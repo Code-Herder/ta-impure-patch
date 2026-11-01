@@ -35,7 +35,9 @@
    (gameClaims, stallClaims): to its end, never stalled, starved or killing no unit, each kill's wreck and death sound,
    and the stall case. Then every demo plays as a replay (replay.js, runReplay) on its game and is checked on every
    replay's claims (replayClaims: its end, the walk and its markers, the seek claim) and its own (REPLAY_CLAIMS, by the
-   demo's id). Their tallies print after the demos', so the demos' lines read as before.
+   demo's id); a live entry's demo plays its live mode (runLive) and is checked on every live replay's claims
+   (liveClaims: the seek, fork, now and release claims, L held still, the end) and its own (LIVE_CLAIMS). Their tallies
+   print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -1643,6 +1645,174 @@ const REPLAY_CLAIMS = {
   },
 };
 
+/* ---- THE LIVE REPLAYS: every demo of a live entry (`"live": true`) played by replay.js's live mode, the rewind's
+   strip moving the game (rewind-spec.md section 7) ---- */
+/* A live replay's frames: `all`, each step's replay view, with `L` (the live simulation's view and orders) while the
+   rewind is not idle or on the step it returns to idle, and `P` (the past simulation's view and orders) on each step a
+   seek ends or Play from here arms; `tl`, the timelines (R.timelines) at each such step; `gv`, the live game's view at
+   the end; `open`, L's view on each open's first frame. */
+function runLive(entry, d, layout, ctx) {
+  const R = WikiReplay.play(entry, d, layout, ctx), all = [{ ...R.view(), L: null, P: null }];
+  const ids = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].map(u => u.id);
+  const snap = s => ({ v: s.view(), o: ids.map(id => s.orders(id)) });
+  while (!all[all.length - 1].done) {
+    const prev = all[all.length - 1];
+    R.step();
+    const f = { ...R.view(), L: null, P: null, tl: null };
+    const pl = prev.live, l = f.live;
+    if (l.rw !== 'idle' || pl.rw !== 'idle') f.L = snap(R.game);
+    const ended = l.past && l.past.target < 0 && (!pl.past || pl.past.target >= 0 || pl.past.gen !== l.past.gen);
+    if (R.past && (ended || (l.arm === 'armed' && pl.arm !== 'armed'))) f.P = snap(R.past);
+    if (f.L || f.P || l.selected !== pl.selected) f.tl = R.timelines();
+    all.push(f);
+  }
+  const gv = R.game ? snap(R.game) : null, why = R.why();
+  R.free();
+  const first = new Map();
+  all.forEach(f => { if (!first.has(f.clock)) first.set(f.clock, f); });
+  return { all, gv: gv && gv.v, go: gv && gv.o, last: all[all.length - 1], F: c => first.get(c), ids, why };
+}
+/* THE CHAIN PLAYED STRAIGHT, the claims' own re-simulation: a fresh game played along timeline `sel`'s chain in `tl`
+   (R.timelines) to tick T, each member's fork operation at its R and its log entries of each tick applied between the
+   ticks they were logged at; with `after`, also the entries of T + 1, the ones a live game standing at T has taken. */
+function straight(entry, d, layout, ctx, tl, sel, T, after) {
+  const chain = [];
+  for (let k = sel; k >= 0; k = tl[k].parent) chain.unshift(tl[k]);
+  const s = WikiSim.game(entry, d, layout, ctx, 'refuse');
+  const apply = x => x.kind === 'release' ? s.release() : s.input(x.kind === 'move' ? { move: [x.x, x.z] } : { [x.kind]: x.key });
+  let m = 0;
+  const logAt = t => { for (const x of chain[m].log) if (x.tau === t) apply(x); };
+  while (s.tick < T && !s.done) {
+    const t = s.tick;
+    if (m + 1 < chain.length && t + 1 === chain[m + 1].R) { m++; s.fork(chain[m].R, chain[m].part || [], chain[m].mode); }
+    logAt(t + 1);
+    s.step();
+  }
+  if (after && !(m + 1 < chain.length && T + 1 === chain[m + 1].R)) logAt(T + 1);
+  return s;
+}
+const sameWorld = (s, ids, w) => JSON.stringify([s.view(), ids.map(id => s.orders(id))]) === JSON.stringify([w.v, w.o]);
+/* EVERY LIVE REPLAY'S CLAIMS (rewind-spec.md 12.2): it plays to its end on the viewer's clock, never stalled, failed,
+   clashing or ignoring a press, its game never stopped; L is held still while the rewind is not idle (one world from
+   each open to its close); THE SEEK CLAIM, each seek that ends shows the world of the selected chain played straight to
+   its tick; THE FORK CLAIM, each armed Play from here stands on the world of the chain played straight to R - 1, the
+   fork that follows starts at R and the new timeline's parent is the chain member holding R - 1; THE NOW CLAIM, after
+   each Back to now L stood on G and goes on as the selected chain played straight with its log, the new release
+   included; THE RELEASE CLAIM, at each fork and Back to now seat 0 held no key or button (the authored demos never lean
+   on the release's held-key rule), and after it nothing is selected and nothing armed (MEASURED, m0-facts.md); and at
+   the end L is the selected chain played straight. */
+function liveClaims(entry, d, layout, ctx, rr, ok) {
+  const v = rr.last, L = v.live;
+  ok(v.done && v.clock === d.end, `played to its end, clock ${d.end} (clock ${v.clock})`);
+  ok(!v.stalled && !v.failed && !L.clash && v.ignored === 0,
+    `never stalled, failed, clashing or ignoring a press (${v.stalled}, ${v.failed}${rr.why ? `: ${rr.why}` : ''}, ${L.clash}, ${v.ignored})`);
+  ok(rr.gv && rr.gv.locked === null && !rr.gv.game.starved && !rr.gv.game.badKill, 'its game never stopped');
+  let held = null, still = true, seeks = 0, bad = null, forks = 0, fbad = null, nows = 0, nbad = null, armed = null;
+  const key = w => JSON.stringify([w.v, w.o]);
+  rr.all.forEach((f, i) => {
+    const p = i ? rr.all[i - 1] : null;
+    if (f.L && f.live.rw !== 'idle') { if (held === null) held = key(f.L); else if (key(f.L) !== held) still = false; }
+    if (f.P && f.live.past && f.live.past.target < 0 && f.tl) {
+      seeks++;
+      const s = straight(entry, d, layout, ctx, f.tl, f.live.selected, f.live.past.tick, false);
+      if (!bad && !sameWorld(s, rr.ids, f.P)) bad = `demo tick ${f.tick}, GameTime ${f.live.past.tick}`;
+      s.free();
+    }
+    if (f.P && f.live.arm === 'armed') armed = { f, keys: f.P.v.keys };
+    if (p && f.live.selected !== p.live.selected) {
+      forks++;
+      const t = f.live.timelines[f.live.selected], parentChainHolds = !!armed && armed.f.live.armR === t.R;
+      if (!fbad && !parentChainHolds) fbad = `the fork at demo tick ${f.tick} was not armed at its R ${t.R}`;
+      else if (!fbad && armed.keys.length) fbad = `seat 0 held ${armed.keys} at the fork at demo tick ${f.tick}`;
+      else if (!fbad && armed.f.live.past.tick !== t.R - 1) fbad = `the armed past stood on ${armed.f.live.past.tick}, not R - 1 = ${t.R - 1}`;
+      armed = null;
+    }
+    if (p && p.live.rw === 'past' && f.live.rw === 'idle' && f.live.selected === p.live.selected) {
+      nows++;
+      const G = f.live.G, prevL = p.L;
+      if (!nbad && (!prevL || prevL.v.keys.length)) nbad = `seat 0 held ${prevL && prevL.v.keys} at Back to now, demo tick ${f.tick}`;
+      else if (!nbad && f.L.v.units.some(u => u.selected)) nbad = `something is selected after Back to now, demo tick ${f.tick}`;
+      else if (!nbad && (f.L.v.mode !== 'contextual' || f.game.tick !== Math.min(G + 1, d.game.end))) nbad = `after Back to now L is ${f.game.tick}, mode ${f.L.v.mode}`;
+      else if (!nbad) {
+        const s = straight(entry, d, layout, ctx, f.tl, f.live.selected, f.game.tick, false);
+        if (!sameWorld(s, rr.ids, f.L)) nbad = `after Back to now at demo tick ${f.tick}, L is not its chain played straight to ${f.game.tick}`;
+        s.free();
+      }
+    }
+    if (f.live.rw === 'idle') held = null;
+  });
+  ok(still, 'L is held still while the rewind is open or the past is shown');
+  ok(!bad, `each of the ${seeks} seeks that end shows the selected chain played straight to its tick${bad ? ` (not at ${bad})` : ''}`);
+  ok(!fbad, `each of the ${forks} forks starts at its armed R on the world of R - 1, seat 0 holding nothing${fbad ? ` (${fbad})` : ''}`);
+  ok(!nbad, `each of the ${nows} Back to nows lets go, and L goes on as its chain played straight with the release${nbad ? ` (${nbad})` : ''}`);
+  const tl = rr.all.filter(f => f.tl).pop().tl, s = straight(entry, d, layout, ctx, tl, L.selected, v.game.tick, true);
+  ok(sameWorld(s, rr.ids, { v: rr.gv, o: rr.go }), `at the end L is the selected chain played straight to ${v.game.tick}`);
+  s.free();
+}
+// a live demo's frames at its viewer's presses of `control`, each with its release's clock tick
+const onRelease = (rr, d, control) => pressesOf(d, control).map(e => rr.F(e.release));
+// a seat-0 unit standing within 48 of (x, z) other than the scene's units: a structure a part placed there
+const builtAt = (w, ids, x, z) => w.units.some(u => u.owner === 0 && !ids.includes(u.id) && Math.hypot(u.x - x, u.z - z) <= 48);
+/* EACH LIVE DEMO'S OWN CLAIMS, by its id (rewind-spec.md section 11, the authored timings) */
+const LIVE_CLAIMS = {
+  // open on the clocks between the presses, L held at G; no past simulation is ever made; L at the end is the clock less
+  // the ticks held
+  button(d, rr, ok) {
+    const [o] = onRelease(rr, d, 'rewind'), [n] = onRelease(rr, d, 'live_now'), held = n.clock - o.clock;
+    ok(rr.all.every(f => (f.clock >= o.clock && f.clock < n.clock) === (f.live.rw === 'open')), `open on clocks ${o.clock}..${n.clock - 1} only`);
+    ok(o.live.G === o.clock - 1 && rr.all.every(f => f.live.past === null), `G ${o.live.G}, and no past simulation made`);
+    ok(rr.last.game.tick === d.end - held, `L ends on ${d.end - held} (${rr.last.game.tick})`);
+  },
+  // the seeks shown at the waits' releases; L at G throughout; the drag's seeks follow its playhead; Back to now
+  steps(d, rr, ok) {
+    const shown = rr.all.filter((f, i) => i && rr.all[i - 1].waiting && !f.waiting).map(f => f.live.now);
+    ok(JSON.stringify(shown) === '[344,43,342,199]', `the waits release on 344, 43, 342 and 199 (${shown})`);
+    const [o] = onRelease(rr, d, 'rewind'), G = o.live.G;
+    ok(rr.all.every(f => f.live.rw === 'idle' || f.game.tick === G), `L stands on ${G} while open and in the past`);
+    const [e] = pressesOf(d, 'track'), P = e.at + WikiReplay.HUD_DOWN;
+    const want = c => c === P ? e.to : e.to + Math.trunc(((e.drag - e.to) * (c - P)) / e.over);
+    const off = Array.from({ length: e.over + 1 }, (_, i) => P + i).filter(c => ![-1, want(c)].includes(rr.F(c).live.past.target));
+    ok(!off.length, `the drag seeks one tick a clock tick, its playhead's${off.length ? ` (not on clock ${off[0]})` : ''}`);
+    const [n] = onRelease(rr, d, 'live_now');
+    ok(n.live.rw === 'idle' && n.live.timelines[0].nlog === 1, 'Back to now returns to now and logs its release');
+  },
+  // the snap to 601 and its toast, the fork, the recorded future dropped and the part's solar placed where the original
+  // has none
+  play(d, rr, ok, entry) {
+    const [a, b] = onRelease(rr, d, 'live_play'), armedAt = rr.all.find(f => f.live.arm === 'armed');
+    ok(a.live.arm === 'seeking' && a.live.armR === 601, `the first click snaps to 601 (${a.live.arm} ${a.live.armR})`);
+    ok(armedAt && armedAt.toast && armedAt.toast.kind === 'armed' && armedAt.toast.value === 601 && armedAt.toast.evict === -1,
+      'armed, the toast says Click again to play from 0:20');
+    const t = rr.last.live.timelines;
+    ok(t.length === 2 && t[0].last === b.live.G && t[1].parent === 0 && t[1].R === 601 && rr.last.live.selected === 1,
+      `timelines [0 (last ${b.live.G}), 1 (parent 0, R 601)] (${JSON.stringify(t.map(x => [x.id, x.parent, x.R, x.last]))})`);
+    ok(b.toast && b.toast.kind === 'playing_from' && b.toast.value === 601, 'the second click plays from 0:20');
+    const c0 = rr.gv.units.find(u => u.id === 'c0'), [part] = d.forks, [px, pz] = part.inputs.find(e => 'move' in e && e.at > 650).move;
+    ok(c0 && c0.z >= 280, `the commander never went north: the recorded order after 601 is gone (z ${c0 && c0.z})`);
+    const first = rr.all.find(f => f.L && f.live.rw === 'open').L.v;
+    ok(builtAt(rr.gv, rr.ids, px, pz) && !builtAt(first, rr.ids, px, pz), `the part's building stands at (${px}, ${pz}), and none in the original`);
+  },
+  // the builder and the commander die in the original; in the fork both live past the kills' ticks
+  death(d, rr, ok) {
+    const [o] = onRelease(rr, d, 'rewind'), kills = d.game.inputs.filter(e => 'kill' in e), last = Math.max(...kills.map(e => e.at));
+    const w = rr.all.find(f => f.L && f.live.rw === 'open').L.v, dead = kills.map(e => e.kill);
+    ok(dead.every(id => !w.units.some(u => u.id === id)) && w.game.seats[0].lost === 1,
+      `at G ${o.live.G} ${dead} are gone and seat 0 has lost its commander (lost ${w.game.seats[0].lost})`);
+    const z = rr.gv.game.seats[0];
+    ok(rr.last.live.selected === 1 && rr.last.game.tick > last && dead.every(id => rr.gv.units.some(u => u.id === id)) && z.lost === 0 && !z.out && !rr.gv.game.badKill,
+      `in the fork at ${rr.last.game.tick}, past ${last}, ${dead} live and seat 0 has lost nothing (lost ${z.lost}, out ${z.out}): the kills were dropped, not missed`);
+  },
+  // two forks, the second the first's; the first's building in the second's world and not in the original's
+  chain(d, rr, ok) {
+    const t = rr.last.live.timelines, [, o2] = onRelease(rr, d, 'rewind');
+    ok(t.length === 3 && t[1].parent === 0 && t[1].R === 301 && t[1].last === o2.live.G && t[2].parent === 1 && t[2].R === 601 && rr.last.live.selected === 2,
+      `timelines [0, 1 (parent 0, R 301, last ${o2.live.G}), 2 (parent 1, R 601)] (${JSON.stringify(t.map(x => [x.id, x.parent, x.R, x.last]))})`);
+    const [f1] = d.forks, [px, pz] = f1.inputs.find(e => 'move' in e && e.at > 360).move;
+    const first = rr.all.find(f => f.L && f.live.rw === 'open').L.v;
+    ok(builtAt(rr.gv, rr.ids, px, pz) && !builtAt(first, rr.ids, px, pz), `the first fork's building at (${px}, ${pz}) stands in the second's world, not in the original's`);
+  },
+};
+
 /* THE TURNED-OFF RULE (decision 24): an entry whose own `lockedIn` names the pack's mod is shown in that mod under
    the "Turned off in this mod" badge (wiki.js `locked`, the same list and the same name), which already tells the
    player its demos do not apply there. Its demos still play, and must play to their end without being refused, but
@@ -1769,12 +1939,16 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
   const notes = [], ok = (cond, what) => notes.push([!!cond, what]);
   try {
     if (!g) throw new Error('its game did not play');
-    const rr = runReplay(entry, d, c.layout, c.ctx);
+    const rr = entry.live ? runLive(entry, d, c.layout, c.ctx) : runReplay(entry, d, c.layout, c.ctx);
     if (lock) {
       const reached = rr.gv && rr.gv.locked !== null;
       ok(rr.last.done && !rr.last.failed && (reached ? rr.gv.locked === lock.type && rr.gv.clock === lock.t : rr.last.clock === d.end),
         `stops under the badge on game tick ${lock.t}, ${lock.type} unbound, or ends before it (${reached ? `locked on ${rr.gv.clock}` : `clock ${rr.last.clock}`})`);
       rt.locked.push(`${id}/${d.id}@${lock.t}`);
+    } else if (entry.live) {
+      liveClaims(entry, d, c.layout, c.ctx, rr, ok);
+      if (LIVE_CLAIMS[d.id]) LIVE_CLAIMS[d.id](d, rr, ok, entry, c.ctx);
+      else ok(false, `the live demo ${d.id} has claims of its own (LIVE_CLAIMS)`);
     } else {
       replayClaims(entry, d, c.layout, c.ctx, rr, g, ok);
       if (REPLAY_CLAIMS[d.id]) REPLAY_CLAIMS[d.id](d, rr, ok, entry, c.ctx);
