@@ -384,9 +384,10 @@ function advance(dt) {
   if (rep) return advanceReplay();
   while (acc >= 1 && sim && !held()) { try { sim.step(); } catch (x) { fail(x); } acc--; }
 }
-/* THE REPLAY'S PACING, the DLL's rule: a frame runs whole steps while their summed cost() -- the game ticks each will
-   run -- stays within WikiReplay.FILL, always at least one, and the demo ticks left over are owed to the next frame.
-   The pacing changes only when a step runs, never what it does: the replay is deterministic in demo ticks. */
+/* THE REPLAY'S PACING, the DLL's rule: a frame runs whole steps while their summed cost() -- never fewer than the game
+   ticks each runs -- stays within WikiReplay.FILL, always at least one, and the demo ticks left over are owed to the
+   next frame, so a frame runs at most max(FILL, the most one step runs) game ticks. The pacing changes only when a step
+   runs, never what it does: the replay is deterministic in demo ticks. */
 function advanceReplay() {
   let spent = 0, n = 0;
   while (acc >= 1 && rep && !held()) {

@@ -1411,10 +1411,15 @@ the game simulations; the simulation knows nothing of the HUD.
   a step's cost has a ceiling by construction. A seek's end marks every sound it re-simulated as
   heard (`quiet`), so none plays at once.
 - **Paced by cost** (`tagpu_wiki.c` `replay_steps`, `wiki.js` likewise): each page fill runs whole
-  steps while the sum of their `tagpu_wikireplay_cost` -- the game ticks each will run -- stays
-  within `WIKI_REPLAY_FILL`, always at least one; the rest stay owed. The replay is deterministic in
-  demo ticks, so pacing changes how many a fill runs, never what any does. A fill runs fewer than
-  `WIKI_REPLAY_FILL` + `WIKI_REPLAY_SEEK` game ticks. **SEEK, WALK and FILL are 64**, set from the
+  steps while the sum of their `tagpu_wikireplay_cost` stays within `WIKI_REPLAY_FILL`, always at
+  least one; the rest stay owed. The cost is never fewer than the ticks the step runs: the ticks the
+  state says, or the most a step runs when the viewer's trip acts on the step's clock tick, since
+  that press may start a seek the step plays. The replay is deterministic in demo ticks, so pacing
+  changes how many a fill runs, never what any does. A fill runs at most max(`WIKI_REPLAY_FILL`,
+  the most one step runs) game ticks, 64; its time is that many ticks at the dearest tick's cost,
+  which is the scene's to keep low: one A* search that expands the whole grid, a unit sent to a point
+  no node stands it on, costs about 160 ordinary ticks (MEASURED 2026-11-01, the i686 build under
+  Wine: 153..192 us against 0.9 us). **SEEK, WALK and FILL are 64**, set from the
   tick's measured cost: Escalation's ticks are the dearest (its commanders' scripts scan every unit
   id to `MAX_ID` every 2.5 to 5 s), and 64 holds its worst fill at 1.75 ms natively while a seek to
   the end of Watching (1800 game ticks) takes 29 steps, about a second at 1×, and one to

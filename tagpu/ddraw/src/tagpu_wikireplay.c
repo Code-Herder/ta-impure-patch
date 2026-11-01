@@ -1214,18 +1214,44 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
     r->done = is_done(r);
 }
 
+/* the viewer's trip acts on clock tick c: trip's own conditions, a drag's every tick counted
+   whether or not its point moved */
+static int trip_acts(const WIKIREPLAY* r, int c)
+{
+    const int press = r->at + WIKI_REPLAY_HUD_DOWN;
+    if (!r->has_cursor) return 0;
+    if (r->to != WIKI_HUD_TRACK) return c == r->at + WIKI_REPLAY_HUD_UP;
+    return c == press || (r->drag >= 0 && c > press && c <= press + r->over)
+        || c == (r->drag >= 0 ? press + r->over : r->at + WIKI_REPLAY_HUD_UP);
+}
+
+/* THE BOUND on a step, its most game ticks: a seek's WIKI_REPLAY_SEEK, the walk's WIKI_REPLAY_WALK
+   (a background walk takes what the game's part left of it, bg_walk), a play's the top speed's */
+static int step_max(void)
+{
+    const int top = SPEEDS[WIKI_REPLAY_NSPEED - 1] / 10, m = WIKI_REPLAY_SEEK > WIKI_REPLAY_WALK ? WIKI_REPLAY_SEEK : WIKI_REPLAY_WALK;
+    return m > top ? m : top;
+}
+
+/* A STEP WHOSE CLOCK TICK THE VIEWER'S TRIP ACTS ON is charged step_max: the press may start a seek,
+   a switch or a rewind's seek that the step then plays, which the state before it cannot say. Every
+   other step runs the ticks the state says. So cost() never falls short of the ticks the step runs,
+   and a fill's sum of costs bounds its ticks (tagpu_wiki.c replay_steps). The walk that holds the
+   clock feeds nothing; a step feeds its clock tick unless a wait holds it behind a pending seek. A
+   live replay has no walker. */
 int tagpu_wikireplay_cost(const WIKIREPLAY* r)
 {
     int n, w;
     const int last = chain_last(r);
     if (r->done) return 0;
+    if (r->walker && !r->bg) return last - r->walker->tick < WIKI_REPLAY_WALK ? last - r->walker->tick : WIKI_REPLAY_WALK;
+    if ((!r->waiting || r->target < 0) && trip_acts(r, r->clock + 1)) return step_max();
     if (r->live) {
         if (r->rw == WIKI_RW_IDLE) return r->game->tick < r->end && !r->game->done;
         if (r->rw != WIKI_RW_PAST || r->target < 0 || !r->past) return 0;
         n = r->target - 1 - r->past->tick;
         return n < WIKI_REPLAY_SEEK ? n : WIKI_REPLAY_SEEK;
     }
-    if (r->walker && !r->bg) return last - r->walker->tick < WIKI_REPLAY_WALK ? last - r->walker->tick : WIKI_REPLAY_WALK;
     if (r->target >= 0) n = r->target - r->game->tick < WIKI_REPLAY_SEEK ? r->target - r->game->tick : WIKI_REPLAY_SEEK;
     else if (r->paused) n = 0;
     else {

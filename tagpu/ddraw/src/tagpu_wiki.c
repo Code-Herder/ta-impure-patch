@@ -1282,10 +1282,10 @@ static int pause_due(void)
    within WIKI_REPLAY_FILL, always at least one; the rest stay owed. THE INVARIANT: the replay is
    deterministic in demo ticks, so pacing changes only how many of them a fill runs, never what any
    of them does -- the world at demo tick T is the same however the fills fell. THE BOUND: a step
-   runs at most max(WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, 8) game ticks and the last one admitted may
-   start a seek of its own (tagpu_wikireplay_cost), so a fill runs fewer than WIKI_REPLAY_FILL +
-   WIKI_REPLAY_SEEK game ticks, whatever the script, the presses or a tick's cost. Returns the steps
-   run. */
+   runs at most max(WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, 8) game ticks and its cost is never fewer
+   than it runs, a step whose press may start a seek charged that most (tagpu_wikireplay_cost), so
+   a fill runs at most max(WIKI_REPLAY_FILL, that most) game ticks, whatever the script or the
+   presses; its time is that many ticks at the dearest tick's cost. Returns the steps run. */
 static int replay_steps(int want)
 {
     int n = 0, spent = 0;

@@ -273,8 +273,9 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
 /* One demo tick. Nothing once it is done. */
 void tagpu_wikireplay_step(WIKIREPLAY* r);
 
-/* The game ticks the next step runs as the state stands; a seek the step's own viewer inputs start
-   adds at most WIKI_REPLAY_SEEK. */
+/* The game ticks the next step runs at most: the ticks the state says, or, when the viewer's trip
+   acts on the step's clock tick, the most any step runs (a press there may start a seek the step
+   plays). Never fewer than the step runs. */
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
 /* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included,

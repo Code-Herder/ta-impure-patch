@@ -25,8 +25,8 @@
 
    THE BOUND: a step runs at most max(SEEK, WALK, the top speed's 8) game ticks -- the walk WALK, a seek SEEK, a play
    SPEEDS' last / 10 -- whatever the script or the presses, so a step's cost has a ceiling by construction, not by how
-   fast a tick happens to be. cost() is the ticks the step will run as the state stands; a seek the step's own viewer
-   inputs start adds at most SEEK to it.
+   fast a tick happens to be. cost() is never fewer than the ticks the step runs: the ticks the state says, or STEP_MAX
+   when the viewer's trip acts on the step's clock tick, whose press may start a seek the step plays.
 
    THE LIFETIME: the replay owns its game and walker simulations and is the only code that frees them -- the old game at
    a backward seek before the new one is made, the walker at the walk's end, both in free() -- and keeps no other
@@ -112,6 +112,9 @@ const WikiReplay = (() => {
   const SPEEDS = [5, 10, 20, 40, 80], SPEED0 = 10;
   // SEEK, WALK and FILL are set from the tick's cost in the game: tagpu_wikireplay.h states the measurement
   const SEEK = 64, WALK = 64, STEP = 300, NEAR = 90, BOOKS = 64, MARKS = Sim.GAME_KILLS + Sim.SEATS, FILL = 64;
+  // THE BOUND on a step, its most game ticks: a seek's SEEK, the walk's WALK (a background walk takes what the game's
+  // part left of it, bgWalk), a play's the top speed's
+  const STEP_MAX = Math.max(SEEK, WALK, Math.trunc(SPEEDS[SPEEDS.length - 1] / 10));
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
   const DEATH = 0, DEFEAT = 1, TOASTS = ['added', 'removed', 'playing_on', 'cannot', 'armed', 'playing_from', 'refused',
     'taking_over', 'cannot_take', 'saved', 'cannot_save', 'click_delete', 'deleted'];
@@ -779,12 +782,24 @@ const WikiReplay = (() => {
       }
       done = isDone();
     };
-    // the game ticks the next step runs as the state stands (THE BOUND)
+    // the viewer's trip acts on clock tick c: trip's own conditions, a drag's every tick counted whether or not its point moved
+    const tripActs = c => {
+      if (!cursor) return false;
+      const t = cursor, P = t.at + HUD_DOWN;
+      if (t.to !== 'track') return c === t.at + HUD_UP;
+      return c === P || (!!t.drag && c > P && c <= P + t.drag.over) || c === (t.drag ? P + t.drag.over : t.at + HUD_UP);
+    };
+    /* THE GAME TICKS THE NEXT STEP RUNS AT MOST (THE BOUND): a step whose clock tick the viewer's trip acts on is charged
+       STEP_MAX, the press may start a seek, a switch or a rewind's seek that the step then plays, which the state before
+       it cannot say; every other step the ticks the state says. So cost() never falls short of the ticks the step runs,
+       and a frame's sum of costs bounds its ticks (wiki.js advanceReplay). The walk that holds the clock feeds nothing; a
+       step feeds its clock tick unless a wait holds it behind a pending seek. A live replay has no walker. */
     R.cost = () => {
       if (done) return 0;
+      if (walker && !bg) return Math.min(WALK, chainLast() - walker.tick);
+      if ((!wait || target < 0) && tripActs(clock + 1)) return STEP_MAX;
       if (LIVE) return rw === 'idle' ? (R.game.tick < end && !R.game.done ? 1 : 0)
         : rw === 'past' && target >= 0 && R.past ? Math.min(SEEK, target - 1 - R.past.tick) : 0;
-      if (walker && !bg) return Math.min(WALK, chainLast() - walker.tick);
       const g = target >= 0 ? Math.min(SEEK, target - R.game.tick) : paused ? 0 : Math.min(Math.floor((acc + speed) / 10), chainLast() - R.game.tick);
       return walker ? g + Math.max(0, Math.min(WALK - g, chainLast() - walker.tick)) : g;
     };
