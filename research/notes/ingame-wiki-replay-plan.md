@@ -3,10 +3,9 @@
 ## Status
 
 **Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
-Watching, landed (`a149e0ce`); the second, Rewind a skirmish, built in the mockup and in the
-DLL on `worktree-qol_shift` -- its simulation, replay and frame, Try it yourself's world input on
-the live frame and its game lane (G2, below) -- and landing; Take over and Players and the camera
-not built.** The owner
+Watching, landed (`a149e0ce`); the second, Rewind a skirmish, landed (`078ac2cb`) -- its
+simulation, replay and frame, Try it yourself's world input on the live frame and its game lane;
+Take over and Players and the camera not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -124,7 +123,7 @@ entries.
 |---|---|---|---|
 | R0 | Research, no code | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost | **done 2026-10-31** (*What R0 found*, below) |
 | W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **landed 2026-10-31** (`a149e0ce`) |
-| R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **C1 landed** (`8005c54f`, `6c976067`); **C2-C5, F1, G1, the release rule and G2 built** on `worktree-qol_shift`, the landing in progress |
+| R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **landed 2026-11-01** (`078ac2cb`; C1 earlier, `8005c54f`, `6c976067`) |
 | T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction; a second seat's cursor (decision 16) | not started |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
 
