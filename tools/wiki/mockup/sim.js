@@ -507,9 +507,12 @@ const WikiSim = (() => {
      - a game entry's demo carries `game` {end, inputs, sidebar}: end an integer 1..GAME_END_MAX, inputs a list,
        sidebar a boolean when given; no demo-level `sidebar`. A page entry's demo carries no `game`.
      - the game script's inputs: each has a numeric `at`; no caption and no wait (game time is the game
-       simulation's tick, so nothing may hold it); `seat`, when given, is 0 (decision 16: no other seat has a cursor
-       yet); a kill is {at, kill} alone, kill naming a unit of the merged scene by its explicit id, at most once and
-       at most GAME_KILLS kills, at <= end.
+       simulation's tick, so nothing may hold it); `seat`, when given, the seat whose cursor gives the input (decision
+       16; 0 when absent): an integer 0..the scene's seats - 1, and 0 alone unless the game's sidebar is false, since
+       the column is seat 0's and a game whose sidebar may be on gives no other seat an input (an over-approximation:
+       an absent sidebar is on when the scene gives seat 0 a builder and the layout has a column); a kill is {at,
+       kill} alone, kill naming a unit of the merged scene by its explicit id, at most once and at most GAME_KILLS
+       kills, at <= end.
      - in the merged scene no feature's id (f<k + 1> when it has none) is a unit's explicit id, since a unit's corpse
        takes its id; and its features and the kills together, the game script's and every fork part's, are at most
        FEATS_MAX, the features table a corpse is placed into (an over-approximation of the wrecks any chain of forks
@@ -550,13 +553,15 @@ const WikiSim = (() => {
      that fails it. */
   const FRAME_BAR = 32;
   const frameFits = (w, h) => 3 * (SIDE_W + CELL * w) >= 4 * (CELL * Math.max(h, 2 * Math.ceil(SIDE_ROWS / (2 * CELL))) + 2 * FRAME_BAR);
-  /* THE LIVE DATA RULE (tagpu_wikidata.c live_orders): in a live entry the release (sim.release) can come between any
-     two ticks of seat 0's game script and of a fork's part, and it empties the selection an order is given from and
-     disarms reclaim. So each `build` naming a type and each `reclaim` has, on its own tick and before it in the order
-     the inputs are fed (by tick, then file order; within one input its move, then its press, then its release, as
-     input() reads them), the click that selects its builder or reclaimer: a `move` aiming the cursor, then `select`
-     pressed, then `select` released. The release runs only between two ticks, so it cannot fall between that click
-     and the order; the move is on the tick too because a trip the release cuts off leaves the cursor wherever it was.
+  /* THE LIVE DATA RULE (tagpu_wikidata.c live_orders): in a live entry a seat's release (sim.release) can come between
+     any two ticks of a game script and of a fork's part, and it empties that seat's selection an order is given from
+     and disarms its reclaim. So each `build` naming a type and each `reclaim` has, on its own tick and before it in
+     the order the inputs are fed (by tick, then file order; within one input its move, then its press, then its
+     release, as input() reads them), the click of its own seat that selects its builder or reclaimer: a `move`
+     aiming that seat's cursor, then `select` pressed, then `select` released. Another seat's click selects nothing
+     of this seat's, and a release lets go of one seat alone, so the rule holds seat by seat. The release runs only
+     between two ticks, so it cannot fall between that click and the order; the move is on the tick too because a
+     trip the release cuts off leaves the cursor wherever it was.
      Whether the click lands on a builder or a reclaimer is the world's, which simcheck's release sweep plays out.
      A live entry has no `pick`: the popup it clicks stands only while reclaim is armed, and with the sidebar's trips a
      reclaim arms only when its trip clicks RECLAIM, ticks after the reclaim's own, while checkTrips keeps every other
@@ -574,7 +579,7 @@ const WikiSim = (() => {
       let step = 0;
       for (let j = 0; j < i; j++) {
         const f = inputs[j];
-        if (f.at !== e.at) continue;
+        if (f.at !== e.at || (f.seat ?? 0) !== (e.seat ?? 0)) continue;
         if (f.move && step < 3) step = 1;
         if (f.down === 'select' && step === 1) step = 2;
         if (f.up === 'select' && step === 2) step = 3;
@@ -623,6 +628,14 @@ const WikiSim = (() => {
     if (!Array.isArray(g.inputs)) throw new Error(`${at}: the game's inputs are not a list`);
     for (const u of (demo.scene && demo.scene.units) || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < seats.length)))
       throw new Error(`${at}: the owner ${u.owner} is no seat of its scene`);
+    /* THE SEAT RULE: a game input's seat is one of the scene's, and with a sidebar that may be on it is 0, since the
+       column is seat 0's (the sim refuses a column beside another seat's input as well, make) */
+    const seatOk = (w, e) => {
+      if (!('seat' in e)) return;
+      if (!(int(e.seat) && e.seat >= 0 && e.seat < seats.length)) throw new Error(`${w}: seat ${e.seat} is no seat of its scene`);
+      if (e.seat !== 0 && g.sidebar !== false)
+        throw new Error(`${w}: seat ${e.seat}: the column is seat 0's, so a game whose sidebar is not false gives no other seat an input`);
+    };
     const S = merge(entry, demo), ids = new Set(S.units.filter(u => typeof u.id === 'string' && u.id).map(u => u.id));
     S.features.forEach((f, k) => { if (ids.has(f.id ?? `f${k + 1}`)) throw new Error(`${at}: the feature ${f.id ?? `f${k + 1}`} has a unit's id`); });
     const killed = new Set();
@@ -630,7 +643,7 @@ const WikiSim = (() => {
       const w = `${at}: the game input at tick ${obj(e) ? e.at : e}`;
       if (!obj(e) || typeof e.at !== 'number') throw new Error(`${w} has no tick`);
       if ('caption' in e || 'until' in e) throw new Error(`${w} is a caption or a wait, which a game script has not`);
-      if ('seat' in e && e.seat !== 0) throw new Error(`${w}: seat ${e.seat}: a seat other than 0 has no cursor yet`);
+      seatOk(w, e);
       if (!('kill' in e)) continue;
       if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${w}: a kill carries another key`);
       if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${w}: the kill names no unit of the scene`);
@@ -658,7 +671,7 @@ const WikiSim = (() => {
           const v = `${w}: the input at tick ${obj(e) ? e.at : e}`;
           if (!obj(e) || typeof e.at !== 'number') throw new Error(`${v} has no tick`);
           if ('caption' in e || 'until' in e) throw new Error(`${v} is a caption or a wait, which a game script has not`);
-          if ('seat' in e && e.seat !== 0) throw new Error(`${v}: seat ${e.seat}: a seat other than 0 has no cursor yet`);
+          seatOk(v, e);
           if (!(e.at >= p.from && e.at <= g.end)) throw new Error(`${v} is not at a tick ${p.from}..${g.end}`);
           if ('kill' in e) {
             if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${v}: a kill carries another key`);
@@ -735,10 +748,16 @@ const WikiSim = (() => {
       if ('hud' in e) release = e.at + ('drag' in e ? HUD_DOWN + e.over : HUD_UP);
     }
   }
-  /* a game entry's demo as the game simulation plays it: its game script, the `seat` taken off each input (every one
-     is seat 0's), and the game's end and sidebar */
+  /* a game entry's demo as the game simulation plays it: its game script, each input keeping its `seat` (the input
+     state it acts on, 0 when absent), and the game's end and sidebar */
   const gameDemo = d => ({ id: d.id, on: d.on, scene: d.scene, end: d.game.end, ...('sidebar' in d.game ? { sidebar: d.game.sidebar } : {}),
-    inputs: d.game.inputs.map(e => { if (!('seat' in e)) return e; const { seat, ...r } = e; return r; }) });
+    inputs: d.game.inputs });
+  /* THE INPUT SEATS, NIN (ingame-wiki-replay-plan.md decision 16): a game simulation holds an input state for every seat its game script or a
+     fork part names, 1 + the highest (a kill names none), at least 1; a page simulation holds one. checkGame bounds
+     every seat by the scene's, so NIN is at most SEATS, and the sim refuses an input of a seat at NIN or above at the
+     door (sim.input, sim.fork). tagpu_wikisim.c input_seats. */
+  const inputSeats = d => [...d.game.inputs, ...(d.forks || []).flatMap(p => p.inputs)]
+    .reduce((n, e) => 'kill' in e ? n : Math.max(n, (e.seat ?? 0) + 1), 1);
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
      select is the left button in both types, cancel the right one in both, order the right one at type 1 and the left
@@ -746,20 +765,24 @@ const WikiSim = (() => {
   const ACTIONS = ['select', 'order', 'cancel'];
   const button = (a, iface) => a === 'select' ? 'lmb' : a === 'cancel' ? 'rmb' : a === 'order' ? (iface ? 'rmb' : 'lmb') : a;
   /* THE DATA RULE OF A RESOLVED SCRIPT, refused here as tagpu_wikisim_init refuses it: once the actions are buttons,
-     a press of a mouse button already held, or a release of one not held, refuses the demo with the input's tick. An
-     authored overlap -- the left button held for a box drag while an `order` click lands at type 0 -- therefore fails
-     simcheck, which plays every demo at both types, and never reaches a player. The keys are not held to it: a key's
-     second down is an auto-repeat (stepSpacing). */
-  function resolve(demo, script, iface) {
-    const held = new Set();
+     a press of a mouse button its seat already holds, or a release of one its seat does not hold, refuses the demo
+     with the input's tick and seat. Each seat has its own hand, held from nothing or from `from[seat]`, the buttons
+     the seat holds when the script takes over (a fork's carried seats). An authored overlap -- the left button held
+     for a box drag while an `order` click lands at type 0 -- therefore fails simcheck, which plays every demo at both
+     types, and never reaches a player. The keys are not held to it: a key's second down is an auto-repeat
+     (stepSpacing). An input already resolved comes back as it was. */
+  function resolve(demo, script, iface, from = []) {
+    const hands = [];
     return script.map(e => {
       const r = ACTIONS.includes(e.down) || ACTIONS.includes(e.up) ? { ...e } : e;
       if (r !== e && 'down' in r) r.down = button(r.down, iface);
       if (r !== e && 'up' in r) r.up = button(r.up, iface);
+      const seat = e.seat ?? 0, held = hands[seat] || (hands[seat] = new Set(from[seat] || []));
       for (const [k, down] of [[r.down, true], [r.up, false]]) {
         if (k !== 'lmb' && k !== 'rmb') continue;
         if (down === held.has(k))
-          throw new Error(`demo ${demo.id}: at tick ${e.at} the ${down ? 'press' : 'release'} of ${k} ${down ? 'while it is held' : 'while it is up'}`);
+          throw new Error(`demo ${demo.id}: at tick ${e.at} the ${down ? 'press' : 'release'} of ${k}${seat ? ` by seat ${seat}` : ''} ` +
+            `${down ? 'while it is held' : 'while it is up'}`);
         if (down) held.add(k); else held.delete(k);
       }
       return r;
@@ -776,7 +799,7 @@ const WikiSim = (() => {
       throw new Error(GAME ? 'the entry is not a game entry: its demos play as demos' : 'a game entry\'s demos play as games');
     if (GAME && !demoGiven) throw new Error('a game plays a demo\'s game script');
     if (GAME && econMode !== 'refuse' && econMode !== 'stall') throw new Error(`the economy's mode ${econMode} is not refuse or stall`);
-    const demoIn = GAME ? gameDemo(demoGiven) : demoGiven;
+    const demoIn = GAME ? gameDemo(demoGiven) : demoGiven, NIN = GAME ? inputSeats(demoGiven) : 1;
     // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
     const B = ctx.casting ? binder(entryIn, ctx.casting, ctx.rival, GAME) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
@@ -786,6 +809,8 @@ const WikiSim = (() => {
       const builder = S.units.some(s => (s.owner ?? 0) === 0 && own(D, s.type) && D[s.type].maxVelocity > 0 && D[s.type].workerTime > 0);
       return scripted && demo && typeof demo.sidebar === 'boolean' ? demo.sidebar : builder;
     })();
+    // THE COLUMN IS SEAT 0'S (the acting seat, below): a game with the sidebar on gives no other seat an input
+    if (ON && NIN > 1) throw new Error(`demo ${demo.id}: the column is seat 0's, so a game with the sidebar gives no other seat an input`);
     /* THE MAP: the scene's, grown downward with the sidebar on by whole 32-unit tiles until it is at least as tall as
        the column, so no band lies under it and every row of the column has the map beside it. The column is at most
        SIDE_ROWS rows (checkLayout), so H is at most SIDE_ROWS / CELL, the rows every stage description's ground holds
@@ -931,12 +956,15 @@ const WikiSim = (() => {
       sndRing[sndTotal % SND_LOG] = [now, kind, name, cat, variant];
       if (sndTotal < INT_MAX - SND_LOG) sndTotal++;
     }
+    /* the viewed seat, whose units' notices play: 0 until a fork takes over another seat, as the game's takeover makes
+       the taken seat the viewed one (tagpu_replay.c tk_seats, main+0x2A43) */
+    let viewed = 0;
     // 0x47F1A0's play by name: at once, no queue, no cooldown
     function soundNamed(name) { if (SNDT) soundEvent(0, SNDNAME[name], -1, 0); }
     // 0x47F780 then 0x47FAD0: the viewed player's unit, the kind's cooldown, one of its kind queued, a full queue's last
     // dropped, and in before the first of a lower priority
     function notice(u, kind) {
-      if (!SNDT || sceneQuiet || u.owner !== 0) return;
+      if (!SNDT || sceneQuiet || u.owner !== viewed) return;
       if (now < sndNext[kind]) return;
       if (sndQ.some(e => e.kind === kind)) return;
       if (sndQ.length === SND_QUEUE) sndQ.pop();
@@ -1077,9 +1105,13 @@ const WikiSim = (() => {
        badge, the first such unit in creation order naming it (input() does the same for a `build` on its tick) */
     const unbound = t => defined(t) && D[t].unbound === true;
     const lock0 = S.units.find(s => unbound(s.type));
+    /* SELECTION: one flag per unit (the state hash's item 3). Seat k's selection is the flagged units it owns, and
+       every select and deselect of a seat's input touches that seat's own units alone, so an input of one seat never
+       changes another's selection; the scene's selection names units of any seat, each then its owner's. */
     for (const id of S.selected) byId(id).sel = true;
-    const selected = () => units.filter(u => u.sel);
-    const builders = () => selected().filter(u => u.owner === 0 && mobile(u.type) && def(u.type).workerTime > 0);
+    const selected = (k = K) => units.filter(u => u.sel && u.owner === k);
+    const deselect = () => { for (const u of units) if (u.owner === K) u.sel = false; };
+    const builders = () => selected().filter(u => mobile(u.type) && def(u.type).workerTime > 0);
     // the types the selected builders' build lists offer, in definition order
     function available() {
       const ts = new Set();
@@ -1091,7 +1123,7 @@ const WikiSim = (() => {
     const started = o => !!structureAt(o.type, o.ox, o.oz);
     function plans() {
       const out = [];
-      for (const u of units) if (u.owner === 0) for (const o of u.orders)
+      for (const u of units) if (u.owner === K) for (const o of u.orders)
         if (o.k === 'build' && !started(o) && !out.some(p => p.type === o.type && p.ox === o.ox && p.oz === o.oz))
           out.push({ type: o.type, ox: o.ox, oz: o.oz });
       return out;
@@ -1130,7 +1162,7 @@ const WikiSim = (() => {
     // it orders, so their plans do not block it.
     function plansBlock(c, shift) {
       const bs = builders(), replaced = !shift && bs.some(u => canBuild(u, c.type)), b = box(c.type, c.ox, c.oz);
-      for (const u of units) if (u.owner === 0 && !(replaced && bs.includes(u)))
+      for (const u of units) if (u.owner === K && !(replaced && bs.includes(u)))
         for (const o of u.orders) if (o.k === 'build' && overlap(b, box(o.type, o.ox, o.oz))) return true;
       return false;
     }
@@ -1249,7 +1281,7 @@ const WikiSim = (() => {
     // matching order decides for that unit.
     function queued(c) {
       let q = 0;
-      for (const u of units) if (u.owner === 0) for (const o of u.orders) {
+      for (const u of units) if (u.owner === K) for (const o of u.orders) {
         if (o.k !== 'build' || !samePlan(c, o)) continue;
         q = 1;
         if (u.sel && def(u.type).workerTime > 0 && findCancel(u, c)) return 2;
@@ -1270,7 +1302,7 @@ const WikiSim = (() => {
       const { x, z } = mapCursor(), target = unitAt(x, z);
       let desired = null, old = 0;
       if (target) {
-        if (target.owner !== 0 || mobile(target.type) || target.built < 1 || !(desired = kind(target.type))) return null;
+        if (target.owner !== K || mobile(target.type) || target.built < 1 || !(desired = kind(target.type))) return null;
         old = strength(target.type);
       }
       const best = {};
@@ -1301,14 +1333,31 @@ const WikiSim = (() => {
     }
 
     /* ---- what the cursor is over ---- */
-    /* gesture: the placement gesture's press site while it lives; shiftPlaced: main+0x2CC6 bit 5, a placement made in
-       this Shift hold, so releasing Shift disarms; spacing: empty cells between neighbours, per building type;
-       place: the last evaluation of the gesture (tagpu_place.c's s_eval) */
-    const st = { cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), mode: null, drag: null, caption: null, hover: null,
-      gesture: null, shiftPlaced: false, spacing: {}, place: null,
-      // reclaim armed (main+0x2CC3 == 12, exclusive with a building armed), the sweep's kind, its ring gesture (the press
-      // point, the last point over the map, past the threshold or not), and a popup press taken
-      rmode: false, kind: S.kind, rg: null };
+    /* A SEAT'S INPUT STATE, IN[k] for each of the NIN input seats (decision 16): its cursor, from the scene's; the keys
+       and buttons it holds, and where each button went down (downOn), which decides whether its release runs the map
+       rules; the armed building (mode) and the drag; gesture: the placement gesture's press site while it lives;
+       shiftPlaced: main+0x2CC6 bit 5, a placement made in this Shift hold, so releasing Shift disarms; spacing: empty
+       cells between neighbours, per building type; place: the last evaluation of the gesture (tagpu_place.c's s_eval);
+       reclaim armed (main+0x2CC3 == 12, exclusive with a building armed), the sweep's kind and its ring gesture (the
+       press point, the last point over the map, past the threshold or not); the hover and the cursor's shape and the
+       tick its sequence began; and fed, the inputs the seat's script has fed (seat 0's trips too) since the sim was
+       made, its kills and waits not counted: the replay layer's clash rule reads it (gameNow), and no hash does. */
+    const seatInput = () => ({ cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), downOn: {}, mode: null, drag: null,
+      hover: null, gesture: null, shiftPlaced: false, spacing: {}, place: null, rmode: false, kind: S.kind, rg: null,
+      cursorShape: null, cursorSince: 0, fed: 0 });
+    const IN = Array.from({ length: NIN }, seatInput);
+    /* THE ORDERING, the acting seat: st is IN[K], and K is 0 between calls. sim.input and a fed script input act as
+       their seat, sim.view(seat) views as it and the step's tail visits each seat in turn, each through asSeat, which
+       puts K back before it returns. Nothing the input rules call re-enters input or view -- the COB host and the sound
+       source are called by the step and read units, never input state -- so every read of st is the acting seat's.
+       THE COLUMN IS SEAT 0'S: a game with the sidebar has NIN 1 (make refuses more), so its router, gadgets, capture
+       and trips only ever run with K 0. The caption is the demo's, no seat's. */
+    let st = IN[0], K = 0, caption = null;
+    const asSeat = (k, f) => {
+      const was = K;
+      K = k; st = IN[k];
+      try { return f(); } finally { K = was; st = IN[was]; }
+    };
     function unitAt(x, z) {
       let hit = null;
       for (const u of units) {
@@ -1328,10 +1377,10 @@ const WikiSim = (() => {
     }
     // the cursor the map rules read: clamped onto the map, so a drag released over the column selects up to its edge
     const mapCursor = () => ON ? { x: Math.min(Math.max(st.cursor.x, 0), MW), z: Math.min(Math.max(st.cursor.z, 0), MH) } : st.cursor;
-    /* screen: the routed screen's name; shown: the shown unit (main+0x37E9C); cap: the gadget a press captured and the
-       button that pressed it (gi+0x64, one slot, so a second press takes it over); downOn: where each mouse button
-       went down, which decides whether its release runs the map rules; locked: the type the demo stopped on (lock) */
-    const sb = { screen: null, shown: null, cap: null, downOn: {}, locked: null };
+    /* the column, seat 0's: screen: the routed screen's name; shown: the shown unit (main+0x37E9C); cap: the gadget a
+       press captured and the button that pressed it (gi+0x64, one slot, so a second press takes it over); and the
+       demo's locked: the type the demo stopped on (lock) */
+    const sb = { screen: null, shown: null, cap: null, locked: null };
     /* the demo stops under the badge: the first lock of the sim names the type, and the tick it falls on finishes as
        any tick does (a trip's data rule leaves only captions after its build there). Its sources: a build the
        layout cannot reach (trip), and a scene unit or a build of an unbound type, with or without the sidebar. */
@@ -1370,7 +1419,7 @@ const WikiSim = (() => {
            finds; they are this selection's, because a selection change clears the shown unit and so routes through
            the branch that computes them. 0x41A120 never un-greys: that a route to the screen already shown reloads it,
            so a STOP greyed for one selection is live again for the next, is [INFERRED]. */
-        case 'stop': return selected().some(u => u.owner === 0 && canStop(u.type)) ? +pressed : 2;
+        case 'stop': return selected(0).some(u => canStop(u.type)) ? +pressed : 2;
         /* RECLAIM is live while some selected unit of the player's has canreclamate: the router ORs def+0x245 bit
            0x400 over them (0x41B509..0x41B512, packed into main+0x37EC1 bit 0x20 at 0x41B6DA..0x41B6F7) and 0x41A120
            greys RECLAIM when the bit is clear (0x41A38C..0x41A3AF), DISASSEMBLED. It is a toggle (attribs 64): its
@@ -1413,7 +1462,7 @@ const WikiSim = (() => {
        difference of at most a frame. A screen change drops the capture, as the engine's page swap reloads the screen
        and its gadgets. */
     function route() {
-      const sel = selected().filter(u => u.owner === 0), side = SIDE;
+      const sel = selected(0), side = SIDE;
       const u = sel.length === 1 ? sel[0] : null, T = u && typePages(u.type);
       // u.page is 1..n for a type with n pages: enter() starts it at 1 and act() is its only other writer, wrapping
       // within 1..n, so T.pages[u.page - 1] is always a page
@@ -1454,7 +1503,7 @@ const WikiSim = (() => {
       else if (g.role === 'buildtab' && n) u.bp = true;
       else if (g.role === 'stop') {
         st.mode = null; st.gesture = null; st.rmode = false; st.rg = null;
-        for (const v of selected()) if (v.owner === 0) v.orders = [];
+        for (const v of selected()) v.orders = [];
       }
       else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) arm(g.unit);
       else if (isReclaim(g)) toggleReclaim();
@@ -1495,7 +1544,7 @@ const WikiSim = (() => {
        its release orders the selected reclaimers to take the features of the chosen kind it holds, split nearest-first
        between them. A shorter press is stock's click. A popup off RECLAIM's row picks the kind, and RECLAIM's own key
        cycles it. ---- */
-    const reclaimers = () => selected().filter(u => u.owner === 0 && canReclaim(u.type));
+    const reclaimers = () => selected().filter(u => canReclaim(u.type));
     // RECLAIM: an order button whose name holds RECLAIM, the orders handler's strstr (0x419F56)
     const isReclaim = g => g.role === 'order' && g.name.includes('RECLAIM');
     // the routed screen's first RECLAIM, its index, -1 for none (tagpu_sweep.c reclaim_gadget)
@@ -1944,7 +1993,7 @@ const WikiSim = (() => {
     }
     // a move: the selected mobile units to points SPACING apart across the cursor, in selection order
     function moveOrder(shift) {
-      const ms = selected().filter(u => u.owner === 0 && mobile(u.type));
+      const ms = selected().filter(u => mobile(u.type));
       const c = mapCursor();
       ms.forEach((u, i) => assign(u, [{ k: 'move', x: c.x + (i - (ms.length - 1) / 2) * SPACING, z: c.z }], shift));
     }
@@ -1959,7 +2008,7 @@ const WikiSim = (() => {
       else quickOrder(c, shift);
       return true;
     }
-    const unfinishedOwn = u => u.owner === 0 && !mobile(u.type) && u.built < 1;
+    const unfinishedOwn = u => u.owner === K && !mobile(u.type) && u.built < 1;
     // the assist: every selected builder is ordered to build the unfinished building where it stands
     const assist = (u, shift) => { for (const b of builders()) assign(b, [{ k: 'build', type: u.type, ox: u.ox, oz: u.oz }], shift); };
     /* TYPE 1, a right press on the map with nothing armed: Quick Build's, else the game's own, which orders at the
@@ -1985,7 +2034,7 @@ const WikiSim = (() => {
     function leftClick(shift) {
       if (quickClick(shift)) return;
       const { x, z } = mapCursor(), u = unitAt(x, z);
-      if (u && u.owner === 0) return unfinishedOwn(u) && builders().length ? assist(u, shift) : select(shift);
+      if (u && u.owner === K) return unfinishedOwn(u) && builders().length ? assist(u, shift) : select(shift);
       moveOrder(shift);
     }
     /* TYPE 0, a right press on the map with nothing armed (0x499172..0x499196, DISASSEMBLED): without Ctrl every unit
@@ -1994,7 +2043,7 @@ const WikiSim = (() => {
        the cursor centred) that the stage, having no camera to move, does not model; the selection stays (MEASURED),
        and main+0x2CDF read 0 after the press, so the view mode itself was not seen. */
     function rightPress0() {
-      if (!st.held.has('ctrl')) for (const u of units) u.sel = false;
+      if (!st.held.has('ctrl')) deselect();
     }
     /* a build-menu placement, stock's click: the selected builders with that button get it; without Shift the menu mode
        ends. With Shift (0x43AFC0) the first build order of the builder's within 16 world units of the site is taken off
@@ -2018,9 +2067,9 @@ const WikiSim = (() => {
       const d = st.drag, { x, z } = mapCursor();
       if (box) {
         const x0 = Math.min(d.x0, x), x1 = Math.max(d.x0, x), z0 = Math.min(d.z0, z), z1 = Math.max(d.z0, z);
-        const inBox = units.filter(u => u.owner === 0 && u.x >= x0 && u.x <= x1 && u.z >= z0 && u.z <= z1);
+        const inBox = units.filter(u => u.owner === K && u.x >= x0 && u.x <= x1 && u.z >= z0 && u.z <= z1);
         const pick = inBox.some(u => mobile(u.type)) ? inBox.filter(u => mobile(u.type)) : inBox;
-        if (!shift) for (const u of units) u.sel = false;
+        if (!shift) deselect();
         for (const u of pick) u.sel = true;
         // the box's sound (0x48C65A..0x48C681): one unit says its select, more the allsound SelectMultipleUnits
         if (pick.length === 1) notice(pick[0], SND.select);
@@ -2028,12 +2077,12 @@ const WikiSim = (() => {
         return;
       }
       const u = unitAt(x, z);
-      if (u && u.owner === 0) {
+      if (u && u.owner === K) {
         if (shift) u.sel = !u.sel;
-        else { for (const v of units) v.sel = false; u.sel = true; }
+        else { deselect(); u.sel = true; }
         // the click's select says it when its unit is left selected (0x48C8B9, 0x48C997)
         if (u.sel) notice(u, SND.select);
-      } else if (!shift) for (const v of units) v.sel = false;
+      } else if (!shift) deselect();
     }
 
     /* ---- input ---- */
@@ -2048,7 +2097,7 @@ const WikiSim = (() => {
        at once (the wiki never sends `build`, and the rule cases use it as their shortcut). */
     const TRIPS = scripted && ON;
     function input(ev) {
-      if ('caption' in ev) st.caption = ev.caption || null;
+      if ('caption' in ev) caption = ev.caption || null;
       if ('build' in ev) {
         if (unbound(ev.build)) lock(ev.build);
         else if (TRIPS) trip(ev.build);
@@ -2070,11 +2119,11 @@ const WikiSim = (() => {
       else if (ev.down && !st.held.has(ev.down)) {
         st.held.add(ev.down);
         const shift = st.held.has('shift'), where = over(), mouse = ev.down === 'lmb' || ev.down === 'rmb';
-        if (mouse) sb.downOn[ev.down] = where;
+        if (mouse) st.downOn[ev.down] = where;
         /* A RIGHT PRESS WHILE A RECLAIM DRAG'S LEFT PRESS IS HELD, wherever it lands, ends the drag and keeps reclaim
            armed; the window procedure takes it and its release before the engine or the GUI sees either
            (tagpu_sweep_mouse) */
-        if (ev.down === 'rmb' && st.rg) { st.rg = null; sb.downOn.rmb = null; }
+        if (ev.down === 'rmb' && st.rg) { st.rg = null; st.downOn.rmb = null; }
         else if (mouse && where === 'side' && onScreen()) pressSide(ev.down);
         else if (where === 'map') {
           // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
@@ -2108,7 +2157,7 @@ const WikiSim = (() => {
         st.held.delete(ev.up);
         // a release runs the map rules only for a press that went down on the map
         if (sb.cap && sb.cap.b === ev.up) releaseSide();
-        else if (sb.downOn[ev.up] === 'map') {
+        else if (st.downOn[ev.up] === 'map') {
           if (ev.up === 'lmb' && st.rg) reclaimRelease();
           else if (ev.up === 'lmb' && st.gesture) release();
           else if (ev.up === 'lmb' && st.drag) {
@@ -2927,21 +2976,20 @@ const WikiSim = (() => {
        except while a wait holds it (wait: {until, max, from}, from the tick it began); a wait that runs past its max
        stops the demo, `stalled`. A Try-it sim has no script, so its clock is its tick. */
     let next = 0, clock = 0, wait = null, stalled = false;
-    /* fed: the inputs of seat 0's the script and its trips have fed since the sim was made, its kills and waits not
-       counted; the replay layer's clash rule reads it (gameNow), and no hash does */
-    let fed = 0;
     // the wait's state holds (UNTILS)
     const holds = w => w.until === 'built' ? built >= w.need : !units.some(u => u.owner === 0 &&
       u.orders.some(o => w.until === 'idle' ? o.k === 'build' || o.k === 'reclaim' : o.k === 'move'));
-    // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
+    /* a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press. The
+       trips' inputs are seat 0's, which K is here; a script input acts as its own seat, which make and the fork held
+       below NIN */
     const feed = t => {
       feeding = t;
-      while (genNext < gen.length && gen[genNext].at <= t) { input(gen[genNext++].ev); fed++; }
+      while (genNext < gen.length && gen[genNext].at <= t) { input(gen[genNext++].ev); IN[0].fed++; }
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
         if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
         else if (GAME && 'kill' in e) kill(e.kill);
-        else { input(e); fed++; }
+        else if (isSeat(e.seat ?? 0)) { const k = e.seat ?? 0; asSeat(k, () => input(e)); IN[k].fed++; }
       }
     };
     const end = scripted && demo && demo.end != null ? demo.end : Infinity;  // a Try-it sim is never done
@@ -2960,7 +3008,7 @@ const WikiSim = (() => {
       return st.kind !== 'all' && f && f.reclaimable && seen(Math.floor(f.x / CELL), Math.floor(f.z / CELL)) && !kindOk(f) ? 'arrow' : 'reclaim';
     };
     const cursorShape = () => over() !== 'map' ? 'arrow' : st.rmode ? reclaimCursor() : st.mode ? 'build' :
-      selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
+      selected().some(u => mobile(u.type)) ? 'move' : 'arrow';
     // the sequence a shape shows: the build cursor is the arrow's cursornormal
     const cursorSeq = k => k === 'build' ? 'arrow' : k;
     /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation began when it
@@ -2974,7 +3022,15 @@ const WikiSim = (() => {
       st.cursorShape = k;
     };
 
-    sim.input = ev => { now = sim.tick; input(ev); dropWork(); cursorTick(sim.tick); };
+    // a seat of the game's input seats; any other value is none (THE BOUND an index into IN rests on)
+    const isSeat = k => int(k) && k >= 0 && k < NIN;
+    /* the player's input, as its seat (`seat`, 0 when absent): one of no input seat is ignored */
+    sim.input = ev => {
+      const k = ev.seat ?? 0;
+      if (!isSeat(k)) return;
+      now = sim.tick;
+      asSeat(k, () => { input(ev); dropWork(); cursorTick(sim.tick); });
+    };
     sim.step = () => {
       const t = sim.tick + 1;
       now = t;
@@ -2997,8 +3053,8 @@ const WikiSim = (() => {
          that starved and at a kill that found no unit */
       sim.done = clock >= end || sb.locked !== null || stalled || starved || badKill;
       if (ON) route();
-      st.hover = hover();
-      cursorTick(t);
+      // the step's per-seat tail: each seat's hover and cursor shape over the world the tick left
+      for (let k = 0; k < NIN; k++) asSeat(k, () => { st.hover = hover(); cursorTick(t); });
     };
     // a unit's orders, for a check: kind, building and site, or the target's id
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
@@ -3020,14 +3076,35 @@ const WikiSim = (() => {
         return m;
       });
     };
-    sim.view = () => {
+    /* what the acting seat's input shows: the ghost, the gesture's sites and shape, the spacing, the cursor, the keys
+       held, the drag and the armed mode */
+    const seatView = () => {
       // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
       const p = placed() && st.place.sites.length ? st.place : null;
       const h = st.hover, gh = !p && h && (h.kind === 'place' ? h : h.kind === 'quick' ? { ...h, ok: true } : null);
       let n = 0;
-      const sites = p ? p.sites.map(s => ({ ...siteCentre(p.type, s), state: s.state, order: s.state === 'place' ? ++n : null })) : [];
+      return {
+        ghost: gh ? { ...centre(gh.type, gh.ox, gh.oz), ok: gh.ok } : null,
+        // the gesture's preview: each site's centre and footprint, 'place' (green), 'refused' (red, skipped) or 'remove'
+        // (yellow, takes a queued order off), and its place among the orders the release would add
+        sites: p ? p.sites.map(s => ({ ...siteCentre(p.type, s), state: s.state, order: s.state === 'place' ? ++n : null })) : [],
+        shape: p ? p.kind : null,
+        spacing: st.mode ? st.spacing[st.mode] || 0 : null,
+        // every change of the shape -- an input, a tick, the scene -- records it (cursorTick)
+        cursor: { x: st.cursor.x, z: st.cursor.z, shape: st.cursorShape, since: st.cursorSince },
+        keys: KEYS.filter(k => st.held.has(k)),
+        drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: mapCursor().x, z1: mapCursor().z } : null,
+        mode: st.rmode ? 'reclaim' : st.mode ? `build:${st.mode}` : 'contextual',
+      };
+    };
+    /* THE VIEW as `seat` sees it (0 when absent, and for a seat of no input state): its own input's parts (seatView),
+       its order lines, its queued sites and the sweep it has armed; `units[].selected` is every seat's flag, the
+       state hash's item 3, which a frame filters by owner. A game with more than one input seat adds the input seats'
+       count, the viewed seat and seats 1..NIN - 1's own parts (`inputs`, each seatView with its reclaim armed, kind
+       and ring), the state hash's item 13. */
+    sim.view = (seat = 0) => asSeat(isSeat(seat) ? seat : 0, () => {
       const lines = [];
-      for (const u of units) if (u.sel) {
+      for (const u of units) if (u.sel && u.owner === K) {
         let from = [u.x, u.z];
         for (const o of u.orders) {
           const t = orderPoint(o) || byId(o.target);
@@ -3038,8 +3115,6 @@ const WikiSim = (() => {
       }
       const owners = new Map();
       for (const u of units) for (const o of u.orders) if (o.k === 'build') owners.set(`${o.type}@${o.ox},${o.oz}`, u.owner);
-      // every change of the shape -- an input, a tick, the scene -- records it (cursorTick)
-      const shape = st.cursorShape, since = st.cursorSince;
       /* THE SWEEP as tagpu_sweep_fill publishes it: while reclaim is armed, the kind; during a drag past the threshold
          the ring, its targets and the readout's counts and sums (a feature with metal counts as a wreck, one with
          energy alone as a tree); otherwise the feature under the pointer the kind takes, bracketed; and the popup
@@ -3060,20 +3135,11 @@ const WikiSim = (() => {
         map: { w: W, h: H, cell: CELL, surfaceMetal: SM, metal: metal.slice(), fog: fog.slice(), vents: vents.map(v => ({ x: (v.cx + 0.5) * CELL, z: (v.cz + 0.5) * CELL })) },
         units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, hx: u.hx, hz: u.hz, fx: fp(u.type)[0], fz: fp(u.type)[1],
           selected: u.sel, built: u.built, reclaimed: u.reclaimed, label: u.label })),
-        ghost: gh ? { ...centre(gh.type, gh.ox, gh.oz), ok: gh.ok } : null,
-        // the gesture's preview: each site's centre and footprint, 'place' (green), 'refused' (red, skipped) or 'remove'
-        // (yellow, takes a queued order off), and its place among the orders the release would add
-        sites,
-        shape: p ? p.kind : null,
-        spacing: st.mode ? st.spacing[st.mode] || 0 : null,
+        ...seatView(),
         queued: plans().map(p => ({ ...centre(p.type, p.ox, p.oz), owner: owners.get(`${p.type}@${p.ox},${p.oz}`) })),
         lines,
-        cursor: { x: st.cursor.x, z: st.cursor.z, shape, since },
-        keys: KEYS.filter(k => st.held.has(k)),
-        drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: mapCursor().x, z1: mapCursor().z } : null,
-        caption: st.caption,
+        caption,
         pace: PACE,
-        mode: st.rmode ? 'reclaim' : st.mode ? `build:${st.mode}` : 'contextual',
         // the features still standing, each by its id, its section name and its footprint at its anchor cell
         feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz, metal: f.metal, energy: f.energy,
           wreck: f.wreck })),
@@ -3114,8 +3180,11 @@ const WikiSim = (() => {
           seats: econ.map((z, k) => ({ name: SEATDATA[k].name, ...z })), mode: STALL ? 'stall' : 'refuse', starved, badKill, nkill,
           ledgers: units.map(u => { const L = u.led; return [L.eP, L.eR, L.eG, L.eD, L.mP, L.mR, L.mG, L.mD]; }),
         } } : {}),
+        // the input seats beyond seat 0, only in a game with more than one (tagpu_wikisim.h, item 13 of the hash)
+        ...(GAME && NIN > 1 ? { nin: NIN, viewed, inputs: IN.slice(1).map((_, i) => asSeat(i + 1, () => ({ ...seatView(),
+          reclaim: st.rmode ? { kind: st.kind, ring: st.rg && st.rg.drag ? ringOf(st.rg) : null } : null }))) } : {}),
       };
-    };
+    });
     // whether it is a game (WikiSim.game), whose view and hash carry the game's part
     sim.game = GAME;
     // the bound entry's type names by index, which a death event names its type by (sound.js drain)
@@ -3123,78 +3192,100 @@ const WikiSim = (() => {
     // frees what the sim holds outside itself: its scripts' world in the COB host
     sim.free = () => { if (COB) COB.free(); };
     /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,
-       a pass that starved, a kill that found no unit), the sound events made since it was made, each seat's
-       commanders lost and whether it is out, the seat-0 inputs fed; seat 0's stored values, storage and last pass's
-       rates, which the live mode's top bar eases and samples (tagpu_wikisim.h WIKIECON's m, e, mmax, emax, ei, eo, mi,
-       mo), and the keys and buttons seat 0 holds, in KEYS order */
-    if (GAME) sim.gameNow = () => ({ stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
-      seats: econ.map(z => ({ lost: z.lost, out: z.out })), fed,
-      bar: { e: econ[0].e, m: econ[0].m, emax: econ[0].emax, mmax: econ[0].mmax, ei: econ[0].ei, eo: econ[0].eo, mi: econ[0].mi, mo: econ[0].mo },
-      keys: KEYS.filter(k => st.held.has(k)) });
-    /* THE RELEASE (tagpu_wikisim_release), between two ticks: what the game's rebuild leaves of seat 0's input after
+       a pass that starved, a kill that found no unit), the sound events made since it was made, each seat's units,
+       commanders lost and whether it is out; and of `seat` (0 when absent, and for a seat of no input state) the
+       inputs fed, the stored values, storage and last pass's rates, which the live mode's top bar eases and samples
+       (tagpu_wikisim.h WIKIECON's m, e, mmax, emax, ei, eo, mi, mo), and the keys and buttons it holds, in KEYS order */
+    if (GAME) sim.gameNow = (seat = 0) => {
+      const k = isSeat(seat) ? seat : 0, z = econ[k];
+      return { stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
+        seats: econ.map(e => ({ units: e.units, lost: e.lost, out: e.out })), fed: IN[k].fed,
+        bar: { e: z.e, m: z.m, emax: z.emax, mmax: z.mmax, ei: z.ei, eo: z.eo, mi: z.mi, mo: z.mo },
+        keys: KEYS.filter(b => IN[k].held.has(b)) };
+    };
+    /* THE RELEASE (tagpu_wikisim_release), between two ticks: what the game's rebuild leaves of seat k's input after
        Back to now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a return
        to now, each from the commander selected and a building armed, came up with no unit selected, main+0x2CC3 back
-       to 1 and the side's MAIN2 shown). The held keys and buttons, a drag, a placement or reclaim gesture and a gadget
-       captured are let go without acting [INFERRED: they are the hardware's, which no recording carries]; not
-       input({up}), since a release acts (a box select, a placement) and would act on the player's behalf. The selection
-       empties and the armed building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
-       settings rather than what the measurement read, stay.
+       to 1 and the side's MAIN2 shown). The seat's held keys and buttons, a drag and a placement or reclaim gesture
+       are let go without acting [INFERRED: they are the hardware's, which no recording carries]; not input({up}),
+       since a release acts (a box select, a placement) and would act on the player's behalf. The seat's selection
+       empties and its armed building or reclaim goes; its spacing and the sweep's kind, settings rather than what the
+       measurement read, stay. Every other seat's input is untouched.
 
-       Every generated input not yet fed goes too: the rest of a build or reclaim trip the release cuts off (a live
-       entry has no pick). The trip was planned from the selection the release empties, so what is left of it would
-       press the column MAIN2 now shows; dropped, the release costs the game at most the one order in hand, a trip it
-       cuts off or a building or reclaim armed and not yet used, as a player whose click is cut off loses their
+       Seat 0's release also lets go of the column's gadget capture, routes the column to MAIN2, and drops every
+       generated input not yet fed: the rest of a build or reclaim trip the release cuts off (a live entry has no
+       pick). The column, its capture and its trips are seat 0's (THE COLUMN IS SEAT 0'S), so another seat's release
+       has none of them to drop. The trip was planned from the selection the release empties, so what is left of it
+       would press the column MAIN2 now shows; dropped, the release costs the game at most the one order in hand, a
+       trip it cuts off or a building or reclaim armed and not yet used, as a player whose click is cut off loses their
        selection and the half-made order with it. This is the one place a timeline's trips are dropped: the fork drops
        them by calling this. A data input is never dropped, and THE LIVE DATA RULE (checkLiveOrders) puts the select of
-       a build's builder and of a reclaim's reclaimer on the order's own tick, which a release, between two ticks,
-       cannot split, and keeps out of a live entry the pick, whose popup a release closes. */
-    function letGo() {
-      genNext = gen.length;
-      st.held = new Set(); st.drag = null; st.gesture = null; st.place = null; st.shiftPlaced = false; st.rg = null;
-      sb.cap = null; sb.downOn = {};
-      for (const u of units) u.sel = false;
-      st.mode = null; st.rmode = false;
-      if (ON) route();
-      st.hover = hover();
-      cursorTick(sim.tick);
+       a build's builder and of a reclaim's reclaimer on the order's own tick and seat, which a release, between two
+       ticks, cannot split, and keeps out of a live entry the pick, whose popup a release closes. A seat of no input
+       state has nothing to let go. */
+    function letGo(k = 0) {
+      if (!isSeat(k)) return;
+      asSeat(k, () => {
+        if (k === 0) { genNext = gen.length; sb.cap = null; }
+        st.held = new Set(); st.downOn = {}; st.drag = null; st.gesture = null; st.place = null; st.shiftPlaced = false; st.rg = null;
+        deselect();
+        st.mode = null; st.rmode = false;
+        if (ON && k === 0) route();
+        st.hover = hover();
+        cursorTick(sim.tick);
+      });
     }
     sim.release = letGo;
-    /* THE FORK (research/notes/ingame-wiki-replay-plan.md, decision 8; tagpu_wikisim_fork): the game handed over at R,
-       the world of R - 1 kept whole, the recorded future dropped and `inputs` (a fork's part, seat 0's game inputs of
-       ticks R..end) its new script, its economy in `mode` from here on. Refused (it throws, the sim untouched) unless
-       the game stands at R - 1 and has not stopped, `mode` is refuse or stall, every input is at R or later and neither
-       a caption nor a wait, the features standing and gone plus the part's kills stay within FEATS_MAX (THE BOUND the
-       wrecks' table rests on), and the part resolves from nothing held and keeps the trips' data rule.
+    /* THE FORK (research/notes/ingame-wiki-replay-plan.md, decision 8; tagpu_wikisim_fork): the game handed over at R
+       to `seat` (0 when absent), the world of R - 1 kept whole, and `inputs` (a fork's part: game inputs of ticks
+       R..end, any seat's) its script with the other seats' recorded inputs, its economy in `mode` from here on.
+       Refused (it throws, the sim untouched) unless the game stands at R - 1 and has not stopped, `mode` is refuse or
+       stall, the seat is one of the input seats, every input is at R or later, neither a caption nor a wait and of an
+       input seat, the features standing and gone plus the part's kills stay within FEATS_MAX (THE BOUND the wrecks'
+       table rests on), and the new script keeps the held-button rule seat by seat -- the taken seat's hand from
+       nothing, every other seat's from the buttons it holds at R - 1, which its carried inputs continue -- and the
+       trips' data rule.
 
        THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the inputs of tick
-       <= t, so every input not yet fed has its tick >= R and is the recorded future the fork replaces: the script's
-       inputs by its new script, the trips' generated ones by the release, which drops them. The release comes before
-       the new script is installed, as the game's fork leaves the player: an authored part begins with the selection
-       it needs, on the tick of each build or reclaim it makes (THE LIVE DATA RULE, checkLiveOrders). The other seats'
-       inputs are empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
-    if (GAME) sim.fork = (R, inputs, mode) => {
+       <= t, so every input not yet fed has its tick >= R (one of a tick no feed reaches, below R, is dropped with it).
+       Of those the fork drops the taken seat's, the recorded future it replaces, and every kill, since a death after R
+       is not fated (decision 8); every other seat's are carried, so they play on from their recorded inputs. The new
+       script is the carried inputs and the part's, merged by tick, the carried first on a tie, each in its own order.
+       The release lets go of the taken seat alone, as the game's takeover leaves its player (tk_live: every unit
+       deselected), and with seat 0 it drops the trips' inputs not yet fed. It comes before the new script is
+       installed: an authored part begins with the selection it needs, on the tick of each build or reclaim it makes
+       (THE LIVE DATA RULE, checkLiveOrders). The fork then views the taken seat, as the game's takeover does. With
+       seat 0 and a script of seat 0 alone, nothing is carried, and the fork is the part alone. */
+    if (GAME) sim.fork = (R, inputs, mode, seat = 0) => {
       const at = `demo ${demo.id}: the fork at tick ${R}`;
       if (sim.tick !== R - 1) throw new Error(`${at}: the game stands at tick ${sim.tick}`);
       if (sb.locked !== null || starved || badKill) throw new Error(`${at}: the game has stopped`);
       if (mode !== 'refuse' && mode !== 'stall') throw new Error(`${at}: the economy's mode ${mode} is not refuse or stall`);
+      if (!isSeat(seat)) throw new Error(`${at}: seat ${seat} is not one of the game's ${NIN} input seats`);
       if (!Array.isArray(inputs)) throw new Error(`${at}: the part's inputs are not a list`);
       let kills = 0;
       for (const e of inputs) {
         if (!obj(e) || !(e.at >= R)) throw new Error(`${at}: an input of the part is before it`);
         if ('caption' in e || 'until' in e) throw new Error(`${at}: a game input is a caption or a wait`);
         if ('kill' in e) kills++;
+        else if (!isSeat(e.seat ?? 0)) throw new Error(`${at}: an input of the part is of seat ${e.seat}, no input seat of the game`);
       }
       if (feats.length + gone.length + kills > FEATS_MAX) throw new Error(`${at}: the features and the kills pass ${FEATS_MAX}`);
-      // the part as gameDemo and the binder make a game script: the seat taken off, the builds the bound types
-      const raw = { id: demo.id, inputs: inputs.map(e => { if (!('seat' in e)) return e; const { seat, ...r } = e; return r; }) };
-      const part = B ? B.demo(raw) : raw;
-      const fresh = resolve(demo, part.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE);
+      // the recorded future split: the other seats' inputs carried, the taken seat's and every kill dropped
+      const carried = script.slice(next).filter(e => e.at >= R && !('kill' in e) && (e.seat ?? 0) !== seat);
+      // the part as gameDemo and the binder make a game script, the builds the bound types, in its own order
+      const raw = { id: demo.id, inputs };
+      const part = (B ? B.demo(raw) : raw).inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]);
+      const merged = [];
+      for (let c = 0, q = 0; c < carried.length || q < part.length;)
+        merged.push(q === part.length || (c < carried.length && carried[c].at <= part[q].at) ? carried[c++] : part[q++]);
+      const fresh = resolve(demo, merged, IFACE, IN.map((I, k) => k === seat ? [] : ['lmb', 'rmb'].filter(b => I.held.has(b))));
       if (TRIPS) checkTrips(fresh, end);
-      // the release drops the trips' inputs not yet fed with the selection they were planned from
-      letGo();
+      letGo(seat);
       script = fresh;
       next = 0;
       STALL = mode === 'stall';
+      viewed = seat;
       sim.done = clock >= end || sb.locked !== null || stalled || starved || badKill;
     };
 
@@ -3205,9 +3296,7 @@ const WikiSim = (() => {
     feed(0);
     if (GAME) counts();
     sim.done = sb.locked !== null || badKill;
-    st.hover = hover();
-    st.cursorShape = cursorShape();
-    st.cursorSince = 0;
+    for (let k = 0; k < NIN; k++) asSeat(k, () => { st.hover = hover(); st.cursorShape = cursorShape(); st.cursorSince = 0; });
     return sim;
   }
 

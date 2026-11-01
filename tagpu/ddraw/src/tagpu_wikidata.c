@@ -572,8 +572,9 @@ static int scenes(R* r, WIKIENTRY* e, const TJV* v)
 }
 
 /* an input of a demo's script, or with `game` of a game script (sim.js checkGame): there it has no
-   caption and no wait, its `seat` is 0 and read past, as sim.js takes it off before its other rules,
-   and a kill is {at, kill} alone, `extra` as any input but a caption is, so no trip admits it */
+   caption and no wait, its `seat` is an integer 0..WIKI_SEATS - 1 (THE SEAT RULE, seat_ok, bounds it
+   by the scene's seats and the sidebar), and a kill is {at, kill} alone, `extra` as any input but a
+   caption is, so no trip admits it */
 static int input(R* r, const TJV* v, WIKIINPUT* in, int game)
 {
     const TJV* c;
@@ -586,11 +587,13 @@ static int input(R* r, const TJV* v, WIKIINPUT* in, int game)
             in->extra = 1;
     if (game) {
         if (tj_get(v, "caption") || tj_get(v, "until")) return refuse(r, "a game input is a caption or a wait", NULL);
-        if ((c = tj_get(v, "seat")) && !(tj_is(c, TJ_NUM) && c->num == 0)) {
-            char why[96], num[32];
-            snprintf(why, sizeof why, "seat %s: a seat other than 0 has no cursor yet",
-                     tj_is(c, TJ_NUM) ? jsnum(num, sizeof num, c->num) : "?");
-            return refuse(r, why, NULL);
+        if ((c = tj_get(v, "seat"))) {
+            if (!tj_is(c, TJ_NUM) || c->num != floor(c->num) || !(c->num >= 0 && c->num < WIKI_SEATS)) {
+                char why[96], num[32];
+                snprintf(why, sizeof why, "seat %s is no seat of its scene", tj_is(c, TJ_NUM) ? jsnum(num, sizeof num, c->num) : "?");
+                return refuse(r, why, NULL);
+            }
+            in->seat = (int)c->num;
         }
         if ((c = tj_get(v, "kill"))) {
             const TJV* k;
@@ -677,15 +680,37 @@ static int scene_has_id(const WIKIENTRY* e, const WIKIDEMO* d, const char* id)
     return 0;
 }
 
-/* THE LIVE DATA RULE (sim.js checkLiveOrders): in a live entry the release
-   (tagpu_wikisim_release) can come between any two ticks of seat 0's game script and of a fork's
-   part, and it empties the selection an order is given from and disarms reclaim. So each build
-   naming a type and each reclaim has, on its own tick and before it in the order the inputs are
-   fed (by tick, then file order; within one input its move, then its press, then its release, as
-   the sim's input() reads them), the click that selects its builder or reclaimer: a move aiming the
-   cursor, then select pressed, then select released. The release runs only between two ticks, so
-   it cannot fall between that click and the order; the move is on the tick too because a trip the
-   release cuts off leaves the cursor wherever it was. Whether the click lands on a builder or a
+/* THE SEAT RULE (sim.js checkGame): a game input's seat is one of its scene's, and 0 unless the
+   game's sidebar is false, since the column is seat 0's and a game whose sidebar may be on gives no
+   other seat an input (an over-approximation: an absent sidebar is on when the scene gives seat 0 a
+   builder and the layout has a column; tagpu_wikisim_init refuses a column beside another seat's
+   input as well). `d`'s game is read up to its inputs. */
+static int seat_ok(R* r, const WIKIINPUT* in, const WIKIDEMO* d)
+{
+    char why[160];
+    if (in->seat >= r->e->scenes[d->on].nseat) {
+        snprintf(why, sizeof why, "seat %d is no seat of its scene", in->seat);
+        return refuse(r, why, NULL);
+    }
+    if (in->seat != 0 && !(d->game.has_sidebar && !d->game.sidebar)) {
+        snprintf(why, sizeof why, "seat %d: the column is seat 0's, so a game whose sidebar is not false gives no other seat an input",
+                 in->seat);
+        return refuse(r, why, NULL);
+    }
+    return 1;
+}
+
+/* THE LIVE DATA RULE (sim.js checkLiveOrders): in a live entry a seat's release
+   (tagpu_wikisim_release) can come between any two ticks of a game script and of a fork's part,
+   and it empties that seat's selection an order is given from and disarms its reclaim. So each
+   build naming a type and each reclaim has, on its own tick and before it in the order the inputs
+   are fed (by tick, then file order; within one input its move, then its press, then its release,
+   as the sim's input() reads them), the click of its own seat that selects its builder or
+   reclaimer: a move aiming that seat's cursor, then select pressed, then select released. Another
+   seat's click selects nothing of this seat's, and a release lets go of one seat alone, so the rule
+   holds seat by seat. The release runs only between two ticks, so it cannot fall between that click
+   and the order; the move is on the tick too because a trip the release cuts off leaves the cursor
+   wherever it was. Whether the click lands on a builder or a
    reclaimer is the world's, which simcheck.mjs's release sweep plays out.
    A live entry has no pick: the popup it clicks stands only while reclaim is armed, and with the
    sidebar's trips a reclaim arms only when its trip clicks RECLAIM, ticks after the reclaim's own,
@@ -713,7 +738,7 @@ static int live_orders(R* r, const WIKIINPUT* in, int n, int part)
         }
         if (!what) continue;
         for (j = 0; j < i; j++) {
-            if (in[j].at != in[i].at) continue;
+            if (in[j].at != in[i].at || in[j].seat != in[i].seat) continue;
             if ((in[j].has & WIKI_IN_MOVE) && step < 3) step = 1;
             if (in[j].down == WIKI_ACT_SELECT && step == 1) step = 2;
             if (in[j].up == WIKI_ACT_SELECT && step == 2) step = 3;
@@ -728,8 +753,9 @@ static int live_orders(R* r, const WIKIINPUT* in, int n, int part)
 }
 
 /* A GAME ENTRY'S DEMO'S GAME, sim.js checkGame: {end, inputs, sidebar} and no other key; end an
-   integer 1..WIKI_GAME_END_MAX, sidebar a boolean; each input a game input (input), each kill of a
-   unit of the merged scene by its explicit id, once, at most WIKI_GAME_KILLS, at or before the end;
+   integer 1..WIKI_GAME_END_MAX, sidebar a boolean; each input a game input (input) of a seat THE
+   SEAT RULE admits (seat_ok), each kill of a unit of the merged scene by its explicit id, once, at
+   most WIKI_GAME_KILLS, at or before the end;
    on a live entry, each build and reclaim after the click selecting its builder or reclaimer, and
    no pick (THE LIVE DATA RULE, live_orders). THE BOUND the game simulation's features rest on: no
    feature of the merged scene takes a unit's id (its id, or f<k + 1> when it has none, sim.js's
@@ -768,7 +794,7 @@ static int game(R* r, const TJV* v, WIKIDEMO* d)
     for (c = inputs->first; c; c = c->next) {
         WIKIINPUT* in = &g->input[i++];
         if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
-        if (!input(r, c, in, 1)) return 0;
+        if (!input(r, c, in, 1) || !seat_ok(r, in, d)) return 0;
         if (!(in->has & WIKI_IN_KILL)) continue;
         if (!scene_has_id(e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
         for (j = 0; j < i - 1; j++)
@@ -872,8 +898,8 @@ static int viewer_order(R* r, const WIKIDEMO* d)
 }
 
 /* A LIVE DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most WIKI_DEMO_FORKS
-   parts, each exactly {id, from, parent, inputs}; each input a game input (input), at a tick
-   from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
+   parts, each exactly {id, from, parent, inputs}; each input a game input (input) of a seat THE
+   SEAT RULE admits (seat_ok), at a tick from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
    WIKI_GAME_KILLS; each build and reclaim after the click selecting its builder or reclaimer, and
    no pick (THE LIVE DATA RULE, live_orders). THE BOUND the game simulation's features rest on, over the parts too: the merged
    scene's features, the game script's kills and every part's together are at most WIKI_FEATS_MAX
@@ -903,7 +929,7 @@ static int forks(R* r, const TJV* v, WIKIDEMO* d)
         for (c = inputs->first; c; c = c->next) {
             WIKIINPUT* in = &f->input[f->ninput++];
             if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
-            if (!input(r, c, in, 1)) return 0;
+            if (!input(r, c, in, 1) || !seat_ok(r, in, d)) return 0;
             if (!(in->at >= f->from && in->at <= d->game.end)) return refuse(r, "a fork part's input is outside its ticks", NULL);
             if (!(in->has & WIKI_IN_KILL)) continue;
             if (!scene_has_id(r->e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
@@ -1255,26 +1281,33 @@ static const WIKIINPUT** script(const WIKIDEMO* d, char* err, size_t errn)
     return in;
 }
 
-int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, char* err, size_t errn)
+int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, const int* held, char* err, size_t errn)
 {
     const WIKIINPUT** in = script(d, err, errn);
-    int i, k, held[2] = { 0, 0 }, ok = 1;
+    int i, k, hand[WIKI_SEATS][2], ok = 1;
     if (!in) return 0;
+    for (i = 0; i < WIKI_SEATS; i++)
+        for (k = 0; k < 2; k++) hand[i][k] = held ? held[2 * i + k] != 0 : 0;
     for (i = 0; ok && i < d->ninput; i++) {
-        /* the press first, then the release: sim.js reads `down` before `up` in one input */
+        /* the press first, then the release: sim.js reads `down` before `up` in one input. THE
+           BOUND: a seat is the reader's, 0..WIKI_SEATS - 1, and one outside it is no hand */
         const int key[2] = { tagpu_wikidata_button(in[i]->down, iface), tagpu_wikidata_button(in[i]->up, iface) };
+        const int z = in[i]->seat;
+        if (z < 0 || z >= WIKI_SEATS) continue;
         for (k = 0; ok && k < 2; k++) {
             const int down = k == 0, b = key[k] == WIKI_KEY_LMB ? 0 : key[k] == WIKI_KEY_RMB ? 1 : -1;
-            char num[32];
+            char num[32], by[16];
             if (b < 0) continue;
-            if (down == held[b]) {
+            if (down == hand[z][b]) {
+                by[0] = 0;
+                if (z) snprintf(by, sizeof by, " by seat %d", z);
                 if (err && errn)
-                    snprintf(err, errn, "demo %s: at tick %s the %s of %s %s", d->id ? d->id : "?",
-                             jsnum(num, sizeof num, in[i]->at), down ? "press" : "release", KEY_NAMES[key[k]],
+                    snprintf(err, errn, "demo %s: at tick %s the %s of %s%s %s", d->id ? d->id : "?",
+                             jsnum(num, sizeof num, in[i]->at), down ? "press" : "release", KEY_NAMES[key[k]], by,
                              down ? "while it is held" : "while it is up");
                 ok = 0;
             }
-            held[b] = down;
+            hand[z][b] = down;
         }
     }
     free((void*)in);

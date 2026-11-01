@@ -312,7 +312,7 @@ static void apply(WIKISIM* s, const WIKIREPLAYLOG* x)
 {
     WIKIINPUT in;
     if (x->kind == WIKI_LOG_RELEASE) {
-        tagpu_wikisim_release(s);
+        tagpu_wikisim_release(s, 0);
         return;
     }
     memset(&in, 0, sizeof in);
@@ -417,7 +417,7 @@ static void live_open(WIKIREPLAY* r)
         toast_of(r, WIKI_TOAST_REFUSED, 0, -1);
         return;
     }
-    memcpy(held, L->held, sizeof held);
+    memcpy(held, L->in[0].held, sizeof held);
     if (!r->scripted && r->selected != 0)
         for (k = 0; k < WIKI_NKEYS; k++)
             if (held[k]) log_apply(r, WIKI_LOG_UP, k, 0, 0, 0);
@@ -483,7 +483,7 @@ static void past_tick(WIKIREPLAY* r)
     if (r->pm + 1 < r->npchain && t + 1 == r->tl[r->pchain[r->pm + 1]].R) {
         m = &r->tl[r->pchain[++r->pm]];
         r->pl = 0;
-        if (!tagpu_wikisim_fork(P, m->R, m->part, m->npart, m->mode, err, sizeof err)) {
+        if (!tagpu_wikisim_fork(P, m->R, 0, m->part, m->npart, m->mode, err, sizeof err)) {
             r->failed = 1;
             return;
         }
@@ -541,7 +541,7 @@ static void fork_at(WIKIREPLAY* r, const PLAN* p)
         npart = f->ninput;
         mode = WIKI_ECON_REFUSE;
     }
-    if (!tagpu_wikisim_fork(P, p->R, part, npart, mode, err, sizeof err)) {
+    if (!tagpu_wikisim_fork(P, p->R, 0, part, npart, mode, err, sizeof err)) {
         r->failed = 1;
         return;
     }
@@ -660,9 +660,9 @@ static void live_play(WIKIREPLAY* r)
     int i, n, fed;
     if (r->rw == WIKI_RW_IDLE) {
         if (L->tick >= r->end || L->done) return;
-        fed = L->fed;
+        fed = L->in[0].fed;
         tagpu_wikisim_step(L);
-        if (r->scripted && in_hand(r, r->clock) && L->fed != fed) r->clash = 1;
+        if (r->scripted && in_hand(r, r->clock) && L->in[0].fed != fed) r->clash = 1;
     } else if (r->rw == WIKI_RW_PAST && r->target >= 0 && r->past) {
         n = r->target - 1 - r->past->tick < WIKI_REPLAY_SEEK ? r->target - 1 - r->past->tick : WIKI_REPLAY_SEEK;
         for (i = 0; i < n && !r->past->done && !r->failed; i++) past_tick(r);

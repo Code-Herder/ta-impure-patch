@@ -231,6 +231,27 @@ function stateHash(sim, v) {
     int(g.mode === 'stall' ? 1 : 0); int(g.starved ? 1 : 0); int(g.badKill ? 1 : 0); int(g.nkill);
     for (const L of g.ledgers) for (const x of L) dbl(x);
   }
+  // 13. a game's input seats beyond seat 0 (tagpu_wikisim.h), only in a game with more than one
+  if (sim.game && v.nin > 1) {
+    int(v.nin); int(v.viewed);
+    for (const q of v.inputs) {
+      int(q.ghost ? 1 : 0);
+      if (q.ghost) { str(q.ghost.type); dbl(q.ghost.x); dbl(q.ghost.z); int(q.ghost.ok ? 1 : 0); }
+      int(q.shape ? SHAPE[q.shape] : 0); int(q.sites.length);
+      for (const s of q.sites) { dbl(s.x); dbl(s.z); int(STATE[s.state]); }
+      dbl(q.cursor.x); dbl(q.cursor.z);
+      for (const k of KEYS) int(q.keys.includes(k) ? 1 : 0);
+      str(q.mode.startsWith('build:') ? q.mode.slice('build:'.length) : '');
+      int(q.spacing ?? -1);
+      int(q.drag ? 1 : 0); if (q.drag) { dbl(q.drag.x0); dbl(q.drag.z0); }
+      int(q.reclaim ? 1 : 0);
+      if (q.reclaim) {
+        int(WikiSim.KINDS.indexOf(q.reclaim.kind));
+        int(q.reclaim.ring ? 1 : 0);
+        if (q.reclaim.ring) { int(q.reclaim.ring.x); int(q.reclaim.ring.z); int(q.reclaim.ring.r); }
+      }
+    }
+  }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
@@ -865,12 +886,24 @@ function gameRefusalCases(game, page) {
   // the game script's inputs
   g('a caption', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, caption: 'x' }); });
   g('a wait', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, until: 'idle', max: 60 }); });
-  g('seat 1', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 1, move: [10, 10] }); });
-  g('seat "0"', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: '0', move: [10, 10] }); });
+  /* THE SEAT RULE (sim.js checkGame, tagpu_wikidata.c seat_ok): a seat of the scene's two, and 0 alone unless the
+     game's sidebar is false; then each seat's own hand (resolve, tagpu_wikidata_buttons) */
+  g('seat 1', 'accepted', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 1, move: [10, 10] }); });
+  for (const v of [2, 4, -1, 1.5, '0', null])
+    g(`seat ${JSON.stringify(v)}`, 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: v, move: [10, 10] }); });
+  g('seat 1 with the sidebar true', 'refused', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 200, seat: 1, move: [10, 10] }]; });
+  g('seat 1 with no sidebar given', 'refused', (e, d, sc, G) => { delete G.sidebar; G.inputs = [{ at: 200, seat: 1, move: [10, 10] }]; });
+  g('seat 0 with the sidebar true', 'accepted', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 200, seat: 0, move: [10, 10] }]; });
   g('seat 0 on a press', 'accepted', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 0, down: 'select' }, { at: 202, up: 'select' }); });
+  g('two seats\' presses overlapping', 'accepted', (e, d, sc, G) => {
+    G.inputs.push({ at: 200, down: 'select' }, { at: 201, seat: 1, down: 'select' }, { at: 202, up: 'select' }, { at: 203, seat: 1, up: 'select' });
+  });
+  g('seat 1 pressing twice', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 1, down: 'select' }, { at: 201, seat: 1, down: 'select' }); });
+  g('seat 1 releasing seat 0\'s press', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, down: 'select' }, { at: 201, seat: 1, up: 'select' }); });
   g('an input with no tick', 'refused', (e, d, sc, G) => { G.inputs.push({ move: [10, 10] }); });
   g('a kill with a move', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', move: [1, 1] }); });
   g('a kill with seat 0', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', seat: 0 }); });
+  g('a kill with seat 1', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', seat: 1 }); });
   g('a kill naming no unit', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'nobody' }); });
   g('a kill naming a feature', 'refused', (e, d, sc, G) => { sc.features = [{ id: 'rock', name: 'armck_dead', at: [1, 1] }]; G.inputs.push({ at: 300, kill: 'rock' }); });
   g('a kill a number', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 3 }); });
@@ -980,6 +1013,12 @@ function gameRefusalCases(game, page) {
   B('a pick on its reclaim\'s tick, after it', 'refused', [...pick(1000), { at: 1000, reclaim: true }, { at: 1000, pick: 'metal' }]);
   B('a pick after its reclaim\'s trip', 'refused', [...pick(1000), { at: 1000, reclaim: true }, { at: 1000 + T, pick: 'metal' }]);
   B('a pick with no reclaim', 'refused', [{ at: 1000, pick: 'all' }]);
+  // seat by seat: the click is the order's own seat's
+  const pickBy = (t, seat) => pick(t).map(e => ({ ...e, seat }));
+  B('a seat 1 build after its own click', 'accepted', [...pickBy(1000, 1), { at: 1000, seat: 1, build: 'ARMSOLAR' }]);
+  B('a seat 1 build after seat 0\'s click', 'refused', [...pick(1000), { at: 1000, seat: 1, build: 'ARMSOLAR' }]);
+  B('a seat 0 build after seat 1\'s click', 'refused', [...pickBy(1000, 1), { at: 1000, build: 'ARMSOLAR' }]);
+  B('a seat 1 reclaim after its own click', 'accepted', [...pickBy(1000, 1), { at: 1000, seat: 1, reclaim: true }]);
   g('live: a replay entry\'s build with no click', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, build: 'ARMSOLAR' }); });
   g('live: a replay entry\'s reclaim with no click', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, reclaim: true }); });
   g('live: a replay entry\'s pick after its reclaim', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, reclaim: true }, { at: 1000 + T, pick: 'metal' }); });
@@ -1012,8 +1051,10 @@ function gameRefusalCases(game, page) {
   ins('with no tick', 'refused', [{ move: [1, 1] }]);
   ins('a caption', 'refused', [{ at: 400, caption: 'x' }]);
   ins('a wait', 'refused', [{ at: 400, until: 'idle', max: 60 }]);
-  ins('of seat 1', 'refused', [{ at: 400, seat: 1, move: [1, 1] }]);
+  ins('of seat 1', 'accepted', [{ at: 400, seat: 1, move: [1, 1] }]);
   ins('of seat 0', 'accepted', [{ at: 400, seat: 0, move: [1, 1] }]);
+  ins('of seat 2', 'refused', [{ at: 400, seat: 2, move: [1, 1] }]);
+  ins('of seat 1 building with no click of its own', 'refused', [...pick(400), { at: 400, seat: 1, build: 'ARMSOLAR' }]);
   ins('building a type of the entry', 'accepted', [...pick(400), { at: 400, build: 'ARMSOLAR' }]);
   ins('building with no click selecting its builder', 'refused', [{ at: 400, build: 'ARMSOLAR' }]);
   ins('building after a click on the tick before', 'refused', [...pick(399), { at: 400, build: 'ARMSOLAR' }]);
@@ -1208,6 +1249,134 @@ function columnCases() {
           } });
     }
   }
+  return cases;
+}
+
+/* ---- THE SEAT PASS (ingame-wiki-replay-plan.md decision 16): a synthetic two-seat game on Watching's field, the
+   sidebar off, Bram's commander given ARMSOLAR to build, both seats acting on the same ticks -- a click on each
+   commander, a reclaim armed and a feature clicked, Shift held across ticks with an order given, a box select, a
+   building armed and placed, a move, an order every 300 ticks after -- and a kill of b0 at 700; played per tick
+   through both, each seat's view and the hash with its item 13 compared. Then the fork at every refresh R <= 1201
+   taking seat 0 and seat 1, with an empty part and a synthetic one, in both modes, 300 ticks on: the seat taken is fed
+   nothing more after an empty part, the other seat exactly its recorded inputs of those ticks, b0's recorded kill
+   never lands, and the fork views the seat taken. At 601 seat 1 holds the left button across R - 1 while seat 0 is
+   taken: carried, its release at 605 resolved from the button held. Then the release of seat 1 alone between two
+   ticks, and the seated fork's refusals. In the fork pass's two contexts; each case's claims are sim.js's. ---- */
+function seatCases() {
+  const FORK_AT = [2, 301, 601, 901, 1201], AFTER = 300, END = 1600;
+  const A = ['fixture, own types, type 1', FIXTURE, { side: 0, iface: 1, casting: null, rival: null }];
+  const CTXS = [A, ['fixture, shifted, type 0', FIXTURE, { side: 0, iface: 0, casting: CASTINGS.shifted[0], rival: RIVALS.shifted }]];
+  const whole = JSON.parse(JSON.stringify(GAMES.find(([id]) => id === 'watching')[1]));
+  whole.units.CORCOM.builds = ['ARMSOLAR'];
+  // each seat's commander, the feature each reclaims, where each places its solar
+  const CMD = [[200, 300], [520, 120]], FEAT = [[272, 240], [584, 176]], SOLAR = [[320, 420], [700, 120]];
+  const both = (at, f) => [0, 1].map(seat => ({ at, seat, ...f(seat) }));
+  const order = t => [...both(t, k => ({ move: [300 + 60 * k + t % 7, 200 + 30 * k] })), ...both(t + 1, () => ({ down: 'order' })),
+    ...both(t + 2, () => ({ up: 'order' }))];
+  const inputs = [
+    ...both(10, k => ({ move: CMD[k] })), ...both(11, () => ({ down: 'select' })), ...both(12, () => ({ up: 'select' })),
+    ...both(20, k => ({ move: FEAT[k] })), ...both(21, () => ({ reclaim: true })), ...both(22, () => ({ down: 'select' })),
+    ...both(23, () => ({ up: 'select' })),
+    ...both(40, () => ({ down: 'shift' })), ...both(41, k => ({ move: k ? [400, 60] : [320, 200] })), ...both(42, () => ({ down: 'order' })),
+    ...both(43, () => ({ up: 'order' })), ...both(50, () => ({ up: 'shift' })),
+    ...both(60, k => ({ move: k ? [440, 80] : [100, 260] })), ...both(61, () => ({ down: 'select' })),
+    ...both(64, k => ({ move: k ? [600, 220] : [260, 380] })), ...both(70, () => ({ up: 'select' })),
+    ...both(80, () => ({ build: 'ARMSOLAR' })), ...both(81, k => ({ move: SOLAR[k] })), ...both(82, () => ({ down: 'select' })),
+    ...both(83, () => ({ up: 'select' })),
+    ...both(100, k => ({ move: k ? [450, 300] : [260, 200] })), ...both(101, () => ({ down: 'order' })), ...both(102, () => ({ up: 'order' })),
+    ...[350, 650, 950, 1250].flatMap(order),
+    { at: 590, seat: 1, move: [400, 40] }, { at: 598, seat: 1, down: 'select' }, { at: 602, seat: 1, move: [640, 260] },
+    { at: 605, seat: 1, up: 'select' },
+    { at: 700, kill: 'b0' },
+  ];
+  const demo = { ...whole.demos[0], inputs: [],
+    scene: { features: [{ id: 'rock0', name: 'armck_dead', at: [16, 14] }, { id: 'rock1', name: 'armck_dead', at: [36, 10] }] },
+    game: { end: END, sidebar: false, inputs } };
+  whole.demos = [demo];
+  // the synthetic part of the seat taken: a click on its commander, an order, the other seat's cursor moved, w1 killed
+  const synthetic = (R, h) => [{ at: R, seat: h, move: CMD[h] }, { at: R + 1, seat: h, down: 'select' }, { at: R + 2, seat: h, up: 'select' },
+    { at: R + 10, seat: h, move: [380, 240] }, { at: R + 11, seat: h, down: 'order' }, { at: R + 12, seat: h, up: 'order' },
+    { at: R + 20, seat: 1 - h, move: [300, 300] }, { at: R + 130, kill: 'w1' }];
+  // a seat's recorded inputs of ticks a..b, the ones feed counts (no kill)
+  const recorded = (k, a, b) => inputs.filter(e => !('kill' in e) && e.seat === k && e.at >= a && e.at <= b).length;
+  const watch = (sim, n) => { for (let i = 0; i < n; i++) { sim.step(); sim.view(); sim.view(1); } };
+  const sel = (v, k) => v.units.filter(u => u.selected && u.owner === k).map(u => u.id);
+  const cases = [];
+  for (const [cn, layout, ctx] of CTXS) {
+    cases.push({ name: `seat -- two seats (${cn}) played to ${END}`, layout, ctx, run: G => {
+      const sim = G(whole, demo, 'refuse');
+      let both13 = false, shift = false;
+      sim.view();
+      for (let t = 1; t <= END; t++) {
+        sim.step();
+        const v = sim.view(), v1 = sim.view(1);
+        sim.fedOf(0); sim.fedOf(1);
+        if (t === 13) both13 = sel(v, 0).includes('c0') && sel(v, 1).includes('c1');
+        if (t === 45) shift = v.keys.includes('shift') && v.inputs[0].keys.includes('shift') && v1.keys.includes('shift');
+      }
+      if (!both13) return 'FAIL the two seats\' clicks did not each select their commander at 13';
+      if (!shift) return 'FAIL the two seats did not each hold Shift at 45';
+      return 'both seats acted';
+    } });
+    for (const R of FORK_AT)
+      for (const h of [0, 1])
+        for (const part of ['empty', 'synthetic'])
+          for (const mode of ['refuse', 'stall'])
+            cases.push({ name: `seat -- (${cn}) the fork at ${R} taking seat ${h}, ${part} part, ${mode}`, layout, ctx, run: G => {
+              const sim = G(whole, demo, 'refuse');
+              for (let i = 0; i < R - 1; i++) sim.step();
+              sim.view();
+              if (sim.fork(R, part === 'empty' ? [] : synthetic(R, h), mode, h) !== 'ok') return 'FAIL the fork was refused';
+              const fed = [sim.fedOf(0), sim.fedOf(1)];
+              watch(sim, AFTER);
+              const v = sim.view(), got = [sim.fedOf(0), sim.fedOf(1)], want = recorded(1 - h, R, R - 1 + AFTER);
+              if (part === 'empty' && got[h] !== fed[h]) return `FAIL the taken seat ${h} was fed ${got[h] - fed[h]} inputs more`;
+              if (got[1 - h] - fed[1 - h] !== want + (part === 'empty' ? 0 : 1))
+                return `FAIL seat ${1 - h} was fed ${got[1 - h] - fed[1 - h]} inputs, its recorded ${want}${part === 'empty' ? '' : ' and the part\'s one'}`;
+              if (R <= 700 && R - 1 + AFTER >= 700 && !v.units.some(u => u.id === 'b0')) return 'FAIL the recorded kill of b0 after R landed';
+              if (v.viewed !== h) return `FAIL the fork views seat ${v.viewed}`;
+              return `seat ${h} taken at ${R}, seat ${1 - h} fed ${want} recorded inputs`;
+            } });
+  }
+  // seat 1's left button held across 600 while seat 0 is taken: carried, its release resolved from the button held
+  cases.push({ name: `seat -- (${A[0]}) seat 1 holding the left button across the fork at 601`, layout: A[1], ctx: A[2], run: G => {
+    const sim = G(whole, demo, 'refuse');
+    for (let i = 0; i < 600; i++) sim.step();
+    if (!sim.view().inputs[0].keys.includes('lmb')) return 'FAIL seat 1 does not hold the left button at 600';
+    if (sim.fork(601, [], 'refuse', 0) !== 'ok') return 'FAIL the fork was refused';
+    watch(sim, 4);
+    if (!sim.view().inputs[0].keys.includes('lmb')) return 'FAIL seat 1 let go of the left button before its release';
+    watch(sim, 1);
+    if (sim.view().inputs[0].keys.includes('lmb')) return 'FAIL seat 1\'s recorded release at 605 did not land';
+    watch(sim, 60);
+    return 'held across the fork, released at 605';
+  } });
+  // the release of seat 1 alone: seat 0 keeps Shift held, seat 1 lets go
+  cases.push({ name: `seat -- (${A[0]}) the release of seat 1 alone at 45`, layout: A[1], ctx: A[2], run: G => {
+    const sim = G(whole, demo, 'refuse');
+    for (let i = 0; i < 45; i++) sim.step();
+    sim.release(1);
+    const v = sim.view(), v1 = sim.view(1);
+    if (!v.keys.includes('shift') || v1.keys.length || sel(v, 1).length) return `FAIL seat 0 keys ${v.keys}, seat 1 keys ${v1.keys}`;
+    watch(sim, 60);
+    return 'seat 1 let go, seat 0 held on';
+  } });
+  // the seated fork's refusals, in order: a seat of no input state, a part's input of one, a seat taken resolved from
+  // nothing, a carried hand pressed again or let go twice; then the taken seat's fresh press, which passes
+  cases.push({ name: `seat -- (${A[0]}) the seated fork's refusals`, layout: A[1], ctx: A[2], run: G => {
+    const sim = G(whole, demo, 'refuse');
+    for (let i = 0; i < 100; i++) sim.step();
+    const got = [sim.fork(101, [], 'refuse', 2), sim.fork(101, [], 'refuse', -1), sim.fork(101, [], 'refuse', 0.5),
+      sim.fork(101, [{ at: 101, seat: 2, move: [1, 1] }], 'refuse', 0), sim.fork(101, [{ at: 101, seat: 1, up: 'select' }], 'refuse', 1)];
+    for (let i = 100; i < 600; i++) sim.step();
+    sim.view();
+    got.push(sim.fork(601, [{ at: 601, seat: 1, down: 'select' }], 'refuse', 0), sim.fork(601, [{ at: 601, seat: 1, up: 'select' }], 'refuse', 0),
+      sim.fork(601, [{ at: 601, seat: 1, up: 'select' }], 'refuse', 1),
+      sim.fork(601, [{ at: 601, seat: 1, down: 'select' }, { at: 603, seat: 1, up: 'select' }], 'refuse', 1));
+    watch(sim, 30);
+    const want = ['refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'ok'];
+    return got.join() === want.join() ? 'every refusal refused' : `FAIL ${got.join()} for ${want.join()}`;
+  } });
   return cases;
 }
 
@@ -1452,7 +1621,7 @@ try {
      recorded and replayed through wikitest `trace`, every answer compared; a case's own claims are sim.js's alone and
      fail it by its verdict. Case k plays on shard k % N + 1. ---- */
   {
-    const all = [...forkCases(), ...columnCases()];
+    const all = [...forkCases(), ...columnCases(), ...seatCases()];
     all.forEach((c, k) => {
       if (k % SHARDS !== SHARD - 1) return;
       const ops = [], expected = [];
@@ -1465,14 +1634,20 @@ try {
         const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: n })); expected.push(v); return v; };
         return {
           step() { ops.push(JSON.stringify({ op: 'step', sim: n })); sim.step(); },
-          view() { const v = ask({ op: 'view' }, sim.view()); ask({ op: 'hash' }, stateHash(sim, sim.view())); return v; },
-          fork(R, inputs, fmode) {
-            let r = 'ok';
-            try { sim.fork(R, inputs, fmode); } catch (e) { r = 'refused'; }
-            return ask({ op: 'fork', R, inputs, mode: fmode }, r);
+          // the view as `seat` sees it, and the state hash (seat 0's, with item 13)
+          view(seat = 0) {
+            const v = ask({ op: 'view', ...(seat ? { seat } : {}) }, sim.view(seat));
+            ask({ op: 'hash' }, stateHash(sim, sim.view()));
+            return v;
           },
-          release() { ops.push(JSON.stringify({ op: 'release', sim: n })); sim.release(); },
+          fork(R, inputs, fmode, seat = 0) {
+            let r = 'ok';
+            try { sim.fork(R, inputs, fmode, seat); } catch (e) { r = 'refused'; }
+            return ask({ op: 'fork', R, inputs, mode: fmode, ...(seat ? { seat } : {}) }, r);
+          },
+          release(seat = 0) { ops.push(JSON.stringify({ op: 'release', sim: n, ...(seat ? { seat } : {}) })); sim.release(seat); },
           get fed() { return ask({ op: 'fed' }, sim.gameNow().fed); },
+          fedOf(seat) { return ask({ op: 'fed', seat }, sim.gameNow(seat).fed); },
           get tick() { return sim.tick; },
         };
       };

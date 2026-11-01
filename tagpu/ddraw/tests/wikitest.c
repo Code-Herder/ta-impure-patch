@@ -176,13 +176,85 @@ static void orders(const WIKISIM* s, const char* id)
     putchar(']');
 }
 
-static void view(WIKISIM* s, int map)
+static const char* const STATE[] = { "place", "refused", "remove" };
+static const char* const SHAPE[] = { NULL, "line", "axis", "rect", "hollow", "ring" };
+static const char* const CURSOR[] = { "arrow", "move", "build", "reclaim" };
+
+/* the armed mode as sim.js names it */
+static void mode_out(const WIKISIM* s, int rmode, int mode)
 {
-    static const char* const STATE[] = { "place", "refused", "remove" };
-    static const char* const SHAPE[] = { NULL, "line", "axis", "rect", "hollow", "ring" };
+    if (rmode) str("reclaim");
+    else if (mode >= 0) {
+        char m[WIKI_ID_MAX + 8];
+        snprintf(m, sizeof m, "build:%s", name(s, mode));
+        str(m);
+    } else str("contextual");
+}
+
+/* an input seat's own parts, sim.js's view.inputs[k]: its seatView and its reclaim */
+static void seat_out(const WIKISIM* s, const WIKIVSEAT* b)
+{
+    int i, first;
+    putchar('{');
+    key("ghost", 1);
+    if (b->has_ghost) {
+        putchar('{'); site(s, &b->ghost); key("ok", 0); fputs(b->ghost.ok ? "true" : "false", stdout); putchar('}');
+    } else fputs("null", stdout);
+    key("sites", 0);
+    putchar('[');
+    for (i = 0; i < b->nsite; i++) {
+        if (i) putchar(',');
+        putchar('{');
+        site(s, &b->site[i]);
+        key("state", 0); str(STATE[b->site[i].state]);
+        key("order", 0);
+        if (b->site[i].order) printf("%d", b->site[i].order);
+        else fputs("null", stdout);
+        putchar('}');
+    }
+    putchar(']');
+    key("shape", 0); str(SHAPE[b->shape]);
+    key("spacing", 0);
+    if (b->spacing >= 0) printf("%d", b->spacing);
+    else fputs("null", stdout);
+    key("cursor", 0);
+    putchar('{');
+    key("x", 1); num(b->cursor_x);
+    key("z", 0); num(b->cursor_z);
+    key("shape", 0); str(CURSOR[b->cursor_shape]);
+    key("since", 0); printf("%d", b->cursor_since);
+    putchar('}');
+    key("keys", 0);
+    putchar('[');
+    for (i = 0, first = 1; i < WIKI_NKEYS; i++)
+        if (b->held[i]) {
+            if (!first) putchar(',');
+            str(tagpu_wikidata_key_name(i));
+            first = 0;
+        }
+    putchar(']');
+    key("drag", 0);
+    if (b->has_drag)
+        printf("{\"x0\":%.17g,\"z0\":%.17g,\"x1\":%.17g,\"z1\":%.17g}", b->drag_x0, b->drag_z0, b->drag_x1, b->drag_z1);
+    else fputs("null", stdout);
+    key("mode", 0); mode_out(s, b->rmode, b->mode);
+    key("reclaim", 0);
+    if (b->rmode) {
+        putchar('{');
+        key("kind", 1); str(tagpu_wikidata_kind_name(b->kind));
+        key("ring", 0);
+        if (b->has_ring) printf("{\"x\":%d,\"z\":%d,\"r\":%d}", b->ring_x, b->ring_z, b->ring_r);
+        else fputs("null", stdout);
+        putchar('}');
+    } else fputs("null", stdout);
+    putchar('}');
+}
+
+/* the view as `seat` sees it, tagpu_wikisim_view_as, in sim.js's view(seat)'s shape */
+static void view_as(WIKISIM* s, int map, int seat)
+{
     static const char* const LINE[] = { "move", "build", "reclaim", "guard" };
-    static const char* const CURSOR[] = { "arrow", "move", "build", "reclaim" };
-    const WIKIVIEW* v = tagpu_wikisim_view(s);
+    const WIKIVIEW* v = tagpu_wikisim_view_as(s, seat);
     int i, first = 1;
     putchar('{');
     if (map) {
@@ -296,13 +368,7 @@ static void view(WIKISIM* s, int map)
     } else fputs("null", stdout);
     key("caption", 0); str(v->caption);
     key("pace", 0); num(v->pace);
-    key("mode", 0);
-    if (v->rmode) str("reclaim");
-    else if (v->mode >= 0) {
-        char m[WIKI_ID_MAX + 8];
-        snprintf(m, sizeof m, "build:%s", name(s, v->mode));
-        str(m);
-    } else str("contextual");
+    key("mode", 0); mode_out(s, v->rmode, v->mode);
     key("feats", 0);
     putchar('[');
     for (i = 0; i < v->nfeat; i++) {
@@ -466,8 +532,22 @@ static void view(WIKISIM* s, int map)
         }
         fputs("]}", stdout);
     }
+    /* the input seats beyond seat 0, sim.js's nin, viewed and inputs, in a game with more than one */
+    if (v->game && v->nin > 1) {
+        key("nin", 0); printf("%d", v->nin);
+        key("viewed", 0); printf("%d", v->viewed);
+        key("inputs", 0);
+        putchar('[');
+        for (i = 0; i < v->nin - 1; i++) {
+            if (i) putchar(',');
+            seat_out(s, &v->input[i]);
+        }
+        putchar(']');
+    }
     putchar('}');
 }
+
+static void view(WIKISIM* s, int map) { view_as(s, map, 0); }
 
 /* ---- the units' scripts: what the DLL reads from the game's archives, here from files ---- */
 #include "wikicobfile.h"
@@ -689,7 +769,7 @@ static int sweep(const char* path, const char* entry, const char* layout, const 
                 break;
             }
             while (s.tick < r && !s.done) tagpu_wikisim_step(&s);
-            tagpu_wikisim_release(&s);
+            tagpu_wikisim_release(&s, 0);
             while (!s.done) tagpu_wikisim_step(&s);
             putchar('{');
             key("entry", 1); str(g.e.id);
@@ -937,8 +1017,9 @@ static int replaytrace(const char* path, const char* entry, const char* layout, 
     return 0;
 }
 
-/* The trace's lines, each parsed; a caption the sim keeps points into its line's tree, so every
-   tree of a sim lives until the sim ends. */
+/* The trace's lines, each parsed; a caption or a kill's id the sim keeps points into its input's or
+   fork's tree, so each of those trees lives until the sim ends. Any other call's tree goes when
+   the call is answered. */
 typedef struct {
     WIKIENTRY e;
     WIKISIM   s;
@@ -972,6 +1053,14 @@ static int cannot(const char* what)
 {
     fprintf(stderr, "wikitest: %s\n", what);
     return 2;
+}
+
+/* a call's `seat`: an integer as written, 0 when absent, and -1, which no sim holds, for a seat that
+   is no integer, as sim.js's own check refuses it */
+static int seat_arg(const TJV* v)
+{
+    const double k = tj_num(tj_get(v, "seat"), 0);
+    return k == (int)k ? (int)k : -1;
 }
 
 static int trace(const char* path)
@@ -1042,12 +1131,16 @@ static int trace(const char* path)
             rc = 2;
             break;
         }
-        c->doc[c->ndoc++] = doc;
+        if (!strcmp(op, "input") || !strcmp(op, "fork")) c->doc[c->ndoc++] = doc;
         if (!strcmp(op, "input")) {
             WIKIINPUT in;
-            /* a `build` names a type of the entry the sim plays, the bound one with a casting */
+            /* a `build` names a type of the entry the sim plays, the bound one with a casting; the
+               seat it acts as is the input's `seat`, as sim.js's input takes it */
             if (!tagpu_wikidata_input(c->s.entry, tj_get(v, "ev"), &in, err, sizeof err)) rc = cannot(err);
-            else tagpu_wikisim_input(&c->s, &in);
+            else {
+                in.seat = seat_arg(tj_get(v, "ev"));
+                tagpu_wikisim_input(&c->s, &in);
+            }
         } else if (!strcmp(op, "fork")) {
             /* a fork's part, each a game input read against the entry as written, whose type
                indices the bound one keeps (a part names the entry's types, as its game script
@@ -1062,14 +1155,17 @@ static int trace(const char* path)
                 if (!tagpu_wikidata_game_input(&c->e, e, &ins[k++], err, sizeof err)) ok = 0;
             if (!ins) rc = cannot("out of memory");
             else if (!ok) rc = cannot(err);
-            else puts(tagpu_wikisim_fork(&c->s, (int)tj_num(tj_get(v, "R"), 0), ins, ni,
+            else puts(tagpu_wikisim_fork(&c->s, (int)tj_num(tj_get(v, "R"), 0), seat_arg(v), ins, ni,
                                          !strcmp(mode, "stall") ? WIKI_ECON_STALL : !strcmp(mode, "refuse") ? WIKI_ECON_REFUSE : -1,
                                          err, sizeof err) ? "\"ok\"" : "\"refused\"");
             free(ins);
-        } else if (!strcmp(op, "fed")) printf("%d\n", c->s.fed);
-        else if (!strcmp(op, "release")) tagpu_wikisim_release(&c->s);
+        } else if (!strcmp(op, "fed")) {
+            /* sim.js's gameNow(seat).fed: a seat of no input state reads seat 0's */
+            const int k = seat_arg(v);
+            printf("%d\n", c->s.in[k >= 0 && k < c->s.nin ? k : 0].fed);
+        } else if (!strcmp(op, "release")) tagpu_wikisim_release(&c->s, seat_arg(v));
         else if (!strcmp(op, "step")) tagpu_wikisim_step(&c->s);
-        else if (!strcmp(op, "view")) { view(&c->s, 1); putchar('\n'); }
+        else if (!strcmp(op, "view")) { view_as(&c->s, 1, seat_arg(v)); putchar('\n'); }
         else if (!strcmp(op, "orders")) { orders(&c->s, tj_str(tj_get(v, "id"), "")); putchar('\n'); }
         else if (!strcmp(op, "done")) puts(c->s.done ? "true" : "false");
         else if (!strcmp(op, "tick")) printf("%d\n", c->s.tick);
@@ -1077,6 +1173,7 @@ static int trace(const char* path)
         else if (!strcmp(op, "iface")) printf("%d\n", c->s.iface);
         else if (!strcmp(op, "hash")) { hash(&c->s); putchar('\n'); }
         else { fprintf(stderr, "wikitest: no op %s\n", op); rc = 2; }
+        if (strcmp(op, "input") && strcmp(op, "fork")) tagpu_json_free(doc);
     }
     for (i = 0; i < TRACE_SIMS; i++) case_end(&cs[i]);
     free(text);

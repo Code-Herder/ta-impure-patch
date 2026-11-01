@@ -442,6 +442,27 @@ typedef struct {
                                                minimap's high dot), "" for none */
 } WIKIVSIDE;
 
+/* What one input seat's state shows (sim.js's seatView, with the reclaim's armed, kind and ring):
+   the view's ghost, gesture sites and shape, spacing, cursor, keys, drag and armed mode, as
+   WIKIVIEW holds them for the seat it is viewed as */
+typedef struct {
+    int              has_ghost;
+    WIKIVSITE        ghost;
+    int              nsite;
+    const WIKIVSITE* site;
+    int              shape;         /* PLACE_*, PLACE_NONE for none */
+    int              spacing;       /* the armed building's, -1 when none is armed */
+    double           cursor_x, cursor_z;
+    int              cursor_shape, cursor_since;
+    int              held[WIKI_NKEYS];
+    int              has_drag;
+    double           drag_x0, drag_z0, drag_x1, drag_z1;
+    int              mode;          /* the armed type, or -1: contextual */
+    int              rmode;         /* reclaim is armed: kind and the ring are its */
+    int              kind;          /* WIKI_KIND_* */
+    int              has_ring, ring_x, ring_z, ring_r;
+} WIKIVSEAT;
+
 typedef struct {
     int              w, h;
     double           surface_metal;
@@ -514,6 +535,10 @@ typedef struct {
     const WIKIECON*  econ;
     int              econ_mode, starved, bad_kill, nkill;
     const WIKILEDGER* ledger;
+    /* a game simulation's input seats (WIKISIM.nin) and its viewed seat; with more than one, seats
+       1..nin - 1's own parts, input[k - 1] for seat k (sim.js's view.inputs) */
+    int              nin, viewed;
+    const WIKIVSEAT* input;
 } WIKIVIEW;
 
 /* The context a sim is made for, sim.js's ctx. tagpu_wikisim_init refuses an iface other than 0
@@ -540,6 +565,33 @@ typedef struct {
 } WIKISIMCTX;
 
 struct WIKISIMBOUND;
+
+/* A SEAT'S INPUT STATE, sim.js's IN[k] (ingame-wiki-replay-plan.md decision 16): its cursor, from the scene's; the shape the
+   cursor shows and the tick its sequence began; the keys and buttons it holds, and where each
+   button went down (OVER_*), which decides whether its release runs the map rules; the armed
+   building (-1 none) and the drag; the placement gesture and its last evaluation; the spacing per
+   type; the reclaim sweep -- armed (main+0x2CC3 == 12, exclusive with a building armed), its kind,
+   and its gesture: the press point, the last point over the map, past the threshold or not; the
+   hover; and fed, the inputs the seat's script (seat 0's trips too) has fed since the sim was made,
+   its kills and waits not counted: the replay layer's clash rule reads it, and no hash does. */
+typedef struct {
+    double           cursor_x, cursor_z;
+    int              cursor_shape, cursor_since;
+    int              held[WIKI_NKEYS];
+    int              down_on[WIKI_NKEYS];
+    int              mode;
+    int              has_drag, drag_active, drag_t;     /* drag_t: the press's tick */
+    double           drag_x0, drag_z0;
+    WIKIHOVER        hover;
+    int              has_gesture;
+    PlaceCell        gesture;
+    int              shift_placed;
+    int              spacing[WIKI_MAX_DEFS];
+    WIKIPLACE        place;
+    int              rmode, kind, has_rg, rg_drag;
+    double           rg_x0, rg_z0, rg_x1, rg_z1;
+    int              fed;
+} WIKISEATIN;
 
 /* ---- the simulation: the caller owns it; tick and done are its to read, the rest is private ---- */
 
@@ -572,25 +624,21 @@ typedef struct {
     WIKIUNIT**       unit;          /* in creation order; a reclaimed one leaves the list */
     int              nunit, cunit, next_id;
 
-    /* sim.js's st */
-    double           cursor_x, cursor_z;
-    int              cursor_shape, cursor_since;    /* the shape shown, and the tick its
-                                                       sequence began                           */
-    int              held[WIKI_NKEYS];
-    int              mode;
-    int              has_drag, drag_active, drag_t;     /* drag_t: the press's tick */
-    double           drag_x0, drag_z0;
-    const char*      caption;
-    WIKIHOVER        hover;
-    int              has_gesture;
-    PlaceCell        gesture;
-    int              shift_placed;
-    int              spacing[WIKI_MAX_DEFS];
-    WIKIPLACE        place;
-    /* the reclaim sweep: armed (main+0x2CC3 == 12, exclusive with a building armed), its kind, and
-       its gesture -- the press point, the last point over the map, past the threshold or not */
-    int              rmode, kind, has_rg, rg_drag;
-    double           rg_x0, rg_z0, rg_x1, rg_z1;
+    /* THE INPUT SEATS (sim.js's IN, NIN, K): in[k] for k < nin, a game simulation's seats its game
+       script or a fork part names (input_seats), 1 for any other; the acting seat, whose input
+       state every input rule reads; and the viewed seat, whose units' notices play (0 until a fork
+       takes over another seat, as the game's takeover makes the taken seat the viewed one,
+       tagpu_replay.c tk_seats).
+       THE ORDERING: act is 0 between calls. tagpu_wikisim_input and a fed script input act as
+       their seat, tagpu_wikisim_view_as views as its seat and the step's tail visits each seat in
+       turn, and each puts act back before it returns. Nothing the input rules call re-enters input
+       or the view -- the COB host and the sound are called by the step and read units, never input
+       state -- so every read of in[act] is the acting seat's.
+       THE COLUMN IS SEAT 0'S: a game with the sidebar has nin 1 (init refuses more), so its router,
+       gadgets, capture and trips only ever run with act 0. */
+    WIKISEATIN       in[WIKI_SEATS];
+    int              nin, act, viewed;
+    const char*      caption;       /* the demo's, no seat's */
 
     /* the features standing, sim.js's feats, in the scene's order; the anchor cells of those
        reclaimed, gone[2k], gone[2k + 1]; both at most WIKI_FEATS_MAX */
@@ -606,9 +654,6 @@ typedef struct {
     double           end;           /* the clock it is done on; never for Try it yourself */
     const char*      demo_id;       /* the demo's id, for a refused fork's message; it lives in the
                                        entry's document, which the caller keeps as long as the sim */
-    int              fed;           /* the inputs of seat 0's the script and its trips have fed since
-                                       the sim was made, its kills and waits not counted: the replay
-                                       layer's clash rule reads it, and no hash does */
     /* THE DEMO'S CLOCK (sim.js's clock): the tick its inputs, trips and end are written in. It runs
        with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
        from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
@@ -659,7 +704,6 @@ typedef struct {
     WIKIUNIT*        shown;         /* main+0x37E9C; remove_unit clears it with its unit */
     int              cap, cap_key;  /* the gadget of `screen` a press captured (-1 none), and the
                                        button that pressed it */
-    int              down_on[WIKI_NKEYS];   /* where each mouse button went down (OVER_*) */
     int              locked;        /* the type the demo stopped on (the first lock wins), or -1 */
     /* the trip's generated inputs, fed before the script's of the same tick */
     WIKIINPUT        trip_in[WIKI_TRIP_EVENTS];
@@ -684,6 +728,10 @@ typedef struct {
     WIKIVFEAT        vfeat[WIKI_FEATS_MAX];
     WIKILEDGER*      vledger;
     int              cvledger;
+    /* the view's seats 1..nin - 1: their parts, and their sites, PLACE_MAX_SITES a seat, allocated
+       by init when nin is above 1 */
+    WIKIVSEAT        vinput[WIKI_SEATS - 1];
+    WIKIVSITE*       vinsite;
     int              cvunit, cvqueued, cvline;
     /* the movement's scratch: one unit's bodies (two a unit: its own and a claim, and the site it
        heads for) and the walking
@@ -758,14 +806,20 @@ int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int s
                         const WIKISIMCTX* ctx, char* err, size_t errn);
 void tagpu_wikisim_free(WIKISIM* s);
 
-/* One input now, as the player gives it, between two ticks: a cursor sequence it changes begins
-   on the tick the sim stands at, the one the next view shows. */
+/* One input now, as the player gives it, between two ticks, acting as its seat (ev->seat): a cursor
+   sequence it changes begins on the tick the sim stands at, the one the next view shows. An input
+   of a seat outside 0..nin - 1 is ignored. */
 void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev);
 
 /* One tick: the script's inputs of the next tick, then the units' work. */
 void tagpu_wikisim_step(WIKISIM* s);
 
-/* The view as it stands; it and its arrays hold until the next call on `s`. */
+/* The view as `seat` sees it (sim.js's view(seat)): its cursor, ghost, gesture sites, queued
+   sites, drag, order lines, sweep, keys, spacing, hover and cursor shape; a seat outside 0..nin - 1
+   views as seat 0. The units' `selected` is every seat's flag (the hash's item 3), which a frame
+   filters by owner. It and its arrays hold until the next call on `s`. tagpu_wikisim_view is
+   tagpu_wikisim_view_as(s, 0). */
+const WIKIVIEW* tagpu_wikisim_view_as(WIKISIM* s, int seat);
 const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s);
 
 /* The posed model of the view's unit `i` (tagpu_wikicob_model: TAGPU_COBVM_MODEL_BYTES(*nprim)
@@ -823,6 +877,12 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         units, lost, out and cmd_lost, then its m, mmax, mi, mo, wm, e, emax, ei, eo and we; then
         the economy's mode (0 refuse, 1 stall), starved, bad_kill and the kills made; then each
         unit's ledger in the view's order, its eP, eR, eG, eD, mP, mR, mG and mD.
+    13. a game simulation with more than one input seat only (nothing otherwise): the input seats'
+        count and the viewed seat; then for each seat k = 1..nin - 1 its ghost (item 4's form), its
+        gesture's sites (item 5's), its cursor, keys, armed type, spacing and drag (item 6's, without
+        the caption), and its reclaim armed, kind and ring (item 11's tail).
+   Items 1-12 read seat 0's input, item 3 every seat's selection. A game whose script and parts
+   name no seat but 0 has one input seat and views seat 0, so item 13 adds nothing to its hash.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, the sweep's targets, readout,
    hover and popup from the features, the ring and the cursor, a site's order number from
@@ -831,34 +891,44 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 
 /* THE FORK (sim.js's sim.fork; research/notes/ingame-wiki-replay-plan.md, decision 8): a game
-   simulation's timeline handed over at R, the world of R - 1 kept whole, the recorded future
-   dropped and the `n` inputs at `in` (a fork's part, seat 0's game inputs as the loader reads them:
-   the seat taken off, a kill's id in the entry's document) its new script, its economy in
-   `econ_mode` (WIKI_ECON_*) from here on. 1, or 0 with a message in `err` and the sim untouched:
-   refused unless it is a game standing at R - 1 that has not stopped (a lock, a pass that starved,
-   a kill that found no unit), the mode is one of the two, every input is at R or later and neither
-   a caption nor a wait, the features standing and gone plus the part's kills stay within
-   WIKI_FEATS_MAX, and the part resolves from nothing held (tagpu_wikidata_buttons) and, with the
-   sidebar's trips, keeps their data rule (tagpu_wikidata_trips); or memory runs out.
+   simulation's timeline handed over at R to `seat`, the world of R - 1 kept whole, and the `n`
+   inputs at `in` (a fork's part, game inputs of any seat as the loader reads them, a kill's id in
+   the entry's document) its script with the other seats' recorded inputs, its economy in
+   `econ_mode` (WIKI_ECON_*) from here on, viewed as `seat`. 1, or 0 with a message in `err` and the
+   sim untouched: refused unless it is a game standing at R - 1 that has not stopped (a lock, a pass
+   that starved, a kill that found no unit), the mode is one of the two, the seat is one of its nin
+   input seats, every input is at R or later, neither a caption nor a wait and of an input seat,
+   the features standing and gone plus the part's kills stay within WIKI_FEATS_MAX, and the new
+   script keeps the held-button rule seat by seat (tagpu_wikidata_buttons: the taken seat's hand
+   from nothing, every other seat's from the buttons it holds at R - 1, which its carried inputs
+   continue) and, with the sidebar's trips, their data rule (tagpu_wikidata_trips); or memory runs
+   out.
 
    THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the
-   inputs of tick <= t, so every input not yet fed has its tick >= R and is the recorded future the
-   fork replaces: the script's inputs by its new script, the trips' generated ones by the release
-   (tagpu_wikisim_release), which drops them. The release comes before the new script is
-   installed, as the game's fork leaves the player.
-   THE LIFETIME: the sim copies the part into a block of its own and frees the old script's; `in` is
-   only read. */
-int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn);
+   inputs of tick <= t, so every input not yet fed has its tick >= R (one of a tick no feed reaches,
+   below R, is dropped with it). Of those the fork drops the taken seat's, the recorded future it
+   replaces, and every kill, since a death after R is not fated (ingame-wiki-replay-plan.md decision 8); every other seat's
+   are carried, so they play on from their recorded inputs. The new script is the carried inputs
+   and the part's, merged by tick, the carried first on a tie, each in its own order. The release
+   (tagpu_wikisim_release) lets go of the taken seat alone, as the game's takeover leaves its player
+   (tk_live: every unit deselected), and with seat 0 it drops the trips' inputs not yet fed; it
+   comes before the new script is installed. With seat 0 and a script of seat 0 alone nothing is
+   carried, and the fork is the part alone.
+   THE LIFETIME: the sim copies the carried inputs and the part into a block of its own and frees
+   the old script's; `in` is only read. */
+int tagpu_wikisim_fork(WIKISIM* s, int R, int seat, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn);
 
-/* THE RELEASE (sim.js's sim.release), between two ticks: what the game's rebuild leaves of seat 0's
+/* THE RELEASE (sim.js's sim.release), between two ticks: what the game's rebuild leaves of `seat`'s
    input after Back to now and in a fork (tagpu_wikisim.c says how that was measured): no key or
-   button held, no drag, no placement or reclaim gesture, no gadget captured, all let go without
-   acting; nothing selected and nothing armed, the column routed to MAIN2; the spacing and the
-   sweep's kind kept; and every generated (trip) input not yet fed dropped, so a release costs the
-   game at most the one order in hand, a trip it cuts off or a building or reclaim armed and not
-   yet used (THE LIVE DATA RULE, tagpu_wikidata.c live_orders, keeps a live entry's orders so).
-   The fork calls it, and the replay layer at Back to now. */
-void tagpu_wikisim_release(WIKISIM* s);
+   button held, no drag, no placement or reclaim gesture, all let go without acting; nothing of the
+   seat's selected and nothing armed; the spacing and the sweep's kind kept; every other seat's input
+   untouched. Seat 0's release also lets go of the column's gadget capture, routes the column to
+   MAIN2 and drops every generated (trip) input not yet fed, so a release costs the game at most the
+   one order in hand, a trip it cuts off or a building or reclaim armed and not yet used (THE LIVE
+   DATA RULE, tagpu_wikidata.c live_orders, keeps a live entry's orders so); the column and its
+   trips are seat 0's. A seat outside 0..nin - 1 has nothing to let go. The fork calls it, and the
+   replay layer at Back to now. */
+void tagpu_wikisim_release(WIKISIM* s, int seat);
 
 
 #endif

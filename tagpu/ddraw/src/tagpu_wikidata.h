@@ -215,12 +215,16 @@ typedef struct {
     int              extra;             /* a demo's input names a key besides at, caption, build,
                                            reclaim and pick: it is no caption alone, which a
                                            trip's ticks admit (tagpu_wikidata_trips) */
+    int              seat;              /* a game input's seat, whose input state it acts on (0 when
+                                           absent, and on every other input): 0..WIKI_SEATS - 1 */
 } WIKIINPUT;
 
 /* A GAME ENTRY'S DEMO'S GAME: the game script, played by a game simulation (WIKI_PLAY_GAME) on game
-   ticks. `end` an integer 1..WIKI_GAME_END_MAX; the inputs seat 0's (decision 16: no other seat has a
-   cursor yet), neither caption nor wait, and at most WIKI_GAME_KILLS kills, each of a unit of the
-   merged scene by its explicit id, once, at or before the end. sim.js's GAME_END_MAX, GAME_KILLS. */
+   ticks. `end` an integer 1..WIKI_GAME_END_MAX; each input of a seat of the scene (decision 16:
+   every seat acts through its own cursor), and of seat 0 alone unless the sidebar is false (THE
+   SEAT RULE, tagpu_wikidata.c), neither caption nor wait, and at most WIKI_GAME_KILLS kills, each
+   of a unit of the merged scene by its explicit id, once, at or before the end. sim.js's
+   GAME_END_MAX, GAME_KILLS. */
 #define WIKI_GAME_KILLS   64
 #define WIKI_GAME_END_MAX 5400
 typedef struct {
@@ -320,7 +324,8 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e);
    one fed straight to the sim need not). 0 with a message in `err` when it is refused. */
 int  tagpu_wikidata_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
 /* The same for an input of a game script (sim.js checkGame's rules for one input): no caption and
-   no wait, a `seat` of 0 read past, a kill {at, kill} alone, its id pointing into `v`'s tree. */
+   no wait, a `seat` an integer 0..WIKI_SEATS - 1 (the scene's seats and the sidebar bound it
+   further where the demo is read), a kill {at, kill} alone, its id pointing into `v`'s tree. */
 int  tagpu_wikidata_game_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
 
 /* The tree and every entry it names, from an archive of art/wiki/ (tagpu_pak.h), or NULL with a
@@ -368,10 +373,13 @@ int tagpu_wikidata_button(int key, int iface);
 
 /* THE DATA RULE OF A RESOLVED SCRIPT, sim.js's resolve(): the demo's inputs in the simulation's
    order (by tick, then file order), each action turned into its button at `iface`; a press of a
-   mouse button already held, or a release of one not held, refuses the demo with the input's
-   tick. Keys are not held to it: a key's second down is an auto-repeat. 1 when it holds, else 0
+   mouse button the input's seat already holds, or a release of one it does not hold, refuses the
+   demo with the input's tick and seat. Each seat has its own hand, from nothing, or with `held`
+   from held[2 * seat] (the left button) and held[2 * seat + 1] (the right), WIKI_SEATS seats: the
+   buttons a fork's carried seats hold when it takes over. Keys are not held to it: a key's second
+   down is an auto-repeat. An input already resolved is its own button. 1 when it holds, else 0
    with a message in `err`. sim.js asks it of every scripted demo. */
-int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, char* err, size_t errn);
+int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, const int* held, char* err, size_t errn);
 
 /* ---- a casting: one side's answer to each cast, the side's record of a pack's `casting` list
    (gfx/side/<mod>/side.json, index-aligned with the layout's sides) or of
