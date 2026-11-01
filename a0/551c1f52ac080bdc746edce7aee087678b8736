@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..a0551c1f findings=4 acted=4 rejected=0 date=2026-11-01 reviewers=2 (general; thread sync) fixes=bb0c5bdf,a85a7dde,078ac2cb
