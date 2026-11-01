@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_json.h"
+#include "tagpu_recrules.h"
 
 #define WIKI_ID_MAX   24    /* a unit id or a unit type, with its terminator */
 #define WIKI_SCENE_MAX 17   /* a scene's name, a-z and 0-9 with a letter first, with its terminator */
@@ -230,13 +231,13 @@ typedef struct {
 } WIKIGAME;
 
 /* A LIVE DEMO'S FORK PART (sim.js checkGame): the game inputs the viewer's fork of `id` goes on
-   with, made at `from` with `parent` its parent timeline. id 1..WIKI_FORK_IDS - 1, no two parts of
-   one id; from 2..the game's end; parent 0..id - 1; each input a game input at a tick from..end, a
-   unit killed at most once in the part and at most WIKI_GAME_KILLS kills. A demo holds at most
-   WIKI_DEMO_FORKS. WIKI_FORK_IDS is the recorder's RECR_TIMELINES, the timelines a recording
-   holds, which tagpu_wiki.c asserts at build time; sim.js's TIMELINES and DEMO_FORKS. */
+   with, made at `from` with `parent` its parent timeline. id 1..RECR_TIMELINES - 1, the
+   recorder's own bound on the timelines a recording holds (tagpu_recrules.h,
+   ingame-wiki-replay-plan.md decision 9), no two parts of one id; from 2..the game's end; parent
+   0..id - 1; each input a game input at a tick from..end, a unit killed at most once in the part
+   and at most WIKI_GAME_KILLS kills. A demo holds at most WIKI_DEMO_FORKS. sim.js's TIMELINES and
+   DEMO_FORKS. */
 #define WIKI_DEMO_FORKS 8
-#define WIKI_FORK_IDS   64
 typedef struct {
     int              id, from, parent;
     int              ninput;

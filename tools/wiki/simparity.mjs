@@ -34,8 +34,10 @@
    wikitest `game` with the fixture casting's rival beside it (casting-fixture.json `rivals`), and the stall case:
    every seat cut to 200, in stall mode tick for tick and in refuse mode, where it must end starved; then every demo of
    it as a replay, through replay.js and wikitest `replay`, demo tick by demo tick -- the replay's view and hash
-   (replayHash, tagpu_wikireplay_hash's twin), the game's view, orders and hash -- and Try it yourself's press trace
-   (TRACE) through replay.js's create and wikitest `replaytrace`. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
+   (replayHash, tagpu_wikireplay_hash's twin, a live entry's rewind state and P's hash included), the game's view,
+   orders and hash -- and Try it yourself's press trace through replay.js's create and wikitest `replaytrace`: TRACE
+   on a replay entry, LIVE_TRACE (the live HUD's presses and the world's input) on a live one. The fork pass forks
+   each distinct game at the refresh ticks (forkCases). It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
    against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
    recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
@@ -103,9 +105,11 @@ function fnv() {
   return { byte, int, str, hex: () => hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
 }
 /* THE REPLAY'S HASH, tagpu_wikireplay_hash's twin over replay.js's view, in tagpu_wikireplay.h's order; the game's
-   state hash last, as its low and its high 32 bits */
+   state hash as its low and its high 32 bits; then a live replay's block, the past simulation's state hash last. A
+   trip from the game is WIKI_REPLAY_AT_GAME, -2. */
+const f32 = new DataView(new ArrayBuffer(4)), f32bits = x => { f32.setFloat32(0, x, true); return f32.getUint32(0, true); };
 function replayHash(R) {
-  const v = R.view(), g = v.game, h = fnv(), ctl = c => WikiReplay.CONTROLS.indexOf(c);
+  const v = R.view(), g = v.game, h = fnv(), ctl = c => c === WikiReplay.AT_GAME ? -2 : WikiReplay.CONTROLS.indexOf(c);
   const b = x => h.int(x ? 1 : 0);
   h.int(v.tick); b(v.done); h.int(v.clock); h.int(v.waiting ? 4 : 0); b(v.stalled); h.str(v.caption); b(v.failed); h.int(v.ignored);
   h.int(g.tick); h.int(g.end); b(g.paused); h.int(g.speed); h.int(g.acc); h.int(g.target); h.int(g.gen); h.int(g.quiet);
@@ -122,6 +126,15 @@ function replayHash(R) {
   h.int(v.walked); h.int(v.marks.length); for (const m of v.marks) for (const x of m) h.int(x);
   const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
   h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
+  if (!v.live) return h.hex();
+  const L = v.live;
+  h.int(WikiReplay.RW.indexOf(L.rw)); h.int(L.G); h.int(L.now); h.int(WikiReplay.ARMS.indexOf(L.arm)); h.int(L.armR); h.int(L.armEvict);
+  h.int(L.dragT); b(L.clash); h.int(L.nlogged); h.int(L.selected); h.int(L.timelines.length);
+  for (const t of L.timelines) { h.int(t.id); h.int(t.parent); h.int(t.R); h.int(t.last); b(t.live); h.int(t.used); h.int(t.mode === 'stall' ? 1 : 0); h.int(t.nlog); }
+  h.int(v.toast ? v.toast.evict : -1); h.int(L.back); b(L.full);
+  h.int(f32bits(L.bar.be)); h.int(f32bits(L.bar.bm)); for (const x of L.bar.rates) h.int(f32bits(x)); h.int(L.bar.dt);
+  const ph = R.past ? stateHash(R.past, R.past.view()) : '0000000000000000';
+  h.int(parseInt(ph.slice(8), 16)); h.int(parseInt(ph.slice(0, 8), 16));
   return h.hex();
 }
 const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];          // WIKI_KEY_* order
@@ -376,6 +389,39 @@ const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play'
   [91, 'play', 0], [92, 'speed', 0], [93, 'leave', 0], [94, 'leave:no', 0], [95, 'leave:no', 0], [100, 'track', -50],
   [101, 'track', 99999], [112, 'play', 0], [115, 'bogus', 0], [116, 'leave:yes', 0], [120, 'rew', 0], [130, 'bookmark', 0],
   [140, 'leave', 0], [145, 'leave:yes', 0]] };
+/* THE LIVE PRESS TRACE, Try it yourself on a live entry's first demo (rewind-spec.md 12.1): the presses as TRACE's
+   and the world inputs as [demo tick, 'move', x, z], [demo tick, 'down' | 'up', key], each given through R.input
+   after that tick's frame. In order: the rewind refused (an empty span) and a replay HUD's play (nothing); a move
+   before any fork (the world takes none); after the demo's scripted opening, the open, rew, a track press forward
+   and Play from here while that seek is pending (ignored), fwd near now (Back to now, its release logged on the
+   original: the opening's builds stand before it, since a build the script makes after a release names no selection
+   and locks the game); the open, a track press, Play from here twice (the snap to 301, then fork 1 in stall mode);
+   in fork 1 a click on the builder, a click on the column's solar button (DZ: its row less the bar), a placement,
+   the button again and a Shift-drag line; armed again, Shift held across the open (its up logged into L), moves
+   over the world while open (logged, the ghost follows) and a click there (ignored), Back to now from the open (a
+   close); later a seek to 301, which shows 300 and plans 301, the segment's first (Cannot play), a seek forward and
+   the snap to 601 and fork 2 of fork 1; in fork 2 an order; a seek into the original's segment and Play from here,
+   fork 3 of the original at 2; in fork 3 a selection and a building armed, then Back to now from the past (the
+   release logged); a seek past that release in fork 3 and Play from here, whose arm replaces F1, LRU, and the fork
+   that deletes it while fork 2's chain keeps its log; a last open, seek and Back to now. In the fixture's column
+   only the builder has pages, at 80 workerTime, so no Try-it fork starves within the game's end: the stall mode's
+   ledgers are compared tick by tick here, and its debt in the game pass's stall case. */
+const LIVE_TRACE = { end: 1500, presses: [
+  [1, 'rewind', 0], [3, 'play', 0], [4, 'move', 300, 300], [250, 'rewind', 0], [251, 'rew', 0], [254, 'track', 80],
+  [255, 'live_play', 0], [260, 'fwd', 0], [400, 'rewind', 0], [401, 'track', 350], [410, 'live_play', 0],
+  [430, 'live_play', 0], [432, 'move', 140, 330], [433, 'down', 'lmb'], [434, 'up', 'lmb'], [436, 'move', -34, 158],
+  [437, 'down', 'lmb'], [438, 'up', 'lmb'], [440, 'move', 72, 312], [441, 'down', 'lmb'], [442, 'up', 'lmb'],
+  [444, 'move', -34, 158], [445, 'down', 'lmb'], [446, 'up', 'lmb'], [448, 'down', 'shift'], [449, 'move', 300, 120],
+  [450, 'down', 'lmb'], [453, 'move', 500, 120], [456, 'up', 'lmb'], [457, 'up', 'shift'], [460, 'move', -34, 158],
+  [461, 'down', 'lmb'], [462, 'up', 'lmb'], [464, 'move', 600, 300], [466, 'down', 'shift'], [468, 'rewind', 0],
+  [470, 'move', 620, 320], [472, 'move', 640, 340], [473, 'down', 'lmb'], [475, 'live_now', 0], [850, 'rewind', 0],
+  [851, 'track', 301], [860, 'live_play', 0], [862, 'track', 650], [872, 'live_play', 0], [890, 'live_play', 0],
+  [892, 'move', 140, 330], [893, 'down', 'lmb'], [894, 'up', 'lmb'], [896, 'move', 400, 400], [897, 'down', 'rmb'],
+  [898, 'up', 'rmb'], [920, 'rewind', 0], [921, 'track', 200], [930, 'live_play', 0], [940, 'live_play', 0],
+  [942, 'move', 140, 330], [943, 'down', 'lmb'], [944, 'up', 'lmb'], [946, 'move', -34, 158], [947, 'down', 'lmb'],
+  [948, 'up', 'lmb'], [950, 'move', 260, 200], [1000, 'rewind', 0], [1001, 'track', 30], [1010, 'live_now', 0],
+  [1400, 'rewind', 0], [1401, 'track', 340], [1412, 'live_play', 0], [1430, 'live_play', 0], [1440, 'rewind', 0],
+  [1441, 'track', 330], [1450, 'live_now', 0]] };
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };
@@ -974,10 +1020,12 @@ function forkCases() {
   const FORK_AT = [2, 301, 601, 901, 1201], AFTER = 300;
   const A = ['fixture, own types, type 1', FIXTURE, { side: 0, iface: 1, casting: null, rival: null }];
   const CTXS = [A, ['fixture, shifted, type 0', FIXTURE, { side: 0, iface: 0, casting: CASTINGS.shifted[0], rival: RIVALS.shifted }]];
-  // the synthetic part: a box over the commander and the builder, ARMSOLAR armed and placed, the rival commander killed
-  const synthetic = R => [{ at: R, move: [100, 250] }, { at: R + 1, down: 'select' }, { at: R + 3, move: [260, 360] },
-    { at: R + 6, up: 'select' }, { at: R + 10, build: 'ARMSOLAR' }, { at: R + 12, seat: 0, move: [300, 420] },
-    { at: R + 14, down: 'lmb' }, { at: R + 16, up: 'lmb' }, { at: R + 40, kill: 'c1' }, { at: R + 50, move: [200, 200] }];
+  /* the synthetic part: a box over the builder, ARMSOLAR armed and placed, the rival commander killed; it plays on a
+     game with the sidebar too: nothing stands in the build's trip (sim.js TRIP, 90 ticks), and the builder has the
+     solar on its page in every layout (the fixture's column has no page for the commander) */
+  const synthetic = R => [{ at: R, move: [120, 315] }, { at: R + 1, down: 'select' }, { at: R + 3, move: [160, 345] },
+    { at: R + 6, up: 'select' }, { at: R + 10, build: 'ARMSOLAR' }, { at: R + 102, seat: 0, move: [300, 420] },
+    { at: R + 104, down: 'lmb' }, { at: R + 106, up: 'lmb' }, { at: R + 130, kill: 'c1' }, { at: R + 140, move: [200, 200] }];
   const play = (sim, n) => { for (let i = 0; i < n; i++) sim.step(); };
   const watch = (sim, n) => { for (let i = 0; i < n; i++) { sim.step(); sim.view(); sim.fed; } };
   const cases = [];
@@ -1003,35 +1051,38 @@ function forkCases() {
                 if (part === 'empty' && sim.fed !== fed) return `FAIL an empty part fed ${sim.fed - fed} inputs`;
                 return `forked at ${R}, played to ${sim.tick}`;
               } });
-      // THE HANDOFF: Shift and the left button held in a placement gesture across R - 1; the fork lets go of both
-      // without placing, and the selection and the armed building go
+      /* THE HANDOFF: Shift and the left button held in a placement gesture across R - 1; the fork lets go of both
+         without placing, and the selection and the armed building go. The gesture arms its building straight, so it
+         plays on a game without the sidebar, whose builds take no trip through the column (sim.js TRIP) */
       const R = 601, held = JSON.parse(JSON.stringify(demo));
-      held.game.inputs.push({ at: R - 6, build: 'ARMSOLAR' }, { at: R - 5, move: [300, 200] }, { at: R - 4, down: 'shift' },
-        { at: R - 3, down: 'lmb' }, { at: R - 2, move: [340, 200] }, { at: R + 5, up: 'lmb' }, { at: R + 6, up: 'shift' });
-      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the handoff at ${R}`, layout: A[1], ctx: A[2], run: G => {
-        const sim = G(whole, held, 'refuse');
-        play(sim, R - 1);
-        const v0 = sim.view();
-        if (!v0.keys.includes('shift') || !v0.keys.includes('lmb') || v0.mode !== 'build:ARMSOLAR') return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}`;
-        if (sim.fork(R, [], 'refuse') !== 'ok') return 'FAIL the fork was refused';
-        const v = sim.view();
-        if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
-          return `FAIL the fork held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected).map(u => u.id)}`;
-        watch(sim, 60);
-        return 'let go';
-      } });
-      // THE RELEASE alone, as Back to now calls it: the same held state let go, the recorded script playing on
-      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the release at ${R - 1}`, layout: A[1], ctx: A[2], run: G => {
-        const sim = G(whole, held, 'refuse');
-        play(sim, R - 1);
-        sim.view();
-        sim.release();
-        const v = sim.view();
-        if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
-          return `FAIL the release held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites`;
-        watch(sim, 60);
-        return 'let go';
-      } });
+      if (!demo.game.sidebar) {
+        held.game.inputs.push({ at: R - 6, build: 'ARMSOLAR' }, { at: R - 5, move: [300, 200] }, { at: R - 4, down: 'shift' },
+          { at: R - 3, down: 'lmb' }, { at: R - 2, move: [340, 200] }, { at: R + 5, up: 'lmb' }, { at: R + 6, up: 'shift' });
+        cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the handoff at ${R}`, layout: A[1], ctx: A[2], run: G => {
+          const sim = G(whole, held, 'refuse');
+          play(sim, R - 1);
+          const v0 = sim.view();
+          if (!v0.keys.includes('shift') || !v0.keys.includes('lmb') || v0.mode !== 'build:ARMSOLAR') return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}`;
+          if (sim.fork(R, [], 'refuse') !== 'ok') return 'FAIL the fork was refused';
+          const v = sim.view();
+          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
+            return `FAIL the fork held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected).map(u => u.id)}`;
+          watch(sim, 60);
+          return 'let go';
+        } });
+        // THE RELEASE alone, as Back to now calls it: the same held state let go, the recorded script playing on
+        cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the release at ${R - 1}`, layout: A[1], ctx: A[2], run: G => {
+          const sim = G(whole, held, 'refuse');
+          play(sim, R - 1);
+          sim.view();
+          sim.release();
+          const v = sim.view();
+          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
+            return `FAIL the release held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites`;
+          watch(sim, 60);
+          return 'let go';
+        } });
+      }
       // a fork of a fork, the second in stall mode
       cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) a fork of a fork`, layout: A[1], ctx: A[2], run: G => {
         const sim = G(whole, demo, 'refuse');
@@ -1181,6 +1232,7 @@ try {
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
   fs.writeFileSync(path.join(tmp, 'trace.json'), JSON.stringify(TRACE));
+  fs.writeFileSync(path.join(tmp, 'livetrace.json'), JSON.stringify(LIVE_TRACE));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
   let context = 0;
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
@@ -1312,7 +1364,11 @@ try {
         if (d && !first) first = { t: R.tick, ...d };
         ticks++;
         if (last) break;
-        if (presses) for (const [t, c, x] of presses.presses) if (t === R.tick) R.press(c, x);
+        if (presses) for (const [t, c, x, z] of presses.presses) if (t === R.tick) {
+          if (c === 'move') R.input({ move: [x, z] });
+          else if (c === 'down' || c === 'up') R.input({ [c]: x });
+          else R.press(c, x);
+        }
         R.step();
       }
       R.free();
@@ -1332,9 +1388,11 @@ try {
       at = 0;
       for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
-      cout = lines(wikitest(['replaytrace', ...args, 'trace.json']));
+      // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE
+      cout = lines(wikitest(['replaytrace', ...args, entry.live ? 'livetrace.json' : 'trace.json']));
       at = 0;
-      compareReplay(id, entry.demos[0], () => WikiReplay.create(entry, entry.demos[0], layout, gctx), `${named}, press trace`, TRACE);
+      compareReplay(id, entry.demos[0], () => WikiReplay.create(entry, entry.demos[0], layout, gctx), `${named}, press trace`,
+        entry.live ? LIVE_TRACE : TRACE);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
     }
   }
@@ -1539,7 +1597,10 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
     /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
     {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
-      const all = [...refusalCases(entry), ...GAMES.flatMap(([, game]) => gameRefusalCases(game, entry))];
+      /* the game cases edit a replay entry's first demo: a sidebar-free game whose viewer presses the replay HUD, which
+         they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
+         plays */
+      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live).flatMap(([, game]) => gameRefusalCases(game, entry))];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
                          rival: c.rival ?? null, replay: !!c.replay }) + '\n' +

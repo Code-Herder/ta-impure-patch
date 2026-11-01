@@ -525,8 +525,8 @@ const WikiSim = (() => {
        entry carries no `forks`. ---- */
   const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400, THEATRE_TABS = 9;
   /* a demo's fork parts, at most (tagpu_wikidata.h WIKI_DEMO_FORKS); and the timelines a recording holds, the
-     recorder's RECR_TIMELINES, which bounds a part's id: tagpu_wikidata.h's WIKI_FORK_IDS is asserted equal to it
-     at build time (tagpu_wiki.c), and simparity's refusal cases hold this to that */
+     recorder's RECR_TIMELINES, which bounds a part's id: tagpu_wikidata.c reads it from tagpu_recrules.h itself,
+     and simparity's refusal cases hold this to that */
   const DEMO_FORKS = 8, TIMELINES = 64;
   // whether the entry is a game entry; anything but "game" in `frame` refuses it
   function isGame(entry) {
@@ -3087,10 +3087,14 @@ const WikiSim = (() => {
     // frees what the sim holds outside itself: its scripts' world in the COB host
     sim.free = () => { if (COB) COB.free(); };
     /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,
-       a pass that starved, a kill that found no unit), the sound events made since it was made, and each seat's
-       commanders lost and whether it is out */
+       a pass that starved, a kill that found no unit), the sound events made since it was made, each seat's
+       commanders lost and whether it is out, the seat-0 inputs fed; seat 0's stored values, storage and last pass's
+       rates, which the live mode's top bar eases and samples (tagpu_wikisim.h WIKIECON's m, e, mmax, emax, ei, eo, mi,
+       mo), and the keys and buttons seat 0 holds, in KEYS order */
     if (GAME) sim.gameNow = () => ({ stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
-      seats: econ.map(z => ({ lost: z.lost, out: z.out })), fed });
+      seats: econ.map(z => ({ lost: z.lost, out: z.out })), fed,
+      bar: { e: econ[0].e, m: econ[0].m, emax: econ[0].emax, mmax: econ[0].mmax, ei: econ[0].ei, eo: econ[0].eo, mi: econ[0].mi, mo: econ[0].mo },
+      keys: KEYS.filter(k => st.held.has(k)) });
     /* THE RELEASE (tagpu_wikisim_release), between two ticks: what the game's rebuild leaves of seat 0's input after
        Back to now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a return
        to now, each from the commander selected and a building armed, came up with no unit selected, main+0x2CC3 back
@@ -3194,6 +3198,8 @@ const WikiSim = (() => {
     HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, HUD_DOWN, HUD_UP,
     // a live demo's fork parts, at most, and the bound of their ids (the recorder's RECR_TIMELINES)
     DEMO_FORKS, TIMELINES,
+    // the keys and buttons an input names, in tagpu_wikidata.h's WIKI_KEY_* order
+    KEYS,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };

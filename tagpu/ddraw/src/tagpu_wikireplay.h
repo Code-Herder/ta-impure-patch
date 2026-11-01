@@ -21,6 +21,29 @@
    or the data brings is bounded before it is used: a control against WIKI_NPRESS, a tick clamped to
    the game, the markers and bookmarks against their arrays.
 
+   LIVE, a live entry's demo (WIKIENTRY.live): a live skirmish with the live HUD's rewind, the game's
+   own rewind state for state with its waits removed. replay.js's header states it -- the live and
+   past simulations, the chain's re-simulation, the arm, the snap by the recorder's refresh grid
+   and the eviction by its function, both called from tagpu_recrules.h itself -- with:
+   THE LIFETIME, LIVE: the replay owns the live simulation L (`game`) and the past one P (`past`)
+   and is the only code that frees them: P at a backward seek before the new one is made, at Back
+   to now, and at the end; L at a fork, the moment P takes its place, and at the end. `game` is
+   replaced the moment its simulation is freed. L is never stepped or written while the past is
+   shown, so Back to now shows its world exactly as it was; the release that follows is the game's
+   own (m0-facts.md) and is logged like an input.
+   THE BOUND, LIVE: a step runs at most max(WIKI_REPLAY_SEEK, 1) game ticks and one fork operation
+   per chain member P crosses; the timelines are at most RECR_TIMELINES, the plan refusing the one
+   past it; the logs hold at most WIKI_REPLAY_LOG entries over every kept log, a deleted timeline's
+   freed once no live timeline's chain reads it, and the idle rewind keeps WIKI_REPLAY_LOG_KEEP of
+   them back -- a key's up for each key the world can hold, and the release -- and, while open, one
+   for the release; each log's block grows before it is needed (log_room), so leaving idle and Back
+   to now can always log what they apply.
+   LOGGED FIRST: Try it's world input after a fork is written to the selected timeline's log and
+   then applied through the function a re-simulation applies it with; one that cannot be logged is
+   not applied, so every fork can be made again exactly.
+   ONE CURSOR: in a scripted live demo, while the viewer's trip or its return glide runs and the
+   rewind is idle, L feeds seat 0 no input; a step that does sets `clash` and ends the replay.
+
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS, as tagpu_wikisim.c: one WIKIREPLAY is used by one
    thread at a time, and it lives as long as its caller keeps it. The DLL compiles this file for
    SSE2 with the simulation (Makefile, THE WIKI'S SIMULATION): it computes on integers, its one
@@ -28,6 +51,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_hudlay.h"
+#include "tagpu_recrules.h"
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
 
@@ -61,8 +85,49 @@
 #define WIKI_REPLAY_HUD_DOWN WIKI_PICK_DOWN
 #define WIKI_REPLAY_HUD_UP   WIKI_PICK_UP
 
-/* a toast's kind; a marker's is HUD_MK_DEATH or HUD_MK_DEFEAT */
-enum { WIKI_TOAST_ADDED, WIKI_TOAST_REMOVED };
+/* a toast's kind, replay.js's TOASTS: a bookmark's two, then the live HUD's five (tagpu_hudinput.c's
+   strings: "Playing on from m:ss", "Cannot play from m:ss", "Click again to play from m:ss" with
+   ", replacing F<n>", "Playing from m:ss", "Rewind refused"); a marker's is HUD_MK_DEATH or
+   HUD_MK_DEFEAT */
+enum { WIKI_TOAST_ADDED, WIKI_TOAST_REMOVED, WIKI_TOAST_PLAYING_ON, WIKI_TOAST_CANNOT, WIKI_TOAST_ARMED,
+       WIKI_TOAST_PLAYING_FROM, WIKI_TOAST_REFUSED };
+
+/* THE LIVE MODE's names and bounds (replay.js RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME): the
+   rewind's states (tagpu_replay.c's IDLE, OPEN and PAST; its FLUSH and ENDING are instantaneous
+   here) and Play from here's arm (tagpu_hudinput.c); the span's first GameTime, a recording's first
+   iteration (demo-recorder-s4-rewind.md); the DisplayTimer's step of 30 GameTimes (engine/render.md,
+   The memo's layout); the logs' bound, about 24 bytes an entry, and what the idle rewind keeps back
+   of it; a log entry's kind; a trip's start at seat 0's cursor in the game, a cursor's `from` */
+enum { WIKI_RW_IDLE, WIKI_RW_OPEN, WIKI_RW_PAST };
+enum { WIKI_ARM_NONE, WIKI_ARM_SEEKING, WIKI_ARM_ARMED };
+enum { WIKI_LOG_MOVE, WIKI_LOG_DOWN, WIKI_LOG_UP, WIKI_LOG_RELEASE };
+#define WIKI_REPLAY_FIRST    1
+#define WIKI_REPLAY_RATE     30
+#define WIKI_REPLAY_LOG      65536
+#define WIKI_REPLAY_LOG_KEEP (WIKI_NKEYS + 1)
+#define WIKI_REPLAY_AT_GAME  (-2)
+
+/* An entry of a timeline's log: applied live between two ticks, applied again by every
+   re-simulation at the same point. tau the tick it first acts on (the simulation stands at tau - 1);
+   kind WIKI_LOG_*; key a WIKI_KEY_* for DOWN and UP; x, z a MOVE's world point. */
+typedef struct {
+    int32_t tau;
+    int8_t  kind, key;
+    double  x, z;
+} WIKIREPLAYLOG;
+
+/* A TIMELINE: the original (id 0) or a fork, in creation order, its index its id. parent -1 for the
+   original; R its first tick; last the span's last when it stopped being the selected one; live 0
+   once deleted; used the demo tick it was made on (the recorder's last-used stamp); mode WIKI_ECON_*;
+   part the fork part's inputs in the entry's data (only read, NULL for the original and Try it's);
+   the log on the heap, the replay's own. */
+typedef struct {
+    int                id, parent, R, last, live, used, mode;
+    const WIKIINPUT*   part;
+    int                npart;
+    WIKIREPLAYLOG*     log;
+    int                nlog, cap;
+} WIKITIMELINE;
 
 /* THE REPLAY'S VIEW, replay.js's R.view(): values only, no pointer into the replay but the
    caption, which points into the entry's document. */
@@ -90,6 +155,19 @@ typedef struct {
     int         toast_kind, toast_at, toast_value;  /* toast_kind -1: none                          */
     int         question, was_paused;           /* Leave's question is open, and the pause before it */
     int         left;                           /* Try it's Yes left the replay: it is done          */
+    /* LIVE (replay.js's view's `live`; `live` 0 leaves the rest 0): the rewind's WIKI_RW_*, the
+       GameTime it opened at, the span (first, last) and the GameTime shown; the WIKI_ARM_*, its start
+       and the fork it evicts (-1 none); the track's last seek (-1 none); the clash; the entries the
+       logs hold; the selected timeline and the timelines; the past simulation (has_past 0 none), its
+       tick, the seek's T (-1 none) and its generation; the top bar's memo, f32 as the engine's, and
+       the DisplayTimer; the return glide's start (-1 none); whether Try it's input is past what the
+       logs keep; the toast's evicted fork (-1 none) */
+    int         live;
+    int         rw, G, first, last, now, arm, arm_R, arm_evict, drag_t, clash, nlogged, selected, ntl;
+    struct { int id, parent, R, last, live, used, mode, nlog; } tl[RECR_TIMELINES];
+    int         has_past, past_tick, past_target, past_gen;
+    float       be, bm, rates[4];               /* rates: energy in, out; metal in, out          */
+    int         dt, back, full, toast_evict;
 } WIKIREPLAYVIEW;
 
 /* The replay; the caller owns it and reads nothing of it but through the functions below. */
@@ -118,6 +196,23 @@ typedef struct {
     int               question, was_paused;
     int               walked, nmark, mark[WIKI_REPLAY_MARKS][3];
     int               prev_lost[WIKI_SEATS], prev_out[WIKI_SEATS];
+    /* LIVE (replay.js's live state): `game` is L; `past` P (NULL none), its generation, its chain
+       (row indices from the original), the member it plays and that member's next log entry; the
+       rewind's state, the GameTime it opened at and the span's last; the track's last seek; the
+       clash; the return glide's start; the arm, its start and its eviction; the timelines, the
+       selected one and the entries every log holds; `made` numbers each simulation made; the top
+       bar's memo and DisplayTimer, and the shown world's figures it eases toward (s_*: the shown
+       tick, seat 0's stored values, storage and rates); the toast's evicted fork */
+    int               live;
+    WIKISIM*          past;
+    int               pgen, npchain, pm, pl, pchain[RECR_TIMELINES];
+    int               rw, G, last, drag_t, clash, back, arm, arm_R, arm_evict;
+    WIKITIMELINE      tl[RECR_TIMELINES];
+    int               ntl, selected, nlogged, made;
+    float             be, bm, rates[4];
+    int               dt, s_tick;
+    double            s_e, s_m, s_emax, s_mmax, s_ei, s_eo, s_mi, s_mo;
+    int               toast_evict;
 } WIKIREPLAY;
 
 /* replay.js's play (`scripted` WIKI_PLAY_DEMO: the viewer's script plays) or create (WIKI_PLAY_TRY:
@@ -136,16 +231,28 @@ void tagpu_wikireplay_step(WIKIREPLAY* r);
    adds at most WIKI_REPLAY_SEEK. */
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
-/* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included
-   (anything else, a live HUD's control among it, does nothing), and for the track the game tick under the pointer, which
-   the seek clamps to the game. Nothing while the replay is done or still walking. */
+/* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included,
+   or in a live replay a live HUD's (tagpu_wikidata_hud_presses; anything else does nothing), and
+   for the track the game tick under the pointer, which the seek clamps to the game (live, to the
+   rewind's span). Nothing while the replay is done or still walking. */
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value);
+
+/* Try it yourself's world input in a live replay (replay.js R.input), given between two steps: a
+   MOVE, else a `down`, else an `up` of a WIKI_KEY_* (anything else does nothing). Taken only after a
+   fork, every kind while the rewind is idle and a move alone while it is open, none in the past,
+   and only while the log can hold it (THE BOUND); LOGGED FIRST. */
+void tagpu_wikireplay_input(WIKIREPLAY* r, const WIKIINPUT* in);
 
 /* The game simulation shown now, NULL only when `failed`; not const, since tagpu_wikisim_view
    writes the simulation's own view arrays. THE LIFETIME: a view taken from it (which points into
    those arrays) is valid only until the next tagpu_wikireplay_step or _press, either of which may
    free that simulation; nothing but the view may be written through it. */
 WIKISIM* tagpu_wikireplay_game(WIKIREPLAY* r);
+
+/* A live replay's past simulation, the world shown once a seek has ended while the rewind shows the
+   past (WIKI_RW_PAST); NULL none, and always in a replay that is not live. THE LIFETIME as
+   tagpu_wikireplay_game's. */
+WIKISIM* tagpu_wikireplay_past(WIKIREPLAY* r);
 
 void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
 
@@ -155,8 +262,12 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
    speed, acc, target, gen, quiet; the cursor: 0, or 1 then from (-1 none), from_value, to, value,
    at, and 1 with drag and over or 0; the bookmark count and each; the toast's kind (-1 none), at
    and value (0 and 0 with none); the question open, was_paused and left; walked, the marker count and
-   each marker's tick, kind and seat; last the game simulation's tagpu_wikisim_hash as its low and
-   its high 32 bits, or 0 and 0 when `failed`. */
+   each marker's tick, kind and seat; the game simulation's tagpu_wikisim_hash as its low and its
+   high 32 bits, or 0 and 0 when `failed`. Then, live only, so a replay's hash takes no byte more:
+   rw, G, the GameTime shown, arm, arm_R, arm_evict, drag_t, clash, nlogged, selected, the timeline
+   count and each one's id, parent, R, last, live, used, mode and log count; the toast's evicted
+   fork (-1 with none); back; full; be, bm and the four rates as their f32 bits; dt; last the past
+   simulation's tagpu_wikisim_hash, low then high, or 0 and 0 with none. */
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r);
 
 /* Frees every simulation the replay holds and its script; `r` holds nothing after. */

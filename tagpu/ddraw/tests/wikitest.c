@@ -29,7 +29,9 @@
    entry's first demo (tagpu_wikireplay, create) with the presses the file TRACE holds,
    {"end": N, "presses": [[tick, control's name, value], ...]}: each tick from 0 its frame is printed
    as replay prints it, then the presses of that tick are made in order, then it steps, up to tick N
-   or the replay's end.
+   or the replay's end. In a live entry's trace a press may be a world input instead, given through
+   tagpu_wikireplay_input: [tick, "move", x, z], [tick, "down", key] or [tick, "up", key], a key by
+   sim.js's name.
 
    `wikitest trace FILE [COB]` replays a recording of sim.js calls (simparity.mjs makes it from
    simcheck.mjs's rule cases), one JSON line per call, each naming its sim by "sim", the order it
@@ -659,11 +661,48 @@ static int game(const char* path, const char* entry, const char* layout, const c
     return rc;
 }
 
-/* a WIKI_HUD_* by its name, or JSON null for none */
+/* a WIKI_HUD_* by its name, a live trip's start at the game by replay.js's AT_GAME, or JSON null for
+   none */
 static void hud_name(int c)
 {
-    if (c < 0) fputs("null", stdout);
+    if (c == WIKI_REPLAY_AT_GAME) fputs("\"@game\"", stdout);
+    else if (c < 0) fputs("null", stdout);
     else str(tagpu_wikidata_hud_name(c));
+}
+
+/* a float as a JSON number: the double replay.js's Math.fround holds, exactly (17 digits round-trip
+   a double) */
+static void f32(float f)
+{
+    printf("%.17g", (double)f);
+}
+
+/* a live replay's `live` block in replay.js's shape */
+static void live_view(const WIKIREPLAYVIEW* v)
+{
+    static const char* const RW[] = { "idle", "open", "past" }, * const ARM[] = { "none", "seeking", "armed" };
+    int i;
+    printf(",\"live\":{\"rw\":\"%s\",\"G\":%d,\"first\":%d,\"last\":%d,\"now\":%d,\"arm\":\"%s\",\"armR\":%d,"
+           "\"armEvict\":%d,\"dragT\":%d,\"clash\":%s,\"nlogged\":%d,\"selected\":%d,\"timelines\":[",
+           RW[v->rw], v->G, v->first, v->last, v->now, ARM[v->arm], v->arm_R, v->arm_evict, v->drag_t,
+           v->clash ? "true" : "false", v->nlogged, v->selected);
+    for (i = 0; i < v->ntl; i++)
+        printf("%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%s,\"used\":%d,\"mode\":\"%s\",\"nlog\":%d}",
+               i ? "," : "", v->tl[i].id, v->tl[i].parent, v->tl[i].R, v->tl[i].last, v->tl[i].live ? "true" : "false",
+               v->tl[i].used, v->tl[i].mode == WIKI_ECON_STALL ? "stall" : "refuse", v->tl[i].nlog);
+    fputs("],\"past\":", stdout);
+    if (v->has_past) printf("{\"tick\":%d,\"target\":%d,\"gen\":%d}", v->past_tick, v->past_target, v->past_gen);
+    else fputs("null", stdout);
+    fputs(",\"bar\":{\"be\":", stdout);
+    f32(v->be);
+    fputs(",\"bm\":", stdout);
+    f32(v->bm);
+    fputs(",\"rates\":[", stdout);
+    for (i = 0; i < 4; i++) {
+        if (i) putchar(',');
+        f32(v->rates[i]);
+    }
+    printf("],\"dt\":%d},\"back\":%d,\"full\":%s}", v->dt, v->back, v->full ? "true" : "false");
 }
 
 /* the replay's view in replay.js's R.view() shape */
@@ -706,14 +745,17 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     for (i = 0; i < v->nbook; i++) printf("%s%d", i ? "," : "", v->book[i]);
     putchar(']');
     key("toast", 0);
-    if (v->toast_kind >= 0)
-        printf("{\"kind\":\"%s\",\"at\":%d,\"value\":%d}", v->toast_kind == WIKI_TOAST_ADDED ? "added" : "removed", v->toast_at,
-               v->toast_value);
-    else fputs("null", stdout);
+    if (v->toast_kind >= 0) {
+        static const char* const TOASTS[] = { "added", "removed", "playing_on", "cannot", "armed", "playing_from", "refused" };
+        printf("{\"kind\":\"%s\",\"at\":%d,\"value\":%d", TOASTS[v->toast_kind], v->toast_at, v->toast_value);
+        if (v->live) printf(",\"evict\":%d", v->toast_evict);
+        putchar('}');
+    } else fputs("null", stdout);
     key("question", 0);
     if (v->question) printf("{\"wasPaused\":%s}", v->was_paused ? "true" : "false");
     else fputs("null", stdout);
     key("left", 0); fputs(v->left ? "true" : "false", stdout);
+    if (v->live) live_view(v);
     putchar('}');
 }
 
@@ -779,6 +821,15 @@ static int press_of(const char* name)
     return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : tagpu_wikidata_hud(name);
 }
 
+/* a WIKI_KEY_* by sim.js's name, or -1 */
+static int key_of(const char* name)
+{
+    int k;
+    for (k = 0; name && k < WIKI_NKEYS; k++)
+        if (!strcmp(name, tagpu_wikidata_key_name(k))) return k;
+    return -1;
+}
+
 /* Try it yourself on the entry's first demo with the file TRACE's presses, one line a tick */
 static int replaytrace(const char* path, const char* entry, const char* layout, const char* casting, const char* rival,
                        int iface, int cob, const char* tracefile)
@@ -811,9 +862,23 @@ static int replaytrace(const char* path, const char* entry, const char* layout, 
     for (;;) {
         replay_frame(&r, g.e.id, g.e.demo[0].id, r.tick == 0 || r.done || r.tick >= last);
         if (r.done || r.tick >= last) break;
-        for (p = tj_is(tj_get(root, "presses"), TJ_ARR) ? tj_get(root, "presses")->first : NULL; p; p = p->next)
-            if ((int)tj_num(tj_at(p, 0), -1) == r.tick)
-                tagpu_wikireplay_press(&r, press_of(tj_str(tj_at(p, 1), NULL)), (int)tj_num(tj_at(p, 2), 0));
+        for (p = tj_is(tj_get(root, "presses"), TJ_ARR) ? tj_get(root, "presses")->first : NULL; p; p = p->next) {
+            const char* what = tj_str(tj_at(p, 1), NULL);
+            if ((int)tj_num(tj_at(p, 0), -1) != r.tick) continue;
+            if (what && (!strcmp(what, "move") || !strcmp(what, "down") || !strcmp(what, "up"))) {
+                /* a world input, as tagpu_wiki.c try_send builds one */
+                WIKIINPUT in;
+                memset(&in, 0, sizeof in);
+                in.down = in.up = in.build = -1;
+                if (!strcmp(what, "move")) {
+                    in.has = WIKI_IN_MOVE;
+                    in.move.x = tj_num(tj_at(p, 2), 0);
+                    in.move.z = tj_num(tj_at(p, 3), 0);
+                } else if (!strcmp(what, "down")) in.down = key_of(tj_str(tj_at(p, 2), NULL));
+                else in.up = key_of(tj_str(tj_at(p, 2), NULL));
+                tagpu_wikireplay_input(&r, &in);
+            } else tagpu_wikireplay_press(&r, press_of(what), (int)tj_num(tj_at(p, 2), 0));
+        }
         tagpu_wikireplay_step(&r);
     }
     tagpu_wikireplay_free(&r);

@@ -832,7 +832,7 @@ static int forks(R* r, const TJV* v, WIKIDEMO* d)
         int partkills = 0;
         if (!tj_is(p, TJ_OBJ) || p->n != 4 || !keys_in(p, PART, 4) || !tj_get(p, "id") || !tj_get(p, "from") || !tj_get(p, "parent") || !inputs)
             return refuse(r, "a fork part is not {id, from, parent, inputs}", NULL);
-        if (!integer(r, tj_get(p, "id"), 1, WIKI_FORK_IDS - 1, &f->id, "a fork part's id")
+        if (!integer(r, tj_get(p, "id"), 1, RECR_TIMELINES - 1, &f->id, "a fork part's id")
             || !integer(r, tj_get(p, "from"), 2, (int)d->game.end, &f->from, "a fork part's from")
             || !integer(r, tj_get(p, "parent"), 0, f->id - 1, &f->parent, "a fork part's parent"))
             return 0;
