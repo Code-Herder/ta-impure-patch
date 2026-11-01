@@ -7997,7 +7997,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
    lock, so a request no takeover can serve is refused while the playing -- or a rewind's live
    original -- still runs. A start that is its timeline's first iteration cannot start one: the
    iteration before it is the parent's, or none for the original (recr_append_point). The writer
-   makes every segment's second iteration a refresh (tagpu_reclossy.h, reclossy_is_refresh), so
+   makes every segment's second iteration a refresh (tagpu_recrules.h, reclossy_is_refresh), so
    only a request for a first iteration meets that, and the refusal names the next, which `next`
    (NULL allowed) is then given: the HUD's takeover snaps forward to it
    (tagpu_replay_takeover_plan); the trigger never does. R with `a` filled, or 0 (why). */

@@ -331,7 +331,7 @@ RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.
              src/tagpu_recmp_orders.c src/tagpu_recmp_players.c src/tagpu_recmp_pov.c \
              src/tagpu_recmp_roots.c src/tagpu_recmp_stream.c src/tagpu_recmp_text.c \
              src/tagpu_recmp_units.c src/crc32.c
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h src/zstd.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h src/zstd.c
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
 clean:

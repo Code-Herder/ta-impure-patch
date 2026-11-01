@@ -86,7 +86,7 @@ def build_native():
     srcs = [DDRAW / "tests/codectest.c", DDRAW / "src/tagpu_reccodec.c", DDRAW / "inc/tagpu_reccodec.h",
             DDRAW / "src/tagpu_reclossy.c", DDRAW / "inc/tagpu_reclossy.h", DDRAW / "inc/tagpu_rechold.h",
             DDRAW / "inc/tagpu_recframe.h", DDRAW / "inc/tagpu_recfmt.h", DDRAW / "inc/tagpu_reclanes.h",
-            DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]
+            DDRAW / "inc/tagpu_recrules.h", DDRAW / "src/zstd.c", *(DDRAW / f for f in frames)]
     if NATIVE.exists() and all(NATIVE.stat().st_mtime >= s.stat().st_mtime for s in srcs):
         return
     print("codectest: building", NATIVE.name, flush=True)

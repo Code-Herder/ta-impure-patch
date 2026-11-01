@@ -925,17 +925,6 @@ int reclossy_equal(const RecLossy* L, const RecLossyExact* x)
     return 1;
 }
 
-/* the interval of the refresh grid that holds GameTime t: 1 to interval is the first */
-static unsigned long long refresh_bin(unsigned t, unsigned interval)
-{
-    return ((unsigned long long)t + interval - 1) / interval;
-}
-
-int reclossy_is_refresh(unsigned n, unsigned tick, unsigned prev, unsigned interval)
-{
-    return n <= 2 || (interval && refresh_bin(tick, interval) != refresh_bin(prev, interval));
-}
-
 int reclossy_hold_parse(RecLossyHold* h, const void* p, unsigned n, char* why, unsigned cap)
 {
     const unsigned char* b = (const unsigned char*)p;

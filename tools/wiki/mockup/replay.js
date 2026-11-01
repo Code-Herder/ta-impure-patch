@@ -53,6 +53,34 @@ const WikiReplay = (() => {
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
   const DEATH = 0, DEFEAT = 1, TOASTS = ['added', 'removed'];
 
+  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h, which the recorder runs and the DLL's Rewind entry
+     is to include (simparity compares them case by case): the refresh interval a recording is written with
+     (REC_REFRESH_TICKS), the live forks a recording keeps (REC_FORK_LIMIT) and the segments a file may hold
+     (RECR_TIMELINES); the refresh grid (refresh_bin, reclossy_is_refresh) and the eviction (rec_fork_evict). */
+  const REFRESH_TICKS = 300, FORK_LIMIT = 3, TIMELINES = 64;
+  // the interval of the refresh grid that holds GameTime t: 1 to interval is the first
+  const refreshBin = (t, interval) => Math.floor((t + interval - 1) / interval);
+  /* whether a segment's iteration at GameTime `tick` is a refresh, `n` its ordinal in the segment from 1 and `prev` the
+     GameTime of the segment's last refresh before it: the first two, then the first in each interval other than the last
+     refresh's; `interval` 0 makes only the first two */
+  const isRefresh = (n, tick, prev, interval) =>
+    n <= 2 || (interval !== 0 && refreshBin(tick, interval) !== refreshBin(prev, interval));
+  /* the recorder's choice among `rows`, [{id, live, used}] in file order (id 0 the original): never the original, never
+     the selected; the least recently used, the earliest on a tie; refused when the live set cannot be bounded. Fewer
+     than `limit` live forks evict none; exactly `limit` the candidate; more, or `limit` with no candidate, cannot be
+     bounded. {ok: true, evict: the id to delete or null for none}, or {ok: false, evict: null} */
+  function forkEvict(rows, selected, limit) {
+    let live = 0, oldest = Infinity, evict = null;
+    for (const r of rows)
+      if (r.id && r.live) {
+        live++;
+        if (r.id !== selected && (evict === null || r.used < oldest)) { oldest = r.used; evict = r.id; }
+      }
+    if (live < limit) return { ok: true, evict: null };
+    if (evict === null || live > limit) return { ok: false, evict: null };
+    return { ok: true, evict };
+  }
+
   /* `scripted`: true to play the viewer's script (play), false for Try it yourself (create). The game plays in refuse
      mode in both: Try it of a replay presses the HUD only, so its game is still the recording (decision 18). */
   function make(entry, demo, layout, ctx, scripted) {
@@ -256,7 +284,7 @@ const WikiReplay = (() => {
     play: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, true),
     create: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, false),
     CONTROLS, PRESSES, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
-    GAME_END_MAX: Sim.GAME_END_MAX,
+    GAME_END_MAX: Sim.GAME_END_MAX, REFRESH_TICKS, FORK_LIMIT, TIMELINES, refreshBin, isRefresh, forkEvict,
   };
 })();
 if (typeof module !== 'undefined') module.exports = WikiReplay;

@@ -1084,18 +1084,18 @@ static void snapshot(Writer* w)
    `w->tick` may follow it. That snapshot comes after those events, so a reader that starts from
    it takes them from the block before.
    THE REFRESH: the segment's first two iterations and then one in each interval, the GameTimes
-   1 modulo it on consecutive iterations (reclossy_is_refresh), and every snapshot's -- a
-   snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last. The filter writes
-   every difference there, so the stream's world equals the copy, and -- told the snapshot
-   follows -- every spray, its sessions closed; the stream's world is checked equal to the copy
-   before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
+   1 modulo it on consecutive iterations (tagpu_recrules.h, reclossy_is_refresh), and every
+   snapshot's -- a snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last.
+   The filter writes every difference there, so the stream's world equals the copy, and -- told
+   the snapshot follows -- every spray, its sessions closed; the stream's world is checked equal
+   to the copy before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
    at which the stream's world was found equal to the copy, so a reader that starts from a
    snapshot holds what a reader of the whole stream holds there. A failed check is a fault of the
    filter, and abandons the file rather than write a stream that does not reach its snapshots. The
    first iteration is a refresh because the bases below are the copy's, and a reader takes its
    own from the stream's first iteration: equal there, they are the same bytes. The second is
    one so that a takeover asked for inside the first interval has a refresh to start from after
-   the segment's first iteration (reclossy_is_refresh).
+   the segment's first iteration (tagpu_recrules.h, reclossy_is_refresh).
    THE BASES are taken at the first call, before any snapshot can be: the wreck pool and the grid
    at the end of the segment's first iteration. INVARIANT: they equal every reader's
    (tagpu_recreader.c, tick_take), by construction -- one Writer is one segment, calloc'd per
