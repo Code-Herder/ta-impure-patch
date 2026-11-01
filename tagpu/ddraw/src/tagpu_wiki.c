@@ -386,7 +386,8 @@ static int      s_about, s_drawer;              /* the theatre's About and its d
    `FR.gv`). s_frameView is copied from the world shown -- the replay's game, or a live replay's
    past simulation while it shows the past -- and filtered to the frame's view (tagpu_wikiframe_view),
    only in a fill that ends with no seek pending, and the record is published from it; the seats
-   and seat 0's cursor the frame record reads are held with it (s_heldGv), since the record's
+   and the human seat's cursor the frame record reads are held with it (s_heldGv, from
+   tagpu_wikisim_view_as of the human seat: seat 0, or the seat a takeover took), since the record's
    players column, top bar and cursor are the world shown, not the world a seek is playing
    through. */
 static WIKIREPLAY     s_rep;
@@ -397,8 +398,8 @@ static WIKISTAGEVIEW  s_frameView;              /* the held view; 158 KB, never 
 static int            s_frameHave;              /* s_frameView holds this replay's world         */
 static WIKISEAT       s_heldSeat[WIKI_SEATS];
 static WIKIECON       s_heldEcon[WIKI_SEATS];
-static WIKIVIEW       s_heldGv;                 /* its game part and seat 0's cursor only: game,
-                                                   nseat, seat, econ, cursor_*                   */
+static WIKIVIEW       s_heldGv;                 /* its game part and the human seat's cursor
+                                                   only: game, nseat, seat, econ, cursor_*       */
 static int            s_repGen = -1, s_repQuiet = -1;   /* the replay's sound, as last synced   */
 /* THE REPLAY'S SERIAL: incremented whenever s_rep is made or freed, published in each packet
    (TAGPU_PK_WIKI.rep_serial) and named by the hit map drawn from it, so a press on the stage HUD
@@ -1802,10 +1803,15 @@ static void check(void)
    handshake or lifetime: the command record is the only way in. THE BOUND: tagpu_wiki_take holds
    the count to WIKIFRAME_FORKS and each id to 1..RECR_TIMELINES - 1, and here an id counts only
    while it names a live fork of this replay, so a list a frame old -- a deletion since -- costs a
-   lane's press that does nothing, never a press on a fork that is gone; and a lane's control acts
-   at its release only when the lanes then drawn name the same fork at the same place
-   (tagpu_hudinput.c held_lane, the press machine's rule), so a list that changed between the press
-   and the release never sends it to the fork that moved into the place. */
+   lane's press that does nothing, never a press on a fork that is gone. THE IDS ARE NEVER REUSED
+   within a replay, which that rests on: a fork's id is its row's index, handed out in order by
+   ntl++ (tagpu_wikireplay.c part_of with fork_at and take_over, and the kept forks at init), no
+   row is taken back, and a deleted or evicted row keeps live 0 for good; a new replay moves
+   rep_serial (sim_free, start), which frame_current refuses. So a stale id names its own dead
+   row, never the fork that took its place in the bay; reusing rows would break this guard. And a
+   lane's control acts at its release only when the lanes then drawn name the same fork at the
+   same place (tagpu_hudinput.c held_lane, the press machine's rule), so a list that changed
+   between the press and the release never sends it to the fork that moved into the place. */
 static int drawn_lanes(int32_t* lane)
 {
     int k;

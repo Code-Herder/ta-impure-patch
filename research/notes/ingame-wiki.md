@@ -1759,7 +1759,13 @@ draws it.
   handshake or lifetime. **The bound**: `tagpu_wiki_take` holds `nlane` to the three forks and each
   id to 1..`RECR_TIMELINES` − 1 (−1 past `nlane`), and `drawn_lanes` keeps an id only while it names
   a live fork of the running takeover replay, so a list a frame old -- a deletion since -- costs a
-  lane's press that does nothing, never a press on a fork that is gone; and the press machine lets
+  lane's press that does nothing, never a press on a fork that is gone. **That rests on ids never
+  being reused within a replay**: a fork's id is its row's index, handed out in order by `ntl++`
+  (`tagpu_wikireplay.c` `part_of` with `fork_at` and `take_over`, and the kept forks at init), no
+  row is taken back, and a deleted or evicted row keeps `live` 0 for good; a new replay moves
+  `rep_serial` (`sim_free`, `start`), which `frame_current` refuses. So a stale id names its own
+  dead row, never the fork that took its place in the bay; reusing rows would break this guard.
+  And the press machine lets
   a lane's control act at its release only when the lanes then drawn name the same fork at the same
   place (`tagpu_hudinput.c` `held_lane`, the game's rule), so a list that changed between the press
   and the release never sends it to the fork that moved into that place. The replay ignores an id
@@ -1770,7 +1776,8 @@ draws it.
   page lies over it, the point fitted through that hit and
   the frame's unit with `tagpu_wikistage_fit` (the function both threads fit a frame with), and on
   the column or the map. Only while the frame drawn is the running live replay's in Try it
-  (`live_try`: `frame_current`); a Watching frame takes none, its viewer not being seat 0. The
+  (`live_try`: `frame_current`); a watching frame takes none -- Watching's, and a takeover entry's
+  while it is watching, before its takeover -- its viewer playing no seat. The
   point goes through `try_send`: a move is held (`s_liveMove`) and `live_flush` sends it before
   each replay step (`replay_steps`) and before each press (`try_press`, `replay_press`), and every
   input reaches the replay through `tagpu_wikireplay_input`, never the simulation directly; a press

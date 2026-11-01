@@ -367,7 +367,7 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
     ok &= key_ok(f->cur.to, f->live);
     if (!ok || f->cur.n < 1 || f->cur.n > 64 || f->cur.i > f->cur.n) f->cur.on = 0;
     if (f->cur.watched < 0 || f->cur.watched >= RECR_TIMELINES) f->cur.watched = 0;
-    /* LIVE: the flags and enums, the ticks, the bar's numbers and seat 0's cursor */
+    /* LIVE: the flags and enums, the ticks, the bar's numbers and the human seat's cursor */
     f->simcur = (uint8_t)(f->live && f->simcur != 0);
     if (f->rw > WIKI_RW_PAST) f->rw = WIKI_RW_IDLE;
     if (f->arm > WIKI_ARM_ARMED) f->arm = WIKI_ARM_NONE;
