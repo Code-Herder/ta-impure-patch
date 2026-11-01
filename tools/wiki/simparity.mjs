@@ -887,6 +887,152 @@ function gameRefusalCases(game, page) {
   return cases;
 }
 
+/* ---- THE FORK PASS (tagpu_wikisim_fork, sim.fork; rewind-spec.md section 12.1): each distinct game of each game
+   entry played to R - 1 and forked at every tick R <= 1201 the writer's refresh grid gives the original that a fork
+   may start at (from tick 1: 2, 301, 601, 901, 1201; R = 1, the segment's first, takes none), with an empty part and
+   with a synthetic one (a box select, a build armed and placed, a kill), in both modes, then played AFTER ticks; in
+   two contexts. Then THE HANDOFF, a fork taken while the recorded seat holds Shift and the left button in a
+   placement gesture, and the same let go by the release alone (Back to now's); a fork of a fork; and the refusals a part or a call can meet at run time. Each case's claims are
+   sim.js's alone (its verdict); the trace makes C answer every call alike. ---- */
+function forkCases() {
+  const FORK_AT = [2, 301, 601, 901, 1201], AFTER = 300;
+  const A = ['fixture, own types, type 1', FIXTURE, { side: 0, iface: 1, casting: null, rival: null }];
+  const CTXS = [A, ['fixture, shifted, type 0', FIXTURE, { side: 0, iface: 0, casting: CASTINGS.shifted[0], rival: RIVALS.shifted }]];
+  // the synthetic part: a box over the commander and the builder, ARMSOLAR armed and placed, the rival commander killed
+  const synthetic = R => [{ at: R, move: [100, 250] }, { at: R + 1, down: 'select' }, { at: R + 3, move: [260, 360] },
+    { at: R + 6, up: 'select' }, { at: R + 10, build: 'ARMSOLAR' }, { at: R + 12, seat: 0, move: [300, 420] },
+    { at: R + 14, down: 'lmb' }, { at: R + 16, up: 'lmb' }, { at: R + 40, kill: 'c1' }, { at: R + 50, move: [200, 200] }];
+  const play = (sim, n) => { for (let i = 0; i < n; i++) sim.step(); };
+  const watch = (sim, n) => { for (let i = 0; i < n; i++) { sim.step(); sim.view(); sim.fed; } };
+  const cases = [];
+  for (const [id, whole] of GAMES) {
+    const seen = new Set();
+    for (const demo of whole.demos) {
+      const key = JSON.stringify([demo.on ?? null, demo.scene ?? null, demo.game]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const end = demo.game.end;
+      for (const [cn, layout, ctx] of CTXS)
+        for (const R of FORK_AT.filter(r => r - 1 + AFTER <= end))
+          for (const part of ['empty', 'synthetic'])
+            for (const mode of ['refuse', 'stall'])
+              cases.push({ name: `fork -- ${id}/${demo.id} (${cn}) at ${R}, ${part} part, ${mode}`, layout, ctx, run: G => {
+                const sim = G(whole, demo, 'refuse');
+                play(sim, R - 1);
+                sim.view();
+                if (sim.fork(R, part === 'empty' ? [] : synthetic(R), mode) !== 'ok') return 'FAIL the fork was refused';
+                const fed = sim.fed;
+                watch(sim, AFTER);
+                // an empty part feeds seat 0 nothing more: the recorded future is gone
+                if (part === 'empty' && sim.fed !== fed) return `FAIL an empty part fed ${sim.fed - fed} inputs`;
+                return `forked at ${R}, played to ${sim.tick}`;
+              } });
+      // THE HANDOFF: Shift and the left button held in a placement gesture across R - 1; the fork lets go of both
+      // without placing, and the selection and the armed building go
+      const R = 601, held = JSON.parse(JSON.stringify(demo));
+      held.game.inputs.push({ at: R - 6, build: 'ARMSOLAR' }, { at: R - 5, move: [300, 200] }, { at: R - 4, down: 'shift' },
+        { at: R - 3, down: 'lmb' }, { at: R - 2, move: [340, 200] }, { at: R + 5, up: 'lmb' }, { at: R + 6, up: 'shift' });
+      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the handoff at ${R}`, layout: A[1], ctx: A[2], run: G => {
+        const sim = G(whole, held, 'refuse');
+        play(sim, R - 1);
+        const v0 = sim.view();
+        if (!v0.keys.includes('shift') || !v0.keys.includes('lmb') || v0.mode !== 'build:ARMSOLAR') return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}`;
+        if (sim.fork(R, [], 'refuse') !== 'ok') return 'FAIL the fork was refused';
+        const v = sim.view();
+        if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
+          return `FAIL the fork held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected).map(u => u.id)}`;
+        watch(sim, 60);
+        return 'let go';
+      } });
+      // THE RELEASE alone, as Back to now calls it: the same held state let go, the recorded script playing on
+      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the release at ${R - 1}`, layout: A[1], ctx: A[2], run: G => {
+        const sim = G(whole, held, 'refuse');
+        play(sim, R - 1);
+        sim.view();
+        sim.release();
+        const v = sim.view();
+        if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
+          return `FAIL the release held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites`;
+        watch(sim, 60);
+        return 'let go';
+      } });
+      // a fork of a fork, the second in stall mode
+      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) a fork of a fork`, layout: A[1], ctx: A[2], run: G => {
+        const sim = G(whole, demo, 'refuse');
+        play(sim, 300);
+        if (sim.fork(301, synthetic(301), 'refuse') !== 'ok') return 'FAIL the first fork was refused';
+        watch(sim, 100);
+        if (sim.fork(401, synthetic(401), 'stall') !== 'ok') return 'FAIL the second fork was refused';
+        watch(sim, 100);
+        return 'forked twice';
+      } });
+      // the refusals at run time, in order, then a fork whose kill finds no unit, which stops the game
+      cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the refusals`, layout: A[1], ctx: A[2], run: G => {
+        const sim = G(whole, demo, 'refuse');
+        play(sim, 100);
+        const got = [sim.fork(100, [], 'refuse'), sim.fork(101, [], 'bogus'), sim.fork(101, [{ at: 100, move: [1, 1] }], 'refuse'),
+          sim.fork(101, Array.from({ length: WikiSim.FEATS_MAX + 1 }, (_, i) => ({ at: 101 + i, kill: 'c1' })), 'refuse'),
+          sim.fork(101, [{ at: 101, down: 'lmb' }, { at: 102, down: 'lmb' }], 'refuse'), sim.fork(101, [{ at: 101, kill: 'nobody' }], 'refuse')];
+        sim.step();
+        sim.view();
+        got.push(sim.fork(102, [], 'refuse'));
+        const want = ['refused', 'refused', 'refused', 'refused', 'refused', 'ok', 'refused'];
+        return got.join() === want.join() ? 'every refusal refused' : `FAIL ${got.join()} for ${want.join()}`;
+      } });
+    }
+  }
+  return cases;
+}
+
+/* ---- THE COLUMN PASS (rewind-spec.md section 12.1): DZ's arithmetic. A game with the sidebar forced on, its first
+   scene builder of seat 0 selected, a build trip to every type it builds (each must arm: the trip lands on the
+   drawn gadget only when centreOf and inside agree on DZ), then a click at the centre of every gadget of the
+   builder's pages taken in world z, the column's row minus FRAME_BAR, and two clicks over the minimap's rows; with
+   the fixture's column and the tall one, at both Interface Types. ---- */
+function columnCases() {
+  const cases = [], T = WikiSim.TRIP, BAR = 32;
+  for (const [id, whole] of GAMES) {
+    const scene = Object.values(whole.scenes)[0];
+    for (const [ln, layout] of [['fixture', FIXTURE], ['fixture-tall', SIDE('fixture-tall')]]) {
+      const types = layout.sides[0].types;
+      const u = scene.units.find(s => (s.owner ?? 0) === 0 && types[s.type] && (whole.units[s.type].builds || []).length);
+      if (!u) continue;
+      const builds = whole.units[u.type].builds, inputs = [];
+      let t = 10;
+      const arms = builds.map(b => {
+        inputs.push({ at: t, build: b }, { at: t + T, down: 'cancel' }, { at: t + T + 2, up: 'cancel' });
+        const a = [t + WikiSim.TRIP_UP + 5, b];
+        t += T + 10;
+        return a;
+      });
+      const screens = [...types[u.type].pages, ...(types[u.type].orders ? [types[u.type].orders] : [])];
+      const click = (x, z) => { inputs.push({ at: t, move: [x, z] }, { at: t + 1, down: 'select' }, { at: t + 2, up: 'select' }); t += 4; };
+      for (const n of screens) {
+        const s = layout.screens[n];
+        for (const g of s.gadgets) click(-128 + g.rect[0] + g.rect[2] / 2, s.y + g.rect[1] + g.rect[3] / 2 - BAR);
+      }
+      click(-64, 40);
+      click(-64, 100);
+      const demo = { ...whole.demos[0], scene: { ...(whole.demos[0].scene || {}), selected: [u.id] },
+        game: { end: t + 10, sidebar: true, inputs } };
+      for (const iface of [1, 0])
+        cases.push({ name: `column -- ${id} (${ln}, type ${iface}): ${builds.length} trips, ${(inputs.length - 3 * builds.length) / 3} clicks`,
+          layout, ctx: { side: 0, iface, casting: null, rival: null }, run: G => {
+            const sim = G(whole, demo, 'refuse');
+            let bad = null;
+            sim.view();
+            for (let k = 0; k < demo.game.end; k++) {
+              sim.step();
+              const v = sim.view();
+              for (const [at, b] of arms) if (sim.tick === at && v.mode !== `build:${b}` && !bad) bad = `${b} not armed at ${at} (${v.mode}, locked ${v.locked})`;
+            }
+            return bad ? `FAIL ${bad}` : `${arms.length} armed`;
+          } });
+    }
+  }
+  return cases;
+}
+
 /* ---- the data read back: what sim.js accepts of a casting or a layout, in wikitest's `data` shapes ---- */
 function castingOut(C) {
   try { WikiSim.checkCasting(C); } catch (e) { return { ok: false, why: e.message }; }
@@ -1115,6 +1261,46 @@ try {
       compareReplay(id, entry.demos[0], () => WikiReplay.create(entry, entry.demos[0], layout, gctx), `${named}, press trace`, TRACE);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
     }
+  }
+
+  /* ---- THE FORK PASS and THE COLUMN PASS (forkCases, columnCases): each case played on sim.js with every call
+     recorded and replayed through wikitest `trace`, every answer compared; a case's own claims are sim.js's alone and
+     fail it by its verdict. Case k plays on shard k % N + 1. ---- */
+  {
+    const all = [...forkCases(), ...columnCases()];
+    all.forEach((c, k) => {
+      if (k % SHARDS !== SHARD - 1) return;
+      const ops = [], expected = [];
+      let made = 0, verdict;
+      // a game simulation whose every call is recorded, as the rule cases' record() records a demo's
+      const G = (entry, demo, mode) => {
+        const sim = WikiSim.game(entry, demo, c.layout, c.ctx, mode), n = made++;
+        ops.push(JSON.stringify({ op: 'create', sim: n, scripted: mode === 'stall' ? 3 : 2, layout: c.layout ?? null, ctx: c.ctx }),
+          JSON.stringify({ ...entry, demos: [demo] }));
+        const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: n })); expected.push(v); return v; };
+        return {
+          step() { ops.push(JSON.stringify({ op: 'step', sim: n })); sim.step(); },
+          view() { const v = ask({ op: 'view' }, sim.view()); ask({ op: 'hash' }, stateHash(sim, sim.view())); return v; },
+          fork(R, inputs, fmode) {
+            let r = 'ok';
+            try { sim.fork(R, inputs, fmode); } catch (e) { r = 'refused'; }
+            return ask({ op: 'fork', R, inputs, mode: fmode }, r);
+          },
+          release() { ops.push(JSON.stringify({ op: 'release', sim: n })); sim.release(); },
+          get fed() { return ask({ op: 'fed' }, sim.gameNow().fed); },
+          get tick() { return sim.tick; },
+        };
+      };
+      try { verdict = c.run(G); } catch (e) { verdict = `FAIL threw ${e.message}`; }
+      fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
+      const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
+      let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
+      for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
+      cases++;
+      if (first) { failed++; console.log(`DIFFER ${c.name}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
+      else if (String(verdict).startsWith('FAIL')) { failed++; console.log(`DIFFER ${c.name}: both alike, but sim.js's claim failed: ${verdict}`); }
+      else console.log(`equal  ${c.name}: ${expected.length} answers (${verdict})`);
+    });
   }
 
   if (SHARD === 1) {

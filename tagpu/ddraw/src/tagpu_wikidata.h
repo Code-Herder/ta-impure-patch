@@ -297,6 +297,9 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e);
    caption points into `v`'s tree, and `at` reads 0 when absent (a demo's inputs must carry it,
    one fed straight to the sim need not). 0 with a message in `err` when it is refused. */
 int  tagpu_wikidata_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
+/* The same for an input of a game script (sim.js checkGame's rules for one input): no caption and
+   no wait, a `seat` of 0 read past, a kill {at, kill} alone, its id pointing into `v`'s tree. */
+int  tagpu_wikidata_game_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
 
 /* The tree and every entry it names, from an archive of art/wiki/ (tagpu_pak.h), or NULL with a
    message in `err`. */

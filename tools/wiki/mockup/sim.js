@@ -1239,13 +1239,18 @@ const WikiSim = (() => {
        layout cannot reach (trip), and a scene unit or a build of an unbound type, with or without the sidebar. */
     const lock = t => { if (sb.locked === null) sb.locked = t; };
     const screenOf = n => LAY.screens[n];
-    // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there holds no gadget
-    const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && z >= 0 && z < MINIMAP;
+    /* DZ: in the frame the column starts at the top bar's first row (stage.js drawFrame), FRAME_BAR above the map; a
+       page's column starts with the map. 0 on a page, so every page demo's arithmetic is the same doubles. A column's
+       row meets a world z only through rowOf and zOf. */
+    const DZ = GAME && ON ? -FRAME_BAR : 0;
+    const rowOf = z => z - DZ, zOf = r => r + DZ;
+    // a point of the stage in the column's own pixels is (x + 128, rowOf(z)); the minimap's 128 x 128 there holds no gadget
+    const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && rowOf(z) >= 0 && rowOf(z) < MINIMAP;
     /* the engine's hit tests (the pump's 0x4AA1F6..0x4AA216, the button handler's 0x4A6B79..0x4A6B95 on the press
        and 0x4A6E84..0x4A6EAC on the release) take the whole pixels x .. x + w - 1 and y .. y + h - 1, DISASSEMBLED.
        The cursor here is a double, and the pixel it stands in is its floor, so that is half-open on the doubles. */
     const inRect = ([gx, gy, gw, gh], px, pz) => px >= gx && px < gx + gw && pz >= gy && pz < gy + gh;
-    const inside = (s, g, x, z) => x < 0 && !onMinimap(x, z) && inRect(g.rect, x + SIDE_W, z - s.y);
+    const inside = (s, g, x, z) => x < 0 && !onMinimap(x, z) && inRect(g.rect, x + SIDE_W, rowOf(z) - s.y);
     /* OWNER QUESTION Q-O1, the recommended answer: a build button is live only when the entry defines its unit and the
        shown builder's list holds it, and greyed otherwise, so a button "comes alive" when an entry adds its unit
        (decision 7's principle). Drawn normal and inert instead would be this function answering true for any named
@@ -1378,7 +1383,7 @@ const WikiSim = (() => {
        Type (0x499162, 0x499567), and the sim does none of it. */
     function onScreen() {
       const s = screenOf(sb.screen), { x, z } = st.cursor;
-      return inRect([0, s.y, s.w, s.h], x + SIDE_W, z);
+      return inRect([0, s.y, s.w, s.h], x + SIDE_W, rowOf(z));
     }
     // the release of the captured button: inside its gadget, still live, it acts; outside, nothing
     function releaseSide() {
@@ -1412,13 +1417,14 @@ const WikiSim = (() => {
     /* THE POPUP, tagpu_sweep.c popup_rect at the stage's scale: 124 x 72 at x POP_X of the column (one past the map's
        left edge), its middle centred on RECLAIM's row and held inside the map's rows, while reclaim is armed and RECLAIM
        is on the routed screen, shown and live; its three rows 112 x 18, 21 apart; the tongue to the button's row. In the
-       stage's coordinates: x from the map's left edge, z the column's row. null for none. */
+       stage's coordinates: x from the map's left edge, z the world's, the button's row taken there through zOf and the
+       popup held inside the map beside the column. null for none. */
     function popup() {
       const i = reclaimIndex();
       if (!st.rmode || i < 0) return null;
       const s = screenOf(sb.screen), g = s.gadgets[i];
       if (g.hidden || !live(gadgetState(g, sb.shown, false))) return null;
-      const by = s.y + g.rect[1], hi = Math.min(MH, LAY.height) - POP_H;
+      const by = zOf(s.y + g.rect[1]), hi = Math.min(MH, zOf(LAY.height)) - POP_H;
       if (hi < 0) return null;
       const y0 = Math.min(Math.max(by + Math.trunc(g.rect[3] / 2) - POP_H / 2, 0), hi), x0 = POP_X - SIDE_W;
       return {
@@ -1555,7 +1561,7 @@ const WikiSim = (() => {
     /* feeding: the tick being fed, and between two ticks the one the sim stands at, since every step feeds its tick:
        the clock an input reads */
     let genNext = 0, feeding = 0;
-    const centreOf = (s, g) => ({ x: -SIDE_W + g.rect[0] + g.rect[2] / 2, z: s.y + g.rect[1] + g.rect[3] / 2 });
+    const centreOf = (s, g) => ({ x: -SIDE_W + g.rect[0] + g.rect[2] / 2, z: zOf(s.y + g.rect[1] + g.rect[3] / 2) });
     /* the plan: the shown unit's first page holding a live T button, the pagers the nearer way round (a tie goes to
        NEXT), and each press's point. Each point is the pager on the page it is pressed on, and every point is
        checked to land on its gadget, so the release at t + TRIP_UP arms T in any layout this accepts. null: T
@@ -2432,8 +2438,8 @@ const WikiSim = (() => {
       mmax: 0, emax: 0, mi: 0, mo: 0, ei: 0, eo: 0, wm: 0, we: 0, units: 0, lost: 0, out: false, cmdLost: false }));
     /* THE TWO MODES (decision 18): 'refuse', an authored script, stops `starved` at the first pass that cannot pay a
        grant; 'stall', a seat the player plays, carries an unpaid grant as the unit's debt, and the debt refuses that
-       unit's requests until a pass pays it, as the engine's builds stall at zero */
-    const STALL = GAME && econMode === 'stall';
+       unit's requests until a pass pays it, as the engine's builds stall at zero. A fork sets it anew (sim.fork). */
+    let STALL = GAME && econMode === 'stall';
     // badKill: a kill found no unit of its id; nkill: the kills made
     let starved = false, badKill = false, nkill = 0;
     // the seats' unit counts at the end of a step, after the work: `out` once a count goes from above 0 to 0
@@ -2801,7 +2807,8 @@ const WikiSim = (() => {
        hash's first step with tick and done (tagpu_wikisim.h, tagpu_wikisim_hash). */
     const sim = { tick: 0, done: false, log: [], side: ON ? ctx.side : -1, iface: IFACE };
     const log = (what, u, type) => sim.log.push({ t: sim.tick, what, id: u.id, type: type || u.type, ox: u.ox, oz: u.oz });
-    const script = scripted && demo ? resolve(demo, demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE) : [];
+    // the resolved script, which a fork replaces (sim.fork)
+    let script = scripted && demo ? resolve(demo, demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE) : [];
     /* THE DATA RULE OF A WAIT, refused here as tagpu_wikidata.c refuses it: `until` one of UNTILS, `max` an integer
        1..UNTIL_MAX, nothing else on the input and no other input on its tick */
     for (const e of script) {
@@ -2822,18 +2829,21 @@ const WikiSim = (() => {
        except while a wait holds it (wait: {until, max, from}, from the tick it began); a wait that runs past its max
        stops the demo, `stalled`. A Try-it sim has no script, so its clock is its tick. */
     let next = 0, clock = 0, wait = null, stalled = false;
+    /* fed: the inputs of seat 0's the script and its trips have fed since the sim was made, its kills and waits not
+       counted; the replay layer's clash rule reads it (gameNow), and no hash does */
+    let fed = 0;
     // the wait's state holds (UNTILS)
     const holds = w => w.until === 'built' ? built >= w.need : !units.some(u => u.owner === 0 &&
       u.orders.some(o => w.until === 'idle' ? o.k === 'build' || o.k === 'reclaim' : o.k === 'move'));
     // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
     const feed = t => {
       feeding = t;
-      while (genNext < gen.length && gen[genNext].at <= t) input(gen[genNext++].ev);
+      while (genNext < gen.length && gen[genNext].at <= t) { input(gen[genNext++].ev); fed++; }
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
         if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
         else if (GAME && 'kill' in e) kill(e.kill);
-        else input(e);
+        else { input(e); fed++; }
       }
     };
     const end = scripted && demo && demo.end != null ? demo.end : Infinity;  // a Try-it sim is never done
@@ -3018,7 +3028,63 @@ const WikiSim = (() => {
        a pass that starved, a kill that found no unit), the sound events made since it was made, and each seat's
        commanders lost and whether it is out */
     if (GAME) sim.gameNow = () => ({ stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
-      seats: econ.map(z => ({ lost: z.lost, out: z.out })) });
+      seats: econ.map(z => ({ lost: z.lost, out: z.out })), fed });
+    /* THE RELEASE (tagpu_wikisim_release), between two ticks: what the game's rebuild leaves of seat 0's input after
+       Back to now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a return
+       to now, each from the commander selected and a building armed, came up with no unit selected, main+0x2CC3 back
+       to 1 and the side's MAIN2 shown). The held keys and buttons, a drag, a placement or reclaim gesture and a gadget
+       captured are let go without acting [INFERRED: they are the hardware's, which no recording carries]; not
+       input({up}), since a release acts (a box select, a placement) and would act on the player's behalf. The selection
+       empties and the armed building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
+       settings rather than what the measurement read, stay. */
+    function letGo() {
+      st.held = new Set(); st.drag = null; st.gesture = null; st.place = null; st.shiftPlaced = false; st.rg = null;
+      sb.cap = null; sb.downOn = {};
+      for (const u of units) u.sel = false;
+      st.mode = null; st.rmode = false;
+      if (ON) route();
+      st.hover = hover();
+      cursorTick(sim.tick);
+    }
+    sim.release = letGo;
+    /* THE FORK (research/notes/ingame-wiki-replay-plan.md, decision 8; tagpu_wikisim_fork): the game handed over at R,
+       the world of R - 1 kept whole, the recorded future dropped and `inputs` (a fork's part, seat 0's game inputs of
+       ticks R..end) its new script, its economy in `mode` from here on. Refused (it throws, the sim untouched) unless
+       the game stands at R - 1 and has not stopped, `mode` is refuse or stall, every input is at R or later and neither
+       a caption nor a wait, the features standing and gone plus the part's kills stay within FEATS_MAX (THE BOUND the
+       wrecks' table rests on), and the part resolves from nothing held and keeps the trips' data rule.
+
+       THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the inputs of tick
+       <= t, so every input not yet fed has its tick >= R and is the recorded future the fork replaces. Then the
+       release, as the game's fork leaves the player: an authored part begins with the selection it needs. The other
+       seats' inputs are empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R
+       here. */
+    if (GAME) sim.fork = (R, inputs, mode) => {
+      const at = `demo ${demo.id}: the fork at tick ${R}`;
+      if (sim.tick !== R - 1) throw new Error(`${at}: the game stands at tick ${sim.tick}`);
+      if (sb.locked !== null || starved || badKill) throw new Error(`${at}: the game has stopped`);
+      if (mode !== 'refuse' && mode !== 'stall') throw new Error(`${at}: the economy's mode ${mode} is not refuse or stall`);
+      if (!Array.isArray(inputs)) throw new Error(`${at}: the part's inputs are not a list`);
+      let kills = 0;
+      for (const e of inputs) {
+        if (!obj(e) || !(e.at >= R)) throw new Error(`${at}: an input of the part is before it`);
+        if ('caption' in e || 'until' in e) throw new Error(`${at}: a game input is a caption or a wait`);
+        if ('kill' in e) kills++;
+      }
+      if (feats.length + gone.length + kills > FEATS_MAX) throw new Error(`${at}: the features and the kills pass ${FEATS_MAX}`);
+      // the part as gameDemo and the binder make a game script: the seat taken off, the builds the bound types
+      const raw = { id: demo.id, inputs: inputs.map(e => { if (!('seat' in e)) return e; const { seat, ...r } = e; return r; }) };
+      const part = B ? B.demo(raw) : raw;
+      const fresh = resolve(demo, part.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE);
+      if (TRIPS) checkTrips(fresh, end);
+      // the trips' inputs not yet fed are dropped with the script they came from
+      genNext = gen.length;
+      letGo();
+      script = fresh;
+      next = 0;
+      STALL = mode === 'stall';
+      sim.done = clock >= end || sb.locked !== null || stalled || starved || badKill;
+    };
 
     if (ON) route();
     if (lock0) lock(lock0.type);
@@ -3056,9 +3122,9 @@ const WikiSim = (() => {
     SND_NAMES,
     // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1
     UNTILS,
-    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS) and its death
-    // sound's kind
-    SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, SND_DEATH,
+    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS, and the
+    // features and kills of WIKI_FEATS_MAX) and its death sound's kind
+    SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, FEATS_MAX, SND_DEATH,
     // the game frame's 4:3 bound on a game entry's map (checkGame)
     frameFits,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order) and a press's trip, for replay.js

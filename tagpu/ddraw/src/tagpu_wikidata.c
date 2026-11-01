@@ -640,6 +640,16 @@ int tagpu_wikidata_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* 
     return input(&r, v, in, 0);
 }
 
+int tagpu_wikidata_game_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn)
+{
+    R r;
+    memset(&r, 0, sizeof r);
+    r.e = e;
+    r.err = err;
+    r.errn = errn;
+    return input(&r, v, in, 1);
+}
+
 /* whether unit id `id` is one of the merged scene's explicit ids: the entry scene's the demo is on
    and the demo's additions */
 static int scene_has_id(const WIKIENTRY* e, const WIKIDEMO* d, const char* id)

@@ -868,11 +868,14 @@ static int is_reclaim(const WIKIGADGET* g) { return g->role == WIKI_ROLE_ORDER &
 
 static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
 
-/* a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there
-   holds no gadget */
-static int on_minimap(double x, double z)
+/* the column's row of world z (s->dz, the header's DZ) */
+static double row_of(const WIKISIM* s, double z) { return z - s->dz; }
+
+/* a point of the stage in the column's own pixels is (x + 128, row_of(z)); the minimap's 128 x 128
+   there holds no gadget */
+static int on_minimap(const WIKISIM* s, double x, double z)
 {
-    return x + WIKI_SIDE_W >= 0 && x + WIKI_SIDE_W < WIKI_SIDE_MINIMAP && z >= 0 && z < WIKI_SIDE_MINIMAP;
+    return x + WIKI_SIDE_W >= 0 && x + WIKI_SIDE_W < WIKI_SIDE_MINIMAP && row_of(s, z) >= 0 && row_of(s, z) < WIKI_SIDE_MINIMAP;
 }
 
 /* The engine's hit tests (the pump's 0x4AA1F6..0x4AA216, the button handler's 0x4A6B79..0x4A6B95
@@ -884,9 +887,9 @@ static int in_rect(const WIKIGADGET* g, double px, double pz)
     return px >= g->x && px < g->x + g->w && pz >= g->y && pz < g->y + g->h;
 }
 
-static int inside(const WIKISCREEN* sc, const WIKIGADGET* g, double x, double z)
+static int inside(const WIKISIM* s, const WIKISCREEN* sc, const WIKIGADGET* g, double x, double z)
 {
-    return x < 0 && !on_minimap(x, z) && in_rect(g, x + WIKI_SIDE_W, z - sc->y);
+    return x < 0 && !on_minimap(s, x, z) && in_rect(g, x + WIKI_SIDE_W, row_of(s, z) - sc->y);
 }
 
 /* a build button's unit as a type of the entry, -1 when it names none the entry defines */
@@ -953,7 +956,7 @@ static int gadget_at(const WIKISIM* s, int screen, const WIKIUNIT* shown, double
     int i, last = -1;
     for (i = 0; i < sc->ngadget; i++) {
         const WIKIGADGET* g = &sc->gadget[i];
-        if (!live(gadget_state(s, g, shown, 0)) || !inside(sc, g, x, z)) continue;
+        if (!live(gadget_state(s, g, shown, 0)) || !inside(s, sc, g, x, z)) continue;
         if (press_acts(g)) return i;
         last = i;
     }
@@ -1070,7 +1073,7 @@ static void press_side(WIKISIM* s, int key)
 static int on_screen(const WIKISIM* s)
 {
     const WIKISCREEN* sc = screen_of(s, s->screen);
-    const double px = s->cursor_x + WIKI_SIDE_W, pz = s->cursor_z;
+    const double px = s->cursor_x + WIKI_SIDE_W, pz = row_of(s, s->cursor_z);
     return px >= 0 && px < sc->w && pz >= sc->y && pz < sc->y + sc->h;
 }
 
@@ -1083,7 +1086,7 @@ static void release_side(WIKISIM* s)
     /* THE BOUND: a capture is a gadget of the screen shown, since route() drops it with any
        change of screen */
     if (i < 0 || i >= sc->ngadget) return;
-    if (live(gadget_state(s, &sc->gadget[i], s->shown, 0)) && inside(sc, &sc->gadget[i], s->cursor_x, s->cursor_z))
+    if (live(gadget_state(s, &sc->gadget[i], s->shown, 0)) && inside(s, sc, &sc->gadget[i], s->cursor_x, s->cursor_z))
         act(s, &sc->gadget[i]);
 }
 
@@ -1103,7 +1106,7 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
     v->nstate = sc->ngadget;
     for (i = 0; i < sc->ngadget; i++) {
         const WIKIGADGET* g = &sc->gadget[i];
-        v->state[i] = gadget_state(s, g, s->shown, s->cap == i && inside(sc, g, s->cursor_x, s->cursor_z));
+        v->state[i] = gadget_state(s, g, s->shown, s->cap == i && inside(s, sc, g, s->cursor_x, s->cursor_z));
     }
     if (under) snprintf(v->under, sizeof v->under, "%s", under->id);
 }
@@ -1176,7 +1179,8 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
    past the map's left edge), its middle centred on RECLAIM's row and held inside the map's rows,
    while reclaim is armed and RECLAIM is on the routed screen, shown and live; its three rows 112 x
    18, 21 apart; the tongue to the button's row. In the stage's coordinates: x from the map's left
-   edge, z the column's row. 0 for none. */
+   edge, z the world's, the button's row taken there with s->dz and the popup held inside the map
+   beside the column. 0 for none. */
 static int popup(const WIKISIM* s, POPUP* P)
 {
     const int i = reclaim_index(s);
@@ -1187,8 +1191,8 @@ static int popup(const WIKISIM* s, POPUP* P)
     sc = screen_of(s, s->screen);
     g = &sc->gadget[i];
     if (g->hidden || !live(gadget_state(s, g, s->shown, 0))) return 0;
-    by = sc->y + g->y;
-    hi = (s->H * CELL < s->lay->height ? s->H * CELL : s->lay->height) - POP_H;
+    by = sc->y + g->y + s->dz;
+    hi = (s->H * CELL < s->lay->height + s->dz ? s->H * CELL : s->lay->height + s->dz) - POP_H;
     if (hi < 0) return 0;
     y0 = clampi(by + g->h / 2 - POP_H / 2, 0, hi);
     x0 = POP_X - WIKI_SIDE_W;
@@ -1553,11 +1557,11 @@ static void gen_push(WIKISIM* s, int at, int kind, double x, double z)
     else in->up = WIKI_KEY_LMB;
 }
 
-static XZ centre_of(const WIKISCREEN* sc, const WIKIGADGET* g)
+static XZ centre_of(const WIKISIM* s, const WIKISCREEN* sc, const WIKIGADGET* g)
 {
     XZ c;
     c.x = -WIKI_SIDE_W + g->x + g->w / 2.0;
-    c.z = sc->y + g->y + g->h / 2.0;
+    c.z = sc->y + g->y + g->h / 2.0 + s->dz;
     return c;
 }
 
@@ -1603,12 +1607,12 @@ static int plan_trip(const WIKISIM* s, int T, TRIPPLAN* plan)
         sc = screen_of(s, scr);
         for (i = 0; i < sc->ngadget && !(sc->gadget[i].role == dir && live(gadget_state(s, &sc->gadget[i], u, 0))); i++) {}
         if (i == sc->ngadget) return 0;
-        plan->press[j] = centre_of(sc, &sc->gadget[i]);
+        plan->press[j] = centre_of(s, sc, &sc->gadget[i]);
         if (gadget_at(s, scr, u, plan->press[j].x, plan->press[j].z) != i) return 0;
         page = dir == WIKI_ROLE_NEXT ? (page == n ? 1 : page + 1) : (page < 2 ? n : page - 1);
     }
     sc = screen_of(s, TP->page[p - 1]);
-    plan->button = centre_of(sc, &sc->gadget[gi]);
+    plan->button = centre_of(s, sc, &sc->gadget[gi]);
     return gadget_at(s, TP->page[p - 1], u, plan->button.x, plan->button.z) == gi;
 }
 
@@ -1629,7 +1633,7 @@ static int find_reclaim(const WIKISIM* s, int screen)
 static int press_at(const WIKISIM* s, int screen, int i, XZ* p)
 {
     const WIKISCREEN* sc = screen_of(s, screen);
-    *p = centre_of(sc, &sc->gadget[i]);
+    *p = centre_of(s, sc, &sc->gadget[i]);
     return gadget_at(s, screen, s->shown, p->x, p->z) == i;
 }
 
@@ -2449,7 +2453,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
            because the stage shows the map where the game shows a view. The minimap stays inert
            (the owner's decision 6), where the game would place at its world point. A right press there is the handler's
            cancel and nothing else. */
-        else if (ev->down == WIKI_KEY_LMB && s->mode >= 0 && !on_minimap(s->cursor_x, s->cursor_z))
+        else if (ev->down == WIKI_KEY_LMB && s->mode >= 0 && !on_minimap(s, s->cursor_x, s->cursor_z))
             place_click(s, shift);
         else if (ev->down == WIKI_KEY_RMB && (s->mode >= 0 || s->rmode)) disarm(s);
     }
@@ -3886,11 +3890,13 @@ static void econ_pass(WIKISIM* s)
 }
 
 /* THE WRECK of a finished unit killed, sim.js's `corpse`, which gives the engine's placement rules
-   (0x486360, 0x423C50) with their addresses. BOUND: the features array holds the merged scene's
-   features plus the game script's kills (scene_feats), which the loader holds to WIKI_FEATS_MAX;
-   a kill adds at most one feature and a feature it destroys leaves, so s->nfeat never passes that
-   capacity, and `gone` (WIKI_FEATS_MAX cells) takes each feature at most once. The row is the
-   type's corpse, an index of the bound features table the binder or the loader checked. */
+   (0x486360, 0x423C50) with their addresses. BOUND: a game's features array holds WIKI_FEATS_MAX
+   (scene_feats), and the features standing plus those gone are the scene's plus one per wreck made,
+   at most one a kill: the loader holds the scene's features and the game script's kills to
+   WIKI_FEATS_MAX, and a fork refuses a part whose kills would pass it (tagpu_wikisim_fork). So
+   s->nfeat never passes the capacity, and `gone` (WIKI_FEATS_MAX cells) takes each feature at most
+   once. The row is the type's corpse, an index of the bound features table the binder or the
+   loader checked. */
 static void corpse(WIKISIM* s, const WIKIUNIT* u)
 {
     const WIKIDEF* d = def(s, u->type);
@@ -3997,7 +4003,10 @@ static void cursor_tick(WIKISIM* s, int now)
 static void feed(WIKISIM* s, int t)
 {
     s->feeding = t;
-    while (s->trip_next < s->ntrip_in && s->trip_in[s->trip_next].at <= t) input(s, &s->trip_in[s->trip_next++]);
+    while (s->trip_next < s->ntrip_in && s->trip_in[s->trip_next].at <= t) {
+        input(s, &s->trip_in[s->trip_next++]);
+        s->fed++;
+    }
     while (s->next < s->nscript && s->script[s->next]->at == t) {
         const WIKIINPUT* e = s->script[s->next++];
         if (e->has & WIKI_IN_UNTIL) {
@@ -4006,7 +4015,10 @@ static void feed(WIKISIM* s, int t)
             s->wait_from = s->tick;
             if (e->until == WIKI_UNTIL_BUILT) s->wait_built = ++s->built_waits;
         } else if (s->game && (e->has & WIKI_IN_KILL)) kill(s, e->kill);
-        else input(s, e);
+        else {
+            input(s, e);
+            s->fed++;
+        }
     }
 }
 
@@ -4784,7 +4796,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
    feature before it, or takes an id given before it. 1, or 0 with the refusal in `err`, or -1 when
    memory ran out. THE BOUND: at most WIKI_FEATS_MAX, the view's and the sweep's tables; each row
    index is one the loader resolved against the entry's table, which the bound entry shares. */
-static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int kills, char* err, size_t errn)
+static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int kills, int game, char* err, size_t errn)
 {
     const int n = a->nfeat + (b ? b->nfeat : 0);
     int k, j;
@@ -4792,8 +4804,9 @@ static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int k
         snprintf(err, errn, "the scene has more than %d features and kills", WIKI_FEATS_MAX);
         return 0;
     }
-    /* room for a wreck per kill (corpse) */
-    if (!(s->feat = (WIKIFEAT*)calloc((size_t)(n + kills) + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
+    /* room for a wreck per kill (corpse); a game's for WIKI_FEATS_MAX, which a fork's kills are held
+       to as well */
+    if (!(s->feat = (WIKIFEAT*)calloc((size_t)(game ? WIKI_FEATS_MAX : n + kills) + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
         return -1;
     for (k = 0; k < n; k++) {
         const WIKISCENEFEAT* sf = k < a->nfeat ? &a->feat[k] : &b->feat[k - a->nfeat];
@@ -5053,6 +5066,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(s->entry, a) || scene_builder(s->entry, b))
            ? lay : NULL;
     s->side = s->lay ? ctx->side : -1;
+    s->dz = game && s->lay ? -WIKI_FRAME_BAR : 0;
     s->trips = scripted && s->lay;
     /* a type's pages are the ones of the side the sim plays: a type is found by (name, side) */
     for (i = 0; i < e->ndef; i++) {
@@ -5075,6 +5089,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->PACE = e->pace;
     s->mode = -1;
     s->end = scripted && d && d->has_end ? d->end : INFINITY;
+    s->demo_id = d ? d->id : NULL;
     s->next_id = 1;
     if (!(s->metal = (double*)malloc(cells * sizeof *s->metal)) || !(s->fog = (unsigned char*)calloc(cells, 1))
         || !(s->mark = (uint32_t*)calloc(cells, sizeof *s->mark)) || !(s->todo = (int*)malloc((cells + 1) * 2 * sizeof *s->todo))
@@ -5135,7 +5150,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
        its first second, which has no reply with sound (the queue's last time starts at 0) */
     /* the sweep's kind the scene starts with: the demo's, else the entry's scene's, else ALL */
     s->kind = b && b->has_kind ? b->kind : a->has_kind ? a->kind : WIKI_KIND_ALL;
-    if ((r = scene_feats(s, a, b, kills, err, errn)) < 0) goto oom;
+    if ((r = scene_feats(s, a, b, kills, game, err, errn)) < 0) goto oom;
     if (!r) goto refused;
     s->snd_quiet = 1;
     r = scene_units(s, a, b, err, errn);
@@ -5198,5 +5213,119 @@ oom:
     snprintf(err, errn, "wiki sim: out of memory");
 refused:
     tagpu_wikisim_free(s);
+    return 0;
+}
+
+/* THE RELEASE, sim.js's sim.release: what the game's rebuild leaves of seat 0's input after Back to
+   now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a
+   return to now, each from the commander selected and a building armed, came up with no unit
+   selected, main+0x2CC3 back to 1 and the side's MAIN2 shown). The held keys and buttons, a drag, a
+   placement or reclaim gesture and a gadget captured are let go without acting [INFERRED: they are
+   the hardware's, which no recording carries]; not an input with `up`, since a release acts (a box
+   select, a placement) and would act on the player's behalf. The selection empties and the armed
+   building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
+   settings rather than what the measurement read, stay. */
+void tagpu_wikisim_release(WIKISIM* s)
+{
+    int k;
+    memset(s->held, 0, sizeof s->held);
+    s->has_drag = s->drag_active = 0;
+    s->has_gesture = 0;
+    s->place.kind = PLACE_NONE;
+    s->place.n = 0;
+    s->shift_placed = 0;
+    s->has_rg = s->rg_drag = 0;
+    s->cap = -1;
+    for (k = 0; k < WIKI_NKEYS; k++) s->down_on[k] = OVER_NONE;
+    for (k = 0; k < s->nunit; k++) s->unit[k]->sel = 0;
+    s->mode = -1;
+    s->rmode = 0;
+    if (s->lay) route(s);
+    s->hover = hover(s);
+    cursor_tick(s, s->tick);
+}
+
+/* THE FORK, sim.js's sim.fork; the contract and THE ORDERING are tagpu_wikisim.h's. Every refusal
+   comes before the first write, so a refused fork leaves the sim as it was. After the recorded
+   future is dropped, the release (above), as the game's fork leaves the player: an authored part
+   begins with the selection it needs. The other seats' inputs are empty under decision 16's data
+   rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
+int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn)
+{
+    const char* id = s->demo_id ? s->demo_id : "?";
+    WIKIINPUT* resolved;
+    const WIKIINPUT** script;
+    WIKIDEMO d;
+    int k, kills = 0;
+    if (!s->game || s->tick != R - 1) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the game stands at tick %d", id, R, s->tick);
+        return 0;
+    }
+    if (s->locked != -1 || s->starved || s->bad_kill) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the game has stopped", id, R);
+        return 0;
+    }
+    if (econ_mode != WIKI_ECON_REFUSE && econ_mode != WIKI_ECON_STALL) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the economy's mode %d is not refuse or stall", id, R, econ_mode);
+        return 0;
+    }
+    if (n < 0 || (n > 0 && !in)) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the part's inputs are not a list", id, R);
+        return 0;
+    }
+    for (k = 0; k < n; k++) {
+        if (!(in[k].at >= R)) {
+            snprintf(err, errn, "demo %s: the fork at tick %d: an input of the part is before it", id, R);
+            return 0;
+        }
+        if (in[k].has & (WIKI_IN_CAPTION | WIKI_IN_UNTIL)) {
+            snprintf(err, errn, "demo %s: the fork at tick %d: a game input is a caption or a wait", id, R);
+            return 0;
+        }
+        kills += (in[k].has & WIKI_IN_KILL) != 0;
+    }
+    /* THE BOUND the wrecks' table rests on (corpse): every wreck the part can make still fits */
+    if (s->nfeat + s->ngone + kills > WIKI_FEATS_MAX) {
+        snprintf(err, errn, "demo %s: the fork at tick %d: the features and the kills pass %d", id, R, WIKI_FEATS_MAX);
+        return 0;
+    }
+    /* THE LIFETIME: the part copied into the sim's own block, as resolve() copies a demo's */
+    if (!(resolved = (WIKIINPUT*)malloc(((size_t)n + 1) * sizeof *resolved))) goto oom;
+    if (!(script = (const WIKIINPUT**)malloc(((size_t)n + 1) * sizeof *script))) {
+        free(resolved);
+        goto oom;
+    }
+    if (n) memcpy(resolved, in, (size_t)n * sizeof *resolved);
+    memset(&d, 0, sizeof d);
+    d.id = s->demo_id;
+    d.ninput = n;
+    d.input = resolved;
+    d.has_end = 1;
+    d.end = s->end;
+    if (!tagpu_wikidata_buttons(&d, s->iface, err, errn) || (s->trips && !tagpu_wikidata_trips(&d, s->iface, err, errn))) {
+        free(resolved);
+        free((void*)script);
+        return 0;
+    }
+    for (k = 0; k < n; k++) {
+        resolved[k].down = tagpu_wikidata_button(resolved[k].down, s->iface);
+        resolved[k].up = tagpu_wikidata_button(resolved[k].up, s->iface);
+        script[k] = &resolved[k];
+    }
+    qsort((void*)script, (size_t)n, sizeof *script, by_tick);
+    /* the trips' inputs not yet fed are dropped with the script they came from */
+    s->trip_next = s->ntrip_in;
+    tagpu_wikisim_release(s);
+    free(s->resolved);
+    free((void*)s->script);
+    s->resolved = resolved;
+    s->script = script;
+    s->nscript = n;
+    s->next = 0;
+    s->econ_mode = econ_mode;
+    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->starved || s->bad_kill;
+    return 1;
+oom:
+    snprintf(err, errn, "wiki sim: out of memory");
     return 0;
 }
