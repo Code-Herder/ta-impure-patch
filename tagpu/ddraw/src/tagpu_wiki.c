@@ -2241,6 +2241,20 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
     fprintf(f, "],\"top_side\":%d}", r->top_side);
 }
 
+/* A timeline's last log entry as [kind, key] (a move's key ""), or null for an empty log: what a
+   lane waits on to know its click was logged, and so applied (LOGGED FIRST, tagpu_wikireplay.h),
+   rather than on a count other entries can reach. Read on this thread, the one that logs. */
+static void log_tail(FILE* f, const WIKITIMELINE* t)
+{
+    static const char* const KIND[] = { "move", "down", "up", "release" };
+    const WIKIREPLAYLOG* e;
+    if (!t || t->nlog <= 0 || !t->log) { fputs("null", f); return; }
+    e = &t->log[t->nlog - 1];
+    fprintf(f, "[\"%s\",", e->kind >= 0 && e->kind <= WIKI_LOG_RELEASE ? KIND[e->kind] : "?");
+    jstr(f, e->kind == WIKI_LOG_DOWN || e->kind == WIKI_LOG_UP ? key_name(e->key) : "", 16);
+    fputc(']', f);
+}
+
 /* A LIVE REPLAY'S STATE, for the lanes (tools/wiki_regression.py rewind, takeover): the rewind, the
    arm, the timelines and the past simulation as the replay's view gives them, the human seat, and
    the world shown -- the past simulation's while the past is shown, else the live one's -- as the
@@ -2261,10 +2275,13 @@ static void live_json(FILE* f, const WIKIREPLAYVIEW* rv)
     if (rv->has_past) fprintf(f, "{\"tick\":%d,\"target\":%d,\"gen\":%d}", rv->past_tick, rv->past_target, rv->past_gen);
     else fputs("null", f);
     fprintf(f, ",\"timelines\":[");
-    for (i = 0; i < rv->ntl && i < RECR_TIMELINES; i++)
+    for (i = 0; i < rv->ntl && i < RECR_TIMELINES; i++) {
         fprintf(f, "%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%d,\"used\":%d,\"mode\":%d,\"nlog\":%d,"
-                   "\"seat\":%d}", i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live,
+                   "\"seat\":%d,\"tail\":", i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live,
                 rv->tl[i].used, rv->tl[i].mode, rv->tl[i].nlog, rv->tl[i].seat);
+        log_tail(f, i < s_rep.ntl ? &s_rep.tl[i] : NULL);
+        fputc('}', f);
+    }
     fprintf(f, "],\"world\":");
     if (!g) {
         fputs("null}", f);

@@ -2237,7 +2237,8 @@ static void select_units(WIKISIM* s, int shift, int box);
 
 /* SELECTION (sim.js's): one flag per unit, the hash's item 3; the acting seat's selection is the
    flagged units it owns, and every select and deselect of its input touches its own units alone,
-   so an input of one seat never changes another's selection */
+   so an input of one seat never changes another's selection. That leaves a selected unit of a
+   seat with no input state selected for good, which is why init refuses a scene that selects one. */
 static void deselect(WIKISIM* s)
 {
     int i;
@@ -5301,10 +5302,22 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     if (!r) goto refused;
     /* the orders the scene gave its units, every serial up to here, say no ok */
     s->scene_serial = s->next_serial;
+    /* THE SCENE'S SELECTION is of the input seats' units alone (sim.js's): a deselect and a release
+       clear only the acting seat's units (deselect, tagpu_wikisim_release), so a selected unit of a
+       seat with no input state would stay selected for the whole simulation */
     for (i = 0; sel && i < sel->nselected; i++) {
         WIKIUNIT* u = by_id(s, sel->selected[i]);
         if (!u) {
             snprintf(err, errn, "wiki sim: the scene selects %s, which it does not have", sel->selected[i]);
+            goto refused;
+        }
+        if (u->owner < 0 || u->owner >= s->nin) {
+            if (sel == b)
+                snprintf(err, errn, "entry %s: demo %s's scene selects %s of seat %d, which takes no input (seats 0..%d do)",
+                         e->id ? e->id : "?", d && d->id ? d->id : "?", sel->selected[i], u->owner, s->nin - 1);
+            else
+                snprintf(err, errn, "entry %s: the scene %s selects %s of seat %d, which takes no input (seats 0..%d do)",
+                         e->id ? e->id : "?", a->name ? a->name : "?", sel->selected[i], u->owner, s->nin - 1);
             goto refused;
         }
         u->sel = 1;

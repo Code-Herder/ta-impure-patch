@@ -908,6 +908,20 @@ function gameRefusalCases(game, page) {
   g('an owner past the seats', 'refused', (e, d, sc) => { sc.units[3].owner = 2; });
   g('a demo unit\'s owner past the seats', 'refused', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 2, at: [300, 60] }] }; });
   g('a demo unit of seat 1', 'accepted', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 1, at: [300, 60] }] }; });
+  /* THE SCENE'S SELECTION is of the input seats' units (sim.js make, tagpu_wikisim_init): the script gives seat 1 no
+     input, so a unit of seat 1 selected by the scene or by the demo's scene is refused, and accepted once seat 1 has
+     one */
+  const seat1 = sc => sc.units.find(u => (u.owner ?? 0) === 1).id;
+  g('the scene selecting a unit of a seat with no input', 'refused', (e, d, sc) => { sc.selected = [seat1(sc)]; });
+  g('the demo\'s scene selecting a unit of a seat with no input', 'refused', (e, d, sc) => { d.scene = { selected: [seat1(sc)] }; });
+  g('the scene selecting a unit of a seat with an input', 'accepted', (e, d, sc, G) => {
+    sc.selected = [seat1(sc)];
+    G.inputs.push({ at: 200, seat: 1, move: [10, 10] });
+  });
+  g('the demo\'s scene selecting a unit of a seat with an input', 'accepted', (e, d, sc, G) => {
+    d.scene = { selected: [seat1(sc)] };
+    G.inputs.push({ at: 200, seat: 1, move: [10, 10] });
+  });
   g('a feature with a unit\'s id', 'refused', (e, d, sc) => { sc.features = [{ id: 'c0', name: 'armck_dead', at: [1, 1] }]; });
   g('a feature named f1 by default, a unit f1', 'refused', (e, d, sc) => { sc.features = [{ name: 'armck_dead', at: [1, 1] }]; sc.units[0].id = 'f1'; });
   g('a feature named f1 by default, no unit f1', 'accepted', (e, d, sc) => { sc.features = [{ name: 'armck_dead', at: [1, 1] }]; });
@@ -1222,6 +1236,19 @@ function takeoverRefusalCases(tk, page) {
   t('a live entry\'s part of seat 1', 'accepted', (e, d) => { delete e.takeover; e.live = true; delete d.kept; d.inputs = []; d.forks = [part({ seat: 1 })]; });
   t('a live entry\'s part of seat 1 with the sidebar', 'refused', (e, d, G) => {
     delete e.takeover; e.live = true; delete d.kept; d.inputs = []; G.sidebar = true; G.inputs = G.inputs.filter(x => (x.seat ?? 0) === 0);
+    d.forks = [part({ seat: 1 })];
+  });
+  /* THE SCENE'S SELECTION of a seat's unit: a takeover entry's game holds every seat's input state, so with no input of
+     seat 1 it is accepted; a live entry's holds seat 1's only for an input or a part of that seat */
+  const sel1 = e => { const sc = Object.values(e.scenes)[0]; sc.selected = [sc.units.find(u => (u.owner ?? 0) === 1).id]; };
+  t('the scene selecting a unit of seat 1, no input of seat 1', 'accepted', (e, d, G) => {
+    sel1(e); G.inputs = G.inputs.filter(x => (x.seat ?? 0) === 0);
+  });
+  t('a live entry\'s scene selecting a unit of seat 1, no input of seat 1', 'refused', (e, d, G) => {
+    delete e.takeover; e.live = true; delete d.kept; d.inputs = []; G.inputs = G.inputs.filter(x => (x.seat ?? 0) === 0); sel1(e);
+  });
+  t('a live entry\'s scene selecting a unit of seat 1, a part of seat 1', 'accepted', (e, d, G) => {
+    delete e.takeover; e.live = true; delete d.kept; d.inputs = []; G.inputs = G.inputs.filter(x => (x.seat ?? 0) === 0); sel1(e);
     d.forks = [part({ seat: 1 })];
   });
   // the viewer's script: the Take over set and its values, the live HUD's controls beside the replay HUD's

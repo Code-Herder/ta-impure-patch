@@ -2601,10 +2601,13 @@ def rewind_r4(c):
     assert any(v["id"] == u["id"] and v["selected"] for v in live_of(d)["world"]["units"]), f"(r4) {u['id']} is not selected"
     hud_click(c, d, "rewind")
     d = settled_live(c, "(r4) rewind did not open the strip again", lambda d: live_of(d)["rw"] == RW_OPEN)
-    G2 = live_of(d)["G"]
-    time.sleep(1.0)
-    d = settled_live(c, "(r4) the frame", lambda d: True)
-    assert d["replay"]["game_tick"] == G2, f"(r4) the live game ran under the open strip: {G2} -> {d['replay']['game_tick']}"
+    G2, k0 = live_of(d)["G"], d["replay"]["tick"]
+    # the live game standing is proven over replay steps, each one a tick it would have played at idle: a second's
+    # worth of them taken with the strip open, waited on rather than slept, so a loaded run cannot pass it unstepped
+    d = settled_live(c, "(r4) the replay took no second of steps under the open strip",
+                     lambda d: live_of(d)["rw"] == RW_OPEN and d["replay"]["tick"] >= k0 + 30)
+    assert d["replay"]["game_tick"] == G2, \
+        f"(r4) the live game ran under the open strip: {G2} -> {d['replay']['game_tick']} over {d['replay']['tick'] - k0} steps"
     hud_click(c, d, "live_now")
     d = settled_live(c, "(r4) Back to now did not close the open strip", lambda d: live_of(d)["rw"] == RW_IDLE)
     w = live_of(d)["world"]
@@ -2987,9 +2990,17 @@ def takeover_t4(c):
     # the world as seat 1: Ada's commander takes no selection of Bram's, Bram's commander is selected and ordered
     d = settled_live(c, "(t4) the live frame", lambda d: d["try_world"] in (0, 1))
     c0, c1 = unit_of(d, "c0"), unit_of(d, "c1")
-    c.keys("dclick:%d,%d" % frame_client(d, c0["x"], c0["z"]))
-    time.sleep(1.0)
-    d = settled_live(c, "(t4) the frame after the click on c0")
+    # Bram's selection is already empty after the takeover's release, so "nothing changed" proves something only once
+    # the click is in his world: waited on until the selected timeline's log ends on the click's left release, logged
+    # and so applied (tagpu_wikireplay_input: logged first), past the click's move and press, with his cursor on c0
+    sel = live_of(d)["selected"]
+    at, tol = frame_client(d, c0["x"], c0["z"]), 1 + 1 / d["frame_fit"]["s"]
+    n0, t0 = live_of(d)["timelines"][sel]["nlog"], time.monotonic()
+    c.keys("dclick:%d,%d" % at)
+    d = settled_live(c, "(t4) the click on c0 was not logged on Bram's timeline",
+                     lambda d: live_of(d)["timelines"][sel]["nlog"] >= n0 + 2 and live_of(d)["timelines"][sel]["tail"] == ["up", "lmb"]
+                     and all(abs(a - b) <= tol for a, b in zip(live_of(d)["world"]["cursor"], (c0["x"], c0["z"]))))
+    took = (live_of(d)["timelines"][sel]["nlog"] - n0, time.monotonic() - t0)
     mine = [u["id"] for u in live_of(d)["world"]["units"] if u["owner"] == 1 and u["selected"]]
     assert not mine and unit_of(d, "c0")["selected"] == c0["selected"], \
         f"(t4) a click on Ada's c0 as Bram: Bram's selected {mine}, c0 {c0['selected']} -> {unit_of(d, 'c0')['selected']}"
@@ -3011,7 +3022,8 @@ def takeover_t4(c):
     finally:
         turbo(c, 0)
     c1b = unit_of(d, "c1")
-    said.append(f"as Bram a click on c0 selected nothing, one on c1 selected it, and a {'right ' if d['ctx']['iface'] else ''}"
+    said.append(f"as Bram a click on c0 selected nothing (its release logged on F{sel} {took[1]:.1f} s after it was sent, "
+                f"{took[0]} log entries), one on c1 selected it, and a {'right ' if d['ctx']['iface'] else ''}"
                 f"click on the ground at ({goal[0]:.0f}, {goal[1]:.0f}) ordered it there: from {far:.0f} to "
                 f"{math.hypot(goal[0] - c1b['x'], goal[1] - c1b['z']):.0f} units away")
 

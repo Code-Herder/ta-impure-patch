@@ -1186,8 +1186,19 @@ const WikiSim = (() => {
     const lock0 = S.units.find(s => unbound(s.type));
     /* SELECTION: one flag per unit (the state hash's item 3). Seat k's selection is the flagged units it owns, and
        every select and deselect of a seat's input touches that seat's own units alone, so an input of one seat never
-       changes another's selection; the scene's selection names units of any seat, each then its owner's. */
-    for (const id of S.selected) byId(id).sel = true;
+       changes another's selection. The scene's selection is therefore of the input seats' units alone, each then its
+       owner's: a unit of a seat at NIN or above would stay selected for good, as no input of its seat exists to
+       deselect it and no release reaches it (tagpu_wikisim_init refuses it alike). */
+    for (const id of S.selected) {
+      const u = byId(id);
+      if (!u) throw new Error(`the scene selects ${id}, which it does not have`);
+      if (u.owner >= NIN) {
+        const scene = demo && demo.scene && demo.scene.selected != null ? `demo ${demo.id}'s scene`
+          : `the scene ${demo && demo.on !== undefined ? demo.on : Object.keys(entryIn.scenes)[0]}`;
+        throw new Error(`entry ${entryIn.id}: ${scene} selects ${id} of seat ${u.owner}, which takes no input (seats 0..${NIN - 1} do)`);
+      }
+      u.sel = true;
+    }
     const selected = (k = K) => units.filter(u => u.sel && u.owner === k);
     const deselect = () => { for (const u of units) if (u.owner === K) u.sel = false; };
     const builders = () => selected().filter(u => mobile(u.type) && def(u.type).workerTime > 0);
