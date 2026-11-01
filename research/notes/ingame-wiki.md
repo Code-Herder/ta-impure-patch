@@ -991,8 +991,14 @@ engine's order.
   earlier cast's, with the reason, so the casts are distinct whatever the tests. No pick of the six
   setups changed (`assetcheck.py`'s synthetic install has the collision).
 - **Every cast carries the economy's figures** as well as the world's: the FBI's BuildCostMetal,
-  BuildCostEnergy, EnergyUse (signed, below 10^7 in magnitude), MetalMake, MetalStorage and
-  EnergyStorage, each finite and at least 0 but EnergyUse; and **its corpse**: the feature section
+  BuildCostEnergy, EnergyUse (signed), MetalMake, MetalStorage and EnergyStorage, each finite. Only
+  a game reads them, so only a game holds them to the economy's bounds -- each at least 0 but
+  EnergyUse, whose magnitude is below 10^7 -- and **leaves a cast outside them unbound**, stopping
+  under the badge as for any unbound cast (`tagpu_wikidata_cast_economy`, `sim.js` `econFits`);
+  a page entry plays the same cast whatever its economy, so a mod's builder, extractor or solar
+  with such a figure still plays Quick Build and the other page entries (`simcheck.mjs` plays every
+  page demo and Watching with every cast's economy outside the bounds; `simparity.mjs` plays
+  that game in both simulations). And **its corpse**: the feature section
   its FBI's `corpse` names, found as the 3D loader finds a feature and read into the features
   table's record, or none when the FBI names none, the section is missing or the record breaks a
   feature's bounds. A game binds a cast's corpse as its type's wreck (*A game*, below).

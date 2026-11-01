@@ -360,8 +360,10 @@ typedef struct {
     double   build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
                                     /* finite, >= 0, build_time > 0; an absent one reads 0 */
     double   build_cost_metal, build_cost_energy, metal_make, metal_storage, energy_storage;
-                                    /* the economy's: finite, >= 0; an absent one reads 0 */
-    double   energy_use;            /* |x| < WIKI_ECON_MAX, negative for a solar collector; absent 0 */
+    double   energy_use;            /* THE ECONOMY'S: finite, an absent one 0. Only a game reads
+                                       them, so only a game holds them to the economy's bounds
+                                       (tagpu_wikidata_cast_economy): a page entry plays a cast
+                                       whatever its economy */
     int      canstop;               /* (canstop & 1), as WIKIDEF's */
     int      activate_when_built;   /* (activatewhenbuilt & 1), as WIKIDEF's */
     int      canreclamate;          /* (canreclamate & 1), as WIKIDEF's */
@@ -373,6 +375,12 @@ typedef struct {
 } WIKICASTDEF;
 
 typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
+
+/* 1 when a cast's economy is within the bounds a game's economy rests on: the build costs, the
+   metal made and the storages >= 0 and the energy use of a magnitude below WIKI_ECON_MAX (a solar
+   collector's is negative); 0 leaves the cast unbound in a game (tagpu_wikisim.c bind, sim.js
+   binder) and in a game only */
+int tagpu_wikidata_cast_economy(const WIKICASTDEF* k);
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
    other key are read past) into `c`, held to every bound of sim.js's checkCasting: all ten casts

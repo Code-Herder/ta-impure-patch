@@ -597,14 +597,17 @@ function refusalCases(entry) {
   cast('the commander absent', 'refused', C => { delete C.casts.commander; });
   cast('the commander unbound', 'accepted', C => { C.casts.commander = null; });
   cast('a builds naming the commander', 'accepted', tower(k => { k.builds = ['commander']; }));
-  cast('a build cost below 0', 'refused', tower(k => { k.buildCostMetal = -1; }));
+  // the economy's figures need only be finite in a casting: a game holds them to its bounds where it binds
+  cast('a build cost below 0', 'accepted', tower(k => { k.buildCostMetal = -1; }));
+  cast('a storage below 0', 'accepted', tower(k => { k.metalStorage = -50; }));
   cast('a storage a string', 'refused', tower(k => { k.energyStorage = '50'; }));
   cast('metal made 0.25', 'accepted', tower(k => { k.metalMake = 0.25; }));
   cast('an energyUse of -20', 'accepted', tower(k => { k.energyUse = -20; }));
   cast('an energyUse of -9999999', 'accepted', tower(k => { k.energyUse = -9999999; }));
-  cast('an energyUse of 1e7', 'refused', tower(k => { k.energyUse = 1e7; }));
-  cast('an energyUse of -1e7', 'refused', tower(k => { k.energyUse = -1e7; }));
+  cast('an energyUse of 1e7', 'accepted', tower(k => { k.energyUse = 1e7; }));
+  cast('an energyUse of -1e7', 'accepted', tower(k => { k.energyUse = -1e7; }));
   cast('an energyUse null', 'refused', tower(k => { k.energyUse = null; }));
+  cast('a world figure below 0', 'refused', tower(k => { k.workerTime = -1; }));
   // the corpse: null, or checkFeature's record and its name
   const wreck = () => ({ name: 'armllt_dead', footprint: [2, 2], metal: 72, energy: 0, height: 20, blocking: true,
     reclaimable: true, object: 'armllt_dead' });
@@ -720,6 +723,12 @@ function gameRefusalCases(game, page) {
   g('bound to identity and its rival', 'accepted', () => {}, 2, bound);
   for (const r of Object.keys(RIVALS)) g(`bound to ${r} and the rival ${r}`, 'accepted', () => {}, 2, { casting: CASTINGS[r][0], rival: RIVALS[r] });
   g('bound with no rival casting: the rival units keep their own', 'accepted', () => {}, 2, { casting: CASTINGS.identity[0] });
+  {
+    // a cast whose economy is outside a game's bounds: the casting is read, and the game leaves the cast unbound
+    const C = clone(CASTINGS.identity[0]);
+    C.casts.builder.metalStorage = -1;
+    g('bound to a casting whose builder stores -1 metal', 'accepted', () => {}, 2, { casting: C, rival: RIVALS.identity });
+  }
   g('played as a demo', 'refused', () => {}, 1);
   g('Try it on it', 'refused', () => {}, 0);
   p('a page entry played as a game', 'refused', () => {}, 2);
@@ -940,6 +949,10 @@ try {
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
     fs.writeFileSync(path.join(tmp, `rival-${name}.json`), JSON.stringify(RIVALS[name]));
   }
+  // the identity casting with every bound cast's economy outside a game's bounds (sim.js econFits): a game leaves each unbound
+  const ECON_OFF = { ...CASTINGS.identity[0], casts: Object.fromEntries(Object.entries(CASTINGS.identity[0].casts).map(([c, k]) =>
+    [c, k && { ...k, metalStorage: -1, energyUse: 1e7 }])) };
+  fs.writeFileSync(path.join(tmp, 'casting-identity-econoff.json'), JSON.stringify(ECON_OFF));
   fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries([...new Set([...Object.keys(SCRIPTS), ...Object.keys(SOUNDS)])].map(n => {
     const t = SCRIPTS[n];
     return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
@@ -1017,18 +1030,27 @@ try {
       }) };
       const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
         [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
-      for (const [e, mode, scripted, tag] of [[entry, 'refuse', 2, ''], [cut, 'stall', 3, ' stall'], [cut, 'refuse', 2, ' starved']]) {
+      const plays = [[entry, 'refuse', 2, '', cname], [cut, 'stall', 3, ' stall', cname], [cut, 'refuse', 2, ' starved', cname]];
+      // with the identity casting, also every cast's economy outside the game's bounds: both leave each cast unbound
+      if (cname === 'identity') plays.push([entry, 'refuse', 2, ' economy off', 'identity-econoff']);
+      for (const [e, mode, scripted, tag, cfile] of plays) {
+        const pctx = cfile === 'identity-econoff' ? { ...gctx, casting: ECON_OFF } : gctx;
         fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(e));
-        cout = lines(wikitest(['game', 'wiki.bin', 'game.json', side || '-', cname ? `casting-${cname}.json` : '-',
+        cout = lines(wikitest(['game', 'wiki.bin', 'game.json', side || '-', cfile ? `casting-${cfile}.json` : '-',
           cname ? `rival-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-', String(scripted)]));
         at = 0;
         for (const demo of e.demos) {
-          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, gctx, mode), `${named}, game${tag}`);
+          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, pctx, mode), `${named}, game${tag}`);
           // the cut game in refuse mode ends starved, unless the context locked it first
           if (tag === ' starved' && sim && sim.view().locked === null && !sim.view().game.starved) {
             failed++;
             differ++;
             console.log(`DIFFER ${id}/${demo.id} (${named}, game${tag}): the game with every seat at ${WIKI_SEAT_MIN} did not starve`);
+          }
+          if (tag === ' economy off' && sim && sim.view().locked === null) {
+            failed++;
+            differ++;
+            console.log(`DIFFER ${id}/${demo.id} (${named}, game${tag}): the game did not stop under the badge`);
           }
         }
         if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, game${tag}) the C sim played ${cout.length - at} frames more`); }

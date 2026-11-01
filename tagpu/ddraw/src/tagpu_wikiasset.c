@@ -3569,16 +3569,19 @@ typedef struct {
 } SCASTING;
 
 /* A cast WIKICASTDEF cannot hold (tagpu_wikiasset.h, where this departs from gfx.py), or NULL:
-   tagpu_wikidata_casting's bounds, which the simulation's binding rests on */
+   tagpu_wikidata_casting's bounds, which the simulation's binding rests on. The economy's figures
+   need only be finite: a game, the only reader of them, holds them to its bounds where it binds
+   (tagpu_wikidata_cast_economy), so a mod's unit outside them still plays every page entry */
 static const char* cast_unfit(const SUNIT* u)
 {
-    const double f[11] = { u->buildtime, u->workertime, u->builddistance, u->maxvelocity, u->extracts, u->energymake,
-                           u->buildcostmetal, u->buildcostenergy, u->metalmake, u->metalstorage, u->energystorage };
+    const double world[6] = { u->buildtime, u->workertime, u->builddistance, u->maxvelocity, u->extracts, u->energymake };
+    const double econ[6] = { u->buildcostmetal, u->buildcostenergy, u->metalmake, u->metalstorage, u->energystorage,
+                             u->energyuse };
     const size_t n = strlen(u->name);
     int i;
     if (n >= WIKI_ID_MAX || strspn(u->name, "0123456789") == n) return "a UnitName the casting cannot hold";
-    for (i = 0; i < 11; i++) if (!(f[i] >= 0 && f[i] < INFINITY)) return "a figure that is not a finite number >= 0";
-    if (!(fabs(u->energyuse) < WIKI_ECON_MAX)) return "an EnergyUse of a magnitude past 1e7";
+    for (i = 0; i < 6; i++) if (!(world[i] >= 0 && world[i] < INFINITY)) return "a figure that is not a finite number >= 0";
+    for (i = 0; i < 6; i++) if (!isfinite(econ[i])) return "an economy figure that is not a finite number";
     if (!(u->buildtime > 0)) return "a BuildTime that is not above 0";
     return NULL;
 }

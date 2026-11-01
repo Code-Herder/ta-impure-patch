@@ -4901,7 +4901,9 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKI
         const WIKICASTING* kc = a->rival ? rk : k;
         const WIKICASTDEF* c = kc ? &kc->cast[a->cast] : NULL;
         WIKIDEF* d = &B->def[i];
-        if (!c || !c->bound) {
+        /* a game's economy reads the cast's economy figures, so a game leaves a cast whose figures
+           are outside the economy's bounds unbound; a page entry reads none of them */
+        if (!c || !c->bound || (game && !tagpu_wikidata_cast_economy(c))) {
             *d = *a;
             s->unbound[i] = c != NULL;
             continue;

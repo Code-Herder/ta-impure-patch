@@ -325,8 +325,9 @@ typedef struct {
        type whose pages are other files than another side's gets screens of its own, named
        <TYPE><page>@<side>.
    And where it departs from gfx.py: a cast whose unit WIKICASTDEF cannot hold -- a UnitName past
-   WIKI_ID_MAX - 1 bytes or all digits, a figure that is not a finite number >= 0, an EnergyUse
-   of a magnitude past WIKI_ECON_MAX, a BuildTime that is not above 0 -- is left unbound and reported, as gfx.py leaves a footprint past
+   WIKI_ID_MAX - 1 bytes or all digits, a figure of the world's that is not a finite number >= 0,
+   an economy figure that is not finite, a BuildTime that is not above 0 -- is left unbound and
+   reported, as gfx.py leaves a footprint past
    WIKI_FP_MAX: tagpu_wikidata_casting's bounds, which the simulation's binding rests on, then hold
    for every casting this file makes. No unit of the six compat setups' castings meets one.
 
@@ -453,8 +454,9 @@ typedef struct WIKISIDE {
        Every bound cast holds tagpu_wikidata_casting's bounds: a type of 1..WIKI_ID_MAX - 1 bytes,
        not all digits, upper-case as the layout's build buttons spell it; a title below
        WIKI_TITLE_MAX bytes of UTF-8; a footprint of 1..WIKI_FP_MAX a side with its G cells inside
-       it; every figure finite and >= 0 but energy_use, whose magnitude is below WIKI_ECON_MAX,
-       the build time above 0; a wreck within a feature record's bounds. */
+       it; every figure of the world's finite and >= 0, the build time above 0, and the economy's
+       finite (a game holds them to its bounds, tagpu_wikidata_cast_economy); a wreck within a
+       feature record's bounds. */
     WIKICASTING    casting[WIKI_SIDE_SIDES];
     /* sidedata's side s -- the byte the engine keeps at PlayerInfo+0x95 -- as a layout side:
        side_of_engine[s] is the index into layout.side and casting, or -1 for a side with no MAIN2

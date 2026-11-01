@@ -1391,6 +1391,11 @@ export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES
 
 /* decision 12 for an unbound cast: the tick and the authored type a demo stops on in this casting -- tick 0 for a
    scene unit of an unbound cast, else the first `build` of one -- or null when it plays to its end */
+/* the casting `C` with every bound cast's economy outside a game's bounds (sim.js econFits), and with every bound cast
+   unbound: a page entry plays the first exactly as `C`, and a game stops on it where it stops on the second */
+const econOff = C => ({ ...C, casts: Object.fromEntries(Object.entries(C.casts).map(([c, k]) =>
+  [c, k && { ...k, metalStorage: -1, energyUse: 1e7 }])) });
+const castsOff = C => ({ ...C, casts: Object.fromEntries(Object.keys(C.casts).map(c => [c, null])) });
 function expectedLock(entry, d, casting) {
   if (!casting) return null;
   const off = Object.keys(entry.units).filter(t => casting.casts[entry.units[t].cast] === null);
@@ -1695,6 +1700,10 @@ for (const c of contexts()) {
             const a = run(entry, d, c.layout, { ...c.ctx, casting: null });
             const k = a.all.findIndex((f, i) => !r.all[i] || frameKey(f) !== frameKey(r.all[i]));
             ok(k < 0 && a.all.length === r.all.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);
+            // a page entry reads no economy figure: casts outside a game's economy bounds play it unchanged
+            const p = run(entry, d, c.layout, { ...c.ctx, casting: econOff(c.ctx.casting) });
+            const q = p.all.findIndex((f, i) => !r.all[i] || frameKey(f) !== frameKey(r.all[i]));
+            ok(q < 0 && p.all.length === r.all.length, `plays exactly so with every cast's economy outside a game's bounds${q < 0 ? '' : ` (first difference on tick ${q})`}`);
           }
         }
       } catch (e) { ok(false, `threw: ${e.stack}`); }
@@ -1734,6 +1743,11 @@ for (const c of games.length ? contexts() : []) {
         gameClaims(entry, d, c.ctx, r, ok, t.refused, t.deaths);
         stallClaims(entry, d, c.layout, c.ctx, ok);
         if (c.name === 'identity') {
+          // a game leaves a cast whose economy is outside its bounds unbound: it stops where it stops on unbound casts
+          const lk = gameLock(entry, d, { ...c.ctx, casting: castsOff(c.ctx.casting) });
+          const p = runGame(entry, d, c.layout, { ...c.ctx, casting: econOff(c.ctx.casting) }, 'refuse');
+          ok(lk && p.sim.done && p.last.v.clock === lk.t && p.last.v.locked === lk.type,
+            `with every cast's economy outside its bounds, stops on tick ${lk && lk.t} under the badge, ${lk && lk.type} unbound (tick ${p.last.v.clock}, locked ${p.last.v.locked})`);
           const a = runGame(entry, d, c.layout, { ...c.ctx, casting: null, rival: null }, 'refuse');
           const k = a.all.findIndex((f, i) => !r.all[i] || frameKey(f) !== frameKey(r.all[i]));
           ok(k < 0 && a.all.length === r.all.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);

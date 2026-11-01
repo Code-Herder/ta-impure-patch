@@ -1421,8 +1421,16 @@ static int cast_no(char* err, size_t errn, WIKICASTING* c, const char* what)
     return 0;
 }
 
-/* sim.js's FIGURES, in its order, and where each lands */
+int tagpu_wikidata_cast_economy(const WIKICASTDEF* k)
+{
+    return k->build_cost_metal >= 0 && k->build_cost_energy >= 0 && k->metal_make >= 0 && k->metal_storage >= 0 &&
+           k->energy_storage >= 0 && fabs(k->energy_use) < WIKI_ECON_MAX;
+}
+
+/* sim.js's FIGURES, in its order, and where each lands: the NWORLD the world reads, then the
+   economy's, which only a game reads (tagpu_wikidata_cast_economy) */
 #define NFIGURES 11
+#define NWORLD   6
 static double* figure(WIKICASTDEF* k, int i)
 {
     double* const at[NFIGURES] = { &k->build_time, &k->worker_time, &k->build_distance, &k->max_velocity, &k->extracts,
@@ -1513,19 +1521,21 @@ static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, siz
         snprintf(why, n, "%s: the footprint is not two integers 1..%d", at, WIKI_FP_MAX);
         return 0;
     }
-    /* the figures divide and step: a build time of 0 would fill a building in no time at all,
-       and a negative or infinite speed or reach would leave the world's arithmetic */
+    /* the world's figures divide and step: a build time of 0 would fill a building in no time at
+       all, and a negative or infinite speed or reach would leave the world's arithmetic. The
+       economy's need only be finite here: a game holds them to its bounds where it binds */
     for (i = 0; i < NFIGURES; i++) {
         if (!(x = tj_get(v, FIGURES[i]))) continue;
-        if (!tj_is(x, TJ_NUM) || !(x->num >= 0 && x->num < INFINITY)) {
-            snprintf(why, n, "%s: %s is not a finite number >= 0", at, FIGURES[i]);
+        if (!tj_is(x, TJ_NUM) || !isfinite(x->num) || (i < NWORLD && !(x->num >= 0))) {
+            snprintf(why, n, i < NWORLD ? "%s: %s is not a finite number >= 0" : "%s: %s is not a finite number", at,
+                     FIGURES[i]);
             return 0;
         }
         *figure(k, i) = x->num;
     }
     if ((x = tj_get(v, "energyUse")) != NULL) {
-        if (!tj_is(x, TJ_NUM) || !(fabs(x->num) < WIKI_ECON_MAX)) {
-            snprintf(why, n, "%s: energyUse is not a number of magnitude below %.0f", at, WIKI_ECON_MAX);
+        if (!tj_is(x, TJ_NUM) || !isfinite(x->num)) {
+            snprintf(why, n, "%s: energyUse is not a finite number", at);
             return 0;
         }
         k->energy_use = x->num;

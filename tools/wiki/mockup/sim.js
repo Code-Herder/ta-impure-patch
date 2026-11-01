@@ -165,14 +165,19 @@ const WikiSim = (() => {
      Every bound below is one tagpu_wikidata.h's WIKICASTDEF holds; a casting breaking one is refused whole.
      The commander comes last so that each earlier cast keeps its index, and each casting's `builds` its meaning. */
   const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar', 'commander'];   // WIKI_CAST_* order
-  /* the figures a cast carries and a bound unit takes, each finite and >= 0, from its FBI: the six the world reads, then
-     the economy's build costs, metal made a second and the two storages, which no demo's world reads */
+  /* the figures a cast carries and a bound unit takes, from its FBI: the six the world reads (WORLD), each finite and
+     >= 0, then the economy's build costs, metal made a second and the two storages, which only a game reads: a casting
+     holds them finite, and a game to the economy's bounds where it binds (econFits) */
   const FIGURES = ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake',
     'buildCostMetal', 'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage'];
+  const WORLD = FIGURES.slice(0, 6);
   // ECON_MAX: the bound of a signed economy figure, energyUse (a solar collector's is negative), tagpu_wikidata.h's WIKI_ECON_MAX
   const ECON_MAX = 1e7;
   // the economy's figures an entry's unit may carry as a cast does: the five held to >= 0, and energyUse to ECON_MAX
   const ECON = ['buildCostMetal', 'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage'];
+  /* a cast's economy within the bounds a game's economy rests on (tagpu_wikidata_cast_economy): an absent figure is 0.
+     Outside them a game leaves the cast unbound (binder); a page entry reads none of them */
+  const econFits = k => ECON.every(n => !(n in k) || k[n] >= 0) && (!('energyUse' in k) || Math.abs(k.energyUse) < ECON_MAX);
   // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
   // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
   const FP_MAX = 16, ID_MAX = 24, TITLE_MAX = 94;
@@ -220,10 +225,11 @@ const WikiSim = (() => {
       if (!fitsIn(k.title, TITLE_MAX)) no(`${at} has no title of at most ${TITLE_MAX - 1} bytes`);
       const f = k.footprint;
       if (!Array.isArray(f) || f.length !== 2 || !f.every(v => int(v) && v >= 1 && v <= FP_MAX)) no(`${at}: the footprint is not two integers 1..${FP_MAX}`);
-      // the figures divide and step: a build time of 0 would fill a building in no time at all, and a negative or
-      // infinite speed or reach would leave the world's arithmetic
-      for (const n of FIGURES) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
-      if ('energyUse' in k && !(typeof k.energyUse === 'number' && Math.abs(k.energyUse) < ECON_MAX)) no(`${at}: energyUse is not a number of magnitude below ${ECON_MAX}`);
+      // the world's figures divide and step: a build time of 0 would fill a building in no time at all, and a negative
+      // or infinite speed or reach would leave the world's arithmetic; the economy's need only be finite here
+      for (const n of WORLD) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
+      for (const n of ECON) if (n in k && !(typeof k[n] === 'number' && Number.isFinite(k[n]))) no(`${at}: ${n} is not a finite number`);
+      if ('energyUse' in k && !(typeof k.energyUse === 'number' && Number.isFinite(k.energyUse))) no(`${at}: energyUse is not a finite number`);
       if (!(k.buildTime > 0)) no(`${at}: buildTime is not above 0`);
       if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
       if ('canreclamate' in k && !int(k.canreclamate)) no(`${at}: canreclamate is not an integer`);
@@ -245,8 +251,8 @@ const WikiSim = (() => {
   /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
      with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt and G cells, and a build list that holds unit j
      of the entry exactly when the casting's build list names j's cast and j is on the unit's own side (a rival or
-     not). A unit of an unbound cast keeps the authored
-     definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
+     not). A unit of an unbound cast -- in a game, also of a cast whose economy is outside the game's bounds
+     (econFits) -- keeps the authored definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
      types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
      captions). Every unit names one of the ten casts and no two units of one side one cast; two units bound to one
@@ -265,8 +271,12 @@ const WikiSim = (() => {
     const K = checkCasting(casting).casts, R = rival ? checkCasting(rival).casts : null;
     const names = Object.keys(entry.units), to = {}, seen = new Set();
     const isRival = t => entry.units[t].rival === true;
-    // the cast record a unit binds to: null for an unbound cast, undefined for a rival with no rival casting
-    const castFor = t => isRival(t) ? (R ? R[entry.units[t].cast] : undefined) : K[entry.units[t].cast];
+    /* the cast record a unit binds to: null for an unbound cast, undefined for a rival with no rival casting. A game's
+       economy reads the cast's economy figures, so a game leaves a cast whose figures are outside its bounds unbound */
+    const castFor = t => {
+      const k = isRival(t) ? (R ? R[entry.units[t].cast] : undefined) : K[entry.units[t].cast];
+      return k && game && !econFits(k) ? null : k;
+    };
     for (const t of names) {
       const c = entry.units[t].cast;
       if (!CASTS.includes(c)) throw new Error(`unit ${t} names no cast`);
