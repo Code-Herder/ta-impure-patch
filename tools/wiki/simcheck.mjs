@@ -1464,7 +1464,8 @@ function gameClaims(entry, d, ctx, r, ok, notes, deaths) {
       if (refused) notes.push(`${e.kill}@${e.at}`);
     } else ok(!placed && !refused, `the kill of ${e.kill} at ${e.at}, whose cast leaves no wreck, left none`);
     if (u.built >= 1 && ctx.snd) {
-      const ev = after.v.sound.events.find(x => x[0] === e.at && x[1] === WikiSim.SND_DEATH);
+      // the death event of this kill's type: two kills may share a tick, and an event names its type by index
+      const ev = after.v.sound.events.find(x => x[0] === e.at && x[1] === WikiSim.SND_DEATH && x[2] === r.sim.types.indexOf(u.type));
       ok(ev, `the kill of ${e.kill} at ${e.at} made a death event`);
       if (ev) {
         const want = (ctx.snd.type(u.type) || {}).death || null, got = WikiSound.death(ctx.snd, r.sim.types, after.v, ev[2], ev[4]);
@@ -1995,8 +1996,156 @@ function takeoverClaims(entry, d, layout, ctx, rr, ok) {
   ok(!tbad, `each of the ${takeovers} takeovers forks the parent chain as its seat, which is fed its part alone and the others their recorded inputs${tbad ? ` (${tbad})` : ''}`);
   if (rr.live.all.length) liveClaims(entry, d, layout, ctx, rr.live, ok);
 }
+// a toast's m:ss, clock_at's rounding (tagpu_hudinput.c): whole seconds from tick 0, rounded
+const clockAt = T => { const s = Math.trunc((T + 15) / 30); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+// a takeover replay's frame on the release of the viewer's nth press of `control`, the frame the press acts on
+const tkRelease = (rr, d, control, n = 0) => rr.F(pressesOf(d, control)[n].release);
+// the frame the picker opens on, and the first of live mode, the takeover's own
+const pickOpened = rr => rr.all.find((f, i) => i && !f.live && f.tk.pick === 'open' && rr.all[i - 1].tk.pick !== 'open');
+const tookOver = rr => rr.all.find(f => f.live);
+const unitOf = (w, id) => w.units.find(u => u.id === id);
+const near = (u, x, z, r) => !!u && Math.hypot(u.x - x, u.z - z) <= r;
+/* unit `id` of a takeover replay's last world stands at (x, z), or its first order is the move there; a move ends
+   within half a footprint of its point when another body stands in the way (2 x 2 cells, 32 units) */
+const goingTo = (rr, id, x, z) => {
+  const q = rr.go[rr.ids.indexOf(id)];
+  return near(unitOf(rr.gv, id), x, z, 16) || (!!q && !!q[0] && q[0].k === 'move' && q[0].x === x && q[0].z === z);
+};
+// the live forks of a takeover view's timelines, by (R, id) as the bay lists them (tagpu_hudstate.c fill_forks)
+const bayOf = tk => tk.timelines.filter(t => t.id && t.live).sort((a, b) => a.R - b.R || a.id - b.id);
+// the timelines as [id, parent, R, live, seat], for a message
+const rowsOf = tk => JSON.stringify(tk.timelines.map(t => [t.id, t.parent, t.R, t.live ? 1 : 0, t.seat]));
+/* THE BAR AFTER THE TAKEOVER (takeover-spec.md 6.8, MEASURED m0t-facts.md #1f): on every live frame the top bar is seat
+   h's -- its memo eased d / 8 a frame, truncated, from the watch mode's zeros toward seat h's stored values, and its
+   rates seat h's, sampled each time the DisplayTimer, R - 1 at the takeover, falls behind the game and steps 30 on. The
+   seat's values come from the parent chain played straight to R - 1 and forked as seat h, stepped beside the live
+   frames; a demo with no rewind after its takeover, so that L plays one tick a frame. */
+function barClaim(entry, d, layout, ctx, rr, ok) {
+  if (rr.live.all.some(f => f.live.rw !== 'idle')) { ok(false, 'the bar claim reads a demo with no rewind after its takeover'); return false; }
+  const t = tookOver(rr), h = t.tk.human, row = t.tl[t.tk.selected];
+  const s = straight(entry, d, layout, ctx, t.tl, row.parent, row.R - 1, false);
+  s.fork(row.R, row.part || [], row.mode, h);
+  const ease = (old, stored, cap) => {
+    const o = Math.trunc(old), dd = Math.trunc(stored) - o, v = o + (Math.trunc(dd / 8) || Math.sign(dd));
+    return Math.fround(v > cap ? cap : v);
+  };
+  let be = 0, bm = 0, dt = row.R - 1, rates = [0, 0, 0, 0], bad = null, other = false;
+  for (const f of rr.live.all) {
+    while (s.tick < f.game.tick) s.step();
+    const b = s.gameNow(h).bar, z = s.gameNow(h === 0 ? 1 : 0).bar;
+    be = ease(be, b.e, b.emax);
+    bm = ease(bm, b.m, b.mmax);
+    if (dt < s.tick) { dt += WikiReplay.RATE; rates = [b.ei, b.eo, b.mi, b.mo].map(Math.fround); }
+    if (b.e !== z.e || b.m !== z.m || b.ei !== z.ei || b.eo !== z.eo) other = true;
+    const got = f.live.bar;
+    if (!bad && (got.be !== be || got.bm !== bm || got.dt !== dt || JSON.stringify(got.rates) !== JSON.stringify(rates)))
+      bad = `demo tick ${f.tick}, GameTime ${f.game.tick}: ${JSON.stringify(got)}, not ${JSON.stringify({ be, bm, rates, dt })}`;
+  }
+  s.free();
+  ok(!bad, `every live frame's top bar is seat ${h}'s, eased from 0 and sampled from R - 1 = ${row.R - 1}${bad ? ` (${bad})` : ''}`);
+  return other;
+}
 /* EACH TAKEOVER DEMO'S OWN CLAIMS, by its id (takeover-spec.md section 9, the authored timings) */
-const TAKEOVER_CLAIMS = {};
+const TAKEOVER_CLAIMS = {
+  /* the picker opens at the refresh before the press, 0:10, with both players' rows live and no warning; Bram's row
+     takes the game over there with its toast; the top bar is his; his recorded order of 700 never comes in the fork,
+     while Ada's recorded move of 450 does; and each seat's selection is its own clicks' */
+  takeover(d, rr, ok, entry, ctx, layout) {
+    const o = pickOpened(rr), [ask] = pressesOf(d, 'takeover'), names = WikiSim.sceneOf(entry, d).seats.map(z => z.name);
+    if (!o) { ok(false, 'the picker opens'); return; }
+    ok(o.clock > ask.release && o.game.tick === 300 && o.game.playhead === 300 && o.tk.pickR === 301 && clockAt(o.game.playhead) === '0:10',
+      `the picker opens at playhead 300, R 301, its title at 0:10 (playhead ${o.game.playhead}, R ${o.tk.pickR})`);
+    ok(o.W && o.W.v.game.seats.every(z => z.units > 0), 'both players have units there, so both rows take a click');
+    ok(o.tk.pickEvict === -1 && bayOf(o.tk).length < WikiReplay.FORK_LIMIT, 'no fork would be replaced: no warning');
+    const t = tookOver(rr), [take] = pressesOf(d, 'takeas');
+    if (!t) { ok(false, 'the row takes the game over'); return; }
+    const toast = t.toast, text = toast && `Taking over ${names[toast.seat]} at ${clockAt(toast.value)}`;
+    ok(t.clock === take.release && toast && toast.kind === 'taking_over' && toast.value === 300 && toast.at === t.tick && text === 'Taking over Bram at 0:10',
+      `Bram's row takes over on its release, clock ${take.release}, with the toast "${text}"`);
+    const k = rr.last.tk;
+    ok(k.mode === 'live' && k.human === 1 && k.selected === 1 && k.timelines.length === 2 && k.timelines[1].parent === 0 && k.timelines[1].R === 301 &&
+      k.timelines[1].seat === 1 && k.timelines.every(x => x.live), `live as seat 1 on timelines [0, 1 (parent 0, R 301, seat 1)] (${rowsOf(k)})`);
+    ok(barClaim(entry, d, layout, ctx, rr, ok), 'Bram\'s economy is not Ada\'s, so the bar shows whose it is');
+    const w1 = unitOf(rr.gv, 'w1'), c0 = unitOf(rr.gv, 'c0'), c1 = unitOf(rr.gv, 'c1');
+    const rec = d.game.inputs.find(e => e.at > 700 && e.at < 710 && 'move' in e).move, [px, pz] = d.forks[0].inputs.filter(e => 'move' in e)[1].move;
+    ok(goingTo(rr, 'w1', px, pz) && !near(w1, ...rec, 48) && !rr.go[rr.ids.indexOf('w1')].some(q => q.x === rec[0] && q.z === rec[1]),
+      `w1 goes where the fork sent it, (${px}, ${pz}), and neither stands at nor heads for the recorded (${rec}): Bram's recorded future is gone (${w1 && [w1.x, w1.z]})`);
+    ok(goingTo(rr, 'c0', 330, 270), `c0 goes to (330, 270): Ada's recorded move of 450 plays on in the fork (${c0 && [c0.x, c0.z]})`);
+    ok(c1 && c1.selected && c0 && c0.selected && w1 && !w1.selected,
+      'each seat\'s selection is its own: c1 by Bram\'s last click in the fork, c0 by Ada\'s recorded one');
+  },
+  /* the bay opens; F1's lane re-chains the game (no new game) and watches F1, its track filling to 301 and running to
+     1500, Bram's commander sent west; F1 drops the recorded kills after its start, so its walk, which reaches the tick
+     of the kill of Ada's commander, marks no death; Back to main recording seeks the original to the same tick, and
+     its walk marks the death again */
+  lanes(d, rr, ok, entry, ctx, layout) {
+    const kill = d.game.inputs.find(e => e.kill === 'c0'), mark = JSON.stringify([[kill.at, WikiReplay.DEATH, 0]]);
+    const L = tkRelease(rr, d, 'lanes'), S = tkRelease(rr, d, 'lane'), M = tkRelease(rr, d, 'main');
+    ok(L.tk.lanes === 1 && JSON.stringify(rr.F(L.clock - 1).marks) === mark, `the bay opens the lanes, the track marking Ada's commander's death at ${kill.at}`);
+    const before = rr.F(S.clock - 1);
+    ok(S.tk.selected === 1 && S.game.gen === before.game.gen && S.tk.fillTo === 301 && S.tk.chainLast === 1500,
+      `F1's lane re-chains at ${S.game.tick}: F1 watched, the same game, the fill to 301 and the length 1500 (${S.tk.selected}, gen ${S.game.gen}, ${S.tk.fillTo}, ${S.tk.chainLast})`);
+    const tl = S.tl, f1 = straight(entry, d, layout, ctx, tl, 1, 600, false), o0 = straight(entry, d, layout, ctx, tl, 0, 600, false);
+    const a = unitOf(f1.view(), 'c1'), b = unitOf(o0.view(), 'c1');
+    ok(a && a.x < 400 && near(b, 460, 200, 8),
+      `at 600 F1's c1 is west, at (${a && [a.x, a.z]}), where the recording's stands at (${b && [b.x, b.z]})`);
+    f1.free();
+    o0.free();
+    const w = rr.F(M.clock - 1);
+    ok(w.tk.selected === 1 && w.tk.walker < 0 && w.marks.length === 0 && kill.at <= w.tk.chainLast,
+      `F1's walk, to ${w.tk.chainLast}, through the kill at ${kill.at}, marks no death (${JSON.stringify(w.marks)})`);
+    const e = rr.all.find(f => f.tick > M.tick && f.game.target < 0), s = e && straight(entry, d, layout, ctx, e.tl, 0, e.game.tick, false);
+    ok(M.tk.selected === 0 && M.game.gen === w.game.gen + 1 && e && e.game.tick === w.game.tick && e.W && sameWorld(s, rr.ids, e.W),
+      `Back to main recording seeks the recording to ${w.game.tick}, the world it played straight to there`);
+    if (s) s.free();
+    ok(rr.last.tk.selected === 0 && rr.last.tk.walker < 0 && JSON.stringify(rr.last.marks) === mark, `its walk marks the death at ${kill.at} again`);
+  },
+  /* Save as a replay writes F2 once; Delete arms F1, then deletes it; F2's lane re-chains, the track seeks along F2, and
+     deleting F2, the fork watched, returns to the recording at the same tick first, then leaves no fork and closes the
+     bay */
+  save(d, rr, ok, entry, ctx, layout) {
+    const toasts = [tkRelease(rr, d, 'export'), ...[0, 1, 2, 3].map(n => tkRelease(rr, d, 'delete', n))]
+      .map(f => f.toast && f.toast.at === f.tick ? `${f.toast.kind} F${f.toast.value}` : null);
+    ok(JSON.stringify(toasts) === JSON.stringify(['saved F2', 'click_delete F1', 'deleted F1', 'click_delete F2', 'deleted F2']),
+      `the toasts: F2 saved as a replay of its own, Click again to delete F1, F1 deleted, then F2's two (${toasts})`);
+    ok(JSON.stringify(rr.last.tk.saved) === '[2]', `F2 saved once (${rr.last.tk.saved})`);
+    const del = tkRelease(rr, d, 'delete', 1);
+    ok(rr.all.every(f => f.tk.timelines[1].live === f.clock < del.clock), `F1 is gone from clock ${del.clock} on`);
+    const S = tkRelease(rr, d, 'lane'), before = rr.F(S.clock - 1);
+    ok(S.tk.selected === 2 && S.game.gen === before.game.gen && S.game.tick === 65, `F2's lane re-chains at 65 (${S.game.tick}, gen ${S.game.gen})`);
+    const D = tkRelease(rr, d, 'delete', 3), k = D.tk;
+    ok(k.selected === 0 && !k.timelines[2].live && bayOf(k).length === 0 && k.lanes === 0 && k.armed === 0 && D.game.target === 900,
+      `deleting F2, watched, returns to the recording first, at 900; no fork is left, the bay closes and nothing is armed (${rowsOf(k)})`);
+    const e = rr.all.find(f => f.tick > D.tick && f.game.target < 0), s = e && straight(entry, d, layout, ctx, e.tl, 0, 900, false);
+    ok(e && e.game.tick === 900 && e.W && sameWorld(s, rr.ids, e.W), 'the world there is the recording played straight to 900');
+    if (s) s.free();
+  },
+  /* F1 watched and left is stamped; the recording sought to 1100, Take over snaps to 901 with three forks kept, so the
+     picker warns and outlines F2's lane, the one never watched and first in the file; Ada's row takes over, F2 is
+     gone and F4 is kept from 901, and Bram plays on as recorded */
+  evict(d, rr, ok, entry, ctx, layout) {
+    const S = tkRelease(rr, d, 'lane'), M = tkRelease(rr, d, 'main');
+    ok(S.tk.selected === 1 && M.tk.selected === 0 && S.game.gen === 1 && M.game.gen === 1, 'F1\'s lane and Back to main recording both re-chain');
+    const u = M.tk.timelines.map(t => t.used);
+    ok(u[1] > 0 && u[2] === 0 && u[3] === 0, `F1 is stamped when left; F2 and F3 were never watched (${u})`);
+    const o = pickOpened(rr);
+    if (!o) { ok(false, 'the picker opens'); return; }
+    const bay = bayOf(o.tk), lane = bay.findIndex(t => t.id === o.tk.pickEvict);
+    ok(o.game.tick === 900 && o.tk.pickR === 901 && o.tk.pickEvict === 2 && bay.length === WikiReplay.FORK_LIMIT && lane === 1,
+      `the picker opens at 900, R 901, with ${bay.length} of ${WikiReplay.FORK_LIMIT} forks kept: it replaces F${o.tk.pickEvict}, lane ${lane} of F1 301, F2 601, F3 1201`);
+    const t = tookOver(rr), names = WikiSim.sceneOf(entry, d).seats.map(z => z.name);
+    const text = t && t.toast && `Taking over ${names[t.toast.seat]} at ${clockAt(t.toast.value)}`;
+    ok(t && text === 'Taking over Ada at 0:30' && t.tk.tkFull, `Ada's row takes over with "${text}", from the warning`);
+    const k = rr.last.tk, f4 = k.timelines[4];
+    ok(k.human === 0 && k.selected === 4 && JSON.stringify(bayOf(k).map(x => x.id)) === '[1,4,3]' && !k.timelines[2].live &&
+      f4 && f4.parent === 0 && f4.R === 901 && f4.seat === 0, `F1, F4 and F3 kept, in the bay's order, F2 gone; F4 from 901, parent 0, seat 0 (${rowsOf(k)})`);
+    barClaim(entry, d, layout, ctx, rr, ok);
+    const [px, pz] = d.forks[0].inputs.filter(e => 'move' in e)[1].move;
+    const where = id => { const u = unitOf(rr.gv, id), q = rr.go[rr.ids.indexOf(id)]; return `${id} at ${u && [u.x, u.z]}, orders ${JSON.stringify(q)}`; };
+    ok(goingTo(rr, 'b0', px, pz) && goingTo(rr, 'c1', 560, 160),
+      `Ada's builder goes where the fork sent it, (${px}, ${pz}), and Bram's commander where he was recorded sending it at 1200, (560, 160) (${where('b0')}; ${where('c1')})`);
+  },
+};
 
 function main() {
 const packDir = arg('--pack');
@@ -2125,7 +2274,7 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
       rt.locked.push(`${id}/${d.id}@${lock.t}`);
     } else if (entry.takeover) {
       takeoverClaims(entry, d, c.layout, c.ctx, rr, ok);
-      if (TAKEOVER_CLAIMS[d.id]) TAKEOVER_CLAIMS[d.id](d, rr, ok, entry, c.ctx);
+      if (TAKEOVER_CLAIMS[d.id]) TAKEOVER_CLAIMS[d.id](d, rr, ok, entry, c.ctx, c.layout);
       else ok(false, `the takeover demo ${d.id} has claims of its own (TAKEOVER_CLAIMS)`);
     } else if (entry.live) {
       liveClaims(entry, d, c.layout, c.ctx, rr, ok);
