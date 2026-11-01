@@ -15,6 +15,15 @@
    would put it there 8 steps early. The toast's `at` is a demo tick (replay.js act stamps R.tick), so the toast's age
    is the demo tick's. Both clocks are in the replay's view, so record() takes neither apart.
 
+   LIVE (a live entry, replay.js's LIVE): the frame is the player's own screen, not a watcher's. The rewind idle or
+   open shows the live simulation as the game shows it (its fog, column, selection and gestures); the past shows the
+   past simulation's world and fog under the column shown at the open, with nothing selected and no armed mode (view,
+   MEASURED by M0, rewind-spec.md 9.1). The HUD is the live one (the rewind button and its strip); the top bar shows
+   the replay's eased memo of seat 0's numbers; the wiki's emblem takes the slot left of the rewind button. THE ONE
+   CURSOR: a demo's viewer and seat 0 are one hand, so while the rewind is idle and no trip or return glide runs, the
+   cursor drawn is the simulation's own (`simcur`), its shape and animation at its world point; a trip that starts
+   then starts from it (`@game`), and a press that leaves the rewind idle glides back to it.
+
    Runs in a page (the global WikiFrame) and under node (module.exports), as replay.js does. */
 const WikiFrame = (() => {
   const Replay = typeof WikiReplay !== 'undefined' ? WikiReplay : require('./replay.js');
@@ -32,6 +41,11 @@ const WikiFrame = (() => {
   const YESORNO = { x: 112, y: 118, w: 400, h: 100, title: [25, 25, 350, 20], yes: [80, 55, 95, 20], no: [225, 55, 95, 20] };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const snap = v => Math.floor(v + 0.5 + 1 / 64);
+  // the simulation's cursor shapes by their index, tagpu_wikisim.h WIKI_CURSOR_*; a glide's point at seat 0's cursor
+  const SHAPES = ['arrow', 'move', 'build', 'reclaim'], AT_GAME = Replay.AT_GAME;
+  // the frame record's rewind state and arm by index, tagpu_wikireplay.h WIKI_RW_* and WIKI_ARM_*
+  const RW = Replay.RW, ARMS = Replay.ARMS;
+  const F32 = Math.fround;
 
   /* The frame's size in game pixels for a view with the map `M` and a column of `sideH` rows (0 without one). */
   function size(M, sideH) {
@@ -52,30 +66,60 @@ const WikiFrame = (() => {
       state: scr.gadgets.map(g => g.hidden ? -1 : GREY.includes(g.role) ? 2 : 0) };
   }
 
-  /* THE WATCHER'S VIEW of game view `gv`: a copy that draws as the game shows a Watch at full map. The fog is all
-     clear (the full-map reveal sets the watcher's sight and explored bit in every cell, tagpu_replay.c), and seat 0's
-     cursor, ghost, sites, queued sites, drag, lines, sweep, held keys and selection are gone (the viewer is not seat 0,
-     sim spec 4.7). The column is the idle MAIN2 of layout side `side` whatever the game script's `sidebar` says: that
-     key governs seat 0's recorded inputs, and the frame is the watcher's screen. */
-  function view(gv, layout, side) {
+  /* THE FRAME'S VIEW of game view `gv`, a copy, by `mode`:
+     - 'watch', THE WATCHER'S VIEW, Watching's: the fog all clear (the full-map reveal sets the watcher's sight and
+       explored bit in every cell, tagpu_replay.c), and seat 0's cursor, ghost, sites, queued sites, drag, lines, sweep,
+       held keys and selection gone (the viewer is not seat 0, sim spec 4.7). The column is the idle MAIN2 of layout
+       side `side` whatever the game script's `sidebar` says: that key governs seat 0's recorded inputs, and the frame
+       is the watcher's screen.
+     - 'player', the live rewind idle or open: the view as the simulation made it, seat 0's fog, column, selection,
+       sites, queued sites, drag, lines and sweep (MEASURED, M0 #1: open keeps the column, the selection and the armed
+       mode). The armed building's ghost only while `cursor`, the simulation's cursor being the one drawn (record's
+       simcur): the game draws it at the pointer (M0 #1), and with the viewer's hand on the HUD no pointer is over the
+       world [INFERRED: open with the pointer on the strip is not measured].
+     - 'past', the live rewind showing the past: the past simulation's world and its fog, seat 0's at T - 1 (MEASURED,
+       M0 #2), under the column `gv` carries, which the caller takes from the live view (the column shown at the open
+       stays: MEASURED, M0 #2), with no unit under the cursor; nothing selected and no armed mode, so no ghost, sites or
+       queued sites, and no seat 0 cursor, drag, lines, sweep or keys (MEASURED: +0x110 bit 4 clear, main+0x2CC3 1).
+     A frame view has no cursor of its own: the frame draws the viewer's or the simulation's in its TOP range. Without
+     a column of its own a live view takes the idle MAIN2 of `side`, since the game's screen always has one. */
+  function view(gv, layout, side, mode = 'watch', cursor = false) {
     if (!gv || !gv.map) return null;
     const M = gv.map, n = (+M.w || 1) * (+M.h || 1);
-    const v = { ...gv, frame: 1, map: { ...M, fog: new Array(n).fill(0) },
-      ghost: null, sites: [], queued: [], lines: [], drag: null, reclaim: null, keys: [], cursor: null, spacing: null,
-      units: (gv.units || []).map(u => ({ ...u, selected: false })) };
-    const sd = idleSide(layout, side);
-    if (sd) v.side = sd;
-    else delete v.side;
+    let v;
+    if (mode === 'player') v = { ...gv, frame: 1, cursor: null, ghost: cursor ? gv.ghost : null };
+    else {
+      v = { ...gv, frame: 1, ghost: null, sites: [], queued: [], lines: [], drag: null, reclaim: null, keys: [], cursor: null, spacing: null,
+        units: (gv.units || []).map(u => ({ ...u, selected: false })) };
+      if (mode === 'watch') { v.map = { ...M, fog: new Array(n).fill(0) }; delete v.side; }
+      else if (v.side) v.side = { ...v.side, under: null };
+    }
+    if (!v.side) {
+      const sd = idleSide(layout, side);
+      if (sd) v.side = sd;
+      else delete v.side;
+    }
     return v;
   }
 
-  /* The toast the HUD shows at demo tick `rv.tick`, the game's strings (tagpu_hudinput.c): '' for none */
+  // a game tick as m:ss: a bookmark's from 0, the live strip's from the rewind's first GameTime (tagpu_hudinput.c live_clock)
+  const clock = (T, first) => { const s = Math.trunc((T > first ? T - first : 0) / TICK); return `${Math.trunc(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  /* The toast the HUD shows at demo tick `rv.tick`, the game's strings (tagpu_hudinput.c): '' for none. Each shows
+     TOAST_TICKS; Play from here's arm says what the second click does for as long as the arm holds, as the game's
+     live_fill keeps it (its snap's seek can outlast a toast's time). */
   function toast(rv) {
-    const t = rv.toast;
-    if (!t || rv.tick - t.at >= TOAST_TICKS) return '';
-    if (t.kind === 'removed') return 'Bookmark removed';
-    const s = Math.trunc(t.value / TICK);
-    return `Bookmark at ${Math.trunc(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const t = rv.toast, L = rv.live;
+    if (!t || (rv.tick - t.at >= TOAST_TICKS && !(t.kind === 'armed' && L && L.arm === 'armed'))) return '';
+    const first = L ? L.first : 0;
+    switch (t.kind) {
+      case 'removed': return 'Bookmark removed';
+      case 'added': return `Bookmark at ${clock(t.value, 0)}`;
+      case 'playing_on': return `Playing on from ${clock(t.value, first)}`;
+      case 'cannot': return `Cannot play from ${clock(t.value, first)}`;
+      case 'armed': return `Click again to play from ${clock(t.value, first)}${t.evict >= 0 ? `, replacing F${t.evict}` : ''}`;
+      case 'playing_from': return `Playing from ${clock(t.value, first)}`;
+      default: return 'Rewind refused';
+    }
   }
 
   /* THE FRAME RECORD (tagpu_wikiframe.h WIKIFRAMEREC) from replay view `rv` and the game view `gv` it shows, the layout
@@ -83,9 +127,19 @@ const WikiFrame = (() => {
      control the press machine holds. Made after the frame's last step or press: a view is only valid until the next.
      The cursor in a demo: `from` the previous trip's control and final tick, or '' (the rest point) before any; `to`
      this trip's, '' before the first; for the track `to_v` the tick under the cursor, which follows a drag as replay.js
-     seeks it; step i of n of the glide (THE GLIDE, above), and it stays at `to` until the next trip starts. */
+     seeks it; step i of n of the glide (THE GLIDE, above), and it stays at `to` until the next trip starts.
+     LIVE: the rewind's state, its span and the GameTime shown, the arm and its start; the top bar's numbers, the
+     replay's memo (the eased stored values and the rates last sampled) with the shown seat 0's storage and stored
+     values; and THE ONE CURSOR (the header): seat 0's cursor in `sim`, its world point, shape and age, and `simcur`
+     while it is the one drawn. A trip that starts while the rewind is idle starts from it (replay.js feed, `@game`);
+     a press that left the rewind idle glides from its control back to it over HUD_DOWN clock ticks from `back`; after
+     that glide, and before any trip, the drawn cursor is the simulation's. In Try it the simulation's cursor is the
+     player's pointer over the world once a fork is played, idle or open (M0 #1), never in the past; before the first
+     fork the world is the recording, whose cursor is not drawn. The floats are f32, as the C record carries them, so
+     both sides compose the bar and place the cursor from the same values. */
   function record(rv, gv, side, tryIt, held) {
-    const g = rv.game, seats = (gv && gv.game && gv.game.seats) || [];
+    const g = rv.game, seats = (gv && gv.game && gv.game.seats) || [], L = rv.live || null;
+    const s0 = L && seats[0], gc = L && gv ? gv.cursor : null;
     const rec = {
       on: 1, playing: !g.paused && g.tick < g.end ? 1 : 0, question: rv.question ? 1 : 0, nseat: seats.length,
       side, colour: 0, speed: g.speed, try_it: tryIt ? 1 : 0, playhead: g.playhead, end: g.end,
@@ -95,21 +149,36 @@ const WikiFrame = (() => {
       held: tryIt ? (Replay.CONTROLS.includes(held) ? held : '') : rv.held || '',
       toast: toast(rv),
       cur: { on: 0, from: '', to: '', from_v: -1, to_v: -1, i: Replay.HUD_DOWN, n: Replay.HUD_DOWN },
+      live: L ? 1 : 0, rw: L ? RW.indexOf(L.rw) : 0, arm: L ? ARMS.indexOf(L.arm) : 0,
+      first: L ? L.first : 0, G: L ? L.G : 0, now: L ? L.now : 0, last: L ? L.last : 0, armR: L && L.arm !== 'none' ? L.armR : 0,
+      bar: s0 ? { e: L.bar.be, m: L.bar.bm, ei: L.bar.rates[0], eo: L.bar.rates[1], mi: L.bar.rates[2], mo: L.bar.rates[3],
+        emax: F32(s0.emax), mmax: F32(s0.mmax), raw_e: F32(s0.e), raw_m: F32(s0.m) }
+        : { e: 0, m: 0, ei: 0, eo: 0, mi: 0, mo: 0, emax: 0, mmax: 0, raw_e: 0, raw_m: 0 },
+      simcur: 0,
+      sim: gc ? { x: F32(gc.x), z: F32(gc.z), shape: Math.max(0, SHAPES.indexOf(gc.shape)), age: L.now - gc.since } : { x: 0, z: 0, shape: 0, age: 0 },
     };
     rec.nmark = rec.mark.length;
-    const c = rv.cursor;
-    if (!tryIt) {
-      rec.cur.on = 1;
-      if (c) {
-        const n = Replay.HUD_DOWN;
-        let to_v = c.value;
-        if (c.drag) {
-          const k = clamp(rv.clock - c.at - n, 0, c.drag.over);
-          to_v = c.value + Math.trunc(((c.drag.drag - c.value) * k) / c.drag.over);
-        }
-        Object.assign(rec.cur, { from: c.from || '', from_v: c.from ? c.fromValue : -1, to: c.to, to_v, i: clamp(rv.clock - c.at, 0, n), n });
-      }
+    const c = rv.cursor, n = Replay.HUD_DOWN, idle = !!L && L.rw === 'idle';
+    if (tryIt) {
+      rec.simcur = L && L.selected !== 0 && L.rw !== 'past' ? 1 : 0;
+      return rec;
     }
+    // a trip's tick under the cursor on clock tick `at`: the press's, or along its drag
+    const tick = at => {
+      if (!c.drag) return c.value;
+      const k = clamp(at - c.at - n, 0, c.drag.over);
+      return c.value + Math.trunc(((c.drag.drag - c.value) * k) / c.drag.over);
+    };
+    // the return glide: this trip's release left the rewind idle (replay.js `back`, a clock tick at or after its start)
+    const back = L && c && L.back >= c.at ? L.back : -1;
+    if (back >= 0) {
+      Object.assign(rec.cur, { from: c.to, from_v: c.to === 'track' ? tick(back) : -1, to: AT_GAME, to_v: -1, i: clamp(rv.clock - back, 0, n), n });
+      rec.simcur = idle && rv.clock - back >= n ? 1 : 0;
+    } else if (c)
+      Object.assign(rec.cur, { from: c.from || '', from_v: c.from && c.from !== AT_GAME ? c.fromValue : -1, to: c.to, to_v: tick(rv.clock),
+        i: clamp(rv.clock - c.at, 0, n), n });
+    else rec.simcur = idle ? 1 : 0;
+    rec.cur.on = rec.simcur ? 0 : 1;
     return rec;
   }
 
@@ -127,18 +196,24 @@ const WikiFrame = (() => {
      nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks (an empty list: the game's
      HUD always draws the Forks bay and Take over, hud.js only for a state with a list). The stats window stays
      closed: the DLL's pass has one chart image, the replay HUD's, and the stage must have its own before it opens one.
-     `art` the side pack's art for the seats' colours, or null. */
+     A live record sets the live HUD as the game's present_live does (tagpu_hudstate.c): the button down and the strip
+     drawn while the rewind is open or in the past, the track from its first GameTime to G, never playing. `art` the
+     side pack's art for the seats' colours, or null. */
   function hudState(rec, Wg, Hg, art) {
-    const k = HUD_H / Hg, T = rec.end / TICK;
+    const k = HUD_H / Hg, live = !!rec.live, G = Math.max(rec.G, rec.first);
+    // live, the strip's track runs from the rewind's first GameTime to G (tagpu_hudstate.c present_live)
+    const T = live ? (G - rec.first) / TICK : rec.end / TICK, t = live ? (clamp(rec.now, rec.first, G) - rec.first) / TICK : rec.playhead / TICK;
     return {
       W: Wg * k, H: HUD_H, frame: { panel: SIDE_W * k, top: BAR * k, bottom: BAR * k },
-      t: rec.playhead / TICK, T, playing: !!rec.playing, speed: rec.speed / 10, hud: 1,
+      t, T, playing: !live && !!rec.playing, speed: rec.speed / 10, hud: 1,
       seats: rec.seat.map((z, i) => ({ i, name: z.name, colour: seatColour(art, z.colour), units: z.units, lost: !!z.lost, out: !!z.out,
         cam: false, res: { m: z.m, mmax: z.mmax, e: z.e, emax: z.emax, mi: z.mi, mo: z.mo, ei: z.ei, eo: z.eo } })),
       teams: rec.seat.map((_, i) => [i]), folded: [], scroll: 0, sight: -1, follow: -1,
       markers: rec.mark.map(m => ({ t: m.t / TICK, kind: MK_NAMES[m.kind], seat: m.seat })),
       toggles: { cursors: true, clicks: true, selections: true, chat: true, stats: false },
       toast: rec.toast, stats: { open: false }, ends: T, len: T, fillTo: T, forks: [],
+      // the live HUD (hud.js live): its strip while the rewind is open or shows the past, and Play from here's arm
+      ...(live ? { live: { open: rec.rw !== 0 }, rw: { arm: rec.arm } } : {}),
     };
   }
 
@@ -159,26 +234,51 @@ const WikiFrame = (() => {
   // a point of a glide from a to b at step i of n: the curve of sim.js glideAt, in doubles, since it is a position
   const glide = (a, b, i, n) => i >= n ? b : a + (b - a) * i * i * (3 * n - 2 * i) / (n * n * n);
 
+  /* SEAT 0'S CURSOR in HUD units, for record `rec` in the frame fitted as `fit` (stage.js fit) with its corner at the
+     canvas point (fx, fy) and `px` device pixels a unit: the world point's canvas point, as stage.js places a world
+     point, from that corner. null for a record that is not live. */
+  function gamePoint(rec, fit, fx, fy, px) {
+    if (!rec.live) return null;
+    return { x: (fit.ox + rec.sim.x * fit.s - fx) / px, y: (fit.oz + rec.sim.z * fit.s - fy) / px };
+  }
+
+  /* THE HUD THE TRIP PRESSED, whose controls the cursor's point is resolved among (point's `boxes`): a return glide
+     leaves a control of the strip its press closed (Back to now, Play from here), so its controls are the HUD's as
+     drawn at that press, the strip open over the past with fwd live (`now` at the strip's start) and nothing armed; the
+     controls lie where they lie whatever the playhead or the arm. Any other record's are its own HUD's. Its boxes
+     only: the HUD drawn is the record's own. */
+  const pressed = rec => rec.live && rec.cur.to === AT_GAME ? { ...rec, rw: RW.indexOf('past'), now: rec.first, arm: 0 } : rec;
+
   /* THE CURSOR'S POINT, in HUD units, for record `rec`: each key at its control's box centre on the device pixels the
      box is drawn on, ((snap(x0 px) + snap(x1 px)) / 2) / px; the track at its tick along the playhead's run at the track
-     box's centre; leave:no at the question's No; '' and a key no box holds at the rest point. `boxes` the stage HUD's
-     controls, each { key, ub: [x, y, w, h] in units, ends } (ends: the track's, from hud.js data-ends), `px` its device
-     pixels a unit, `rest` and `no` (the question's No, or null) as { x, y } in units. */
-  function point(rec, boxes, px, rest, no) {
+     box's centre, the run being the game's [0, end], live the strip's [first, G]; leave:no at the question's No; @game at
+     seat 0's cursor (gamePoint); '' and a key no box holds at the rest point. `boxes` the stage HUD's controls, each
+     { key, ub: [x, y, w, h] in units, ends } (ends: the track's, from hud.js data-ends), `px` its device pixels a unit,
+     `rest`, `no` (the question's No, or null) and `game` (gamePoint, or null) as { x, y } in units. */
+  function point(rec, boxes, px, rest, no, game) {
     const c = rec.cur, at = key => boxes.filter(b => b.key === key).pop();
     const mid = (a, w) => (snap(a * px) + snap((a + w) * px)) / 2 / px;
+    const a0 = rec.live ? rec.first : 0, a1 = rec.live ? Math.max(rec.G, rec.first) : rec.end;
     const resolve = (key, v) => {
       if (key === 'leave:no') return no || rest;
+      if (key === AT_GAME) return game || rest;
       const b = key ? at(key) : null;
       if (!b) return rest;
       const [x, y, w, h] = b.ub;
       if (key !== 'track') return { x: mid(x, w), y: mid(y, h) };
       const x0 = x + b.ends, x1 = x + w - b.ends;
-      return { x: x0 + (x1 - x0) * clamp(v, 0, rec.end) / Math.max(1, rec.end), y: mid(y, h) };
+      return { x: x0 + (x1 - x0) * (clamp(v, a0, a1) - a0) / Math.max(1, a1 - a0), y: mid(y, h) };
     };
     const a = resolve(c.from, c.from_v), b = resolve(c.to, c.to_v);
     return { x: glide(a.x, b.x, c.i, c.n), y: glide(a.y, b.y, c.i, c.n) };
   }
+
+  /* A FRAME POINT OF THE WORLD, in world units (stage.js's x, z): on the column, x in [-128, 0) and z in [-32, Hg - 32)
+     (the column starts at the top bar's first row), or on the map, x in [0, mw) and z in [0, mh). A point on a bar, or
+     on the viewport below a map shorter than the column, is none. Try it yourself's world takes a point only here
+     (rewind-spec.md 9.6), and the simulation's cursor is drawn only here. */
+  const onWorld = (x, z, Hg, mw, mh) =>
+    (x >= -SIDE_W && x < 0 && z >= -BAR && z < Hg - BAR) || (x >= 0 && x < mw && z >= 0 && z < mh);
 
   /* THE PRESS MACHINE, Try it yourself's presses on the stage HUD and on Leave's question, as the game's HUD takes them
      (tagpu_hudinput.c, hud-in-game.md): a left press on a control holds it, and a button acts at its release only when
@@ -220,6 +320,7 @@ const WikiFrame = (() => {
     };
   }
 
-  return { size, idleSide, view, toast, record, hudState, seatColour, dialog, glide, point, Press, YESORNO, COLOURS, HUD_H };
+  return { size, idleSide, view, toast, record, hudState, seatColour, dialog, glide, gamePoint, pressed, point, onWorld, Press, YESORNO,
+    COLOURS, HUD_H, SHAPES };
 })();
 if (typeof module !== 'undefined') module.exports = WikiFrame;

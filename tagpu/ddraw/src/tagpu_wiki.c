@@ -379,10 +379,12 @@ static int      s_about, s_drawer;              /* the theatre's About and its d
    press (a backward seek), so nothing here keeps a pointer into it past the call that took it.
 
    THE HELD VIEW: the stage shows the last world drawn while a seek runs (decision 11; wiki.js
-   `FR.gv`). s_frameView is copied from the replay's game, and filtered to the watcher's view
-   (tagpu_wikiframe_view), only in a fill that ends with no seek pending, and the record is
-   published from it; the seats the frame record reads are held with it (s_heldGv), since the
-   record's players column is the world shown, not the world a seek is playing through. */
+   `FR.gv`). s_frameView is copied from the world shown -- the replay's game, or a live replay's
+   past simulation while it shows the past -- and filtered to the frame's view (tagpu_wikiframe_view),
+   only in a fill that ends with no seek pending, and the record is published from it; the seats
+   and seat 0's cursor the frame record reads are held with it (s_heldGv), since the record's
+   players column, top bar and cursor are the world shown, not the world a seek is playing
+   through. */
 static WIKIREPLAY     s_rep;
 static int            s_repOn;                  /* s_rep holds a replay: freed at a change      */
 static int            s_repTry;                 /* it was made for Try it yourself (create)      */
@@ -391,7 +393,8 @@ static WIKISTAGEVIEW  s_frameView;              /* the held view; 158 KB, never 
 static int            s_frameHave;              /* s_frameView holds this replay's world         */
 static WIKISEAT       s_heldSeat[WIKI_SEATS];
 static WIKIECON       s_heldEcon[WIKI_SEATS];
-static WIKIVIEW       s_heldGv;                 /* its game part only: game, nseat, seat, econ   */
+static WIKIVIEW       s_heldGv;                 /* its game part and seat 0's cursor only: game,
+                                                   nseat, seat, econ, cursor_*                   */
 static int            s_repGen = -1, s_repQuiet = -1;   /* the replay's sound, as last synced   */
 /* THE REPLAY'S SERIAL: incremented whenever s_rep is made or freed, published in each packet
    (TAGPU_PK_WIKI.rep_serial) and named by the hit map drawn from it, so a press on the stage HUD
@@ -1242,21 +1245,29 @@ static int frame_current(void)
 /* A REPLAY'S PART OF THE RECORD (wiki.js drawReplay): the held view, its frame record and the
    viewer's caption. Called after the fill's last step and press: the game's view is valid only until
    the next (tagpu_wikireplay_game), and the record holds values only, so it outlives it.
+   THE WORLD SHOWN: a replay's game, the watcher's view of it; a live replay's live simulation as
+   the player sees it, idle or open; while the past is shown its past simulation, under the live
+   view's column (the column shown at the open stays, MEASURED m0-facts.md #2), which L, never
+   stepped while the past is shown, still holds.
    THE SOUND: what a seek re-simulated is heard already -- each new game and each seek's end starts
    the count at the view's `quiet` (tagpu_wikireplay.h), and only a world shown is heard. */
 static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
 {
     WIKIREPLAYVIEW rv;
-    WIKISIM* g = tagpu_wikireplay_game(&s_rep);
+    WIKISIM* g;
     const char* cap;
     uint32_t t = 0;
+    int shown, mode;
     tagpu_wikireplay_view(&s_rep, &rv);
+    mode = !rv.live ? WIKIFRAME_WATCH : rv.rw == WIKI_RW_PAST ? WIKIFRAME_PAST : WIKIFRAME_PLAYER;
+    g = mode == WIKIFRAME_PAST ? tagpu_wikireplay_past(&s_rep) : tagpu_wikireplay_game(&s_rep);
     if (rv.gen != s_repGen || rv.quiet != s_repQuiet) {
         s_repGen = rv.gen;
         s_repQuiet = rv.quiet;
         s_heard = rv.quiet;
     }
-    if (rv.target < 0 && g) {
+    shown = rv.target < 0 && g;
+    if (shown) {
         const WIKIVIEW* v = tagpu_wikisim_view(g);
         int k;
         t = tagpu_wikistage_copy(&s_frameView, v, g->entry, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
@@ -1268,14 +1279,24 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         }
         s_heldGv.seat = s_heldSeat;
         s_heldGv.econ = s_heldEcon;
+        s_heldGv.cursor_x = v->cursor_x;
+        s_heldGv.cursor_z = v->cursor_z;
+        s_heldGv.cursor_shape = v->cursor_shape;
+        s_heldGv.cursor_since = v->cursor_since;
         sound_drain(v, g->entry);
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&s_frameView, g);
         s_frameView.tick = g->tick;
-        tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc);
+        if (mode == WIKIFRAME_PAST) {
+            WIKISIM* L = tagpu_wikireplay_game(&s_rep);
+            tagpu_wikistage_side(&s_frameView, L ? tagpu_wikisim_view(L) : NULL, s_laySrc);
+        }
         s_frameHave = 1;
     }
     tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held, &w->frame);
+    /* the armed building's ghost goes with the simulation's cursor. Try it's world input reaches no
+       game frame (stage_world), so in Try it the player's own pointer is the one cursor */
+    if (shown) tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && !s_repTry);
     if (!s_frameHave) {
         /* a seek began before any world was shown (a capture asked mid-seek): wiki.js says the same */
         if (!w->msg[0]) lstrcpynA(w->msg, "loading\xE2\x80\xA6", sizeof w->msg);

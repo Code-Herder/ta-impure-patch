@@ -239,6 +239,24 @@ static void rec_json(const TJV* R, WIKIFRAMEREC* f)
     f->cur.to_v = (int32_t)tj_num(tj_get(v, "to_v"), -1);
     f->cur.i = (uint8_t)tj_num(tj_get(v, "i"), 0);
     f->cur.n = (uint8_t)tj_num(tj_get(v, "n"), 0);
+    f->live = (uint8_t)tj_num(tj_get(R, "live"), 0);
+    f->rw = (uint8_t)tj_num(tj_get(R, "rw"), 0);
+    f->arm = (uint8_t)tj_num(tj_get(R, "arm"), 0);
+    f->first = (int32_t)tj_num(tj_get(R, "first"), 0);
+    f->G = (int32_t)tj_num(tj_get(R, "G"), 0);
+    f->now = (int32_t)tj_num(tj_get(R, "now"), 0);
+    f->last = (int32_t)tj_num(tj_get(R, "last"), 0);
+    f->arm_R = (int32_t)tj_num(tj_get(R, "armR"), 0);
+    v = tj_get(R, "bar");
+#define F_(n_) f->bar.n_ = (float)tj_num(tj_get(v, #n_), 0)
+    F_(e); F_(m); F_(ei); F_(eo); F_(mi); F_(mo); F_(emax); F_(mmax); F_(raw_e); F_(raw_m);
+#undef F_
+    f->simcur = (uint8_t)tj_num(tj_get(R, "simcur"), 0);
+    v = tj_get(R, "sim");
+    f->sim.x = (float)tj_num(tj_get(v, "x"), 0);
+    f->sim.z = (float)tj_num(tj_get(v, "z"), 0);
+    f->sim.shape = (uint8_t)tj_num(tj_get(v, "shape"), 0);
+    f->sim.age = (int32_t)tj_num(tj_get(v, "age"), 0);
 }
 
 static void box_out(const char* name, double x, double y, double w, double h)
@@ -250,21 +268,22 @@ static void box_out(const char* name, double x, double y, double w, double h)
    pixels a unit) from the mockup's own record H.rec, of a map H.map beside a column H.side_h rows
    tall: the frame (tagpu_wikistage_fit, as the stage draws it), the HUD's state from the record
    (tagpu_wikiframe_hudstate, after the render thread's bound), its controls (tagpu_hudlay_build),
-   the viewer's cursor (tagpu_wikiframe_point), the emblems at art/wiki/layout.json's `button`
-   place and Leave's question, every one in page device pixels; a box as x0 y0 x1 y1, each edge
+   the cursor (tagpu_wikiframe_point among the controls of tagpu_wikiframe_pressed's HUD, or the
+   simulation's at tagpu_wikiframe_game_point outside Try it), the emblems at art/wiki/layout.json's
+   `button` place -- right[0] for a live frame, right[1] for a replay's -- and Leave's question, every one in page device pixels; a box as x0 y0 x1 y1, each edge
    snapped as the HUD's draw snaps it (tagpu_hud_snap, tagpu_hud_edge). */
 static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, size_t nl, const HUDLAY* hud)
 {
-    static HUDSTATE st;
-    static HUDOPS ops;
+    static HUDSTATE st, pst;
+    static HUDOPS ops, pops;
     char err[256];
-    WIKIFRAMEREC rec;
+    WIKIFRAMEREC rec, pr;
     WIKISTAGEFIT fit;
     WIKIFRAMEDLG dlg;
     WIKISTAGEFRAME sf;
     TJDOC* ld;
     const TJV* B;
-    double X0, Y0, cw, ch, fx, fy, b[4], x, y, rx, ry, nx, ny;
+    double X0, Y0, cw, ch, fx, fy, b[4], x, y, rx, ry, nx, ny, gx, gy;
     float hpx;
     int Wg, Hg, i, w, h, side_h, n = 0;
     if (!H || !tj_is(H, TJ_OBJ)) return;
@@ -298,10 +317,21 @@ static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, siz
     ry = (fit.oz + h * WIKI_CELL / 2.0 * fit.s - fy) / hpx;
     nx = (dlg.no.x + dlg.no.w / 2.0 - fx) / hpx;
     ny = (dlg.no.y + dlg.no.h / 2.0 - fy) / hpx;
+    tagpu_wikiframe_game_point(&rec, &fit, fx, fy, hpx, &gx, &gy);
     if (rec.cur.on) {
-        tagpu_wikiframe_point(&rec, &ops, hpx, tagpu_hudlay_globals(hud)->track_ends, rx, ry, nx, ny, &x, &y);
+        const HUDOPS* among = &ops;
+        if (tagpu_wikiframe_pressed(&rec, &pr)) {
+            tagpu_wikiframe_hudstate(&pr, Wg, Hg, hpx, NULL, &pst);
+            if (!tagpu_hudlay_build(hud, &pst, &pops, err, sizeof err)) {
+                fprintf(stderr, "wikilaycheck: the pressed stage HUD: %s\n", err);
+                exit(1);
+            }
+            among = &pops;
+        }
+        tagpu_wikiframe_point(&rec, among, hpx, tagpu_hudlay_globals(hud)->track_ends, rx, ry, nx, ny, gx, gy, &x, &y);
         printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + x * hpx, Y0 + fy + y * hpx);
-    }
+    } else if (rec.simcur && !rec.try_it && gx == gx && gy == gy)
+        printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + gx * hpx, Y0 + fy + gy * hpx);
     if (rec.question) {
         const WIKIFRAMEBOX* q[4] = { &dlg.panel, &dlg.title, &dlg.yes, &dlg.no };
         static const char* names[4] = { "panel", "title", "yes", "no" };
@@ -318,7 +348,7 @@ static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, siz
     memset(&sf, 0, sizeof sf);
     sf.btn_side = (int16_t)tj_num(tj_get(B, "side"), 0);
     sf.btn_top = (int16_t)tj_num(tj_get(B, "top"), 0);
-    sf.btn_right = (int16_t)tj_num(tj_at(tj_get(B, "right"), 1), 0);
+    sf.btn_right = (int16_t)tj_num(tj_at(tj_get(B, "right"), rec.live ? 0 : 1), 0);
     sf.btn_config = (int16_t)tj_num(tj_get(B, "config"), 0);
     tagpu_json_free(ld);
     fputs(",\"emblems\":[", stdout);

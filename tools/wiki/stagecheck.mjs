@@ -52,6 +52,9 @@
    its own canvas: Leave's question on a third of the frames, its answer held as (k / 3) % 3, and the viewer's cursor on
    the even frames at a canvas point both sides take from k (wikistagetest.c says which). The recording keeps each
    call's clip -- save, a rect, clip, restore -- and each op's clip must be the call's, the canvas's where there is none.
+   A live entry's frame is the player's: by k, frame.js view's mode -- the watcher's, the player's, the past's -- with
+   the armed ghost kept on the even frames, the emblem at layout.json's button.right[0], and the cursor the
+   simulation's, its shape the k % 4th of the four and its age 7 k ticks.
 
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
    more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
@@ -331,7 +334,7 @@ try {
   const plainIcons = Object.fromEntries(Object.entries(icons).filter(([n]) => !Object.values(WikiStage.EMBLEM).includes(n)));
   const BUTTON = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/layout.json'), 'utf8')).button;
   const frameArgs = [...['wiki', 'config'].map(k => String(part.indexOf(WikiStage.EMBLEM[k]))),
-    ...[BUTTON.side, BUTTON.top, BUTTON.right[1], BUTTON.config].map(String)];
+    ...[BUTTON.side, BUTTON.top, BUTTON.right[1], BUTTON.config, BUTTON.right[0]].map(String)];
   const SHAPES = ['arrow', 'move', 'build', 'reclaim'];                     // WIKI_CURSOR_*
   const cursorArgs = SHAPES.map(s => String(part.indexOf(WikiStage.CURSOR[s])));
   const sizeArgs = SHAPES.flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
@@ -382,8 +385,11 @@ try {
           if (sim.tick % 30 === 0 || sim.done) {
             const v = sim.view();
             sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v, tick: sim.tick });
-            if (entry.frame === 'game')
-              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`, v: WikiFrame.view(v, sb.layout, 0), tick: sim.tick, frame: true });
+            if (entry.frame === 'game') {
+              const k = Math.floor(sim.tick / 30), mode = entry.live ? ['watch', 'player', 'past'][k % 3] : 'watch';
+              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`, v: WikiFrame.view(v, sb.layout, 0, mode, k % 2 === 0), tick: sim.tick,
+                frame: true, live: !!entry.live });
+            }
             if (v.parts.length) { nspray += v.parts.length; nsprayed++; }
           }
           if (sim.done) break;
@@ -412,7 +418,7 @@ try {
   /* a frame view's presentation (wikistagetest.c frame_of): by k = tick / 30, the bars' picture on the odd frames, the
      emblems while k % 4 < 2, the question when k % 3 is 0 with its answer held as (k / 3) % 3, the cursor on the even
      frames; the TOP range on the recording through a context that names its range */
-  const frameOf = (r, v, sz, tick) => {
+  const frameOf = (r, v, sz, tick, live) => {
     const k = Math.floor((+tick || 0) / 30), C = WikiStage.content(v), fit = WikiStage.fit(C, sz.w, sz.h, sz.u);
     const top = new Proxy(r.g, {
       get(o, key) { r.layer('top'); const x = o[key]; return typeof x === 'function' ? x.bind(o) : x; },
@@ -422,16 +428,17 @@ try {
       bar: k % 2 ? { draw: (g, part, size, b) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
         g.drawImage({ name: 'bar' }, 0, 32 * part, size, 32, b.x, b.y, b.w, b.h); g.imageSmoothingEnabled = sm; } } : null,
       button: BUTTON, top, question: k % 3 === 0 ? WikiFrame.dialog(fit, C.w, C.h) : null, held: ['', 'yes', 'no'][Math.floor(k / 3) % 3],
-      cursor: k % 2 ? null : { x: 0.3 * sz.w + (7 * k) % 50, y: 0.45 * sz.h + (5 * k) % 40 },
+      cursor: k % 2 ? null : { x: 0.3 * sz.w + (7 * k) % 50, y: 0.45 * sz.h + (5 * k) % 40, ...(live ? { shape: SHAPES[k % 4], age: 7 * k } : {}) },
+      live: live ? 1 : 0,
     };
   };
-  const draw = (v, sz, em, asked, image, tick, cursors, L) => {
+  const draw = (v, sz, em, asked, image, tick, cursors, L, live) => {
     const r = recorder(em, asked, sz.w, sz.h);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
     const emblems = !v || !v.frame || Math.floor((+tick || 0) / 30) % 4 < 2;
     r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons: emblems ? icons : plainIcons, cursors, tick,
       cursor: Math.floor((+tick || 0) / 30) % 2 === 0, layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) },
-      frame: v && v.frame ? frameOf(r, v, sz, tick) : undefined });
+      frame: v && v.frame ? frameOf(r, v, sz, tick, live) : undefined });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -454,7 +461,7 @@ try {
 
   /* ---- the measure: every string a dry run asks for, measured by the C side ---- */
   const asked = new Set();
-  for (const sb of SIDEBARS) for (const sz of sb.sizes) for (const f of sb.frames) draw(f.v, sz, null, asked, null, f.tick, null, sb.layout);
+  for (const sb of SIDEBARS) for (const sz of sb.sizes) for (const f of sb.frames) draw(f.v, sz, null, asked, null, f.tick, null, sb.layout, f.live);
   const strings = [...asked].filter(s => s !== '');
   if (strings.some(s => s.includes('\n'))) throw new CannotRun('a measured string holds a line break');
   fs.writeFileSync(path.join(tmp, 'strings.txt'), strings.join('\n') + '\n');
@@ -485,7 +492,7 @@ try {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout), c = shapes(fr, sz, face, part, icons, CELL, kit);
+      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout, f.live), c = shapes(fr, sz, face, part, icons, CELL, kit);
       nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
       if (f.frame) {
         nframe++; nbar += c.filter(sh => sh.k === 'bar').length; nclip += c.filter(sh => sh.clip).length;
@@ -511,7 +518,7 @@ try {
       }
       // R0 and the sidebar, the image, R2: R1's ops kept by the rule, the image after R0, the sidebar and the ground
       for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
-        const r = draw(f.v, sz, em, null, im, f.tick, cur, sb.layout), at = r.out.findIndex(sh => sh.k === 'image');
+        const r = draw(f.v, sz, em, null, im, f.tick, cur, sb.layout, f.live), at = r.out.findIndex(sh => sh.k === 'image');
         if (at < 0 || r.out.filter(sh => sh.k === 'image').length !== 1) { bad = `${im.name}: the image is drawn ${at < 0 ? 'never' : 'twice'}`; break; }
         const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
         bad = !r.tags.slice(0, at).every(under) ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);

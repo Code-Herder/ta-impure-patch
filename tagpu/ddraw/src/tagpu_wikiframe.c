@@ -41,17 +41,43 @@ static int control(const char* k)
     return c >= 0 && c < WIKI_NHUD;
 }
 
+/* a game tick as m:ss into `b`: a bookmark's from 0, the live strip's from the rewind's first
+   GameTime (tagpu_hudinput.c live_clock) */
+static const char* clock_of(char* b, size_t n, int T, int first)
+{
+    const unsigned s = (unsigned)(T > first ? T - first : 0) / TICK;
+    snprintf(b, n, "%u:%02u", s / 60, s % 60);
+    return b;
+}
+
 void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, char* out)
 {
-    unsigned s;
+    char c[16];
     out[0] = 0;
-    if (rv->toast_kind < 0 || rv->tick - rv->toast_at >= WIKIFRAME_TOAST) return;
-    if (rv->toast_kind == WIKI_TOAST_REMOVED) {
-        copy(out, HUD_TOASTLEN, "Bookmark removed");
+    if (rv->toast_kind < 0) return;
+    /* Play from here's arm says what the second click does for as long as the arm holds */
+    if (rv->tick - rv->toast_at >= WIKIFRAME_TOAST && !(rv->toast_kind == WIKI_TOAST_ARMED && rv->live && rv->arm == WIKI_ARM_ARMED))
         return;
+    clock_of(c, sizeof c, rv->toast_value, rv->live ? rv->first : 0);
+    switch (rv->toast_kind) {
+    case WIKI_TOAST_REMOVED: copy(out, HUD_TOASTLEN, "Bookmark removed"); break;
+    case WIKI_TOAST_ADDED: snprintf(out, HUD_TOASTLEN, "Bookmark at %s", clock_of(c, sizeof c, rv->toast_value, 0)); break;
+    case WIKI_TOAST_PLAYING_ON: snprintf(out, HUD_TOASTLEN, "Playing on from %s", c); break;
+    case WIKI_TOAST_CANNOT: snprintf(out, HUD_TOASTLEN, "Cannot play from %s", c); break;
+    case WIKI_TOAST_ARMED:
+        if (rv->toast_evict >= 0) snprintf(out, HUD_TOASTLEN, "Click again to play from %s, replacing F%d", c, rv->toast_evict);
+        else snprintf(out, HUD_TOASTLEN, "Click again to play from %s", c);
+        break;
+    case WIKI_TOAST_PLAYING_FROM: snprintf(out, HUD_TOASTLEN, "Playing from %s", c); break;
+    default: copy(out, HUD_TOASTLEN, "Rewind refused"); break;
     }
-    s = (unsigned)(rv->toast_value > 0 ? rv->toast_value : 0) / TICK;
-    snprintf(out, HUD_TOASTLEN, "Bookmark at %u:%02u", s / 60, s % 60);
+}
+
+/* the tick under a trip's cursor on clock tick `at`: the press's, or along its drag */
+static int trip_tick(const WIKIREPLAYVIEW* rv, int at)
+{
+    if (rv->drag < 0 || rv->over <= 0) return rv->value;
+    return rv->value + (rv->drag - rv->value) * clampi(at - rv->at - WIKI_REPLAY_HUD_DOWN, 0, rv->over) / rv->over;
 }
 
 void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int side, int try_it, const char* try_held,
@@ -98,20 +124,58 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
     tagpu_wikiframe_toast(rv, out->toast);
     out->cur.from_v = out->cur.to_v = -1;
     out->cur.i = out->cur.n = (uint8_t)n;
-    if (try_it) return;
-    out->cur.on = 1;
-    if (rv->has_cursor) {
-        int to_v = rv->value;
-        if (rv->drag >= 0 && rv->over > 0) {
-            const int at = clampi(rv->clock - rv->at - n, 0, rv->over);
-            to_v = rv->value + (rv->drag - rv->value) * at / rv->over;
+    if (rv->live) {
+        out->live = 1;
+        out->rw = (uint8_t)rv->rw;
+        out->arm = (uint8_t)rv->arm;
+        out->first = rv->first;
+        out->G = rv->G;
+        out->now = rv->now;
+        out->last = rv->last;
+        out->arm_R = rv->arm != WIKI_ARM_NONE ? rv->arm_R : 0;
+        if (nseat > 0) {
+            const WIKIECON* z = &gv->econ[0];
+            out->bar.e = rv->be;
+            out->bar.m = rv->bm;
+            out->bar.ei = rv->rates[0];
+            out->bar.eo = rv->rates[1];
+            out->bar.mi = rv->rates[2];
+            out->bar.mo = rv->rates[3];
+            out->bar.emax = (float)z->emax;
+            out->bar.mmax = (float)z->mmax;
+            out->bar.raw_e = (float)z->e;
+            out->bar.raw_m = (float)z->m;
         }
-        copy(out->cur.from, sizeof out->cur.from, rv->from >= 0 ? tagpu_wikiframe_key(rv->from) : "");
+        if (gv) {
+            out->sim.x = (float)gv->cursor_x;
+            out->sim.z = (float)gv->cursor_z;
+            out->sim.shape = (uint8_t)(gv->cursor_shape >= 0 && gv->cursor_shape < WIKI_CURSOR_N ? gv->cursor_shape : 0);
+            out->sim.age = rv->now - gv->cursor_since;
+        }
+    }
+    /* THE ONE CURSOR (frame.js record): in Try it the simulation's is the player's pointer over the
+       world once a fork is played, never in the past */
+    if (try_it) {
+        out->simcur = (uint8_t)(rv->live && rv->selected != 0 && rv->rw != WIKI_RW_PAST);
+        return;
+    }
+    if (rv->live && rv->has_cursor && rv->back >= rv->at) {
+        /* the return glide: this trip's release left the rewind idle */
+        copy(out->cur.from, sizeof out->cur.from, tagpu_wikiframe_key(rv->to));
+        out->cur.from_v = rv->to == WIKI_HUD_TRACK ? trip_tick(rv, rv->back) : -1;
+        copy(out->cur.to, sizeof out->cur.to, WIKIFRAME_AT_GAME);
+        out->cur.i = (uint8_t)clampi(rv->clock - rv->back, 0, n);
+        out->simcur = (uint8_t)(rv->rw == WIKI_RW_IDLE && rv->clock - rv->back >= n);
+    } else if (rv->has_cursor) {
+        copy(out->cur.from, sizeof out->cur.from, rv->from == WIKI_REPLAY_AT_GAME ? WIKIFRAME_AT_GAME
+                                                  : rv->from >= 0 ? tagpu_wikiframe_key(rv->from) : "");
         out->cur.from_v = rv->from >= 0 ? rv->from_value : -1;
         copy(out->cur.to, sizeof out->cur.to, tagpu_wikiframe_key(rv->to));
-        out->cur.to_v = to_v;
+        out->cur.to_v = trip_tick(rv, rv->clock);
         out->cur.i = (uint8_t)clampi(rv->clock - rv->at, 0, n);
-    }
+    } else
+        out->simcur = (uint8_t)(rv->live && rv->rw == WIKI_RW_IDLE);
+    out->cur.on = (uint8_t)!out->simcur;
 }
 
 /* a float held finite and within the economy's bound */
@@ -121,13 +185,20 @@ static float econ(float v)
     return v < -WIKI_ECON_MAX ? (float)-WIKI_ECON_MAX : v;
 }
 
-/* a key terminated in its array and among the replay's controls, else "" */
-static int key_ok(char* k)
+/* a key terminated in its array and among the replay's controls, else ""; with `game`, seat 0's
+   cursor's key too */
+static int key_ok(char* k, int game)
 {
     k[HUD_KEYLEN - 1] = 0;
-    if (!k[0] || control(k)) return 1;
+    if (!k[0] || control(k) || (game && !strcmp(k, WIKIFRAME_AT_GAME))) return 1;
     k[0] = 0;
     return 0;
+}
+
+/* a float held finite and within [lo, hi]; NaN takes lo */
+static float within(float v, float lo, float hi)
+{
+    return !(v == v) ? lo : v < lo ? lo : v > hi ? hi : v;
 }
 
 void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
@@ -163,13 +234,35 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
         z->m = econ(z->m); z->mmax = econ(z->mmax); z->mi = econ(z->mi); z->mo = econ(z->mo);
         z->e = econ(z->e); z->emax = econ(z->emax); z->ei = econ(z->ei); z->eo = econ(z->eo);
     }
-    key_ok(f->held);
+    key_ok(f->held, 0);
     f->toast[sizeof f->toast - 1] = 0;
     f->cur.on = (uint8_t)(f->cur.on != 0);
+    f->live = (uint8_t)(f->live != 0);
     /* both keys bounded before either is judged: a short-circuit would leave `to` unterminated */
-    ok = key_ok(f->cur.from);
-    ok &= key_ok(f->cur.to);
+    ok = key_ok(f->cur.from, f->live);
+    ok &= key_ok(f->cur.to, f->live);
     if (!ok || f->cur.n < 1 || f->cur.n > 64 || f->cur.i > f->cur.n) f->cur.on = 0;
+    /* LIVE: the flags and enums, the ticks, the bar's numbers and seat 0's cursor */
+    f->simcur = (uint8_t)(f->live && f->simcur != 0);
+    if (f->rw > WIKI_RW_PAST) f->rw = WIKI_RW_IDLE;
+    if (f->arm > WIKI_ARM_ARMED) f->arm = WIKI_ARM_NONE;
+    f->first = clampi(f->first, 0, WIKI_GAME_END_MAX);
+    f->G = clampi(f->G, 0, WIKI_GAME_END_MAX);
+    f->now = clampi(f->now, 0, WIKI_GAME_END_MAX);
+    f->last = clampi(f->last, 0, WIKI_GAME_END_MAX);
+    f->arm_R = clampi(f->arm_R, 0, WIKI_GAME_END_MAX);
+    f->bar.e = econ(f->bar.e); f->bar.m = econ(f->bar.m);
+    f->bar.ei = econ(f->bar.ei); f->bar.eo = econ(f->bar.eo); f->bar.mi = econ(f->bar.mi); f->bar.mo = econ(f->bar.mo);
+    f->bar.emax = econ(f->bar.emax); f->bar.mmax = econ(f->bar.mmax);
+    f->bar.raw_e = econ(f->bar.raw_e); f->bar.raw_m = econ(f->bar.raw_m);
+    /* the cursor's point within the largest frame: a map of WIKISTAGE_MAP cells beside the tallest column */
+    f->sim.x = within(f->sim.x, -WIKIFRAME_SIDE_W, WIKISTAGE_MAP * WIKI_CELL);
+    f->sim.z = within(f->sim.z, -WIKIFRAME_BAR, WIKISTAGE_MAP * WIKI_CELL > WIKI_SIDE_ROWS ? WIKISTAGE_MAP * WIKI_CELL : WIKI_SIDE_ROWS);
+    if (f->sim.age < 0) f->sim.age = 0;
+    if (f->sim.shape >= WIKI_CURSOR_N) {
+        f->sim.shape = WIKI_CURSOR_ARROW;
+        f->simcur = 0;
+    }
 }
 
 int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* out)
@@ -196,23 +289,31 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
     return 1;
 }
 
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src)
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor)
 {
     int i;
     v->frame = 1;
-    memset(v->fog, 0, sizeof v->fog);
-    v->has_ghost = 0;
-    v->nsite = v->nqueued = v->nline = 0;
-    v->shape = PLACE_NONE;
-    v->spacing = -1;
-    v->has_drag = 0;
-    v->rmode = 0;
-    memset(&v->sweep, 0, sizeof v->sweep);
-    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) v->unit[i].selected = 0;
-    memset(v->held, 0, sizeof v->held);
     v->cursor_shape = WIKI_CURSOR_N;
-    v->has_side = (uint8_t)tagpu_wikiframe_idle_side(lay, side, &v->side);
-    v->layout_src = (uint8_t)(v->has_side && layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
+    if (mode == WIKIFRAME_PLAYER) {
+        if (!cursor) v->has_ghost = 0;
+    } else {
+        if (mode != WIKIFRAME_PAST) memset(v->fog, 0, sizeof v->fog);
+        v->has_ghost = 0;
+        v->nsite = v->nqueued = v->nline = 0;
+        v->shape = PLACE_NONE;
+        v->spacing = -1;
+        v->has_drag = 0;
+        v->rmode = 0;
+        memset(&v->sweep, 0, sizeof v->sweep);
+        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) v->unit[i].selected = 0;
+        memset(v->held, 0, sizeof v->held);
+        if (mode != WIKIFRAME_PAST) v->has_side = 0;
+        v->side.under = -1;
+    }
+    if (!v->has_side) {
+        v->has_side = (uint8_t)tagpu_wikiframe_idle_side(lay, side, &v->side);
+        v->layout_src = (uint8_t)(v->has_side && layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
+    }
 }
 
 uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k)
@@ -274,6 +375,18 @@ void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, c
     st->ends = st->len = st->fill_to = (float)T;
     st->fork_max = HUD_MAXFORK;
     st->timeline = st->replace = st->armed = -1;
+    if (f->live) {
+        /* the live HUD as tagpu_hudstate.c present_live sets it: the strip from the rewind's first
+           GameTime to G, the playhead at the GameTime shown within it, never playing */
+        const int G = f->G > f->first ? f->G : f->first;
+        st->live = 1;
+        st->live_open = st->rw_down = f->rw != WIKI_RW_IDLE;
+        st->rw_arm = f->arm;
+        st->T = (float)((G - f->first) / (double)TICK);
+        st->t = (float)((clampi(f->now, f->first, G) - f->first) / (double)TICK);
+        st->ends = st->len = st->fill_to = st->T;
+        st->playing = 0;
+    }
 }
 
 static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
@@ -345,20 +458,60 @@ static void resolve(const WIKIFRAMEREC* f, const HUDOPS* o, float px, double end
         return;
     }
     {
+        /* the run: the game's [0, end], live the strip's [first, G] */
+        const int a0 = f->live ? f->first : 0, a1 = f->live ? (f->G > f->first ? f->G : f->first) : f->end;
         const double x0 = (double)b->r.x + ends, x1 = (double)b->r.x + b->r.w - ends;
-        const int t = clampi(v, 0, f->end);
-        *x = x0 + (x1 - x0) * t / (f->end > 1 ? f->end : 1);
+        const int t = clampi(v, a0, a1) - a0;
+        *x = x0 + (x1 - x0) * t / (a1 - a0 > 1 ? a1 - a0 : 1);
     }
 }
 
+void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, double fx, double fy, float px, double* x,
+                                double* y)
+{
+    *x = *y = NAN;
+    if (!f->live) return;
+    *x = (fit->ox + f->sim.x * fit->s - fx) / px;
+    *y = (fit->oz + f->sim.z * fit->s - fy) / px;
+}
+
+int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out)
+{
+    *out = *f;
+    if (!f->live || strcmp(f->cur.to, WIKIFRAME_AT_GAME)) return 0;
+    out->rw = WIKI_RW_PAST;
+    out->now = f->first;
+    out->arm = WIKI_ARM_NONE;
+    return 1;
+}
+
+/* a key's point: @game at seat 0's cursor (`gx`, `gy`; NaN: the rest point), any other by resolve */
+static void resolve_key(const WIKIFRAMEREC* f, const HUDOPS* o, float px, double ends, const char* k, int v, double rx,
+                        double ry, double nx, double ny, double gx, double gy, double* x, double* y)
+{
+    if (!strcmp(k, WIKIFRAME_AT_GAME)) {
+        const int ok = gx == gx && gy == gy;
+        *x = ok ? gx : rx;
+        *y = ok ? gy : ry;
+        return;
+    }
+    resolve(f, o, px, ends, k, v, rx, ry, nx, ny, x, y);
+}
+
 void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* ops, float px, double ends, double rest_x, double rest_y,
-                           double no_x, double no_y, double* x, double* y)
+                           double no_x, double no_y, double game_x, double game_y, double* x, double* y)
 {
     double ax, ay, bx, by;
-    resolve(f, ops, px, ends, f->cur.from, f->cur.from_v, rest_x, rest_y, no_x, no_y, &ax, &ay);
-    resolve(f, ops, px, ends, f->cur.to, f->cur.to_v, rest_x, rest_y, no_x, no_y, &bx, &by);
+    resolve_key(f, ops, px, ends, f->cur.from, f->cur.from_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &ax, &ay);
+    resolve_key(f, ops, px, ends, f->cur.to, f->cur.to_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &bx, &by);
     *x = tagpu_wikiframe_glide(ax, bx, f->cur.i, f->cur.n);
     *y = tagpu_wikiframe_glide(ay, by, f->cur.i, f->cur.n);
+}
+
+int tagpu_wikiframe_on_world(double x, double z, int Hg, int mw, int mh)
+{
+    return (x >= -WIKIFRAME_SIDE_W && x < 0 && z >= -WIKIFRAME_BAR && z < Hg - WIKIFRAME_BAR) ||
+           (x >= 0 && x < mw && z >= 0 && z < mh);
 }
 
 void tagpu_wikiframe_press_init(WIKIFRAMEPRESS* m)

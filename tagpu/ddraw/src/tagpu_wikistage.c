@@ -88,10 +88,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->nfeat = out->ngone = 0;
     out->rmode = 0;
     out->frame = 0;
-    out->has_side = 0;
-    out->layout_src = WIKISTAGE_LAYOUT_NONE;
-    memset(&out->side, 0, sizeof out->side);
-    out->side.index = -1;
+    tagpu_wikistage_side(out, NULL, layout_src);
     out->locked = -1;
     if (!v || v->w <= 0 || v->h <= 0) return 0;
 
@@ -233,26 +230,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     if (cut(out->caption, sizeof out->caption, v->caption)) t |= WIKISTAGE_TRUNC_CAPTION;
     out->pace = v->pace;
     out->mode = (int16_t)(v->mode >= 0 && v->mode < WIKI_MAX_DEFS ? v->mode : -1);
-    /* the sidebar: its states to their array, the unit under the cursor found by id among the
-       units copied (sim.js's ids are unique; the first wins, as side.js's find), -1 when it is
-       none of them */
-    if (v->has_side) {
-        const WIKIVSIDE* sd = &v->side;
-        out->has_side = 1;
-        out->layout_src = (uint8_t)(layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
-        out->side.h = (int16_t)(sd->h > 0 && sd->h <= WIKI_SIDE_ROWS ? sd->h : 0);
-        out->side.index = (int8_t)(sd->index >= 0 && sd->index < WIKI_SIDE_SIDES ? sd->index : -1);
-        out->side.screen = (int16_t)(sd->screen >= 0 && sd->screen < WIKI_SIDE_SCREENS ? sd->screen : -1);
-        n = sd->nstate > 0 ? sd->nstate < WIKI_SIDE_GADGETS ? sd->nstate : WIKI_SIDE_GADGETS : 0;
-        for (i = 0; i < n; i++) out->side.state[i] = (int8_t)(sd->state[i] >= -1 && sd->state[i] <= 2 ? sd->state[i] : -1);
-        out->side.nstate = (int16_t)n;
-        out->side.under = -1;
-        for (i = 0; sd->under[0] && i < out->nunit; i++)
-            if (v->unit[i].id && !strcmp(v->unit[i].id, sd->under)) {
-                out->side.under = (int16_t)i;
-                break;
-            }
-    }
+    tagpu_wikistage_side(out, v, layout_src);
     /* A LOCK REACHES THE PAGE WITH THE SIDEBAR OFF TOO: a scene unit or a build of a cast the
        casting leaves unbound stops a demo that has no sidebar, and the page's badge says so */
     out->locked = (int16_t)(v->locked >= 0 && v->locked < WIKI_MAX_DEFS ? v->locked : v->locked == WIKI_LOCK_RECLAIM ? WIKI_LOCK_RECLAIM : -1);
@@ -262,6 +240,34 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->ntype = (int16_t)n;
     out->trunc = t;
     return t;
+}
+
+void tagpu_wikistage_side(WIKISTAGEVIEW* out, const WIKIVIEW* v, int layout_src)
+{
+    int i, n;
+    out->has_side = 0;
+    out->layout_src = WIKISTAGE_LAYOUT_NONE;
+    memset(&out->side, 0, sizeof out->side);
+    out->side.index = -1;
+    out->side.under = -1;
+    if (!v || !v->has_side) return;
+    {
+        const WIKIVSIDE* sd = &v->side;
+        out->has_side = 1;
+        out->layout_src = (uint8_t)(layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
+        out->side.h = (int16_t)(sd->h > 0 && sd->h <= WIKI_SIDE_ROWS ? sd->h : 0);
+        out->side.index = (int8_t)(sd->index >= 0 && sd->index < WIKI_SIDE_SIDES ? sd->index : -1);
+        out->side.screen = (int16_t)(sd->screen >= 0 && sd->screen < WIKI_SIDE_SCREENS ? sd->screen : -1);
+        n = sd->nstate > 0 ? sd->nstate < WIKI_SIDE_GADGETS ? sd->nstate : WIKI_SIDE_GADGETS : 0;
+        for (i = 0; i < n; i++) out->side.state[i] = (int8_t)(sd->state[i] >= -1 && sd->state[i] <= 2 ? sd->state[i] : -1);
+        out->side.nstate = (int16_t)n;
+        /* both counts bound the walk: `out` may hold another simulation's units than `v` */
+        for (i = 0; sd->under[0] && i < out->nunit && i < v->nunit; i++)
+            if (v->unit[i].id && !strcmp(v->unit[i].id, sd->under)) {
+                out->side.under = (int16_t)i;
+                break;
+            }
+    }
 }
 
 /* ---- the canvas and the fit ------------------------------------------------------------------ */
@@ -925,8 +931,9 @@ void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int
 /* the parts under the world: the screen's black, the column from frame row 0 (dz -32), the top
    bar at frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32 -- the composed
    picture's part 0 and 1 drawn whole and nearest (HOP_BAR), or two whitebox strips without one --
-   then Impure's emblems in the top bar's right end: the wiki emblem in the rewind button's slot (a
-   replay has no rewind) and the sprocket, up and inert, at layout.json's `button` place */
+   then Impure's emblems in the top bar's right end at layout.json's `button` place: the wiki
+   emblem at the right inset `fr` gives (a replay's in the rewind button's slot, a live frame's left
+   of the rewind button, which the stage HUD draws) and the sprocket, up and inert */
 static void frame_parts(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, const WIKISTAGEFRAME* fr,
                         const WIKISTAGEFIT* f, double top)
 {
@@ -977,8 +984,9 @@ static void say(B* c, const char* t, const WIKIFRAMEBOX* b, uint32_t col)
 
 /* THE TOP RANGE, over the stage HUD: Leave's question while it is open, a whitebox at YESORNO.GUI's
    own rects (tagpu_wikiframe_dialog) -- the panel with an edge, the title centred, Yes and No, the
-   one held down pressed -- and then the viewer's cursor, the game's arrow at the player's cursor
-   scale. The cursor's op, or -1. */
+   one held down pressed -- and then the cursor at the player's cursor scale: the viewer's arrow,
+   or a live frame's simulation's cursor, its shape `cursor_age` ticks into its animation. The
+   cursor's op, or -1. */
 static int frame_top(B* c, const WIKISTAGEART* art, const WIKISTAGEFRAME* fr, const WIKISTAGEFIT* f)
 {
     mark(c, WIKISTAGE_IN_TOP, 0);
@@ -995,7 +1003,8 @@ static int frame_top(B* c, const WIKISTAGEART* art, const WIKISTAGEFRAME* fr, co
         say(c, "No", &d.no, HEX(SIDE_LABEL));
     }
     if (!(fr->cursor_x == fr->cursor_x) || !(fr->cursor_y == fr->cursor_y)) return -1;
-    return cursor_at(c, art, fr->cursor_x, fr->cursor_y, WIKI_CURSOR_ARROW, 0);
+    return cursor_at(c, art, fr->cursor_x, fr->cursor_y, fr->cursor_shape < WIKI_CURSOR_N ? fr->cursor_shape : WIKI_CURSOR_ARROW,
+                     fr->cursor_age);
 }
 
 /* stage.js `readout`: a line on a dark plate at the stage's bottom, right or left */

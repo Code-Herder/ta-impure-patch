@@ -32,7 +32,10 @@
    parts WIKI and CONFIG when k % 4 < 2 and whitebox buttons otherwise, at layout.json's `button`
    SIDE, TOP, RIGHT (its right[1]) and CFG, Leave's question when k % 3 is 0 with its answer held
    as (k / 3) % 3 (none, Yes, No), and the viewer's cursor when k is even at the canvas point
-   (0.3 W + (7 k) % 50, 0.45 H + (5 k) % 40): stagecheck.mjs draws the same.
+   (0.3 W + (7 k) % 50, 0.45 H + (5 k) % 40): stagecheck.mjs draws the same. A live entry's frame
+   is the player's: the view filtered in mode k % 3 (WIKIFRAME_WATCH, _PLAYER, _PAST) with the
+   ghost kept when k is even, the emblem at layout.json's right[0] (the argument after CFG), and
+   the cursor the simulation's, shape k % 4 and age 7 k.
 
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -217,7 +220,7 @@ static WIKISIDE* side_art(const WIKILAYOUT* lay)
 }
 
 /* the frame's presentation for frame k (the header's rule), on a canvas W x H device pixels */
-static void frame_of(int k, double W, double H, const int16_t* btn, WIKISTAGEART* art, const int16_t* emblem,
+static void frame_of(int k, int live, double W, double H, const int16_t* btn, WIKISTAGEART* art, const int16_t* emblem,
                      const WIKISTAGEVIEW* v, WIKISTAGEFRAME* fr)
 {
     int Wg, Hg;
@@ -226,7 +229,7 @@ static void frame_of(int k, double W, double H, const int16_t* btn, WIKISTAGEART
     fr->bar_w = (int16_t)(k % 2 ? Wg - WIKIFRAME_SIDE_W : 0);
     fr->btn_side = btn[0];
     fr->btn_top = btn[1];
-    fr->btn_right = btn[2];
+    fr->btn_right = btn[live ? 4 : 2];
     fr->btn_config = btn[3];
     art->emblem[0] = k % 4 < 2 ? emblem[0] : -1;
     art->emblem[1] = k % 4 < 2 ? emblem[1] : -1;
@@ -234,6 +237,8 @@ static void frame_of(int k, double W, double H, const int16_t* btn, WIKISTAGEART
     fr->held = (uint8_t)((k / 3) % 3);
     fr->cursor_x = k % 2 ? NAN : 0.3 * W + (7 * k) % 50;
     fr->cursor_y = k % 2 ? NAN : 0.45 * H + (5 * k) % 40;
+    fr->cursor_shape = (uint8_t)(live ? k % WIKI_CURSOR_N : WIKI_CURSOR_ARROW);
+    fr->cursor_age = live ? 7 * k : 0;
 }
 
 static int ops(char** a, const char* cob)
@@ -250,7 +255,7 @@ static int ops(char** a, const char* cob)
     FACE f;
     HUDRECT r;
     double u;
-    int16_t emblem[2], btn[4];
+    int16_t emblem[2], btn[5];
     int i, j, k;
     if (!pak) { fprintf(stderr, "wikistagetest: cannot read %s\n", a[0]); return 2; }
     if (cob && !cob_load(cob)) return 2;
@@ -281,7 +286,7 @@ static int ops(char** a, const char* cob)
     u = atof(a[23]);
     emblem[0] = (int16_t)atoi(a[24]);
     emblem[1] = (int16_t)atoi(a[25]);
-    for (k = 0; k < 4; k++) btn[k] = (int16_t)atoi(a[26 + k]);
+    for (k = 0; k < 5; k++) btn[k] = (int16_t)atoi(a[26 + k]);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
@@ -306,10 +311,12 @@ static int ops(char** a, const char* cob)
                     if (e->frame == WIKI_FRAME_GAME) {
                         double cx, cy, cw, ch;
                         WIKISTAGEFRAME fr;
+                        const int kf = s.tick / 30;
                         vf = v;
-                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD);
+                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD,
+                                             e->live ? kf % 3 : WIKIFRAME_WATCH, kf % 2 == 0);
                         tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
-                        frame_of(s.tick / 30, cw, ch, btn, &art, emblem, &vf, &fr);
+                        frame_of(kf, e->live, cw, ch, btn, &art, emblem, &vf, &fr);
                         tagpu_wikistage_build(&vf, NULL, r, u, 1, &fr, &art, &o);
                         frame(&o, &vf, e->id, e->demo[j].id, s.tick, r, u);
                     }
@@ -345,7 +352,7 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if ((argc == 32 || argc == 33) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 33 ? argv[32] : NULL);
+    if ((argc == 33 || argc == 34) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 34 ? argv[33] : NULL);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
                     "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD RECLAIM AW AH MW MH BW BH RW RH SPRITES"
                     " LAYOUT X Y W H U WIKI CONFIG SIDE TOP RIGHT CFG [COB]\n");

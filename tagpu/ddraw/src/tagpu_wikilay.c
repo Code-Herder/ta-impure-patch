@@ -1463,11 +1463,11 @@ void tagpu_wikilay_free(WIKILAY* l)
 
 const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l) { return l->kit; }
 
-void tagpu_wikilay_button(const WIKILAY* l, double* side, double* top, double* right, double* config)
+void tagpu_wikilay_button(const WIKILAY* l, int rewind, double* side, double* top, double* right, double* config)
 {
     *side = l->g.btn_side;
     *top = l->g.btn_top;
-    *right = l->g.btn_right[1];
+    *right = l->g.btn_right[rewind ? 0 : 1];
     *config = l->g.btn_config;
 }
 

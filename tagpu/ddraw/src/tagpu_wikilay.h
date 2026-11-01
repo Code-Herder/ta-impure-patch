@@ -138,9 +138,11 @@ void          tagpu_wikilay_free(WIKILAY* l);
 const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l);
 
 /* art/wiki/layout.json's `button`, in the top bar's own pixels: the wiki button's square side, its
-   top, its right inset in the rewind button's slot (`right[1]`) and the Config sprocket's -- where
-   a frame:game stage draws Impure's emblems in its frame's top bar (WIKISTAGEFRAME). */
-void tagpu_wikilay_button(const WIKILAY* l, double* side, double* top, double* right, double* config);
+   top, its right inset and the Config sprocket's -- where a frame:game stage draws Impure's emblems
+   in its frame's top bar (WIKISTAGEFRAME). The right inset is the game's own top bar's rule (the
+   page's button, `rewind` below): with `rewind` set, left of the rewind button (`right[0]`), a live
+   frame's; else in the rewind button's slot (`right[1]`), a replay's. */
+void tagpu_wikilay_button(const WIKILAY* l, int rewind, double* side, double* top, double* right, double* config);
 
 /* THE FACE LIGHTNESS RULE (wiki.js faceLight): a part's face is light when its middle, inside its
    slices, scaled to 8 x 8 and its opaque pixels (alpha above 128) averaged at 0.3 R + 0.59 G +

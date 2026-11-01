@@ -17,6 +17,11 @@
    tagpu_wikiframe_bound before anything reads it: every value in it is DATA until then. Every
    other function here reads only a bounded record and immutable art.
 
+   LIVE, a live entry's replay (frame.js's header states it): the player's own screen, the live HUD
+   and the top bar's eased numbers, and THE ONE CURSOR -- the simulation's own while the rewind is
+   idle and the viewer's hand is free, `@game` the point a trip starts from and a return glide ends
+   at.
+
    PURE. No global, no engine address, no allocation; pure C99 and the C library, so framecheck.mjs
    compiles it natively. The DLL computes it on SSE2 (Makefile, THE WIKI'S FRAME), so its doubles
    are frame.js's. */
@@ -58,6 +63,19 @@ typedef struct {
     int32_t from_v, to_v;
     uint8_t on, i, n, pad;
 } WIKIFRAMECUR;
+/* a glide's point at seat 0's cursor in the game (WIKI_REPLAY_AT_GAME), as a cursor key */
+#define WIKIFRAME_AT_GAME "@game"
+/* THE TOP BAR'S NUMBERS (bar.js compose's `num`): live, the replay's memo -- the eased stored energy
+   and metal and the rates last sampled (tagpu_wikireplay.h) -- with the shown seat 0's storages
+   and stored values; Watching's are 0, the viewer's zeroed record (decision 13) */
+typedef struct { float e, m, ei, eo, mi, mo, emax, mmax, raw_e, raw_m; } WIKIFRAMEBAR;
+/* SEAT 0'S CURSOR in the shown world: its world point, its shape (WIKI_CURSOR_*) and the ticks
+   since that shape began, which its animation runs from */
+typedef struct {
+    float   x, z;
+    int32_t age;
+    uint8_t shape, pad[3];
+} WIKIFRAMESIM;
 typedef struct {
     uint8_t       on;                       /* a frame:game entry's replay is on the stage               */
     uint8_t       playing;                  /* the game is not paused and not at its end                 */
@@ -74,6 +92,14 @@ typedef struct {
     char          held[HUD_KEYLEN];         /* the HUD control held down; "" none                        */
     char          toast[HUD_TOASTLEN];      /* "" none                                                   */
     WIKIFRAMECUR  cur;
+    /* LIVE (`live` 0 leaves the rest 0): the rewind's WIKI_RW_* and Play from here's WIKI_ARM_*; the
+       drawn cursor is the simulation's (`simcur`, then cur.on is 0); the span's first GameTime, the
+       GameTime the rewind opened at, the GameTime shown, the span's last and the arm's start (0
+       while unarmed), game ticks */
+    uint8_t       live, rw, arm, simcur;
+    int32_t       first, G, now, last, arm_R;
+    WIKIFRAMEBAR  bar;
+    WIKIFRAMESIM  sim;
 } WIKIFRAMEREC;
 
 /* The replay HUD's control `c` (WIKI_HUD_*, leave:yes included) by the key the HUD's hit map and
@@ -102,7 +128,10 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
    WIKI_SEATS (the whitebox table), else 0xFF (grey); every float finite and within WIKI_ECON_MAX;
    every string terminated in its array; the held key and the cursor's keys among the replay's
    controls (a held key that is not becomes "", a cursor key that is not turns the cursor off), and
-   the cursor's n in 1..64 with i <= n, else the cursor off. */
+   the cursor's n in 1..64 with i <= n, else the cursor off. Live: the flags to 0/1, rw and arm to
+   their enums, else idle and none; first, G, now, last and arm_R to 0..WIKI_GAME_END_MAX; every bar
+   float finite and within WIKI_ECON_MAX; the cursor's point finite and within the frame's largest
+   map and column, its shape a WIKI_CURSOR_* and its age 0 or more, else simcur off. */
 void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo);
 
 /* ---- the watcher's view ------------------------------------------------------------------------ */
@@ -114,14 +143,24 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo);
    against a fresh simulation's MAIN2. 1 into `out`, or 0 when the layout has no such side. */
 int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* out);
 
-/* THE WATCHER'S VIEW, in place, of a copy (tagpu_wikistage_copy) of the replay's game view: the frame
-   flag set, the fog all clear (the full-map reveal sets the watcher's sight and explored bit in
-   every cell, tagpu_replay.c), seat 0's cursor, ghost, sites, queued sites, lines, drag, sweep, held
-   keys and every selection gone (the viewer is not seat 0), and the column the idle MAIN2 of `side`
-   in `lay`, which `layout_src` (WIKISTAGE_LAYOUT_*) names to the render thread, whatever the game
-   script's sidebar says: that key governs seat 0's recorded inputs, and the frame is the watcher's
-   screen. No column when the layout has no such side. */
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src);
+/* THE FRAME'S VIEW, in place, of a copy (tagpu_wikistage_copy) of the replay's game view, by `mode`
+   (frame.js view states each):
+   WIKIFRAME_WATCH, the watcher's: the frame flag set, the fog all clear (the full-map reveal sets
+   the watcher's sight and explored bit in every cell, tagpu_replay.c), seat 0's cursor, ghost,
+   sites, queued sites, lines, drag, sweep, held keys and every selection gone (the viewer is not
+   seat 0), and the column the idle MAIN2 of `side` in `lay`, which `layout_src` (WIKISTAGE_LAYOUT_*)
+   names to the render thread, whatever the game script's sidebar says: that key governs seat 0's
+   recorded inputs, and the frame is the watcher's screen.
+   WIKIFRAME_PLAYER, the live rewind idle or open: the view as the simulation made it (MEASURED, M0
+   #1), the ghost only with `cursor` (the simulation's cursor is the one drawn).
+   WIKIFRAME_PAST, the live rewind's past: the past simulation's world and fog under the column the
+   copy carries, which the caller has copied from the live simulation's view (tagpu_wikistage_side)
+   with no unit under it; nothing selected, no ghost, sites, queued sites, cursor, lines, drag, sweep
+   or keys (MEASURED, M0 #2).
+   No frame view keeps a cursor of its own. A live view without a column takes the idle MAIN2 of
+   `side`; none at all when the layout has no such side. */
+enum { WIKIFRAME_WATCH, WIKIFRAME_PLAYER, WIKIFRAME_PAST };
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor);
 
 /* ---- the stage HUD ---------------------------------------------------------------------------- */
 
@@ -134,7 +173,7 @@ uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k);
    hud.js's state() as frame.js hudState makes it: a screen of the frame's own size at 100 % (Q3),
    the engine frame the column and both bars, every switch on and nothing folded as a fresh Watch,
    each seat a team of one, no sight, no follow, no forks, no pointer (mx, my -1), the record's held
-   control and toast. `sd` the published sidebar art for the seats' colours, or NULL.
+   control and toast; a live record the live HUD as tagpu_hudstate.c present_live sets it. `sd` the published sidebar art for the seats' colours, or NULL.
    THE CHART: the stats window stays closed, so no build of this state emits HOP_CHART. That is what
    keeps the HUD pass's one chart image the replay HUD's; the stage must have its own before it
    opens the window (P). fork_max is HUD_MAXFORK until the recorder's constant reaches here through
@@ -154,15 +193,36 @@ void tagpu_wikiframe_dialog(const WIKISTAGEFIT* fit, int Wg, int Hg, WIKIFRAMEDL
    its truncation, since it is a position on the screen and not simulation state. */
 double tagpu_wikiframe_glide(double a, double b, int i, int n);
 
+/* SEAT 0'S CURSOR in HUD units for a bounded record in the frame fitted as `fit`, its corner at the
+   canvas point (fx, fy) and `px` device pixels a unit (frame.js gamePoint); NaN for a record that
+   is not live. */
+void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, double fx, double fy, float px, double* x,
+                                double* y);
+
+/* THE HUD THE TRIP PRESSED (frame.js pressed), the record whose HUD the cursor's point is resolved
+   among: for a return glide, which leaves a control of the strip its press closed, `f` with the
+   strip open over the past, fwd live (`now` at the strip's first) and nothing armed, the HUD as
+   drawn at that press -- its controls lie where they lie whatever the playhead or the arm; for any
+   other record `f` itself. Its boxes only: the HUD drawn is `f`'s own. 1 when `out` differs from
+   `f`, a return glide's. */
+int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out);
+
 /* THE CURSOR'S POINT, in HUD units, for a bounded record: each key at its control's HOP_HOT box
    centre on the device pixels the box is drawn on, ((snap(x0 px) + snap(x1 px)) / 2) / px, the last
    box of that key; the track at its tick along the playhead's run -- the track box inset by `ends`
-   (layout.json's dock.rail.track.ends, HUDGLOBALS.track_ends) at each end -- at the box's centre y;
-   leave:no at the question's No (`no_x`, `no_y` in units; NaN when the question is not drawn: the
-   rest point); "" and a key no box holds at the rest point. Then the glide from one to the other.
-   framecheck claims no demo names a key that does not resolve. */
+   (layout.json's dock.rail.track.ends, HUDGLOBALS.track_ends) at each end, the run the game's
+   [0, end] or live the strip's [first, G] -- at the box's centre y; leave:no at the question's No
+   (`no_x`, `no_y` in units; NaN when the question is not drawn: the rest point); @game at seat 0's
+   cursor (`game_x`, `game_y`, tagpu_wikiframe_game_point; NaN: the rest point); "" and a key no box
+   holds at the rest point. Then the glide from one to the other. `ops` is the HUD of
+   tagpu_wikiframe_pressed's record. framecheck claims no demo names a key that does not resolve. */
 void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* ops, float px, double ends, double rest_x, double rest_y,
-                           double no_x, double no_y, double* x, double* y);
+                           double no_x, double no_y, double game_x, double game_y, double* x, double* y);
+
+/* A FRAME POINT OF THE WORLD (frame.js onWorld), world units: on the column, x in [-128, 0) and z in
+   [-32, Hg - 32), or on the map, x in [0, mw) and z in [0, mh); a bar, or the viewport below a map
+   shorter than the column, is none. */
+int tagpu_wikiframe_on_world(double x, double z, int Hg, int mw, int mh);
 
 /* ---- Try it yourself's presses ----------------------------------------------------------------- */
 

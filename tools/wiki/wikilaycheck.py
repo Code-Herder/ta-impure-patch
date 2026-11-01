@@ -95,6 +95,15 @@ CASES = [
      {"drawer": True, "scroll": {"tree": "half"}}),
     ("4k-stock-watching-try-held", (3840, 2160), "mod=stock&entry=watching&demo=2", {"held": "c-try", "speed": 2}),
     ("3440-mayhem-watching-question", (3440, 1440), "mod=mayhem&entry=watching&demo=7", {"question": True}),
+    # a live entry, Rewind a skirmish: the live HUD on the stage and the wiki's emblem at the live place (right[0]);
+    # the simulation's own cursor idle, the strip open, the glide back to seat 0's cursor from Back to now (laid out
+    # on the HUD it was pressed on), the past, Play from here armed, and a fork played on
+    ("1080-stock-rewind-idle", (1920, 1080), "mod=stock&entry=rewind", {"tick": 200}),
+    ("3440-stock-rewind-open", (3440, 1440), "mod=stock&entry=rewind", {"tick": 400}),
+    ("1440-esc-rewind-glide", (2560, 1440), "mod=escalation&entry=rewind", {"tick": 485}),
+    ("1024-stock-rewind-past", (1024, 768), "mod=stock&entry=rewind&demo=2", {"tick": 800}),
+    ("4k-tazero-rewind-armed", (3840, 2160), "mod=tazero&entry=rewind&demo=3", {"tick": 1250}),
+    ("1080-stock-rewind-fork", (1920, 1080), "mod=stock&entry=rewind&demo=4", {"tick": 1290}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -235,9 +244,10 @@ COLLECT = r"""async () => {
     // it at a fraction, which the game's grid does not have
     const sr = $('#stage').getBoundingClientRect(), snap = v => Math.floor(v + 0.5 + 1 / 64);
     const cx = snap(sr.left - f.left), cy = snap(sr.top - f.top);
-    const gm = rp.game.view().map, sd = WikiFrame.idleSide(WikiPage.layout(), (WikiPage.context() || {}).side || 0);
+    // the column the frame shows: the watcher's idle MAIN2, or a live frame's seat 0's (frame.js view)
+    const gm = rp.game.view().map;
     const at = b => [cx + b.x, cy + b.y, b.w, b.h];
-    stagehud = { rec, map: [gm.w, gm.h], side_h: sd ? sd.h : 0, Wg: FD.Wg, Hg: FD.Hg, hpx: FD.hpx,
+    stagehud = { rec, map: [gm.w, gm.h], side_h: FD.side_h, Wg: FD.Wg, Hg: FD.Hg, hpx: FD.hpx,
       canvas: [cx, cy, $('#stage').width, $('#stage').height], corner: [cx + FD.fx, cy + FD.fy],
       // each enabled control by laycheck.py's key, the game's HOP_HOT name: its act and its value, team, seat or fork
       hot: [...$('#stagehud').querySelectorAll('[data-act], [data-track]')].filter(e => e.dataset.dev && !e.classList.contains('off') && shown(e))

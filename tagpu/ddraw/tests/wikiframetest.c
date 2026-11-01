@@ -9,11 +9,13 @@
    demo with the pointer's events the file TRY holds (below). One JSON line a chosen demo tick (THE
    TICKS below): {"e", "d", "t", "rec": the frame record from tagpu_wikiframe_record, before the
    bound, in frame.js record()'s names; "st": the HUD state tagpu_wikiframe_hudstate makes of the
-   bounded record (`dump_state`); "px", "rest", "no": the stage HUD's unit and the rest point and
-   the question's No in units, for the frame fitted into FIT_W x FIT_H device pixels at FIT_U a
-   unit; "ends": the track's inset; "boxes": the HUD's controls laid out by tagpu_hudlay_build from
-   that state, [key, x, y, w, h] in units; "pt": tagpu_wikiframe_point's point; "chart": 1 when the
-   build emitted HOP_CHART; "unresolved": a cursor key no box holds, or ""}. A demo the replay
+   bounded record (`dump_state`); "px", "rest", "no", "game": the stage HUD's unit and the rest
+   point, the question's No and seat 0's cursor (tagpu_wikiframe_game_point, null when the record
+   is not live) in units, for the frame fitted into FIT_W x FIT_H device pixels at FIT_U a unit;
+   "ends": the track's inset; "boxes": the controls the cursor is resolved among, laid out by
+   tagpu_hudlay_build from that state or, for a return glide, from tagpu_wikiframe_pressed's, [key,
+   x, y, w, h] in units; "pt": tagpu_wikiframe_point's point; "chart": 1 when a build emitted
+   HOP_CHART; "unresolved": a cursor key no box holds, or ""}. A demo the replay
    refuses is one line {"e", "d", "refused"}.
    THE TICKS: tick 0, every 15th, the last, and each tick on which the viewer's clock stands at a
    trip's start, at its press (HUD_DOWN on) or at its release; in Try it, every tick.
@@ -175,7 +177,18 @@ static void dump_rec(const WIKIFRAMEREC* f)
     str(f->cur.from);
     fputs(",\"to\":", stdout);
     str(f->cur.to);
-    printf(",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}}", (int)f->cur.from_v, (int)f->cur.to_v, f->cur.i, f->cur.n);
+    printf(",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}", (int)f->cur.from_v, (int)f->cur.to_v, f->cur.i, f->cur.n);
+    printf(",\"live\":%d,\"rw\":%d,\"arm\":%d,\"first\":%d,\"G\":%d,\"now\":%d,\"last\":%d,\"armR\":%d,\"bar\":{", f->live, f->rw,
+           f->arm, (int)f->first, (int)f->G, (int)f->now, (int)f->last, (int)f->arm_R);
+#define B_(n_, c_) fputs(c_ "\"" #n_ "\":", stdout); fnum(f->bar.n_)
+    B_(e, ""); B_(m, ","); B_(ei, ","); B_(eo, ","); B_(mi, ","); B_(mo, ","); B_(emax, ","); B_(mmax, ","); B_(raw_e, ",");
+    B_(raw_m, ",");
+#undef B_
+    printf("},\"simcur\":%d,\"sim\":{\"x\":", f->simcur);
+    fnum(f->sim.x);
+    fputs(",\"z\":", stdout);
+    fnum(f->sim.z);
+    printf(",\"shape\":%d,\"age\":%d}}", f->sim.shape, (int)f->sim.age);
 }
 
 static void dump_state(const HUDSTATE* st)
@@ -306,16 +319,16 @@ static const HUDOP* hot_of(const HUDOPS* o, const char* k)
 static void emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const char* d, int try_it, const char* held,
                  const WIKILAYOUT* lay, HUDOPS* ops)
 {
-    static HUDSTATE st;
+    static HUDSTATE st, pst;
     char err[256];
     WIKIREPLAYVIEW rv;
-    WIKIFRAMEREC rec, b;
+    WIKIFRAMEREC rec, b, pr;
     WIKISTAGESIDE sd;
     WIKISTAGEFIT fit;
     WIKIFRAMEDLG dlg;
     const WIKIVIEW* gv = r->game ? tagpu_wikisim_view(r->game) : NULL;
     const double ends = tagpu_hudlay_globals(hud)->track_ends;
-    double fx, fy, rx, ry, nx, ny, x, y;
+    double fx, fy, rx, ry, nx, ny, gx, gy, x, y;
     float px;
     int Wg, Hg, i, chart = 0, side_h, nbox = 0;
     const char* unresolved = "";
@@ -347,21 +360,36 @@ static void emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const ch
         fprintf(stderr, "wikiframetest: the HUD's build failed: %s\n", err);
         exit(2);
     }
-    tagpu_wikiframe_point(&b, ops, px, ends, rx, ry, nx, ny, &x, &y);
+    for (i = 0; i < ops->n; i++) chart |= ops->op[i].kind == HOP_CHART;
+    /* the cursor's controls are the HUD's the trip pressed: a return glide's, the strip as it stood */
+    if (tagpu_wikiframe_pressed(&b, &pr)) {
+        tagpu_wikiframe_hudstate(&pr, Wg, Hg, px, NULL, &pst);
+        if (!tagpu_hudlay_build(hud, &pst, ops, err, sizeof err)) {
+            fprintf(stderr, "wikiframetest: the pressed HUD's build failed: %s\n", err);
+            exit(2);
+        }
+        for (i = 0; i < ops->n; i++) chart |= ops->op[i].kind == HOP_CHART;
+    }
+    tagpu_wikiframe_game_point(&b, &fit, fx, fy, px, &gx, &gy);
+    tagpu_wikiframe_point(&b, ops, px, ends, rx, ry, nx, ny, gx, gy, &x, &y);
     fputs(",\"px\":", stdout);
     fnum(px);
-    printf(",\"rest\":[%.17g,%.17g],\"no\":[%.17g,%.17g],\"ends\":%.9g,\"boxes\":[", rx, ry, nx, ny, ends);
+    printf(",\"rest\":[%.17g,%.17g],\"no\":[%.17g,%.17g]", rx, ry, nx, ny);
+    if (gx == gx) printf(",\"game\":[%.17g,%.17g]", gx, gy);
+    else fputs(",\"game\":null", stdout);
+    printf(",\"ends\":%.9g,\"boxes\":[", ends);
     for (i = 0; i < ops->n; i++) {
         const HUDOP* p = &ops->op[i];
-        if (p->kind == HOP_CHART) chart = 1;
         if (p->kind != HOP_HOT) continue;
         printf("%s[", nbox++ ? "," : "");
         str(ops->text + p->run);
         printf(",%.9g,%.9g,%.9g,%.9g]", p->r.x, p->r.y, p->r.w, p->r.h);
     }
     if (b.cur.on) {
-        if (b.cur.from[0] && strcmp(b.cur.from, "leave:no") && !hot_of(ops, b.cur.from)) unresolved = b.cur.from;
-        if (b.cur.to[0] && strcmp(b.cur.to, "leave:no") && !hot_of(ops, b.cur.to)) unresolved = b.cur.to;
+        if (b.cur.from[0] && strcmp(b.cur.from, "leave:no") && strcmp(b.cur.from, WIKIFRAME_AT_GAME) && !hot_of(ops, b.cur.from))
+            unresolved = b.cur.from;
+        if (b.cur.to[0] && strcmp(b.cur.to, "leave:no") && strcmp(b.cur.to, WIKIFRAME_AT_GAME) && !hot_of(ops, b.cur.to))
+            unresolved = b.cur.to;
     }
     printf("],\"pt\":[%.17g,%.17g],\"chart\":%d,\"unresolved\":", x, y, chart);
     str(unresolved);
@@ -583,7 +611,7 @@ static void hostile(const HUDLAY* hud, HUDOPS* ops, WIKIFRAMEREC* f, const char*
     tagpu_wikiframe_bound(f, nside, nlogo);
     tagpu_wikiframe_hudstate(f, 768, 544, 1.5f, NULL, &st);
     said(ok(f) && tagpu_hudlay_build(hud, &st, ops, err, sizeof err), what);
-    tagpu_wikiframe_point(f, ops, 1.5f, 6, 10, 10, NAN, NAN, &x, &y);
+    tagpu_wikiframe_point(f, ops, 1.5f, 6, 10, 10, NAN, NAN, NAN, NAN, &x, &y);
     said(x == x && y == y, "  and its point is a number");
 }
 
@@ -620,6 +648,17 @@ static int ok_indices(const WIKIFRAMEREC* f)
            f->seat[1].colour == 3 && !f->cur.on;
 }
 static int ok_glide(const WIKIFRAMEREC* f) { return !f->cur.on; }
+static int ok_live(const WIKIFRAMEREC* f)
+{
+    const float* b = &f->bar.e;
+    int k;
+    for (k = 0; k < 10; k++)
+        if (!(b[k] == b[k]) || fabsf(b[k]) > (float)WIKI_ECON_MAX) return 0;
+    return f->live == 1 && f->rw == WIKI_RW_IDLE && f->arm == WIKI_ARM_NONE && f->first == 0 && f->G == WIKI_GAME_END_MAX &&
+           f->now == 0 && f->last == WIKI_GAME_END_MAX && f->arm_R == 0 && f->sim.x == -WIKIFRAME_SIDE_W && f->sim.z == -WIKIFRAME_BAR &&
+           f->sim.age == 0 && f->sim.shape == WIKI_CURSOR_ARROW && !f->simcur && f->cur.on && !strcmp(f->cur.from, WIKIFRAME_AT_GAME);
+}
+static int ok_not_live(const WIKIFRAMEREC* f) { return !f->live && !f->simcur && !f->cur.on; }
 
 static void base(WIKIFRAMEREC* f)
 {
@@ -717,6 +756,24 @@ static int selftest(const char* huddir)
     base(&f);
     f.cur.n = 0;
     hostile(hud, &ops, &f, "bound: a glide of no steps", 1, 0, ok_glide);
+    base(&f);
+    f.live = 7;
+    f.rw = 9;
+    f.arm = 200;
+    f.simcur = 3;
+    f.first = -5;
+    f.G = 1 << 30;
+    f.now = -1;
+    f.last = 99999;
+    f.arm_R = -7;
+    f.bar.e = NAN; f.bar.m = HUGE_VALF; f.bar.ei = -HUGE_VALF; f.bar.mo = 3e9f; f.bar.raw_m = -NAN;
+    f.sim.x = -1e9f; f.sim.z = NAN; f.sim.age = -40; f.sim.shape = 77;
+    snprintf(f.cur.from, sizeof f.cur.from, WIKIFRAME_AT_GAME);
+    hostile(hud, &ops, &f, "bound: a live record's flags, enums, ticks, bar and cursor", 1, 0, ok_live);
+    base(&f);
+    f.simcur = 1;
+    snprintf(f.cur.from, sizeof f.cur.from, WIKIFRAME_AT_GAME);
+    hostile(hud, &ops, &f, "bound: @game and the simulation's cursor in a record that is not live", 1, 0, ok_not_live);
     partition_cases();
     tagpu_hudlay_free(hud);
     return s_bad;

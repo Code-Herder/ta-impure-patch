@@ -211,6 +211,12 @@ typedef struct {
    WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
 uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src);
 
+/* THE COLUMN alone, the copy's: `v`'s sidebar (none when `v` is NULL or has none) into `out`, its
+   states to their array and the unit under the cursor found by id among `out`'s units, which may
+   be another simulation's than `v`'s -- a live replay's past view takes the live view's column
+   (tagpu_wikiframe_view, WIKIFRAME_PAST). */
+void tagpu_wikistage_side(WIKISTAGEVIEW* out, const WIKIVIEW* v, int layout_src);
+
 /* THE POSES, after the copy: each copied unit's posed model from the simulation `s` the view was
    taken of (tagpu_wikisim_model), into `out`'s pose pool in unit order. A unit whose model does not
    fit the pool, or whose primitives are more than WIKI3D's bound, is left at rest
@@ -361,18 +367,24 @@ void tagpu_wikistage_image(int w, int h, int side_h, int frame, HUDRECT stage, d
 int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved);
 
 /* WHAT A FRAME VIEW DRAWS BESIDE THE VIEW (stage.js draw's `o.frame`), all presentation: the
-   viewer's cursor, Leave's question, the bars' picture and the emblems' place. */
+   cursor, Leave's question, the bars' picture and the emblems' place. */
 typedef struct {
-    double  cursor_x, cursor_y;         /* the viewer's cursor in canvas device pixels; NaN
-                                           none (Try it: the player's own pointer)         */
+    double  cursor_x, cursor_y;         /* the cursor drawn in canvas device pixels: the viewer's
+                                           glide, or a live frame's simulation's own; NaN none
+                                           (Try it: the player's own pointer)               */
+    int32_t cursor_age;                 /* the ticks since its shape began, its animation's  */
+    uint8_t cursor_shape;               /* WIKI_CURSOR_*: the viewer's is the arrow          */
     uint8_t question;                   /* Leave's question is drawn (tagpu_wikiframe_dialog) */
     uint8_t held;                       /* its answer held down: 0 none, 1 Yes, 2 No        */
     int16_t bar_w;                      /* the bars' picture is composed (HOP_BAR, HUD_TEX_BAR),
                                            this wide; 0: the whitebox strips               */
     int16_t btn_side, btn_top;          /* art/wiki/layout.json `button`, game pixels: the
                                            emblem's square and its top; btn_side 0: none    */
-    int16_t btn_right, btn_config;      /* its right inset (`right[1]`, the rewind's slot) and
-                                           the sprocket's (`config`)                       */
+    int16_t btn_right, btn_config;      /* the wiki emblem's right inset -- `right[1]`, the
+                                           rewind button's slot, in a replay's frame, which
+                                           has no rewind; `right[0]` left of it in a live
+                                           frame's (tagpu_wikilay_button) -- and the
+                                           sprocket's (`config`)                            */
 } WIKISTAGEFRAME;
 
 /* Emblem `part` (0 the wiki's, 1 the sprocket) of a frame fitted as `f`, at `fr`'s button place,

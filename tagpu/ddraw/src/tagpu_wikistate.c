@@ -60,6 +60,7 @@ static WIKIFRAMEREC s_rec;              /* the record's frame, copied and bounde
 static uint32_t     s_repSerial;        /* the packet's rep_serial, of the frame s_rec is from   */
 static int          s_frameOn;          /* this frame's stage is a game frame with its record     */
 static HUDSTATE     s_hst;              /* 35 KB                                                  */
+static HUDSTATE     s_pst;              /* a return glide's pressed HUD (tagpu_wikiframe_pressed) */
 static HUDOPS       s_hops;             /* 0.5 MB                                                 */
 static int          s_hudOn;            /* s_hops holds this frame's stage HUD                    */
 static float        s_hpx;              /* its unit: the frame's height / 720 device pixels       */
@@ -80,6 +81,7 @@ static unsigned         s_barGen;       /* bumped at every new composition; 0: n
 static int              s_barW;         /* its width, -1 when the key composes nothing        */
 static const WIKISIDE*  s_barOf;
 static int              s_barSide = -2, s_barColour = -1, s_barWg, s_barHg;
+static WIKIFRAMEBAR     s_barNum;       /* the numbers composed                               */
 /* what the stage HUD costs this thread, told when the window closes */
 static LARGE_INTEGER    s_qpf;
 static double           s_costHud, s_costBar;
@@ -324,19 +326,28 @@ const unsigned char* tagpu_wikistate_bar(unsigned* gen)
     return s_barRgba;
 }
 
-/* the bars for the bounded record on `side`'s art in a frame Wg x Hg: their width, 0 for the
-   whitebox strips */
+/* the bars for the bounded record on `side`'s art in a frame Wg x Hg, showing its numbers (a live
+   frame's memo, Watching's zeros): their width, 0 for the whitebox strips. Composed again only when
+   the art, the side, the badge, the size or a number changes: a live frame's eased numbers settle
+   within a few frames of each change. */
 static int bar_bind(const WIKISIDE* side, int Wg, int Hg)
 {
-    static const WIKIBARNUM ZERO;
     if (!side) return 0;
-    if (side != s_barOf || s_rec.side != s_barSide || s_rec.colour != s_barColour || Wg != s_barWg || Hg != s_barHg) {
+    if (side != s_barOf || s_rec.side != s_barSide || s_rec.colour != s_barColour || Wg != s_barWg || Hg != s_barHg ||
+        memcmp(&s_rec.bar, &s_barNum, sizeof s_barNum)) {
+        const WIKIFRAMEBAR* b = &s_rec.bar;
+        WIKIBARNUM n;
+        memset(&n, 0, sizeof n);
+        n.e = b->e; n.m = b->m; n.emax = b->emax; n.mmax = b->mmax;
+        n.ei = b->ei; n.eo = b->eo; n.mi = b->mi; n.mo = b->mo;
+        n.raw_e = b->raw_e; n.raw_m = b->raw_m;
         s_barOf = side;
         s_barSide = s_rec.side;
         s_barColour = s_rec.colour;
         s_barWg = Wg;
         s_barHg = Hg;
-        s_barW = s_rec.side < 0 ? -1 : tagpu_wikibar_compose(side, s_rec.side, s_rec.colour, Wg, Hg, &ZERO, s_barIdx);
+        s_barNum = s_rec.bar;
+        s_barW = s_rec.side < 0 ? -1 : tagpu_wikibar_compose(side, s_rec.side, s_rec.colour, Wg, Hg, &n, s_barIdx);
         if (s_barW > 0) {
             tagpu_wikibar_rgba(side, s_barIdx, s_barW, s_barRgba);
             if (++s_barGen == 0) s_barGen = 1;
@@ -391,7 +402,7 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
     sf->held = (uint8_t)(w->leave_held <= 2 ? w->leave_held : 0);
     if (art && art->lay) {
         double side_, top, right, config;
-        tagpu_wikilay_button(art->lay, &side_, &top, &right, &config);
+        tagpu_wikilay_button(art->lay, s_rec.live, &side_, &top, &right, &config);
         sf->btn_side = (int16_t)side_;
         sf->btn_top = (int16_t)top;
         sf->btn_right = (int16_t)right;
@@ -401,24 +412,46 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
         tagpu_wikiframe_hudstate(&s_rec, Wg, Hg, s_hpx, side, &s_hst);
         s_hst.mx = s_hst.my = -1;
         if (tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err)) {
+            WIKIFRAMEREC pr;
+            double gx, gy;
+            int rebuild = 0;
             s_hudOn = 1;
-            if (s_rec.cur.on) {
+            tagpu_wikiframe_game_point(&s_rec, &fit, fx, fy, s_hpx, &gx, &gy);
+            /* a return glide leaves a control its press closed: it is resolved among the HUD's
+               controls as drawn at that press, and the HUD is laid out again as drawn now */
+            if (s_rec.cur.on && tagpu_wikiframe_pressed(&s_rec, &pr)) {
+                tagpu_wikiframe_hudstate(&pr, Wg, Hg, s_hpx, side, &s_pst);
+                s_pst.mx = s_pst.my = -1;
+                if (!tagpu_hudlay_build(hart->lay, &s_pst, &s_hops, err, sizeof err)) s_hudOn = 0;
+                rebuild = 1;
+            }
+            if (s_rec.cur.on && s_hudOn) {
                 /* the rest point is the map's centre; No is the question's, NaN while it is not drawn */
                 const double rx = (fit.ox + v->w * WIKI_CELL / 2.0 * fit.s - fx) / s_hpx;
                 const double ry = (fit.oz + v->h * WIKI_CELL / 2.0 * fit.s - fy) / s_hpx;
                 const double nx = s_rec.question ? (s_dlg.no.x + s_dlg.no.w / 2.0 - fx) / s_hpx : NAN;
                 const double ny = s_rec.question ? (s_dlg.no.y + s_dlg.no.h / 2.0 - fy) / s_hpx : NAN;
                 tagpu_wikiframe_point(&s_rec, &s_hops, s_hpx, tagpu_hudlay_globals(hart->lay)->track_ends, rx, ry, nx, ny,
-                                      &x, &y);
+                                      gx, gy, &x, &y);
                 s_hst.mx = (float)x;
                 s_hst.my = (float)y;
                 sf->cursor_x = fx + x * s_hpx;
                 sf->cursor_y = fy + y * s_hpx;
+            } else if (s_rec.simcur && !w->try_it && gx == gx && gy == gy) {
+                /* THE ONE CURSOR: a demo's simulation's own, its shape and animation at its world
+                   point; Try it's is the player's pointer, which reaches no game frame's world */
+                s_hst.mx = (float)gx;
+                s_hst.my = (float)gy;
+                sf->cursor_x = fx + gx * s_hpx;
+                sf->cursor_y = fy + gy * s_hpx;
+                sf->cursor_shape = s_rec.sim.shape;
+                sf->cursor_age = s_rec.sim.age;
             } else if (w->try_it && w->ptr_x >= s_cv[0] && w->ptr_x < s_cv[2] && w->ptr_y >= s_cv[1] && w->ptr_y < s_cv[3]) {
                 s_hst.mx = (float)((w->ptr_x - s_hox) / (double)s_hpx);
                 s_hst.my = (float)((w->ptr_y - s_hoy) / (double)s_hpx);
             }
-            if (s_hst.mx >= 0 && !tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err)) s_hudOn = 0;
+            if (s_hudOn && (rebuild || s_hst.mx >= 0) && !tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err))
+                s_hudOn = 0;
         }
         if (!s_hudOn) {
             InterlockedExchange(&s_refused, 1);

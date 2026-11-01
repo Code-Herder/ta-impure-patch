@@ -13,15 +13,19 @@
    scripts (the layouts fixture, fixture-tall and none x no casting and each of casting-fixture.json's x interface
    types 1 and 0), its viewer's script played through replay.js and through the C replay, at demo tick 0, every 15th
    tick, the last, and each tick the viewer's clock stands at a trip's start, its press or its release; and Try it
-   yourself on the entry's first demo, every tick, with TRY's pointer events through both press machines. Per tick,
-   C and JS must agree on:
+   yourself on the entry's first demo, every tick, with TRY's pointer events through both press machines (a live
+   entry's: LIVE_TRY's). Per tick, C and JS must agree on:
    1. the frame record, tagpu_wikiframe_record's against record()'s, field for field (a float as a float: the record
       carries floats);
    2. the HUD state: hudState() of the record, read by hudstatejson.c as laycheck.c reads the mockup's, against
       tagpu_wikiframe_hudstate's, field for field;
    3. the cursor's point: point() over C's own laid-out HUD controls against tagpu_wikiframe_point, to 1e-9 units,
-      with the rest point and the question's No each side computes for the frame fitted into stagecheck.mjs's
-      1920 x 1080 stage (stage.js fit and frame.js dialog against tagpu_wikistage_fit and tagpu_wikiframe_dialog).
+      with the rest point, the question's No and seat 0's cursor each side computes for the frame fitted into
+      stagecheck.mjs's 1920 x 1080 stage (stage.js fit, frame.js dialog and gamePoint against tagpu_wikistage_fit,
+      tagpu_wikiframe_dialog and tagpu_wikiframe_game_point).
+   A live entry's records carry the rewind's state, the top bar's numbers and seat 0's cursor, its HUD state the live
+   HUD's, its toasts the live HUD's five, and its cursor glides from and to seat 0's (@game) and runs the track on
+   the strip's [first, G].
    The filtered view (frame.js view against tagpu_wikiframe_view) is stagecheck.mjs's frame mode, which draws it.
 
    THE TABLES. glide() against tagpu_wikiframe_glide to 1e-12; the press machine on PRESSES' event sequences; the
@@ -86,6 +90,30 @@ const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.
    track pressed, dragged twice (the second at the same tick: nothing) and released elsewhere, a right press and its
    release (nothing), uiscale (no control: nothing), a bookmark, Leave and its question's body (nothing), Yes released
    on No (nothing), the frame outside it (No at once), Leave again and No, Leave a third time and Yes, which leaves */
+/* LIVE_TRY: a live entry's Try it yourself, every live verb: the rewind opened too early (refused), opened and
+   played on (Playing on), opened again; fwd while open (drawn disabled: nothing) and the strip's plate (nothing);
+   back to the span's start and Play from here at once (a fork of the original, stall mode); in it, opened, the track
+   pressed, dragged (once to the same tick) and released elsewhere, then Play from here twice (the snap, the arm, a
+   fork of the fork); opened in that, a seek and Play from here twice (a third fork); opened in that, a seek and Play
+   from here twice (the arm's warning that it replaces F1, then the fourth fork, the first evicted); opened, back to
+   the span's start, Play from here at a segment's first (Cannot play) and Back to now; the track pressed while idle
+   (nothing) */
+const LIVE_TRY = { end: 180, events: [[1, 'down', 1, 'rewind', false, 0], [2, 'up', 1, 'rewind', false, 0],
+  [20, 'down', 1, 'rewind', false, 0], [21, 'up', 1, 'rewind', false, 0], [24, 'down', 1, 'live_play', false, 0], [25, 'up', 1, 'live_play', false, 0],
+  [30, 'down', 1, 'rewind', false, 0], [31, 'up', 1, 'rewind', false, 0], [33, 'down', 1, 'fwd', false, 0], [34, 'up', 1, 'fwd', false, 0],
+  [36, 'down', 1, 'live', false, 0], [37, 'up', 1, 'live', false, 0], [40, 'down', 1, 'rew', false, 0], [41, 'up', 1, 'rew', false, 0],
+  [45, 'down', 1, 'live_play', false, 0], [46, 'up', 1, 'live_play', false, 0],
+  [60, 'down', 1, 'rewind', false, 0], [61, 'up', 1, 'rewind', false, 0], [65, 'down', 1, 'track', false, 3], [66, 'drag', 1, 'track', false, 8],
+  [67, 'drag', 1, 'track', false, 8], [68, 'up', 1, 'live', false, 12], [75, 'down', 1, 'live_play', false, 0], [76, 'up', 1, 'live_play', false, 0],
+  [85, 'down', 1, 'live_play', false, 0], [86, 'up', 1, 'live_play', false, 0],
+  [95, 'down', 1, 'rewind', false, 0], [96, 'up', 1, 'rewind', false, 0], [98, 'down', 1, 'track', false, 5], [99, 'up', 1, 'track', false, 5],
+  [103, 'down', 1, 'live_play', false, 0], [104, 'up', 1, 'live_play', false, 0], [110, 'down', 1, 'live_play', false, 0], [111, 'up', 1, 'live_play', false, 0],
+  [125, 'down', 1, 'rewind', false, 0], [126, 'up', 1, 'rewind', false, 0], [128, 'down', 1, 'track', false, 6], [129, 'up', 1, 'track', false, 6],
+  [133, 'down', 1, 'live_play', false, 0], [134, 'up', 1, 'live_play', false, 0], [140, 'down', 1, 'live_play', false, 0], [141, 'up', 1, 'live_play', false, 0],
+  [150, 'down', 1, 'rewind', false, 0], [151, 'up', 1, 'rewind', false, 0], [153, 'down', 1, 'rew', false, 0], [154, 'up', 1, 'rew', false, 0],
+  [158, 'down', 1, 'live_play', false, 0], [159, 'up', 1, 'live_play', false, 0], [163, 'down', 1, 'live_now', false, 0], [164, 'up', 1, 'live_now', false, 0],
+  [170, 'down', 1, 'track', false, 40], [171, 'up', 1, 'track', false, 50]] };
+
 const TRY = { end: 150, events: [[5, 'down', 1, 'play', false, 0], [6, 'up', 1, 'play', false, 0], [10, 'down', 1, 'speed', false, 0],
   [11, 'up', 1, 'speed', false, 0], [15, 'down', 1, 'fwd', false, 0], [16, 'up', 1, 'rew', false, 0], [20, 'down', 1, 'track', false, 300],
   [21, 'drag', 1, 'track', false, 600], [22, 'drag', 1, 'track', false, 600], [23, 'up', 1, 'play', false, 700],
@@ -99,7 +127,9 @@ const TRY = { end: 150, events: [[5, 'down', 1, 'play', false, 0], [6, 'up', 1, 
 /* PRESSES: the press machine's sequences, [op, src, key, right, T]: a button pressed and released on itself and on
    another; the track pressed, dragged (once to the same tick) and released at another tick and at its last; a right
    press; a second press while one is held; a drag with nothing held; the question's four keys, and Yes released on
-   No; keys that are no control (uiscale, a row, leave:yes from the HUD, the empty key); leave:no from the HUD */
+   No; keys that are no control (uiscale, a row, leave:yes from the HUD, the empty key); leave:no from the HUD; the
+   live HUD's: the rewind button, Play from here and Back to now pressed and released on themselves and on each
+   other, and the strip's plate (no control: nothing) */
 const PRESSES = [
   [['down', 1, 'play', false, 0], ['up', 1, 'play', false, 0]],
   [['down', 1, 'speed', false, 0], ['up', 1, 'rew', false, 0], ['up', 1, 'speed', false, 0]],
@@ -114,6 +144,9 @@ const PRESSES = [
   [['down', 1, 'uiscale', false, 0], ['up', 1, 'uiscale', false, 0], ['down', 1, 'row:3', false, 0], ['up', 1, 'row:3', false, 0],
     ['down', 1, 'leave:yes', false, 0], ['up', 1, 'leave:yes', false, 0], ['down', 1, '', false, 0], ['up', 1, '', false, 0]],
   [['down', 1, 'leave:no', false, 0], ['up', 1, 'leave:no', false, 0], ['down', 1, 'bookmark', false, 0], ['up', 1, 'bookmark', false, 0]],
+  [['down', 1, 'rewind', false, 0], ['up', 1, 'rewind', false, 0], ['down', 1, 'live_play', false, 0], ['up', 1, 'live_now', false, 0],
+    ['down', 1, 'live_now', false, 0], ['up', 1, 'live_now', false, 0], ['down', 1, 'live', false, 0], ['up', 1, 'live', false, 0],
+    ['down', 1, 'live_play', false, 0], ['up', 1, 'live_play', false, 0]],
 ];
 
 class CannotRun extends Error {}
@@ -173,9 +206,10 @@ function frameJs(R, layout, tryIt, held) {
   const dlg = WikiFrame.dialog(fit, Wg, Hg);
   const rest = { x: (fit.ox + (+M.w || 1) * cell / 2 * fit.s - fx) / px, y: (fit.oz + (+M.h || 1) * cell / 2 * fit.s - fy) / px };
   const no = { x: (dlg.no.x + dlg.no.w / 2 - fx) / px, y: (dlg.no.y + dlg.no.h / 2 - fy) / px };
+  const game = WikiFrame.gamePoint(rec, fit, fx, fy, px);
   // the game's HUD draws the record's held control down (tagpu_wikiframe_hudstate); the page presses it on the DOM
   const st = { ...WikiFrame.hudState(rec, Wg, Hg, null), held: rec.held };
-  return { t: rv.tick, rec, st, px, rest, no, Wg, Hg };
+  return { t: rv.tick, rec, st, px, rest, no, game, Wg, Hg };
 }
 
 let failed = 0, frames = 0, demos = 0, tables = 0;
@@ -305,6 +339,7 @@ function framesCheck(exe, tmp) {
     fs.writeFileSync(path.join(tmp, `rival-${name}.json`), JSON.stringify(RIVALS[name]));
   }
   fs.writeFileSync(path.join(tmp, 'try.json'), JSON.stringify(TRY));
+  fs.writeFileSync(path.join(tmp, 'livetry.json'), JSON.stringify(LIVE_TRY));
   let context = 0;
   for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     if (context++ % SHARDS !== SHARD - 1) continue;
@@ -314,7 +349,7 @@ function framesCheck(exe, tmp) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
       const cout = lines(run(exe, ['frames', path.join(tmp, 'wiki.bin'), path.join(tmp, 'game.json'), side || '-',
         cname ? path.join(tmp, `casting-${cname}.json`) : '-', cname ? path.join(tmp, `rival-${cname}.json`) : '-', String(iface), HUDDIR,
-        path.join(tmp, 'try.json')]));
+        path.join(tmp, entry.live ? 'livetry.json' : 'try.json')]));
       const js = [];
       const play = (demo, name, make, presses) => {
         let R;
@@ -335,7 +370,7 @@ function framesCheck(exe, tmp) {
         R.free();
       };
       for (const demo of entry.demos) play(demo, demo.id, () => WikiReplay.play(entry, demo, layout, ctx), null);
-      play(entry.demos[0], `${entry.demos[0].id}/try`, () => WikiReplay.create(entry, entry.demos[0], layout, ctx), TRY);
+      play(entry.demos[0], `${entry.demos[0].id}/try`, () => WikiReplay.create(entry, entry.demos[0], layout, ctx), entry.live ? LIVE_TRY : TRY);
       // the JS states through C's reader, one line each
       const states = js.filter(f => !f.refused);
       fs.writeFileSync(path.join(tmp, 'states.jsonl'), states.map(f => JSON.stringify({ st: f.st, px: f.px })).join('\n') + '\n');
@@ -352,12 +387,14 @@ function framesCheck(exe, tmp) {
         n++;
         if (c.t !== j.t) { first = `${j.e}/${j.d}: C's frame ${i} is at demo tick ${c.t}, frame.js's ${j.t}`; break; }
         let d = diff(c.rec, j.rec, 'rec') || diff(c.st, j.read, 'state') || diff(c.px, j.px, 'px');
-        if (!d) for (const [k, a, b] of [['rest', c.rest, j.rest], ['no', c.no, j.no]])
-          if (Math.abs(a[0] - b.x) > 1e-9 || Math.abs(a[1] - b.y) > 1e-9) { d = { at: k, c: a, j: [b.x, b.y] }; break; }
+        if (!d) for (const [k, a, b] of [['rest', c.rest, j.rest], ['no', c.no, j.no], ['game', c.game, j.game]]) {
+          if (!a !== !b) { d = { at: k, c: a, j: b }; break; }
+          if (a && (Math.abs(a[0] - b.x) > 1e-9 || Math.abs(a[1] - b.y) > 1e-9)) { d = { at: k, c: a, j: [b.x, b.y] }; break; }
+        }
         if (d) { first = `${where}: ${d.at}: C ${show(d.c)}, frame.js ${show(d.j)}`; break; }
         // C's boxes, its ends and the px are floats, printed to 9 digits: fround gives back the float itself
         const F = Math.fround, boxes = c.boxes.map(([key, x, y, w, h]) => ({ key, ub: [F(x), F(y), F(w), F(h)], ends: F(c.ends) }));
-        const pt = j.rec.cur.on ? WikiFrame.point(j.rec, boxes, j.px, j.rest, j.no) : null;
+        const pt = j.rec.cur.on ? WikiFrame.point(j.rec, boxes, j.px, j.rest, j.no, j.game) : null;
         if (pt && (Math.abs(pt.x - c.pt[0]) > 1e-9 || Math.abs(pt.y - c.pt[1]) > 1e-9)) {
           first = `${where}: the cursor: C (${c.pt}), frame.js (${pt.x}, ${pt.y})`;
           break;
@@ -366,6 +403,7 @@ function framesCheck(exe, tmp) {
         const cur = j.rec.cur;
         if (c.unresolved) fail(`claim ${where} (${named}): the key ${c.unresolved} has no control in C's HUD`);
         if (cur.on && cur.to === 'track' && !(cur.to_v >= 0 && cur.to_v <= j.rec.end)) fail(`claim ${where} (${named}): the track tick ${cur.to_v} is off the track`);
+        if (cur.on && j.rec.live && (cur.from === '@game' || cur.to === '@game') && !j.game) fail(`claim ${where} (${named}): a glide at seat 0's cursor with no point for it`);
         if (c.chart) fail(`claim ${where} (${named}): the stage HUD's build has a chart`);
         if (!(c.st.W >= 960)) fail(`claim ${where} (${named}): the HUD is ${c.st.W} units wide, under 960`);
       }

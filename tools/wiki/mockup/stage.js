@@ -205,11 +205,13 @@ const WikiStage = (() => {
      THE FRAME (a view of frame.js view, v.frame): the whole game screen of the map's size, drawn by drawFrame -- its
      black, the column from the screen's top, the two bars and Impure's emblems -- before the ground, and every range
      from the ground through the overlays held to the viewport, as the game draws its world under the HUD's surface.
-     `o.frame` = { bar, button, top, question, held, cursor, msg }: bar, the bars' picture ({ draw(g, part, size, rect) },
-     null for the whitebox strips); button, layout.json's `button` (the emblems' place); top, the 2D context of the
-     canvas over the stage HUD, the TOP range: Leave's question while `question` (frame.js dialog's rects, `held` the
-     answer held down) and the viewer's cursor at `cursor`, a canvas point, or none. A frame view has no cursor of its
-     own and no readouts: the viewer is not seat 0. */
+     `o.frame` = { bar, button, live, top, question, held, cursor, msg }: bar, the bars' picture ({ draw(g, part, size,
+     rect) }, null for the whitebox strips); button, layout.json's `button` (the emblems' place); live, the frame of a
+     live entry, whose wiki emblem stands left of the rewind button; top, the 2D context of the canvas over the stage
+     HUD, the TOP range: Leave's question while `question` (frame.js dialog's rects, `held` the answer held down) and
+     the cursor at `cursor`, { x, y } a canvas point with the shape and age of a live frame's simulation's cursor (the
+     viewer's arrow without), or none. A frame view has no cursor of its own and no readouts: the frame draws the one
+     cursor on the screen in its TOP range. */
   function draw(g, v, o) {
     const W = o.W, H = o.H, U = o.U, im = o.image || null;
     const mark = o.layer || (() => {});
@@ -455,8 +457,9 @@ const WikiStage = (() => {
      screen's black, palette index 0, the engine's clear; the column from frame row 0 (drawSide, dz -32); the top bar at
      frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32, the composed picture's part 0 and 1 drawn
      whole and nearest (bar.js), or two whitebox strips without one; then Impure's emblems in the top bar's right end,
-     the wiki emblem in the rewind button's slot (a replay has no rewind) and the sprocket, up and inert, at
-     layout.json's `button` place. Every part's edges are snapped to device pixels. k carries draw()'s X, Z, s, U, the
+     the wiki emblem in the rewind button's slot, `right[1]` (a replay has no rewind), or in a live frame left of the
+     rewind button, `right[0]`, as the game's own top bar places it (tagpu_wikilay.c), and the sprocket, up and inert,
+     at layout.json's `button` place. Every part's edges are snapped to device pixels. k carries draw()'s X, Z, s, U, the
      content rect C, label, shade and mark. Returns the emblems' boxes in canvas pixels, the wiki's then the sprocket's
      (the frame's emblems, wikilaycheck.py pairs them with the game's), or null without a `button` place. */
   function drawFrame(g, v, F, o, k) {
@@ -480,13 +483,13 @@ const WikiStage = (() => {
       else { solid(b, SIDE_WB.button); g.lineWidth = s; g.strokeStyle = SIDE_WB.edge; g.strokeRect(b.x + s / 2, b.y + s / 2, b.w - s, b.h - s); }
       return b;
     };
-    return [at(B.right[1], EMBLEM.wiki), at(B.config, EMBLEM.config)];
+    return [at(B.right[F.live ? 0 : 1], EMBLEM.wiki), at(B.config, EMBLEM.config)];
   }
 
   /* THE TOP RANGE, on its own canvas over the stage HUD (o.frame.top): Leave's question while it is open, a whitebox at
      YESORNO.GUI's own rects (frame.js dialog) -- the panel with an edge, the title centred, Yes and No, the one held
-     down pressed -- and then the viewer's cursor, the game's arrow at the player's cursor scale. Whether it drew the
-     cursor. */
+     down pressed -- and then the cursor at the player's cursor scale: the viewer's arrow, or a live frame's simulation's
+     cursor, its shape `age` ticks into its animation. Whether it drew the cursor. */
   function drawTop(F, o, W, H, U) {
     const t = F.top;
     if (!t) return false;
@@ -509,7 +512,7 @@ const WikiStage = (() => {
         say(label, D[key], SIDE_WB.label);
       }
     }
-    return !!F.cursor && cursorAt(t, o, F.cursor.x, F.cursor.y, 'arrow', 0, U);
+    return !!F.cursor && cursorAt(t, o, F.cursor.x, F.cursor.y, F.cursor.shape || 'arrow', +F.cursor.age || 0, U);
   }
 
   /* THE RECLAIM SWEEP (tagpu_mark.c gather_sweep, tagpu_gui_surf.c sharp_sweep): every target's corner brackets and the

@@ -392,6 +392,7 @@ function advanceReplay() {
   while (acc >= 1 && rep && !held()) {
     const c = rep.cost();
     if (n && spent + c > WikiReplay.FILL) break;
+    liveFlush();
     try { rep.step(); } catch (x) { fail(x); return; }
     spent += c; n++; acc--;
   }
@@ -476,11 +477,15 @@ function draw() {
 }
 
 /* ---- the frame: a frame:game entry's replay on the whole game frame (frame.js), its HUD and Leave's question ----
-   One frame of the page is, in order: the replay's view; the game's view, copied only while no seek is pending (a
-   seek's ticks are never shown: the stage holds the last world drawn); the watcher's view of it; the fit; the frame
-   record; the stage HUD laid out by hud.js in #stagehud at 100 % of the frame, its controls' boxes, the viewer's cursor
-   among them and the hint under it; then stage.js's frame, the question and the cursor on #stagetop over the HUD.
-   Every frame lays the HUD out again, one layout a frame as the DLL builds its ops. */
+   One frame of the page is, in order: the replay's view; the world shown, copied only while no seek is pending (a
+   seek's ticks are never shown: the stage holds the last world drawn) -- a replay's game, a live replay's live
+   simulation, or its past simulation while the past is shown, under the live one's column (the column shown at the
+   open stays, MEASURED m0-facts.md #2); the frame record; the frame's view of that world (frame.js view: the
+   watcher's, the player's or the past's); the fit; the stage HUD laid out by hud.js in #stagehud at 100 % of the frame,
+   its controls' boxes, the cursor among them or the simulation's at its world point, and the hint under it; then
+   stage.js's frame, the question and the cursor on #stagetop over the HUD. Every frame lays the HUD out again, one
+   layout a frame as the DLL builds its ops; a return glide's frame lays out first the HUD its press was made on
+   (frame.js pressed), whose controls the cursor leaves from. */
 const S_LEFT = 'In the game, this goes back to the Replays browser.';
 // the replay HUD's layout, kit and parts, from the repository root the check server serves: no stage HUD until then
 let HUD_OK = false;
@@ -489,22 +494,27 @@ const hudSnap = v => Math.floor(v + 0.5 + 1 / 64);   // hud.js snapPx: a box's e
 /* the frame as last drawn: the game's view and poses held through a seek, the sound's generation and quiet, the
    record, the frame's corner and its HUD's unit (canvas pixels), its controls' boxes, and the press machine with the
    player's pointer for Try it yourself */
-let FR = null, PRESS = null, PTR = null;
-function frameReset() { FR = { gv: null, poses: null, tick: 0, gen: -1, quiet: -1, rec: null, hud: null, boxes: [] }; PRESS = WikiFrame.Press(); }
+let FR = null, PRESS = null, PTR = null, liveMove = null;
+function frameReset() {
+  FR = { gv: null, lside: null, poses: null, tick: 0, gen: -1, quiet: -1, rec: null, hud: null, boxes: [] };
+  PRESS = WikiFrame.Press(); liveMove = null;
+}
 frameReset();
 function frameClear() {
   if (stageHud.firstChild) stageHud.innerHTML = '';
   if (!stageHud.hidden) { stageHud.hidden = true; stageTop.getContext('2d').clearRect(0, 0, stageTop.width, stageTop.height); }
 }
-// the bars in the mod's own art (bar.js) under the game look with the pack's art, as the column is; null for the whitebox
+/* the bars in the mod's own art (bar.js) under the game look with the pack's art, as the column is, showing the
+   record's numbers (a live frame's memo, Watching's zeros); null for the whitebox. Composed again only when the art,
+   the side, the badge, the size or a number changes, as the DLL's bar_bind */
 const BARCV = document.createElement('canvas');
 let barKey = null;
-function barArt(side, colour, Wg, Hg) {
+function barArt(side, colour, Wg, Hg, num) {
   const p = pack();
   if (!gameLook() || !p || !p.art || simLayout !== p.layout || typeof WikiBar === 'undefined') return null;
-  const key = `${S.mod}|${side}|${colour}|${Wg}|${Hg}`;
+  const key = `${S.mod}|${side}|${colour}|${Wg}|${Hg}|${JSON.stringify(num)}`;
   if (key !== barKey) {
-    const c = WikiBar.compose(p.art, side, colour, Wg, Hg);
+    const c = WikiBar.compose(p.art, side, colour, Wg, Hg, num);
     barKey = key;
     BARCV.width = WikiBar.BAR_W; BARCV.height = WikiBar.BAR_H;
     if (c) BARCV.getContext('2d').putImageData(new ImageData(WikiBar.rgba(p.art, c), WikiBar.BAR_W, WikiBar.BAR_H), 0, 0);
@@ -516,23 +526,35 @@ function barArt(side, colour, Wg, Hg) {
 }
 function drawReplay() {
   const g = stage.getContext('2d'), W = stage.width, H = stage.height, U = G.gh / 720;
-  let rv;
+  let rv, mode = 'watch';
   try {
     rv = rep.view();
-    if (rv.game.target < 0 && rep.game) { FR.gv = rep.game.view(); FR.poses = rep.game.poses(); FR.tick = rep.game.tick; }
+    mode = !rv.live ? 'watch' : rv.live.rw === 'past' ? 'past' : 'player';
+    const shown = mode === 'past' ? rep.past : rep.game;
+    if (rv.game.target < 0 && shown) {
+      FR.gv = shown.view(); FR.poses = shown.poses(); FR.tick = shown.tick;
+      // the past's column is the live simulation's, which is never stepped while the past is shown
+      FR.lside = mode === 'past' && rep.game ? rep.game.view().side || null : null;
+    }
   } catch (x) { fail(x); frameClear(); WikiStage.draw(g, null, { W, H, U, msg: simErr }); return null; }
   // THE SOUND: what a seek re-simulated is heard already -- each new game or finished seek starts the count at `quiet`
   if (rv.game.gen !== FR.gen || rv.game.quiet !== FR.quiet) { FR.gen = rv.game.gen; FR.quiet = rv.game.quiet; heard = rv.game.quiet; }
-  if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard, rep.game && rep.game.types);
-  const side = simCtx ? simCtx.side : 0, fv = WikiFrame.view(FR.gv, simLayout, side);
+  if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard, (mode === 'past' ? rep.past : rep.game)?.types);
+  const side = simCtx ? simCtx.side : 0;
+  const rec = FR.gv ? WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held) : null;
+  /* THE ONE CURSOR in Try it: after a fork the simulation's follows the player's pointer while it is over the world and
+     on no control of the HUD, and is the one drawn there, the browser's hidden (rewind-spec.md 9.5) */
+  const onWorld = !!(rec && rec.simcur && repTry && PTR && overStage && liveWorld(PTR));
+  const gv = mode === 'past' && FR.gv ? { ...FR.gv, side: FR.lside || undefined } : FR.gv;
+  const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld));
   if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
   const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
   const fx = hudSnap(fit.ox + C.x0 * fit.s), fy = hudSnap(fit.oz + C.z0 * fit.s), hpx = Hg * fit.s / WikiFrame.HUD_H;
-  const rec = WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held);
   const p = pack(), art = gameLook() && p && p.art && simLayout === p.layout ? p.art : null;
   const st = WikiFrame.hudState(rec, Wg, Hg, art);
   const units = q => ({ x: (q.x - fx) / hpx, y: (q.y - fy) / hpx });
   const dlg = WikiFrame.dialog(fit, Wg, Hg);
+  const game = WikiFrame.gamePoint(rec, fit, fx, fy, hpx);
   let cursor = null;
   stageHud.hidden = false;
   if (HUD_OK) {
@@ -541,26 +563,36 @@ function drawReplay() {
     Object.assign(stageHud.style, { left: `${sr.left - br.left - box.clientLeft + fx / G.k}px`, top: `${sr.top - br.top - box.clientTop + fy / G.k}px`,
       width: `${Wg * fit.s / G.k}px`, height: `${Hg * fit.s / G.k}px` });
     stageHud.style.setProperty('--u', `${hpx / G.k}px`);
+    const boxes = () => [...stageHud.querySelectorAll('[data-act], [data-track]')].map(e => ({
+      key: 'track' in e.dataset ? 'track' : e.dataset.act, off: e.classList.contains('off'),
+      ub: (e.dataset.ub || '0 0 0 0').split(' ').map(Number), ends: +e.dataset.ends || 0 }));
+    const pr = rec.cur.on ? WikiFrame.pressed(rec) : rec;
+    let among = null;
+    if (pr !== rec) { HUD.draw(stageHud, WikiFrame.hudState(pr, Wg, Hg, art), hpx, G.k); among = boxes(); }
     HUD.draw(stageHud, st, hpx, G.k);
     const down = rec.held && stageHud.querySelector(`.art.hot[data-act="${rec.held}"]`);
     if (down) HUD.press(down, true);
-    FR.boxes = [...stageHud.querySelectorAll('[data-act], [data-track]')].map(e => ({
-      key: 'track' in e.dataset ? 'track' : e.dataset.act, off: e.classList.contains('off'),
-      ub: (e.dataset.ub || '0 0 0 0').split(' ').map(Number), ends: +e.dataset.ends || 0 }));
+    FR.boxes = boxes();
     const M = fv.map, cell = +M.cell || 16;
     const rest = units({ x: fit.ox + (+M.w || 1) * cell / 2 * fit.s, y: fit.oz + (+M.h || 1) * cell / 2 * fit.s });
     const no = units({ x: dlg.no.x + dlg.no.w / 2, y: dlg.no.y + dlg.no.h / 2 });
+    const simShape = () => ({ shape: WikiFrame.SHAPES[rec.sim.shape] || 'arrow', age: rec.sim.age });
     if (rec.cur.on) {
-      const pt = WikiFrame.point(rec, FR.boxes, hpx, rest, no);
+      const pt = WikiFrame.point(rec, among || FR.boxes, hpx, rest, no, game);
       HUD.hint(stageHud, pt.x, pt.y, st);
       cursor = { x: fx + pt.x * hpx, y: fy + pt.y * hpx };
+    } else if (rec.simcur && !repTry && game) {
+      // a demo's simulation's own cursor, its shape and animation at its world point
+      HUD.hint(stageHud, game.x, game.y, st);
+      cursor = { x: fx + game.x * hpx, y: fy + game.y * hpx, ...simShape() };
     } else {
       const q = PTR && overStage ? units(PTR) : null;
       HUD.hint(stageHud, q && q.x, q && q.y, st);
+      if (onWorld) cursor = { x: PTR.x, y: PTR.y, ...simShape() };
     }
   }
   FR.rec = rec;
-  FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor };
+  FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor, fit, side_h: fv.side ? fv.side.h : 0 };
   const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), FR.poses) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
@@ -569,10 +601,10 @@ function drawReplay() {
   } : null;
   FIT = WikiStage.draw(g, fv, { W, H, U, icons: ICONS, cursors: CURSORS, tick: FR.tick, cursor: false, image,
     side: { layout: simLayout, art: sideArt(fv, simLayout) },
-    frame: { bar: barArt(side, rec.colour, Wg, Hg), button: LAY.button, top: stageTop.getContext('2d'),
-      question: rec.question ? dlg : null, held: PRESS.held, cursor } });
+    frame: { bar: barArt(side, rec.colour, Wg, Hg, rec.bar), button: LAY.button, top: stageTop.getContext('2d'),
+      question: rec.question ? dlg : null, held: PRESS.held, cursor, live: rec.live } });
   FR.hud.emblems = FIT ? FIT.emblems : null;
-  stage.classList.remove('try');
+  stage.classList.toggle('try', onWorld);
   const off = locked(entry()) || !!(FR.gv && FR.gv.locked);
   for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
   return { caption: rv.left ? S_LEFT : rv.caption, keys: [] };
@@ -605,27 +637,58 @@ function frameHit(q) {
   return on && { src: 'hud', key: on.key };
 }
 /* the track's tick under canvas point q: its x on the playhead's run as drawn, device pixels, clamped to the run, then
-   rounded on the end the track was drawn with (tagpu_hudinput.c seek_at); the replay's seek clamps it again */
+   rounded on the span the track was drawn with -- [0, end], live the strip's [first, G] (tagpu_hudinput.c seek_at,
+   live_seek_at); the replay's seek clamps it again */
 function trackTick(q) {
   const F = FR.hud, t = FR.boxes.find(b => b.key === 'track');
   if (!F || !t || !FR.rec) return 0;
   const x0 = hudSnap((t.ub[0] + t.ends) * F.hpx), x1 = hudSnap((t.ub[0] + t.ub[2] - t.ends) * F.hpx);
   if (x1 <= x0) return 0;
-  const f = clamp((Math.floor(q.x - F.fx + 0.5) - x0) / (x1 - x0), 0, 1);
-  return Math.trunc(f * FR.rec.end + 0.5);
+  const f = clamp((Math.floor(q.x - F.fx + 0.5) - x0) / (x1 - x0), 0, 1), r = FR.rec;
+  if (r.live) return r.first + Math.trunc(f * (Math.max(r.G, r.first) - r.first) + 0.5);
+  return Math.trunc(f * r.end + 0.5);
 }
-// the press machine's outputs made on the replay; Yes ends Try it, and the stage holds the replay it left
+/* the press machine's outputs made on the replay, the pointer's held move first; Yes ends Try it, and the stage holds
+   the replay it left. A live replay whose rewind leaves idle takes no key or button of the world until it is idle
+   again (replay.js input), and lets go of seat 0's input at its rebuild, so the page holds none down either */
 function pressOut(outs) {
+  if (outs.length) liveFlush();
   for (const [c, v] of outs) rep.press(c, v);
-  if (outs.length && rep.view().left) { S.try = false; controls(); syncURL(); }
+  const v = outs.length ? rep.view() : null;
+  if (v && v.left) { S.try = false; controls(); syncURL(); }
+  if (v && v.live && v.live.rw !== 'idle') down.clear();
+}
+/* TRY IT YOURSELF'S WORLD on a live frame (rewind-spec.md 9.6): canvas point q as a world point [x, z] through the
+   frame's fit when it lies on the column or the map (frame.js onWorld) and on no control of the HUD, else null. The
+   replay takes it only after a fork (replay.js input). */
+function liveWorld(q) {
+  const F = FR.hud, r = FR.rec, M = FR.gv && FR.gv.map;
+  if (!F || !F.fit || !r || !r.live || r.question || !M || frameHit(q)) return null;
+  const x = (q.x - F.fit.ox) / F.fit.s, z = (q.y - F.fit.oz) / F.fit.s, cell = +M.cell || 16;
+  return WikiFrame.onWorld(x, z, F.Hg, (+M.w || 1) * cell, (+M.h || 1) * cell) ? [x, z] : null;
+}
+const liveTry = () => frameTry() && !!FR.rec && !!FR.rec.live;
+// the pointer's last world point, sent once before each replay step and before each press (rewind-spec.md 9.6)
+function liveFlush() {
+  if (!liveMove || !rep) return;
+  const m = liveMove;
+  liveMove = null;
+  try { rep.input({ move: m }); } catch (x) { fail(x); }
 }
 stage.addEventListener('mousedown', e => {
   if (!frameTry()) return;
   e.preventDefault();
   const q = canvasPoint(e), h = frameHit(q);
-  if (h) pressOut(PRESS.down(h.src, h.key, e.button !== 0, trackTick(q)));
+  if (h) { pressOut(PRESS.down(h.src, h.key, e.button !== 0, trackTick(q))); return; }
+  const w = liveTry() && liveWorld(q), b = BTN[e.button];
+  if (w && b) { liveMove = w; liveFlush(); if (!down.has(b)) { down.add(b); send({ down: b }); } }
 });
-window.addEventListener('mousemove', e => { if (frameEntry()) PTR = canvasPoint(e); });
+window.addEventListener('mousemove', e => {
+  if (!frameEntry()) return;
+  PTR = canvasPoint(e);
+  const w = liveTry() && liveWorld(PTR);
+  if (w) liveMove = w;
+});
 window.addEventListener('mouseup', e => {
   if (!frameTry() || !PRESS.held || e.button !== 0) return;
   const q = canvasPoint(e), h = frameHit(q);
@@ -654,7 +717,11 @@ function strip(v) {
 
 /* ---- Try it yourself: the stage's mouse and the modifier keys go to sim.input; the sidebar's buttons are the sim's ---- */
 const down = new Set();                // the buttons and keys sent down and not yet up
-function send(ev) { if (!sim || !S.try || sim.done) return; try { sim.input(ev); } catch (x) { fail(x); } }
+function send(ev) {
+  if (liveTry()) { if (!ev.move) { liveFlush(); try { rep.input(ev); } catch (x) { fail(x); } } return; }
+  if (!sim || !S.try || sim.done) return;
+  try { sim.input(ev); } catch (x) { fail(x); }
+}
 function releaseAll() { for (const k of down) send({ up: k }); down.clear(); }
 // the pointer as a stage point clamped to the content rect: the map, and the sidebar with it. The sim decides what is
 // under it (the column or the map)
@@ -666,9 +733,10 @@ function world(e) {
 const BTN = { 0: 'lmb', 2: 'rmb' };
 stage.addEventListener('mouseenter', () => { overStage = true; });
 stage.addEventListener('mouseleave', () => { overStage = false; });
-stage.addEventListener('mousemove', e => { if (S.try) { const w = world(e); if (w) send({ move: w }); } });
+// a frame's stage takes its own (the frame's handlers above): a live frame's world through its fit
+stage.addEventListener('mousemove', e => { if (S.try && !frameEntry()) { const w = world(e); if (w) send({ move: w }); } });
 stage.addEventListener('mousedown', e => {
-  const b = BTN[e.button]; if (!S.try || !b) return;
+  const b = BTN[e.button]; if (!S.try || !b || frameEntry()) return;
   e.preventDefault(); const w = world(e); if (w) send({ move: w });
   if (!down.has(b)) { down.add(b); send({ down: b }); }
 });
