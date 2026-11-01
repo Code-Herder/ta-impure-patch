@@ -6,6 +6,13 @@
    caller writes the request into a shared buffer, wakes the worker and waits on an Atomics.wait; the worker writes
    the request to serve.py, reads its answer line and wakes the caller. One request is in flight at a time.
 
+   THE HANDSHAKE is the word flag[0]: the caller stores 1 once the request is in the buffer, the worker stores 2 once
+   the answer is (or once serve.py is gone), and nothing else writes it. A wake-up is not an answer: the worker's
+   Atomics.notify follows its store, so a worker stalled between the two notifies after the caller has already seen
+   the 2, read that answer and posted the next request, and that late notify wakes the next request's wait while the
+   buffer still holds the request itself. The caller therefore returns only on reading 2 after its own 1, never on
+   the wait returning; serve.py answers each request with exactly one line, so that 2 is its own request's answer.
+
      import { cobHost } from './cobhost.mjs';
      const cob = cobHost();                   // starts serve.py --stdio once
      WikiSim.play(entry, demo, layout, { ...ctx, cob: cob.forPack('tools/wiki/mockup/gfx/quickbuild') });
@@ -71,7 +78,8 @@ export function cobHost() {
     flag[1] = b.length;
     Atomics.store(flag, 0, 1);
     worker.postMessage('go');
-    Atomics.wait(flag, 0, 1);
+    // until the answer's 2, not until a wake-up: the previous answer's notify can arrive late (THE HANDSHAKE above)
+    while (Atomics.load(flag, 0) === 1) Atomics.wait(flag, 0, 1);
     const n = flag[1];
     if (n === -2) throw new Error('cobhost: serve.py --stdio exited');
     if (n < 0) throw new Error('cobhost: the answer is too large');
