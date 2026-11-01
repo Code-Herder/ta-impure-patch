@@ -750,14 +750,13 @@ def page(c, shot=None):
     if shot:
         grab(c, shot)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, node
-    # WATCH_NODE, are drawn either way
+    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching and
+    # Rewind, nodes WATCH_NODE and the next, are drawn either way
+    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", f"entry:{tree_node(REWIND)}"])
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == ["entry:5", f"entry:{WATCH_NODE}"],
-                  "(p3) fold:1 did not fold Building")
+    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == rest, "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3", "entry:5",
-                                                                             f"entry:{WATCH_NODE}"],
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == sorted(["entry:2", "entry:3", *rest]),
                   "(p3) fold:1 did not unfold Building")
     print("wiki page: (p3) Building folded and unfolded")
 
