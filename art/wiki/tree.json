@@ -2,4 +2,4 @@
   "tree": [ { "title": "Quality of Life", "children": [
               { "title": "Building", "children": [ { "entry": "quickbuild" }, { "entry": "buildshapes" } ] },
               { "title": "Reclaiming", "children": [ { "entry": "reclaim" } ] } ] },
-            { "title": "Replays", "children": [ { "entry": "watching" }, { "entry": "rewind" } ] } ] }
+            { "title": "Replays", "children": [ { "entry": "watching" }, { "entry": "takeover" }, { "entry": "rewind" } ] } ] }

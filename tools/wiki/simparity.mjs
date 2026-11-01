@@ -1292,8 +1292,9 @@ function forkCases() {
                 return `forked at ${R}, played to ${sim.tick}`;
               } });
       /* THE HANDOFF: Shift and the left button held in a placement gesture across R - 1; the fork lets go of both
-         without placing, and the selection and the armed building go. The gesture arms its building straight, so it
-         plays on a game without the sidebar, whose builds take no trip through the column (sim.js TRIP) */
+         without placing, and seat 0's selection and the armed building go. The gesture arms its building straight, so it
+         plays on a game without the sidebar, whose builds take no trip through the column (sim.js TRIP). The release is
+         the taken seat's alone (sim.js THE RELEASE), so a unit another seat's recorded click selected stays selected */
       const R = 601, held = JSON.parse(JSON.stringify(demo));
       if (!demo.game.sidebar) {
         // the commander picked where it stands on the build's tick, as a live entry's build needs (THE LIVE DATA RULE)
@@ -1312,8 +1313,8 @@ function forkCases() {
             return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}, selected ${v0.units.filter(u => u.selected).map(u => u.id)}`;
           if (sim.fork(R, [], 'refuse') !== 'ok') return 'FAIL the fork was refused';
           const v = sim.view();
-          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
-            return `FAIL the fork held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected).map(u => u.id)}`;
+          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected && u.owner === 0))
+            return `FAIL the fork held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected && u.owner === 0).map(u => u.id)}`;
           watch(sim, 60);
           return 'let go';
         } });
@@ -1324,8 +1325,8 @@ function forkCases() {
           sim.view();
           sim.release();
           const v = sim.view();
-          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
-            return `FAIL the release held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites`;
+          if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected && u.owner === 0))
+            return `FAIL the release held on: keys ${v.keys}, mode ${v.mode}, ${v.sites.length} sites, selected ${v.units.filter(u => u.selected && u.owner === 0).map(u => u.id)}`;
           watch(sim, 60);
           return 'let go';
         } });
