@@ -1834,7 +1834,7 @@ WATCH_PAGE = ("drawer", "play", "replay", "x1", "x2", "try", "about")
 # (v3) each demo held at a tick it shows its point at, no seek pending there (a capture then shows no world): play
 # paused, speed at 2x, fwd's seek done, the track let go, Bram's commander gone, the bookmark's toast, the question
 WATCH_SHOTS = (("play", 150), ("speed", 120), ("rewfwd", 100), ("track", 180), ("markers", 130), ("bookmarks", 90),
-               ("leave", 100))
+               ("leave", 201))     # leave at 201: Leave's question up, No held (replay.js: held 199..204)
 WATCH_PAIRED = ("play", "track", "bookmarks", "leave")    # (v3) beside the mockup at the same state
 HIT_PAGE, HIT_HUD, HIT_DIALOG = 0, 1, 2        # TAGPU_CMD_WIKIHIT.src (tagpu_wikiframe.h WIKIHIT_*)
 S_LEFT = "In the game, this goes back to the Replays browser."    # tagpu_wikiframe.h WIKIFRAME_LEFT
@@ -2041,6 +2041,14 @@ def watch_v3(c, shots, res):
             said.append(f"{part} {of} px equal")
         n, of, mx = region_diff(g, m, [emb[0], R["top"][1], emb[1], R["top"][3]])
         said.append(f"the emblems {n} of {of} px differ (up to {mx})")
+        # Leave's question: drawn in the game whenever the record has it open, measured beside the mockup's
+        dlg = [h for h in d["hits"] if h.get("src") == HIT_DIALOG]
+        if d["frame"].get("question"):
+            box = next((h["rect"] for h in dlg if h["key"] == "dialog"), None)
+            assert box and {"yes", "no"} <= {h["key"] for h in dlg}, \
+                f"(v3) {demo}@{tick}: the record has Leave's question open but the game drew no dialog: {dlg}"
+            n, of, mx = region_diff(g, m, box)
+            said.append(f"the question (held {d['frame'].get('held')!r}) {n} of {of} px differ (up to {mx})")
         n, of, mx = region_diff(g, m, R["world"])
         said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
         print(f"wiki watch: (v3) {demo} at tick {tick}: {'; '.join(said)}")
@@ -2122,22 +2130,28 @@ def watch_v4(c):
 
 
 def watch_v5(c):
-    """(v5) the costs: one fill's most during Try it's seek to the end, the render thread's stage HUD and bars, the
-    pass's peak against its caps. The window is closed and opened again first: the page's cost is counted from its
+    """(v5) the costs: one fill's most during Try it's seek to the end (paused, so the seek alone moves the game), the
+    render thread's stage HUD and bars, the pass's peak against its caps. The window is closed and opened again first: the page's cost is counted from its
     open, and the shots above step a whole replay in one fill, which no player's fill does."""
     c.keys("esc")
     wait_dump(c, lambda d: not d["open"], "(v5) Esc did not close the window")
     d = watch_open(c)
     press(c, d, "try")
+    # the walk over first (a press does nothing while it runs), then paused, so that only the seek moves the game:
+    # a lost press then fails here rather than the replay playing to the end at 1x
     d = wait_dump(c, lambda d: d.get("replay") and d["replay"]["try"] and d["try"]
-                  and any(h.get("src") == HIT_HUD for h in d["hits"]), "(v5) Try it did not start again")
+                  and d["replay"]["walked"] >= d["replay"]["end"] and any(h.get("src") == HIT_HUD for h in d["hits"]),
+                  "(v5) Try it did not start again", seconds=60)
+    if not d["replay"]["paused"]:
+        c.keys("dclick:%d,%d" % c.centre(hit_of(d, "play", HIT_HUD)))
+        d = wait_dump(c, lambda d: d["replay"]["paused"], "(v5) play did not pause the replay")
     x0, x1, _ = d["hud_run"]
     tr = hit_of(d, "track", HIT_HUD)
     k0 = d["replay"]["tick"]
     t0 = time.monotonic()
     c.keys("dclick:%d,%d" % (x1 - 1, (tr[1] + tr[3]) // 2))
     d = wait_dump(c, lambda d: d["replay"]["target"] < 0 and d["replay"]["game_tick"] >= d["replay"]["end"] - 30,
-                  "(v5) the seek to the end did not finish", seconds=120)
+                  "(v5) the seek to the end did not finish", seconds=60)
     secs = time.monotonic() - t0
     print(f"wiki watch: (v5) a seek to the end ({d['replay']['end']} game ticks) in {secs:.1f} s and "
           f"{d['replay']['tick'] - k0} demo ticks (the walk {d['replay']['walked']}); the page cost the game thread at "
