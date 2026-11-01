@@ -742,7 +742,14 @@ ftol(old)`, the step `d/8` truncated toward zero and at least ±1 when `d ≠ 0`
 (`0x468F73..0x468FBF`): only when the DisplayTimer `+0xF8` is below GameTime is it raised by 30 and
 the four rates re-read through `0x464AB0` (`+0x90`), `0x464AC0` (`+0x94`), `0x464AF0` (`+0x9C`)
 and `0x464B00` (`+0xA0`), each `fld [arg+off]; ret 4`. So the stored values ease every frame and
-the rates shown are sampled once a game second.
+the rates shown are sampled once a game second. `ftol` is `0x4E43A0`, MSVC's `_ftol`, which
+truncates (`or ah,0xC` at `0x4E43AF` before its `fistp`; [cob.md](cob.md)). MEASURED 2026-11-01 (a four-seat skirmish, the recorder's live rewind): at GameTime 1 the memo
+already held the stored values (10 000 each, rates 25/0 and 1/0); the memo is one per process and
+**persists through the recorder's seek and fork** -- a seek's own frame showed 9748.0 / 9697.0 while
+the stored values were already 10 000, and the next read, at most 15 frames later, the eased ones;
+the fork's frame at 1200 held the past's 9993.0 / 9793.0 against stored 9769.0 / 9612.7. Not
+measured: the memo frame by frame after a seek (the reads were 15 frames apart), and before a
+level's first frame.
 
 The four rects [DISASSEMBLED 2026-10-07]:
 

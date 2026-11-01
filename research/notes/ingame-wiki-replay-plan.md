@@ -3,8 +3,10 @@
 ## Status
 
 **Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
-Watching, landed (`a149e0ce`); Rewind in progress, its recorder rules shared with the wiki
-(`inc/tagpu_recrules.h`); Take over and Players and the camera not built.** The owner
+Watching, landed (`a149e0ce`); the second, Rewind a skirmish, built in the mockup and in the
+DLL's simulation, replay and frame on `worktree-qol_shift`, with Try it yourself's world input in
+the DLL, the threads' span and its game lane still open (G2, below); Take over and Players and the
+camera not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -47,6 +49,9 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 22 | The page's own controls | **Kept** beside the HUD's: the page's play, replay and speed drive the demo, the HUD's the replay inside it | The page stays the same on every entry |
 | 23 | Leave, then Yes, in Try it yourself | **The stage's replay ends**, with a caption saying that in the game this returns to the Replays screen | |
 | 24 | The theatre's arrangement, Leave's question, the bottom bar, the viewer's cursor | Taken as the presentation spec recommends and corrected in the browser at W1: a row of tabs, the transport, Try it and About, the About panel over the stage's right, the tree a drawer, no keys strip; Leave's question at YESORNO's own rectangles, whitebox until a real Watch is measured; the bottom bar as the bare strip (a hovered unit's readout is a gap); the viewer's cursor the game's arrow at the player's cursor scale | |
+| 25 | What a fork and Back to now leave of the player's input (2026-11-01) | **The game's.** Held keys, buttons and gestures are let go without acting; the selection and the armed building go too, because the game's rebuild clears them (MEASURED, *What the game's live rewind leaves*, below) | A release that acted would finish a box select or a placement the player never made; keeping the selection would show what the game does not |
+| 26 | How long a fork plays in Try it yourself (2026-11-01) | **To the demo's `game.end`**, like every timeline; to play more, the player rewinds and plays from an earlier point | It adds no rule, and every seek stays within the authored game's length |
+| 27 | The recorded seat 0's cursor in Try it yourself before the first fork (2026-11-01) | **Not drawn**: the player's pointer is the screen's one cursor. The world still shows what seat 0 does -- its selections, sites and buildings. In the authored demos the simulation's cursor is drawn, the viewer and seat 0 being one scripted hand | The game shows one cursor; two arrows would leave the player unsure which one is theirs |
 
 ## The entries
 
@@ -106,10 +111,12 @@ them, as they refuse the existing rules ([the data format](ingame-wiki.md#the-da
 The keys as built, with every rule both readers refuse, are in [the in-game wiki](ingame-wiki.md),
 *The data format*: `"seats"` on a scene, `"game": {end, inputs, sidebar}` on a demo, `"seat"` (0
 only, decision 16) and `{ "kill": "<id>" }` on a game input, `"rival"` and `"corpse"` on a unit,
-the economy's figures, and the viewer's `{ "hud": … }` presses and `{ "until": "seeked" }` wait.
-Watching's demos press `play`, `speed`, `rew`, `fwd`, `track` (with `to`, and `drag` with `over`),
-`bookmark`, `leave` and `leave:no`; the other controls above wait for their entries, and a fork's
-part for R1.
+the economy's figures, the viewer's `{ "hud": … }` presses and `{ "until": "seeked" }` wait, and
+for Rewind `"live": true` on the entry and a demo's `"forks"`, its fork parts. Watching's demos
+press the replay HUD's `play`, `speed`, `rew`, `fwd`, `track` (with `to`, and `drag` with `over`),
+`bookmark`, `leave` and `leave:no`; Rewind's the live HUD's `rewind`, `rew`, `fwd`, `track`,
+`live_play` and `live_now`, each entry the one set only. The other controls above wait for their
+entries.
 
 ## The landings
 
@@ -117,12 +124,12 @@ part for R1.
 |---|---|---|---|
 | R0 | Research, no code | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost | **done 2026-10-31** (*What R0 found*, below) |
 | W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **landed 2026-10-31** (`a149e0ce`) |
-| R1-R3 | Rewind a skirmish | the fork rules, the top bar's rewind button, the strip; the economy's `stall` mode gets its first caller | not started |
+| R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **C1 landed** (`8005c54f`, `6c976067`); **C2-C5, F1, G1 and the release rule built** on `worktree-qol_shift`; **G2 open** |
 | T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction; a second seat's cursor (decision 16) | not started |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
 
 Watching went first because it builds the frame, the two clocks, seek and the kills, which every
-other entry stands on, without forks. **Rewind is next**, the owner's own example, whose fork
+other entry stands on, without forks. **Rewind is second**, the owner's own example, whose fork
 machinery Take over reuses; then Take over, then Players and the camera.
 
 **Watching, as built.** The planned W1 (mockup), W2 (C) and W3 (in the game) became one landing
@@ -153,6 +160,69 @@ not yet compared with a real Watch's (the question's place and the column's stat
 [INFERRED]); a hovered unit's readout on the bottom bar (decision 24); sound at 2× to 8× (*Open*);
 Escalation's dear ticks (*The measured costs*).
 
+**Rewind, as built.** One landing again, cut along the spec's seams, the recorder's part ahead of
+it on its own.
+
+| step | what it carries | commits |
+|---|---|---|
+| C1 | the recorder's rules in one pure header, `inc/tagpu_recrules.h` -- `REC_REFRESH_TICKS`, `REC_FORK_LIMIT`, `RECR_TIMELINES`, `reclossy_is_refresh` and the eviction `rec_fork_evict`, moved out of the recorder -- and `replay.js`'s twins, checked against it | `8005c54f`, `6c976067` (on `main`) |
+| C2 | the simulation's fork (`tagpu_wikisim_fork`, `sim.fork`) and release (`tagpu_wikisim_release`, `sim.release`); the column's row 0 at world z −32 in a game with the sidebar on (DZ); `fed`, the seat-0 inputs fed | `71bde6a3` |
+| C3 | the data: `live`, the live HUD's three controls, a demo's `forks` | `cde880e8` |
+| C4 | the replay's live mode (`replay.js`, `tagpu_wikireplay.c`): the live and past simulations, the chain's re-simulation, Play from here's arm, the forks and their eviction by the recorder's own functions, Back to now's release logged on the timeline, the top bar's memo; `simparity.mjs`'s live pass and LIVE_TRACE | `ce60384d` |
+| C5 | `art/wiki/entries/rewind.json`, its five demos, and `simcheck.mjs`'s live claims | `c66f3be4` |
+| F1, G1 | the live frame in the mockup and the DLL: the views by mode, the record's live fields, the live HUD on the stage, the wiki emblem at `right[0]`, the top bar's numbers, the one cursor | `10f44a02` |
+| the release rule | the release drops the trip it cuts off; the live data rule; `simcheck.mjs`'s release sweep and `wikitest sweep` | `2383ed38` |
+| G2 | **open**: the DLL's Try it world input on a live entry (`tagpu_wiki.c` `stage_world`), `TAGPU_CMD_WIKI`'s drawn span, the wikistate dump's live fields and `wiki_regression.py`'s `rewind` lane | -- |
+| D | the documentation pass | the `docs:` commit |
+
+**Decisions taken in the build**, each held by both simulations and checked by `simcheck.mjs`:
+
+- **The game's end is 2700 ticks** (1:30) in every demo. Every timeline holds at it, a Try-it
+  fork's included (decision 26), and a seek to it takes 43 steps of `WIKI_REPLAY_SEEK` (64).
+- **Seat 0 builds through the ARMCK.** The fixture layout (`art/wiki/side/fixture.json`), the
+  sidebar the offline checks play, pages a build menu on the ARM side only for ARMCK and ARMACK,
+  so the commander has none there: in the four demos with the sidebar the opening's ARMSOLAR and
+  ARMMEX are the ARMCK's, each the cursor's trip to its button, and the commander assists the
+  solar. With every seat's storage cut to 200 (the stall case) the game then runs dry in every
+  context simcheck plays (MEASURED 2026-11-01 without the units' scripts: refuse mode starved at
+  tick 120, 150 or 240). *Undo a death* plays without the sidebar, where a build arms at once: the
+  commander builds the solar and the ARMCK the extractor, each build whole on one tick (select,
+  arm, place).
+- **The release drops the trip in flight.** Back to now can land while seat 0's script is inside
+  a build trip; the release empties the selection the trip was planned from, so the rest of the
+  trip would press the MAIN2 the column now shows and lock the game. The release therefore drops
+  every generated input not yet fed (`trip_next = ntrip_in`, `genNext = gen.length`) with the
+  held state, and the fork drops a timeline's trips only by calling it, so one place does it. A
+  release costs the game at most the one order in hand: a trip it cuts off, or a building armed
+  and not yet placed.
+- **A live build selects its builder on its own tick** (the live data rule, a load refusal:
+  `tagpu_wikidata.c` `live_builds`, `sim.js` `checkLiveBuilds`). In a live entry each build
+  naming a type, in seat 0's game script and in every fork part, has on its own tick and before
+  it the click that selects its builder: a move, then select pressed, then select released. It
+  holds **by construction**: the release runs only between two ticks (Back to now and the fork
+  call it between steps, and a re-simulation applies a logged release at its tick before the
+  step), so it cannot fall between that click and the build. Reselecting before each build on an
+  earlier tick did not close it: a release could still land between the select and the build.
+  The refusal names the demo, the fork part and the tick.
+- **The sweep proves it.** `simcheck.mjs`'s release sweep plays each live entry's distinct games
+  with the release after every tick from 0 to the script's last input, each to its end, and fails
+  on a lock, a starved pass, a kill that found no unit or a stalled wait: 2266 releases over
+  Rewind's four distinct games (after ticks 0..242, 0..410, 0..710 and 0..900). It runs without
+  the units' scripts, which make a game about 75 times dearer (MEASURED 2026-11-01: 0.75 s against
+  10 ms for 2700 ticks); a starve that only the scripts' later start of work would bring is the
+  one case it does not play. `simparity.mjs` holds the C sim to `sim.js` at every release's end
+  through `wikitest sweep`, in two contexts.
+
+**Not closed by Rewind** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): G2 above, so
+no part of Rewind has run in the game yet and its page cost (the plan's 0.5 ms target), its
+longest seek and its fork's frame are not measured; its scene has no stage description
+(`art/wiki/stage/rewind.field.json`), so `stagemap.py check` refuses it and the game's stage would
+draw its ground as the whitebox; the entry's text does not yet say that the
+wiki's game stops at its end (decision 26); the eviction is checked by LIVE_TRACE and shown by no
+demo (Take over's demo 4 shows it); the arrow and diamond the game draws round the recorded
+commander in the past are the overlays', P1's [INFERRED]; the live game has no speed of its own
+(one game tick a demo step, the game's 1×), and the Pause key during a rewind is not modelled.
+
 ## The measured costs
 
 MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the tick costs by
@@ -180,7 +250,9 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
   in a frame that composes them, nothing in one that keeps them; the wiki's layer peaked at 1 309
   of 32 768 instances (87 batches of 1024).
 - **The packet**: `TAGPU_PK_WIKI` 167 536 bytes with the frame record (1 512 of them), the head 328
-  with the replay's serial; `TAGPU_CMD_WIKI` 10 032.
+  with the replay's serial; `TAGPU_CMD_WIKI` 10 032. Rewind's live fields grow the record to
+  1 592 bytes and the area to 167 616, the head still 328 (sizeof on the DLL's compiler,
+  2026-11-01); the command record stays 10 032 until G2 adds the drawn span.
 
 ## What R0 found
 
@@ -209,6 +281,38 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
   in 3.56 ms, the dearest 1 033 ticks in 4.37 ms (4.78 ms with the DLL's compiler under Wine), the
   worst single tick 33 µs (MEASURED 2026-10-31). A seek needs no snapshots. A seek must count the
   sound events it re-simulated as heard, or they play at once.
+
+## What the game's live rewind leaves
+
+MEASURED 2026-11-01 before Rewind's code was written, on the reference setup under Wine: `main`
+`a149e0ce`'s DLL, one four-seat skirmish (the `battle` fixture's load), true sight, driven with
+`tacli rewind`, `shot`, `peek` and `ui`, the commander selected (unit `+0x110` bit 4) and a
+building armed from its build page (`main+0x2CC3` 14) before each open. The engine-side facts are
+in the engine map ([recorder.md](engine/recorder.md), *What the live rewind leaves of the
+player's screen and input*; [input.md](engine/input.md), the order byte's cancels).
+
+- **Open** keeps everything: the column (the build page), the selection, the armed mode, and the
+  armed building's ghost drawn at the pointer over the world. The wiki's `player` view.
+- **The past** (a seek to 700 showing 699): the player controls the spectator record 10 and views
+  their own (`main+0x2A42` 10, `+0x2A43` 0); the column shown at the open stays (not idle MAIN2);
+  nothing selected, nothing armed (`0x2CC3` 1, `+0x2CC4` keeping a stale type); the fog the seat's
+  own at the GameTime shown; the top bar's stored values the past's, eased, and its rates the ones
+  sampled before the seek (+25/−0 energy shown at 699 while the record held 50.15 of expense).
+  The wiki's `past` view.
+- **Back to now** (at 2501, 165 ms) and **a fork** (asked at 1500, taken over at 1201, 221 ms)
+  restore neither the selection nor the armed mode, and show the side's MAIN2. The wiki's release.
+- **The resource bar's DisplayTimer** (the viewed record's `+0xF8`) is 0 in a record no frame has
+  drawn, 30 at GameTime 1, 60 from 31, 90 from 61; a seek and a fork set it to the GameTime shown
+  (399 after a seek to 400, 1200 at the fork). After Back to now at 2501 it read 2561 at 2536: set
+  to G and raised at 2502 and 2532 [INFERRED from the arithmetic].
+- **The memo** of the bar persists through a seek and a fork (the seek's own frame showed
+  9748.0 / 9697.0 while the stored values were already 10 000), and at GameTime 1 it equalled the
+  stored values (10 000).
+
+Not measured: the open and the past with the pointer on the strip; the memo frame by frame after
+a seek (the reads were 15 frames apart and it had converged); what keys or buttons the player holds
+through a fork or Back to now; the arrow and diamond the game draws round the recorded commander in
+the past, [INFERRED] the replay overlays.
 
 ## Open
 

@@ -1015,7 +1015,11 @@ recalled a group and `0x2CC3` went from 14 to 1. On that instance the plain digi
 traced. **In stock a
 placement outlives the units it would order** — MEASURED 2026-09-26 with
 `tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
-and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
+and `0x2CC4` 246, and the square and our build ghost stayed on the pointer. **Impure's live
+rewind leaves the byte 1** — MEASURED 2026-11-01: from 14 armed before the open, `0x2CC3` read 14
+while the strip was open, and 1 in the past, after a return to now and in a fork, `0x2CC4` keeping
+its type each time; which write puts it there is not traced ([recorder.md](recorder.md), *What the
+live rewind leaves of the player's screen and input*).
 
 **B9 checks it at two points of the frame, for a placement and for every command mode.** The in-play handler `0x499200` handles the mouse
 first (the build cursor at `0x499241`, the cursor choice `0x48D220` at `0x499297`, the click

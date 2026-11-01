@@ -2064,6 +2064,38 @@ pointer; the remainder initializes ten `0x20`-byte groups and returns `ret 4`
 at `0x4801E3`. P1 reused all three buffers across two activations at GameTime
 1522 and then completed teardown and a second skirmish load.
 
+**What the live rewind leaves of the player's screen and input [MEASURED 2026-11-01].** Read with
+`tacli rewind`, `peek`, `shot` and `ui` on the reference setup under Wine, `main` `a149e0ce`'s DLL,
+in a four-seat skirmish (the `battle` fixture's load, true sight), with the commander (unit 1)
+selected (`+0x110` 0x35, bit 4 set) and a building armed from its build page (`main+0x2CC3` 14,
+`+0x2CC4` 71 ARMLLT or 112 ARMSOLAR, `ARMCOM2.GUI` or `ARMCOM1.GUI` over `ARMMAIN2.GUI`) before
+each open:
+
+- **Open** (paused at GameTime 2501) converts nothing: `main+0x2A42` and `+0x2A43` stay 0, and the
+  selection, the build page and `0x2CC3` 14 are kept, the armed building's ghost drawn at the
+  pointer over the world.
+- **The past** (a seek to 700, shown at GameTime 699): `+0x2A42` 10 (record 10: `+0x00` 1, `+0x73`
+  3) and `+0x2A43` 0, so the fog is record 0's at the GameTime shown and the bars stay seat 0's
+  (*The in-play interface takes the viewed record's side*, below). The GUI stack keeps the build
+  page shown at the open (`ARMCOM2.GUI` under `ARMMAIN2.GUI`), not MAIN2. The commander's `+0x110`
+  reads 0x21 or 0x25, bit 4 clear; `0x2CC3` is 1, and `+0x2CC4` keeps the stale 71. Record 0's
+  DisplayTimer `+0xF8` equals GameTime, so the bar's rates are not sampled again while the past is
+  held: it showed +25/−0 energy and +1.0/−0.0 metal, the open's, while record 0 held 50.15 energy
+  and 31.29 metal of expense.
+- **Return to now** (at 2501, 165 ms) and **a fork** (asked at 1500, taken over at 1201, 221 ms):
+  `+0x2A42` and `+0x2A43` 0, the commander's `+0x110` 0x25 (bit 4 clear, bit 5 kept), `0x2CC3` 1,
+  and `ARMMAIN2.GUI` with no build menu: neither the selection nor the armed building is restored.
+  Close after a seek is the same.
+
+Which writes clear them is not traced. [INFERRED: the selection bit and the build page's bits
+22–25 are `drop` rows of `replay-layout.tsv` (`selected`, `buildpage`), neither recorded nor
+restored, so a rebuilt unit carries none; with nothing selected, B9's `order_check`
+(`tagpu_patches.c`, *An order mode with nobody to order*) disarms through the right button's
+cancel `0x499100`, which writes `0x2CC3` = 1 and leaves `0x2CC4`.] It is not the free's clear at
+`0x486DE8`, which takes bit 5 with bit 4. Not measured: the open and the past with the pointer on
+the strip. The in-game wiki's Rewind entry copies these
+([the replay entries' plan](../ingame-wiki-replay-plan.md), *What the game's live rewind leaves*).
+
 **The mid-game spectator must receive the loaded seat's metadata [DISASSEMBLED].**
 The ordinary player init writes GameTime into `+0xF4` (WinLoseTime) at `0x464727`;
 a fresh playback initializes it at zero, while a mid-game init would stamp the live
