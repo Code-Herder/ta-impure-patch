@@ -179,8 +179,8 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
 - **The render thread**: the stage HUD's two builds at most 0.159 ms in a frame; the bars 0.301 ms
   in a frame that composes them, nothing in one that keeps them; the wiki's layer peaked at 1 309
   of 32 768 instances (87 batches of 1024).
-- **The packet**: `TAGPU_PK_WIKI` 167 528 bytes with the frame record (1 512 of them), the head 320
-  unchanged; `TAGPU_CMD_WIKI` 10 028.
+- **The packet**: `TAGPU_PK_WIKI` 167 536 bytes with the frame record (1 512 of them), the head 328
+  with the replay's serial; `TAGPU_CMD_WIKI` 10 032.
 
 ## What R0 found
 

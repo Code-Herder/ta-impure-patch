@@ -57,6 +57,7 @@ static int      s_nover;
 #define WIKISTATE_TOPMAX 64             /* the frame's TOP range: Leave's question and the viewer's
                                            cursor, about a dozen ops (tagpu_wikistage.c frame_top) */
 static WIKIFRAMEREC s_rec;              /* the record's frame, copied and bounded as data        */
+static uint32_t     s_repSerial;        /* the packet's rep_serial, of the frame s_rec is from   */
 static int          s_frameOn;          /* this frame's stage is a game frame with its record     */
 static HUDSTATE     s_hst;              /* 35 KB                                                  */
 static HUDOPS       s_hops;             /* 0.5 MB                                                 */
@@ -585,6 +586,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
        sizes: the bar's height on screen (tagpu_hud_live, as tagpu_hudstate.c reads it) */
     u = (float)vh / 720.0f;
     tagpu_hud_live(&pw, &bh, &q8);
+    s_repSerial = w->rep_serial;
     sv = tagpu_pk_wiki_stage(pk);
     if (sv && w->has_stage) {
         memcpy(&s_view, sv, sizeof s_view);
@@ -875,6 +877,8 @@ void tagpu_wikistate_drawn(int drew, int cursor)
         s_map.hud_x1 = dev(s_hox, tagpu_hud_snap(s_hops.track_x1 * s_hpx));
         s_map.hud_end = s_rec.end;
     }
+    /* the replay this map's HUD, run and end are of: the serial of the packet they were drawn from */
+    s_map.rep_serial = s_repSerial;
     s_drew = 1;
 }
 

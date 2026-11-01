@@ -393,6 +393,11 @@ static WIKISEAT       s_heldSeat[WIKI_SEATS];
 static WIKIECON       s_heldEcon[WIKI_SEATS];
 static WIKIVIEW       s_heldGv;                 /* its game part only: game, nseat, seat, econ   */
 static int            s_repGen = -1, s_repQuiet = -1;   /* the replay's sound, as last synced   */
+/* THE REPLAY'S SERIAL: incremented whenever s_rep is made or freed, published in each packet
+   (TAGPU_PK_WIKI.rep_serial) and named by the hit map drawn from it, so a press on the stage HUD
+   acts only on the replay that map was drawn for (frame_current). Wraps after 2^32 makes and frees,
+   which no session reaches. */
+static uint32_t       s_repSerial;
 
 static const WIKIDATA* data(void)
 {
@@ -511,7 +516,10 @@ static void sim_free(void)
 {
     sound_tally();
     if (s_simOn) tagpu_wikisim_free(&s_sim);
-    if (s_repOn) tagpu_wikireplay_free(&s_rep);
+    if (s_repOn) {
+        tagpu_wikireplay_free(&s_rep);
+        s_repSerial++;
+    }
     s_simOn = s_repOn = 0;
     s_frameHave = 0;
     s_heldGv.game = s_heldGv.nseat = 0;
@@ -942,6 +950,7 @@ static void start(void)
     s_cast = cast;
     if (e->frame == WIKI_FRAME_GAME) {
         s_repOn = 1;
+        s_repSerial++;
         s_repTry = s_try;
     } else
         s_simOn = 1;
@@ -1220,6 +1229,16 @@ static int frame_try(void)
     return s_repOn && s_repTry && s_try && !s_rep.done;
 }
 
+/* THE HIT MAP IS THE RUNNING REPLAY'S: the last frame drawn was a game frame of this entry, drawn
+   from a packet of this replay (s_repSerial). An ORDERING, not a timing: the render thread copies
+   the serial into the map with the frame it drew from the same packet, so a map whose serial
+   matches holds the stage HUD, the playhead's run and the end of the replay running now, and a
+   press a frame of an earlier replay would scale is never made. */
+static int frame_current(void)
+{
+    return s_hit.frame && s_hit.entry == s_entry && s_hit.rep_serial == s_repSerial;
+}
+
 /* A REPLAY'S PART OF THE RECORD (wiki.js drawReplay): the held view, its frame record and the
    viewer's caption. Called after the fill's last step and press: the game's view is valid only until
    the next (tagpu_wikireplay_game), and the record holds values only, so it outlives it.
@@ -1298,7 +1317,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     if (dt > 0.25) dt = 0.25;
     /* the track held in Try it seeks with the pointer at each fill, as the game's HUD seeks during a
        drag (tagpu_hudinput.c), before the fill's steps so that the seek is the one they play */
-    if (frame_try() && !strcmp(s_press.held, "track")) {
+    if (frame_try() && frame_current() && !strcmp(s_press.held, "track")) {
         int cx, cy, c, v;
         if (mouse_last_client(&cx, &cy) && tagpu_wikiframe_press_drag(&s_press, track_tick(cx), &c, &v))
             replay_press(c, v);
@@ -1342,6 +1361,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     memcpy(w->scroll, s_scroll, sizeof w->scroll);
     lstrcpynA(w->msg, s_msg, sizeof w->msg);
     w->shot = s_shot;
+    w->rep_serial = s_repSerial;
     w->about = (uint8_t)s_about;
     w->drawer = (uint8_t)s_drawer;
     w->leave_held = (uint8_t)(!frame_try() ? 0 : !strcmp(s_press.held, "yes") ? 1 : !strcmp(s_press.held, "no") ? 2 : 0);
@@ -1606,18 +1626,20 @@ static void check(void)
 static void frame_down(int src, const char* key, int cx)
 {
     int c, v;
-    if (frame_try() && tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), &c, &v)) replay_press(c, v);
+    if (frame_try() && frame_current() && tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), &c, &v))
+        replay_press(c, v);
 }
 
 /* the left button's release, wherever it is made: the control held is let go, acting when the
    release lands on it (a HUD control or the question's answer, never the page's control of the
-   same key) and the track seeking to where it lets go */
+   same key) and the track seeking to where it lets go. A release while the hit map is not the
+   running replay's (frame_current) lets the control go without acting. */
 static void frame_up(void)
 {
     char key[TAGPU_WIKI_KEY];
     int cx, cy, src, c, v, T, on = 0;
     if (!s_press.held[0]) return;
-    if (!frame_try()) {
+    if (!frame_try() || !frame_current()) {
         tagpu_wikiframe_press_init(&s_press);
         return;
     }

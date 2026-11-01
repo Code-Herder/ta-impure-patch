@@ -1467,9 +1467,10 @@ draws it.
   the page demo's place, steps it as above, copies the held view, fills the record after the fill's
   last step (`tagpu_wikiframe_record`: the game's view points into the simulation's arrays, which
   the next step may free; the record holds values only), drains the sound past the view's `quiet`,
-  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 167 528 bytes with
-  it, the head 320, sizeof on the DLL's compiler), with the theatre's `about`, `drawer` and
-  `leave_held`. The reader takes `frame` only from an area of the whole size
+  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 167 536 bytes with
+  it, the head 328, sizeof on the DLL's compiler), with the theatre's `about`, `drawer` and
+  `leave_held` and the replay's serial `rep_serial` in the head, a count the game thread
+  increments whenever it makes or frees the replay. The reader takes `frame` only from an area of the whole size
   (`tagpu_pk_wiki_frame`).
 - **The render thread** (`tagpu_wikistate.c`) copies the record and bounds its copy before anything
   reads it (`tagpu_wikiframe_bound`: every count, flag, tick, side, colour, float and string); lays
@@ -1482,17 +1483,22 @@ draws it.
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
   (About, the drawer), the question, the stage HUD cut to the canvas, the page. Each hit carries
   its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
-  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 028 bytes), with the stage HUD's playhead run
-  as drawn and the end it stood for.
+  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 032 bytes), with the stage HUD's playhead run
+  as drawn, the end it stood for and the `rep_serial` of the packet that frame was drawn from.
 - **The HUD pass** (`tagpu_vk_hud.c`) draws the wiki's layer as seven lists in paint order
   (`WIKILISTS`), one partition of the instance range (`tagpu_huddraw_partition`: main batches
   first), and the bar texture.
 - **Try it's presses** go through the press machine (`tagpu_wikiframe_press_*`, the game's HUD
   rules): a button acts at its release on the same control, the track seeks at the press, while
   held and at the release, a right press is taken and does nothing, and with the question open its
-  Yes and No act at their release and a press outside it is No. The track's tick is the pointer on
-  the run the render thread last drew, which `tagpu_wikireplay_press` clamps to the game again, so
-  a stale run costs a seek to a slightly different tick, never one outside the demo.
+  Yes and No act at their release and a press outside it is No. A press, a drag and a release act
+  only while the hit map is the running replay's -- a game frame of this entry drawn from a packet
+  of this replay (`frame_current`: the map's `rep_serial` equals the game thread's) -- and a
+  release on any other map lets the held control go without acting, so a click on the frame of a
+  replay already replaced (another demo's Try it started under it) is never scaled by that
+  replay's end. The track's tick is the pointer on the run the render thread last drew, which
+  `tagpu_wikireplay_press` clamps to the game again, so a run a frame old within the same replay
+  costs a seek to a slightly different tick, never one outside the demo.
 
 ### The checks
 

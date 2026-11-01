@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10028 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10032 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -47,7 +47,7 @@
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so
    the 158 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles; MEASURED as
    sizeof on the DLL's compiler) and a frame:game entry's frame record after it (WIKIFRAMEREC,
-   1512 bytes; the whole area 167528, the head 320, MEASURED as sizeof on the DLL's compiler) are
+   1512 bytes; the whole area 167536, the head 328, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */
@@ -93,6 +93,9 @@ typedef struct TAGPU_PK_WIKI {
     uint32_t shot;              /* the last capture the trigger tagpu_wiki.shot asked for, 0
                                    none: the first frame of this view whose 3D image is drawn
                                    writes it (tagpu_wikiworld.h)                             */
+    uint32_t rep_serial;        /* the game thread's count of replays made and freed: the
+                                   replay this packet shows, which the hit map drawn from it
+                                   names (TAGPU_CMD_WIKI.rep_serial)                         */
     WIKISTAGEVIEW stage;        /* the demo's view by value: carried only with has_stage      */
     WIKIFRAMEREC  frame;        /* a frame:game entry's frame record (tagpu_wikiframe.h), `on` 0
                                    for any other entry; DATA, bounded by the render thread's
@@ -134,6 +137,9 @@ typedef struct TAGPU_CMD_WIKI {
     int16_t  hud_x0, hud_x1;    /* the stage HUD's playhead run as drawn, client pixels; equal:
                                    no track was drawn                                        */
     int32_t  hud_end;           /* the game tick the run's end stood for (the record's end)   */
+    uint32_t rep_serial;        /* TAGPU_PK_WIKI.rep_serial of the packet that frame drew: the
+                                   replay its stage HUD, its run and its end are of; data,
+                                   compared for equality only                                */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
