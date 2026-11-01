@@ -906,10 +906,13 @@ static void delete_fork(WIKIREPLAY* r, int id)
    the playing's stamps are written when it ends, tagpu_replay.c, and read only by a later
    eviction in the live game, which no demo reaches]; the evicted fork deleted, the new row
    selected; then LIVE MODE with seat h the human, the cursor's glide back from the row to seat h's
-   cursor starting now. THE BAR AT THE TAKEOVER (MEASURED, m0t-facts.md #1f): the memo is carried,
-   not reset -- the watch mode's zeros, the viewer's, as the game's memo persists through a seek and
-   a fork -- so it eases from 0 toward seat h's stored values; the DisplayTimer is R - 1, so the
-   step that plays R samples seat h's rates and raises it to R + 29. The game after the fix that
+   cursor starting now. THE BAR AT THE TAKEOVER: the memo is carried, not reset, so it eases from
+   the watch mode's zeros (the viewer's) toward seat h's stored values. MEASURED (m0t-facts.md #1f,
+   p0m-facts.md F1, 2026-11-01): at R - 1 the memo holds the viewer's zeros; the bars grabbed about
+   1 s after a running takeover read 6893 / 6917 on their way to seat h's 9861 / 9894, and 0.3 s
+   later the memo held those; the frames between were not read, so the ease itself is [INFERRED]
+   from the memo's own rule. The DisplayTimer is R - 1, so the step that plays R samples seat h's
+   rates (MEASURED: from R + 1) and raises it to R + 29. The game after the fix that
    runs a takeover's live game at once (takeover-pause-fix-spec.md) draws the takeover's own frame
    at R - 1 before its first batch of ticks; the wiki's first live frame is R's. */
 static void take_over(WIKIREPLAY* r, int h)
