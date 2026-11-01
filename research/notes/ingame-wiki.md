@@ -1571,7 +1571,10 @@ draws it.
   shown, the simulation's follows it over the world and is the one drawn there, its shape and
   animation at the pointer, the armed building's ghost with it. Whether the pointer is on the world
   is decided once, on the game thread (`TAGPU_PK_WIKI.try_world`, *Across the threads*), for both
-  the ghost and the cursor, so a frame never shows the ghost without the cursor or both cursors.
+  the ghost and the cursor. That answer comes through an earlier frame's map while the cursor is
+  placed on this frame's canvas, so the render thread also drops the ghost in any frame that does
+  not draw the simulation's cursor (`frame_hud`): no frame shows the ghost without the cursor, or
+  both cursors.
 - **The frame record** (`WIKIFRAMEREC`, 1592 bytes): what the stage HUD and the bars need, by value
   -- on, playing, the question, the seats (name, colour, lost, out, the units and eight economy
   figures each), the side and the badge's colour, the speed, Try it, the playhead and end, the
@@ -1602,7 +1605,8 @@ draws it.
   wiki's map only, so the stage can never drive the real replay) -- once for the boxes, once with
   the hint at the viewer's point or the player's pointer, and, with `try_world`, the simulation's
   cursor at the pointer, its shape and age from the record; composes the bars only when what they are
-  composed of changes (the published side art, the side, the colour, the frame's size), bumping a
+  composed of changes (the published side art, the side, the colour, the frame's size, a number
+  of the record's `bar`: on a live frame the economy moves those about once a tick), bumping a
   generation `tagpu_vk_hud.c` sends whole as `HUD_TEX_BAR` (`HOP_BAR` ops); splits the frame's TOP
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
   (About, the drawer), the question, the stage HUD cut to the canvas, the page. Each hit carries

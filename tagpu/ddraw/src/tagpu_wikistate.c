@@ -328,8 +328,9 @@ const unsigned char* tagpu_wikistate_bar(unsigned* gen)
 
 /* the bars for the bounded record on `side`'s art in a frame Wg x Hg, showing its numbers (a live
    frame's memo, Watching's zeros): their width, 0 for the whitebox strips. Composed again only when
-   the art, the side, the badge, the size or a number changes: a live frame's eased numbers settle
-   within a few frames of each change. */
+   the art, the side, the badge, the size or a number changes. A live frame's numbers include seat
+   0's stored values, which move whenever the economy flows, so its bars are composed again about
+   once a game tick; Watching's are zeros and compose once. */
 static int bar_bind(const WIKISIDE* side, int Wg, int Hg)
 {
     if (!side) return 0;
@@ -379,7 +380,7 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
     LARGE_INTEGER t0;
     char err[160];
     double X0, Y0, cw, ch, fx, fy, x, y;
-    int Wg, Hg;
+    int Wg, Hg, simDrawn = 0;
     QueryPerformanceCounter(&t0);
     tagpu_wikistage_canvas(s_fr.stage, u, &X0, &Y0, &cw, &ch);
     tagpu_wikistage_fit(v->w, v->h, v->has_side ? v->side.h : 0, 1, cw, ch, u, &fit);
@@ -460,6 +461,7 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
                     sf->cursor_y = w->ptr_y - s_dlgY;
                     sf->cursor_shape = s_rec.sim.shape;
                     sf->cursor_age = s_rec.sim.age;
+                    simDrawn = 1;
                 }
             }
             if (s_hudOn && (rebuild || s_hst.mx >= 0) && !tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err))
@@ -470,6 +472,12 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
             tagpu_logf("wiki: the stage HUD's layout refused (%s) - the wiki is not drawn this session", err);
         }
     }
+    /* THE GHOST GOES WITH THE CURSOR: try_world, which kept the view's ghost, is the game
+       thread's answer through an earlier frame's map, while the cursor above is placed on this
+       frame's canvas, so after a resize the two can differ for a frame. The ghost is drawn only
+       in a frame that draws the simulation's cursor, so no frame shows it beside the player's
+       arrow (s_view is this thread's copy; the stage and the 3D scene both read it after this). */
+    if (w->try_it && w->try_world == 1 && !simDrawn) s_view.has_ghost = 0;
     {
         const double hud = elapsed_ms(&t0);
         QueryPerformanceCounter(&t0);
