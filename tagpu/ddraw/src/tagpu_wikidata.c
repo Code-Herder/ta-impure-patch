@@ -671,12 +671,51 @@ static int scene_has_id(const WIKIENTRY* e, const WIKIDEMO* d, const char* id)
     return 0;
 }
 
+/* THE LIVE DATA RULE (sim.js checkLiveBuilds): in a live entry the release
+   (tagpu_wikisim_release) can come between any two ticks of seat 0's game script and of a fork's
+   part, and it empties the selection a build is made from. So each build naming a type has, on its
+   own tick and before it in the order the inputs are fed (by tick, then file order; within one
+   input its move, then its press, then its release, as the sim's input() reads them), the click
+   that selects its builder: a move aiming the cursor, then select pressed, then select released.
+   The release runs only between two ticks, so it cannot fall between that click and the build; the
+   move is on the tick too because a trip the release cuts off leaves the cursor wherever it was.
+   Whether the click lands on a builder is the world's, which simcheck.mjs's release sweep plays
+   out. `part` is the fork part's id, 0 for the game script. */
+static int live_builds(R* r, const WIKIINPUT* in, int n, int part)
+{
+    int i, j;
+    for (i = 0; i < n; i++) {
+        /* step: 1 the cursor aimed, 2 then select pressed, 3 then released, over the inputs fed
+           before the build */
+        int step = 0;
+        char why[224], num[32];
+        if (!(in[i].has & WIKI_IN_BUILD) || in[i].build < 0) continue;
+        for (j = 0; j < i; j++) {
+            if (in[j].at != in[i].at) continue;
+            if ((in[j].has & WIKI_IN_MOVE) && step < 3) step = 1;
+            if (in[j].down == WIKI_ACT_SELECT && step == 1) step = 2;
+            if (in[j].up == WIKI_ACT_SELECT && step == 2) step = 3;
+        }
+        if (step == 3) continue;
+        if (part)
+            snprintf(why, sizeof why, "the fork part %d: the build at tick %s has no click selecting its builder on its own tick "
+                     "(a move, then select pressed and released), which a live entry's build needs", part, jsnum(num, sizeof num, in[i].at));
+        else
+            snprintf(why, sizeof why, "the build at tick %s has no click selecting its builder on its own tick "
+                     "(a move, then select pressed and released), which a live entry's build needs", jsnum(num, sizeof num, in[i].at));
+        return refuse(r, why, NULL);
+    }
+    return 1;
+}
+
 /* A GAME ENTRY'S DEMO'S GAME, sim.js checkGame: {end, inputs, sidebar} and no other key; end an
    integer 1..WIKI_GAME_END_MAX, sidebar a boolean; each input a game input (input), each kill of a
-   unit of the merged scene by its explicit id, once, at most WIKI_GAME_KILLS, at or before the end.
-   THE BOUND the game simulation's features rest on: no feature of the merged scene takes a unit's id
-   (its id, or f<k + 1> when it has none, sim.js's naming), since a unit's wreck takes the unit's,
-   and the merged scene's features and the kills together are at most WIKI_FEATS_MAX. */
+   unit of the merged scene by its explicit id, once, at most WIKI_GAME_KILLS, at or before the end;
+   on a live entry, each build after the click selecting its builder (THE LIVE DATA RULE,
+   live_builds). THE BOUND the game simulation's features rest on: no feature of the merged scene
+   takes a unit's id (its id, or f<k + 1> when it has none, sim.js's naming), since a unit's wreck
+   takes the unit's, and the merged scene's features and the kills together are at most
+   WIKI_FEATS_MAX. */
 static int game(R* r, const TJV* v, WIKIDEMO* d)
 {
     const TJV *c, *k, *inputs = tj_get(v, "inputs");
@@ -720,6 +759,7 @@ static int game(R* r, const TJV* v, WIKIDEMO* d)
         if (!(in->at <= g->end)) return refuse(r, "a kill is after the game's end", NULL);
         kills++;
     }
+    if (e->live && !live_builds(r, g->input, g->ninput, 0)) return 0;
     if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
     return 1;
 }
@@ -815,7 +855,8 @@ static int viewer_order(R* r, const WIKIDEMO* d)
 /* A LIVE DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most WIKI_DEMO_FORKS
    parts, each exactly {id, from, parent, inputs}; each input a game input (input), at a tick
    from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
-   WIKI_GAME_KILLS. THE BOUND the game simulation's features rest on, over the parts too: the merged
+   WIKI_GAME_KILLS; each build after the click selecting its builder (THE LIVE DATA RULE,
+   live_builds). THE BOUND the game simulation's features rest on, over the parts too: the merged
    scene's features, the game script's kills and every part's together are at most WIKI_FEATS_MAX
    (tagpu_wikisim_fork holds a fork to the same at run time). */
 static int forks(R* r, const TJV* v, WIKIDEMO* d)
@@ -853,6 +894,7 @@ static int forks(R* r, const TJV* v, WIKIDEMO* d)
             if (partkills == WIKI_GAME_KILLS) return refuse(r, "a fork part has more than 64 kills", NULL);
             partkills++;
         }
+        if (!live_builds(r, f->input, f->ninput, f->id)) return 0;
         kills += partkills;
     }
     for (k = 0; k < 2; k++) n += sc[k]->nfeat;

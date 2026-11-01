@@ -843,7 +843,9 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 
    THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the
    inputs of tick <= t, so every input not yet fed has its tick >= R and is the recorded future the
-   fork replaces. Then the release (tagpu_wikisim_release), as the game's fork leaves the player.
+   fork replaces: the script's inputs by its new script, the trips' generated ones by the release
+   (tagpu_wikisim_release), which drops them. The release comes before the new script is
+   installed, as the game's fork leaves the player.
    THE LIFETIME: the sim copies the part into a block of its own and frees the old script's; `in` is
    only read. */
 int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn);
@@ -852,7 +854,9 @@ int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_m
    input after Back to now and in a fork (tagpu_wikisim.c says how that was measured): no key or
    button held, no drag, no placement or reclaim gesture, no gadget captured, all let go without
    acting; nothing selected and nothing armed, the column routed to MAIN2; the spacing and the
-   sweep's kind kept. The fork calls it, and the replay layer at Back to now. */
+   sweep's kind kept; and every generated (trip) input not yet fed dropped, so a release costs the
+   game at most the one order in hand, a trip it cuts off or a building armed and not yet placed.
+   The fork calls it, and the replay layer at Back to now. */
 void tagpu_wikisim_release(WIKISIM* s);
 
 

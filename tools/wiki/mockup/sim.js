@@ -550,6 +550,30 @@ const WikiSim = (() => {
      that fails it. */
   const FRAME_BAR = 32;
   const frameFits = (w, h) => 3 * (SIDE_W + CELL * w) >= 4 * (CELL * Math.max(h, 2 * Math.ceil(SIDE_ROWS / (2 * CELL))) + 2 * FRAME_BAR);
+  /* THE LIVE DATA RULE (tagpu_wikidata.c live_builds): in a live entry the release (sim.release) can come between any
+     two ticks of seat 0's game script and of a fork's part, and it empties the selection a build is made from. So
+     each `build` naming a type has, on its own tick and before it in the order the inputs are fed (by tick, then file
+     order; within one input its move, then its press, then its release, as input() reads them), the click that
+     selects its builder: a `move` aiming the cursor, then `select` pressed, then `select` released. The release runs
+     only between two ticks, so it cannot fall between that click and the build; the move is on the tick too because
+     a trip the release cuts off leaves the cursor wherever it was. Whether the click lands on a builder is the
+     world's, which simcheck's release sweep plays out. `w` names the demo, or the demo and the fork part. */
+  function checkLiveBuilds(w, inputs) {
+    inputs.forEach((e, i) => {
+      if (!(typeof e.build === 'string' && e.build)) return;
+      // step: 1 the cursor aimed, 2 then select pressed, 3 then released, over the inputs fed before the build
+      let step = 0;
+      for (let j = 0; j < i; j++) {
+        const f = inputs[j];
+        if (f.at !== e.at) continue;
+        if (f.move && step < 3) step = 1;
+        if (f.down === 'select' && step === 1) step = 2;
+        if (f.up === 'select' && step === 2) step = 3;
+      }
+      if (step < 3) throw new Error(`${w}: the build at tick ${e.at} has no click selecting its builder on its own tick ` +
+        '(a move, then select pressed and released), which a live entry\'s build needs');
+    });
+  }
   function checkGame(entry, demo) {
     const game = isGame(entry);
     if (game && 'pace' in entry) throw new Error('a game entry has no pace');
@@ -605,6 +629,7 @@ const WikiSim = (() => {
       if (!(e.at <= g.end)) throw new Error(`${w}: the kill is after the game's end`);
       killed.add(e.kill);
     }
+    if (live) checkLiveBuilds(at, g.inputs);
     let partKills = 0;
     if ('forks' in demo) {
       const F = demo.forks, partIds = [];
@@ -642,6 +667,7 @@ const WikiSim = (() => {
             throw new Error(`${v}: a move is not two numbers`);
           if (!key(e.down) || !key(e.up)) throw new Error(`${v}: no key ${key(e.down) ? e.up : e.down}`);
         }
+        checkLiveBuilds(w, p.inputs);
         partKills += kills.size;
       }
     }
@@ -3102,8 +3128,17 @@ const WikiSim = (() => {
        captured are let go without acting [INFERRED: they are the hardware's, which no recording carries]; not
        input({up}), since a release acts (a box select, a placement) and would act on the player's behalf. The selection
        empties and the armed building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
-       settings rather than what the measurement read, stay. */
+       settings rather than what the measurement read, stay.
+
+       Every generated input not yet fed goes too: the rest of a build, reclaim or pick trip the release cuts off. The
+       trip was planned from the selection the release empties, so what is left of it would press the column MAIN2 now
+       shows; dropped, the release costs the game at most the one order in hand, a trip it cuts off or a building armed
+       and not yet placed, as a player whose click is cut off loses their selection and the half-made order with it.
+       This is the one place a timeline's trips are dropped: the fork drops them by calling this. A data input is never
+       dropped, and THE LIVE DATA RULE (checkLiveBuilds) puts the select of a build's builder on the build's own tick,
+       which a release, between two ticks, cannot split. */
     function letGo() {
+      genNext = gen.length;
       st.held = new Set(); st.drag = null; st.gesture = null; st.place = null; st.shiftPlaced = false; st.rg = null;
       sb.cap = null; sb.downOn = {};
       for (const u of units) u.sel = false;
@@ -3121,10 +3156,11 @@ const WikiSim = (() => {
        wrecks' table rests on), and the part resolves from nothing held and keeps the trips' data rule.
 
        THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the inputs of tick
-       <= t, so every input not yet fed has its tick >= R and is the recorded future the fork replaces. Then the
-       release, as the game's fork leaves the player: an authored part begins with the selection it needs. The other
-       seats' inputs are empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R
-       here. */
+       <= t, so every input not yet fed has its tick >= R and is the recorded future the fork replaces: the script's
+       inputs by its new script, the trips' generated ones by the release, which drops them. The release comes before
+       the new script is installed, as the game's fork leaves the player: an authored part begins with the selection
+       it needs, on the tick of each build it makes (THE LIVE DATA RULE, checkLiveBuilds). The other seats' inputs are
+       empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
     if (GAME) sim.fork = (R, inputs, mode) => {
       const at = `demo ${demo.id}: the fork at tick ${R}`;
       if (sim.tick !== R - 1) throw new Error(`${at}: the game stands at tick ${sim.tick}`);
@@ -3143,8 +3179,7 @@ const WikiSim = (() => {
       const part = B ? B.demo(raw) : raw;
       const fresh = resolve(demo, part.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE);
       if (TRIPS) checkTrips(fresh, end);
-      // the trips' inputs not yet fed are dropped with the script they came from
-      genNext = gen.length;
+      // the release drops the trips' inputs not yet fed with the selection they were planned from
       letGo();
       script = fresh;
       next = 0;

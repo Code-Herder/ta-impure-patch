@@ -18,6 +18,11 @@
    arguments demos takes ("-" for none) and the opponent's casting the file RIVAL holds, and prints
    as demos does; each view carries the game's part, "game", as sim.js's view does.
 
+   `wikitest sweep PAK ENTRY LAYOUT CASTING RIVAL IFACE COB` plays every demo's game of the game
+   entry the file ENTRY holds once for each tick r from 0 to its script's last input, with Back to
+   now's release (tagpu_wikisim_release) between r and r + 1, in the context game's arguments give,
+   and prints one line per r: {"entry", "demo", "r", "t", "stopped", "h"} (see sweep).
+
    `wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB` plays every demo of the game entry the
    file ENTRY holds through the replay layer (tagpu_wikireplay, its viewer's script played) in the
    context game's arguments give, and prints one line per demo tick from 0: {"entry", "demo", "t",
@@ -656,6 +661,50 @@ static int game(const char* path, const char* entry, const char* layout, const c
         }
         tagpu_wikisim_free(&s);
         if (rc) break;
+    }
+    run_close(&g);
+    return rc;
+}
+
+/* THE RELEASE SWEEP (simcheck.mjs releaseSweep): every demo of the game entry the file ENTRY holds,
+   its game played in refuse mode with tagpu_wikisim_release between tick r and r + 1 for every r
+   from 0 to its game script's last input, then on to its end, in the context game's arguments give;
+   one line per r: {"entry", "demo", "r", "t": the tick it ended on, "stopped": a lock, a starved
+   pass, a kill that found no unit or a stalled wait, "h": tagpu_wikisim_hash as 16 hex digits} */
+static int sweep(const char* path, const char* entry, const char* layout, const char* casting, const char* rival, int iface,
+                 int cob)
+{
+    char err[256];
+    GAMERUN g;
+    int j, k, r, last, rc = 0;
+    if (!run_open(&g, path, entry, layout, casting, rival, iface, cob)) return 2;
+    for (j = 0; j < g.e.ndemo && !rc; j++) {
+        const WIKIDEMO* d = &g.e.demo[j];
+        for (last = 0, k = 0; k < d->game.ninput; k++)
+            if (d->game.input[k].at > last) last = (int)d->game.input[k].at;
+        for (r = 0; r <= last && !rc; r++) {
+            WIKISIM s;
+            if (!tagpu_wikisim_init(&s, &g.e, d, WIKI_PLAY_GAME, g.lay, &g.ctx, err, sizeof err)) {
+                refused_line(g.e.id, d->id, err);
+                break;
+            }
+            while (s.tick < r && !s.done) tagpu_wikisim_step(&s);
+            tagpu_wikisim_release(&s);
+            while (!s.done) tagpu_wikisim_step(&s);
+            putchar('{');
+            key("entry", 1); str(g.e.id);
+            key("demo", 0); str(d->id);
+            key("r", 0); printf("%d", r);
+            key("t", 0); printf("%d", s.tick);
+            key("stopped", 0); fputs(s.locked != -1 || s.starved || s.bad_kill || s.stalled ? "true" : "false", stdout);
+            key("h", 0); hash(&s);
+            fputs("}\n", stdout);
+            if (s.oom) {
+                fprintf(stderr, "wikitest: %s/%s ran out of memory\n", g.e.id, d->id);
+                rc = 2;
+            }
+            tagpu_wikisim_free(&s);
+        }
     }
     run_close(&g);
     return rc;
@@ -1491,6 +1540,13 @@ int main(int argc, char** argv)
         cob_free();
         return rc;
     }
+    if (argc == 9 && !strcmp(argv[1], "sweep")) {
+        const int cob = strcmp(argv[8], "-") != 0;
+        if (cob && !cob_load(argv[8])) return 2;
+        rc = sweep(argv[2], argv[3], argv[4], argv[5], argv[6], atoi(argv[7]), cob);
+        cob_free();
+        return rc;
+    }
     if ((argc == 9 && !strcmp(argv[1], "replay")) || (argc == 10 && !strcmp(argv[1], "replaytrace"))) {
         const int cob = strcmp(argv[8], "-") != 0;
         if (cob && !cob_load(argv[8])) return 2;
@@ -1512,6 +1568,7 @@ int main(int argc, char** argv)
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
     fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]"
             " | wikitest game PAK ENTRY LAYOUT CASTING RIVAL IFACE COB SCRIPTED"
+            " | wikitest sweep PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
             " | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"

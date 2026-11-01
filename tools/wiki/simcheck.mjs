@@ -33,7 +33,8 @@
    distinct game script of its demos through WikiSim.game in every context, the opponent's casting beside the
    player's (the fixture's `rivals`, or under --pack the first other side's), and is checked on its own claims
    (gameClaims, stallClaims): to its end, never stalled, starved or killing no unit, each kill's wreck and death sound,
-   and the stall case. Then every demo plays as a replay (replay.js, runReplay) on its game and is checked on every
+   and the stall case; a live entry's game also, without the units' scripts, with Back to now's release after each
+   tick up to its last input (releaseSweep), which must not stop it. Then every demo plays as a replay (replay.js, runReplay) on its game and is checked on every
    replay's claims (replayClaims: its end, the walk and its markers, the seek claim) and its own (REPLAY_CLAIMS, by the
    demo's id); a live entry's demo plays its live mode (runLive) and is checked on every live replay's claims
    (liveClaims: the seek, fork, now and release claims, L held still, the end) and its own (LIVE_CLAIMS). Their tallies
@@ -1490,6 +1491,33 @@ function stallClaims(entry, d, layout, ctx, ok) {
   ok(r.last.v.game.starved, `in refuse mode the cut game ends starved (tick ${r.last.t})`);
 }
 
+/* THE RELEASE SWEEP, a live entry's game (rewind-spec.md section 5.2; sim.js THE RELEASE and THE LIVE DATA RULE):
+   Back to now's release between tick r and r + 1, for every r from 0 to the game script's last input, then the
+   script played on to the game's end, which it must reach without a lock, a starved pass, a kill that found no unit
+   or a stalled wait. The release drops the trip it cuts off and every build's builder is selected on the build's own
+   tick, so a release costs the game at most that one order; this plays every such cost out, the economy's included,
+   rather than arguing it. Each r is a fresh game, so the sweep costs (last input + 1) games: about 2300 for the
+   rewind entry's four distinct games, 20 s a context. It runs in every context without the units' scripts, which
+   reach the game only through a builder's INBUILDSTANCE gate (sim.js stance); with them a game costs about 75 times
+   as much (MEASURED 2026-11-01: 0.75 s against 10 ms, 2700 ticks), half an hour a context, so a starve that only the
+   scripts' later start of work would bring is the one case the sweep does not play. */
+function releaseSweep(entry, d, layout, ctx, ok) {
+  const last = Math.max(0, ...d.game.inputs.map(e => e.at)), stopped = [];
+  for (let r = 0; r <= last; r++) {
+    const s = WikiSim.game(entry, d, layout, ctx, 'refuse');
+    while (s.tick < r && !s.done) s.step();
+    s.release();
+    while (!s.done) s.step();
+    const v = s.view();
+    if (v.clock !== d.game.end || v.locked !== null || v.stalled || v.game.starved || v.game.badKill)
+      stopped.push(`${r} (tick ${v.clock}${v.locked !== null ? `, locked ${v.locked}` : ''}${v.game.starved ? ', starved' : ''}` +
+        `${v.game.badKill ? ', a kill found no unit' : ''}${v.stalled ? ', stalled' : ''})`);
+    s.free();
+  }
+  ok(!stopped.length, `Back to now's release after each tick 0..${last} plays the game on to its end` +
+    `${stopped.length ? `: not after ${stopped.length} of them, ${stopped.slice(0, 8).join(', ')}` : ''}`);
+}
+
 /* ---- THE REPLAYS: every demo of a game entry played by replay.js, its viewer's script moving the game through the
    HUD (research/notes/ingame-wiki-replay-plan.md, decisions 4, 11 and 17) ---- */
 /* A replay's frames: `all`, the replay's view each demo tick; `F(c)`, the first frame on viewer clock c (the step that
@@ -1912,6 +1940,7 @@ for (const c of games.length ? contexts() : []) {
       } else {
         gameClaims(entry, d, c.ctx, r, ok, t.refused, t.deaths);
         stallClaims(entry, d, c.layout, c.ctx, ok);
+        if (entry.live && !c.ctx.cob) releaseSweep(entry, d, c.layout, c.ctx, ok);
         if (c.name === 'identity') {
           // a game leaves a cast whose economy is outside its bounds unbound: it stops where it stops on unbound casts
           const lk = gameLock(entry, d, { ...c.ctx, casting: castsOff(c.ctx.casting) });
