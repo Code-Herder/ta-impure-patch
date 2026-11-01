@@ -5,7 +5,10 @@
 **Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
 Watching, landed (`a149e0ce`); the second, Rewind a skirmish, landed (`078ac2cb`) -- its
 simulation, replay and frame, Try it yourself's world input on the live frame and its game lane;
-Take over and Players and the camera not built.** The owner
+the game's own takeover fix it needed, P0, landed (`fa62ae5e`); the third, Take over a replay, is
+built -- a cursor for every seat, the picker, the Forks bay and its lanes, the takeover into a live
+game as any seat, Try it in the game and its game lane -- and its landing is in progress; Players
+and the camera not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -37,9 +40,9 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 11 | Seeking | **Re-simulation, spread over fills**: a seek plays from tick 0 (or a later start point, if one is added) to the target at most a fixed budget of ticks a fill; the stage holds the last world drawn and the HUD shows the playhead at the target. The first C landing measures a tick's cost. **Snapshots at each refresh only if** a seek to the end of the longest demo takes more than about a second, and then held to the re-simulated world by the state hash at every refresh in the parity check | Safe by construction: the world after a seek is the world after playing to that tick, the hash `simparity.mjs` already checks. A deep copy of `WIKISIM` (a dozen heap blocks and the COB VM's state) is the riskiest code here and is not built before it is needed. A seek in one fill would freeze the frame, unacceptable in multiplayer, where the wiki is open over a running game. 8× needs 8 game ticks a fill at 30 fps, the existing bound |
 | 12 | The order | **Vertical slices, one entry at a time**, each its mockup, then its C, then the game (below) | The mockup is the specification: each entry is corrected in the browser before any C is written for it |
 | 13 | The top bar while watching | **The game's: the viewed record's.** At full map that is the viewer's own record, whose storages the player init zeroes, so the bar reads 0 with both fills skipped; under Sight it is that seat's numbers in its side's art. The players column carries every seat's numbers | A replay shows what the game showed. If the zeros are wrong, the fix is the game's, and the wiki follows it |
-| 14 | The bottom bar | **Drawn**: PANELBOT of the viewed side, tiled from x 129 along the screen's last 32 rows, as `0x46A860` draws it | The HUD's dock sits on it in the game; the same art and loader as the top bar |
-| 15 | Sight on the other side | **Today's mixed frame**: the panel and PANELSIDE stay the loaded side's, the two bars take the viewed side's. When the mid-level re-skin (OQ-B, [the takeover](tadr-port/demo-recorder-s4-takeover.md), *The mixed-side interface*) lands in the game, the wiki follows it in the same landing | The stage shows what the game does now |
-| 16 | When the other seats get cursor inputs | **Deferred to Take over (T1) or the overlays (P1)**, whichever first has a demo that gives a seat other than 0 an input; until then both readers refuse a `seat` other than 0, and the opponent acts through its scene's orders | None of Watching's demos gives the opponent an input, so the parity check could not test the state a seat's input changes |
+| 14 | The bottom bar | **Drawn**: PANELBOT of the loaded side, tiled from x 129 along the screen's last 32 rows, as `0x46A860` draws it. After a takeover of a seat of the other side the game draws the bottom strip the load's (MEASURED 2026-11-01, M0-T: a CORE seat taken on an ARM load, the strip pixel-identical to the ARM takeover's, 0 of 27 776 pixels; [engine/ui.md](engine/ui.md), *The resource bar tiles in a loop*), so the wiki draws it from the load's side in every frame | The HUD's dock sits on it in the game; the same art and loader as the top bar |
+| 15 | Sight on the other side | **Today's mixed frame**: the panel, PANELSIDE and the bottom bar stay the loaded side's, the top bar takes the viewed side's -- as the game draws a takeover of the other side (MEASURED 2026-11-01, M0-T: the top bar's background, labels and badge CORE's after a CORE seat is taken on an ARM load, 8 319, 1 428 / 1 552 and 800 pixels apart from the ARM takeover's; the column, minimap and bottom strip 0 pixels apart). In the wiki the top bar's side is the record's `top_side`. When the mid-level re-skin (OQ-B, [the takeover](tadr-port/demo-recorder-s4-takeover.md), *The mixed-side interface*) lands in the game, the wiki follows it in the same landing | The stage shows what the game does now |
+| 16 | When the other seats get cursor inputs | **Settled by Take over**: every seat of a game has its own cursor, held keys and buttons, selection and armed mode in both simulations, and a game input names its seat (*Take over, as built*, below). A seat other than 0 is admitted only in a game whose sidebar is false, since the column is seat 0's | Take over's first demo has the opponent, Bram, act through cursor inputs, and Try it may take over any seat |
 | 17 | A click on a marker | **The timeline pressed at the marker's time**, a seek there; a marker has no hot area of its own in the game | What the game does |
 | 18 | Running dry | **An authored demo never runs dry**: one whose storage would fall below zero stops, `starved`, and `simcheck.mjs` fails the landing in any context where one does, so no demo's timing is ever the economy's. **In Try it yourself the builds stall at zero** as the engine's do, slowed to what the income meets | Refusing at load is impossible -- only playing it says. Clamping in Try it would show the player something the game does not do |
 | 19 | The opponent's side | **The first side of the running mod's layout that is not the player's**; with one side, the opponent keeps the entry's own types | A rule that names no mod |
@@ -94,7 +97,8 @@ them, as they refuse the existing rules ([the data format](ingame-wiki.md#the-da
 
 - **`"frame": "game"`** on the entry: the theatre layout and the whole game frame on the stage.
 - **A demo's `game`**: `{ "inputs": [...] }`, the recording's script on game time, its inputs the
-  existing kinds with an optional `"seat"` (0..3 in the design; 0 only until decision 16's entry) and the new `{ "kill": "<unit>" }`. A unit's
+  existing kinds with an optional `"seat"` (one of the scene's, 0 when absent; a seat other than 0
+  only in a game whose sidebar is false, decision 16) and the new `{ "kill": "<unit>" }`. A unit's
   `owner` in a scene is its seat.
 - **A demo's `inputs`** on such an entry are the viewer's, on demo time: the captions, the waits
   and `{ "hud": "<control>", ... }`, each played as the cursor's trip to the drawn control, as a
@@ -103,19 +107,23 @@ them, as they refuse the existing rules ([the data format](ingame-wiki.md#the-da
   the forks bay, a lane's watch, save and delete) and the top bar's rewind button and the strip's
   (back, forward, the track, Back to now, Play from here).
 - **A fork's part**: the game inputs the viewer's fork or takeover goes on with, keyed by the
-  fork it belongs to.
+  fork it belongs to, with the seat its fork takes. **A demo's kept forks**: the forks the
+  recording's file already holds when a Take over demo starts, as they were played.
 - **A scene's economy**: each seat's storage at the start; income and spending follow from the
   casting's figures.
 
 The keys as built, with every rule both readers refuse, are in [the in-game wiki](ingame-wiki.md),
-*The data format*: `"seats"` on a scene, `"game": {end, inputs, sidebar}` on a demo, `"seat"` (0
-only, decision 16) and `{ "kill": "<id>" }` on a game input, `"rival"` and `"corpse"` on a unit,
-the economy's figures, the viewer's `{ "hud": … }` presses and `{ "until": "seeked" }` wait, and
-for Rewind `"live": true` on the entry and a demo's `"forks"`, its fork parts. Watching's demos
+*The data format*: `"seats"` on a scene, `"game": {end, inputs, sidebar}` on a demo, `"seat"` (the
+seat rule, decision 16) and `{ "kill": "<id>" }` on a game input, `"rival"` and `"corpse"` on a unit,
+the economy's figures, the viewer's `{ "hud": … }` presses and `{ "until": "seeked" }` wait,
+for Rewind `"live": true` on the entry and a demo's `"forks"`, its fork parts, and for Take over
+`"takeover": true` on the entry, a demo's `"kept"` forks and a part's `"seat"`. Watching's demos
 press the replay HUD's `play`, `speed`, `rew`, `fwd`, `track` (with `to`, and `drag` with `over`),
 `bookmark`, `leave` and `leave:no`; Rewind's the live HUD's `rewind`, `rew`, `fwd`, `track`,
-`live_play` and `live_now`, each entry the one set only. The other controls above wait for their
-entries.
+`live_play` and `live_now`; Take over's the replay HUD's, its Take over set's `takeover`, `takeas`
+(with `seat`), `lanes`, `lane`, `main`, `export` and `delete` (the last three with `fork`) and, after
+the takeover, the live HUD's. The overlays, Sight, Follow, Jump and the stats window wait for
+Players and the camera.
 
 ## The landings
 
@@ -125,7 +133,7 @@ entries.
 | W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **landed 2026-10-31** (`a149e0ce`) |
 | R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **landed 2026-11-01** (`078ac2cb`; C1 earlier, `8005c54f`, `6c976067`) |
 | P0 | **A takeover starts the live game running** (the game, its own landing ahead of T1, owner's answer QB = A, 2026-11-01): the takeover ends the playing's pause (`tk_run`), the wiki does not open while a takeover is queued, and the live HUD draws from the frame whose visit armed the fork. MEASURED before it (M0-T, main `587ca2a7`): the live game stood paused at R − 1 = 1500 for 54 s and 68 s until the Pause key, no HUD drew meanwhile, the recording started only at the key, and the toast showed on the live HUD only when the game ran within its 1.8 s | the game's change; tareplay's W checks the game runs with no input | **landed 2026-11-01** (`fa62ae5e`) |
-| T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction; a second seat's cursor (decision 16) | not started |
+| T1-T3 | **Take over a replay**: a cursor for every seat (C1), the takeover data (C2), the replay's Take over (C3), the entry (C4), the mockup's frame and the DLL's (F1, G1), the threads and Try it in the DLL (G2), and the docs, as one landing | the picker, the Forks bay, the lanes, Save as a replay, Delete, the eviction; a second seat's cursor (decision 16) | **built 2026-11-01, landing in progress** (*Take over, as built*, below) |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
 
 Watching went first because it builds the frame, the two clocks, seek and the kills, which every
@@ -155,7 +163,7 @@ landing B (a whitebox top bar) was dropped by decision 20.
 | G5 | the documentation pass: the engine map (the economy, the wrecks, the death sound, MobileBuild's result 8, the resource and bottom bars, with the corrections R0 and the scouts found), the module note, [the in-game wiki](ingame-wiki.md) and this note | the `docs:` commit |
 
 **Not closed by Watching** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the other
-three entries; a second seat's cursor (decision 16); Leave's question and the watcher's column are
+three entries; Leave's question and the watcher's column are
 not yet compared with a real Watch's (the question's place and the column's state are
 [INFERRED]); a hovered unit's readout on the bottom bar (decision 24); sound at 2× to 8× (*Open*);
 Escalation's dear ticks (*The measured costs*).
@@ -225,12 +233,125 @@ it on its own.
 
 **Not closed by Rewind** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the game
 lane plays Rewind on the base game only -- under the five mods of the compatibility suite the
-`mods` lane holds its live bars (w7) and nothing else of the entry; the page's cost on
-the game thread is over the 0.5 ms target under the gate's load (*The measured costs*), and no lane
-fails on it; the eviction is checked by LIVE_TRACE and shown by no
-demo (Take over's demo 4 shows it); the arrow and diamond the game draws round the recorded
+`mods` lane holds its live bars (w7) and nothing else of the entry; the eviction is checked by
+LIVE_TRACE and shown by no Rewind demo (Take over's demo 4 shows it); the arrow and diamond the game draws round the recorded
 commander in the past are the overlays', P1's [INFERRED]; the live game has no speed of its own
 (one game tick a demo step, the game's 1×), and the Pause key during a rewind is not modelled.
+
+**Take over, as built.** One landing again, on Rewind's fork machinery, after the game's own fix
+it copies (P0: a takeover starts the live game running, the owner's answer QB). The owner answered
+the spec's four questions on 2026-11-01, all with the recommended answer: a takeover entry has no
+sidebar (QA); the game is fixed first so a takeover runs on at once (QB); the eviction is shown as
+the game shows it at that moment, the picker's warning and the outlined lane, with no watch-again
+step (QC); Watching's Try it keeps its Take over button and Forks bay drawn and inert (QD).
+
+| step | what it carries | commits |
+|---|---|---|
+| C1 | a cursor for every seat in both simulations: the input seats (`nin`), the acting seat, a seat's selection its own units' flags, the seat rule, the seated fork and the per-seat release, hash item 13 | `d654bfa6` |
+| C2 | the data: `takeover`, `kept`, a part's `seat`, the seven Take over controls and a press's `fork`, in both readers | `7d45fbac` |
+| C3 | the replay's Take over (`replay.js`, `tagpu_wikireplay.c`): watch mode on the selected chain, the picker, the lanes, the switch's two paths, Save and Delete, the takeover into live mode as any seat; `simparity.mjs`'s takeover pass and press traces | `2d6035b7` |
+| C4 | `art/wiki/entries/takeover.json` and its four demos, its place in `art/wiki/tree.json` (Replays, between Watching and Rewind), `art/wiki/stage/takeover.field.json` (Rewind's ground), `simcheck.mjs`'s TAKEOVER_CLAIMS | `564c79a4` |
+| F1, G1 | the frame in the mockup and the DLL: the record's Take over block and `top_side`, the stage HUD's Take over set, the six toasts, the indexed keys, the press machine's lanes, the top bar of the taken seat's side; `hud.js`'s Take over button down while asked, sought or open; then Back to main recording's cursor | `dd70166d`, `a1c35b4c` |
+| G2 | the drawn lanes in `TAGPU_CMD_WIKI`, Try it on a takeover entry in the DLL, the dump's Take over fields, `wiki_regression.py`'s `takeover` lane (t1)-(t5) and the `mods` lane's (w8), both in the gate | `0428fd23`, `a5f8e903` |
+| the scene and the pacing | w1's recorded goal moved; `cost()` charging a step whose trip acts its full limit | `fdfdf610`, `e29462e3` |
+| D | the documentation pass | the `docs:` commit |
+
+The four demos (`end` 1100, 900, 900 and 1000 demo ticks; every game 2700 ticks, the sidebar
+false): **takeover** -- Take over snaps back to R 301 and opens the picker, and Bram's row takes the
+game over while Ada's recorded inputs play on; **lanes** -- one kept fork (F1, Bram from 301), the
+bay opened, F1's lane switched to without a rebuild, Back to main recording seeking the recording;
+**save** -- two kept forks, F2 saved, F1 deleted in two clicks, F2 watched and then deleted while
+watched, so the replay goes back to the recording first and the bay closes; **evict** -- three kept
+forks, F1 watched and left, Take over at GameTime 1100 snapping to 901 with the warning that it
+replaces F2, and Ada's row taking over.
+
+**Decisions taken in the build**, each held by both simulations or both frames and checked:
+
+- **Per-seat input, a seat other than 0 only without a sidebar.** A game simulation holds an input
+  state for each input seat -- a takeover entry's every seat of its scene, since Try it may take
+  any; any other game's the seats its script and fork parts name; a page simulation one --: the
+  cursor, held keys and buttons, the drag, the armed building, the placement gesture, the spacing
+  and the reclaim sweep. Every input rule reads **the acting seat**'s (THE ORDERING in
+  `tagpu_wikisim.h`: `act` is 0 between calls; an input, a fed script input, a view and the step's
+  per-seat tail act as their seat and put it back). A seat's selection is its own units' `sel`
+  flags, and a deselect touches only the acting seat's units. The column -- the router, its
+  gadgets, its capture and the trips -- is seat 0's, so both readers refuse a seat other than 0 in a
+  game whose sidebar is not false (an over-approximation: an absent sidebar may be on), init
+  refuses more than one input seat beside a column, and a takeover entry's games must say
+  `sidebar: false` (QA). A game of one input seat hashes as before (item 13 is only a game's with
+  more than one), so Watching's and Rewind's hash lines did not move.
+- **`fork(R, part, mode, seat)` releases the taken seat only.** The inputs not yet fed (every one
+  of tick R or later) are split: the taken seat's recorded future and every kill are dropped (a
+  death after R is not fated, decision 8), every other seat's are carried; the new script is the
+  carried inputs and the part's, merged by tick, the carried first on a tie. The held-button rule
+  is checked per seat over it -- the taken seat's hand from nothing, every other seat's from what
+  it holds at R − 1 -- before anything is written. The release lets go of the taken seat alone, as
+  the game's takeover leaves its player; seat 0's release also drops the trips not yet fed and
+  routes the column to MAIN2. The taken seat becomes the viewed one, whose units' notices play.
+  With seat 0 and a script of seat 0 alone nothing is carried, so Rewind's fork is unchanged by
+  construction.
+- **The recording kills Ada's commander, c0, at 1500, beside her builder b0.** Demo 2 needs the
+  original's track to carry a death marker F1 does not: F1 plays from 301, and a fork drops the
+  recorded kills after its start. b0, the spec's only kill, is no commander and marks nothing. The
+  commander dies on the builder's tick, so the seat is left with the solar and the extractor alone,
+  as in Rewind's *Undo a death*. Each order of the two deaths that leaves a seat paying for a unit
+  without its commander starves the game, which refuse mode stops, in a mod pack: Bram's commander
+  in Escalation, Ada's before her builder in Twilight.
+- **w1's recorded goal is (290, 300).** The recording first sent Bram's CORAK w1 to (300, 330) at
+  701, inside Ada's ARMSOLAR (5 × 5 cells, x 240..320, z 320..400), where no node of the planner
+  stands w1's 2 × 2 body: every leg it walked began with an A* that expanded 1 730 of the map's
+  1 827 nodes and found no goal, nine times between ticks 701 and 786 in every simulation that
+  played the recording. (290, 300) is beside the same spot and clear of the solar and of c0 at
+  (330, 270) at 701; its plans expand 2 to 18 nodes. (340, 330), the other candidate, stands w1
+  where *evict*'s F4 sends b0 and moved the misses to b0. The claims read the recorded point from
+  the data, so none changed. A scene's points are the scene's to keep reachable: the pacing bounds
+  a fill's ticks, not a tick's cost (*The measured costs*).
+- **`cost()` charges a step whose viewer's trip acts on its clock tick the most a step runs**
+  (`tagpu_wikireplay_cost`, `replay.js` `R.cost`): max(SEEK, WALK, the top speed's 8), 64. Such a
+  step's press can start a seek, a switch or a rewind's seek that the same step then plays, which the
+  state before it cannot say; charged what the state said, a fill could run up to FILL + SEEK − 1
+  game ticks: 128 (MEASURED in one fill of Watching's `track`, of Rewind's `steps`, `play`,
+  `death` and `chain`, and of Take over's `save` and `evict`). Every other step is charged
+  what the state says. So the cost is never fewer than the ticks the step runs, and a fill runs at
+  most max(FILL, 64) = 64 game ticks (MEASURED: 64 at most over every demo of the three entries,
+  the page's fill at 8 and at 100 steps a fill). The walk that holds the clock feeds nothing, and a
+  step feeds its clock tick unless a wait holds it behind a pending seek, so neither is charged for
+  the trip. Try it's presses act between fills, outside steps. Pacing only: no hash moved.
+- **Back to main recording's cursor is resolved on the lanes drawn at its press.** The control is
+  drawn only on the watched lane, and its press leaves that lane, so a cursor resting on it, and
+  the next trip leaving it, found no control and jumped to the rest point. A trip carries the
+  timeline watched at its press (the cursor's `watched`, the frame record's `WIKIFRAMECUR.watched`,
+  bounded to 0..`RECR_TIMELINES` − 1), and `tagpu_wikiframe_pressed` / `frame.js` `pressed` resolve
+  a trip to or from `main` on the lanes as drawn then: open, that fork the watched one. Watching a
+  lane is what draws Back to main recording and widens the lane to hold it; the other flags only
+  fill. Presentation only: the replay's hash does not take it, and `framecheck.mjs` holds it equal
+  at every trip's start, press and release.
+- **`top_side`, the top bar's side.** The frame record carries the layout side of the human seat
+  (`tagpu_wikiframe_seat_side`: seat 0 the load's side, any other seat the opponent's, the first
+  layout side other than the load's, which casts the rival units) in a takeover's live game, and the
+  load's side in every other record. The top bar -- PANELTOP, the PANELBOT tiles after it, the
+  rects, the colours, the font and the badge's place -- is `top_side`'s; the badge's frame is the
+  human seat's colour; the bottom bar and PANELSIDE's column are the load's (decisions 14 and 15 as
+  M0-T measured them).
+- **The picker's rows dim by `units == 0`**, the game's rule, and a row on such a seat takes
+  nothing. Kept forks are live rows of the demo's file, `used` 0, in refuse mode; one whose seat has
+  no unit at its R − 1 fails the replay. The takeover carries the top bar's memo from watch mode's
+  zeros, so it eases from 0 toward the taken seat's values, and sets the DisplayTimer to R − 1.
+
+**Not closed by Take over** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the game
+lane plays it on the base game only -- under the five mods the `mods` lane holds the taken seat's
+two bars (w8) and nothing else of the entry; a taken seat has no column of its own, so in Try it a
+player who takes over orders on the map and cannot arm a building (QA); whether the game's top bar
+eases from 0 after a takeover is not resolved -- M0-T read the taken seat's values at the first
+read, at least 10 s late, and after P0 one window grab 1.06 s after the row drew METAL 6 893 and
+ENERGY 6 917 while the memo's floats read 0.29 s later already held 9 861 / 9 894 -- so the wiki's
+ease from 0 is [INFERRED]; why the bottom bar stays the load's when the viewed side changes is
+measured, not read in the engine ([engine/ui.md](engine/ui.md)); the viewed seat's contact bits,
+which the game's takeover changes (`+0x110` bit 9 cleared on every unit but the taken seat's,
+meaning not established), have no counterpart in the wiki. Left out on purpose: the computer
+players the game seats after a takeover (decision 8's line), per-seat columns (QA), the watch-again
+step (QC), and the refusals no wiki state reaches (the file worker's queue and tickets, `Cannot
+watch F<n>`, `Cannot delete F<n>`, `Take over refused`, `Cannot go back to m:ss`).
 
 ## The measured costs
 
@@ -269,16 +390,56 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
   the fork itself taking 0.019 to 0.029 ms (r4). The longest seek, a past game re-simulated from
   tick 0 to the strip's end (r5): 75 demo steps and 2.5 s alone, 87 and 3.3 s in the gate. The page
   cost the game thread at most 0.413 ms in one frame over 503 frames alone, and 0.558 ms over 502 in
-  the gate -- over the 0.5 ms target, which the lane prints and does not fail on. The render
+  the gate (the 0.5 ms target: *The page against the target*, below). The render
   thread's stage HUD at most 0.029 ms in a frame and the bars 0.201 ms alone (0.038 and 0.268 ms in
   the gate). The `mods` lane's (w7) held the live frame's two bars, `bar.js` given the record's
   numbers, pixel-equal on all six setups. The gate's 38 lanes (22 offline checks, 10 modes, 6
   setups): 37 passed; the page lane's fold check (p3) did not count Rewind's row under Replays,
   and with it counted (`f1cc29ed`) the page lane passed on its own.
-- **The packet**: `TAGPU_PK_WIKI` 167 616 bytes, the frame record 1 592 of them with Rewind's live
-  fields, the head 328 with the replay's serial; `try_world` sits in padding, so the area did not
-  grow with it. `TAGPU_CMD_WIKI` 10 040, the live strip's drawn span (`hud_first`, `hud_G`)
-  included (sizeof on the DLL's compiler, 2026-11-01).
+- **Take over in the game** (MEASURED 2026-11-01, `wiki_regression.py`'s `takeover` lane at
+  1920 × 1080, first as the only lane, then in the full gate): (t1) a watching frame of demo `lanes`
+  1152 × 544 with the Take over button 20 units tall and as wide as the transport plate above it,
+  the Forks bay at the housing's left end level with the track, and none of the live HUD's
+  controls; (t2) demos `lanes` (6 ticks) and `evict` (12 ticks, over watching, the lanes, the picker
+  and live) paused, the record -- its Take over block and `top_side` among the fields -- and the
+  replay's hash equal `replay.js`'s; (t3) the open picker at the limit (`evict` at 510), F1 watched
+  (`lanes` at 310) and Bram taken (`takeover` at 620): the column and both bars pixel-equal to the
+  mockup's, the taken frame's `top_side` 1; (t4) Try it on `evict`'s data: the bay opened three
+  lanes, a lane and Back to main recording switched (both sought), F2 saved and then refused, Take
+  over snapped 1101 to 900 and warned of F2, Bram's row took over as F4 at 901 with F2 gone, a
+  click as Bram on Ada's commander selected nothing, one on his own selected it, and a right click
+  on the ground moved it 187 units to its goal; a Delete armed and made; the watched F1 deleted,
+  the replay going back to the recording first; GameTime and the key ring unmoved; (t5) the seek
+  to 2700 in 73 demo steps and 2.6 s alone (78 and 3.6 s in the gate), the switch to F3 sought to
+  2100 in 62 (66, 3.3 s), the snap to 1800 in 73 (77, 3.3 s); the takeover's fork 0.004 ms alone
+  (0.010 ms in the gate); the stage HUD's two builds at most 0.118 ms in a frame (0.185 ms) and
+  the bars 0.001 ms. The page cost the game thread at most 0.516 ms in one frame over 440 frames
+  alone and 0.635 ms over 445 in the gate. The `mods` lane's (w8): Take over's first demo at tick
+  700 after Bram is taken, both bars pixel-equal to `bar.js` on all six setups, the top bar of
+  layout side 1. The lane passed in 343 s alone and 506 s in the gate, where every game lane
+  passed.
+- **A replay's fills** (MEASURED 2026-11-01 by playing the replay layer with the page's fill,
+  `WIKI_REPLAY_FILL` 64, on the DLL's i686 SSE2 build under Wine, on `fdfdf610`'s tree): the worst
+  fill per Take over demo 0.092 ms (`takeover`), 0.121 (`lanes`), 0.184 (`save`) and 0.142
+  (`evict`); Watching's 0.08 to 0.16 ms, Rewind's 0.15 to 0.21; no tick of a Take over demo over
+  50 µs. With w1's old goal the nine ticks of a full-grid A* miss cost 153 to 192 µs each against
+  0.91 to 0.98 µs for every other tick, and the fill across them 1.00 ms, the page's worst (t5 read
+  1.757 ms in the game then).
+- **The page against the target**: in the full gate of 2026-11-01 each replay entry's page cost
+  the game thread about 0.57 to 0.64 ms at most in one frame -- Watching's (v5) 0.565 ms over 233
+  frames, Rewind's (r5) 0.633 over 503, Take over's (t5) 0.635 over 445 -- against the plan's
+  0.5 ms. The replay's own fills are at most about 0.2 ms (above), so most of the frame's cost is
+  the page's other work [INFERRED estimate: about 0.4 ms]. The owner judged it fine for the wiki
+  (2026-11-01): in single player the wiki pauses the game while it is open (`tagpu_wiki.c`, THE
+  PAUSE), and in multiplayer the time touches only the viewer's frame time, never the simulation
+  [INFERRED: not measured]. The lanes keep printing the figure beside the target, so a regression
+  still shows.
+- **The packet**: `TAGPU_PK_WIKI` 167 704 bytes, the frame record 1 680 of them with Rewind's live
+  fields and Take over's block (the picker, the lanes, the human seat, the fork limit and its
+  warning, the chain's last, the fill, the picker's R and eviction, three forks, `top_side`, the
+  cursor's `watched`), the head 328 with the replay's serial; `try_world` sits in padding.
+  `TAGPU_CMD_WIKI` 10 056, the live strip's drawn span (`hud_first`, `hud_G`) and the drawn lanes
+  (`nlane`, `lane_id[3]`) included (sizeof on the DLL's compiler, 2026-11-01).
 
 ## What R0 found
 

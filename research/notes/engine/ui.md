@@ -2141,7 +2141,15 @@ PANELBOT[0]. The other art and the block's rules:
   bits 0 and 1 are both set (`0x46A88F..0x46A8A0`) it tiles **PANELBOT of the viewed side** (the
   side byte at `0x46A8A6..0x46A8D5`, the slot `main+0x14833 + 4s`) from x `0x81` at y
   `0x4B6710() − 0x20`, each frame's hotspot added, until x reaches the screen width
-  (`0x46A8E0..0x46A929`); then its own readouts, which this map has not read.
+  (`0x46A8E0..0x46A929`); then its own readouts, which this map has not read. **After a replay
+  takeover of a seat of the other side the strip stays the load's** while the top bar takes the
+  taken seat's side (MEASURED 2026-11-01 on the reference setup, Impure's Vulkan lane: a CORE seat
+  taken over on an ARM load, `main+0x2A42` = `+0x2A43` = 1 after it; against the takeover of the
+  ARM seat, the top bar's background, its METAL / ENERGY labels and the badge differ in 8 319,
+  1 428 / 1 552 and 800 pixels, the bottom strip, the column and the minimap in 0 of 27 776,
+  45 056 and 16 128). Why the strip does not follow the viewed side is not read [INFERRED: `main+0x3923B` bits 0
+  and 1 are not both set in that frame, so `0x46A860` tiles nothing and the strip is the chrome
+  painted at the load; the bits were not read].
 - **The in-game wiki composes both bars by these rules** (`tagpu_wikibar.c`, `tools/wiki/mockup/bar.js`,
   held equal byte for byte by `tools/wiki/barcheck.mjs` and pixel-exact against a capture of the
   game's frame); [the in-game wiki](../ingame-wiki.html), *The game frame on the stage*.

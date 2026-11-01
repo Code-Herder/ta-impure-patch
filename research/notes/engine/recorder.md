@@ -2254,7 +2254,9 @@ level**, from its one call `0x49842A` at the in-play entry, so PANELSIDE is pain
 only. **The per-frame readers of the viewed side** are the resource bar's block in DrawGameScreen
 (`0x468FEF..0x468FF4`, every redraw) and the bottom bar `0x46A860` (`0x46A8A6..0x46A8D5`), which
 tile that side's PANELTOP and PANELBOT ([ui.md](ui.md), *The resource bar tiles in a loop*)
-[DISASSEMBLED 2026-10-31].
+[DISASSEMBLED 2026-10-31]. A replay takeover of a seat of the other side shows the top bar
+following the viewed side and the bottom strip, the column and the minimap staying the load's
+(MEASURED 2026-11-01, the same entry of ui.md, which says why the strip is not explained).
 
 **The explosion's owner gate tests type 3 alone** [DISASSEMBLED 2026-10-06]: `0x49A01B..0x49A047`
 forms the owner record from the projectile's owner byte `+0x66` and skips the damage when the
