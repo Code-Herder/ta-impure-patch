@@ -2197,7 +2197,7 @@ panel's `GUIMEMSTRUCT*` at `[ebp+4]`) snapshots the panel's surface (`[panel+0xB
 **`0x512FE4 = 1`** (`0x460204`). Each call of `0x45FFB0` then advances `0x512FEC` by `0x15` up
 to `0x115` (fourteen steps), draws the `LIGHTBAR` frame — `0x4B8D40([main+0x51D], "LIGHTBAR")`
 then `0x4B7F30(seq, 2)` — with `0x4B7F90`, and reveals the panel to the left of the bar with
-`0x4C7580` stamps (the textured-triangle stamp, at `0x46012A`); the closer **`0x4609B0`** clears
+`0x4C7580` stamps (the textured-triangle stamp, at `0x46012A`); the closer **`0x4609B0`**, ARMOPT's handler (installed by its set-up `0x460CC0` at `0x460CDD`), clears in its close branch
 `0x512FE4` (`0x4609D4`). The opener's callers: `0x427459`, `0x427906`, `0x44444D`, `0x460ABD`
 (inside the closer) and `0x4776D8`, each right after `0x47F1A0("Options"|"Menu", 0)` [INFERRED:
 a screen lookup by name — it walks the table at `main+0x33E13`]. Every pixel the wipe writes goes

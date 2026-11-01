@@ -872,7 +872,7 @@ on a trigger:
   the human player's commander, under the stock build and the fix alike.
 
 **Multiplayer.** Neither fix is reached in a network game: the retail game has no saved multiplayer game.
-`ARMOPT.GUI`'s handler `0x460CC0` greys `SAVEGAME` and `LOADGAME` in a game of type 3 (`cmp eax,3;
+`ARMOPT.GUI`'s set-up `0x460CC0` (its handler is `0x4609B0`, installed at `0x460CDD`) greys `SAVEGAME` and `LOADGAME` in a game of type 3 (`cmp eax,3;
 sete` at `0x460CF7` and `0x460D37`, then `0x4A1200` sets the gadget's `+0x13C` bit 0); the only
 other writer of a save is the console's `Save` (the table row at `0x5020D8` → `0x417430`), at access
 level 4, the debug level; and a load from the main menu rebuilds the game type from the save's

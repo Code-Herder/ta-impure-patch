@@ -129,7 +129,11 @@ object `*(main+0x10)` is never touched ([the COB plan](../ingame-wiki-cob-plan.h
 
 **Fields we write**, on the game thread, through `tagpu_menu_pause_hold`: bit 0 of `main+0x38A51`
 (the pause), only when `main+0x2A44` bit 0 is clear (a single-player level), set at the open only
-when it was clear and cleared at the close only when the open set it. Of our own: the game
+when it was clear and cleared at the close only when the open set it. The window does not open
+while one of Impure's three writers that put a pause back, or end one, later and without input
+has its write in flight (`pause_in_flight`, `tagpu_wiki.c`): a rewind not idle, Leave's question,
+or a takeover queued, whose run ends the playing's pause (`tk_run`, `tagpu_replay.c`); each
+refusal is logged `wiki: not opened - ...`. Of our own: the game
 folder's `tagpu_wiki.json`, `tagpu_wiki3d.json`, `tagpu_wikiside.json` and `tagpu_wiki.layout.json`
 (the layout a `tagpu_wiki.check` played on; each through its `.tmp`) and the deletion of
 `tagpu_wiki.dump`, `tagpu_wiki3d.dump`, `tagpu_wiki.check`, `tagpu_wiki.shot` and `tagpu_wiki.pause`, and the

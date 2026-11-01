@@ -519,8 +519,13 @@ and, for the seek,
 [<recording>] --at T --player P [--difficulty D]`, or `takeover <P> at <T>[ difficulty <D>]` in the
 trigger, runs the seek in its TAKEOVER mode at the next frame visit: the world of T is made as a
 seek makes it, but with P human and the other recorded seats AI, and the level goes on as a live
-skirmish from T. The recorder then records the game after T as a new timeline appended to the same
-file, through the handle the takeover opened. A playing of a forked timeline (`--timeline N`) holds
+skirmish from T. The live game runs at once: the takeover ends the playing's pause (Take over's
+click on the replay HUD pauses the playback) at the frame visit that ran it, and the takeover line
+says so with the tail `; the playing's pause ended`; a pause the test pacing took (`pause at`, the
+launch's hold) stands until `resume`, and the tail says `; the test's pause holds it until resume`;
+a playing that was running adds no tail. The recorder then records the game after T as a new
+timeline appended to the same file, through the handle the takeover opened, from the first step,
+GameTime T. A playing of a forked timeline (`--timeline N`) holds
 at each boundary of its chain and crosses it with a seek to the child's first iteration
 ([engine map](../engine/recorder.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)).
 
@@ -652,6 +657,10 @@ and on the loader thread at the allocator ownership boundary and the level init'
 - a test launch's turbo and `pause at <T>`: the same count set to k (1..5) or
   0, then reduced to end at T; the pause bit `main+0x38A51` bit 0 set at the
   frame visit after step T and cleared by `resume`;
+
+- the end of a playing's takeover (`tk_run`): the pause bit `main+0x38A51` bit 0 cleared once,
+  at the frame visit that ran the takeover, in a single-player level and not while the test
+  pacing's pause stands; a rewind's fork leaves the bit to the rewind's end;
 
 - the level init's call, on a puppet level: record 10's buffers through `0x464700`; when they
   cannot be made, `main+0x2A42` and `main+0x2A43` = the lowest recorded seat;
@@ -786,6 +795,7 @@ and on the loader thread at the allocator ownership boundary and the level init'
 
 The recorder refuses a puppet level; a takeover arms it for the live level that follows, with the
 fork's file handle (`tagpu_rec_fork_arm`), and it starts at the next capture point, iteration T.
+While the arm waits, `tagpu_rec_fork_armed` is 1 and the live HUD draws on it (§2.12b).
 `tagpu_recreader.c` reads the file and names no engine memory.
 
 ### 2.12b The replay HUD (`tagpu_hudstate.c`, `tagpu_hudinput.c`, `tagpu_vk_hud.c`; every Vulkan replay)
@@ -801,7 +811,9 @@ samples from the recording file through the walker's own reader, and each unit t
 from the level's defs on the game thread; it hit-tests clicks on the game thread against the
 frame on screen, and draws a pass of its own on the render thread. **In a live recorded
 skirmish** the same pass draws the live rewind's button and strip, whose clicks are the rewind's
-verbs (`tagpu_hudstate_mode`, *Live rewind* in [the HUD in game](../hud-in-game.html)). On GDI a
+verbs (`tagpu_hudstate_mode`, *Live rewind* in [the HUD in game](../hud-in-game.html)), and so it
+does from the frame whose visit armed a fork — a takeover's or a rewind's — before the recording
+starts at the next step. On GDI a
 replay has no on-screen controls and a live game no rewind button, and the engine's `PAUSED`
 icon stays. The watching dock and
 the player cards it replaced are deleted, and with them the dock's and the cards' HUD-scale
@@ -826,7 +838,8 @@ regions (§2.15).
 | `vk_down`, `passes_down` | `tagpu_vk_hud_down`, behind the seam's `vkDeviceWaitIdle`; the pass builds again on its next frame | render |
 
 **Fields we write**, through the replay's calls and `tagpu_menu.c`, on the game thread, on a
-playback level only: `main+0x38A51` bit 0 (the pause, read-modify-written); `main+0x38A4B` and
+playback level only: `main+0x38A51` bit 0 (the pause, read-modify-written; Take over's click sets
+it and the takeover's end clears it, `tk_run`); `main+0x38A4B` and
 `+0x38A4D` (the speed's ceiling and live value, the presets 5..80 only, the player's put back at
 the teardown and exchanged around every settings save); `main+0x2A43` and the temporary sight
 records for Sight, and the camera for Jump and Follow, as [the replay's players and

@@ -143,7 +143,12 @@ The owner's decisions:
   `g_ddraw.renderer` is `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`,
   below), and `tagpu_hudstate_mode` says what the HUD shows. **The live HUD** while a rewind owns
   the level or one could open (`tagpu_replay_rewind_state`: its state is not idle, or `available`
-  — a live, recorded, non-network skirmish whose recorder is healthy); **else the replay HUD**
+  — a live, recorded, non-network skirmish whose recorder is healthy), or while the recorder
+  holds a fork armed for the next capture point (`armed`, the same conditions with
+  `tagpu_rec_fork_armed` in place of the recording): a takeover's or a rewind's fork makes the
+  level a live recorded skirmish from the frame whose visit armed it, before its first step
+  starts the recording. Until that step the rewind is not `available`, and a press on its button
+  is refused as an open with no recording is ("Rewind refused"); **else the replay HUD**
   while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
   rewind is asked first because a rewind into the past plays the recording as puppets, where
   `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
@@ -641,9 +646,12 @@ refuse. W checks it where seats are out: past the fixture's end scenario, at a r
 picker's clickable rows are the seats with a unit, and the takeover refuses one without by that
 line.
 
-**After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
-the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
-then. The new fork's lane is there the next time the file is watched.
+**After the takeover** the level is a live skirmish, running: puppet mode ends and the reader
+closes, and the picker's pause ends with the playing (`tk_run`, `tagpu_replay.c`), at the frame
+visit that runs the takeover, before the draw. The fork is armed at that visit, so the live HUD
+draws from that frame (*When it draws*), and the toast "Taking over <player> at m:ss" is on it
+for the rest of its 1.8 s (wall clock, from the click). The recording starts at the first step,
+GameTime R. The new fork's lane is there the next time the file is watched.
 
 ## The lanes
 

@@ -228,17 +228,21 @@ cursor is drawn; the packet record says so.
 Nothing else writes the bit while the wiki is open, because **the window does not open while
 another pause is in flight**. Every engine writer in play is behind input the wiki holds, or is a
 peer's message `0x19`, which a single-player level never receives (the census in
-`exe-reverse-engineering.md`, *A level starts paused*). Two of Impure's writers put a pause back
-later without input:
+`exe-reverse-engineering.md`, *A level starts paused*). Three of Impure's writers put a pause
+back, or end one, later without input:
 - **The live rewind.** Its open saves bit 0 and sets it; its end restores what it saved. In the
   `FLUSH` and `ENDING` states that end comes from the frame visit, unasked, when the writer
   finishes or the open is refused (for example "no complete seek interval yet").
 - **The replay HUD's Leave.** The next frame's observer opens its question, and puts the pause back
   when it cannot, or once the question is gone.
+- **A takeover of a playing.** Its run, at the frame visit after its request, ends the playing's
+  pause (`tk_run`, `tagpu_replay.c`): the picker's click paused the playback, and the live game
+  runs from the takeover.
 
-So the wiki refuses to open while `tagpu_replay_rewind_state` is not idle or
-`tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`. Neither starts while the
-window is open, since their buttons are the replay HUD's. The one verb that can be queued before
+So the wiki refuses to open while `tagpu_replay_rewind_state` is not idle or reports a takeover
+queued (`tk_queued`), or `tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`.
+None starts while the window is open, since their buttons, Take over's rows included, are the
+replay HUD's; the trigger's `takeover`, like its `resume`, is a test's command no player reaches. The one verb that can be queued before
 the open and run after it is a rewind's open; it saves the wiki's pause and gives it back at its
 own end, so the game stays paused after both have closed, until the Pause key: a pause outliving
 the window, never a game running under it. This needs no `0x496920` observer, which lives in
