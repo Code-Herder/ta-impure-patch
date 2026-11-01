@@ -2189,7 +2189,8 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
     jstr(f, r->cur.from, sizeof r->cur.from);
     fprintf(f, ",\"to\":");
     jstr(f, r->cur.to, sizeof r->cur.to);
-    fprintf(f, ",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}", (int)r->cur.from_v, (int)r->cur.to_v, r->cur.i, r->cur.n);
+    fprintf(f, ",\"from_v\":%d,\"to_v\":%d,\"watched\":%d,\"i\":%d,\"n\":%d}", (int)r->cur.from_v, (int)r->cur.to_v,
+            (int)r->cur.watched, r->cur.i, r->cur.n);
     fprintf(f, ",\"live\":%d,\"rw\":%d,\"arm\":%d,\"first\":%d,\"G\":%d,\"now\":%d,\"last\":%d,\"armR\":%d,"
                "\"bar\":{\"e\":%.9g,\"m\":%.9g,\"ei\":%.9g,\"eo\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"emax\":%.9g,"
                "\"mmax\":%.9g,\"raw_e\":%.9g,\"raw_m\":%.9g},\"simcur\":%d,\"sim\":{\"x\":%.9g,\"z\":%.9g,"

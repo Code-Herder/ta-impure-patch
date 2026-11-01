@@ -875,8 +875,10 @@ static void replay_view(const WIKIREPLAYVIEW* v)
         putchar('{');
         key("from", 1); hud_name(v->from);
         key("fromValue", 0); printf("%d", v->from_value);
+        key("fromWatched", 0); printf("%d", v->from_watched);
         key("to", 0); hud_name(v->to);
         key("value", 0); printf("%d", v->value);
+        key("watched", 0); printf("%d", v->watched);
         key("at", 0); printf("%d", v->at);
         key("drag", 0);
         if (v->drag >= 0) printf("{\"drag\":%d,\"over\":%d}", v->drag, v->over);

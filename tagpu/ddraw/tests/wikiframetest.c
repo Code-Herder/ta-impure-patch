@@ -178,7 +178,8 @@ static void dump_rec(const WIKIFRAMEREC* f)
     str(f->cur.from);
     fputs(",\"to\":", stdout);
     str(f->cur.to);
-    printf(",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}", (int)f->cur.from_v, (int)f->cur.to_v, f->cur.i, f->cur.n);
+    printf(",\"from_v\":%d,\"to_v\":%d,\"watched\":%d,\"i\":%d,\"n\":%d}", (int)f->cur.from_v, (int)f->cur.to_v,
+           (int)f->cur.watched, f->cur.i, f->cur.n);
     printf(",\"live\":%d,\"rw\":%d,\"arm\":%d,\"first\":%d,\"G\":%d,\"now\":%d,\"last\":%d,\"armR\":%d,\"bar\":{", f->live, f->rw,
            f->arm, (int)f->first, (int)f->G, (int)f->now, (int)f->last, (int)f->arm_R);
 #define B_(n_, c_) fputs(c_ "\"" #n_ "\":", stdout); fnum(f->bar.n_)

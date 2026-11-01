@@ -170,10 +170,11 @@ typedef struct {
        generation and the sound total heard already */
     int         game_tick, end, playhead, paused, speed, acc, target, gen, quiet;
     /* the viewer's cursor, the last trip (has_cursor 0 before the first): the previous trip's
-       control (-1 none) and final tick, this one's control and tick (-1 for a button), the clock
-       tick it began, and its drag (drag -1 none); `held` the control between its press and
-       release, -1 none */
-    int         has_cursor, from, from_value, to, value, at, drag, over, held;
+       control (-1 none), final tick and `watched`, this one's control and tick (-1 for a button),
+       the timeline watched at its press (replay.js's cursor states why that is the one selected
+       at its start), the clock tick it began, and its drag (drag -1 none); `held` the control
+       between its press and release, -1 none */
+    int         has_cursor, from, from_value, from_watched, to, value, watched, at, drag, over, held;
     int         nmark;
     int         mark[WIKI_REPLAY_MARKS][3];     /* tick, HUD_MK_*, seat                              */
     int         walked;                         /* the walker's tick, the end once the walk is over  */
@@ -228,7 +229,7 @@ typedef struct {
     int               waiting, wait_from, wait_max;
     const char*       caption;
     int               end, paused, speed, acc, target, gen, quiet;
-    int               has_cursor, from, from_value, to, value, at, drag, over, pos;
+    int               has_cursor, from, from_value, from_watched, to, value, watched, at, drag, over, pos;
     int               nbook, book[WIKI_REPLAY_BOOKS];
     int               toast_kind, toast_at, toast_value;
     int               question, was_paused;
@@ -318,7 +319,10 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
    only, so no other replay's hash takes a byte more: the WIKI_TK_* mode, human, pick, pick_R,
    pick_evict, pick_parent, pick_tl, pick_serial, serial, lanes, armed, bg, tk_full, the saved
    count and each, the timeline count and each one's id, parent, R, last, live, used, mode and
-   seat; last the walker's tick, -1 with none. */
+   seat; last the walker's tick, -1 with none. The cursor's watched and from_watched are not
+   hashed: they are presentation, read only by the frame record (tagpu_wikiframe.h WIKIFRAMECUR),
+   which tools/wiki/framecheck.mjs holds equal to frame.js's at every trip's start, press and
+   release. */
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r);
 
 /* Frees every simulation the replay holds and its script; `r` holds nothing after. */

@@ -247,6 +247,7 @@ static void rec_json(const TJV* R, WIKIFRAMEREC* f)
     key_copy(f->cur.to, sizeof f->cur.to, tj_str(tj_get(v, "to"), ""));
     f->cur.from_v = (int32_t)tj_num(tj_get(v, "from_v"), -1);
     f->cur.to_v = (int32_t)tj_num(tj_get(v, "to_v"), -1);
+    f->cur.watched = (int32_t)tj_num(tj_get(v, "watched"), 0);
     f->cur.i = (uint8_t)tj_num(tj_get(v, "i"), 0);
     f->cur.n = (uint8_t)tj_num(tj_get(v, "n"), 0);
     f->live = (uint8_t)tj_num(tj_get(R, "live"), 0);

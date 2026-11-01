@@ -285,6 +285,7 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         /* the return glide: this trip's release left the rewind idle, or took a seat over */
         key_of(out, rv->to, rv->value, out->cur.from);
         out->cur.from_v = rv->to == WIKI_HUD_TRACK ? trip_tick(rv, rv->back) : -1;
+        out->cur.watched = rv->to == WIKI_HUD_MAIN ? rv->watched : 0;
         copy(out->cur.to, sizeof out->cur.to, WIKIFRAME_AT_GAME);
         out->cur.i = (uint8_t)clampi(rv->clock - rv->back, 0, n);
         out->simcur = (uint8_t)(rv->rw == WIKI_RW_IDLE && rv->clock - rv->back >= n);
@@ -294,6 +295,7 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         out->cur.from_v = rv->from >= 0 ? rv->from_value : -1;
         key_of(out, rv->to, rv->value, out->cur.to);
         out->cur.to_v = trip_tick(rv, rv->clock);
+        out->cur.watched = rv->to == WIKI_HUD_MAIN ? rv->watched : rv->from == WIKI_HUD_MAIN ? rv->from_watched : 0;
         out->cur.i = (uint8_t)clampi(rv->clock - rv->at, 0, n);
     } else
         out->simcur = (uint8_t)(rv->live && rv->rw == WIKI_RW_IDLE);
@@ -364,6 +366,7 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
     ok = key_ok(f->cur.from, f->live);
     ok &= key_ok(f->cur.to, f->live);
     if (!ok || f->cur.n < 1 || f->cur.n > 64 || f->cur.i > f->cur.n) f->cur.on = 0;
+    if (f->cur.watched < 0 || f->cur.watched >= RECR_TIMELINES) f->cur.watched = 0;
     /* LIVE: the flags and enums, the ticks, the bar's numbers and seat 0's cursor */
     f->simcur = (uint8_t)(f->live && f->simcur != 0);
     if (f->rw > WIKI_RW_PAST) f->rw = WIKI_RW_IDLE;
@@ -664,6 +667,16 @@ int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out)
 {
     int k;
     *out = *f;
+    if (f->tk && !f->live && f->cur.watched > 0 && (!strcmp(f->cur.to, "main") || !strcmp(f->cur.from, "main"))) {
+        /* the lanes as Back to main recording's press drew them: open, its fork the watched one */
+        for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS && f->fork[k].id != f->cur.watched; k++) {}
+        if (k >= f->nfork || k >= WIKIFRAME_FORKS || (f->lanes && (f->fork[k].flags & WIKIFRAME_FORK_WATCHED))) return 0;
+        out->lanes = 1;
+        for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++)
+            out->fork[k].flags = (uint8_t)(f->fork[k].id == f->cur.watched ? f->fork[k].flags | WIKIFRAME_FORK_WATCHED
+                                                                             : f->fork[k].flags & ~WIKIFRAME_FORK_WATCHED);
+        return 1;
+    }
     if (!f->live || strcmp(f->cur.to, WIKIFRAME_AT_GAME)) return 0;
     if (!strncmp(f->cur.from, "takeas:", 7)) {
         /* a takeover's glide back from its row: the replay HUD with the picker open, as many

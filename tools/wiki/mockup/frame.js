@@ -193,7 +193,8 @@ const WikiFrame = (() => {
      The cursor in a demo: `from` the previous trip's control and final tick, or '' (the rest point) before any; `to`
      this trip's, '' before the first; for the track `to_v` the tick under the cursor, which follows a drag as replay.js
      seeks it; step i of n of the glide (THE GLIDE, above), and it stays at `to` until the next trip starts. A Take over
-     control's key is its indexed one (keyOf).
+     control's key is its indexed one (keyOf). `watched`: when `to` or else `from` is Back to main recording, the
+     timeline watched at that trip's press (replay.js's cursor), the lane `main` was drawn on (pressed); 0 otherwise.
      LIVE: the rewind's state, its span and the GameTime shown, the arm and its start; the top bar's numbers, the
      replay's memo (the eased stored values and the rates last sampled) with the human seat's storage and stored values;
      and THE ONE CURSOR (the header): the human seat's cursor in `sim`, its world point, shape and age, and `simcur`
@@ -217,7 +218,7 @@ const WikiFrame = (() => {
       mark: rv.marks.map(([t, kind, seat]) => ({ t, kind, seat })).concat(rv.books.map(t => ({ t, kind: MK_BOOKMARK, seat: -1 }))),
       held: '',
       toast: toast(rv, seats.map(z => z.name)),
-      cur: { on: 0, from: '', to: '', from_v: -1, to_v: -1, i: Replay.HUD_DOWN, n: Replay.HUD_DOWN },
+      cur: { on: 0, from: '', to: '', from_v: -1, to_v: -1, watched: 0, i: Replay.HUD_DOWN, n: Replay.HUD_DOWN },
       live: L ? 1 : 0, rw: L ? RW.indexOf(L.rw) : 0, arm: L ? ARMS.indexOf(L.arm) : 0,
       first: L ? L.first : 0, G: L ? L.G : 0, now: L ? L.now : 0, last: L ? L.last : 0, armR: L && L.arm !== 'none' ? L.armR : 0,
       bar: sh ? { e: L.bar.be, m: L.bar.bm, ei: L.bar.rates[0], eo: L.bar.rates[1], mi: L.bar.rates[2], mo: L.bar.rates[3],
@@ -247,12 +248,12 @@ const WikiFrame = (() => {
     const back = L && c && L.back >= c.at ? L.back : -1;
     if (back >= 0) {
       Object.assign(rec.cur, { from: keyOf(rec, c.to, c.value), from_v: c.to === 'track' ? tick(back) : -1, to: AT_GAME, to_v: -1,
-        i: clamp(rv.clock - back, 0, n), n });
+        watched: c.to === 'main' ? c.watched : 0, i: clamp(rv.clock - back, 0, n), n });
       rec.simcur = idle && rv.clock - back >= n ? 1 : 0;
     } else if (c)
       Object.assign(rec.cur, { from: c.from === AT_GAME ? AT_GAME : c.from ? keyOf(rec, c.from, c.fromValue) : '',
         from_v: c.from && c.from !== AT_GAME ? c.fromValue : -1, to: keyOf(rec, c.to, c.value), to_v: tick(rv.clock),
-        i: clamp(rv.clock - c.at, 0, n), n });
+        watched: c.to === 'main' ? c.watched : c.from === 'main' ? c.fromWatched : 0, i: clamp(rv.clock - c.at, 0, n), n });
     else rec.simcur = idle ? 1 : 0;
     rec.cur.on = rec.simcur ? 0 : 1;
     return rec;
@@ -354,9 +355,18 @@ const WikiFrame = (() => {
      the warning when the takeover's picker drew it (tk_full); any other return glide leaves a control of the strip its
      press closed (Back to now, Play from here), so its controls are the HUD's as drawn at that press, the strip open
      over the past with fwd live (`now` at the strip's start) and nothing armed; the controls lie where they lie
-     whatever the playhead or the arm. Any other record's are its own HUD's. Its boxes only: the HUD drawn is the
-     record's own. */
+     whatever the playhead or the arm. A trip to or from Back to main recording whose press left the lane it is drawn on
+     (cur.watched, a fork the list holds and no longer watches) is resolved on the lanes as drawn at that press: open,
+     with that fork the watched one. Watching a lane is what draws its Back to main recording and widens the lane to
+     hold it (tagpu_hudlay.c lanes); the other flags only fill. Any other record's are its own HUD's. Its boxes only:
+     the HUD drawn is the record's own. */
   function pressed(rec) {
+    const c = rec.cur;
+    if (rec.tk && !rec.live && c.watched > 0 && (c.to === 'main' || c.from === 'main')) {
+      const k = rec.fork.findIndex(f => f.id === c.watched);
+      if (k < 0 || (rec.lanes && rec.fork[k].flags & WATCHED)) return rec;
+      return { ...rec, lanes: 1, fork: rec.fork.map((f, j) => ({ ...f, flags: j === k ? f.flags | WATCHED : f.flags & ~WATCHED })) };
+    }
     if (!rec.live || rec.cur.to !== AT_GAME) return rec;
     if (rec.cur.from.startsWith('takeas:')) {
       const n = rec.tk_full ? rec.fork_max : 0;

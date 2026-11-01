@@ -243,6 +243,8 @@ static void feed(WIKIREPLAY* r, int c)
             const int from_game = r->live && r->rw == WIKI_RW_IDLE;
             r->from = from_game ? WIKI_REPLAY_AT_GAME : r->has_cursor ? r->to : -1;
             r->from_value = !from_game && r->has_cursor ? r->pos : -1;
+            r->from_watched = !from_game && r->has_cursor ? r->watched : 0;
+            r->watched = r->selected;
             r->has_cursor = 1;
             r->to = e->hud;
             /* a trip's value: the track's tick, a picker row's seat, a lane's fork, -1 for any
@@ -1311,6 +1313,8 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->has_cursor = r->has_cursor;
     v->from = r->has_cursor ? r->from : -1;
     v->from_value = r->has_cursor ? r->from_value : -1;
+    v->from_watched = r->has_cursor ? r->from_watched : 0;
+    v->watched = r->has_cursor ? r->watched : 0;
     v->to = r->has_cursor ? r->to : -1;
     v->value = r->has_cursor ? r->value : -1;
     v->at = r->has_cursor ? r->at : 0;

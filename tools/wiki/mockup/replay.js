@@ -168,9 +168,14 @@ const WikiReplay = (() => {
     let clock = 0, next = 0, wait = null, stalled = false, caption = null, failed = false, ignored = 0, done = false;
     let paused = false, speed = SPEED0, acc = 0, target = -1, gen = 1, quiet = 0;
     let books = [], toast = null, question = null, left = false;
-    /* the viewer's cursor: the last trip, {from, fromValue, to, value, at, drag}, from the previous trip's control and
-       its final value, the track's tick (-1 for a button), the clock tick it began and the drag's {drag, over}; `pos`
-       the track's position, the last tick it sought, which the next trip starts from */
+    /* the viewer's cursor: the last trip, {from, fromValue, fromWatched, to, value, watched, at, drag}, from the previous
+       trip's control, its final value and its `watched`, the track's tick (-1 for a button), the timeline watched at its
+       press, the clock tick it began and the drag's {drag, over}; `pos` the track's position, the last tick it sought,
+       which the next trip starts from. `watched` is the timeline selected at the trip's start, which is the one at its
+       press: in watch mode only a press switches the timeline (a lane, Back to main recording, a deletion, a takeover),
+       and a trip's own is the one press in hand. Back to main recording is drawn only on the watched lane, which its
+       press leaves, so the cursor resting on it, and the next trip leaving it, are placed on the HUD drawn at that
+       press (frame.js pressed) */
     let cursor = null, pos = -1;
     // the walk: the markers in the order made, the walker's tick, and each seat's last counts
     const marks = [];
@@ -304,8 +309,9 @@ const WikiReplay = (() => {
           // in a live demo a trip that starts while the rewind is idle starts from seat 0's cursor in the game
           const fromGame = LIVE && rw === 'idle';
           // a trip's value: the track's tick, a picker row's seat, a lane's fork, -1 for any other button
-          cursor = { from: fromGame ? AT_GAME : cursor ? cursor.to : null, fromValue: fromGame || !cursor ? -1 : pos, to: e.hud,
-            value: e.hud === 'track' ? e.to : e.hud === 'takeas' ? e.seat : 'fork' in e ? e.fork : -1, at: c,
+          cursor = { from: fromGame ? AT_GAME : cursor ? cursor.to : null, fromValue: fromGame || !cursor ? -1 : pos,
+            fromWatched: fromGame || !cursor ? 0 : cursor.watched, to: e.hud,
+            value: e.hud === 'track' ? e.to : e.hud === 'takeas' ? e.seat : 'fork' in e ? e.fork : -1, watched: selected, at: c,
             drag: 'drag' in e ? { drag: e.drag, over: e.over } : null };
           pos = cursor.value;
         } else caption = e.caption || null;
@@ -818,7 +824,8 @@ const WikiReplay = (() => {
         tick: R.tick, clock, done, waiting: wait ? 'seeked' : null, stalled, caption, failed, ignored,
         game: LIVE ? { tick: g.tick, end, playhead: nowTick(), paused: rw !== 'idle' || g.tick >= end || g.done, speed, acc, target, gen, quiet }
           : { tick: g ? g.tick : 0, end, playhead: target >= 0 ? target : g ? g.tick : 0, paused, speed, acc, target, gen, quiet },
-        cursor: t ? { from: t.from, fromValue: t.fromValue, to: t.to, value: t.value, at: t.at,
+        cursor: t ? { from: t.from, fromValue: t.fromValue, fromWatched: t.fromWatched, to: t.to, value: t.value,
+          watched: t.watched, at: t.at,
           drag: t.drag ? { drag: t.drag.drag, over: t.drag.over } : null } : null,
         held: t && clock >= t.at + HUD_DOWN && clock < release ? t.to : null,
         marks: marks.map(m => m.slice()), walked,

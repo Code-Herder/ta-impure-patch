@@ -62,10 +62,12 @@ typedef struct {
 } WIKIFRAMESEAT;
 /* THE VIEWER'S CURSOR in control space: the trip from `from` (its control and final tick) to `to`,
    "" being the rest point; a track's tick in from_v / to_v (to_v the drag's current one), -1 for a
-   button; glide step i of n, at `to` once i reaches n, where it stays until the next trip starts */
+   button; when `to`, else `from`, is Back to main recording, `watched` the timeline watched at that
+   trip's press, the lane it was drawn on (tagpu_wikiframe_pressed), 0 otherwise; glide step i of n,
+   at `to` once i reaches n, where it stays until the next trip starts */
 typedef struct {
     char    from[HUD_KEYLEN], to[HUD_KEYLEN];
-    int32_t from_v, to_v;
+    int32_t from_v, to_v, watched;
     uint8_t on, i, n, pad;
 } WIKIFRAMECUR;
 /* a glide's point at seat 0's cursor in the game (WIKI_REPLAY_AT_GAME), as a cursor key */
@@ -180,7 +182,7 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
    every string terminated in its array; the held key and the cursor's keys among the replay's
    controls or the indexed ones (tagpu_wikiframe_indexed; a held key that is neither becomes "", a
    cursor key that is neither turns the cursor off), and the cursor's n in 1..64 with i <= n, else
-   the cursor off. Live: the flags to 0/1, rw and arm to their enums, else idle and none; first, G,
+   the cursor off; its watched to 0..RECR_TIMELINES - 1, else 0. Live: the flags to 0/1, rw and arm to their enums, else idle and none; first, G,
    now, last and arm_R to 0..WIKI_GAME_END_MAX; every bar float finite and within WIKI_ECON_MAX; the
    cursor's point finite and within the frame's largest map and column, its shape a WIKI_CURSOR_*
    and its age 0 or more, else simcur off. Take over: tk, lanes and tk_full to 0/1, and a record
@@ -275,8 +277,12 @@ void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, 
    (tagpu_hudlay.c picker) and nowhere else; for any other return glide, which leaves a control of
    the strip its press closed, `f` with the strip open over the past, fwd live (`now` at the
    strip's first) and nothing armed, the HUD as drawn at that press -- its controls lie where they
-   lie whatever the playhead or the arm; for any other record `f` itself. Its boxes only: the HUD
-   drawn is `f`'s own. 1 when `out` differs from `f`, a return glide's. */
+   lie whatever the playhead or the arm; for a takeover's watching whose trip goes to or leaves
+   Back to main recording, pressed on a lane the list holds and no longer watches (cur.watched),
+   `f` with the lanes open and that fork the watched one, the lanes as drawn at that press:
+   watching a lane is what draws its Back to main recording and widens the lane to hold it
+   (tagpu_hudlay.c lanes), the other flags only fill; for any other record `f` itself. Its boxes
+   only: the HUD drawn is `f`'s own. 1 when `out` differs from `f`. */
 int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out);
 
 /* THE CURSOR'S POINT, in HUD units, for a bounded record: each key at its control's HOP_HOT box
