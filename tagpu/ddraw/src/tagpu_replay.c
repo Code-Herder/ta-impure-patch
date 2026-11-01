@@ -1093,8 +1093,9 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
     /* V shows the side and colour of the recording's controlled player, or of its first seat when
        the controlled record is not seated. With full visibility V is the viewed record, and the
        interface takes the viewed record's side and colour: MAIN2 is loaded once from its side
-       (0x497B56..0x497BD8), the chrome and both bars read the side every frame
-       (0x467D98..0x467DB3), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
+       (0x497B56..0x497BD8), the chrome reads the side once a level (0x467D98..0x467DB3, caller
+       0x49842A), the resource bar and the bottom bar read it every redraw (0x468FEF..0x468FF4,
+       0x46A8A6..0x46A8D5), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
        side menus %sGEN and %sDL take the controlled record's, which is V too (0x41B2E0). What
        record 10 and its PlayerInfo held goes back after the teardown (tagpu_replay_level_after).
        V is no puppet seat: the puppet table has ten entries, and every gate keys on a unit's
