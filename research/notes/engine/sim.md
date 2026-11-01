@@ -598,7 +598,11 @@ replay HUD's play button and Take over's click, a frame seek, the live rewind (s
 held by the keeper at `0x496920`, put back at its end), the test pacing, the in-game wiki (*The
 in-game wiki's engine questions*, below), and **the end of a playing's takeover**, which clears the
 playing's pause once at the frame visit that ran the takeover (`0x4969CD`, before the draw), so the
-live game runs from the next frame unless the test pacing's pause stands (`tagpu_replay.c`,
+live game runs from the next frame unless the test pacing's pause stands or a menu opened earlier
+in that frame holds the world: the key handler `0x495E90` runs at `0x496971`, before the visit, and
+its menu case sets `main+0x37EBE` bit 0 (`0x4961C1`) after the set-up's pause (`0x4961B7` →
+`0x460E00`), which the next frame's test at `0x496918` honours by jumping past the step
+(`0x49691E` → `0x49697B`) until the menu's close [DISASSEMBLED 2026-11-01] (`tagpu_replay.c`,
 `tk_run`). Each with its rule: the hook map's *fields we write*, the row `main+0x38A51` bit 0.
 
 **The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,

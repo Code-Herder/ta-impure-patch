@@ -240,7 +240,8 @@ back, or end one, later without input:
   runs from the takeover.
 
 So the wiki refuses to open while `tagpu_replay_rewind_state` is not idle or reports a takeover
-queued (`tk_queued`), or `tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`.
+queued (`tk_queued`, one the frame visit will still run: it carries the visit's own gate, so a
+level whose first step failed reports none), or `tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`.
 None starts while the window is open, since their buttons, Take over's rows included, are the
 replay HUD's; the trigger's `takeover`, like its `resume`, is a test's command no player reaches. The one verb that can be queued before
 the open and run after it is a rewind's open; it saves the wiki's pause and gives it back at its
