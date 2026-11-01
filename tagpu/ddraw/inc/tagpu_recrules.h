@@ -1,8 +1,9 @@
 #ifndef TAGPU_RECRULES_H
 #define TAGPU_RECRULES_H
-/* The recorder's rules the wiki also plays: the refresh grid a writer flags, the live-fork bound
-   and its eviction choice. Pure and engine-free so the wiki's simulation includes the recorder's
-   own code (ingame-wiki-replay-plan.md, decision 9): a change here reaches both.
+/* The recorder's rules the wiki is to play: the refresh grid a writer flags, the live-fork bound
+   and its eviction choice. Pure and engine-free so the in-game wiki's Rewind entry can include the
+   recorder's own code (ingame-wiki-replay-plan.md, decision 9). Today the recorder runs it, and
+   tests/wikitest.c runs it against the mockup's twins.
 
    No state, no engine memory, no Win32: stdint.h only. tools/wiki/mockup/replay.js holds the
    wiki's JavaScript twins (isRefresh, refreshBin, forkEvict, REFRESH_TICKS, FORK_LIMIT,

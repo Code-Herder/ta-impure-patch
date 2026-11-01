@@ -53,8 +53,8 @@ const WikiReplay = (() => {
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
   const DEATH = 0, DEFEAT = 1, TOASTS = ['added', 'removed'];
 
-  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h, which the DLL's wiki includes and the recorder
-     itself runs (simparity compares them case by case): the refresh interval a recording is written with
+  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h, which the recorder runs and the DLL's Rewind entry
+     is to include (simparity compares them case by case): the refresh interval a recording is written with
      (REC_REFRESH_TICKS), the live forks a recording keeps (REC_FORK_LIMIT) and the segments a file may hold
      (RECR_TIMELINES); the refresh grid (refresh_bin, reclossy_is_refresh) and the eviction (rec_fork_evict). */
   const REFRESH_TICKS = 300, FORK_LIMIT = 3, TIMELINES = 64;
