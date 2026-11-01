@@ -1636,13 +1636,27 @@ static void check_notes(const WIKIENTRY* e, const WIKIDEMO* dm, int k, int ifc, 
         tagpu_logf("wiki check: %s/%s/%d/%d stopped: a wait ran past its max", e->id, dm->id, k, ifc);
 }
 
+/* the game ticks a step of a replay simulated, read off its views before (a) and after (b). A
+   watched replay: the walker's and the shown game's, a backward seek's new game (a new gen)
+   counted from its tick 0. A live one steps either the live game L or, in the past, the past
+   simulation P, never both (tagpu_wikireplay.c live_play): while P stands, P's ticks, a new P (a
+   new past_gen) counted from its tick 0, since L stands still in the past; otherwise L's, and on a
+   fork's step, where P becomes L and L's gen becomes P's, from the tick P stood at, so the step
+   counts only what it simulated rather than the whole of L's tick. */
+static long replay_ran(const WIKIREPLAYVIEW* a, const WIKIREPLAYVIEW* b)
+{
+    if (!b->live) return (b->walked - a->walked) + (b->gen != a->gen ? b->game_tick : b->game_tick - a->game_tick);
+    if (b->has_past) return b->past_tick - (a->has_past && a->past_gen == b->past_gen ? a->past_tick : 0);
+    if (b->gen == a->gen) return b->game_tick - a->game_tick;
+    return b->game_tick - (a->has_past && a->past_gen == b->gen ? a->past_tick : 0);
+}
+
 /* A GAME ENTRY'S DEMO IN THE CHECK: played as the page will play it, through the replay layer
    (tagpu_wikireplay.h) with the viewer's script, to its end; its tagpu_wikireplay_hash logged as
-   every hash is, and then its cost -- the game ticks its steps ran (the walker's and the shown
-   game's, a backward seek's new game counted from its tick 0) and the milliseconds, the start's
-   two simulations apart and the dearest step named -- the measurement WIKI_REPLAY_SEEK, _WALK and
-   _FILL are set from. A step's ticks are read off its view before and after, outside the timed
-   call. 1 when it started. */
+   every hash is, and then its cost -- the game ticks its steps ran (replay_ran) and the
+   milliseconds, the start's two simulations apart and the dearest step named -- the measurement
+   WIKI_REPLAY_SEEK, _WALK and _FILL are set from. A step's ticks are read off its view before and
+   after, outside the timed call. 1 when it started. */
 static int check_replay(const WIKIENTRY* e, const WIKIDEMO* dm, int k, int ifc, const WIKILAYOUT* lay,
                         const WIKISIMCTX* ctx)
 {
@@ -1669,7 +1683,7 @@ static int check_replay(const WIKIENTRY* e, const WIKIDEMO* dm, int k, int ifc, 
         QueryPerformanceCounter(&t1);
         stepMs = ms_between(t0, t1);
         tagpu_wikireplay_view(r, &v[1]);
-        ran = (v[1].walked - v[0].walked) + (v[1].gen != v[0].gen ? v[1].game_tick : v[1].game_tick - v[0].game_tick);
+        ran = replay_ran(&v[0], &v[1]);
         if (ran < 0) ran = 0;           /* a backward seek that failed left no game: its view says tick 0 */
         ticks += ran;
         ms += stepMs;
