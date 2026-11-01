@@ -40,7 +40,9 @@
    recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
    is compared. For each demo and case it names the first differing tick or call and field. It compares the build
-   trip's and the replay layer's constants. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
+   trip's and the replay layer's constants, and the recorder's rules (tagpu_recrules.h, which the wiki and the recorder
+   share) through wikitest `rules` against replay.js's twins, the refresh grid against tools/replay/tarec.py's is_refresh
+   too. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
    alike -- the demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each
    interface type, a unit's G cells, every bound of the casting and of the layout on both sides of it, the binding of
    an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side, and every
@@ -1180,6 +1182,98 @@ try {
       cases++;
       if (d) { failed++; console.log(`DIFFER the build trip's and the replay's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
       else console.log(`equal  the build trip's and the replay's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows; seek ${c.REPLAY.SEEK}, walk ${c.REPLAY.WALK}, ${c.REPLAY.CONTROLS.length} controls`);
+    }
+
+    /* ---- the recorder's rules: tagpu_recrules.h's own functions (wikitest `rules`) against replay.js's twins, and the
+       refresh grid against tools/replay/tarec.py's is_refresh, which the file checks use; `want` where a case's answer is
+       stated elsewhere: test_tareplay.py test_the_grid's, and the wiki's refresh points (rewind-spec §3.4) ---- */
+    {
+      const W = WikiReplay, T = W.REFRESH_TICKS;
+      const span = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+      const grid = (f, iv) => [f, f + 1, ...span(1, Math.floor(2000 / iv)).map(k => k * iv + 1).filter(t => t > f + 1 && t <= 2000)];
+      const refresh = [
+        ...[[1, 500, 0], [2, 501, 500], [3, 502, 501], [3, 511, 501], [3, 512, 501], [5, 535, 511]].map((c, i) =>
+          ({ name: `test_the_grid ${c.join(',')} at 30`, args: [...c, 30], want: [1, 1, 0, 1, 1, 0][i] })),
+        { name: 'the third iteration on the grid', args: [3, T + 1, 2, T] },
+        { name: 'the third iteration before the grid', args: [3, T, 2, T] },
+        { name: 'the iteration after a refresh', args: [4, T + 2, T + 1, T] },
+        { name: 'interval 0: the third', args: [3, T + 1, 2, 0] },
+        { name: 'interval 0: the second', args: [2, T + 1, T, 0] },
+      ];
+      const walks = [
+        { name: 'test_the_grid\'s walk past gaps at 30', iv: 30, ticks: [1, 2, 3, 30, 31, 32, 60, 62, 91], want: [1, 2, 31, 62, 91] },
+        ...[1, 2, 300, 301, 302, 601].flatMap(f => [T, 30, 0].map(iv => ({
+          name: `a segment from ${f} to 2000 at ${iv}`, iv, ticks: span(f, 2000),
+          want: iv ? grid(f, iv) : [f, f + 1] }))),
+      ];
+      const evicts = [
+        { name: 'fewer than the limit live', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20]], selected: 2, want: { ok: 1, evict: null } },
+        { name: 'the limit live, the least recently used selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 1,
+          want: { ok: 1, evict: 2 } },
+        { name: 'the limit live, the least recently used not selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 3,
+          want: { ok: 1, evict: 1 } },
+        { name: 'the limit live with a tie, the earliest wins', rows: [[0, 1, 0], [1, 1, 30], [2, 1, 10], [3, 1, 10]], selected: 1,
+          want: { ok: 1, evict: 2 } },
+        { name: 'a tie whose earliest is selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 10], [3, 1, 30]], selected: 1, want: { ok: 1, evict: 2 } },
+        { name: 'more than the limit live: refused', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30], [4, 1, 40]], selected: 4,
+          want: { ok: 0, evict: null } },
+        { name: 'only the original and the selected', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, want: { ok: 1, evict: null } },
+        { name: 'only the original and the selected at limit 1: no candidate, refused', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, limit: 1,
+          want: { ok: 0, evict: null } },
+        { name: 'ids above 3 with deleted rows between', rows: [[0, 1, 0], [1, 0, 1], [2, 0, 2], [5, 1, 40], [6, 0, 3], [7, 1, 15], [9, 1, 25]],
+          selected: 9, want: { ok: 1, evict: 7 } },
+        { name: 'the original selected and the least recently used', rows: [[0, 1, 50], [1, 1, 30], [2, 1, 10], [3, 1, 20]], selected: 0,
+          want: { ok: 1, evict: 2 } },
+        { name: 'no rows', rows: [], selected: 0, want: { ok: 1, evict: null } },
+      ];
+      fs.writeFileSync(path.join(tmp, 'rules.txt'), [
+        ...refresh.map(c => `refresh ${c.args.join(' ')}`),
+        ...walks.map(c => `walk ${c.iv} ${c.ticks.join(' ')}`),
+        ...evicts.map(c => `evict ${c.selected} ${c.limit ?? W.FORK_LIMIT}${c.rows.map(r => ` ${r.join(':')}`).join('')}`),
+      ].join('\n') + '\n');
+      const got = lines(wikitest(['rules', 'rules.txt'])).map(l => JSON.parse(l));
+      const py = JSON.parse(run('python3', ['-I', '-c', `
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import tarec
+cases, out = json.load(sys.stdin), []
+for kind, iv, a in cases:
+    if kind == 'refresh':
+        out.append(int(tarec.is_refresh(*a, iv)))
+        continue
+    prev, r = 0, []
+    for n, t in enumerate(a, 1):
+        if tarec.is_refresh(n, t, prev, iv):
+            r.append(t)
+            prev = t
+    out.append(r)
+print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.RECR_TIMELINES, 'out': out}))
+`, path.join(ROOT, 'tools/replay')], { input: JSON.stringify([...refresh.map(c => ['refresh', c.args[3], c.args.slice(0, 3)]),
+        ...walks.map(c => ['walk', c.iv, c.ticks])]) }));
+      const judge = (name, answers) => {
+        const first = answers.find(([, v]) => v !== undefined && diff(v, answers[0][1], ''));
+        cases++;
+        if (first) {
+          failed++;
+          console.log(`DIFFER rules -- ${name}: ${answers.map(([who, v]) => `${who} ${show(v)}`).join(', ')}`);
+        } else console.log(`equal  rules -- ${name}: ${show(answers[0][1])}`);
+      };
+      judge('the constants', [['C', got[0]], ['replay.js', { REFRESH_TICKS: T, FORK_LIMIT: W.FORK_LIMIT, TIMELINES: W.TIMELINES }]]);
+      judge('the constants tarec.py holds', [['C', { REFRESH_TICKS: got[0].REFRESH_TICKS, TIMELINES: got[0].TIMELINES }],
+        ['tarec.py', { REFRESH_TICKS: py.REFRESH_TICKS, TIMELINES: py.TIMELINES }]]);
+      let at = 1;
+      refresh.forEach((c, i) => judge(`isRefresh: ${c.name}`, [['C', got[at++]], ['replay.js', W.isRefresh(...c.args) ? 1 : 0],
+        ['tarec.py', py.out[i]], ['wanted', c.want]]));
+      walks.forEach((c, i) => {
+        const j = [];
+        let prev = 0;
+        c.ticks.forEach((t, k) => { if (W.isRefresh(k + 1, t, prev, c.iv)) { j.push(t); prev = t; } });
+        judge(`the grid: ${c.name}`, [['C', got[at++]], ['replay.js', j], ['tarec.py', py.out[refresh.length + i]], ['wanted', c.want]]);
+      });
+      evicts.forEach(c => {
+        const j = W.forkEvict(c.rows.map(([id, live, used]) => ({ id, live, used })), c.selected, c.limit ?? W.FORK_LIMIT);
+        judge(`forkEvict: ${c.name}`, [['C', got[at++]], ['replay.js', { ok: j.ok ? 1 : 0, evict: j.evict }], ['wanted', c.want]]);
+      });
     }
 
     /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */

@@ -57,6 +57,14 @@
    `wikitest constants` prints the build trip's constants and the replay layer's as one JSON line, in
    sim.js's and replay.js's names.
 
+   `wikitest rules FILE` plays the recorder's rules, tagpu_recrules.h's own functions, on the cases
+   FILE holds, one a line: `refresh N TICK PREV INTERVAL`, reclossy_is_refresh's answer, 0 or 1;
+   `walk INTERVAL T1 T2 ...`, the refreshes of a segment whose iterations are at GameTimes T1, T2,
+   ... in that order, as a JSON array; `evict SELECTED LIMIT ID:LIVE:USED ...`, rec_fork_evict on the
+   rows in file order, {"ok": 0|1, "evict": the id or null}. It prints the constants first,
+   {"REFRESH_TICKS", "FORK_LIMIT", "TIMELINES"}, then one line per case; simparity.mjs asks
+   replay.js's twins the same.
+
    `wikitest malformed` loads data the loader must survive -- each case an archive or an entry
    built here -- and prints one line per case, "ok <case>" or "FAILED <case>: why". The native
    build runs under AddressSanitizer, so a write past an allocation fails the run as well.
@@ -69,6 +77,7 @@
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
 #include "tagpu_wikireplay.h"
+#include "tagpu_recrules.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1152,6 +1161,63 @@ static int constants(void)
     return 0;
 }
 
+/* ---- the recorder's rules ---- */
+
+static int rules(const char* path)
+{
+    size_t n;
+    char* text = slurp(path, &n);
+    char *line, *end;
+    int rc = 0;
+    if (!text) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
+    printf("{\"REFRESH_TICKS\":%d,\"FORK_LIMIT\":%d,\"TIMELINES\":%d}\n", REC_REFRESH_TICKS, REC_FORK_LIMIT,
+           RECR_TIMELINES);
+    for (line = text; *line && !rc; line = end) {
+        unsigned a, b, c, d;
+        int len;
+        for (end = line; *end && *end != '\n'; end++) {}
+        if (*end) *end++ = 0;
+        if (!*line) continue;
+        if (sscanf(line, "refresh %u %u %u %u", &a, &b, &c, &d) == 4)
+            printf("%d\n", reclossy_is_refresh(a, b, c, d));
+        else if (sscanf(line, "walk %u%n", &a, &len) == 1) {
+            unsigned t, prev = 0, k = 0;
+            const char* p = line + len;
+            const char* sep = "";
+            putchar('[');
+            while (sscanf(p, " %u%n", &t, &len) == 1) {
+                p += len;
+                if (reclossy_is_refresh(++k, t, prev, a)) {
+                    printf("%s%u", sep, t);
+                    sep = ",";
+                    prev = t;
+                }
+            }
+            puts("]");
+            p += strspn(p, " ");
+            if (*p) { rc = cannot("a walk case's iterations are GameTimes"); break; }
+        } else if (sscanf(line, "evict %u %u%n", &a, &b, &len) == 2) {
+            RecForkRow rows[RECR_TIMELINES];
+            unsigned k = 0, id, live;
+            unsigned long long stamp;
+            uint32_t evict;
+            const char* p = line + len;
+            int ok;
+            while (k < RECR_TIMELINES && sscanf(p, " %u:%u:%llu%n", &id, &live, &stamp, &len) == 3) {
+                rows[k++] = (RecForkRow){id, (uint8_t)live, stamp};
+                p += len;
+            }
+            p += strspn(p, " ");
+            if (*p) { rc = cannot("an evict case's rows are at most RECR_TIMELINES of ID:LIVE:USED"); break; }
+            ok = rec_fork_evict(rows, k, a, b, &evict);
+            if (evict == UINT32_MAX) printf("{\"ok\":%d,\"evict\":null}\n", ok);
+            else printf("{\"ok\":%d,\"evict\":%u}\n", ok, (unsigned)evict);
+        } else rc = cannot("a rules case is not refresh, walk or evict");
+    }
+    free(text);
+    return rc;
+}
+
 /* ---- malformed data ---- */
 
 static void put32(unsigned char* p, size_t v)
@@ -1357,13 +1423,14 @@ int main(int argc, char** argv)
     if (argc == 3 && !strcmp(argv[1], "refuse")) return refuse(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "data")) return data(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "constants")) return constants();
+    if (argc == 3 && !strcmp(argv[1], "rules")) return rules(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
     fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]"
             " | wikitest game PAK ENTRY LAYOUT CASTING RIVAL IFACE COB SCRIPTED"
             " | wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
             " | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"
-            " | wikitest constants"
+            " | wikitest constants | wikitest rules FILE"
             " | wikitest malformed\n");
     return 2;
 }
