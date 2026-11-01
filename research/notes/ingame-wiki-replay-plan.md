@@ -5,9 +5,9 @@
 **Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
 Watching, landed (`a149e0ce`); the second, Rewind a skirmish, landed (`078ac2cb`) -- its
 simulation, replay and frame, Try it yourself's world input on the live frame and its game lane;
-the game's own takeover fix it needed, P0, landed (`fa62ae5e`); the third, Take over a replay, is
-built -- a cursor for every seat, the picker, the Forks bay and its lanes, the takeover into a live
-game as any seat, Try it in the game and its game lane -- and its landing is in progress; Players
+the game's own takeover fix it needed, P0, landed (`fa62ae5e`); the third, Take over a replay,
+landed (`e96fa13f`) -- a cursor for every seat, the picker, the Forks bay and its lanes, the takeover into a live
+game as any seat, Try it in the game and its game lane; Players
 and the camera not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
@@ -133,7 +133,7 @@ Players and the camera.
 | W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **landed 2026-10-31** (`a149e0ce`) |
 | R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **landed 2026-11-01** (`078ac2cb`; C1 earlier, `8005c54f`, `6c976067`) |
 | P0 | **A takeover starts the live game running** (the game, its own landing ahead of T1, owner's answer QB = A, 2026-11-01): the takeover ends the playing's pause (`tk_run`), the wiki does not open while a takeover is queued, and the live HUD draws from the frame whose visit armed the fork. MEASURED before it (M0-T, main `587ca2a7`): the live game stood paused at R − 1 = 1500 for 54 s and 68 s until the Pause key, no HUD drew meanwhile, the recording started only at the key, and the toast showed on the live HUD only when the game ran within its 1.8 s | the game's change; tareplay's W checks the game runs with no input | **landed 2026-11-01** (`fa62ae5e`) |
-| T1-T3 | **Take over a replay**: a cursor for every seat (C1), the takeover data (C2), the replay's Take over (C3), the entry (C4), the mockup's frame and the DLL's (F1, G1), the threads and Try it in the DLL (G2), and the docs, as one landing | the picker, the Forks bay, the lanes, Save as a replay, Delete, the eviction; a second seat's cursor (decision 16) | **built 2026-11-01, landing in progress** (*Take over, as built*, below) |
+| T1-T3 | **Take over a replay**: a cursor for every seat (C1), the takeover data (C2), the replay's Take over (C3), the entry (C4), the mockup's frame and the DLL's (F1, G1), the threads and Try it in the DLL (G2), and the docs, as one landing | the picker, the Forks bay, the lanes, Save as a replay, Delete, the eviction; a second seat's cursor (decision 16) | **landed 2026-11-01** (`e96fa13f`; *Take over, as built*, below) |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
 
 Watching went first because it builds the frame, the two clocks, seek and the kills, which every
