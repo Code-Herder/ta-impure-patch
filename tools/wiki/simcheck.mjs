@@ -50,6 +50,7 @@ import { pathToFileURL } from 'node:url';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const WikiReplay = createRequire(import.meta.url)('./mockup/replay.js');
+const WikiSound = createRequire(import.meta.url)('./mockup/sound.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
 const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
@@ -1431,8 +1432,10 @@ function runGame(entry, d, layout, ctx, mode) {
 /* A GAME'S CLAIMS, in refuse mode: it plays to its end, never stalled, starved or stopped by a kill that found no unit;
    no two bodies overlap; each kill of a finished unit whose cast leaves a wreck placed it, or the placement's rule 1
    or 2 refused it (listed), and an unfinished unit's kill left none; each kill of a finished unit made a death event
-   when the context has a sound source. `notes` lists the refused wrecks. */
-function gameClaims(entry, d, ctx, r, ok, notes) {
+   when the context has a sound source, which the player (sound.js death, tagpu_wiki.c death_play) plays as the killed
+   type's death WAV, or not at all where its cell is black. `notes` lists the refused wrecks; `deaths` counts the
+   deaths that play a WAV, that play none (the type has no WAV) and that are in the black. */
+function gameClaims(entry, d, ctx, r, ok, notes, deaths) {
   const v = r.last.v;
   ok(v.clock === d.game.end && v.locked === null, `played to its end, tick ${d.game.end} (tick ${v.clock}, locked ${v.locked})`);
   ok(!v.stalled && !v.game.starved && !v.game.badKill, `never stalled, starved or killing no unit (${v.stalled}, ${v.game.starved}, ${v.game.badKill})`);
@@ -1453,8 +1456,13 @@ function gameClaims(entry, d, ctx, r, ok, notes) {
       if (refused) notes.push(`${e.kill}@${e.at}`);
     } else ok(!placed && !refused, `the kill of ${e.kill} at ${e.at}, whose cast leaves no wreck, left none`);
     if (u.built >= 1 && ctx.snd) {
-      const heard = after.v.sound.events.some(x => x[0] === e.at && x[1] === WikiSim.SND_DEATH);
-      ok(heard, `the kill of ${e.kill} at ${e.at} made a death event`);
+      const ev = after.v.sound.events.find(x => x[0] === e.at && x[1] === WikiSim.SND_DEATH);
+      ok(ev, `the kill of ${e.kill} at ${e.at} made a death event`);
+      if (ev) {
+        const want = (ctx.snd.type(u.type) || {}).death || null, got = WikiSound.death(ctx.snd, r.sim.types, after.v, ev[2], ev[4]);
+        ok(got === want || got === 'black', `the kill of ${e.kill} at ${e.at} plays ${u.type}'s death WAV ${want} (${got})`);
+        deaths[got === 'black' ? 2 : got ? 0 : 1]++;
+      }
     }
   }
 }
@@ -1704,7 +1712,7 @@ const games = fs.readdirSync(`${ROOT}art/wiki/entries`).filter(f => f.endsWith('
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${f}`, 'utf8'))]).filter(([, e]) => e.frame === 'game');
 const gameTally = {}, replayTally = {};
 for (const c of games.length ? contexts() : []) {
-  const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [] };
+  const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [], deaths: [0, 0, 0] };
   const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [] };
   /* each game once (demos that share their scene and their game script play the same game), then every demo as a
      replay on it */
@@ -1723,7 +1731,7 @@ for (const c of games.length ? contexts() : []) {
           `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.v.clock}, locked ${r.last.v.locked})`);
         t.locked.push(`${id}/${d.id}@${lock.t}`);
       } else {
-        gameClaims(entry, d, c.ctx, r, ok, t.refused);
+        gameClaims(entry, d, c.ctx, r, ok, t.refused, t.deaths);
         stallClaims(entry, d, c.layout, c.ctx, ok);
         if (c.name === 'identity') {
           const a = runGame(entry, d, c.layout, { ...c.ctx, casting: null, rival: null }, 'refuse');
@@ -1781,6 +1789,7 @@ for (const [label, t] of Object.entries(tally))
 for (const [label, t] of Object.entries(gameTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} games ${label}] ${t.pass} pass, ${t.fail} fail` +
     `${t.refused.length ? `; wrecks the placement refused: ${t.refused.join(' ')}` : ''}` +
+    `${t.deaths.some(n => n) ? `; deaths: ${t.deaths[0]} play their type's WAV, ${t.deaths[1]} have none, ${t.deaths[2]} in the black` : ''}` +
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 for (const [label, t] of Object.entries(replayTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} replays ${label}] ${t.pass} pass, ${t.fail} fail` +

@@ -2231,7 +2231,14 @@ of the function it imitates; the code cites each address where it applies it.
   `soundhit`, found as the FBI loader finds ExplodeAs (`tagpu_wikiasset.c` `death_load`, `gfx.py`
   `death_wav`, `assetcheck.py` comparing the two) -- when the viewed seat's fog at that cell is not
   black, with no owner test: the engine's `0x47F300` gate ([units.md](engine/units.html), *The death
-  explosion*).
+  explosion*). The type is the event's index into the simulation's own entry, bound to its
+  casting (`tagpu_wiki.c` `death_play`, `sound.js` `death`, `sim.js` `types`), and the cell is the
+  view's one fog, the viewed seat's. It plays through the wiki's mixer under the named sound's
+  settings and with no priority, speechfx or unitchat test, as `0x47F300` tests none, at the
+  engine's −585 for a point inside the view: the stage shows its whole map. Sound Mode 3D's
+  placement of the sound by its point is not repeated. `simcheck.mjs` checks that each kill of a
+  finished unit resolves to its type's death WAV, and the game's `wiki sound:` line counts the
+  demo's deaths, those in the black and those played.
 - **The economy** is the engine's, per unit and per seat ([weapons.md](engine/weapons.html), *The
   ledger*): each unit's ledger (energy and metal produced, requested, granted and debt); a build
   credited this tick asks the **builder's** ledger for its increment's share of the built type's

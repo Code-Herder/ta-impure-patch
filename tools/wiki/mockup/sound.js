@@ -10,11 +10,13 @@
    THE PLAYER'S SETTINGS ARE THE ENGINE'S DEFAULTS (0x45C570): fxvol 27, speechfx on, unitchat 10, Sound Mode 1, so every
    reply and every named sound plays. Each play is at the engine's -585 (-5.85 dB), times fxvol's share of the wave
    volume the Options slider sets, (27 << 10) / 0xFFFF, which in the game is the process's volume and here the gain.
-   Neither sound is positional. A sound has WIKISOUND_VOICES voices (0x4CF570): a stopped one is reused, else a new one,
+   Neither sound is positional, and a unit's death plays its type's death WAV when the fog at its cell is not black
+   (`death`). A sound has WIKISOUND_VOICES voices (0x4CF570): a stopped one is reused, else a new one,
    else the one furthest through its samples restarts. The page stays silent until the browser lets audio start (the
    first click); a WAV not decoded yet when its event comes is skipped, as a refused one is silent in the game. */
 const WikiSound = (() => {
-  const VOICES = 4, GAIN = Math.pow(10, -585 / 2000) * ((27 << 10) / 0xffff);
+  // DEATH: tagpu_wikisim.h WIKI_SND_DEATH, the kind past the 24 of the kind table
+  const VOICES = 4, GAIN = Math.pow(10, -585 / 2000) * ((27 << 10) / 0xffff), DEATH = 24;
   const NAMES = ['SelectMultipleUnits', 'oktobuild', 'notoktobuild', 'addbuild', 'buildbutton', 'ordersbutton',
     'nextbuildmenu', 'immediateorders', 'Options'];
   const ROOTS = {};               // root -> { doc, clips: file -> AudioBuffer | 'loading' | null }
@@ -83,19 +85,36 @@ const WikiSound = (() => {
     const d = root(dir).doc;
     return play(dir, d && d.named && d.named[name]);
   }
+  /* A UNIT'S DEATH (tagpu_wikisim.h WIKI_SND_DEATH, tagpu_wiki.c death_play): the death event's type, `name` an index
+     of `types` (the sim's own type names, sim.types), and its cell `variant` of the view's map. What it plays: the
+     type's `death` from `src` (a sound source: sounds.json's types here, a pack's meshes in tools/wiki/simcheck.mjs)
+     when the view's fog at the cell is not black, 'black' when it is, and null for no WAV or an event out of bounds.
+     0x47F300 plays a weapon's soundhit with no priority and no speech settings, at -585 for a point inside the view,
+     which the stage's whole map is (tagpu_wikisound.h, A UNIT'S DEATH). */
+  function death(src, types, v, name, variant) {
+    const m = v && v.map, t = types && Number.isInteger(name) && name >= 0 && name < types.length ? types[name] : null;
+    if (!t || !m || !m.fog || !Number.isInteger(variant) || variant < 0 || variant >= m.w * m.h) return null;
+    if (m.fog[variant] === 2) return 'black';
+    const got = src && src.type(t);
+    return got && got.death || null;
+  }
   /* the view's events past `heard` (a count the caller keeps per sim, from 0), played in the order made; returns the
-     new count. A burst past the ring's WIKI_SND_LOG is lost, as in the game. */
-  function drain(dir, v, heard) {
+     new count. A burst past the ring's WIKI_SND_LOG is lost, as in the game. `types` is the sim's type names by
+     index, which a death event names its type by. */
+  function drain(dir, v, heard, types) {
     const s = v && v.sound;
     if (!s) return heard;
     const first = s.total - s.events.length;
     for (let i = Math.max(0, heard - first); i < s.events.length; i++) {
       const [, kind, name, cat, variant] = s.events[i];
-      if (kind) reply(dir, cat, kind, variant);
+      if (kind === DEATH) {
+        const f = death(source(dir), types, v, name, variant);
+        if (f && f !== 'black') play(dir, f);
+      } else if (kind) reply(dir, cat, kind, variant);
       else named(dir, NAMES[name]);
     }
     return s.total;
   }
-  return { source, drain, named, NAMES };
+  return { source, drain, named, death, NAMES, DEATH };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSound;

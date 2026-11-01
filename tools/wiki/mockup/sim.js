@@ -2998,6 +2998,8 @@ const WikiSim = (() => {
     };
     // whether it is a game (WikiSim.game), whose view and hash carry the game's part
     sim.game = GAME;
+    // the bound entry's type names by index, which a death event names its type by (sound.js drain)
+    sim.types = defIndex.slice();
     // frees what the sim holds outside itself: its scripts' world in the COB host
     sim.free = () => { if (COB) COB.free(); };
     /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,

@@ -434,9 +434,12 @@ static int demo_on(void)
    buttons say `Options`, as the engine's in-game menu controls do. */
 static int s_heard;                             /* the demo's events played: its snd_total then  */
 static int s_lost;                              /* events the ring let go before they were played */
+static int s_died, s_diedDark, s_diedPlayed;    /* its deaths, those in the black, those played  */
 static char s_sndDemo[2 * WIKI_ID_MAX + 16];    /* "<entry>/<demo>" of s_sim, for the tally      */
 
+static const WIKI3D* load_of(void);
 static const WIKI3DSOUND* sound_of(void);
+static int snd_type(void* c, const char* name, WIKISNDTYPE* out);
 
 /* a press on one of the page's controls: the engine's in-game menu controls say `Options` */
 static void button_sound(void)
@@ -444,7 +447,29 @@ static void button_sound(void)
     tagpu_wikisound_named(sound_of(), WIKI_SNDNAME_OPTIONS);
 }
 
-static void sound_drain(const WIKIVIEW* v)
+/* A UNIT'S DEATH (tagpu_wikisim.h WIKI_SND_DEATH): its type's death WAV, looked up through the
+   sound source by the type's name in the simulation's entry, when the view's fog at the event's
+   cell is not black -- the wiki keeps one fog, the viewed seat's. 0x47F300 has no priority to give
+   (tagpu_wikisound.h, A UNIT'S DEATH). BOUND: the type indexes the entry's types only below their
+   count, the cell the view's map only below w x h, and the clip is bounded by the mixer. */
+static void death_play(const WIKIVIEW* v, const WIKIENTRY* entry, const WIKISNDEV* e)
+{
+    const WIKI3D* w = load_of();
+    WIKISNDTYPE t;
+    s_died++;
+    if (!entry || e->name < 0 || e->name >= entry->ndef || !v->fog || e->variant < 0 ||
+        e->variant >= v->w * v->h)
+        return;
+    if (v->fog[e->variant] == 2) {
+        s_diedDark++;
+        return;
+    }
+    if (!w || !snd_type((void*)w, entry->def[e->name].name, &t) || t.death < 0) return;
+    s_diedPlayed += tagpu_wikisound_death(&w->sound, t.death);
+}
+
+/* `entry` is the simulation's own, bound to its casting: a death event names a type by its index */
+static void sound_drain(const WIKIVIEW* v, const WIKIENTRY* entry)
 {
     static const unsigned char PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
     const WIKI3DSOUND* snd = sound_of();
@@ -459,6 +484,7 @@ static void sound_drain(const WIKIVIEW* v)
     for (i = s_heard - first; i >= 0 && i < v->nsnd; i++) {
         const WIKISNDEV* e = &v->snd[i];
         if (e->kind > 0 && e->kind < WIKI_SND_KINDS) tagpu_wikisound_reply(snd, e->cat, e->kind, e->variant, PRIORITY[e->kind]);
+        else if (e->kind == WIKI_SND_DEATH) death_play(v, entry, e);
         else if (!e->kind) tagpu_wikisound_named(snd, e->name);
     }
     s_heard = v->snd_total;
@@ -473,10 +499,12 @@ static void sound_tally(void)
     tagpu_wikisound_tally(&played, &failed, &silent, &slow, &what);
     if (shown() && shown()->snd_on && (s_heard || played || failed || silent))
         tagpu_logf("wiki sound: the demo %s made %d sound(s): %d Play call(s) succeeded, %d failed, %d silent by the "
-                   "settings or a missing WAV, %d lost; the slowest call %.0f us (%s)", s_sndDemo, s_heard, played,
-                   failed, silent, s_lost, slow, what);
+                   "settings or a missing WAV, %d lost; %d death(s), %d of them in the black, %d played; the slowest "
+                   "call %.0f us (%s)", s_sndDemo, s_heard, played, failed, silent, s_lost, s_died, s_diedDark,
+                   s_diedPlayed, slow, what);
     s_heard = 0;
     s_lost = 0;
+    s_died = s_diedDark = s_diedPlayed = 0;
 }
 
 static void sim_free(void)
@@ -777,12 +805,19 @@ static int snd_type(void* c, const char* name, WIKISNDTYPE* out)
 }
 static WIKISNDSRC s_sndsrc = { NULL, snd_type };
 
+/* the published 3D load, NULL while there is none */
+static const WIKI3D* load_of(void)
+{
+    const WIKI3D* w = NULL;
+    if (s_assets == ASSETS_FAILED || tagpu_wiki3d_answer(&w) == WIKISIDE_PENDING) return NULL;
+    return w;
+}
+
 /* the published load's sound, NULL while there is none (the page's buttons play from it too) */
 static const WIKI3DSOUND* sound_of(void)
 {
-    const WIKI3D* w = NULL;
-    if (s_assets == ASSETS_FAILED || tagpu_wiki3d_answer(&w) == WIKISIDE_PENDING || !w) return NULL;
-    return &w->sound;
+    const WIKI3D* w = load_of();
+    return w ? &w->sound : NULL;
 }
 
 /* THE UNITS' SCRIPTS AND SOUNDS come from the one 3D load, both or neither, as simparity.mjs
@@ -1214,7 +1249,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         }
         s_heldGv.seat = s_heldSeat;
         s_heldGv.econ = s_heldEcon;
-        sound_drain(v);
+        sound_drain(v, g->entry);
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&s_frameView, g);
         s_frameView.tick = g->tick;
@@ -1320,7 +1355,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
         /* THE CAPTION IS SHOWN FILLED (tagpu_wikitext.h); the view keeps it raw, as the hash does */
         if (tagpu_wikitext_fill(v->caption, &s_words, w->stage.caption, sizeof w->stage.caption))
             t |= WIKISTAGE_TRUNC_CAPTION;
-        sound_drain(v);
+        sound_drain(v, s_sim.entry);
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&w->stage, &s_sim);
         w->stage.tick = s_sim.tick;

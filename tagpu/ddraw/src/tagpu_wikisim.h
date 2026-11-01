@@ -222,7 +222,7 @@ typedef struct {
     int32_t count[WIKI_SND_KINDS];
     int     death;                  /* its death's WAV, an index of the load's sound table
                                        (WIKI3DUNIT.death_sound), -1 none; the simulation does not
-                                       read it */
+                                       read it, the player does (tagpu_wiki.c death_play) */
 } WIKISNDTYPE;
 
 /* Where a sim's sounds come from: for the type named `name` its WIKISNDTYPE into `out`, 1; 0 when

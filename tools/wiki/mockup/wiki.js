@@ -454,7 +454,7 @@ function draw() {
   if (rep) return drawReplay();
   frameClear();
   const g = stage.getContext('2d'), v = view();
-  if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard);
+  if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard, sim && sim.types);
   const r = v && window.WikiGfx ? WikiGfx.frame(stageId(), v, sim ? sim.tick : 0, stageDir(), poses()) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
@@ -523,7 +523,7 @@ function drawReplay() {
   } catch (x) { fail(x); frameClear(); WikiStage.draw(g, null, { W, H, U, msg: simErr }); return null; }
   // THE SOUND: what a seek re-simulated is heard already -- each new game or finished seek starts the count at `quiet`
   if (rv.game.gen !== FR.gen || rv.game.quiet !== FR.quiet) { FR.gen = rv.game.gen; FR.quiet = rv.game.quiet; heard = rv.game.quiet; }
-  if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard);
+  if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard, rep.game && rep.game.types);
   const side = simCtx ? simCtx.side : 0, fv = WikiFrame.view(FR.gv, simLayout, side);
   if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
   const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
