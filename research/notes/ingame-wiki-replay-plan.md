@@ -4,9 +4,9 @@
 
 **Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
 Watching, landed (`a149e0ce`); the second, Rewind a skirmish, built in the mockup and in the
-DLL's simulation, replay and frame on `worktree-qol_shift`, with Try it yourself's world input in
-the DLL, the threads' span and its game lane still open (G2, below); Take over and Players and the
-camera not built.** The owner
+DLL on `worktree-qol_shift` -- its simulation, replay and frame, Try it yourself's world input on
+the live frame and its game lane (G2, below) -- and landing; Take over and Players and the camera
+not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -124,7 +124,7 @@ entries.
 |---|---|---|---|
 | R0 | Research, no code | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost | **done 2026-10-31** (*What R0 found*, below) |
 | W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **landed 2026-10-31** (`a149e0ce`) |
-| R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **C1 landed** (`8005c54f`, `6c976067`); **C2-C5, F1, G1 and the release rule built** on `worktree-qol_shift`; **G2 open** |
+| R | **Rewind a skirmish**: the recorder's rules shared (C1, its own landing), then the simulation, the data, the replay's live mode and the entry (C2-C5), the mockup's frame and the DLL's (F1, G1), the release rule, the threads and Try it's world input in the DLL (G2), and the docs, as one landing | below | **C1 landed** (`8005c54f`, `6c976067`); **C2-C5, F1, G1, the release rule and G2 built** on `worktree-qol_shift`, the landing in progress |
 | T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction; a second seat's cursor (decision 16) | not started |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
 
@@ -169,10 +169,10 @@ it on its own.
 | C2 | the simulation's fork (`tagpu_wikisim_fork`, `sim.fork`) and release (`tagpu_wikisim_release`, `sim.release`); the column's row 0 at world z −32 in a game with the sidebar on (DZ); `fed`, the seat-0 inputs fed | `71bde6a3` |
 | C3 | the data: `live`, the live HUD's three controls, a demo's `forks` | `cde880e8` |
 | C4 | the replay's live mode (`replay.js`, `tagpu_wikireplay.c`): the live and past simulations, the chain's re-simulation, Play from here's arm, the forks and their eviction by the recorder's own functions, Back to now's release logged on the timeline, the top bar's memo; `simparity.mjs`'s live pass and LIVE_TRACE | `ce60384d` |
-| C5 | `art/wiki/entries/rewind.json`, its five demos, and `simcheck.mjs`'s live claims | `c66f3be4` |
+| C5 | `art/wiki/entries/rewind.json`, its five demos, and `simcheck.mjs`'s live claims; the scene's stage description (`art/wiki/stage/rewind.field.json`, by `stagemap.py build` from the field scene's recipe) and the text's sentence on where every timeline stops (decision 26) | `c66f3be4`, `7b7b7fa4` |
 | F1, G1 | the live frame in the mockup and the DLL: the views by mode, the record's live fields, the live HUD on the stage, the wiki emblem at `right[0]`, the top bar's numbers, the one cursor | `10f44a02` |
 | the release rule | the release drops the trip it cuts off; the live data rule; `simcheck.mjs`'s release sweep and `wikitest sweep` | `2383ed38` |
-| G2 | **open**: the DLL's Try it world input on a live entry (`tagpu_wiki.c` `stage_world`), `TAGPU_CMD_WIKI`'s drawn span, the wikistate dump's live fields and `wiki_regression.py`'s `rewind` lane | -- |
+| G2 | the DLL's Try it world input on the live frame (`tagpu_wiki.c` `live_world`, the topmost hit; the held move `live_flush`; every input through `tagpu_wikireplay_input`) and the one-cursor answer `TAGPU_PK_WIKI.try_world`; `TAGPU_CMD_WIKI`'s drawn span (`hud_first`, `hud_G`); the dump's live fields (`live_json`); `wiki_regression.py`'s `rewind` lane (r1)-(r5) and the `mods` lane's (w7), both in the gate; `simparity.mjs --frame`'s world shown and `pending`, `barcheck.mjs --compose`'s NUM | `c74198fe`, `f1cc29ed` |
 | D | the documentation pass | the `docs:` commit |
 
 **Decisions taken in the build**, each held by both simulations and checked by `simcheck.mjs`:
@@ -216,12 +216,11 @@ it on its own.
   one case it does not play. `simparity.mjs` holds the C sim to `sim.js` at every release's end
   through `wikitest sweep`, in two contexts.
 
-**Not closed by Rewind** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): G2 above, so
-no part of Rewind has run in the game yet and its page cost (the plan's 0.5 ms target), its
-longest seek and its fork's frame are not measured; its scene has no stage description
-(`art/wiki/stage/rewind.field.json`), so `stagemap.py check` refuses it and the game's stage would
-draw its ground as the whitebox; the entry's text does not yet say that the
-wiki's game stops at its end (decision 26); the eviction is checked by LIVE_TRACE and shown by no
+**Not closed by Rewind** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the game
+lane plays Rewind on the base game only -- under the five mods of the compatibility suite the
+`mods` lane holds its live bars (w7) and nothing else of the entry; the page's cost on
+the game thread is over the 0.5 ms target under the gate's load (*The measured costs*), and no lane
+fails on it; the eviction is checked by LIVE_TRACE and shown by no
 demo (Take over's demo 4 shows it); the arrow and diamond the game draws round the recorded
 commander in the past are the overlays', P1's [INFERRED]; the live game has no speed of its own
 (one game tick a demo step, the game's 1×), and the Pause key during a rewind is not modelled.
@@ -252,10 +251,27 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
 - **The render thread**: the stage HUD's two builds at most 0.159 ms in a frame; the bars 0.301 ms
   in a frame that composes them, nothing in one that keeps them; the wiki's layer peaked at 1 309
   of 32 768 instances (87 batches of 1024).
-- **The packet**: `TAGPU_PK_WIKI` 167 536 bytes with the frame record (1 512 of them), the head 328
-  with the replay's serial; `TAGPU_CMD_WIKI` 10 032. Rewind's live fields grow the record to
-  1 592 bytes and the area to 167 616, the head still 328 (sizeof on the DLL's compiler,
-  2026-11-01); the command record stays 10 032 until G2 adds the drawn span.
+- **Rewind in the game** (MEASURED 2026-11-01, `wiki_regression.py`'s `rewind` lane at
+  1920 × 1080, first as the only lane, then in the full gate at `-j 6`): the rewind button's hit
+  within a pixel of frame pixels Wg − 75 .. Wg − 48, rows 2..29 (r1); demos `steps` and `chain`
+  paused at nine ticks each, the record and the replay's hash equal `replay.js`'s (r2); at the open
+  strip, the armed second click, the fork's first ticks and `button` at tick 90, the column and both
+  bars pixel-equal to the mockup's, the emblems' columns and the HUD's controls left out (r3); in
+  Try it an ARMSOLAR placed by world input stands, Back to now from the open strip closes it with
+  the selection and the armed building kept, and from the past it releases both, logged on F1,
+  the fork itself taking 0.019 to 0.029 ms (r4). The longest seek, a past game re-simulated from
+  tick 0 to the strip's end (r5): 75 demo steps and 2.5 s alone, 87 and 3.3 s in the gate. The page
+  cost the game thread at most 0.413 ms in one frame over 503 frames alone, and 0.558 ms over 502 in
+  the gate -- over the 0.5 ms target, which the lane prints and does not fail on. The render
+  thread's stage HUD at most 0.029 ms in a frame and the bars 0.201 ms alone (0.038 and 0.268 ms in
+  the gate). The `mods` lane's (w7) held the live frame's two bars, `bar.js` given the record's
+  numbers, pixel-equal on all six setups. The gate's 38 lanes (22 offline checks, 10 modes, 6
+  setups): 37 passed; the page lane's fold check (p3) did not count Rewind's row under Replays,
+  and with it counted (`f1cc29ed`) the page lane passed on its own.
+- **The packet**: `TAGPU_PK_WIKI` 167 616 bytes, the frame record 1 592 of them with Rewind's live
+  fields, the head 328 with the replay's serial; `try_world` sits in padding, so the area did not
+  grow with it. `TAGPU_CMD_WIKI` 10 040, the live strip's drawn span (`hud_first`, `hud_G`)
+  included (sizeof on the DLL's compiler, 2026-11-01).
 
 ## What R0 found
 
