@@ -43,7 +43,8 @@ skirmish segment of the multiplayer file:
   (the first iteration past one that a gap skips; `reclossy_is_refresh`). The two calls name the
   same segment (one chain walk, `chain_hold`). The trigger logs `a takeover asked for at GameTime
   T takes over at R` when they differ, the taken-over line names R, and tacli reports it (`at` in
-  `--json`); the level holds at R − 1. A live rewind's fork rounds the same way. At a refresh the
+  `--json`); a `tacli replay takeover` launch's level holds at R − 1 (the launch's hold). A live
+  rewind's fork rounds the same way. At a refresh the
   stream's world is the writer's exact copy, and between two the stream may hold weapon targets
   that owner code resolves with no alive test (R0 below).
 - **Every GameTime after a timeline's first iteration can be taken over.** The fork is appended
@@ -74,6 +75,21 @@ skirmish segment of the multiplayer file:
   live rewind's fork reports through the rewind's own outcome
   ([live rewind](demo-recorder-s4-rewind.md#live-rewind-protocol)). The trigger's `hud state`
   prints it, with the timelines and the rewind's state (`tagpu_replay.c`, the trigger's comment).
+- **The live game runs from the takeover.** The takeover ends the playing's pause at the frame
+  visit that ran it, before the draw (`tk_run`), so the first step after it makes GameTime R and
+  starts the fork's recording with no input. The takeover's line, `replay: <name>: taken over at
+  GameTime R as player P, ...; timeline N (parent M) is recorded from GameTime R`, says what the
+  run did in a tail: `; the playing's pause ended` when the playing stood paused (the HUD's Take
+  over's case: its click paused the playback), `; the test's pause holds it until resume` while
+  the test pacing's pause stands (a `pause at` taken, the launch's hold), and nothing when the
+  playing was running. A `tacli replay takeover` launch requests `play <name> <P>` with no `at`
+  and writes the takeover trigger only after the `replay: playing` verdict (`tools/tacli`,
+  `_replay_start`). With the launch's hold (`tagpu_hold.on`, a test launch) the hold is taken at
+  the frame visit after the playing's first batch, whose first step logs the verdict
+  (`hold_visit`, after that visit's trigger read), so a takeover read at any later visit runs held
+  (`s_pause_taken`), its line carries `; the test's pause holds it until resume`, and the level
+  stays at R − 1 until `resume`; without the hold the playing runs and the line has no tail. A
+  live rewind's fork leaves the pause to the rewind, which puts back the one it found.
 - `tacli replay play` and `replay seek --recording` take `--timeline N`, which the request file
   carries as `timeline N`.
 - `tools/replay/tarec.py segments FILE` lists a file's timelines (so does `info`),

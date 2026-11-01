@@ -2053,6 +2053,17 @@ takeover makes both, in the init's order. **The teardown `0x464A00` frees both**
 record's map bit, then `0x408F10` and `0x4B4F20` on `+0x74`, which it zeroes
 (`0x464A41..0x464A6B`).
 
+**The live game runs from the takeover.** The whole takeover runs inside one frame visit, before
+the draw call `0x4969CD`, and ends the playing's pause there: bit 0 of `main+0x38A51`, which Take
+over's own click sets, is cleared once (`tk_run`), unless the test pacing's pause stands (then
+`resume` ends it). The next frame's pause test `0x496920` passes, its first batch runs up to five
+ticks (`engine/sim.md`, *A level starts paused*), and its first step makes GameTime T; that step's
+capture point `0x4954ED` takes the fork's arm and starts the timeline. A rewind's fork leaves the
+pause to the rewind's end, which puts back the one the rewind found. **The arm is the HUD's live
+signal**: from `tagpu_rec_fork_arm` to the capture point that takes it (recorded or refused) or
+the level's end that drops it, `tagpu_rec_fork_armed` is 1, and the live HUD draws on it, so it
+and the takeover's toast show from the takeover's own frame, before the first step.
+
 **Live rewind prerequisites [DISASSEMBLED and MEASURED 2026-10-02].**
 [The S4d experiments](../tadr-port/demo-recorder-s4-rewind.md) call the same routines
 from the game-thread frame visit before `0x4969CD`. For a newly seated spectator,

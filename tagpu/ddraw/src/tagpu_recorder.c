@@ -7622,6 +7622,11 @@ int tagpu_rec_fork_arm(RecFork* f)
     return 1;
 }
 
+int tagpu_rec_fork_armed(void)
+{
+    return s_state == ST_IDLE && s_fork.file != NULL;
+}
+
 /* the recording's start at this capture point: the counts kept since the level's last start are
    this recording's from here */
 static void rec_begin(const Level* L, int tick, const RecMpConfig* mp)

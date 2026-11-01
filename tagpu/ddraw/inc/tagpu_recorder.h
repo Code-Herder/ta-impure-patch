@@ -235,6 +235,9 @@ int tagpu_rec_fork_ready(char* why, unsigned cap);
    fork is always recorded, decision D3). On 1 the recorder owns f->file (f->file = NULL); on 0
    the caller still does. Game thread. */
 int tagpu_rec_fork_arm(RecFork* f);
+/* 1 from tagpu_rec_fork_arm to the capture point that takes the arm, recorded or refused
+   (tagpu_rec_capture), or the level's end that drops it. Game thread. */
+int tagpu_rec_fork_armed(void);
 
 /* Live rewind, game thread only, between simulation steps. Flush asks asynchronously; poll is
    0 pending, 1 complete, -1 failed. Suspension retains the unpublished step's events and all

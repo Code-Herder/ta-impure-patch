@@ -143,7 +143,16 @@ The owner's decisions:
   `g_ddraw.renderer` is `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`,
   below), and `tagpu_hudstate_mode` says what the HUD shows. **The live HUD** while a rewind owns
   the level or one could open (`tagpu_replay_rewind_state`: its state is not idle, or `available`
-  — a live, recorded, non-network skirmish whose recorder is healthy); **else the replay HUD**
+  — a live, recorded, non-network skirmish whose recorder is healthy), or while the recorder
+  holds a fork armed for the next capture point (`armed`, the same conditions with
+  `tagpu_rec_fork_armed` in place of the recording): a takeover's or a rewind's fork makes the
+  level a live recorded skirmish from the frame whose visit armed it, before its first step
+  starts the recording. Until that step the rewind is not `available`, but a press on its button
+  is served later, not judged at the click: `rw_send` (`tagpu_hudinput.c`) queues the open and
+  `rw_visit` (`tagpu_replay.c`) runs it at the next frame visit, which in a running level comes
+  after that frame's step and its capture point `0x4954ED` have started the recording. The open is
+  refused, as one with no recording is ("Rewind refused"), only if the arm still stands at that
+  visit, as it does while a test's pause holds the level; **else the replay HUD**
   while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
   rewind is asked first because a rewind into the past plays the recording as puppets, where
   `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
@@ -641,9 +650,12 @@ refuse. W checks it where seats are out: past the fixture's end scenario, at a r
 picker's clickable rows are the seats with a unit, and the takeover refuses one without by that
 line.
 
-**After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
-the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
-then. The new fork's lane is there the next time the file is watched.
+**After the takeover** the level is a live skirmish, running: puppet mode ends and the reader
+closes, and the picker's pause ends with the playing (`tk_run`, `tagpu_replay.c`), at the frame
+visit that runs the takeover, before the draw. The fork is armed at that visit, so the live HUD
+draws from that frame (*When it draws*), and the toast "Taking over <player> at m:ss" is on it
+for the rest of its 1.8 s (wall clock, from the click). The recording starts at the first step,
+GameTime R. The new fork's lane is there the next time the file is watched.
 
 ## The lanes
 
@@ -791,7 +803,7 @@ over the world, is `tagpu_menu_modal`'s.
 | `leave` | transport | Leave's question (*Leave*) |
 | `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*); closes the picker |
 | `takeover` | above the transport plate | the picker asked for: the playback paused, and the next fill plans the takeover and seeks back to its start (*Take over*); while asked for, seeking or open, closes it |
-| `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
+| `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. Refused while Leave's question is wanted or open (*Leave*). No hot for a row whose player has no unit left |
 | `picker` | the picker's plate | taken, and nothing done |
 | `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
 | `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, nothing: it stays watched (*The lanes*) |
@@ -881,8 +893,16 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
 ### Leave
 
 - **The click pauses and queues the question.** It remembers whether the playback was paused,
-  pauses it, and sets a request; when the menu's hooks did not arm (`tagpu_menu_leave_ready`) it
-  shows the toast "Leave from the game menu" instead.
+  pauses it, and sets a request; when the menu's hooks did not arm (`tagpu_menu_leave_ready`) or a
+  takeover is queued (`tk_queued`, below) it shows the toast "Leave from the game menu" instead.
+- **Leave and Take over exclude each other.** The takeover's run ends the playing's pause
+  (`tk_run`), and the question's opener writes neither `main+0x38A51` nor `main+0x37EBE`
+  [DISASSEMBLED 2026-11-01: no instruction with either displacement in `0x460680..0x4607F1` or in
+  `0x49F000..0x4AB000`, the GUI code its six calls enter], so with both in flight the live game would run under "Leave this replay?". Leave is refused
+  while a takeover is queued (`tagpu_replay_rewind_state`'s `tk_queued`), and a picker row
+  (`takeas:i`) while Leave's question is wanted or open (`tagpu_hudinput_leave_pending`), with the
+  toast "Answer Leave's question first". Each click sets what the other tests before it returns,
+  so of two clicks in one pump batch the second is refused, whichever it is.
 - **The DrawGameScreen observer opens it** (`menu_tick` in `tagpu_menu.c`, `leave_open`), where
   the engine's own screens are opened — the engine's Exit → Main Menu path, EXITMENU's handler
   at `0x46082B..0x46083A` without its `GUI_Pop`, there being no EXITMENU to pop: the question

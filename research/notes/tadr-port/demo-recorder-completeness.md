@@ -752,7 +752,13 @@ seat the recording's human commanded `follow:` (`follow seat`), `follow:` again 
 `w<T1>` is armed at T1 and `play` resumes; `leave` and Yes return to the browser with the player's
 speed back in the game and in the store; a second Watch plays it again, and its coverage file
 carries the first level's teardown. `w<T1>` is compared with the recording by `tarec compare
---puppet`, as P's, R's and Q's dumps are, and must be EQUAL. The one S5 function no fixture reaches
+--puppet`, as P's, R's and Q's dumps are, and must be EQUAL. Then W takes over through the HUD
+(`watch_takeover`): Take over snaps the playback back to the refresh R0 and opens the picker, the
+row of the seat the recording's human commanded takes over at R0 itself, and its line must end
+`; the playing's pause ended`. W arms `pause at R0 + 300` before that click and presses nothing
+after it, so the live game must run by itself, its recorder's timeline starting at R0, to the
+pause at R0 + 300; a stall at R0 − 1 with the pause bit set fails as the takeover leaving the game
+paused. The fork is then compared with its parent (`tarec compare-fork`). The one S5 function no fixture reaches
 is `watch_refuse_engine`, the notice for the engine's CD check `0x41D6A0`, which cannot refuse in
 this exe: its first test reads `0x50289C`, 1 in the file and written by no instruction
 (DISASSEMBLED), and returns `'.'`.

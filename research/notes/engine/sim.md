@@ -542,8 +542,12 @@ tests the engine's records and the globals image against the engine's own ranges
 function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4968AA`,
 `0x496920`), and those two are called from nowhere else (`0x4967F3`, `0x49680C`, `0x496928`,
 `0x49693E`). The scheduler tests it as well (`0x4953D9`), the pause icon `igpaused` shows it (`0x46A107`;
-`0x46A2A8` beside it tests bit 1, not the pause), and the pause key flips it and puts the new bit into a message `0x19`
-(`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
+`0x46A2A8` beside it tests bit 1, not the pause), and the pause key, the in-game key handler's
+case `0x496099..0x4960E5`, flips it (`0x4960AA..0x4960BC`) and sends the new bit as the message
+`{0x19, bl, bit}` built at `[esp+0x10]` (`0x49609F`, `0x4960A4`, `0x4960D6`) through
+`0x451DF0(0x44FDB0(), &msg, 3)` (`0x4960A8`, `0x4960C8..0x4960E0`) [DISASSEMBLED 2026-11-01] — the
+sender tests the network bit (`engine/network.md`, its row), so in a single-player level the
+message reaches no peer; the `0x19` receiver stores a
 peer's bit (`0x455967..0x45597A`, when the message's byte 1 is 0; the packet dispatcher's switch at
 `0x45486D` indexes the table `0x455F84` by the type minus 2, and entry 23, at `0x455FE0`, is
 `0x45593D`) [DISASSEMBLED 2026-10-26]. Bits 1 and 2 are the scheduler's: bit 1 its lag flag
@@ -557,10 +561,23 @@ the level is paused bits 1 and 2 keep the last call's value through the hold. Bo
 state, bit 2 following the wall clock through the trim and bit 1 the peers' lag, and the demo
 recorder leaves them (`replay-globals.tsv`, `pacingbits`, the owner's decision 2026-10-12): MEASURED 2026-10-12 under a load average of 63–87, a live
 recording held bit 2 set at GameTime 721 where its playings held it clear. Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
-outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
+in play and outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
 (the LOADGAME screens, `LOADGAME.GUI` `0x50936C`); clear it at `0x44B6F0`, `0x460A33` (the in-game
-menu's close, outside mode 3), `0x49720A` (the loader's network branch) and `0x49990E` (key `0xE3`
-in state 7's handler `0x499880`). **`0x44B6F0` and `0x44BE61` are the unit-restrictions screen's
+menu's close, in play and outside mode 3), `0x49720A` (the loader's network branch) and `0x49990E` (key `0xE3`
+in state 7's handler `0x499880`). **The menus' pause** [DISASSEMBLED 2026-11-01]: the options
+opener `0x45CFC0` loads `PREFS.GUI` (`0x506958`) in play (`main+0x2A44` bit 2) and `STARTOPT.GUI`
+(`0x506948`) otherwise (`0x45CFE0`, `0x45D011`), sets `main+0x37EBE` bit 0 in play (`0x45D002`) and
+the pause in play outside mode 3 (`0x45D083..0x45D0A1`). The in-game menu's set-up `0x460CC0`
+loads `ARMOPT.GUI` (`0x506DB0`), installs `0x4609B0` as its handler (`0x460CDD`), sets up
+`SAVEGAME` (`0x506D8C`) and `LOADGAME` (`0x506D98`) by the mode, `MISSION` (`0x506D74`) and
+`Settings` (`0x506DA4`) (`0x460CF0..0x460DA2`), and sets the pause outside mode 3
+(`0x460DF1..0x460E00`). Its handler `0x4609B0` (`ret 4`; the command branch names `LOADGAME` at
+`0x460A5A`) clears the pause in its close branch (`[esi+0x60] == −1`) only in play and outside mode 3
+(`0x460A15..0x460A33`), and then `main+0x37EBE` bit 0 whatever the mode (`0x460A3F`). **Six other
+handlers' close branches clear `main+0x37EBE` bit 0 and not the pause**: `0x45D2B1`, `0x45D2CB`,
+`0x45DAAB`, `0x45E15D`, `0x45EAEA`, `0x45FC45` (every store to the displacement `0x37EBE` in
+`0x45D000..0x461000`, read at its address). So `main+0x37EBE` bit 0 does not follow the pause, and
+neither bit tells a menu's pause from another writer's. **`0x44B6F0` and `0x44BE61` are the unit-restrictions screen's
 save lists**, not the battle room's: `0x44B6F0` is in `0x44B690`, the handler that `0x44B990`
 installs at `0x44B9B9` on the screen it opens from `SAVELIST.GUI` (`0x505F64`), and `0x44BE61` is
 in `0x44BC10`; `RESTRICT2.GUI`'s handler `0x44C420` (installed at `0x44C834`, the screen named at
@@ -570,8 +587,23 @@ saves bit 0 at `0x495B85` and clears it at `0x495B7E`, and stores the saved bit 
 Its one caller is `0x417738`, in `0x417600` with the string `BIGSHOT` (`0x5024F4`), and `0x417600`
 is the chat command `MakePoster`, the row `{0x502254 "MakePoster", 0x417600, 2}` at `0x501FB4` of
 the command table `0x501F48` [DISASSEMBLED 2026-10-26: every instruction storing to the
-displacement `0x38A51`, the stores read at their addresses]. Impure's in-game wiki writes bit 0 in a
-single-player level (*The in-game wiki's engine questions*, below).
+displacement `0x38A51`, the stores read at their addresses]. **Every unpause starts with a batch of
+up to five ticks**: the frame function does not call the scheduler while the bit is set, so the
+first unpaused call's elapsed (`0x495236..0x495255`: clock − the base `+0x38A37`, then the base =
+the clock) is the whole pause, and its due clamps to 5 (`0x4953EF..0x4953FE`) [DISASSEMBLED
+2026-11-01] — the same after the Pause key, a menu's close or any of Impure's writers.
+
+**Impure's writers of bit 0**, all on the GAME thread and in a single-player level only: the
+replay HUD's play button and Take over's click, a frame seek, the live rewind (saved at its open,
+held by the keeper at `0x496920`, put back at its end), the test pacing, the in-game wiki (*The
+in-game wiki's engine questions*, below), and **the end of a playing's takeover**, which clears the
+playing's pause once at the frame visit that ran the takeover (`0x4969CD`, before the draw), so the
+live game runs from the next frame unless the test pacing's pause stands or a menu opened earlier
+in that frame holds the world: the key handler `0x495E90` runs at `0x496971`, before the visit, and
+its menu case sets `main+0x37EBE` bit 0 (`0x4961C1`) after the set-up's pause (`0x4961B7` →
+`0x460E00`), which the next frame's test at `0x496918` honours by jumping past the step
+(`0x49691E` → `0x49697B`) until the menu's close [DISASSEMBLED 2026-11-01] (`tagpu_replay.c`,
+`tk_run`). Each with its rule: the hook map's *fields we write*, the row `main+0x38A51` bit 0.
 
 **The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
 which sets the bit, and never closes it, so the bit outlives the level. The loader `0x497180`

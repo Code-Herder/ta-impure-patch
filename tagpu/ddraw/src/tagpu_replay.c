@@ -8198,17 +8198,57 @@ static void tk_live(char* ta, unsigned P)
     *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED) = 1;
 }
 
+/* THE TAKEOVER STARTS THE LIVE GAME RUNNING. The pause the level stands in here is the playing's
+   -- the replay HUD's play button and Take over's own click (pick_act, tagpu_replay_pause), the
+   Pause key during the playing, a frame seek -- and the playing has ended, so its pause ends with
+   it, at the frame visit that ran the takeover, before the draw.
+   No step of the takeover needs the pause: R0..R17 and TK0..TK4b run inside this one frame visit;
+   the next frame's pause test 0x496920 passes, its step makes GameTime T, and that step's capture
+   point 0x4954ED starts the timeline tagpu_rec_fork_arm armed.
+   What it keeps: a pause the test pacing took (s_pause_taken), which `resume` ends. No other
+   writer of ours holds the bit to put it back later: the in-game wiki does not open while a
+   takeover is queued (pause_in_flight, tagpu_wiki.c), and Leave and Take over exclude each other
+   (tagpu_hudinput.c, s_leaveWant).
+   THE BOUND beside the write: a network game never reaches here -- a playing's level is single
+   player: the Start's and Watch's refusals, and play never sets main+0x2A44 bit 0 -- so the write
+   is the Pause key's flip 0x4960AA..0x4960BC without its message 0x19 (0x49609F..0x4960E0,
+   DISASSEMBLED), which has no peer to reach.
+   The first unpaused frame runs up to five ticks: the scheduler was not called while paused, so
+   its elapsed (0x495236..0x495255: clock - base, then base = clock) is the whole pause and its
+   due clamps to 5 (0x4953EF..0x4953FE, DISASSEMBLED), as after the Pause key.
+   A MENU OPENED BEFORE THIS VISIT HOLDS THE WORLD ITSELF. The in-game key handler 0x495E90 runs at
+   0x496971, before this visit at the draw call 0x4969CD; its menu case calls the in-game menu's
+   set-up 0x460CC0 (0x4961B7), which sets the pause (0x460E00), and then sets main+0x37EBE bit 0
+   (0x4961C1), as the menu button (0x49477E) and the options opener (0x45D002) do. Clearing the
+   pause here leaves that bit, and the next frame tests it at 0x496918 and jumps at 0x49691E to
+   0x49697B, past the pause test, the scheduler and the step, so the world stays held until the
+   menu's close clears both (0x460A33, 0x460A3F) [DISASSEMBLED]. Options opened directly close
+   through handlers that clear main+0x37EBE bit 0 alone (0x45D2B1 and five others, engine/sim.md
+   *The menus' pause*), so the game runs on at that close where without the takeover it would stay
+   paused: the running live game this run is for.
+   Returns the takeover line's tail, what the run did, so the line is true in every case. */
+static const char* tk_run(char* ta)
+{
+    unsigned short* pause = (unsigned short*)(ta + OFF_PAUSE);
+    if (s_pause_taken) return "; the test's pause holds it until resume";
+    if ((ta[OFF_NETWORK] & 1) || !(*pause & 1)) return "";
+    *pause &= (unsigned short)~1u;
+    return "; the playing's pause ended";
+}
+
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
    false, the elimination's included; the step-down follows the seek's lines, which read the world
    through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
-   and s_opt and s_vinfo stay for the level's end; the arm comes last (tagpu_recorder.c,
-   tagpu_rec_fork_arm). */
-static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
+   and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
+   tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
+   rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
+static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
                    unsigned rebuild, unsigned built, LONGLONG hz)
 {
     const RecHeader* h = recr_header(s_rd);
     char line[700], seats[80], tail[96];
+    const char* run;
     unsigned i, n = 0, id = s_tk.fork.id, parent = s_tk.fork.parent;
     seats[0] = 0;
     for (i = 0; i < h->nseats && n < sizeof seats; i++)
@@ -8241,7 +8281,8 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                    id);
         snprintf(tail, sizeof tail, "; timeline %u is not recorded", id);
     }
-    tagpu_logf("%s%s", line, tail);
+    run = s_rw.state ? "" : tk_run(ta);       /* a rewind's fork: rw_finish's pause */
+    tagpu_logf("%s%s%s", line, tail, run);
     s_tk.on = 0;
 }
 
@@ -8600,7 +8641,7 @@ static int seek_run(char* ta)
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
     if (back) rw_finish(ta, 1);
     else if (tk)
-        tk_end(T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
+        tk_end(ta, T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t2.QuadPart - t1.QuadPart, hz.QuadPart), s_st.obuilt - built0, hz.QuadPart);
     if (tk && !back && s_rw.state) rw_finish(ta, 0);
@@ -10614,12 +10655,19 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out)
        effect */
     out->available = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
                      !(ta[OFF_NETWORK] & 1) && tagpu_rec_rewind_ready();
+    /* the same conditions, with the arm in place of the recording */
+    out->armed = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
+                 !(ta[OFF_NETWORK] & 1) && tagpu_rec_fork_armed();
     if (s_rw.state >= RW_OPEN) {
         out->first = s_span.first;
         out->last = s_span.last;
     }
     out->G = s_rw.G;
     out->T = s_rw.T;
+    /* the frame visit's own gate (frame_visit): a takeover queued on a level whose first step
+       then failed (s_dead) is never run, so it is not queued */
+    out->tk_queued = tagpu_puppet_on() && s_rd && !s_dead && s_seek.pending &&
+                     s_seek.mode == SK_TAKEOVER;
 }
 
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
