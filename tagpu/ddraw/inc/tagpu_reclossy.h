@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include "tagpu_recfmt.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_recrules.h"
 
 /* an order list's node images, in list order: the writer's copy and the filter's hold them so */
 typedef struct RecLossyList { unsigned n, cap; unsigned char* img; } RecLossyList;
@@ -51,18 +52,7 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
    slot's two lists and, with RECL_CELLS, every cell. The writer asks it after every refresh. */
 int reclossy_equal(const RecLossy* L, const RecLossyExact* x);
 
-/* THE REFRESH GRID: 1 when a segment's iteration at GameTime `tick` is a refresh, `n` its ordinal
-   in the segment from 1 and `prev` the GameTime of the segment's last refresh before it. The
-   segment's first two iterations are, and after them the first iteration in each interval of
-   `interval` GameTimes (1 to interval, interval + 1 to 2 * interval, ...) other than the last
-   refresh's: on consecutive GameTimes those 1 modulo the interval, and past a gap that skips
-   such a GameTime the first iteration after it. The second is one because a takeover starts at
-   a refresh and its fork is appended after the iteration before it (tagpu_replay.c,
-   takeover_point): at the first, that iteration is the parent's or none, so a request inside the
-   first interval rounds to the second, whose iteration before is the segment's own. The writer
-   decides with this and every check of a file mirrors it (codectest lossy, tarec.py lossy-check).
-   `interval` is REC_REFRESH_MIN..REC_REFRESH_TICKS; 0 makes only the first two refreshes. */
-int reclossy_is_refresh(unsigned n, unsigned tick, unsigned prev, unsigned interval);
+/* THE REFRESH GRID, reclossy_is_refresh, is tagpu_recrules.h's: the wiki plays it too */
 
 /* THE SPRAY SESSIONS' TABLE, which every reader of a stream with RECL_SPRAYS keeps and the filter
    writes by (tagpu_reclossy.c, THE SPRAY SESSIONS): each unit slot's session and its sprays of

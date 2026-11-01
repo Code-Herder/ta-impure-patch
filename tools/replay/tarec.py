@@ -257,7 +257,7 @@ RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4
 RB_CONTRIBUTIONS = 7
 RB_EXACT = 8                # the exact records of the stream block before it (tagpu_rec.exact)
 RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
-RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
+RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recrules.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
             RB_MINIMAP: "minimap", RB_TIMELINES: "timelines", RB_CONTRIBUTIONS: "contributions",
             RB_EXACT: "exact stream"}
@@ -2451,7 +2451,7 @@ class Held:
 def is_refresh(n, t, prev, interval):
     """Whether a segment's iteration at GameTime t is a refresh, n its ordinal in the segment from
     1 and prev the GameTime of the segment's last refresh, as the writer decides it
-    (tagpu_reclossy.h, reclossy_is_refresh): the first two, and then the first in each interval
+    (tagpu_recrules.h, reclossy_is_refresh): the first two, and then the first in each interval
     of `interval` GameTimes (1 to interval, interval + 1 to 2 * interval, ...) other than the last
     refresh's -- on consecutive GameTimes those 1 modulo the interval."""
     return n <= 2 or (interval > 0 and (t + interval - 1) // interval !=

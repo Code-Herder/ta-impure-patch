@@ -2,11 +2,11 @@
 #define TAGPU_RECFILE_H
 #include <stdint.h>
 #include <windows.h>
+#include "tagpu_recrules.h"
 
 /* RB_TIMELINES rows are bounded independently of IDs: a compacted file retains the highest
    allocated ID's tombstone even when its segment is gone, so an ID is never reused. */
 #define REC_TIMELINE_ROWS 65
-#define REC_FORK_LIMIT 3
 #define REC_TL_LIVE 1
 #define REC_TL_DELETED 2
 typedef struct RecTimelineState {

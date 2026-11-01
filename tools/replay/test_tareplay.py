@@ -1440,8 +1440,8 @@ class LossyStream(unittest.TestCase):
         self.assertIn("GameTime 2: a refresh iteration that does not end a refresh block", o)
 
     def test_the_grid(self):
-        """the writer's rule (reclossy_is_refresh): the first two iterations, then 1 modulo the
-        interval, or the first iteration past one a gap skips"""
+        """the writer's rule (tagpu_recrules.h, reclossy_is_refresh): the first two iterations,
+        then 1 modulo the interval, or the first iteration past one a gap skips"""
         self.assertEqual([tarec.is_refresh(n, t, p, 30) for n, t, p in
                           ((1, 500, 0), (2, 501, 500), (3, 502, 501), (3, 511, 501),
                            (3, 512, 501), (5, 535, 511))], [True, True, False, True, True,

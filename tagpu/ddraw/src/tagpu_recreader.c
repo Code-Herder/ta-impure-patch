@@ -2270,11 +2270,11 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimeline
         return 0;
     }
     a->next_id = r->max_id + 1;
-    a->evict = UINT32_MAX;
     {
-        unsigned live = 0;
-        uint64_t oldest = UINT64_MAX, now = recfile_now();
-        unsigned selected = recr_selected(r)->id;
+        /* keep < RECR_TIMELINES (refused above), so every kept segment has a row */
+        RecForkRow rows[RECR_TIMELINES];
+        uint32_t evict;
+        uint64_t now = recfile_now();
         for (i = 0; i < keep; i++) {
             const RecTimeline* t = &r->seg[i].t;
             RecTimelineState* row = &a->states[a->nstates++];
@@ -2288,19 +2288,13 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimeline
                 }
             *row = (RecTimelineState){t->id, (uint8_t)t->state, {0}, (uint32_t)lu,
                                      (uint32_t)(lu >> 32)};
-            if (t->id && t->state == REC_TL_LIVE) {
-                live++;
-                if (t->id != selected && (a->evict == UINT32_MAX || lu < oldest)) {
-                    oldest = lu;
-                    a->evict = t->id;
-                }
-            }
+            rows[i] = (RecForkRow){t->id, (uint8_t)(t->state == REC_TL_LIVE), lu};
         }
-        if (live < REC_FORK_LIMIT) a->evict = UINT32_MAX;
-        else if (a->evict == UINT32_MAX || live > REC_FORK_LIMIT) {
+        if (!rec_fork_evict(rows, keep, recr_selected(r)->id, REC_FORK_LIMIT, &evict)) {
             snprintf(why, cap, "the live fork set cannot be bounded to %u", REC_FORK_LIMIT);
             return 0;
         }
+        a->evict = evict;
         for (i = 0; i < a->nstates; i++)
             if (a->states[i].id == a->evict) a->states[i].state = REC_TL_DELETED;
         /* The new ID exceeds the previous high watermark, so its row carries that watermark

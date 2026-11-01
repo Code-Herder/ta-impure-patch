@@ -19,6 +19,7 @@
 #include "tagpu_reccodec.h"
 #include "tagpu_reclossy.h"
 #include "tagpu_recfile.h"
+#include "tagpu_recrules.h"
 #include "tagpu_recmp_file.h"
 #include "tagpu_recmp_units.h"
 #include "tagpu_recmp_named.h"
@@ -31,8 +32,6 @@
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
 #define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or unpack to, and a
                                        sectioned block decode to                              */
-#define RECR_TIMELINES  64          /* the segments a file may hold: a file with more is refused
-                                       by name                                                   */
 #define RECR_BOUNDARY   2           /* recr_tick: the chain goes on in its next segment         */
 
 /* a seat at the start: an RT_PLAYER entry */

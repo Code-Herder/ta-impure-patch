@@ -37,6 +37,7 @@
 #include "tagpu_replay_globals.h"
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
+#include "tagpu_recrules.h"
 
 /* 26: format 25 with the contest order's keys (RK_EV_TURN), the carry links at their place
    (RK_EV_LINK) and Teleport's moves at theirs (RK_EV_PLACE). 25 was format 24 with
@@ -1140,13 +1141,7 @@ _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
 _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46 &&
                RT_TYPES == 47, "the codec's and the filter's tags");
 
-/* RT_HOLD. A refresh iteration is a segment's first or second, one whose GameTime is 1 modulo
-   the interval (the first after it where an iteration skips that GameTime), and every snapshot's
-   (tagpu_reclossy.h, reclossy_is_refresh): on the grid, every refresh is also 1 modulo the
-   radar pass's step of 30 ticks, and the grid is the same in every recording. A file without
-   RT_HOLD, a multiplayer recording, is written on REC_REFRESH_TICKS's grid. */
-#define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
-#define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
+/* RT_HOLD's flags and bytes; its interval's bounds and the refresh grid are tagpu_recrules.h's */
 #define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held: a playing keeps
                                    the engine's own (tagpu_puppet.c, THE FOOTPRINT WRITERS)      */
 #define RECL_SPRAYS       2u    /* the nano sprays are written as sessions (RK_SPRAY_SESSION)    */
