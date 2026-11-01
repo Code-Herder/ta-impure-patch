@@ -45,13 +45,21 @@ void tagpu_hudstate_refuse(const char* why)
                    "game no rewind button this session", why);
 }
 
+/* THE LIVE HUD FROM THE ARM: a fork armed for the next capture point makes the level a live
+   recorded skirmish from the arm on, since only that capture point (recorded, or refused with its
+   line) or the level's end clears the arm (tagpu_rec_fork_armed). So the live HUD, and the toast
+   it carries, draws from the frame whose visit ran the takeover or the rewind's fork, not from the
+   first step after it. Until that capture point the rewind is not `available`, and a press on its
+   button is refused as its open refuses one with no recording ("Rewind refused").
+   The arm is a lifetime the game thread alone moves: set by the takeover's TK4b, cleared by the
+   capture point or the level's end, read here (THE FORK'S HANDLE, tagpu_recorder.c). */
 int tagpu_hudstate_mode(void)
 {
     TAGPU_REPLAY_RWSTATE rw;
     unsigned first, last;
     if (!tagpu_hudstate_on()) return HUD_MODE_NONE;
     tagpu_replay_rewind_state(&rw);
-    if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available) return HUD_MODE_LIVE;
+    if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available || rw.armed) return HUD_MODE_LIVE;
     return tagpu_replay_live() && tagpu_replay_span(&first, &last) ? HUD_MODE_REPLAY : HUD_MODE_NONE;
 }
 

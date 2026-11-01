@@ -10647,6 +10647,9 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out)
        effect */
     out->available = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
                      !(ta[OFF_NETWORK] & 1) && tagpu_rec_rewind_ready();
+    /* the same conditions, with the arm in place of the recording */
+    out->armed = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
+                 !(ta[OFF_NETWORK] & 1) && tagpu_rec_fork_armed();
     if (s_rw.state >= RW_OPEN) {
         out->first = s_span.first;
         out->last = s_span.last;
