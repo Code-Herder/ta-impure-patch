@@ -4849,7 +4849,6 @@ static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
     return 0;
 }
 
-/* the bound entry: a copy of the entry pointing at its own types, and those types */
 /* the bound entry, its types and, in a game, its features table with the casts' wrecks */
 struct WIKISIMBOUND {
     WIKIENTRY   e;
