@@ -514,23 +514,54 @@ const WikiSim = (() => {
        kill} alone, kill naming a unit of the merged scene by its explicit id, at most once and at most GAME_KILLS
        kills, at <= end.
      - in the merged scene no feature's id (f<k + 1> when it has none) is a unit's explicit id, since a unit's corpse
-       takes its id; and its features and the kills together, the game script's and every fork part's, are at most
-       FEATS_MAX, the features table a corpse is placed into (an over-approximation of the wrecks any chain of forks
-       can make, which tagpu_wikisim_fork holds at run time too).
+       takes its id; and its features and the kills together, the game script's, every fork part's and every kept
+       fork's, are at most FEATS_MAX, the features table a corpse is placed into (an over-approximation of the wrecks
+       any chain of forks can make, which tagpu_wikisim_fork holds at run time too).
      - A LIVE ENTRY (`"live": true`, a game entry's alone, a boolean) plays a live skirmish with the rewind, never a
        replay; its viewer presses LIVE_CONTROLS, a replay entry's REPLAY_CONTROLS (checkViewer). Its demo may carry
-       `forks`, a list of at most DEMO_FORKS parts {id, from, parent, inputs}: the game inputs the viewer's fork of
-       that id goes on with. id an integer 1..TIMELINES - 1 and no two parts of one id; from an integer 2..end (no
-       fork starts at the original's first tick); parent an integer 0..id - 1 (a parent is made before its child:
-       ids only grow); inputs a list of game inputs (the rules above, a unit killed at most once in the part and at
-       most GAME_KILLS kills), each as tagpu_wikidata.c reads one (a build of a type of the entry, a reclaim true, a
-       pick a kind, a move two numbers, a key one of KEYS or ACTIONS) and at a tick from..end. A demo of any other
-       entry carries no `forks`. ---- */
+       `forks`, a list of at most DEMO_FORKS parts {id, from, parent, inputs} and an optional `seat`: the game inputs
+       the viewer's fork of that id goes on with, played as `seat` (0 when absent; THE SEAT RULE above holds it). id an
+       integer 1..TIMELINES - 1 and no two parts of one id; from an integer 2..end (no fork starts at the original's
+       first tick); parent an integer 0..id - 1 (a parent is made before its child: ids only grow); inputs a list of
+       game inputs of any seat (the rules above, a unit killed at most once in the part and at most GAME_KILLS kills),
+       each as tagpu_wikidata.c reads one (a build of a type of the entry, a reclaim true, a pick a kind, a move two
+       numbers, a key one of KEYS or ACTIONS) and at a tick from..end. A demo of any other entry carries no `forks`.
+     - A TAKEOVER ENTRY (`"takeover": true`, a game entry's alone, a boolean, never with `live` true) plays a replay
+       with the replay HUD's Take over: the picker, the Forks bay and its lanes (replay.js, TAKE OVER). Its viewer
+       presses REPLAY_CONTROLS, TAKEOVER_CONTROLS and LIVE_CONTROLS (a takeover turns the replay into a live game);
+       its demos' game has the sidebar false, since the column is seat 0's and a takeover may take any seat. Its demo
+       may carry `forks` as a live entry's, and `kept`: the forks the recording's file holds when the demo starts,
+       at most FORK_LIMIT, each exactly {id, from, parent, seat, end, inputs} as it was played. id k + 1 at index k
+       (a kept fork's row is its id); parent an integer 0..id - 1; from a tick of the parent's segment after the
+       parent's first (the original's is 1, a kept parent's its from) and at most the parent's end (the original's
+       is the game's), a refresh the recorder's writer flags walked from that first (refreshAt), since a fork starts
+       only there (tagpu_replay.c takeover_point); seat one of the scene's (THE SEAT RULE); end an integer from..the
+       game's end; inputs as a part's, at a tick from..its end. A demo of any other entry carries no `kept`. ---- */
   const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400, THEATRE_TABS = 9;
   /* a demo's fork parts, at most (tagpu_wikidata.h WIKI_DEMO_FORKS); and the timelines a recording holds, the
      recorder's RECR_TIMELINES, which bounds a part's id: tagpu_wikidata.c reads it from tagpu_recrules.h itself,
      and simparity's refusal cases hold this to that */
   const DEMO_FORKS = 8, TIMELINES = 64;
+  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h, which the recorder runs and the DLL's replay
+     layer and loader include (simparity compares them case by case): the refresh interval a recording is written
+     with (REC_REFRESH_TICKS) and the live forks a recording keeps (REC_FORK_LIMIT); the refresh grid (refresh_bin,
+     reclossy_is_refresh). replay.js plans its forks with them, and checkGame holds a kept fork to them. */
+  const REFRESH_TICKS = 300, FORK_LIMIT = 3;
+  // the interval of the refresh grid that holds GameTime t: 1 to interval is the first
+  const refreshBin = (t, interval) => Math.floor((t + interval - 1) / interval);
+  /* whether a segment's iteration at GameTime `tick` is a refresh, `n` its ordinal in the segment from 1 and `prev` the
+     GameTime of the segment's last refresh before it: the first two, then the first in each interval other than the last
+     refresh's; `interval` 0 makes only the first two */
+  const isRefresh = (n, tick, prev, interval) =>
+    n <= 2 || (interval !== 0 && refreshBin(tick, interval) !== refreshBin(prev, interval));
+  /* the last GameTime up to T that the writer flags a refresh in a segment whose first iteration is `first`, walked from
+     it with the ordinal from 1; `first` itself when T is below first + 1. At most T - first + 1 integer steps
+     (tagpu_wikidata.c tagpu_wikidata_refresh_at) */
+  function refreshAt(first, T) {
+    let R0 = first;
+    for (let r = first, n = 1, prev = 0; r <= T; r++, n++) if (isRefresh(n, r, prev, REFRESH_TICKS)) { R0 = r; prev = r; }
+    return R0;
+  }
   // whether the entry is a game entry; anything but "game" in `frame` refuses it
   function isGame(entry) {
     if (!('frame' in entry)) return false;
@@ -594,7 +625,9 @@ const WikiSim = (() => {
     if (game && 'pace' in entry) throw new Error('a game entry has no pace');
     if (game && Array.isArray(entry.demos) && entry.demos.length > THEATRE_TABS) throw new Error(`a game entry has at most ${THEATRE_TABS} demos`);
     if ('live' in entry && !(game && typeof entry.live === 'boolean')) throw new Error('live is a game entry\'s, true or false');
-    const live = game && entry.live === true;
+    if ('takeover' in entry && !(game && typeof entry.takeover === 'boolean')) throw new Error('takeover is a game entry\'s, true or false');
+    if (entry.live === true && entry.takeover === true) throw new Error('an entry is a replay, a live game or a takeover\'s replay');
+    const live = game && entry.live === true, tk = game && entry.takeover === true;
     for (const [t, d] of Object.entries(entry.units || {})) {
       for (const n of ECON) if (n in d && !(typeof d[n] === 'number' && d[n] >= 0 && d[n] < Infinity)) throw new Error(`unit ${t}: ${n} is not a finite number >= 0`);
       if ('energyUse' in d && !(typeof d.energyUse === 'number' && Math.abs(d.energyUse) < ECON_MAX)) throw new Error(`unit ${t}: energyUse is not a number of magnitude below ${ECON_MAX}`);
@@ -617,7 +650,8 @@ const WikiSim = (() => {
     if (!demo) return game;
     const at = `demo ${demo.id}`;
     if (demo.scene && 'seats' in demo.scene) throw new Error(`${at}: a demo's scene has no seats`);
-    if ('forks' in demo && !live) throw new Error(`${at}: forks are a live entry's demo's`);
+    if ('forks' in demo && !live && !tk) throw new Error(`${at}: forks are a live or a takeover entry's demo's`);
+    if ('kept' in demo && !tk) throw new Error(`${at}: kept is a takeover entry's demo's`);
     if (!game) { if ('game' in demo) throw new Error(`${at}: game is a game entry's`); return game; }
     const g = demo.game, seats = sceneOf(entry, demo).seats;
     if (!obj(g)) throw new Error(`${at} has no game`);
@@ -625,6 +659,9 @@ const WikiSim = (() => {
     if (!Object.keys(g).every(k => ['end', 'inputs', 'sidebar'].includes(k))) throw new Error(`${at}: game holds a key it does not know`);
     if (!(int(g.end) && g.end >= 1 && g.end <= GAME_END_MAX)) throw new Error(`${at}: the game's end is not an integer 1..${GAME_END_MAX}`);
     if ('sidebar' in g && typeof g.sidebar !== 'boolean') throw new Error(`${at}: the game's sidebar is not a boolean`);
+    /* a takeover may take any seat, and the column is seat 0's: a takeover entry's game has none, the sidebar false (an
+       absent sidebar may be on, THE SEAT RULE's over-approximation) */
+    if (tk && g.sidebar !== false) throw new Error(`${at}: a takeover entry's game has the sidebar false, since the column is seat 0's`);
     if (!Array.isArray(g.inputs)) throw new Error(`${at}: the game's inputs are not a list`);
     for (const u of (demo.scene && demo.scene.units) || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < seats.length)))
       throw new Error(`${at}: the owner ${u.owner} is no seat of its scene`);
@@ -653,49 +690,75 @@ const WikiSim = (() => {
       killed.add(e.kill);
     }
     if (live) checkLiveOrders(at, g.inputs);
+    /* a fork's game inputs, of a part or a kept fork, at ticks from..last: each as tagpu_wikidata.c reads one, which a
+       part's never reaches a simulation to be checked by; its kills, each of a unit of the scene once in the fork and
+       at most GAME_KILLS, counted */
+    const forkInputs = (w, inputs, from, last) => {
+      if (!Array.isArray(inputs)) throw new Error(`${w}: its inputs are not a list`);
+      const kills = new Set();
+      for (const e of inputs) {
+        const v = `${w}: the input at tick ${obj(e) ? e.at : e}`;
+        if (!obj(e) || typeof e.at !== 'number') throw new Error(`${v} has no tick`);
+        if ('caption' in e || 'until' in e) throw new Error(`${v} is a caption or a wait, which a game script has not`);
+        seatOk(v, e);
+        if (!(e.at >= from && e.at <= last)) throw new Error(`${v} is not at a tick ${from}..${last}`);
+        if ('kill' in e) {
+          if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${v}: a kill carries another key`);
+          if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${v}: the kill names no unit of the scene`);
+          if (kills.has(e.kill)) throw new Error(`${v}: ${e.kill} is killed twice`);
+          if (kills.size === GAME_KILLS) throw new Error(`${v}: more than ${GAME_KILLS} kills`);
+          kills.add(e.kill);
+          continue;
+        }
+        const key = k => !(typeof k === 'string' && k !== '') || KEYS.includes(k) || ACTIONS.includes(k);
+        if (typeof e.build === 'string' && e.build && !own(entry.units, e.build)) throw new Error(`${v}: no unit type ${e.build}`);
+        if ('reclaim' in e && e.reclaim !== true) throw new Error(`${v}: a reclaim is not true`);
+        if ('pick' in e && !KINDS.includes(e.pick)) throw new Error(`${v}: a pick names no kind`);
+        if ('move' in e && e.move !== null && !(Array.isArray(e.move) && typeof e.move[0] === 'number' && typeof e.move[1] === 'number'))
+          throw new Error(`${v}: a move is not two numbers`);
+        if (!key(e.down) || !key(e.up)) throw new Error(`${v}: no key ${key(e.down) ? e.up : e.down}`);
+      }
+      return kills.size;
+    };
     let partKills = 0;
     if ('forks' in demo) {
       const F = demo.forks, partIds = [];
       if (!Array.isArray(F) || F.length > DEMO_FORKS) throw new Error(`${at}: forks is not a list of at most ${DEMO_FORKS} parts`);
       for (const p of F) {
         const w = `${at}: the fork part ${obj(p) ? p.id : p}`;
-        if (!obj(p) || Object.keys(p).length !== 4 || !['id', 'from', 'parent', 'inputs'].every(k => own(p, k)))
-          throw new Error(`${w} is not {id, from, parent, inputs}`);
+        if (!obj(p) || !['id', 'from', 'parent', 'inputs'].every(k => own(p, k)) || !Object.keys(p).every(k => ['id', 'from', 'parent', 'inputs', 'seat'].includes(k)))
+          throw new Error(`${w} is not {id, from, parent, inputs} with an optional seat`);
         if (!(int(p.id) && p.id >= 1 && p.id < TIMELINES) || partIds.includes(p.id)) throw new Error(`${w}: the id is not a new integer 1..${TIMELINES - 1}`);
         partIds.push(p.id);
         if (!(int(p.from) && p.from >= 2 && p.from <= g.end)) throw new Error(`${w}: from is not an integer 2..${g.end}`);
         if (!(int(p.parent) && p.parent >= 0 && p.parent < p.id)) throw new Error(`${w}: the parent is not an integer 0..${p.id - 1}`);
-        if (!Array.isArray(p.inputs)) throw new Error(`${w}: its inputs are not a list`);
-        const kills = new Set();
-        for (const e of p.inputs) {
-          const v = `${w}: the input at tick ${obj(e) ? e.at : e}`;
-          if (!obj(e) || typeof e.at !== 'number') throw new Error(`${v} has no tick`);
-          if ('caption' in e || 'until' in e) throw new Error(`${v} is a caption or a wait, which a game script has not`);
-          seatOk(v, e);
-          if (!(e.at >= p.from && e.at <= g.end)) throw new Error(`${v} is not at a tick ${p.from}..${g.end}`);
-          if ('kill' in e) {
-            if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${v}: a kill carries another key`);
-            if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${v}: the kill names no unit of the scene`);
-            if (kills.has(e.kill)) throw new Error(`${v}: ${e.kill} is killed twice`);
-            if (kills.size === GAME_KILLS) throw new Error(`${v}: more than ${GAME_KILLS} kills`);
-            kills.add(e.kill);
-            continue;
-          }
-          // the rest of an input as tagpu_wikidata.c reads one, which a part's never reaches a simulation to be checked by
-          const key = k => !(typeof k === 'string' && k !== '') || KEYS.includes(k) || ACTIONS.includes(k);
-          if (typeof e.build === 'string' && e.build && !own(entry.units, e.build)) throw new Error(`${v}: no unit type ${e.build}`);
-          if ('reclaim' in e && e.reclaim !== true) throw new Error(`${v}: a reclaim is not true`);
-          if ('pick' in e && !KINDS.includes(e.pick)) throw new Error(`${v}: a pick names no kind`);
-          if ('move' in e && e.move !== null && !(Array.isArray(e.move) && typeof e.move[0] === 'number' && typeof e.move[1] === 'number'))
-            throw new Error(`${v}: a move is not two numbers`);
-          if (!key(e.down) || !key(e.up)) throw new Error(`${v}: no key ${key(e.down) ? e.up : e.down}`);
-        }
+        if ('seat' in p) seatOk(`${w}: the fork's`, p);
+        partKills += forkInputs(w, p.inputs, p.from, g.end);
         checkLiveOrders(w, p.inputs);
-        partKills += kills.size;
       }
     }
-    if (S.features.length + killed.size + partKills > FEATS_MAX) throw new Error(`${at}: the scene's features and the kills pass ${FEATS_MAX}`);
-    checkViewer(at, demo, g.end, live);
+    // the forks the file holds: a parent's first and end by id, the original's 1 and the game's end
+    let keptKills = 0;
+    if ('kept' in demo) {
+      const K = demo.kept, span = [{ R: 1, end: g.end }];
+      if (!Array.isArray(K) || K.length > FORK_LIMIT) throw new Error(`${at}: kept is not a list of at most ${FORK_LIMIT} forks`);
+      K.forEach((f, k) => {
+        const w = `${at}: the kept fork ${k + 1}`;
+        if (!obj(f) || Object.keys(f).length !== 6 || !['id', 'from', 'parent', 'seat', 'end', 'inputs'].every(n => own(f, n)))
+          throw new Error(`${w} is not {id, from, parent, seat, end, inputs}`);
+        if (f.id !== k + 1) throw new Error(`${w}: its id is not ${k + 1}, its place in the list`);
+        if (!(int(f.parent) && f.parent >= 0 && f.parent < f.id)) throw new Error(`${w}: the parent is not an integer 0..${f.id - 1}`);
+        const P = span[f.parent];
+        if (!(int(f.from) && f.from > P.R && f.from <= P.end && refreshAt(P.R, f.from) === f.from))
+          throw new Error(`${w}: from is not a refresh of its parent's segment after its first ${P.R}, up to its end ${P.end}`);
+        seatOk(`${w}: the fork's`, f);
+        if (!(int(f.end) && f.end >= f.from && f.end <= g.end)) throw new Error(`${w}: the end is not an integer ${f.from}..${g.end}`);
+        keptKills += forkInputs(w, f.inputs, f.from, f.end);
+        span.push({ R: f.from, end: f.end });
+      });
+    }
+    if (S.features.length + killed.size + partKills + keptKills > FEATS_MAX) throw new Error(`${at}: the scene's features and the kills pass ${FEATS_MAX}`);
+    checkViewer(at, demo, g.end, live ? 'live' : tk ? 'takeover' : 'replay', seats.length);
     return game;
   }
   /* THE VIEWER'S SCRIPT of a game entry's demo, its `inputs` on demo time (decision 4): the data rule, refused here as
@@ -703,19 +766,29 @@ const WikiSim = (() => {
      list reads as empty, as the loader reads one. Each input has a numeric `at` and is exactly one of
      - a caption, {at, caption};
      - the viewer's one wait, {at, until: "seeked", max}: max an integer 1..UNTIL_MAX, and no other input on its tick;
-     - a press of the HUD's, {at, hud}: hud one of a live entry's LIVE_CONTROLS, else of REPLAY_CONTROLS (leave:yes
-       is the player's alone, never a script's: the presentation's), and for `track` a `to`, an integer 0..the game's end, with `drag` (the same)
-       and `over` (an integer 1..UNTIL_MAX) together or neither.
+     - a press of the HUD's, {at, hud}: hud one of a live entry's LIVE_CONTROLS, a takeover entry's REPLAY_CONTROLS,
+       TAKEOVER_CONTROLS and LIVE_CONTROLS, else of REPLAY_CONTROLS (leave:yes is the player's alone, never a
+       script's: the presentation's); for `track` a `to`, an integer 0..the game's end, with `drag` (the same) and
+       `over` (an integer 1..UNTIL_MAX) together or neither; for `takeas` a `seat`, the picker's row of that seat, an
+       integer 0..the scene's seats - 1; for `lane`, `export` and `delete` a `fork`, the id of the fork whose lane it
+       presses, an integer 1..TIMELINES - 1.
      A press's trip runs from its tick to its release, at + HUD_UP, or for a drag at + HUD_DOWN + over; no other press
      and no wait stands in it, the release's tick included, in the order the inputs are fed (by tick, then file
      order). A demo's `end`, when given, is a number. */
   /* HUD_CONTROLS, every control a script may name, in WIKI_HUD_* order: the replay HUD's eight, then the live HUD's
-     own three (rew, fwd and track are both HUDs', and mean the live HUD's in a live entry) */
-  const HUD_CONTROLS = ['play', 'speed', 'rew', 'fwd', 'track', 'bookmark', 'leave', 'leave:no', 'rewind', 'live_play', 'live_now'];
+     own three (rew, fwd and track are both HUDs', and mean the live HUD's in a live game), then the replay HUD's Take
+     over set (tagpu_hudinput.c pick_act and lane_act): Take over, a picker row, the Forks bay, a lane, Back to main
+     recording, a lane's Save as a replay and its Delete */
+  const HUD_CONTROLS = ['play', 'speed', 'rew', 'fwd', 'track', 'bookmark', 'leave', 'leave:no', 'rewind', 'live_play', 'live_now',
+    'takeover', 'takeas', 'lanes', 'lane', 'main', 'export', 'delete'];
   const REPLAY_CONTROLS = HUD_CONTROLS.slice(0, 8), LIVE_CONTROLS = ['rewind', 'rew', 'fwd', 'track', 'live_play', 'live_now'];
+  const TAKEOVER_CONTROLS = HUD_CONTROLS.slice(11);
+  // the controls each kind of game entry's viewer presses (checkViewer's `set`)
+  const PRESS_SETS = { replay: REPLAY_CONTROLS, live: LIVE_CONTROLS,
+    takeover: [...new Set([...REPLAY_CONTROLS, ...TAKEOVER_CONTROLS, ...LIVE_CONTROLS])] };
   // a HUD press's trip is the popup pick's without its glide back (THE PICK TRIP): pressed at HUD_DOWN, released at HUD_UP
   const HUD_DOWN = PICK_DOWN, HUD_UP = PICK_UP;
-  function checkViewer(at, demo, end, live) {
+  function checkViewer(at, demo, end, set, nseat) {
     if ('end' in demo && demo.end !== null && typeof demo.end !== 'number') throw new Error(`${at}: the end is not a number`);
     const list = Array.isArray(demo.inputs) ? demo.inputs : [];
     const keys = (e, ks) => Object.keys(e).every(k => k === 'at' || ks.includes(k));
@@ -726,9 +799,12 @@ const WikiSim = (() => {
       if ('hud' in e) {
         if (e.hud === 'leave:yes') throw new Error(`${w}: leave:yes is the player's, never a demo's`);
         if (!HUD_CONTROLS.includes(e.hud)) throw new Error(`${w}: ${JSON.stringify(e.hud)} is no control a demo presses`);
-        if (!(live ? LIVE_CONTROLS : REPLAY_CONTROLS).includes(e.hud))
-          throw new Error(`${w}: ${e.hud} is no control a ${live ? 'live' : 'replay'} demo presses`);
-        if (e.hud !== 'track' ? !keys(e, ['hud']) : !keys(e, ['hud', 'to', 'drag', 'over'])) throw new Error(`${w}: the press carries a key it does not know`);
+        if (!PRESS_SETS[set].includes(e.hud)) throw new Error(`${w}: ${e.hud} is no control a ${set} demo presses`);
+        const value = e.hud === 'takeas' ? 'seat' : ['lane', 'export', 'delete'].includes(e.hud) ? 'fork' : null;
+        if (e.hud === 'track' ? !keys(e, ['hud', 'to', 'drag', 'over']) : !keys(e, value ? ['hud', value] : ['hud']))
+          throw new Error(`${w}: the press carries a key it does not know`);
+        if (value === 'seat' && !(int(e.seat) && e.seat >= 0 && e.seat < nseat)) throw new Error(`${w}: the row's seat is not an integer 0..${nseat - 1}`);
+        if (value === 'fork' && !(int(e.fork) && e.fork >= 1 && e.fork < TIMELINES)) throw new Error(`${w}: the fork is not an integer 1..${TIMELINES - 1}`);
         if (e.hud !== 'track') continue;
         if (!tick(e, 'to')) throw new Error(`${w}: the track's to is not an integer 0..${end}`);
         if (('drag' in e) !== ('over' in e)) throw new Error(`${w}: drag and over come together`);
@@ -752,12 +828,15 @@ const WikiSim = (() => {
      state it acts on, 0 when absent), and the game's end and sidebar */
   const gameDemo = d => ({ id: d.id, on: d.on, scene: d.scene, end: d.game.end, ...('sidebar' in d.game ? { sidebar: d.game.sidebar } : {}),
     inputs: d.game.inputs });
-  /* THE INPUT SEATS, NIN (ingame-wiki-replay-plan.md decision 16): a game simulation holds an input state for every seat its game script or a
-     fork part names, 1 + the highest (a kill names none), at least 1; a page simulation holds one. checkGame bounds
-     every seat by the scene's, so NIN is at most SEATS, and the sim refuses an input of a seat at NIN or above at the
-     door (sim.input, sim.fork). tagpu_wikisim.c input_seats. */
-  const inputSeats = d => [...d.game.inputs, ...(d.forks || []).flatMap(p => p.inputs)]
-    .reduce((n, e) => 'kill' in e ? n : Math.max(n, (e.seat ?? 0) + 1), 1);
+  /* THE INPUT SEATS, NIN (ingame-wiki-replay-plan.md decision 16): a game simulation of a takeover entry holds an input
+     state for every seat of its scene, since Try it may take over any of them; any other game for every seat its game
+     script or a fork part names, as an input's seat or as the seat the fork is played as, 1 + the highest (a kill
+     names none), at least 1; a page simulation holds one. checkGame bounds every seat by the scene's, so NIN is at
+     most SEATS, and the sim refuses an input of a seat at NIN or above at the door (sim.input, sim.fork).
+     tagpu_wikisim.c input_seats. */
+  const inputSeats = (entry, d) => entry.takeover === true ? sceneOf(entry, d).seats.length
+    : [...d.game.inputs, ...(d.forks || []).flatMap(p => [...p.inputs, { seat: p.seat }])]
+      .reduce((n, e) => 'kill' in e ? n : Math.max(n, (e.seat ?? 0) + 1), 1);
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
      select is the left button in both types, cancel the right one in both, order the right one at type 1 and the left
@@ -799,7 +878,7 @@ const WikiSim = (() => {
       throw new Error(GAME ? 'the entry is not a game entry: its demos play as demos' : 'a game entry\'s demos play as games');
     if (GAME && !demoGiven) throw new Error('a game plays a demo\'s game script');
     if (GAME && econMode !== 'refuse' && econMode !== 'stall') throw new Error(`the economy's mode ${econMode} is not refuse or stall`);
-    const demoIn = GAME ? gameDemo(demoGiven) : demoGiven, NIN = GAME ? inputSeats(demoGiven) : 1;
+    const demoIn = GAME ? gameDemo(demoGiven) : demoGiven, NIN = GAME ? inputSeats(entryIn, demoGiven) : 1;
     // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
     const B = ctx.casting ? binder(entryIn, ctx.casting, ctx.rival, GAME) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
@@ -3330,9 +3409,11 @@ const WikiSim = (() => {
     frameFits,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order), a replay entry's and a live entry's,
     // and a press's trip, for replay.js
-    HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, HUD_DOWN, HUD_UP,
+    HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, TAKEOVER_CONTROLS, HUD_DOWN, HUD_UP,
     // a live demo's fork parts, at most, and the bound of their ids (the recorder's RECR_TIMELINES)
     DEMO_FORKS, TIMELINES,
+    // the recorder's rules (THE RECORDER'S RULES), which replay.js plans its forks with
+    REFRESH_TICKS, FORK_LIMIT, refreshBin, isRefresh, refreshAt,
     // the keys and buttons an input names, in tagpu_wikidata.h's WIKI_KEY_* order
     KEYS,
     // the shapes alone, for checks against tagpu_placegeo.c

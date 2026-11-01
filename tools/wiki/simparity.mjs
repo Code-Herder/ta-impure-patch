@@ -399,6 +399,48 @@ if (tryAt >= 0) {
 const CASTINGS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).castings;
 // the opponent's casting beside each fixture casting: the fixture layout has one side, so the rival is given apart
 const RIVALS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).rivals;
+/* THE TAKEOVER FIXTURE: a takeover entry (`"takeover": true`) on Rewind's field, its four demos the ones
+   takeover-spec.md section 9 lays out -- the picker and a seat taken (Bram, seat 1, while Ada's recorded inputs play
+   on), the lanes with a kept fork watched and left, a fork saved and two deleted (the watched one after a return to
+   the original), and the fourth fork's eviction -- the data the takeover entry's refusal cases edit. Each click is
+   aimed where its unit stands on its tick in the simulation; a takeover's part is quiet through the return glide. */
+function takeoverFixture() {
+  const base = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/rewind.json'), 'utf8'));
+  // a click selecting what stands at p, and an order to q on the three ticks after, both of `seat`
+  const click = (at, seat, p) => [{ at, seat, move: p }, { at, seat, down: 'select' }, { at, seat, up: 'select' }];
+  const send = (at, seat, p, q) => [...click(at, seat, p), { at: at + 1, seat, move: q }, { at: at + 2, seat, down: 'order' },
+    { at: at + 3, seat, up: 'order' }];
+  // the recording: Ada's solar and mex, Bram's commander and walker sent about, Ada's commander moved, b0 killed
+  const inputs = [...click(10, 0, [200, 300]), { at: 10, build: 'ARMSOLAR' }, { at: 10, move: [280, 360] }, { at: 10, down: 'lmb' },
+    { at: 10, up: 'lmb' }, ...click(80, 0, [140, 330]), { at: 80, build: 'ARMMEX' }, { at: 80, move: [120, 376] },
+    { at: 80, down: 'lmb' }, { at: 80, up: 'lmb' }, ...send(200, 1, [520, 120], [460, 200]), ...send(450, 0, [200, 300], [330, 270]),
+    ...send(700, 1, [430, 330], [300, 330]), ...send(1200, 1, [460, 200], [560, 160]), { at: 1500, kill: 'b0' }];
+  const game = { end: 2700, sidebar: false, inputs };
+  const K1 = { id: 1, from: 301, parent: 0, seat: 1, end: 1500, inputs: [...send(340, 1, [460, 200], [300, 120]), ...send(600, 1, [430, 330], [500, 400])] };
+  const K2 = { id: 2, from: 601, parent: 0, seat: 0, end: 1800, inputs: send(640, 0, [330, 270], [200, 150]) };
+  const K3 = { id: 3, from: 1201, parent: 0, seat: 0, end: 2100, inputs: send(1240, 0, [330, 270], [330, 100]) };
+  const at = (t, hud, k = {}) => ({ at: t, hud, ...k });
+  const e = { ...base, id: 'takeover-fixture', takeover: true, title: 'Take over a replay', subtitle: 'The replay layer\'s Take over',
+    text: ['Take over plays a replay on from any moment, as one of its players.'] };
+  delete e.live;
+  e.demos = [
+    { id: 'takeover', title: 'The picker, a seat chosen', end: 1100, game, inputs: [at(400, 'takeover'), { at: 427, until: 'seeked', max: 120 },
+      at(520, 'takeas', { seat: 1 })],
+      forks: [{ id: 1, from: 301, parent: 0, seat: 1, inputs: [...send(340, 1, [430, 330], [250, 120]), ...send(420, 1, [460, 200], [600, 300])] }] },
+    { id: 'lanes', title: 'The lanes', end: 900, game, kept: [K1], inputs: [at(60, 'lanes'), at(240, 'lane', { fork: 1 }), at(640, 'main'),
+      { at: 667, until: 'seeked', max: 120 }] },
+    { id: 'save', title: 'A fork saved, two deleted', end: 900, game, kept: [K1, K2], inputs: [at(40, 'play'), at(90, 'lanes'),
+      at(160, 'export', { fork: 2 }), at(300, 'delete', { fork: 1 }), at(360, 'delete', { fork: 1 }), at(480, 'lane', { fork: 2 }),
+      at(540, 'track', { to: 900 }), { at: 567, until: 'seeked', max: 120 }, at(600, 'delete', { fork: 2 }), at(660, 'delete', { fork: 2 }),
+      { at: 687, until: 'seeked', max: 120 }] },
+    { id: 'evict', title: 'The fourth fork', end: 1000, game, inputs: [at(40, 'lanes'), at(100, 'lane', { fork: 1 }), at(160, 'main'),
+      at(300, 'play'), at(360, 'track', { to: 1100 }), { at: 387, until: 'seeked', max: 120 }, at(420, 'takeover'),
+      { at: 447, until: 'seeked', max: 120 }, at(560, 'takeas', { seat: 0 })],
+      kept: [{ ...K1, end: 1200 }, { ...K2, seat: 1, end: 1500, inputs: send(640, 1, [430, 330], [500, 400]) }, K3],
+      forks: [{ id: 4, from: 901, parent: 0, seat: 0, inputs: send(940, 0, [140, 330], [330, 330]) }] },
+  ];
+  return e;
+}
 // every game entry, the tree's or not (frame "game"), in file order
 const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
@@ -1035,7 +1077,7 @@ function gameRefusalCases(game, page) {
   F(`${WikiSim.DEMO_FORKS + 1} parts`, 'refused', Array.from({ length: WikiSim.DEMO_FORKS + 1 }, (_, i) => part({ id: i + 1, parent: i })));
   F('a part not an object', 'refused', [[1, 301, 0, []]]);
   F('a part without inputs', 'refused', [(({ inputs, ...k }) => k)(part())]);
-  F('a part with a key more', 'refused', [part({ seat: 0 })]);
+  F('a part with a key more', 'refused', [part({ end: 900 })]);
   for (const [v, want] of [[0, 'refused'], [1, 'accepted'], [WikiSim.TIMELINES - 1, 'accepted'], [WikiSim.TIMELINES, 'refused'], [1.5, 'refused'], ['1', 'refused']])
     F(`an id ${JSON.stringify(v)}`, want, [part({ id: v })]);
   F('two parts of one id', 'refused', [part(), part({ from: 401, inputs: [] })]);
@@ -1088,6 +1130,122 @@ function gameRefusalCases(game, page) {
       sc.features = pebbles(n);
       d.forks = [part({ inputs: [{ at: 400, kill: 'c1' }] })];
     });
+  return cases;
+}
+
+/* ---- THE TAKEOVER ENTRY'S REFUSALS (sim.js checkGame's takeover rules, kept forks and a part's seat; checkViewer's
+   Take over set; the C loader's entry, game, forks, kept and viewer_input): each case the takeover fixture `tk`, or the
+   page entry `page`, edited, its first demo (or the one an edit keeps) played as a game, or as a replay where only
+   the viewer's script is at stake ---- */
+function takeoverRefusalCases(tk, page) {
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const cases = [];
+  const CTX = { side: 0, iface: 1, casting: null, rival: null, layout: FIXTURE };
+  // the fixture with its demo `k` alone, edited; `replay` plays it as a replay
+  const t = (name, want, edit, k = 1, replay = false) => {
+    const e = clone(tk);
+    e.demos = [e.demos[k]];
+    edit(e, e.demos[0], e.demos[0].game);
+    cases.push({ name: `takeover: ${name}`, want, scripted: 2, ...CTX, entry: e, replay });
+  };
+  const r = (name, want, inputs, k = 1) => t(`viewer: ${name}`, want, (e, d) => { d.inputs = inputs; }, k, true);
+  const K1 = tk.demos[1].kept[0], end = tk.demos[1].game.end;
+  // the entry
+  t('the fixture\'s takeover demo', 'accepted', () => {}, 0);
+  t('the fixture\'s lanes demo', 'accepted', () => {});
+  t('the fixture\'s evict demo', 'accepted', () => {}, 3);
+  for (const v of [1, 'true', null]) t(`takeover ${JSON.stringify(v)}`, 'refused', e => { e.takeover = v; });
+  t('takeover false, no kept', 'accepted', (e, d) => { e.takeover = false; delete d.kept; d.inputs = []; });
+  t('takeover false, a kept', 'refused', (e, d) => { e.takeover = false; d.inputs = []; });
+  t('takeover and live true', 'refused', (e, d) => { e.live = true; d.inputs = []; });
+  t('takeover true, live false', 'accepted', e => { e.live = false; });
+  cases.push({ name: 'takeover: takeover on a page entry', want: 'refused', scripted: 1, ...CTX, entry: { ...clone(page), takeover: true } });
+  cases.push({ name: 'takeover: takeover false on a page entry', want: 'refused', scripted: 1, ...CTX, entry: { ...clone(page), takeover: false } });
+  t('the sidebar true', 'refused', (e, d, G) => { G.sidebar = true; });
+  t('the sidebar absent', 'refused', (e, d, G) => { delete G.sidebar; });
+  // a kept fork, as checkGame and kept() read it
+  const k = (name, want, edit) => t(`kept: ${name}`, want, (e, d) => { edit(d.kept, d); });
+  k('none', 'accepted', K => { K.length = 0; });
+  k('an object', 'refused', (K, d) => { d.kept = { a: K1 }; });
+  k('four forks', 'refused', K => { K.push({ ...K1, id: 2 }, { ...K1, id: 3 }, { ...K1, id: 4 }); });
+  k('three forks', 'accepted', K => { K.push({ ...K1, id: 2, from: 601, inputs: [] }, { ...K1, id: 3, from: 901, inputs: [] }); });
+  k('a key more', 'refused', K => { K[0].colour = 1; });
+  k('a key less', 'refused', K => { delete K[0].end; });
+  k('a fork not an object', 'refused', K => { K[0] = [1, 301, 0, 1, 1500, []]; });
+  for (const [v, want] of [[2, 'refused'], [0, 'refused'], ['1', 'refused']]) k(`the id ${JSON.stringify(v)} at index 0`, want, K => { K[0].id = v; });
+  k('ids out of order', 'refused', K => { K.push({ ...K1, id: 3, from: 601, inputs: [] }); });
+  for (const [v, want] of [[-1, 'refused'], [1, 'refused'], [0.5, 'refused']]) k(`a parent ${v}`, want, K => { K[0].parent = v; });
+  k('a parent the fork before', 'accepted', K => { K.push({ ...K1, id: 2, parent: 1, from: 601, inputs: [] }); });
+  // the refresh grid walked from the parent's first: 1, 2, 301, 601, ...; from a kept parent's 301: 301, 302, 601, ...
+  for (const [v, want] of [[1, 'refused'], [2, 'accepted'], [3, 'refused'], [300, 'refused'], [301, 'accepted'], [302, 'refused'],
+    [601, 'accepted'], [2401, 'accepted'], [2700, 'refused'], [2701, 'refused'], [301.5, 'refused']])
+    k(`from ${v}`, want, K => { K[0].from = v; K[0].end = 2700; K[0].inputs = []; });
+  for (const [v, want] of [[301, 'refused'], [302, 'accepted'], [303, 'refused'], [601, 'accepted'], [1500, 'refused'], [1501, 'refused']])
+    k(`from ${v} of a kept parent from 301 to 1500`, want, K => { K.push({ ...K1, id: 2, parent: 1, from: v, end: 2700, inputs: [] }); });
+  k('from past a kept parent\'s end', 'refused', K => { K[0].end = 500; K[0].inputs = []; K.push({ ...K1, id: 2, parent: 1, from: 601, end: 900, inputs: [] }); });
+  for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [1.5, 'refused'], ['1', 'refused']])
+    k(`seat ${JSON.stringify(v)}`, want, K => { K[0].seat = v; });
+  for (const [v, want] of [[300, 'refused'], [600, 'accepted'], [end, 'accepted'], [end + 1, 'refused'], [700.5, 'refused']])
+    k(`end ${v}`, want, K => { K[0].end = v; K[0].inputs = []; });
+  k('end at from', 'accepted', K => { K[0].end = 301; K[0].inputs = []; });
+  k('inputs an object', 'refused', K => { K[0].inputs = {}; });
+  k('an input before from', 'refused', K => { K[0].inputs = [{ at: 300, seat: 1, move: [1, 1] }]; });
+  k('an input past its end', 'refused', K => { K[0].inputs = [{ at: 1501, seat: 1, move: [1, 1] }]; });
+  k('an input at its end', 'accepted', K => { K[0].inputs = [{ at: 1500, seat: 1, move: [1, 1] }]; });
+  k('an input of seat 2', 'refused', K => { K[0].inputs = [{ at: 400, seat: 2, move: [1, 1] }]; });
+  k('an input of the other seat', 'accepted', K => { K[0].inputs = [{ at: 400, seat: 0, move: [1, 1] }]; });
+  k('a caption', 'refused', K => { K[0].inputs = [{ at: 400, caption: 'x' }]; });
+  k('a build of no type', 'refused', K => { K[0].inputs = [{ at: 400, build: 'NOPE' }]; });
+  k('a build without its click', 'accepted', K => { K[0].inputs = [{ at: 400, build: 'ARMSOLAR' }]; });
+  k('a kill', 'accepted', K => { K[0].inputs = [{ at: 400, kill: 'c0' }]; });
+  k('a unit killed twice', 'refused', K => { K[0].inputs = [{ at: 400, kill: 'c0' }, { at: 500, kill: 'c0' }]; });
+  k('a kill naming no unit', 'refused', K => { K[0].inputs = [{ at: 400, kill: 'nobody' }]; });
+  // the features plus every kill: the script's one kill and a kept fork's; 1 x 1 features in rows 0..4, clear of every
+  // unit and every order
+  for (const [n, want] of [[254, 'accepted'], [255, 'refused']])
+    t(`${n} features, a kill and a kept fork's kill`, want, e => {
+      e.features.pebble = { footprint: [1, 1], metal: 1 };
+      Object.values(e.scenes)[0].features = Array.from({ length: n }, (_, i) => ({ name: 'pebble', at: [i % 64, Math.floor(i / 64)] }));
+      e.demos[0].kept[0].inputs = [{ at: 400, kill: 'c0' }];
+    });
+  t('kept on a live entry', 'refused', (e, d) => { delete e.takeover; e.live = true; d.inputs = []; });
+  // a fork part's seat, on a takeover entry and a live one
+  const part = (o = {}) => ({ id: 2, from: 601, parent: 0, inputs: [], ...o });
+  for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [1.5, 'refused'], [null, 'refused']])
+    t(`a part's seat ${JSON.stringify(v)}`, want, (e, d) => { d.forks = [part({ seat: v })]; });
+  t('a part without a seat', 'accepted', (e, d) => { d.forks = [part()]; });
+  t('a part with a key more', 'refused', (e, d) => { d.forks = [part({ end: 900 })]; });
+  t('a part\'s input of the other seat', 'accepted', (e, d) => { d.forks = [part({ seat: 1, inputs: [{ at: 700, seat: 0, move: [1, 1] }] })]; });
+  t('a part\'s build without its click', 'refused', (e, d) => { d.forks = [part({ inputs: [{ at: 700, build: 'ARMSOLAR' }] })]; });
+  t('a live entry\'s part of seat 1', 'accepted', (e, d) => { delete e.takeover; e.live = true; delete d.kept; d.inputs = []; d.forks = [part({ seat: 1 })]; });
+  t('a live entry\'s part of seat 1 with the sidebar', 'refused', (e, d, G) => {
+    delete e.takeover; e.live = true; delete d.kept; d.inputs = []; G.sidebar = true; G.inputs = G.inputs.filter(x => (x.seat ?? 0) === 0);
+    d.forks = [part({ seat: 1 })];
+  });
+  // the viewer's script: the Take over set and its values, the live HUD's controls beside the replay HUD's
+  r('every control', 'accepted', [...WikiSim.HUD_CONTROLS.map((c, i) => ({ at: 10 + 30 * i, hud: c,
+    ...(c === 'track' ? { to: 100 } : c === 'takeas' ? { seat: 1 } : ['lane', 'export', 'delete'].includes(c) ? { fork: 1 } : {}) }))]);
+  for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [0.5, 'refused'], ['1', 'refused']])
+    r(`takeas seat ${JSON.stringify(v)}`, want, [{ at: 10, hud: 'takeas', seat: v }]);
+  r('takeas without a seat', 'refused', [{ at: 10, hud: 'takeas' }]);
+  r('takeas with a fork', 'refused', [{ at: 10, hud: 'takeas', seat: 1, fork: 1 }]);
+  for (const c of ['lane', 'export', 'delete']) {
+    for (const [v, want] of [[1, 'accepted'], [WikiSim.TIMELINES - 1, 'accepted'], [0, 'refused'], [WikiSim.TIMELINES, 'refused'], [1.5, 'refused']])
+      r(`${c} fork ${v}`, want, [{ at: 10, hud: c, fork: v }]);
+    r(`${c} without a fork`, 'refused', [{ at: 10, hud: c }]);
+    r(`${c} with a seat`, 'refused', [{ at: 10, hud: c, fork: 1, seat: 0 }]);
+  }
+  for (const c of ['takeover', 'lanes', 'main']) r(`${c} with a fork`, 'refused', [{ at: 10, hud: c, fork: 1 }]);
+  r('a track with a seat', 'refused', [{ at: 10, hud: 'track', to: 100, seat: 0 }]);
+  r('leave:yes', 'refused', [{ at: 10, hud: 'leave:yes' }]);
+  // the Take over set is a takeover entry's alone
+  const asReplay = e => { delete e.takeover; };
+  const asLive = e => { delete e.takeover; e.live = true; };
+  for (const c of WikiSim.TAKEOVER_CONTROLS) {
+    const k = c === 'takeas' ? { seat: 1 } : ['lane', 'export', 'delete'].includes(c) ? { fork: 1 } : {};
+    t(`a replay entry's demo pressing ${c}`, 'refused', (e, d) => { asReplay(e); delete d.kept; d.inputs = [{ at: 10, hud: c, ...k }]; }, 1, true);
+    t(`a live entry's demo pressing ${c}`, 'refused', (e, d) => { asLive(e); delete d.kept; d.inputs = [{ at: 10, hud: c, ...k }]; });
+  }
   return cases;
 }
 
@@ -1861,7 +2019,8 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
       /* the game cases edit a replay entry's first demo: a sidebar-free game whose viewer presses the replay HUD, which
          they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
          plays */
-      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live).flatMap(([, game]) => gameRefusalCases(game, entry))];
+      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover).flatMap(([, game]) => gameRefusalCases(game, entry)),
+        ...takeoverRefusalCases(takeoverFixture(), entry)];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
                          rival: c.rival ?? null, replay: !!c.replay }) + '\n' +

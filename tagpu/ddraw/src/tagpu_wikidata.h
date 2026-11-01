@@ -190,12 +190,16 @@ enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_U
 
 /* THE HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its order;
    the game's keys, hud-in-game.md), WIKI_NHUD of them: the replay HUD's eight, then the live HUD's
-   own three. A replay entry's script presses the replay HUD's, a live entry's the live HUD's,
-   which share rew, fwd and track (tagpu_wikidata_hud_presses). leave:yes is the player's alone,
-   never a script's: Try it yourself may press it (replay.js PRESSES, tagpu_wikireplay_press), so it
-   is numbered after the script's controls and has no name the loader reads. */
+   own three, then the replay HUD's Take over set (tagpu_hudinput.c pick_act and lane_act): Take
+   over, a picker row, the Forks bay, a lane, Back to main recording, a lane's Save as a replay and
+   its Delete. A replay entry's script presses the replay HUD's, a live entry's the live HUD's,
+   which share rew, fwd and track (tagpu_wikidata_hud_presses), a takeover entry's all three sets
+   (tagpu_wikidata_hud_takeover). leave:yes is the player's alone, never a script's: Try it
+   yourself may press it (replay.js PRESSES, tagpu_wikireplay_press), so it is numbered after the
+   script's controls and has no name the loader reads. */
 enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
-       WIKI_HUD_LEAVE_NO, WIKI_HUD_REWIND, WIKI_HUD_LIVE_PLAY, WIKI_HUD_LIVE_NOW, WIKI_NHUD,
+       WIKI_HUD_LEAVE_NO, WIKI_HUD_REWIND, WIKI_HUD_LIVE_PLAY, WIKI_HUD_LIVE_NOW, WIKI_HUD_TAKEOVER, WIKI_HUD_TAKEAS,
+       WIKI_HUD_LANES, WIKI_HUD_LANE, WIKI_HUD_MAIN, WIKI_HUD_EXPORT, WIKI_HUD_DELETE, WIKI_NHUD,
        WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_NPRESS };
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
@@ -215,8 +219,10 @@ typedef struct {
     int              extra;             /* a demo's input names a key besides at, caption, build,
                                            reclaim and pick: it is no caption alone, which a
                                            trip's ticks admit (tagpu_wikidata_trips) */
-    int              seat;              /* a game input's seat, whose input state it acts on (0 when
-                                           absent, and on every other input): 0..WIKI_SEATS - 1 */
+    int              seat;              /* a game input's seat, whose input state it acts on, and a
+                                           takeas press's row, the seat it takes over (0 when absent,
+                                           and on every other input): 0..WIKI_SEATS - 1 */
+    int              fork;              /* a lane, export or delete press's fork id, -1 for none */
 } WIKIINPUT;
 
 /* A GAME ENTRY'S DEMO'S GAME: the game script, played by a game simulation (WIKI_PLAY_GAME) on game
@@ -234,16 +240,22 @@ typedef struct {
     int              has_sidebar, sidebar;
 } WIKIGAME;
 
-/* A LIVE DEMO'S FORK PART (sim.js checkGame): the game inputs the viewer's fork of `id` goes on
-   with, made at `from` with `parent` its parent timeline. id 1..RECR_TIMELINES - 1, the
-   recorder's own bound on the timelines a recording holds (tagpu_recrules.h,
-   ingame-wiki-replay-plan.md decision 9), no two parts of one id; from 2..the game's end; parent
-   0..id - 1; each input a game input at a tick from..end, a unit killed at most once in the part
-   and at most WIKI_GAME_KILLS kills. A demo holds at most WIKI_DEMO_FORKS. sim.js's TIMELINES and
-   DEMO_FORKS. */
+/* A LIVE OR TAKEOVER DEMO'S FORK PART (sim.js checkGame): the game inputs the viewer's fork of
+   `id` goes on with, made at `from` with `parent` its parent timeline and played as `seat`. id
+   1..RECR_TIMELINES - 1, the recorder's own bound on the timelines a recording holds
+   (tagpu_recrules.h, ingame-wiki-replay-plan.md decision 9), no two parts of one id; from 2..the
+   game's end; parent 0..id - 1; seat one of the scene's (THE SEAT RULE), 0 when absent; each
+   input a game input of any seat at a tick from..end, a unit killed at most once in the part and
+   at most WIKI_GAME_KILLS kills. A demo holds at most WIKI_DEMO_FORKS. sim.js's TIMELINES and
+   DEMO_FORKS.
+   A TAKEOVER DEMO'S KEPT FORK, the same record with `end`: a fork the recording's file holds when
+   the demo starts, as it was played. At most REC_FORK_LIMIT, id k + 1 at index k; parent
+   0..id - 1; from a refresh of the parent's segment after its first (the original's 1, a kept
+   parent's from) and at most its end (tagpu_wikidata_refresh_at); seat one of the scene's; end
+   from..the game's end; each input at a tick from..end. A part's end is -1. */
 #define WIKI_DEMO_FORKS 8
 typedef struct {
-    int              id, from, parent;
+    int              id, from, parent, seat, end;
     int              ninput;
     WIKIINPUT*       input;             /* in file order */
 } WIKIFORK;
@@ -270,8 +282,11 @@ typedef struct {
     int              sidebar;           /* the sidebar, else a mobile builder of the player's does */
     int              has_game;          /* a game entry's demo: its game script */
     WIKIGAME         game;
-    int              nfork;             /* a live entry's demo: its fork parts, in file order */
+    int              nfork;             /* a live or a takeover entry's demo: its fork parts, in file
+                                           order */
     WIKIFORK*        fork;
+    int              nkept;             /* a takeover entry's demo: the forks its file holds, by id */
+    WIKIFORK*        kept;
 } WIKIDEMO;
 
 typedef struct {
@@ -285,6 +300,8 @@ typedef struct {
     int              frame;             /* WIKI_FRAME_*; a game entry has no pace (1) */
     int              live;              /* a game entry's `live`: its demos play a live skirmish with
                                            the rewind, never a replay */
+    int              takeover;          /* a game entry's `takeover`: its demos play a replay with the
+                                           replay HUD's Take over (never with `live`) */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
     WIKIFEATDEF*     feat;              /* the `features` table, in the file's order */
     int              nscene;            /* 1 or more, every map the first one's size */
@@ -358,6 +375,14 @@ int         tagpu_wikidata_hud(const char* name);
 /* 1 when a demo of a live entry (`live` 1: sim.js's LIVE_CONTROLS) or of a replay entry (0: its
    REPLAY_CONTROLS) presses control `hud`, else 0 */
 int         tagpu_wikidata_hud_presses(int hud, int live);
+/* 1 when `hud` is one of the replay HUD's Take over set (sim.js's TAKEOVER_CONTROLS), else 0; a
+   takeover entry's demo presses these and both sets above */
+int         tagpu_wikidata_hud_takeover(int hud);
+
+/* THE REFRESH WALK (sim.js refreshAt): the last GameTime up to T that the recorder's writer flags a
+   refresh (reclossy_is_refresh) in a segment whose first iteration is `first`, walked from it with
+   the ordinal from 1; `first` itself when T is below first + 1. At most T - first + 1 steps. */
+int         tagpu_wikidata_refresh_at(int first, int T);
 
 /* A feature of the entry's table by name, or -1. */
 int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name);

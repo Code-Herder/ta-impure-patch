@@ -5104,9 +5104,9 @@ static int resolve(WIKISIM* s, const WIKIDEMO* d)
     return 1;
 }
 
-/* THE INPUT SEATS (sim.js's inputSeats): 1 + the highest seat a game demo's game script or a fork
-   part names (a kill names none), at least 1; -1 when an input names a seat outside
-   0..WIKI_SEATS - 1, which the loader refuses (THE BOUND every index into WIKISIM.in rests on) */
+/* THE INPUT SEATS (sim.js's inputSeats) of the inputs `in`: 1 + the highest seat they name (a kill
+   names none), at least `seats`; -1 when an input names a seat outside 0..WIKI_SEATS - 1, which the
+   loader refuses (THE BOUND every index into WIKISIM.in rests on) */
 static int input_seats(const WIKIINPUT* in, int n, int seats)
 {
     int i;
@@ -5141,12 +5141,20 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         snprintf(err, errn, "a game plays a demo's game script");
         return 0;
     }
-    /* THE INPUT SEATS: a game's, its script's and its fork parts'; one for any other sim */
+    /* THE INPUT SEATS: a takeover entry's game every seat of its scene, since Try it may take over
+       any of them; any other game's its script's and its fork parts', each part's inputs and the
+       seat it is played as; one for any other sim */
     s->nin = 1;
-    if (game) {
+    if (game && e->takeover) s->nin = a->nseat;
+    else if (game) {
         s->nin = input_seats(d->game.input, d->game.ninput, 1);
-        for (i = 0; i < d->nfork; i++) s->nin = input_seats(d->fork[i].input, d->fork[i].ninput, s->nin);
-        if (s->nin < 0) {
+        for (i = 0; i < d->nfork; i++) {
+            s->nin = input_seats(d->fork[i].input, d->fork[i].ninput, s->nin);
+            if (s->nin >= 0 && d->fork[i].seat + 1 > s->nin) s->nin = d->fork[i].seat < WIKI_SEATS ? d->fork[i].seat + 1 : -1;
+        }
+    }
+    if (game) {
+        if (s->nin < 1 || s->nin > WIKI_SEATS) {
             snprintf(err, errn, "demo %s: an input names a seat outside 0..%d", d->id ? d->id : "?", WIKI_SEATS - 1);
             s->nin = 0;
             return 0;

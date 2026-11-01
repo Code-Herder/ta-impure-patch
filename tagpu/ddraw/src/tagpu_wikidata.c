@@ -21,7 +21,8 @@ static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "me
                                                     "walker", "tower", "wall", "solar", "commander" };
 /* sim.js's HUD_CONTROLS, in WIKI_HUD_* order */
 static const char* const HUD_NAMES[WIKI_NHUD] = { "play", "speed", "rew", "fwd", "track", "bookmark", "leave", "leave:no",
-                                                   "rewind", "live_play", "live_now" };
+                                                   "rewind", "live_play", "live_now", "takeover", "takeas", "lanes", "lane",
+                                                   "main", "export", "delete" };
 
 const char* tagpu_wikidata_key_name(int key)
 {
@@ -57,6 +58,23 @@ int tagpu_wikidata_hud_presses(int hud, int live)
         return hud == WIKI_HUD_REWIND || hud == WIKI_HUD_REW || hud == WIKI_HUD_FWD || hud == WIKI_HUD_TRACK
             || hud == WIKI_HUD_LIVE_PLAY || hud == WIKI_HUD_LIVE_NOW;
     return hud >= WIKI_HUD_PLAY && hud <= WIKI_HUD_LEAVE_NO;
+}
+
+int tagpu_wikidata_hud_takeover(int hud)
+{
+    return hud >= WIKI_HUD_TAKEOVER && hud <= WIKI_HUD_DELETE;
+}
+
+int tagpu_wikidata_refresh_at(int first, int T)
+{
+    unsigned nth = 1, prev = 0;
+    int t, R0 = first;
+    for (t = first; t <= T; t++, nth++)
+        if (reclossy_is_refresh(nth, (unsigned)t, prev, REC_REFRESH_TICKS)) {
+            R0 = t;
+            prev = (unsigned)t;
+        }
+    return R0;
 }
 
 /* a sweep kind by name, or -1 */
@@ -781,6 +799,10 @@ static int game(R* r, const TJV* v, WIKIDEMO* d)
         g->has_sidebar = 1;
         g->sidebar = tj_is(c, TJ_TRUE);
     }
+    /* a takeover may take any seat, and the column is seat 0's: a takeover entry's game has none,
+       the sidebar false (an absent sidebar may be on, THE SEAT RULE's over-approximation) */
+    if (e->takeover && !(g->has_sidebar && !g->sidebar))
+        return refuse(r, "a takeover entry's game has the sidebar false, since the column is seat 0's", NULL);
     if (!tj_is(inputs, TJ_ARR)) return refuse(r, "the game's inputs are not a list", NULL);
     for (q = 0, n = 0; q < 2; q++)
         for (j = 0; j < sc[q]->nfeat; j++, n++) {
@@ -823,24 +845,40 @@ static int keys_in(const TJV* v, const char* const* keys, int n)
 
 /* AN INPUT OF A GAME ENTRY'S VIEWER'S SCRIPT (sim.js checkViewer, which tagpu_wikireplay plays):
    exactly one of a caption {at, caption}; the wait {at, until: "seeked", max}, max an integer
-   1..WIKI_UNTIL_MAX; or a press {at, hud} of a WIKI_HUD_* control, for the track with `to` an
+   1..WIKI_UNTIL_MAX; or a press {at, hud} of a WIKI_HUD_* control the entry's kind presses (a
+   replay entry's, a live entry's, a takeover entry's all three sets), for the track with `to` an
    integer 0..end and `drag` (the same) and `over` (an integer 1..WIKI_UNTIL_MAX) together or
-   neither. leave:yes is the player's, never a script's. */
-static int viewer_input(R* r, const TJV* v, WIKIINPUT* in, int end)
+   neither, for a picker row with `seat` an integer 0..nseat - 1, for a lane, its Save and its
+   Delete with `fork` an integer 1..RECR_TIMELINES - 1. leave:yes is the player's, never a
+   script's. */
+static int viewer_input(R* r, const TJV* v, WIKIINPUT* in, int end, int nseat)
 {
     static const char* const CAPTION[] = { "caption" }, *const WAIT[] = { "until", "max" }, *const PRESS[] = { "hud" },
-                             *const TRACK[] = { "hud", "to", "drag", "over" };
+                             *const TRACK[] = { "hud", "to", "drag", "over" }, *const ROW[] = { "hud", "seat" },
+                             *const LANE[] = { "hud", "fork" };
     const TJV* c;
     memset(in, 0, sizeof *in);
-    in->build = in->down = in->up = in->hud = in->drag = -1;
+    in->build = in->down = in->up = in->hud = in->drag = in->fork = -1;
     in->at = tj_num(tj_get(v, "at"), 0);
     if ((c = tj_get(v, "hud"))) {
+        int ok;
         if (tj_is(c, TJ_STR) && !strcmp(c->str, "leave:yes")) return refuse(r, "leave:yes is the player's, never a demo's", NULL);
         if (!tj_is(c, TJ_STR) || (in->hud = tagpu_wikidata_hud(c->str)) < 0)
             return refuse(r, "a press names no control a demo presses", NULL);
-        if (!tagpu_wikidata_hud_presses(in->hud, r->e->live))
+        ok = r->e->takeover ? tagpu_wikidata_hud_presses(in->hud, 0) || tagpu_wikidata_hud_presses(in->hud, 1)
+                                  || tagpu_wikidata_hud_takeover(in->hud)
+                            : tagpu_wikidata_hud_presses(in->hud, r->e->live);
+        if (!ok)
             return refuse(r, r->e->live ? "a press names no control a live demo presses:" : "a press names no control a replay demo presses:", c->str);
         in->has |= WIKI_IN_HUD;
+        if (in->hud == WIKI_HUD_TAKEAS) {
+            if (!keys_in(v, ROW, 2)) return refuse(r, "a press carries a key it does not know", NULL);
+            return integer(r, tj_get(v, "seat"), 0, nseat - 1, &in->seat, "the row's seat");
+        }
+        if (in->hud == WIKI_HUD_LANE || in->hud == WIKI_HUD_EXPORT || in->hud == WIKI_HUD_DELETE) {
+            if (!keys_in(v, LANE, 2)) return refuse(r, "a press carries a key it does not know", NULL);
+            return integer(r, tj_get(v, "fork"), 1, RECR_TIMELINES - 1, &in->fork, "the press's fork");
+        }
         if (in->hud != WIKI_HUD_TRACK)
             return keys_in(v, PRESS, 1) ? 1 : refuse(r, "a press carries a key it does not know", NULL);
         if (!keys_in(v, TRACK, 4)) return refuse(r, "a press carries a key it does not know", NULL);
@@ -897,61 +935,116 @@ static int viewer_order(R* r, const WIKIDEMO* d)
     return 1;
 }
 
-/* A LIVE DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most WIKI_DEMO_FORKS
-   parts, each exactly {id, from, parent, inputs}; each input a game input (input) of a seat THE
-   SEAT RULE admits (seat_ok), at a tick from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
-   WIKI_GAME_KILLS; each build and reclaim after the click selecting its builder or reclaimer, and
-   no pick (THE LIVE DATA RULE, live_orders). THE BOUND the game simulation's features rest on, over the parts too: the merged
-   scene's features, the game script's kills and every part's together are at most WIKI_FEATS_MAX
-   (tagpu_wikisim_fork holds a fork to the same at run time). */
-static int forks(R* r, const TJV* v, WIKIDEMO* d)
+/* A FORK'S GAME INPUTS, of a part or a kept fork (sim.js checkGame forkInputs): each a game input
+   (input) of a seat THE SEAT RULE admits (seat_ok) at a tick from..last, a kill of a unit of the
+   merged scene by its explicit id, once in the fork, at most WIKI_GAME_KILLS; into `f`, its kills
+   added to `*kills`. `what` names the fork in a refusal. */
+static int fork_inputs(R* r, const TJV* inputs, WIKIFORK* f, const WIKIDEMO* d, int last, const char* what, int* kills)
 {
-    static const char* const PART[] = { "id", "from", "parent", "inputs" };
-    const WIKISCENE* sc[2] = { &r->e->scenes[d->on], &d->scene };
-    const TJV *p, *c;
-    int i, j, k = 0, n = 0, kills = 0;
+    const TJV* c;
+    int j, partkills = 0;
+    char why[96];
+    if (!tj_is(inputs, TJ_ARR)) return refuse(r, "a fork's inputs are not a list:", what);
+    if (!(f->input = (WIKIINPUT*)zalloc(r, (size_t)inputs->n, sizeof *f->input))) return 0;
+    for (c = inputs->first; c; c = c->next) {
+        WIKIINPUT* in = &f->input[f->ninput++];
+        if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
+        if (!input(r, c, in, 1) || !seat_ok(r, in, d)) return 0;
+        if (!(in->at >= f->from && in->at <= last)) return refuse(r, "a fork's input is outside its ticks:", what);
+        if (!(in->has & WIKI_IN_KILL)) continue;
+        if (!scene_has_id(r->e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
+        for (j = 0; j < f->ninput - 1; j++)
+            if ((f->input[j].has & WIKI_IN_KILL) && !strcmp(f->input[j].kill, in->kill))
+                return refuse(r, "a unit is killed twice in a fork:", in->kill);
+        if (partkills == WIKI_GAME_KILLS) {
+            snprintf(why, sizeof why, "%s has more than %d kills", what, WIKI_GAME_KILLS);
+            return refuse(r, why, NULL);
+        }
+        partkills++;
+    }
+    *kills += partkills;
+    return 1;
+}
+
+/* A LIVE OR TAKEOVER DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most
+   WIKI_DEMO_FORKS parts, each {id, from, parent, inputs} and an optional seat, the seat it is
+   played as, which THE SEAT RULE admits (seat_ok); its inputs as fork_inputs reads them at ticks
+   from..end; each build and reclaim after the click selecting its builder or reclaimer, and no
+   pick (THE LIVE DATA RULE, live_orders). */
+static int forks(R* r, const TJV* v, WIKIDEMO* d, int* kills)
+{
+    static const char* const PART[] = { "id", "from", "parent", "inputs", "seat" };
+    const TJV* p;
+    int i;
     if (!tj_is(v, TJ_ARR) || v->n > WIKI_DEMO_FORKS) return refuse(r, "forks is not a list of at most 8 parts", NULL);
     if (!(d->fork = (WIKIFORK*)zalloc(r, (size_t)v->n, sizeof *d->fork))) return 0;
     for (p = v->first; p; p = p->next) {
         WIKIFORK* f = &d->fork[d->nfork++];
-        const TJV* inputs = tj_get(p, "inputs");
-        int partkills = 0;
-        if (!tj_is(p, TJ_OBJ) || p->n != 4 || !keys_in(p, PART, 4) || !tj_get(p, "id") || !tj_get(p, "from") || !tj_get(p, "parent") || !inputs)
-            return refuse(r, "a fork part is not {id, from, parent, inputs}", NULL);
+        WIKIINPUT seat;
+        f->end = -1;
+        if (!tj_is(p, TJ_OBJ) || !keys_in(p, PART, 5) || !tj_get(p, "id") || !tj_get(p, "from") || !tj_get(p, "parent")
+            || !tj_get(p, "inputs"))
+            return refuse(r, "a fork part is not {id, from, parent, inputs} with an optional seat", NULL);
         if (!integer(r, tj_get(p, "id"), 1, RECR_TIMELINES - 1, &f->id, "a fork part's id")
             || !integer(r, tj_get(p, "from"), 2, (int)d->game.end, &f->from, "a fork part's from")
-            || !integer(r, tj_get(p, "parent"), 0, f->id - 1, &f->parent, "a fork part's parent"))
+            || !integer(r, tj_get(p, "parent"), 0, f->id - 1, &f->parent, "a fork part's parent")
+            || (tj_get(p, "seat") && !integer(r, tj_get(p, "seat"), 0, WIKI_SEATS - 1, &f->seat, "a fork part's seat")))
             return 0;
+        memset(&seat, 0, sizeof seat);
+        seat.seat = f->seat;
+        if (!seat_ok(r, &seat, d)) return 0;
         for (i = 0; i < d->nfork - 1; i++)
             if (d->fork[i].id == f->id) return refuse(r, "two fork parts have one id", NULL);
-        if (!tj_is(inputs, TJ_ARR)) return refuse(r, "a fork part's inputs are not a list", NULL);
-        if (!(f->input = (WIKIINPUT*)zalloc(r, (size_t)inputs->n, sizeof *f->input))) return 0;
-        for (c = inputs->first; c; c = c->next) {
-            WIKIINPUT* in = &f->input[f->ninput++];
-            if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
-            if (!input(r, c, in, 1) || !seat_ok(r, in, d)) return 0;
-            if (!(in->at >= f->from && in->at <= d->game.end)) return refuse(r, "a fork part's input is outside its ticks", NULL);
-            if (!(in->has & WIKI_IN_KILL)) continue;
-            if (!scene_has_id(r->e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
-            for (j = 0; j < f->ninput - 1; j++)
-                if ((f->input[j].has & WIKI_IN_KILL) && !strcmp(f->input[j].kill, in->kill))
-                    return refuse(r, "a unit is killed twice in a fork part:", in->kill);
-            if (partkills == WIKI_GAME_KILLS) return refuse(r, "a fork part has more than 64 kills", NULL);
-            partkills++;
-        }
+        if (!fork_inputs(r, tj_get(p, "inputs"), f, d, (int)d->game.end, "a fork part", kills)) return 0;
         if (!live_orders(r, f->input, f->ninput, f->id)) return 0;
-        kills += partkills;
     }
-    for (k = 0; k < 2; k++) n += sc[k]->nfeat;
-    for (i = 0; i < d->game.ninput; i++) kills += (d->game.input[i].has & WIKI_IN_KILL) != 0;
-    if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
+    return 1;
+}
+
+/* A TAKEOVER DEMO'S KEPT FORKS (sim.js checkGame, WIKIFORK's rules): a list of at most
+   REC_FORK_LIMIT forks, each exactly {id, from, parent, seat, end, inputs}: id k + 1 at index k;
+   parent 0..id - 1; from after the parent's first (the original's 1, a kept parent's from), at
+   most its end (the original's the game's), and a refresh of its segment walked from that first
+   (tagpu_wikidata_refresh_at), since a fork starts only there (tagpu_replay.c takeover_point); seat
+   one of the scene's (seat_ok); end from..the game's end; its inputs as fork_inputs reads them at
+   ticks from..end. */
+static int kept(R* r, const TJV* v, WIKIDEMO* d, int* kills)
+{
+    static const char* const KEPT[] = { "id", "from", "parent", "seat", "end", "inputs" };
+    const TJV* p;
+    int k = 0;
+    if (!tj_is(v, TJ_ARR) || v->n > REC_FORK_LIMIT) return refuse(r, "kept is not a list of at most 3 forks", NULL);
+    if (!(d->kept = (WIKIFORK*)zalloc(r, (size_t)v->n, sizeof *d->kept))) return 0;
+    for (p = v->first; p; p = p->next, k++) {
+        WIKIFORK* f = &d->kept[d->nkept++];
+        WIKIINPUT seat;
+        int pR, pend;
+        if (!tj_is(p, TJ_OBJ) || p->n != 6 || !keys_in(p, KEPT, 6) || !tj_get(p, "id") || !tj_get(p, "from") || !tj_get(p, "parent")
+            || !tj_get(p, "seat") || !tj_get(p, "end") || !tj_get(p, "inputs"))
+            return refuse(r, "a kept fork is not {id, from, parent, seat, end, inputs}", NULL);
+        if (!integer(r, tj_get(p, "id"), k + 1, k + 1, &f->id, "a kept fork's id, its place in the list,")
+            || !integer(r, tj_get(p, "parent"), 0, f->id - 1, &f->parent, "a kept fork's parent"))
+            return 0;
+        pR = f->parent ? d->kept[f->parent - 1].from : 1;
+        pend = f->parent ? d->kept[f->parent - 1].end : (int)d->game.end;
+        if (!integer(r, tj_get(p, "from"), pR + 1, pend, &f->from, "a kept fork's from, after its parent's first and up to its end,"))
+            return 0;
+        if (tagpu_wikidata_refresh_at(pR, f->from) != f->from)
+            return refuse(r, "a kept fork's from is not a refresh of its parent's segment", NULL);
+        if (!integer(r, tj_get(p, "seat"), 0, WIKI_SEATS - 1, &f->seat, "a kept fork's seat")) return 0;
+        memset(&seat, 0, sizeof seat);
+        seat.seat = f->seat;
+        if (!seat_ok(r, &seat, d)) return 0;
+        if (!integer(r, tj_get(p, "end"), f->from, (int)d->game.end, &f->end, "a kept fork's end")) return 0;
+        if (!fork_inputs(r, tj_get(p, "inputs"), f, d, f->end, "a kept fork", kills)) return 0;
+    }
     return 1;
 }
 
 static int demo(R* r, const TJV* v, WIKIDEMO* d)
 {
     const TJV *c, *inputs = tj_get(v, "inputs"), *end = tj_get(v, "end");
-    int i = 0;
+    int i = 0, kills = 0;
     d->id = tj_str(tj_get(v, "id"), NULL);
     d->title = tj_str(tj_get(v, "title"), NULL);
     r->where = d->id ? d->id : "?";
@@ -971,16 +1064,30 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
             if (d->scene.unit[i].owner >= r->e->scenes[d->on].nseat) return refuse(r, "a unit's owner is no seat of its scene", NULL);
         if (!(d->has_game = game(r, c, d))) return 0;
     }
-    /* `forks` is a live entry's demo's alone */
+    /* `forks` is a live or a takeover entry's demo's alone, `kept` a takeover entry's. THE BOUND the
+       game simulation's features rest on, over the forks too: the merged scene's features, the game
+       script's kills, every part's and every kept fork's together are at most WIKI_FEATS_MAX
+       (tagpu_wikisim_fork holds a fork to the same at run time). */
     if ((c = tj_get(v, "forks"))) {
-        if (!r->e->live) return refuse(r, "forks are a live entry's demo's", NULL);
-        if (!forks(r, c, d)) return 0;
+        if (!r->e->live && !r->e->takeover) return refuse(r, "forks are a live or a takeover entry's demo's", NULL);
+        if (!forks(r, c, d, &kills)) return 0;
+    }
+    if ((c = tj_get(v, "kept"))) {
+        if (!r->e->takeover) return refuse(r, "kept is a takeover entry's demo's", NULL);
+        if (!kept(r, c, d, &kills)) return 0;
+    }
+    if (kills) {
+        const WIKISCENE* sc[2] = { &r->e->scenes[d->on], &d->scene };
+        int n = sc[0]->nfeat + sc[1]->nfeat, k;
+        for (k = 0; k < d->game.ninput; k++) kills += (d->game.input[k].has & WIKI_IN_KILL) != 0;
+        if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
     }
     d->ninput = count(inputs);
     if (!(d->input = (WIKIINPUT*)zalloc(r, (size_t)d->ninput, sizeof *d->input))) return 0;
     for (c = tj_is(inputs, TJ_ARR) ? inputs->first : NULL, i = 0; c; c = c->next)
         if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "an input has no tick", NULL);
-        else if (d->has_game ? !viewer_input(r, c, &d->input[i++], (int)d->game.end) : !input(r, c, &d->input[i++], 0)) return 0;
+        else if (d->has_game ? !viewer_input(r, c, &d->input[i++], (int)d->game.end, r->e->scenes[d->on].nseat)
+                             : !input(r, c, &d->input[i++], 0)) return 0;
     if (d->has_game && !viewer_order(r, d)) return 0;
     if ((d->has_end = end && !tj_is(end, TJ_NULL)) && !number(r, end, &d->end, "the end")) return 0;
     /* sim.js throws on a `sidebar` that is not a boolean when it plays the demo, and every demo is
@@ -1016,6 +1123,8 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
         free(e->demo[i].game.input);
         for (k = 0; e->demo[i].fork && k < e->demo[i].nfork; k++) free(e->demo[i].fork[k].input);
         free(e->demo[i].fork);
+        for (k = 0; e->demo[i].kept && k < e->demo[i].nkept; k++) free(e->demo[i].kept[k].input);
+        free(e->demo[i].kept);
     }
     free(e->demo);
     for (i = 0; e->scenes && i < e->nscene; i++) scene_free(&e->scenes[i]);
@@ -1220,13 +1329,18 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     /* sim.js isGame: `frame` absent, or "game"; a game entry has no pace */
     c = tj_get(root, "frame");
     e->frame = c && tj_is(c, TJ_STR) && !strcmp(c->str, "game") ? WIKI_FRAME_GAME : WIKI_FRAME_PAGE;
-    /* sim.js checkGame: `live` a game entry's, a boolean; the rule refuses anything else below */
+    /* sim.js checkGame: `live` and `takeover` a game entry's, booleans, never both true; the rule
+       refuses anything else below */
     e->live = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "live"), TJ_TRUE);
+    e->takeover = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "takeover"), TJ_TRUE);
     if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
     else if (c && e->frame != WIKI_FRAME_GAME) refuse(&r, "has a frame other than \"game\"", NULL);
     else if (e->frame == WIKI_FRAME_GAME && tj_get(root, "pace")) refuse(&r, "is a game entry with a pace", NULL);
     else if ((c = tj_get(root, "live")) && (e->frame != WIKI_FRAME_GAME || !(tj_is(c, TJ_TRUE) || tj_is(c, TJ_FALSE))))
         refuse(&r, "has a live that is not a game entry's true or false", NULL);
+    else if ((c = tj_get(root, "takeover")) && (e->frame != WIKI_FRAME_GAME || !(tj_is(c, TJ_TRUE) || tj_is(c, TJ_FALSE))))
+        refuse(&r, "has a takeover that is not a game entry's true or false", NULL);
+    else if (e->live && e->takeover) refuse(&r, "is a replay, a live game or a takeover's replay, never two", NULL);
     else if (e->frame == WIKI_FRAME_GAME && count(tj_get(root, "demos")) > WIKI_THEATRE_TABS)
         refuse(&r, "is a game entry with more demos than the theatre's tabs", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
