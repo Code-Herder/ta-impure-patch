@@ -195,9 +195,10 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
   path, skipped when the shooter's `+0x111` bit 28 is set). `0x401220`/`0x401260` are the same
   for one resource and only ever run on a player's `+0xEC` record (`0x464BC4`, `0x464CF4`). The
-  economy pass `0x401360` itself, once a pass, walks the owner's units in creation order (the
-  block `[+0x67, +0x6B]`, stride `0x118`) that have the alive bit (`+0x110` bit 28,
-  `0x4013AC..0x4013B4`) [DISASSEMBLED 2026-10-31]:
+  economy pass `0x401360` itself, once a pass, walks the owner's units in slot order (the block
+  `[+0x67, +0x6B]`, stride `0x118`, `0x401375..0x4013A6`; the allocator reuses free slots, so slot
+  order is not creation order) that have the alive bit (`+0x110` bit 28, `0x4013AC..0x4013B4`)
+  [DISASSEMBLED 2026-10-31]:
 
   - **a structure** (`+0x110` bit 29, `0x4013BA`) counts these only while active (`+0x10E` bit 0,
     `0x4013C5`; inactive, it goes straight to the finished-unit terms below): its EnergyUse `+0x1C6`
@@ -207,8 +208,11 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
     whose energy was just granted adds its `+0x58` -- ExtractsMetal × its SetSpeed ([cob.md](cob.md))
     -- to the metal produced `+0xD4` (`0x4014A1..0x4014C8`, `0x401504..0x401545`); a MakesMetal unit
     (the byte `+0x22D`) whose energy was granted adds that to `+0xD4` (`0x4014CA..0x4014F7`); any
-    other structure adds WindGenerator `+0x1D2` × `main+0x37EDE` and TidalGenerator `+0x1D6` ×
-    `main+0x14267` to `+0xBC`, each only when its factor is above 0 (`0x401550..0x4016B5`);
+    other structure adds WindGenerator `+0x1D2` × `main+0x37EDE` to `+0xBC` when WindGenerator is
+    above 0, and else TidalGenerator `+0x1D6` × `main+0x14267` when TidalGenerator is above 0: the
+    wind test `0x401561` jumps to the tidal test `0x4015BC` only when WindGenerator is not above 0,
+    and both wind arms jump past it to `0x4016C5` (`0x4015A6`, `0x4015B7`), so a unit with both
+    produces only its wind (`0x401550..0x4016B5`);
   - **a mobile unit** active or moving (`+0x10E` bit 0, or `+0x110 & 0xC`, `0x401617..0x401622`)
     requests or produces its EnergyUse the same way (`0x401641..0x401668`, `0x401670..0x4016B5`);
   - **a finished unit** (`+0x104` = 0.0, `0x4016C5..0x4016D6`) of either kind produces its

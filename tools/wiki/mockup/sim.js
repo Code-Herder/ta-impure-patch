@@ -2447,8 +2447,8 @@ const WikiSim = (() => {
     /* THE PASS, 0x401360, on ticks 1, 30, 60, ...: the level's init seeds the player's next pass +0xF0 with GameTime 0
        (0x46470C..0x464715), and the players phase runs a record's pass when +0xF0 <= GameTime and adds 30
        (0x46507D..0x465092), after GameTime's increment; every seat on the same tick, in seat order, after the units'
-       work (research/notes/engine/sim.md, the players phase follows the unit tick). Per unit of the seat in creation
-       order: a structure (+0x110 bit 29, 0x4013BA) that is active (+0x10E bit 0, 0x4013C5) requests its EnergyUse
+       work (research/notes/engine/sim.md, the players phase follows the unit tick). Per unit of the seat in slot order
+       (0x401375..0x4013A6; here in creation order, below): a structure (+0x110 bit 29, 0x4013BA) that is active (+0x10E bit 0, 0x4013C5) requests its EnergyUse
        (0x4013ED..0x401421) or, negative, produces it (0x401429..0x401478), and an extractor whose energy was granted
        produces ExtractsMetal x its SetSpeed (0x401480..0x4014C8); a mobile unit active or moving (0x401617..0x401622)
        requests or produces its EnergyUse (0x401641..0x401668); a finished unit (+0x104 == 0.0, 0x4016C5..0x4016D6)
@@ -2460,9 +2460,11 @@ const WikiSim = (() => {
        its ledger zeroed, the engine's fmul, fsubr and faddp in the engine's order. WHERE THE WIKI DEPARTS: activation
        is a finished unit whose FBI says ActivateWhenBuilt, which the engine sets at a completion (0x41B9A6) and at a
        finished create (0x48612F) [INFERRED: no cast unit's script changes its own], and moving is the step this tick
-       (u.stepped) [INFERRED that it agrees with the move-rate class +0x110 & 0xC]; MakesMetal, wind, tidal, cloak,
-       the AI's scaling, the transfers and the reclaim payouts are not modelled (no cast takes such a unit, no seat is
-       an AI, the owner left the payouts out). The ledger is the engine's f32 as a double, as every figure here is. */
+       (u.stepped) [INFERRED that it agrees with the move-rate class +0x110 & 0xC]; the units are walked in creation
+       order, where the engine walks its slots, which the allocator reuses: the sums are the same terms added in
+       another order, so only their rounding can differ; MakesMetal, wind, tidal, cloak, the AI's scaling, the
+       transfers and the reclaim payouts are not modelled (no cast takes such a unit, no seat is an AI, the owner left
+       the payouts out). The ledger is the engine's f32 as a double, as every figure here is. */
     function pass() {
       econ.forEach((z, k) => {
         let sm = 0, se = 0;

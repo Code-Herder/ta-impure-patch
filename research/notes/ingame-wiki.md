@@ -2249,8 +2249,9 @@ of the function it imitates; the code cites each address where it applies it.
   a finished unit produces its EnergyMake and MetalMake and adds its storages; then the seat's
   sums, the debts paid first and then the grants, the excess over the storage wasted, and the
   settle in the engine's order of operations. **Where it departs** [INFERRED]: activation is a
-  finished unit whose FBI says ActivateWhenBuilt, and moving is the step this tick; MakesMetal,
-  wind, tide, cloak, the AI's scaling, the transfers and the reclaim payouts are not modelled (no
+  finished unit whose FBI says ActivateWhenBuilt, and moving is the step this tick; a seat's units
+  are summed in creation order where the engine walks its slots, which it reuses, so only the
+  sums' rounding can differ; MakesMetal, wind, tide, cloak, the AI's scaling, the transfers and the reclaim payouts are not modelled (no
   cast takes such a unit, no seat is an AI). **Two modes** (the plan's decision 18): `refuse`
   (`WIKI_PLAY_GAME`), an authored script, stops `starved` at the first pass that cannot pay a
   grant, which `simcheck.mjs` fails, so no authored demo's timing is ever the economy's; `stall`
