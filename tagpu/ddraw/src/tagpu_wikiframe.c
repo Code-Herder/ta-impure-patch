@@ -21,11 +21,35 @@ static void copy(char* d, size_t n, const char* s)
     snprintf(d, n, "%s", s ? s : "");
 }
 
-void tagpu_wikiframe_size(int w, int h, int side_h, int* Wg, int* Hg)
+void tagpu_wikiframe_size(int w, int h, int side_h, int sw, int sh, WIKIFRAMESIZE* out)
 {
-    const int mw = (w > 0 ? w : 1) * WIKI_CELL, mh = (h > 0 ? h : 1) * WIKI_CELL;
-    *Wg = WIKIFRAME_SIDE_W + mw;
-    *Hg = mh + 2 * WIKIFRAME_BAR > side_h ? mh + 2 * WIKIFRAME_BAR : side_h;
+    const int screen = sw > 0 && sh > 0;
+    out->mw = (w > 0 ? w : 1) * WIKI_CELL;
+    out->mh = (h > 0 ? h : 1) * WIKI_CELL;
+    out->vw = screen ? sw * WIKI_CELL : out->mw;
+    out->Hg = (screen ? sh * WIKI_CELL : out->mh) + 2 * WIKIFRAME_BAR;
+    if (side_h > out->Hg) out->Hg = side_h;
+    out->Wg = WIKIFRAME_SIDE_W + out->vw;
+    out->vh = out->Hg - 2 * WIKIFRAME_BAR;
+}
+
+void tagpu_wikiframe_view_size(const WIKISTAGEVIEW* v, int* Wg, int* Hg)
+{
+    WIKIFRAMESIZE sz;
+    if (v->frame && v->screen) {
+        *Wg = WIKIFRAME_SIDE_W + v->vp_w;
+        *Hg = v->vp_h + 2 * WIKIFRAME_BAR;
+        return;
+    }
+    tagpu_wikiframe_size(v->w, v->h, v->has_side ? v->side.h : 0, 0, 0, &sz);
+    *Wg = sz.Wg;
+    *Hg = sz.Hg;
+}
+
+void tagpu_wikiframe_eye(int cx, int cz, const WIKIFRAMESIZE* sz, int* ex, int* ez)
+{
+    *ex = clampi(cx - sz->vw / 2, 0, sz->mw > sz->vw ? sz->mw - sz->vw : 0);
+    *ez = clampi(cz - sz->vh / 2, 0, sz->mh > sz->vh ? sz->mh - sz->vh : 0);
 }
 
 const char* tagpu_wikiframe_key(int c)
@@ -43,19 +67,33 @@ static int control(const char* k)
 
 int tagpu_wikiframe_indexed(const char* key, int* control_, int* index)
 {
-    static const struct { const char* act; int c, n; } IX[4] = {
+    static const struct { const char* act; int c, n; } IX[8] = {
         { "takeas", WIKI_HUD_TAKEAS, WIKI_SEATS },
         { "lane", WIKI_HUD_LANE, WIKIFRAME_FORKS },
         { "export", WIKI_HUD_EXPORT, WIKIFRAME_FORKS },
         { "delete", WIKI_HUD_DELETE, WIKIFRAME_FORKS },
+        { "jump", WIKI_HUD_JUMP, WIKI_SEATS },
+        { "sight", WIKI_HUD_SIGHT, WIKI_SEATS },
+        { "follow", WIKI_HUD_FOLLOW, WIKI_SEATS },
+        { "fold", WIKI_HUD_FOLD, WIKI_SEATS },
     };
     const char* colon = key ? strchr(key, ':') : NULL;
     size_t k;
     int i;
+    if (colon && colon - key == 4 && !strncmp(key, "chip", 4)) {
+        /* a chip by its name, among sim.js's CHIPS */
+        for (i = 0; i < WIKI_NCHIP; i++)
+            if (!strcmp(colon + 1, tagpu_wikidata_chip_name(i))) {
+                *control_ = WIKI_HUD_CHIP;
+                *index = i;
+                return 1;
+            }
+        return 0;
+    }
     /* one digit: every index is below 10 */
     if (!colon || colon[1] < '0' || colon[1] > '9' || colon[2]) return 0;
     k = (size_t)(colon - key);
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 8; i++)
         if (strlen(IX[i].act) == k && !strncmp(key, IX[i].act, k) && colon[1] - '0' < IX[i].n) {
             *control_ = IX[i].c;
             *index = colon[1] - '0';
@@ -69,6 +107,19 @@ static int known(const char* k)
 {
     int c, n;
     return control(k) || tagpu_wikiframe_indexed(k, &c, &n);
+}
+
+/* a lane's control: one that names a fork by its place in the record's list */
+static int on_lane(int c)
+{
+    return c == WIKI_HUD_LANE || c == WIKI_HUD_EXPORT || c == WIKI_HUD_DELETE;
+}
+
+int tagpu_wikiframe_hover_seat(const char* key)
+{
+    int c, n;
+    if (!tagpu_wikiframe_indexed(key, &c, &n)) return -1;
+    return c == WIKI_HUD_JUMP || c == WIKI_HUD_SIGHT || c == WIKI_HUD_FOLLOW ? n : -1;
 }
 
 /* a game tick as m:ss into `b`: a bookmark's from 0, the live strip's from the rewind's first
@@ -125,15 +176,22 @@ void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, 
 
 /* A trip's control as the HUD keys it (THE INDEXED CONTROLS): a picker row by its seat, a lane's
    control by the place of the fork `v` in the record's list, "" (the rest point) when the list
-   does not hold it; any other control by its name. */
+   does not hold it; a players row's Jump, Sight and Follow and a team header's fold by its seat or
+   team `v`, a chip by its name; any other control by its name. */
 static void key_of(const WIKIFRAMEREC* f, int c, int v, char* out)
 {
     int k;
-    if (c == WIKI_HUD_TAKEAS) {
-        snprintf(out, HUD_KEYLEN, "takeas:%d", v);
+    if (c == WIKI_HUD_TAKEAS || c == WIKI_HUD_JUMP || c == WIKI_HUD_SIGHT || c == WIKI_HUD_FOLLOW || c == WIKI_HUD_FOLD) {
+        snprintf(out, HUD_KEYLEN, "%s:%d", c == WIKI_HUD_FOLD ? "fold" : tagpu_wikiframe_key(c), v);
         return;
     }
-    if (c == WIKI_HUD_LANE || c == WIKI_HUD_EXPORT || c == WIKI_HUD_DELETE) {
+    if (c == WIKI_HUD_CHIP) {
+        const char* n = tagpu_wikidata_chip_name(v);
+        if (n) snprintf(out, HUD_KEYLEN, "chip:%s", n);
+        else out[0] = 0;
+        return;
+    }
+    if (on_lane(c)) {
         out[0] = 0;
         for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++)
             if (f->fork[k].id == v) {
@@ -189,6 +247,34 @@ static void tk_block(const WIKIREPLAYVIEW* rv, WIKIFRAMEREC* out)
     out->nfork = (uint8_t)k;
 }
 
+/* THE PLAYERS BLOCK of a players replay's view for a record of `n` seats (frame.js plBlock): Sight,
+   Follow, the switches, the folded rows, the stats window, the samples' count, period and base;
+   each seat's team and recorded camera from the demo's scene, its series of the window's measure
+   from the replay's samples -- or, with no replay, a team of its own, no camera, every sample 0 */
+static void pl_block(const WIKIREPLAYVIEW* rv, const WIKIREPLAY* rep, int n, WIKIFRAMEREC* out)
+{
+    const WIKISCENE* sc = rep && rep->e && rep->d && rep->d->on >= 0 && rep->d->on < rep->e->nscene ? &rep->e->scenes[rep->d->on] : NULL;
+    const int npt = clampi(rv->npt, 0, WIKI_STAT_PTS), m = clampi(rv->stat_measure, 0, WIKI_STAT_MEASURES - 1);
+    int k, s;
+    out->pl = 1;
+    out->sight = (int8_t)clampi(rv->sight, -1, 127);
+    out->follow = (int8_t)clampi(rv->follow, -1, 127);
+    out->tog = (uint8_t)rv->tog;
+    out->folded = (uint8_t)rv->folded;
+    out->stat_open = (uint8_t)(rv->stat_open != 0);
+    out->stat_team = (uint8_t)(rv->stat_team != 0);
+    out->stat_measure = (uint8_t)clampi(rv->stat_measure, 0, 255);
+    out->npt = (uint16_t)npt;
+    out->period = (uint16_t)clampi(rv->period, 0, 0xFFFF);
+    out->base = rv->base;
+    for (k = 0; k < n; k++) {
+        const int z = sc && k < sc->nseat;
+        out->team[k] = (uint8_t)(z ? clampi(sc->seat[k].team, 0, 255) : k);
+        if (z && sc->seat[k].has_camera) out->cam |= (uint8_t)(1u << k);
+        for (s = 0; s < npt; s++) out->series[k][s] = rep ? tagpu_wikireplay_stat(rep, s, k, m) : 0.0f;
+    }
+}
+
 /* the tick under a trip's cursor on clock tick `at`: the press's, or along its drag */
 static int trip_tick(const WIKIREPLAYVIEW* rv, int at)
 {
@@ -197,22 +283,24 @@ static int trip_tick(const WIKIREPLAYVIEW* rv, int at)
 }
 
 void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int side, int try_it, const char* try_held,
-                            int top_side, WIKIFRAMEREC* out)
+                            int top_side, const WIKIREPLAY* rep, WIKIFRAMEREC* out)
 {
     const int n = WIKI_REPLAY_HUD_DOWN;
     /* the human seat: seat 0 in Rewind, the seat taken over in a takeover's live game */
     const int h = rv->live && rv->human >= 0 && rv->human < WIKI_SEATS ? rv->human : 0;
-    int k, nseat = gv && gv->game ? gv->nseat : 0;
+    int k, vs, nseat = gv && gv->game ? gv->nseat : 0;
     memset(out, 0, sizeof *out);
     if (nseat > WIKI_SEATS) nseat = WIKI_SEATS;
     if (nseat < 0) nseat = 0;
+    /* the viewed seat: Sight's in a players replay, -1 under the full map */
+    vs = rv->players && rv->sight >= 0 && rv->sight < nseat ? rv->sight : -1;
     out->on = 1;
     out->playing = (uint8_t)(!rv->paused && rv->game_tick < rv->end);
     out->question = (uint8_t)(rv->question != 0);
     out->nseat = (uint8_t)nseat;
     out->side = (int8_t)(side >= -128 && side <= 127 ? side : -1);
     out->top_side = out->side;
-    out->colour = (uint8_t)(rv->live ? h : 0);
+    out->colour = (uint8_t)(rv->live ? h : vs >= 0 ? vs : 0);
     out->speed = (uint8_t)rv->speed;
     out->try_it = (uint8_t)(try_it != 0);
     out->playhead = rv->playhead;
@@ -238,9 +326,27 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         out->mark[out->nmark].kind = HUD_MK_BOOKMARK;
         out->mark[out->nmark].seat = -1;
     }
-    if (rv->tk) {
-        tk_block(rv, out);
-        if (rv->live && top_side >= -128 && top_side <= 127) out->top_side = (int8_t)top_side;
+    if (rv->tk) tk_block(rv, out);
+    if (((rv->tk && rv->live) || vs >= 0) && top_side >= -128 && top_side <= 127) out->top_side = (int8_t)top_side;
+    if (rv->players) {
+        pl_block(rv, rep, nseat, out);
+        if (!rv->live) {
+            /* the top bar is the replay's memo, eased toward the viewed seat's numbers, or under the
+               full map the watcher's zeros */
+            out->bar.e = rv->pbe;
+            out->bar.m = rv->pbm;
+            out->bar.ei = rv->prates[0];
+            out->bar.eo = rv->prates[1];
+            out->bar.mi = rv->prates[2];
+            out->bar.mo = rv->prates[3];
+            if (vs >= 0) {
+                const WIKIECON* z = &gv->econ[vs];
+                out->bar.emax = (float)z->emax;
+                out->bar.mmax = (float)z->mmax;
+                out->bar.raw_e = (float)z->e;
+                out->bar.raw_m = (float)z->m;
+            }
+        }
     }
     if (try_it) copy(out->held, sizeof out->held, known(try_held) ? try_held : "");
     else if (rv->held >= 0) key_of(out, rv->held, rv->value, out->held);
@@ -389,14 +495,46 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
         f->sim.shape = WIKI_CURSOR_ARROW;
         f->simcur = 0;
     }
-    /* TAKE OVER: a record that is not tk carries nothing of it */
+    /* PLAYERS: a record that is not pl carries nothing of it; a sample is data through the stats
+       window's own test (tagpu_hudlay_stat_groups), so the series and the HUD agree */
+    f->pl = (uint8_t)(f->pl != 0);
+    if (!f->pl) {
+        f->sight = f->follow = 0;
+        f->tog = f->folded = f->stat_open = f->stat_team = f->stat_measure = f->cam = 0;
+        f->npt = f->period = 0;
+        f->base = 0;
+        memset(f->team, 0, sizeof f->team);
+        memset(f->series, 0, sizeof f->series);
+    } else {
+        if (f->sight < -1 || f->sight >= f->nseat) f->sight = -1;
+        if (f->follow < -1 || f->follow >= f->nseat) f->follow = -1;
+        f->tog &= HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
+        f->folded &= (1u << WIKI_SEATS) - 1;
+        f->stat_open = (uint8_t)(f->stat_open != 0);
+        f->stat_team = (uint8_t)(f->stat_team != 0);
+        if (f->stat_measure >= WIKI_STAT_MEASURES) f->stat_measure = 0;
+        if (f->npt > WIKI_STAT_PTS) f->npt = WIKI_STAT_PTS;
+        f->period = (uint16_t)clampi(f->period, 0, WIKI_GAME_END_MAX);
+        f->base = clampi(f->base, 0, WIKI_GAME_END_MAX);
+        f->cam &= (uint8_t)((1u << f->nseat) - 1);
+        for (k = 0; k < WIKI_SEATS; k++) {
+            if (f->team[k] >= WIKI_SEATS) f->team[k] = (uint8_t)k;
+            for (j = 0; j < WIKI_STAT_PTS; j++) {
+                const float v = f->series[k][j];
+                f->series[k][j] = k < f->nseat && j < f->npt && v == v && v < 1e30f && v > -1e30f ? v : 0.0f;
+            }
+        }
+    }
+    /* THE TOP BAR'S SIDE: the human seat's in a takeover's live game, the viewed seat's under a
+       players record's Sight, the load's in every other */
     f->tk = (uint8_t)(f->tk != 0);
+    if (!((f->tk && f->live) || (f->pl && f->sight >= 0)) || f->top_side < -1 || f->top_side >= nside) f->top_side = f->side;
+    /* TAKE OVER: a record that is not tk carries nothing of it */
     if (!f->tk) {
         f->pick = f->lanes = f->nfork = f->fork_max = f->tk_full = 0;
         f->human = 0;
         f->chain_last = f->fill_to = f->pick_R = f->pick_evict = 0;
         memset(f->fork, 0, sizeof f->fork);
-        f->top_side = f->side;
         return;
     }
     f->lanes = (uint8_t)(f->lanes != 0);
@@ -404,8 +542,6 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
     if (f->pick > 2) f->pick = 0;
     if (f->human < -1 || f->human >= f->nseat) f->human = -1;
     if (f->fork_max > WIKIFRAME_FORKS) f->fork_max = WIKIFRAME_FORKS;
-    /* the top bar's side is the human seat's in the live game only */
-    if (!f->live || f->top_side < -1 || f->top_side >= nside) f->top_side = f->side;
     f->chain_last = clampi(f->chain_last, 0, f->end);
     f->fill_to = clampi(f->fill_to, 0, f->end);
     f->pick_R = clampi(f->pick_R, 0, f->end);
@@ -448,11 +584,113 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
     return 1;
 }
 
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human)
+/* Math.trunc held to int16_t, as tagpu_wikistage_copy takes a unit's minimap point */
+static int16_t whole16(double v)
 {
+    const double t = v < 0 ? ceil(v) : floor(v);
+    return (int16_t)(t > 32767 ? 32767 : t < -32768 ? -32768 : t);
+}
+
+/* whether world point (x, z) lies on a lit block of the (w >> 1) x (h >> 1) grid `lit` */
+static int lit_at(const uint8_t* lit, int gw, int gh, double x, double z)
+{
+    int c, r;
+    if (!(x > -1e6 && x < 1e6 && z > -1e6 && z < 1e6)) return 0;
+    c = (int)floor(x) >> 5;
+    r = (int)floor(z) >> 5;
+    return c >= 0 && c < gw && r >= 0 && r < gh && lit[r * gw + c] > 0;
+}
+
+/* SIGHT IN THE FRAME'S VIEW (frame.js sightView), seat s at the shown tick g, into the watcher's
+   view `v` copied from `gv`: the map's fog a cell its lit block's, the units drawn compacted to
+   those the seat sees, and the minimap's pass */
+static void sight_view(WIKISTAGEVIEW* v, const WIKIVIEW* gv, const WIKILAYOUT* lay, const WIKIREPLAYVIEW* P, int g)
+{
+    static const int CORNER[4][2] = { { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+    uint8_t lit[WIKI_SIGHT_GRID];
+    const int s = P->sight, gw = v->w >> 1, gh = v->h >> 1;
+    int i, j, k, n;
+    if (!tagpu_wikisim_sight_lit(gv, lay ? &lay->sight : NULL, s, g, lit)) memset(lit, 0, sizeof lit);
+    for (i = 0; i < v->w * v->h; i++) {
+        const int c = (i % v->w) >> 1, r = (i / v->w) >> 1;
+        v->fog[i] = (uint8_t)(c < gw && r < gh && lit[r * gw + c] ? 0 : 1);
+    }
+    /* the units drawn, in their order: the copy's unit i is the view's unit i (tagpu_wikistage_copy),
+       whose double point the test reads, as frame.js's does */
+    for (i = n = 0; i < v->nunit && i < WIKISTAGE_UNITS && i < gv->nunit; i++) {
+        const WIKIVUNIT* u = &gv->unit[i];
+        const double fx = u->fx ? u->fx : 1, fz = u->fz ? u->fz : 1;
+        int seen = u->owner == s;
+        for (k = 0; k < 4 && !seen; k++) seen = lit_at(lit, gw, gh, u->x + CORNER[k][0] * 8 * fx, u->z + CORNER[k][1] * 8 * fz);
+        if (seen) v->unit[n++] = v->unit[i];
+    }
+    v->nunit = (int16_t)n;
+    /* the minimap: the pass's bits, a block past the pass's unlit, and its dots in the view's order */
+    v->mini = 1;
+    v->mini_gw = (uint8_t)gw;
+    v->mini_gh = (uint8_t)gh;
+    memset(v->mini_lit, 0, sizeof v->mini_lit);
+    for (i = 0; i < gw * gh && i < P->pass_blocks && i < WIKI_SIGHT_GRID; i++)
+        if (P->pass_fog[i >> 3] >> (i & 7) & 1) v->mini_lit[i >> 3] |= (uint8_t)(1u << (i & 7));
+    for (i = n = 0; i < gv->nunit && n < WIKISTAGE_UNITS; i++) {
+        const WIKIVUNIT* u = &gv->unit[i];
+        int on = u->owner == s;
+        for (j = 0; j < P->npass_contact && !on; j++) on = u->id && !strcmp(u->id, P->pass_contact[j]);
+        if (!on) continue;
+        v->dot[n].tx = whole16(u->x);
+        v->dot[n].tz = whole16(u->z);
+        v->dot[n].owner = (uint8_t)(u->owner >= 0 && u->owner < 8 ? u->owner : 255);
+        n++;
+    }
+    v->ndot = (int16_t)n;
+}
+
+/* THE OVERLAYS of the watcher's view or the past's from the game view `gv` (frame.js view):
+   each seat's cursor, the clicks of the last CLICK_SHOW ticks at or after the ring's start, and
+   each unit's owner's selection, each switched by `tog` and kept to the seats `all` (every seat)
+   or seat `human` */
+#define CLICK_SHOW 15
+static void overlays(WIKISTAGEVIEW* v, const WIKIFRAMEOV* ov, unsigned tog, int all, int human)
+{
+    const WIKIVIEW* gv = ov->gv;
+    int k;
+    v->ncur = v->nclick = 0;
+    if (gv && gv->game && (tog & HUD_TOG_CURSORS))
+        for (k = 0; k < gv->ncursor && k < WIKI_SEATS; k++) {
+            if (!gv->cursor[k].on || !(all || k == human)) continue;
+            v->cur[v->ncur].x = (float)gv->cursor[k].x;
+            v->cur[v->ncur].z = (float)gv->cursor[k].z;
+            v->cur[v->ncur].seat = (uint8_t)k;
+            v->ncur++;
+        }
+    if (gv && gv->game && (tog & HUD_TOG_CLICKS))
+        for (k = 0; k < gv->nclick && k < WIKI_CLICKS; k++) {
+            const WIKICLICK* c = &gv->click[k];
+            const int age = ov->tick + 1 - c->tick;
+            if (!(all || c->seat == human) || c->tick < ov->click_from || age < 0 || age >= CLICK_SHOW) continue;
+            v->click[v->nclick].x = (float)c->x;
+            v->click[v->nclick].z = (float)c->z;
+            v->click[v->nclick].seat = (uint8_t)(c->seat >= 0 && c->seat < 255 ? c->seat : 255);
+            v->click[v->nclick].age = (uint8_t)age;
+            v->nclick++;
+        }
+}
+
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human,
+                          const WIKIFRAMEOV* ov)
+{
+    const WIKIREPLAYVIEW* P = ov ? ov->players : NULL;
+    const unsigned tog = P ? (unsigned)P->tog : HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT;
     int i;
     v->frame = 1;
     v->cursor_shape = WIKI_CURSOR_N;
+    v->screen = 0;
+    v->vp_w = v->vp_h = 0;
+    v->eye_x = v->eye_z = 0;
+    v->ncur = v->nclick = 0;
+    v->mini = v->mini_gw = v->mini_gh = 0;
+    v->ndot = 0;
+    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) v->unit[i].osel = 0;
     if (mode == WIKIFRAME_PLAYER) {
         if (!cursor) v->has_ghost = 0;
         for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
@@ -466,15 +704,32 @@ void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int
         v->has_drag = 0;
         v->rmode = 0;
         memset(&v->sweep, 0, sizeof v->sweep);
-        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) v->unit[i].selected = 0;
+        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) {
+            WIKISTAGEUNIT* u = &v->unit[i];
+            u->osel = (uint8_t)((tog & HUD_TOG_SELECTIONS) && u->selected && (mode == WIKIFRAME_WATCH || u->owner == human));
+            u->selected = 0;
+        }
         memset(v->held, 0, sizeof v->held);
         if (mode != WIKIFRAME_PAST) v->has_side = 0;
         v->side.under = -1;
+        if (ov) overlays(v, ov, tog, mode == WIKIFRAME_WATCH, human);
     }
     if (!v->has_side) {
         v->has_side = (uint8_t)tagpu_wikiframe_idle_side(lay, side, &v->side);
         v->layout_src = (uint8_t)(v->has_side && layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
     }
+    if (ov && ov->screen_w > 0 && ov->screen_h > 0) {
+        WIKIFRAMESIZE sz;
+        int ex, ez;
+        tagpu_wikiframe_size(v->w, v->h, v->has_side ? v->side.h : 0, ov->screen_w, ov->screen_h, &sz);
+        tagpu_wikiframe_eye(P ? P->cam_x : 0, P ? P->cam_z : 0, &sz, &ex, &ez);
+        v->screen = 1;
+        v->vp_w = (int16_t)sz.vw;
+        v->vp_h = (int16_t)sz.vh;
+        v->eye_x = ex;
+        v->eye_z = ez;
+    }
+    if (P && P->sight >= 0 && mode == WIKIFRAME_WATCH && ov->gv) sight_view(v, ov->gv, lay, P, ov->tick);
 }
 
 uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k)
@@ -491,7 +746,40 @@ uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k)
     return k >= 0 && k < WIKI_SEATS ? COLOURS[k] : GREY;
 }
 
-void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, const struct WIKISIDE* sd, HUDSTATE* st)
+/* frame.js hudState's stand-ins with no HUD layout: layout.json's window.x, window.y and chart.teams */
+#define WIN_X 150
+#define WIN_Y 56
+static const uint32_t TEAM_RGB[5] = { 0xe0c060, 0x60b8e0, 0xe07878, 0x80d070, 0xb090e0 };
+
+/* THE PLAYERS SET of a players record (frame.js hudState's `pl` part): the teams in the order of
+   their first seats, the folded team rows, the switches, Sight and Follow, the stats window */
+static void pl_state(const WIKIFRAMEREC* f, const HUDGLOBALS* gl, HUDSTATE* st)
+{
+    const char* m = tagpu_wikidata_chip_name(WIKI_CHIP_METAL + (f->stat_measure < WIKI_STAT_MEASURES ? f->stat_measure : 0));
+    int k, t;
+    st->nteam = 0;
+    for (k = 0; k < st->nseat; k++) {
+        for (t = 0; t < st->nteam && f->team[st->team_seat[t][0]] != f->team[k]; t++) {}
+        if (t == st->nteam) st->team_n[st->nteam++] = 0;
+        st->team_seat[t][st->team_n[t]++] = (uint8_t)k;
+    }
+    st->folded = f->folded & ((1u << st->nteam) - 1);
+    st->toggles = (f->tog & (HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT)) | (f->stat_open ? HUD_TOG_STATS : 0);
+    st->sight = f->sight;
+    st->follow = f->follow;
+    st->stats.open = f->stat_open;
+    st->stats.x = gl ? gl->win_x : WIN_X;
+    st->stats.y = gl ? gl->win_y : WIN_Y;
+    copy(st->stats.measure, sizeof st->stats.measure, m);
+    st->stats.team = f->stat_team && tagpu_hudlay_headed(st);
+    st->stats.dt = (float)(f->period / (double)TICK);
+    st->stats.t0 = (float)(f->base / (double)TICK);
+    st->stats.npt = f->npt;
+    tagpu_hudlay_stat_groups(st, &f->series[0][0], WIKI_SEATS, WIKI_STAT_PTS, gl ? gl->team_rgb : TEAM_RGB, gl ? gl->nteam_rgb : 5);
+}
+
+void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, const struct WIKISIDE* sd,
+                              const HUDGLOBALS* gl, HUDSTATE* st)
 {
     const double k = (double)WIKIFRAME_HUD_H / (Hg > 0 ? Hg : 1), T = f->end / (double)TICK;
     int i;
@@ -564,6 +852,7 @@ void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, c
         st->pick_down = f->pick != 0;
         st->lanes_open = f->lanes;
     }
+    if (f->pl) pl_state(f, gl, st);
     if (f->live) {
         /* the live HUD as tagpu_hudstate.c present_live sets it: the strip from the rewind's first
            GameTime to G, the playhead at the GameTime shown within it, never playing */
@@ -668,6 +957,10 @@ int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out)
 {
     int k;
     *out = *f;
+    if (f->pl && !f->stat_open && (!strcmp(f->cur.to, "close") || !strcmp(f->cur.from, "close"))) {
+        out->stat_open = 1;
+        return 1;
+    }
     if (f->tk && !f->live && f->cur.watched > 0 && (!strcmp(f->cur.to, "main") || !strcmp(f->cur.from, "main"))) {
         /* the lanes as Back to main recording's press drew them: open, its fork the watched one */
         for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS && f->fork[k].id != f->cur.watched; k++) {}
@@ -698,6 +991,17 @@ int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out)
     return 1;
 }
 
+int tagpu_wikiframe_row_point(const HUDOPS* ops, int seat, float px, float* mx, float* my)
+{
+    char k[HUD_KEYLEN];
+    const HUDOP* b;
+    snprintf(k, sizeof k, "row:%d", seat);
+    if (!(b = box_of(ops, k))) return 0;
+    *mx = (float)mid(b->r.x, b->r.w, px);
+    *my = (float)mid(b->r.y, b->r.h, px);
+    return 1;
+}
+
 /* a key's point: @game at seat 0's cursor (`gx`, `gy`; NaN: the rest point), any other by resolve */
 static void resolve_key(const WIKIFRAMEREC* f, const HUDOPS* o, float px, double ends, const char* k, int v, double rx,
                         double ry, double nx, double ny, double gx, double gy, double* x, double* y)
@@ -711,12 +1015,12 @@ static void resolve_key(const WIKIFRAMEREC* f, const HUDOPS* o, float px, double
     resolve(f, o, px, ends, k, v, rx, ry, nx, ny, x, y);
 }
 
-void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* ops, float px, double ends, double rest_x, double rest_y,
-                           double no_x, double no_y, double game_x, double game_y, double* x, double* y)
+void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* from, const HUDOPS* to, float px, double ends, double rest_x,
+                           double rest_y, double no_x, double no_y, double game_x, double game_y, double* x, double* y)
 {
     double ax, ay, bx, by;
-    resolve_key(f, ops, px, ends, f->cur.from, f->cur.from_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &ax, &ay);
-    resolve_key(f, ops, px, ends, f->cur.to, f->cur.to_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &bx, &by);
+    resolve_key(f, from, px, ends, f->cur.from, f->cur.from_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &ax, &ay);
+    resolve_key(f, to, px, ends, f->cur.to, f->cur.to_v, rest_x, rest_y, no_x, no_y, game_x, game_y, &bx, &by);
     *x = tagpu_wikiframe_glide(ax, bx, f->cur.i, f->cur.n);
     *y = tagpu_wikiframe_glide(ay, by, f->cur.i, f->cur.n);
 }
@@ -734,6 +1038,11 @@ int tagpu_wikiframe_seat_side(const WIKILAYOUT* lay, int side, int seat)
     for (r = 0; r < lay->nside && r < WIKI_SIDE_SIDES; r++)
         if (r != side) return r;
     return side;
+}
+
+int tagpu_wikiframe_top_side(const WIKIREPLAYVIEW* rv, const WIKILAYOUT* lay, int side)
+{
+    return tagpu_wikiframe_seat_side(lay, side, rv->live ? rv->human : rv->players && rv->sight >= 0 ? rv->sight : 0);
 }
 
 int tagpu_wikiframe_lanes(const WIKIFRAMEREC* f, int32_t* lane)
@@ -758,15 +1067,16 @@ static int give(int c, int v, int* control, int* value)
     return 1;
 }
 
-/* a button: a control a demo presses that is not the track, a picker row and a lane's controls
-   by their indexed keys alone (the HUD keys no other) */
+/* a button: a control a demo presses that is not the track; a picker row, a lane's controls, a
+   players row's Jump, Sight and Follow and a chip by their indexed keys alone (the HUD keys no
+   other) */
 static int button(const char* k)
 {
     int c, n;
     if (tagpu_wikiframe_indexed(k, &c, &n)) return 1;
     c = control(k) ? tagpu_wikidata_hud(k) : -1;
-    return c >= 0 && c != WIKI_HUD_TRACK && c != WIKI_HUD_TAKEAS && c != WIKI_HUD_LANE && c != WIKI_HUD_EXPORT &&
-           c != WIKI_HUD_DELETE;
+    return c >= 0 && c != WIKI_HUD_TRACK && c != WIKI_HUD_TAKEAS && !on_lane(c) && c != WIKI_HUD_JUMP && c != WIKI_HUD_SIGHT &&
+           c != WIKI_HUD_FOLLOW && c != WIKI_HUD_CHIP;
 }
 
 /* the fork lane n showed, or -1 past the lanes drawn */
@@ -791,7 +1101,7 @@ int tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int 
         m->last = T;
         return give(WIKI_HUD_TRACK, T, control_, value);
     }
-    if (tagpu_wikiframe_indexed(key, &c, &n) && c != WIKI_HUD_TAKEAS) {
+    if (tagpu_wikiframe_indexed(key, &c, &n) && on_lane(c)) {
         /* a lane's control is held only on a lane drawn, with the fork it showed */
         if ((m->lane = lane_at(lane, nlane, n)) < 0) return 0;
     }
@@ -821,7 +1131,7 @@ int tagpu_wikiframe_press_up(WIKIFRAMEPRESS* m, const char* key, int T, const in
     if (!strcmp(h, "yes")) return give(WIKI_HUD_LEAVE_YES, 0, control_, value);
     if (!strcmp(h, "no")) return give(WIKI_HUD_LEAVE_NO, 0, control_, value);
     if (tagpu_wikiframe_indexed(h, &c, &n)) {
-        if (c == WIKI_HUD_TAKEAS) return give(c, n, control_, value);
+        if (!on_lane(c)) return give(c, n, control_, value);
         /* THE HELD LANE: the same fork at the same place at the press and at the release */
         return id >= 0 && lane_at(lane, nlane, n) == id ? give(c, id, control_, value) : 0;
     }

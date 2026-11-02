@@ -281,14 +281,21 @@ void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, dou
     *h = tagpu_hud_edge(stage.y, stage.h, px) - *y0;
 }
 
-void tagpu_wikistage_fit(int w, int h, int side_h, int frame, double stage_w, double stage_h, double u, WIKISTAGEFIT* out)
+void tagpu_wikistage_fit(int w, int h, int side_h, int frame, int vp_w, int vp_h, double stage_w, double stage_h, double u,
+                         WIKISTAGEFIT* out)
 {
     const double cell = WIKI_CELL, mw = (w > 0 ? w : 1) * cell, mh = (h > 0 ? h : 1) * cell, pad = 6 * u;
     double sx, sz;
     /* stage.js `content`: the column left of the map, as tall as the taller of the two; the frame
-       the whole game screen from the column's left edge and the top bar's top */
+       the whole game screen from the column's left edge and the top bar's top, a players frame's
+       its screen's, the viewport where the map stands */
     out->z0 = 0;
-    if (frame) {
+    if (frame && vp_w > 0 && vp_h > 0) {
+        out->x0 = -WIKI_SIDE_W;
+        out->z0 = -WIKIFRAME_BAR;
+        out->cw = WIKI_SIDE_W + vp_w;
+        out->ch = vp_h + 2 * WIKIFRAME_BAR;
+    } else if (frame) {
         out->x0 = -WIKI_SIDE_W;
         out->z0 = -WIKIFRAME_BAR;
         out->cw = WIKI_SIDE_W + mw;
@@ -307,6 +314,32 @@ void tagpu_wikistage_fit(int w, int h, int side_h, int frame, double stage_w, do
     out->s = sx < sz ? sx : sz;
     out->ox = (stage_w - out->cw * out->s) / 2 - out->x0 * out->s;
     out->oz = (stage_h - out->ch * out->s) / 2 - out->z0 * out->s;
+}
+
+void tagpu_wikistage_fit_view(const WIKISTAGEVIEW* v, double stage_w, double stage_h, double u, WIKISTAGEFIT* out)
+{
+    const int E = v->frame && v->screen;
+    tagpu_wikistage_fit(v->w, v->h, v->has_side ? v->side.h : 0, v->frame, E ? v->vp_w : 0, E ? v->vp_h : 0, stage_w, stage_h,
+                        u, out);
+}
+
+void tagpu_wikistage_eye(WIKISTAGEVIEW* v)
+{
+    const int mw = v->w * WIKI_CELL, mh = v->h * WIKI_CELL;
+    v->screen = (uint8_t)(v->screen == 1 && v->frame && v->w > 0 && v->h > 0);
+    if (!v->screen) {
+        v->vp_w = v->vp_h = 0;
+        v->eye_x = v->eye_z = 0;
+        return;
+    }
+    if (v->vp_w < WIKI_CELL) v->vp_w = WIKI_CELL;
+    if (v->vp_w > WIKISTAGE_MAP * WIKI_CELL) v->vp_w = WIKISTAGE_MAP * WIKI_CELL;
+    if (v->vp_h < WIKI_CELL) v->vp_h = WIKI_CELL;
+    if (v->vp_h > WIKISTAGE_MAP * WIKI_CELL) v->vp_h = WIKISTAGE_MAP * WIKI_CELL;
+    if (v->eye_x > mw - v->vp_w) v->eye_x = mw - v->vp_w;
+    if (v->eye_z > mh - v->vp_h) v->eye_z = mh - v->vp_h;
+    if (v->eye_x < 0) v->eye_x = 0;
+    if (v->eye_z < 0) v->eye_z = 0;
 }
 
 static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
@@ -335,18 +368,54 @@ int tagpu_wikistage_cursor_frame(const WIKISTAGESPR* frames, int n, int loop, lo
     return f;
 }
 
-void tagpu_wikistage_image(int w, int h, int side_h, int frame, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1)
+/* THE VIEWPORT, the frame's (stage.js draw's `vp`): the world's rect on the canvas, every edge
+   snapped, inside the canvas W x H -- the map's width and the rows between the bars, or a players
+   frame's viewport; [r0, r1) x [r2, r3) in canvas device pixels */
+static void viewport(const WIKISTAGEVIEW* v, const WIKISTAGEFIT* f, double W, double H, double* r)
 {
-    double cx, cy, cw, ch;
+    if (v->frame && v->screen) {
+        r[0] = snapd(f->ox);
+        r[1] = snapd(f->oz);
+        r[2] = snapd(f->ox + v->vp_w * f->s);
+        r[3] = snapd(f->oz + v->vp_h * f->s);
+    } else {
+        r[0] = snapd(f->ox);
+        r[1] = snapd(f->oz);
+        r[2] = snapd(f->ox + v->w * WIKI_CELL * f->s);
+        r[3] = snapd(f->oz + (f->ch - 2 * WIKIFRAME_BAR) * f->s);
+    }
+    r[0] = fmax(r[0], 0);
+    r[1] = fmax(r[1], 0);
+    r[2] = fmin(r[2], W);
+    r[3] = fmin(r[3], H);
+}
+
+void tagpu_wikistage_image(const WIKISTAGEVIEW* v, HUDRECT stage, double u, int* r, int* clip)
+{
+    const int E = v->frame && v->screen, w = v->w > 0 ? v->w : 1, h = v->h > 0 ? v->h : 1;
+    const double ex = E ? v->eye_x : 0, ez = E ? v->eye_z : 0;
+    double cx, cy, cw, ch, vp[4];
     WIKISTAGEFIT f;
     tagpu_wikistage_canvas(stage, u, &cx, &cy, &cw, &ch);
-    tagpu_wikistage_fit(w, h, side_h, frame, cw, ch, u, &f);
+    tagpu_wikistage_fit_view(v, cw, ch, u, &f);
     /* the canvas's corner is a whole device pixel (tagpu_wikistage_canvas), so snapping each edge
-       from the canvas, as stage.js does, snaps it from the screen too */
-    *x0 = (int)(cx + snapd(f.ox));
-    *y0 = (int)(cy + snapd(f.oz));
-    *x1 = (int)(cx + snapd(f.ox + (w > 0 ? w : 1) * WIKI_CELL * f.s));
-    *y1 = (int)(cy + snapd(f.oz + (h > 0 ? h : 1) * WIKI_CELL * f.s));
+       from the canvas, as stage.js does, snaps it from the screen too; a players frame's map
+       stands at the eye (stage.js X, Z) */
+    r[0] = (int)(cx + snapd(f.ox + (0 - ex) * f.s));
+    r[1] = (int)(cy + snapd(f.oz + (0 - ez) * f.s));
+    r[2] = (int)(cx + snapd(f.ox + (w * WIKI_CELL - ex) * f.s));
+    r[3] = (int)(cy + snapd(f.oz + (h * WIKI_CELL - ez) * f.s));
+    if (!clip) return;
+    if (v->frame) viewport(v, &f, cw, ch, vp);
+    else {
+        vp[0] = vp[1] = 0;
+        vp[2] = cw;
+        vp[3] = ch;
+    }
+    clip[0] = (int)(cx + vp[0]);
+    clip[1] = (int)(cy + vp[1]);
+    clip[2] = (int)(cx + fmax(vp[2], vp[0]));
+    clip[3] = (int)(cy + fmax(vp[3], vp[1]));
 }
 
 int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved)
@@ -681,24 +750,36 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
         } while (0)
         for (z = 0; z < mh; z++)
             for (x = 0; x < mw; x++) CELLAT(x, z, ground(v, z * mw + x, top));
+        /* the fog: the map's, or under a players frame's Sight the pass's (`mini`), grey on each
+           cell of an unlit block; the pass's grid is bounded against its bits */
         for (z = 0; z < mh; z++)
             for (x = 0; x < mw; x++) {
-                const int fg = v->fog[z * mw + x];
+                const int bi = (z >> 1) * v->mini_gw + (x >> 1);
+                const int fg = !v->mini ? v->fog[z * mw + x]
+                             : (x >> 1) < v->mini_gw && (z >> 1) < v->mini_gh && bi < WIKISTAGE_FOG * 8 &&
+                               (v->mini_lit[bi >> 3] >> (bi & 7) & 1) ? 0 : 1;
                 if (fg) CELLAT(x, z, fg == 2 ? rgba(0, 0, 0, .9) : rgba(128, 128, 128, .5));
             }
 #undef CELLAT
         /* a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its
-           owner's colour */
-        for (i = 0; i < v->nunit; i++) {
-            const WIKISTAGEUNIT* u = &v->unit[i];
+           owner's colour: every unit's, or under Sight the pass's dots */
+        for (i = 0; i < (v->mini ? v->ndot : v->nunit) && i < WIKISTAGE_UNITS; i++) {
+            const int tx = v->mini ? v->dot[i].tx : v->unit[i].tx, tz = v->mini ? v->dot[i].tz : v->unit[i].tz;
+            const int owner = v->mini ? v->dot[i].owner : v->unit[i].owner;
             int px, py;
-            tagpu_wikiside_dot(u->tx, u->tz, &m, W, Hm, &px, &py);
+            tagpu_wikiside_dot(tx, tz, &m, W, Hm, &px, &py);
             circle(c, ox + ((m.offx + px + .5) - WIKI_SIDE_W) * s, oz + ((m.offy + py + .5) + dz) * s, 1.5 * s, 1.5 * s,
-                   team(u->owner));
+                   team(owner));
         }
-        /* the camera box: the stage shows the whole map, so it is the picture's border */
-        b = sbox(ox, oz, dz, s, m.offx, m.offy, m.w, m.h);
-        sring(c, &b, s, HEX(SIDE_BOX));
+        /* the camera box (tagpu_wikiside_camera_box): the picture's border while the stage shows
+           the whole map, a players frame's viewport at its eye */
+        {
+            int cb[4];
+            if (v->frame && v->screen) tagpu_wikiside_camera_box(&m, W, Hm, v->eye_x, v->eye_z, v->vp_w, v->vp_h, cb);
+            else tagpu_wikiside_camera_box(&m, W, Hm, 0, 0, W, Hm, cb);
+            b = sbox(ox, oz, dz, s, cb[0], cb[1], cb[2] - cb[0] + 1, cb[3] - cb[1] + 1);
+            sring(c, &b, s, HEX(SIDE_BOX));
+        }
     }
 
     /* THE SCREEN IS DATA UNTIL BOUNDED: an index of the layout, which tagpu_wikilayout_check
@@ -1015,6 +1096,74 @@ static void readout(B* c, const char* t, int right)
     text(c, t, right ? c->W - 5 * U : 5 * U, c->H - 2 * U - h / 2, sz, right ? 2 : 0, HEX(0xf0f0ea));
 }
 
+/* a filled triangle, a canvas's three-point subpath (HOP_TRI: the third point in units) */
+static void tri(B* c, double x0, double y0, double x1, double y1, double x2, double y2, uint32_t col)
+{
+    HUDOP* p;
+    if (!(p = op(c, HOP_TRI, x0, y0, x1 - x0, y1 - y0))) return;
+    p->shade = (float)((c->X0 + x2) / c->u);
+    p->size = (float)((c->Y0 + y2) / c->u);
+    p->rgba = col;
+}
+
+/* THE REPLAY'S OVERLAYS on a frame (stage.js drawOverlays, which states the order, the sizes and
+   the game's rules they follow), drawn last in the world, inside the viewport clip: each unit's
+   owner's selection as the stage's brackets in that seat's colour, the clicks' rings, oldest
+   first, then the cursors' arrows in seat order -- OV_ARROW's five triangles in the seat's colour
+   and its seven edges in the GUI's black. Seat k's colour is the frame's (`fr->seat_rgb`) or the
+   stage's stand-in; a seat or an age is data, held to the tables it indexes. */
+#define OV_SEG     16
+#define CLICK_SHOW 15
+#define OV_PI      3.14159265358979323846   /* Math.PI */
+static void overlays(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEFRAME* fr, double ox, double oz, double ex, double ez,
+                     double s, double U, double cp)
+{
+    static const double ARROW[7][2] = { { 0, 0 }, { 0, 15 }, { 4, 11 }, { 7, 17 }, { 9, 16 }, { 6, 10 }, { 11, 10 } };
+    static const int TRI[5][3] = { { 0, 1, 2 }, { 0, 2, 5 }, { 0, 5, 6 }, { 2, 3, 4 }, { 2, 4, 5 } };
+    const uint32_t edge = HEX(fr && fr->seat_rgb ? fr->edge : 0);
+    int i, j;
+#define OX(v_) (ox + ((v_) - ex) * s)
+#define OZ(v_) (oz + ((v_) - ez) * s)
+#define COL(q_) (fr && fr->seat_rgb ? HEX((q_) < WIKI_SEATS ? fr->seat[q_] : 0x8a8a8a) : team(q_))
+    mark(c, WIKISTAGE_IN_OVER, 0);
+    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) {
+        const WIKISTAGEUNIT* un = &v->unit[i];
+        const double w = un->fx * cp, h = un->fz * cp, bx = OX(un->x) - w / 2, by = OZ(un->z) - h / 2;
+        const double m = 3 * U, x0 = bx - m, y0 = by - m, x1 = bx + w + m, y1 = by + h + m, k = fmin(w, h) * .35 + m;
+        const double cn[4][4] = { { x0, y0, 1, 1 }, { x1, y0, -1, 1 }, { x0, y1, 1, -1 }, { x1, y1, -1, -1 } };
+        if (!un->osel) continue;
+        for (j = 0; j < 4; j++) {
+            const double pt[6] = { cn[j][0] + cn[j][2] * k, cn[j][1], cn[j][0], cn[j][1], cn[j][0], cn[j][1] + cn[j][3] * k };
+            poly(c, pt, 3, 0, fmax(1, 1.5 * U), COL(un->owner), HUGE_VAL, 0);
+        }
+    }
+    for (i = 0; i < v->nclick && i < WIKI_CLICKS; i++) {
+        const WIKISTAGECLICK* k = &v->click[i];
+        const int age = k->age < CLICK_SHOW ? k->age : CLICK_SHOW - 1;
+        const double r = (4 + 12.0 * (CLICK_SHOW - age) / CLICK_SHOW) * s, cx = snapd(OX(k->x)), cy = snapd(OZ(k->z));
+        for (j = 0; j < OV_SEG; j++) {
+            const double a0 = 2 * OV_PI * j / OV_SEG, a1 = 2 * OV_PI * (j + 1) / OV_SEG;
+            line(c, cx + r * cos(a0), cy + r * sin(a0), cx + r * cos(a1), cy + r * sin(a1), s, COL(k->seat));
+        }
+    }
+    for (i = 0; i < v->ncur && i < WIKI_SEATS; i++) {
+        const WIKISTAGECUR* k = &v->cur[i];
+        const double ax = snapd(OX(k->x)), ay = snapd(OZ(k->z));
+        double P[7][2];
+        for (j = 0; j < 7; j++) {
+            P[j][0] = ax + ARROW[j][0] * s;
+            P[j][1] = ay + ARROW[j][1] * s;
+        }
+        for (j = 0; j < 5; j++)
+            tri(c, P[TRI[j][0]][0], P[TRI[j][0]][1], P[TRI[j][1]][0], P[TRI[j][1]][1], P[TRI[j][2]][0], P[TRI[j][2]][1],
+                COL(k->seat));
+        for (j = 0; j < 7; j++) line(c, P[j][0], P[j][1], P[(j + 1) % 7][0], P[(j + 1) % 7][1], s, edge);
+    }
+#undef OX
+#undef OZ
+#undef COL
+}
+
 int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
                           const WIKISTAGEFRAME* frame, const WIKISTAGEART* art, WIKISTAGEOPS* out)
 {
@@ -1049,14 +1198,27 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
     } else {
         const int mw = v->w, mh = v->h;
         const double cell = WIKI_CELL;
+        /* TWO TRANSFORMS (stage.js draw): the frame's, from the fit's origin, and the world's, the
+           frame's less the eye of a players frame, whose viewport shows the map from the eye; with
+           no eye the two are one, so no other frame's ops move. The cells the viewport meets,
+           [c0, c1) x [r0, r1), are where the ground, its grid and its fog are drawn. */
+        const int E = v->frame && v->screen;
+        const double ex = E ? v->eye_x : 0, ez = E ? v->eye_z : 0;
         WIKISTAGEFIT f;
         double s, ox, oz, cp, top = v->surface_metal;
-#define X(v_) (ox + (v_) * s)
-#define Z(v_) (oz + (v_) * s)
+        int c0 = 0, c1 = mw, r0 = 0, r1 = mh;
+#define X(v_) (ox + ((v_) - ex) * s)
+#define Z(v_) (oz + ((v_) - ez) * s)
         const HUDRECT canvas = c.clip;
-        tagpu_wikistage_fit(mw, mh, v->has_side ? v->side.h : 0, v->frame, c.W, c.H, u, &f);
+        tagpu_wikistage_fit_view(v, c.W, c.H, u, &f);
         s = f.s; ox = f.ox; oz = f.oz;
         cp = cell * s;
+        if (E) {
+            c0 = (int)fmin(fmax(floor(ex / cell), 0), mw);
+            c1 = (int)fmin(fmax(ceil((ex + v->vp_w) / cell), 0), mw);
+            r0 = (int)fmin(fmax(floor(ez / cell), 0), mh);
+            r1 = (int)fmin(fmax(ceil((ez + v->vp_h) / cell), 0), mh);
+        }
         for (i = 0; i < mw * mh; i++)
             if (v->metal[i] > top) top = v->metal[i];
 
@@ -1070,32 +1232,32 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
            of it lands on them -- every op from the ground through the overlays clips to the
            viewport, its edges snapped, inside the canvas */
         if (v->frame) {
-            const double x0 = fmax(snapd(X(0)), 0), y0 = fmax(snapd(Z(0)), 0);
-            const double x1 = fmin(snapd(X(mw * cell)), c.W), y1 = fmin(snapd(Z(f.ch - 2 * WIKIFRAME_BAR)), c.H);
-            c.clip.x = (float)((c.X0 + x0) / u);
-            c.clip.y = (float)((c.Y0 + y0) / u);
-            c.clip.w = (float)(fmax(x1 - x0, 0) / u);
-            c.clip.h = (float)(fmax(y1 - y0, 0) / u);
+            double vp[4];
+            viewport(v, &f, c.W, c.H, vp);
+            c.clip.x = (float)((c.X0 + vp[0]) / u);
+            c.clip.y = (float)((c.Y0 + vp[1]) / u);
+            c.clip.w = (float)(fmax(vp[2] - vp[0], 0) / u);
+            c.clip.h = (float)(fmax(vp[3] - vp[1], 0) / u);
         }
 
         /* the ground: plain cells light, metal darker by how far it stands above surfaceMetal */
         mark(&c, WIKISTAGE_IN_GROUND, 0);
-        for (z = 0; z < mh; z++)
-            for (x = 0; x < mw; x++)
+        for (z = r0; z < r1; z++)
+            for (x = c0; x < c1; x++)
                 rect(&c, floor(X(x * cell)), floor(Z(z * cell)), ceil(cp) + 1, ceil(cp) + 1, ground(v, z * mw + x, top));
         /* the grid: one pixel wide on pixel centres, each row broken at the columns so that no
            pixel of the translucent stroke is laid twice */
         if (cp >= 5) {
             const uint32_t g = rgba(0, 0, 0, .12);
-            const double end = X(mw * cell);
-            for (x = 0; x <= mw; x++) {
+            const double end = X(c1 * cell);
+            for (x = c0; x <= c1; x++) {
                 const double px = floor(X(x * cell) + 0.5);
-                line(&c, px + .5, Z(0), px + .5, Z(mh * cell), 1, g);
+                line(&c, px + .5, Z(r0 * cell), px + .5, Z(r1 * cell), 1, g);
             }
-            for (z = 0; z <= mh; z++) {
+            for (z = r0; z <= r1; z++) {
                 const double pz = floor(Z(z * cell) + 0.5) + .5;
-                double a = X(0);
-                for (x = 0; x <= mw; x++) {
+                double a = X(c0 * cell);
+                for (x = c0; x <= c1; x++) {
                     const double px = floor(X(x * cell) + 0.5);
                     if (px > a) line(&c, a, pz, px, pz, 1, g);
                     a = px + 1;
@@ -1124,9 +1286,10 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             rect(&c, x0, y0, w, h, fill[k]);
             ring(&c, x0 + lw / 2, y0 + lw / 2, w - lw, h - lw, lw, edge[k]);
         }
-        /* fog: grey half over seen-before ground, black over unexplored */
-        for (z = 0; z < mh; z++)
-            for (x = 0; x < mw; x++) {
+        /* fog: grey half over seen-before ground, black over unexplored, on the cells the ground
+           is drawn on */
+        for (z = r0; z < r1; z++)
+            for (x = c0; x < c1; x++) {
                 const int fg = v->fog[z * mw + x];
                 if (!fg) continue;
                 rect(&c, floor(X(x * cell)), floor(Z(z * cell)), ceil(cp) + 1, ceil(cp) + 1,
@@ -1236,7 +1399,8 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             const double x0 = X(fmin(v->drag_x0, v->drag_x1)), y0 = Z(fmin(v->drag_z0, v->drag_z1));
             ring(&c, x0, y0, fabs((double)v->drag_x1 - v->drag_x0) * s, fabs((double)v->drag_z1 - v->drag_z0) * s, fmax(1, U), HEX(0xf2f6e8));
         }
-        if (v->rmode) sweep(&c, v, ox, oz, s, cell, cp);
+        if (v->rmode) sweep(&c, v, ox - ex * s, oz - ez * s, s, cell, cp);
+        if (v->frame) overlays(&c, v, frame, ox, oz, ex, ez, s, U, cp);
         /* the frame's top range, over the stage HUD, and nothing of the view's own after it: the
            viewer is not seat 0, so the frame has no cursor of the view's and no readouts */
         if (v->frame) {

@@ -693,6 +693,20 @@ static void try_release_all(int send)
     s_downReal = 0;
 }
 
+/* THE DRAWN FRAME'S FIT on stage hit `h` and its size in game pixels: the held frame view's map and
+   viewport (a players entry's screen, which every frame of the entry shares) beside the drawn
+   frame's column, through the function the render thread fits it with */
+static void frame_fit(const TAGPU_CMD_WIKIHIT* h, WIKISTAGEFIT* f, int* Wg, int* Hg)
+{
+    const int E = s_frameView.screen;
+    WIKIFRAMESIZE sz;
+    tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, E ? s_frameView.vp_w : 0, E ? s_frameView.vp_h : 0,
+                        h->x1 - h->x0, h->y1 - h->y0, s_hit.u, f);
+    tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, 0, 0, &sz);
+    *Wg = E ? WIKIFRAME_SIDE_W + s_frameView.vp_w : sz.Wg;
+    *Hg = E ? s_frameView.vp_h + 2 * WIKIFRAME_BAR : sz.Hg;
+}
+
 /* A LIVE FRAME'S WORLD POINT (frame.js onWorld, wiki.js liveWorld): client point (cx, cy) through the
    drawn frame's fit -- its `stage` hit, its unit and its column's rows, with tagpu_wikistage_fit, the
    one function both threads fit a frame with -- when the topmost control of that frame under the point
@@ -712,8 +726,7 @@ static int live_world(int cx, int cy, double* wx, double* wz)
     if (!live_try() || !s_frameHave) return 0;
     h = hit_src(cx, cy, key, &src);
     if (!h || src != WIKIHIT_PAGE || strcmp(key, "stage")) return 0;
-    tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
-    tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+    frame_fit(h, &f, &Wg, &Hg);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;
@@ -749,7 +762,7 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
     /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the
        entry's map grown beside the drawn frame's column, as the simulation grows it */
-    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0,
+    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0, 0, 0,
                         h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
@@ -1385,6 +1398,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
 {
     WIKIREPLAYVIEW rv;
     WIKISIM* g;
+    const WIKIVIEW* ov_gv = NULL;
     const char* cap;
     uint32_t t = 0;
     int shown, mode, human;
@@ -1419,6 +1433,10 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&s_frameView, g);
         s_frameView.tick = g->tick;
+        /* THE OVERLAYS AND SIGHT read the world's view again: the pose ended the first one's
+           lifetime, and nothing steps or presses the simulation before the frame view reads it
+           below (tagpu_wikiframe_view's `gv`) */
+        ov_gv = tagpu_wikisim_view_as(g, human);
         if (mode == WIKIFRAME_PAST) {
             WIKISIM* L = tagpu_wikireplay_game(&s_rep);
             tagpu_wikistage_side(&s_frameView, L ? tagpu_wikisim_view_as(L, human) : NULL, s_laySrc);
@@ -1426,7 +1444,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         s_frameHave = 1;
     }
     tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held,
-                           tagpu_wikiframe_seat_side(s_lay, s_ctx.side, human), &w->frame);
+                           tagpu_wikiframe_top_side(&rv, s_lay, s_ctx.side), &s_rep, &w->frame);
     /* THE ONE CURSOR (rewind-spec.md 9.5): the armed building's ghost goes with the simulation's cursor,
        drawn in a demo whenever it is the one drawn, and in Try it only while the player's pointer lies
        on the live frame's world (stage_world), where the stage draws the simulation's cursor at the
@@ -1436,9 +1454,19 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         double x, z;
         w->try_world = (uint8_t)(s_repTry && w->frame.simcur && w->ptr_x >= 0 && stage_world(w->ptr_x, w->ptr_y, &x, &z));
     }
-    if (shown)
+    if (shown) {
+        /* what the replay adds to the world it shows: its overlays at the shown tick, and a players
+           replay's camera on the entry's screen and Sight */
+        WIKIFRAMEOV ov;
+        ov.tick = s_frameView.tick;
+        ov.click_from = rv.click_from;
+        ov.players = rv.players ? &rv : NULL;
+        ov.screen_w = rv.players ? e->screen_w : 0;
+        ov.screen_h = rv.players ? e->screen_h : 0;
+        ov.gv = ov_gv;
         tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && (!s_repTry || w->try_world),
-                             human);
+                             human, &ov);
+    }
     if (!s_frameHave) {
         /* a seek began before any world was shown (a capture asked mid-seek): wiki.js says the same */
         if (!w->msg[0]) lstrcpynA(w->msg, "loading\xE2\x80\xA6", sizeof w->msg);
@@ -2463,8 +2491,7 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         if (h) {
             WIKISTAGEFIT ft;
             int Wg, Hg;
-            tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &ft);
-            tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+            frame_fit(h, &ft, &Wg, &Hg);
             fprintf(f, ",\"frame_fit\":{\"canvas\":[%d,%d],\"s\":%.17g,\"ox\":%.17g,\"oz\":%.17g,\"Wg\":%d,\"Hg\":%d}",
                     h->x0, h->y0, ft.s, ft.ox, ft.oz, Wg, Hg);
         }

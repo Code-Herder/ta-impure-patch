@@ -560,7 +560,7 @@ function drawReplay() {
   const gv = mode === 'past' && FR.gv ? { ...FR.gv, side: FR.lside || undefined } : FR.gv;
   // the world shown with the replay's overlays, at the tick it was copied at, and a players entry's camera and Sight
   const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld), human,
-    { tick: FR.tick, players: rv.players || null, screen: rv.players && e ? e.screen : null });
+    { tick: FR.tick, clickFrom: rv.clickFrom, players: rv.players || null, screen: rv.players && e ? e.screen : null });
   if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
   const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
   const fx = hudSnap(fit.ox + C.x0 * fit.s), fy = hudSnap(fit.oz + C.z0 * fit.s), hpx = Hg * fit.s / WikiFrame.HUD_H;

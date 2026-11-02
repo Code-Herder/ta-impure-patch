@@ -38,6 +38,15 @@
    the cursor the simulation's, shape k % 4 and age 7 k. A takeover entry's frame cycles the same
    three modes, as the human seat (k / 3) % the seats -- the view that seat's (tagpu_wikisim_view_as),
    its selection the player's in the player's mode -- and is the player's but in the watcher's.
+   Every frame view carries the replay's overlays at its tick (tagpu_wikiframe_view's `ov`, the
+   game view it was copied from, the click ring from 0).
+   A PLAYERS ENTRY'S DEMOS are played once more, without the units' scripts, through the replay
+   layer (tagpu_wikireplay, the viewer's script played), its demo named "<demo>/players": at demo
+   tick 0, every 30th and the last, when no seek is pending, the game's view copied and filtered
+   to the watcher's with what the replay adds -- the camera on the entry's screen, Sight, the
+   overlays at the click ring's start -- and drawn as a frame whose presentation, and the sidebar
+   art's phase, follow the game's tick; the line's "t" is the demo tick.
+   Each frame's line also carries "imgclip", the image's scissor (tagpu_wikistage_image).
 
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -121,7 +130,7 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
        none resolved, and the ground fallen back -- one digit an op; and the image's rect */
     {
         static const uint32_t all[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu }, none[2] = { 0, 0 };
-        int x0i, y0i, x1i, y1i, k;
+        int k;
         fputs("\"rng\":[", stdout);
         for (i = 0; i < o->n; i++) {
             printf("%s[%d,", i ? "," : "", o->range[i]);
@@ -138,8 +147,9 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
             for (i = 0; i < o->n; i++) putchar('0' + tagpu_wikistage_keep(o, i, 1, k != 2, k == 1 ? none : all));
             putchar('"');
         }
-        tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, v->frame, r, u, &x0i, &y0i, &x1i, &y1i);
-        printf("],\"img\":[%d,%d,%d,%d],\"grp\":[", x0i, y0i, x1i, y1i);
+        int ir[4], ic[4];
+        tagpu_wikistage_image(v, r, u, ir, ic);
+        printf("],\"img\":[%d,%d,%d,%d],\"imgclip\":[%d,%d,%d,%d],\"grp\":[", ir[0], ir[1], ir[2], ir[3], ic[0], ic[1], ic[2], ic[3]);
         for (i = 0; i < o->ngrp; i++) printf("%s%.9g", i ? "," : "", o->grp[i]);
         fputs("],", stdout);
     }
@@ -226,7 +236,7 @@ static void frame_of(int k, int live, double W, double H, const int16_t* btn, WI
                      const WIKISTAGEVIEW* v, WIKISTAGEFRAME* fr)
 {
     int Wg, Hg;
-    tagpu_wikiframe_size(v->w, v->h, v->has_side ? v->side.h : 0, &Wg, &Hg);
+    tagpu_wikiframe_view_size(v, &Wg, &Hg);
     memset(fr, 0, sizeof *fr);
     fr->bar_w = (int16_t)(k % 2 ? Wg - WIKIFRAME_SIDE_W : 0);
     fr->btn_side = btn[0];
@@ -241,6 +251,58 @@ static void frame_of(int k, int live, double W, double H, const int16_t* btn, WI
     fr->cursor_y = k % 2 ? NAN : 0.45 * H + (5 * k) % 40;
     fr->cursor_shape = (uint8_t)(live ? k % WIKI_CURSOR_N : WIKI_CURSOR_ARROW);
     fr->cursor_age = live ? 7 * k : 0;
+}
+
+/* THE SIDEBAR'S ART for a frame at game tick t (the header's phases) */
+static void side_phase(WIKISTAGEART* art, WIKISIDE* sd, int t)
+{
+    const int phase = (t / 30) % 3;
+    art->side_layout = sd ? &sd->layout : NULL;
+    art->side = sd && phase ? sd : NULL;
+    art->side_minimap = phase == 1;
+}
+
+/* A PLAYERS ENTRY'S DEMO through the replay layer (the header): its frames, "<demo>/players" */
+static int players(const WIKIENTRY* e, const WIKIDEMO* d, WIKISIDE* sd, HUDRECT r, double u, const int16_t* btn,
+                   const int16_t* emblem, WIKISTAGEART* art, WIKISTAGEVIEW* vf, WIKISTAGEOPS* o)
+{
+    const WIKISIMCTX ctx = { 0, NULL, 1, NULL, NULL, NULL };
+    char err[256], name[96];
+    WIKIREPLAY rep;
+    WIKIREPLAYVIEW rv;
+    snprintf(name, sizeof name, "%s/players", d->id);
+    if (!tagpu_wikireplay_init(&rep, e, d, WIKI_PLAY_DEMO, sd ? &sd->layout : NULL, &ctx, err, sizeof err)) {
+        fprintf(stderr, "wikistagetest: %s/%s: the replay refused it: %s\n", e->id, d->id, err);
+        return 0;
+    }
+    for (;;) {
+        tagpu_wikireplay_view(&rep, &rv);
+        if ((rep.tick % 30 == 0 || rv.done) && rv.target < 0 && rep.game) {
+            const WIKIVIEW* gv = tagpu_wikisim_view(rep.game);
+            const int g = rep.game->tick;
+            double cx, cy, cw, ch;
+            WIKISTAGEFRAME fr;
+            WIKIFRAMEOV ov;
+            tagpu_wikistage_copy(vf, gv, e, WIKISTAGE_LAYOUT_MOD);
+            vf->tick = g;
+            ov.tick = g;
+            ov.click_from = rv.click_from;
+            ov.players = rv.players ? &rv : NULL;
+            ov.screen_w = e->screen_w;
+            ov.screen_h = e->screen_h;
+            ov.gv = gv;
+            tagpu_wikiframe_view(vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, WIKIFRAME_WATCH, 0, 0, &ov);
+            side_phase(art, sd, g);
+            tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
+            frame_of(g / 30, 0, cw, ch, btn, art, emblem, vf, &fr);
+            tagpu_wikistage_build(vf, NULL, r, u, 1, &fr, art, o);
+            frame(o, vf, e->id, name, rep.tick, r, u);
+        }
+        if (rv.done) break;
+        tagpu_wikireplay_step(&rep);
+    }
+    tagpu_wikireplay_free(&rep);
+    return 1;
 }
 
 static int ops(char** a, const char* cob)
@@ -301,12 +363,9 @@ static int ops(char** a, const char* cob)
             }
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
-                    const int phase = (s.tick / 30) % 3;
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, WIKISTAGE_LAYOUT_MOD);
                     v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
-                    art.side_layout = sd ? &sd->layout : NULL;
-                    art.side = sd && phase ? sd : NULL;
-                    art.side_minimap = phase == 1;
+                    side_phase(&art, sd, s.tick);
                     art.emblem[0] = art.emblem[1] = -1;
                     tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, NULL, &art, &o);
                     frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
@@ -316,12 +375,16 @@ static int ops(char** a, const char* cob)
                         const int kf = s.tick / 30, mode = e->live || e->takeover ? kf % 3 : WIKIFRAME_WATCH;
                         const WIKIVIEW* g0 = tagpu_wikisim_view(&s);
                         const int ns = g0->game && g0->nseat > 0 ? g0->nseat : 1, human = e->takeover ? (kf / 3) % ns : 0;
+                        WIKIFRAMEOV ov;
                         vf = v;
                         if (human) {
                             tagpu_wikistage_copy(&vf, tagpu_wikisim_view_as(&s, human), e, WIKISTAGE_LAYOUT_MOD);
                             vf.tick = s.tick;
                         }
-                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, mode, kf % 2 == 0, human);
+                        memset(&ov, 0, sizeof ov);
+                        ov.tick = s.tick;
+                        ov.gv = human ? tagpu_wikisim_view_as(&s, human) : tagpu_wikisim_view(&s);
+                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, mode, kf % 2 == 0, human, &ov);
                         tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
                         frame_of(kf, e->live || (e->takeover && mode != WIKIFRAME_WATCH), cw, ch, btn, &art, emblem, &vf, &fr);
                         tagpu_wikistage_build(&vf, NULL, r, u, 1, &fr, &art, &o);
@@ -332,6 +395,7 @@ static int ops(char** a, const char* cob)
                 tagpu_wikisim_step(&s);
             }
             tagpu_wikisim_free(&s);
+            if (e->players && !cob && !players(e, &e->demo[j], sd, r, u, btn, emblem, &art, &vf, &o)) return 2;
         }
     tagpu_wikidata_free(d);
     free(sd);

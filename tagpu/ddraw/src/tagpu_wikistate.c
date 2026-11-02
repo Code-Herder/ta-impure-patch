@@ -66,6 +66,8 @@ static int          s_frameOn;          /* this frame's stage is a game frame wi
 static HUDSTATE     s_hst;              /* 35 KB                                                  */
 static HUDSTATE     s_pst;              /* a return glide's pressed HUD (tagpu_wikiframe_pressed) */
 static HUDOPS       s_hops;             /* 0.5 MB                                                 */
+static HUDSTATE     s_vst;              /* the HUD with the pointer on a row (hover_hud)          */
+static HUDOPS       s_vops;             /* its controls, 0.5 MB                                   */
 static int          s_hudOn;            /* s_hops holds this frame's stage HUD                    */
 static float        s_hpx;              /* its unit: the frame's height / 720 device pixels       */
 static int          s_hox, s_hoy;       /* the frame's corner on the attachment                   */
@@ -371,6 +373,21 @@ static double elapsed_ms(const LARGE_INTEGER* t0)
     return s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0->QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0;
 }
 
+/* THE HUD A ROW'S HOVER STRIP IS RESOLVED ON: the HUD `base` the trip pressed, built into `ops`,
+   laid out again into `out` with the pointer on seat `seat`'s row, which is the only HUD that lays
+   the row's strip out (tagpu_hudlay.c row). `ops` itself when the HUD draws no such row, or the
+   build fails: the key then resolves to the rest point, as one no box holds does. */
+static const HUDOPS* hover_hud(const HUDLAY* lay, const HUDSTATE* base, const HUDOPS* ops, int seat, HUDOPS* out)
+{
+    char err[160];
+    float mx, my;
+    if (!tagpu_wikiframe_row_point(ops, seat, s_hpx, &mx, &my)) return ops;
+    s_vst = *base;
+    s_vst.mx = mx;
+    s_vst.my = my;
+    return tagpu_hudlay_build(lay, &s_vst, out, err, sizeof err) ? out : ops;
+}
+
 /* THE STAGE HUD of a frame view `v` on the canvas of this frame's stage at `u`, from the bounded
    record (presentation spec 5.4): the fit, the frame's size and its HUD unit, the HUD's corner --
    the screen's corner, the canvas's and the frame's snapped one, all whole device pixels, so the
@@ -390,8 +407,8 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
     int Wg, Hg, simDrawn = 0;
     QueryPerformanceCounter(&t0);
     tagpu_wikistage_canvas(s_fr.stage, u, &X0, &Y0, &cw, &ch);
-    tagpu_wikistage_fit(v->w, v->h, v->has_side ? v->side.h : 0, 1, cw, ch, u, &fit);
-    tagpu_wikiframe_size(v->w, v->h, v->has_side ? v->side.h : 0, &Wg, &Hg);
+    tagpu_wikistage_fit_view(v, cw, ch, u, &fit);
+    tagpu_wikiframe_view_size(v, &Wg, &Hg);
     tagpu_wikiframe_dialog(&fit, Wg, Hg, &s_dlg);
     fx = tagpu_hud_snap((float)(fit.ox + fit.x0 * fit.s));
     fy = tagpu_hud_snap((float)(fit.oz + fit.z0 * fit.s));
@@ -408,6 +425,18 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
     sf->cursor_x = sf->cursor_y = NAN;
     sf->question = s_rec.question;
     sf->held = (uint8_t)(w->leave_held <= 2 ? w->leave_held : 0);
+    /* the replay's overlays in the HUD's seat colours, their arrows edged in the GUI's black
+       (palette entry gui[0], wiki.js guiBlack) */
+    {
+        int k;
+        sf->seat_rgb = 1;
+        for (k = 0; k < WIKI_SEATS; k++) sf->seat[k] = tagpu_wikiframe_seat_colour(side, k);
+        sf->edge = 0;
+        if (side && side->has_gui) {
+            const unsigned char* c = side->pal + 4 * side->gui[0];
+            sf->edge = (uint32_t)c[0] << 16 | (uint32_t)c[1] << 8 | c[2];
+        }
+    }
     if (art && art->lay) {
         double side_, top, right, config;
         tagpu_wikilay_button(art->lay, s_rec.live, &side_, &top, &right, &config);
@@ -417,7 +446,8 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
         sf->btn_config = (int16_t)config;
     }
     if (hart && s_hpx > 0) {
-        tagpu_wikiframe_hudstate(&s_rec, Wg, Hg, s_hpx, side, &s_hst);
+        const HUDGLOBALS* gl = tagpu_hudlay_globals(hart->lay);
+        tagpu_wikiframe_hudstate(&s_rec, Wg, Hg, s_hpx, side, gl, &s_hst);
         s_hst.mx = s_hst.my = -1;
         if (tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err)) {
             WIKIFRAMEREC pr;
@@ -428,19 +458,29 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
             /* a return glide leaves a control its press closed: it is resolved among the HUD's
                controls as drawn at that press, and the HUD is laid out again as drawn now */
             if (s_rec.cur.on && tagpu_wikiframe_pressed(&s_rec, &pr)) {
-                tagpu_wikiframe_hudstate(&pr, Wg, Hg, s_hpx, side, &s_pst);
+                tagpu_wikiframe_hudstate(&pr, Wg, Hg, s_hpx, side, gl, &s_pst);
                 s_pst.mx = s_pst.my = -1;
                 if (!tagpu_hudlay_build(hart->lay, &s_pst, &s_hops, err, sizeof err)) s_hudOn = 0;
                 rebuild = 1;
             }
             if (s_rec.cur.on && s_hudOn) {
-                /* the rest point is the map's centre; No is the question's, NaN while it is not drawn */
-                const double rx = (fit.ox + v->w * WIKI_CELL / 2.0 * fit.s - fx) / s_hpx;
-                const double ry = (fit.oz + v->h * WIKI_CELL / 2.0 * fit.s - fy) / s_hpx;
+                /* the rest point is the map's centre, a players frame's its viewport's (frame.js
+                   restOf); No is the question's, NaN while it is not drawn */
+                const double rx = (fit.ox + (v->screen ? v->vp_w : v->w * WIKI_CELL) / 2.0 * fit.s - fx) / s_hpx;
+                const double ry = (fit.oz + (v->screen ? v->vp_h : v->h * WIKI_CELL) / 2.0 * fit.s - fy) / s_hpx;
                 const double nx = s_rec.question ? (s_dlg.no.x + s_dlg.no.w / 2.0 - fx) / s_hpx : NAN;
                 const double ny = s_rec.question ? (s_dlg.no.y + s_dlg.no.h / 2.0 - fy) / s_hpx : NAN;
-                tagpu_wikiframe_point(&s_rec, &s_hops, s_hpx, tagpu_hudlay_globals(hart->lay)->track_ends, rx, ry, nx, ny,
-                                      gx, gy, &x, &y);
+                /* a row's hover strip is resolved on the HUD with the pointer on its row: one
+                   more build for each end that names one, the second into s_hops, which neither
+                   end then reads and the build below lays out again */
+                const HUDSTATE* base = rebuild ? &s_pst : &s_hst;
+                const int fs = tagpu_wikiframe_hover_seat(s_rec.cur.from), ts = tagpu_wikiframe_hover_seat(s_rec.cur.to);
+                const HUDOPS* from = fs >= 0 ? hover_hud(hart->lay, base, &s_hops, fs, &s_vops) : &s_hops;
+                const HUDOPS* to = ts < 0 ? &s_hops : ts == fs ? from
+                                 : fs < 0 ? hover_hud(hart->lay, base, &s_hops, ts, &s_vops)
+                                 : hover_hud(hart->lay, base, &s_hops, ts, &s_hops);
+                tagpu_wikiframe_point(&s_rec, from, to, s_hpx, gl->track_ends, rx, ry, nx, ny, gx, gy, &x, &y);
+                rebuild |= fs >= 0 || ts >= 0;
                 s_hst.mx = (float)x;
                 s_hst.my = (float)y;
                 sf->cursor_x = fx + x * s_hpx;
@@ -556,6 +596,13 @@ static void view_bound(WIKISTAGEVIEW* v)
     if (v->side.index < -1 || v->side.index >= WIKI_SIDE_SIDES) v->side.index = -1;
     if (v->side.under < -1 || v->side.under >= v->nunit) v->side.under = -1;
     if (v->locked != WIKI_LOCK_RECLAIM && (v->locked < -1 || v->locked >= v->ntype)) v->locked = -1;
+    /* what a replay adds: the eye inside the map (tagpu_wikistage_eye), the overlays and the
+       pass's dots to their arrays; the build bounds each seat, age and block it reads */
+    tagpu_wikistage_eye(v);
+    if (v->ncur > WIKI_SEATS) v->ncur = WIKI_SEATS;
+    if (v->nclick > WIKI_CLICKS) v->nclick = WIKI_CLICKS;
+    v->mini = (uint8_t)(v->mini == 1);
+    HOLD(v->ndot, WIKISTAGE_UNITS);
 #undef HOLD
     for (i = 0; i < v->nunit; i++) v->unit[i].label[WIKISTAGE_LABEL - 1] = 0;
     for (i = 0; i < WIKI_MAX_DEFS; i++) v->type[i][WIKISTAGE_LABEL - 1] = 0;

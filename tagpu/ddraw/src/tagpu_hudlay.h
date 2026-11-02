@@ -390,4 +390,16 @@ static inline void tagpu_hud_ring(const HUDOP* op, float px, float X[4], float Y
    `headed`). The column's headers, the teams chip and the stats window's team split follow it. */
 int tagpu_hudlay_headed(const HUDSTATE* st);
 
+/* THE STATS WINDOW'S GROUPS of a state whose seats, markers, teams, stats.team and stats.npt are
+   set (index.html `state()` makes the mockup's alike; the in-game wiki's frame.js statGroups is the
+   twin): with stats.team clear, a group a seat, in its colour, with the time of its first
+   commander-death marker (-1 none); with it set, a group a team, "Team N", in the chart's team
+   colours `team_rgb` (`nteam_rgb` of them; NULL: grey), its samples its seats' summed in f32. A
+   sample is data from the recording, so one that is not a finite number below 1e30 in magnitude is
+   taken as 0. `v` holds `nrow` rows of samples `stride` floats apart, row k seat k's, a seat past
+   them read at row seat % nrow; NULL with stats.npt 0. stats.npt is held to HUD_MAXPT and `stride`.
+   The game's stats (tagpu_hudstate.c) and the in-game wiki's stage HUD (tagpu_wikiframe.c) call
+   it, so the two windows group alike by construction. Pure. */
+void tagpu_hudlay_stat_groups(HUDSTATE* st, const float* v, int nrow, int stride, const uint32_t* team_rgb, int nteam_rgb);
+
 #endif

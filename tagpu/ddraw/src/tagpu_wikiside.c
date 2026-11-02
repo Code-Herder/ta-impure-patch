@@ -74,24 +74,45 @@ static int nearest(const unsigned char* pal, int r, int g, int b)
     return best;
 }
 
+/* a 32-unit cell's fog: the map's at the cell's first 16-unit cell, or under a players frame's
+   Sight the pass's (`mini`), seen where its block is unlit. 2r < mh and 2c < mw since r < rows
+   and c < cols, and the index is bounded against the copy's map besides; the pass's grid is
+   bounded against its bits */
+static int fog_at(const WIKISTAGEVIEW* v, int c, int r)
+{
+    const int fi = 2 * r * v->w + 2 * c, bi = r * v->mini_gw + c;
+    if (v->mini)
+        return c < v->mini_gw && r < v->mini_gh && bi < WIKISTAGE_FOG * 8 && (v->mini_lit[bi >> 3] >> (bi & 7) & 1) ? 0 : 1;
+    return fi >= 0 && fi < v->w * v->h ? v->fog[fi] : 0;
+}
+
+/* a dot's radlogo frame at unit point (tx, tz) of owner `owner`: an owner past the frames has none */
+static void dot(const WIKISIDE* art, WIKISIDECOL* o, const WIKISIDEMAP* m, int W, int H, int tx, int tz, int owner)
+{
+    if (owner < art->nradlogo && owner < WIKISIDE_DOTS) {
+        const WIKISIDEFRAME* f = &art->radlogo[owner];
+        int px, py;
+        tagpu_wikiside_dot(tx, tz, m, W, H, &px, &py);
+        blit(art, o, f, m->offx + px - f->hx, m->offy + py - f->hy, art->dot_key, m->offx, m->offy, m->offx + m->w,
+             m->offy + m->h);
+    }
+}
+
 /* side.js's minimap: the base under the fog, the dots, the camera box */
 static int minimap(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned char* base, int nbase, WIKISIDECOL* o)
 {
     WIKISIDEMAP m;
     const int W = v->w * WIKI_CELL, H = v->h * WIKI_CELL, mw = v->w, mh = v->h, cols = mw / 2, rows = mh / 2;
     const int un = index8(art->unexplored), bx = index8(art->box);
-    int x, y, i, x0, y0, x1, y1;
+    int x, y, i, x0, y0, x1, y1, cb[4];
     if (!base || mw <= 0 || mh <= 0) return 0;
     tagpu_wikiside_geometry(W, H, &m);
     /* THE BASE IS DATA UNTIL BOUNDED: exactly the picture's pixels, as side.js takes it */
     if (nbase != m.w * m.h) return 0;
-    /* 0x466C20: each picture pixel takes the fog of its 32-unit cell, read at the cell's first
-       16-unit cell; 2r < mh and 2c < mw since r < rows and c < cols, and the index is bounded
-       against the copy's map besides */
+    /* 0x466C20: each picture pixel takes the fog of its 32-unit cell */
     for (y = 0; y < m.h; y++)
         for (x = 0; x < m.w; x++) {
-            const int c = x * cols / m.w, r = y * rows / m.h, fi = 2 * r * mw + 2 * c;
-            const int f = fi >= 0 && fi < mw * mh ? v->fog[fi] : 0, b = base[y * m.w + x];
+            const int f = fog_at(v, x * cols / m.w, y * rows / m.h), b = base[y * m.w + x];
             put(o, m.offx + x, m.offy + y, f == 2 ? un : f == 1 ? art->seen[b] : b);
         }
     x0 = m.offx;
@@ -99,16 +120,11 @@ static int minimap(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned c
     x1 = m.offx + m.w;
     y1 = m.offy + m.h;
     /* radlogo's frame is the owner's colour (PlayerInfo+0x96), as the 3D look's team faces take
-       it; an owner past the frames has no dot */
-    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) {
-        const WIKISTAGEUNIT* u = &v->unit[i];
-        if (u->owner < art->nradlogo && u->owner < WIKISIDE_DOTS) {
-            const WIKISIDEFRAME* f = &art->radlogo[u->owner];
-            int px, py;
-            tagpu_wikiside_dot(u->tx, u->tz, &m, W, H, &px, &py);
-            blit(art, o, f, m.offx + px - f->hx, m.offy + py - f->hy, art->dot_key, x0, y0, x1, y1);
-        }
-    }
+       it: every unit has a dot, or under Sight the pass's dots */
+    if (v->mini)
+        for (i = 0; i < v->ndot && i < WIKISTAGE_UNITS; i++) dot(art, o, &m, W, H, v->dot[i].tx, v->dot[i].tz, v->dot[i].owner);
+    else
+        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++) dot(art, o, &m, W, H, v->unit[i].tx, v->unit[i].tz, v->unit[i].owner);
     /* the unit under the pointer gets radlogohigh as well (0x466DC0, +0xA8 == main+0x2CBA) */
     if (art->has_high && v->side.under >= 0 && v->side.under < v->nunit && v->side.under < WIKISTAGE_UNITS) {
         const WIKISTAGEUNIT* u = &v->unit[v->side.under];
@@ -116,15 +132,20 @@ static int minimap(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned c
         tagpu_wikiside_dot(u->tx, u->tz, &m, W, H, &px, &py);
         blit(art, o, &art->high, m.offx + px - art->high.hx, m.offy + py - art->high.hy, art->dot_key, x0, y0, x1, y1);
     }
-    /* 0x466B70: the camera box. The stage shows the whole map, so the box is the picture's border */
-    for (x = x0; x < x1; x++) {
-        put(o, x, y0, bx);
-        put(o, x, y1 - 1, bx);
+    /* 0x466B70: the camera box (tagpu_wikiside_camera_box), inside the picture: the picture's
+       border while the stage shows the whole map */
+    if (v->frame && v->screen) tagpu_wikiside_camera_box(&m, W, H, v->eye_x, v->eye_z, v->vp_w, v->vp_h, cb);
+    else tagpu_wikiside_camera_box(&m, W, H, 0, 0, W, H, cb);
+#define PUT(x_, y_) do { if ((x_) >= x0 && (x_) < x1 && (y_) >= y0 && (y_) < y1) put(o, (x_), (y_), bx); } while (0)
+    for (x = cb[0]; x <= cb[2]; x++) {
+        PUT(x, cb[1]);
+        PUT(x, cb[3]);
     }
-    for (y = y0; y < y1; y++) {
-        put(o, x0, y, bx);
-        put(o, x1 - 1, y, bx);
+    for (y = cb[1]; y <= cb[3]; y++) {
+        PUT(cb[0], y);
+        PUT(cb[2], y);
     }
+#undef PUT
     return 1;
 }
 

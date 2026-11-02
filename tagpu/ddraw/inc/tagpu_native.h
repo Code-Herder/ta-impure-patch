@@ -71,9 +71,10 @@ int tagpu_native_scissor_on(void);
 
    THE SCISSOR is a second rect the composite stays inside, beside the block's
    own, for a producer whose block holds more than it shows. The game's world
-   sets none -- its block is its viewport -- and neither does the wiki's stage
-   while it shows its whole map (tagpu_wikiworld.c); a zeroed target has none,
-   so a producer that does not set the field draws exactly as without it.
+   sets none -- its block is its viewport; the wiki's stage sets a frame's
+   viewport, which a players frame's map, standing at its eye, is larger than
+   (tagpu_wikiworld.c); a zeroed target has none, so a producer that does not
+   set the field draws exactly as without it.
 
    Render thread only. */
 typedef struct {

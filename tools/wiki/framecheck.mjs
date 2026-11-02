@@ -31,6 +31,13 @@
    the strip's [first, G]. A takeover's records carry the Take over block, its live records the seat taken over's
    view, numbers, cursor and top bar's side, and its cursor resolves the indexed keys (takeas:<seat>, lane:<k>,
    export:<k>, delete:<k>) among C's boxes.
+   A PLAYERS ENTRY's records (players.json, and the players fixture and scratch entry of players-fixture.mjs played
+   beside the tree's) carry the players block -- Sight, Follow, the switches, the folded rows, the stats window, each
+   seat's team, recorded camera and samples of the window's measure -- and under Sight the viewed seat's top bar; its
+   HUD state the Players set and the stats window with its groups, from the HUD layout's place and team colours; its
+   frame the entry's screen's, the rest point the viewport's centre; and its cursor resolves the Players set's keys
+   (jump:<seat>, sight:<seat>, follow:<seat>, fold:<team>, chip:<name>), a row's hover strip among the boxes C lays
+   out with the pointer on that row.
    The filtered view (frame.js view against tagpu_wikiframe_view) is stagecheck.mjs's frame mode, which draws it.
 
    THE TABLES. glide() against tagpu_wikiframe_glide to 1e-12; the press machine on PRESSES' event sequences; the
@@ -54,10 +61,12 @@
    - Wg - 75 > 129 + the widest PANELTOP of the packs present, for every frame:game demo's map: the wiki emblem
      never covers a readout (the presentation's section 3.4);
    - every viewer `hud` key and every track tick of a trip resolves in C's laid-out HUD: the key has a control box
-     and the tick lies on the track. The boxes are laid out in units from the state alone (tagpu_hudlay.c reads the
+     and the tick lies on the track -- but a control the HUD draws disabled, which takes no press and so has no box:
+     the teams chip while the teams are not told apart, which the players scratch entry presses. The boxes are laid out in units from the state alone (tagpu_hudlay.c reads the
      state's px only for the hint's hit test), so a key that resolves at the one fit checked resolves on every
      screen's theatre stage;
-   - the HUD's chart never appears: no HOP_CHART in any build. */
+   - the HUD's chart appears only in a players record with the stats window open, or in the HUD a trip to or from its
+     close is resolved on (frame.js pressed): no other build has a HOP_CHART. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -90,7 +99,9 @@ const FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-f
 const CASTINGS = FIXTURE.castings, RIVALS = FIXTURE.rivals;
 const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
-  .filter(([, e]) => e.frame === 'game').concat([['takeover-fixture', takeoverFixture()]]);
+  .filter(([, e]) => e.frame === 'game').concat([['takeover-fixture', takeoverFixture()], ['players-fixture', playersFixture()],
+    ['players-scratch', playersScratch()]]);
+const HUDLAYOUT = JSON.parse(fs.readFileSync(path.join(HUDDIR, 'layout.json'), 'utf8'));
 
 /* TRY: Try it yourself's pointer events, [demo tick, op, src (1 the HUD, 2 the question), key, right, T], each made
    after that tick's frame: play pressed and released on it, speed, a press on fwd released on rew (nothing), the
@@ -228,27 +239,32 @@ function chosen(rv) {
   return rv.clock === c.at || rv.clock === c.at + WikiReplay.HUD_DOWN || rv.clock === rel;
 }
 
-/* one frame's JS answers, from the replay `R` in its layout and the press machine's held control (Try it); the world
-   the human seat's view, as wiki.js takes it */
-function frameJs(R, layout, tryIt, held) {
+/* one frame's JS answers, from the replay `R` of `entry`'s `demo` in its layout and the press machine's held control
+   (Try it); the world the human seat's view, as wiki.js takes it: a players replay's record with its seats and
+   samples, its frame the entry's screen's and its rest point the viewport's centre (frame.js restOf), its HUD state
+   from the HUD layout */
+function frameJs(R, layout, tryIt, held, entry, demo) {
   const rv = R.view(), human = rv.live ? rv.live.human : 0, gv = R.game ? R.game.view(human) : null;
-  const rec = WikiFrame.record(rv, gv, 0, tryIt, held, WikiFrame.topSide(rv, layout, 0));
+  const pl = rv.players ? { seats: WikiFrame.plSeats(entry, demo), stat: R.stat } : null;
+  const rec = WikiFrame.record(rv, gv, 0, tryIt, held, WikiFrame.topSide(rv, layout, 0), pl);
   const sd = WikiFrame.idleSide(layout, 0);
-  const M = gv ? gv.map : { w: 1, h: 1 }, cell = +M.cell || 16;
-  const { Wg, Hg } = WikiFrame.size(M, sd ? sd.h : 0);
-  const fit = WikiStage.fit(WikiStage.content({ map: M, frame: 1, side: sd }), FIT.W, FIT.H, FIT.U);
+  const M = gv ? gv.map : { w: 1, h: 1 }, screen = rv.players ? entry.screen : null;
+  const sz = WikiFrame.size(M, sd ? sd.h : 0, screen), { Wg, Hg } = sz;
+  const C = screen ? { x0: -128, z0: -32, w: Wg, h: Hg } : WikiStage.content({ map: M, frame: 1, side: sd });
+  const fit = WikiStage.fit(C, FIT.W, FIT.H, FIT.U);
   const snap = v => Math.floor(v + 0.5 + 1 / 64);
   const fx = snap(fit.ox - 128 * fit.s), fy = snap(fit.oz - 32 * fit.s), px = Math.fround(Hg * fit.s / WikiFrame.HUD_H);
   const dlg = WikiFrame.dialog(fit, Wg, Hg);
-  const rest = { x: (fit.ox + (+M.w || 1) * cell / 2 * fit.s - fx) / px, y: (fit.oz + (+M.h || 1) * cell / 2 * fit.s - fy) / px };
+  const rp = WikiFrame.restOf(screen ? { map: M, eye: { w: sz.vw, h: sz.vh } } : { map: M });
+  const rest = { x: (fit.ox + rp.x * fit.s - fx) / px, y: (fit.oz + rp.z * fit.s - fy) / px };
   const no = { x: (dlg.no.x + dlg.no.w / 2 - fx) / px, y: (dlg.no.y + dlg.no.h / 2 - fy) / px };
   const game = WikiFrame.gamePoint(rec, fit, fx, fy, px);
   // the game's HUD draws the record's held control down (tagpu_wikiframe_hudstate); the page presses it on the DOM
-  const st = { ...WikiFrame.hudState(rec, Wg, Hg, null), held: rec.held };
+  const st = { ...WikiFrame.hudState(rec, Wg, Hg, null, HUDLAYOUT), held: rec.held };
   return { t: rv.tick, rec, st, px, rest, no, game, Wg, Hg };
 }
 
-let failed = 0, frames = 0, demos = 0, tables = 0;
+let failed = 0, frames = 0, demos = 0, tables = 0, nplayers = 0, nsight = 0, nstats = 0, nhover = 0;
 const fail = msg => { failed++; console.log(`DIFFER ${msg}`); };
 
 /* ---- the idle side ---- */
@@ -320,88 +336,6 @@ function claimsJs() {
       }
     }
   return widest;
-}
-
-/* ---- the players frames, JavaScript alone: frame.js and stage.js over a players replay ----
-   THE PLAYERS FRAMES (players-spec.md section 7). Until tagpu_wikiframe.c and tagpu_wikistage.c carry the players
-   presentation, the players fixture and scratch entry (players-fixture.mjs) are played here on the JavaScript side
-   alone, each demo through replay.js with the fixture layout's sight table, at the chosen ticks, through the whole
-   frame: record() with the players block, hudState() with the HUD layout, view() with the eye, Sight and the overlays,
-   and stage.js's draw into a context that draws nothing. Each frame must hold: the record's block bounded as
-   tagpu_wikiframe_bound will bound it (Sight and Follow -1 or a seat, the measure one of the seven, the samples within
-   STAT_PTS, a series a seat of npt samples) and the top bar the viewed seat's side under Sight; the HUD's teams the
-   scene's, its stats window's groups a seat or a headed team each, of npt samples; the eye inside the map less the
-   viewport; under Sight the map's fog a cell each, the units drawn seat s's or on a lit block, the minimap's dots seat
-   s's or the pass's contacts; every overlay inside the switches; and the draw returning the frame's fit. */
-const NOOP = () => {};
-const nullContext = () => new Proxy({ canvas: { width: 1, height: 1 } }, {
-  get(o, k) { if (k in o) return o[k]; return k === 'measureText' ? () => ({ width: 0 }) : NOOP; },
-  set(o, k, v) { o[k] = v; return true; },
-});
-function playersJs() {
-  const layout = SIDE('fixture'), hud = JSON.parse(fs.readFileSync(path.join(HUDDIR, 'layout.json'), 'utf8'));
-  const ctx = { side: 0, casting: null, iface: 1, cob: null, snd: null, rival: null };
-  const seen = { frames: 0, replays: 0, moved: 0, sight: 0, dots: 0, contacts: 0, cur: 0, click: 0, osel: 0, stats: 0, team: 0 };
-  for (const entry of [playersFixture(), playersScratch()])
-    for (const demo of entry.demos) {
-      const at = `players ${entry.id}/${demo.id}`;
-      let R;
-      try { R = WikiReplay.play(entry, demo, layout, ctx); } catch (e) { fail(`${at}: replay.js refused it: ${e.message}`); continue; }
-      const pl = { seats: WikiFrame.plSeats(entry, demo), stat: R.stat };
-      seen.replays++;
-      for (;;) {
-        const rv = R.view();
-        // a seek's ticks are never shown: the page holds the world drawn before it
-        if (chosen(rv) && R.game && rv.game.target < 0) {
-          const where = `${at} at demo tick ${rv.tick}`, P = rv.players, gv = R.game.view(), seats = gv.game.seats.length;
-          const rec = WikiFrame.record(rv, gv, 0, false, null, WikiFrame.topSide(rv, layout, 0), pl);
-          const fv = WikiFrame.view(gv, layout, 0, 'watch', false, 0, { tick: R.game.tick, players: P, screen: entry.screen });
-          const C = WikiStage.content(fv), st = WikiFrame.hudState(rec, C.w, C.h, null, hud);
-          const sz = WikiFrame.size(gv.map, fv.side ? fv.side.h : 0, entry.screen);
-          const bad = [];
-          if (!rec.pl || !(rec.sight >= -1 && rec.sight < seats) || !(rec.follow >= -1 && rec.follow < seats)) bad.push('Sight or Follow');
-          if (!(rec.stat_measure >= 0 && rec.stat_measure < WikiReplay.MEASURES.length) || !(rec.npt <= WikiReplay.STAT_PTS)) bad.push('the stats state');
-          if (rec.series.length !== seats || rec.series.some(v => v.length !== rec.npt)) bad.push('the series');
-          if (rec.top_side !== (rec.sight >= 0 ? WikiFrame.seatSide(layout, 0, rec.sight) : 0)) bad.push('the top bar\'s side');
-          if (show(st.teams) !== show(WikiFrame.teamsOf(pl.seats.map(z => z.team)))) bad.push('the teams');
-          if (st.stats.open && st.stats.groups.some(g => g.v.length !== rec.npt)) bad.push('the groups\' samples');
-          if (C.w !== sz.Wg || C.h !== sz.Hg || fv.eye.w !== sz.vw || fv.eye.h !== sz.vh) bad.push('the frame\'s size');
-          if (!(fv.eye.x >= 0 && fv.eye.x <= sz.mw - sz.vw && fv.eye.z >= 0 && fv.eye.z <= sz.mh - sz.vh)) bad.push(`the eye ${show(fv.eye)}`);
-          if (P.sight >= 0) {
-            const lit = WikiSim.sightLit(gv, layout.sight, P.sight, R.game.tick), gw = gv.map.w >> 1;
-            const on = (x, z) => lit[(Math.floor(z) >> 5) * gw + (Math.floor(x) >> 5)] > 0;
-            if (fv.map.fog.length !== gv.map.w * gv.map.h) bad.push('the fog');
-            if (fv.units.some(u => u.owner !== P.sight && ![-1, 1].some(a => [-1, 1].some(b => on(u.x + a * 8 * u.fx, u.z + b * 8 * u.fz)))))
-              bad.push('a unit on no lit block');
-            const ids = new Set(P.pass.contacts);
-            if (!fv.mini || fv.mini.dots.length !== gv.units.filter(u => u.owner === P.sight || ids.has(u.id)).length) bad.push('the dots');
-            seen.sight++;
-            if (fv.mini && fv.mini.dots.some(d => d.owner !== P.sight)) seen.contacts++;
-            if (fv.mini && fv.mini.dots.length) seen.dots++;
-          } else if (fv.mini) bad.push('a minimap of the pass under the full map');
-          if ((!(P.tog & WikiFrame.TOG.cursors) && fv.ocur.length) || (!(P.tog & WikiFrame.TOG.clicks) && fv.oclick.length)
-            || (!(P.tog & WikiFrame.TOG.selections) && fv.units.some(u => u.osel))) bad.push('an overlay switched off');
-          if (fv.oclick.some(c => c.age < 0 || c.age >= WikiFrame.CLICK_SHOW)) bad.push('a click\'s age');
-          const fit = WikiStage.draw(nullContext(), fv, { W: FIT.W, H: FIT.H, U: FIT.U, frame: { button: null } });
-          if (!fit || fit.cw !== C.w || fit.ch !== C.h) bad.push('the draw');
-          if (bad.length) fail(`${where}: ${bad.join(', ')}`);
-          seen.frames++;
-          if (fv.eye.x || fv.eye.z) seen.moved++;
-          if (fv.ocur.length) seen.cur++;
-          if (fv.oclick.length) seen.click++;
-          if (fv.units.some(u => u.osel)) seen.osel++;
-          if (st.stats.open) { seen.stats++; if (st.stats.split === 'team') seen.team++; }
-        }
-        if (rv.done) break;
-        R.step();
-      }
-      R.free();
-    }
-  console.log(`players (JS alone): ${seen.frames} frames over ${seen.replays} replays -- the eye off (0, 0) in ${seen.moved}, Sight in ${seen.sight} `
-    + `(minimap dots in ${seen.dots}, a contact among them in ${seen.contacts}), cursors in ${seen.cur}, clicks in ${seen.click}, `
-    + `selections in ${seen.osel}, the stats window in ${seen.stats} (by team in ${seen.team})`);
-  for (const [k, what] of [['moved', 'the camera moved'], ['sight', 'Sight'], ['contacts', 'a contact dot'], ['cur', 'a cursor'], ['osel', 'a selection'], ['stats', 'the stats window']])
-    if (!seen[k]) fail(`players (JS alone): no frame shows ${what}`);
 }
 
 /* ---- the tables ---- */
@@ -479,7 +413,7 @@ function framesCheck(exe, tmp) {
           // the lanes the tick's frame draws, which the presses after it are made on
           let ids = [];
           if (presses || chosen(rv)) {
-            const f = frameJs(R, layout, !!presses, P.held);
+            const f = frameJs(R, layout, !!presses, P.held, entry, demo);
             js.push({ e: id, d: name, ...f });
             ids = WikiFrame.lanes(f.rec);
           }
@@ -527,10 +461,19 @@ function framesCheck(exe, tmp) {
         }
         // the claims on C's laid-out HUD
         const cur = j.rec.cur;
-        if (c.unresolved) fail(`claim ${where} (${named}): the key ${c.unresolved} has no control in C's HUD`);
+        const headed = j.st.teams.length > 1 && j.st.teams.some(m => m.length > 1);
+        if (c.unresolved && !(c.unresolved === 'chip:team' && !headed))
+          fail(`claim ${where} (${named}): the key ${c.unresolved} has no control in C's HUD`);
         if (cur.on && cur.to === 'track' && !(cur.to_v >= 0 && cur.to_v <= j.rec.end)) fail(`claim ${where} (${named}): the track tick ${cur.to_v} is off the track`);
         if (cur.on && j.rec.live && (cur.from === '@game' || cur.to === '@game') && !j.game) fail(`claim ${where} (${named}): a glide at seat 0's cursor with no point for it`);
-        if (c.chart) fail(`claim ${where} (${named}): the stage HUD's build has a chart`);
+        const statHud = j.rec.pl && (j.rec.stat_open || (cur.on && (cur.to === 'close' || cur.from === 'close')));
+        if (c.chart && !statHud) fail(`claim ${where} (${named}): the stage HUD's build has a chart`);
+        if (j.rec.pl) {
+          nplayers++;
+          if (j.rec.sight >= 0) nsight++;
+          if (j.rec.stat_open) nstats++;
+          if (cur.on && /^(jump|sight|follow):/.test(cur.to)) nhover++;
+        }
         if (!(c.st.W >= 960)) fail(`claim ${where} (${named}): the HUD is ${c.st.W} units wide, under 960`);
       }
       frames += n;
@@ -556,13 +499,13 @@ try {
   }
   if (SHARD === 1) {
     const widest = claimsJs();
-    playersJs();
     idleCheck(exe, tmp);
     if (exe) tablesCheck(exe, tmp);
     console.log(`tables: ${tables} checks (the widest PANELTOP of ${PACKLIST.length} packs ${widest})`);
   }
   if (exe) framesCheck(exe, tmp);
   code = failed ? 1 : 0;
+  if (exe) console.log(`players: ${nplayers} frames carry the players block (Sight in ${nsight}, the stats window open in ${nstats}, a glide to a row's hover strip in ${nhover})`);
   console.log(failed ? `framecheck: ${failed} failed` : `framecheck: all equal -- ${frames} frames over ${demos} replays${SHARDS > 1 ? ` (shard ${SHARD_ARG})` : ''}, ${tables} table checks`);
 } catch (e) {
   if (!(e instanceof CannotRun)) throw e;

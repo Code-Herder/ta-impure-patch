@@ -994,6 +994,7 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("caption", 0); if (v->caption) str(v->caption); else fputs("null", stdout);
     key("failed", 0); fputs(v->failed ? "true" : "false", stdout);
     key("ignored", 0); printf("%d", v->ignored);
+    key("clickFrom", 0); printf("%d", v->click_from);
     key("game", 0);
     printf("{\"tick\":%d,\"end\":%d,\"playhead\":%d,\"paused\":%s,\"speed\":%d,\"acc\":%d,\"target\":%d,\"gen\":%d,\"quiet\":%d}",
            v->game_tick, v->end, v->playhead, v->paused ? "true" : "false", v->speed, v->acc, v->target, v->gen, v->quiet);
