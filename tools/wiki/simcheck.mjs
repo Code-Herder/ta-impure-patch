@@ -2441,7 +2441,7 @@ const PLAYERS_CLAIMS = {
       return k >= 0 && WikiSim.sightContacts(f.w, L, 1)[k] === 1 && unseen(f.w, L, f.w.units[k]);
     };
     if (!passes.some(radarOnly)) {
-      const radars = bram.map(t => `${t.name} radar ${Math.max(t.radarDistance, t.sonarDistance)}${t.activates ? '' : ' (not activated)'}, sight ${t.sightDistance}`).join('; ');
+      const radars = bram.map(t => `${t.name} radar ${t.radarDistance}, sonar ${t.sonarDistance}${t.activates ? '' : ' (not activated)'}, sight ${t.sightDistance}`).join('; ');
       skip(CONTACT, `at no pass after the death vision does the world make c0 a contact of Bram's on no lit block (${radars})`);
       return;
     }
