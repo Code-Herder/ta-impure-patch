@@ -56,6 +56,24 @@ any expiry is changed. At GameTime zero the operation requires no existing tempo
 since the engine's strict-less-than expiry cannot remove one then. None of this changes the
 camera, controlled seat, playback clock or recording file.
 
+The resource bar follows the new seat: the rates from the next frame; the stored values ease
+toward the seat's over the following frames (an eighth of the difference a frame, at least 1,
+`0x468E7B..0x468F12`). The engine re-reads the bar's `+income −expense` rates only while the
+viewed record's DisplayTimer `+0xF8` is behind GameTime, so a seat viewed earlier in the same game
+second, or any seat after a seek, would keep the previous record's rates — for up to a game second
+running, and for as long as the game is paused ([render.md](../engine/render.md), *The memo's
+layout*). Right after it writes the viewed byte, `sight_change` lowers the new record's
+DisplayTimer, when it is at or above GameTime, by whole steps of 30 to the last value of its phase
+below GameTime (`bar_rates_due`), in the frame visit before the in-play draw call, so the draw that
+follows re-reads that record's rates once and leaves the timer where the engine's own steps would;
+at GameTime 0 it writes nothing, and the first tick's draw re-reads as for any record. The field is
+display state: only that draw and the saver read it, and the recording drops it. A seek leaves
+every record's timer at GameTime, so after a paused seek the rates stay the pre-seek ones until
+the game runs, and so after a takeover that leaves the game paused and after a return to now,
+which change the view around that write: the engine's rule, left for a later landing by the
+owner's choice of 2026-11-01 ([render.md](../engine/render.md), *What the Sight store does not
+cover*).
+
 ## Verification
 
 The checks below were made through the player cards, which called the same `tagpu_replay.c`
@@ -80,6 +98,9 @@ recording ended at iteration 3990, both still worked while the host clock contin
 the model kept the final recorded resources, three defeated seats and one surviving unit without
 a commander.
 
-The harness's W lane clicks the replay HUD's Sight on the first row twice while paused — that
-row's seat, then the full map — checking the viewed seat, the clock and the camera
-([completeness](demo-recorder-completeness.md), *The player's way in (W)*).
+The harness's W lane clicks the replay HUD's Sight on the first row four times while paused,
+after its seek — that row's seat, the full map, the seat and the full map again — checking the
+viewed seat, the clock and the camera, and that a frame drew the viewed record's bar (the memo's
+byte 0 its `+0x146`) with the record's four rates in the memo bit for bit; the bar's row could not
+run when the seat's rates equal the full map's ([completeness](demo-recorder-completeness.md),
+*The player's way in (W)*).

@@ -778,8 +778,12 @@ and on the loader thread at the allocator ownership boundary and the level init'
   radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12), then, when the host views the
   recording's viewed record, bits 8–10 from the primary stream's images; the records' expiry `0x482130`
   once; every seat's `+0xF0` from the image
-  and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
-  the chat lines `0x463C80`; and every seat's `+0x18`;
+  and V's to the next multiple of 30, every record's `+0xF8` = GameTime (so a paused seek's
+  resource bar keeps the pre-seek rates until the game runs, and so do a takeover that leaves the
+  game paused and a return to now, which change the view around this write: the engine's rule,
+  left for a later landing by the owner's choice of 2026-11-01; [render.md](../engine/render.md),
+  *What the Sight store does not cover*), the notices `0x47EE30` and the chat lines `0x463C80`; and
+  every seat's `+0x18`;
 - at a takeover, inside the seek and in its order: viewed = P and the difficulty `main+0x37EEE`
   (the options put the player's back at the level's end); each recorded seat's type through
   `0x463C60` (P 1, the others 2), before R7's creates and again after the players' images; each
@@ -841,9 +845,13 @@ regions (§2.15).
 playback level only: `main+0x38A51` bit 0 (the pause, read-modify-written; Take over's click sets
 it and the takeover's end clears it, `tk_run`); `main+0x38A4B` and
 `+0x38A4D` (the speed's ceiling and live value, the presets 5..80 only, the player's put back at
-the teardown and exchanged around every settings save); `main+0x2A43` and the temporary sight
-records for Sight, and the camera for Jump and Follow, as [the replay's players and
-Sight](../tadr-port/demo-recorder-player-cards.html) and the perspective plan's 4c-2 state; the dword
+the teardown and exchanged around every settings save); `main+0x2A43`, the temporary sight
+records and the newly viewed record's DisplayTimer `+0xF8` for Sight (when at or above GameTime,
+lowered by whole steps of 30 to the last value of its phase below it, none at GameTime 0, so that
+the draw after the frame visit re-reads that record's resource-bar rates once and leaves the timer
+in its phase; [render.md](../engine/render.md), *The memo's layout*), and the camera for Jump and
+Follow, as [the replay's players and Sight](../tadr-port/demo-recorder-player-cards.html) and the
+perspective plan's 4c-2 state; the dword
 `0x512FF8` (YESORNO's question, 0) and, through `0x4A07D0`, the `TITLE` record's text of the
 YESORNO it opened and `gi+0xCCA`. Of our own: `replays\index.dat`'s bookmarks field, the store's
 `replayhud` (`impure.cfg`), the game folder's `tagpu_replayhud.json` (and its `.tmp`), and the

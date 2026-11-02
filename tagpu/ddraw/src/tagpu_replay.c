@@ -6473,6 +6473,7 @@ void __cdecl tagpu_replay_capture(void)
 #define DEF_BORDER     0xFFFB       /* a cell def at or above this is no feature (0x4246EC)       */
 #define PL_RECORDS     11           /* the player records a SIM_ID_PLAYER may name                */
 #define PL_DISPLAY     0xF8         /* DisplayTimer, a GameTime deadline (0x464765)               */
+#define DISPLAY_TICKS  30           /* the DisplayTimer's step, DrawGameScreen's add (0x468F83)   */
 #define PASS_TICKS     30           /* the players phase's period (0x46507D..0x465092)            */
 
 /* 0x47CB00(unit): a bucket's unlink, thiscall on the bucket, `ret 4` (DISASSEMBLED
@@ -7705,6 +7706,28 @@ static void eye_put(const Lv* L, unsigned T)
     }
 }
 
+/* The newly viewed record's DisplayTimer lowered to the last deadline of its own 30-tick phase
+   below GameTime `now`, so that the next draw re-reads the resource bar's rates once and leaves the
+   timer where the engine's own steps would have it: see the comment over the call in
+   sight_change. A timer already below `now` is left alone: the draw re-reads it anyway. `back`
+   is 1..30, so the lowered value is below `now` and at least now - 30, and one add of 30 takes it
+   to the first value at or above `now` congruent to the timer. When `now` is below `back` (only
+   in the first game second, under a timer a seek left at a GameTime not a multiple of 30) the
+   phase has no deadline at or above 0 below `now`: the timer goes to 0, still one re-read, and
+   the draw leaves it at 30, the phase of a record initialised at the load (0x464765). Every term
+   is bounded before it is subtracted, so nothing wraps whatever the timer holds. */
+static void bar_rates_due(char* ta, unsigned seat, unsigned now)
+{
+    char* rec = player_rec(ta, seat);
+    unsigned timer, back;
+    if (!now) return;
+    memcpy(&timer, rec + PL_DISPLAY, 4);
+    if (timer < now) return;
+    back = DISPLAY_TICKS - (timer - now) % DISPLAY_TICKS;
+    timer = now >= back ? now - back : 0;
+    memcpy(rec + PL_DISPLAY, &timer, 4);
+}
+
 /* Changing the viewed record leaves the units, their per-seat sight counters, the clock and
    the camera intact. Only death vision depends on which record was viewed during playback.
    Read that history with a separate reader, so a refused read cannot displace the next step's
@@ -7766,6 +7789,26 @@ static void sight_change(char* ta)
         goto refused;
     }
     ta[OFF_VIEWED] = (char)seat;
+    /* The resource bar's rates follow the new record from the next draw. DrawGameScreen
+       re-reads the bar's four rates (0x464AB0, 0x464AC0, 0x464AF0, 0x464B00: the record's
+       +0x90, +0x94, +0x9C, +0xA0) only while the viewed record's DisplayTimer +0xF8 is below
+       GameTime, adding 30 once per draw when it is (0x468F73..0x468FBF, DISASSEMBLED);
+       otherwise the bar keeps the rates of the last record it re-read. A record viewed earlier
+       in this game second, or any record after a seek (sk_deadlines), has its timer at or above
+       GameTime, so without this store a Sight change -- paused above all -- shows the previous
+       record's rates. INVARIANT: after the store the timer is below GameTime and at least
+       GameTime - 30, in the record's own phase (bar_rates_due), so the next draw re-reads exactly
+       once and leaves the timer at the first deadline at or above GameTime that the engine's
+       30-tick steps from the record's earlier value reach. ORDERING: this runs in the frame
+       visit, on the game thread, before the in-play draw call 0x4969CD; that draw forms the
+       viewed record from main+0x2A43 (0x468E4B), so the re-read is of the record now viewed.
+       BOUND: at GameTime 0 there is no value below it, so nothing is written and the first
+       tick's draw re-reads as for any record; seat <= REC_VIEWER was tested above, so the record
+       is one of main's eleven. The store is display state alone: the timer's readers are that
+       draw and the saver 0x4664EB, and replay-layout.tsv drops the field. The engine's own +View
+       0x416B50 writes only main+0x2A43 (0x416BC1); this is the one place a replay's view change
+       departs from it. */
+    bar_rates_due(ta, seat, L.now);
     s_cull_inputs++;
     eye_put(&L, L.now + 1);
     minimap_fog(ta);
