@@ -7,7 +7,8 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 
 /* THE PLAYERS FIXTURE: Watching's entry made a players entry (`"players": true`) -- a screen of 56 x 30 cells, the
    narrowest that makes a 4:3 frame; the map grown to 64 x 44, even and as deep as the viewport beside the deepest
-   column; each seat a camera and a team; each type a sight above the floor -- and its game given camera inputs and
+   column; each seat a camera and a team; each type a sight whose table the fixture layout stores (art/wiki/side/fixture.json,
+   the stock indices 3, 6, 7 and 8) -- and its game given camera inputs and
    killers, so that both twins are shown to read them alike and to leave them out of the simulation. Every figure is
    invented for the checks: none is read from a game file. Ada's moves lie at x 120..298, z 252..376 from tick 12 to
    92, inside every view her camera holds. */
@@ -15,7 +16,7 @@ export function playersFixture() {
   const base = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/watching.json'), 'utf8'));
   const e = { ...base, id: 'players-fixture', players: true, screen: [56, 30], title: 'Players and the camera',
     subtitle: 'The replay layer\'s players', text: ['A players replay follows each seat\'s camera.'] };
-  const SIGHT = { ARMCOM: 300, ARMCK: 260, ARMMEX: 160, ARMSOLAR: 160, CORCOM: 300, CORAK: 240 };
+  const SIGHT = { ARMCOM: 300, ARMCK: 260, ARMMEX: 100, ARMSOLAR: 200, CORCOM: 300, CORAK: 240 };
   e.units = Object.fromEntries(Object.entries(base.units).map(([t, d]) => [t, { ...d, sightDistance: SIGHT[t] ?? 200,
     modelHeight: 30, ...(d.cast === 'commander' ? { radarDistance: 700, sonarDistance: 0 } : {}) }]));
   const cams = [[448, 352], [576, 240]];

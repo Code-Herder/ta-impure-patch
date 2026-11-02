@@ -1360,12 +1360,12 @@ static void layout_out(const WIKILAYOUT* L)
     if (!L->sight.numtables) fputs("null", stdout);
     else {
         printf("{\"numtables\":%d,\"tables\":[", L->sight.numtables);
-        for (i = 1; i < L->sight.numtables; i++) {
-            printf("%s[", i > 1 ? "," : "");
-            for (k = L->sight.first[i - 1]; k < L->sight.first[i]; k++)
-                printf("%s[%d,%d,%d]", k > L->sight.first[i - 1] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+        for (i = 0; i < L->sight.nidx; i++) {
+            printf("%s{\"idx\":%d,\"cells\":[", i ? "," : "", L->sight.idx[i]);
+            for (k = L->sight.first[i]; k < L->sight.first[i + 1]; k++)
+                printf("%s[%d,%d,%d]", k > L->sight.first[i] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
                        L->sight.cell[k].n);
-            putchar(']');
+            fputs("]}", stdout);
         }
         fputs("]}", stdout);
     }
@@ -1436,9 +1436,9 @@ static int constants(void)
     printf("],\"PLAYERS_CONTROLS\":[");
     for (k = 0, n = 0; k < WIKI_NHUD; k++)
         if (tagpu_wikidata_hud_players(k)) { if (n++) putchar(','); str(tagpu_wikidata_hud_name(k)); }
-    printf("],\"PLAYERS_DEATHS\":%d,\"PLAYERS_DEATH_SPAN\":%d,\"SIGHT_MIN\":%d,\"SIGHT_TABLES\":%d,\"SIGHT_REACH\":%d,"
-           "\"SIGHT_CELLS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN, WIKI_SIGHT_TABLES,
-           WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS);
+    printf("],\"PLAYERS_DEATHS\":%d,\"PLAYERS_DEATH_SPAN\":%d,\"SIGHT_MIN\":%d,\"SIGHT_NUMTABLES\":%d,\"SIGHT_IDX\":%d,"
+           "\"SIGHT_REACH\":%d,\"SIGHT_CELLS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN,
+           WIKI_SIGHT_NUMTABLES, WIKI_SIGHT_IDX, WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS);
     return 0;
 }
 

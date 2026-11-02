@@ -813,6 +813,40 @@ function refusalCases(entry) {
   lay('a type named in 32 bytes', 'refused', L => { types(L)['T'.repeat(32)] = { pages: ['ARMCK1'], orders: null }; });
   lay('a prefix of 32 bytes', 'refused', L => { L.sides[0].prefix = 'P'.repeat(32); });
   lay('a note and keys the schema does not name', 'accepted', L => { L.note = 'x'; L.extra = [1]; ck1(L)[0].colour = 'red'; });
+  // THE SIGHT TABLE (tagpu_wikidata.h WIKISIGHT): sparse by index, every bound both ways
+  const sightT = L => L.sight.tables;
+  // n distinct cells in (dr, dc) order, within the reach
+  const cellsN = n => Array.from({ length: n }, (_, i) => [i % 127 - 63, Math.floor(i / 127) - 63, 1]);
+  lay('no sight table', 'accepted', L => { delete L.sight; });
+  lay('a sight table null', 'accepted', L => { L.sight = null; });
+  lay('a sight table storing none', 'accepted', L => { L.sight.tables = []; });
+  for (const [n, want] of [[1, 'refused'], [2, 'accepted'], [32767, 'accepted'], [32768, 'refused'], [2.5, 'refused'], ['9', 'refused']])
+    lay(`numtables ${JSON.stringify(n)}`, want, L => { L.sight = { numtables: n, tables: [{ idx: 1, cells: [[1, 0, 1]] }] }; });
+  lay('numtables absent', 'refused', L => { delete L.sight.numtables; });
+  lay('tables absent', 'refused', L => { delete L.sight.tables; });
+  for (const [n, want] of [[32, 'accepted'], [33, 'refused']])
+    lay(`${n} tables stored`, want, L => { L.sight = { numtables: 100, tables: Array.from({ length: n }, (_, i) => ({ idx: i + 1, cells: [[1, 0, 1]] })) }; });
+  lay('a table at idx 0', 'refused', L => { sightT(L)[0].idx = 0; });
+  lay('numtables 8 under a table at 8', 'refused', L => { L.sight.numtables = 8; });
+  lay('a table at idx numtables', 'refused', L => { sightT(L)[3].idx = 9; });
+  lay('tables out of order', 'refused', L => { sightT(L).reverse(); });
+  lay('one index stored twice', 'refused', L => { sightT(L)[1].idx = sightT(L)[0].idx; });
+  lay('an idx not an integer', 'refused', L => { sightT(L)[0].idx = 3.5; });
+  lay('a table a list', 'refused', L => { sightT(L)[0] = sightT(L)[0].cells; });
+  lay('a table with no cells', 'refused', L => { delete sightT(L)[0].cells; });
+  lay('a table of no cell', 'accepted', L => { sightT(L)[0].cells = []; });
+  lay('a cell 63 blocks out', 'accepted', L => { sightT(L)[0].cells = [[-63, -63, 1], [63, 63, 1]]; });
+  lay('a cell 64 blocks out', 'refused', L => { sightT(L)[0].cells = [[64, 0, 1]]; });
+  lay('a count of 255', 'accepted', L => { sightT(L)[0].cells = [[1, 0, 255]]; });
+  lay('a count of 256', 'refused', L => { sightT(L)[0].cells = [[1, 0, 256]]; });
+  lay('a count of 0', 'refused', L => { sightT(L)[0].cells = [[1, 0, 0]]; });
+  lay('cells out of order', 'refused', L => { sightT(L)[0].cells = [[1, 0, 1], [0, 0, 1]]; });
+  lay('one cell twice', 'refused', L => { sightT(L)[0].cells = [[1, 0, 1], [1, 0, 1]]; });
+  lay('a cell of two numbers', 'refused', L => { sightT(L)[0].cells = [[1, 0]]; });
+  for (const [n, want] of [[32768, 'accepted'], [32769, 'refused']])
+    lay(`${n} cells stored`, want, L => {
+      L.sight = { numtables: 9, tables: [{ idx: 1, cells: cellsN(16129) }, { idx: 2, cells: cellsN(16129) }, { idx: 3, cells: cellsN(n - 2 * 16129) }] };
+    });
   return cases;
 }
 
@@ -1661,8 +1695,23 @@ function playersRefusalCases(pf, page) {
     t(`seat 1's team ${JSON.stringify(v)}`, want, (e, d, G, sc) => { sc.seats[1].team = v; });
   t('both seats one team', 'accepted', (e, d, G, sc) => { sc.seats[0].team = 2; sc.seats[1].team = 2; });
   t('a seat with another key', 'refused', (e, d, G, sc) => { sc.seats[0].colour = 1; });
-  // THE SIGHT FLOOR and the figures' bounds
-  for (const [k, v, want] of [['sightDistance', 32, 'accepted'], ['sightDistance', 31, 'refused'], ['sightDistance', 32767, 'accepted'],
+  /* THE SIGHT FLOOR and the figures' bounds. The fixture layout stores the stock tables 3, 6, 7 and 8 alone, so a sight
+     of 32 (radius index 1) refuses the game there and plays with no layout; 32767 is clamped to numtables - 1 = 8 */
+  t('ARMCK\'s sightDistance 32, no layout', 'accepted', e => { e.units.ARMCK.sightDistance = 32; }, false, { layout: null });
+  for (const [v, want] of [[96, 'accepted'], [95, 'refused'], [191, 'refused'], [192, 'accepted'], [287, 'accepted'], [288, 'accepted']])
+    t(`ARMCK's sightDistance ${v}, over tables 3, 6, 7, 8`, want, e => { e.units.ARMCK.sightDistance = v; });
+  t('a rival type of sightDistance 160, over tables 3, 6, 7, 8', 'refused', e => { e.units.CORAK.sightDistance = 160; });
+  t('a rival type of sightDistance 160, no layout', 'accepted', e => { e.units.CORAK.sightDistance = 160; }, false, { layout: null });
+  t('a layout with no sight table', 'accepted', e => { e.units.ARMCK.sightDistance = 40; }, false, { layout: { ...FIXTURE, sight: null } });
+  {
+    // a cast whose radius index the layout does not store is left unbound, its type playing its authored figures
+    const C = clone(CASTINGS.identity[0]);
+    C.casts.builder = { ...C.casts.builder, sightDistance: 170 };
+    t('bound to a casting whose builder reaches table 5, not stored', 'accepted', () => {}, false, { casting: C, rival: RIVALS.identity });
+    t('bound to a casting whose builder reaches table 5, own ARMCK at table 5', 'refused', e => { e.units.ARMCK.sightDistance = 170; }, false,
+      { casting: C, rival: RIVALS.identity });
+  }
+  for (const [k, v, want] of [['sightDistance', 32, 'refused'], ['sightDistance', 31, 'refused'], ['sightDistance', 32767, 'accepted'],
     ['sightDistance', 32768, 'refused'], ['sightDistance', 40.5, 'refused'], ['sightDistance', '300', 'refused'], ['radarDistance', -32768, 'accepted'],
     ['radarDistance', -32769, 'refused'], ['sonarDistance', 32767, 'accepted'], ['modelHeight', 255, 'accepted'], ['modelHeight', 256, 'refused'],
     ['modelHeight', -1, 'refused']])
@@ -2151,8 +2200,8 @@ try {
       // a players entry's: the stats window's chips, the Players set, the deaths' bound and the sight table's bounds
       const p = JSON.parse(pl), S = WikiSim;
       const q = diff(p, { CHIPS: S.CHIPS, PLAYERS_CONTROLS: S.PLAYERS_CONTROLS, PLAYERS_DEATHS: S.PLAYERS_DEATHS,
-        PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_TABLES: S.SIGHT_TABLES, SIGHT_REACH: S.SIGHT_REACH,
-        SIGHT_CELLS: S.SIGHT_CELLS }, '');
+        PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_NUMTABLES: S.SIGHT_NUMTABLES, SIGHT_IDX: S.SIGHT_IDX,
+        SIGHT_REACH: S.SIGHT_REACH, SIGHT_CELLS: S.SIGHT_CELLS }, '');
       cases++;
       if (q) { failed++; console.log(`DIFFER the players entry's constants: ${q.at}: C ${show(q.c)}, sim.js ${show(q.j)}`); }
       else console.log(`equal  the players entry's constants: ${p.CHIPS.length} chips, ${p.PLAYERS_CONTROLS.length} controls, ` +

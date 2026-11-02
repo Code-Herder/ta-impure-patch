@@ -511,9 +511,6 @@ typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
    collector's is negative); 0 leaves the cast unbound in a game (tagpu_wikisim.c bind, sim.js
    binder) and in a game only */
 int tagpu_wikidata_cast_economy(const WIKICASTDEF* k);
-/* 1 when a cast's sight is at least WIKI_SIGHT_MIN; 0 leaves the cast unbound in a players entry's
-   game (THE SIGHT FLOOR), as the economy's bounds leave one unbound in any game */
-int tagpu_wikidata_cast_sight(const WIKICASTDEF* k);
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
    other key are read past) into `c`, held to every bound of sim.js's checkCasting: all ten casts
@@ -621,27 +618,50 @@ typedef struct {
    idx - 1, idx = min(trunc(sight / 32), numtables - 1) (0x48230D..0x482366, 0x433500), where the
    height test passes -- on the stage's flat ground everywhere (MEASURED M0-P1: no block of the
    set unlit). So a table loses nothing as a COUNT GRID, each offset with the number of ray points
-   on it, in any order. Only TABLE1..TABLE<numtables - 1> are reachable, and only they are kept:
-   table idx (1..numtables - 1) is cell[first[idx - 1] .. first[idx]), its offsets strictly
-   increasing by (dr, dc). MEASURED M0-P1 with the stock file (numtables 9): a unit's lit set is
-   its table's offsets and its own block, 213 / 177 / 137 blocks at idx 8 / 7 / 6. THE BOUNDS a
-   producer holds or keeps no table (numtables 0: Sight lights every block, with a report line):
-   numtables 2..WIKI_SIGHT_TABLES (1 or less gives idx 0 for every unit, the read before the
-   buffer); every point within WIKI_SIGHT_REACH blocks on both axes; a count 1..255; every line's
-   numbers present (a missing one is atoi(NULL), undefined in the engine); and the cells of every
-   table together at most WIKI_SIGHT_CELLS. MEASURED 2026-11-01 over the compat setups' files: the
-   stock file keeps its table (748 cells); ProTA's, Escalation's and Twilight's (90, 90 and 94
-   tables) and Mayhem's and TA Zero's (64 and 63 tables, 272 616 and 260 008 cells, reaching 63 and
-   62 blocks) break the bounds, so those layouts have no table. */
-#define WIKI_SIGHT_TABLES 64
+   on it, in any order. MEASURED M0-P1 with the stock file (numtables 9): a unit's lit set is its
+   table's offsets and its own block, 213 / 177 / 137 blocks at idx 8 / 7 / 6.
+   ONLY THE TABLES THE SETUP'S TYPES REACH ARE KEPT, sparse by index: the idx of each sight of a
+   cast the layout's castings bind and of each type a players entry of the wiki's tree defines,
+   at least WIKI_SIGHT_MIN (tagpu_wikiasset.c sight_read, gfx.py `sight_table`). Stored table k is
+   radius index idx[k] (strictly increasing, each 1..numtables - 1) and cell[first[k] ..
+   first[k + 1]), its offsets strictly increasing by (dr, dc). A type whose index is not stored
+   plays in no players entry's game over this table (tagpu_wikidata_sight_ok): a cast is left
+   unbound and an entry's own type refuses the game, so the stamp never reads a table the layout
+   does not hold. numtables is not bounded above beyond the engine's signed word (the clamp
+   makes every index below it); MEASURED 2026-11-02 over the compat setups' files: numtables 9
+   (stock), 64 (Mayhem), 90 (ProTA, Escalation), 94 (Twilight), 63 (TA Zero), and the tables their
+   castings reach 4 / 6 / 6 / 11 / 6 / 7 indices of 560 / 1200 / 1200 / 15212 / 1800 / 3900 cells,
+   Twilight's reaching 38 blocks with a count of 39. THE BOUNDS a producer holds or keeps no table
+   (numtables 0: Sight lights every block, with a report line): numtables at least 2 (1 or less
+   gives idx 0 for every unit, the read before the buffer); at most WIKI_SIGHT_IDX indices, about
+   three times Twilight's 11; in a stored table every point within WIKI_SIGHT_REACH blocks on both
+   axes, a count 1..255 and every line's numbers present (a missing one is atoi(NULL), undefined in
+   the engine); and the stored tables' cells together at most WIKI_SIGHT_CELLS, about twice
+   Twilight's 15212 (3 bytes a cell: 96 KB a layout). */
+#define WIKI_SIGHT_NUMTABLES 32767
 #define WIKI_SIGHT_REACH  63
-#define WIKI_SIGHT_CELLS  16384
+#define WIKI_SIGHT_IDX    32
+#define WIKI_SIGHT_CELLS  32768
 typedef struct { int8_t dc, dr; uint8_t n; } WIKISIGHTCELL;
 typedef struct {
     int           numtables;        /* 0: the layout has no table */
-    int           first[WIKI_SIGHT_TABLES];
+    int           nidx;             /* the tables stored */
+    int           idx[WIKI_SIGHT_IDX];
+    int           first[WIKI_SIGHT_IDX + 1];
     WIKISIGHTCELL cell[WIKI_SIGHT_CELLS];
 } WIKISIGHT;
+
+/* THE RADIUS INDEX of a sight over a layout's table, the engine's min(trunc(sight / 32),
+   numtables - 1); 0 below WIKI_SIGHT_MIN or with no table (numtables 0), where no table is read */
+int tagpu_wikidata_sight_index(const WIKISIGHT* t, int sight);
+/* The stored table a sight stamps with: k with t->idx[k] its radius index, or -1 when it has none
+   (below WIKI_SIGHT_MIN, no table, or an index the layout does not store) */
+int tagpu_wikidata_sight_table(const WIKISIGHT* t, int sight);
+/* 1 when a type of `sight` plays in a players entry's game over table `t` (NULL: no layout): its
+   sight at least WIKI_SIGHT_MIN (THE SIGHT FLOOR) and, when `t` holds a table, its radius index
+   stored. A cast that fails it is left unbound (tagpu_wikisim.c bind), an entry's own type refuses
+   the game (tagpu_wikisim_init), as sim.js's sightFits */
+int tagpu_wikidata_sight_ok(const WIKISIGHT* t, int sight);
 
 typedef struct WIKILAYOUT {
     int         format, width, height;

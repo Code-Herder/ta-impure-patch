@@ -4983,10 +4983,11 @@ struct WIKISIMBOUND {
    index: the entry holds at most WIKI_MAX_DEFS types (the loader), each cast is checked against
    WIKI_NCAST before it indexes the casting, the casting's footprints and G rows were held to
    WIKI_FP_MAX by its reader, and a wreck past WIKI_FEAT_DEFS rows refuses the sim before it is
-   written. 1, or 0 with the refusal in `err` (-1 when memory ran out), and s->entry is the bound
-   entry once it is 1. */
-static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKICASTING* rk, int game, char* err,
-                size_t errn)
+   written. `sight` is the layout's sight table (NULL without a layout), which a players entry's
+   game binds a cast over. 1, or 0 with the refusal in `err` (-1 when memory ran out), and s->entry
+   is the bound entry once it is 1. */
+static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKICASTING* rk, int game,
+                const WIKISIGHT* sight, char* err, size_t errn)
 {
     struct WIKISIMBOUND* B;
     unsigned seen[2] = { 0, 0 };
@@ -5022,9 +5023,11 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKI
         WIKIDEF* d = &B->def[i];
         /* a game's economy reads the cast's economy figures, so a game leaves a cast whose figures
            are outside the economy's bounds unbound; a page entry reads none of them. A players
-           entry's game leaves one below THE SIGHT FLOOR unbound too (tagpu_wikidata.h
-           WIKI_SIGHT_MIN), so no type it plays makes the stamp's out-of-bounds index 0 */
-        if (!c || !c->bound || (game && !tagpu_wikidata_cast_economy(c)) || (game && e->players && !tagpu_wikidata_cast_sight(c))) {
+           entry's game leaves one unbound too when it is below THE SIGHT FLOOR or its radius index
+           is one the layout's table does not store (tagpu_wikidata_sight_ok), so no type it plays
+           makes the stamp's out-of-bounds index 0 or reads a table the layout does not hold */
+        if (!c || !c->bound || (game && !tagpu_wikidata_cast_economy(c))
+            || (game && e->players && !tagpu_wikidata_sight_ok(sight, c->sight_distance))) {
             *d = *a;
             s->unbound[i] = c != NULL;
             continue;
@@ -5202,11 +5205,22 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     s->iface = ctx->iface;
     s->entry = e;
-    if (ctx->cast && (r = bind(s, e, ctx->cast, ctx->rival, game, err, errn)) <= 0) {
+    if (ctx->cast && (r = bind(s, e, ctx->cast, ctx->rival, game, lay ? &lay->sight : NULL, err, errn)) <= 0) {
         if (r < 0) goto oom;
         tagpu_wikisim_free(s);
         return 0;
     }
+    /* THE SIGHT TABLE a players game stamps with: a type of the bound entry whose radius index the
+       layout's table does not store refuses the game -- an entry's own type, since bind left a
+       cast of one unbound -- as sim.js's make does */
+    if (game && e->players && lay)
+        for (i = 0; i < s->entry->ndef; i++) {
+            const WIKIDEF* t = &s->entry->def[i];
+            if (tagpu_wikidata_sight_ok(&lay->sight, t->sight_distance)) continue;
+            snprintf(err, errn, "unit %s: a players entry's type of sightDistance %d reaches sight table %d, which the layout "
+                     "does not store", t->name, t->sight_distance, tagpu_wikidata_sight_index(&lay->sight, t->sight_distance));
+            goto refused;
+        }
     /* THE SIDEBAR, on or off for the sim's whole life: a demo shows it when its `sidebar` says so,
        by default when the scene gives the player a mobile builder; Try it shows it whenever the
        scene does, whatever the demo said */

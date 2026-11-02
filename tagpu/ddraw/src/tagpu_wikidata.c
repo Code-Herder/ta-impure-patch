@@ -1795,24 +1795,28 @@ static int lay_no(char* err, size_t errn, const char* what, const char* name)
 /* a name field holds its terminator, so no read of it runs past the field */
 static int terminated(const char* s) { return memchr(s, 0, WIKI_SIDE_NAME) != NULL; }
 
-/* THE SIGHT TABLE'S BOUNDS (tagpu_wikidata.h WIKISIGHT): none, or numtables 2..WIKI_SIGHT_TABLES,
-   each table's cells a run of `cell` from first[0] = 0 to first[numtables - 1] <= WIKI_SIGHT_CELLS,
-   none of negative length, each offset within WIKI_SIGHT_REACH and strictly after the one before
-   it by (dr, dc), so no offset is given twice, and each count 1..255 */
+/* THE SIGHT TABLE'S BOUNDS (tagpu_wikidata.h WIKISIGHT): none, or numtables
+   2..WIKI_SIGHT_NUMTABLES and 0..WIKI_SIGHT_IDX tables stored, their indices strictly increasing
+   within 1..numtables - 1, each table's cells a run of `cell` from first[0] = 0 to first[nidx] <=
+   WIKI_SIGHT_CELLS, none of negative length, each offset within WIKI_SIGHT_REACH and strictly after
+   the one before it by (dr, dc), so no offset is given twice, and each count 1..255 */
 static int sight_check(const WIKISIGHT* t, char* err, size_t errn)
 {
     int i, k;
     if (!t->numtables) return 1;
-    if (t->numtables < 2 || t->numtables > WIKI_SIGHT_TABLES || t->first[0] != 0 || t->first[t->numtables - 1] > WIKI_SIGHT_CELLS)
-        return lay_no(err, errn, "the sight table is not 2..64 tables of at most 16384 cells", NULL);
-    for (i = 1; i < t->numtables; i++) {
-        if (t->first[i] < t->first[i - 1]) return lay_no(err, errn, "a sight table's cells run backwards", NULL);
-        for (k = t->first[i - 1]; k < t->first[i]; k++) {
+    if (t->numtables < 2 || t->numtables > WIKI_SIGHT_NUMTABLES || t->nidx < 0 || t->nidx > WIKI_SIGHT_IDX
+        || t->first[0] != 0 || t->first[t->nidx] > WIKI_SIGHT_CELLS)
+        return lay_no(err, errn, "the sight table is not 2..32767 tables, at most 32 of them stored in at most 32768 cells", NULL);
+    for (i = 0; i < t->nidx; i++) {
+        if (t->idx[i] < 1 || t->idx[i] >= t->numtables || (i && t->idx[i] <= t->idx[i - 1]))
+            return lay_no(err, errn, "a sight table's indices are not increasing within 1..numtables - 1", NULL);
+        if (t->first[i + 1] < t->first[i]) return lay_no(err, errn, "a sight table's cells run backwards", NULL);
+        for (k = t->first[i]; k < t->first[i + 1]; k++) {
             const WIKISIGHTCELL* c = &t->cell[k];
             if (c->dc < -WIKI_SIGHT_REACH || c->dc > WIKI_SIGHT_REACH || c->dr < -WIKI_SIGHT_REACH || c->dr > WIKI_SIGHT_REACH
                 || !c->n)
                 return lay_no(err, errn, "a sight table's cell is past 63 blocks or counts nothing", NULL);
-            if (k > t->first[i - 1] && (c->dr < c[-1].dr || (c->dr == c[-1].dr && c->dc <= c[-1].dc)))
+            if (k > t->first[i] && (c->dr < c[-1].dr || (c->dr == c[-1].dr && c->dc <= c[-1].dc)))
                 return lay_no(err, errn, "a sight table's cells are not in order by row, then column, each once", NULL);
         }
     }
@@ -1934,21 +1938,23 @@ static int lay_gadget(const TJV* v, WIKIGADGET* g)
 }
 
 /* THE SIGHT TABLE (sim.js checkLayout's `sight`): absent or null, none; else {numtables, tables},
-   numtables an integer 2..WIKI_SIGHT_TABLES and tables a list of numtables - 1, table idx at index
-   idx - 1, each a list of [dc, dr, n] integers, at most WIKI_SIGHT_CELLS over every table, into
-   `t`; sight_check holds the rest. 0 when it is malformed. */
+   numtables an integer 2..WIKI_SIGHT_NUMTABLES and tables a list of at most WIKI_SIGHT_IDX
+   {idx, cells}, idx an integer and cells a list of [dc, dr, n] integers, at most WIKI_SIGHT_CELLS
+   over every table, into `t`; sight_check holds the rest. 0 when it is malformed. */
 static int lay_sight(const TJV* v, WIKISIGHT* t)
 {
     const TJV *tables = tj_get(v, "tables"), *a, *c;
-    int i = 0, n = 0, nt;
+    int n = 0, nt;
     memset(t, 0, sizeof *t);
     if (!v || tj_is(v, TJ_NULL)) return 1;
-    if (!tj_is(v, TJ_OBJ) || !lay_int(tj_get(v, "numtables"), 2, WIKI_SIGHT_TABLES, &nt) || !tj_is(tables, TJ_ARR)
-        || tables->n != nt - 1)
+    if (!tj_is(v, TJ_OBJ) || !lay_int(tj_get(v, "numtables"), 2, WIKI_SIGHT_NUMTABLES, &nt) || !tj_is(tables, TJ_ARR)
+        || tables->n > WIKI_SIGHT_IDX)
         return 0;
     for (a = tables->first; a; a = a->next) {
-        if (!tj_is(a, TJ_ARR)) return 0;
-        for (c = a->first; c; c = c->next) {
+        const TJV* cells = tj_get(a, "cells");
+        if (!tj_is(a, TJ_OBJ) || !lay_int(tj_get(a, "idx"), 1, WIKI_SIGHT_NUMTABLES - 1, &t->idx[t->nidx]) || !tj_is(cells, TJ_ARR))
+            return 0;
+        for (c = cells->first; c; c = c->next) {
             int dc, dr, k;
             if (n == WIKI_SIGHT_CELLS || !tj_is(c, TJ_ARR) || c->n != 3 || !lay_int(tj_at(c, 0), -128, 127, &dc)
                 || !lay_int(tj_at(c, 1), -128, 127, &dr) || !lay_int(tj_at(c, 2), 0, 255, &k))
@@ -1957,7 +1963,7 @@ static int lay_sight(const TJV* v, WIKISIGHT* t)
             t->cell[n].dr = (int8_t)dr;
             t->cell[n++].n = (uint8_t)k;
         }
-        t->first[++i] = n;
+        t->first[++t->nidx] = n;
     }
     t->numtables = nt;
     return 1;
@@ -2074,9 +2080,24 @@ int tagpu_wikidata_cast_economy(const WIKICASTDEF* k)
            k->energy_storage >= 0 && fabs(k->energy_use) < WIKI_ECON_MAX;
 }
 
-int tagpu_wikidata_cast_sight(const WIKICASTDEF* k)
+int tagpu_wikidata_sight_index(const WIKISIGHT* t, int sight)
 {
-    return k->sight_distance >= WIKI_SIGHT_MIN;
+    if (sight < WIKI_SIGHT_MIN || !t || t->numtables < 2) return 0;
+    return sight / 32 < t->numtables - 1 ? sight / 32 : t->numtables - 1;
+}
+
+int tagpu_wikidata_sight_table(const WIKISIGHT* t, int sight)
+{
+    const int idx = tagpu_wikidata_sight_index(t, sight);
+    int k;
+    for (k = 0; idx && k < t->nidx && k < WIKI_SIGHT_IDX; k++)
+        if (t->idx[k] == idx) return k;
+    return -1;
+}
+
+int tagpu_wikidata_sight_ok(const WIKISIGHT* t, int sight)
+{
+    return sight >= WIKI_SIGHT_MIN && (!t || !t->numtables || tagpu_wikidata_sight_table(t, sight) >= 0);
 }
 
 /* sim.js's FIGURES, in its order, and where each lands: the NWORLD the world reads, then the

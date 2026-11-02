@@ -5,20 +5,29 @@
      exit 0 when every check holds, 1 when one fails, 2 when it cannot run (the stock pack is missing)
 
    THE FIXTURE'S TABLE. art/wiki/side/fixture.json and fixture-tall.json carry the stock game's sight table, which
-   tools/wiki/sidepacks.py writes from the stock pack: each must equal the stock pack's own, pass sim.js's checkLayout,
-   and hold to the game as measured -- the scout's statistics of the stock file (TABLE1: 8 point visits on 8 offsets;
-   TABLE4: 84 on 60; TABLE8: 332 on 212, visited 1 / 2 / 3 / 5 / 7 times on 148 / 32 / 24 / 4 / 4 of them) and M0-P1's
-   lit sets, a unit's table plus its own block: at radius index 8 (ARMCOM, CORAK) 213 blocks, counts 1 / 2 / 3 / 5 / 7
-   on 149 / 32 / 24 / 4 / 4; at 7 (ARMCK) 177, on 117 / 24 / 28 / 4 / 4; at 6 (ARMSOLAR) 137, counts 1 / 2 / 3 / 5 on
-   93 / 24 / 12 / 8 (MEASURED 2026-11-01, the counters read in game on a flat plate). The index is min(trunc(sight /
-   32), numtables - 1), checked against the stock pack's sightDistance for those four types.
+   tools/wiki/sidepacks.py writes from the stock pack: each must equal the stock pack's own and pass sim.js's
+   checkLayout. A layout stores only the tables its setup's types reach (tagpu_wikidata.h WIKISIGHT), so the stock
+   table holds radius indices 3, 6, 7 and 8 -- ARMDRAG's 100, the 210 of ARMSOLAR and the stock structures, ARMCK's
+   235 and the 290 of ARMCOM, CORAK's 275 among them -- and is held to the game as measured on those: TABLE8 to the
+   scout's statistics of the stock file (332 point visits on 212 offsets, visited 1 / 2 / 3 / 5 / 7 times on 148 / 32 /
+   24 / 4 / 4 of them), and M0-P1's lit sets, a unit's table plus its own block: at radius index 8 (ARMCOM, CORAK) 213
+   blocks, counts 1 / 2 / 3 / 5 / 7 on 149 / 32 / 24 / 4 / 4; at 7 (ARMCK) 177, on 117 / 24 / 28 / 4 / 4; at 6
+   (ARMSOLAR) 137, counts 1 / 2 / 3 / 5 on 93 / 24 / 12 / 8 (MEASURED 2026-11-01, the counters read in game on a flat
+   plate). The index is min(trunc(sight / 32), numtables - 1), checked against the stock pack's sightDistance for
+   those four types. Every stored table of the stock pack is held to the scout's statements about the whole stock
+   file: TABLE i reaches Chebyshev distance i exactly, its offsets are eight-fold symmetric (both negations and the
+   swap) and none is the unit's own block -- which is all that holds TABLE3, which nothing measured counted.
+   NO LONGER CHECKED: the scout's TABLE1 (8 visits on 8 offsets) and TABLE4 (84 on 60), which no stock type reaches,
+   so no layout stores them; nor its TABLE9, which numtables 9 never reaches.
 
    THE MODEL HEIGHTS. The stock pack's modelHeight for the four types M0-P1 read the def byte +0x170 of: ARMCOM 39,
    ARMCK 27, ARMSOLAR 38, CORAK 26.
 
    THE CASTINGS. Every pack present: each cast's sightDistance, radarDistance and sonarDistance integers of 16 bits
-   and modelHeight a byte (sim.js checkCasting), and its sight table, when it has one, checkLayout's. Which packs keep
-   no table, and why, is the pack's report; the line names them.
+   and modelHeight a byte (sim.js checkCasting); its sight table present and checkLayout's (every compat setup keeps
+   one, MEASURED 2026-11-02), storing exactly the radius indices its castings' bound casts and the tree's players
+   entries' own types reach, sight 32 or more (gfx.py `sight_table`), so every type a players game binds has its table.
+   The line gives the tables and cells stored.
 
    THE CHIPS. sim.js's CHIPS, the stats window's chips a `chip` press names, are the window's two splits and
    art/hud/layout.json's window.measures keys, in that order (tagpu_wikidata.h WIKI_CHIP_*, which simparity holds
@@ -34,6 +43,21 @@ const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
 const FIXTURES = ['fixture.json', 'fixture-tall.json'].map(f => path.join(ROOT, 'art/wiki/side', f));
 
 class CannotRun extends Error {}
+
+/* every sightDistance a players entry of the tree gives its own types (gfx.py `entry_sights`): with the castings',
+   what a layout's table stores */
+function playersSights() {
+  const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
+  const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
+  const out = [];
+  for (const id of new Set(tree.tree.flatMap(leaves))) {
+    const f = path.join(ROOT, 'art/wiki/entries', `${id}.json`);
+    const e = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+    if (e.players !== true) continue;
+    for (const d of Object.values(e.units || {})) if (Number.isInteger(d.sightDistance) && d.sightDistance >= 32) out.push(d.sightDistance);
+  }
+  return out;
+}
 
 let failed = 0;
 const say = (ok, what) => { if (!ok) failed++; console.log(`${ok ? 'ok    ' : 'FAILED'} ${what}`); };
@@ -57,14 +81,24 @@ function run() {
     say(same(L.sight, sight), `${path.basename(f)}: its sight table is the stock pack's`);
   }
 
-  // the scout's statistics of the stock file
-  const table = idx => sight.tables[idx - 1];
+  // the scout's statistics of the stock file, on the one table they cover that a stock type reaches
+  const table = idx => (sight.tables.find(T => T.idx === idx) || { cells: null }).cells;
   const visits = cells => cells.reduce((n, c) => n + c[2], 0);
-  for (const [idx, v, o] of [[1, 8, 8], [4, 84, 60], [8, 332, 212]])
-    say(visits(table(idx)) === v && table(idx).length === o,
-      `TABLE${idx}: ${visits(table(idx))} point visits on ${table(idx).length} offsets (the scout: ${v} on ${o})`);
-  say(same(histogram(table(8)), { 1: 148, 2: 32, 3: 24, 5: 4, 7: 4 }), `TABLE8 visited ${JSON.stringify(histogram(table(8)))} ` +
+  say(same(sight.tables.map(T => T.idx), [3, 6, 7, 8]), `the stock table stores indices ${sight.tables.map(T => T.idx).join(', ')} ` +
+    '(the stock castings reach 3, 6, 7, 8)');
+  const t8 = table(8);
+  say(!!t8 && visits(t8) === 332 && t8.length === 212, `TABLE8: ${t8 ? visits(t8) : '-'} point visits on ${t8 ? t8.length : '-'} offsets ` +
+    '(the scout: 332 on 212)');
+  say(!!t8 && same(histogram(t8), { 1: 148, 2: 32, 3: 24, 5: 4, 7: 4 }), `TABLE8 visited ${t8 ? JSON.stringify(histogram(t8)) : '-'} ` +
     '(the scout: 1 x 148, 2 x 32, 3 x 24, 5 x 4, 7 x 4)');
+  // the scout's statements about every table of the stock file, on each stored one
+  for (const T of sight.tables) {
+    const key = new Set(T.cells.map(([dc, dr]) => `${dc},${dr}`));
+    const reach = Math.max(...T.cells.map(([dc, dr]) => Math.max(Math.abs(dc), Math.abs(dr))));
+    const sym = T.cells.every(([dc, dr]) => [[-dc, dr], [dc, -dr], [dr, dc]].every(([a, b]) => key.has(`${a},${b}`)));
+    say(reach === T.idx && sym && !key.has('0,0'), `TABLE${T.idx}: reaches ${reach} blocks, ${sym ? '' : 'not '}eight-fold symmetric, ` +
+      `${key.has('0,0') ? 'holds' : 'without'} the own block (the scout: reach ${T.idx}, symmetric, without)`);
+  }
 
   // M0-P1's lit sets: the table of the type's index, and its own block once (no table holds the offset 0, 0)
   const casts = stock.casting.flatMap(c => Object.values(c.casts).filter(Boolean));
@@ -74,9 +108,9 @@ function run() {
   for (const [t, [idx, n, hist, height]] of Object.entries(MEASURED)) {
     const k = type(t);
     if (!k) { say(false, `${t}: the stock pack casts no ${t}`); continue; }
-    const got = Math.min(Math.trunc(k.sightDistance / 32), sight.numtables - 1);
-    say(got === idx, `${t}: sightDistance ${k.sightDistance}, radius index ${got} (M0-P1: ${idx})`);
-    const cells = table(got);
+    const got = WikiSim.sightIndex(sight, k.sightDistance), T = WikiSim.sightTable(sight, k.sightDistance);
+    say(got === idx && !!T, `${t}: sightDistance ${k.sightDistance}, radius index ${got}${T ? ', stored' : ', NOT stored'} (M0-P1: ${idx})`);
+    const cells = T ? T.cells : [];
     const own = cells.some(([dc, dr]) => dc === 0 && dr === 0);
     const lit = [...cells, ...(own ? [] : [[0, 0, 1]])];
     say(!own && lit.length === n && same(histogram(lit), hist),
@@ -84,11 +118,13 @@ function run() {
     say(k.modelHeight === height, `${t}: modelHeight ${k.modelHeight} (M0-P1: ${height})`);
   }
 
-  // every pack's castings and table under sim.js's bounds
+  // every pack's castings and table under sim.js's bounds, its table storing exactly the indices its types reach
+  const entrySights = playersSights();
   for (const mod of fs.readdirSync(PACKS).sort()) {
     const file = path.join(PACKS, mod, 'side.json');
     if (!fs.existsSync(file)) continue;
     const P = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const S = P.layout.sight;
     let why = null;
     try {
       WikiSim.checkLayout(P.layout);
@@ -98,10 +134,17 @@ function run() {
         for (const n of ['sightDistance', 'radarDistance', 'sonarDistance', 'modelHeight', 'activatewhenbuilt'])
           if (!(n in k)) throw new Error(`${C.side} ${c}: no ${n}`);
       }
+      if (!S) {
+        const none = (P.report || []).find(r => r && r.element === 'sight table' && r.refused);
+        throw new Error(`no sight table: ${none ? none.refused : 'no report line'}`);
+      }
+      const sights = [...entrySights, ...P.casting.flatMap(C => Object.values(C.casts).filter(Boolean).map(k => k.sightDistance))];
+      const want = [...new Set(sights.map(s => WikiSim.sightIndex(S, s)).filter(i => i > 0))].sort((a, b) => a - b);
+      if (!same(S.tables.map(T => T.idx), want)) throw new Error(`its table stores ${S.tables.map(T => T.idx)}, its types reach ${want}`);
     } catch (e) { why = e.message; }
-    const none = (P.report || []).find(r => r && r.element === 'sight table' && r.refused);
     say(why === null, `pack ${mod}: every cast's sight figures and its layout's sight table read` +
-      (why ? `: ${why}` : P.layout.sight ? ` (${P.layout.sight.numtables} tables)` : ` (no table: ${none ? none.refused : 'no report line'})`));
+      (why ? `: ${why}` : ` (numtables ${S.numtables}; indices ${S.tables.map(T => T.idx).join(', ')}; ` +
+        `${S.tables.reduce((n, T) => n + T.cells.length, 0)} cells)`));
   }
 
   // the chips: the window's splits, then its measures

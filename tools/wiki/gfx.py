@@ -2139,24 +2139,49 @@ def unit_height(eng, u):
     return h, f"{hit[1]} ({hit[2]})"
 
 
-SIGHT_TABLES = 64          # numtables at most (WIKI_SIGHT_TABLES)
 SIGHT_REACH = 63           # a point's offset from the unit's block, blocks on each axis (WIKI_SIGHT_REACH)
-SIGHT_CELLS = 16384        # the cells of every table together (WIKI_SIGHT_CELLS)
+SIGHT_IDX = 32             # the radius indices stored at most (WIKI_SIGHT_IDX)
+SIGHT_CELLS = 32768        # the cells of the stored tables together (WIKI_SIGHT_CELLS)
+SIGHT_MIN = 32             # a players entry's type's sightDistance at least (WIKI_SIGHT_MIN)
 SIGHT_LINE = 511           # a line's value as 0x4C48C0 reads it into its 0x200-byte buffer
-SIGHT_CAP = 1 << 20        # the file's bytes at most (tagpu_wikiasset.c CAP_SIDE)
+SIGHT_CAP = 8 << 20        # the file's bytes at most (tagpu_wikiasset.c CAP_LOS): the largest measured, Twilight's, is 2 718 022
 
 
-def sight_table(eng, report):
+def entry_sights():
+    """Every sightDistance a players entry of the wiki's tree gives one of its own types, at least SIGHT_MIN: with the
+    bound casts', the sights whose tables a layout stores (sight_table). The tree's entries are the ones the DLL's
+    archive reads (tagpu_wikidata.c), so the DLL's producer (tagpu_wikiasset.c sight_read) takes the same set."""
+    tree = json.loads((REPO / "art" / "wiki" / "tree.json").read_text())
+
+    def leaves(n):
+        return [n["entry"]] if "entry" in n else [e for c in n.get("children", []) for e in leaves(c)]
+
+    out = set()
+    for eid in dict.fromkeys(e for n in tree["tree"] for e in leaves(n)):
+        f = ENTRIES / f"{eid}.json"
+        entry = json.loads(f.read_text()) if f.exists() else {}
+        if entry.get("players") is not True:
+            continue
+        for d in entry.get("units", {}).values():
+            s = d.get("sightDistance") if isinstance(d, dict) else None
+            if isinstance(s, int) and not isinstance(s, bool) and SIGHT_MIN <= s <= 32767:
+                out.add(s)
+    return out
+
+
+def sight_table(eng, report, sights):
     """The layout's `sight`: `<gamedata>\\los.tdf` as the engine's loader stores it, reduced to count grids
-    (tagpu_wikidata.h WIKISIGHT states the loader, DISASSEMBLED 0x433130, 0x433380, 0x4336F0): numtables from
-    [TABLEINFO], each TABLE<idx> for idx 1..numtables - 1 -- the ones the stamp reaches -- as [[dc, dr, n], ...] in
-    (dr, dc) order. numtables, numlines and a line's count are the TDF number's low 16 bits, signed; a line's value is
-    cut at SIGHT_LINE bytes and split on ', ' (strtok), each token C's atoi; each pair (x, y), each a 16-bit word, is
-    stored as the offsets (x, -y), (y, x), (-x, y), (-y, -x); a count of 0 or less, a missing line or a missing
-    section adds nothing. None, with a report line, when the file is missing, passes SIGHT_CAP bytes, does not parse
-    or breaks a bound:
-    numtables outside 2..SIGHT_TABLES, a line short of its count's numbers, an offset past SIGHT_REACH, a count of a
-    cell past 255, or past SIGHT_CELLS cells over the tables. tagpu_wikiasset.c sight_read is the same rule."""
+    (tagpu_wikidata.h WIKISIGHT states the loader, DISASSEMBLED 0x433130, 0x433380, 0x4336F0), for the radius indices
+    `sights` reach and no other: numtables from [TABLEINFO], and for each idx = min(trunc(s / 32), numtables - 1) of
+    a sight s in `sights` (each at least SIGHT_MIN, so idx is 1 or more) TABLE<idx> as {idx, cells}, its cells
+    [[dc, dr, n], ...] in (dr, dc) order, the tables by idx. numtables, numlines and a line's count are the TDF
+    number's low 16 bits, signed; a line's value is cut at SIGHT_LINE bytes and split on ', ' (strtok), each token C's
+    atoi; each pair (x, y), each a 16-bit word, is stored as the offsets (x, -y), (y, x), (-x, y), (-y, -x); a count
+    of 0 or less, a missing line or a missing section adds nothing. None, with a report line, when the file is
+    missing, passes SIGHT_CAP bytes, does not parse or breaks a bound: numtables below 2, more than SIGHT_IDX indices,
+    and in a stored table a line short of its count's numbers, an offset past SIGHT_REACH or a count of a cell past
+    255, or past SIGHT_CELLS cells over the stored tables. A table no sight reaches is never read. tagpu_wikiasset.c
+    sight_read is the same rule."""
     hit = eng.load(eng.dirs["gamedata"], "los", "TDF")
     el = "sight table"
     if hit is None:
@@ -2178,10 +2203,13 @@ def sight_table(eng, report):
 
     info = sec("tableinfo")
     nt = word(info["keys"].get("numtables")) if info else 0
-    if not 2 <= nt <= SIGHT_TABLES:
-        return no(f"numtables {nt} is not 2..{SIGHT_TABLES}")
+    if nt < 2:
+        return no(f"numtables {nt} is below 2")
+    idxs = sorted({min(s // 32, nt - 1) for s in sights if s >= SIGHT_MIN})
+    if len(idxs) > SIGHT_IDX:
+        return no(f"the types reach {len(idxs)} tables, past {SIGHT_IDX}")
     tables, cells = [], 0
-    for idx in range(1, nt):
+    for idx in idxs:
         t = sec(f"table{idx}")
         keys = t["keys"] if t else {}
         grid = {}
@@ -2206,9 +2234,9 @@ def sight_table(eng, report):
             return no(f"TABLE{idx} counts a block past 255 times")
         cells += len(grid)
         if cells > SIGHT_CELLS:
-            return no(f"the tables pass {SIGHT_CELLS} cells")
-        tables.append([[dc, dr, grid[dc, dr]] for dc, dr in sorted(grid, key=lambda p: (p[1], p[0]))])
-    report.append({"element": el, "path": hit[1], "where": hit[2], "numtables": nt, "cells": cells})
+            return no(f"the stored tables pass {SIGHT_CELLS} cells")
+        tables.append({"idx": idx, "cells": [[dc, dr, grid[dc, dr]] for dc, dr in sorted(grid, key=lambda p: (p[1], p[0]))]})
+    report.append({"element": el, "path": hit[1], "where": hit[2], "numtables": nt, "indices": idxs, "cells": cells})
     return {"numtables": nt, "tables": tables}
 
 
@@ -2314,7 +2342,7 @@ def bar_art(eng, art, s, fonts, report):
             "rects": {r: rects[r] for r in BAR_RECTS}, "ecol": ecol, "mcol": mcol, "font": fonts[source][0]}
 
 
-def side_pack(eng, mod, descs, rows, out, pal, report):
+def side_pack(eng, mod, descs, rows, out, pal, report, sights):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
     its casting and the pages of its cast types. `rows` holds each stage's scene rows, which its map grows from beside
@@ -2424,7 +2452,8 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
                                    f"no live button for the {d} {unit}"})
     height = max([SIDE_MIN_H] + [s["y"] + s["h"] for s in screens.values()])
     layout = {"format": 1, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
-              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens, "sight": sight_table(eng, report)}
+              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens,
+              "sight": sight_table(eng, report, sights | {k["sightDistance"] for c in casting for k in c["casts"].values() if k})}
 
     # PANELSIDE of every layout side, and the dots
     side_art = {"panelside": []}
@@ -2690,7 +2719,7 @@ def main(argv=None):
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, descs, rows, out, palette, report)
+            pack = side_pack(eng, args.mod, descs, rows, out, palette, report, entry_sights())
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1

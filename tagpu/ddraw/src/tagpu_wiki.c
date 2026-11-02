@@ -1633,12 +1633,12 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
     if (!L->sight.numtables) fputs("null", f);
     else {
         fprintf(f, "{\"numtables\":%d,\"tables\":[", L->sight.numtables);
-        for (i = 1; i < L->sight.numtables && i < WIKI_SIGHT_TABLES; i++) {
-            fprintf(f, "%s[", i > 1 ? "," : "");
-            for (k = L->sight.first[i - 1]; k < L->sight.first[i] && k < WIKI_SIGHT_CELLS; k++)
-                fprintf(f, "%s[%d,%d,%d]", k > L->sight.first[i - 1] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+        for (i = 0; i < L->sight.nidx && i < WIKI_SIGHT_IDX; i++) {
+            fprintf(f, "%s{\"idx\":%d,\"cells\":[", i ? "," : "", L->sight.idx[i]);
+            for (k = L->sight.first[i]; k < L->sight.first[i + 1] && k < WIKI_SIGHT_CELLS; k++)
+                fprintf(f, "%s[%d,%d,%d]", k > L->sight.first[i] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
                         L->sight.cell[k].n);
-            fputc(']', f);
+            fputs("]}", f);
         }
         fputs("]}", f);
     }

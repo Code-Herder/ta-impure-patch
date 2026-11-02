@@ -14,8 +14,8 @@ one, and on the stock pack checks the cast rule's stock identity (`stock_identit
 what pins it.
 
 From the stock pack it also writes the fixture layouts' `sight` (art/wiki/side/fixture.json and fixture-tall.json),
-the stock game's sight table as gfx.py reduces it to count grids, so that the wiki's fallback layout lights what the
-stock game lights (`fixture_sight`).
+the stock game's sight table as gfx.py reduces it to count grids -- the tables the stock castings and the tree's players
+entries reach -- so that the wiki's fallback layout lights what the stock game lights (`fixture_sight`).
 
 This mapping is test tooling; the picture rule and the cast rule in gfx.py name no mod. `unknown`
 has no pack: the mockup gives it the fixture layout.
@@ -194,7 +194,7 @@ def stock_identity(pack):
 
 def fixture_sight(pack):
     """The stock pack's sight table written into each fixture layout as its `sight`, in place of the one it holds, one
-    table a line before `screens`. Returns the files it changed."""
+    stored table ({idx, cells}) a line before `screens`. Returns the files it changed."""
     sight = pack["layout"].get("sight")
     if sight is None:
         return []

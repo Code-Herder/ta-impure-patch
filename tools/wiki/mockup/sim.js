@@ -159,27 +159,36 @@ const WikiSim = (() => {
     return L;
   }
   /* THE SIGHT TABLE of a layout's mod (tagpu_wikidata.h WIKISIGHT, which states the engine's loader and stamp it
-     reduces): `sight`, absent or null for none, else {numtables, tables}: numtables an integer 2..SIGHT_TABLES and
-     tables a list of numtables - 1 count grids, TABLE<idx> at index idx - 1, each a list of [dc, dr, n] -- the block
-     offset (column, row) from the unit's own and the number of ray points on it -- strictly increasing by (dr, dc),
-     |dc|, |dr| <= SIGHT_REACH, n 1..255, at most SIGHT_CELLS cells over every table. A unit of sight s lights the
-     cells of table min(trunc(s / 32), numtables - 1) and its own block. */
-  const SIGHT_TABLES = 64, SIGHT_REACH = 63, SIGHT_CELLS = 16384;
+     reduces, and why only the tables the setup's types reach are kept): `sight`, absent or null for none, else
+     {numtables, tables}: numtables an integer 2..SIGHT_NUMTABLES and tables a list of at most SIGHT_IDX {idx, cells},
+     idx strictly increasing within 1..numtables - 1 and cells a count grid, a list of [dc, dr, n] -- the block offset
+     (column, row) from the unit's own and the number of ray points on it -- strictly increasing by (dr, dc), |dc|,
+     |dr| <= SIGHT_REACH, n 1..255, at most SIGHT_CELLS cells over every table. A unit of sight s lights the cells of
+     table sightIndex(S, s) and its own block. */
+  const SIGHT_NUMTABLES = 32767, SIGHT_IDX = 32, SIGHT_REACH = 63, SIGHT_CELLS = 32768;
   function checkSight(S, no) {
     if (S === undefined || S === null) return;
-    if (!obj(S) || !(int(S.numtables) && S.numtables >= 2 && S.numtables <= SIGHT_TABLES) || !Array.isArray(S.tables) ||
-        S.tables.length !== S.numtables - 1) no('the sight table is not {numtables, tables}');
+    if (!obj(S) || !(int(S.numtables) && S.numtables >= 2 && S.numtables <= SIGHT_NUMTABLES) || !Array.isArray(S.tables) ||
+        S.tables.length > SIGHT_IDX) no('the sight table is not {numtables, tables}');
     let n = 0;
-    for (const T of S.tables) {
-      if (!Array.isArray(T) || (n += T.length) > SIGHT_CELLS) no('the sight table is not {numtables, tables}');
-      T.forEach((c, k) => {
+    S.tables.forEach((T, i) => {
+      if (!obj(T) || !int(T.idx) || T.idx < 1 || T.idx >= SIGHT_NUMTABLES || !Array.isArray(T.cells) || (n += T.cells.length) > SIGHT_CELLS)
+        no('the sight table is not {numtables, tables}');
+      T.cells.forEach((c, k) => {
         if (!Array.isArray(c) || c.length !== 3 || !c.every(int) || Math.abs(c[0]) > SIGHT_REACH || Math.abs(c[1]) > SIGHT_REACH ||
             c[2] < 1 || c[2] > 255) no(`a sight table's cell is past ${SIGHT_REACH} blocks or counts nothing`);
-        if (k && (c[1] < T[k - 1][1] || (c[1] === T[k - 1][1] && c[0] <= T[k - 1][0])))
+        if (k && (c[1] < T.cells[k - 1][1] || (c[1] === T.cells[k - 1][1] && c[0] <= T.cells[k - 1][0])))
           no('a sight table\'s cells are not in order by row, then column, each once');
       });
-    }
+      if (T.idx >= S.numtables || (i && T.idx <= S.tables[i - 1].idx))
+        no('a sight table\'s indices are not increasing within 1..numtables - 1');
+    });
   }
+  /* THE RADIUS INDEX of a sight over a layout's table S, the engine's min(trunc(sight / 32), numtables - 1)
+     (0x48230D..0x482366); 0 below SIGHT_MIN or without a table, where no table is read (tagpu_wikidata_sight_index) */
+  const sightIndex = (S, s) => s < SIGHT_MIN || !S ? 0 : Math.min(Math.trunc(s / 32), S.numtables - 1);
+  // the stored table {idx, cells} a sight stamps with, or null (tagpu_wikidata_sight_table)
+  const sightTable = (S, s) => { const i = sightIndex(S, s); return i ? S.tables.find(T => T.idx === i) || null : null; };
 
   /* ---- casts and castings (research/notes/ingame-wiki.md, the owner's decisions 13-15 and 20) ----
      Each unit of an entry names its cast, its place in the demos; a casting answers each cast with one of the mod's
@@ -208,7 +217,14 @@ const WikiSim = (() => {
   const SIGHT = [['sightDistance', -32768, 32767], ['radarDistance', -32768, 32767], ['sonarDistance', -32768, 32767],
     ['modelHeight', 0, 255]];
   const SIGHT_MIN = 32;
-  const sightFits = k => ('sightDistance' in k ? k.sightDistance : 0) >= SIGHT_MIN;
+  /* a type of figures k plays in a players entry's game over the layout's sight table S (null: none): its sight at
+     least SIGHT_MIN and, with a table, its radius index stored (tagpu_wikidata_sight_ok). The binder leaves a cast that
+     fails it unbound and make refuses an entry's own type that does, so the stamp never reads a table the layout does
+     not hold */
+  const sightFits = (k, S = null) => {
+    const s = 'sightDistance' in k ? k.sightDistance : 0;
+    return s >= SIGHT_MIN && (!S || sightTable(S, s) !== null);
+  };
   const sightBad = (k, n, lo, hi) => n in k && !(int(k[n]) && k[n] >= lo && k[n] <= hi);
   // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
   // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
@@ -285,7 +301,8 @@ const WikiSim = (() => {
      with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt, sight figures and G cells, and a build list that holds unit j
      of the entry exactly when the casting's build list names j's cast and j is on the unit's own side (a rival or
      not). A unit of an unbound cast -- in a game, also of a cast whose economy is outside the game's bounds
-     (econFits), and in a players entry's game of one below the sight floor (sightFits) -- keeps the authored definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
+     (econFits), and in a players entry's game of one below the sight floor or whose sight table the layout does not store
+     (sightFits) -- keeps the authored definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
      types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
      captions). Every unit names one of the ten casts and no two units of one side one cast; two units bound to one
@@ -300,7 +317,7 @@ const WikiSim = (() => {
      unit order, put over the row of its name or appended after the rows; past FEAT_DEFS rows the demo is refused. A
      unit keeping its authored definition keeps its authored corpse. Outside a game entry a cast's corpse stays in the
      casting. tagpu_wikisim.c builds the same as WIKISIM's own bdef[] (a field of the sim, so it lives and dies with it). */
-  function binder(entry, casting, rival = null, game = false) {
+  function binder(entry, casting, rival = null, game = false, sight = null) {
     const K = checkCasting(casting).casts, R = rival ? checkCasting(rival).casts : null;
     const names = Object.keys(entry.units), to = {}, seen = new Set();
     const isRival = t => entry.units[t].rival === true;
@@ -308,7 +325,7 @@ const WikiSim = (() => {
        economy reads the cast's economy figures, so a game leaves a cast whose figures are outside its bounds unbound */
     const castFor = t => {
       const k = isRival(t) ? (R ? R[entry.units[t].cast] : undefined) : K[entry.units[t].cast];
-      return k && game && (!econFits(k) || (entry.players === true && !sightFits(k))) ? null : k;
+      return k && game && (!econFits(k) || (entry.players === true && !sightFits(k, sight))) ? null : k;
     };
     for (const t of names) {
       const c = entry.units[t].cast;
@@ -1040,8 +1057,15 @@ const WikiSim = (() => {
     if (GAME && econMode !== 'refuse' && econMode !== 'stall') throw new Error(`the economy's mode ${econMode} is not refuse or stall`);
     const demoIn = GAME ? gameDemo(demoGiven) : demoGiven, NIN = GAME ? inputSeats(entryIn, demoGiven) : 1;
     // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
-    const B = ctx.casting ? binder(entryIn, ctx.casting, ctx.rival, GAME) : null;
+    const SIGHTT = layout && layout.sight ? layout.sight : null;
+    const B = ctx.casting ? binder(entryIn, ctx.casting, ctx.rival, GAME, SIGHTT) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
+    /* THE SIGHT TABLE a players game stamps with: a type of the bound entry whose radius index the layout's table does
+       not store refuses the game -- an entry's own type, since the binder left a cast of one unbound */
+    if (GAME && entry.players === true && SIGHTT)
+      for (const [t, d] of Object.entries(entry.units))
+        if (!sightFits(d, SIGHTT)) throw new Error(`unit ${t}: a players entry's type of sightDistance ${d.sightDistance} ` +
+          `reaches sight table ${sightIndex(SIGHTT, d.sightDistance)}, which the layout does not store`);
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
     if (!KINDS.includes(S.kind)) throw new Error(`the scene's reclaim kind ${JSON.stringify(S.kind)} is not one of ${KINDS}`);
     const ON = !!layout && (() => {
@@ -3585,8 +3609,8 @@ const WikiSim = (() => {
     HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, TAKEOVER_CONTROLS, PLAYERS_CONTROLS, CHIPS, HUD_DOWN, HUD_UP,
     // a players entry's seat's camera at a tick (tagpu_wikidata_seat_cam), its deaths' bound and the sight floor
     seatCam, PLAYERS_DEATHS, PLAYERS_DEATH_SPAN, SIGHT_MIN,
-    // a layout's sight table's bounds (tagpu_wikidata.h WIKI_SIGHT_*)
-    SIGHT_TABLES, SIGHT_REACH, SIGHT_CELLS,
+    // a layout's sight table's bounds (tagpu_wikidata.h WIKI_SIGHT_*), and the table a sight stamps with
+    SIGHT_NUMTABLES, SIGHT_IDX, SIGHT_REACH, SIGHT_CELLS, sightIndex, sightTable,
     // a live demo's fork parts, at most, and the bound of their ids (the recorder's RECR_TIMELINES)
     DEMO_FORKS, TIMELINES,
     // the recorder's rules (THE RECORDER'S RULES), which replay.js plans its forks with
