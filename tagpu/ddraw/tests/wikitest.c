@@ -952,6 +952,35 @@ static void tk_view(const WIKIREPLAYVIEW* v)
     fputs("]}", stdout);
 }
 
+/* a players replay's `players` block in replay.js's shape */
+static void players_view(const WIKIREPLAYVIEW* v)
+{
+    int i;
+    printf(",\"players\":{\"cam\":{\"x\":%d,\"z\":%d},\"follow\":%d,\"jumpReq\":%d,\"sight\":%d,\"sightReq\":%d,\"tog\":%d,"
+           "\"folded\":%d,\"stat\":{\"open\":%s,\"measure\":%d,\"team\":%s},\"clickFrom\":%d,\"shown\":%d,\"pend\":%s,"
+           "\"bar\":{\"be\":", v->cam_x, v->cam_z, v->follow, v->jump_req, v->sight, v->sight_req, v->tog, v->folded,
+           v->stat_open ? "true" : "false", v->stat_measure, v->stat_team ? "true" : "false", v->click_from, v->shown,
+           v->pend ? "true" : "false");
+    f32(v->pbe);
+    fputs(",\"bm\":", stdout);
+    f32(v->pbm);
+    fputs(",\"rates\":[", stdout);
+    for (i = 0; i < 4; i++) {
+        if (i) putchar(',');
+        f32(v->prates[i]);
+    }
+    fputs("],\"dt\":[", stdout);
+    for (i = 0; i <= WIKI_SEATS; i++) printf("%s%d", i ? "," : "", v->pdt[i]);
+    printf("]},\"pass\":{\"at\":%d,\"blocks\":%d,\"fog\":\"", v->pass_at, v->pass_blocks);
+    for (i = 0; i < (v->pass_blocks + 7) / 8; i++) printf("%02x", v->pass_fog[i]);
+    fputs("\",\"contacts\":[", stdout);
+    for (i = 0; i < v->npass_contact; i++) {
+        if (i) putchar(',');
+        str(v->pass_contact[i]);
+    }
+    printf("]},\"npt\":%d,\"nseat\":%d,\"base\":%d,\"period\":%d}", v->npt, v->nseat, v->base, v->period);
+}
+
 /* the replay's view in replay.js's R.view() shape */
 static void replay_view(const WIKIREPLAYVIEW* v)
 {
@@ -996,7 +1025,8 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("toast", 0);
     if (v->toast_kind >= 0) {
         static const char* const TOASTS[] = { "added", "removed", "playing_on", "cannot", "armed", "playing_from", "refused",
-                                              "taking_over", "cannot_take", "saved", "cannot_save", "click_delete", "deleted" };
+                                              "taking_over", "cannot_take", "saved", "cannot_save", "click_delete", "deleted",
+                                              "camera" };
         printf("{\"kind\":\"%s\",\"at\":%d,\"value\":%d", TOASTS[v->toast_kind], v->toast_at, v->toast_value);
         if (v->live || v->tk) printf(",\"evict\":%d", v->toast_evict);
         if (v->toast_seat >= 0) printf(",\"seat\":%d", v->toast_seat);
@@ -1008,11 +1038,13 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("left", 0); fputs(v->left ? "true" : "false", stdout);
     if (v->live) live_view(v);
     if (v->tk) tk_view(v);
+    if (v->players) players_view(v);
     putchar('}');
 }
 
-/* one demo tick of a replay: its hash and view, then the game's hash, view and orders */
-static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int map)
+/* one demo tick of a replay: its hash and view, then the game's hash, view and orders; a players
+   replay's also the game's sight_out over `t`, its layout's table (NULL none) */
+static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int map, const WIKISIGHT* t)
 {
     WIKIREPLAYVIEW rv;
     WIKISIM* s = tagpu_wikireplay_game(r);
@@ -1037,6 +1069,10 @@ static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int
             orders(s, v->unit[i].id);
         }
         putchar('}');
+        if (rv.players) {
+            key("s", 0);
+            sight_out(s, t);
+        }
     } else fputs(",\"gh\":null,\"v\":null,\"o\":null", stdout);
     fputs("}\n", stdout);
 }
@@ -1056,10 +1092,10 @@ static int replay(const char* path, const char* entry, const char* layout, const
             refused_line(g.e.id, g.e.demo[j].id, err);
             continue;
         }
-        replay_frame(&r, g.e.id, g.e.demo[j].id, 1);
+        replay_frame(&r, g.e.id, g.e.demo[j].id, 1, g.lay ? &g.lay->sight : NULL);
         while (!r.done) {
             tagpu_wikireplay_step(&r);
-            replay_frame(&r, g.e.id, g.e.demo[j].id, r.done);
+            replay_frame(&r, g.e.id, g.e.demo[j].id, r.done, g.lay ? &g.lay->sight : NULL);
         }
         tagpu_wikireplay_free(&r);
     }
@@ -1067,10 +1103,12 @@ static int replay(const char* path, const char* entry, const char* layout, const
     return 0;
 }
 
-/* a press of Try it's by replay.js's name: a control, or the question's Yes, which no script names */
+/* a press of Try it's by replay.js's name: a control, or the question's Yes or a team row's fold,
+   which no script names */
 static int press_of(const char* name)
 {
-    return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : tagpu_wikidata_hud(name);
+    return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : name && !strcmp(name, "fold") ? WIKI_HUD_FOLD
+         : tagpu_wikidata_hud(name);
 }
 
 /* a WIKI_KEY_* by sim.js's name, or -1 */
@@ -1112,7 +1150,7 @@ static int replaytrace(const char* path, const char* entry, const char* layout, 
         return rc;
     }
     for (;;) {
-        replay_frame(&r, g.e.id, g.e.demo[0].id, r.tick == 0 || r.done || r.tick >= last);
+        replay_frame(&r, g.e.id, g.e.demo[0].id, r.tick == 0 || r.done || r.tick >= last, g.lay ? &g.lay->sight : NULL);
         if (r.done || r.tick >= last) break;
         for (p = tj_is(tj_get(root, "presses"), TJ_ARR) ? tj_get(root, "presses")->first : NULL; p; p = p->next) {
             const char* what = tj_str(tj_at(p, 1), NULL);
@@ -1535,8 +1573,10 @@ static int constants(void)
     for (k = 0, n = 0; k < WIKI_NHUD; k++)
         if (tagpu_wikidata_hud_players(k)) { if (n++) putchar(','); str(tagpu_wikidata_hud_name(k)); }
     printf("],\"PLAYERS_DEATHS\":%d,\"PLAYERS_DEATH_SPAN\":%d,\"SIGHT_MIN\":%d,\"SIGHT_NUMTABLES\":%d,\"SIGHT_IDX\":%d,"
-           "\"SIGHT_REACH\":%d,\"SIGHT_CELLS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN,
-           WIKI_SIGHT_NUMTABLES, WIKI_SIGHT_IDX, WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS);
+           "\"SIGHT_REACH\":%d,\"SIGHT_CELLS\":%d,\"STAT_MEASURES\":%d,\"STAT_MEASURE0\":%d,\"STAT_PTS\":%d,\"TOG_ALL\":%d,"
+           "\"NOT_ASKED\":%d,\"PASS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN,
+           WIKI_SIGHT_NUMTABLES, WIKI_SIGHT_IDX, WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS, WIKI_STAT_MEASURES, WIKI_STAT_MEASURE0,
+           WIKI_STAT_PTS, (int)WIKI_REPLAY_TOG_ALL, WIKI_REPLAY_NOT_ASKED, WIKI_REPLAY_PASS);
     return 0;
 }
 

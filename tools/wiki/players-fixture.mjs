@@ -28,3 +28,26 @@ export function playersFixture() {
     inputs: [...d.game.inputs.map(x => 'kill' in x ? { ...x, by: 0 } : x), ...camera] } }));
   return e;
 }
+
+/* THE PLAYERS SCRATCH ENTRY: the fixture with Bram's camera not recorded (his scene camera and camera input gone), so
+   Jump and Follow on his row toast, and one demo whose viewer presses the Players set -- Jump and Follow on Ada, the
+   switches, the stats window and its chips, a seek to before w1's death and Sight on Bram through it (his death vision
+   and Ada's units as his commander's radar contacts), the pause, Sight changes while paused (the bar's re-read), a
+   seek back while paused (every DisplayTimer to the shown tick), Follow off, Jump and Follow on Bram, close and a
+   switch -- so that both twins are shown to play the replay layer's players state alike. */
+export function playersScratch() {
+  const e = playersFixture();
+  e.id = 'players-scratch';
+  e.scenes = Object.fromEntries(Object.entries(e.scenes).map(([n, sc]) => [n, { ...sc,
+    seats: sc.seats.map((z, k) => { if (k !== 1) return z; const { camera, ...rest } = z; return rest; }) }]));
+  const base = e.demos[0];
+  const inputs = [{ at: 0, caption: 'The Players set.' }, { at: 10, hud: 'jump', seat: 0 }, { at: 40, hud: 'follow', seat: 0 },
+    { at: 70, hud: 'cursors' }, { at: 100, hud: 'stats' }, { at: 130, hud: 'chip', chip: 'army' }, { at: 160, hud: 'chip', chip: 'team' },
+    { at: 190, hud: 'track', to: 1150 }, { at: 220, until: 'seeked', max: 120 }, { at: 230, hud: 'sight', seat: 1 },
+    { at: 290, hud: 'play' }, { at: 320, hud: 'sight', seat: 0 }, { at: 350, hud: 'sight', seat: 0 }, { at: 380, hud: 'sight', seat: 1 },
+    { at: 410, hud: 'rew' }, { at: 440, hud: 'play' }, { at: 470, hud: 'follow', seat: 0 }, { at: 500, hud: 'jump', seat: 1 },
+    { at: 530, hud: 'follow', seat: 1 }, { at: 560, hud: 'close' }, { at: 590, hud: 'selections' }];
+  e.demos = [{ ...base, id: 'players', end: 640, inputs,
+    game: { ...base.game, inputs: base.game.inputs.filter(x => !('camera' in x && x.seat === 1)) } }];
+  return e;
+}

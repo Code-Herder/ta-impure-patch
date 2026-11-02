@@ -3563,15 +3563,29 @@ const WikiSim = (() => {
     sim.free = () => { if (COB) COB.free(); };
     /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,
        a pass that starved, a kill that found no unit), the sound events made since it was made, each seat's units,
-       commanders lost, whether it is out, and its kills and losses; and of `seat` (0 when absent, and for a seat of no input state) the
-       inputs fed, the stored values, storage and last pass's rates, which the live mode's top bar eases and samples
-       (tagpu_wikisim.h WIKIECON's m, e, mmax, emax, ei, eo, mi, mo), and the keys and buttons it holds, in KEYS order */
+       commanders lost, whether it is out, its kills and losses, its stored values, storage and last pass's rates (`bar`,
+       which a players replay's top bar eases toward under Sight), its metal income, energy income and metal wasted, and
+       its army value (army); and of `seat` (0 when absent, and for a seat of no input state) the inputs fed, the stored
+       values, storage and last pass's rates, which the live mode's top bar eases and samples (tagpu_wikisim.h WIKIECON's
+       m, e, mmax, emax, ei, eo, mi, mo), and the keys and buttons it holds, in KEYS order */
+    const barOf = z => ({ e: z.e, m: z.m, emax: z.emax, mmax: z.mmax, ei: z.ei, eo: z.eo, mi: z.mi, mo: z.mo });
+    /* THE ARMY VALUE of seat k (tagpu_wikisim_army; tagpu_replay_army_values, tagpu_hudmarks.c sample): the metal cost
+       of each of its live, finished units of a mobile type that is not its commander -- the game values a type whose
+       BMcode +0x22F is 1 and that is not a commander (+0x245 bit 0x40000) at its metal cost +0x18A, every other at 0 --
+       summed in f32 in the units' order, as the game sums its floats */
+    function army(k) {
+      let a = 0;
+      for (const u of units)
+        if (u.owner === k && u.built >= 1 && mobile(u.type) && def(u.type).cast !== 'commander')
+          a = Math.fround(a + Math.fround(def(u.type).buildCostMetal || 0));
+      return a;
+    }
     if (GAME) sim.gameNow = (seat = 0) => {
       const k = isSeat(seat) ? seat : 0, z = econ[k];
       return { stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
-        seats: econ.map(e => ({ units: e.units, lost: e.lost, out: e.out, kills: e.kills, losses: e.losses })), fed: IN[k].fed,
-        bar: { e: z.e, m: z.m, emax: z.emax, mmax: z.mmax, ei: z.ei, eo: z.eo, mi: z.mi, mo: z.mo },
-        keys: KEYS.filter(b => IN[k].held.has(b)) };
+        seats: econ.map((e, j) => ({ units: e.units, lost: e.lost, out: e.out, kills: e.kills, losses: e.losses, bar: barOf(e),
+          mi: e.mi, ei: e.ei, wm: e.wm, army: army(j) })), fed: IN[k].fed,
+        bar: barOf(z), keys: KEYS.filter(b => IN[k].held.has(b)) };
     };
     /* THE RELEASE (tagpu_wikisim_release), between two ticks: what the game's rebuild leaves of seat k's input after
        Back to now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a return

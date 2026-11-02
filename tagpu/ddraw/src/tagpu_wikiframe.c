@@ -118,6 +118,7 @@ void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, 
     case WIKI_TOAST_CANNOT_SAVE: snprintf(out, HUD_TOASTLEN, "Cannot save F%d", rv->toast_value); break;
     case WIKI_TOAST_CLICK_DELETE: snprintf(out, HUD_TOASTLEN, "Click again to delete F%d", rv->toast_value); break;
     case WIKI_TOAST_DELETED: snprintf(out, HUD_TOASTLEN, "F%d deleted", rv->toast_value); break;
+    case WIKI_TOAST_CAMERA: copy(out, HUD_TOASTLEN, "Camera was not recorded"); break;
     default: copy(out, HUD_TOASTLEN, "Rewind refused"); break;
     }
 }

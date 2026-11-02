@@ -156,6 +156,7 @@ const WikiFrame = (() => {
       case 'cannot_save': return `Cannot save F${t.value}`;
       case 'click_delete': return `Click again to delete F${t.value}`;
       case 'deleted': return `F${t.value} deleted`;
+      case 'camera': return 'Camera was not recorded';
       default: return 'Rewind refused';
     }
   }

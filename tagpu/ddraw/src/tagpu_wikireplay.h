@@ -59,6 +59,18 @@
    does, and a switch frees the walker before the new one is made; the takeover frees the walker,
    which live mode has none of. A kept fork's part points into the entry's data, only read.
 
+   PLAYERS, a players entry's demo (WIKIENTRY.players): a replay with the replay HUD's Players set
+   -- the viewer's camera, moved by Jump and Follow alone (each seat's camera is recorded data,
+   tagpu_wikidata_seat_cam), Sight, the overlays' switches, the team rows' folds and the stats
+   window -- with each step's tail after the game's part, paused or not: the camera, a seek's end
+   and a Sight request, the minimap's pass, the top bar. replay.js's header and its functions
+   state the rules. The walker samples every seat's measures as it walks.
+   THE BOUND, PLAYERS: a tail costs one pass at most (a lit grid and the contacts), one ease and
+   one re-read; the samples are at most WIKI_STAT_PTS; the pass's contacts are the view's units
+   at most, in a block the replay owns and frees. The Players set is inert in every other replay:
+   tagpu_wikireplay_press takes it only in a players replay, and the loader refuses it in any
+   other entry's script.
+
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS, as tagpu_wikisim.c: one WIKIREPLAY is used by one
    thread at a time, and it lives as long as its caller keeps it. The DLL compiles this file for
    SSE2 with the simulation (Makefile, THE WIKI'S SIMULATION): it computes on integers, its one
@@ -104,11 +116,12 @@
    strings: "Playing on from m:ss", "Cannot play from m:ss", "Click again to play from m:ss" with
    ", replacing F<n>", "Playing from m:ss", "Rewind refused"), then the Take over set's six
    ("Taking over NAME at m:ss", "Cannot take over at m:ss", "F<id> saved as a replay of its own",
-   "Cannot save F<id>", "Click again to delete F<id>", "F<id> deleted"); a marker's is HUD_MK_DEATH
-   or HUD_MK_DEFEAT */
+   "Cannot save F<id>", "Click again to delete F<id>", "F<id> deleted"), then the Players set's
+   "Camera was not recorded" (tagpu_hudinput.c:800, Jump or Follow on a seat with no camera); a
+   marker's is HUD_MK_DEATH or HUD_MK_DEFEAT */
 enum { WIKI_TOAST_ADDED, WIKI_TOAST_REMOVED, WIKI_TOAST_PLAYING_ON, WIKI_TOAST_CANNOT, WIKI_TOAST_ARMED,
        WIKI_TOAST_PLAYING_FROM, WIKI_TOAST_REFUSED, WIKI_TOAST_TAKING_OVER, WIKI_TOAST_CANNOT_TAKE, WIKI_TOAST_SAVED,
-       WIKI_TOAST_CANNOT_SAVE, WIKI_TOAST_CLICK_DELETE, WIKI_TOAST_DELETED };
+       WIKI_TOAST_CANNOT_SAVE, WIKI_TOAST_CLICK_DELETE, WIKI_TOAST_DELETED, WIKI_TOAST_CAMERA };
 
 /* TAKE OVER's names (replay.js PICKS, MODES): the picker's states (tagpu_hudinput.c PICK_CLOSED,
    _ASKED, _SEEKING, _OPEN) and a takeover replay's modes, watching the recording and the live game
@@ -130,6 +143,22 @@ enum { WIKI_LOG_MOVE, WIKI_LOG_DOWN, WIKI_LOG_UP, WIKI_LOG_RELEASE };
 #define WIKI_REPLAY_LOG      65536
 #define WIKI_REPLAY_LOG_KEEP (WIKI_NKEYS + 1)
 #define WIKI_REPLAY_AT_GAME  (-2)
+
+/* THE PLAYERS STATE's names and bounds (replay.js MEASURES, MEASURE0, STAT_PTS, TOG_ALL, NOT_ASKED,
+   PASS): the stats window's seven measures, the chips from WIKI_CHIP_METAL on in their order (a
+   measure's index is its chip's less WIKI_CHIP_METAL) and the one a replay starts on; the samples
+   a seat keeps, one at the walk's first tick and one every 30 GameTime to WIKI_GAME_END_MAX, within
+   the game HUD's series (HUD_MAXPT, TAGPU_PK_HUD_POINTS); the four overlay switches, all on at a
+   replay's start; a Sight request's "none" (-1 is the full map); the radar pass's 30-tick
+   deadline; the pass's fog bits, one a block of the sight grid. */
+#define WIKI_STAT_MEASURES     (WIKI_NCHIP - WIKI_CHIP_METAL)
+#define WIKI_STAT_MEASURE0     (WIKI_CHIP_UNITS - WIKI_CHIP_METAL)
+#define WIKI_STAT_PTS          (WIKI_GAME_END_MAX / WIKI_REPLAY_RATE + 1)
+#define WIKI_REPLAY_TOG_ALL    (HUD_TOG_CURSORS | HUD_TOG_CLICKS | HUD_TOG_SELECTIONS | HUD_TOG_CHAT)
+#define WIKI_REPLAY_NOT_ASKED  (-2)
+#define WIKI_REPLAY_PASS       30
+#define WIKI_REPLAY_FOG        ((WIKI_SIGHT_GRID + 7) / 8)
+_Static_assert(WIKI_STAT_PTS <= HUD_MAXPT, "a players replay's samples fit the game HUD's series");
 
 /* An entry of a timeline's log: applied live between two ticks, applied again by every
    re-simulation at the same point. tau the tick it first acts on (the simulation stands at tau - 1);
@@ -207,6 +236,27 @@ typedef struct {
        takeover's picker drew the fork limit's warning */
     int         tk, tk_mode, pick, pick_R, pick_evict, pick_parent, pick_tl, pick_serial, lanes, armed;
     int         chain_last, fill_to, serial, nsaved, saved[RECR_TIMELINES], bg, walker_tick, tk_full;
+    /* PLAYERS (replay.js's view's `players`; `players` 0 leaves the rest 0): the viewer's camera, a
+       view's centre in world units; Follow's seat and the Jump asked (-1 none); Sight's seat (-1 the
+       full map) and the one asked (WIKI_REPLAY_NOT_ASKED none); the overlay switches (HUD_TOG_*);
+       the folded team rows, a bit each; the stats window open, its measure (an index of the seven,
+       WIKI_STAT_MEASURES) and its split by team; the tick a click must be at or after to show; the
+       shown tick and whether a seek's end is due; the top bar's memo, f32 as the engine's, and each
+       record's DisplayTimer, the seats' then the watcher's; the pass: its tick (-1 none), its
+       blocks (0 under the full map), the fog bits (block i lit is bit i & 7 of byte i >> 3) and the
+       ids of the units its contacts mark -- `pass_contact` points into the replay, valid until the
+       next tagpu_wikireplay_step, _press or _free; the samples' count, the seats each holds (the
+       scene's), base and period (tagpu_wikireplay_stat reads one). */
+    int         players;
+    int         cam_x, cam_z, follow, jump_req, sight, sight_req, tog, folded;
+    int         stat_open, stat_measure, stat_team, click_from, shown, pend;
+    float       pbe, pbm, prates[4];
+    int         pdt[WIKI_SEATS + 1];
+    int         pass_at, pass_blocks;
+    uint8_t     pass_fog[WIKI_REPLAY_FOG];
+    int         npass_contact;
+    const char (*pass_contact)[WIKI_ID_MAX];
+    int         npt, nseat, base, period;
 } WIKIREPLAYVIEW;
 
 /* The replay; the caller owns it and reads nothing of it but through the functions below. */
@@ -259,6 +309,24 @@ typedef struct {
        whether the walker walks in the background; whether the takeover's picker drew the warning */
     int               tk, pick, pick_R, pick_evict, pick_parent, pick_tl, pick_serial;
     int               serial, lanes, armed, nsaved, saved[RECR_TIMELINES], bg, tk_full;
+    /* PLAYERS (replay.js's players state; `players` a players entry's replay): the view's fields of
+       the same names, with the shown world's figures the top bar eases toward (p_*: the viewed
+       seat's stored values, storage and rates, 0 under the full map); the pass's contacts' ids in a
+       block of cpass_id the replay owns (THE LIFETIME: grown by make_pass, freed by
+       tagpu_wikireplay_free, never shrunk); the samples, sv[n][k] seat k's seven measures in
+       WIKI_STAT_MEASURES order, for the scene's seats, stat_nseat of them */
+    int               players;
+    int               cam_x, cam_z, follow, jump_req, sight, sight_req, tog, folded;
+    int               stat_open, stat_measure, stat_team, click_from, shown, pend;
+    float             pbe, pbm, prates[4];
+    int               pdt[WIKI_SEATS + 1];
+    double            p_e, p_m, p_emax, p_mmax, p_ei, p_eo, p_mi, p_mo;
+    int               pass_at, pass_blocks;
+    uint8_t           pass_fog[WIKI_REPLAY_FOG];
+    char            (*pass_id)[WIKI_ID_MAX];
+    int               npass_id, cpass_id;
+    int               npt, pbase, period, stat_nseat;
+    float             sv[WIKI_STAT_PTS][WIKI_SEATS][WIKI_STAT_MEASURES];
 } WIKIREPLAY;
 
 /* replay.js's play (`scripted` WIKI_PLAY_DEMO: the viewer's script plays) or create (WIKI_PLAY_TRY:
@@ -279,11 +347,15 @@ void tagpu_wikireplay_step(WIKIREPLAY* r);
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
 /* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included,
-   a takeover replay's watch mode also its Take over set (tagpu_wikidata_hud_takeover), or in a
-   live replay a live HUD's (tagpu_wikidata_hud_presses; anything else does nothing); for the track
-   the game tick under the pointer, which the seek clamps to the game (live, to the rewind's span),
-   for a picker row its seat, for a lane's controls the fork's id. Nothing while the replay is done
-   or still walking before it shows (a background walk is no such walk). */
+   a takeover replay's watch mode also its Take over set (tagpu_wikidata_hud_takeover), a players
+   replay's also the Players set (tagpu_wikidata_hud_players) and WIKI_HUD_FOLD, or in a live
+   replay a live HUD's (tagpu_wikidata_hud_presses; anything else does nothing); for the track the
+   game tick under the pointer, which the seek clamps to the game (live, to the rewind's span), for
+   a picker row its seat, for a lane's controls the fork's id, for a players row's Jump, Sight and
+   Follow its seat, which must be one of the scene's, for a chip its WIKI_CHIP_* and for a fold the
+   team row's index, below WIKI_SEATS (a value outside these is refused at the door, so a hit map a
+   frame old can name nothing outside the replay's). Nothing while the replay is done or still
+   walking before it shows (a background walk is no such walk). */
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value);
 
 /* Try it yourself's world input in a live replay (replay.js R.input), given between two steps: a
@@ -305,6 +377,10 @@ WIKISIM* tagpu_wikireplay_past(WIKIREPLAY* r);
 
 void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
 
+/* A players replay's sample n of seat `seat`, measure `m` (WIKI_STAT_MEASURES order); 0 outside the
+   samples taken, and in any other replay (replay.js R.stat). */
+float tagpu_wikireplay_stat(const WIKIREPLAY* r, int n, int seat, int m);
+
 /* THE REPLAY'S HASH: 64-bit FNV-1a as tagpu_wikisim_hash, an integer 4 bytes little-endian and a
    string its byte length then its bytes ("" for none), over, in order: tick, done, clock, waiting
    (WIKI_UNTIL_SEEKED or 0), stalled, the caption, failed, ignored; the game's tick, end, paused,
@@ -320,7 +396,12 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
    only, so no other replay's hash takes a byte more: the WIKI_TK_* mode, human, pick, pick_R,
    pick_evict, pick_parent, pick_tl, pick_serial, serial, lanes, armed, bg, tk_full, the saved
    count and each, the timeline count and each one's id, parent, R, last, live, used, mode and
-   seat; last the walker's tick, -1 with none. The cursor's watched and from_watched are not
+   seat; last the walker's tick, -1 with none. Then, a players replay's only, so no other replay's
+   hash takes a byte more: cam_x, cam_z, follow, jump_req, sight, sight_req, tog, folded,
+   stat_open, stat_measure, stat_team, click_from, shown, pend; pbe, pbm and the four prates as
+   their f32 bits; the five pdt; pass_at, pass_blocks, the fog bits' bytes (pass_blocks + 7) / 8 of
+   them, one byte each, the contact count and each id; npt, base, period; and every sample's f32
+   bits, n, then seat (nseat of them), then measure. The cursor's watched and from_watched are not
    hashed: they are presentation, read only by the frame record (tagpu_wikiframe.h WIKIFRAMECUR),
    which tools/wiki/framecheck.mjs holds equal to frame.js's at every trip's start, press and
    release. */

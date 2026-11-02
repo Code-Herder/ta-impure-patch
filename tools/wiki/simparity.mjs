@@ -73,7 +73,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
-import { playersFixture } from './players-fixture.mjs';
+import { playersFixture, playersScratch } from './players-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -131,6 +131,7 @@ function replayHash(R) {
   const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
   h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
   if (v.live) liveHash(R, v, h);
+  if (v.players) playersHash(R, v.players, h);
   if (!v.tk) return h.hex();
   // a takeover replay's block, tagpu_wikireplay.h's order
   const T = v.tk;
@@ -141,6 +142,18 @@ function replayHash(R) {
   for (const t of T.timelines) { h.int(t.id); h.int(t.parent); h.int(t.R); h.int(t.last); b(t.live); h.int(t.used); h.int(t.mode === 'stall' ? 1 : 0); h.int(t.seat); }
   h.int(T.walker);
   return h.hex();
+}
+// the hash's players block, tagpu_wikireplay.h's order
+function playersHash(R, P, h) {
+  const b = x => h.int(x ? 1 : 0);
+  h.int(P.cam.x); h.int(P.cam.z); h.int(P.follow); h.int(P.jumpReq); h.int(P.sight); h.int(P.sightReq); h.int(P.tog); h.int(P.folded);
+  b(P.stat.open); h.int(P.stat.measure); b(P.stat.team); h.int(P.clickFrom); h.int(P.shown); b(P.pend);
+  h.int(f32bits(P.bar.be)); h.int(f32bits(P.bar.bm)); for (const x of P.bar.rates) h.int(f32bits(x)); for (const x of P.bar.dt) h.int(x);
+  h.int(P.pass.at); h.int(P.pass.blocks);
+  for (let i = 0; i < P.pass.fog.length; i += 2) h.byte(parseInt(P.pass.fog.slice(i, i + 2), 16));
+  h.int(P.pass.contacts.length); for (const id of P.pass.contacts) h.str(id);
+  h.int(P.npt); h.int(P.base); h.int(P.period);
+  for (let n = 0; n < P.npt; n++) for (let k = 0; k < P.nseat; k++) for (let m = 0; m < WikiReplay.MEASURES.length; m++) h.int(f32bits(R.stat(n, k, m)));
 }
 // the hash's live block
 function liveHash(R, v, h) {
@@ -439,7 +452,7 @@ const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
   .filter(([, e]) => e.frame === 'game');
 // the games the game pass and the replay pass play: the entries and the takeover fixture
-const PLAYS = [...GAMES, ['players-fixture', playersFixture()], ['takeover-fixture', takeoverFixture()]];
+const PLAYS = [...GAMES, ['players-fixture', playersFixture()], ['players-scratch', playersScratch()], ['takeover-fixture', takeoverFixture()]];
 const WIKI_SEAT_MIN = 200;
 /* THE PRESS TRACE, Try it yourself's presses as [demo tick, control, value], each made after that tick's frame: one
    during the walk (nothing), the pause and the play, every speed, rew and fwd, a track press and its drag back and
@@ -453,6 +466,19 @@ const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play'
   [91, 'play', 0], [92, 'speed', 0], [93, 'leave', 0], [94, 'leave:no', 0], [95, 'leave:no', 0], [100, 'track', -50],
   [101, 'track', 99999], [112, 'play', 0], [115, 'bogus', 0], [116, 'leave:yes', 0], [120, 'rew', 0], [130, 'bookmark', 0],
   [140, 'leave', 0], [145, 'leave:yes', 0]] };
+/* THE PLAYERS PRESS TRACE, Try it yourself on a players entry's first demo (players-spec.md section 10): presses during
+   the walk (nothing); Jump, Follow, Follow again (Free cam) and Follow back on; Sight on Bram, again (the full map) and
+   on Bram again; each switch, and Cursors back on; the stats window, a measure, the team split and the player split;
+   a team row folded, another folded and unfolded; a seek forward with Sight on Ada asked while it is pending (applied
+   at its end); the pause, Sight changes while paused (the bar's re-read), a seek back while paused; Jump on Bram (a
+   toast where his camera was not recorded); a seat, a chip and a fold outside the door (nothing); close; Leave with a
+   Sight press it ignores, then Yes */
+const PLAYERS_TRACE = { end: 230, presses: [[5, 'jump', 0], [40, 'jump', 0], [45, 'follow', 0], [50, 'follow', 0], [55, 'follow', 0],
+  [60, 'sight', 1], [70, 'sight', 1], [75, 'sight', 1], [80, 'cursors', 0], [81, 'clicks', 0], [82, 'selections', 0], [83, 'chat', 0],
+  [84, 'cursors', 0], [90, 'stats', 0], [95, 'chip', 5], [96, 'chip', 1], [97, 'chip', 0], [100, 'fold', 0], [101, 'fold', 1],
+  [102, 'fold', 1], [110, 'track', 1180], [111, 'sight', 0], [140, 'play', 0], [145, 'sight', 1], [150, 'sight', 1],
+  [155, 'sight', 1], [160, 'rew', 0], [180, 'jump', 1], [185, 'jump', 9], [186, 'chip', 99], [187, 'fold', 7], [190, 'close', 0],
+  [200, 'leave', 0], [201, 'sight', 0], [205, 'leave:yes', 0]] };
 /* THE LIVE PRESS TRACE, Try it yourself on a live entry's first demo (rewind-spec.md 12.1): the presses as TRACE's
    and the world inputs as [demo tick, 'move', x, z], [demo tick, 'down' | 'up', key], each given through R.input
    after that tick's frame. In order: the rewind refused (an empty span) and a replay HUD's play (nothing); a move
@@ -2031,8 +2057,10 @@ try {
     /* ---- THE REPLAY PASS: every demo of every game entry through replay.js's play and wikitest `replay`, in this
        context, demo tick by demo tick -- the replay's view and hash, the game's view, orders and hash; then THE PRESS
        TRACE, Try it yourself (create) on the entry's first demo with TRACE's presses ---- */
-    // one replay against the C lines from `at` on, which it consumes; `presses` for Try it, else the viewer's script
-    const compareReplay = (id, demo, make, named, presses) => {
+    /* one replay against the C lines from `at` on, which it consumes; `presses` for Try it, else the viewer's script;
+       with `sight` (a players entry's: the layout's sight table, null for none) the shown game's sight each demo tick
+       too (sightOut), taken while the view still holds the map it reads */
+    const compareReplay = (id, demo, make, named, presses, sight) => {
       let R, why = null;
       try { R = make(); } catch (e) { why = e.message; }
       if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
@@ -2052,10 +2080,10 @@ try {
       let first = null, ticks = 0;
       for (;;) {
         const rv = R.view(), last = rv.done || (presses && R.tick >= presses.end), g = R.game;
-        const v = g ? g.view() : null;
+        const v = g ? g.view() : null, sv = v && sight !== undefined ? sightOut(g, v, sight) : undefined;
         if (v && !(R.tick === 0 || last)) delete v.map;
         const j = { entry: id, demo: demo.id, t: R.tick, h: replayHash(R), r: rv, gh: g ? stateHash(g, g.view()) : null, v,
-          o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null };
+          o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null, ...(sv ? { s: sv } : {}) };
         if (at >= cout.length) { first = { t: R.tick, at: '(the C replay ended early)', c: null, j: null }; break; }
         const d = diff(JSON.parse(cout[at++]), j, '');
         if (d && !first) first = { t: R.tick, ...d };
@@ -2083,18 +2111,19 @@ try {
         String(iface), cob ? 'cob.json' : '-'];
       cout = lines(wikitest(['replay', ...args]));
       at = 0;
-      for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null);
+      const sight = entry.players === true ? (layout && layout.sight) || null : undefined;
+      for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null, sight);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
       // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE; a takeover entry's its
       // TAKEOVER_TRACES, on its last demo
       const traces = entry.takeover ? TAKEOVER_TRACES.map(t => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }])
-        : [[entry.live ? LIVE_TRACE : TRACE, entry]];
+        : [[entry.live ? LIVE_TRACE : entry.players ? PLAYERS_TRACE : TRACE, entry]];
       for (const [trace, te] of traces) {
         fs.writeFileSync(path.join(tmp, 'presses.json'), JSON.stringify(trace));
         fs.writeFileSync(path.join(tmp, 'pressgame.json'), JSON.stringify(te));
         cout = lines(wikitest(['replaytrace', ...args.map(a => a === 'game.json' ? 'pressgame.json' : a), 'presses.json']));
         at = 0;
-        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace);
+        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace, sight);
         if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
       }
     }
@@ -2249,7 +2278,8 @@ try {
       const p = JSON.parse(pl), S = WikiSim;
       const q = diff(p, { CHIPS: S.CHIPS, PLAYERS_CONTROLS: S.PLAYERS_CONTROLS, PLAYERS_DEATHS: S.PLAYERS_DEATHS,
         PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_NUMTABLES: S.SIGHT_NUMTABLES, SIGHT_IDX: S.SIGHT_IDX,
-        SIGHT_REACH: S.SIGHT_REACH, SIGHT_CELLS: S.SIGHT_CELLS }, '');
+        SIGHT_REACH: S.SIGHT_REACH, SIGHT_CELLS: S.SIGHT_CELLS, STAT_MEASURES: W.MEASURES.length, STAT_MEASURE0: W.MEASURE0,
+        STAT_PTS: W.STAT_PTS, TOG_ALL: W.TOG_ALL, NOT_ASKED: W.NOT_ASKED, PASS: W.PASS }, '');
       cases++;
       if (q) { failed++; console.log(`DIFFER the players entry's constants: ${q.at}: C ${show(q.c)}, sim.js ${show(q.j)}`); }
       else console.log(`equal  the players entry's constants: ${p.CHIPS.length} chips, ${p.PLAYERS_CONTROLS.length} controls, ` +

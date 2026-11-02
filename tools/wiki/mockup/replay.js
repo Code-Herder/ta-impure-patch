@@ -97,6 +97,19 @@
    switch frees the walker before the new one is made; R.game is replaced the moment its simulation is freed. The
    takeover frees the walker: live mode has none.
 
+   PLAYERS (a players entry, `"players": true`: research/notes/ingame-wiki-replay-plan.md, entry P1-P3). The demo plays a
+   replay as Watching does, with the replay HUD's Players set: the viewer's camera, which moves by Jump and Follow alone
+   (each seat's camera is recorded data, Sim.seatCam), Sight, the overlays' switches, the team rows' folds and the
+   stats window, the game's own state for state (tagpu_hudinput.c act; players-spec.md section 6). EACH STEP'S TAIL, after
+   the game's part, paused or not (DrawGameScreen runs on every frame), at the shown tick g -- the game's, or while a
+   seek is pending the world the stage holds: the camera (Jump before Follow); a seek's end and a Sight request, which
+   a pending seek holds back as the game's frame visit runs its Sight change only with no seek pending; the minimap's
+   pass; the top bar. The walker samples every seat's measures for the stats window as it walks.
+
+   THE BOUND, PLAYERS: a tail's cost is one pass at most (two lit grids' worth: tagpu_wikisim_sight_lit and the
+   contacts), one ease and one re-read; the samples are at most STAT_PTS, the walk's ticks being at most
+   GAME_END_MAX. The Players set is inert in every other replay: its presses are no control of theirs (PRESSES).
+
    Runs in a page (the global WikiReplay, after sim.js) and under node (module.exports), as sim.js does. */
 const WikiReplay = (() => {
   const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./sim.js');
@@ -117,7 +130,7 @@ const WikiReplay = (() => {
   const STEP_MAX = Math.max(SEEK, WALK, Math.trunc(SPEEDS[SPEEDS.length - 1] / 10));
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
   const DEATH = 0, DEFEAT = 1, TOASTS = ['added', 'removed', 'playing_on', 'cannot', 'armed', 'playing_from', 'refused',
-    'taking_over', 'cannot_take', 'saved', 'cannot_save', 'click_delete', 'deleted'];
+    'taking_over', 'cannot_take', 'saved', 'cannot_save', 'click_delete', 'deleted', 'camera'];
   // the picker's states (tagpu_hudinput.c PICK_*, tagpu_wikireplay.h WIKI_PICK_*) and a takeover replay's modes
   const PICKS = ['closed', 'asked', 'seeking', 'open'], MODES = ['watch', 'live'];
   /* THE LIVE MODE's names and bounds (tagpu_wikireplay.h WIKI_RW_*, WIKI_ARM_*, WIKI_REPLAY_LOG and _LOG_KEEP): the
@@ -126,6 +139,15 @@ const WikiReplay = (() => {
      bound and what the idle rewind keeps back of it; a trip's start at seat 0's cursor */
   const RW = ['idle', 'open', 'past'], ARMS = ['none', 'seeking', 'armed'], FIRST = 1, RATE = 30;
   const LOG = 65536, LOG_KEEP = Sim.KEYS.length + 1, AT_GAME = '@game';
+  /* THE PLAYERS STATE's names and bounds (tagpu_wikireplay.h WIKI_STAT_*, WIKI_REPLAY_TOG_ALL, NOT_ASKED): what a players
+     entry's viewer presses -- the replay HUD's, the Players set and a team row's fold, which only the player presses;
+     the stats window's measures, the chips after the two splits in their order (layout.json window.measures), the one a
+     replay starts on, and the samples a seat keeps: one at the walk's first tick and one every 30 GameTime to
+     GAME_END_MAX; the four overlay switches (tagpu_hudlay.h HUD_TOG_CURSORS, _CLICKS, _SELECTIONS, _CHAT), all on at a
+     replay's start; a Sight request's "none" (-1 is the full map); the radar pass's 30-tick deadline */
+  const PL_PRESSES = [...PRESSES, ...Sim.PLAYERS_CONTROLS, 'fold'];
+  const MEASURES = Sim.CHIPS.slice(2), MEASURE0 = MEASURES.indexOf('units'), STAT_PTS = Math.trunc(Sim.GAME_END_MAX / RATE) + 1;
+  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16 }, TOG_ALL = 2 | 4 | 8 | 16, NOT_ASKED = -2, PASS = 30;
 
   /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h (sim.js holds the refresh grid, which its
      loader's kept forks are held to; simparity compares them case by case): the refresh interval, the live forks a
@@ -212,6 +234,25 @@ const WikiReplay = (() => {
     }
     // the selected chain's last tick: a takeover's watch mode plays its selected timeline to that timeline's last
     const chainLast = () => TK ? rows[selected].last : end;
+    /* THE PLAYERS STATE (PL; tagpu_wikireplay.h, WIKIREPLAY's players part), a players replay's only: the viewer's camera,
+       the view's centre, at eye (0, 0) at the start (MEASURED, m0p-facts.md P3: held at a playing's first step the eye
+       read (0, 0) with no Follow, and stayed there at GameTime 300 with no input); Follow's seat and a Jump asked (-1
+       none); Sight's seat (-1 the full map) and the one asked (NOT_ASKED none); the overlay switches; the folded team
+       rows; the stats window, closed, on its first measure, split by player; the tick a click must be at or after to
+       show (a seek empties the ring); the shown tick and whether a seek's end is due; the top bar's memo, f32 as the
+       engine's, and a DisplayTimer per record -- each seat's, then the watcher's, the full map's -- 0 as a record's is
+       from the load (MEASURED, m0p-facts.md P2: records 0-3 read 0 at GameTime 300 with no input), with the shown world's
+       figures it eases toward; the minimap's pass; the walker's samples, `sv[n][k]` the seven measures of seat k */
+    const PL = entry.frame === 'game' && entry.players === true;
+    const SIGHT = layout && layout.sight ? layout.sight : null, NSEAT = R.game.gameNow().seats.length;
+    let cam = { x: 0, z: 0 }, follow = -1, jumpReq = -1, sight = -1, sightReq = NOT_ASKED, tog = TOG_ALL, folded = 0;
+    let stat = { open: false, measure: MEASURE0, team: false }, clickFrom = 0, shownT = 0, pend = false;
+    let pbe = 0, pbm = 0, prates = [0, 0, 0, 0], pbar = { e: 0, m: 0, emax: 0, mmax: 0, ei: 0, eo: 0, mi: 0, mo: 0 };
+    const pdt = new Array(Sim.SEATS + 1).fill(0);
+    let pass = { at: -1, blocks: 0, fog: new Uint8Array(0), contacts: [] };
+    const sv = [];
+    // the period: a whole number of seconds that fits the span in the game's 512 samples (tagpu_hudmarks.c walk_start)
+    const pbase = 0, period = RATE * Math.max(1, Math.ceil((end - pbase) / (RATE * 511)));
 
     const sound = () => R.game.gameNow().sound;
     const stopped = () => R.game !== null && R.game.gameNow().stopped;
@@ -239,7 +280,8 @@ const WikiReplay = (() => {
         gen++;
         quiet = 0;
         target = T === 0 ? -1 : T;
-      } else if (T > R.game.tick) target = T;
+        pend = true;
+      } else if (T > R.game.tick) { target = T; pend = true; }
       else {
         if (target >= 0) quiet = sound();
         target = -1;
@@ -262,6 +304,7 @@ const WikiReplay = (() => {
       }
       const playhead = target >= 0 ? target : R.game.tick;
       if (TK && (pickAct(c, value) || laneAct(c, value))) return;
+      if (PL && plAct(c, value)) return;
       if (c === 'play') {
         if (playhead === chainLast()) { seek(0); paused = false; } else paused = !paused;
       } else if (c === 'speed') {
@@ -311,10 +354,12 @@ const WikiReplay = (() => {
         else if ('hud' in e) {
           // in a live demo a trip that starts while the rewind is idle starts from seat 0's cursor in the game
           const fromGame = LIVE && rw === 'idle';
-          // a trip's value: the track's tick, a picker row's seat, a lane's fork, -1 for any other button
+          // a trip's value: the track's tick, a picker row's or a players row's seat, a chip's index in CHIPS, a lane's
+          // fork, -1 for any other button
           cursor = { from: fromGame ? AT_GAME : cursor ? cursor.to : null, fromValue: fromGame || !cursor ? -1 : pos,
             fromWatched: fromGame || !cursor ? 0 : cursor.watched, to: e.hud,
-            value: e.hud === 'track' ? e.to : e.hud === 'takeas' ? e.seat : 'fork' in e ? e.fork : -1, watched: selected, at: c,
+            value: e.hud === 'track' ? e.to : ['takeas', 'jump', 'sight', 'follow'].includes(e.hud) ? e.seat
+              : e.hud === 'chip' ? Sim.CHIPS.indexOf(e.chip) : 'fork' in e ? e.fork : -1, watched: selected, at: c,
             drag: 'drag' in e ? { drag: e.drag, over: e.over } : null };
           pos = cursor.value;
         } else caption = e.caption || null;
@@ -550,17 +595,19 @@ const WikiReplay = (() => {
         const s = rw === 'past' ? R.past : R.game;
         shown = { tick: s.tick, ...s.gameNow(human).bar };
       }
-      const ease = (old, stored, cap) => {
-        const o = Math.trunc(old), d = Math.trunc(stored) - o;
-        const step = Math.trunc(d / 8) || Math.sign(d), v = o + step;
-        return Math.fround(v > cap ? cap : v);
-      };
       be = ease(be, shown.e, shown.emax);
       bm = ease(bm, shown.m, shown.mmax);
       if (dt < shown.tick) {
         dt += RATE;
         rates = [shown.ei, shown.eo, shown.mi, shown.mo].map(Math.fround);
       }
+    }
+
+    // one stored value of the memo eased toward `stored` and held to `cap` (barFrame states the rule)
+    function ease(old, stored, cap) {
+      const o = Math.trunc(old), d = Math.trunc(stored) - o;
+      const step = Math.trunc(d / 8) || Math.sign(d), v = o + step;
+      return Math.fround(v > cap ? cap : v);
     }
 
     /* ---- TAKE OVER (the header's TAKE OVER) ---- */
@@ -758,15 +805,126 @@ const WikiReplay = (() => {
       if (armed && (!lanes || !liveFork(armed))) armed = 0;
     }
 
+    /* ---- PLAYERS (the header's PLAYERS) ---- */
+    // seat k's camera at game tick t, null when its camera was not recorded (Sim.seatCam)
+    const camOf = (k, t) => Sim.seatCam(entry, demo, k, t);
+    // a Players press's value the door takes (tagpu_wikireplay_press): a row's seat one of the scene's, a chip one of
+    // CHIPS by its index, a team row's fold one of the rows the teams can make
+    function plValue(c, value) {
+      const below = n => Number.isInteger(value) && value >= 0 && value < n;
+      return c === 'jump' || c === 'sight' || c === 'follow' ? below(NSEAT) : c === 'chip' ? below(Sim.CHIPS.length)
+        : c === 'fold' ? below(Sim.SEATS) : true;
+    }
+    /* THE PLAYERS SET's KEYS (tagpu_hudinput.c act, players-spec.md 6.3): true when the press is one of them. Jump and
+       Follow on a seat whose camera was not recorded toast it and do nothing; Jump asks the camera onto the seat once
+       and ends Follow; Follow toggles on the seat, another seat's replacing it, and drops a Jump asked; Sight asks the
+       seat, or the full map when the seat is the one viewed -- applied in the step's tail, as the game's press sets
+       s_viewPending and its next frame visit runs sight_change; a switch toggles its overlay; stats opens or closes the
+       window and close closes it; a chip sets the split (player, team) or the measure; a team row's fold toggles it. A
+       value outside plValue is ignored and counted. */
+    function plAct(c, value) {
+      if (!Sim.PLAYERS_CONTROLS.includes(c) && c !== 'fold') return false;
+      if (!plValue(c, value)) { ignored++; return true; }
+      if (c === 'jump' || c === 'follow') {
+        if (!camOf(value, 0)) toast = { kind: 'camera', at: R.tick, value };
+        else if (c === 'jump') { jumpReq = value; follow = -1; }
+        else { follow = follow === value ? -1 : value; jumpReq = -1; }
+      } else if (c === 'sight') sightReq = sight === value ? -1 : value;
+      else if (Object.hasOwn(TOG, c)) tog ^= TOG[c];
+      else if (c === 'stats') stat.open = !stat.open;
+      else if (c === 'close') stat.open = false;
+      else if (c === 'chip') { if (value < 2) stat.team = value === 1; else stat.measure = value - 2; }
+      else folded ^= 1 << value;
+      return true;
+    }
+    /* THE BAR'S RE-READ DUE at a Sight change (tagpu_replay.c bar_rates_due, the game's rule since P0', copied): record
+       v's DisplayTimer lowered to the last deadline of its own 30-tick phase below `now`, so the next frame re-reads the
+       rates once and leaves the timer where the engine's own steps would have it; a timer already below `now` is left,
+       since the frame re-reads anyway; at GameTime 0 nothing (no value is below it); when the phase has no deadline in
+       0..now - 1 the timer goes to 0, still one re-read. */
+    function ratesDue(v, now) {
+      if (!now || pdt[v] < now) return;
+      const back = RATE - (pdt[v] - now) % RATE;
+      pdt[v] = now >= back ? now - back : 0;
+    }
+    /* THE PASS (PD17) at shown tick g, from the game's world, which stands at g: the viewed seat's lit grid (Sim.sightLit),
+       a fog bit per block of it, lit or not, and the ids of the units its contacts mark (Sim.sightContacts) -- the
+       engine's radar pass 0x467440 and the minimap's fog composite 0x466C20, which run for the viewed record alone on
+       its 30-tick deadline (0x46507D..0x465092, the one call 0x46556D), and which the replay runs at once at a Sight
+       change and a seek (sight_change, R14b). The bits stay until the next pass, while the minimap's dots move every
+       tick at the units' places (the rebuild 0x466DC0 runs every tick): a unit made after the pass has no bit (the
+       create sets bit 9 only on the viewed record's own, 0x485C1D..0x485C48). The phase is a record's initialised at
+       GameTime 0 with its pass at the multiples of 30 (MEASURED, m0p-facts.md P2: record 1's +0xF0 330 at 300, 510 at
+       487). Under the full map, empty: every unit is a dot and there is no fog. */
+    function makePass(g) {
+      pass = { at: g, blocks: 0, fog: new Uint8Array(0), contacts: [] };
+      if (sight < 0) return;
+      const v = R.game.view(), lit = Sim.sightLit(v, SIGHT, sight, g), con = Sim.sightContacts(v, lit, sight);
+      const fog = new Uint8Array((lit.length + 7) >> 3);
+      lit.forEach((b, i) => { if (b) fog[i >> 3] |= 1 << (i & 7); });
+      pass = { at: g, blocks: lit.length, fog, contacts: v.units.filter((u, i) => con[i]).map(u => u.id) };
+    }
+    /* EACH STEP'S TAIL (players-spec.md 6.4), after the game's part, every step, paused or not (DrawGameScreen runs on
+       every frame; MEASURED, m0p-facts.md P2: the stored numbers eased 9686 -> 10000 while paused), at the shown tick g:
+       the game's, or while a seek is pending the world the stage holds.
+       1. The camera: a Jump asked puts it on the seat's at g, once; else Follow keeps it there. Jump before Follow, both
+          after the step's play, at the shown tick; a seek leaves both alone and Follow goes on from the new tick, and
+          past the script's last camera input seatCam holds its point (tagpu_replay.c:10951-10953).
+       2. With no seek pending: a seek's end sets every DisplayTimer to g (sk_deadlines) and the click ring's start
+          (a seek empties the ring), and makes the pass; then a Sight request other than the seat viewed is applied
+          (the request is held while a seek is pending, as the game's frame visit runs sight_change only with no seek
+          pending), with the bar's re-read due (ratesDue) and the pass made; a request of the seat viewed changes
+          nothing (sight_change returns when the byte already names it).
+       3. The pass, also at every g that is a multiple of PASS other than the last pass's.
+       4. The top bar in watch mode, DrawGameScreen's memo (barFrame's rule): the viewed seat's stored values and
+          storage, all 0 under the full map (the watcher's record), eased once; then, when the viewed record's
+          DisplayTimer is below g, it rises by 30 and the four rates are re-read -- once a step, so a timer far behind
+          catches up 30 a step and stops at the first value at or past g (0x468F73..0x468FBF; MEASURED, m0p-facts.md
+          P2: 0 -> 300 at GameTime 300 and stays). */
+    function plTail() {
+      if (target < 0) shownT = R.game.tick;
+      const g = shownT;
+      if (jumpReq >= 0) { const c = camOf(jumpReq, g); cam = { x: c[0], z: c[1] }; jumpReq = -1; }
+      else if (follow >= 0) { const c = camOf(follow, g); cam = { x: c[0], z: c[1] }; }
+      if (target < 0) {
+        let due = false;
+        if (pend) { pdt.fill(g); clickFrom = g; pend = false; due = true; }
+        if (sightReq !== NOT_ASKED) {
+          if (sightReq !== sight) { sight = sightReq; ratesDue(sight >= 0 ? sight : Sim.SEATS, g); due = true; }
+          sightReq = NOT_ASKED;
+        }
+        if (due || (g % PASS === 0 && g !== pass.at)) makePass(g);
+        pbar = sight >= 0 ? { ...R.game.gameNow().seats[sight].bar } : { e: 0, m: 0, emax: 0, mmax: 0, ei: 0, eo: 0, mi: 0, mo: 0 };
+      }
+      pbe = ease(pbe, pbar.e, pbar.emax);
+      pbm = ease(pbm, pbar.m, pbar.mmax);
+      const v = sight >= 0 ? sight : Sim.SEATS;
+      if (pdt[v] < g) {
+        pdt[v] += RATE;
+        prates = [pbar.ei, pbar.eo, pbar.mi, pbar.mo].map(Math.fround);
+      }
+    }
+    /* THE WALKER'S SAMPLES (tagpu_hudmarks.c sample, players-spec.md 6.5), a players replay's: at each walked tick at or
+       past base + n period, every seat's seven measures in MEASURES order -- metal and energy income (+0x9C, +0x90),
+       units alive (+0x144), the army value (Sim's gameNow army: the summed metal cost of its live, finished, mobile
+       units that are not its commander), kills and losses (+0xFC, +0xFE), and the metal wasted (+0xD4, a double the game
+       reads as f32) -- each an f32. BOUND: STAT_PTS, every sample of a game GAME_END_MAX long at a period of 30. */
+    function statWalk() {
+      if (!PL) return;
+      const seats = walker.gameNow().seats;
+      while (sv.length < STAT_PTS && walker.tick >= pbase + sv.length * period)
+        sv.push(seats.map(z => [z.mi, z.ei, z.units, z.army, z.kills, z.losses, z.wm].map(Math.fround)));
+    }
+
     /* ONE STEP, a demo tick: while the walk runs, WALK of its ticks and nothing else; then the viewer's clock (a held
        wait releases when no seek is pending and stalls past its max) and the game's part; live, the arm's fill and the
-       top bar's frame after it */
+       top bar's frame after it; a players replay, its tail */
     R.step = () => {
       if (done) return;
       R.tick++;
       if (walker && !bg) {
         const n = Math.min(WALK, chainLast() - walker.tick);
-        for (let i = 0; i < n && !walker.done && chainStep(walker); i++) publish();
+        for (let i = 0; i < n && !walker.done && chainStep(walker); i++) { publish(); statWalk(); }
         if (!failed) { if (walker.done || walker.tick >= chainLast()) endWalk(); else walked = walker.tick; }
         done = isDone();
         return;
@@ -781,6 +939,7 @@ const WikiReplay = (() => {
         const ran = play();
         if (TK && !failed) { pickFill(); laneFill(); }
         if (TK && !failed) bgWalk(ran);
+        if (PL && !failed) plTail();
       }
       done = isDone();
     };
@@ -806,12 +965,14 @@ const WikiReplay = (() => {
       return walker ? g + Math.max(0, Math.min(WALK - g, chainLast() - walker.tick)) : g;
     };
     /* Try it yourself's press, acting at once: one of PRESSES, a takeover entry's watch mode also of its Take over set,
-       live one of LIVE_CONTROLS (anything else does nothing); for the track the game tick under the pointer, an integer
-       the seek clamps to the game (live, to the rewind's span), for a picker row its seat, for a lane's controls the
-       fork's id. None reaches a replay done or still walking before it shows (a background walk is no such walk),
+       a players entry's of PL_PRESSES, live one of LIVE_CONTROLS (anything else does nothing); for the track the game
+       tick under the pointer, an integer the seek clamps to the game (live, to the rewind's span), for a picker row its
+       seat, for a lane's controls the fork's id, for a players row's Jump, Sight and Follow its seat, for a chip its
+       index in CHIPS and for a fold the team row's index, each refused at the door outside plValue. None reaches a replay done or still walking before it shows (a background walk is no such walk),
        which the page does not show yet. */
     R.press = (c, value) => {
-      if (done || (walker && !bg) || !(LIVE ? Sim.LIVE_CONTROLS : TK ? TK_PRESSES : PRESSES).includes(c)) return;
+      if (done || (walker && !bg) || !(LIVE ? Sim.LIVE_CONTROLS : TK ? TK_PRESSES : PL ? PL_PRESSES : PRESSES).includes(c)) return;
+      if (PL && !plValue(c, value)) return;
       act(c, value);
       done = isDone();
     };
@@ -865,6 +1026,18 @@ const WikiReplay = (() => {
          deletion (0 none), the selected timeline, its chain's last and the tick the track fills to; the rows' serial,
          the forks saved, whether the walker walks in the background and its tick (-1 none), whether the takeover's
          picker drew the fork limit's warning; the timelines in creation order */
+      /* PLAYERS (a players entry): the viewer's camera (a centre), Follow, the Jump asked, Sight and the Sight asked, the
+         switches, the folded rows, the stats window (its measure an index in MEASURES), the click ring's start, the
+         shown tick and whether a seek's end is due; the top bar's memo and each record's DisplayTimer; the pass, its
+         tick (-1 none), its blocks, the fog bits as hex (block i is bit i & 7 of byte i >> 3) and the contacts' ids;
+         the samples' count, the seats each holds (the scene's), base and period (R.stat reads one) */
+      if (PL) v.players = {
+        cam: { ...cam }, follow, jumpReq, sight, sightReq, tog, folded, stat: { ...stat }, clickFrom, shown: shownT, pend,
+        bar: { be: pbe, bm: pbm, rates: prates.slice(), dt: pdt.slice() },
+        pass: { at: pass.at, blocks: pass.blocks, fog: Array.from(pass.fog, b => b.toString(16).padStart(2, '0')).join(''),
+          contacts: pass.contacts.slice() },
+        npt: sv.length, nseat: NSEAT, base: pbase, period,
+      };
       if (TK) v.tk = {
         mode: LIVE ? 'live' : 'watch', human, pick, pickR, pickEvict, pickParent, pickTl, pickSerial, lanes, armed, selected,
         chainLast: chainLast(), fillTo: fillTo(), serial, saved: saved.slice(), bg, walker: walker ? walker.tick : -1, tkFull,
@@ -874,6 +1047,8 @@ const WikiReplay = (() => {
     };
     // why the replay failed, or null: a fork part the viewer's fork found wrong, a refused fork operation, a make that threw
     R.why = () => why;
+    // a players replay's sample n of seat k, measure m (MEASURES order), 0 outside the samples (tagpu_wikireplay_stat)
+    R.stat = (n, k, m) => n >= 0 && n < sv.length && k >= 0 && k < sv[n].length && m >= 0 && m < MEASURES.length ? sv[n][k][m] : 0;
     /* a live or a takeover replay's timelines as a re-simulation reads them, copies in creation order: each one's id,
        parent, R, last, mode, seat, part (the fork part's inputs, null for the original) and log; a check plays a chain
        straight from them (simcheck.mjs, the seek and now claims). [] for any other replay. */
@@ -892,6 +1067,7 @@ const WikiReplay = (() => {
     // the seats as the scene and the script's tick 0 leave them, a walk that has nothing to play, the clock's tick 0
     if (!LIVE) {
       publish();
+      statWalk();
       if (walker.done || walker.tick >= chainLast()) endWalk();
     } else {
       /* the memo before the level's first frame: seat 0's stored values (its settings), no rate read, the DisplayTimer
@@ -911,7 +1087,7 @@ const WikiReplay = (() => {
     create: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, false),
     CONTROLS, PRESSES, TK_PRESSES, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
     GAME_END_MAX: Sim.GAME_END_MAX, REFRESH_TICKS, FORK_LIMIT, TIMELINES, refreshBin, isRefresh, forkEvict,
-    RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME, PICKS, MODES,
+    RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME, PICKS, MODES, PL_PRESSES, MEASURES, MEASURE0, STAT_PTS, TOG_ALL, NOT_ASKED, PASS,
   };
 })();
 if (typeof module !== 'undefined') module.exports = WikiReplay;

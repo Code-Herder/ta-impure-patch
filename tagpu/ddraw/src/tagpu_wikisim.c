@@ -4899,6 +4899,23 @@ int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int
     return gw * gh;
 }
 
+/* THE ARMY VALUE (tagpu_replay_army_values, tagpu_hudmarks.c sample): the game values a type whose
+   BMcode +0x22F is 1 and that is not a commander (+0x245 bit 0x40000) at its metal cost +0x18A,
+   every other at 0, and sums the floats of its live, finished units in slot order; the wiki's
+   mobile type is one with a max velocity, its commander the cast. The sum stays in f32 (SSE2,
+   the Makefile's THE WIKI'S SIMULATION), each add rounded as Math.fround rounds sim.js's. */
+float tagpu_wikisim_army(const WIKISIM* s, int seat)
+{
+    float a = 0;
+    int i;
+    for (i = 0; s->game && i < s->nunit; i++) {
+        const WIKIUNIT* u = s->unit[i];
+        if (u->owner == seat && u->built >= 1 && mobile(s, u->type) && def(s, u->type)->cast != WIKI_CAST_COMMANDER)
+            a += (float)def(s, u->type)->build_cost_metal;
+    }
+    return a;
+}
+
 /* THE CONTACTS (OQ-C A; DISASSEMBLED, the scout's P2.2 and P3): the radar pass 0x467440 runs for
    the viewed record alone. Its loop 2 walks each of the viewer's live, not dying, activated
    (+0x10E bit 0) units with a radar +0x204 or sonar +0x206: a target of another owner at a

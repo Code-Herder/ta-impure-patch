@@ -949,6 +949,11 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s);
                                     temporary sight record's expiry (tagpu_wikisim.c) */
 int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out);
 
+/* THE ARMY VALUE of `seat` in a game simulation (sim.js's gameNow army, which states the game's
+   rule): the metal cost of each of its live, finished units of a mobile type that is not its
+   commander, summed in f32 in the units' order; 0 for a seat it does not have. Pure. */
+float tagpu_wikisim_army(const WIKISIM* s, int seat);
+
 /* THE CONTACTS of `seat` in a game's view `v`, over its lit grid `lit` (tagpu_wikisim_sight_lit's
    for the same view): per view unit, index-aligned with v->unit, 1 when the radar pass would mark
    it, else 0, into `out` (v->nunit bytes). The rule is tagpu_wikisim.c's comment; sim.js
