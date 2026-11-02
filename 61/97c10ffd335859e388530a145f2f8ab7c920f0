@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=28c1c6e0..6197c10f findings=8 acted=7 rejected=1 date=2026-11-01 reviewers=2 (general; threads+state) fixes=16275b8d,384b36d1 rejected: multiplayer takeover keeps the pause (tk_run tests main+0x2A44 bit 0, not s_mp)
