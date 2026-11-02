@@ -44,7 +44,8 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
                  HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
                  play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
                  Sight and Sight again, twice, with clock and camera unchanged and the resource
-                 bar's rates the viewed record's after each, Follow, Follow again and Jump, the Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
+                 bar's rates the viewed record's after each, Follow, Follow again and Jump, the
+                 Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
                  back to the browser, and a second Watch -- every HUD control clicked in device
                  space where the game drew it (`tacli hud`)
 
@@ -1748,6 +1749,11 @@ def player_field(seat, off, size):
     return f"*0x511DE8+{0x1B63 + 0x14B * seat + off:#x}:{size}"
 
 
+def bar_memo(w):
+    """The four rates the resource-bar memo holds, as dwords, in BAR_RATES' order."""
+    return tuple(peek(w, f"*0x511DE8+{BAR_MEMO + m:#x}:4") for m, _ in BAR_RATES)
+
+
 def bar_rates(w, seat):
     """The resource bar of record `seat` once a draw has made it: Failed unless a frame drew it
     within ACK_S or unless the memo's four rates are the record's, bit for bit; returns the
@@ -1760,7 +1766,7 @@ def bar_rates(w, seat):
         if time.monotonic() >= end:
             raise Failed(f"the HUD's Sight: no frame drew the bar of seat {seat} in {ACK_S} s")
         nap(0.2)
-    shown = tuple(peek(w, f"*0x511DE8+{BAR_MEMO + m:#x}:4") for m, _ in BAR_RATES)
+    shown = bar_memo(w)
     want = tuple(peek(w, player_field(seat, r, 4)) for _, r in BAR_RATES)
     if shown != want:
         raise Failed(f"the bar shows other rates under Sight on seat {seat}: "
@@ -1777,7 +1783,13 @@ def watch_hud(w, log, rec):
     seek watch_lane makes, neither is the first); Follow, Follow again (the free camera) and Jump
     on the row of the seat the recording's human commanded (the perspective streams carry that
     seat's camera); the Cursors switch off and on. A row's buttons show while the pointer is over
-    the row, which `tacli hud` hovers first."""
+    the row, which `tacli hud` hovers first. Returns two rows: the rows and switches, and the
+    resource bar, which could not run when the seat's four rates equal the full map's -- a bar
+    that kept the other record's rates would then pass. A visit discriminates when the memo held
+    other rates than the viewed record's before its click: with the two records' rates unequal,
+    the second, third and fourth visits always do (the memo held the other record's, checked bit
+    for bit), and the first does when the rates the memo kept from before the seek differ from
+    the seat's."""
     seats = tarec.header_only(rec)["players"]
     if not seats:
         raise CouldNotRun("the HUD's rows: no recorded seats")
@@ -1796,8 +1808,9 @@ def watch_hud(w, log, rec):
 
     # the rows are the recording header's seats in order (tagpu_replay_players)
     s0 = seats[0]["index"]
-    rates = {}
-    for seat in (s0, viewer, s0, viewer):
+    rates, telling = {}, []
+    for k, seat in enumerate((s0, viewer, s0, viewer), 1):
+        held = bar_memo(w)
         n = len(log.lines)
         hud(w, "click", "sight:0")
         got = log.wait(rf"replay: sight is seat {seat} at GameTime {tick};|"
@@ -1807,8 +1820,8 @@ def watch_hud(w, log, rec):
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
             raise Failed("the HUD's Sight changed the paused clock or camera")
         rates[seat] = bar_rates(w, seat)
-    same = (" (the two records' rates are equal: not discriminating)"
-            if rates[s0] == rates[viewer] else "")
+        if held != rates[seat]:
+            telling.append(f"{k} (record {seat})")
 
     h = tarec.header_only(rec)
     own = (h.get("options") or {}).get("controlled")
@@ -1823,9 +1836,18 @@ def watch_hud(w, log, rec):
     if w.gametime() != tick:
         raise Failed(f"the HUD's rows: Follow, Jump or a switch moved the paused clock from {tick} "
                      f"to {w.gametime()}")
-    return ("W: the HUD's rows and switches", PASS, f"Sight {s0}, {viewer}, {s0}, {viewer}; "
-            f"GameTime {tick} and camera {eye} unchanged; the bar's rates the viewed record's at "
-            f"each of the four{same}; " + "; ".join(lines))
+    rows = [("W: the HUD's rows and switches", PASS, f"Sight {s0}, {viewer}, {s0}, {viewer}; "
+             f"GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))]
+    bar = "W: the resource bar under Sight"
+    if rates[s0] == rates[viewer]:
+        rows.append((bar, UNRUN, f"seat {s0}'s four rates equal record {viewer}'s "
+                     f"({' '.join('%08X' % v for v in rates[s0])}), so a bar that kept the other "
+                     f"record's rates would pass"))
+    else:
+        rows.append((bar, PASS, f"the viewed record's rates at each of the four visits; those "
+                     f"whose memo held other rates before the click, which discriminate: "
+                     f"{', '.join(telling)}"))
+    return rows
 
 
 def hud_show(w):
@@ -2222,7 +2244,7 @@ def watch_lane(w, fx, rec, out, T):
     # the seek begins the playing the dump waits on: an end line before its answer is the
     # playing it replaced
     sought = after_line(log.lines, got, n)
-    res.append(watch_hud(w, log, rec))
+    res += watch_hud(w, log, rec)
     arm_dump(w, log, f"w{T}", T)
     hud(w, "click", "play")
     wait_dumps(log, [f"w{T}"], running=True, playing=sought)

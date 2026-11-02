@@ -2,10 +2,10 @@
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
-its runs and snapshot chains, and which cells are images, read from files built from the format alone, the fixtures'
-takeover entries, the W lane's edited header copies, compare-counts' script slice and exact
-COB children, the puppet's native owner's query check, and a multiplayer dump's sort chains
-(tarec.sort_chains). No game runs. The files are read through
+its runs and snapshot chains, and which cells are images, read from files built from the format
+alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
+compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
+multiplayer dump's sort chains (tarec.sort_chains). No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -279,6 +279,81 @@ class RunTo(unittest.TestCase):
                                                                       (1, "keys", ["b"])]), 1)
         self.assertEqual(ran, ["a.json", ["b"]])
         hold_at.assert_not_called()
+
+
+class WatchHudBar(unittest.TestCase):
+    """watch_hud's resource-bar row against a modelled game: paused at one GameTime, Sight
+    toggles the viewed record between the first row's seat and record 10, and each draw that
+    follows writes the memo's byte 0 and, when the build re-reads them, the four rates."""
+
+    S0, VIEWER, TICK = 0, 10, 300
+
+    def game(self, rates, rereads=True):
+        memo = {"byte0": self.VIEWER, "rates": rates[self.VIEWER]}
+        state = {"viewed": self.VIEWER}
+        lines = []
+        base, memo_at = 0x1B63, tareplay.BAR_MEMO
+        offs = {m: k for k, (m, _) in enumerate(tareplay.BAR_RATES)}
+        recs = {r: k for k, (_, r) in enumerate(tareplay.BAR_RATES)}
+
+        def peek(w, spec):
+            off, size = spec.split("+")[1].split(":")
+            off = int(off, 16)
+            if off == 0x2A43:
+                return state["viewed"]
+            if off in (0x1431F, 0x14323):
+                return 7
+            if off == memo_at:
+                return memo["byte0"]
+            if off - memo_at in offs:
+                return memo["rates"][offs[off - memo_at]]
+            seat, field = divmod(off - base, 0x14B)
+            return seat if field == 0x146 else rates[seat][recs[field]]
+
+        def hud(w, verb, key, **kw):
+            if key == "sight:0":
+                seat = self.S0 if state["viewed"] == self.VIEWER else self.VIEWER
+                state["viewed"] = seat
+                lines.append(f"replay: sight is seat {seat} at GameTime {self.TICK}; death "
+                             f"vision 0 made, 0 refused")
+                memo["byte0"] = seat
+                if rereads:
+                    memo["rates"] = rates[seat]
+            else:
+                # the other controls are not under test: one line every one of their waits finds
+                lines.append("replay: x: follow seat 0, epoch 1; replay: x: jump to seat 0, epoch "
+                             "1; free cam; replay: overlay cursors off; replay: overlay cursors on")
+
+        def wait(pattern, timeout, n):
+            return next((x for x in log.lines[n:] if re.search(pattern, x)), None)
+
+        log = SimpleNamespace(lines=lines, wait=wait)
+        w = SimpleNamespace(gametime=lambda: self.TICK)
+        header = {"players": [{"index": self.S0}], "options": {"controlled": self.S0}}
+        return w, log, peek, hud, header
+
+    def run_hud(self, rates, rereads=True):
+        w, log, peek, hud, header = self.game(rates, rereads)
+        with patch.object(tareplay, "peek", peek), patch.object(tareplay, "hud", hud), \
+             patch.object(tareplay, "nap"), \
+             patch.object(tareplay.tarec, "header_only", return_value=header):
+            return tareplay.watch_hud(w, log, "rec")
+
+    def test_rates_that_differ_pass_and_name_the_telling_visits(self):
+        rows = self.run_hud({self.S0: (0x41480000, 0x3F800000, 0x3F000000, 0),
+                             self.VIEWER: (0, 0, 0, 0)})
+        self.assertEqual([r[1] for r in rows], [tareplay.PASS, tareplay.PASS])
+        self.assertIn("1 (record 0), 2 (record 10), 3 (record 0), 4 (record 10)", rows[1][2])
+
+    def test_equal_rates_could_not_run(self):
+        rows = self.run_hud({self.S0: (0, 0, 0, 0), self.VIEWER: (0, 0, 0, 0)})
+        self.assertEqual(rows[0][1], tareplay.PASS)
+        self.assertEqual(rows[1][1], tareplay.UNRUN)
+
+    def test_a_bar_that_keeps_the_last_rates_fails(self):
+        with self.assertRaisesRegex(tareplay.Failed, "other rates under Sight on seat 0"):
+            self.run_hud({self.S0: (0x41480000, 0, 0, 0), self.VIEWER: (0, 0, 0, 0)},
+                         rereads=False)
 
 
 class FailedWorkerCleanup(unittest.TestCase):
