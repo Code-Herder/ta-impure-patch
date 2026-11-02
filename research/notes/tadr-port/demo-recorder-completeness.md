@@ -745,8 +745,14 @@ notice is answered OK. Then the recording itself is watched; the HUD's `speed` c
 the in-game Options' OK (Tab, PREFS, PREV — the settings save `0x430F00`) must leave the
 instance's registry store at the player's `gamespeed` while the playing keeps the HUD's; `play`
 pauses (GameTime and the pause word are read to hold still); the trigger `hud seek <T1>` seeks
-through the timeline's own entry; then, paused (`watch_hud`), `sight:0` twice (the first row's
-seat, then the playing's viewer back, the clock and the camera unchanged), and on the row of the
+through the timeline's own entry; then, paused (`watch_hud`), `sight:0` four times (the first row's
+seat, the playing's viewer back, the seat and the viewer again, the clock and the camera
+unchanged), each followed by the resource bar's check (`bar_rates`): the memo `main+0x37E3F`'s
+byte 0 must reach the viewed record's `+0x146` within the one-frame bound, which only a draw of
+that record's bar writes, and its four rates (`+5`, `+9`, `+0x11`, `+0x15`) must equal the
+record's `+0x90`, `+0x94`, `+0x9C`, `+0xA0` bit for bit — after the seek every record's DisplayTimer
+is at GameTime, so the engine alone would not re-read any of them
+([render.md](../engine/render.md), *The memo's layout*); and on the row of the
 seat the recording's human commanded `follow:` (`follow seat`), `follow:` again (`free cam`) and
 `jump:` (`jump to seat`), then `cursors` off and on, the paused clock unchanged throughout; dump
 `w<T1>` is armed at T1 and `play` resumes; `leave` and Yes return to the browser with the player's

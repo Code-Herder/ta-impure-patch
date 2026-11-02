@@ -125,6 +125,14 @@ The owner's decisions:
 - **Sight and Follow are drawn pressed on the player they are set to, and a click on the pressed
   one undoes it** — the full map, the free camera. That replaces the cards' Full map and Free cam
   (2026-10-08).
+- **Sight shows the viewed seat's resource bar from the next frame, paused or not** (2026-11-01):
+  its stored metal and energy and its `+income −expense` rates. The engine re-reads the rates only
+  while the viewed record's DisplayTimer is behind GameTime, so Sight sets the newly viewed
+  record's one tick behind and the draw that follows re-reads them (`sight_change`;
+  [render.md](engine/render.md), *The memo's layout*). The stock `+View` cheat does not, and a
+  player of the stock game sees the previous seat's rates for up to a game second. After a paused
+  seek the rates stay the pre-seek ones until the game runs: the same engine rule, left for a later
+  landing by the owner's choice of 2026-11-01.
 - **The foot plate's five buttons:** game stats, which opens and closes the stats window, then
   Cursors, Clicks, Selections and Chat, the four switches of the dock's old Overlays menu. The
   map button and the capture button are removed (2026-10-08).
@@ -982,7 +990,9 @@ control's place in the frame on screen — and never calls the replay's API:
 
 The replay harness's W lane drives the HUD through it ([completeness](tadr-port/demo-recorder-completeness.md),
 *The replay test harness*): the speed, play, the trigger's `hud seek <T>` (the timeline's own
-seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
+seek entry, at a GameTime of the test's choosing), Sight on row 0 and again (the full map), twice,
+each followed by the resource bar's check — a frame drew the viewed record's bar and its memo
+holds that record's four rates bit for bit — then Follow, Follow again and
 Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
 and Leave, answered Yes through `tacli ui`. On the second Watch it takes over through the HUD
 (`watch_takeover`). First at the recording's last refresh RD, where the end scenario has left one

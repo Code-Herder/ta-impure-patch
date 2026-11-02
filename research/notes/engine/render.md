@@ -739,8 +739,8 @@ metal storage `+0xA8` (floats). **The easing** (`0x468E7B..0x468F12`): `d = ftol
 ftol(old)`, the step `d/8` truncated toward zero and at least ±1 when `d ≠ 0`, the new value
 `ftol(old) + step` kept as a float; energy eases toward `+0x8C`, metal toward `+0x98`. **The clamp**
 (`0x468F14..0x468F6C`): each eased value above its storage is set to it. **The rates**
-(`0x468F73..0x468FBF`): only when the DisplayTimer `+0xF8` is below GameTime is it raised by 30 and
-the four rates re-read through `0x464AB0` (`+0x90`), `0x464AC0` (`+0x94`), `0x464AF0` (`+0x9C`)
+(`0x468F73..0x468FBF`): only when the DisplayTimer `+0xF8` is below GameTime is it raised by 30
+(stored at `0x468F87`) and the four rates re-read, at `0x468F8D..0x468FBF`, through `0x464AB0` (`+0x90`), `0x464AC0` (`+0x94`), `0x464AF0` (`+0x9C`)
 and `0x464B00` (`+0xA0`), each `fld [arg+off]; ret 4`. So the stored values ease every frame and
 the rates shown are sampled once a game second. `ftol` is `0x4E43A0`, MSVC's `_ftol`, which
 truncates (`or ah,0xC` at `0x4E43AF` before its `fistp`; [cob.md](cob.md)). MEASURED 2026-11-01 (a four-seat skirmish, the recorder's live rewind): at GameTime 1 the memo
@@ -750,6 +750,25 @@ the stored values were already 10 000, and the next read, at most 15 frames late
 the fork's frame at 1200 held the past's 9993.0 / 9793.0 against stored 9769.0 / 9612.7. Not
 measured: the memo frame by frame after a seek (the reads were 15 frames apart), and before a
 level's first frame.
+
+**A change of view keeps the rates of the last record re-read** [DISASSEMBLED 2026-11-01]. The
+rates' re-read is gated on the record the block forms from `main+0x2A43` at `0x468E4B`, and its test
+is `jae 0x468FC6` at `0x468F81` (unsigned): a record whose DisplayTimer is at or above GameTime is
+not re-read, and its memo `+5..+0x18` stay what the previous record left. A record's timer is the
+player init's GameTime until it is viewed (`0x464765`), and each frame that views it raises it 30 at
+a time while below, so it stops at the first value at or above GameTime. So a view change to a
+record viewed earlier in the same game second keeps the old record's rates for up to 30 ticks while
+running and for as long as the game is paused. Every `DrawGameScreen` call reaches the test:
+`0x468CF0..0x468E3F` holds no `ret` and one jump, `jne 0x468E35` at `0x468DFF`, which stays inside
+it. The stock `+View N` (`0x416B50`) writes `main+0x2A43` alone (`0x416BC1`) and has the same
+consequence. **Impure's replay Sight departs from it on purpose**: `sight_change`
+(`tagpu_replay.c`) sets the newly viewed record's DisplayTimer to GameTime − 1 in the frame visit,
+before the draw call `0x4969CD`, so the draw that follows re-reads that record's rates (at GameTime 0
+it writes nothing; the first tick's draw re-reads as for any record). A seek or fork sets every
+record's timer to GameTime (`sk_deadlines`), so after a paused seek the rates stay the pre-seek
+ones until the game runs; that follows the engine's rule and is left for a later landing, by the
+owner's choice of 2026-11-01. The field's other readers and writers: [units.md](units.md), player
+`+0xF8`.
 
 The four rects [DISASSEMBLED 2026-10-07]:
 
