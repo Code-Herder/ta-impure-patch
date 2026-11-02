@@ -624,8 +624,11 @@ create (`0x4860B2` in the local create `0x485F50`, `0x4862CA` in `0x4861D0`, `0x
 (`0x48B12B`), run-later, no argument.
 
 - **At completion** `0x41B8D0` calls `0x48B090(built, 1, 1)` only when def `+0x241` bit 18 is set
-  (`0x41B9A6..0x41B9BF`); **a unit created whole** takes the same gate in the create, behind
-  `finished` (`0x48611A`, `0x48612F..0x486148`). Bit 18 is FBI **`activatewhenbuilt`**: the loader
+  (`0x41B9A6..0x41B9BF`, the bit read at `0x41B9AC`); **a unit created whole** takes the same gate
+  in the create, behind `finished` (`0x48611A`, `0x48612F..0x486148`, the bit read at `0x486135`) --
+  so a commander placed at a level's start has its radar on from its create, which the radar pass
+  needs (`+0x10E` bit 0; [recorder.md](recorder.md), `0x467440`'s loop 2) [INFERRED: the level's
+  commander spawn takes the finished branch]. Bit 18 is FBI **`activatewhenbuilt`**: the loader
   reads the key (`0x503B6C`) with `0x4C46C0`, keeps `and 1`, shifts it to bit 18 and merges it into
   def `+0x241` (`0x42C6B9..0x42C6DE`). It is `0x41B8D0`'s only script start: without
   ActivateWhenBuilt a finished structure is not switched on by the engine.

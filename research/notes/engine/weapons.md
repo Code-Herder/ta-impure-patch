@@ -301,7 +301,11 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   vertex's y (`+0x24` the array, 12 bytes a vertex, y at `+4`; `+0x04` the count) plus the node's y
   offset `+0x14`, and its child chain's (`+0x30`) top plus the same offset, with plain 32-bit adds
   (`0x4CB5F0..0x4CB641`). The wiki's 3D load and `gfx.py` compute it the same way
-  (`tagpu_wikiasset.c` `model_top`, `gfx.py` `model_shape`).
+  (`tagpu_wikiasset.c` `model_top`, `gfx.py` `model_shape`). Stored as the dword `+0x16E`, its
+  high word `+0x170` is the model's height in whole units, the byte the sight emitter adds to the
+  altitude ([units.md](units.md), the sight emit): MEASURED 2026-11-01 (M0-P1, the def bytes read
+  in game) ARMCOM 39, ARMCK 27, ARMSOLAR 38, CORAK 26, which the wiki's castings compute from the
+  3DO (`tagpu_wikiasset.c` `height_chain`, `gfx.py` `model_height`).
 - **The init `0x473B50(box1, box2, life)`** (thiscall): end tick `+0x04` = GameTime + life through
   `0x471D70` (`0x473B5B`; both emitters pass life 1, `0x47216F` and `0x4722A3`); box1 to
   `+0x1C..+0x30` (`0x473B6E`), box2 to `+0x34..+0x48` (`0x473B7E`); then **each box cut, per

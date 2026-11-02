@@ -1864,7 +1864,7 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 | `0x482304` | the stamp `0x482270` | re-tests the stored row (`0x4822D0`) | sight grid | **not a separate shear**: the emitter's row |
 | `0x482435` | the stamp | bounds one ray's cell | sight grid | **not the shear**: a ray's clip |
 | `0x482663` | the sight emitter `0x4825B0` (below) | whether a unit stamps its sight at all, and where | sight grid (`main+0x14297`) | sheared, patched: table (`0x482615..0x48261E`) |
-| `0x48307C`, `0x4830C6` (outside the 57: a spilled pointer) | the sight grid's builder | whether a terrain tile's height is written, at its sheared row | sight grid (through `[esp+0x14]`) | **not the defect**: the grid is built in sheared space; an off-grid tile loses only its occlusion |
+| `0x48307C`, `0x4830C6` (outside the 57: a spilled pointer) | the sight grid's builder `0x482C20` (*The sight table and the stamp*, below) | whether a terrain tile's height is written, at its sheared row | sight grid (through `[esp+0x14]`) | **not the defect**: the grid is built in sheared space; an off-grid tile loses only its occlusion |
 | `0x48E9A8` | `cmp [ebp+0x84],ebx` in `0x48E010` [function start from the preceding padding] | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
 | `0x49BF08` | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | LOS grid | sheared, patched: local (hand stub over `0x49BEE8..0x49BF0F`; `ecx` is next written by the loop's top `0x49BEA3` through `0x49BF42`, or reloaded at `0x49C058`) |
 | `0x4B4FF8` | `cmp [esi+0x84],edi` at the top of `0x4B4FF0` | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
@@ -1965,11 +1965,20 @@ a dead slot) and whose owner record
 (`+0x96`) has `+0x146` equal to `main+0x2A43` (`0x486716..0x48672A`); it pushes `0x3C`
 (`0x486732`), the def's (`+0x92`) `+0x170` and `+0x202`, each sign-extended from a word
 (`0x486737`, `0x48673E`), and the unit's `+0x6A`. It does not test LosType itself: the add does.
-The expiry `0x482130` (its one call `0x495688`, once a call of the step `0x495490`, after its tick
+**The list is one for the whole game**, so the cap of 20 is shared: a death of the viewed player
+while 20 records live lights nothing, and the 20 stay. Since only the viewed player's deaths are
+added, and a replay's Sight change drops every record and makes the newly viewed seat's again
+([recorder.md](recorder.md), *The temporary sight records*, R14a), the bound is the viewed seat's in
+effect. The expiry `0x482130` (its one call `0x495688`, once a call of the step `0x495490`, after its tick
 loop) removes every record past its time through `0x481D50`
 (`0x482161`), then compacts the table (`0x4821BF..0x48222D`): each kept record is copied down with
 its pointers re-aimed at its new place, the stored words (`0x482220`) and the byte (`0x48222D`)
-moved together.
+moved together. "Past its time" is `+0x1C` below GameTime, unsigned (`0x482153..0x48215E`, `jae`
+keeps it): a record made at GameTime d is removed by the first expiry with GameTime ≥ d + 61, so the
+last GameTime drawn with it is the last step end at or below d + 60 -- d + 60 itself when a step is
+one tick, up to one step earlier otherwise. The in-game wiki's death vision copies the cap, the list's
+owner rule and this boundary (`tagpu_wikisim.c` `kill` and `tagpu_wikisim_sight_lit`; its players
+entry's data rule keeps a script under the cap: at most 20 kills of one seat within any 62 ticks).
 
 - **The stamp and its removal read the stored words**: `0x482270` at `0x4822CD`/`0x4822D0`,
   `0x481930` at `0x48197F`/`0x481982`, `0x481D50` at `0x481DAD`/`0x481DB0`, each re-testing the
@@ -2051,6 +2060,96 @@ did not move: stored at column 24, row 0, stock's row), and no cell at 200 or mo
 fixture: 179 sites installed, all 44 patched sites read back as intended — the emitter's two
 branches landing after the count — the point `0x4825D4..0x482614` and `0x48261F..0x48266A` read
 back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells of rows 0–9.
+
+### The sight table and the stamp — `los.tdf`'s loader `0x433130`, the stamp `0x482270`, the sight grid `0x482C20` [DISASSEMBLED + MEASURED 2026-11-01]
+
+**The table** is the container `0x51E6A0` (`+4` begin, `+8` end, 16-byte elements, each a vector
+of rays; a ray a vector of 4-byte points `{i16 column, i16 row}`). **`0x433130`** (thiscall, `ecx`
+the container), called once a map load at `0x483BB3`, just before the screen fog grid's allocation
+(below), opens `gamedata\los.tdf` (`"TDF"` `0x50341C`, `"los"` `0x5049E8`, `"gamedata"`
+`0x503360`), reads `[TABLEINFO]` (`0x5049DC`) `numtables` (`0x5049D0`, read at `0x433195`), sizes
+the container to that many elements and calls **`0x433380(parser, i)`** for i = 0 .. numtables − 1
+(`0x433241`). `0x433380` reads `[TABLE<i+1>]` (`"TABLE%d"` `0x5049F8`) `numlines` (`0x5049EC`) =
+N, sizes element i to 4N rays, and for each line k calls **`0x4336F0(parser, k, q)`** four times,
+q = 0..3, filling rays k, N + k, 2N + k and 3N + k (`0x43348D`, `0x4334A9`, `0x4334BD`,
+`0x4334D7`). `0x4336F0` reads `line<k+1>` (`"line%d"` `0x504A04`), splits it with `strtok` on
+`", "` (`0x504A00`), sizes the ray to its first number's count of points and stores each pair
+(x, y) through the jump table **`0x4339A4`** on q (`0x4337D4`):
+
+| q | handler | column | row |
+|---|---|---|---|
+| 0 | `0x4337DB` | x | −y |
+| 1 | `0x43383A` | y | x |
+| 2 | `0x433897` | −x | y |
+| 3 | `0x4338F6` | −y | −x |
+
+Two reflections and two axis swaps, **not the four sign images**. Nothing merges rays or points, so
+a stamp adds one to a block for every ray point on it. `0x4339E0(ray, j, &column, &row)` reads point
+j's two words (`0x4339E8..0x4339FE`). **The stock file** (MEASURED over the install's
+`gamedata\los.tdf`, `totala1.hpi`, 7 888 bytes; statistics only): `numtables` 9; every pair in the
+closed first quadrant, so each image covers one quadrant; the lines are swap-symmetric, so a table's
+loaded union is eight-fold, (±a, ±b) and (±b, ±a); TABLE i reaches Chebyshev radius i, point j of a
+ray at distance j + 1, no ray on the unit's own block; TABLE8 48 rays, 332 point visits, 212 offsets;
+TABLE9 is never reached at `numtables` 9 ([line-of-sight](../line-of-sight.md) §3).
+
+**The index.** The stamp takes `idx = trunc(SightDistance / 32)` from the record's sight word, sign
+extended (`movsx` at `0x48230D`; the FBI loader stores `sightdistance` unclamped as def `+0x202`'s
+word at `0x42C3B3`), floored at 0 (`sets`, `dec`, `and`), clamped to `count − 1` with
+`count = 0x433520(table)` = (end − begin) >> 4, 0 for an empty container (`0x48232E..0x482366`),
+and asks **`0x433500(idx)`** for the element: `begin + (idx − 1)·16` (`dec eax; movsx; shl 4;
+add`, `0x433500..0x433510`), so the element is `[TABLE<idx>]`. The mapped stamp `0x481930`
+(`0x4819C9..0x481A22`) and the removal `0x481D50` (`0x481E09..0x481E4D`) compute the same index
+from the same table. MEASURED (M0-P1, below): idx 8 / 7 / 6 / 8 for sight 290 / 235 / 210 / 275.
+
+**Engine-defect candidate: idx 0 reads before the table.** Nothing on the path guards it: a
+SightDistance below 32, or a `numtables` of 1 (which clamps every index to 0), makes `0x433500`
+return the 16 bytes before the element buffer, whose `+4`/`+8` the stamp reads as a ray vector
+(`0x4335C0` at `0x482378`, a 16-bit count tested at `0x4823A9`) [what follows is undefined --
+heap bookkeeping or another allocation, no rays or a walk of garbage pointers; INFERRED, not run].
+The own block is stamped first either way, and the removal reads the same words later, which need
+not hold the same values then. Stock never reaches it (MEASURED: none of the install's 278
+`units\*.fbi` has a SightDistance below 32, and `numtables` is 9). Not patched; the in-game wiki
+keeps out of it by construction (a players entry's sight floor of 32 and a sight table of at least
+2 tables).
+
+**The stamp `0x482270`** (the record the emitter `0x4825B0` built, above) adds one to the unit's own
+block (`inc dl` at `0x48239E`), then walks every ray of the element and adds one to the block under
+each point whose height test passes (`inc byte` at `0x48247F`). **The height test**
+(`0x4823D1..0x4824B5`, per ray): a point on the grid is lit when its block's top slope
+`(b0 − h)/s` is strictly above the horizon, the highest bottom slope `(b1 − h)/s` of the lit points
+before it on the ray (`s` the point's step, `h` the unit's height byte, `b0`, `b1` its block's two
+bytes); the first on-grid point of every ray is always lit. **The removal `0x481D50`** is the same
+walk with `dec` (`0x481E7E`, `0x481F5F`): a byte compare of `0x482270..0x4824D6` against
+`0x481D50..0x481FB6` differs only in the call and jump displacements and those two opcodes, so a
+removal returns the counters to their value when the stored words, the height byte, the sight word,
+the table and the grid are what the stamp saw.
+
+**Engine-defect candidate: the counters wrap.** A player's sight counters are one byte a block,
+`inc` and `dec` symmetric: one TABLE8 stamp adds at most 7 to a block (plus 1 on its own), so about 37
+units of one owner stacked over a block would wrap it to 0 and show it unlit [INFERRED arithmetic,
+not measured]. Not patched.
+
+**MEASURED 2026-11-01** (M0-P1: main `28c1c6e0`'s DLL, Over Crude Water's flat plate at height 139,
+True LOS, `numtables` 9, each unit's counters read from its owner's record): each unit lights
+**exactly** its table's offsets as (±a, ±b) and (±b, ±a) plus its own block -- ARMCOM (sight 290,
+idx 8) 213 blocks, ARMCK (235, 7) 177, ARMSOLAR (210, 6) 137, CORAK (275, 8) 213, measured − rule =
+rule − measured = 0 for all four; the four sign images alone give 203 / 169 / 131 / 203. ARMCOM's
+counts: 1 on 149 blocks (its own among them), 2 on 32, 3 on 24, 5 on 4, 7 on 4. Every ray point
+passed the height test, and the set is centred on column `x >> 5` and the sheared row
+`(z − h/2) >> 5`, h = def `+0x170` + altitude: ARMCOM 39 + 139 = 178, row 183 for z 5975
+(`z >> 5` = 186); ARMCK 166 → 185 (188); ARMSOLAR 177 → 214 (217); CORAK 165 → 212 (214). Two
+reads 6 s apart were identical.
+
+**The sight grid `0x482C20`** (one caller, `0x483CEC` in LoadMap) holds the terrain's heights for
+the test: `main+0x1428F` `{cells, cols, rows, count}`, cols and rows the map's 16-pixel columns and
+rows halved toward zero (`0x482F1B..0x482F45`; the emitter bounds a unit against them,
+`main+0x14293`/`+0x14297`), two bytes a block made from the most (mx) and the least (mn) of the
+tile heights that land on it, each tile at its sheared row (`0x482F15..0x483145`): `b0 = max((mn +
+2·mx)/3, sea)` and `b1 = max((mx + 2·mn)/3, sea)`, `sea` the byte `main+0x1427F`
+(`0x483189..0x483205`). A player's counters at record `+0x7C` are the same size (`0x46482B..0x46484F`).
+On ground of one height every on-grid point of every ray is lit, at any model height, except past
+the grid's southmost rows no tile reaches (a script of `0x482F15..0x483205` over flat maps, then
+M0-P1 above).
 
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 
