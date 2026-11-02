@@ -572,13 +572,41 @@ static double metal_at(const WIKISIM* s, int i, int j)
     return k < 0 ? NAN : s->metal[k];
 }
 
+/* the cells of a footprint metal_at finds above SurfaceMetal. Inside the map it is four reads of
+   the sums init builds (WIKISIM.rich): Quick Build's hover asks it for every candidate of site()'s
+   search round every seat's cursor, on every tick a selected builder offers an extractor. Read
+   cell by cell it was 55 % of a players replay's time (MEASURED 2026-11-02, gprof over the five
+   players demos, native -O2). A footprint past an edge reads cell by cell, where flat() aliases
+   into the next row as JS indexes; site() never asks one. */
 static int coverage(const WIKISIM* s, int ox, int oz, int fx, int fz)
 {
     int i, j, n = 0;
+    if (ox >= 0 && oz >= 0 && fx >= 0 && fz >= 0 && ox + fx <= s->W && oz + fz <= s->H) {
+        const int* R = s->rich;
+        const int w = s->W + 1;
+        return R[(oz + fz) * w + ox + fx] - R[oz * w + ox + fx] - R[(oz + fz) * w + ox] + R[oz * w + ox];
+    }
     for (j = oz; j < oz + fz; j++)
         for (i = ox; i < ox + fx; i++)
             if (metal_at(s, i, j) > s->SM) n++;
     return n;
+}
+
+/* WIKISIM.rich, once metal and fog are filled: rich[(j + 1)(W + 1) + i + 1] counts the cells of
+   columns 0..i and rows 0..j above SurfaceMetal as metal_at reads them */
+static void rich_sums(WIKISIM* s)
+{
+    const int w = s->W + 1;
+    int i, j;
+    memset(s->rich, 0, (size_t)w * sizeof *s->rich);
+    for (j = 0; j < s->H; j++) {
+        int row = 0;
+        s->rich[(j + 1) * w] = 0;
+        for (i = 0; i < s->W; i++) {
+            row += metal_at(s, i, j) > s->SM;
+            s->rich[(j + 1) * w + i + 1] = s->rich[j * w + i + 1] + row;
+        }
+    }
 }
 
 static int distinct(WIKISIM* s, CHOICE* c);
@@ -4975,6 +5003,7 @@ void tagpu_wikisim_free(WIKISIM* s)
     free(s->burst);
     free(s->metal);
     free(s->fog);
+    free(s->rich);
     free(s->vent);
     free(s->vent_centre);
     free((void*)s->script);
@@ -5496,6 +5525,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         || !(s->occ = (unsigned char*)malloc(cells)) || !(s->known = (unsigned char*)malloc(cells))
         || !(s->shut = (unsigned char*)malloc(cells)) || !(s->pg = (double*)malloc(cells * sizeof *s->pg))
         || !(s->par = (int*)malloc(cells * sizeof *s->par))
+        || !(s->rich = (int*)malloc((size_t)(s->W + 1) * (s->H + 1) * sizeof *s->rich))
         || !(s->heap = (WIKIHEAPNODE*)malloc((cells * 8 + 4) * sizeof *s->heap)))
         goto oom;
     for (i = 0; i < (int)cells; i++) s->metal[i] = s->SM;
@@ -5503,6 +5533,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     for (i = 0; b && i < b->nmetal; i++) fill_metal(s, &b->metal[i]);
     for (i = 0; i < a->nfog; i++) fill_fog(s, &a->fog[i]);
     for (i = 0; b && i < b->nfog; i++) fill_fog(s, &b->fog[i]);
+    rich_sums(s);
     s->nvent = a->nvent + (b ? b->nvent : 0);
     if (!(s->vent = (PlaceCell*)calloc((size_t)s->nvent + 1, sizeof *s->vent))
         || !(s->vent_centre = (WIKIPOINT*)calloc((size_t)s->nvent + 1, sizeof *s->vent_centre)))

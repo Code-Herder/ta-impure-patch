@@ -660,6 +660,11 @@ typedef struct {
     double           SM, PACE;
     double*          metal;
     unsigned char*   fog;
+    int*             rich;          /* (W + 1) x (H + 1): the cells metal_at finds above SurfaceMetal,
+                                       summed from the map's top-left corner, so a footprint's
+                                       coverage is four reads. Built in init after fill_metal and
+                                       fill_fog, the only writes of metal and fog, so the sums hold
+                                       for the sim's life. */
     int              nvent;
     PlaceCell*       vent;
     WIKIPOINT*       vent_centre;
