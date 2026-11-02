@@ -1,5 +1,6 @@
-/* players-fixture.mjs -- a players entry built for the checks, until art/wiki/entries/players.json carries the real
-   one: simparity.mjs plays it beside the entries and edits it for its refusal cases. */
+/* players-fixture.mjs -- a players entry built for the checks beside the tree's art/wiki/entries/players.json, its
+   figures invented and its scratch entry's Bram with no camera: simparity.mjs plays both beside the entries and edits
+   the fixture for its refusal cases. */
 import fs from 'node:fs';
 import path from 'node:path';
 

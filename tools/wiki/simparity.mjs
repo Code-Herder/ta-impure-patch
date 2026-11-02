@@ -1493,8 +1493,8 @@ function forkCases() {
    at both Interface Types. ---- */
 function columnCases() {
   const cases = [], T = WikiSim.TRIP, BAR = 32;
-  // a takeover entry's game has no column: its sidebar is false (sim.js checkGame)
-  for (const [id, whole] of GAMES.filter(([, e]) => !e.takeover)) {
+  // a takeover or a players entry's game has no column: its sidebar is false (sim.js checkGame)
+  for (const [id, whole] of GAMES.filter(([, e]) => !e.takeover && !e.players)) {
     const scene = Object.values(whole.scenes)[0];
     for (const [ln, layout] of [['fixture', FIXTURE], ['fixture-tall', SIDE('fixture-tall')]]) {
       const types = layout.sides[0].types;
@@ -2383,8 +2383,8 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
       /* the game cases edit a replay entry's first demo: a sidebar-free game whose viewer presses the replay HUD, which
          they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
-         plays */
-      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover).flatMap(([, game]) => gameRefusalCases(game, entry)),
+         plays, and a takeover or a players entry's data rules are their fixtures' cases */
+      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover && !game.players).flatMap(([, game]) => gameRefusalCases(game, entry)),
         ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry)];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,

@@ -1087,7 +1087,7 @@ const WikiReplay = (() => {
     create: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, false),
     CONTROLS, PRESSES, TK_PRESSES, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
     GAME_END_MAX: Sim.GAME_END_MAX, REFRESH_TICKS, FORK_LIMIT, TIMELINES, refreshBin, isRefresh, forkEvict,
-    RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME, PICKS, MODES, PL_PRESSES, MEASURES, MEASURE0, STAT_PTS, TOG_ALL, NOT_ASKED, PASS,
+    RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME, PICKS, MODES, PL_PRESSES, MEASURES, MEASURE0, STAT_PTS, TOG, TOG_ALL, NOT_ASKED, PASS,
   };
 })();
 if (typeof module !== 'undefined') module.exports = WikiReplay;
