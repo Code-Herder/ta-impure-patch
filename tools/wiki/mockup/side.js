@@ -29,6 +29,18 @@ const WikiSide = (() => {
   // a dot's pixel in the picture (0x466DC0): the unit's world point, flat on the stage, scaled by the picture over the
   // extent, each step truncated as the engine's integer arithmetic does
   const dotAt = (x, z, m, W, H) => [Math.trunc(Math.trunc(x) * m.w / W), Math.trunc(Math.trunc(z) * m.h / H)];
+  /* THE CAMERA BOX, 0x466B70 (DISASSEMBLED 2026-11-01, 0x466B70..0x466C12): [left, top, right, bottom], inclusive
+     column pixels, for the picture `m` (geometry) over the extent W x H and the eye { x, z, w, h } (the eye and the
+     viewport in world units, frame.js view's `eye`; null: eye 0 and the viewport the whole extent):
+     left = pw eyeX / W + offx, top = ph eyeZ / H + offy, right = pw w / W + left - 1, bottom = ph h / H + top - 1, every
+     division truncating as the engine's idiv. The engine's view is in cells (main+0x1423B, +0x1423F) times 16; the
+     stage's viewport is its world units [INFERRED: equal for a viewport of whole cells, which a screen's width is].
+     With no eye it is the picture's border. */
+  function cameraBox(m, W, H, eye) {
+    const ex = eye ? eye.x : 0, ez = eye ? eye.z : 0, vw = eye ? eye.w : W, vh = eye ? eye.h : H;
+    const left = Math.trunc(m.w * ex / W) + m.offx, top = Math.trunc(m.h * ez / H) + m.offy;
+    return [left, top, Math.trunc(m.w * vw / W) + left - 1, Math.trunc(m.h * vh / H) + top - 1];
+  }
 
   // the palette entry nearest (squared RGB distance, the first index on a tie) to a colour
   function nearest(pal, r, g, b) {
@@ -76,25 +88,29 @@ const WikiSide = (() => {
     if (base && base.length === m.w * m.h && M) {
       minimap = true;
       const mw = M.w | 0, mh = M.h | 0, cols = Math.trunc(mw / 2), rows = Math.trunc(mh / 2), fog = M.fog || [];
-      const un = art.minimap.unexplored, seen = art.seen;
-      // 0x466C20: each picture pixel takes the fog of its 32-unit cell, read at the cell's first 16-unit cell
+      const un = art.minimap.unexplored, seen = art.seen, mini = view.mini || null;
+      // a 32-unit cell's fog: the map's at the cell's first 16-unit cell, or under a players frame's Sight the pass's
+      // (frame.js view's `mini`), seen where its block is unlit
+      const fogAt = (c, r) => mini ? (c < mini.gw && r < mini.gh && mini.lit[r * mini.gw + c] ? 0 : 1) : fog[2 * r * mw + 2 * c] | 0;
+      // 0x466C20: each picture pixel takes the fog of its 32-unit cell
       for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
-        const c = Math.trunc(x * cols / m.w), r = Math.trunc(y * rows / m.h), f = fog[2 * r * mw + 2 * c] | 0, b = base[y * m.w + x];
+        const f = fogAt(Math.trunc(x * cols / m.w), Math.trunc(y * rows / m.h)), b = base[y * m.w + x];
         const o = (m.offy + y) * COL + m.offx + x;
         idx[o] = f === 2 ? un : f === 1 ? seen[b] : b; a[o] = 1;
       }
       const pic = [m.offx, m.offy, m.offx + m.w, m.offy + m.h], D = art.dots;
       const dot = (u, f) => { const [px, py] = dotAt(u.x, u.z, m, mapW, mapH); blit(f, m.offx + px - f[4], m.offy + py - f[5], D.key, pic); };
       // radlogo's frame is the owner's colour (PlayerInfo+0x96), as the 3D look's team faces take it; an owner past
-      // the frames has no dot
-      for (const u of view.units || []) { const f = D.radlogo[u.owner | 0]; if (f) dot(u, f); }
+      // the frames has no dot. Every unit has one, or under Sight the pass's dots
+      for (const u of mini ? mini.dots : view.units || []) { const f = D.radlogo[u.owner | 0]; if (f) dot(u, f); }
       // the unit under the pointer gets radlogohigh as well (0x466DC0, +0xA8 == main+0x2CBA)
       const hi = sv.under != null && D.high && (view.units || []).find(u => u.id === sv.under);
       if (hi) dot(hi, D.high);
-      // 0x466B70: the camera box. The stage shows the whole map, so the box is the picture's border
-      const bx = art.minimap.box;
-      for (let x = m.offx; x < m.offx + m.w; x++) { idx[m.offy * COL + x] = bx; idx[(m.offy + m.h - 1) * COL + x] = bx; a[m.offy * COL + x] = a[(m.offy + m.h - 1) * COL + x] = 1; }
-      for (let y = m.offy; y < m.offy + m.h; y++) { idx[y * COL + m.offx] = bx; idx[y * COL + m.offx + m.w - 1] = bx; a[y * COL + m.offx] = a[y * COL + m.offx + m.w - 1] = 1; }
+      // 0x466B70: the camera box (cameraBox), inside the picture
+      const bx = art.minimap.box, [l, t, r, bt] = cameraBox(m, mapW, mapH, view.eye || null);
+      const put = (x, y) => { if (x >= pic[0] && x < pic[2] && y >= pic[1] && y < pic[3]) { idx[y * COL + x] = bx; a[y * COL + x] = 1; } };
+      for (let x = l; x <= r; x++) { put(x, t); put(x, bt); }
+      for (let y = t; y <= bt; y++) { put(l, y); put(r, y); }
     }
 
     const scr = layout.screens[sv.screen], sa = art.screens[sv.screen];
@@ -291,6 +307,6 @@ const WikiSide = (() => {
     return { ...read(j, sheet, pal, seen, greyed, fonts), casting: j.casting, report: j.report || [], mod: j.mod };
   }
 
-  return { compose, rgba, read, load, geometry, dotAt, fntProblem, COL };
+  return { compose, rgba, read, load, geometry, dotAt, cameraBox, fntProblem, COL };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSide;
