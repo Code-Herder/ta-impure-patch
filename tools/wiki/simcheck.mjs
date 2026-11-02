@@ -43,7 +43,7 @@
    the camera, Sight, the overlays and the stats window, and what they name inside the viewport). A claim the
    context's figures make unobservable (Sight's hidden unit and radar-only contact) prints as SKIP under its demo's
    line, with the context and why, and the replays' tally lists it: it neither fails nor passes unseen. Every game's
-   claims include THE GOALS' CLAIM on the fixture's castings, that each move order of its script goes where its unit's
+   claims include THE GOALS' CLAIM, in every context, that each move order of its script goes where its unit's
    planner reaches. Their tallies print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
@@ -1447,8 +1447,7 @@ function runGame(entry, d, layout, ctx, mode) {
   sim.free();
   return { sim, all, last: all[all.length - 1], log: sim.log, cobNotes };
 }
-/* A GAME'S CLAIMS, in refuse mode: every move order goes where its unit's planner reaches (goalClaims), on the fixture's
-   castings, which hold the figures an author designs against; it plays to its
+/* A GAME'S CLAIMS, in refuse mode: every move order goes where its unit's planner reaches (goalClaims); it plays to its
    end, never stalled, starved or stopped by a kill that found no unit; no two bodies overlap; each kill of a finished unit whose cast leaves a wreck placed it, or the placement's rule 1
    or 2 refused it (listed), and an unfinished unit's kill left none; each kill of a finished unit made a death event
    when the context has a sound source, which the player (sound.js death, tagpu_wiki.c death_play) plays as the killed
@@ -1456,7 +1455,7 @@ function runGame(entry, d, layout, ctx, mode) {
    deaths that play a WAV, that play none (the type has no WAV) and that are in the black. */
 function gameClaims(entry, d, ctx, r, ok, notes, deaths) {
   const v = r.last.v;
-  if (!PACK) goalClaims(r, ok);
+  goalClaims(r, ok);
   ok(v.clock === d.game.end && v.locked === null, `played to its end, tick ${d.game.end} (tick ${v.clock}, locked ${v.locked})`);
   ok(!v.stalled && !v.game.starved && !v.game.badKill, `never stalled, starved or killing no unit (${v.stalled}, ${v.game.starved}, ${v.game.badKill})`);
   const met = r.all.findIndex(f => !apart(f.v));
@@ -2265,9 +2264,9 @@ function cameraClaim(entry, d, rr, ok) {
    and clear of every body but those it overlaps already -- units, walking or not, and features -- and joins the nodes
    the unit stands on through clear nodes, sides or corners with both sides clear. A goal no node reaches makes every
    leg's search expand the whole grid, the dearest tick a game has. A claim on a build site, which the planner also
-   counts, is not counted here: the sites a script builds on are the placement's, which refuses a blocked one. A pack's
-   casting is not held to it: its bodies are a mod's (TA Zero's 3 x 3 commanders), a goal beside another unit can be
-   out of their reach, and the sim plays it all the same, its fill paced by the cost it charges. */
+   counts, is not counted here: the sites a script builds on are the placement's, which refuses a blocked one. Every
+   context is held to it, a pack's casting too: a mod's bodies differ (TA Zero's commanders are 3 x 3), so a goal is
+   authored with room for the largest body any casting gives its unit, not only the fixture's. */
 function goalClaims(r, ok) {
   const unreached = [];
   for (const f of r.all) for (const u of f.v.units) {

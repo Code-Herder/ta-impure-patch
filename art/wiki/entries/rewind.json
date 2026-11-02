@@ -286,7 +286,7 @@
           {"at": 400, "seat": 0, "move": [200, 300]},
           {"at": 402, "down": "select"},
           {"at": 404, "up": "select"},
-          {"at": 406, "seat": 0, "move": [400, 300]},
+          {"at": 406, "seat": 0, "move": [400, 250]},
           {"at": 408, "down": "order"},
           {"at": 410, "up": "order"}
         ]
