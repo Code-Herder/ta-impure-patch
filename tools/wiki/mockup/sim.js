@@ -155,7 +155,30 @@ const WikiSim = (() => {
         if (!T.pages.length && T.orders === null) no(`${at} has no page`);
       }
     });
+    checkSight(L.sight, no);
     return L;
+  }
+  /* THE SIGHT TABLE of a layout's mod (tagpu_wikidata.h WIKISIGHT, which states the engine's loader and stamp it
+     reduces): `sight`, absent or null for none, else {numtables, tables}: numtables an integer 2..SIGHT_TABLES and
+     tables a list of numtables - 1 count grids, TABLE<idx> at index idx - 1, each a list of [dc, dr, n] -- the block
+     offset (column, row) from the unit's own and the number of ray points on it -- strictly increasing by (dr, dc),
+     |dc|, |dr| <= SIGHT_REACH, n 1..255, at most SIGHT_CELLS cells over every table. A unit of sight s lights the
+     cells of table min(trunc(s / 32), numtables - 1) and its own block. */
+  const SIGHT_TABLES = 64, SIGHT_REACH = 63, SIGHT_CELLS = 16384;
+  function checkSight(S, no) {
+    if (S === undefined || S === null) return;
+    if (!obj(S) || !(int(S.numtables) && S.numtables >= 2 && S.numtables <= SIGHT_TABLES) || !Array.isArray(S.tables) ||
+        S.tables.length !== S.numtables - 1) no('the sight table is not {numtables, tables}');
+    let n = 0;
+    for (const T of S.tables) {
+      if (!Array.isArray(T) || (n += T.length) > SIGHT_CELLS) no('the sight table is not {numtables, tables}');
+      T.forEach((c, k) => {
+        if (!Array.isArray(c) || c.length !== 3 || !c.every(int) || Math.abs(c[0]) > SIGHT_REACH || Math.abs(c[1]) > SIGHT_REACH ||
+            c[2] < 1 || c[2] > 255) no(`a sight table's cell is past ${SIGHT_REACH} blocks or counts nothing`);
+        if (k && (c[1] < T[k - 1][1] || (c[1] === T[k - 1][1] && c[0] <= T[k - 1][0])))
+          no('a sight table\'s cells are not in order by row, then column, each once');
+      });
+    }
   }
 
   /* ---- casts and castings (research/notes/ingame-wiki.md, the owner's decisions 13-15 and 20) ----
@@ -178,6 +201,15 @@ const WikiSim = (() => {
   /* a cast's economy within the bounds a game's economy rests on (tagpu_wikidata_cast_economy): an absent figure is 0.
      Outside them a game leaves the cast unbound (binder); a page entry reads none of them */
   const econFits = k => ECON.every(n => !(n in k) || k[n] >= 0) && (!('energyUse' in k) || Math.abs(k.energyUse) < ECON_MAX);
+  /* THE SIGHT FIGURES (tagpu_wikidata.h WIKICASTDEF's), with their bounds, an absent one 0: SightDistance, RadarDistance
+     and SonarDistance as the def's signed words hold them (every engine reader is movsx), and modelHeight, def+0x170's
+     byte, the model's height (0x4CB5F0). A players entry's game leaves a cast below SIGHT_MIN unbound (sightFits), and
+     refuses an own type below it: radius index 0 is the engine's read before the sight table */
+  const SIGHT = [['sightDistance', -32768, 32767], ['radarDistance', -32768, 32767], ['sonarDistance', -32768, 32767],
+    ['modelHeight', 0, 255]];
+  const SIGHT_MIN = 32;
+  const sightFits = k => ('sightDistance' in k ? k.sightDistance : 0) >= SIGHT_MIN;
+  const sightBad = (k, n, lo, hi) => n in k && !(int(k[n]) && k[n] >= lo && k[n] <= hi);
   // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
   // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
   const FP_MAX = 16, ID_MAX = 24, TITLE_MAX = 94;
@@ -234,6 +266,7 @@ const WikiSim = (() => {
       if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
       if ('canreclamate' in k && !int(k.canreclamate)) no(`${at}: canreclamate is not an integer`);
       if ('activatewhenbuilt' in k && !int(k.activatewhenbuilt)) no(`${at}: activatewhenbuilt is not an integer`);
+      for (const [n, lo, hi] of SIGHT) if (sightBad(k, n, lo, hi)) no(`${at}: ${n} is not an integer ${lo}..${hi}`);
       if ('vent' in k && typeof k.vent !== 'boolean') no(`${at}: vent is not a boolean`);
       checkG(at, k, f);
       if ('builds' in k && !(Array.isArray(k.builds) && k.builds.every(b => CASTS.includes(b)))) no(`${at}: builds is not a list of casts`);
@@ -249,10 +282,10 @@ const WikiSim = (() => {
     return C;
   }
   /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
-     with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt and G cells, and a build list that holds unit j
+     with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt, sight figures and G cells, and a build list that holds unit j
      of the entry exactly when the casting's build list names j's cast and j is on the unit's own side (a rival or
      not). A unit of an unbound cast -- in a game, also of a cast whose economy is outside the game's bounds
-     (econFits) -- keeps the authored definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
+     (econFits), and in a players entry's game of one below the sight floor (sightFits) -- keeps the authored definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
      types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
      captions). Every unit names one of the ten casts and no two units of one side one cast; two units bound to one
@@ -275,7 +308,7 @@ const WikiSim = (() => {
        economy reads the cast's economy figures, so a game leaves a cast whose figures are outside its bounds unbound */
     const castFor = t => {
       const k = isRival(t) ? (R ? R[entry.units[t].cast] : undefined) : K[entry.units[t].cast];
-      return k && game && !econFits(k) ? null : k;
+      return k && game && (!econFits(k) || (entry.players === true && !sightFits(k))) ? null : k;
     };
     for (const t of names) {
       const c = entry.units[t].cast;
@@ -299,6 +332,7 @@ const WikiSim = (() => {
       if ('canstop' in k) b.canstop = k.canstop;
       if ('canreclamate' in k) b.canreclamate = k.canreclamate;
       if ('activatewhenbuilt' in k) b.activatewhenbuilt = k.activatewhenbuilt;
+      for (const [n] of SIGHT) if (n in k) b[n] = k[n];
       if (k.vent) b.vent = true;
       if (k.g && k.g.length) b.g = k.g.map(c => [c[0], c[1]]);
       if (game && k.corpse) {
@@ -568,10 +602,17 @@ const WikiSim = (() => {
     if (entry.frame !== 'game') throw new Error(`the entry's frame ${JSON.stringify(entry.frame)} is not "game"`);
     return true;
   }
-  function checkSeats(at, seats) {
+  /* A GAME SCENE'S SEATS: 1..SEATS of {name, metal, energy}; a players entry's (`players`) also take `camera`, the
+     view's centre at the game's first tick, two integers (checkGame holds them to the map), and `team`, an integer
+     0..SEATS - 1, absent the seat's own index -- seats of one team are allied to each other */
+  function checkSeats(at, seats, players = false) {
     if (!Array.isArray(seats) || seats.length < 1 || seats.length > SEATS) throw new Error(`${at}: seats is not a list of 1 to ${SEATS}`);
+    const known = players ? ['name', 'metal', 'energy', 'camera', 'team'] : ['name', 'metal', 'energy'];
     seats.forEach((s, k) => {
-      if (!obj(s) || !Object.keys(s).every(n => ['name', 'metal', 'energy'].includes(n))) throw new Error(`${at}: seat ${k} is not {name, metal, energy}`);
+      if (!obj(s) || !Object.keys(s).every(n => known.includes(n))) throw new Error(`${at}: seat ${k} is not {name, metal, energy}`);
+      if ('team' in s && !(int(s.team) && s.team >= 0 && s.team < SEATS)) throw new Error(`${at}: seat ${k}'s team is not an integer 0..${SEATS - 1}`);
+      if ('camera' in s && !(Array.isArray(s.camera) && s.camera.length === 2 && s.camera.every(int)))
+        throw new Error(`${at}: seat ${k}'s camera is not two integers`);
       if (!fitsIn(s.name, SEAT_NAME) || !s.name.length || s.name.includes('{')) throw new Error(`${at}: seat ${k}'s name is not 1 to ${SEAT_NAME - 1} bytes without "{"`);
       for (const n of ['metal', 'energy'])
         if (!(int(s[n]) && s[n] >= SEAT_MIN && s[n] <= SEAT_MAX)) throw new Error(`${at}: seat ${k}'s ${n} is not an integer ${SEAT_MIN}..${SEAT_MAX}`);
@@ -584,6 +625,75 @@ const WikiSim = (() => {
      that fails it. */
   const FRAME_BAR = 32;
   const frameFits = (w, h) => 3 * (SIDE_W + CELL * w) >= 4 * (CELL * Math.max(h, 2 * Math.ceil(SIDE_ROWS / (2 * CELL))) + 2 * FRAME_BAR);
+  /* A PLAYERS ENTRY'S SCREEN (tagpu_wikidata.c screen and screen_on_map), `screen` [sw, sh] cells: the game screen its
+     recordings were made on, two even integers 2..MAP_MAX (whole 32-unit tiles, the ground's grid), within the first
+     scene's map, whose rows are at least the viewport's beside the deepest column, 16 h >= max(16 sh, SIDE_ROWS - 64),
+     so the eye's range is never empty. The frame is the screen's, so the 4:3 bound is taken on it (screenFits)
+     instead of on the map. The map's sides are even too: the sight grid is (w/2) x (h/2) blocks, halved truncating
+     (0x482F1B..0x482F45), so an odd side would leave its last 16-unit column or row with no block. */
+  const MAP_MAX = 128;
+  const screenFits = (sw, sh) => 3 * (SIDE_W + CELL * sw) >= 4 * Math.max(CELL * sh + 2 * FRAME_BAR, SIDE_ROWS);
+  function checkScreen(entry, m) {
+    const S = entry.screen;
+    if (!(Array.isArray(S) && S.length === 2 && S.every(v => int(v) && v >= 2 && v <= MAP_MAX && v % 2 === 0)))
+      throw new Error(`a players entry's screen is not two even integers 2..${MAP_MAX}`);
+    if (S[0] > m.w || S[1] > m.h) throw new Error('a players entry\'s screen is larger than its map');
+    if (CELL * m.h < Math.max(CELL * S[1], SIDE_ROWS - 2 * FRAME_BAR))
+      throw new Error('a players entry\'s map has fewer rows than the viewport\'s beside the deepest column');
+    if (!screenFits(S[0], S[1])) throw new Error(`a players entry's screen of ${S[0]} x ${S[1]} makes a frame narrower than 4:3`);
+  }
+  /* THE CAMERA'S RANGE: a view centre of the entry's screen inside the map of w x h cells, x in [8 sw, 16 w - 8 sw] and
+     z in [8 sh, 16 h - 8 sh] (tagpu_wikidata.c cam_ok) */
+  const camOk = (entry, m, p) => p[0] >= 8 * entry.screen[0] && p[0] <= CELL * m.w - 8 * entry.screen[0] &&
+    p[1] >= 8 * entry.screen[1] && p[1] <= CELL * m.h - 8 * entry.screen[1];
+  /* A SEAT'S CAMERA (tagpu_wikidata.h tagpu_wikidata_seat_cam, which states the rule): the centre [x, z] of seat k's
+     view at game tick t of a players entry's demo, or null when the seat has none. Each glide is each axis
+     a + trunc((b - a) (t - at) / over), in integers; the products stay below 2^53, so the doubles are exact. */
+  function seatCam(entry, demo, k, t) {
+    const z = sceneOf(entry, demo).seats[k];
+    if (!z || !z.camera) return null;
+    let a = [z.camera[0], z.camera[1]];
+    for (const e of demo.game.inputs) {
+      if (!('camera' in e) || (e.seat ?? 0) !== k) continue;
+      if (e.at > t) break;
+      const over = e.over ?? 0;
+      if (t >= e.at + over) { a = [e.camera[0], e.camera[1]]; continue; }
+      return [0, 1].map(i => a[i] + Math.trunc((e.camera[i] - a[i]) * (t - e.at) / over));
+    }
+    return a;
+  }
+  /* A PLAYERS ENTRY'S DEATHS (tagpu_wikidata.h WIKI_PLAYERS_DEATHS, which states the engine's cap): at most
+     PLAYERS_DEATHS kills of one seat's units at ticks within any PLAYERS_DEATH_SPAN consecutive ticks */
+  const PLAYERS_DEATHS = 20, PLAYERS_DEATH_SPAN = 62;
+  function checkDeaths(at, S, nseat, inputs) {
+    const owner = new Map();
+    for (const u of S.units) if (typeof u.id === 'string' && u.id && !owner.has(u.id)) owner.set(u.id, u.owner ?? 0);
+    for (let k = 0; k < nseat; k++) {
+      const t = inputs.filter(e => 'kill' in e && owner.get(e.kill) === k).map(e => e.at).sort((a, b) => a - b);
+      for (let i = 0; i + PLAYERS_DEATHS < t.length; i++)
+        if (t[i + PLAYERS_DEATHS] <= t[i] + (PLAYERS_DEATH_SPAN - 1))
+          throw new Error(`${at}: seat ${k} loses more than ${PLAYERS_DEATHS} units within ${PLAYERS_DEATH_SPAN} ticks from tick ${t[i]}`);
+    }
+  }
+  /* THE VIEW RULE (tagpu_wikidata.c cameras_ok, which states why): for every seat with a camera, at every tick u from
+     its first move (tick 0 at the earliest) to the game's end, the point of its last move at or before u, in the order
+     the script is fed, lies in its view at u: |x - cx(u)| < 8 sw and |z - cz(u)| < 8 sh */
+  function checkCameras(at, entry, demo) {
+    const seats = sceneOf(entry, demo).seats, g = demo.game, [sw, sh] = entry.screen;
+    seats.forEach((z, k) => {
+      if (!z.camera) return;
+      const mv = g.inputs.map((e, i) => [e, i]).filter(([e]) => Array.isArray(e.move) && (e.seat ?? 0) === k)
+        .sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]);
+      if (!mv.length || !(mv[0].at <= g.end)) return;
+      let m = -1;
+      for (let u = Math.max(0, Math.ceil(mv[0].at)); u <= g.end; u++) {
+        while (m + 1 < mv.length && mv[m + 1].at <= u) m++;
+        const c = seatCam(entry, demo, k, u);
+        if (!(Math.abs(mv[m].move[0] - c[0]) < 8 * sw && Math.abs(mv[m].move[1] - c[1]) < 8 * sh))
+          throw new Error(`${at}: seat ${k}'s cursor at tick ${u} is outside its camera's view`);
+      }
+    });
+  }
   /* THE LIVE DATA RULE (tagpu_wikidata.c live_orders): in a live entry a seat's release (sim.release) can come between
      any two ticks of a game script and of a fork's part, and it empties that seat's selection an order is given from
      and disarms its reclaim. So each `build` naming a type and each `reclaim` has, on its own tick and before it in
@@ -626,9 +736,15 @@ const WikiSim = (() => {
     if (game && Array.isArray(entry.demos) && entry.demos.length > THEATRE_TABS) throw new Error(`a game entry has at most ${THEATRE_TABS} demos`);
     if ('live' in entry && !(game && typeof entry.live === 'boolean')) throw new Error('live is a game entry\'s, true or false');
     if ('takeover' in entry && !(game && typeof entry.takeover === 'boolean')) throw new Error('takeover is a game entry\'s, true or false');
-    if (entry.live === true && entry.takeover === true) throw new Error('an entry is a replay, a live game or a takeover\'s replay');
-    const live = game && entry.live === true, tk = game && entry.takeover === true;
+    if ('players' in entry && !(game && typeof entry.players === 'boolean')) throw new Error('players is a game entry\'s, true or false');
+    if ([entry.live, entry.takeover, entry.players].filter(v => v === true).length > 1)
+      throw new Error('an entry is a replay, a live game, a takeover\'s replay or a players\' replay, never two');
+    const live = game && entry.live === true, tk = game && entry.takeover === true, pl = game && entry.players === true;
+    if (!pl && 'screen' in entry) throw new Error('screen is a players entry\'s');
+    if (pl && !('screen' in entry)) throw new Error('a players entry has a screen');
     for (const [t, d] of Object.entries(entry.units || {})) {
+      for (const [n, lo, hi] of SIGHT) if (sightBad(d, n, lo, hi)) throw new Error(`unit ${t}: ${n} is not an integer ${lo}..${hi}`);
+      if (pl && !sightFits(d)) throw new Error(`unit ${t}: a players entry's type has a sightDistance of at least ${SIGHT_MIN}`);
       for (const n of ECON) if (n in d && !(typeof d[n] === 'number' && d[n] >= 0 && d[n] < Infinity)) throw new Error(`unit ${t}: ${n} is not a finite number >= 0`);
       if ('energyUse' in d && !(typeof d.energyUse === 'number' && Math.abs(d.energyUse) < ECON_MAX)) throw new Error(`unit ${t}: energyUse is not a number of magnitude below ${ECON_MAX}`);
       if (('rival' in d || 'corpse' in d) && !game) throw new Error(`unit ${t}: rival and corpse are a game entry's`);
@@ -638,14 +754,24 @@ const WikiSim = (() => {
     }
     for (const [n, s] of Object.entries(entry.scenes)) {
       if (!game) { if ('seats' in s) throw new Error(`the scene ${n}: seats are a game entry's`); continue; }
-      checkSeats(`the scene ${n}`, s.seats);
+      checkSeats(`the scene ${n}`, s.seats, pl);
       for (const u of s.units || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < s.seats.length)))
         throw new Error(`the scene ${n}: the owner ${u.owner} is no seat of it`);
     }
     // every scene has the first's size (sceneOf), so the first's map decides
-    if (game) {
+    if (game && !pl) {
       const m = entry.scenes[Object.keys(entry.scenes)[0]].map;
       if (!frameFits(m.w, m.h)) throw new Error(`a game entry's map of ${m.w} x ${m.h} makes a frame narrower than 4:3`);
+    }
+    if (pl) {
+      for (const [n, s] of Object.entries(entry.scenes)) {
+        if (!(obj(s.map) && int(s.map.w) && int(s.map.h) && s.map.w % 2 === 0 && s.map.h % 2 === 0))
+          throw new Error(`the scene ${n}: a players entry's map is not of even cells`);
+        s.seats.forEach((z, k) => {
+          if (z.camera && !camOk(entry, s.map, z.camera)) throw new Error(`the scene ${n}: seat ${k}'s camera puts its view outside the map`);
+        });
+      }
+      checkScreen(entry, entry.scenes[Object.keys(entry.scenes)[0]].map);
     }
     if (!demo) return game;
     const at = `demo ${demo.id}`;
@@ -662,6 +788,8 @@ const WikiSim = (() => {
     /* a takeover may take any seat, and the column is seat 0's: a takeover entry's game has none, the sidebar false (an
        absent sidebar may be on, THE SEAT RULE's over-approximation) */
     if (tk && g.sidebar !== false) throw new Error(`${at}: a takeover entry's game has the sidebar false, since the column is seat 0's`);
+    // every seat of a players entry acts through its cursor (the plan's D16): no column
+    if (pl && g.sidebar !== false) throw new Error(`${at}: a players entry's game has the sidebar false, since every seat acts`);
     if (!Array.isArray(g.inputs)) throw new Error(`${at}: the game's inputs are not a list`);
     for (const u of (demo.scene && demo.scene.units) || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < seats.length)))
       throw new Error(`${at}: the owner ${u.owner} is no seat of its scene`);
@@ -675,14 +803,31 @@ const WikiSim = (() => {
     };
     const S = merge(entry, demo), ids = new Set(S.units.filter(u => typeof u.id === 'string' && u.id).map(u => u.id));
     S.features.forEach((f, k) => { if (ids.has(f.id ?? `f${k + 1}`)) throw new Error(`${at}: the feature ${f.id ?? `f${k + 1}`} has a unit's id`); });
-    const killed = new Set();
+    const killed = new Set(), camPrev = [];
     for (const e of g.inputs) {
       const w = `${at}: the game input at tick ${obj(e) ? e.at : e}`;
       if (!obj(e) || typeof e.at !== 'number') throw new Error(`${w} has no tick`);
       if ('caption' in e || 'until' in e) throw new Error(`${w} is a caption or a wait, which a game script has not`);
       seatOk(w, e);
+      if (!('kill' in e) && 'camera' in e) {
+        /* A CAMERA INPUT, a players entry's (tagpu_wikidata.c game): {at, seat, camera, over}, of a seat with a camera,
+           to a point of its range, at an integer tick up to the end, never inside the seat's previous glide */
+        if (!pl) throw new Error(`${w}: a camera input is a players entry's`);
+        if (!Object.keys(e).every(k => ['at', 'seat', 'camera', 'over'].includes(k))) throw new Error(`${w}: a camera input carries another key`);
+        if (!(int(e.at) && e.at >= 0 && e.at <= GAME_END_MAX)) throw new Error(`${w}: a camera input's tick is not an integer 0..${GAME_END_MAX}`);
+        if (!(Array.isArray(e.camera) && e.camera.length === 2 && e.camera.every(int))) throw new Error(`${w}: a camera is not two integers`);
+        if ('over' in e && !(int(e.over) && e.over >= 0 && e.over <= GAME_END_MAX)) throw new Error(`${w}: over is not an integer 0..${GAME_END_MAX}`);
+        const k = e.seat ?? 0, prev = camPrev[k];
+        if (!seats[k].camera) throw new Error(`${w}: the camera input's seat has no camera`);
+        if (!camOk(entry, sceneOf(entry, demo).map, e.camera)) throw new Error(`${w}: the camera input puts its view outside the map`);
+        if (!(e.at <= g.end)) throw new Error(`${w}: the camera input is after the game's end`);
+        if (prev && e.at < prev.at + (prev.over ?? 0)) throw new Error(`${w}: the camera input is before the end of its seat's previous one`);
+        camPrev[k] = e;
+        continue;
+      }
       if (!('kill' in e)) continue;
-      if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${w}: a kill carries another key`);
+      if (!Object.keys(e).every(k => k === 'at' || k === 'kill' || k === 'by')) throw new Error(`${w}: a kill carries another key`);
+      if ('by' in e && !(int(e.by) && e.by >= 0 && e.by < seats.length)) throw new Error(`${w}: the kill's by is no seat of its scene`);
       if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${w}: the kill names no unit of the scene`);
       if (killed.has(e.kill)) throw new Error(`${w}: ${e.kill} is killed twice`);
       if (killed.size === GAME_KILLS) throw new Error(`${w}: more than ${GAME_KILLS} kills`);
@@ -703,13 +848,16 @@ const WikiSim = (() => {
         seatOk(v, e);
         if (!(e.at >= from && e.at <= last)) throw new Error(`${v} is not at a tick ${from}..${last}`);
         if ('kill' in e) {
-          if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${v}: a kill carries another key`);
+          if (!Object.keys(e).every(k => k === 'at' || k === 'kill' || k === 'by')) throw new Error(`${v}: a kill carries another key`);
+          if ('by' in e && !(int(e.by) && e.by >= 0 && e.by < seats.length)) throw new Error(`${v}: the kill's by is no seat of its scene`);
           if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${v}: the kill names no unit of the scene`);
           if (kills.has(e.kill)) throw new Error(`${v}: ${e.kill} is killed twice`);
           if (kills.size === GAME_KILLS) throw new Error(`${v}: more than ${GAME_KILLS} kills`);
           kills.add(e.kill);
           continue;
         }
+        // a fork is a live or a takeover entry's, never a players entry's, which alone has camera inputs
+        if ('camera' in e) throw new Error(`${v}: a camera input is a players entry's`);
         const key = k => !(typeof k === 'string' && k !== '') || KEYS.includes(k) || ACTIONS.includes(k);
         if (typeof e.build === 'string' && e.build && !own(entry.units, e.build)) throw new Error(`${v}: no unit type ${e.build}`);
         if ('reclaim' in e && e.reclaim !== true) throw new Error(`${v}: a reclaim is not true`);
@@ -758,7 +906,8 @@ const WikiSim = (() => {
       });
     }
     if (S.features.length + killed.size + partKills + keptKills > FEATS_MAX) throw new Error(`${at}: the scene's features and the kills pass ${FEATS_MAX}`);
-    checkViewer(at, demo, g.end, live ? 'live' : tk ? 'takeover' : 'replay', seats.length);
+    if (pl) { checkDeaths(at, S, seats.length, g.inputs); checkCameras(at, entry, demo); }
+    checkViewer(at, demo, g.end, live ? 'live' : tk ? 'takeover' : pl ? 'players' : 'replay', seats.length);
     return game;
   }
   /* THE VIEWER'S SCRIPT of a game entry's demo, its `inputs` on demo time (decision 4): the data rule, refused here as
@@ -771,21 +920,29 @@ const WikiSim = (() => {
        script's: the presentation's); for `track` a `to`, an integer 0..the game's end, with `drag` (the same) and
        `over` (an integer 1..UNTIL_MAX) together or neither; for `takeas` a `seat`, the picker's row of that seat, an
        integer 0..the scene's seats - 1; for `lane`, `export` and `delete` a `fork`, the id of the fork whose lane it
-       presses, an integer 1..TIMELINES - 1.
+       presses, an integer 1..TIMELINES - 1; a players entry's REPLAY_CONTROLS and PLAYERS_CONTROLS, `jump`, `sight`
+       and `follow` with a `seat` as `takeas` has, and `chip` with a `chip`, one of CHIPS. The Players set is a
+       players entry's alone.
      A press's trip runs from its tick to its release, at + HUD_UP, or for a drag at + HUD_DOWN + over; no other press
      and no wait stands in it, the release's tick included, in the order the inputs are fed (by tick, then file
      order). A demo's `end`, when given, is a number. */
   /* HUD_CONTROLS, every control a script may name, in WIKI_HUD_* order: the replay HUD's eight, then the live HUD's
      own three (rew, fwd and track are both HUDs', and mean the live HUD's in a live game), then the replay HUD's Take
      over set (tagpu_hudinput.c pick_act and lane_act): Take over, a picker row, the Forks bay, a lane, Back to main
-     recording, a lane's Save as a replay and its Delete */
+     recording, a lane's Save as a replay and its Delete; then the Players set (tagpu_hudinput.c act): a row's
+     Jump, Sight and Follow, the four overlay switches, the stats window's button, its close and a chip */
   const HUD_CONTROLS = ['play', 'speed', 'rew', 'fwd', 'track', 'bookmark', 'leave', 'leave:no', 'rewind', 'live_play', 'live_now',
-    'takeover', 'takeas', 'lanes', 'lane', 'main', 'export', 'delete'];
+    'takeover', 'takeas', 'lanes', 'lane', 'main', 'export', 'delete', 'jump', 'sight', 'follow', 'cursors', 'clicks',
+    'selections', 'chat', 'stats', 'close', 'chip'];
   const REPLAY_CONTROLS = HUD_CONTROLS.slice(0, 8), LIVE_CONTROLS = ['rewind', 'rew', 'fwd', 'track', 'live_play', 'live_now'];
-  const TAKEOVER_CONTROLS = HUD_CONTROLS.slice(11);
+  const TAKEOVER_CONTROLS = HUD_CONTROLS.slice(11, 18), PLAYERS_CONTROLS = HUD_CONTROLS.slice(18);
+  /* the stats window's chips a `chip` press names, in tagpu_wikidata.h's WIKI_CHIP_* order: the two splits, then
+     art/hud/layout.json's window.measures keys in that file's order (tools/wiki/castcheck.mjs holds the list to it) */
+  const CHIPS = ['player', 'team', 'metal', 'energy', 'units', 'army', 'kills', 'losses', 'excess'];
   // the controls each kind of game entry's viewer presses (checkViewer's `set`)
   const PRESS_SETS = { replay: REPLAY_CONTROLS, live: LIVE_CONTROLS,
-    takeover: [...new Set([...REPLAY_CONTROLS, ...TAKEOVER_CONTROLS, ...LIVE_CONTROLS])] };
+    takeover: [...new Set([...REPLAY_CONTROLS, ...TAKEOVER_CONTROLS, ...LIVE_CONTROLS])],
+    players: [...REPLAY_CONTROLS, ...PLAYERS_CONTROLS] };
   // a HUD press's trip is the popup pick's without its glide back (THE PICK TRIP): pressed at HUD_DOWN, released at HUD_UP
   const HUD_DOWN = PICK_DOWN, HUD_UP = PICK_UP;
   function checkViewer(at, demo, end, set, nseat) {
@@ -799,12 +956,15 @@ const WikiSim = (() => {
       if ('hud' in e) {
         if (e.hud === 'leave:yes') throw new Error(`${w}: leave:yes is the player's, never a demo's`);
         if (!HUD_CONTROLS.includes(e.hud)) throw new Error(`${w}: ${JSON.stringify(e.hud)} is no control a demo presses`);
+        if (PLAYERS_CONTROLS.includes(e.hud) && set !== 'players') throw new Error(`${w}: ${e.hud} is a players' replay's control`);
         if (!PRESS_SETS[set].includes(e.hud)) throw new Error(`${w}: ${e.hud} is no control a ${set} demo presses`);
-        const value = e.hud === 'takeas' ? 'seat' : ['lane', 'export', 'delete'].includes(e.hud) ? 'fork' : null;
+        const value = ['takeas', 'jump', 'sight', 'follow'].includes(e.hud) ? 'seat' : ['lane', 'export', 'delete'].includes(e.hud) ? 'fork'
+          : e.hud === 'chip' ? 'chip' : null;
         if (e.hud === 'track' ? !keys(e, ['hud', 'to', 'drag', 'over']) : !keys(e, value ? ['hud', value] : ['hud']))
           throw new Error(`${w}: the press carries a key it does not know`);
         if (value === 'seat' && !(int(e.seat) && e.seat >= 0 && e.seat < nseat)) throw new Error(`${w}: the row's seat is not an integer 0..${nseat - 1}`);
         if (value === 'fork' && !(int(e.fork) && e.fork >= 1 && e.fork < TIMELINES)) throw new Error(`${w}: the fork is not an integer 1..${TIMELINES - 1}`);
+        if (value === 'chip' && !CHIPS.includes(e.chip)) throw new Error(`${w}: the chip is not one of ${CHIPS.join(', ')}`);
         if (e.hud !== 'track') continue;
         if (!tick(e, 'to')) throw new Error(`${w}: the track's to is not an integer 0..${end}`);
         if (('drag' in e) !== ('over' in e)) throw new Error(`${w}: drag and over come together`);
@@ -831,12 +991,12 @@ const WikiSim = (() => {
   /* THE INPUT SEATS, NIN (ingame-wiki-replay-plan.md decision 16): a game simulation of a takeover entry holds an input
      state for every seat of its scene, since Try it may take over any of them; any other game for every seat its game
      script or a fork part names, as an input's seat or as the seat the fork is played as, 1 + the highest (a kill
-     names none), at least 1; a page simulation holds one. checkGame bounds every seat by the scene's, so NIN is at
+     names none, and a camera input acts on no input state), at least 1; a page simulation holds one. checkGame bounds every seat by the scene's, so NIN is at
      most SEATS, and the sim refuses an input of a seat at NIN or above at the door (sim.input, sim.fork).
      tagpu_wikisim.c input_seats. */
   const inputSeats = (entry, d) => entry.takeover === true ? sceneOf(entry, d).seats.length
     : [...d.game.inputs, ...(d.forks || []).flatMap(p => [...p.inputs, { seat: p.seat }])]
-      .reduce((n, e) => 'kill' in e ? n : Math.max(n, (e.seat ?? 0) + 1), 1);
+      .reduce((n, e) => 'kill' in e || 'camera' in e ? n : Math.max(n, (e.seat ?? 0) + 1), 1);
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
      select is the left button in both types, cancel the right one in both, order the right one at type 1 and the left
@@ -3079,6 +3239,8 @@ const WikiSim = (() => {
         const e = script[next++];
         if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
         else if (GAME && 'kill' in e) kill(e.kill);
+        // a seat's camera is recorded data the replay layer reads (seatCam); the simulation never sees it
+        else if (GAME && 'camera' in e) {}
         else if (isSeat(e.seat ?? 0)) { const k = e.seat ?? 0; asSeat(k, () => input(e)); IN[k].fed++; }
       }
     };
@@ -3416,11 +3578,15 @@ const WikiSim = (() => {
     // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS, and the
     // features and kills of WIKI_FEATS_MAX) and its death sound's kind
     SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, FEATS_MAX, SND_DEATH,
-    // the game frame's 4:3 bound on a game entry's map (checkGame)
-    frameFits,
+    // the game frame's 4:3 bound on a game entry's map (checkGame), and a players entry's on its screen
+    frameFits, screenFits,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order), a replay entry's and a live entry's,
-    // and a press's trip, for replay.js
-    HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, TAKEOVER_CONTROLS, HUD_DOWN, HUD_UP,
+    // and a press's trip, for replay.js; the stats window's chips (WIKI_CHIP_*)
+    HUD_CONTROLS, REPLAY_CONTROLS, LIVE_CONTROLS, TAKEOVER_CONTROLS, PLAYERS_CONTROLS, CHIPS, HUD_DOWN, HUD_UP,
+    // a players entry's seat's camera at a tick (tagpu_wikidata_seat_cam), its deaths' bound and the sight floor
+    seatCam, PLAYERS_DEATHS, PLAYERS_DEATH_SPAN, SIGHT_MIN,
+    // a layout's sight table's bounds (tagpu_wikidata.h WIKI_SIGHT_*)
+    SIGHT_TABLES, SIGHT_REACH, SIGHT_CELLS,
     // a live demo's fork parts, at most, and the bound of their ids (the recorder's RECR_TIMELINES)
     DEMO_FORKS, TIMELINES,
     // the recorder's rules (THE RECORDER'S RULES), which replay.js plans its forks with

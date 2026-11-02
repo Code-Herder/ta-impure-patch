@@ -4036,6 +4036,9 @@ static void feed(WIKISIM* s, int t)
             s->wait_from = s->tick;
             if (e->until == WIKI_UNTIL_BUILT) s->wait_built = ++s->built_waits;
         } else if (s->game && (e->has & WIKI_IN_KILL)) kill(s, e->kill);
+        /* a seat's camera is recorded data the replay layer reads (tagpu_wikidata_seat_cam); the
+           simulation never sees it */
+        else if (e->has & WIKI_IN_CAMERA) {}
         else if (seat_in(s, e->seat)) {
             s->act = e->seat;
             input(s, e);
@@ -5018,8 +5021,10 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKI
         const WIKICASTDEF* c = kc ? &kc->cast[a->cast] : NULL;
         WIKIDEF* d = &B->def[i];
         /* a game's economy reads the cast's economy figures, so a game leaves a cast whose figures
-           are outside the economy's bounds unbound; a page entry reads none of them */
-        if (!c || !c->bound || (game && !tagpu_wikidata_cast_economy(c))) {
+           are outside the economy's bounds unbound; a page entry reads none of them. A players
+           entry's game leaves one below THE SIGHT FLOOR unbound too (tagpu_wikidata.h
+           WIKI_SIGHT_MIN), so no type it plays makes the stamp's out-of-bounds index 0 */
+        if (!c || !c->bound || (game && !tagpu_wikidata_cast_economy(c)) || (game && e->players && !tagpu_wikidata_cast_sight(c))) {
             *d = *a;
             s->unbound[i] = c != NULL;
             continue;
@@ -5059,6 +5064,10 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKI
         d->canstop = c->canstop;
         d->canreclamate = c->canreclamate;
         d->activate_when_built = c->activate_when_built;
+        d->sight_distance = c->sight_distance;
+        d->radar_distance = c->radar_distance;
+        d->sonar_distance = c->sonar_distance;
+        d->model_height = c->model_height;
         for (j = 0; j < e->ndef; j++)
             if (!e->def[j].rival == !a->rival && ((c->builds >> e->def[j].cast) & 1)) d->builds |= (uint64_t)1 << j;
     }
@@ -5106,13 +5115,14 @@ static int resolve(WIKISIM* s, const WIKIDEMO* d)
 }
 
 /* THE INPUT SEATS (sim.js's inputSeats) of the inputs `in`: 1 + the highest seat they name (a kill
-   names none), at least `seats`; -1 when an input names a seat outside 0..WIKI_SEATS - 1, which the
-   loader refuses (THE BOUND every index into WIKISIM.in rests on) */
+   names none, and a camera input acts on no input state), at least `seats`; -1 when an input names
+   a seat outside 0..WIKI_SEATS - 1, which the loader refuses (THE BOUND every index into WIKISIM.in
+   rests on) */
 static int input_seats(const WIKIINPUT* in, int n, int seats)
 {
     int i;
     for (i = 0; i < n && seats > 0; i++) {
-        if (in[i].has & WIKI_IN_KILL) continue;
+        if (in[i].has & (WIKI_IN_KILL | WIKI_IN_CAMERA)) continue;
         if (in[i].seat < 0 || in[i].seat >= WIKI_SEATS) return -1;
         if (in[i].seat + 1 > seats) seats = in[i].seat + 1;
     }

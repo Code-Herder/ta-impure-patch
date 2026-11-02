@@ -1296,6 +1296,10 @@ static void casting_out(const WIKICASTING* k)
         key("canstop", 0); printf("%d", d->canstop);
         key("activatewhenbuilt", 0); printf("%d", d->activate_when_built);
         key("canreclamate", 0); printf("%d", d->canreclamate);
+        key("sightDistance", 0); printf("%d", d->sight_distance);
+        key("radarDistance", 0); printf("%d", d->radar_distance);
+        key("sonarDistance", 0); printf("%d", d->sonar_distance);
+        key("modelHeight", 0); printf("%d", d->model_height);
         key("vent", 0); printf("%d", d->vent);
         key("g", 0);
         for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);
@@ -1352,7 +1356,20 @@ static void layout_out(const WIKILAYOUT* L)
         }
         fputs("}}", stdout);
     }
-    puts("]}");
+    fputs("],\"sight\":", stdout);
+    if (!L->sight.numtables) fputs("null", stdout);
+    else {
+        printf("{\"numtables\":%d,\"tables\":[", L->sight.numtables);
+        for (i = 1; i < L->sight.numtables; i++) {
+            printf("%s[", i > 1 ? "," : "");
+            for (k = L->sight.first[i - 1]; k < L->sight.first[i]; k++)
+                printf("%s[%d,%d,%d]", k > L->sight.first[i - 1] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+                       L->sight.cell[k].n);
+            putchar(']');
+        }
+        fputs("]}", stdout);
+    }
+    puts("}");
 }
 
 static int data(const char* path)
@@ -1399,7 +1416,7 @@ static int constants(void)
 {
     static const WIKITRIPROW rows[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
     static const int speeds[WIKI_REPLAY_NSPEED] = WIKI_REPLAY_SPEEDS;
-    int k;
+    int k, n;
     printf("{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"PICK\":%d,\"PICK_DOWN\":%d,\"PICK_UP\":%d,\"TRIP_ROWS\":[",
            WIKI_TRIP, WIKI_TRIP_DOWN, WIKI_TRIP_UP, WIKI_PICK, WIKI_PICK_DOWN, WIKI_PICK_UP);
     for (k = 0; k < WIKI_TRIP_NROWS; k++)
@@ -1414,6 +1431,14 @@ static int constants(void)
            WIKI_REPLAY_SPEED0, WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, WIKI_REPLAY_STEP, WIKI_REPLAY_NEAR, WIKI_REPLAY_BOOKS,
            WIKI_REPLAY_MARKS, WIKI_REPLAY_FILL, WIKI_REPLAY_HUD_DOWN, WIKI_REPLAY_HUD_UP, HUD_MK_DEATH, HUD_MK_DEFEAT,
            WIKI_GAME_END_MAX);
+    fputs("{\"CHIPS\":[", stdout);
+    for (k = 0; k < WIKI_NCHIP; k++) { if (k) putchar(','); str(tagpu_wikidata_chip_name(k)); }
+    printf("],\"PLAYERS_CONTROLS\":[");
+    for (k = 0, n = 0; k < WIKI_NHUD; k++)
+        if (tagpu_wikidata_hud_players(k)) { if (n++) putchar(','); str(tagpu_wikidata_hud_name(k)); }
+    printf("],\"PLAYERS_DEATHS\":%d,\"PLAYERS_DEATH_SPAN\":%d,\"SIGHT_MIN\":%d,\"SIGHT_TABLES\":%d,\"SIGHT_REACH\":%d,"
+           "\"SIGHT_CELLS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN, WIKI_SIGHT_TABLES,
+           WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS);
     return 0;
 }
 

@@ -1629,7 +1629,20 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
         }
         fprintf(f, "]}");
     }
-    fprintf(f, "}}");
+    fprintf(f, "},\"sight\":");
+    if (!L->sight.numtables) fputs("null", f);
+    else {
+        fprintf(f, "{\"numtables\":%d,\"tables\":[", L->sight.numtables);
+        for (i = 1; i < L->sight.numtables && i < WIKI_SIGHT_TABLES; i++) {
+            fprintf(f, "%s[", i > 1 ? "," : "");
+            for (k = L->sight.first[i - 1]; k < L->sight.first[i] && k < WIKI_SIGHT_CELLS; k++)
+                fprintf(f, "%s[%d,%d,%d]", k > L->sight.first[i - 1] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+                        L->sight.cell[k].n);
+            fputc(']', f);
+        }
+        fputs("]}", f);
+    }
+    fputc('}', f);
 }
 
 static double ms_between(LARGE_INTEGER t0, LARGE_INTEGER t1)
@@ -2173,10 +2186,12 @@ static void casting_json(FILE* f, const WIKICASTING* c)
         fprintf(f, ",\"footprint\":[%d,%d],\"buildTime\":%.17g,\"workerTime\":%.17g,\"buildDistance\":%.17g,"
                    "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"energyUse\":%.17g,"
                    "\"buildCostMetal\":%.17g,\"buildCostEnergy\":%.17g,\"metalMake\":%.17g,\"metalStorage\":%.17g,"
-                   "\"energyStorage\":%.17g,\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,\"vent\":%s,\"g\":[",
+                   "\"energyStorage\":%.17g,\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,"
+                   "\"sightDistance\":%d,\"radarDistance\":%d,\"sonarDistance\":%d,\"modelHeight\":%d,\"vent\":%s,\"g\":[",
                 k->fx, k->fz, k->build_time, k->worker_time, k->build_distance, k->max_velocity, k->extracts,
                 k->energy_make, k->energy_use, k->build_cost_metal, k->build_cost_energy, k->metal_make, k->metal_storage,
-                k->energy_storage, k->canstop, k->canreclamate, k->activate_when_built, k->vent ? "true" : "false");
+                k->energy_storage, k->canstop, k->canreclamate, k->activate_when_built, k->sight_distance, k->radar_distance,
+                k->sonar_distance, k->model_height, k->vent ? "true" : "false");
         for (z = n = 0; z < WIKI_FP_MAX; z++)
             for (x = 0; x < WIKI_FP_MAX; x++)
                 if (k->g[z] >> x & 1u) fprintf(f, "%s[%d,%d]", n++ ? "," : "", x, z);

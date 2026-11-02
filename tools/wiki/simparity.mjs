@@ -73,6 +73,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
+import { playersFixture } from './players-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -420,7 +421,7 @@ const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
   .filter(([, e]) => e.frame === 'game');
 // the games the game pass and the replay pass play: the entries and the takeover fixture
-const PLAYS = [...GAMES, ['takeover-fixture', takeoverFixture()]];
+const PLAYS = [...GAMES, ['players-fixture', playersFixture()], ['takeover-fixture', takeoverFixture()]];
 const WIKI_SEAT_MIN = 200;
 /* THE PRESS TRACE, Try it yourself's presses as [demo tick, control, value], each made after that tick's frame: one
    during the walk (nothing), the pause and the play, every speed, rew and fwd, a track press and its drag back and
@@ -965,6 +966,16 @@ function gameRefusalCases(game, page) {
   g('a kill naming no unit', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'nobody' }); });
   g('a kill naming a feature', 'refused', (e, d, sc, G) => { sc.features = [{ id: 'rock', name: 'armck_dead', at: [1, 1] }]; G.inputs.push({ at: 300, kill: 'rock' }); });
   g('a kill a number', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 3 }); });
+  // a kill's killer, `by`, a seat of the scene, on any game entry
+  for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [0.5, 'refused'], ['1', 'refused']])
+    g(`a kill by ${JSON.stringify(v)}`, want, (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', by: v }); });
+  // the players entry's data on a replay entry
+  g('a camera input', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, seat: 0, camera: [300, 300] }); });
+  g('a seat\'s camera', 'refused', (e, d, sc) => { sc.seats[0].camera = [300, 300]; });
+  g('a seat\'s team', 'refused', (e, d, sc) => { sc.seats[0].team = 0; });
+  g('a screen', 'refused', e => { e.screen = [56, 30]; });
+  g('a type\'s sight figures', 'accepted', e => { e.units.ARMCK.sightDistance = 0; e.units.ARMCK.radarDistance = -1; e.units.ARMCK.modelHeight = 7; });
+  g('a type\'s sightDistance 32768', 'refused', e => { e.units.ARMCK.sightDistance = 32768; });
   g('a unit killed twice', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 1600, kill: 'w1' }); });
   g('a kill after the end', 'refused', (e, d, sc, G) => { G.end = 1499; });
   g('a kill at the end', 'accepted', (e, d, sc, G) => { G.end = 1500; });
@@ -1252,11 +1263,19 @@ function takeoverRefusalCases(tk, page) {
     d.forks = [part({ seat: 1 })];
   });
   // the viewer's script: the Take over set and its values, the live HUD's controls beside the replay HUD's
-  r('every control', 'accepted', [...WikiSim.HUD_CONTROLS.map((c, i) => ({ at: 10 + 30 * i, hud: c,
+  r('every control but the Players set', 'accepted', [...WikiSim.HUD_CONTROLS.filter(c => !WikiSim.PLAYERS_CONTROLS.includes(c)).map((c, i) => ({ at: 10 + 30 * i, hud: c,
     ...(c === 'track' ? { to: 100 } : c === 'takeas' ? { seat: 1 } : ['lane', 'export', 'delete'].includes(c) ? { fork: 1 } : {}) }))]);
   for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [0.5, 'refused'], ['1', 'refused']])
     r(`takeas seat ${JSON.stringify(v)}`, want, [{ at: 10, hud: 'takeas', seat: v }]);
   r('takeas without a seat', 'refused', [{ at: 10, hud: 'takeas' }]);
+  // the Players set is a players entry's alone
+  for (const c of WikiSim.PLAYERS_CONTROLS)
+    r(`the Players set's ${c}`, 'refused', [{ at: 10, hud: c, ...(['jump', 'sight', 'follow'].includes(c) ? { seat: 0 } : c === 'chip' ? { chip: 'metal' } : {}) }]);
+  // a kill's `by` on any game entry, a kept fork's too; a camera input a players entry's alone, never a fork's
+  k('a kill by seat 1', 'accepted', K => { K[0].inputs = [{ at: 400, kill: 'c0', by: 1 }]; });
+  k('a kill by seat 2', 'refused', K => { K[0].inputs = [{ at: 400, kill: 'c0', by: 2 }]; });
+  k('a camera input', 'refused', K => { K[0].inputs = [{ at: 400, seat: 1, camera: [600, 400] }]; });
+  t('a part\'s camera input', 'refused', (e, d) => { d.forks = [part({ inputs: [{ at: 700, seat: 0, camera: [600, 400] }] })]; });
   r('takeas with a fork', 'refused', [{ at: 10, hud: 'takeas', seat: 1, fork: 1 }]);
   for (const c of ['lane', 'export', 'delete']) {
     for (const [v, want] of [[1, 'accepted'], [WikiSim.TIMELINES - 1, 'accepted'], [0, 'refused'], [WikiSim.TIMELINES, 'refused'], [1.5, 'refused']])
@@ -1570,6 +1589,178 @@ function seatCases() {
 }
 
 /* ---- the data read back: what sim.js accepts of a casting or a layout, in wikitest's `data` shapes ---- */
+/* THE PLAYERS ENTRY'S DATA RULES (tagpu_wikidata.c and sim.js checkGame, checkViewer): the players fixture's first demo
+   edited, each rule both ways; `replay` cases play it as a replay, so that the viewer's script is read too */
+function playersRefusalCases(pf, page) {
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const cases = [];
+  const CTX = { side: 0, iface: 1, casting: null, rival: null, layout: FIXTURE };
+  const sc0 = e => e.scenes[Object.keys(e.scenes)[0]];
+  const t = (name, want, edit, replay = false, ctx = {}) => {
+    const e = clone(pf);
+    e.demos = [e.demos[0]];
+    edit(e, e.demos[0], e.demos[0].game, sc0(e));
+    cases.push({ name: `players: ${name}`, want, scripted: 2, ...CTX, ...ctx, entry: e, replay });
+  };
+  const r = (name, want, inputs) => t(`viewer: ${name}`, want, (e, d) => { d.inputs = inputs; }, true);
+  const cam = (G, ...c) => { G.inputs = [...G.inputs.filter(x => !('camera' in x)), ...c]; };
+  // the entry
+  t('the fixture', 'accepted', () => {});
+  t('the fixture as a replay', 'accepted', () => {}, true);
+  t('bound to identity: no cast has a sight, so each keeps its own type', 'accepted', () => {}, false,
+    { casting: CASTINGS.identity[0], rival: RIVALS.identity });
+  t('bound to shifted and its rival', 'accepted', () => {}, false, { casting: CASTINGS.shifted[0], rival: RIVALS.shifted });
+  {
+    // a cast below the sight floor is left unbound in a players game, as one outside the economy is in any game
+    const C = clone(CASTINGS.shifted[0]);
+    C.casts.builder.sightDistance = 31;
+    t('bound to a casting whose builder sees 31', 'accepted', () => {}, false, { casting: C, rival: RIVALS.shifted });
+  }
+  for (const v of [1, 'true', null]) t(`players ${JSON.stringify(v)}`, 'refused', e => { e.players = v; });
+  t('players false, a screen', 'refused', e => { e.players = false; });
+  t('players false, a camera', 'refused', (e, d, G) => { e.players = false; delete e.screen; cam(G); });
+  t('players false, no camera, team or screen', 'accepted', (e, d, G, sc) => {
+    e.players = false; delete e.screen; cam(G);
+    for (const s of Object.values(e.scenes)) s.seats = s.seats.map(({ camera, team, ...z }) => z);
+  });
+  t('players and live', 'refused', e => { e.live = true; });
+  t('players and takeover', 'refused', e => { e.takeover = true; });
+  t('players, live and takeover false', 'accepted', e => { e.live = false; e.takeover = false; });
+  cases.push({ name: 'players: players on a page entry', want: 'refused', scripted: 1, ...CTX, entry: { ...clone(page), players: true } });
+  cases.push({ name: 'players: a screen on a page entry', want: 'refused', scripted: 1, ...CTX, entry: { ...clone(page), screen: [56, 30] } });
+  t('the sidebar true', 'refused', (e, d, G) => { G.sidebar = true; });
+  t('the sidebar absent', 'refused', (e, d, G) => { delete G.sidebar; });
+  // the screen: even, within the map, the map as deep as the viewport beside the deepest column, a 4:3 frame
+  t('no screen', 'refused', e => { delete e.screen; });
+  for (const [v, want] of [[[56, 30], 'accepted'], [[64, 44], 'accepted'], [[58, 30], 'accepted'], [[56, 2], 'accepted'], [[55, 30], 'refused'], [[56, 31], 'refused'],
+    [[54, 30], 'refused'], [[66, 30], 'refused'], [[56, 46], 'refused'], [[0, 30], 'refused'], [[56.5, 30], 'refused'], [['56', 30], 'refused'],
+    [[56], 'refused'], [[56, 30, 2], 'refused'], [{ w: 56, h: 30 }, 'refused']])
+    t(`the screen ${JSON.stringify(v)}`, want, (e, d, G) => {
+      // no seat a camera, so that no camera's range decides
+      e.screen = v;
+      cam(G);
+      for (const s of Object.values(e.scenes)) s.seats.forEach(z => { delete z.camera; });
+    });
+  const map = (w, h) => (e, d, G) => {
+    cam(G);
+    for (const s of Object.values(e.scenes)) { s.map = { ...s.map, w, h }; s.seats.forEach(z => { z.camera = [8 * 56, 8 * 30]; }); }
+  };
+  t('a map 64 x 44', 'accepted', map(64, 44));
+  t('a map 66 x 44', 'accepted', map(66, 44));
+  t('a map 64 x 42, shallower than the viewport beside the deepest column', 'refused', map(64, 42));
+  t('a map 64 x 43', 'refused', map(64, 43));
+  t('a map 63 x 44', 'refused', map(63, 44));
+  t('a map 56 x 44, the screen\'s width', 'accepted', map(56, 44));
+  // a seat's camera, inside [8 sw, 16 w - 8 sw] x [8 sh, 16 h - 8 sh] = [448, 576] x [240, 464]
+  for (const [v, want] of [[[448, 352], 'accepted'], [[567, 352], 'accepted'], [[447, 352], 'refused'], [[577, 352], 'refused'],
+    [[500, 240], 'accepted'], [[500, 464], 'accepted'], [[500, 239], 'refused'], [[500, 465], 'refused'], [[500.5, 352], 'refused'],
+    [['500', 352], 'refused'], [[500], 'refused'], [null, 'refused']])
+    t(`seat 0's camera ${JSON.stringify(v)}`, want, (e, d, G, sc) => { cam(G); sc.seats[0].camera = v; });
+  t('seat 0 with no camera', 'accepted', (e, d, G, sc) => { cam(G); delete sc.seats[0].camera; });
+  for (const [v, want] of [[0, 'accepted'], [3, 'accepted'], [4, 'refused'], [-1, 'refused'], [1.5, 'refused'], ['1', 'refused'], [null, 'refused']])
+    t(`seat 1's team ${JSON.stringify(v)}`, want, (e, d, G, sc) => { sc.seats[1].team = v; });
+  t('both seats one team', 'accepted', (e, d, G, sc) => { sc.seats[0].team = 2; sc.seats[1].team = 2; });
+  t('a seat with another key', 'refused', (e, d, G, sc) => { sc.seats[0].colour = 1; });
+  // THE SIGHT FLOOR and the figures' bounds
+  for (const [k, v, want] of [['sightDistance', 32, 'accepted'], ['sightDistance', 31, 'refused'], ['sightDistance', 32767, 'accepted'],
+    ['sightDistance', 32768, 'refused'], ['sightDistance', 40.5, 'refused'], ['sightDistance', '300', 'refused'], ['radarDistance', -32768, 'accepted'],
+    ['radarDistance', -32769, 'refused'], ['sonarDistance', 32767, 'accepted'], ['modelHeight', 255, 'accepted'], ['modelHeight', 256, 'refused'],
+    ['modelHeight', -1, 'refused']])
+    t(`ARMCK's ${k} ${JSON.stringify(v)}`, want, e => { e.units.ARMCK[k] = v; });
+  t('ARMCK with no sightDistance', 'refused', e => { delete e.units.ARMCK.sightDistance; });
+  t('a rival type with no sightDistance', 'refused', e => { delete e.units.CORAK.sightDistance; });
+  // camera inputs
+  const C0 = (o = {}) => ({ at: 200, seat: 0, camera: [500, 320], over: 60, ...o });
+  t('a camera input', 'accepted', (e, d, G) => cam(G, C0()));
+  for (const [o, want] of [[{ over: 0 }, 'accepted'], [{ over: 5400 }, 'accepted'], [{ over: 5401 }, 'refused'], [{ over: -1 }, 'refused'],
+    [{ over: 1.5 }, 'refused'], [{ at: 200.5 }, 'refused'], [{ at: -1 }, 'refused'], [{ at: 1800 }, 'accepted'], [{ at: 1801 }, 'refused'],
+    [{ camera: [447, 320] }, 'refused'], [{ camera: [500, 465] }, 'refused'], [{ camera: [500.5, 320] }, 'refused'],
+    [{ camera: [500] }, 'refused'], [{ seat: 1 }, 'accepted'], [{ seat: 2 }, 'refused'], [{ move: [1, 1] }, 'refused'],
+    [{ down: 'select' }, 'refused'], [{ kill: 'w1' }, 'refused']])
+    t(`a camera input ${JSON.stringify(o)}`, want, (e, d, G) => cam(G, C0(o)));
+  t('a camera input with no over', 'accepted', (e, d, G) => { const c = C0(); delete c.over; cam(G, c); });
+  t('a camera input with no seat, seat 0\'s', 'accepted', (e, d, G) => { const c = C0(); delete c.seat; cam(G, c); });
+  t('a camera input of a seat with no camera', 'refused', (e, d, G, sc) => { delete sc.seats[1].camera; cam(G, C0({ seat: 1 })); });
+  t('a camera input on a replay entry', 'refused', (e, d, G, sc) => {
+    e.players = false; delete e.screen; for (const s of Object.values(e.scenes)) s.seats = s.seats.map(({ camera, team, ...z }) => z);
+    cam(G, C0());
+  });
+  // a glide never overlaps its seat's previous one; another seat's may
+  t('a camera input at the end of its seat\'s glide', 'accepted', (e, d, G) => cam(G, C0(), C0({ at: 260, camera: [448, 352] })));
+  t('a camera input inside its seat\'s glide', 'refused', (e, d, G) => cam(G, C0(), C0({ at: 259, camera: [448, 352] })));
+  t('a camera input before its seat\'s previous one', 'refused', (e, d, G) => cam(G, C0(), C0({ at: 100, camera: [448, 352], over: 0 })));
+  t('a camera input inside another seat\'s glide', 'accepted', (e, d, G) => cam(G, C0(), C0({ at: 230, seat: 1, camera: [500, 300] })));
+  // a camera input acts on no input state: seat 1's alone holds no input state for a selection of seat 1's unit
+  const sel1 = e => { const sc = sc0(e); sc.selected = [sc.units.find(u => (u.owner ?? 0) === 1).id]; };
+  t('the scene selecting a unit of seat 1, a camera input of seat 1', 'refused', (e, d, G) => { sel1(e); cam(G, C0({ seat: 1, camera: [520, 300] })); });
+  t('the scene selecting a unit of seat 1, a move of seat 1', 'accepted', (e, d, G) => { sel1(e); G.inputs.push({ at: 300, seat: 1, move: [520, 200] }); });
+  /* THE VIEW RULE: Ada's last move is (120, 376) at tick 92, and her view is 448 a side wide and 240 deep; the camera
+     glides under the resting pointer */
+  t('seat 0\'s camera at x 567', 'accepted', (e, d, G, sc) => { cam(G); sc.seats[0].camera = [567, 352]; });
+  t('seat 0\'s camera at x 568', 'refused', (e, d, G, sc) => { cam(G); sc.seats[0].camera = [568, 352]; });
+  t('a glide to x 567 after the last move', 'accepted', (e, d, G) => cam(G, C0({ camera: [567, 352], over: 100 })));
+  t('a glide to x 568 after the last move', 'refused', (e, d, G) => cam(G, C0({ camera: [568, 352], over: 100 })));
+  t('a glide away at the end', 'refused', (e, d, G) => cam(G, C0({ at: 1800, camera: [576, 352], over: 0 })));
+  t('a glide away past the end', 'accepted', (e, d, G) => cam(G, C0({ at: 1740, camera: [576, 352], over: 3000 })));
+  t('seat 0 with no camera, its moves anywhere', 'accepted', (e, d, G, sc) => { cam(G); delete sc.seats[0].camera; G.inputs.push({ at: 300, seat: 0, move: [1000, 690] }); });
+  t('a move outside the view', 'refused', (e, d, G) => { G.inputs.push({ at: 300, seat: 0, move: [1000, 690] }); });
+  t('a move just inside the view', 'accepted', (e, d, G, sc) => { cam(G); G.inputs.push({ at: 300, seat: 0, move: [448 + 447, 352 + 239] }); sc.seats[0].camera = [448, 352]; });
+  t('a move on the view\'s edge', 'refused', (e, d, G, sc) => { cam(G); G.inputs.push({ at: 300, seat: 0, move: [448 + 448, 352] }); sc.seats[0].camera = [448, 352]; });
+  t('a move outside the view, then back on its tick', 'accepted', (e, d, G, sc) => {
+    cam(G); sc.seats[0].camera = [448, 352]; G.inputs.push({ at: 300, seat: 0, move: [1000, 690] }, { at: 300, seat: 0, move: [400, 352] });
+  });
+  t('a move back, then outside the view on its tick', 'refused', (e, d, G, sc) => {
+    cam(G); sc.seats[0].camera = [448, 352]; G.inputs.push({ at: 300, seat: 0, move: [400, 352] }, { at: 300, seat: 0, move: [1000, 690] });
+  });
+  // kills and their killers
+  for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [0.5, 'refused'], ['0', 'refused'], [null, 'refused']])
+    t(`a kill by ${JSON.stringify(v)}`, want, (e, d, G) => { G.inputs.find(x => x.kill === 'w1').by = v; });
+  t('a kill with no by', 'accepted', (e, d, G) => { delete G.inputs.find(x => x.kill === 'w1').by; });
+  /* A PLAYERS ENTRY'S DEATHS: 21 more of Ada's units, killed at the ticks given; 20 in any 62 ticks at most */
+  const deaths = ticks => (e, d, G, sc) => {
+    sc.units.push(...ticks.map((_, i) => ({ id: `d${i}`, type: 'ARMCK', at: [40 + 40 * (i % 10), 520 + 40 * Math.floor(i / 10)] })));
+    G.inputs.push(...ticks.map((at, i) => ({ at, kill: `d${i}` })));
+  };
+  const span = (n, from, step) => Array.from({ length: n }, (_, i) => from + i * step);
+  t('20 of seat 0\'s units killed on one tick', 'accepted', deaths(span(20, 300, 0)));
+  t('21 of seat 0\'s units killed on one tick', 'refused', deaths(span(21, 300, 0)));
+  t('21 of seat 0\'s units killed over 61 ticks', 'refused', deaths(span(21, 300, 3).map((v, i) => i === 20 ? 361 : v)));
+  t('21 of seat 0\'s units killed over 62 ticks', 'accepted', deaths(span(21, 300, 3).map((v, i) => i === 20 ? 362 : v)));
+  t('21 of seat 0\'s units killed 4 ticks apart', 'accepted', deaths(span(21, 300, 4)));
+  t('20 of seat 0\'s units and one of seat 1\'s on one tick', 'accepted', (e, d, G, sc) => {
+    deaths(span(20, 1200, 0))(e, d, G, sc);
+  });
+  t('21 of seat 0\'s units on a players false entry', 'accepted', (e, d, G, sc) => {
+    e.players = false; delete e.screen; cam(G); for (const s of Object.values(e.scenes)) s.seats = s.seats.map(({ camera, team, ...z }) => z);
+    deaths(span(21, 300, 0))(e, d, G, sc);
+  });
+  // the viewer's script: the replay HUD's controls and the Players set, their values; no other entry's
+  const value = c => c === 'track' ? { to: 100 } : ['jump', 'sight', 'follow'].includes(c) ? { seat: 1 } : c === 'chip' ? { chip: 'metal' } : {};
+  r('every control of the replay HUD and the Players set', 'accepted', [...WikiSim.REPLAY_CONTROLS, ...WikiSim.PLAYERS_CONTROLS]
+    .map((c, i) => ({ at: 10 + 30 * i, hud: c, ...value(c) })));
+  for (const c of ['jump', 'sight', 'follow']) {
+    for (const [v, want] of [[0, 'accepted'], [1, 'accepted'], [2, 'refused'], [-1, 'refused'], [0.5, 'refused'], ['1', 'refused']])
+      r(`${c} seat ${JSON.stringify(v)}`, want, [{ at: 10, hud: c, seat: v }]);
+    r(`${c} without a seat`, 'refused', [{ at: 10, hud: c }]);
+    r(`${c} with a chip`, 'refused', [{ at: 10, hud: c, seat: 0, chip: 'metal' }]);
+  }
+  for (const c of WikiSim.CHIPS) r(`chip ${c}`, 'accepted', [{ at: 10, hud: 'chip', chip: c }]);
+  for (const v of ['nope', 'Metal', 0, null]) r(`chip ${JSON.stringify(v)}`, 'refused', [{ at: 10, hud: 'chip', chip: v }]);
+  r('chip without a chip', 'refused', [{ at: 10, hud: 'chip' }]);
+  r('chip with a seat', 'refused', [{ at: 10, hud: 'chip', chip: 'metal', seat: 0 }]);
+  for (const c of ['cursors', 'clicks', 'selections', 'chat', 'stats', 'close'])
+    r(`${c} with a seat`, 'refused', [{ at: 10, hud: c, seat: 0 }]);
+  for (const c of ['fold', 'leave:yes', 'takeover', 'takeas', 'lanes', 'live_now', 'rewind'])
+    r(`${c}`, 'refused', [{ at: 10, hud: c, ...(c === 'takeas' || c === 'fold' ? { seat: 0 } : {}) }]);
+  // the Players set on a replay entry
+  for (const c of WikiSim.PLAYERS_CONTROLS)
+    t(`the Players set's ${c} on a replay entry`, 'refused', (e, d, G) => {
+      e.players = false; delete e.screen; cam(G); for (const s of Object.values(e.scenes)) s.seats = s.seats.map(({ camera, team, ...z }) => z);
+      d.inputs = [{ at: 10, hud: c, ...value(c) }];
+    }, true);
+  return cases;
+}
+
 function castingOut(C) {
   try { WikiSim.checkCasting(C); } catch (e) { return { ok: false, why: e.message }; }
   const casts = WikiSim.CASTS.map(c => {
@@ -1584,7 +1775,8 @@ function castingOut(C) {
       'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage', 'energyUse']) o[n] = k[n] ?? 0;
     const f = k.corpse;
     return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, activatewhenbuilt: (k.activatewhenbuilt & 1) === 1 ? 1 : 0,
-      canreclamate: (k.canreclamate & 1) === 1 ? 1 : 0,
+      canreclamate: (k.canreclamate & 1) === 1 ? 1 : 0, sightDistance: k.sightDistance ?? 0, radarDistance: k.radarDistance ?? 0,
+      sonarDistance: k.sonarDistance ?? 0, modelHeight: k.modelHeight ?? 0,
       vent: k.vent ? 1 : 0, g,
       builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0),
       // WIKIFEATDEF: an absent figure 0, an absent flag false, no object ""
@@ -1597,7 +1789,8 @@ function layoutOut(L) {
   try { WikiSim.checkLayout(L); } catch (e) { return { ok: false, why: e.message }; }
   return { ok: true, height: L.height, screens: Object.keys(L.screens),
     sides: L.sides.map(s => ({ name: s.name, prefix: s.prefix, main2: s.main2, gen: s.gen,
-      types: Object.fromEntries(Object.entries(s.types).map(([t, T]) => [t, { pages: T.pages, orders: T.orders }])) })) };
+      types: Object.fromEntries(Object.entries(s.types).map(([t, T]) => [t, { pages: T.pages, orders: T.orders }])) })),
+    sight: L.sight ?? null };
 }
 function dataItems() {
   const items = [];
@@ -1943,7 +2136,8 @@ try {
 
     /* ---- the build trip's constants ---- */
     {
-      const c = JSON.parse(wikitest(['constants']));
+      const [cl, pl] = lines(wikitest(['constants']));
+      const c = JSON.parse(cl);
       const W = WikiReplay;
       const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
         PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS,
@@ -1954,6 +2148,15 @@ try {
       cases++;
       if (d) { failed++; console.log(`DIFFER the build trip's and the replay's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
       else console.log(`equal  the build trip's and the replay's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows; seek ${c.REPLAY.SEEK}, walk ${c.REPLAY.WALK}, ${c.REPLAY.CONTROLS.length} controls`);
+      // a players entry's: the stats window's chips, the Players set, the deaths' bound and the sight table's bounds
+      const p = JSON.parse(pl), S = WikiSim;
+      const q = diff(p, { CHIPS: S.CHIPS, PLAYERS_CONTROLS: S.PLAYERS_CONTROLS, PLAYERS_DEATHS: S.PLAYERS_DEATHS,
+        PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_TABLES: S.SIGHT_TABLES, SIGHT_REACH: S.SIGHT_REACH,
+        SIGHT_CELLS: S.SIGHT_CELLS }, '');
+      cases++;
+      if (q) { failed++; console.log(`DIFFER the players entry's constants: ${q.at}: C ${show(q.c)}, sim.js ${show(q.j)}`); }
+      else console.log(`equal  the players entry's constants: ${p.CHIPS.length} chips, ${p.PLAYERS_CONTROLS.length} controls, ` +
+        `${p.PLAYERS_DEATHS} deaths in ${p.PLAYERS_DEATH_SPAN} ticks, sight from ${p.SIGHT_MIN}`);
     }
 
     /* ---- the recorder's rules: tagpu_recrules.h's own functions (wikitest `rules`) against replay.js's twins, and the
@@ -2055,7 +2258,7 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
          they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
          plays */
       const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover).flatMap(([, game]) => gameRefusalCases(game, entry)),
-        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry)];
+        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry)];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
                          rival: c.rival ?? null, replay: !!c.replay }) + '\n' +
