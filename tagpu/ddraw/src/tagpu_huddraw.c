@@ -61,6 +61,10 @@
      RING   the colour over the band vPrm.y pixels deep inside the circle inscribed in vPx, each
             edge antialiased over a pixel as DOT's is: the disc of the outer radius less the disc
             of the inner, none when the band reaches the centre. Unsnapped, as a canvas arc is.
+     TRI    the colour over the triangle vPx.xy, vPx.zw, vPx.xy + vUV: each edge covers a pixel
+            by the pixel-wide box filter across it, half at the edge, as LINE's sides do, and the
+            three edges' shares multiply, as LINE's across and along do. The draw emits one only
+            with an area, so no edge has length 0. Unsnapped, as a canvas path is.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
    whole row. Its matrix is the Filter Effects spec's saturate. */
@@ -105,6 +109,11 @@ static const char* FS =
     "  if (al < 0.0) return b0 ? cover(ac, hw) * clamp(0.5 + al, 0.0, 1.0) : cover(length(q), hw);\n"
     "  if (al > L) return b1 ? cover(ac, hw) * clamp(0.5 + L - al, 0.0, 1.0) : cover(length(p - b), hw);\n"
     "  return cover(ac, hw) * (b0 ? clamp(0.5 + al, 0.0, 1.0) : 1.0) * (b1 ? clamp(0.5 + L - al, 0.0, 1.0) : 1.0);\n"
+    "}\n"
+    /* a pixel's share of the side of edge a -> b the triangle lies on, s its signed area's sign */
+    "float side(vec2 p, vec2 a, vec2 b, float s){\n"
+    "  vec2 d = b - a;\n"
+    "  return clamp(0.5 + s * (d.x * (p.y - a.y) - d.y * (p.x - a.x)) / length(d), 0.0, 1.0);\n"
     "}\n"
     "void main(){\n"
     "  vec2 p = gl_FragCoord.xy;\n"
@@ -159,6 +168,10 @@ static const char* FS =
     "    vec2 ce = 0.5 * (vPx.xy + vPx.zw);\n"
     "    float r = 0.5 * (vPx.z - vPx.x), ri = r - vPrm.y, d = length(p - ce);\n"
     "    c = vCol * (clamp(r - d + 0.5, 0.0, 1.0) - (ri > 0.0 ? clamp(ri - d + 0.5, 0.0, 1.0) : 0.0));\n"
+    "  } else if (m == 9) {\n"
+    "    vec2 a = vPx.xy, b = vPx.zw, q = vPx.xy + vUV;\n"
+    "    float s = sign((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x));\n"
+    "    c = vCol * (side(p, a, b, s) * side(p, b, q, s) * side(p, q, a, s));\n"
     "  } else {\n"
     "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) discard;\n"
     "    float s = max(vPrm.y, 1e-3);\n"
@@ -432,18 +445,25 @@ static void text(B* c, const HUDOP* op)
    group's y range there, which its band test reads. The groups' ranges in a column, merged where
    they overlap, are its bands: every pixel a line can cover is in exactly one band, so the
    fragment stage composites every group a pixel can see in one invocation, and a pixel no line
-   reaches is never shaded. */
-static float    s_chart[HUD_CHART_H][HUD_CHART_W][4];
-static float    s_cnext[HUD_CHART_H][HUD_CHART_W][4];
-static unsigned s_cgen = 1;
-typedef struct { float x0, y0, x1, y1; int j0, j1, col; } BAND;
-static BAND     s_band[HUD_CHART_COLS * HUD_MAXSEAT];
-static int      s_nband;
+   reaches is never shaded.
 
-const float* tagpu_huddraw_chart(unsigned* gen)
+   EACH SLOT (tagpu_huddraw.h) HAS ITS OWN IMAGE, BANDS AND GENERATION, and the build of a list
+   touches only its own slot's, so the two HUDs that can draw a chart in one frame cannot see each
+   other's. The next image is scratch, filled and compared inside one chart_prepare, so the slots
+   share it. Every generation starts at 1, which no device copy holds (tagpu_vk_hud.c's start at
+   0). */
+static float    s_chart[HUD_CHART_SLOTS][HUD_CHART_H][HUD_CHART_W][4];
+static float    s_cnext[HUD_CHART_H][HUD_CHART_W][4];
+static unsigned s_cgen[HUD_CHART_SLOTS] = { 1, 1 };
+typedef struct { float x0, y0, x1, y1; int j0, j1, col; } BAND;
+static BAND     s_band[HUD_CHART_SLOTS][HUD_CHART_COLS * HUD_MAXSEAT];
+static int      s_nband[HUD_CHART_SLOTS];
+
+const float* tagpu_huddraw_chart(int slot, unsigned* gen)
 {
-    *gen = s_cgen;
-    return &s_chart[0][0][0];
+    if (slot < 0 || slot >= HUD_CHART_SLOTS) { *gen = 0; return NULL; }
+    *gen = s_cgen[slot];
+    return &s_chart[slot][0][0][0];
 }
 
 static void rgba4(float* t, uint32_t rgb, float a)
@@ -454,9 +474,13 @@ static void rgba4(float* t, uint32_t rgb, float a)
     t[3] = a;
 }
 
+/* the list's slot, which draw_op has bounded */
 static void chart_prepare(const B* c)
 {
     const HUDCHART* K = c->ops->chart;
+    const int slot = c->ops->chart_slot;
+    BAND* band = s_band[slot];
+    int* nband = &s_nband[slot];
     float px = c->px, hw = K->w * px / 2, hh = K->halo_w * px / 2, cr = K->cross * px, cw = K->cross_w * px / 2;
     float reach = (hw > hh ? hw : hh) + 1, ce = cr + cw + 1, ends = reach > ce ? reach : ce;
     int n = K->n < HUD_MAXSEAT ? K->n : HUD_MAXSEAT, np = K->npt < HUD_MAXPT ? K->npt : HUD_MAXPT;
@@ -488,7 +512,7 @@ static void chart_prepare(const B* c)
     }
 
     /* the bands, in the screen's device pixels as emit takes them; the image is the attachment's */
-    s_nband = 0;
+    *nband = 0;
 #define PX(i) (K->pt[0][i][0] * px)
     for (col = 0; col < ncol; col++) {
         int js = col * HUD_CHART_SEG, je = np - 2 < js + HUD_CHART_SEG - 1 ? np - 2 : js + HUD_CHART_SEG - 1;
@@ -520,7 +544,7 @@ static void chart_prepare(const B* c)
             ord[k] = g;
         }
         for (k = 0; k < nb; k++) {
-            BAND* b = &s_band[s_nband++];
+            BAND* b = &band[(*nband)++];
             float top = lo[ord[k]], bot = hi[ord[k]];
             while (k + 1 < nb && lo[ord[k + 1]] <= bot) {
                 k++;
@@ -531,9 +555,9 @@ static void chart_prepare(const B* c)
         }
     }
 #undef PX
-    if (memcmp(s_cnext, s_chart, sizeof s_chart)) {
-        memcpy(s_chart, s_cnext, sizeof s_chart);
-        s_cgen++;
+    if (memcmp(s_cnext, s_chart[slot], sizeof s_cnext)) {
+        memcpy(s_chart[slot], s_cnext, sizeof s_cnext);
+        s_cgen[slot]++;
     }
 }
 
@@ -650,16 +674,40 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
         break;
     }
-    case HOP_CHART:
-        if (!c->ops->chart) break;
+    case HOP_CHART: {
+        const int slot = c->ops->chart_slot;
+        if (!c->ops->chart || slot < 0 || slot >= HUD_CHART_SLOTS) break;
         if (!*charted) { chart_prepare(c); *charted = 1; }
-        for (j = 0; j < s_nband; j++) {
-            const BAND* bd = &s_band[j];
-            if (!(in = emit(c, HUD_TEX_CHART, HUDM_CHART, bd->x0, bd->y0, bd->x1, bd->y1, op))) break;
+        for (j = 0; j < s_nband[slot]; j++) {
+            const BAND* bd = &s_band[slot][j];
+            if (!(in = emit(c, slot ? HUD_TEX_CHART_WIKI : HUD_TEX_CHART, HUDM_CHART, bd->x0, bd->y0, bd->x1, bd->y1, op)))
+                break;
             in->px[0] = (float)bd->j0; in->px[1] = (float)bd->j1; in->px[2] = (float)bd->col; in->px[3] = 0;
             colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
         }
         break;
+    }
+    case HOP_TRI: {
+        /* the three points in device pixels; a box one pixel past them holds every pixel the
+           shader's half-pixel edge can cover. A point that is not finite, or three on one line,
+           would leave the shader an edge of no length or a box of no size: nothing is drawn */
+        const float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+        const float x2 = op->shade * px, y2 = op->size * px;
+        const float area2 = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+        float lo_x = x0, lo_y = y0, hi_x = x0, hi_y = y0;
+        if (!isfinite(x0) || !isfinite(y0) || !isfinite(x1) || !isfinite(y1) || !isfinite(x2) || !isfinite(y2)
+            || !isfinite(area2) || area2 == 0) break;
+        lo_x = x1 < lo_x ? x1 : lo_x; lo_x = x2 < lo_x ? x2 : lo_x;
+        lo_y = y1 < lo_y ? y1 : lo_y; lo_y = y2 < lo_y ? y2 : lo_y;
+        hi_x = x1 > hi_x ? x1 : hi_x; hi_x = x2 > hi_x ? x2 : hi_x;
+        hi_y = y1 > hi_y ? y1 : hi_y; hi_y = y2 > hi_y ? y2 : hi_y;
+        if (!(in = emit(c, -1, HUDM_TRI, lo_x - 1, lo_y - 1, hi_x + 1, hi_y + 1, op))) break;
+        in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+        in->uv[0] = in->uv[2] = x2 - x0;
+        in->uv[1] = in->uv[3] = y2 - y0;
+        colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
     case HOP_TEXT:
         text(c, op);
         break;
@@ -771,6 +819,7 @@ HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
     l.grp = ops->grp;
     l.ngrp = ops->ngrp < HUD_MAXGRP ? ops->ngrp : HUD_MAXGRP;
     l.chart = &ops->chart;
+    l.chart_slot = 0;
     l.watch = -1;
     return l;
 }
