@@ -43,8 +43,8 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
                  hash; a map no archive has, which the Start refuses), then plays it; the replay
                  HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
                  play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
-                 Sight and Sight again with clock and camera unchanged, Follow, Follow again and
-                 Jump, the Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
+                 Sight and Sight again, twice, with clock and camera unchanged and the resource
+                 bar's rates the viewed record's after each, Follow, Follow again and Jump, the Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
                  back to the browser, and a second Watch -- every HUD control clicked in device
                  space where the game drew it (`tacli hud`)
 
@@ -1737,12 +1737,47 @@ def watch_button(w):
     return m.group(1)
 
 
+BAR_MEMO = 0x37E3F                     # DrawGameScreen's resource-bar memo in main (0x468FC6)
+# the memo's four rates and the player record's fields the draw re-reads them from, through the
+# getters 0x464AB0, 0x464AC0, 0x464AF0, 0x464B00 (0x468F8D..0x468FBF)
+BAR_RATES = ((5, 0x90), (9, 0x94), (0x11, 0x9C), (0x15, 0xA0))
+
+
+def player_field(seat, off, size):
+    """A peek spec for player record `seat`'s field: main+0x1B63, 0x14B a record (0x468E4B)."""
+    return f"*0x511DE8+{0x1B63 + 0x14B * seat + off:#x}:{size}"
+
+
+def bar_rates(w, seat):
+    """The resource bar of record `seat` once a draw has made it: Failed unless a frame drew it
+    within ACK_S or unless the memo's four rates are the record's, bit for bit; returns the
+    record's four rates as dwords. Byte 0 of the memo is the viewed record's +0x146 (0x468E6C)
+    and only a draw of that record's bar writes it (0x468FEC); the previous view's record holds
+    another, so its arrival is the ordering, not a delay. Paused, neither side moves after."""
+    slot = peek(w, player_field(seat, 0x146, 1))
+    end = time.monotonic() + ACK_S
+    while peek(w, f"*0x511DE8+{BAR_MEMO:#x}:1") != slot:
+        if time.monotonic() >= end:
+            raise Failed(f"the HUD's Sight: no frame drew the bar of seat {seat} in {ACK_S} s")
+        nap(0.2)
+    shown = tuple(peek(w, f"*0x511DE8+{BAR_MEMO + m:#x}:4") for m, _ in BAR_RATES)
+    want = tuple(peek(w, player_field(seat, r, 4)) for _, r in BAR_RATES)
+    if shown != want:
+        raise Failed(f"the bar shows other rates under Sight on seat {seat}: "
+                     f"{' '.join('%08X' % v for v in shown)} against "
+                     f"{' '.join('%08X' % v for v in want)}")
+    return want
+
+
 def watch_hud(w, log, rec):
     """The replay HUD's row actions and switches, clicked in device space while paused: Sight on
-    the first row and again (the full map), with the clock and the camera unchanged; Follow,
-    Follow again (the free camera) and Jump on the row of the seat the recording's human
-    commanded (the perspective streams carry that seat's camera); the Cursors switch off and on.
-    A row's buttons show while the pointer is over the row, which `tacli hud` hovers first."""
+    the first row and again (the full map), twice, with the clock and the camera unchanged and
+    the resource bar's rates the viewed record's after each (bar_rates; the second visit to a
+    record at the same paused GameTime is the one the engine would not re-read, and after the
+    seek watch_lane makes, neither is the first); Follow, Follow again (the free camera) and Jump
+    on the row of the seat the recording's human commanded (the perspective streams carry that
+    seat's camera); the Cursors switch off and on. A row's buttons show while the pointer is over
+    the row, which `tacli hud` hovers first."""
     seats = tarec.header_only(rec)["players"]
     if not seats:
         raise CouldNotRun("the HUD's rows: no recorded seats")
@@ -1760,7 +1795,9 @@ def watch_hud(w, log, rec):
         return got.strip()
 
     # the rows are the recording header's seats in order (tagpu_replay_players)
-    for seat in (seats[0]["index"], viewer):
+    s0 = seats[0]["index"]
+    rates = {}
+    for seat in (s0, viewer, s0, viewer):
         n = len(log.lines)
         hud(w, "click", "sight:0")
         got = log.wait(rf"replay: sight is seat {seat} at GameTime {tick};|"
@@ -1769,6 +1806,9 @@ def watch_hud(w, log, rec):
             raise Failed(f"the HUD's Sight: {got.strip() if got else 'no Sight reply'}")
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
             raise Failed("the HUD's Sight changed the paused clock or camera")
+        rates[seat] = bar_rates(w, seat)
+    same = (" (the two records' rates are equal: not discriminating)"
+            if rates[s0] == rates[viewer] else "")
 
     h = tarec.header_only(rec)
     own = (h.get("options") or {}).get("controlled")
@@ -1783,8 +1823,9 @@ def watch_hud(w, log, rec):
     if w.gametime() != tick:
         raise Failed(f"the HUD's rows: Follow, Jump or a switch moved the paused clock from {tick} "
                      f"to {w.gametime()}")
-    return ("W: the HUD's rows and switches", PASS, f"Sight {seats[0]['index']} and again "
-            f"{viewer}; GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
+    return ("W: the HUD's rows and switches", PASS, f"Sight {s0}, {viewer}, {s0}, {viewer}; "
+            f"GameTime {tick} and camera {eye} unchanged; the bar's rates the viewed record's at "
+            f"each of the four{same}; " + "; ".join(lines))
 
 
 def hud_show(w):

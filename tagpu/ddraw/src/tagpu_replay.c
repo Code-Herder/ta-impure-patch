@@ -7705,6 +7705,16 @@ static void eye_put(const Lv* L, unsigned T)
     }
 }
 
+/* the newly viewed record's resource bar rates, re-read by the engine on the next draw: see the
+   comment over the call in sight_change */
+static void bar_rates_due(char* ta, unsigned seat, unsigned now)
+{
+    unsigned due;
+    if (!now) return;
+    due = now - 1;
+    memcpy(player_rec(ta, seat) + PL_DISPLAY, &due, 4);
+}
+
 /* Changing the viewed record leaves the units, their per-seat sight counters, the clock and
    the camera intact. Only death vision depends on which record was viewed during playback.
    Read that history with a separate reader, so a refused read cannot displace the next step's
@@ -7766,6 +7776,23 @@ static void sight_change(char* ta)
         goto refused;
     }
     ta[OFF_VIEWED] = (char)seat;
+    /* The resource bar's rates follow the new record from the next draw. DrawGameScreen
+       re-reads the bar's four rates (0x464AB0, 0x464AC0, 0x464AF0, 0x464B00: the record's
+       +0x90, +0x94, +0x9C, +0xA0) only while the viewed record's DisplayTimer +0xF8 is below
+       GameTime, adding 30 when it does (0x468F73..0x468FBF, DISASSEMBLED); otherwise the bar
+       keeps the rates of the last record it re-read. A record viewed earlier in this game second,
+       or any record after a seek (sk_deadlines), has its timer at or above GameTime, so without
+       this store a Sight change -- paused above all -- shows the previous record's rates.
+       ORDERING: this runs in the frame visit, on the game thread, before the in-play draw call
+       0x4969CD; that draw forms the viewed record from main+0x2A43 (0x468E4B), finds its timer
+       one below GameTime, adds 30 and re-reads the rates from the record now viewed. BOUND: at
+       GameTime 0 there is no value below it, so nothing is written and the first tick's draw
+       re-reads as for any record; seat <= REC_VIEWER was tested above, so the record is one of
+       main's eleven. The store is display state alone: the timer's readers are that draw and the
+       saver 0x4664EB, and replay-layout.tsv drops the field. The engine's own +View 0x416B50
+       writes only main+0x2A43 (0x416BC1); this is where Impure's view change departs from it,
+       by the owner's choice. */
+    bar_rates_due(ta, seat, L.now);
     s_cull_inputs++;
     eye_put(&L, L.now + 1);
     minimap_fog(ta);
