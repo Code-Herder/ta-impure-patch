@@ -45,11 +45,14 @@
 
    THE FRAME (research/notes/ingame-wiki-replay-plan.md, decisions 6 and 20-24). Every frame of a frame:game entry is
    drawn a second time as the whole game frame: the view filtered to the watcher's (frame.js view, tagpu_wikiframe_view,
-   the column the idle MAIN2 of the layout's side 0) and drawn in stage.js's frame mode -- its black, the column from
-   the top bar's top, the two bars (the bars' picture as one drawImage of a part of the bar canvas, HOP_BAR, on the odd
-   frames k = tick / 30, the whitebox strips on the even), Impure's emblems (the kit's parts while k % 4 < 2, whitebox
-   buttons otherwise), every range from the ground through the overlays clipped to the viewport, and the TOP range on
-   its own canvas: Leave's question on a third of the frames, its answer held as (k / 3) % 3, and the viewer's cursor on
+   the column the idle MAIN2 of the layout's side 0, the replay's overlays at the frame's tick with every switch on --
+   each seat's cursor, its clicks of the last 15 ticks and its selection, the human seat's alone in the past) and drawn
+   in stage.js's frame mode -- its black, the column from the top bar's top, the two bars (the bars' picture as one
+   drawImage of a part of the bar canvas, HOP_BAR, on the odd frames k = tick / 30, the whitebox strips on the even),
+   Impure's emblems (the kit's parts while k % 4 < 2, whitebox buttons otherwise), every range from the ground through
+   the overlays clipped to the viewport (the replay's last: each selection's brackets in its seat's colour, each
+   click's ring of 16 lines, each cursor's arrow as five filled triangles, HOP_TRI, and seven edges), and the TOP range
+   on its own canvas: Leave's question on a third of the frames, its answer held as (k / 3) % 3, and the viewer's cursor on
    the even frames at a canvas point both sides take from k (wikistagetest.c says which). The recording keeps each
    call's clip -- save, a rect, clip, restore -- and each op's clip must be the call's, the canvas's where there is none.
    A live entry's frame is the player's: by k, frame.js view's mode -- the watcher's, the player's, the past's -- with
@@ -398,7 +401,7 @@ try {
               const k = Math.floor(sim.tick / 30), mode = entry.live || entry.takeover ? ['watch', 'player', 'past'][k % 3] : 'watch';
               const ns = (v.game && v.game.seats ? v.game.seats.length : 0) || 1, human = entry.takeover ? Math.floor(k / 3) % ns : 0;
               sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`,
-                v: WikiFrame.view(human ? sim.view(human) : v, sb.layout, 0, mode, k % 2 === 0, human), tick: sim.tick,
+                v: WikiFrame.view(human ? sim.view(human) : v, sb.layout, 0, mode, k % 2 === 0, human, { tick: sim.tick }), tick: sim.tick,
                 frame: true, live: !!entry.live || (!!entry.takeover && mode !== 'watch') });
             }
             if (v.parts.length) { nspray += v.parts.length; nsprayed++; }

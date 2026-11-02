@@ -396,11 +396,12 @@ if (process.argv.includes('--hash')) {
           while (!R.view().done && R.view().tick < t) R.step();
           // the world shown, as wiki.js draws it: a live replay's past simulation while the past is shown, else its
           // game, as the human seat sees it (seat 0 but in a takeover's live game), with the top bar of that seat's
-          // side. `pending`: a seek is under way, when the page holds the last world drawn and a record at this tick
+          // side (under a players replay's Sight the viewed seat's, frame.js topSide). `pending`: a seek is under way, when the page holds the last world drawn and a record at this tick
           // depends on where the frames fell, so the lane compares none there
           const rv = R.view(), shown = rv.live && rv.live.rw === 'past' ? R.past : R.game;
           const human = rv.live ? rv.live.human : 0;
-          const rec = WikiFrame.record(rv, shown ? shown.view(human) : null, side, false, null, WikiFrame.seatSide(layout, side, human));
+          const pl = rv.players ? { seats: WikiFrame.plSeats(entry, demo), stat: R.stat } : null;
+          const rec = WikiFrame.record(rv, shown ? shown.view(human) : null, side, false, null, WikiFrame.topSide(rv, layout, side), pl);
           console.log(`frame ${id}/${demo.id}@${rv.tick} ${replayHash(R)} ${JSON.stringify({ ...rec, pending: rv.game.target >= 0 })}`);
         }
         while (!R.view().done) R.step();

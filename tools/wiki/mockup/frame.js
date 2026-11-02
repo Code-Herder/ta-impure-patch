@@ -35,6 +35,24 @@
    side. A takeover entry has no sidebar (ingame-wiki-replay-plan.md, entry 3), so the column is the load's idle MAIN2
    in either mode, as the game draws it after a takeover of either side (MEASURED, M0-T #1d).
 
+   PLAYERS (a players entry, replay.js's PL; players-spec.md section 7). THE SCREEN is the entry's `screen` (sw, sh
+   cells), not the map: Wg = 128 + 16 sw, Hg = max(16 sh + 64, the column's rows), and the viewport, the world
+   between the column and the bars, Wv = 16 sw by Hv = Hg - 64 world units. THE EYE, the viewport's top left in the
+   world, is the replay's camera (a centre) less half the viewport, held to [0, mapW - Wv] x [0, mapH - Hv]: the
+   engine's eye clamp 0x41C3C0 (engine/input.md), its extent the map's -- not Impure's half-off range, since the stage
+   draws no ground past the map. SIGHT is presentation (PD5): under Sight the frame's view takes the viewed seat's lit
+   grid at the shown tick for the map's fog and the units drawn, and the replay's last pass for the minimap's fog and
+   dots; the top bar is the replay's memo in the viewed seat's side's art, its badge that seat's (MEASURED, m0p-facts.md
+   P2: CORE's badge, red, under Sight on seat 1). The record carries the players block and the stats window's series,
+   which hudState turns into the stage HUD's Players set and stats window.
+
+   THE OVERLAYS (OQ-B; tagpu_replay.c THE OVERLAYS, tagpu_mark.c gather_overlay) are drawn in every replay view the
+   watcher sees: the watcher's view of Watching, of Take over's watching and of a players replay -- every recorded
+   seat's cursor, clicks and selection, whatever Sight shows (the recorder's owner answer Q5) -- and the past of
+   Rewind and Take over, the human seat's (MEASURED, m0p-facts.md P4: a rewind's past drew the recorded commander's
+   selection rectangle and the recorded cursor's arrow in seat 0's colour, and the switches removed each). Each is
+   switched by the replay's overlay switches, all on outside a players replay, whose Players set alone presses them.
+
    Runs in a page (the global WikiFrame) and under node (module.exports), as replay.js does. */
 const WikiFrame = (() => {
   const Replay = typeof WikiReplay !== 'undefined' ? WikiReplay : require('./replay.js');
@@ -51,6 +69,13 @@ const WikiFrame = (() => {
      panel 400 x 100 at (112, 118) of the 640 x 480 GUI space, its title at (25, 25) 350 x 20, Yes at (80, 55) and No at
      (225, 55), each 95 x 20. Its place on a larger screen is [INFERRED]: the GUI space centred. */
   const YESORNO = { x: 112, y: 118, w: 400, h: 100, title: [25, 25, 350, 20], yes: [80, 55, 95, 20], no: [225, 55, 95, 20] };
+  /* THE OVERLAY SWITCHES' bits (tagpu_hudlay.h HUD_TOG_*, replay.js TOG), all on outside a players replay; a click
+     shows REC_CLICK_SHOW ticks (tagpu_replay.c) */
+  const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16 }, CLICK_SHOW = 15;
+  /* THE STATS WINDOW's measures by the record's index (replay.js MEASURES, layout.json window.measures), and its place
+     and the team groups' colours where hudState is given no HUD layout: layout.json's window.x, window.y and
+     chart.teams, which a page and a check pass from the file itself */
+  const MEASURES = Replay.MEASURES, WINDOW = { x: 150, y: 56 }, TEAM_COLOURS = ['#e0c060', '#60b8e0', '#e07878', '#80d070', '#b090e0'];
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const snap = v => Math.floor(v + 0.5 + 1 / 64);
   // the simulation's cursor shapes by their index, tagpu_wikisim.h WIKI_CURSOR_*; a glide's point at seat 0's cursor
@@ -61,22 +86,37 @@ const WikiFrame = (() => {
   /* THE FORKS THE STAGE HUD LISTS (tagpu_wikiframe.h WIKIFRAME_FORKS, the recorder's fork limit) and their flags, the
      packet's TAGPU_PK_FORK_*: the one watched, a member of the watched chain, the Delete armed while the lanes are open */
   const FORKS = Replay.FORK_LIMIT, WATCHED = 1, CHAIN = 2, ARMED = 4;
-  /* THE INDEXED CONTROLS of the Take over set, as tagpu_hudlay.c keys them: a picker row `takeas:<row>` (a row is its
+  /* THE INDEXED CONTROLS of the Take over set and the Players set, as tagpu_hudlay.c keys them: a picker row `takeas:<row>` (a row is its
      seat: the record lists the seats in order), a lane's `lane:<k>`, `export:<k>` and `delete:<k>`, k its place in the
-     record's fork list. { act, n } for such a key, else null. */
-  const IX = { takeas: Sim.SEATS, lane: FORKS, export: FORKS, delete: FORKS };
+     record's fork list; and the Players set's: a hovered row's `jump:<seat>`, `sight:<seat>` and `follow:<seat>`, a
+     team header's `fold:<team>` and a stats chip's `chip:<name>`, whose n is its index in sim.js CHIPS (the replay's
+     press value). { act, n } for such a key, else null. LANE: the controls on a lane, which name a fork by its place. */
+  const IX = { takeas: Sim.SEATS, lane: FORKS, export: FORKS, delete: FORKS, jump: Sim.SEATS, sight: Sim.SEATS,
+    follow: Sim.SEATS, fold: Sim.SEATS };
+  const LANE = ['lane', 'export', 'delete'];
   function indexed(key) {
-    const m = /^(takeas|lane|export|delete):([0-9])$/.exec(key || '');
+    const c = /^chip:([a-z]+)$/.exec(key || '');
+    if (c) return Sim.CHIPS.includes(c[1]) ? { act: 'chip', n: Sim.CHIPS.indexOf(c[1]) } : null;
+    const m = /^(takeas|lane|export|delete|jump|sight|follow|fold):([0-9])$/.exec(key || '');
     return m && +m[2] < IX[m[1]] ? { act: m[1], n: +m[2] } : null;
   }
   // a replay control's key or an indexed one: what a record names as held or as a cursor's end
   const known = k => Replay.CONTROLS.includes(k) || !!indexed(k);
 
-  /* The frame's size in game pixels for a view with the map `M` and a column of `sideH` rows (0 without one). */
-  function size(M, sideH) {
+  /* The frame's size in game pixels for a view with the map `M` and a column of `sideH` rows (0 without one), on a
+     players entry's `screen` ([sw, sh] cells; null: the map's): Wg x Hg, the map's extent mw x mh and the viewport
+     vw x vh, the world between the column and the bars (THE SCREEN, the header). Without a screen the viewport is as
+     wide as the map and as deep as the frame leaves, the map at its top. */
+  function size(M, sideH, screen = null) {
     const cell = +M.cell || 16, mw = (+M.w || 1) * cell, mh = (+M.h || 1) * cell;
-    return { Wg: SIDE_W + mw, Hg: Math.max(mh + 2 * BAR, +sideH || 0), mw, mh };
+    const vw = screen ? screen[0] * cell : mw, Hg = Math.max((screen ? screen[1] * cell : mh) + 2 * BAR, +sideH || 0);
+    return { Wg: SIDE_W + vw, Hg, mw, mh, vw, vh: Hg - 2 * BAR };
   }
+  /* THE EYE of camera `cam` (a view centre, integers) on a frame of size() `sz`: the viewport's top left, held to the
+     map less the viewport, the engine's eye clamp 0x41C3C0 (THE EYE, the header). Integers: the camera is (sim.js
+     seatCam), and the viewport is whole cells wide and rows deep. */
+  const eye = (cam, sz) => ({ x: clamp(cam.x - Math.trunc(sz.vw / 2), 0, Math.max(0, sz.mw - sz.vw)),
+    z: clamp(cam.z - Math.trunc(sz.vh / 2), 0, Math.max(0, sz.mh - sz.vh)) });
 
   /* THE IDLE COLUMN of layout side `side`: its MAIN2 with nothing selected, which is what a watcher's screen shows
      (R0: the viewer controls the spectator record, whose unit list is empty). Each gadget's state is sim.js
@@ -109,25 +149,77 @@ const WikiFrame = (() => {
        stays: MEASURED, M0 #2), with no unit under the cursor; nothing selected and no armed mode, so no ghost, sites or
        queued sites, and no seat 0 cursor, drag, lines, sweep or keys (MEASURED: +0x110 bit 4 clear, main+0x2CC3 1).
      A frame view has no cursor of its own: the frame draws the viewer's or the simulation's in its TOP range. Without
-     a column of its own a live view takes the idle MAIN2 of `side`, since the game's screen always has one. */
-  function view(gv, layout, side, mode = 'watch', cursor = false, human = 0) {
+     a column of its own a live view takes the idle MAIN2 of `side`, since the game's screen always has one.
+
+     `ov` is what the replay adds to the world it shows: `tick`, the shown tick n (the world's); `players`, a players
+     replay's view (replay.js view().players) or null; `screen`, a players entry's screen or null. The watcher's view
+     and the past's carry THE OVERLAYS (the header), each switched by the replay's switches (all on but in a players
+     replay): `ocur`, each seat's cursor { x, z, seat } while it is on the map, in seat order; `oclick`, the clicks
+     { x, z, seat, age } made at or after the replay's clickFrom with age n + 1 - t in 0..14 (PD12: the game ages a
+     click against GameTime + 1, tagpu_replay.c:11284, put with its iteration's tick [INFERRED: the iteration is the one
+     the input of tick t feeds]), oldest first; per unit `osel`, its owner seat's selection. The watcher's are every
+     seat's, the past's the human seat's alone. With a screen the view carries `eye` { x, z, w, h }: the eye and the
+     viewport (THE EYE). Under a players replay's Sight, the watcher's view is the viewed seat's (sightView). */
+  function view(gv, layout, side, mode = 'watch', cursor = false, human = 0, ov = {}) {
     if (!gv || !gv.map) return null;
-    const M = gv.map, n = (+M.w || 1) * (+M.h || 1);
+    const M = gv.map, n = (+M.w || 1) * (+M.h || 1), P = ov.players || null, tog = P ? P.tog : TOG.cursors | TOG.clicks | TOG.selections | TOG.chat;
+    // a seat whose overlays the view carries: every seat to the watcher, the human seat in the past
+    const mine = k => mode === 'watch' || k === human;
     let v;
     if (mode === 'player') v = { ...gv, frame: 1, cursor: null, ghost: cursor ? gv.ghost : null,
       units: (gv.units || []).map(u => u.selected && u.owner !== human ? { ...u, selected: false } : u) };
     else {
       v = { ...gv, frame: 1, ghost: null, sites: [], queued: [], lines: [], drag: null, reclaim: null, keys: [], cursor: null, spacing: null,
-        units: (gv.units || []).map(u => ({ ...u, selected: false })) };
+        units: (gv.units || []).map(u => ({ ...u, selected: false, osel: !!(tog & TOG.selections) && !!u.selected && mine(u.owner) })) };
       if (mode === 'watch') { v.map = { ...M, fog: new Array(n).fill(0) }; delete v.side; }
       else if (v.side) v.side = { ...v.side, under: null };
+      const g = gv.game || {}, t = +ov.tick || 0, from = P ? P.clickFrom : 0;
+      v.ocur = tog & TOG.cursors ? (g.cursors || []).map((c, k) => ({ x: c.x, z: c.z, seat: k, on: c.on }))
+        .filter(c => c.on && mine(c.seat)).map(({ x, z, seat }) => ({ x, z, seat })) : [];
+      v.oclick = tog & TOG.clicks ? (g.clicks || []).filter(c => mine(c.seat) && c.tick >= from && t + 1 - c.tick >= 0 && t + 1 - c.tick < CLICK_SHOW)
+        .map(c => ({ x: c.x, z: c.z, seat: c.seat, age: t + 1 - c.tick })) : [];
     }
     if (!v.side) {
       const sd = idleSide(layout, side);
       if (sd) v.side = sd;
       else delete v.side;
     }
+    if (ov.screen) {
+      const sz = size(M, v.side ? v.side.h : 0, ov.screen), e = eye(P ? P.cam : { x: 0, z: 0 }, sz);
+      v.eye = { x: e.x, z: e.z, w: sz.vw, h: sz.vh };
+    }
+    if (P && P.sight >= 0 && mode === 'watch') sightView(v, gv, layout, P, +ov.tick || 0);
     return v;
+  }
+
+  /* SIGHT IN THE FRAME'S VIEW (players-spec.md 7.4), seat s = P.sight at the shown tick n, into the watcher's view v:
+     1. the lit grid, Sim.sightLit over the layout's sight table, the function the replay's pass calls;
+     2. the map's fog, each 16-unit cell its block's: clear where the count is not 0, grey (1) where it is -- the mapped
+        mode of the skirmish's True LOS, no black;
+     3. the units drawn: seat s's, and any other whose footprint's four corners (x +- 8 fx, z +- 8 fz) meet a lit block
+        -- the footprint's corners stand in for 0x465AC0's four model-box points [INFERRED], so a unit may show a
+        block earlier or later than in the game at a sight's edge; a radar contact is not drawn on the map (MEASURED,
+        m0p-facts.md P5). `slots` keeps each drawn unit's index in gv.units, which the page's poses are aligned with;
+     4. the minimap's `mini`: `lit`, the pass's fog bits a byte a block of the (w >> 1) x (h >> 1) grid, 1 lit (the
+        pass carries block i as bit i & 7 of byte i >> 3; a block past the pass's is unlit), and `dots` { x, z, owner },
+        seat s's units and every unit the pass's contacts name that is still live, at its place now: the dots move
+        every tick while the bits keep the pass's (0x466DC0 rebuilds the dots every tick, the pass runs on the
+        record's deadline). */
+  function sightView(v, gv, layout, P, n) {
+    const s = P.sight, M = gv.map, w = +M.w || 1, h = +M.h || 1, gw = w >> 1, gh = h >> 1;
+    const lit = Sim.sightLit(gv, layout && layout.sight ? layout.sight : null, s, n);
+    const block = (c, r) => c >= 0 && c < gw && r >= 0 && r < gh ? lit[r * gw + c] : 0;
+    v.map = { ...v.map, fog: Array.from({ length: w * h }, (_, i) => block((i % w) >> 1, Math.trunc(i / w) >> 1) ? 0 : 1) };
+    const at = (x, z) => block(Math.floor(x) >> 5, Math.floor(z) >> 5) > 0;
+    const seen = u => u.owner === s || [[-1, -1], [1, -1], [-1, 1], [1, 1]].some(([a, b]) => at(u.x + a * 8 * (+u.fx || 1), u.z + b * 8 * (+u.fz || 1)));
+    const slots = [];
+    v.units = v.units.filter((u, i) => seen(u) && slots.push(i));
+    v.slots = slots;
+    const seenLit = new Uint8Array(gw * gh), hex = String(P.pass.fog || '');
+    for (let i = 0; i < gw * gh && i < P.pass.blocks && (i >> 3) * 2 + 2 <= hex.length; i++)
+      seenLit[i] = parseInt(hex.substr((i >> 3) * 2, 2), 16) >> (i & 7) & 1;
+    const con = new Set(P.pass.contacts);
+    v.mini = { gw, gh, lit: seenLit, dots: (gv.units || []).filter(u => u.owner === s || con.has(u.id)).map(u => ({ x: u.x, z: u.z, owner: u.owner })) };
   }
 
   // a game tick as m:ss: a bookmark's from 0, the live strip's from the rewind's first GameTime (tagpu_hudinput.c live_clock)
@@ -178,11 +270,40 @@ const WikiFrame = (() => {
   const NO_TK = { tk: 0, pick: 0, lanes: 0, nfork: 0, human: 0, fork_max: 0, tk_full: 0, chain_last: 0, fill_to: 0, pickR: 0,
     pickEvict: 0, fork: [] };
 
+  /* A PLAYERS ENTRY'S SEATS for its records, from the demo's scene: each seat's team (its own index when the scene
+     gives none, a team of one) and whether its camera was recorded (a scene `camera`: sim.js seatCam is null without
+     one, the game's "Camera was not recorded") */
+  function plSeats(entry, demo) {
+    const names = Object.keys(entry.scenes || {}), on = demo && demo.on !== undefined ? demo.on : names[0];
+    const sc = (entry.scenes || {})[on] || { seats: [] };
+    return (sc.seats || []).map((z, k) => ({ team: Number.isInteger(z.team) ? z.team : k, cam: !!Sim.seatCam(entry, demo, k, 0) }));
+  }
+  /* THE PLAYERS BLOCK of a players replay's view `P` for a record of `n` seats, `pl` = { seats (plSeats), stat (the
+     replay's R.stat) } or null: Sight and Follow (-1 none), the switches, the folded rows, the stats window (its
+     measure an index in MEASURES), the samples' count, period and base, each seat's team, the recorded cameras as a bit
+     a seat, and each seat's samples of the measure */
+  function plBlock(P, n, pl) {
+    const zs = pl && pl.seats ? pl.seats : [], stat = pl && pl.stat;
+    return { pl: 1, sight: P.sight, follow: P.follow, tog: P.tog, folded: P.folded, stat_open: P.stat.open ? 1 : 0,
+      stat_team: P.stat.team ? 1 : 0, stat_measure: P.stat.measure, npt: P.npt, period: P.period, base: P.base,
+      team: Array.from({ length: n }, (_, k) => zs[k] ? zs[k].team : k),
+      cam: zs.reduce((a, z, k) => a | (z.cam && k < n ? 1 << k : 0), 0),
+      series: Array.from({ length: n }, (_, k) => Array.from({ length: P.npt }, (_, s) => stat ? F32(stat(s, k, P.stat.measure)) : 0)) };
+  }
+  /* THE TOP BAR'S SIDE of replay view `rv` (the record's `topSide`): the human seat's in a takeover's live game, the
+     viewed seat's under a players replay's Sight, else `side` (seatSide) */
+  function topSide(rv, layout, side) {
+    const s = rv.live ? rv.live.human : rv.players && rv.players.sight >= 0 ? rv.players.sight : 0;
+    return seatSide(layout, side, s);
+  }
+
   /* A TRIP'S CONTROL as the HUD keys it (THE INDEXED CONTROLS, above): a picker row by its seat `v`, a lane's control by
-     the place of the fork `v` in record `rec`'s list, '' (the rest point) when the list does not hold it; any other
-     control by its name */
+     the place of the fork `v` in record `rec`'s list, '' (the rest point) when the list does not hold it; a players
+     row's Jump, Sight and Follow and a team header's fold by its seat or team `v`, a chip by its name, CHIPS[v]; any
+     other control by its name */
   function keyOf(rec, c, v) {
-    if (c === 'takeas') return `takeas:${v}`;
+    if (c === 'takeas' || c === 'jump' || c === 'sight' || c === 'follow' || c === 'fold') return `${c}:${v}`;
+    if (c === 'chip') return v >= 0 && v < Sim.CHIPS.length ? `chip:${Sim.CHIPS[v]}` : '';
     if (c === 'lane' || c === 'export' || c === 'delete') { const k = rec.fork.findIndex(f => f.id === v); return k >= 0 ? `${c}:${k}` : ''; }
     return c;
   }
@@ -206,14 +327,22 @@ const WikiFrame = (() => {
      the simulation's. In Try it the simulation's cursor is the player's pointer over the world once a fork is played,
      idle or open (M0 #1), never in the past; before the first fork the world is the recording, whose cursor is not
      drawn. The floats are f32, as the C record carries them, so both sides compose the bar and place the cursor from
-     the same values. */
-  function record(rv, gv, side, tryIt, held, topSide = side) {
+     the same values.
+     PLAYERS (a players replay, rv.players, with `pl` = { seats, stat }: plSeats' seats and the replay's R.stat): the
+     players block -- Sight, Follow, the switches, the folded team rows, the stats window's state, the samples' count,
+     period and base, each seat's team and whether its camera was recorded (`cam`, a bit a seat), and `series`, each
+     seat's samples of the window's measure as f32 (the measure the game's TAGPU_PK_HUDSTAT carries); every other record
+     has none. A players record's top bar is the replay's memo, eased toward the viewed seat's numbers or under the full
+     map the watcher's zeros; under Sight its storage and stored values are that seat's, its badge that seat's colour
+     and its art that seat's side's (`topSide`, topSide()). */
+  function record(rv, gv, side, tryIt, held, topSide = side, pl = null) {
     const g = rv.game, seats = (gv && gv.game && gv.game.seats) || [], L = rv.live || null, T = rv.tk || null;
     const h = L && L.human >= 0 && L.human < Sim.SEATS ? L.human : 0;
     const sh = L && seats[h], gc = L && gv ? gv.cursor : null;
+    const P = rv.players || null, vs = P && P.sight >= 0 && P.sight < seats.length ? P.sight : -1, vz = vs >= 0 ? seats[vs] : null;
     const rec = {
       on: 1, playing: !g.paused && g.tick < g.end ? 1 : 0, question: rv.question ? 1 : 0, nseat: seats.length,
-      side, colour: L ? h : 0, speed: g.speed, try_it: tryIt ? 1 : 0, playhead: g.playhead, end: g.end,
+      side, colour: L ? h : vs >= 0 ? vs : 0, speed: g.speed, try_it: tryIt ? 1 : 0, playhead: g.playhead, end: g.end,
       seat: seats.map((z, k) => ({ name: z.name, colour: k, lost: z.lost > 0 ? 1 : 0, out: z.out ? 1 : 0, units: z.units,
         m: z.m, mmax: z.mmax, mi: z.mi, mo: z.mo, e: z.e, emax: z.emax, ei: z.ei, eo: z.eo })),
       mark: rv.marks.map(([t, kind, seat]) => ({ t, kind, seat })).concat(rv.books.map(t => ({ t, kind: MK_BOOKMARK, seat: -1 }))),
@@ -224,11 +353,14 @@ const WikiFrame = (() => {
       first: L ? L.first : 0, G: L ? L.G : 0, now: L ? L.now : 0, last: L ? L.last : 0, armR: L && L.arm !== 'none' ? L.armR : 0,
       bar: sh ? { e: L.bar.be, m: L.bar.bm, ei: L.bar.rates[0], eo: L.bar.rates[1], mi: L.bar.rates[2], mo: L.bar.rates[3],
         emax: F32(sh.emax), mmax: F32(sh.mmax), raw_e: F32(sh.e), raw_m: F32(sh.m) }
+        : P ? { e: P.bar.be, m: P.bar.bm, ei: P.bar.rates[0], eo: P.bar.rates[1], mi: P.bar.rates[2], mo: P.bar.rates[3],
+          emax: vz ? F32(vz.emax) : 0, mmax: vz ? F32(vz.mmax) : 0, raw_e: vz ? F32(vz.e) : 0, raw_m: vz ? F32(vz.m) : 0 }
         : { e: 0, m: 0, ei: 0, eo: 0, mi: 0, mo: 0, emax: 0, mmax: 0, raw_e: 0, raw_m: 0 },
       simcur: 0,
       sim: gc ? { x: F32(gc.x), z: F32(gc.z), shape: Math.max(0, SHAPES.indexOf(gc.shape)), age: L.now - gc.since } : { x: 0, z: 0, shape: 0, age: 0 },
       ...(T ? tkBlock(T) : NO_TK),
-      top_side: T && L ? topSide : side,
+      top_side: (T && L) || vs >= 0 ? topSide : side,
+      ...(P ? plBlock(P, seats.length, pl) : {}),
     };
     rec.nmark = rec.mark.length;
     const c = rv.cursor, n = Replay.HUD_DOWN, idle = !!L && L.rw === 'idle';
@@ -282,6 +414,33 @@ const WikiFrame = (() => {
     return `rgb(${pal[p * 4]},${pal[p * 4 + 1]},${pal[p * 4 + 2]})`;
   }
 
+  // the teams of each seat's team value: a list of seats a team, the teams in the order of their first seats
+  function teamsOf(team) {
+    const out = [], at = new Map();
+    (team || []).forEach((t, i) => { if (!at.has(t)) { at.set(t, out.length); out.push([]); } out[at.get(t)].push(i); });
+    return out;
+  }
+  // teams are told apart only when one of them has two players (hud.js and tagpu_hudlay.c `headed`)
+  const headed = teams => teams.length > 1 && teams.some(m => m.length > 1);
+  // a sample is data from the recording: one that is not a finite number is drawn as 0 (tagpu_hudstate.c sample)
+  const sample = v => v === v && v < 1e30 && v > -1e30 ? v : 0;
+  /* THE STATS WINDOW'S GROUPS, tagpu_hudstate_stat_groups' twin (index.html state() makes the mockup's the same way):
+     a group a seat, in its colour and with the time of its first commander-death marker (null for none), its samples
+     the record's series; or, when the split asks for teams and the teams are told apart (headed, the test the teams
+     chip is enabled by), a group a team, `Team N` in the chart's team colours `cols`, its samples the sum of its seats'
+     in f32 as the game adds them. `seats`, `teams` and `markers` are the state's, the markers' times in seconds. */
+  function statGroups(rec, seats, teams, markers, cols) {
+    const npt = rec.npt, S = rec.series;
+    if (!(rec.stat_team && headed(teams)))
+      return seats.map((z, i) => {
+        const d = markers.filter(m => m.kind === 'death' && m.seat === i).map(m => m.t);
+        return { name: z.name, col: z.colour, death: d.length ? Math.min(...d) : null,
+          v: Array.from({ length: npt }, (_, s) => sample(S[i] ? S[i][s] : 0)) };
+      });
+    return teams.map((m, t) => ({ name: `Team ${t + 1}`, col: cols[t % cols.length], death: null,
+      v: Array.from({ length: npt }, (_, s) => m.reduce((a, i) => F32(a + sample(S[i] ? S[i][s] : 0)), 0)) }));
+  }
+
   /* THE STAGE HUD'S STATE, hud.js's (tools/hudart/mockup/index.html state()) from record `rec` in a frame Wg x Hg: a
      screen of the frame's own size at 100 % (Q3), the engine frame the column and both bars, every switch on and
      nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks (an empty list: the game's
@@ -297,22 +456,38 @@ const WikiFrame = (() => {
      the chain's last, the forks in seconds named by their seats, the watched one, the armed Delete and, while the
      picker is open, the one it would replace by their places, the picker drawn while open, the Take over button down
      while it is asked, sought or open (pickDown), and the lanes as open as the record says. `art` the side pack's art
-     for the seats' colours, or null. */
-  function hudState(rec, Wg, Hg, art) {
+     for the seats' colours, or null.
+     A PLAYERS RECORD (rec.pl) sets the Players set as the game's present does: Sight and Follow on their seats, the
+     switches from its bits (Stats from the window's state), the folded team rows, the teams from each seat's team in
+     seat order (tagpu_hudstate.c teams joins the mutual alliances in that order, and a team's seats are mutually
+     allied), each seat's `cam`, and the stats window at layout.json's place (PD13: the stage has no drag) with its
+     measure, its split and its groups (statGroups) at a sample every period / 30 s from base / 30 s. `hud` is the HUD
+     layout (art/hud/layout.json, hud.js's) for the window's place and the teams' colours, or null for its values. */
+  function hudState(rec, Wg, Hg, art, hud = null) {
     const k = HUD_H / Hg, live = !!rec.live, G = Math.max(rec.G, rec.first), tk = !!rec.tk && !live;
     // live, the strip's track runs from the rewind's first GameTime to G (tagpu_hudstate.c present_live)
     const T = live ? (G - rec.first) / TICK : rec.end / TICK;
     const t = live ? (clamp(rec.now, rec.first, G) - rec.first) / TICK : (tk ? Math.min(rec.playhead, rec.chain_last) : rec.playhead) / TICK;
     const at = flag => rec.fork.findIndex(f => f.flags & flag);
+    const pl = !!rec.pl, seats = rec.seat.map((z, i) => ({ i, name: z.name, colour: seatColour(art, z.colour), units: z.units, lost: !!z.lost,
+      out: z.units === 0, cam: pl && !!(rec.cam >> i & 1), res: { m: z.m, mmax: z.mmax, e: z.e, emax: z.emax, mi: z.mi, mo: z.mo, ei: z.ei, eo: z.eo } }));
+    const markers = rec.mark.map(m => ({ t: m.t / TICK, kind: MK_NAMES[m.kind], seat: m.seat }));
+    const teams = pl ? teamsOf(rec.team) : rec.seat.map((_, i) => [i]);
     return {
       W: Wg * k, H: HUD_H, frame: { panel: SIDE_W * k, top: BAR * k, bottom: BAR * k },
       t, T, playing: !live && !!rec.playing, speed: rec.speed / 10, hud: 1,
-      seats: rec.seat.map((z, i) => ({ i, name: z.name, colour: seatColour(art, z.colour), units: z.units, lost: !!z.lost, out: z.units === 0,
-        cam: false, res: { m: z.m, mmax: z.mmax, e: z.e, emax: z.emax, mi: z.mi, mo: z.mo, ei: z.ei, eo: z.eo } })),
-      teams: rec.seat.map((_, i) => [i]), folded: [], scroll: 0, sight: -1, follow: -1,
-      markers: rec.mark.map(m => ({ t: m.t / TICK, kind: MK_NAMES[m.kind], seat: m.seat })),
+      seats, teams, folded: [], scroll: 0, sight: -1, follow: -1, markers,
       toggles: { cursors: true, clicks: true, selections: true, chat: true, stats: false },
       toast: rec.toast, stats: { open: false }, ends: T, len: T, fillTo: T, forks: [],
+      ...(pl ? {
+        sight: rec.sight, follow: rec.follow, folded: teams.map((_, j) => j).filter(j => rec.folded >> j & 1),
+        toggles: { cursors: !!(rec.tog & TOG.cursors), clicks: !!(rec.tog & TOG.clicks), selections: !!(rec.tog & TOG.selections),
+          chat: !!(rec.tog & TOG.chat), stats: !!rec.stat_open },
+        stats: { open: !!rec.stat_open, x: hud ? hud.window.x : WINDOW.x, y: hud ? hud.window.y : WINDOW.y,
+          measure: MEASURES[rec.stat_measure] || MEASURES[0], split: rec.stat_team && headed(teams) ? 'team' : 'player',
+          groups: statGroups(rec, seats, teams, markers, hud ? hud.chart.teams : TEAM_COLOURS),
+          dt: rec.period / TICK, t0: rec.base / TICK },
+      } : {}),
       ...(tk ? {
         len: rec.chain_last / TICK, fillTo: rec.fill_to / TICK,
         forks: rec.fork.map(f => ({ id: f.id, name: f.seat < rec.seat.length ? rec.seat[f.seat].name : 'Unknown seat',
@@ -417,15 +592,17 @@ const WikiFrame = (() => {
      nothing, so a press can never reach anything but the stage's replay; no press plays a sound (decision 9). Each call
      returns the presses to make, [control, value] pairs for the replay's press(). `T` is the track's tick under the
      pointer: the page maps the pointer's x on the playhead's run, clamped, and replay.js's seek clamps it again.
-     THE INDEXED CONTROLS are buttons too: a picker row's release gives takeas with the row, a lane's control's its
-     control with the fork the lane showed. `ids` (lanes()) is the forks of the lanes the pressed frame drew, in their
+     THE INDEXED CONTROLS are buttons too: a picker row's release gives takeas with the row, a players row's Jump,
+     Sight and Follow theirs with the seat, a team header's fold with the team and a chip's chip with its index in
+     CHIPS, a lane's control's its control with the fork the lane showed. `ids` (lanes()) is the forks of the lanes the pressed frame drew, in their
      keys' order; a lane's control is held only when it names a lane drawn, and acts at its release only when the lanes
      then drawn name the same fork at that place: a list that changed under the pointer between the two -- a deletion's,
      a fork made -- never sends the release to the fork that moved into its place (tagpu_hudinput.c held_lane, the
      game's rule). The id is data: the replay refuses one that is not a live fork. */
   function Press() {
     let held = '', lastT = -1, lane = -1;
-    const plain = ['track', 'takeas', 'lane', 'export', 'delete'];
+    // the controls a key names only with its index: bare, no button (a players row's buttons and a chip among them)
+    const plain = ['track', 'takeas', 'lane', 'export', 'delete', 'jump', 'sight', 'follow', 'chip'];
     const button = k => !!indexed(k) || (Replay.CONTROLS.includes(k) && !plain.includes(k));
     const laneAt = (ids, n) => Array.isArray(ids) && n < ids.length ? ids[n] : -1;
     return {
@@ -440,7 +617,7 @@ const WikiFrame = (() => {
         if (key === 'track') { held = key; lastT = T; return [['track', T]]; }
         const ix = indexed(key);
         // a lane's control is held only on a lane drawn, with the fork it showed
-        if (ix && ix.act !== 'takeas' && (lane = laneAt(ids, ix.n)) < 0) return [];
+        if (ix && LANE.includes(ix.act) && (lane = laneAt(ids, ix.n)) < 0) return [];
         if (button(key)) held = key;
         return [];
       },
@@ -456,13 +633,20 @@ const WikiFrame = (() => {
         if (h === 'track') return T === lastT ? [] : [['track', T]];
         if (!h || key !== h) return [];
         const ix = indexed(h);
-        if (ix) return ix.act === 'takeas' ? [['takeas', ix.n]] : id >= 0 && laneAt(ids, ix.n) === id ? [[ix.act, id]] : [];
+        if (ix) return !LANE.includes(ix.act) ? [[ix.act, ix.n]] : id >= 0 && laneAt(ids, ix.n) === id ? [[ix.act, id]] : [];
         return [[h === 'yes' ? 'leave:yes' : h === 'no' ? 'leave:no' : h, 0]];
       },
     };
   }
 
-  return { size, idleSide, view, toast, record, hudState, seatColour, dialog, glide, gamePoint, pressed, point, onWorld, Press, YESORNO,
-    COLOURS, HUD_H, SHAPES, indexed, seatSide, lanes };
+  /* THE REST POINT of a frame view `fv`, the cursor's point before any trip, from the viewport's top left in world units:
+     the map's centre, or with a screen the viewport's (the map is larger than it) */
+  const restOf = fv => {
+    const M = fv.map, cell = +M.cell || 16;
+    return fv.eye ? { x: fv.eye.w / 2, z: fv.eye.h / 2 } : { x: (+M.w || 1) * cell / 2, z: (+M.h || 1) * cell / 2 };
+  };
+
+  return { size, eye, idleSide, view, toast, record, hudState, seatColour, dialog, glide, gamePoint, pressed, point, onWorld, Press, YESORNO,
+    COLOURS, HUD_H, SHAPES, indexed, seatSide, topSide, lanes, plSeats, statGroups, teamsOf, restOf, TOG, CLICK_SHOW };
 })();
 if (typeof module !== 'undefined') module.exports = WikiFrame;

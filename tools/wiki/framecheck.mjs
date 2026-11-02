@@ -64,6 +64,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { takeoverFixture } from './takeover-fixture.mjs';
+import { playersFixture, playersScratch } from './players-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -231,7 +232,7 @@ function chosen(rv) {
    the human seat's view, as wiki.js takes it */
 function frameJs(R, layout, tryIt, held) {
   const rv = R.view(), human = rv.live ? rv.live.human : 0, gv = R.game ? R.game.view(human) : null;
-  const rec = WikiFrame.record(rv, gv, 0, tryIt, held, WikiFrame.seatSide(layout, 0, human));
+  const rec = WikiFrame.record(rv, gv, 0, tryIt, held, WikiFrame.topSide(rv, layout, 0));
   const sd = WikiFrame.idleSide(layout, 0);
   const M = gv ? gv.map : { w: 1, h: 1 }, cell = +M.cell || 16;
   const { Wg, Hg } = WikiFrame.size(M, sd ? sd.h : 0);
@@ -319,6 +320,88 @@ function claimsJs() {
       }
     }
   return widest;
+}
+
+/* ---- the players frames, JavaScript alone: frame.js and stage.js over a players replay ----
+   THE PLAYERS FRAMES (players-spec.md section 7). Until tagpu_wikiframe.c and tagpu_wikistage.c carry the players
+   presentation, the players fixture and scratch entry (players-fixture.mjs) are played here on the JavaScript side
+   alone, each demo through replay.js with the fixture layout's sight table, at the chosen ticks, through the whole
+   frame: record() with the players block, hudState() with the HUD layout, view() with the eye, Sight and the overlays,
+   and stage.js's draw into a context that draws nothing. Each frame must hold: the record's block bounded as
+   tagpu_wikiframe_bound will bound it (Sight and Follow -1 or a seat, the measure one of the seven, the samples within
+   STAT_PTS, a series a seat of npt samples) and the top bar the viewed seat's side under Sight; the HUD's teams the
+   scene's, its stats window's groups a seat or a headed team each, of npt samples; the eye inside the map less the
+   viewport; under Sight the map's fog a cell each, the units drawn seat s's or on a lit block, the minimap's dots seat
+   s's or the pass's contacts; every overlay inside the switches; and the draw returning the frame's fit. */
+const NOOP = () => {};
+const nullContext = () => new Proxy({ canvas: { width: 1, height: 1 } }, {
+  get(o, k) { if (k in o) return o[k]; return k === 'measureText' ? () => ({ width: 0 }) : NOOP; },
+  set(o, k, v) { o[k] = v; return true; },
+});
+function playersJs() {
+  const layout = SIDE('fixture'), hud = JSON.parse(fs.readFileSync(path.join(HUDDIR, 'layout.json'), 'utf8'));
+  const ctx = { side: 0, casting: null, iface: 1, cob: null, snd: null, rival: null };
+  const seen = { frames: 0, replays: 0, moved: 0, sight: 0, dots: 0, contacts: 0, cur: 0, click: 0, osel: 0, stats: 0, team: 0 };
+  for (const entry of [playersFixture(), playersScratch()])
+    for (const demo of entry.demos) {
+      const at = `players ${entry.id}/${demo.id}`;
+      let R;
+      try { R = WikiReplay.play(entry, demo, layout, ctx); } catch (e) { fail(`${at}: replay.js refused it: ${e.message}`); continue; }
+      const pl = { seats: WikiFrame.plSeats(entry, demo), stat: R.stat };
+      seen.replays++;
+      for (;;) {
+        const rv = R.view();
+        // a seek's ticks are never shown: the page holds the world drawn before it
+        if (chosen(rv) && R.game && rv.game.target < 0) {
+          const where = `${at} at demo tick ${rv.tick}`, P = rv.players, gv = R.game.view(), seats = gv.game.seats.length;
+          const rec = WikiFrame.record(rv, gv, 0, false, null, WikiFrame.topSide(rv, layout, 0), pl);
+          const fv = WikiFrame.view(gv, layout, 0, 'watch', false, 0, { tick: R.game.tick, players: P, screen: entry.screen });
+          const C = WikiStage.content(fv), st = WikiFrame.hudState(rec, C.w, C.h, null, hud);
+          const sz = WikiFrame.size(gv.map, fv.side ? fv.side.h : 0, entry.screen);
+          const bad = [];
+          if (!rec.pl || !(rec.sight >= -1 && rec.sight < seats) || !(rec.follow >= -1 && rec.follow < seats)) bad.push('Sight or Follow');
+          if (!(rec.stat_measure >= 0 && rec.stat_measure < WikiReplay.MEASURES.length) || !(rec.npt <= WikiReplay.STAT_PTS)) bad.push('the stats state');
+          if (rec.series.length !== seats || rec.series.some(v => v.length !== rec.npt)) bad.push('the series');
+          if (rec.top_side !== (rec.sight >= 0 ? WikiFrame.seatSide(layout, 0, rec.sight) : 0)) bad.push('the top bar\'s side');
+          if (show(st.teams) !== show(WikiFrame.teamsOf(pl.seats.map(z => z.team)))) bad.push('the teams');
+          if (st.stats.open && st.stats.groups.some(g => g.v.length !== rec.npt)) bad.push('the groups\' samples');
+          if (C.w !== sz.Wg || C.h !== sz.Hg || fv.eye.w !== sz.vw || fv.eye.h !== sz.vh) bad.push('the frame\'s size');
+          if (!(fv.eye.x >= 0 && fv.eye.x <= sz.mw - sz.vw && fv.eye.z >= 0 && fv.eye.z <= sz.mh - sz.vh)) bad.push(`the eye ${show(fv.eye)}`);
+          if (P.sight >= 0) {
+            const lit = WikiSim.sightLit(gv, layout.sight, P.sight, R.game.tick), gw = gv.map.w >> 1;
+            const on = (x, z) => lit[(Math.floor(z) >> 5) * gw + (Math.floor(x) >> 5)] > 0;
+            if (fv.map.fog.length !== gv.map.w * gv.map.h) bad.push('the fog');
+            if (fv.units.some(u => u.owner !== P.sight && ![-1, 1].some(a => [-1, 1].some(b => on(u.x + a * 8 * u.fx, u.z + b * 8 * u.fz)))))
+              bad.push('a unit on no lit block');
+            const ids = new Set(P.pass.contacts);
+            if (!fv.mini || fv.mini.dots.length !== gv.units.filter(u => u.owner === P.sight || ids.has(u.id)).length) bad.push('the dots');
+            seen.sight++;
+            if (fv.mini && fv.mini.dots.some(d => d.owner !== P.sight)) seen.contacts++;
+            if (fv.mini && fv.mini.dots.length) seen.dots++;
+          } else if (fv.mini) bad.push('a minimap of the pass under the full map');
+          if ((!(P.tog & WikiFrame.TOG.cursors) && fv.ocur.length) || (!(P.tog & WikiFrame.TOG.clicks) && fv.oclick.length)
+            || (!(P.tog & WikiFrame.TOG.selections) && fv.units.some(u => u.osel))) bad.push('an overlay switched off');
+          if (fv.oclick.some(c => c.age < 0 || c.age >= WikiFrame.CLICK_SHOW)) bad.push('a click\'s age');
+          const fit = WikiStage.draw(nullContext(), fv, { W: FIT.W, H: FIT.H, U: FIT.U, frame: { button: null } });
+          if (!fit || fit.cw !== C.w || fit.ch !== C.h) bad.push('the draw');
+          if (bad.length) fail(`${where}: ${bad.join(', ')}`);
+          seen.frames++;
+          if (fv.eye.x || fv.eye.z) seen.moved++;
+          if (fv.ocur.length) seen.cur++;
+          if (fv.oclick.length) seen.click++;
+          if (fv.units.some(u => u.osel)) seen.osel++;
+          if (st.stats.open) { seen.stats++; if (st.stats.split === 'team') seen.team++; }
+        }
+        if (rv.done) break;
+        R.step();
+      }
+      R.free();
+    }
+  console.log(`players (JS alone): ${seen.frames} frames over ${seen.replays} replays -- the eye off (0, 0) in ${seen.moved}, Sight in ${seen.sight} `
+    + `(minimap dots in ${seen.dots}, a contact among them in ${seen.contacts}), cursors in ${seen.cur}, clicks in ${seen.click}, `
+    + `selections in ${seen.osel}, the stats window in ${seen.stats} (by team in ${seen.team})`);
+  for (const [k, what] of [['moved', 'the camera moved'], ['sight', 'Sight'], ['contacts', 'a contact dot'], ['cur', 'a cursor'], ['osel', 'a selection'], ['stats', 'the stats window']])
+    if (!seen[k]) fail(`players (JS alone): no frame shows ${what}`);
 }
 
 /* ---- the tables ---- */
@@ -473,6 +556,7 @@ try {
   }
   if (SHARD === 1) {
     const widest = claimsJs();
+    playersJs();
     idleCheck(exe, tmp);
     if (exe) tablesCheck(exe, tmp);
     console.log(`tables: ${tables} checks (the widest PANELTOP of ${PACKLIST.length} packs ${widest})`);
