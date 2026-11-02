@@ -26,6 +26,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> takeover --launch [--shots DIR]
                                                       Take over a replay, a takeover entry: its frame, the
                                                       records, and Try it's lanes, takeover and world input
+    wiki_regression.py <instance> players --launch [--shots DIR]
+                                                      Players and the camera, a players entry: its frame with a
+                                                      camera, the records and the view, and Try it's Players set
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
@@ -201,6 +204,34 @@ art/wiki/entries/takeover.json or from simparity's records of it, none written h
   (t5) reopened, Try it with the playhead at the end, the longest sought switch (F3's lane) and the snap there: their
        demo steps and seconds, the most one fill cost the game thread (the target 0.5 ms), the takeover's time from
        (t4); Esc, and the render thread's stage HUD cost from the log.
+players, on the same launch as sp (players-spec.md 10). Every tick it uses is read from art/wiki/entries/players.json or
+from simparity's records of it, none written here:
+  (p1) the tree's Players drawn as a watching frame with a camera: the frame the entry's screen gives (frame_fit), its
+       world rect the viewport, the image's clip equal to it and the image the whole map at the eye, as the drawn frame
+       placed them (the dump's frame_clip and frame_img, TAGPU_CMD_WIKI img and clip); the replay HUD's controls, the
+       Players set's switches and every seat's row hit inside the frame;
+  (p2) every demo paused (tagpu_wiki.pause, under the turbo) at each trip's press, at each tick a press acts and at the
+       first, middle and last tick of each players state with no seek running (simparity --hash --frame at every demo
+       tick): the record's FRAME_KEYS, live block, bar and players block, every sample f32 for f32, the frame's view --
+       the eye, the cursors, the clicks, the units drawn with their overlay selection, the fog, the minimap's pass --
+       and the replay's hash equal replay.js's;
+  (p3) with --shots DIR, the states simparity's records name held (tagpu_wiki.shot) -- Jump's acts; Follow's, mid-way
+       and Free cam; Sight on Bram, w1's death vision, the vision gone, Ada's commander a radar dot, the caption over
+       it and the full map; every overlay on, each tick Bram's first click is ringed and each switch; each act of the
+       stats window -- and grabbed beside the mockup at the same state: the column (its minimap) and both bars
+       pixel-equal, the top bar in the viewed seat's side's art under Sight; the emblems, the stats window and the
+       world measured; the radar dot's frame also beside M0-P2's top bar and M0-P5's minimap
+       (.data/wiki-replay/m0p-shots, for the eye: different screens, so not measured);
+  (p4) on Watching's Try it the Players set and Take over inert: each control drawn held (the press machine's
+       press_held) and let go, the record unchanged and no players block; then Try it on demo jump's data through device
+       clicks, a row hovered by `dmove:` first: Jump on Bram's row and Ada's (the eye at sim.js seatCam's), Follow on
+       Bram's with the replay playing (the eye on his camera) and again (Free cam: the eye stays), paused Sight on
+       Bram, Ada and Bram again (the bar's rates each viewed seat's at once, OQ-D A; his side's top bar; the fog and
+       the minimap pass) and again (the full map, the rates 0), each switch off and on, stats, a chip, the team split,
+       close; GameTime stands and the key ring's indices stay equal;
+  (p5) reopened, Try it on demo sight's data, the track clicked at its end, Sight on Bram and the stats window open:
+       the seek's steps and seconds and the most one fill cost the game thread (the target 0.5 ms); Esc, and the
+       render thread's stage HUD cost from the log.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -778,9 +809,9 @@ def page(c, shot=None):
     if shot:
         grab(c, shot)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, Take over
-    # and Rewind are drawn either way
-    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", f"entry:{tree_node(TAKEOVER)}", f"entry:{tree_node(REWIND)}"])
+    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, Take over,
+    # Rewind and Players are drawn either way
+    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", *(f"entry:{tree_node(e)}" for e in (TAKEOVER, REWIND, PLAYERS))])
     press(c, d, "fold:1")
     d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == rest, "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
@@ -1957,7 +1988,8 @@ def watch_v1(c, d):
 def simparity_frames(d, asks, entry=WATCH):
     """(v2) replay.js's hash and frame record at each (demo, tick) of `asks` of `entry` in the dump's context: its layout,
     side, interface type, the pack of a mod's layout and the units' scripts (simparity.mjs --hash --frame)"""
-    lay = TREE / ".wiki-watch-layout.json"
+    # one file a process: the gate runs several lanes at once, each writing and removing its own
+    lay = TREE / f".wiki-watch-layout.{os.getpid()}.json"
     lay.write_text(json.dumps(d["layout"]))
     try:
         args = ["--layout", str(lay) if d["layout"] is not None else "null", "--side", str(d["ctx"]["side"]),
@@ -3099,6 +3131,528 @@ def takeover(c, shots, res):
     takeover_t5(c, fork_line)
 
 
+# ---- players: a players entry on the page, Players and the camera (players-spec.md 10) ----
+
+PLAYERS = "players"
+PL_KEYS = ("pl", "sight", "follow", "tog", "folded", "stat_open", "stat_team", "stat_measure", "npt", "period", "base",
+           "team", "cam", "top_side")                   # (p2) the record's players block, but its samples
+PL_SWITCHES = ("cursors", "clicks", "selections", "chat")  # (p4) the Players set's switches, replay.js TOG's names
+PL_INERT = ("jump:1", "sight:1", "follow:1", "cursors", "stats", "takeover")   # (p4) pressed on Watching: none acts
+PL_EMBLEM = 76                                          # a watching frame's emblems' first column, Wg less this
+M0P_FIGS = ("fig-p2-topbar.png", "fig-p5-minimap-sight1.png")   # (p3) M0-P2's top bar and M0-P5's minimap, for the eye
+
+
+def pl_entry():
+    return json.loads((TREE / f"art/wiki/entries/{PLAYERS}.json").read_text())
+
+
+def pl_twin(expr):
+    """`expr` evaluated by node with sim.js as S, replay.js as R and the players entry as E: the mockup's own answer"""
+    js = ("const S = require(process.argv[1]), R = require(process.argv[2]), E = require(process.argv[3]);"
+          f" console.log(JSON.stringify({expr}));")
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / "tools/wiki/mockup/replay.js"),
+                        str(TREE / f"art/wiki/entries/{PLAYERS}.json")], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"node: {r.stderr.strip()[-400:]}"
+    return json.loads(r.stdout)
+
+
+def pl_eye(d, demo, seat, g):
+    """The eye seat `seat`'s recorded camera at game tick g gives the drawn frame (frame.js eye): sim.js seatCam, less
+    half the viewport, held to the map less the viewport, the viewport and the map the dump's"""
+    cam = pl_twin(f"S.seatCam(E, E.demos.find(d => d.id === {json.dumps(demo)}), {seat}, {g})")
+    assert cam, f"seat {seat} of {demo} has no recorded camera"
+    vw, vh = d["view"]["eye"][2:]
+    mw, mh = d["map"][0] * 16, d["map"][1] * 16
+    return [min(max(cam[0] - vw // 2, 0), max(0, mw - vw)), min(max(cam[1] - vh // 2, 0), max(0, mh - vh))]
+
+
+def pl_open(c):
+    """The wiki opened on Players and the camera, drawn as a watching frame with its stage HUD: picked from the tree, or
+    from the theatre's drawer when the page shows a game frame"""
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"], "(p1) the page was not drawn")
+    return pl_pick(c, d, PLAYERS, "(p1)")
+
+
+def pl_pick(c, d, entry, what):
+    """`entry` picked from the tree, opening the theatre's drawer first when the page hides the tree: the dump once its
+    game frame is drawn with its stage HUD"""
+    key = f"entry:{tree_node(entry)}"
+    if d["entry"] != entry:
+        if not any(h["key"] == key for h in d["hits"]):
+            press(c, d, "drawer")
+            d = wait_dump(c, lambda d: any(h["key"] == key for h in d["hits"]), f"{what} the drawer did not show {key}")
+        c.keys("dclick:%d,%d" % c.centre(c.hit(d, key)))
+    return wait_dump(c, lambda d: d["entry"] == entry and d.get("drawn_frame") and d.get("frame_fit")
+                     and any(h.get("src") == HIT_HUD for h in d["hits"]) and (entry != PLAYERS or d["frame"].get("pl")),
+                     f"{what} the tree did not draw {entry}'s game frame with its stage HUD", seconds=60)
+
+
+def pl_p1(c, d):
+    """(p1) a watching frame with a camera: the frame the entry's screen gives (128 + 16 sw wide, the viewport 16 sw x
+    Hg - 64 at least 16 sh deep), its world rect the viewport, the image's clip equal to it and the image the whole map
+    at the eye, all as the drawn frame placed them (frame_fit, frame_clip, frame_img); the replay HUD's controls, the
+    Players set's switches and every seat's row inside the frame"""
+    sw, sh = pl_entry()["screen"]
+    f, v = d["frame_fit"], d["view"]
+    assert v["screen"] == 1 and f["Wg"] == 128 + 16 * sw and v["eye"][2] == 16 * sw and f["Hg"] == v["eye"][3] + 64 \
+        and v["eye"][3] >= 16 * sh, f"(p1) the frame {f['Wg']} x {f['Hg']} with the viewport {v['eye']} is not the " \
+                                    f"screen {sw} x {sh}'s"
+    R = frame_rects(d)
+    snap = lambda x: math.floor(x + 0.5 + 1 / 64)
+    X = lambda wx: f["canvas"][0] + snap(f["ox"] + wx * f["s"])
+    Z = lambda wz: f["canvas"][1] + snap(f["oz"] + wz * f["s"])
+    ex, ez = v["eye"][:2]
+    mw, mh = d["map"][0] * 16, d["map"][1] * 16
+    img = [X(-ex), Z(-ez), X(mw - ex), Z(mh - ez)]
+    near = lambda a, b: all(abs(p - q) <= 1 for p, q in zip(a, b))
+    assert near(d["frame_clip"], R["world"]), f"(p1) the image's clip {d['frame_clip']} is not the viewport {R['world']}"
+    assert near(d["frame_img"], img), f"(p1) the image {d['frame_img']} is not the map {mw} x {mh} at the eye {img}"
+    hud = {h["key"]: h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD}
+    want = {"play", "track", "leave", "stats", *PL_SWITCHES, *(f"row:{k}" for k in range(d["frame"]["nseat"]))}
+    assert want <= set(hud), f"(p1) the stage HUD lacks {sorted(want - set(hud))}: {sorted(hud)}"
+    out = [k for k in want if not (R["frame"][0] <= hud[k][0] and hud[k][2] <= R["frame"][2] and R["frame"][1] <= hud[k][1]
+                                   and hud[k][3] <= R["frame"][3])]
+    assert not out, f"(p1) stage HUD controls outside the frame {R['frame']}: {out}"
+    print(f"wiki players: (p1) a watching frame {f['Wg']} x {f['Hg']} on the screen {sw} x {sh}: the viewport "
+          f"{v['eye'][2]} x {v['eye'][3]} at the eye ({ex}, {ez}), the image's clip {d['frame_clip']} the world rect, the "
+          f"image {d['frame_img']} the {mw} x {mh} map at the eye; {len(hud)} stage HUD controls, {sorted(want)} among them")
+
+
+def pl_candidates(d, demos):
+    """Every demo tick of each demo of `demos` to its end, through simparity: {demo: [(tick, hash, record), ...]} in
+    tick order, each record with its frame view (simparity --frame's `view`)"""
+    byid = {dm["id"]: dm for dm in entry_demos(PLAYERS)}
+    got = simparity_frames(d, [(k, t) for k in demos for t in range(1, int(byid[k]["end"]) + 120)], PLAYERS)
+    out = {k: [] for k in demos}
+    for (k, t), (h, rec) in sorted(got.items(), key=lambda p: p[0][1]):
+        if k in out and not any(t == q for q, _, _ in out[k]):
+            out[k].append((t, h, rec))
+    return {k: v[:-1] for k, v in out.items()}
+
+
+def pl_sig(rec):
+    """A players record's state as the lane picks ticks by: Sight, Follow, the switches and the stats window"""
+    return rec["sight"], rec["follow"], rec["tog"], rec["stat_open"], rec["stat_team"], rec["stat_measure"]
+
+
+def pl_acts(rows):
+    """The ticks of `rows` at which a press acts: the players state changes, or the eye moves with no Follow (a Jump)"""
+    out = []
+    for (_, _, a), (t, _, b) in zip(rows, rows[1:]):
+        if pl_sig(a) != pl_sig(b) or (a["follow"] < 0 and b["follow"] < 0 and a["view"]["eye"] != b["view"]["eye"]):
+            out.append(t)
+    return out
+
+
+def pl_view_diff(g, w):
+    """The fields of the game's players view that differ from frame.js view's (simparity's `view`): the eye, the
+    cursors, the clicks, the units drawn with their overlay selection (positions as the f32 the record holds), the
+    fog, the minimap's pass"""
+    pts = lambda L, n: [tuple(f32(x) for x in p[:2]) + tuple(p[2:n]) for p in L]
+    bad = [k for k in ("screen", "eye", "fog") if g[k] != w[k]]
+    bad += [k for k, n in (("ocur", 3), ("oclick", 4), ("units", 4)) if pts(g[k], n) != pts(w[k], n)]
+    if (g["mini"] is None) != (w["mini"] is None) or (g["mini"] and any(g["mini"][k] != w["mini"][k] for k in g["mini"])):
+        bad.append("mini")
+    return bad
+
+
+def pl_record_diff(rec, want):
+    """The fields of a players record that differ from replay.js's: record_diff's, the players block, each sample as
+    the f32 it is, and the frame's view"""
+    bad = record_diff(rec, want) + [k for k in PL_KEYS if rec.get(k) != want.get(k)]
+    if [[f32(x) for x in s] for s in rec.get("series", [])] != [[f32(x) for x in s] for s in want.get("series", [])]:
+        bad.append("series")
+    return bad + [f"view.{k}" for k in pl_view_diff(rec["view"], want["view"])]
+
+
+def pl_p2(c, d, cand):
+    """(p2) every demo paused (tagpu_wiki.pause, under the turbo) at each trip's press, at each tick a press acts, and at
+    the first, middle and last tick of each players state the demo reaches with no seek running: the record the game
+    thread placed -- FRAME_KEYS, the live block, the bar, the players block, each sample f32 for f32 -- the frame's view
+    -- the eye, the overlays, the fog and the minimap's pass -- and the replay's hash, equal replay.js's"""
+    ids = [dm["id"] for dm in entry_demos(PLAYERS)]
+    turbo(c, 8)
+    said, n = [], 0
+    try:
+        for k in ids:
+            rows = [r for r in cand[k] if not r[2]["pending"]]
+            press_at = {t for (_, _, a), (t, _, b) in zip(rows, rows[1:]) if b["held"] and not a["held"]}
+            runs = {}
+            for t, h, rec in rows:
+                runs.setdefault(pl_sig(rec), []).append(t)
+            at = press_at | set(pl_acts(rows)) | {ts[i] for ts in runs.values() for i in (0, len(ts) // 2, -1)}
+            by = {t: (h, rec) for t, h, rec in rows}
+            for t in sorted(at):
+                h, want = by[t]
+                g = paused_at(c, PLAYERS, ids.index(k) + 1, k, t, "(p2)")
+                assert g.get("view"), f"(p2) {k}@{t}: the dump carries no players view"
+                rec = {**g["frame"], "view": g["view"]}
+                bad = pl_record_diff(rec, want)
+                assert not bad, f"(p2) {k}@{t}: the record's {bad} differ: game " \
+                                f"{[rec.get(f.split('.')[0]) if not f.startswith('view.') else g['view'].get(f[5:]) for f in bad]}"[:900] + \
+                                f", replay.js {[want.get(f.split('.')[0]) if not f.startswith('view.') else want['view'].get(f[5:]) for f in bad]}"[:900]
+                assert g["hash"] == h, f"(p2) {k}@{t}: the replay's hash {g['hash']}, replay.js's {h}"
+                n += 1
+            said.append(f"{k} at {len(at)} ticks over {len(runs)} states")
+    finally:
+        turbo(c, 0)
+    print(f"wiki players: (p2) {n} paused frames, {'; '.join(said)}: each record's {', '.join(FRAME_KEYS + LIVE_KEYS + PL_KEYS)}, "
+          f"bar, sim and samples, the view's eye, cursors, clicks, units, fog and minimap pass, and the replay's hash equal "
+          f"replay.js's")
+
+
+def pl_shots(cand):
+    """(p3) the demo ticks to shoot, each with what it shows, all read from simparity's records: Jump's two acts;
+    Follow's two and the middle of its run; Sight's two, w1's death under it (Bram's units drawn one fewer), the tick
+    its vision goes (the most blocks gone dark at once after it), the first pass after that (the minimap's bits
+    change) with Ada's commander a dot and not drawn -- a radar contact -- and every caption of the demo while it is
+    one; the overlays' tick before the first switch, each tick Bram's first click is ringed, and each switch's act; and
+    each act of the stats window. [(demo, tick, what)]"""
+    out = []
+    ok = lambda k: [r for r in cand[k] if not r[2]["pending"]]
+    rows = ok("jump")
+    out += [("jump", t, "jump") for t in pl_acts(rows)]
+    rows = ok("follow")
+    acts = pl_acts(rows)
+    on = [t for t, _, r in rows if r["follow"] >= 0]
+    out += [("follow", acts[0], "follow"), ("follow", on[len(on) // 2], "following"), ("follow", acts[-1], "free cam")]
+    rows = ok("sight")
+    acts = pl_acts(rows)
+    pairs = list(zip(rows, rows[1:]))
+    under = [(a, b) for a, b in pairs if a[2]["sight"] == 1 and b[2]["sight"] == 1]
+    seen = lambda r: sum(1 for u in r["view"]["units"] if u[2] == 1)
+    death = next(b[0] for a, b in under if seen(b[2]) < seen(a[2]))
+    dark = lambda a, b: a[2]["view"]["fog"].count("0") - b[2]["view"]["fog"].count("0")
+    gone = max((p for p in under if p[1][0] > death), key=lambda p: dark(*p))[1][0]
+
+    def radar(r):
+        mine = {(math.trunc(u[0]), math.trunc(u[1])) for u in r["view"]["units"] if u[2] == 0}
+        return any(q[2] == 0 and (q[0], q[1]) not in mine for q in r["view"]["mini"]["dots"])
+    dot = next(b[0] for a, b in under if b[0] > gone and a[2]["view"]["mini"]["lit"] != b[2]["view"]["mini"]["lit"])
+    assert radar(next(r for t, _, r in rows if t == dot)), f"(p3) sight: the pass at {dot} makes no radar dot of Ada's"
+    out += [("sight", acts[0], "sight on Bram"), ("sight", death, "w1's death vision"), ("sight", gone, "the vision gone"),
+            ("sight", dot, "c0 a radar dot")]
+    caps = [ev["at"] for ev in next(dm for dm in entry_demos(PLAYERS) if dm["id"] == "sight")["inputs"] if "caption" in ev]
+    hold = pl_hold(rows, "sight")
+    out += [("sight", a + hold, "the radar caption") for a in caps if dot < a + hold < acts[-1]]
+    out += [("sight", acts[-1], "the full map")]
+    rows = ok("overlays")
+    acts = pl_acts(rows)
+    first = next(q for _, _, r in rows for q in r["view"]["oclick"] if q[2] == 1)
+    ring = [t for t, _, r in rows if any(q[:3] == first[:3] for q in r["view"]["oclick"])]
+    out += [("overlays", acts[0] - 1, "every overlay on")]
+    out += [("overlays", t, "Bram's first click ringed") for t in ring]
+    out += [("overlays", t, "a switch") for t in acts]
+    rows = ok("stats")
+    out += [("stats", t, "the stats window") for t in pl_acts(rows)]
+    return out
+
+
+def pl_hold(rows, demo):
+    """The demo ticks the walk holds the clock: the first trip's start less its `at` in players.json (the record's
+    viewer's cursor leaves the rest point at the trip's start)"""
+    first = next(ev for ev in next(dm for dm in entry_demos(PLAYERS) if dm["id"] == demo)["inputs"] if "hud" in ev)
+    t = next(t for t, _, r in rows if r["cur"]["to"])
+    return t - first["at"]
+
+
+def pl_beside(game_png, d, path):
+    """The game frame's top bar and its column's minimap beside M0-P2's top bar and M0-P5's minimap under Sight, each
+    scaled to one width, for the eye: different screens, so nothing is measured"""
+    from PIL import Image
+    src = data_root() / "wiki-replay" / "m0p-shots"
+    figs = [src / n for n in M0P_FIGS]
+    if not all(p.exists() for p in figs):
+        print(f"wiki players: (p3) no M0-P figure at {src}: the frame is not put beside them")
+        return
+    R, f = frame_rects(d), d["frame_fit"]
+    g = Image.open(game_png).convert("RGB")
+    col = R["column"]
+    mini = (col[0], col[1], col[2], col[1] + round(160 * f["s"]))
+    rows = [g.crop(tuple(R["top"])), Image.open(figs[0]).convert("RGB"), g.crop(mini), Image.open(figs[1]).convert("RGB")]
+    W = 1024
+    rows = [r.resize((W, max(1, round(r.height * W / r.width))), Image.NEAREST) for r in rows]
+    out = Image.new("RGB", (W, sum(r.height + 4 for r in rows)), (255, 0, 255))
+    y = 0
+    for r in rows:
+        out.paste(r, (0, y))
+        y += r.height + 4
+    out.save(path)
+    print(f"wiki players: (p3) the top bar and the minimap beside M0-P's (game, M0-P2, game, M0-P5) in {path}")
+
+
+def pl_p3(c, shots, res, cand):
+    """(p3) each tick of pl_shots held (tagpu_wiki.shot) and the presented frame grabbed, the mockup's at the same state
+    beside it: the column (its minimap, dots and camera box included) and both bars pixel-equal -- the top bar in the
+    viewed seat's side's art under Sight -- the emblems, the stats window and the world measured; the record says what
+    each shows. Sight's radar dot also beside M0-P's captures"""
+    shots.mkdir(parents=True, exist_ok=True)
+    ids = [dm["id"] for dm in entry_demos(PLAYERS)]
+    by = {(k, t): rec for k in cand for t, _, rec in cand[k]}
+    todo = pl_shots(cand)
+    for demo, tick, what in todo:
+        want = by[(demo, tick)]
+        d = rewind_shot(c, ids.index(demo) + 1, demo, tick, PLAYERS)
+        r, v = d["frame"], d["view"]
+        bad = [k for k in ("sight", "follow", "tog", "stat_open", "stat_team", "stat_measure", "top_side") if r[k] != want[k]]
+        bad += ["view.eye"] if v["eye"] != want["view"]["eye"] else []
+        assert not bad, f"(p3) {demo}@{tick} ({what}): the frame shot is not replay.js's at that tick: {bad}"
+        if r["sight"] >= 0:
+            assert r["top_side"] == want["top_side"] and v["mini"], f"(p3) {demo}@{tick}: Sight drew no minimap pass"
+        base = shots / f"{res}-{PLAYERS}-{demo}-t{tick}"
+        grab(c, base.with_suffix(".game.png"))
+        base.with_suffix(".frame.json").write_text(json.dumps({"frame_fit": d["frame_fit"], "rects": frame_rects(d), "record": r,
+                                                               "view": v, "hud": [h for h in d["hits"] if h.get("src") == HIT_HUD]}))
+        at = mockup_shot({"res": [int(x) for x in res.split("x")], "entry": PLAYERS, "demo_n": ids.index(demo), "tick": tick,
+                          "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
+        g, m = png_rgba(base.with_suffix(".game.png")), png_rgba(base.with_suffix(".mockup.png"))
+        R, f = frame_rects(d), d["frame_fit"]
+        hud = [h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD]
+        if at:
+            hud.append([round(at[0]) - 64, round(at[1]) - 64, round(at[0]) + 64, round(at[1]) + 64])
+        # the open stats window with its drop shadow (layout.json window.shadow: its offset down and its blur), which
+        # reaches 3 sigma, 1.5 blurs, past the box (tagpu_huddraw.c HOPF_DROP) and lies over the column's right edge:
+        # each renderer blurs it its own way, so it is measured with the window, not held to the column's equality
+        win = next((h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD and h["key"] == "window"), None)
+        if r["stat_open"] and win:
+            dy, blur = json.loads((TREE / "art/hud/layout.json").read_text())["window"]["shadow"][:2]
+            u = f["Hg"] * f["s"] / 720
+            e = math.ceil(1.5 * blur * u)
+            win = [win[0] - e, win[1] - e, win[2] + e, win[3] + e + math.ceil(dy * u)]
+            hud.append(win)
+        cx, s_, ox = f["canvas"][0], f["s"], f["ox"]
+        emb = [cx + math.floor(ox + (f["Wg"] - 128 - k) * s_ + 0.5 + 1 / 64) for k in (PL_EMBLEM, 16)]
+        said = []
+        for part, tex in (("column", (128, f["Hg"])), ("top", (f["Wg"] - 128, 32)), ("bottom", (f["Wg"] - 128, 32))):
+            n, of, mx = region_diff(g, m, R[part], tex, emb if part == "top" else None, hud)
+            assert of > 0, f"(p3) {demo}@{tick}: the {part} rect {R[part]} is empty"
+            assert n == 0, f"(p3) {demo}@{tick} ({what}): {n} of {of} pixels of the {part} differ from the mockup's (up to {mx})"
+            said.append(f"{part} {of} px equal")
+        n, of, mx = region_diff(g, m, [emb[0], R["top"][1], emb[1], R["top"][3]])
+        said.append(f"the emblems {n} of {of} px differ (up to {mx})")
+        if r["stat_open"] and win:
+            n, of, mx = region_diff(g, m, win)
+            said.append(f"the stats window and its shadow {n} of {of} px differ (up to {mx})")
+        n, of, mx = region_diff(g, m, R["world"])
+        said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
+        print(f"wiki players: (p3) {demo} at tick {tick}, game {r['playhead']} ({what}: eye {v['eye'][:2]}, sight {r['sight']}, "
+              f"follow {r['follow']}, tog {r['tog']}, stats {r['stat_open']}/{r['stat_measure']}/{r['stat_team']}, top_side "
+              f"{r['top_side']}, {len(v['ocur'])} cursors, {len(v['oclick'])} clicks, {sum(u[3] for u in v['units'])} selected, "
+              f"{len(v['units'])} units, {len(v['mini']['dots']) if v['mini'] else 0} dots): {'; '.join(said)}")
+        if what == "c0 a radar dot":
+            pl_beside(base.with_suffix(".game.png"), d, base.with_suffix(".m0p.png"))
+    print(f"wiki players: (p3) {len(todo)} frames grabbed to {shots}")
+
+
+def pl_settled(c, what, pred=lambda d: True, seconds=60):
+    """The dump once the players replay runs no seek, its walk is over, the frame drawn is the running replay's, and
+    `pred` holds"""
+    return wait_dump(c, lambda d: d.get("replay") and d["replay"]["target"] < 0 and d["replay"]["walked"] >= d["replay"]["end"]
+                     and d.get("drawn_frame") and d["frame"].get("pl") and d.get("view") and pred(d), what, seconds=seconds)
+
+
+def pl_try_start(c, demo):
+    """Try it afresh on `demo`'s data, its walk over, paused: the dump"""
+    ids = [dm["id"] for dm in entry_demos(PLAYERS)]
+    d = c.dump()
+    press(c, d, f"demo:{ids.index(demo)}")
+    d = wait_dump(c, lambda d: d["demo"] == demo and not d["try"], f"(p4) demo:{ids.index(demo)} did not pick {demo}")
+    press(c, d, "try")
+    d = pl_settled(c, "(p4) Try it did not start the replay for the player",
+                   lambda d: d["try"] and d["replay"]["try"] and any(h.get("src") == HIT_HUD for h in d["hits"]))
+    if not d["replay"]["paused"]:
+        hud_click(c, d, "play")
+        d = pl_settled(c, "(p4) play did not pause the replay", lambda d: d["replay"]["paused"])
+    return d
+
+
+def pl_row(c, d, k, settled):
+    """The pointer brought onto row k of the players column: the dump once the frame drawn lays out its hover strip"""
+    c.keys("dmove:%d,%d" % c.centre(hit_of(d, f"row:{k}", HIT_HUD)))
+    return settled(f"row {k} hovered did not draw its strip",
+                   lambda d: any(h["key"] == f"jump:{k}" and h.get("src") == HIT_HUD for h in d["hits"]))
+
+
+def pl_rates(rec, k):
+    """Whether the record's bar rates are seat k's, the f32 of each, or the watcher's zeros for k -1"""
+    want = [0, 0, 0, 0] if k < 0 else [rec["seat"][k][f] for f in ("ei", "eo", "mi", "mo")]
+    return [f32(rec["bar"][f]) for f in ("ei", "eo", "mi", "mo")] == [f32(x) for x in want]
+
+
+def pl_inert(c, d):
+    """(p4) on Watching, Try it, the Players set and Take over inert (OQ-B A; takeover-spec QD): each of PL_INERT the
+    HUD draws -- a row's strip with the pointer on it -- pressed and let go on the stage HUD, the press machine holding
+    it in between (the dump's press_held, the proof the press was the replay's), and after it the record the same:
+    no players block, no view, no Take over block, the playhead, the pause and the toast as they were"""
+    d = pl_pick(c, d, WATCH, "(p4)")
+    press(c, d, "demo:0")
+    d = wait_dump(c, lambda d: d["demo"] == WATCH_DEMOS[0] and not d["try"], "(p4) demo:0 did not pick Watching's first demo")
+    press(c, d, "try")
+
+    def settled(what, pred=lambda d: True):
+        return wait_dump(c, lambda d: d.get("replay") and d["replay"]["target"] < 0 and d["replay"]["walked"] >= d["replay"]["end"]
+                         and d.get("drawn_frame") and d["try"] and d["replay"]["try"] and pred(d), f"(p4) Watching: {what}", seconds=60)
+    d = settled("Try it did not start")
+    if not d["replay"]["paused"]:
+        hud_click(c, d, "play")
+        d = settled("play did not pause", lambda d: d["replay"]["paused"])
+    d = pl_row(c, d, 1, settled)
+    keep = lambda d: (d["frame"]["playhead"], d["replay"]["paused"], d["frame"]["toast"], d["frame"]["tk"], d["frame"]["pick"])
+    k0, said = keep(d), []
+    for key in PL_INERT:
+        h = next((h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD and h["key"] == key), None)
+        if not h:
+            said.append(f"{key} not drawn")
+            continue
+        x, y = c.centre(h)
+        c.keys(f"ddown:{x},{y}")
+        settled(f"{key} was not held", lambda d: d["replay"]["press_held"] == key)
+        c.keys(f"dup:{x},{y}")
+        d = settled(f"{key}'s release was not taken", lambda d: not d["replay"]["press_held"])
+        assert not d["frame"].get("pl") and not d.get("view") and keep(d) == k0, \
+            f"(p4) Watching: {key} acted: pl {d['frame'].get('pl')}, view {bool(d.get('view'))}, {keep(d)} not {k0}"
+        said.append(f"{key} held and let go, nothing changed")
+    print(f"wiki players: (p4) Watching's Try it: {'; '.join(said)}")
+    return d
+
+
+def pl_p4(c, d):
+    """(p4) Try it on demo jump's data through device clicks, each read back through the dump's record and view: Jump on
+    Bram's row and on Ada's (the row hovered by `dmove:` first), Follow on Bram's with the replay playing and Follow
+    again (Free cam), then paused: Sight on Bram, on Ada, on Bram again -- the bar's rates each viewed seat's at once,
+    the top bar's side his, the fog and the minimap his pass -- and once more (the full map); each switch off and on;
+    the stats window opened, a chip, the team split, closed. GameTime stands and the key ring's indices stay equal.
+    Before it, on Watching, the same controls are inert (pl_inert)."""
+    gt0, ring0 = c.gametime(), c.ring()
+    d = pl_inert(c, d)
+    d = pl_pick(c, d, PLAYERS, "(p4)")
+    demo = entry_demos(PLAYERS)[0]["id"]
+    d = pl_try_start(c, demo)
+    said = [f"Try it on {demo}'s data, paused at {d['replay']['game_tick']}"]
+
+    def settled(what, pred=lambda d: True, seconds=60):
+        return pl_settled(c, f"(p4) {what}", pred, seconds)
+
+    def press_on(d, k, key, pred, what):
+        d = pl_row(c, d, k, settled)
+        hud_click(c, d, f"{key}:{k}")
+        return settled(what, pred)
+    for k in (1, 0):
+        g = d["replay"]["game_tick"]
+        eye = pl_eye(d, demo, k, g)
+        d = press_on(d, k, "jump", lambda d: d["view"]["eye"][:2] == eye and d["frame"]["follow"] == -1,
+                     f"Jump on row {k} did not put the eye at {eye}")
+        said.append(f"Jump on row {k} put the eye at {eye}")
+    d = press_on(d, 1, "follow", lambda d: d["frame"]["follow"] == 1, "Follow on Bram's row did not follow")
+    hud_click(c, d, "play")
+    # played on until Bram's camera is gliding (players.json: his glide from 220 over 240), so the eye has moved
+    g0 = d["replay"]["game_tick"]
+    glide = pl_twin("E.demos[0].game.inputs.filter(i => i.camera && i.seat === 1).map(i => [i.at, i.over])")
+    assert glide, "(p4) players.json records no camera glide of Bram's"
+    gt = max(g0 + 60, glide[0][0] + glide[0][1] // 2)
+    d = settled(f"Follow: the replay did not play to {gt} with the eye on Bram's camera",
+                lambda d: not d["replay"]["paused"] and d["replay"]["game_tick"] >= gt, seconds=120)
+    hud_click(c, d, "play")
+    d = settled("play did not pause", lambda d: d["replay"]["paused"])
+    g1 = d["replay"]["game_tick"]
+    eye = pl_eye(d, demo, 1, g1)
+    assert d["view"]["eye"][:2] == eye, f"(p4) following Bram at {g1}: the eye {d['view']['eye'][:2]}, his camera's {eye}"
+    said.append(f"Follow on Bram's row kept the eye on his camera from {g0} to {g1} ({eye})")
+    d = press_on(d, 1, "follow", lambda d: d["frame"]["follow"] == -1, "Follow again did not free the camera")
+    free = d["view"]["eye"][:2]
+    hud_click(c, d, "play")
+    d = settled("Free cam: the replay did not play 60 ticks", lambda d: d["replay"]["game_tick"] >= g1 + 60)
+    g2 = d["replay"]["game_tick"]
+    assert d["view"]["eye"][:2] == free, f"(p4) Free cam: the eye moved from {free} to {d['view']['eye'][:2]} by {g2}"
+    said.append(f"Follow again stopped it: the eye stayed at {free} from {g1} to {g2} while Bram's camera went to "
+                f"{pl_eye(d, demo, 1, g2)}")
+    hud_click(c, d, "play")
+    d = settled("play did not pause", lambda d: d["replay"]["paused"])
+    side = d["frame"]["side"]
+    for k in (1, 0, 1):
+        d = press_on(d, k, "sight", lambda d: d["frame"]["sight"] == k, f"Sight on row {k} did not view seat {k}")
+        r = d["frame"]
+        assert pl_rates(r, k), f"(p4) Sight on seat {k}, paused: the bar's rates {r['bar']} are not seat {k}'s {r['seat'][k]}"
+        assert d["view"]["mini"] and "1" in d["view"]["fog"], f"(p4) Sight on seat {k}: no minimap pass or no fog"
+        assert (r["top_side"] != side) == (k == 1), f"(p4) Sight on seat {k}: the top bar's side {r['top_side']}, the load's {side}"
+        said.append(f"Sight on row {k}: the rates seat {k}'s at once ({r['bar']['ei']:g} -{r['bar']['eo']:g}), top_side "
+                    f"{r['top_side']}")
+    d = press_on(d, 1, "sight", lambda d: d["frame"]["sight"] == -1, "Sight again did not give the full map")
+    assert pl_rates(d["frame"], -1) and d["view"]["mini"] is None and "1" not in d["view"]["fog"], \
+        f"(p4) the full map: bar {d['frame']['bar']}, mini {d['view']['mini']}"
+    said.append("Sight again: the full map, the rates 0")
+    tog = pl_twin("R.TOG")
+    for name in PL_SWITCHES:
+        bit = tog[name]
+        for on in (0, 1):
+            hud_click(c, d, name)
+            d = settled(f"{name} did not turn {'on' if on else 'off'}", lambda d: bool(d["frame"]["tog"] & bit) == bool(on))
+            v = d["view"]
+            if not on and name == "cursors":
+                assert not v["ocur"], f"(p4) cursors off: {v['ocur']}"
+            if not on and name == "clicks":
+                assert not v["oclick"], f"(p4) clicks off: {v['oclick']}"
+            if not on and name == "selections":
+                assert not any(u[3] for u in v["units"]), "(p4) selections off: a unit's selection drawn"
+    said.append(f"each of {', '.join(PL_SWITCHES)} off and on")
+    measures = pl_twin("R.MEASURES")
+    hud_click(c, d, "stats")
+    d = settled("stats did not open the window", lambda d: d["frame"]["stat_open"]
+                and any(h["key"] == "chip:army" for h in d["hits"] if h.get("src") == HIT_HUD))
+    hud_click(c, d, "chip:army")
+    d = settled("chip:army did not chart the army", lambda d: d["frame"]["stat_measure"] == measures.index("army"))
+    hud_click(c, d, "chip:team")
+    d = settled("chip:team did not split by teams", lambda d: d["frame"]["stat_team"])
+    hud_click(c, d, "close")
+    d = settled("close did not close the window", lambda d: not d["frame"]["stat_open"])
+    said.append("stats opened the window, army and team charted, close closed it")
+    assert c.gametime() == gt0, f"(p4) GameTime ran under the page: {gt0} -> {c.gametime()}"
+    assert c.ring() == ring0, f"(p4) the engine's key ring moved: {ring0} -> {c.ring()}"
+    print(f"wiki players: (p4) Try it: {'; '.join(said)}; GameTime stood and the key ring stayed equal")
+
+
+def pl_p5(c):
+    """(p5) the costs: the window closed and opened again (the page's cost counts from its open), Try it on demo
+    sight's data, the track clicked at its end, Sight on Bram and the stats window open: the seek's demo steps and
+    seconds, the most one fill cost the game thread (the target 0.5 ms); Esc, and the render thread's stage HUD cost,
+    the stats window drawn, from the log"""
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(p5) Esc did not close the window")
+    d = pl_open(c)
+    d = pl_try_start(c, "sight")
+    x0, x1, _ = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    c.keys("dclick:%d,%d" % (x1 - 1, (tr[1] + tr[3]) // 2))
+    d = pl_settled(c, "(p5) the seek to the end did not finish", lambda d: d["replay"]["game_tick"] >= d["replay"]["end"] - 30)
+    said = [f"the seek to {d['replay']['game_tick']} in {d['replay']['tick'] - k0} demo steps, {time.monotonic() - t0:.1f} s"]
+    d = pl_row(c, d, 1, lambda what, pred: pl_settled(c, f"(p5) {what}", pred))
+    hud_click(c, d, "sight:1")
+    d = pl_settled(c, "(p5) Sight on Bram did not view him", lambda d: d["frame"]["sight"] == 1)
+    hud_click(c, d, "stats")
+    d = pl_settled(c, "(p5) stats did not open the window", lambda d: d["frame"]["stat_open"])
+    print(f"wiki players: (p5) {'; '.join(said)}; Sight on Bram and the stats window open; the page cost the game thread "
+          f"at most {d['cost_max_ms']:.3f} ms in one frame over {d['cost_frames']} frames (the target 0.5 ms)")
+    start = c.mark()
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(p5) Esc did not close the window")
+    print(f"wiki players: (p5) {wait_line(c, start, r'wiki: the stage HUD cost the render thread', '(p5) no stage HUD cost line', 30).split('] ', 1)[-1]}")
+
+
+def players(c, shots, res):
+    """(p1)..(p5): Players and the camera, a players entry, on the page"""
+    held_at(c, HELD_AT)
+    d = pl_open(c)
+    pl_p1(c, d)
+    cand = pl_candidates(d, [dm["id"] for dm in entry_demos(PLAYERS)])
+    pl_p2(c, d, cand)
+    if shots:
+        pl_p3(c, shots, res, cand)
+    pl_p4(c, c.dump())
+    pl_p5(c)
+
+
 def hud(c):
     return json.loads(tacli("hud", c.name, "show", "--json", timeout=180))
 
@@ -3948,8 +4502,8 @@ def offline_checks():
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
-GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind", "takeover")
-GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind", "takeover"}    # the modes that take --shots DIR
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind", "takeover", "players")
+GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind", "takeover", "players"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
                                                         # slowest, units, takes some 750 s alone and 863 s at -j 6
@@ -4166,7 +4720,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
     p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "watch",
-                                    "rewind", "takeover", "mp", "mods", "offline", "gate"))
+                                    "rewind", "takeover", "players", "mp", "mods", "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -4177,7 +4731,8 @@ def main():
                                               "stage3d, units: the captures of the wiki's target and the presented frames; "
                                               "watch: each Watching demo's frame, four beside the mockup's; "
                                               "rewind: four Rewind frames beside the mockup's; "
-                                              "takeover: three Take over frames beside the mockup's")
+                                              "takeover: three Take over frames beside the mockup's; "
+                                              "players: the Players demos' states beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
     p.add_argument("--offline-jobs", type=int, default=8, help="gate: the offline checks run at once, 0 for none")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
@@ -4222,6 +4777,8 @@ def main():
                     rewind(c, a.shots, a.res)
                 elif a.mode == "takeover":
                     takeover(c, a.shots, a.res)
+                elif a.mode == "players":
+                    players(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

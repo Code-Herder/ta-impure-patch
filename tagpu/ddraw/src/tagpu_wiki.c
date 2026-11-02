@@ -2287,7 +2287,55 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
         fprintf(f, "%s{\"id\":%d,\"from\":%d,\"end\":%d,\"parent\":%d,\"seat\":%d,\"flags\":%d}", k ? "," : "",
                 (int)r->fork[k].id, (int)r->fork[k].from, (int)r->fork[k].end, (int)r->fork[k].parent, r->fork[k].seat,
                 r->fork[k].flags);
-    fprintf(f, "],\"top_side\":%d}", r->top_side);
+    fprintf(f, "],\"top_side\":%d", r->top_side);
+    if (r->pl) {
+        int s;
+        fprintf(f, ",\"pl\":1,\"sight\":%d,\"follow\":%d,\"tog\":%d,\"folded\":%d,\"stat_open\":%d,\"stat_team\":%d,"
+                   "\"stat_measure\":%d,\"npt\":%d,\"period\":%d,\"base\":%d,\"team\":[", r->sight, r->follow, r->tog,
+                r->folded, r->stat_open, r->stat_team, r->stat_measure, r->npt, r->period, (int)r->base);
+        for (k = 0; k < r->nseat && k < WIKI_SEATS; k++) fprintf(f, "%s%d", k ? "," : "", r->team[k]);
+        fprintf(f, "],\"cam\":%d,\"series\":[", r->cam);
+        for (k = 0; k < r->nseat && k < WIKI_SEATS; k++) {
+            fprintf(f, "%s[", k ? "," : "");
+            for (s = 0; s < r->npt && s < WIKI_STAT_PTS; s++) fprintf(f, "%s%.9g", s ? "," : "", r->series[k][s]);
+            fputc(']', f);
+        }
+        fputc(']', f);
+    }
+    fputc('}', f);
+}
+
+/* A PLAYERS FRAME'S VIEW as the record carries it to the render thread (WIKISTAGEVIEW, filled by
+   tagpu_wikiframe_view), for the players lane, which compares it with frame.js view's: the eye and the
+   viewport, the overlays (each seat's cursor, each click with its age, each unit's overlay
+   selection), the units drawn (Sight hides those on no lit block), the map's fog a digit a cell, and
+   under Sight the minimap's pass -- its grid's bits a digit a block and its dots */
+static void view_json(FILE* f, const WIKISTAGEVIEW* v)
+{
+    const int n = v->w > 0 && v->h > 0 && v->w <= WIKISTAGE_MAP && v->h <= WIKISTAGE_MAP ? v->w * v->h : 0;
+    int i;
+    fprintf(f, "{\"screen\":%d,\"eye\":[%d,%d,%d,%d],\"ocur\":[", v->screen, (int)v->eye_x, (int)v->eye_z, v->vp_w, v->vp_h);
+    for (i = 0; i < v->ncur && i < WIKI_SEATS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d]", i ? "," : "", v->cur[i].x, v->cur[i].z, v->cur[i].seat);
+    fprintf(f, "],\"oclick\":[");
+    for (i = 0; i < v->nclick && i < WIKI_CLICKS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d,%d]", i ? "," : "", v->click[i].x, v->click[i].z, v->click[i].seat, v->click[i].age);
+    fprintf(f, "],\"units\":[");
+    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d,%d]", i ? "," : "", v->unit[i].x, v->unit[i].z, v->unit[i].owner, v->unit[i].osel);
+    fprintf(f, "],\"fog\":\"");
+    for (i = 0; i < n; i++) fputc('0' + (v->fog[i] <= 9 ? v->fog[i] : 9), f);
+    fprintf(f, "\",\"mini\":");
+    if (!v->mini) {
+        fputs("null}", f);
+        return;
+    }
+    fprintf(f, "{\"gw\":%d,\"gh\":%d,\"lit\":\"", v->mini_gw, v->mini_gh);
+    for (i = 0; i < v->mini_gw * v->mini_gh && i < WIKISTAGE_FOG * 8; i++) fputc('0' + (v->mini_lit[i >> 3] >> (i & 7) & 1), f);
+    fprintf(f, "\",\"dots\":[");
+    for (i = 0; i < v->ndot && i < WIKISTAGE_UNITS; i++)
+        fprintf(f, "%s[%d,%d,%d]", i ? "," : "", v->dot[i].tx, v->dot[i].tz, v->dot[i].owner);
+    fputs("]}}", f);
 }
 
 /* A timeline's last log entry as [kind, key] (a move's key ""), or null for an empty log: what a
@@ -2455,6 +2503,10 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         if (rv.tk) tk_json(f, &rv);
         fprintf(f, "},\"try_world\":%d,\"frame\":", w->try_world);
         frame_json(f, &w->frame);
+        if (w->has_stage && w->stage.frame && w->frame.pl) {
+            fprintf(f, ",\"view\":");
+            view_json(f, &w->stage);
+        }
     }
     /* the caption as the record carries it, filled, its UTF-8 as it is */
     fprintf(f, ",\"caption\":");
@@ -2495,6 +2547,9 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             fprintf(f, ",\"frame_fit\":{\"canvas\":[%d,%d],\"s\":%.17g,\"ox\":%.17g,\"oz\":%.17g,\"Wg\":%d,\"Hg\":%d}",
                     h->x0, h->y0, ft.s, ft.ox, ft.oz, Wg, Hg);
         }
+        /* the image's rect and its clip as the drawn frame placed them (TAGPU_CMD_WIKI img, clip) */
+        fprintf(f, ",\"frame_img\":[%d,%d,%d,%d],\"frame_clip\":[%d,%d,%d,%d]", s_hit.img[0], s_hit.img[1], s_hit.img[2],
+                s_hit.img[3], s_hit.clip[0], s_hit.clip[1], s_hit.clip[2], s_hit.clip[3]);
     }
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
        (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */

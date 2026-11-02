@@ -364,6 +364,18 @@ function diff(c, j, at) {
 }
 const show = v => { const s = JSON.stringify(v); return s.length > 160 ? `${s.slice(0, 157)}...` : s; };
 const lines = out => out.split(/\r?\n/).filter(l => l.length);
+/* A FRAME VIEW (frame.js view) in the shape of the game's state dump of a players frame (tagpu_wiki.c view_json): the eye
+   and the viewport, the cursors, the clicks with their ages, the units drawn with their overlay selection (owner 255
+   for none, as WIKISTAGEUNIT holds it), the map's fog a digit a cell, and under Sight the minimap's pass, its grid's bits
+   a digit a block and its dots truncated toward zero as the minimap takes them */
+const frameView = v => ({
+  screen: v.eye ? 1 : 0, eye: v.eye ? [v.eye.x, v.eye.z, v.eye.w, v.eye.h] : [0, 0, 0, 0],
+  ocur: (v.ocur || []).map(c => [c.x, c.z, c.seat]), oclick: (v.oclick || []).map(c => [c.x, c.z, c.seat, c.age]),
+  units: v.units.map(u => [u.x, u.z, Number.isInteger(u.owner) && u.owner >= 0 ? u.owner : 255, u.osel ? 1 : 0]),
+  fog: Array.from(v.map.fog, f => Math.min(9, f)).join(''),
+  mini: v.mini ? { gw: v.mini.gw, gh: v.mini.gh, lit: Array.from(v.mini.lit).join(''),
+    dots: v.mini.dots.map(d => [Math.trunc(d.x), Math.trunc(d.z), d.owner]) } : null,
+});
 
 if (process.argv.includes('--hash')) {
   const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
@@ -401,8 +413,14 @@ if (process.argv.includes('--hash')) {
           const rv = R.view(), shown = rv.live && rv.live.rw === 'past' ? R.past : R.game;
           const human = rv.live ? rv.live.human : 0;
           const pl = rv.players ? { seats: WikiFrame.plSeats(entry, demo), stat: R.stat } : null;
-          const rec = WikiFrame.record(rv, shown ? shown.view(human) : null, side, false, null, WikiFrame.topSide(rv, layout, side), pl);
-          console.log(`frame ${id}/${demo.id}@${rv.tick} ${replayHash(R)} ${JSON.stringify({ ...rec, pending: rv.game.target >= 0 })}`);
+          const gv = shown ? shown.view(human) : null;
+          const rec = WikiFrame.record(rv, gv, side, false, null, WikiFrame.topSide(rv, layout, side), pl);
+          // a players frame's view, in the shape of the game's state dump (tagpu_wiki.c view_json): what the players lane
+          // compares the record's WIKISTAGEVIEW with
+          const mode = !rv.live ? 'watch' : rv.live.rw === 'past' ? 'past' : 'player';
+          const view = rv.players && gv ? frameView(WikiFrame.view(gv, layout, side, mode, !!rec.simcur, human,
+            { tick: shown.tick, clickFrom: rv.clickFrom, players: rv.players, screen: entry.screen })) : undefined;
+          console.log(`frame ${id}/${demo.id}@${rv.tick} ${replayHash(R)} ${JSON.stringify({ ...rec, pending: rv.game.target >= 0, view })}`);
         }
         while (!R.view().done) R.step();
         console.log(`${id}/${demo.id} ${replayHash(R)}`);

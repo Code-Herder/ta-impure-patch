@@ -980,6 +980,16 @@ void tagpu_wikistate_drawn(int drew, int cursor)
        (tagpu_wiki.c live_world), and the stage HUD's playhead run as drawn turns a pointer into a
        tick (TAGPU_CMD_WIKI hud_x0) */
     s_map.frame = (uint8_t)(s_haveStage && s_viewOk && s_view.frame);
+    /* the frame's image and its clip, by the function and from the view, stage and unit the world
+       composite takes them with (tagpu_wikistate_scene, tagpu_wikiworld.c) */
+    if (s_map.frame) {
+        int r[4], clip[4];
+        tagpu_wikistage_image(&s_view, s_stageRect, s_px, r, clip);
+        for (i = 0; i < 4; i++) {
+            s_map.img[i] = dev(i & 1 ? s_oy : s_ox, r[i]);
+            s_map.clip[i] = dev(i & 1 ? s_oy : s_ox, clip[i]);
+        }
+    }
     if (s_frameOn && s_hudOn && s_hops.track_x1 > s_hops.track_x0) {
         s_map.hud_x0 = dev(s_hox, tagpu_hud_snap(s_hops.track_x0 * s_hpx));
         s_map.hud_x1 = dev(s_hox, tagpu_hud_snap(s_hops.track_x1 * s_hpx));
