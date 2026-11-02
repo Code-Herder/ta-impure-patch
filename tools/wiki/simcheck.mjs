@@ -40,9 +40,11 @@
    (liveClaims: the seek, fork, now and release claims, L held still, the end) and its own (LIVE_CLAIMS); a takeover
    entry's demo its watch mode and takeover (runTakeover, takeoverClaims, TAKEOVER_CLAIMS); a players entry's demo the
    replay with the Players set (runReplay with the game's world each step, replayClaims, countBound and PLAYERS_CLAIMS:
-   the camera, Sight, the overlays and the stats window, and what they name inside the viewport). Every game's claims
-   include THE GOALS' CLAIM on the fixture's castings, that each move order of its script goes where its unit's planner
-   reaches. Their tallies print after the demos', so the demos' lines read as before.
+   the camera, Sight, the overlays and the stats window, and what they name inside the viewport). A claim the
+   context's figures make unobservable (Sight's hidden unit and radar-only contact) prints as SKIP under its demo's
+   line, with the context and why, and the replays' tally lists it: it neither fails nor passes unseen. Every game's
+   claims include THE GOALS' CLAIM on the fixture's castings, that each move order of its script goes where its unit's
+   planner reaches. Their tallies print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -2362,11 +2364,21 @@ const PLAYERS_CLAIMS = {
   },
   /* Sight on Bram, through a seek: the eye stays (0, 0); the seek's end sets every DisplayTimer to its tick; from the
      release the bar's rates are Bram's at each re-read and its memo eases from 0 toward his stored values; some unit
-     of Ada's or Cleo's is hidden at every shown tick; w1's death lights its stamp's blocks through d + 60 and no longer
+     of Ada's or Cleo's is hidden on some shown tick; w1's death lights its stamp's blocks through d + 60 and no longer
      from d + 61; from the first pass after that which marks c0 and finds it on no lit block -- his commander's radar --
      c0 stays a contact, hidden and inside the view, until Sight lets go; then the full map: no fog, no contact, the
-     bar's rates 0 and its memo 0. Without a sight table every block is lit and nothing is hidden. */
-  sight(d, rr, ok, entry, ctx, layout) {
+     bar's rates 0 and its memo 0. Without a sight table every block is lit and nothing is hidden.
+
+     THE TWO CLAIMS A MOD'S FIGURES CAN RULE OUT (owner's decision OQ-F): a hidden unit and c0 as a radar-only contact.
+     The captions state the rule, true in every mod, so these two check the demo shows it wherever the casting's
+     figures let it -- the types' sight, radar and sonar, through the layout's tables, at the units' positions -- and
+     are skipped by name (`skip`) where they do not: Twilight's CORAK sees 600 and its commanders 650 on a field 1536
+     wide, and TA Zero's commanders have radar equal to sight. A unit outside Bram's sight is observable when one of
+     Ada's or Cleo's stands on no block his units and live deaths light on any tick of the game (`g`, runGame's
+     frames); the claim then needs one on some clock under Sight, the window the demo shows. A radar-only contact is observable when, at some pass after the death vision, the game's world makes c0 a contact
+     of his on no lit block (sightContacts over the casting's radar and sonar); the claim then needs the replay's own
+     pass to mark it, from a pass by the radar caption to Sight's release, inside the view. */
+  sight(d, rr, ok, entry, ctx, layout, g, skip) {
     const [on, off] = pressesOf(d, 'sight'), S = layout && layout.sight;
     ok(on.seat === 1 && off.seat === 1 && rr.all.every(f => f.players.sight === (f.clock >= on.release && f.clock < off.release ? 1 : -1)),
       `Sight is Bram's from clock ${on.release} to ${off.release - 1}, then the full map`);
@@ -2391,8 +2403,18 @@ const PLAYERS_CLAIMS = {
       return;
     }
     const lit = f => WikiSim.sightLit(f.w, S, 1, f.players.shown);
-    const hidden = under.find(f => { const L = lit(f); return !f.w.units.some(u => u.owner !== 1 && unseen(f.w, L, u)); });
-    ok(!hidden, `some unit of Ada's or Cleo's is outside Bram's sight on every clock under it${hidden ? ` (none on clock ${hidden.clock})` : ''}`);
+    const hides = (w, L) => w.units.some(u => u.owner !== 1 && unseen(w, L, u));
+    // Bram's types and their figures, which a skip names
+    const types = new Map(g.all[0].v.game.types.map(t => [t.name, t]));
+    const bram = [...new Set(g.all.flatMap(f => f.v.units.filter(u => u.owner === 1).map(u => u.type)))].map(n => types.get(n)).filter(Boolean);
+    const sights = bram.map(t => `${t.name} ${t.sightDistance}`).join(', ');
+    const HIDDEN = 'some unit of Ada\'s or Cleo\'s is outside Bram\'s sight on a clock under it';
+    if (!g.all.some(f => hides(f.v, WikiSim.sightLit(f.v, S, 1, f.t))))
+      skip(HIDDEN, `no unit of Ada's or Cleo's stands outside his sight on any tick of the game (his units' sight: ${sights})`);
+    else {
+      const shown = under.find(f => hides(f.w, lit(f)));
+      ok(shown, `${HIDDEN}${shown ? `, first on clock ${shown.clock}` : ''}`);
+    }
     // w1's death: the blocks its stamp alone lights at its tick
     const kill = d.game.inputs.find(e => e.kill === 'w1'), seen = under.find(f => f.w.game.deaths.some(e => e.tick === kill.at && e.owner === 1));
     const death = seen && seen.w.game.deaths.find(e => e.tick === kill.at && e.owner === 1);
@@ -2414,9 +2436,19 @@ const PLAYERS_CLAIMS = {
       `the death's own block lies inside the viewport, and ${shows} of the ${gone} blocks that go dark`);
     // the radar contact: the first pass after the death vision that marks c0 on no lit block
     const passes = under.filter((f, i) => f.players.pass.at > span && (i === 0 || f.players.pass.at !== under[i - 1].players.pass.at));
+    const CONTACT = 'a pass after the death vision marks c0 a contact on no lit block';
+    const radarOnly = f => {
+      const L = lit(f), k = f.w.units.findIndex(u => u.id === 'c0');
+      return k >= 0 && WikiSim.sightContacts(f.w, L, 1)[k] === 1 && unseen(f.w, L, f.w.units[k]);
+    };
+    if (!passes.some(radarOnly)) {
+      const radars = bram.map(t => `${t.name} radar ${Math.max(t.radarDistance, t.sonarDistance)}${t.activates ? '' : ' (not activated)'}, sight ${t.sightDistance}`).join('; ');
+      skip(CONTACT, `at no pass after the death vision does the world make c0 a contact of Bram's on no lit block (${radars})`);
+      return;
+    }
     const P = passes.find(f => { const u = unitIn(f.w, 'c0'); return u && f.players.pass.contacts.includes('c0') && unseen(f.w, lit(f), u); });
     const cap = (d.inputs.find(e => typeof e.caption === 'string' && e.caption.includes('radar')) || {}).at;
-    if (!P) { ok(false, 'a pass after the death vision marks c0 a contact on no lit block'); return; }
+    if (!P) { ok(false, CONTACT); return; }
     const k1 = rr.all.findIndex(f => f === P), lost = rr.all.slice(k1).find(f => f.clock < off.release && f.game.target < 0 && (() => {
       const u = unitIn(f.w, 'c0');
       return !u || !f.players.pass.contacts.includes('c0') || !unseen(f.w, lit(f), u) || !inside(viewport(entry, f.players.cam), bodyOf(u));
@@ -2553,7 +2585,7 @@ const games = fs.readdirSync(`${ROOT}art/wiki/entries`).filter(f => f.endsWith('
 const gameTally = {}, replayTally = {};
 for (const c of games.length ? contexts() : []) {
   const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [], deaths: [0, 0, 0] };
-  const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [] };
+  const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [], skipped: [] };
   /* each game once (demos that share their scene and their game script play the same game), then every demo as a
      replay on it */
   const played = new Map();
@@ -2599,6 +2631,8 @@ for (const c of games.length ? contexts() : []) {
    replay's claims and the demo's own */
 function replayDemo(c, id, entry, d, lock, g, rt) {
   const notes = [], ok = (cond, what) => notes.push([!!cond, what]);
+  // a claim this context's figures rule out (PLAYERS_CLAIMS sight): named with why, never silent, and not a failure
+  const skips = [], skip = (what, why) => skips.push([what, why]);
   try {
     if (!g) throw new Error('its game did not play');
     const rr = entry.takeover ? runTakeover(entry, d, c.layout, c.ctx) : entry.live ? runLive(entry, d, c.layout, c.ctx)
@@ -2615,7 +2649,7 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
     } else if (entry.players) {
       replayClaims(entry, d, c.layout, c.ctx, rr, g, ok);
       countBound(g, c.layout, ok);
-      if (PLAYERS_CLAIMS[d.id]) PLAYERS_CLAIMS[d.id](d, rr, ok, entry, c.ctx, c.layout);
+      if (PLAYERS_CLAIMS[d.id]) PLAYERS_CLAIMS[d.id](d, rr, ok, entry, c.ctx, c.layout, g, skip);
       else ok(false, `the players demo ${d.id} has claims of its own (PLAYERS_CLAIMS)`);
     } else if (entry.live) {
       liveClaims(entry, d, c.layout, c.ctx, rr, ok);
@@ -2630,8 +2664,11 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
   const pass = notes.every(n => n[0]);
   if (!pass) failed++;
   rt[pass ? 'pass' : 'fail']++;
-  console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] replay ${id}/${d.id} -- ${d.title}${lock ? ` (its game stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+  for (const [what] of skips) rt.skipped.push(`${id}/${d.id}: ${what}`);
+  console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] replay ${id}/${d.id} -- ${d.title}${lock ? ` (its game stops on tick ${lock.t}: ${lock.type} unbound)` : ''}` +
+    `${skips.length ? ` (${skips.length} claim${skips.length > 1 ? 's' : ''} not observable here, skipped)` : ''}`);
   for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
+  for (const [what, why] of skips) console.log(`     SKIP ${what} -- not observable in ${PACK ? `${PACK.mod} ` : ''}${c.label}: ${why}`);
 }
 for (const id of PACK ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
@@ -2653,7 +2690,8 @@ for (const [label, t] of Object.entries(gameTally))
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 for (const [label, t] of Object.entries(replayTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} replays ${label}] ${t.pass} pass, ${t.fail} fail` +
-    `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}`);
+    `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}` +
+    `${t.skipped.length ? `; skipped, not observable with these figures: ${t.skipped.join('; ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);   // also ends the scripts' host
 }

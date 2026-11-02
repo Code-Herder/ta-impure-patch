@@ -404,9 +404,9 @@
         {"at": 30, "hud": "track", "to": 930},
         {"at": 57, "until": "seeked", "max": 120},
         {"at": 80, "hud": "sight", "seat": 1},
-        {"at": 140, "caption": "Bram's line of sight; Ada's units outside it are hidden, and the top bar is his, in his side's art."},
+        {"at": 140, "caption": "Bram's line of sight: units outside it are hidden, and the top bar is his, in his side's art."},
         {"at": 260, "caption": "A unit that dies leaves its sight for two seconds."},
-        {"at": 340, "caption": "Out of his sight but inside his commander's radar, Ada's commander is only a dot on the minimap."},
+        {"at": 340, "caption": "A unit inside his radar but outside his sight shows only as a dot on the minimap."},
         {"at": 460, "hud": "sight", "seat": 1},
         {"at": 520, "caption": "Sight again: the whole map, and the bar back to the watcher's."}
       ]
