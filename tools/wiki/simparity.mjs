@@ -1637,6 +1637,33 @@ function seatCases() {
     const want = ['refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'ok'];
     return got.join() === want.join() ? 'every refusal refused' : `FAIL ${got.join()} for ${want.join()}`;
   } });
+  /* THE DEATH VISION'S BOUND (sim.js kill, tagpu_wikisim.c kill): 24 more of Bram's units, killed 20 on tick 50, 2 on
+     60, 1 on 111 and 1 on 112, by a script no players rule holds (a replay entry's) and by a fork part; the engine's
+     add keeps the first 20, refuses the three while they are live (a death of tick d is live at an add on t while
+     d + 61 >= t) and keeps the last */
+  const many = JSON.parse(JSON.stringify(whole)), K = 24;
+  many.scenes.field.units.push(...Array.from({ length: K }, (_, i) => ({ id: `k${i}`, type: 'CORAK', owner: 1,
+    at: [560 + (i % 6) * 48, 200 + Math.floor(i / 6) * 48] })));
+  const killsAt = [...Array(20).fill(50), 60, 60, 111, 112].map((at, i) => ({ at, kill: `k${i}` }));
+  const eyes = sim => sim.view().game.deaths.filter(d => d.owner === 1).map(d => d.tick).join();
+  const wantEyes = [...Array(20).fill(50), 112].join();
+  const scripted = { ...many.demos[0], game: { end: 200, sidebar: false, inputs: killsAt } };
+  cases.push({ name: `seat -- (${A[0]}) the death vision's bound, scripted`, layout: A[1], ctx: A[2], run: G => {
+    const sim = G({ ...many, demos: [scripted] }, scripted, 'refuse');
+    for (let t = 0; t < 130; t++) { sim.step(); sim.view(); }
+    const got = eyes(sim);
+    return got === wantEyes ? 'the 21st to 23rd live deaths refused, the 24th kept' : `FAIL deaths at ${got}, want ${wantEyes}`;
+  } });
+  const plain = { ...many.demos[0], game: { end: 200, sidebar: false, inputs: [] } };
+  cases.push({ name: `seat -- (${A[0]}) the death vision's bound, a fork part`, layout: A[1], ctx: A[2], run: G => {
+    const sim = G({ ...many, demos: [plain] }, plain, 'refuse');
+    for (let t = 0; t < 40; t++) sim.step();
+    sim.view();
+    if (sim.fork(41, killsAt, 'refuse') !== 'ok') return 'FAIL the fork was refused';
+    for (let t = 41; t < 130; t++) { sim.step(); sim.view(); }
+    const got = eyes(sim);
+    return got === wantEyes ? 'the 21st to 23rd live deaths refused, the 24th kept' : `FAIL deaths at ${got}, want ${wantEyes}`;
+  } });
   return cases;
 }
 

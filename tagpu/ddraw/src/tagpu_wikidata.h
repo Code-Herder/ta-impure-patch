@@ -260,8 +260,9 @@ typedef struct {
    at ticks within any WIKI_PLAYERS_DEATH_SPAN consecutive ticks. The engine's temporary sight
    record add 0x482910 refuses a 21st live record (0x48292C, the scout's P1.5), and a record made at
    d is still live at an add at d' while d >= d' - 61 (the expiry 0x482130 after the step ending at
-   d' - 1 keeps d + 60 >= d' - 1); under the rule the cap never binds, so the wiki's death vision is
-   every death of the viewed seat within 60 ticks exactly. */
+   d' - 1 keeps d + 60 >= d' - 1). The simulation applies that refusal itself (tagpu_wikisim.c
+   kill), so a fork part's kills are held to it too; this rule keeps an authored script from ever
+   reaching it, so its death vision is every death of the viewed seat within 60 ticks exactly. */
 #define WIKI_PLAYERS_DEATHS     20
 #define WIKI_PLAYERS_DEATH_SPAN 62
 /* THE SIGHT FLOOR of a players entry's type (its own and every one a casting binds): the stamp's

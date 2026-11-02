@@ -4002,7 +4002,20 @@ static void death_sound(WIKISIM* s, const WIKIUNIT* u)
    whatever killed it (+0xFE, ungated at 0x4868C1); `by`, a seat of the game other than the
    victim's, counts a kill when the victim was finished (+0xFC, behind a killer, +0x104 == 0 and
    another player; engine/memory.md); a `by` that is no seat counts nothing. The death is recorded
-   for the replay's death vision at the unit's place (WIKIDEATH).
+   for the replay's death vision at the unit's place (WIKIDEATH) when the engine's temporary sight
+   record add would keep it.
+   THE DEATH VISION'S BOUND (DISASSEMBLED 2026-11-02, 0x482910..0x482935, 0x482130..0x482260,
+   0x4866E0..0x486748): the records are one list for the whole game, main+0x1427B, 36 bytes each,
+   its count main+0x14277. The add 0x482910 refuses the new record, touching nothing, when the count
+   is already 20 (`cmp eax,0x14; jge` at 0x48292C): the records live stay and the newest death
+   lights nothing. Its one caller, the destructor at 0x486748, adds only for a unit whose owner's
+   +0x146 is the viewed byte main+0x2A43 (0x486716..0x48672A), and a replay's Sight change drops
+   every record and makes the new seat's again (tagpu_replay.c sight_change), so the list holds the
+   viewed seat's deaths alone: the bound is the seat's. The expiry 0x482130, after each step's tick
+   loop, removes a record whose tick + 60 is below GameTime, so at an add on tick t a death of tick
+   d is live while d + WIKI_SIGHT_SPAN >= t - 1, a step being one tick. So a kill of a seat that
+   already has WIKI_PLAYERS_DEATHS deaths live is not recorded, whatever the script or a fork part
+   kills; a players entry's data rule keeps its own script inside that bound (tagpu_wikidata.h).
    THE INVARIANT, an ordering: between two ticks the only references to a WIKIUNIT are s->unit[] and
    s->shown -- advance clears every job pointer by the tick's end, and orders, the spray and the
    sounds name units by id -- and a kill runs in feed, between advances, so remove_unit clearing
@@ -4011,7 +4024,7 @@ static void death_sound(WIKISIM* s, const WIKIUNIT* u)
 static void kill(WIKISIM* s, const char* id, int by)
 {
     WIKIUNIT* u = id ? by_id(s, id) : NULL;
-    int i;
+    int i, live;
     if (!u) {
         s->bad_kill = 1;
         return;
@@ -4019,7 +4032,9 @@ static void kill(WIKISIM* s, const char* id, int by)
     s->nkill++;
     if (u->owner >= 0 && u->owner < s->nseat) s->econ[u->owner].losses++;
     if (by >= 0 && by < s->nseat && by != u->owner && u->built >= 1) s->econ[by].kills++;
-    if (s->ndeath < WIKI_FEATS_MAX) {
+    for (i = live = 0; i < s->ndeath; i++)
+        live += s->death[i].owner == u->owner && s->death[i].tick + WIKI_SIGHT_SPAN + 1 >= s->feeding;
+    if (s->ndeath < WIKI_FEATS_MAX && live < WIKI_PLAYERS_DEATHS) {
         WIKIDEATH* d = &s->death[s->ndeath++];
         d->tick = s->feeding;
         d->owner = u->owner;
@@ -4841,9 +4856,9 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
    for each unit of the viewed player killed, at its place with its sight and height, stamped
    through the same emitter; the expiry 0x482130 removes it once its tick + 60 is below GameTime
    (0x482153..0x48215E), so the last tick drawn with it is tick + WIKI_SIGHT_SPAN, a step being one
-   tick. A death of `seat` with g <= tick + WIKI_SIGHT_SPAN stamps as its unit did. At most 20 live
-   at once in the engine (0x48292C); a players entry's data rule holds its deaths within that
-   (WIKI_PLAYERS_DEATHS), so the cap never binds. BOUND: every index is checked against the grid,
+   tick. A death of `seat` with g <= tick + WIKI_SIGHT_SPAN stamps as its unit did; the list holds
+   only the deaths the engine's add keeps, at most WIKI_PLAYERS_DEATHS live (kill states the
+   rule). BOUND: every index is checked against the grid,
    the view's type count and the table's cells before it is read. */
 static int sight_asr5(int v) { return v >= 0 ? v / 32 : -((-v + 31) / 32); }
 

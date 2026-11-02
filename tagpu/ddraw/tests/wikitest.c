@@ -1774,7 +1774,7 @@ static int sightcost(const char* path, int n)
     static WIKIVUNIT unit[256];
     static WIKIDEATH death[20];
     static uint8_t lit[WIKI_SIGHT_GRID], dark[WIKI_SIGHT_GRID], con[256];
-    static char ids[256][8];
+    static char ids[256][16];   /* "u" and any int, which -Wformat-truncation asks room for */
     WIKIVTYPE type[1];
     WIKIVIEW v;
     WIKILAYOUT* L;

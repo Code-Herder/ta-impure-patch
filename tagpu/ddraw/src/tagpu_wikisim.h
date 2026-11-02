@@ -294,7 +294,8 @@ typedef struct {
 typedef struct { int tick, seat; double x, z; } WIKICLICK;
 
 /* A DEATH in a game (tagpu_wikisim.c kill), for the replay's death vision: the tick the kill was
-   fed on, the unit's owner, its type (an index of the entry's types) and its place */
+   fed on, the unit's owner, its type (an index of the entry's types) and its place. Only a death
+   the engine's temporary sight record add keeps is one (kill states the rule). */
 typedef struct { int tick, owner, type; double x, z; } WIKIDEATH;
 
 /* a game view's seat's cursor: its map cursor, `on` once it has moved and while it is over the map */
@@ -636,10 +637,11 @@ typedef struct {
     int              game, econ_mode, nseat, starved, bad_kill, nkill;
     WIKISEAT         seat[WIKI_SEATS];
     WIKIECON         econ[WIKI_SEATS];
-    /* a game's clicks, a ring at nclicks % WIKI_CLICKS (nclicks the clicks made), and its deaths,
-       in the order made and never removed. BOUND: at most WIKI_FEATS_MAX deaths, which the data
-       rule holds a game's kills to, its script's and every fork part's; one past it is not
-       recorded, in either twin. The deaths are hashed (item 14), the clicks are not. */
+    /* a game's clicks, a ring at nclicks % WIKI_CLICKS (nclicks the clicks made), and its deaths
+       the sight record add keeps, in the order made and never removed. BOUND: at most
+       WIKI_FEATS_MAX deaths, which the data rule holds a game's kills to, its script's and every
+       fork part's; one past it is not recorded, in either twin. The deaths are hashed (item 14),
+       the clicks are not. */
     WIKICLICK        clicks[WIKI_CLICKS];
     int              nclicks;
     WIKIDEATH        death[WIKI_FEATS_MAX];

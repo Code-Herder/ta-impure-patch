@@ -2934,11 +2934,15 @@ const WikiSim = (() => {
     let STALL = GAME && econMode === 'stall';
     // badKill: a kill found no unit of its id; nkill: the kills made
     let starved = false, badKill = false, nkill = 0;
-    /* THE DEATHS, for the replay's death vision (tagpu_wikisim.h WIKIDEATH): each kill of a unit, {tick, owner, x, z,
-       type} at the unit's place on the tick it is fed, in the order made, never removed (a seek rebuilds the game, and
-       with it the list). BOUND: at most FEATS_MAX, which checkGame's data rule holds a game's kills to, its script's and
-       every fork part's; one past it is not recorded, in either twin. */
+    /* THE DEATHS, the replay's death vision (tagpu_wikisim.h WIKIDEATH): each kill of a unit the engine's temporary
+       sight record add would keep, {tick, owner, x, z, type} at the unit's place on the tick it is fed, in the order
+       made, never removed (a seek rebuilds the game, and with it the list). The add's refusal is the engine's
+       (tagpu_wikisim.c kill states it): a kill of a seat that already has PLAYERS_DEATHS deaths live at the add,
+       tick + SIGHT_SPAN at or past the kill's tick - 1, is not recorded, whatever the script or a fork part kills.
+       BOUND: at most FEATS_MAX, which checkGame's data rule holds a game's kills to, its script's and every fork
+       part's; one past it is not recorded, in either twin. */
     const deaths = [];
+    const liveDeaths = (owner, t) => deaths.filter(d => d.owner === owner && d.tick + SIGHT_SPAN + 1 >= t).length;
     // the seats' unit counts at the end of a step, after the work: `out` once a count goes from above 0 to 0
     function counts() {
       econ.forEach((z, k) => {
@@ -3093,7 +3097,8 @@ const WikiSim = (() => {
          +0x104 == 0 and another player; engine/memory.md). A `by` that is no seat of the game counts nothing. */
       if (econ[u.owner]) econ[u.owner].losses++;
       if (int(by) && by >= 0 && by < econ.length && by !== u.owner && u.built >= 1) econ[by].kills++;
-      if (deaths.length < FEATS_MAX) deaths.push({ tick: feeding, owner: u.owner, x: u.x, z: u.z, type: u.type });
+      if (deaths.length < FEATS_MAX && liveDeaths(u.owner, feeding) < PLAYERS_DEATHS)
+        deaths.push({ tick: feeding, owner: u.owner, x: u.x, z: u.z, type: u.type });
       if (u.built >= 1) { corpse(u); deathSound(u); }
       const z = econ[u.owner];
       if (z && def(u.type).cast === 'commander') { z.lost++; z.cmdLost = true; }
