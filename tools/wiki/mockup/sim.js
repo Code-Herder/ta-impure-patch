@@ -190,6 +190,53 @@ const WikiSim = (() => {
   // the stored table {idx, cells} a sight stamps with, or null (tagpu_wikidata_sight_table)
   const sightTable = (S, s) => { const i = sightIndex(S, s); return i ? S.tables.find(T => T.idx === i) || null : null; };
 
+  /* THE LIT GRID of `seat` in a game's view v at the shown tick g, over the layout's sight table S (null: none):
+     tagpu_wikisim_sight_lit, whose comment states the engine's rule (the emit 0x4827B0, the emitter 0x4825B0, the
+     stamp 0x482270) and M0-P1's measurement. A byte a block on the (w >> 1) x (h >> 1) grid, row-major, wrapping as the
+     engine's counters do. Each unit of the seat stamps, and each of its deaths with g <= tick + 60; without a table
+     every block is 1. */
+  const SIGHT_SPAN = 60;
+  // the clicks a game keeps (make's `clicks`): the overlay's ring, OV_RING (tagpu_replay.c:484)
+  const CLICKS = 64;
+  function sightLit(v, S, seat, g) {
+    const gw = v.map.w >> 1, gh = v.map.h >> 1, lit = new Uint8Array(gw * gh);
+    if (!S) return lit.fill(1);
+    const T = new Map(v.game.types.map(t => [t.name, t]));
+    const stamp = (x, z, k) => {
+      if (!k) return;
+      const h = Math.min(255, k.modelHeight + 1), c = Math.floor(x) >> 5, r = (Math.floor(z) - (h >> 1)) >> 5;
+      if (c < 0 || c >= gw || r < 0 || r >= gh) return;
+      lit[r * gw + c] = (lit[r * gw + c] + 1) & 255;
+      const tab = sightTable(S, k.sightDistance);
+      if (tab) for (const [dc, dr, n] of tab.cells) {
+        const cc = c + dc, rr = r + dr;
+        if (cc >= 0 && cc < gw && rr >= 0 && rr < gh) lit[rr * gw + cc] = (lit[rr * gw + cc] + n) & 255;
+      }
+    };
+    for (const u of v.units) if (u.owner === seat) stamp(u.x, u.z, T.get(u.type));
+    for (const d of v.game.deaths) if (d.owner === seat && g <= d.tick + SIGHT_SPAN) stamp(d.x, d.z, T.get(d.type));
+    return lit;
+  }
+  /* THE CONTACTS of `seat` in a game's view v, over its lit grid `lit` (sightLit): per view unit 1 when the radar
+     pass would mark it, else 0 -- tagpu_wikisim_contacts, whose comment states the rule (0x467440's loops 2 and 5,
+     0x467840). The distance is the engine's 64-bit d^2 on 16.16 positions, here in BigInt: dx^2 reaches 2^54. */
+  function sightContacts(v, lit, seat) {
+    const gw = v.map.w >> 1, gh = v.map.h >> 1, T = new Map(v.game.types.map(t => [t.name, t]));
+    const fix = x => BigInt(Math.floor(x * 65536));
+    const radars = [];
+    for (const r of v.units) {
+      const k = T.get(r.type), R = k ? Math.max(k.radarDistance, k.sonarDistance) : 0;
+      if (r.owner === seat && r.built >= 1 && k && k.activates && R > 0) radars.push([fix(r.x), fix(r.z), BigInt(R) * BigInt(R)]);
+    }
+    return v.units.map(u => {
+      if (u.owner === seat) return 0;
+      const c = Math.floor(u.x) >> 5, r = Math.floor(u.z) >> 5;
+      if (c >= 0 && c < gw && r >= 0 && r < gh && lit[r * gw + c]) return 1;
+      const ux = fix(u.x), uz = fix(u.z);
+      return radars.some(([rx, rz, R2]) => ((ux - rx) * (ux - rx) >> 32n) + ((uz - rz) * (uz - rz) >> 32n) < R2) ? 1 : 0;
+    });
+  }
+
   /* ---- casts and castings (research/notes/ingame-wiki.md, the owner's decisions 13-15 and 20) ----
      Each unit of an entry names its cast, its place in the demos; a casting answers each cast with one of the mod's
      types for one side, or null when the rule found none (unbound). The casting is a pack's
@@ -1614,12 +1661,21 @@ const WikiSim = (() => {
        cells between neighbours, per building type; place: the last evaluation of the gesture (tagpu_place.c's s_eval);
        reclaim armed (main+0x2CC3 == 12, exclusive with a building armed), the sweep's kind and its ring gesture (the
        press point, the last point over the map, past the threshold or not); the hover and the cursor's shape and the
-       tick its sequence began; and fed, the inputs the seat's script has fed (seat 0's trips too) since the sim was
-       made, its kills and waits not counted: the replay layer's clash rule reads it (gameNow), and no hash does. */
+       tick its sequence began; fed, the inputs the seat's script has fed (seat 0's trips too) since the sim was
+       made, its kills and waits not counted: the replay layer's clash rule reads it (gameNow), and no hash does; and
+       moved, whether the seat has moved its cursor since the sim was made: the game records a seat's cursor from its
+       first move (the view's cursors), and no hash reads it either -- it decides nothing, and simparity compares the
+       views. */
     const seatInput = () => ({ cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), downOn: {}, mode: null, drag: null,
       hover: null, gesture: null, shiftPlaced: false, spacing: {}, place: null, rmode: false, kind: S.kind, rg: null,
-      cursorShape: null, cursorSince: 0, fed: 0 });
+      cursorShape: null, cursorSince: 0, fed: 0, moved: false });
     const IN = Array.from({ length: NIN }, seatInput);
+    /* THE CLICKS, a game's (tagpu_wikisim.h WIKICLICK): each click action of any seat, {tick, seat, x, z} at the seat's
+       map cursor, the CLICKS most recent kept, oldest first -- the ring the replay's overlay draws (OV_RING,
+       tagpu_replay.c:484). The tick is the one the input is fed on (a script's tick t, or the tick the sim stands at for
+       a player's), which the overlay ages a click from. Not hashed: it decides nothing, and simparity compares the
+       views. A page demo records none. */
+    const clicks = [];
     /* THE ORDERING, the acting seat: st is IN[K], and K is 0 between calls. sim.input and a fed script input act as
        their seat, sim.view(seat) views as it and the step's tail visits each seat in turn, each through asSeat, which
        puts K back before it returns. Nothing the input rules call re-enters input or view -- the COB host and the sound
@@ -2370,6 +2426,17 @@ const WikiSim = (() => {
     /* A scripted demo with the sidebar on plays a `build` out as its trip; Try it, and a demo without the sidebar, arm
        at once (the wiki never sends `build`, and the rule cases use it as their shortcut). */
     const TRIPS = scripted && ON;
+    /* A CLICK ACTION of the acting seat, recorded before the action runs (CLICKS): the left click's -- 0x4993C5..0x4993D0
+       and 0x499435..0x499441, here a placement at a press, the sweep's press, the click branch of a release (select at
+       type 1, leftClick at type 0) and a placement off the map (perspective-streams E6) -- and the right press's,
+       0x499100, every right press on the map: rightClick, rightPress0 and the cancel of an armed building or sweep.
+       [INFERRED] a right press over the column is the GUI's and records none; a players game has no column. */
+    function clickAction() {
+      if (!GAME) return;
+      const c = mapCursor();
+      clicks.push({ tick: feeding, seat: K, x: c.x, z: c.z });
+      if (clicks.length > CLICKS) clicks.shift();
+    }
     function input(ev) {
       if ('caption' in ev) caption = ev.caption || null;
       if ('build' in ev) {
@@ -2384,6 +2451,7 @@ const WikiSim = (() => {
       if (ev.pick) { if (TRIPS) pickTrip(ev.pick); else st.kind = ev.pick; }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };
+        st.moved = true;
         const c = mapCursor();
         if (st.drag && sq(c.x - st.drag.x0) + sq(c.z - st.drag.z0) > DRAG * DRAG) st.drag.active = true;
         reclaimMove();
@@ -2402,15 +2470,16 @@ const WikiSim = (() => {
         else if (where === 'map') {
           // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
           if (ev.down === 'lmb') {
-            if (st.rmode) reclaimPress();
+            if (st.rmode) { clickAction(); reclaimPress(); }
             else if (st.mode && shift) st.gesture = cursorSite();
-            else if (st.mode) placeClick(false);
+            else if (st.mode) { clickAction(); placeClick(false); }
             else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, t: feeding, active: false }; }
           }
           // with a building armed a right press cancels it at both types (0x499100, MEASURED at type 1)
           // with a building or reclaim armed a right press is the handler's cancel
           if (ev.down === 'rmb') {
             st.drag = null;
+            clickAction();
             if (st.mode || st.rmode) disarm();
             else if (IFACE) rightClick(shift); else rightPress0();
           }
@@ -2424,7 +2493,7 @@ const WikiSim = (() => {
            clamped point (1148, 6416), snapped to (1144, 6424). The sim's clamp onto the map stands for the engine's
            onto the view, because the stage shows the map where the game shows a view. The minimap stays inert (the owner's decision 6), where the game would place at its world
            point. A right press there is the handler's cancel and nothing else. */
-        else if (ev.down === 'lmb' && st.mode && !onMinimap(st.cursor.x, st.cursor.z)) placeClick(shift);
+        else if (ev.down === 'lmb' && st.mode && !onMinimap(st.cursor.x, st.cursor.z)) { clickAction(); placeClick(shift); }
         else if (ev.down === 'rmb' && (st.mode || st.rmode)) disarm();
       }
       if (ev.up && st.held.has(ev.up)) {
@@ -2438,7 +2507,8 @@ const WikiSim = (() => {
             // a box is the same at both types; a click is type 1's select and type 0's leftClick
             const d = st.drag, c = mapCursor(), shift = st.held.has('shift');
             const click = feeding - d.t < CLICK_TIME && Math.abs(c.x - d.x0) < CLICK_BOX && Math.abs(c.z - d.z0) < CLICK_BOX;
-            if (!click) select(shift, true); else if (IFACE) select(shift); else leftClick(shift);
+            if (!click) select(shift, true);
+            else { clickAction(); if (IFACE) select(shift); else leftClick(shift); }
             st.drag = null;
           }
         }
@@ -2854,15 +2924,21 @@ const WikiSim = (() => {
        data); mi, mo, ei, eo the last pass's income and spending (+0x9C,
        +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units, the units alive, a nanoframe included
        (+0x144, incremented at each create 0x486187, 0x486322); lost, the commanders lost (+0x106); out, the count gone
-       from above 0 to 0; cmdLost, the commander lost: +0x149 bit 0 cleared, so the base storage stops counting. */
+       from above 0 to 0; cmdLost, the commander lost: +0x149 bit 0 cleared, so the base storage stops counting; kills and
+       losses, the units it killed and lost (+0xFC, +0xFE; `kill`). */
     const econ = SEATDATA.map(z => ({ m: z.metal, e: z.energy, bm: z.metal, be: z.energy,
-      mmax: 0, emax: 0, mi: 0, mo: 0, ei: 0, eo: 0, wm: 0, we: 0, units: 0, lost: 0, out: false, cmdLost: false }));
+      mmax: 0, emax: 0, mi: 0, mo: 0, ei: 0, eo: 0, wm: 0, we: 0, units: 0, lost: 0, out: false, cmdLost: false, kills: 0, losses: 0 }));
     /* THE TWO MODES (decision 18): 'refuse', an authored script, stops `starved` at the first pass that cannot pay a
        grant; 'stall', a seat the player plays, carries an unpaid grant as the unit's debt, and the debt refuses that
        unit's requests until a pass pays it, as the engine's builds stall at zero. A fork sets it anew (sim.fork). */
     let STALL = GAME && econMode === 'stall';
     // badKill: a kill found no unit of its id; nkill: the kills made
     let starved = false, badKill = false, nkill = 0;
+    /* THE DEATHS, for the replay's death vision (tagpu_wikisim.h WIKIDEATH): each kill of a unit, {tick, owner, x, z,
+       type} at the unit's place on the tick it is fed, in the order made, never removed (a seek rebuilds the game, and
+       with it the list). BOUND: at most FEATS_MAX, which checkGame's data rule holds a game's kills to, its script's and
+       every fork part's; one past it is not recorded, in either twin. */
+    const deaths = [];
     // the seats' unit counts at the end of a step, after the work: `out` once a count goes from above 0 to 0
     function counts() {
       econ.forEach((z, k) => {
@@ -3008,10 +3084,16 @@ const WikiSim = (() => {
        unit -- `work` and `jobs` are made anew in each advance, and orders, the spray and the sounds name units by id --
        and a kill runs between advances, so removeUnit clearing both leaves nothing that reads it; its script goes with
        it, and a script's handle is never given again (spawn). */
-    function kill(id) {
+    function kill(id, by) {
       const u = byId(id);
       if (!u) { badKill = true; return; }
       nkill++;
+      /* THE KILLS AND THE LOSSES (PD6): the victim's seat loses it whatever killed it (+0xFE, ungated at 0x4868C1); `by`,
+         a seat of the game other than the victim's, counts a kill when the victim was finished (+0xFC, behind a killer,
+         +0x104 == 0 and another player; engine/memory.md). A `by` that is no seat of the game counts nothing. */
+      if (econ[u.owner]) econ[u.owner].losses++;
+      if (int(by) && by >= 0 && by < econ.length && by !== u.owner && u.built >= 1) econ[by].kills++;
+      if (deaths.length < FEATS_MAX) deaths.push({ tick: feeding, owner: u.owner, x: u.x, z: u.z, type: u.type });
       if (u.built >= 1) { corpse(u); deathSound(u); }
       const z = econ[u.owner];
       if (z && def(u.type).cast === 'commander') { z.lost++; z.cmdLost = true; }
@@ -3262,7 +3344,7 @@ const WikiSim = (() => {
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
         if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
-        else if (GAME && 'kill' in e) kill(e.kill);
+        else if (GAME && 'kill' in e) kill(e.kill, e.by);
         // a seat's camera is recorded data the replay layer reads (seatCam); the simulation never sees it
         else if (GAME && 'camera' in e) {}
         else if (isSeat(e.seat ?? 0)) { const k = e.seat ?? 0; asSeat(k, () => input(e)); IN[k].fed++; }
@@ -3455,6 +3537,13 @@ const WikiSim = (() => {
         ...(GAME ? { game: {
           seats: econ.map((z, k) => ({ name: SEATDATA[k].name, ...z })), mode: STALL ? 'stall' : 'refuse', starved, badKill, nkill,
           ledgers: units.map(u => { const L = u.led; return [L.eP, L.eR, L.eG, L.eD, L.mP, L.mR, L.mG, L.mD]; }),
+          // each input seat's cursor at its map cursor, `on` once it has moved and while it is over the map
+          cursors: IN.map((I, k) => asSeat(k, () => { const c = mapCursor(); return { x: c.x, z: c.z, on: I.moved && over() === 'map' }; })),
+          clicks: clicks.map(c => ({ ...c })),
+          deaths: deaths.map(d => ({ ...d })),
+          // each type's sight figures (sightLit, sightContacts), in the bound entry's order
+          types: defIndex.map(t => ({ name: t, sightDistance: D[t].sightDistance ?? 0, radarDistance: D[t].radarDistance ?? 0,
+            sonarDistance: D[t].sonarDistance ?? 0, activates: (D[t].activatewhenbuilt & 1) === 1, modelHeight: D[t].modelHeight ?? 0 })),
         } } : {}),
         // the input seats beyond seat 0, only in a game with more than one (tagpu_wikisim.h, item 13 of the hash)
         ...(GAME && NIN > 1 ? { nin: NIN, viewed, inputs: IN.slice(1).map((_, i) => asSeat(i + 1, () => ({ ...seatView(),
@@ -3469,13 +3558,13 @@ const WikiSim = (() => {
     sim.free = () => { if (COB) COB.free(); };
     /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,
        a pass that starved, a kill that found no unit), the sound events made since it was made, each seat's units,
-       commanders lost and whether it is out; and of `seat` (0 when absent, and for a seat of no input state) the
+       commanders lost, whether it is out, and its kills and losses; and of `seat` (0 when absent, and for a seat of no input state) the
        inputs fed, the stored values, storage and last pass's rates, which the live mode's top bar eases and samples
        (tagpu_wikisim.h WIKIECON's m, e, mmax, emax, ei, eo, mi, mo), and the keys and buttons it holds, in KEYS order */
     if (GAME) sim.gameNow = (seat = 0) => {
       const k = isSeat(seat) ? seat : 0, z = econ[k];
       return { stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
-        seats: econ.map(e => ({ units: e.units, lost: e.lost, out: e.out })), fed: IN[k].fed,
+        seats: econ.map(e => ({ units: e.units, lost: e.lost, out: e.out, kills: e.kills, losses: e.losses })), fed: IN[k].fed,
         bar: { e: z.e, m: z.m, emax: z.emax, mmax: z.mmax, ei: z.ei, eo: z.eo, mi: z.mi, mo: z.mo },
         keys: KEYS.filter(b => IN[k].held.has(b)) };
     };
@@ -3611,6 +3700,9 @@ const WikiSim = (() => {
     seatCam, PLAYERS_DEATHS, PLAYERS_DEATH_SPAN, SIGHT_MIN,
     // a layout's sight table's bounds (tagpu_wikidata.h WIKI_SIGHT_*), and the table a sight stamps with
     SIGHT_NUMTABLES, SIGHT_IDX, SIGHT_REACH, SIGHT_CELLS, sightIndex, sightTable,
+    // a seat's lit grid and contacts in a game's view (tagpu_wikisim_sight_lit, tagpu_wikisim_contacts), and the
+    // clicks the view keeps
+    sightLit, sightContacts, SIGHT_SPAN, CLICKS,
     // a live demo's fork parts, at most, and the bound of their ids (the recorder's RECR_TIMELINES)
     DEMO_FORKS, TIMELINES,
     // the recorder's rules (THE RECORDER'S RULES), which replay.js plans its forks with

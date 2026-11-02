@@ -20,6 +20,10 @@
    NO LONGER CHECKED: the scout's TABLE1 (8 visits on 8 offsets) and TABLE4 (84 on 60), which no stock type reaches,
    so no layout stores them; nor its TABLE9, which numtables 9 never reaches.
 
+   THE STAMP. sim.js's sightLit on each of the four alone on a flat map lights exactly that set with those counts,
+   centred on the sheared row (z - h / 2) >> 5, h = modelHeight + 1 (the stage's altitude, raised to the sea level + 1),
+   and lights nothing within h / 2 of the north edge (0x4826A9).
+
    THE MODEL HEIGHTS. The stock pack's modelHeight for the four types M0-P1 read the def byte +0x170 of: ARMCOM 39,
    ARMCK 27, ARMSOLAR 38, CORAK 26.
 
@@ -116,6 +120,15 @@ function run() {
     say(!own && lit.length === n && same(histogram(lit), hist),
       `${t}: lights ${lit.length} blocks, counts ${JSON.stringify(histogram(lit))} (M0-P1: ${n}, ${JSON.stringify(hist)})`);
     say(k.modelHeight === height, `${t}: modelHeight ${k.modelHeight} (M0-P1: ${height})`);
+    // sim.js's stamp (sightLit) on the type alone on a flat 128 x 128 map: the same set and counts, on the sheared row
+    const h = Math.min(255, k.modelHeight + 1), z = 1040 + (h >> 1), one = (zz) => ({ map: { w: 128, h: 128 },
+      units: [{ owner: 0, type: t, x: 1040, z: zz, built: 1 }], game: { deaths: [], types: [{ name: t, sightDistance: k.sightDistance,
+        radarDistance: 0, sonarDistance: 0, activates: false, modelHeight: k.modelHeight }] } });
+    const grid = WikiSim.sightLit(one(z), sight, 0, 0), got2 = [];
+    grid.forEach((b, i) => { if (b) got2.push([(i % 64) - 32, Math.floor(i / 64) - 32, b]); });
+    const want2 = lit.map(([dc, dr, n]) => [dc, dr, n]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+    say(same(got2, want2), `${t}: sightLit at z ${z} (h ${h}) lights its table and its own block about row ${(z - (h >> 1)) >> 5}`);
+    say(WikiSim.sightLit(one((h >> 1) - 1), sight, 0, 0).every(b => b === 0), `${t}: sightLit within h / 2 of the north edge lights nothing`);
   }
 
   // every pack's castings and table under sim.js's bounds, its table storing exactly the indices its types reach

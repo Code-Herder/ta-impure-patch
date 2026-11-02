@@ -242,6 +242,7 @@ function stateHash(sim, v) {
     for (const z of g.seats) {
       int(z.units); int(z.lost); int(z.out ? 1 : 0); int(z.cmdLost ? 1 : 0);
       for (const n of ['m', 'mmax', 'mi', 'mo', 'wm', 'e', 'emax', 'ei', 'eo', 'we']) dbl(z[n]);
+      int(z.kills); int(z.losses);
     }
     int(g.mode === 'stall' ? 1 : 0); int(g.starved ? 1 : 0); int(g.badKill ? 1 : 0); int(g.nkill);
     for (const L of g.ledgers) for (const x of L) dbl(x);
@@ -267,7 +268,24 @@ function stateHash(sim, v) {
       }
     }
   }
+  // 14. a game's deaths (tagpu_wikisim.h), only in a game
+  if (sim.game) {
+    int(v.game.deaths.length);
+    for (const d of v.game.deaths) { int(d.tick); int(d.owner); dbl(d.x); dbl(d.z); str(d.type); }
+  }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
+}
+
+/* A PLAYERS GAME'S SIGHT at the tick the sim stands at, as wikitest's sight_out prints it: per seat of the game, its
+   lit grid (sim.js sightLit over the layout's table S) as its FNV-1a 32 and its lit blocks' count, and its contacts
+   (sightContacts) as a string of 0 and 1 in the view's unit order. The view `v` must still hold its map. */
+function sightOut(sim, v, S) {
+  return v.game.seats.map((_, k) => {
+    const lit = WikiSim.sightLit(v, S, k, sim.tick);
+    let h = 0x811c9dc5, n = 0;
+    for (const b of lit) { h = Math.imul(h ^ b, 0x01000193) >>> 0; n += b !== 0 ? 1 : 0; }
+    return { lit: h.toString(16).padStart(8, '0'), n, c: WikiSim.sightContacts(v, lit, k).join('') };
+  });
 }
 
 /* THE UNITS' SCRIPTS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read from the
@@ -1891,8 +1909,9 @@ try {
                   snd: cob ? soundSource(PACKS) : null };
     let cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
     let at = 0;
-    // one demo through sim.js (`make`) against the C sim's lines from `at` on, which it consumes
-    const compare = (id, demo, make, named) => {
+    /* one demo through sim.js (`make`) against the C sim's lines from `at` on, which it consumes; with `sight` (a
+       players game's: the layout's sight table, null for none) each tick's sight too (sightOut) */
+    const compare = (id, demo, make, named, sight) => {
       {
         let sim, why = null;
         try { sim = make(); } catch (e) { why = e.message; }
@@ -1913,9 +1932,10 @@ try {
         }
         let first = null, ticks = 0;
         for (;;) {
-          const v = sim.view(), h = stateHash(sim, v);
+          const v = sim.view(), h = stateHash(sim, v), sv = sight === undefined ? undefined : sightOut(sim, v, sight);
           if (!(sim.tick === 0 || sim.done)) delete v.map;
-          const j = { entry: id, demo: demo.id, t: sim.tick, h, v, o: Object.fromEntries(v.units.map(u => [u.id, sim.orders(u.id)])) };
+          const j = { entry: id, demo: demo.id, t: sim.tick, h, v, o: Object.fromEntries(v.units.map(u => [u.id, sim.orders(u.id)])),
+            ...(sv ? { s: sv } : {}) };
           if (at >= cout.length) { first = { t: sim.tick, at: '(the C sim ended early)', c: null, j: null }; break; }
           const d = diff(JSON.parse(cout[at++]), j, '');
           if (d && !first) first = { t: sim.tick, ...d };
@@ -1963,7 +1983,8 @@ try {
           cname ? `rival-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-', String(scripted)]));
         at = 0;
         for (const demo of e.demos) {
-          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, pctx, mode), `${named}, game${tag}`);
+          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, pctx, mode), `${named}, game${tag}`,
+            e.players === true ? (layout && layout.sight) || null : undefined);
           // the cut game in refuse mode ends starved, unless the context locked it first
           if (tag === ' starved' && sim && sim.view().locked === null && !sim.view().game.starved) {
             failed++;
