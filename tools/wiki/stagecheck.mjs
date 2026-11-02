@@ -23,8 +23,8 @@
    size normalised; an undashed strokeRect a ring, the band half the width either side of its edges; a stroked subpath
    one line a straight piece, dashed by the canvas dash rule from its first point, a corner inside a dash carrying the
    piece into it half the width (a right angle's miter), and a closed subpath on at its end joining round its first
-   corner; an arc filled a circle as deep as its radius and stroked a ring; fillText a line of text; drawImage an
-   icon. Each op is read back into the same shapes in the canvas's device pixels, and the two lists are paired one for
+   corner; a filled subpath of three points a triangle; an arc filled a circle as deep as its radius and stroked a
+   ring; fillText a line of text; drawImage an icon. Each op is read back into the same shapes in the canvas's device pixels, and the two lists are paired one for
    one: kinds, colours (rgba in 1/255ths) and strings equal, every coordinate within 1/64 of a pixel. Every op must
    also clip to the canvas.
 
@@ -170,8 +170,12 @@ function recorder(em, asked, W, H) {
     },
     fill() {
       for (const p of path) {
-        if (!p.arc) throw new Error('a filled polygon, which the check does not read');
-        if (p.r > 0) out.push({ k: 'circle', cx: p.cx, cy: p.cy, r: p.r, d: p.r, c: colour(g.fillStyle) });
+        if (!p.arc) {
+          // a filled three-point subpath is one triangle (HOP_TRI); a fill closes it whether or not it was closed
+          if (p.pts.length !== 3) throw new Error('a filled polygon of other than three points, which the check does not read');
+          const [[x0, y0], [x1, y1], [x2, y2]] = p.pts;
+          out.push({ k: 'tri', x0, y0, x1, y1, x2, y2, c: colour(g.fillStyle) });
+        } else if (p.r > 0) out.push({ k: 'circle', cx: p.cx, cy: p.cy, r: p.r, d: p.r, c: colour(g.fillStyle) });
       }
     },
     stroke() {
@@ -250,7 +254,7 @@ function recorder(em, asked, W, H) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8 }, RING = 4, SPRITE = 128;
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8, TRI: 9 }, RING = 4, SPRITE = 128;
 function shapes(fr, sz, face, part, icons, cell, kit) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
   // each shape's group and the group's opacity, as the recording gives them
@@ -266,6 +270,9 @@ function shapes(fr, sz, face, part, icons, cell, kit) {
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.DOT && flags === RING) out.push({ k: 'circle', cx: X(x) + w * u / 2, cy: Y(y) + h * u / 2, r: w * u / 2, d: size * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
+    else if (kind === HOP.TRI && !flags)
+      // HOP_TRI: the first point, the second as a line's, the third (shade, size) a point in units
+      out.push({ k: 'tri', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, x2: X(shade), y2: Y(size), c: rgba });
     else if (kind === HOP.TEXT && !flags)
       out.push({ k: 'text', x: X(x), y: Y(y), align: centre, size: size * u, face: face[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });
     else if (kind === HOP.PART && flags === SPRITE)

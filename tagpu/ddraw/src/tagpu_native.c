@@ -2761,6 +2761,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     {
         TAGPU_WORLDTGT w;
         int hdx, hdy;
+        /* zeroed: the game's world has no scissor of its own (`clip` 0) */
+        memset(&w, 0, sizeof w);
         w.gw = gw; w.gh = gh; w.ss = ss; w.devres = devres;
         w.vx = f->vp_x; w.vy = f->vp_y; w.vw = f->vp_w; w.vh = f->vp_h;
         if (tagpu_hud_shift(&hdx, &hdy) && gw > 0 && gh > 0) {

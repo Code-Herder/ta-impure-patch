@@ -972,6 +972,8 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_tgt.devres = 0;
     s_tgt.vx = ox + x0; s_tgt.vy = oy + y0;
     s_tgt.vw = x1 - x0; s_tgt.vh = y1 - y0;
+    /* the stage shows the whole map, so the image's rect is all the scissor it needs */
+    s_tgt.clip = 0;
     s_tgt.frame = f->frame_counter;
     s_tgtHave = s_tgt.vw > 0 && s_tgt.vh > 0;
 
