@@ -125,13 +125,15 @@ The owner's decisions:
 - **Sight and Follow are drawn pressed on the player they are set to, and a click on the pressed
   one undoes it** — the full map, the free camera. That replaces the cards' Full map and Free cam
   (2026-10-08).
-- **Sight shows the viewed seat's resource bar from the next frame, paused or not** (2026-11-01):
-  its stored metal and energy and its `+income −expense` rates. The engine re-reads the rates only
-  while the viewed record's DisplayTimer is behind GameTime, so Sight sets the newly viewed
-  record's one tick behind and the draw that follows re-reads them (`sight_change`;
-  [render.md](engine/render.md), *The memo's layout*). The stock `+View` cheat does not, and a
-  player of the stock game sees the previous seat's rates for up to a game second. After a paused
-  seek the rates stay the pre-seek ones until the game runs: the same engine rule, left for a later
+- **Sight shows the viewed seat's resource bar, paused or not** (2026-11-01): its `+income
+  −expense` rates from the next frame, and its stored metal and energy easing toward the seat's
+  over the following frames (an eighth of the difference a frame, at least 1). The engine re-reads
+  the rates only while the viewed record's DisplayTimer is behind GameTime, so Sight moves the
+  newly viewed record's back by whole game seconds to just behind it and the draw that follows
+  re-reads them once (`sight_change`; [render.md](engine/render.md), *The memo's layout*). The
+  stock `+View` cheat does not, and a player of the stock game sees the previous seat's rates for
+  up to a game second. After a paused seek, a takeover that leaves the game paused or a return to
+  now the rates stay the earlier ones until the game runs: the same engine rule, left for a later
   landing by the owner's choice of 2026-11-01.
 - **The foot plate's five buttons:** game stats, which opens and closes the stats window, then
   Cursors, Clicks, Selections and Chat, the four switches of the dock's old Overlays menu. The

@@ -752,7 +752,11 @@ byte 0 must reach the viewed record's `+0x146` within the one-frame bound, which
 that record's bar writes, and its four rates (`+5`, `+9`, `+0x11`, `+0x15`) must equal the
 record's `+0x90`, `+0x94`, `+0x9C`, `+0xA0` bit for bit — after the seek every record's DisplayTimer
 is at GameTime, so the engine alone would not re-read any of them
-([render.md](../engine/render.md), *The memo's layout*); and on the row of the
+([render.md](../engine/render.md), *The memo's layout*). The bar is its own row, which could not
+run when the seat's four rates equal the full map's (a bar that kept the other record's rates would
+then pass), and which names the visits that discriminate: those whose memo held other rates before
+the click — with the two records' rates unequal the second, third and fourth always, the first when
+the rates the memo kept from before the seek differ from the seat's; and on the row of the
 seat the recording's human commanded `follow:` (`follow seat`), `follow:` again (`free cam`) and
 `jump:` (`jump to seat`), then `cursors` off and on, the paused clock unchanged throughout; dump
 `w<T1>` is armed at T1 and `play` resumes; `leave` and Yes return to the browser with the player's
