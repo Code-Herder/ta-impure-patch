@@ -328,12 +328,17 @@ static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, siz
     h = (int)tj_num(tj_at(tj_get(H, "map"), 1), 1);
     side_h = (int)tj_num(tj_get(H, "side_h"), 0);
     tagpu_wikistage_canvas(stage, px, &X0, &Y0, &cw, &ch);
-    tagpu_wikistage_fit(w, h, side_h, 1, cw, ch, px, &fit);
-    tagpu_wikiframe_size(w, h, side_h, &Wg, &Hg);
+    tagpu_wikistage_fit(w, h, side_h, 1, 0, 0, cw, ch, px, &fit);
+    {
+        WIKIFRAMESIZE sz;
+        tagpu_wikiframe_size(w, h, side_h, 0, 0, &sz);
+        Wg = sz.Wg;
+        Hg = sz.Hg;
+    }
     fx = snap(fit.ox + fit.x0 * fit.s);
     fy = snap(fit.oz + fit.z0 * fit.s);
     hpx = (float)(Hg * fit.s / WIKIFRAME_HUD_H);
-    tagpu_wikiframe_hudstate(&rec, Wg, Hg, hpx, NULL, &st);
+    tagpu_wikiframe_hudstate(&rec, Wg, Hg, hpx, NULL, tagpu_hudlay_globals(hud), &st);
     if (!tagpu_hudlay_build(hud, &st, &ops, err, sizeof err)) { fprintf(stderr, "wikilaycheck: the stage HUD: %s\n", err); exit(1); }
     printf(",\n\"stagehud\":{\"Wg\":%d,\"Hg\":%d,\"hpx\":%.9g,\"bar\":[%d,%d,%d],", Wg, Hg, hpx, rec.side, rec.top_side, rec.colour);
     box_out("canvas", X0, Y0, cw, ch);
@@ -356,14 +361,14 @@ static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, siz
     if (rec.cur.on) {
         const HUDOPS* among = &ops;
         if (tagpu_wikiframe_pressed(&rec, &pr)) {
-            tagpu_wikiframe_hudstate(&pr, Wg, Hg, hpx, NULL, &pst);
+            tagpu_wikiframe_hudstate(&pr, Wg, Hg, hpx, NULL, tagpu_hudlay_globals(hud), &pst);
             if (!tagpu_hudlay_build(hud, &pst, &pops, err, sizeof err)) {
                 fprintf(stderr, "wikilaycheck: the pressed stage HUD: %s\n", err);
                 exit(1);
             }
             among = &pops;
         }
-        tagpu_wikiframe_point(&rec, among, hpx, tagpu_hudlay_globals(hud)->track_ends, rx, ry, nx, ny, gx, gy, &x, &y);
+        tagpu_wikiframe_point(&rec, among, among, hpx, tagpu_hudlay_globals(hud)->track_ends, rx, ry, nx, ny, gx, gy, &x, &y);
         printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + x * hpx, Y0 + fy + y * hpx);
     } else if (rec.simcur && !rec.try_it && gx == gx && gy == gy)
         printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + gx * hpx, Y0 + fy + gy * hpx);

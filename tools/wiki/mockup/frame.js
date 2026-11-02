@@ -151,11 +151,12 @@ const WikiFrame = (() => {
      A frame view has no cursor of its own: the frame draws the viewer's or the simulation's in its TOP range. Without
      a column of its own a live view takes the idle MAIN2 of `side`, since the game's screen always has one.
 
-     `ov` is what the replay adds to the world it shows: `tick`, the shown tick n (the world's); `players`, a players
-     replay's view (replay.js view().players) or null; `screen`, a players entry's screen or null. The watcher's view
-     and the past's carry THE OVERLAYS (the header), each switched by the replay's switches (all on but in a players
-     replay): `ocur`, each seat's cursor { x, z, seat } while it is on the map, in seat order; `oclick`, the clicks
-     { x, z, seat, age } made at or after the replay's clickFrom with age n + 1 - t in 0..14 (PD12: the game ages a
+     `ov` is what the replay adds to the world it shows: `tick`, the shown tick n (the world's); `clickFrom`, the
+     replay's click ring's start (replay.js view().clickFrom: a seek empties the ring); `players`, a players replay's
+     view (replay.js view().players) or null; `screen`, a players entry's screen or null. The watcher's view and the
+     past's carry THE OVERLAYS (the header), each switched by the replay's switches (all on but in a players replay):
+     `ocur`, each seat's cursor { x, z, seat } while it is on the map, in seat order; `oclick`, the clicks
+     { x, z, seat, age } made at or after clickFrom with age n + 1 - t in 0..14 (PD12: the game ages a
      click against GameTime + 1, tagpu_replay.c:11284, put with its iteration's tick [INFERRED: the iteration is the one
      the input of tick t feeds]), oldest first; per unit `osel`, its owner seat's selection. The watcher's are every
      seat's, the past's the human seat's alone. With a screen the view carries `eye` { x, z, w, h }: the eye and the
@@ -173,7 +174,7 @@ const WikiFrame = (() => {
         units: (gv.units || []).map(u => ({ ...u, selected: false, osel: !!(tog & TOG.selections) && !!u.selected && mine(u.owner) })) };
       if (mode === 'watch') { v.map = { ...M, fog: new Array(n).fill(0) }; delete v.side; }
       else if (v.side) v.side = { ...v.side, under: null };
-      const g = gv.game || {}, t = +ov.tick || 0, from = P ? P.clickFrom : 0;
+      const g = gv.game || {}, t = +ov.tick || 0, from = +ov.clickFrom || 0;
       v.ocur = tog & TOG.cursors ? (g.cursors || []).map((c, k) => ({ x: c.x, z: c.z, seat: k, on: c.on }))
         .filter(c => c.on && mine(c.seat)).map(({ x, z, seat }) => ({ x, z, seat })) : [];
       v.oclick = tog & TOG.clicks ? (g.clicks || []).filter(c => mine(c.seat) && c.tick >= from && t + 1 - c.tick >= 0 && t + 1 - c.tick < CLICK_SHOW)
@@ -534,10 +535,13 @@ const WikiFrame = (() => {
      whatever the playhead or the arm. A trip to or from Back to main recording whose press left the lane it is drawn on
      (cur.watched, a fork the list holds and no longer watches) is resolved on the lanes as drawn at that press: open,
      with that fork the watched one. Watching a lane is what draws its Back to main recording and widens the lane to
-     hold it (tagpu_hudlay.c lanes); the other flags only fill. Any other record's are its own HUD's. Its boxes only:
-     the HUD drawn is the record's own. */
+     hold it (tagpu_hudlay.c lanes); the other flags only fill. A trip to or from the stats window's close whose press
+     closed the window is resolved on the HUD with the window open, as drawn at that press: the window stands at the
+     layout's place whatever its state, so its close lies where it was. Any other record's are its own HUD's. Its
+     boxes only: the HUD drawn is the record's own. */
   function pressed(rec) {
     const c = rec.cur;
+    if (rec.pl && !rec.stat_open && (c.to === 'close' || c.from === 'close')) return { ...rec, stat_open: 1 };
     if (rec.tk && !rec.live && c.watched > 0 && (c.to === 'main' || c.from === 'main')) {
       const k = rec.fork.findIndex(f => f.id === c.watched);
       if (k < 0 || (rec.lanes && rec.fork[k].flags & WATCHED)) return rec;

@@ -45,9 +45,10 @@
 
    TWO LENGTHS. The area is TAGPU_PK_WIKI_HEAD bytes -- everything before `stage` -- while there is
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so
-   the 158 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles; MEASURED as
-   sizeof on the DLL's compiler) and a frame:game entry's frame record after it (WIKIFRAMEREC,
-   1680 bytes; the whole area 167704, the head 328, MEASURED as sizeof on the DLL's compiler) are
+   the 164 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles, 2 KB a replay's
+   overlays and minimap pass; MEASURED as sizeof on the DLL's compiler) and a frame:game entry's
+   frame record after it (WIKIFRAMEREC, 4600 bytes, 2896 of them a players record's samples; the
+   whole area 172744, the head 328, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */

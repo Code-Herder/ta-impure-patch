@@ -238,15 +238,20 @@ const WikiReplay = (() => {
        the view's centre, at eye (0, 0) at the start (MEASURED, m0p-facts.md P3: held at a playing's first step the eye
        read (0, 0) with no Follow, and stayed there at GameTime 300 with no input); Follow's seat and a Jump asked (-1
        none); Sight's seat (-1 the full map) and the one asked (NOT_ASKED none); the overlay switches; the folded team
-       rows; the stats window, closed, on its first measure, split by player; the tick a click must be at or after to
-       show (a seek empties the ring); the shown tick and whether a seek's end is due; the top bar's memo, f32 as the
+       rows; the stats window, closed, on its first measure, split by player; the shown tick and whether a seek's end is
+       due (THE CLICK RING below keeps the same flag in every replay); the top bar's memo, f32 as the
        engine's, and a DisplayTimer per record -- each seat's, then the watcher's, the full map's -- 0 as a record's is
        from the load (MEASURED, m0p-facts.md P2: records 0-3 read 0 at GameTime 300 with no input), with the shown world's
        figures it eases toward; the minimap's pass; the walker's samples, `sv[n][k]` the seven measures of seat k */
     const PL = entry.frame === 'game' && entry.players === true;
     const SIGHT = layout && layout.sight ? layout.sight : null, NSEAT = R.game.gameNow().seats.length;
     let cam = { x: 0, z: 0 }, follow = -1, jumpReq = -1, sight = -1, sightReq = NOT_ASKED, tog = TOG_ALL, folded = 0;
-    let stat = { open: false, measure: MEASURE0, team: false }, clickFrom = 0, shownT = 0, pend = false;
+    let stat = { open: false, measure: MEASURE0, team: false }, shownT = 0, pend = false;
+    /* THE CLICK RING's start, every replay's: the tick a click must be at or after to show. A seek empties the game's
+       ring (tagpu_replay.c, OV_RING), so the frame's view shows no click made before the tick a seek ended on: a
+       players replay's tail sets it (plTail), every other replay's game at the same point (seekEnd), and a live
+       replay's past where its seek ends (livePlay). 0 before any seek. */
+    let clickFrom = 0;
     let pbe = 0, pbm = 0, prates = [0, 0, 0, 0], pbar = { e: 0, m: 0, emax: 0, mmax: 0, ei: 0, eo: 0, mi: 0, mo: 0 };
     const pdt = new Array(Sim.SEATS + 1).fill(0);
     let pass = { at: -1, blocks: 0, fog: new Uint8Array(0), contacts: [] };
@@ -572,6 +577,7 @@ const WikiReplay = (() => {
           target = -1;
           quiet = R.past.gameNow().sound;
           dt = R.past.tick;
+          clickFrom = R.past.tick;
         }
       }
     }
@@ -864,6 +870,10 @@ const WikiReplay = (() => {
       lit.forEach((b, i) => { if (b) fog[i >> 3] |= 1 << (i & 7); });
       pass = { at: g, blocks: lit.length, fog, contacts: v.units.filter((u, i) => con[i]).map(u => u.id) };
     }
+    // a seek's end outside a players replay: the click ring starts at the tick it ended on (THE CLICK RING)
+    function seekEnd() {
+      if (target < 0 && pend) { clickFrom = R.game.tick; pend = false; }
+    }
     /* EACH STEP'S TAIL (players-spec.md 6.4), after the game's part, every step, paused or not (DrawGameScreen runs on
        every frame; MEASURED, m0p-facts.md P2: the stored numbers eased 9686 -> 10000 while paused), at the shown tick g:
        the game's, or while a seek is pending the world the stage holds.
@@ -940,6 +950,7 @@ const WikiReplay = (() => {
         if (TK && !failed) { pickFill(); laneFill(); }
         if (TK && !failed) bgWalk(ran);
         if (PL && !failed) plTail();
+        else if (!failed) seekEnd();
       }
       done = isDone();
     };
@@ -999,7 +1010,7 @@ const WikiReplay = (() => {
       const g = R.game, t = cursor;
       const release = t && (t.drag ? t.at + HUD_DOWN + t.drag.over : t.at + HUD_UP);
       const v = {
-        tick: R.tick, clock, done, waiting: wait ? 'seeked' : null, stalled, caption, failed, ignored,
+        tick: R.tick, clock, done, waiting: wait ? 'seeked' : null, stalled, caption, failed, ignored, clickFrom,
         game: LIVE ? { tick: g.tick, end, playhead: nowTick(), paused: rw !== 'idle' || g.tick >= end || g.done, speed, acc, target, gen, quiet }
           : { tick: g ? g.tick : 0, end, playhead: target >= 0 ? target : g ? g.tick : 0, paused, speed, acc, target, gen, quiet },
         cursor: t ? { from: t.from, fromValue: t.fromValue, fromWatched: t.fromWatched, to: t.to, value: t.value,

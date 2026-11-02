@@ -54,6 +54,22 @@ static inline void tagpu_wikiside_dot(int tx, int tz, const WIKISIDEMAP* m, int 
     *py = tz * m->h / H;
 }
 
+/* THE CAMERA BOX, 0x466B70 (DISASSEMBLED 2026-11-01, 0x466B70..0x466C12; side.js cameraBox):
+   b = [left, top, right, bottom], inclusive column pixels, for the picture `m` over the extent
+   W x H and the eye (ex, ez) with the viewport vw x vh in world units: left = m.w ex / W + offx,
+   top = m.h ez / H + offy, right = m.w vw / W + left - 1, bottom = m.h vh / H + top - 1, each
+   division truncating as the engine's idiv. The engine's view is in cells (main+0x1423B,
+   +0x1423F) times 16, the stage's viewport its world units [INFERRED: equal for a viewport of
+   whole cells, which a screen's is]. Eye 0 and the viewport the extent give the picture's border.
+   The callers pass values held to the map (tagpu_wikistage_eye), so no product overflows. */
+static inline void tagpu_wikiside_camera_box(const WIKISIDEMAP* m, int W, int H, int ex, int ez, int vw, int vh, int* b)
+{
+    b[0] = m->w * ex / W + m->offx;
+    b[1] = m->h * ez / H + m->offy;
+    b[2] = m->w * vw / W + b[0] - 1;
+    b[3] = m->h * vh / H + b[1] - 1;
+}
+
 /* The composed column: `h` rows of WIKI_SIDE_W palette indices and their coverage, 1 where a
    pixel is painted -- which the engine's black clear makes every pixel of the column. 192 KB:
    never on a stack. */

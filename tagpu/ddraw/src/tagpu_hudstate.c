@@ -402,23 +402,17 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
                DUMP_OUT, st->nseat, st->nteam, st->nmark, st->t, st->T, vw, vh, u);
 }
 
-/* a sample is data from the recording: one that is not a finite number is drawn as 0 */
-static float sample(float v)
-{
-    return v == v && v < 1e30f && v > -1e30f ? v : 0.0f;
-}
-
 /* THE STATS WINDOW: its state as the input keeps it, and the groups the mockup's host makes of the
-   samples (index.html `state()`): a player each, with the cross of its first commander death, or,
-   when the split asks for teams and the teams are told apart (tagpu_hudlay_headed, the test the
-   teams chip is enabled by), a team each, summed, in the chart's team colours. */
+   samples (index.html `state()`), tagpu_hudlay_stat_groups: a player each, with the cross of its
+   first commander death, or, when the split asks for teams and the teams are told apart
+   (tagpu_hudlay_headed, the test the teams chip is enabled by), a team each, summed, in the chart's
+   team colours. */
 static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE* st)
 {
     const TAGPU_PK_HUDSTAT* hs = tagpu_pk_hudstat(pk);
     const HUDART* art = tagpu_hudart_get();
     const HUDGLOBALS* gl = art ? tagpu_hudlay_globals(art->lay) : NULL;
     HUDSTATS* S = &st->stats;
-    int npt = hs ? (hs->npt < HUD_MAXPT ? hs->npt : HUD_MAXPT) : 0, i, j, k;
 
     S->open = h->stat_open;
     S->x = h->stat_x;
@@ -428,33 +422,9 @@ static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE
     S->team = h->stat_team && tagpu_hudlay_headed(st);
     S->dt = hs && hs->period ? (float)hs->period / TICKS : 1.0f;
     S->t0 = hs && hs->base > h->first ? (float)(hs->base - h->first) / TICKS : 0.0f;
-    S->npt = npt;
-    if (!S->team) {
-        S->ngroup = st->nseat;
-        for (i = 0; i < st->nseat; i++) {
-            HUDGROUP* g = &S->group[i];
-            memcpy(g->name, st->seat[i].name, sizeof g->name);
-            g->colour = st->seat[i].colour;
-            g->death = -1.0f;
-            for (j = 0; j < st->nmark; j++)
-                if (st->mark[j].kind == HUD_MK_DEATH && st->mark[j].seat == i && (g->death < 0 || st->mark[j].t < g->death))
-                    g->death = st->mark[j].t;
-            for (k = 0; k < npt; k++) g->v[k] = sample(hs->v[i][k]);
-        }
-        return;
-    }
-    S->ngroup = st->nteam;
-    for (i = 0; i < st->nteam; i++) {
-        HUDGROUP* g = &S->group[i];
-        snprintf(g->name, sizeof g->name, "Team %d", i + 1);
-        g->colour = gl ? gl->team_rgb[i % gl->nteam_rgb] : 0x808080;
-        g->death = -1.0f;
-        for (k = 0; k < npt; k++) {
-            float v = 0;
-            for (j = 0; j < st->team_n[i]; j++) v += sample(hs->v[st->team_seat[i][j] % TAGPU_PK_HUD_SEATS][k]);
-            g->v[k] = v;
-        }
-    }
+    S->npt = hs ? (hs->npt < HUD_MAXPT ? hs->npt : HUD_MAXPT) : 0;
+    tagpu_hudlay_stat_groups(st, hs ? &hs->v[0][0] : NULL, TAGPU_PK_HUD_SEATS, (int)(sizeof hs->v[0] / sizeof hs->v[0][0]),
+                             gl ? gl->team_rgb : NULL, gl ? gl->nteam_rgb : 0);
 }
 
 /* a GameTime in seconds from the track's start, held to [first, axis] */

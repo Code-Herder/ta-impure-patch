@@ -213,6 +213,13 @@ typedef struct {
     int         toast_seat;                     /* the seat a toast names (Taking over), -1 none     */
     int         question, was_paused;           /* Leave's question is open, and the pause before it */
     int         left;                           /* Try it's Yes left the replay: it is done          */
+    /* THE CLICK RING's start, every replay's (replay.js's view's `clickFrom`): the tick a click
+       must be at or after to show. A seek empties the game's ring (tagpu_replay.c, OV_RING), so it
+       is the game's tick where a seek ended -- a live replay's past's where the past's seek ended --
+       and 0 before any seek. Presentation: hashed only in a players replay's block, beside the
+       Sight and the overlay switches it is displayed with, since the clicks it filters are hashed
+       nowhere (tagpu_wikisim.h, item 14); simparity compares the view, which carries it. */
+    int         click_from;
     /* LIVE (replay.js's view's `live`; `live` 0 leaves the rest 0): the rewind's WIKI_RW_*, the
        GameTime it opened at, the span (first, last) and the GameTime shown; the WIKI_ARM_*, its start
        and the fork it evicts (-1 none); the track's last seek (-1 none); the clash; the entries the
@@ -240,7 +247,7 @@ typedef struct {
        view's centre in world units; Follow's seat and the Jump asked (-1 none); Sight's seat (-1 the
        full map) and the one asked (WIKI_REPLAY_NOT_ASKED none); the overlay switches (HUD_TOG_*);
        the folded team rows, a bit each; the stats window open, its measure (an index of the seven,
-       WIKI_STAT_MEASURES) and its split by team; the tick a click must be at or after to show; the
+       WIKI_STAT_MEASURES) and its split by team; the
        shown tick and whether a seek's end is due; the top bar's memo, f32 as the engine's, and each
        record's DisplayTimer, the seats' then the watcher's; the pass: its tick (-1 none), its
        blocks (0 under the full map), the fog bits (block i lit is bit i & 7 of byte i >> 3) and the
@@ -249,7 +256,7 @@ typedef struct {
        scene's), base and period (tagpu_wikireplay_stat reads one). */
     int         players;
     int         cam_x, cam_z, follow, jump_req, sight, sight_req, tog, folded;
-    int         stat_open, stat_measure, stat_team, click_from, shown, pend;
+    int         stat_open, stat_measure, stat_team, shown, pend;
     float       pbe, pbm, prates[4];
     int         pdt[WIKI_SEATS + 1];
     int         pass_at, pass_blocks;
@@ -283,6 +290,10 @@ typedef struct {
     int               nbook, book[WIKI_REPLAY_BOOKS];
     int               toast_kind, toast_at, toast_value;
     int               question, was_paused;
+    /* the click ring's start (the view's click_from) and whether a seek's end is due: every seek
+       sets `pend`, and the step that finds no seek pending takes it (seek_end, a players replay's
+       pl_tail) */
+    int               click_from, pend;
     int               walked, nmark, mark[WIKI_REPLAY_MARKS][3];
     int               prev_lost[WIKI_SEATS], prev_out[WIKI_SEATS];
     /* LIVE (replay.js's live state): `game` is L; `past` P (NULL none), its generation, its chain
@@ -317,7 +328,7 @@ typedef struct {
        WIKI_STAT_MEASURES order, for the scene's seats, stat_nseat of them */
     int               players;
     int               cam_x, cam_z, follow, jump_req, sight, sight_req, tog, folded;
-    int               stat_open, stat_measure, stat_team, click_from, shown, pend;
+    int               stat_open, stat_measure, stat_team, shown;
     float             pbe, pbm, prates[4];
     int               pdt[WIKI_SEATS + 1];
     double            p_e, p_m, p_emax, p_mmax, p_ei, p_eo, p_mi, p_mo;

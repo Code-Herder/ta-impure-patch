@@ -59,7 +59,17 @@
    the armed ghost kept on the even frames, the emblem at layout.json's button.right[0], and the cursor the
    simulation's, its shape the k % 4th of the four and its age 7 k ticks. A takeover entry's frame cycles the same
    three modes as the human seat (k / 3) % the seats -- the view that seat's (sim.view(h)), its selection the
-   player's in the player's mode -- and is the player's but in the watcher's.
+   player's in the player's mode -- and is the player's but in the watcher's. The image's scissor
+   (tagpu_wikistage_image's `clip`) must be the clip the image was drawn under: a frame's viewport, the canvas
+   otherwise.
+
+   THE PLAYERS FRAMES (players-spec.md section 7). A players entry's demos play once more on every sidebar but the
+   scripted one, through replay.js and the C replay layer, the viewer's script played: at demo tick 0, every 30th and
+   the last, while no seek is pending, the game's view filtered to the watcher's with what the replay adds -- the
+   camera on the entry's screen (the frame its screen's, the world at the eye, clipped to the viewport, the ground's
+   cells, grid and fog culled to it, the minimap's camera box), Sight (the map's fog and the units drawn the viewed
+   seat's, the minimap's pass), the overlays at the replay's click ring's start -- drawn as a frame whose
+   presentation and sidebar phase follow the game's tick.
 
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
    more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
@@ -77,12 +87,14 @@ const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
 const WikiStage = require('./mockup/stage.js');
 const WikiFrame = require('./mockup/frame.js');
+const WikiReplay = require('./mockup/replay.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const TOL = 1 / 64;
 const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
   'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c'];
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c',
+  'src/tagpu_hudlay.c'];
 // the stages: device pixels a unit, the canvas's corner and size in device pixels
 const SIZES = [
   { name: '1920x1080', u: 1.5, x0: 759, y0: 146, w: 1045, h: 532 },
@@ -384,7 +396,7 @@ try {
   const cobFile = path.join(tmp, 'cob.json');
   fs.writeFileSync(cobFile, JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
     [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
-  let nspray = 0, nsprayed = 0;
+  let nspray = 0, nsprayed = 0, nplayers = 0, nmoved = 0, nsight = 0, noverlay = 0;
   for (const sb of SIDEBARS) {
     sb.layout = sb.file && JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki', sb.file), 'utf8'));
     sb.frames = [];
@@ -409,8 +421,29 @@ try {
           if (sim.done) break;
           sim.step();
         }
+        if (entry.players && !sb.cob) playersFrames(sb, ids[i], entry, demo);
       }
     });
+  }
+  /* A PLAYERS ENTRY'S DEMO through the replay layer (the header's THE PLAYERS FRAMES; wikistagetest.c players) */
+  function playersFrames(sb, id, entry, demo) {
+    const R = WikiReplay.play(entry, demo, sb.layout, { side: 0, casting: null, iface: 1, cob: null, snd: null, rival: null });
+    for (;;) {
+      const rv = R.view();
+      if ((R.tick % 30 === 0 || rv.done) && rv.game.target < 0 && R.game) {
+        const gv = R.game.view(), g = R.game.tick;
+        const v = WikiFrame.view(gv, sb.layout, 0, 'watch', false, 0,
+          { tick: g, clickFrom: rv.clickFrom, players: rv.players || null, screen: entry.screen });
+        sb.frames.push({ key: `${id}/${demo.id}/players/frame/${R.tick}`, v, tick: g, frame: true, live: false, players: true });
+        nplayers++;
+        if (v.eye.x || v.eye.z) nmoved++;
+        if (rv.players.sight >= 0) nsight++;
+        if (v.ocur.length || v.oclick.length || v.units.some(u => u.osel)) noverlay++;
+      }
+      if (rv.done) break;
+      R.step();
+    }
+    R.free();
   }
   /* THE SIDEBAR'S STAND-IN ART, wikistagetest.c side_art: the game look's image in frames whose tick / 30 is 1 past a
      multiple of 3 (with its minimap) or 2 past it (without), drawn as wiki.js draws the composed column; gadget i of
@@ -542,10 +575,15 @@ try {
           const i = [...codes].findIndex((ch, j) => ch !== fr.keep[k][j]);
           bad = `${im.name}: tagpu_wikistage_keep puts op ${i} ${'-uo'[+fr.keep[k][i]]}, stage.js ${'-uo'[+codes[i]]}`;
         }
-        // the image's rect: the composite's, from the same fit (tagpu_wikistage_image)
+        // the image's rect: the composite's, from the same fit (tagpu_wikistage_image), and its scissor the clip it
+        // was drawn under, the canvas's where there is none
         const ir = r.out[at], cr = [fr.img[0] - sz.x0, fr.img[1] - sz.y0, fr.img[2] - fr.img[0], fr.img[3] - fr.img[1]];
+        const jc = ir.clip || [0, 0, sz.w, sz.h], cc = [fr.imgclip[0] - sz.x0, fr.imgclip[1] - sz.y0,
+          fr.imgclip[2] - fr.imgclip[0], fr.imgclip[3] - fr.imgclip[1]];
         if (!bad && [ir.x, ir.y, ir.w, ir.h].some((v, j) => v !== cr[j]))
           bad = `${im.name}: the image at ${show([ir.x, ir.y, ir.w, ir.h])}, tagpu_wikistage_image ${show(cr)}`;
+        if (!bad && jc.some((v, j) => v !== cc[j]))
+          bad = `${im.name}: the image clipped to ${show(jc)}, tagpu_wikistage_image's scissor ${show(cc)}`;
         if (bad) break;
         nsplit++; nimage += want.length;
       }
@@ -556,7 +594,7 @@ try {
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${nplayers} players frames (the eye off (0, 0) in ${nmoved}, Sight in ${nsight}, an overlay in ${noverlay}); ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

@@ -706,6 +706,7 @@ static void live_play(WIKIREPLAY* r)
             r->target = -1;
             r->quiet = r->past->snd_total;
             r->dt = r->past->tick;
+            r->click_from = r->past->tick;
         }
     }
 }
@@ -1266,6 +1267,16 @@ static void pl_tail(WIKIREPLAY* r)
     }
 }
 
+/* a seek's end outside a players replay: the click ring starts at the tick it ended on
+   (tagpu_wikireplay.h, THE CLICK RING); pl_tail does it in its own order in a players replay */
+static void seek_end(WIKIREPLAY* r)
+{
+    if (r->target < 0 && r->pend) {
+        r->click_from = r->game->tick;
+        r->pend = 0;
+    }
+}
+
 /* THE WALKER'S SAMPLES (replay.js statWalk states the measures and their order), a players
    replay's: at each walked tick at or past base + n period, every seat's seven. BOUND:
    WIKI_STAT_PTS samples, the walker's seats at most WIKI_SEATS. */
@@ -1456,6 +1467,7 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
         }
         if (r->tk && !r->failed) bg_walk(r, ran);
         if (r->players && !r->failed) pl_tail(r);
+        else if (!r->failed) seek_end(r);
     }
     r->done = is_done(r);
 }
@@ -1608,6 +1620,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->question = r->question;
     v->was_paused = r->question ? r->was_paused : 0;
     v->left = r->left;
+    v->click_from = r->click_from;
     if (r->live || r->tk) {
         v->ntl = r->ntl;
         for (i = 0; i < r->ntl; i++) {
@@ -1655,7 +1668,6 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
         v->stat_open = r->stat_open;
         v->stat_measure = r->stat_measure;
         v->stat_team = r->stat_team;
-        v->click_from = r->click_from;
         v->shown = r->shown;
         v->pend = r->pend;
         v->pbe = r->pbe;
