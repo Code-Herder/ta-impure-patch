@@ -219,8 +219,9 @@ from simparity's records of it, none written here:
        and Free cam; Sight on Bram, w1's death vision, the vision gone, Ada's commander a radar dot, the caption over
        it and the full map; every overlay on, each tick Bram's first click is ringed and each switch; each act of the
        stats window -- and grabbed beside the mockup at the same state: the column (its minimap) and both bars
-       pixel-equal, the top bar in the viewed seat's side's art under Sight; the emblems, the stats window and the
-       world measured; the radar dot's frame also beside M0-P2's top bar and M0-P5's minimap
+       pixel-equal, the top bar in the viewed seat's side's art under Sight; the stats window's plot (its lines, their
+       halos and crosses, the grid and the playhead) within PL_PLOT_LEVELS of the mockup's; the emblems, the stats
+       window and the world measured; the radar dot's frame also beside M0-P2's top bar and M0-P5's minimap
        (.data/wiki-replay/m0p-shots, for the eye: different screens, so not measured);
   (p4) on Watching's Try it the Players set and Take over inert: each control drawn held (the press machine's
        press_held) and let go, the record unchanged and no players block; then Try it on demo jump's data through device
@@ -956,7 +957,7 @@ def turbo(c, k):
         wait_line(c, start, r"wiki: tagpu_wiki\.turbo: gone", "the turbo's end was not read")
 
 
-def mockup_shot(state, path):
+def mockup_shot(state, path, out=None):
     """The mockup at the same state -- the screen, the entry, the demo paused at the tick -- grabbed
     headless by playwright-cli, one CSS pixel a device pixel, as wikilaycheck.py opens it. The
     sidebar is the mod's (`mod`, a tools/wiki/sidepacks.py pack name, stock by default), its pack
@@ -965,7 +966,10 @@ def mockup_shot(state, path):
     tools/wiki/stage3dcheck.py renders it); without it the stage is the whitebox. tools/wiki/serve.py
     serves it, so its demo plays with the units' scripts as the game's does. A frame:game entry's demo is its replay,
     stepped to the demo tick as tagpu_wiki.shot steps the game's. Returns the frame's viewer's cursor, the point it
-    is drawn at in the picture's pixels, or None."""
+    is drawn at in the picture's pixels, or None. A dict `out` is given the stage HUD's chart, None while the stats
+    window is closed: `rect`, its SVG [x0, y0, x1, y1) on the device pixels hud.js pins it to (pinChart), and `plot`,
+    its plot area [x0, y0, x1, y1) as hud.js chart() places it (layout.json chart.plot, the legend's width R from the
+    SVG's data-chart), both in the picture's pixels, unrounded."""
     sys.path.insert(0, str(TREE / "tools/wiki"))
     import wikilaycheck as wl
     from PIL import Image
@@ -1015,18 +1019,35 @@ def mockup_shot(state, path):
                                   " const F = WikiPage.frameDrawn && WikiPage.frameDrawn(), q = F && F.cursor,"
                                   " c = $('#stage'), r = c.getBoundingClientRect();"
                                   " const at = q ? [r.left + q.x * r.width / c.width - f.left, r.top + q.y * r.height / c.height - f.top] : null;"
-                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim ? sim.tick : rep.view().tick, at]); }").stdout)
-        fx, fy, fw, fh, tick, cursor_at = json.loads(v)
+                                  " const k = $('#stagehud [data-chart]'), b = k && k.getBoundingClientRect();"
+                                  " const ch = b ? [b.left, b.top, b.right, b.bottom, k.dataset.chart, k.getAttribute('viewBox')] : null;"
+                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim ? sim.tick : rep.view().tick, at, ch]); }").stdout)
+        fx, fy, fw, fh, tick, cursor_at, chart = json.loads(v)
         assert (round(fw), round(fh)) == (gw, gh) and tick == state["tick"], \
             f"the mockup's frame is {fw} x {fh} at tick {tick}, not {gw} x {gh} at {state['tick']}"
         run("screenshot", f"--filename={tmp / 'page.png'}")
         Image.open(tmp / "page.png").crop((round(fx), round(fy), round(fx) + gw, round(fy) + gh)).save(path)
         print(f"wiki: the mockup at the same state grabbed to {path}")
+        if out is not None:
+            out["chart"] = chart and chart_box(chart, round(fx), round(fy))
         return cursor_at
     finally:
         run("close")
         httpd.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def chart_box(chart, ox, oy):
+    """The stats window's chart from mockup_shot's page: its SVG's client rect, data-chart (`W H R`, its size and the
+    legend's width in units) and view box, as {rect, plot} in the pixels of a picture cropped at (ox, oy). The plot is
+    hud.js chart()'s [Lp, Tp] to [W - R, H - plot.b] in the SVG's units, mapped through the view box to its pixels."""
+    x0, y0, x1, y1, dc, vb = chart
+    W, H, R = map(float, dc.split())
+    vx, vy, vw, vh = map(float, vb.split())
+    P = json.loads((TREE / "art/hud/layout.json").read_text())["chart"]["plot"]
+    sx, sy = (x1 - x0) / vw, (y1 - y0) / vh
+    X, Y = (lambda u: x0 - ox + (u - vx) * sx), (lambda v: y0 - oy + (v - vy) * sy)
+    return {"rect": [x0 - ox, y0 - oy, x1 - ox, y1 - oy], "plot": [X(P["l"]), Y(P["t"]), X(W - R), Y(H - P["b"])]}
 
 
 def demos(c, shots, res):
@@ -3140,6 +3161,11 @@ PL_SWITCHES = ("cursors", "clicks", "selections", "chat")  # (p4) the Players se
 PL_INERT = ("jump:1", "sight:1", "follow:1", "cursors", "stats", "takeover")   # (p4) pressed on Watching: none acts
 PL_EMBLEM = 76                                          # a watching frame's emblems' first column, Wg less this
 M0P_FIGS = ("fig-p2-topbar.png", "fig-p5-minimap-sight1.png")   # (p3) M0-P2's top bar and M0-P5's minimap, for the eye
+# (p3) the most a pixel of the stats window's plot may differ from the mockup's, a channel's levels: the GPU's coverage
+# of a 1.1-unit stroke and the browser's antialiasing round apart by up to 16, while a halo drawn by the mockup alone
+# left 21, 167 and 49 pixels of the three shots with a past more than 24 apart, up to 92 (MEASURED 2026-11-02, the
+# players lane's stats shots with the window open, 1920 x 1080): a halo, a line or a cross one side lacks fails it
+PL_PLOT_LEVELS = 24
 
 
 def pl_entry():
@@ -3382,11 +3408,35 @@ def pl_beside(game_png, d, path):
     print(f"wiki players: (p3) the top bar and the minimap beside M0-P's (game, M0-P2, game, M0-P5) in {path}")
 
 
+def pl_plot(g, m, chart, ptr, at, what):
+    """The stats window's plot (mockup_shot's chart: its lines, their halos and crosses, the grid and the playhead)
+    held to the mockup's: no pixel more than PL_PLOT_LEVELS apart, except under the game's pointer at `ptr` (the dump's,
+    the client point of the last move the wiki took) and the frame's viewer cursor at `at` (the mockup's), each the
+    box any cursor frame drawn with its hotspot there can cover (tools/wiki/mockup/gfx/cursors.json)"""
+    import numpy as np
+    assert chart, f"{what}: the mockup drew no chart with the stats window open"
+    x0, y0, x1, y1 = (math.floor(v) if k < 2 else math.ceil(v) for k, v in enumerate(chart["plot"]))
+    A, B = g[y0:y1, x0:x1, :3].astype(int), m[y0:y1, x0:x1, :3].astype(int)
+    assert A.size and A.shape == B.shape, f"{what}: the plot {chart['plot']} is empty"
+    dif = np.abs(A - B).max(axis=2)
+    fr = json.loads((TREE / "tools/wiki/mockup/gfx/cursors.json").read_text())["frames"]
+    e = max(max(f["w"], f["h"]) for f in fr) + 1
+    for q in (ptr, at):
+        if q and q[0] >= 0:
+            qx, qy = round(q[0]), round(q[1])
+            dif[max(0, qy - e - y0):max(0, qy + e - y0), max(0, qx - e - x0):max(0, qx + e - x0)] = 0
+    bad = np.argwhere(dif > PL_PLOT_LEVELS)
+    assert not len(bad), f"{what}: {len(bad)} pixels of the stats window's plot {[x0, y0, x1, y1]} differ from the mockup's " \
+                         f"by more than {PL_PLOT_LEVELS} (up to {int(dif.max())}), first at {[(int(x) + x0, int(y) + y0) for y, x in bad[:6]]}"
+    return f"its plot {dif.size} px within {PL_PLOT_LEVELS} (up to {int(dif.max())})"
+
+
 def pl_p3(c, shots, res, cand):
     """(p3) each tick of pl_shots held (tagpu_wiki.shot) and the presented frame grabbed, the mockup's at the same state
     beside it: the column (its minimap, dots and camera box included) and both bars pixel-equal -- the top bar in the
-    viewed seat's side's art under Sight -- the emblems, the stats window and the world measured; the record says what
-    each shows. Sight's radar dot also beside M0-P's captures"""
+    viewed seat's side's art under Sight -- the stats window's plot within PL_PLOT_LEVELS (pl_plot), the emblems, the
+    stats window and the world measured; the record says what each shows. Sight's radar dot also beside M0-P's
+    captures"""
     shots.mkdir(parents=True, exist_ok=True)
     ids = [dm["id"] for dm in entry_demos(PLAYERS)]
     by = {(k, t): rec for k in cand for t, _, rec in cand[k]}
@@ -3404,8 +3454,9 @@ def pl_p3(c, shots, res, cand):
         grab(c, base.with_suffix(".game.png"))
         base.with_suffix(".frame.json").write_text(json.dumps({"frame_fit": d["frame_fit"], "rects": frame_rects(d), "record": r,
                                                                "view": v, "hud": [h for h in d["hits"] if h.get("src") == HIT_HUD]}))
+        mk = {}
         at = mockup_shot({"res": [int(x) for x in res.split("x")], "entry": PLAYERS, "demo_n": ids.index(demo), "tick": tick,
-                          "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
+                          "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"), mk)
         g, m = png_rgba(base.with_suffix(".game.png")), png_rgba(base.with_suffix(".mockup.png"))
         R, f = frame_rects(d), d["frame_fit"]
         hud = [h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD]
@@ -3434,6 +3485,7 @@ def pl_p3(c, shots, res, cand):
         if r["stat_open"] and win:
             n, of, mx = region_diff(g, m, win)
             said.append(f"the stats window and its shadow {n} of {of} px differ (up to {mx})")
+            said.append(pl_plot(g, m, mk.get("chart"), d["ptr"], at, f"(p3) {demo}@{tick} ({what})"))
         n, of, mx = region_diff(g, m, R["world"])
         said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
         print(f"wiki players: (p3) {demo} at tick {tick}, game {r['playhead']} ({what}: eye {v['eye'][:2]}, sight {r['sight']}, "

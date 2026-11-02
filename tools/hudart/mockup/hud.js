@@ -456,7 +456,7 @@ const HUD = (() => {
     const Lp = C.plot.l, Tp = C.plot.t, pw = W - Lp - R, ph = H - Tp - C.plot.b, X = s => Lp + pw * (S.t0 + s * DT) / st.T;
     const now = Math.max(0, Math.min(NS - 1, Math.round((st.t - S.t0) / DT)));
     const max = nice(Math.max(...G.flatMap(g => g.v))), Y = v => Tp + ph * (1 - v / max), fv = v => statFormat(S.measure, v);
-    const dark = c => { const n = parseInt(c.slice(1), 16); return .3 * (n >> 16) + .59 * ((n >> 8) & 255) + .11 * (n & 255) < C.line.dark; };
+    const dark = c => { const [r, g, b] = rgbOf(c); return .3 * r + .59 * g + .11 * b < C.line.dark; };
     const tx = (x, y, s, o) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${TS.font}" font-weight="${TS.weight}" letter-spacing="${TS.spacing}em"${TS.upper ? ' style="text-transform:uppercase"' : ''} ${o}>${s}</text>`;
     const A = C.axis, xph = Lp + pw * st.t / st.T;
     let h = `<defs><clipPath id="past"><rect x="0" y="0" width="${xph.toFixed(1)}" height="${H}"/></clipPath></defs>`;
@@ -489,6 +489,17 @@ const HUD = (() => {
         + (dark(e.g.col) ? `<g data-ring="${bx} ${by} ${bw} ${bh} ${t}" fill="${Lg.swatch_edge}">${'<rect/>'.repeat(4)}</g>` : '')
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)
         + tx(lx + lw, yy + rh * Lg.text_y, fv(e.v), `font-size="${fs}" fill="${Lg.value}" text-anchor="end"`); }).join('');
+  }
+  /* a group's colour as [r, g, b]: the two forms a host gives, `#rrggbb` (the stand-ins) and `rgb(r,g,b)` (the wiki's
+     colours out of a pack's palette, frame.js seatColour). Any other form throws: read as a number it would be NaN,
+     which the bit operations of the luma turn into 0, so every such colour would read as dark and draw the halo and
+     the ring the DLL (tagpu_hudlay.c dark, on the colour's bytes) does not */
+  function rgbOf(c) {
+    let m = /^#([0-9a-f]{6})$/i.exec(c);
+    if (m) { const n = parseInt(m[1], 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+    m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(c);
+    if (m) return [+m[1], +m[2], +m[3]];
+    throw new Error(`hud.js: a chart colour is neither #rrggbb nor rgb(r,g,b): ${c}`);
   }
   const nice = v => { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
 
