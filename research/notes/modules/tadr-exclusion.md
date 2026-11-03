@@ -29,6 +29,12 @@ ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` (and on
 takeover. The plan and the other routes: [the
 takeover](../compat/takeover.md).
 
+**What of a TADR install Impure reads: data, never code.** A mod's icon set for TADR's megamap —
+the ini the exe's string at `0x5098A3` names, its `[Preferences] MegaMapConfig`, the `iconcfg.ini`
+and its PCX pictures — is read from the install as bounded files and parsed by Impure's own pure
+code for the strategic icons ([strategic icons](icons.html), *Mod icon sets*). Nothing of TADR is
+loaded or called for it, and the takeover above is unchanged.
+
 **TADR's modules never run.** Loading and running are two steps, and the second one is ours.
 `tagpu_takeover_tadr_init` walks every mapped
 image (`util_enumerate_modules`, which reads the address space rather than the loader's list, so a

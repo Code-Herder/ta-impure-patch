@@ -24,9 +24,10 @@ renderer: it is a jump to the whole-map level, TADR's gesture on our camera.
 
 **Why not TADR's design.** TADR's megamap is a separate 2D picture of the map with its own input
 translation for every order. Ours draws the world, and selects and commands in it, at every level
-down to the whole map; what the game shows there is the world itself, with icons for the units. The TADR-port notes listed the
-megamap as a deliberate exclusion (`tadr-port/quality-of-life.md`, `tadr-merge-exploration.md`);
-this plan replaces that line, and the landing that ships it corrects those notes.
+down to the whole map; what the game shows there is the world itself, with icons for the units. The TADR-port notes
+([quality of life](tadr-port/quality-of-life.html), [the merge exploration](tadr-merge-exploration.html))
+and the roadmap's TADR survey state the mega map as this design: a repurposed strategic zoom with
+TADR's icon sets read from the install, not a port of TADR's view.
 
 ## What BAR does — the rule we copy
 
@@ -155,7 +156,8 @@ Every TADR mod sets `MegaMapConfig=.\Icon\iconcfg.ini` (TA Zero: `.\ZIcon\`) in 
   (shown only when selected), `HoverColor`; `UseCircleHover`; `UseDefaultIcon`.
 - `UseDefaultIcon=TRUE`: fixed file names in the folder — `COMMANDER`, `CONS`, `FACTORY`,
   `BUILDING`, `AIRCRAFTCOMBAT`, `AIRCONS`, `MOBILECOMBAT`, `NONE`, `UNKNOWN`, `NUKEICON` (`.PCX`),
-  plus `<side commander>.PCX` per side (ARM, CORE, GOK). Mayhem, TA Zero and Twilight ship this.
+  plus `<side>.PCX` per side (ARM, CORE, GOK). Mayhem, TA Zero and Twilight ship this, without a
+  `COMMANDER.PCX`.
 - `UseDefaultIcon=FALSE`: `[Icon]` maps an FBI category tag to a PCX; `Unknow`, `Nothing`,
   `NukeIcon` are special keys. ProTA 4.8 ships 24 entries: the three specials and 21 categories
   (AIR, AIRCONS, AIRFAC, BUILDING, EXP, EXPFAC, HOVER, HOVCONS, HOVFAC, KBOT, KBOTCONS, KBOTFAC,
@@ -163,6 +165,9 @@ Every TADR mod sets `MegaMapConfig=.\Icon\iconcfg.ini` (TA Zero: `.\ZIcon\`) in 
 - **Escalation** ships a set in custom mode in its TAF install and its RAR — nine categories, AIR,
   LAB, BLDG, BIG, LRG, FAT, AIRCONS, CONS, BIGCON; the escalation-gold-10.2.0 fixture's `TAESC.ini`
   names `.\Icon\iconcfg.ini` but has no such folder. **Retail** has no TADR ini → the generated set.
+- The pictures are 6 to 20 px square (TADR's bound is 22); each folder's `smallcircle`, 100 × 10,
+  is TADR's hover circle and no icon. Every set and its sizes: [the setups](compat/setups.html),
+  *The mega map's icon sets*.
 
 The icons are read from the player's install at run time and never shipped, so the
 redistribution question does not arise. TADR itself is never loaded (the takeover), only its
@@ -170,7 +175,8 @@ ini and art read. **The ini TADR reads** is the one named by the exe's string at
 (`TAIniStr`, `HardCodeFunctions.cpp:799`), which the Community Patch Loader rewrites at start; its
 `[Preferences]` `MegaMapConfig` names the icon config relative to the current directory, cut at its
 last `;` (the research for landings 3–4, `.data/mega-map/facts-2026-11-03-icons.md` §E–§F in the
-main checkout).
+main checkout). Impure resolves it against the exe's folder, refuses an absolute one and cuts a
+value at its first `;` ([strategic icons](modules/icons.html), *Mod icon sets*).
 
 ## Decisions on landing 1 (owner, 2026-11-03)
 
@@ -285,11 +291,22 @@ is per-frame working copies, not information, so the landing is split to remove 
    panel 46 px past 640×480, so rows wait for a panel layout that fits. The class table's and the
    art's game-thread code sits in `tagpu_packet_pub.c`, an existing publisher, so
    `thread-split.allow` gains no line.
-4. **Mod icon sets.** Find the install's TADR ini, read `iconcfg.ini`, decode the PCX through the
-   palette into an atlas (FillColor → team colour, TransparentColor → alpha, SelectedColor only
-   when selected); categories through a read-only walk of the category map.
-5. **Documentation** rides with each landing; the last one also corrects the TADR-port notes'
-   "megamap excluded" lines and adds an in-game wiki entry.
+4. **Mod icon sets.** *Built 2026-11-03 on its worktree; the in-game checks V4-1..V4-5 are open*
+   (`.data/mega-map/landing3-4-spec.md`: Mayhem's set at the floor in team colours and selected,
+   ProTA's categories and its UNKNOWN, Escalation's set from a full install and the compat setups'
+   Escalation with no set, TA Zero's `ZIcon` and retail with none, the pick on set pictures). The
+   module: [strategic icons](modules/icons.html), *Mod icon sets*. Once a process, at the first
+   in-play fill and before the art's release store, the TADR ini named at `0x5098A3`, its
+   `MegaMapConfig`, the iconcfg and its PCX pictures are read from the install as bounded files and
+   parsed by pure, host-tested code (`tagpu_iconset.c`); the pictures go into the icon atlas beside
+   the radar logo, FillColor → team colour (white when selected), TransparentColor → nothing,
+   SelectedColor shown only when selected, in the set's own colour. Once a level, each type takes
+   the first picture in TADR's load order whose types hold it — TADR's rules, with the categories
+   from a read-only walk of the engine's map `[0x51E6B4, 0x51E6B8)` that never calls `0x488C50` —
+   else the set's UNKNOWN, else its generated shape; a radar contact draws the set's NONE. Both
+   threads size a set picture through one function, so the pick's circle is the picture's. The
+   game-thread code sits in `tagpu_packet_pub.c`, so `thread-split.allow` gains no line.
+5. **Documentation** rides with each landing; the last one adds an in-game wiki entry.
 
 Presentation only: nothing here writes simulation state. The recorder question in landing 1 is
 the one place it meets the replay.

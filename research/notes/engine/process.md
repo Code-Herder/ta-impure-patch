@@ -954,6 +954,19 @@ a register once and call through it; the register is given with the load.
    The highest-ID fixture observed the consequence: retail-key/ini edits left the match
    at 1000 units per player with player nine absent. See [the COB gate](../tadr-port/cob.md).
 
+   **The options file's name is the string at `0x5098A3`** [DISASSEMBLED 2026-11-03]: the tail
+   of the format `0x5098A0` (`%s\totala.ini` in retail), whose one reference in `.text` is that
+   `push 0x5098A0` at `0x49F5CE`; no instruction names `0x5098A3` itself. In retail it is
+   `totala.ini`, followed by three NULs, so the name has 12 characters and a NUL of room before
+   the next string at `0x5098B0`. The Community Patch Loader's `ConfigFileName` writes it at start
+   ([deep-patch-loader.md](../deep-patch-loader.md)), and TADR names its own ini from it and the
+   exe's directory (`TAIniStr`, `HardCodeFunctions.cpp:799`); the names measured on the setups
+   are `taesc.ini` (Escalation GOLD 10.2.0), `tazero.ini` (TA Zero alpha 5), `ta.ini` (Twilight,
+   gammata's) and `totala.ini` in the ProTA and Mayhem exes, which their loader rewrites to
+   `ProTA.ini` and `mayhem.ini`. The strategic icons read it in the running process, within 33
+   bytes, to find a mod's TADR icon set ([strategic icons](../modules/icons.html), *Mod icon
+   sets*).
+
    The dword wrappers carry the options: the loader `0x42F9A0` and the saver
    `REGISTRY_SaveSettings 0x430F00` ("The Visuals options the store owns" above). `0x42F980` and
    `0x42F960` are the raw read and the binary write with the section bound, used for `cdshell`,

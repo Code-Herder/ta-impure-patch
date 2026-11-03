@@ -1447,8 +1447,10 @@ passes draw there, and the GDI lane shows what they leave) and the 2× bake's ca
 
 **Unit-type slots, 512 → 16 384** [DISASSEMBLED 2026-09-24; MEASURED 2026-09-24]. A category mask is
 one bit a type: 0x40-byte heap blocks the name map `0x488C50` allocates (`push 0x40; call 0x4B4F10` at
-`0x488CC2`) and clears (`0x488CD3`), ORs (`0x488E3E`), sets a type's own bit in (`0x488E03`, and at game
-start `0x488E70` from `0x42D6C2`), and 0x40-byte stack masks in the AI plan's `Weight` and `Limit`
+`0x488CC2`) and clears (`0x488CD3`), ORs (`0x488E3E`), sets a type's own bit in (`0x488E03`, and at the
+level load `0x488E70`, whose one call site is `0x42CC40` in the FBI reader `0x42BF40`, which the loop
+from `0x42D6C2` calls per type at `0x42D722`; the map itself: [units](units.html), *The unit-category
+map*), and 0x40-byte stack masks in the AI plan's `Weight` and `Limit`
 commands (`0x406DB0`, `0x406E40`, filled by `0x488D30`) and in Ctrl-Z (`0x48BE00`). Every reader
 indexes one by a type ID below the def count, and nothing else sizes them. The 17 sites: the heap
 allocation (a stub, since `push 0x40` has no room for 2048), its clear and OR counts, and in each

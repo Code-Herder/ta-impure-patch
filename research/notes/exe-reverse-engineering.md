@@ -273,7 +273,8 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   site Impure widens for 16 384 types), clears 16 dwords (`0x488CD2`), inserts through
   `0x488FB0` (`this` = `0x51E6B0`), then releases its two strings through `0x4C9390` and returns
   the mask. The carry flag is clear on both paths into `0x488CC2` (`je` after a `cmp` that
-  found equality, `jne` after `test eax,eax`).
+  found equality, `jne` after `test eax,eax`). The map itself, every caller that inserts into it
+  and its free `0x488BF0`: [units](engine/units.md), *The unit-category map*.
 - **`0x42C028`** — one caller of `0x488C50`, in the unit-definition load: it reads the FBI key
   `wpri_badTargetCategory` (string `0x503E88`, default `"none"` at `0x503EA0`) and stores the
   mask at `def+0x231`. It runs on the Load Thread when a skirmish loads.

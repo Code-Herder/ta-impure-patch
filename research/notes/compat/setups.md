@@ -190,6 +190,30 @@ with no box, and **Start stopped the load on the box** `Maps\A Plethora of Ponds
 held 109 maps, the nine among them. With the fix the screen opened on a map with terrain, Start
 went into the game, and the list held 100, none of the nine.
 
+## The mega map's icon sets
+
+Impure's strategic icons draw the set a mod ships for TADR's megamap, read from the install at run
+time; nothing of it ships with Impure, and none of TADR's code runs for it ([strategic
+icons](../modules/icons.md), *Mod icon sets*). The ini Impure starts from is the one the exe's
+string at `0x5098A3` names. As the installs ship them (MEASURED 2026-11-03 from the files of the
+compat setups' game folders and of Escalation's release archive):
+
+| install | TADR ini → `MegaMapConfig` | mode | the set |
+|---|---|---|---|
+| Total Mayhem 11.3.0 | `mayhem.ini` → `.\Icon\iconcfg.ini` | default | the fixed pictures and the sides' `ARM`, `CORE`, `GOK`; FillColor 245 |
+| ProTA 4.8 | `ProTA.ini` → `.\Icon\iconcfg.ini` | custom, 24 `[Icon]` lines | `Unknow`, `Nothing`, `NukeIcon` and 21 categories (AIR, AIRCONS, AIRFAC, BUILDING, EXP, EXPFAC, HOVER, HOVCONS, HOVFAC, KBOT, KBOTCONS, KBOTFAC, MINE, SHIP, SHIPCONS, SHIPFAC, SUB, SUBCONS, VEHICLE, VEHCONS, VEHFAC); FillColor 34 |
+| TA Zero alpha 5 | `tazero.ini` → `.\ZIcon\iconcfg.ini` | default | FillColor 245 |
+| TA Twilight 2.0 beta 98 | `ta.ini` → `.\Icon\iconcfg.ini` | default | FillColor 245 |
+| Escalation, from its release archive (the TA Forever install ships the same) | `taesc.ini` → `.\Icon\iconcfg.ini` | custom, 12 `[Icon]` lines | the three specials and 9 categories: AIR, LAB, BLDG, BIG, LRG, FAT, AIRCONS, CONS, BIGCON; FillColor 245 |
+| Escalation GOLD 10.2.0, as the compat setups install it | `taesc.ini` → `.\Icon\iconcfg.ini` | — | **no `Icon` folder**: no set; every type draws its generated shape |
+| retail, and the setups with no mod | no TADR ini | — | no set |
+
+The three default-mode sets hold the same file names and no `COMMANDER.PCX`, so their load names
+it skipped and a commander by TADR's flag rule takes its side's picture. Every shipped set has TransparentColor 9 and
+SelectedColor 255. Its pictures are 6 to 20 px —
+most units 10, commanders 18, factories 16 — and each folder also holds TADR's 100 × 10 hover
+circle `smallcircle`, which no list names and the decoder's 22-px bound refuses.
+
 ## The 3.9.02 exe
 
 gammata's drop-in and the older community installs ship the "3.9.02" `TotalA.exe` (md5

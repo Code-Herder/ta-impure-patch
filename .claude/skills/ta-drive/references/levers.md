@@ -238,7 +238,7 @@ Driving the camera at a zoom other than 1:
   a hard switch). Like `wheel=`, the store counts only under `--defaults`; a tacli control launch
   draws at 100/100/33. With those, 1x shows no icon on any frame up to about 2600 px tall, and at
   1920x1080 COMBAT starts to fade in below z 0.409 and is opaque below 0.274 (the module's table
-  has every class). Read `icons: on= units= icons= hidden= cargo= dots= drop= base= zS= z=
+  has every class). Read `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z=
   alpha(combat)= alpha(dot)= edges=… by-class=… us=` every 300 frames: at 1x `icons=0 hidden=0`;
   `zS=` is the level the frame spans BAR's distance at (`frame height / 4970`, 0.2173 at 1080);
   the nine-field lists are in class order UNKNOWN, COMMANDER, FACTORY, BUILDING, AIRCONS,
@@ -246,6 +246,16 @@ Driving the camera at a zoom other than 1:
   otherwise). A click on an icon whose model is hidden is answered by the icon's circle on the game
   thread: `zoom: icon pick - N hit(s), M miss(es) so far`, at most once a second. Radar contacts
   show as the minimap's dot under the same rule (`dots=`) and are not pickable in the world view.
+- **A mod's TADR icon set replaces the shapes** where the install ships one (no lever; it is read
+  once a process from the files `MegaMapConfig` names in the ini the exe's `0x5098A3` string
+  names — Mayhem, ProTA, TA Zero and Twilight do; retail and the compat setups' Escalation do not). The
+  log says which, once: `icons: mod set <folder> from <ini> (<MegaMapConfig>), default|custom
+  mode, N picture(s) loaded of M, … skipped: …` or `icons: no mod set - …`; the art line then
+  counts `N mod set picture(s)`. Each level with a set logs `icons: mod set by type - E map
+  entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W= CTRL_B= CTRL_F=; <category>=<types>`
+  (a custom set's categories, `absent` for one the game does not have). `set=` on the heartbeat
+  counts the icons drawn as set pictures. A set picture is drawn at `k = round(base/10)` (1 at
+  1080p, 2 at 4K) and switches at its own drawn size, so it is not the class table's edge.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -
@@ -456,7 +466,7 @@ that map's size.
 | `surf: golden source WxH on the GAME thread -- captured= unchanged= refused= …` | 300 captures | `refused` | `us avg=` is the game-thread cost (55–58 µs at 1024x768) |
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps= hud=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down; `hud=1` while the replay HUD draws |
 | `mark: bars= sel= selover= icons= iconover= cursor= place= placered= placetake= ordart= ordline= text=… atlas= zoom=` (`log`) | 120 | `iconover` | the live zoom is readable here; `icons=` counts the strategic icons' quads, `iconover=` those the bucket refused; `ordart=` counts the order art's quads (route dots and waypoint sprites); `place=` counts the placement sites drawn, `placered=`/`placetake=` those of them red and yellow; the file lever logs nothing |
-| `icons: on= units= icons= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges= dotk= by-class= us=` | 300 | `drop` | the strategic icons (§"Camera, viewport and fog"): `hidden=` models not drawn under an icon, `cargo=` units carried by one, `dots=` radar dots, `us=` the frame's decision + the sort and emit, in µs; `on=0` when the unit or the marker pass is not drawing, no type table rode the packet, or the art is not published yet (`icons: art N radar logo frame(s) of M, …` once a process) |
+| `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges= dotk= by-class= us=` | 300 | `drop` | the strategic icons (§"Camera, viewport and fog"): `set=` icons drawn as a mod set's picture, `hidden=` models not drawn under an icon, `cargo=` units carried by one, `dots=` radar contacts (a dot, or the set's NONE picture), `us=` the frame's decision + the sort and emit, in µs; `on=0` when the unit or the marker pass is not drawing, no type table rode the packet, or the art is not published yet (`icons: art N radar logo frame(s) of M, …` once a process) |
 | `order: arena= recs= drawn= lines= dots= …` (`log`) | 120 | | `arena=-1` = SHIFT not held |
 | `… \| hits: bad= bare 09= 0b= over= young owner= by= slots= tables= out 09= 0b= B= stockB= unk= in 09= 0b= owner=A/R by=S/U/R dead= gate= copy exact= bound= unk= held= fallback= holdfail= retry= delay= q=` (after `wire:`, before `ghost:`; the alert fields first, since the `packet:` line is cut at 2040 bytes from its end) | 300 render frames | `bad`, `bare`, `over`; `young owner` whenever `dmgdelay.on` is armed | `owner=` hits applied/refused as the victim's owner; `by=` a bystander's applied as the same unit / applied undecidable / refused as stale; `slots=` the table's count (10·N + 1); `B=` the carried messages' bytes against `stockB=`; `bound=` copies the `0x2C` made with a real lower bound, `unk=` those without; `held=` creates the hold moved, `fallback=` those it gave a slot freed in the last tick, `holdfail=` those it failed, `retry=` Deathmatch respawns that found no slot and wait for their countdown's next fire, about 180 ticks |
 | `… \| ghost:[ LEVER-OFF] over= bad= offthread= unbound= short= q= deep= replay= now= killed= swept= nokill= untracked= inactive= stale= cleared= levels= pos ground= air= none= off=` (after `hits:`, the line's last section; the alert fields and the lever first) | 300 render frames | `over`, `bad`, `offthread`, `unbound`, `short` | `q=` creates held during the load and `replay=` those replayed before the first tick (a `replayed slot …` line each); `now=` creates made in a catch-up tick (a `created slot … in a catch-up tick` line); `killed=` held creates a refused `0x0C` cancelled, `swept=` copies made before state 6 that a kill refused in the catch-up ticks marked dying; `pos ground=`/`air=` dirty creates placed from their move payload, `none=` left at stock's record, `off=` a payload off the map, `unbound=` a reader that is not B3's (B5 refuses to install without B3 armed), `short=` a position read that would pass its message's end; ` LEVER-OFF` with `ghostq.off` |

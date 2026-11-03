@@ -3759,7 +3759,10 @@ queue editing, build spacing, construction controls and allied information. Mex/
 area reclaim by kind ([module §2.110](modules/reclaim-sweep.html#2110-the-reclaim-sweep-tagpu_sweepc-tagpu_sweepgeoc-tagpu_routec-2026-10-28)), are built. Escalation/Twilight ship rotation but no supported
 mod content enables it; several newer gaps have public development downloads and are absent from
 all native bundles. Existing ghosts/piece masks, markers, world zoom and replay playback/seeking
-are covered; the separate megamap remains intentionally excluded. The survey does not change
+are covered; the megamap is covered differently — not TADR's separate view but the world zoom
+repurposed as a strategic zoom, Ctrl+wheel (`wheel=megamap` swaps the wheels), with TADR's icon
+sets read from the install ([the plan](mega-map-plan.html), *Why not TADR's design*). The survey
+does not change
 [the data-key safety recommendations](tadr-port/data-keys-evidence.html).
 
 ### F — COB compatibility for the supported mods

@@ -2,26 +2,34 @@
 
 Zoomed out, a unit is drawn as a flat team-coloured icon of constant screen size, by BAR's rule;
 where its model is smaller than the icon, the model is not drawn at all, and the icon answers the
-pick.
+pick. A mod that ships an icon set for TADR's megamap has its types drawn with that set's
+pictures, read from the player's install.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
-Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`. The design and the landings: [mega map plan](../mega-map-plan.html), landing 3.
+Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`. The design and the landings: [mega map plan](../mega-map-plan.html), landings 3 and 4.
 
-**Not yet checked in game.** The host test passes and the DLL builds; none of the in-game checks
+**Not yet checked in game.** The host tests pass and the DLL builds; none of the in-game checks
 has been run — 1× against the stock frame, every class at the floor in both team colours, the
 fade band's alphas, click, hover, band box and orders on icons, radar dots, the 4K numbers, the
-cost against the models replaced, the keys changing the live view (the plan's landing 3).
+cost against the models replaced, the keys changing the live view (the plan's landing 3), and for
+the mod sets V4-1..V4-5: Mayhem's set at the floor in team colours and selected, ProTA's
+categories and its UNKNOWN, Escalation's set from a full install and the compat setups' Escalation
+with no set, TA Zero's `ZIcon` folder and retail with none, and the pick on set pictures (the
+plan's landing 4). Offline, every picture the compat setups' sets ship decodes at its size through
+the pure decoder (6 to 20 px); only the 100 × 10 hover circle `smallcircle` is refused.
 
 | file | what it holds | thread |
 |---|---|---|
 | `inc/tagpu_icon_rule.h` | the rule (size, distance, fade, hide) and the generated shapes, pure C with their GLSL twin `TAGPU_GLSL_ICON_FN` | any |
 | `inc/tagpu_icontype.h` | the classes `TAGPU_ICLS_*`, the type table's and the art's interfaces | — |
-| `src/tagpu_packet_pub.c` (`utype_level`, `utype_level_end`, `iconart_build`) | the per-type class table, built once a level inside the in-play fill and carried in the packet; the radar logo art, decoded once a process | game |
+| `inc/tagpu_iconset.h`, `src/tagpu_iconset.c` | a mod set's pure half: the PCX decoder, the profile-file reader, the iconcfg's two modes and the load list, the texel classes and the atlas packer `tagpu_iconart_pack` — no file I/O, no engine name, no Win32 | any |
+| `src/tagpu_packet_pub.c` (`utype_level`, `utype_level_end`, `iconart_build`, `iconset_load`, `iset_level`) | the per-type class table and each type's set picture, built once a level inside the in-play fill and carried in the packet; the art — the radar logo and a mod's set — read once a process | game |
 | `src/tagpu_icon.c` | per frame: which packet unit is an icon, which model is hidden, the queue and its sort | render |
 | `src/tagpu_native.c` (the unit gather), `src/tagpu_mark.c`, `src/tagpu_vk_mark.c` | the icons placed, emitted and drawn by the marker pass | render |
 | `src/tagpu_zoom.c` (`icon_hit`) | the pick, inside the unit hit test's guard at `0x48CE15` | game |
-| `tests/icontest.c`, `tests/icontest.py` | the host test (`make icontest` is its Windows build) | host |
+| `tests/icontest.c`, `tests/icontest.py` | the rule's host test (`make icontest` is its Windows build) | host |
+| `tests/iconsettest.c`, `tests/iconsettest.py` | the set's host test under ASan and UBSan, every input built by the test — no mod file is committed (`make iconsettest` is its Windows build) | host |
 
 ## The rule
 
@@ -89,7 +97,8 @@ fade in at 1× on a 4K-native frame; above about 2600 px tall (5K native) they f
 ## The class rule
 
 Built once a level on the game thread, at the level's first in-play fill (`utype_level`, a no-op
-once built for the level), one `TAGPU_PK_UTYPE` (8 B: class, layer, a mod set's icon, `r_px`) per
+once built for the level), one `TAGPU_PK_UTYPE` (8 B: class, layer, the type's mod set picture — `TAGPU_ICON_NOSET` unless
+`iset_level` gives it one, *Mod icon sets* — and `r_px`) per
 UnitDef row: `udefs = [main+0x1439B]`, stride `0x249`, rows `[0, UNITINFOCount)` with
 `UNITINFOCount = [main+0x1438F]`, the count the level teardown's `0x42DB90` loops to. Row 0, the
 engine's "no model", stays UNKNOWN with no radius. A unit's row is its `+0xA6`, which is both the
@@ -154,6 +163,120 @@ checks the C one (symmetry, ink on every border texel, the plus only on builders
 open and a solid one closed, the nine classes pairwise different from 7 to 128 px, and the 16-px
 rasters' FNV `0x4EC8F4CD`).
 
+## Mod icon sets
+
+Several mods ship an icon set for TADR's megamap: an `iconcfg.ini` and a folder of small 8-bit
+PCX pictures in the TA palette. Impure reads the same files from the player's install at run time
+and draws them itself: TADR's code never runs ([keeping TADR out](tadr-exclusion.html)), and no
+picture ships with Impure. Which installs carry one: [the setups](../compat/setups.html), *The mega
+map's icon sets*.
+
+**Finding it** (`iconset_load`, once a process, on the game thread at the first in-play fill,
+before the art's release store):
+
+1. **The TADR ini's name** is the string at `0x5098A3` in the running exe ([process](../engine/process.html),
+   *The options file's name*): `totala.ini` in retail, rewritten by the Community Patch Loader at
+   start-up to the mod's, so by the first in-play fill it is the mod's. It is taken only as 1..32
+   characters of `[A-Za-z0-9_.-]` and a NUL within 33 bytes; anything else is no set.
+2. `<exe dir>\<name>`, at most 64 KB → `[Preferences] MegaMapConfig`. Absent, empty, too long, or
+   not relative (a drive `:`, or a leading `\` or `/`) → no set, so only the install's own files
+   are read. TADR resolves the value against the current directory; the exe's folder is used here
+   [INFERRED equal under every launcher in use: tacli and the loaders start TA in its folder].
+3. **The iconcfg**, at most 64 KB, at `<exe dir>\<value>`; the pictures' folder is that path cut at
+   its last `\` or `/`.
+
+**Reading the files** the way the Win32 profile API does: section names and keys compared ASCII
+case-insensitively; whitespace trimmed around the name, the key and the value; a line whose first
+non-blank character is `;` skipped; a section line's name ends at its first `]`, so
+`[Option] ; General Settings`, which every shipped set has, is `Option`; only the first section of
+a name is read, and a key's first line in it; a value cut at its first `;` and trimmed again; a key
+over 63 bytes or a value over 259 refused, never cut. `[Option]`'s `FillColor`,
+`TransparentColor` and `SelectedColor` are their leading decimal digits when those make 0..255,
+else TADR's defaults 0, 9 and 89; `UseDefaultIcon` is TRUE when its lower-cased value contains
+`true`, and absent is TRUE (TADR's default). `HoverColor` and `UseCircleHover` are not read.
+
+**The load list**, in TADR's order, which is the order a type's picture is chosen in:
+
+- each side's `<side name>.PCX`, for `s < min([main+0x37F39], 5)`: the name at
+  `main+0x37F3D + 0x232·s`, read within its 0x1E bytes and taken only as a file name — printable,
+  none of `\ / : * ? " < > |`, ending within the record;
+- **default mode** (`UseDefaultIcon` TRUE): `COMMANDER`, `AIRCRAFTCOMBAT`, `AIRCONS`, `CONS`,
+  `MOBILECOMBAT`, `FACTORY`, `BUILDING`, `NONE`, `UNKNOWN`, `NUKEICON` (`.PCX`);
+- **custom mode**: every `[Icon]` line in file order, the value the file — the key `Nothing` is
+  NONE, `Unknow` UNKNOWN, `NukeIcon` NUKEICON (case-insensitive), any other key the category it
+  names. A line whose value is empty or not relative is refused and counted.
+
+At most 64 pictures, each file at most 4 KB; one that does not read or decode is skipped and named
+in the log. When NONE or UNKNOWN loads twice, the last one is the set's, as in TADR.
+
+**The PCX decoder** (`tagpu_pcx_decode`) takes ZSoft's header (`0x0A`, RLE, 8 bpp, one plane), a
+picture of 1..22 px a side (TADR's `ICONMAXWIDTH/HEIGHT`) whose row stride `bytes_per_line` is at
+least its width and at most 1024, and decodes `h × bytes_per_line` bytes as one stream: a run may
+cross a row, only the first `w` bytes of each row are kept, a run that passes the image's last byte
+ends there, and a stream that ends first is refused. Texels are TA palette indices as they are;
+the trailing palette is ignored. TADR decodes `w × h` bytes and swaps the two, which gives the same
+pixels for the square pictures every set ships; this decoder honours the stride. The shipped
+pictures are 6 to 20 px; a set's 100 × 10 hover circle `smallcircle` is past the bound, and no
+shipped list names it.
+
+**Into the atlas.** Each picture's texels are classed in TADR's precedence — TransparentColor is
+nothing, else FillColor is the team colour, else SelectedColor is shown only when selected, else
+the texel is drawn as its own index (`tagpu_iconset_classify`) — and packed with the radar logo
+frames into one atlas (*Radar dots*). The art keeps the set's SelectedColor as `selcol`.
+
+**Each type's picture** (`iset_level`, once a level inside the in-play fill, right after the class
+rule): the first entry in load order whose types hold the type's row, else the set's UNKNOWN, else
+none — the type keeps its generated shape (TADR would index its list at −1). What an entry holds
+is TADR's rule (`ExternQuickKey.cpp`):
+
+| entry | its types |
+|---|---|
+| a side's picture | that side's commanders: `showplayername` ∧ `hidedamage` (decoys included) whose `Side` (def `+0xA0`, 8 bytes) equals the side's name, ASCII case-insensitively |
+| COMMANDER | every such commander |
+| AIRCRAFTCOMBAT | `canfly` ∧ a weapon that is no stockpile (WeaponTypeMask `+0x111` bit 28 clear, read only from a record of the weapon array) ∧ ¬builder ∧ no yard map ∧ ¬commander |
+| AIRCONS | `canfly` ∧ builder ∧ no yard map ∧ ¬commander |
+| CONS | the types of category `CTRL_B` when it holds any, else builder ∧ ¬isairbase ∧ mobile (`bmcode` ≠ 0) ∧ ¬commander |
+| MOBILECOMBAT | the types of `CTRL_W` ∧ ¬canfly |
+| FACTORY | `CTRL_F`'s types when it holds any, else builder ∧ ¬isairbase ∧ immobile ∧ ¬commander |
+| BUILDING | a yard map (the def's pointer `+0x14E` non-NULL; never dereferenced) ∧ ¬commander |
+| a custom line | the types of the category its key names |
+| NONE, UNKNOWN, NUKEICON | no type |
+
+A category with no type is the same as an absent one.
+
+**The categories are the engine's own map, walked read-only** ([units](../engine/units.html), *The
+unit-category map*): `[*(u8**)0x51E6B4, *(u8**)0x51E6B8)`, 8-byte `{name, mask}` entries, a type's
+bit its row. The bounds must be equal (no categories) or a whole number of entries between two
+pointers `ptr_ok` accepts, at most 65 536; an entry whose name or mask `ptr_ok` refuses is skipped.
+The walk is linear and compares names with `_stricmp`'s ASCII fold, so it holds whatever order the
+map is in; an engine name is read only to its NUL or the first byte that differs from ours, within
+64. A mask bit is read only for a row below `UNITINFOCount`, which the class table has already
+bounded by `TAGPU_LIM_TYPES`, the mask's bits under Impure's raise. **`0x488C50` is never called**:
+on a miss it inserts, so a category the map lacks is simply absent.
+
+*Why the walk is safe*: the map and its masks are freed only by the teardown (`0x488BF0`, whose one
+caller is `0x491C3A`, game thread) and inserted into during play only by game-thread code; the walk
+runs on the game thread inside the in-play publish, so neither happens during it — a lifetime by
+thread ownership. The level's load filled the map on the loader thread before `main+0x38D75` bit 1
+(`0x497C5F`), which the game thread read before its first in-play frame. `ptr_ok` is a filter on
+values, not the argument. The units page names the one inserter whose thread is not established,
+the AI plan's `Weight`/`Limit` commands.
+
+**Drawing a set picture.** A type whose `icon` names one of the published art's pictures is drawn
+with it (`tagpu_icon_type`, `inc/tagpu_icon_rule.h`): at the art scale `k = max(1, round(base /
+10))` — 1 at 1920 × 1080 and 2 at 3840 × 2160 with the defaults — its own aspect kept, shape 0.
+`icon` is DATA: an index at or past the art's picture count is the class's shape. The rule takes
+`S = E = k × the picture's longer side` (art has no 7-px floor), so where a set picture takes over
+follows its drawn size, not the class's BAR size. On the atlas the TransparentColor texels are
+discarded, the FillColor texels take the owner's team colour — **white when selected** — and the
+SelectedColor texels are discarded unless the unit is selected, when they show in the set's own
+SelectedColor (`uIconSelCol`, *The draw*). TADR keeps the team fill on a selected unit and shows the
+frame; this whitens the fill, as BAR does, and shows the frame. The render thread (`tagpu_icon.c`,
+the picture and its fade) and the game thread's pick (`tagpu_zoom.c`, whether the model hides and
+the circle's width) both ask `tagpu_icon_type`, so they agree on every size.
+
+With no set, every type's `icon` is `TAGPU_ICON_NOSET` and every path is the generated shapes'.
+
 ## Radar dots
 
 **Stock draws a radar contact on the minimap alone** ([ui](../engine/ui.html), *The minimap,
@@ -163,11 +286,14 @@ radar or sonar contact (`+0x110 & 0x300`) with a model is drawn as **the minimap
 owner's logo frame of `radlogo` (`main+0x147DF`), at an integer scale `k_r = max(1, round(0.8 ·
 base / 4))`, under the rule with `S = E = k_r × max(w, h)` (8 px at 1080p, 4 px at the smallest
 scale; the 7-px floor is the generated shapes', not the art's), on layer 1 (BAR's unidentified
-contact). A dot hides nothing, is never white and is not pickable in the world view — the
-engine's own rule (`0x48CD80` picks a radar contact on the minimap only). No fog source, no
-foreign unit and no dot.
+contact). **With a mod set that has a NONE picture** — the mod's art for an unidentified contact —
+the contact is drawn as that picture instead, at the set's art scale `k` (*Mod icon sets*), its
+FillColor in the owner's team colour, under the rule with `S = E = k × max(w, h)`. A contact hides
+nothing, is never white and is not pickable in the world view — the engine's own rule (`0x48CD80`
+picks a radar contact on the minimap only). No fog source, no foreign unit and no contact.
 
-**The art** is decoded once a process at the first in-play fill (`iconart_build`): `radlogo` is
+**The art** — the radar logo and a mod's set — is built once a process at the first in-play fill
+(`iconart_build`, which calls `iconset_load` before it packs): `radlogo` is
 session art, loaded by `0x429870` from start-up's `0x49134D`, and `0x42991E` is the only write of
 its pointer ([weapons](../engine/weapons.html), *The effect GAF sequences are a SESSION asset*). Up
 to 16 frames of at most 16 × 16, then a mod set's pictures (up to 64, at most 22 × 22), go into a
@@ -214,11 +340,14 @@ device grid (`snap_device`), into a bucket grown to the packet's unit count. The
 selection, the alpha and the shape **ride the vertex's world slot as two integers under 2¹²** —
 `team + 256 · selected` and `alpha + 256 · shape` — so the interpolated value rounds back to the
 integer at every fragment. The marker FS's `uText == 2` is the icon branch (text is `uText == 1`):
-shape 0 samples the icon atlas (the key discarded, the selected marker shown only when selected,
-the fill marker taking the team colour or white), any other shape is `taIconShape`. Its four
-uniforms `uIconFill`, `uIconSel`, `uIconWhite`, `uIconInk` sit at 20, 24, 28 and 32 of FS's block;
-the line program's `uGrid` is also at 32, so `tagpu_vk_mark.c` writes `uGrid` into line draws'
-blocks alone. The atlas is the image `IMG_ICON`, in a fourth descriptor set per slot, uploaded
+shape 0 samples the icon atlas (the key discarded, the selected marker discarded unless selected
+and then drawn as `uIconSelCol`, the fill marker taking the team colour or white), any other shape
+is `taIconShape`. Its five uniforms `uIconFill`, `uIconSel`, `uIconWhite`, `uIconInk` and
+`uIconSelCol` sit at 20, 24, 28, 32 and 36 of FS's block, which stays 48 bytes (`FS_SZ`):
+`uIconSelCol` is the art's `selcol`, a mod set's SelectedColor, handed over with the other markers
+(`TAGPU_MKHAND.iconSelCol`). The line program's `uGrid`, an `ivec4`, starts at 32, so
+`tagpu_vk_mark.c` writes `uGrid` into line draws' blocks alone and an icon draw's block holds
+`uIconInk` and `uIconSelCol` in its first two words. The atlas is the image `IMG_ICON`, in a fourth descriptor set per slot, uploaded
 once per slot (it never changes after its publication); an icon draw without it draws nothing and
 is logged once. `TAGPU_MK_MAXDRAW` is 24: a full frame records 16 draws, and a draw past the cap
 drops the whole marker layer for the frame.
@@ -241,7 +370,9 @@ drops the whole marker layer for the frame.
 - **Hidden**: hit when `(px − ax)² + (py − ay)² ≤ (0.45 · E / z)²`, with `ax = ((x − (eyeX << 16))
   >> 16) + 0x80` and `ay = ((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` — `0x48C6A0`'s
   own anchor without its corner offsets, in 64 bits. `0x48C6A0` is never called for such a unit, so
-  its int16 narrowing cannot wrap.
+  its int16 narrowing cannot wrap. `E` is the edge `tagpu_icon_type` gives the picture: the
+  class's drawn edge, or `k ×` the longer side of the type's set picture in the art this thread
+  published, the type's `icon` bounded by the art's picture count.
 
 *Why it is safe by construction*: every value comes from the unit's own record, its carrier's and
 the main block, read on the game thread that owns them inside the engine's own call; the row is
@@ -279,7 +410,14 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
 ## Threads
 
 - **The type table** is built and read on the game thread (the publisher and the pick) and reaches
-  the render thread only as values inside the packet.
+  the render thread only as values inside the packet; each type's set picture is one of them, an
+  index both threads bound by the art's picture count.
+- **The mod set** is read on the game thread inside the first in-play fill, before the art's
+  release store: the ini name at `0x5098A3` and the sides' names in the main block, then the files,
+  each bounded before it is read and DATA to the pure parsers. The load list it keeps is the game
+  thread's own, read again only by the per-level walk on the same thread.
+- **The category walk** runs on the game thread inside the in-play fill, once a level: a lifetime
+  by thread ownership (*Mod icon sets*).
 - **The art** is written once on the game thread before a release store
   (`__atomic_store_n(&s_iconArtReady, 1, __ATOMIC_RELEASE)`) and never written or freed after it;
   `tagpu_icontype_art()` takes it with an acquire load, so a render-thread pointer taken after it
@@ -288,7 +426,9 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   marker gather, which read its arrays in the same frame on the same thread: program order is the
   ordering. `tagpu_icon.c` reads only the packet and the published art.
 - `thread-split.allow` names the new game-thread reads inside the existing `publisher` lines of
-  `tagpu_packet_pub.c` (the type table, the radar logo) and `tagpu_zoom.c` (the pick's reads);
+  `tagpu_packet_pub.c` (the type table, the radar logo, the TADR ini's name, the sides' names, the
+  install's files and the category walk with the def fields it reads) and `tagpu_zoom.c` (the
+  pick's reads); `tagpu_iconset.c` is pure and has no line;
   `tagpu_icon.c` reads no engine memory and has no line. Presentation only: nothing writes
   simulation state, and no `sim` file is touched.
 
@@ -296,8 +436,13 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
 
 | line | when |
 |---|---|
-| `icons: on= units= icons= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges=<9> dotk= by-class=<9> us=<frame>+<emit>` | every 300 render frames, from the marker gather; the nine are in `TAGPU_ICLS_*` order — UNKNOWN, COMMANDER, FACTORY, BUILDING, AIRCONS, AIRCOMBAT, AIR, CONS, COMBAT. At 1× with the defaults `icons=0 hidden=0` |
-| `icons: art N radar logo frame(s) of M, key K fill F sel S` | once a process, at the art's publication |
+| `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges=<9> dotk= by-class=<9> us=<frame>+<emit>` | every 300 render frames, from the marker gather; `set=` the icons drawn as a mod set's picture (radar contacts not counted), `dots=` the radar contacts, as a dot or the set's NONE; the nine are in `TAGPU_ICLS_*` order — UNKNOWN, COMMANDER, FACTORY, BUILDING, AIRCONS, AIRCOMBAT, AIR, CONS, COMBAT, and count set pictures by their type's class. At 1× with the defaults `icons=0 hidden=0` |
+| `icons: mod set <folder> from <ini> (<MegaMapConfig>), <mode> mode, N picture(s) loaded of M, R [Icon] line(s) refused, skipped: <files>` | once a process, when a set's iconcfg reads; `<mode>` is `default` or `custom`, `M` the load list's length, `<files>` the pictures that did not read or decode, or `none` |
+| `icons: no mod set - the exe names no TADR ini`, `… - <ini> names no MegaMapConfig of the install's own`, `… - <ini>'s MegaMapConfig <value> does not read` | once a process, instead of the line above |
+| `icons: the mod set leaves no three free palette indices beside the radar logo - not drawn` | once a process: the set is dropped and the logos packed alone |
+| `icons: art N radar logo frame(s) of M, S mod set picture(s), key K fill F sel S` | once a process, at the art's publication |
+| `icons: mod set by type - E map entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W=a CTRL_B=b CTRL_F=c; <category>=<types> …` | once a level with a set loaded: the category map's entries, the types (rows past 0) given a picture and those given UNKNOWN, the three Ctrl categories' type counts, and each custom line's category with its type count, or `absent` for one the map does not hold |
+| `icons: the category map's bounds are not a map - no categories this level` | a level whose map bounds the walk refuses |
 | `icons: N unit types, past the table's T - no icons this level` | a level with too many types |
 | `icons: N units in the packet, past the T the icons hold - no icons while that is true` | once |
 | `zoom: icon pick - N hit(s), M miss(es) so far` | at most once a second, on the game thread |
@@ -306,13 +451,24 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
 ## What it does not do
 
 - **No menu rows** for the three keys until a panel layout fits 640×480.
-- **No mod icon sets** — a mod's own TADR `iconcfg.ini` art is landing 4; every type draws its
-  generated shape (`TAGPU_PK_UTYPE.icon` is `TAGPU_ICON_NOSET`).
-- **No hover indication** on an icon (BAR has none; TADR's HoverColor is not carried over).
+- **No hover indication** on an icon (BAR has none; a set's `HoverColor` and `UseCircleHover` are
+  not read).
+- **A mod set needs `MegaMapConfig`.** In default mode with no `MegaMapConfig`, TADR looks for the
+  fixed pictures in the current directory; here there is no set. The iconcfg is resolved against
+  the exe's folder, not the current directory [INFERRED the same under every launcher in use], and
+  an absolute `MegaMapConfig` is refused.
+- **A value is cut at its first `;`**; TADR cuts `MegaMapConfig` at its last, so a value holding
+  two `;` reads differently.
+- **The category walk runs once a level.** A category the console's reload adds to mid-level
+  (`0x42D1F0`, [units](../engine/units.html), *The unit-category map*) is seen at the next level.
+- **The walk's safety rests on every play-time inserter being on the game thread**; the AI plan's
+  `Weight`/`Limit` path into `0x488C50` (`0x488D30`) is the one whose thread is not established.
+- **Side pictures are read at the first in-play fill of the process**: the side names then are
+  the set's for the process.
 - **Overlapping icons**: the engine's own tie-break picks among hits (the smallest key over def
   `+0x176`/`+0x17A`/`+0x17E`, `0x48CE1E..0x48CE75`), which need not be the icon drawn on top.
 - **An icon whose unit the HotUnits cull does not list** is not pickable, so the strip of an icon
   hanging over the view's edge from a unit outside the addressable rect answers nothing.
 - **A unit the native pass does not own** keeps the engine's sprite and gets no icon.
-- Nuke projectiles get no icon; a building out of radar leaves no ghost icon (BAR keeps one);
+- Nuke projectiles get no icon, so a set's NUKEICON is loaded and never drawn; a building out of radar leaves no ghost icon (BAR keeps one);
   BAR's "real icon once identified" for a radar contact has no TA counterpart.

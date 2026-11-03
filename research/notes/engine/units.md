@@ -180,6 +180,65 @@ nothing sizes or indexes, so raising it costs time, not memory. The raised limit
 TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
+### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
+
+**What it is.** A sorted array of 8-byte entries `{name, mask}` between `*(u8**)0x51E6B4` (begin)
+and `*(u8**)0x51E6B8` (end), the two dwords after `0x51E6B0`, the object `0x488FB0` takes as
+`this`. `name` is a refcounted string object whose one dword is the text (`0x488C50` hands
+`[entry]` to `_stricmp`; `0x488BF0` releases it through `0x4C9390` with `ecx` = the entry), and
+`mask` points at a heap block with one bit a type. The order is `_stricmp 0x4F8A70`'s, an ASCII
+A–Z fold. A type is bit `ID & 31` of dword `ID >> 5`, `ID` = def `+0x21E`, and the level load makes
+`ID` the type's row: `0x42D2E0` sorts the def array by name (comparator `0x42DB60`,
+`_stricmp(a+0x20, b+0x20) < 0`, through `0x432D40`/`0x432FB0`), then `0x42D61A..0x42D653` store
+`+0x21E = row` for every row below `UNITINFOCount` (`0x42D634`), before the per-type FBI loop that
+stores it again at `0x42D702`. So **a mask's bit index is the type's row, which is a unit's
+`+0xA6`**. The blocks are 0x40 bytes stock; Impure's raised limits widen them to
+`TAGPU_LIM_TYPES` bits (*Unit-type slots* in [weapons](weapons.html)).
+
+**`0x488C50(name)`**, stdcall, `ret 4` — lookup or insert. A lower_bound with an 8-byte stride:
+count = `(end − begin) >> 3` (`0x488C67..0x488C69`), halved each step, `_stricmp([ebx+esi*8],
+name)` at `0x488C7E`, and on "less" `ebx` moves past the probe (`lea ebx,[ebx+esi*8+0x8]`,
+`0x488C8D`). An entry that compares equal returns its mask (`mov eax,[ebx+0x4]`, `0x488CB5`); on a
+miss it allocates a 0x40-byte block (`push 0x40; call 0x4B4F10`, `0x488CC2`), clears 16 dwords
+(`0x488CD2..0x488CDB`) and inserts `{name, block}` at the lower_bound through `0x488FB0`
+(`ecx = 0x51E6B0`, `0x488D06`) [INFERRED: a vector insert that can reallocate the array — its body
+was not read here]. **Every call with a name the map lacks adds an empty category**, so a reader
+that must not change the map never calls it. Its argument and the TADR collision at `0x488CC2`:
+[the engine map's index page](../exe-reverse-engineering.md), *Where other patchers meet ours*.
+
+**`0x488BF0`**, no arguments — the free. It frees every entry's mask through `0x4B4F20`
+(`0x488C06`), releases every name through `0x4C9390` (`0x488C2A`), sets end = begin (`0x488C37`)
+and zeroes the dword `0x51E6C0` (`0x488C3E`) [what `0x51E6C0` holds not traced]. **Its one caller
+is `0x491C3A`**, in the teardown `0x491B60` on the game thread ([memory](memory.html)).
+
+**Who inserts** — every `call 0x488C50` in `.text`, by caller:
+
+| site | in | name | when |
+|---|---|---|---|
+| `0x42C028`, `0x42C052`, `0x42C07C`, `0x42C0A6` | the FBI reader `0x42BF40` | the badTarget/noChase tags (masks stored at def `+0x231..+0x23D`) | the level load, loader thread |
+| `0x488EB1`, `0x488F00` | `0x488E70`, whose one call site is `0x42CC40` in `0x42BF40` (the FBI `category` value, key `0x5039B8`) | each token of `category`, then `"ALL"` (`0x507C14`) | the level load, loader thread |
+| `0x41C338` | `0x41C310`, the Ctrl+C camera follow (one caller, `0x496409`) | `"Commander"` (`0x502860`) | play, game thread |
+| `0x48BF38` | `0x48BF30`, select by category (callers `0x4963F4`, with `CTRL_<letter>` formatted at `0x4963D8`, and `0x496404`, with `"CTRL_C"` `0x5094E8`) | its argument | play, game thread |
+| `0x48D9AC`, `0x48D9E5` | the group recall `0x48D9A0` (one caller, `0x495FFD` in the key switch) | `"CTRL_F"` (`0x508DA0`), both | play, game thread |
+| `0x48DC39` | `0x48DC30` | `"CTRL_F"` | **no call site and no literal `0x0048DC30` in the image** |
+| `0x49342D` | `0x4933E0`, the SHARE dialog's give (caller `0x493673`, under the gadget `SHARUNIT`; [recorder](recorder.html), `0x488700` row) | `"Commander"` | play, game thread |
+| `0x488E34` | `0x488D30`, which fills the AI plan's stack masks for its `Weight` and `Limit` commands `0x406DB0`/`0x406E40` (callers `0x406DE9`, `0x406E7D`) | the command's category | **not established**: `0x406F00` registers the two commands once at start-up (from `0x43C050` ← `0x491200`, `0x43C32F`); where the plan's commands run was not traced |
+
+The FBI reader is also re-run for one type by `0x42D1F0` (at `0x42D269`), whose one caller
+`0x4174BE` is in the console command code that compares its token with `"Reload"` (`0x5021A8`,
+at `0x416F85`) [INFERRED: the same function; the branch was not traced], so a reload can add bits
+to a mask mid-level.
+
+**When a reader may walk it.** The level load fills the map on the loader thread (`0x42BF40` ←
+`0x42D2E0` ← `LoadGameData_Main 0x4917D0`), before that thread's last act sets `main+0x38D75`
+bit 1 (`0x497C5F`), which the game thread reads (`0x498342`) before its first in-play frame
+([process](process.html), *The in-play publish point*). During play the inserters above that are
+traced run on the game thread, and the free runs only in the game thread's teardown. So a walk on
+the game thread, inside the in-play draw, sees a map that nothing reallocates or frees while it
+runs — the strategic icons' per-level walk, which reads the entries and never calls `0x488C50`
+([strategic icons](../modules/icons.html), *Mod icon sets*). The AI plan's path is the one inserter
+whose thread this page does not establish.
+
 ### The unit and player records, byte by byte: the savers, the replay layout's rows and what the values carry [DISASSEMBLED + MEASURED 2026-09-29]
 
 What the demo recorder's replay layout rests on. The recording keeps every byte of a unit record
