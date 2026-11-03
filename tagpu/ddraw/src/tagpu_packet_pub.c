@@ -1212,6 +1212,190 @@ const TAGPU_ICONART* tagpu_icontype_art(void)
     return __atomic_load_n(&s_iconArtReady, __ATOMIC_ACQUIRE) == 1 ? &s_iconArt : NULL;
 }
 
+/* ---- each type's picture of the mod's set, once a level ----
+   THE ENGINE'S CATEGORIES. The map [*(u8**)0x51E6B4, *(u8**)0x51E6B8) holds
+   8-byte entries {char* name, u32* mask}, kept sorted by _stricmp (0x4F8A70,
+   an ASCII A-Z fold); a type is bit `row` of a mask -- 0x42D61A..0x42D653
+   renumber the def's ID to its row after the name sort [DISASSEMBLED] -- and
+   a mask is TAGPU_LIM_TYPES bits under Impure's raise, 512 stock
+   (tagpu_patches.c's category mask sites, installed all or nothing: the
+   process exits on a mismatch). A bit is read only for a row below the
+   level's UNITINFOCount, which utype_level has already bounded by
+   TAGPU_LIM_TYPES. The walk is linear and compares names itself, so it holds
+   whatever order the map is in.
+
+   WHY IT IS SAFE TO READ: the map and its masks are engine heap objects that
+   only the teardown frees (0x488BF0, whose one caller is 0x491C3A in the
+   teardown 0x491B60, game thread) and only game-thread code inserts into
+   (0x488C50 through 0x488FB0, which can reallocate the array: the Ctrl keys
+   0x48D9AC, 0x48DC39, 0x48D9E5, 0x48BF38 and 0x41C338, and the console
+   Reload's 0x42D1F0); this walk runs on the game thread inside the in-play
+   publish, so neither can happen during it -- a lifetime by thread
+   ownership. The level's load filled the map on the loader thread (0x42BF40
+   through 0x42CC40 and 0x488E70) before its last act sets main+0x38D75 bit 1
+   (0x497C5F), which the game thread read before its first in-play frame
+   (0x498342). The map's bounds and every entry's two pointers pass ptr_ok,
+   a filter on values, not the argument. We NEVER call 0x488C50: on a miss it
+   inserts, so a name the map does not hold is simply absent here.
+
+   WHICH PICTURE: the first set entry, in load order, whose types hold the
+   row (TADR's UnitPicture), else the set's UNKNOWN, else none -- the type
+   keeps its generated shape (TADR would index its picture list at -1).
+   What each kind holds is TADR's ExternQuickKey rule: a side's picture its
+   commanders -- showplayername and hidedamage, decoys included -- whose
+   Side is the side's name; COMMANDER every such commander; MOBILECOMBAT the
+   types of CTRL_W that cannot fly; CONS those of CTRL_B when it names any,
+   else the mobile builders that are no air base and no commander; FACTORY
+   CTRL_F likewise, else the immobile builders; BUILDING a yard map and no
+   commander; AIRCRAFTCOMBAT a flier with a weapon that is no stockpile, no
+   builder, no yard map and no commander; AIRCONS a flying builder with no
+   yard map and no commander; a category of the custom list, its types. A
+   category with no type is the same as an absent one. */
+#define VA_CATMAP_BEGIN    0x0051E6B4u  /* {char* name, u32* mask}*: the map  */
+#define VA_CATMAP_END      0x0051E6B8u
+#define CATMAP_MAX         65536u       /* entries the walk accepts           */
+#define CAT_NAME_MAX       64           /* bytes of a name it compares        */
+#define UD_SIDE            0xA0         /* char Side[8]                       */
+#define UD_SIDE_CAP        8
+#define UD_YARDMAP         0x14E        /* yard map pointer; 0 = none         */
+#define WTM_STOCKPILE      0x10000000u  /* W_MASK bit 28: a stockpile weapon  */
+
+enum { ISC_CTRL_W, ISC_CTRL_B, ISC_CTRL_F, ISC_N };
+static const char* const ISC_NAME[ISC_N] = { "CTRL_W", "CTRL_B", "CTRL_F" };
+
+static int ascii_fold(int c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; }
+
+/* `name` (the engine's) equals `want` (ours, under CAT_NAME_MAX), folded as
+   _stricmp folds. The engine's string is read only up to its NUL, or to the
+   first byte that differs from ours. */
+static int cat_name_eq(const char* name, const char* want, int cap)
+{
+    int k;
+    for (k = 0; k < cap; k++) {
+        const int a = ascii_fold((unsigned char)name[k]), b = ascii_fold((unsigned char)want[k]);
+        if (a != b) return 0;
+        if (!a) return 1;
+    }
+    return 0;
+}
+
+static int mask_bit(const unsigned* m, unsigned row)
+{
+    return m && ((m[row >> 5] >> (row & 31u)) & 1u);
+}
+
+/* TADR's commander: showplayername and hidedamage, decoys included */
+static int iset_commander(const char* def)
+{
+    return (RDU32(def, UD_TYPEMASK2) & UDM2_SHOWNAME) && (RDU32(def, UD_TYPEMASK) & UDM_HIDEDAMAGE);
+}
+
+/* a weapon slot holding a record of the weapon array that is no stockpile */
+static int iset_direct_weapon(const char* def)
+{
+    int k;
+    for (k = 0; k < 3; k++) {
+        const char* w = *(const char* const*)(def + UD_WEAPONS + k * 4);
+        if (w && tagpu_limits_weapon_index(w) >= 1 && !(RDU32(w, W_MASK) & WTM_STOCKPILE)) return 1;
+    }
+    return 0;
+}
+
+static void iset_level(const char* udefs, unsigned n)
+{
+    static const unsigned* catMask[TAGPU_ICONART_SETS];
+    static unsigned        catCount[TAGPU_ICONART_SETS];
+    const unsigned* isc[ISC_N] = { NULL, NULL, NULL };
+    unsigned iscCount[ISC_N] = { 0, 0, 0 };
+    const char* begin = *(const char* const*)VA_CATMAP_BEGIN;
+    const char* end = *(const char* const*)VA_CATMAP_END;
+    unsigned entries = 0, row, picked = 0, unknown = 0;
+    int e, k, len;
+    char b[1024];
+
+    if (!s_isN) return;
+    memset(catMask, 0, sizeof catMask);
+    memset(catCount, 0, sizeof catCount);
+    /* the map's bounds: an empty map is two equal pointers, NULL before any
+       insert; anything else that is not a whole number of entries between two
+       plausible pointers is treated as no categories */
+    if (begin != end) {
+        if (ptr_ok(begin) && ptr_ok(end) && end > begin && (size_t)(end - begin) % 8 == 0 &&
+            (size_t)(end - begin) / 8 <= CATMAP_MAX)
+            entries = (unsigned)((size_t)(end - begin) / 8);
+        else
+            plog("icons: the category map's bounds are not a map - no categories this level");
+    }
+    for (k = 0; k < (int)entries; k++) {
+        const char* name = *(const char* const*)(begin + (size_t)k * 8);
+        const unsigned* mask = *(const unsigned* const*)(begin + (size_t)k * 8 + 4);
+        if (!ptr_ok(name) || !ptr_ok(mask)) continue;
+        for (e = 0; e < s_isN; e++)
+            if (s_isEnt[e].kind == TAGPU_ISE_CATEGORY && !catMask[e] &&
+                cat_name_eq(name, s_isEnt[e].name, CAT_NAME_MAX))
+                catMask[e] = mask;
+        for (e = 0; e < ISC_N; e++)
+            if (!isc[e] && cat_name_eq(name, ISC_NAME[e], CAT_NAME_MAX)) isc[e] = mask;
+    }
+    for (row = 0; row < n; row++) {
+        for (e = 0; e < s_isN; e++) catCount[e] += (unsigned)mask_bit(catMask[e], row);
+        for (e = 0; e < ISC_N; e++) iscCount[e] += (unsigned)mask_bit(isc[e], row);
+    }
+    for (row = 1; row < n; row++) {
+        const char* def = udefs + (size_t)row * UDEF_STRIDE;
+        const unsigned m = RDU32(def, UD_TYPEMASK);
+        const int builder = (m & UDM_BUILDER) != 0, airbase = (m & UDM_AIRBASE) != 0;
+        const int canfly = (m & UDM_CANFLY) != 0, mobile = RDU8(def, UD_BMCODE) != 0;
+        const int yard = *(const void* const*)(def + UD_YARDMAP) != NULL;
+        const int cmd = iset_commander(def);
+        int pick = -1;
+        for (e = 0; e < s_isN && pick < 0; e++) {
+            const TAGPU_ISENTRY* en = &s_isEnt[e];
+            int holds = 0;
+            switch (en->kind) {
+            case TAGPU_ISE_SIDE:
+                holds = cmd && cat_name_eq(def + UD_SIDE, en->name, UD_SIDE_CAP);
+                break;
+            case TAGPU_ISE_CATEGORY:
+                holds = mask_bit(catMask[e], row);
+                break;
+            case TAGPU_ISE_DEFAULT:
+                switch (en->arg) {
+                case TAGPU_ISD_COMMANDER:    holds = cmd; break;
+                case TAGPU_ISD_AIRWEAPON:    holds = canfly && !cmd && !builder && !yard &&
+                                                     iset_direct_weapon(def); break;
+                case TAGPU_ISD_AIRCON:       holds = canfly && builder && !yard && !cmd; break;
+                case TAGPU_ISD_CONS:         holds = iscCount[ISC_CTRL_B] ? mask_bit(isc[ISC_CTRL_B], row)
+                                                   : builder && !airbase && mobile && !cmd; break;
+                case TAGPU_ISD_MOBILEWEAPON: holds = !canfly && mask_bit(isc[ISC_CTRL_W], row); break;
+                case TAGPU_ISD_FACTORY:      holds = iscCount[ISC_CTRL_F] ? mask_bit(isc[ISC_CTRL_F], row)
+                                                   : builder && !airbase && !mobile && !cmd; break;
+                case TAGPU_ISD_BUILDING:     holds = yard && !cmd; break;
+                default: break;
+                }
+                break;
+            default:                     /* NONE, UNKNOWN, NUKEICON hold no type */
+                break;
+            }
+            if (holds) pick = e;
+        }
+        if (pick < 0 && s_isUnknown >= 0) { pick = s_isUnknown; unknown++; }
+        else if (pick >= 0) picked++;
+        if (pick >= 0) s_utype[row].icon = (unsigned char)pick;
+    }
+    len = _snprintf(b, sizeof b, "icons: mod set by type - %u map entr(ies), %u of %u type(s) by a picture, "
+                    "%u UNKNOWN; CTRL_W=%u CTRL_B=%u CTRL_F=%u;", entries, picked, n - 1, unknown,
+                    iscCount[ISC_CTRL_W], iscCount[ISC_CTRL_B], iscCount[ISC_CTRL_F]);
+    for (e = 0; e < s_isN && len > 0 && len < (int)sizeof b; e++) {
+        int k2;
+        if (s_isEnt[e].kind != TAGPU_ISE_CATEGORY) continue;
+        k2 = catMask[e] ? _snprintf(b + len, sizeof b - (size_t)len, " %s=%u", s_isEnt[e].name, catCount[e])
+                        : _snprintf(b + len, sizeof b - (size_t)len, " %s=absent", s_isEnt[e].name);
+        len = k2 < 0 ? (int)sizeof b : len + k2;
+    }
+    b[sizeof b - 1] = 0; plog(b);
+}
+
 /* The table for the level in play, built at its first in-play fill; a no-op
    once built for it. A level with more types than the table holds has none,
    and every unit of it is drawn as its model. */
@@ -1240,12 +1424,14 @@ static void utype_level(const char* ta)
         /* row 0 is the engine's "no model": it stays UNKNOWN with no radius */
         t->cls   = (unsigned char)(row ? utype_class(ta, def, nsides) : TAGPU_ICLS_UNKNOWN);
         t->layer = UTYPE_LAYER[t->cls];
-        t->icon  = TAGPU_ICON_NOSET;
+        t->icon  = TAGPU_ICON_NOSET;       /* iset_level fills it, with a set */
         /* unit+0xA6 is both the model id and the type row, so the hit guard's
            radius per model id is this row's model radius */
         r = row ? tagpu_zoom_hit_radius(ta, row) : 0u;
         t->r_px = (unsigned short)(r > 0xFFFFu ? 0xFFFFu : r);
     }
+    /* each type's picture of the mod's set, when one is loaded */
+    iset_level(udefs, n);
     s_utypeN = n;
 }
 
