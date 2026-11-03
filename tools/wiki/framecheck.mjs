@@ -61,10 +61,10 @@
    - Wg - 75 > 129 + the widest PANELTOP of the packs present, for every frame:game demo's map: the wiki emblem
      never covers a readout (the presentation's section 3.4);
    - every viewer `hud` key and every track tick of a trip resolves in C's laid-out HUD: the key has a control box
-     and the tick lies on the track -- but a control the HUD draws disabled, which takes no press and so has no box:
-     the teams chip while the teams are not told apart, which the players scratch entry presses. The boxes are laid out in units from the state alone (tagpu_hudlay.c reads the
-     state's px only for the hint's hit test), so a key that resolves at the one fit checked resolves on every
-     screen's theatre stage;
+     and the tick lies on the track. A control the HUD draws disabled has no box, so no script presses one: the
+     replay does nothing on such a press, as the game takes none. The boxes are laid out in units from the state
+     alone (tagpu_hudlay.c reads the state's px only for the hint's hit test), so a key that resolves at the one fit
+     checked resolves on every screen's theatre stage;
    - the HUD's chart appears only in a players record with the stats window open, or in the HUD a trip to or from its
      close is resolved on (frame.js pressed): no other build has a HOP_CHART. */
 import fs from 'node:fs';
@@ -461,8 +461,7 @@ function framesCheck(exe, tmp) {
         }
         // the claims on C's laid-out HUD
         const cur = j.rec.cur;
-        const headed = j.st.teams.length > 1 && j.st.teams.some(m => m.length > 1);
-        if (c.unresolved && !(c.unresolved === 'chip:team' && !headed))
+        if (c.unresolved)
           fail(`claim ${where} (${named}): the key ${c.unresolved} has no control in C's HUD`);
         if (cur.on && cur.to === 'track' && !(cur.to_v >= 0 && cur.to_v <= j.rec.end)) fail(`claim ${where} (${named}): the track tick ${cur.to_v} is off the track`);
         if (cur.on && j.rec.live && (cur.from === '@game' || cur.to === '@game') && !j.game) fail(`claim ${where} (${named}): a glide at seat 0's cursor with no point for it`);

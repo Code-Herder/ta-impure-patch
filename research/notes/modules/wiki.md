@@ -149,9 +149,11 @@ camera*), zero and unhashed in every other replay. Each step's tail, after the g
 the camera (Jump once, Follow every step, onto the seat's recorded camera, `tagpu_wikidata_seat_cam`;
 nothing else moves it), applies a Sight request with the game's `bar_rates_due` rule copied (held
 while a seek is pending; a seek's end sets every DisplayTimer to the shown tick and the click ring's
-start), runs the pass at a Sight change, a seek's end and every multiple of 30 -- the viewed seat's
-lit grid as fog bits and the units its contacts mark (`tagpu_wikisim_sight_lit`,
-`tagpu_wikisim_contacts`) -- and eases the top bar's memo. The walker samples every seat's seven
+start), runs the pass at a Sight change and a seek's end -- the viewed seat's lit grid as fog bits
+and the units its contacts mark (`tagpu_wikisim_sight_lit`, `tagpu_wikisim_contacts`) -- and eases
+the top bar's memo; the game's part runs the pass on every played tick that reaches the viewed
+record's 30-tick deadline, at 2× to 8× as at 1×. The teams chip acts only while the teams are told
+apart, as the game's HUD enables it. The walker samples every seat's seven
 measures every 30 game ticks from tick 0, at most `WIKI_STAT_PTS` (181), read by
 `tagpu_wikireplay_stat`. The Players set, the folds and the chips act only in a players replay; a
 seat, chip or row outside the scene is refused at `tagpu_wikireplay_press`'s door. **Across the

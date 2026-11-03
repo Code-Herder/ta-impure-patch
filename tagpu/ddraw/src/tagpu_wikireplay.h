@@ -63,13 +63,15 @@
    -- the viewer's camera, moved by Jump and Follow alone (each seat's camera is recorded data,
    tagpu_wikidata_seat_cam), Sight, the overlays' switches, the team rows' folds and the stats
    window -- with each step's tail after the game's part, paused or not: the camera, a seek's end
-   and a Sight request, the minimap's pass, the top bar. replay.js's header and its functions
-   state the rules. The walker samples every seat's measures as it walks.
-   THE BOUND, PLAYERS: a tail costs one pass at most (a lit grid and the contacts), one ease and
-   one re-read; the samples are at most WIKI_STAT_PTS; the pass's contacts are the view's units
-   at most, in a block the replay owns and frees. The Players set is inert in every other replay:
-   tagpu_wikireplay_press takes it only in a players replay, and the loader refuses it in any
-   other entry's script.
+   and a Sight request, each making the minimap's pass, the top bar; the game's part makes the
+   pass on the played tick that reaches its 30-tick deadline. replay.js's header and its
+   functions state the rules. The walker samples every seat's measures as it walks.
+   THE BOUND, PLAYERS: a step makes two passes at most (each a lit grid and the contacts), one in
+   its play, which plays at most 8 ticks, under the 30 between two deadlines, and one in its
+   tail; one ease and one re-read; the samples are at most WIKI_STAT_PTS; the pass's contacts are
+   the view's units at most, in a block the replay owns and frees. The Players set is inert in
+   every other replay: tagpu_wikireplay_press takes it only in a players replay, and the loader
+   refuses it in any other entry's script.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS, as tagpu_wikisim.c: one WIKIREPLAY is used by one
    thread at a time, and it lives as long as its caller keeps it. The DLL compiles this file for

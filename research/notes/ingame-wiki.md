@@ -1627,7 +1627,7 @@ keeps Take over inert.
 - **Each step's tail**, after the game's part, paused or not, at the shown tick (the held world's
   while a seek is pending): first the camera (Jump before Follow); then, with no seek pending, a
   seek's end -- every record's DisplayTimer set to the tick and the click ring's start
-  `click_from` with it -- and a Sight request; then the pass; then the top bar.
+  `click_from` with it -- and a Sight request, each making the pass; then the top bar.
 - **Sight** is a request, applied by the next tail with no seek pending, as the game's frame visit
   runs `sight_change` only then. A change applies **the bar timer's phase rule** of the game's
   Sight (`tagpu_replay.c` `bar_rates_due`, copied as `rates_due`): the newly viewed record's
@@ -1637,16 +1637,25 @@ keeps Take over inert.
   stored values (all 0 under the full map) and, while the viewed record's DisplayTimer is below the
   tick, raises it by 30 and re-reads the four rates; under Sight the bar is the seat's numbers in
   its side's art, `top_side` (decisions 13 and 15).
-- **The pass** (the minimap's fog and contacts): made at a Sight change, at a seek's end and at
-  every shown tick that is a multiple of 30 (`WIKI_REPLAY_PASS`), as the engine's radar pass and
-  fog composite run on the viewed record's 30-tick deadline: the viewed seat's lit grid as one fog
-  bit a block, and the ids of the units its contacts mark (*A game*, below: `sightLit` and
-  `sightContacts`); empty under the full map. The phase is that of a record made at GameTime 0 with
-  its pass shown at the multiple of 30, as M0-P measured one [INFERRED: a record's phase follows its
-  init's GameTime].
+- **The pass** (the minimap's fog and contacts): made at a Sight change and at a seek's end by the
+  tail, and by the game's part on every played tick that reaches the viewed record's 30-tick
+  deadline (`WIKI_REPLAY_PASS`), at that tick's world, as the engine's players phase checks
+  `+0xF0` every tick and runs the radar pass and fog composite when it is due: the viewed seat's lit
+  grid as one fog bit a block, and the ids of the units its contacts mark (*A game*, below:
+  `sightLit` and `sightContacts`); empty under the full map. The deadline is the next multiple of
+  30 above the last pass's tick, 30 before any: the engine's `+0xF0` is always the next multiple of
+  30 above GameTime (`0x497C10` sets 30, each due tick adds 30), a seek sets the viewed record's to
+  that (`sk_deadlines`) and a Sight change leaves it, so it is derived from the pass's tick rather
+  than kept (`pass_due`, `passDue`). At 2× to 8×, a step's 2 to 8 ticks, the pass is still made at
+  every multiple of 30 though no shown tick lands on one. The phase is that of a record made at
+  GameTime 0 with its pass at the multiples of 30, as M0-P measured one [INFERRED: a record's phase
+  follows its init's GameTime].
 - **The switches** Cursors, Clicks, Selections and Chat, all on at a replay's start; the team rows'
   folds; the stats window's state (closed, measure units, split by player at every start, as the
-  game opens each replay); `click_from`.
+  game opens each replay); `click_from`. The teams chip splits by team only while the teams are
+  told apart (two teams or more, one of two seats or more, the HUD's `headed`): otherwise the HUD
+  draws it disabled, with no hot box, so the game takes no press on it, and the replay's press does
+  nothing either (`teams_headed`, `HEADED`).
 - **The samples**: the walker takes every seat's seven measures -- metal and energy income, the
   excess, units, the army value, kills and losses -- at its first tick and every 30 GameTime after,
   at most `WIKI_STAT_PTS` (181) a seat, the period the game's walker's `30 · max(1, ceil(span /
@@ -2029,7 +2038,15 @@ draws it.
   after the death vision marks c0 a contact on no lit block", skipped in TA Twilight (ARM and CORE)
   and TA Zero (GOK, ARM and CORE), whose commanders see 600 to 650 on a field 1 536 wide or carry
   radar equal to sight; a skip prints SKIP under its demo's line with the context and the figures
-  (each type's radar, sonar and sight) and the replays' tally lists it. `framecheck.mjs` holds the
+  (each type's radar, sonar and sight) and the replays' tally lists it. Observability is decided
+  without the code under test: the first from `sightLit` alone, which `castcheck.mjs` holds to
+  M0-P1, the second from c0 on no lit block and closer than max(radar, sonar) to one of Bram's
+  live, finished, activated radar or sonar units at a pass deadline the demo shows under Sight,
+  in the game played straight, never from `sightContacts`. So a regression that loses the contact
+  fails the claim instead of skipping it, and where the claim is skipped `sightContacts` making c0
+  a contact fails too. The sight demo also plays at 2×, 4× and 8× from an odd tick with Sight on
+  Bram, and at 4× and 8× the pass must be made at every multiple of 30 with his lit grid of that
+  tick. `framecheck.mjs` holds the
   players record, HUD state, view and draw in both frames (the eye, Sight's fog, units and dots,
   the overlays), `stagecheck.mjs` the players frames' ops (the culled ground, the clip, the image
   rect and its scissor, the minimap's box and dots, `HOP_TRI`, the rings and brackets) and the

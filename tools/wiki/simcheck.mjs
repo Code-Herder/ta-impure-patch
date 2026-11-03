@@ -41,8 +41,9 @@
    entry's demo its watch mode and takeover (runTakeover, takeoverClaims, TAKEOVER_CLAIMS); a players entry's demo the
    replay with the Players set (runReplay with the game's world each step, replayClaims, countBound and PLAYERS_CLAIMS:
    the camera, Sight, the overlays and the stats window, and what they name inside the viewport). A claim the
-   context's figures make unobservable (Sight's hidden unit and radar-only contact) prints as SKIP under its demo's
-   line, with the context and why, and the replays' tally lists it: it neither fails nor passes unseen. Every game's
+   context's figures make unobservable (Sight's hidden unit and radar-only contact), decided from the figures and the
+   units' places and never from the code under test, prints as SKIP under its demo's line, with the context and why,
+   and the replays' tally lists it: it neither fails nor passes unseen. Every game's
    claims include THE GOALS' CLAIM, in every context, that each move order of its script goes where its unit's
    planner reaches. Their tallies print after the demos', so the demos' lines read as before.
 
@@ -2328,6 +2329,37 @@ function reaches(v, u, x, z) {
   }
   return false;
 }
+// the engine's radar pass deadline, 30 GameTime (0x46507D..0x465092), the claim's own figure rather than the code's
+const PASS_TICKS = 30;
+// a lit grid as the pass's fog bits in the view's hex: block i is bit i & 7 of byte i >> 3
+function fogHex(lit) {
+  const b = new Uint8Array((lit.length + 7) >> 3);
+  lit.forEach((x, i) => { if (x) b[i >> 3] |= 1 << (i & 7); });
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+/* THE PASS AT 2x AND FASTER (PD17): Sight on Bram, then speed 20, 40 and 80, each entered from an odd game tick, so
+   that a step's 2, 4 or 8 ticks never show a multiple of 30. The pass still keeps the engine's deadline: on every
+   clock under 4x and 8x it is the one made at the last multiple of 30 at or below the shown tick, each of the window's
+   multiples of 30 gets one, and its fog is Bram's lit grid in the game played straight to that tick (`g`) */
+function cadenceClaim(entry, d, layout, ctx, g, ok) {
+  const dm = { ...d, end: 220, inputs: [{ at: 10, hud: 'sight', seat: 1 }, { at: 40, hud: 'speed' }, { at: 70, hud: 'speed' },
+    { at: 140, hud: 'speed' }] };
+  const rr = runReplay(entry, dm, layout, ctx), S = layout && layout.sight, world = new Map(g.all.map(f => [f.t, f.v]));
+  for (const sp of [40, 80]) {
+    const run = rr.all.filter(f => f.game.speed === sp && f.game.target < 0 && f.players.sight === 1);
+    const from = run.length ? rr.all[rr.all.indexOf(run[0]) - 1].game.tick : -1, to = run.length ? run[run.length - 1].game.tick : -1;
+    const due = [];
+    for (let m = PASS_TICKS * (Math.floor(from / PASS_TICKS) + 1); m <= to; m += PASS_TICKS) due.push(m);
+    const made = [...new Set(run.map(f => f.players.pass.at))].filter(t => t > from);
+    const stale = run.find(f => f.players.pass.at !== PASS_TICKS * Math.floor(f.players.shown / PASS_TICKS));
+    const wrong = made.find(t => { const v = world.get(t), f = run.find(x => x.players.pass.at === t);
+      return !v || f.players.pass.fog !== fogHex(WikiSim.sightLit(v, S, 1, t)); });
+    ok(run.length > 0 && from % 2 === 1 && run.every(f => f.game.tick % 2 === 1) && !stale && same(made, due) && wrong === undefined,
+      `at speed ${sp} from the odd tick ${from} to ${to} the pass is made at each multiple of 30, ${due.length} of them, with Bram's ` +
+      `lit grid of that tick${stale ? ` (not on clock ${stale.clock}: the pass of ${stale.players.pass.at} at ${stale.players.shown})` : ''}` +
+      `${wrong !== undefined ? ` (the fog of ${wrong} is not his lit grid there)` : ''}${!same(made, due) ? ` (made ${made.join(' ')})` : ''}`);
+  }
+}
 /* EACH PLAYERS DEMO'S OWN CLAIMS, by its id (players-spec.md section 9, the authored timings; the ticks read from the
    data) */
 const PLAYERS_CLAIMS = {
@@ -2374,11 +2406,18 @@ const PLAYERS_CLAIMS = {
      are skipped by name (`skip`) where they do not: Twilight's CORAK sees 600 and its commanders 650 on a field 1536
      wide, and TA Zero's commanders have radar equal to sight. A unit outside Bram's sight is observable when one of
      Ada's or Cleo's stands on no block his units and live deaths light on any tick of the game (`g`, runGame's
-     frames); the claim then needs one on some clock under Sight, the window the demo shows. A radar-only contact is observable when, at some pass after the death vision, the game's world makes c0 a contact
-     of his on no lit block (sightContacts over the casting's radar and sonar); the claim then needs the replay's own
-     pass to mark it, from a pass by the radar caption to Sight's release, inside the view. */
+     frames); the claim then needs one on some clock under Sight, the window the demo shows. A radar-only contact is
+     observable when, at some pass deadline after the death vision that the demo shows under Sight (a multiple of 30,
+     PD17), c0 stands on no block Bram's lit grid lights and closer than max(radar, sonar) to one of his live,
+     finished, activated units with a radar or sonar, at the places the game played straight gives (`g`). That rule
+     reads the types' figures and the units' places alone, and sightLit, which castcheck holds to M0-P1's measured
+     sets; never sightContacts, the code under test, so a contact it loses fails the claim rather than skipping it.
+     Where the rule says observable the claim runs and needs the replay's own pass to mark c0, from a pass by the
+     radar caption to Sight's release, inside the view; where it says not, the claim is skipped by name, and
+     sightContacts making c0 a contact there fails, the rule and the simulation disagreeing. */
   sight(d, rr, ok, entry, ctx, layout, g, skip) {
     const [on, off] = pressesOf(d, 'sight'), S = layout && layout.sight;
+    cadenceClaim(entry, d, layout, ctx, g, ok);
     ok(on.seat === 1 && off.seat === 1 && rr.all.every(f => f.players.sight === (f.clock >= on.release && f.clock < off.release ? 1 : -1)),
       `Sight is Bram's from clock ${on.release} to ${off.release - 1}, then the full map`);
     ok(rr.all.every(f => sameCam(f.players.cam, { x: 0, z: 0 })), 'the camera stays on eye (0, 0)');
@@ -2436,13 +2475,22 @@ const PLAYERS_CLAIMS = {
     // the radar contact: the first pass after the death vision that marks c0 on no lit block
     const passes = under.filter((f, i) => f.players.pass.at > span && (i === 0 || f.players.pass.at !== under[i - 1].players.pass.at));
     const CONTACT = 'a pass after the death vision marks c0 a contact on no lit block';
-    const radarOnly = f => {
-      const L = lit(f), k = f.w.units.findIndex(u => u.id === 'c0');
-      return k >= 0 && WikiSim.sightContacts(f.w, L, 1)[k] === 1 && unseen(f.w, L, f.w.units[k]);
+    const world = new Map(g.all.map(f => [f.t, f.v]));
+    const deadlines = [...new Set(under.map(f => f.players.shown))].filter(t => t > span && t % PASS_TICKS === 0);
+    // c0 on no lit block and inside the reach of a radar or sonar of Bram's, from the raw figures (the claim's comment)
+    const reached = t => {
+      const v = world.get(t), c0 = v && unitIn(v, 'c0');
+      if (!c0 || !unseen(v, WikiSim.sightLit(v, S, 1, t), c0)) return false;
+      const T = new Map(v.game.types.map(k => [k.name, k]));
+      return v.units.some(u => { const k = T.get(u.type), R = k ? Math.max(k.radarDistance, k.sonarDistance) : 0;
+        return u.owner === 1 && u.built >= 1 && k && k.activates && R > 0 && Math.hypot(u.x - c0.x, u.z - c0.z) < R; });
     };
-    if (!passes.some(radarOnly)) {
+    if (!deadlines.some(reached)) {
       const radars = bram.map(t => `${t.name} radar ${t.radarDistance}, sonar ${t.sonarDistance}${t.activates ? '' : ' (not activated)'}, sight ${t.sightDistance}`).join('; ');
       skip(CONTACT, `at no pass after the death vision does the world make c0 a contact of Bram's on no lit block (${radars})`);
+      const contact = deadlines.find(t => { const v = world.get(t), L = v && WikiSim.sightLit(v, S, 1, t), k = v ? v.units.findIndex(u => u.id === 'c0') : -1;
+        return k >= 0 && WikiSim.sightContacts(v, L, 1)[k] === 1 && unseen(v, L, v.units[k]); });
+      ok(contact === undefined, `the simulation makes c0 no radar-only contact where the raw figures reach none${contact !== undefined ? ` (it does at ${contact})` : ''}`);
       return;
     }
     const P = passes.find(f => { const u = unitIn(f.w, 'c0'); return u && f.players.pass.contacts.includes('c0') && unseen(f.w, lit(f), u); });

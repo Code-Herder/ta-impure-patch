@@ -43,7 +43,7 @@ export function playersScratch() {
     seats: sc.seats.map((z, k) => { if (k !== 1) return z; const { camera, ...rest } = z; return rest; }) }]));
   const base = e.demos[0];
   const inputs = [{ at: 0, caption: 'The Players set.' }, { at: 10, hud: 'jump', seat: 0 }, { at: 40, hud: 'follow', seat: 0 },
-    { at: 70, hud: 'cursors' }, { at: 100, hud: 'stats' }, { at: 130, hud: 'chip', chip: 'army' }, { at: 160, hud: 'chip', chip: 'team' },
+    { at: 70, hud: 'cursors' }, { at: 100, hud: 'stats' }, { at: 130, hud: 'chip', chip: 'army' }, { at: 160, hud: 'chip', chip: 'kills' },
     { at: 190, hud: 'track', to: 1150 }, { at: 220, until: 'seeked', max: 120 }, { at: 230, hud: 'sight', seat: 1 },
     { at: 290, hud: 'play' }, { at: 320, hud: 'sight', seat: 0 }, { at: 350, hud: 'sight', seat: 0 }, { at: 380, hud: 'sight', seat: 1 },
     { at: 410, hud: 'rew' }, { at: 440, hud: 'play' }, { at: 470, hud: 'follow', seat: 0 }, { at: 500, hud: 'jump', seat: 1 },

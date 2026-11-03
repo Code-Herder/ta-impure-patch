@@ -471,8 +471,11 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
                 const double nx = s_rec.question ? (s_dlg.no.x + s_dlg.no.w / 2.0 - fx) / s_hpx : NAN;
                 const double ny = s_rec.question ? (s_dlg.no.y + s_dlg.no.h / 2.0 - fy) / s_hpx : NAN;
                 /* a row's hover strip is resolved on the HUD with the pointer on its row: one
-                   more build for each end that names one, the second into s_hops, which neither
-                   end then reads and the build below lays out again */
+                   more build for each end that names one. With two rows the second is built
+                   into s_hops itself; `from` reads s_vops, or -- where its row has no box or
+                   its build failed, and hover_hud left it on s_hops -- that second HUD. Either
+                   way it resolves alike: its key names its own row's strip, which only the HUD
+                   with the pointer on that row lays out. The build below lays s_hops out again. */
                 const HUDSTATE* base = rebuild ? &s_pst : &s_hst;
                 const int fs = tagpu_wikiframe_hover_seat(s_rec.cur.from), ts = tagpu_wikiframe_hover_seat(s_rec.cur.to);
                 const HUDOPS* from = fs >= 0 ? hover_hud(hart->lay, base, &s_hops, fs, &s_vops) : &s_hops;

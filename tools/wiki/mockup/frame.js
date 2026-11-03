@@ -425,7 +425,7 @@ const WikiFrame = (() => {
   const headed = teams => teams.length > 1 && teams.some(m => m.length > 1);
   // a sample is data from the recording: one that is not a finite number is drawn as 0 (tagpu_hudstate.c sample)
   const sample = v => v === v && v < 1e30 && v > -1e30 ? v : 0;
-  /* THE STATS WINDOW'S GROUPS, tagpu_hudstate_stat_groups' twin (index.html state() makes the mockup's the same way):
+  /* THE STATS WINDOW'S GROUPS, tagpu_hudlay_stat_groups' twin (index.html state() makes the mockup's the same way):
      a group a seat, in its colour and with the time of its first commander-death marker (null for none), its samples
      the record's series; or, when the split asks for teams and the teams are told apart (headed, the test the teams
      chip is enabled by), a group a team, `Team N` in the chart's team colours `cols`, its samples the sum of its seats'
@@ -446,7 +446,8 @@ const WikiFrame = (() => {
      screen of the frame's own size at 100 % (Q3), the engine frame the column and both bars, every switch on and
      nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks (an empty list: the game's
      HUD always draws the Forks bay and Take over, hud.js only for a state with a list). The stats window stays
-     closed: the DLL's pass has one chart image, the replay HUD's, and the stage must have its own before it opens one.
+     closed but in a players record, the one replay whose HUD opens it (its chart is the stage's own image, chart slot
+     1, HUD_TEX_CHART_WIKI, beside the replay HUD's slot 0).
      A live record sets the live HUD as the game's present_live does (tagpu_hudstate.c): the button down and the strip
      drawn while the rewind is open or in the past, the track from its first GameTime to G, never playing. A seat is out,
      its row dimmed and its picker row refused, while it has no unit: the game's rule (tagpu_hudstate.c, `out` is units

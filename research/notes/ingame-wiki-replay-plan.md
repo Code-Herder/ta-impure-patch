@@ -420,10 +420,10 @@ Selections off, Cursors on; **stats** -- the window opened, army, kills, the tea
   held while a seek is pending, re-reads the newly viewed record's rates once and keeps its
   30-tick phase, `bar_rates_due` copied; a seek's end sets every DisplayTimer to the shown tick.
   The memo eases from 0 toward the seat's stored values.
-- **The pass runs on the record's deadline**: at a Sight change, a seek's end and every multiple
-  of 30 game ticks, as the game's radar pass runs on the viewed record's DisplayTimer
-  ([engine/recorder.md](engine/recorder.md), `0x467440`), while the minimap's dots move every
-  tick.
+- **The pass runs on the record's deadline**: at a Sight change, a seek's end and on every played
+  tick that reaches a multiple of 30, at 2× to 8× as at 1×, as the game's radar pass runs on the
+  viewed record's 30-tick deadline `+0xF0`, checked every tick ([engine/recorder.md](engine/recorder.md),
+  `0x467440`), while the minimap's dots move every tick.
 - **The deaths are bounded as the engine bounds them** (C2b): the engine keeps one list of at
   most 20 live temporary sight records, filled only for the viewed player's deaths, so a 21st
   death within the 61 ticks a record lives is lost in the game; the wiki drops it the same way,

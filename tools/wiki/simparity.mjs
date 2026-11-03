@@ -487,7 +487,8 @@ const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play'
   [140, 'leave', 0], [145, 'leave:yes', 0]] };
 /* THE PLAYERS PRESS TRACE, Try it yourself on a players entry's first demo (players-spec.md section 10): presses during
    the walk (nothing); Jump, Follow, Follow again (Free cam) and Follow back on; Sight on Bram, again (the full map) and
-   on Bram again; each switch, and Cursors back on; the stats window, a measure, the team split and the player split;
+   on Bram again; each switch, and Cursors back on; the stats window, a measure, the team split (nothing where the
+   teams are not told apart, as in the fixtures, whose seats are each a team of one) and the player split;
    a team row folded, another folded and unfolded; a seek forward with Sight on Ada asked while it is pending (applied
    at its end); the pause, Sight changes while paused (the bar's re-read), a seek back while paused; Jump on Bram (a
    toast where his camera was not recorded); a seat, a chip and a fold outside the door (nothing); close; Leave with a

@@ -265,8 +265,21 @@ static void feed(WIKIREPLAY* r, int c)
     }
 }
 
+static void make_pass(WIKIREPLAY* r, int g);
+
+/* THE PASS'S DEADLINE, the viewed record's +0xF0 (replay.js passDue states the engine's rule and
+   why it is the next multiple of 30 above the last pass's tick, 30 before any): the first played
+   tick at or past it makes the pass. pass_at is -1 or a shown tick, at most the game's end, so
+   the product cannot overflow. */
+static int pass_due(const WIKIREPLAY* r)
+{
+    return r->pass_at < 0 ? WIKI_REPLAY_PASS : WIKI_REPLAY_PASS * (r->pass_at / WIKI_REPLAY_PASS + 1);
+}
+
 /* the game's part of a step: a seek's ticks, else the speed's, along the selected chain; the ticks
-   it ran */
+   it ran. A players replay's pass is made on each played tick that reaches its deadline, at that
+   tick's world, as the engine's players phase runs it every tick; a seek's ticks make none, its
+   end does (pl_tail). */
 static int play(WIKIREPLAY* r)
 {
     WIKISIM* g = r->game;
@@ -283,6 +296,10 @@ static int play(WIKIREPLAY* r)
         while (r->acc >= 10 && g->tick < chain_last(r) && !g->done && chain_step(r, g)) {
             r->acc -= 10;
             ran++;
+            if (r->players && g->tick >= pass_due(r)) {
+                make_pass(r, g->tick);
+                if (r->failed) break;
+            }
         }
         if (g->tick == chain_last(r)) {
             r->paused = 1;
@@ -1106,6 +1123,24 @@ static int pl_value(const WIKIREPLAY* r, int c, int value)
     }
 }
 
+/* the teams are told apart (replay.js HEADED, tagpu_hudlay_headed): two teams or more, one of
+   them of two seats or more, seat k's team the scene's (the loader gives an absent one k), as
+   the record's teams are (tagpu_wikiframe.c pl_block). Otherwise the HUD draws the teams chip
+   disabled, with no hot box, so the game takes no press on it. BOUND: the seats counted are the
+   game's, at most WIKI_SEATS, and a team value is the loader's 0..WIKI_SEATS - 1. */
+static int teams_headed(const WIKIREPLAY* r)
+{
+    const WIKISCENE* sc = scene_of(r);
+    int n[WIKI_SEATS] = { 0 }, k, t, nteam = 0, big = 0;
+    for (k = 0; k < r->game->nseat && k < WIKI_SEATS; k++) {
+        t = k < sc->nseat ? sc->seat[k].team : k;
+        if (t < 0 || t >= WIKI_SEATS) t = k;
+        nteam += n[t]++ == 0;
+        big |= n[t] > 1;
+    }
+    return nteam > 1 && big;
+}
+
 /* THE PLAYERS SET's KEYS (tagpu_hudinput.c act; replay.js plAct states the rules): 1 when the
    press is one of them; a value outside pl_value is ignored and counted. */
 static int pl_act(WIKIREPLAY* r, int c, int value)
@@ -1140,8 +1175,8 @@ static int pl_act(WIKIREPLAY* r, int c, int value)
     case WIKI_HUD_STATS: r->stat_open = !r->stat_open; break;
     case WIKI_HUD_CLOSE: r->stat_open = 0; break;
     case WIKI_HUD_CHIP:
-        if (value < WIKI_CHIP_METAL) r->stat_team = value == WIKI_CHIP_TEAM;
-        else r->stat_measure = value - WIKI_CHIP_METAL;
+        if (value >= WIKI_CHIP_METAL) r->stat_measure = value - WIKI_CHIP_METAL;
+        else if (value == WIKI_CHIP_PLAYER || teams_headed(r)) r->stat_team = value == WIKI_CHIP_TEAM;
         break;
     default: /* WIKI_HUD_FOLD */
         r->folded ^= 1 << value;
@@ -1209,8 +1244,9 @@ static void make_pass(WIKIREPLAY* r, int g)
 
 /* EACH STEP'S TAIL (replay.js plTail states the order and why), after the game's part, every step,
    paused or not, at the shown tick: the camera; with no seek pending a seek's end and a Sight
-   request, then the pass; the top bar. The seats it indexes are bounded: Follow's and Jump's by
-   pl_value and the camera's presence, Sight's by pl_value, so below the scene's seats. */
+   request, each making the pass (every other pass is play's, at its deadline); the top bar. The
+   seats it indexes are bounded: Follow's and Jump's by pl_value and the camera's presence,
+   Sight's by pl_value, so below the scene's seats. */
 static void pl_tail(WIKIREPLAY* r)
 {
     int g, x, z, v, due = 0;
@@ -1241,7 +1277,7 @@ static void pl_tail(WIKIREPLAY* r)
             }
             r->sight_req = WIKI_REPLAY_NOT_ASKED;
         }
-        if (due || (g % WIKI_REPLAY_PASS == 0 && g != r->pass_at)) make_pass(r, g);
+        if (due) make_pass(r, g);
         if (r->failed) return;
         if (r->sight >= 0 && r->sight < r->game->nseat) {
             const WIKIECON* e = &r->game->econ[r->sight];
