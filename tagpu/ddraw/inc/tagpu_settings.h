@@ -53,6 +53,9 @@ typedef enum {
     TS_VSYNC,       /* 1 | 0: present on the display's vertical blank          */
     TS_REPLAYHUD,   /* 100 | 75 | 125 | 150: the replay HUD's own scale, percent */
     TS_WHEEL,       /* 0 zoom | 1 megamap: what the plain wheel does; Ctrl does the other */
+    TS_ICONSCALE,   /* 100 | 75 | 125 | 150 | 200: the strategic icons' size, percent of BAR's */
+    TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
+    TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */
     TS_RESOURCE_BASE, /* per-mod radius, Quick Build pairs; versions share a preference */
     TS_NKEYS = TS_RESOURCE_BASE + MOD_N * 2
 } TagpuSetting;
@@ -178,6 +181,10 @@ void tagpu_settings_save_window(int x, int y, int w, int h);
 int  tagpu_settings_ss(void);
 int  tagpu_settings_fps(void);
 
+/* The strategic icons' three settings, percents (TS_ICONSCALE, TS_ICONDIST,
+   TS_ICONFADE): the store's, else the compiled 100, 100 and 33. Any thread;
+   the render thread asks every frame, the pick every hit test. */
+void tagpu_settings_icons(int* scale, int* dist, int* fade);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing
    there is -- on, the present waits for the vertical blank and the limiter

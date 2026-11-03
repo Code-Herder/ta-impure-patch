@@ -105,7 +105,7 @@ ALLEXTS  := .o .stock.o .cover.o .stock.cover.o
 ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))) \
                                      $(addsuffix .wiki$(e), $(basename $(SCENE_SRCS))))
 
-.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest
+.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest icontest
 all: $(TARGET)
 
 %.o: %.rc
@@ -334,7 +334,16 @@ RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.
 tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h src/zstd.c
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
+# THE STRATEGIC ICONS' RULE AND SHAPES (tests/icontest.c over inc/tagpu_icon_rule.h): the defaults'
+# levels against the plan's table, the fade ramp, 1x left stock up to 4K native, and the generated
+# shapes. tests/icontest.py builds and runs the same file on the host with the sanitizers; this is
+# its Windows build. Not part of `all` or of CI -- it needs Wine to run.
+icontest: tests/icontest.exe
+
+tests/icontest.exe: tests/icontest.c inc/tagpu_icon_rule.h inc/tagpu_icontype.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/icontest.c
+
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe tests/icontest.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)
