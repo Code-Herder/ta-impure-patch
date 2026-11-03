@@ -951,6 +951,16 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
    never from a table, because mods recolour it. */
 #define OFF_RADLOGO        0x147DF   /* GAF sequence*: radlogo                */
 #define ICONART_FRMAX      16        /* the largest logo frame kept, a side    */
+/* THE LAYOUT. Frame i has a cell ICONART_FRMAX + 1 texels square, so a texel
+   of gap keeps a neighbour out of its filtered edge, laid in rows of
+   ICONART_ROWCELLS from texel (1, 1): its corner is (1 + 17 (i % 15),
+   1 + 17 (i / 15)). The 15th cell ends at texel 255 and the 16th would start
+   at 256, past the row, so a row holds 15 and every frame the build reads
+   (at most TAGPU_ICONART_LOGOS) has a cell inside the atlas by the assert. */
+#define ICONART_CELL       (ICONART_FRMAX + 1)
+#define ICONART_ROWCELLS   ((TAGPU_ICONART_W - 1) / ICONART_CELL)
+_Static_assert(1 + ((TAGPU_ICONART_LOGOS + ICONART_ROWCELLS - 1) / ICONART_ROWCELLS) * ICONART_CELL
+               <= TAGPU_ICONART_H, "every logo frame the build reads has a cell in the atlas");
 
 static unsigned char  s_iconPix[TAGPU_ICONART_W * TAGPU_ICONART_H];
 static unsigned char  s_iconCov[TAGPU_ICONART_W * TAGPU_ICONART_H];   /* this thread's */
@@ -973,7 +983,7 @@ static void iconart_build(const char* ta)
 {
     static unsigned char pix[ICONART_FRMAX * ICONART_FRMAX], cov[ICONART_FRMAX * ICONART_FRMAX];
     const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
-    int used[256], marks[3], i = 0, x = 1, k, px, nfr = 0;
+    int used[256], marks[3], i = 0, k, px, nfr = 0;
     char b[160];
 
     memset(&s_iconArt, 0, sizeof s_iconArt);
@@ -986,6 +996,7 @@ static void iconart_build(const char* ta)
             const unsigned char* g = tagpu_gaf_seq_frame(seq, i);
             TAGPU_GAFGEOM gm;
             TAGPU_ICONRECT* r = &s_iconArt.logo[i];
+            const int x = 1 + (i % ICONART_ROWCELLS) * ICONART_CELL, y = 1 + (i / ICONART_ROWCELLS) * ICONART_CELL;
             int t, row;
             if (!g || !tagpu_gaf_frame_geom(g, &gm)) break;
             if (gm.w <= 0 || gm.h <= 0 || gm.w > ICONART_FRMAX || gm.h > ICONART_FRMAX) break;
@@ -997,19 +1008,19 @@ static void iconart_build(const char* ta)
             t = iconart_team(pix, cov, gm.w, gm.h, gm.hotx, gm.hoty);
             if (t < 0) break;
             for (row = 0; row < gm.h; row++) {
-                memcpy(s_iconPix + (size_t)(1 + row) * TAGPU_ICONART_W + x, pix + row * gm.w, (size_t)gm.w);
-                memcpy(s_iconCov + (size_t)(1 + row) * TAGPU_ICONART_W + x, cov + row * gm.w, (size_t)gm.w);
+                memcpy(s_iconPix + (size_t)(y + row) * TAGPU_ICONART_W + x, pix + row * gm.w, (size_t)gm.w);
+                memcpy(s_iconCov + (size_t)(y + row) * TAGPU_ICONART_W + x, cov + row * gm.w, (size_t)gm.w);
             }
             for (px = 0; px < gm.w * gm.h; px++) if (cov[px]) used[pix[px]] = 1;
-            r->x = (uint16_t)x; r->y = 1; r->w = (uint16_t)gm.w; r->h = (uint16_t)gm.h;
+            r->x = (uint16_t)x; r->y = (uint16_t)y; r->w = (uint16_t)gm.w; r->h = (uint16_t)gm.h;
             r->hx = (int16_t)gm.hotx; r->hy = (int16_t)gm.hoty;
             s_iconArt.team[i] = (unsigned char)t;
-            x += ICONART_FRMAX + 1;
         }
     }
-    /* the three markers: the smallest indices no drawn texel holds. Ten 4x4
-       frames draw at most 160 texels, so three are always free while the art
-       is the logo's alone. */
+    /* the three markers: the smallest indices no drawn texel holds. The
+       retail art, ten 4x4 frames, draws at most 160 texels, so three are
+       free; a mod's art can draw every index, which the branch below
+       answers. */
     for (k = 0, px = 0; px < 256 && k < 3; px++) if (!used[px]) marks[k++] = px;
     if (k < 3) {
         /* every index is drawn: nothing can mark "not drawn", so no art */

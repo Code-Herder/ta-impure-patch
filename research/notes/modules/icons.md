@@ -170,7 +170,10 @@ foreign unit and no dot.
 **The art** is decoded once a process at the first in-play fill (`iconart_build`): `radlogo` is
 session art, loaded by `0x429870` from start-up's `0x49134D`, and `0x42991E` is the only write of
 its pointer ([weapons](../engine/weapons.html), *The effect GAF sequences are a SESSION asset*). Up
-to 16 frames of at most 16 × 16 go into a 256 × 256 atlas of palette indices; **each logo's team
+to 16 frames of at most 16 × 16 go into a 256 × 256 atlas of palette indices, each in a 17-texel
+cell (a texel of gap), 15 cells to a row: frame `i` at `(1 + 17 (i mod 15), 1 + 17 ⌊i / 15⌋)`, so
+the 16th starts the second row and every frame read has its cell inside the atlas (a compile-time
+assert holds the count against the rows); **each logo's team
 colour is its frame's texel at the hotspot** (the commonest drawn texel when the hotspot draws
 nothing), never a table, because mods recolour it. The atlas's key, fill and selected markers are
 the three smallest indices no drawn texel holds. A unit whose logo has no frame is filled in the
