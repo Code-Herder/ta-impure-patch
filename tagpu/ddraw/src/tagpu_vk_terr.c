@@ -1215,6 +1215,16 @@ static TAGPU_RNBFRAME* s_nbTmp;
 static int             s_nbTmpCap;
 static DWORD           s_nbT0;
 static int             s_nbSaidDone;
+/* THE LAST SCREEN SCAN'S INPUTS: the map cells it covered and everything a
+   cell's key is read from. A scan whose inputs equal these finds nothing to
+   do -- every key of those cells went in last time, and `s_nbLastSeen` is
+   already at least one past each of their places -- so it is skipped. */
+static struct {
+    int ok, x0, x1, y0, y1, mapW, atlasN;
+    const unsigned short* tileMap;
+    const unsigned* keys;
+    unsigned mapSerial, keySerial;
+} s_nbScan;
 
 static void nb_feed_free(void)
 {
@@ -1222,6 +1232,7 @@ static void nb_feed_free(void)
     free(s_nbTmp); s_nbTmp = NULL; s_nbTmpCap = 0;
     s_nbCursor = s_nbAdded = s_nbLastSeen = 0;
     s_nbSaidDone = 0;
+    s_nbScan.ok = 0;
 }
 
 static int nb_room(int n)
@@ -1249,23 +1260,39 @@ static int nb_push(int n, int onScreen)
     return 1;
 }
 
-/* THE KEY OF GRID CELL i, or -1 when the cell draws nothing: the vertex
-   stage's rule (tagpu_terr.c, above the VS) on the CPU -- a cell past the
-   area while the mirror is off, or a tile past the atlas, is not drawn, and
-   a cell past the area takes the key of the cell tagpu_edge_reflect folds it
-   to. Only the cell's key is needed here, so the folds are not. Every index
-   is inside the hand-over's tile map: `prepare` has refused an area outside
-   it, and the fold answers in [0, area). */
-static int nb_cell_key(const TAGPU_TERRHAND* t, int c, int r)
+/* THE MAP CELLS ONE AXIS OF THE GRID DRAWS: [*lo, *hi], the image of grid
+   cells [0, n) from `first`, or 0 when it draws none. The vertex stage's rule
+   (tagpu_terr.c, above the VS) on the CPU: a cell past the area (`area`
+   cells) is not drawn while the mirror is off, and takes the cell
+   tagpu_edge_reflect folds it to while it is on. The image is an interval:
+   without the mirror it is [first, first + n) clipped to the area, and the
+   fold of consecutive integers moves by 0 or 1 a step (a triangle wave on
+   [0, area)), so the image of a run is the run between its least and its
+   greatest value. Every value is inside the hand-over's tile map: `prepare`
+   has refused an area outside it, and the fold answers in [0, area). */
+static int nb_axis(int first, int n, int area, int mirror, int* lo, int* hi)
 {
-    int mx = t->tile0X + c, my = t->tile0Y + r, flip;
-    size_t at;
-    if (mx < 0 || mx >= t->areaW || my < 0 || my >= t->areaH) {
-        if (!t->mirror) return -1;
-        mx = tagpu_edge_reflect(mx, t->areaW, &flip);
-        my = tagpu_edge_reflect(my, t->areaH, &flip);
+    int i, flip;
+    if (!mirror) {
+        *lo = first > 0 ? first : 0;
+        *hi = first + n - 1 < area - 1 ? first + n - 1 : area - 1;
+        return *lo <= *hi;
     }
-    at = (size_t)my * (size_t)t->mapW + (size_t)mx;
+    *lo = area; *hi = -1;
+    for (i = 0; i < n; i++) {
+        int m = first + i;
+        if (m < 0 || m >= area) m = tagpu_edge_reflect(m, area, &flip);
+        if (m < *lo) *lo = m;
+        if (m > *hi) *hi = m;
+    }
+    return *lo <= *hi;
+}
+
+/* THE KEY OF MAP CELL (mx, my), inside the tile map, or -1 when the cell
+   draws nothing: a tile past the atlas is not drawn. */
+static int nb_cell_key(const TAGPU_TERRHAND* t, int mx, int my)
+{
+    size_t at = (size_t)my * (size_t)t->mapW + (size_t)mx;
     if ((int)t->tileMap[at] >= t->atlasN) return -1;
     return t->keys[at] < 0x80000000u ? (int)t->keys[at] : -1;
 }
@@ -1275,7 +1302,7 @@ static int nb_cell_key(const TAGPU_TERRHAND* t, int c, int r)
    the request's own key count before it is used. */
 static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 {
-    int i, n, r, c, pending, painted;
+    int i, n, mx, my, x0, x1, y0, y1, pending, painted;
     if (s_nbGen != s_rjGen || s_nbQN != t->nbN) {
         nb_feed_free();
         if (t->nbN < 1 || !(s_nbPos = (int*)malloc((size_t)t->nbN * sizeof *s_nbPos))) return 0;
@@ -1283,14 +1310,25 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         s_nbQN = t->nbN; s_nbGen = s_rjGen; s_nbT0 = GetTickCount();
     }
     painted = tagpu_vk_restore_job_painted(s_rjob);
-    /* THE CELLS ON SCREEN, in the grid's own order: a cell's key is its
-       frame's index (tagpu_terr.h, `nbFrames`). An unqueued key goes in; a
-       queued one not painted yet raises the mark to its place. */
-    if (painted < s_nbQN && t->nbOn && t->keys) {
+    /* THE CELLS ON SCREEN: a cell's key is its frame's index (tagpu_terr.h,
+       `nbFrames`). An unqueued key goes in; a queued one not painted yet
+       raises the mark to its place. A grid cell's map cell is the pair of its
+       two axes' folds, so the map cells the grid draws are the product of the
+       two axes' images (nb_axis), and walking that product, in map order,
+       visits exactly the keys a walk of every grid cell does, each once --
+       at the floor the grid's reflected border strips add none -- and
+       nothing when the inputs are the last scan's (s_nbScan). */
+    if (painted < s_nbQN && t->nbOn && t->keys &&
+        nb_axis(t->tile0X, t->cols, t->areaW, t->mirror, &x0, &x1) &&
+        nb_axis(t->tile0Y, t->rows, t->areaH, t->mirror, &y0, &y1) &&
+        !(s_nbScan.ok && s_nbScan.x0 == x0 && s_nbScan.x1 == x1 && s_nbScan.y0 == y0 &&
+          s_nbScan.y1 == y1 && s_nbScan.mapW == t->mapW && s_nbScan.atlasN == t->atlasN &&
+          s_nbScan.tileMap == t->tileMap && s_nbScan.keys == t->keys &&
+          s_nbScan.mapSerial == t->mapSerial && s_nbScan.keySerial == t->keySerial)) {
         n = 0;
-        for (r = 0; r < t->rows; r++)
-            for (c = 0; c < t->cols; c++) {
-                int k = nb_cell_key(t, c, r);
+        for (my = y0; my <= y1; my++)
+            for (mx = x0; mx <= x1; mx++) {
+                int k = nb_cell_key(t, mx, my);
                 if (k < 0 || k >= s_nbQN) continue;
                 if (s_nbPos[k] >= 0) {
                     if (s_nbPos[k] >= painted && s_nbPos[k] >= s_nbLastSeen) s_nbLastSeen = s_nbPos[k] + 1;
@@ -1301,6 +1339,11 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
                 s_nbTmp[n++] = t->nbFrames[k];
             }
         if (!nb_push(n, 1)) return 0;
+        s_nbScan.ok = 1;
+        s_nbScan.x0 = x0; s_nbScan.x1 = x1; s_nbScan.y0 = y0; s_nbScan.y1 = y1;
+        s_nbScan.mapW = t->mapW; s_nbScan.atlasN = t->atlasN;
+        s_nbScan.tileMap = t->tileMap; s_nbScan.keys = t->keys;
+        s_nbScan.mapSerial = t->mapSerial; s_nbScan.keySerial = t->keySerial;
     }
     pending = painted < s_nbLastSeen;
     /* THE REST OF THE MAP, topped up to a batch waiting */
