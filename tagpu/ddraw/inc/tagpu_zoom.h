@@ -166,7 +166,7 @@ int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 /* The span a pass gathers over along one axis, for the 1x viewport's extent
    `v` at level `z`: v/z + 64 below 1 (the 64 is the partial cells at the
    edge), never more than the zoom floor's and never less than v. The native
-   pass takes it and may only shorten it (its terrain reservation); the
+   pass takes it and may only shorten it (TAGPU_GATHER_SPAN_MAX); the
    publisher sizes the tables' reach with it at the floor; the reach bound
    clamps the predicted eye with it. One expression for all three. */
 int   tagpu_zoom_gather_span(int v, float z);

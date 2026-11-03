@@ -2264,7 +2264,7 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
 
    THE SLAB, per axis (vh for y): `[e + (vw - S)/2 - M, e + (vw - S)/2 + S + M]`,
    S = tagpu_zoom_gather_span(vw, z) and M = TAGPU_GATHER_MARGIN — the native
-   pass's own test, whose S is this one or shorter (its terrain reservation only
+   pass's own test, whose S is this one or shorter (its TAGPU_GATHER_SPAN_MAX clamp only
    trims), which only narrows the slab about the same centre; it contains the
    view. At every level, the 1x one included.
 

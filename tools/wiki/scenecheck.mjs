@@ -7,8 +7,9 @@
 
    WHAT IS PAIRED (research/notes/ingame-wiki-3d-stage-plan.md, section 9, "The scene, checked op-for-op"):
    - each stage's GROUND, from the mockup's pack (tools/wiki/gfx.py, which resolves the stage descriptions against
-     the install): the terrain cells classicTerrain().gather makes at the stage's camera (zoom 1, the eye at the
-     map's corner, the whole map) -- column, row and tile, exactly -- and the feature quads gatherFeatures makes
+     the install): the terrain cells classicTerrain().gather hands the GPU at the stage's camera (zoom 1, the eye at
+     the map's corner, the whole map) -- the grid and the tile map it uploads, each cell drawn as tagpu_terr.c's
+     vertex stage derives it: column, row and tile, exactly -- and the feature quads gatherFeatures makes
      there -- each corner, the depth key, the mode and the anchor, within 1/64 of a unit -- in their order, both
      buckets. The gathers run as gfx.js runs them, through a recording stand-in for the WebGL context, so the code
      paired is the mockup's own and not a copy of it;
@@ -49,13 +50,13 @@ function run(cmd, args, opts = {}) {
 }
 
 /* A WebGL2 context that records: every method is a no-op returning a handle, the status queries say yes, and
-   bufferData keeps what it was given -- which is how the terrain gather hands over its instances. */
+   texImage2D keeps what it was given -- which is how the terrain gather hands over its tile map. */
 function fakeGL() {
-  const got = { buffers: [] };
+  const got = { textures: [] };
   const gl = new Proxy({}, {
     get(_, k) {
       if (k === 'got') return got;
-      if (k === 'bufferData') return (t, data) => got.buffers.push(data);
+      if (k === 'texImage2D') return (t, lvl, internal, w, h, b, fmt, type, data) => got.textures.push({ w, h, data });
       if (k === 'getShaderParameter' || k === 'getProgramParameter') return () => true;
       if (typeof k === 'string' && /^[A-Z_0-9]+$/.test(k)) return 0;
       return () => ({});
@@ -74,13 +75,22 @@ function mockupGround(dir, pack) {
   const pal = new Uint8Array(1024);
   const terr = TR.classicTerrain(gl, '', '', pack.map.atlas, atlas, pal);
   const tiles = u16(fs.readFileSync(path.join(dir, pack.map.tilemap.file)));
-  gl.got.buffers.length = 0;
+  gl.got.textures.length = 0;
   const g = terr.gather(tiles, pack.map.tilemap, [0, 0], [GW, GH], 0, 0);
-  const inst = gl.got.buffers.at(-1) || new Int16Array(0);
+  /* THE CELLS THE VERTEX STAGE DRAWS, from what the gather handed the GPU: instance i is grid cell
+     (i % cols, i / cols), map cell tile0 plus that; with the mirror off a cell past the area draws nothing, and so
+     does a tile past the atlas (tagpu_terr.c, the VS). The tile is read out of the texture the gather uploaded. */
+  const tm = gl.got.textures.at(-1);
   const cells = [];
-  for (let i = 0; i < g.n; i++) {
-    const col = inst[i * 4], row = inst[i * 4 + 1], tile = inst[i * 4 + 2] + inst[i * 4 + 3] * pack.map.atlas.cols;
-    cells.push([col, row, tile]);
+  if (tm && g.grid.mirror === 0) {
+    const { cols, tile0: [tx0, ty0], area: [aw, ah], atlasN } = g.grid;
+    for (let i = 0; i < g.n; i++) {
+      const col = i % cols, row = (i / cols) | 0, mx = tx0 + col, my = ty0 + row;
+      if (mx < 0 || mx >= aw || my < 0 || my >= ah || mx >= tm.w || my >= tm.h) continue;
+      const tile = tm.data[my * tm.w + mx];
+      if (tile >= atlasN) continue;
+      cells.push([col, row, tile]);
+    }
   }
   let shadow = [], body = [];
   const feats = [];
