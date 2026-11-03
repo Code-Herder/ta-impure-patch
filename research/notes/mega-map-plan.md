@@ -1,7 +1,6 @@
 # Mega map and strategic icons — plan
 
-*A plan note: the design the owner chose on 2026-11-02, and the landings that build it. Open
-decisions are marked **OPEN**. Facts carry their source; the scout's full inventory, with every
+*A plan note: the design the owner chose on 2026-11-02, and the landings that build it. Facts carry their source; the scout's full inventory, with every
 citation, is archived at `.data/mega-map/facts-2026-11-02.md` in the main checkout.*
 
 ## What it is
@@ -53,7 +52,9 @@ re-clone to verify).
   `UnitIconFadeVanish` and `UnitIconFadeStart` (`UnitDrawer.cpp:833-840`), drawn over the model
   until the model switches off. **BAR disables it**: it sets Vanish = Start on every launch
   (`springconfig.lua:118`), so BAR as shipped is a hard switch. The model itself never fades.
-  **OPEN — owner**: BAR as shipped (hard switch) or the engine's ramp (icon fades in over the model).
+  **Decided (owner, 2026-11-02): the engine's ramp.** The icon fades in from alpha 64 to 255
+  across a band before the model switches off; the band is an `impure.cfg` key, and a zero band is
+  BAR's hard switch.
 - **The far zoom is per map** in BAR too: `1.333 × max(mapx, mapy) × 8` elmos
   (`SpringController.cpp:49`).
 
@@ -85,8 +86,8 @@ Islands at 20480² px, is about 0.034 at 1024×768, 0.050 at 1920×1080 and 0.10
   nothing to scroll to; stated, not fixed.
 - **The recorder's camera** clamps the level to 0.25..8: the writer (`tagpu_recorder.c:3873`),
   `rec_pov_ok` (`tagpu_recpov.h:85`, which makes an out-of-range sample *malformed*), and Follow
-  (`tagpu_persp.c:65`). **OPEN — owner**: widen the format's range (a format version, so a replay
-  shows the mega map the player saw) or keep 0.25 as the replay camera's floor.
+  (`tagpu_persp.c:65`). **Decided (owner, 2026-11-02): widen the format's range** under a new
+  format version, so a replay shows the whole-map view the player saw; older recordings still read.
 - The file lever and the Follow lever ignore levels below 0.25 (`tagpu_zoom.c:395-403, 486`).
 
 ## The facts the icons need
@@ -136,7 +137,7 @@ ini and art read. Which ini a given install's TADR reads is a research item for 
 
 1. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
    extent and the true viewport; the six guards, the vpwide cap and the two levers follow it; the
-   wide fog grid's cost argued or re-sized; the recorder's range per the owner's decision.
+   wide fog grid's cost argued or re-sized; the recorder's camera range widened under a new format version.
    *Verified*: wheel to the whole map on Seven Islands at 1024×768 and 4K; click and band-box
    selection and a move order at that level; `tagpu_fogwide_check.on` `differ=0`; frame and tick
    time at the floor. Sim-adjacent if the fog grid changes → review at `high`.
