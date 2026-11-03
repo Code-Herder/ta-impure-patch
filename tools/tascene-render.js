@@ -8,7 +8,8 @@
    What it holds, each the engine's rule as the lab ports it:
    - the GL helpers, the base atlas (every index expanded to its palette colour, alpha 0 at a frame's key) and the
      face-shade multiplier (tagpu_render3do.c `s_shadeK`);
-   - the terrain: tagpu_terr.c's gather, one instance a visible 32-px cell, and its instanced draw;
+   - the terrain: tagpu_terr.c's gather, one instance a 32-px cell of the swept grid drawn from the tile map, and its
+     instanced draw;
    - the features: tagpu_feat.c's sweep rect, projection and depth keys (and the lab's mirror past the map's edge,
      which shares the sweep), and the sprite draw;
    - the units: one instance's yaw, projection, per-face flat shade and intra-model depth, the structure's slant
@@ -138,15 +139,20 @@ function shadeK(pal, shd, rows, neutral) {
 }
 
 // ---- terrain: tagpu's own shaders and the 32-px grid. tagpu_terr.c's
-// vertex shader is INSTANCED: a static unit quad (TAGPU_TERR_QUAD, the
-// engine's vertex order, the shared edge on (1,0)-(0,1)) at location 0, and
-// per instance the cell's grid column and row and its tile's atlas column and
-// row as four unnormalised shorts at location 1 (TAGPU_TERR_ICOMP). The
-// shader rebuilds the position, world point and UVs from those and uOrigin,
-// uTile0, uTexel — exactly, every term an integer far below 2^24.
+// vertex shader is INSTANCED with no instance buffer: a static unit quad
+// (TAGPU_TERR_QUAD, the engine's vertex order, the shared edge on (1,0)-(0,1))
+// at location 0, and one instance per cell of the swept grid, which the
+// shader turns into its map cell (uTile0 + (i % uCols, i / uCols)) and reads
+// that cell's tile out of the tile map, an R16UI texture (uTileMap). A cell
+// past the area (uArea) with the mirror off (uMirror 0), or whose tile is
+// past the atlas (uAtlasN), draws nothing. The shader rebuilds the position,
+// world point and UVs from those and uOrigin, uTexel -- exactly, every term an
+// integer far below 2^24.
 //
 // `atlas` is the pack's map.atlas (w, h, cols, tiles) and `r8` its indices; the
-// base atlas goes to texture unit 16, the program's sampler for it.
+// base atlas goes to texture unit 16, the program's sampler for it, the tile
+// map to unit 7 and the neighbourhood keys -- one zero texel: this lane has no
+// restored atlas, so uNbhd is 0 and the shader never reads it -- to unit 8.
 function classicTerrain(gl, vs, fs, atlas, r8, pal) {
   const prog = program(gl, vs, fs, "terrain");
   const vao = gl.createVertexArray();
@@ -157,67 +163,75 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
                 gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
-  const inst = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-  gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 4, gl.SHORT, false, 8, 0);   // SSCALED, as the game's
-  gl.vertexAttribDivisor(1, 1);
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
                                 "uPal", "uFogSrc", "uFogSize",
                                 "uFog", "uOrigin", "uTile0", "uTexel",
+                                "uCols", "uArea", "uMirror", "uAtlasN", "uNbhd", "uNbCols",
+                                "uTileMap", "uKeys",
                                 "uLambert", "uRestored", "uBase", "uHDim",
                                 "uShadowOn"]);
   nameShadowUnits(gl, prog);
   tex2D(gl, 16, gl.RGBA8, atlas.w, atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
         baseAtlas(pal, r8, atlas.w, atlas.h, null, 0));
+  const tmTex = tex2D(gl, 7, gl.R16UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_SHORT, new Uint16Array([0]));
+  tex2D(gl, 8, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
   gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
-  let cells = new Int16Array(4 * 4096);
+  let tmFor = null;                     // the tile map array unit 7 holds
   return {
     prog, vao, U,
-    // tagpu_terr.c's gather, line for line: one instance per visible cell.
-    // `tm` is the pack's map.tilemap (w, h) and `tiles` its u16 indices; E and W
-    // the swept world rect, (vpL, vpT) the viewport's game-pixel corner.
-    // `area` [cols, rows] is where the map ends, in 32-px cells (tagpu_fx.h
-    // tagpu_edge_area: the engine's scroll extent, at most the tile map); a
-    // cell past it is skipped. Without one the map is the whole tile map.
+    // tagpu_terr.c's gather: the swept grid, and the tile map it is drawn from.
+    // `tm` is the pack's map.tilemap (w, h) and `tiles` its u16 indices, sent to
+    // unit 7 when they are not the array it holds; E and W the swept world
+    // rect, (vpL, vpT) the viewport's game-pixel corner. `area` [cols, rows] is
+    // where the map ends, in 32-px cells (tagpu_fx.h tagpu_edge_area: the
+    // engine's scroll extent, at most the tile map); a cell past it is not
+    // drawn. Without one the map is the whole tile map. Returns the instance
+    // count and the grid as the GPU was handed it.
     gather(tiles, tm, E, W, vpL, vpT, area) {
-      const stride = tm.w;
       const [areaC, areaR] = area || [tm.w, tm.h];
       const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
       const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
       const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
-      if (cells.length < cols * rows * 4) cells = new Int16Array(cols * rows * 4);
-      let n = 0, skipped = 0, junk = 0;
-      for (let r = 0; r < rows; r++) {
-        const my = ty0 + r;
-        if (my < 0 || my >= areaR) { skipped += cols; continue; }
-        for (let c = 0; c < cols; c++) {
-          const mx = tx0 + c;
-          if (mx < 0 || mx >= areaC) { skipped++; continue; }
-          const idx = tiles[my * stride + mx];
-          if (idx >= atlas.tiles) { junk++; continue; }
-          // the quad still spans exactly TILE_PX texels, and its far edge lands
-          // ON the guard column, which is a copy of the last real one
-          const o = n * 4;
-          cells[o] = c; cells[o + 1] = r;
-          cells[o + 2] = idx % atlas.cols; cells[o + 3] = (idx / atlas.cols) | 0;
-          n++;
-        }
+      if (tmFor !== tiles) {
+        gl.activeTexture(gl.TEXTURE7);
+        gl.bindTexture(gl.TEXTURE_2D, tmTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, tm.w, tm.h, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, tiles);
+        gl.activeTexture(gl.TEXTURE0);
+        tmFor = tiles;
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-      gl.bufferData(gl.ARRAY_BUFFER, cells.subarray(0, n * 4), gl.DYNAMIC_DRAW);
       gl.useProgram(prog);
       // grid cell (0,0)'s screen corner, the map cell it is, the atlas texel
       gl.uniform2f(U.uOrigin, vpL - fx, vpT - fy);
-      gl.uniform2f(U.uTile0, tx0, ty0);
+      gl.uniform2i(U.uTile0, tx0, ty0);
       gl.uniform2f(U.uTexel, 1 / atlas.w, 1 / atlas.h);
-      return { n, stats: { cols, rows, tx0, ty0, fx, fy, cells: n, skipped, junk } };
+      gl.uniform1i(U.uCols, cols);
+      gl.uniform2i(U.uArea, areaC, areaR);
+      gl.uniform1i(U.uMirror, 0);
+      gl.uniform1i(U.uAtlasN, atlas.tiles);
+      gl.uniform1i(U.uNbhd, 0); gl.uniform1i(U.uNbCols, 1);
+      gl.uniform1i(U.uTileMap, 7); gl.uniform1i(U.uKeys, 8);
+      // the lab's counts: the cells on the map, and of those the ones whose
+      // tile is past the atlas, which the shader does not draw
+      const c0 = Math.max(tx0, 0), c1 = Math.min(tx0 + cols, areaC);
+      const r0 = Math.max(ty0, 0), r1 = Math.min(ty0 + rows, areaR);
+      let onMap = 0, junk = 0;
+      for (let my = r0; my < r1; my++)
+        for (let mx = c0; mx < c1; mx++) {
+          onMap++;
+          if (tiles[my * tm.w + mx] >= atlas.tiles) junk++;
+        }
+      return { n: cols * rows,
+               grid: { cols, rows, tile0: [tx0, ty0], area: [areaC, areaR], mirror: 0, atlasN: atlas.tiles },
+               stats: { cols, rows, tx0, ty0, fx, fy, cells: onMap - junk,
+                        skipped: cols * rows - onMap, junk } };
     },
     // The draw, unlit: no height grid, so no lambert term. `f` is the frame:
     // GW, GH (the game frame), zoom, zoomC, depth (the pack's), and the fog
     // source's uniforms (fog: 0 off, else uFog's bits; fogSize, its cells),
-    // its R32UI texture on unit 2 (tagpu_fogsrc.h).
+    // its R32UI texture on unit 2 (tagpu_fogsrc.h). `n` is the gather's
+    // instance count, one a cell of the grid.
     draw(f, n) {
       gl.useProgram(prog);
       gl.uniform2f(U.uGame, f.GW, f.GH);

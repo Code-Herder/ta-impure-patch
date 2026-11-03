@@ -2134,9 +2134,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
        viewport is read out of engine memory and everything below sizes itself
        from it, so a garbage pair must not be believed — but nothing here
-       assumes a number: the world target is the game's own size, the gather
-       rect is the viewport over the zoom, and the terrain staging is reserved
-       from the viewport. 16384 is the largest 2D image common hardware will
+       assumes a number: the world target is the game's own size and the gather
+       rect is the viewport over the zoom. 16384 is the largest 2D image common hardware will
        hold, which is the real ceiling on the target the frame is drawn into. */
     if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
 /* The macro captures `f` from its expansion site, so it is confined to the one
@@ -2197,17 +2196,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int evpL, evpT;
     int evw = tagpu_zoom_gather_span(vw, s_zoom, tagpu_zoom_floor());
     int evh = tagpu_zoom_gather_span(vh, s_zoom, tagpu_zoom_floor());
-    /* Reserve the terrain staging for THIS VIEWPORT at the zoom floor and trim
-       the rect to what could be reserved. Unconditional, at every zoom: the
-       reservation is what the gather draws out of, so a 1x frame needs it made
-       too, and making it from the viewport rather than from this frame's rect
-       is what keeps a zoom-out from allocating mid-gesture. It trims nothing
-       on any screen whose viewport was believed — see tagpu_terr.h. */
-    tagpu_terr_clamp_span(vw, vh, &evw, &evh);
-    /* the effective rect is only ever WIDER than the engine's — a trim that
-       took it below the viewport would cull content that is plainly on screen.
-       Then centre it: at z >= 1 the deltas are zero and this is the engine's
-       own viewport, bit for bit. */
+    /* the effective rect is never NARROWER than the engine's -- a rect below
+       the viewport would cull content that is plainly on screen. The span's
+       cap sits past the 16384 bound above, so these two lines change nothing
+       today; they are what keeps that true if either number moves. Then
+       centre it: at z >= 1 the deltas are zero and this is the engine's own
+       viewport, bit for bit. */
     if (evw < vw) evw = vw;
     if (evh < vh) evh = vh;
     evpL = vpL + (vw - evw) / 2;

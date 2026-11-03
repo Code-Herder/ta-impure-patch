@@ -2736,8 +2736,8 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
 
    THE SLAB, per axis (vh for y): `[e + (vw - S)/2 - M, e + (vw - S)/2 + S + M]`,
    S = tagpu_zoom_gather_span(vw, z, floor) and M = TAGPU_GATHER_MARGIN — the native
-   pass's own test, whose S is this one or shorter (its terrain reservation only
-   trims), which only narrows the slab about the same centre; it contains the
+   pass's own test, whose S is this one (the native pass only raises it to
+   the viewport, which it already is or exceeds); the slab contains the
    view. At every level, the 1x one included.
 
    WHAT IT HOLDS. The reach is the slab at the packet's reach level about its

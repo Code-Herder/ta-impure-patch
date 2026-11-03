@@ -159,7 +159,11 @@ static int                s_nwreck;
 static unsigned char*     s_tatlas;     /* ATLAS_W x s_tatlasH palette indices                    */
 static int                s_tatlasH;
 static unsigned           s_tatlasSerial;
-static short              s_cells[WIKISCENE_TILES * TAGPU_TERR_ICOMP];
+/* THE STAGE'S TILE MAP, the terrain draw's: every 32-px cell's tile index (the scene's cells,
+   WSCENECELL), `s_tmW` x `s_tmH`, and the serial the Vulkan lane re-uploads it on */
+static unsigned short     s_tmap[WIKISCENE_TILES];
+static int                s_tmW, s_tmH;
+static unsigned           s_tmSerial;
 static TAGPU_GAFENT       s_fents[FATLAS_MAX];
 static TAGPU_GAFATLAS     s_fatlas;
 static float*             s_fv[2];      /* shadows, bodies: 6 vertices a quad, FVST floats each    */
@@ -285,7 +289,9 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     g.nfeat = n2d;
     g.feat = s_sfeat;
     if (!tagpu_wikiscene_ground(&g, &s_scene)) return "the ground is past a bound of the scene";
-    if (s_scene.ncell * TAGPU_TERR_ICOMP > (int)(sizeof s_cells / sizeof s_cells[0])) return "too many cells";
+    /* the scene's cells are every cell of the map's tile grid, row by row (tagpu_wikiscene_ground) */
+    if (s_scene.ncell != (st->w / 2) * (map_rows / 2) || s_scene.ncell > WIKISCENE_TILES)
+        return "the ground's cells are not its tile grid";
 
     /* THE TERRAIN ATLAS, tagpu_terr.c `ensure_atlas`'s layout over the description's tile set */
     rows = (st->ntile + ATLAS_COLS - 1) / ATLAS_COLS;
@@ -310,12 +316,15 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     s_tatlas = atlas;
     s_tatlasH = h;
     s_tatlasSerial++;
+    s_tmW = st->w / 2;
+    s_tmH = map_rows / 2;
     for (i = 0; i < s_scene.ncell; i++) {
-        short* o = s_cells + (size_t)i * TAGPU_TERR_ICOMP;
-        o[0] = s_scene.cell[i].col; o[1] = s_scene.cell[i].row;
-        o[2] = (short)(s_scene.cell[i].tile % ATLAS_COLS); o[3] = (short)(s_scene.cell[i].tile / ATLAS_COLS);
-        o[4] = o[5] = o[6] = o[7] = 0;
+        const WSCENECELL* c = &s_scene.cell[i];
+        if (c->col < 0 || c->col >= s_tmW || c->row < 0 || c->row >= s_tmH)
+            return "a ground cell is outside its tile grid";
+        s_tmap[(size_t)c->row * s_tmW + c->col] = c->tile;
     }
+    s_tmSerial++;
 
     /* THE FEATURE ATLAS: every frame of the ground painted now, on this thread, and the stage's
        quads' vertices built from their entries. The atlas has no allowance (`budget` 0): it holds
@@ -922,11 +931,16 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     }
 
     /* THE TERRAIN, every cell of the map at zoom 1: tagpu_terr.c `terr_publish`'s fields at the
-       stage's camera -- grid cell (0, 0) is the map's, its corner the target's, no restore, no
-       relief, no shadow map, fog when a cell is fogged (the source, tagpu_wikiworld_fogsrc) */
+       stage's camera -- the grid is the whole tile map and grid cell (0, 0) is its first, its
+       corner the target's, the area the map's, no mirror, no keys, no restore, no relief, no
+       shadow map, fog when a cell is fogged (the source, tagpu_wikiworld_fogsrc) */
     if (s_wantTerr && !s_noMap) {
         memset(&s_terr, 0, sizeof s_terr);
-        s_terr.cells = s_cells; s_terr.ncell = s_scene.ncell;
+        s_terr.cols = s_tmW; s_terr.rows = s_tmH;
+        s_terr.areaW = s_tmW; s_terr.areaH = s_tmH;
+        s_terr.atlasN = s_stage ? s_stage->ntile : 0;
+        s_terr.tileMap = s_tmap; s_terr.mapW = s_tmW; s_terr.mapH = s_tmH;
+        s_terr.mapSerial = s_tmSerial;
         s_terr.gw = (float)s_scene.gw; s_terr.gh = (float)s_scene.gh;
         s_terr.zoom = 1.0f;
         s_terr.zoomCx = (float)s_scene.gw * 0.5f; s_terr.zoomCy = (float)s_scene.gh * 0.5f;

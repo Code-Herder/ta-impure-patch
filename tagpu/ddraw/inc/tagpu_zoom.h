@@ -195,10 +195,9 @@ int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
    `v` at level `z`: v/z + 64 below 1 (the 64 is the partial cells at the
    edge), never less than v. A level below `floor` is taken at the floor, and
    the span is never more than TAGPU_GATHER_SPAN_MAX (tagpu_terr.h) whatever
-   floor the caller holds. The native pass takes it and may only shorten it
-   (its terrain reservation); the publisher sizes the tables' reach with it at
-   the reach level; the reach bound clamps the predicted eye with it. One
-   expression for all three. */
+   floor the caller holds. The native pass gathers over it; the publisher
+   sizes the tables' reach with it at the reach level; the reach bound clamps
+   the predicted eye with it. One expression for all three. */
 int   tagpu_zoom_gather_span(int v, float z, float floor);
 
 /* The window the game thread publishes about its eye `eye` along one axis of
