@@ -93,10 +93,12 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
      already gives one a `layout(location=)`.
   7. `gl_VertexID` / `gl_InstanceID` become `gl_VertexIndex` /
      `gl_InstanceIndex`. `firstVertex` is 0 in every draw that reads
-     `gl_VertexID`, so the two names mean the same value there. The line draws
-     (tagpu_vk_mark.c, tagpu_vk_fx.c) pass a nonzero `firstInstance`, which only
-     moves the fetch of their per-instance attributes; no shader reads
-     `gl_InstanceID`, and one that did would be offset by it under Vulkan.
+     `gl_VertexID`, and `firstInstance` is 0 in the one draw whose shader reads
+     `gl_InstanceID` (the terrain, tagpu_vk_terr.c), so the two names mean the
+     same value there. The line draws (tagpu_vk_mark.c, tagpu_vk_fx.c) pass a
+     nonzero `firstInstance`, which only moves the fetch of their per-instance
+     attributes; their shaders do not read `gl_InstanceID`, and one that did
+     would be offset by it under Vulkan.
   8. Vertex `in` declarations are NOT touched: every vertex stage in the fork
      already carries `layout(location=)` on each attribute. One that does not
      is an error here.
