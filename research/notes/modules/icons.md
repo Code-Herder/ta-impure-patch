@@ -89,10 +89,12 @@ starts to fade in (`d'` = 0.67) and is opaque (`d'` = 1):
 | COMMANDER | 16 px, 0.204 / 0.137 | 33 px, 0.396 / 0.266 |
 
 **1× is the stock frame.** With the defaults, `z = 1` gives alpha 0 for every class and the radar
-dot while `gh ≤ 0.67 · 4970 · min(mult)` ≈ 2600 px; the host test asserts it for every frame
-480..2160 px tall at 4:3, 5:4, 16:10, 16:9, 21:9 and 32:9. With `iconfade=67` the smallest classes
-fade in at 1× on a 4K-native frame; above about 2600 px tall (5K native) they fade in faintly at
-1× with the defaults too.
+dot while `gh ≤ 0.67 · 4970 · min(mult)`; with `S` rounded to whole px the first alpha at 1× comes
+at 2569 to 2666 px tall by the frame's shape (a radar contact at 5:4, COMBAT at 4:3 first). The
+host test asserts alpha 0 for every frame 480..2560 px tall at 4:3, 5:4, 16:10, 16:9, 21:9 and
+32:9, for the shapes and for every set picture size (*Drawing a set picture*). With `iconfade=67`
+the smallest classes fade in at 1× on a 4K-native frame; above about 2570 px tall (5K native)
+they fade in faintly at 1× with the defaults too.
 
 ## The class rule
 
@@ -267,9 +269,11 @@ unit-category map*). What it takes is a snapshot for the level.
 **Drawing a set picture.** A type whose `icon` names one of the published art's pictures is drawn
 with it (`tagpu_icon_type`, `inc/tagpu_icon_rule.h`): at the art scale `k = max(1, round(base /
 10))` — 1 at 1920 × 1080 and 2 at 3840 × 2160 with the defaults — its own aspect kept, shape 0.
-`icon` is DATA: an index at or past the art's picture count is the class's shape. The rule takes
-`S = E = k × the picture's longer side` (art has no 7-px floor), so where a set picture takes over
-follows its drawn size, not the class's BAR size. On the atlas the TransparentColor texels are
+`icon` is DATA: an index at or past the art's picture count is the class's shape. **The switch is
+the class's**: `S` is BAR's size for the type's class, exactly as for its shape, so where a type
+turns into an icon does not depend on which picture the mod drew, and 1× stays stock for every
+picture size a set can hold (the host test runs 6..22 px a side). Only the cover test and the pick
+take the picture as drawn, `E = k × its longer side` (art has no 7-px floor). On the atlas the TransparentColor texels are
 discarded, the FillColor texels take the owner's team colour — **white when selected** — and the
 SelectedColor texels are discarded unless the unit is selected, when they show in the set's own
 SelectedColor (`uIconSelCol`, *The draw*). TADR keeps the team fill on a selected unit and shows the
@@ -286,11 +290,13 @@ located*), so ours follow the same distance rule and 1× stays stock. A unit the
 the cloak test or the fog test (an unexplored tile, or a grey one for a foreign unit) that is a
 radar or sonar contact (`+0x110 & 0x300`) with a model is drawn as **the minimap's own dot**: its
 owner's logo frame of `radlogo` (`main+0x147DF`), at an integer scale `k_r = max(1, round(0.8 ·
-base / 4))`, under the rule with `S = E = k_r × max(w, h)` (8 px at 1080p, 4 px at the smallest
-scale; the 7-px floor is the generated shapes', not the art's), on layer 1 (BAR's unidentified
-contact). **With a mod set that has a NONE picture** — the mod's art for an unidentified contact —
+base / 4))` and `E = k_r × max(w, h)` (8 px at 1080p, 4 px at the smallest scale; the 7-px floor
+is the generated shapes', not the art's), switching at `S = round(0.8 · base)`, the size `k_r` is
+rounded from (`tagpu_icon_dot_size`): equal to `4 k_r` at 1080p and 4K native, and never the
+rounded-down scale, which would bring contacts in at 1× on a 3186 × 2390 frame. On layer 1 (BAR's
+unidentified contact). **With a mod set that has a NONE picture** — the mod's art for an unidentified contact —
 the contact is drawn as that picture instead, at the set's art scale `k` (*Mod icon sets*), its
-FillColor in the owner's team colour, under the rule with `S = E = k × max(w, h)`. A contact hides
+FillColor in the owner's team colour, `E = k × max(w, h)`, switching at the same contact `S`. A contact hides
 nothing, is never white and is not pickable in the world view — the engine's own rule (`0x48CD80`
 picks a radar contact on the minimap only). No fog source, no foreign unit and no contact.
 

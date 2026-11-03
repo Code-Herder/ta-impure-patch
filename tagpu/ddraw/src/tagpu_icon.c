@@ -201,8 +201,11 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
             k = s_dotK;
             r->team = s_art->team[u->logo];
         }
+        /* the switch at the contact's BAR size, whatever art draws it, so a
+           mod's bigger frame or NONE picture does not bring contacts in
+           sooner -- 1x stays stock (tagpu_icon_dot_size) */
         e = k * (f->w > f->h ? f->w : f->h);
-        r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, e, e, 0u, &hide);
+        r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, tagpu_icon_dot_size(&s_view), e, 0u, &hide);
         if (!r->alpha) return 0;
         r->art = f;
         r->ew = (unsigned short)(k * f->w); r->eh = (unsigned short)(k * f->h);
@@ -267,7 +270,8 @@ void tagpu_icon_emit(void)
     if (s_frames % IC_LOG_FRAMES == 0) {
         char b[400];
         int dh = 0;
-        const int dotA = s_on ? tagpu_icon_eval(&s_view, s_zoom, 4 * s_dotK, 4 * s_dotK, 0u, &dh) : 0;
+        const int dotA = s_on ? tagpu_icon_eval(&s_view, s_zoom, tagpu_icon_dot_size(&s_view), 4 * s_dotK, 0u,
+                                                &dh) : 0;
         int combatA = 0;
         if (s_on) combatA = tagpu_icon_eval(&s_view, s_zoom, s_size[TAGPU_ICLS_COMBAT], s_edge[TAGPU_ICLS_COMBAT],
                                           0u, &dh);

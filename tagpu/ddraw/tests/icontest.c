@@ -6,8 +6,9 @@
         to +-0.001;
      2. the fade ramp's two ends, and a zero band as a step;
      3. at 1x with the defaults, no icon -- alpha 0 for every class and the
-        radar dot -- on every common display shape up to 4K native: the
-        promise that 1x stays the stock frame;
+        radar dot -- and for every class and radar contact drawn as a set
+        picture of any size a set can hold, on every common display shape up
+        to 2560 px tall: the promise that 1x stays the stock frame;
      4. the drawn edge's floor: every class's edge is TAGPU_ICON_EDGE_MIN or
         more at every icon scale on every frame, and BAR's size where the
         floor does not bind; the switch follows BAR's size and the cover
@@ -120,22 +121,81 @@ static void test_ramp(void)
 }
 
 /* ---- 3. 1x is the stock frame ---- */
+/* THE TALLEST FRAME 1x IS CHECKED STOCK AT: 2560 px, every display short of
+   5K. The rule's own limit is gh <= 0.67 x 4970 x min(S / base), which the
+   rounding of S to whole px moves per frame: the first alpha at 1x comes at
+   2569 px tall (a radar contact at 5:4) and 2581 (COMBAT at 4:3), the latest
+   at 2666 -- so "about 2600" is the rule's, and 2560 is the bound it holds at
+   on every shape. */
+#define ONE_MAX_H 2560
+
 static void test_one(void)
 {
-    /* every common display shape, from 4:3 to 32:9, up to 4K native's height */
+    /* every common display shape, from 4:3 to 32:9, up to ONE_MAX_H */
     static const int ASPECT[][2] = { { 4, 3 }, { 5, 4 }, { 16, 10 }, { 16, 9 }, { 21, 9 }, { 32, 9 } };
     int a, gh, c, hide;
     for (a = 0; a < (int)(sizeof ASPECT / sizeof ASPECT[0]); a++)
-        for (gh = 480; gh <= 2160; gh++) {
+        for (gh = 480; gh <= ONE_MAX_H; gh++) {
             const int gw = gh * ASPECT[a][0] / ASPECT[a][1];
             TAGPU_ICON_VIEW v;
             tagpu_icon_view(&v, gw, gh, 100, 100, 33);
             for (c = -1; c < TAGPU_ICLS_N; c++) {
                 const int e = c < 0 ? 4 * tagpu_icon_dot_k(&v) : tagpu_icon_gen_edge(&v, c);
-                const int al = tagpu_icon_eval(&v, 1.0f, c < 0 ? e : tagpu_icon_bar_edge(&v, c), e, 0, &hide);
+                const int al = tagpu_icon_eval(&v, 1.0f, c < 0 ? tagpu_icon_dot_size(&v) : tagpu_icon_bar_edge(&v, c),
+                                               e, 0, &hide);
                 CHECK(al == 0 && !hide, "%dx%d at 1x: %s alpha %d", gw, gh, c < 0 ? "radar dot" : NAME[c], al);
             }
         }
+}
+
+/* 1x for a mod set: every class drawn as a picture of every size a set can
+   hold (6..22 px a side, the shipped range and the decoder's bound), and a
+   radar contact drawn as any such NONE picture or logo frame, on every display
+   shape up to ONE_MAX_H px tall: alpha 0. The switch takes the class's or the
+   contact's BAR size whatever the picture is (tagpu_icon_type,
+   tagpu_icon_dot_size), so a picture brings icons into the stock frame
+   exactly where a shape would, and not before. */
+static void test_one_sets(void)
+{
+    static const int ASPECT[][2] = { { 4, 3 }, { 5, 4 }, { 16, 10 }, { 16, 9 }, { 21, 9 }, { 32, 9 } };
+    static TAGPU_ICONART art;
+    int a, gh, c, w, hide, size, edge, k = 0, fails = 0;
+    memset(&art, 0, sizeof art);
+    /* every width 6..22 with a square, the shortest and the tallest height:
+       51 pictures, in the art's 64 slots */
+    for (w = 6; w <= 22; w++) {
+        static const int H3[3] = { 0, 6, 22 };
+        int j;
+        for (j = 0; j < 3; j++) {
+            art.set[k].w = (unsigned short)w;
+            art.set[k].h = (unsigned short)(H3[j] ? H3[j] : w);
+            k++;
+        }
+    }
+    art.nset = k;
+    for (a = 0; a < (int)(sizeof ASPECT / sizeof ASPECT[0]); a++)
+        for (gh = 480; gh <= ONE_MAX_H; gh++) {
+            const int gw = gh * ASPECT[a][0] / ASPECT[a][1];
+            TAGPU_ICON_VIEW v;
+            int i;
+            tagpu_icon_view(&v, gw, gh, 100, 100, 33);
+            for (i = 0; i < art.nset; i++) {
+                const TAGPU_ICONRECT* r = &art.set[i];
+                const int dotEdge = tagpu_icon_art_k(&v) * (r->w > r->h ? r->w : r->h);
+                for (c = 0; c < TAGPU_ICLS_N; c++) {
+                    tagpu_icon_type(&v, &art, c, (unsigned)i, &size, &edge);
+                    if (tagpu_icon_eval(&v, 1.0f, size, edge, 0, &hide) || hide) {
+                        if (!fails) printf("first: %dx%d, %s as a %dx%d picture\n", gw, gh, NAME[c], r->w, r->h);
+                        fails++;
+                    }
+                }
+                if (tagpu_icon_eval(&v, 1.0f, tagpu_icon_dot_size(&v), dotEdge, 0, &hide) || hide) {
+                    if (!fails) printf("first: %dx%d, a contact as a %dx%d picture\n", gw, gh, r->w, r->h);
+                    fails++;
+                }
+            }
+        }
+    CHECK(fails == 0, "%d set picture(s) at 1x with an alpha, up to %d px tall", fails, ONE_MAX_H);
 }
 
 /* ---- 4. the floor ---- */
@@ -317,15 +377,17 @@ static void test_type(void)
     art.set[1].w = 18; art.set[1].h = 12;
     tagpu_icon_view(&v, 3840, 2160, 100, 100, 33);           /* base 20.16: k 2 */
     r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
-    CHECK(r == &art.set[0] && size == 20 && edge == 20, "set picture 0 at 4K: %d/%d", size, edge);
+    CHECK(r == &art.set[0] && edge == 20 && size == tagpu_icon_bar_edge(&v, TAGPU_ICLS_COMBAT),
+          "set picture 0 at 4K: %d/%d", size, edge);
     r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 1, &size, &edge);
-    CHECK(r == &art.set[1] && size == 36 && edge == 36, "a picture's longer side decides: %d/%d", size, edge);
+    CHECK(r == &art.set[1] && edge == 36, "a picture's longer side decides its edge: %d", edge);
     tagpu_icon_view(&v, 1920, 1080, 100, 100, 33);           /* base 10.08: k 1 */
-    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
-    CHECK(r && size == 10 && edge == 10, "set picture 0 at 1080p: %d/%d", size, edge);
+    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_FACTORY, 0, &size, &edge);
+    CHECK(r && edge == 10 && size == tagpu_icon_bar_edge(&v, TAGPU_ICLS_FACTORY),
+          "set picture 0 at 1080p: %d/%d, the switch at the class's size", size, edge);
     tagpu_icon_view(&v, 640, 480, 100, 100, 33);             /* base 3.36: k 1, no floor */
     r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
-    CHECK(r && size == 10 && edge == 10, "a picture has no floor and no shrink: %d/%d", size, edge);
+    CHECK(r && edge == 10, "a picture has no floor and no shrink: %d", edge);
     for (c = 0; c < TAGPU_ICLS_N; c++) {
         static const unsigned none[4] = { TAGPU_ICON_NOSET, 2, 63, 64 };
         int k;
@@ -345,6 +407,7 @@ int main(int argc, char** argv)
     test_table();
     test_ramp();
     test_one();
+    test_one_sets();
     test_floor();
     test_type();
     test_shapes(dump);

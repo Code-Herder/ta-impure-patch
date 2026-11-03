@@ -291,7 +291,7 @@ is per-frame working copies, not information, so the landing is split to remove 
    order (layer, then far to near); the pick by the icon's circle at `0x48CE15`. A 7-px floor on
    the drawn edge, the smallest at which the nine classes are pairwise different, with the switch
    kept on BAR's unfloored size. Three closed-list `impure.cfg` keys — `iconscale`, `icondist`
-   and the fade band `iconfade` (default 33, so 1× stays stock up to a 2600-px-tall frame) — and
+   and the fade band `iconfade` (default 33, so 1× stays stock up to a 2560-px-tall frame) — and
    **no menu rows**: the front-end screen has no free slot and three rows would run the in-game
    panel 46 px past 640×480, so rows wait for a panel layout that fits. The class table's and the
    art's game-thread code sits in `tagpu_packet_pub.c`, an existing publisher, so

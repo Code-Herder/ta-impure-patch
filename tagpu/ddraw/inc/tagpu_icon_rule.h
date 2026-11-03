@@ -40,8 +40,10 @@
    frame COMBAT is 6 px by BAR's rule and drawn at 7. A hidden model's icon is opaque
    by construction (d' > 1 gives 255). With the defaults (scale 100, dist 100,
    fade 33) z = 1 gives alpha 0 for every class while gh is at most about
-   0.67 * 4970 * min(mult), ~2600: at 1x the frame is the stock frame on every
-   display up to 4K native, which tests/icontest.c checks. */
+   0.67 * 4970 * min(mult): with S rounded to whole px the first alpha comes
+   at 2569 to 2666 px tall by the frame's shape, so at 1x the frame is the
+   stock frame on every display up to 2560 px tall, a mod set's pictures
+   included, which tests/icontest.c checks. */
 #include <math.h>
 #include "tagpu_icontype.h"   /* TAGPU_ICLS_* */
 
@@ -119,28 +121,48 @@ static __inline int tagpu_icon_dot_k(const TAGPU_ICON_VIEW* v)
 /* What a type is drawn as: its mod set's picture when `icon`
    (TAGPU_PK_UTYPE.icon, DATA to this function) names one of `art`'s, at the
    art scale, or else its class's generated shape. *size is the predicate's
-   S, *edge the edge the cover test and the pick take: a picture's are both
-   k x its longer side (art has no floor); a shape's are BAR's size and the
-   floored edge. Returns the picture's rect, or NULL for a shape. The render
-   thread's picture (tagpu_icon.c) and the game thread's pick (tagpu_zoom.c)
-   both ask this, so the two agree on every size. */
+   S, *edge the edge the cover test and the pick take. THE SWITCH IS THE
+   CLASS'S EITHER WAY: S is BAR's size for the class, so where a type turns
+   into an icon does not depend on which picture a mod drew for it, and "1x
+   is the stock frame" holds for a set exactly as for the shapes (the host
+   test runs every picture size a set can hold). Only the cover test and the
+   pick take the picture as drawn: a picture's edge is k x its longer side
+   (art has no floor), a shape's the floored edge. Returns the picture's
+   rect, or NULL for a shape. The render thread's picture (tagpu_icon.c) and
+   the game thread's pick (tagpu_zoom.c) both ask this, so the two agree on
+   every size. */
 static __inline const TAGPU_ICONRECT* tagpu_icon_type(const TAGPU_ICON_VIEW* v, const TAGPU_ICONART* art,
                                                       int cls, unsigned icon, int* size, int* edge)
 {
+    *size = tagpu_icon_bar_edge(v, cls);
     if (art && (int)icon < art->nset && icon < TAGPU_ICONART_SETS) {
         const TAGPU_ICONRECT* r = &art->set[icon];
-        *size = *edge = tagpu_icon_art_k(v) * (r->w > r->h ? r->w : r->h);
+        *edge = tagpu_icon_art_k(v) * (r->w > r->h ? r->w : r->h);
         return r;
     }
-    *size = tagpu_icon_bar_edge(v, cls);
     *edge = tagpu_icon_gen_edge(v, cls);
     return NULL;
 }
 
+/* A radar contact's BAR size, S for the switch whatever it is drawn as (the
+   logo frame or a set's NONE picture): 0.8 x base, the size the dot's scale
+   k_r is rounded from, NOT 4 x k_r. The two are equal at 1080p (8 px) and at
+   4K native (16), but k_r rounds down by up to half a step, and a dot whose S
+   followed it would switch sooner: at 3186 x 2390, 4 x k_r is 12 px against
+   13, enough to fade contacts in at 1x. Taken unrounded the switch is the
+   size's, and 1x stays stock to 2560 px (tests/icontest.c). */
+static __inline int tagpu_icon_dot_size(const TAGPU_ICON_VIEW* v)
+{
+    const int e = (int)floorf(0.8f * v->base + 0.5f);
+    return e > 1 ? e : 1;
+}
+
 /* The predicate at level z for an icon of BAR size `size_px` drawn `edge_px`
    wide over a model of radius `r_px`: the icon's alpha, 0..255, and in *hide
-   whether the model is not drawn. Art has no floor and passes its edge as
-   both. 0 and no hide for a level, size or view that cannot be evaluated. */
+   whether the model is not drawn. Art has no floor: its edge is the picture
+   as drawn, its size the class's or the contact's BAR size
+   (tagpu_icon_type, tagpu_icon_dot_size). 0 and no hide for a level, size or
+   view that cannot be evaluated. */
 static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int size_px, int edge_px,
                                     unsigned r_px, int* hide)
 {
