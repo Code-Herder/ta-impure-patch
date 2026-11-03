@@ -33,6 +33,8 @@
 #include "tagpu_settings.h"
 #include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
+#include "tagpu_icontype.h"   /* the icons' class table, for the pick */
+#include "tagpu_icon_rule.h"  /* the icons' rule: whether a unit's model is hidden */
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -1689,7 +1691,23 @@ float tagpu_zoom_game_floor(void)
    not built -- a publisher that applies nothing has no level end to clear it
    either -- measures every call on the spot with the same `0x4CB650` call,
    correct and only slower. GetUnitAtMouse runs on the game thread, the
-   table's thread. */
+   table's thread.
+
+   A UNIT DRAWN AS AN ICON IS ANSWERED BY ITS ICON, before any of the above
+   (icon_hit): the strategic icons' rule (inc/tagpu_icon_rule.h) at the
+   game thread's applied level says its model is not drawn, so "hit" is the
+   point inside 0.45 of the icon's edge, in world px, about the anchor
+   `0x48C6A0` projects -- `((x - (eyeX << 16)) >> 16) + 0x80`,
+   `((z - (eyeY << 16)) >> 16) - ((alt >> 16) >> 1) + 0x20`, without its
+   corner offsets and computed in 64 bits, without its int16 narrowing. Such
+   a unit never reaches `0x48C6A0`, so the narrowing the conditions above
+   guard cannot wrap for it. A unit carried by one whose model is hidden is
+   never hit (BAR gives cargo no icon of its own); every other unit -- a
+   model, a nanoframe, a dead one, a type the class table does not cover --
+   goes to the guarded engine test as before. HotUnits is the cull and is
+   untouched (one id per slot, `0x485596`): an icon changes what a hit test
+   answers, not which units are asked. Counted: `zoom: icon pick`, at most
+   once a second. */
 #define VA_HITTEST       0x0048C6A0u   /* stdcall(unit, point), ret 8           */
 #define VA_MODELBOX      0x004CB650u   /* stdcall(model, min*, max*, flag), ret 0x10 */
 #define OFF_MODELPTRS    0x14377       /* Model3DONode* [UNITINFOCount]         */
@@ -1697,7 +1715,16 @@ float tagpu_zoom_game_floor(void)
 #define U_X              0x6A          /* 16.16 world x                         */
 #define U_ALT            0x6E          /* 16.16 altitude                        */
 #define U_Z              0x72          /* 16.16 world z                         */
-#define U_MODELID        0xA6          /* u16 index into MODEL_PTRS             */
+#define U_MODELID        0xA6          /* u16 index into MODEL_PTRS, and the
+                                          type's UnitDef row                     */
+#define U_CARRIER        0x86          /* UnitStruct* that carries it, 0 = none */
+#define U_NANO           0x104         /* float, the build fraction remaining   */
+#define U_HEALTH         0x108         /* s16                                   */
+#define OFF_UNITBEG      0x14357       /* UnitStruct* the unit array starts at  */
+#define OFF_UNITSLOTS    0x14351       /* u16: its slot count, 10 x MaxUnits + 1 */
+#define UNIT_STRIDE      0x118
+#define OFF_SCREENW      0x37E1F       /* i32 the engine's screen, W and H      */
+#define OFF_SCREENH      0x37E23
 #define HIT_R_MAX        8191u
 #define HIT_R_TOO_BIG    0xFFFFu       /* a model whose R exceeds HIT_R_MAX     */
 #define HIT_MODELS       0x10000u      /* every u16 model id                    */
@@ -1760,6 +1787,73 @@ static int hit_axis_fits(int v1616, long long eye, unsigned r)
     return (d < 0 ? -d : d) + (long long)r <= 32767;
 }
 
+/* game thread only: the icon picks answered, for the log */
+static unsigned s_iconHits, s_iconMisses;
+
+/* Whether `unit`'s model is hidden under its icon at level `z`: 1, with the
+   icon's edge in *edge; 0 when it is drawn as a model; -1 when the rule does
+   not apply -- a row past the class table, a nanoframe, a unit with no health.
+   The row is unit+0xA6, bounded by the table's count, which is the level's
+   UNITINFOCount. */
+static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
+                      const TAGPU_ICON_VIEW* v, float z, int* edge)
+{
+    const unsigned row = *(const unsigned short*)(unit + U_MODELID);
+    int hide;
+    if (row >= n || tab[row].cls >= TAGPU_ICLS_N) return -1;
+    if (*(const float*)(unit + U_NANO) > 0.0f || *(const short*)(unit + U_HEALTH) <= 0) return -1;
+    *edge = tagpu_icon_gen_edge(v, tab[row].cls);
+    tagpu_icon_eval(v, z, *edge, tab[row].r_px, &hide);
+    return hide;
+}
+
+/* The pick of a unit drawn as an icon: 1 hit, 0 not hit, -1 not an icon (ask
+   the engine). The invariant is above `VA_HITTEST`. Every value comes from the
+   unit's own record, its carrier's and the main block, read on the game
+   thread that owns them inside the engine's own call (`0x48CE15` in
+   `0x48CD80`); the row is bounded by the table's count and the carrier by
+   the unit array -- a stride-aligned record below the engine's slot count. The
+   pick follows the game thread's applied level and the picture the frame's
+   level; the two are equal at rest and differ only while a zoom tween moves --
+   a property, not a timing argument: no memory is read across threads. */
+static int icon_hit(const char* ta, const char* unit, const int* point)
+{
+    unsigned n;
+    const TAGPU_PK_UTYPE* tab = tagpu_icontype_table(&n);
+    const float z = game_level();
+    const char* carrier;
+    TAGPU_ICON_VIEW v;
+    int scale, dist, fade, edge = 0, h;
+    long long ax, ay, dx, dy;
+    double r;
+
+    if (!tab) return -1;
+    tagpu_settings_icons(&scale, &dist, &fade);
+    tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
+                    scale, dist, fade);
+    h = icon_hides(tab, n, unit, &v, z, &edge);
+    if (h < 0) return -1;
+    carrier = *(const char* const*)(unit + U_CARRIER);
+    if (carrier) {
+        const char* beg = *(const char* const*)(ta + OFF_UNITBEG);
+        const unsigned slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
+        size_t d;
+        int ce;
+        if (!model_ptr_ok(beg) || carrier < beg) return -1;
+        d = (size_t)(carrier - beg);
+        if (d % UNIT_STRIDE || d / UNIT_STRIDE >= slots) return -1;
+        return icon_hides(tab, n, carrier, &v, z, &ce) == 1 ? 0 : -1;
+    }
+    if (!h) return -1;
+    ax = (((long long)*(const int*)(unit + U_X) - ((long long)*(const int*)(ta + OFF_EYEX) << 16)) >> 16) + 0x80;
+    ay = (((long long)*(const int*)(unit + U_Z) - ((long long)*(const int*)(ta + OFF_EYEY) << 16)) >> 16)
+         - ((long long)(*(const int*)(unit + U_ALT) >> 16) >> 1) + 0x20;
+    dx = (long long)point[0] - ax;
+    dy = (long long)point[1] - ay;
+    r = 0.45 * (double)edge / (double)z;
+    return (double)(dx * dx + dy * dy) <= r * r;
+}
+
 unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m)
 {
     if (m >= hit_model_count(ta)) return 0;
@@ -1773,6 +1867,21 @@ int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
     unsigned m = 0, r = 0, n;
 
     if (ta_ok(ta) && model_ptr_ok(unit)) {
+        const int icon = icon_hit(ta, unit, point);
+        if (icon >= 0) {
+            static DWORD tick;               /* game thread only */
+            DWORD now = GetTickCount();
+            if (icon) s_iconHits++; else s_iconMisses++;
+            if (now - tick > 1000) {
+                char b[120];
+                tick = now;
+                _snprintf(b, sizeof b, "zoom: icon pick - %u hit(s), %u miss(es) so far", s_iconHits,
+                          s_iconMisses);
+                b[sizeof b - 1] = 0;
+                zlog(b);
+            }
+            return icon;
+        }
         m = *(const unsigned short*)(unit + U_MODELID);
         n = hit_model_count(ta);
         if (m < n) {
