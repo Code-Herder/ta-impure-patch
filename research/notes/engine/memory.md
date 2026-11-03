@@ -814,7 +814,7 @@ it is what makes "the ModelId is in range" a safety property rather than a guess
 - **The allocator does not zero** ([`MEM_Alloc`](#0x4d83b0-mem_alloc-the-named-allocator-mem_allocnamed)).
   Nothing about an untouched slot is therefore safe to assume — which is why the next point is the
   load-bearing one.
-- **Every slot in `[1, count)` is written.** The load loop runs `esi = 1` while
+- **Every slot in `[1, count)` is written.** The load loop starts `esi = 1` (`0x42D69E`) and runs while
   `esi < [main+0x1438F]` (`0x42D6B6` / `0x42D6BC`) and stores the loaded model to
   `[table + esi*4]` at `0x42D7A2` on every iteration — including the failure path, where
   `0x4CB560` returned NULL and `0x4B6290` reported it: `edi` is stored either way.

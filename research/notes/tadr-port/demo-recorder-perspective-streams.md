@@ -107,7 +107,7 @@ snapshot refuses `RK_POV` and `RK_CLICK`, and every kind keeps one length everyw
 
 Validation, the same in the C readers, the history and both Python mirrors:
 - **Exact lengths:** 32, 20, 36 for `RK_POV_AT`, and `8 + 6*count`.
-- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read; the contribution envelope is unchanged, so `RECMP_VERSION` stays 2.
+- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read. `RECMP_VERSION` stays 2 by the owner's decision, so a peer on an older build accepts the handshake and then refuses (`mp_refuse`) the first camera sample below 0.25, and its recording stops consuming there; only games mixing builds are affected, and the newest build's recording is whole.
 - **`RecClick`:** `button` 1 or less, `region` 3 or less, `itype` 1 or less.
 - **`RecSel`:** `total` at most the seat's block (`units_each`) and REC_SEL_MAX, `first + count <= total`, slots strictly ascending and inside the seat's block, and a transaction contiguous on its stream that publishes only at END.
 - **Coordinates are data:** never an index, bounded at use by the projection's clip.
@@ -521,7 +521,7 @@ release); a Shift `pclick` on the commander (`down:shift` … `up:shift`, which 
 ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; `wheel:1`; then,
 at tick 1080, the mega map (`down:ctrl`, `wheel:-1`, `up:ctrl`), which takes the view to the zoom
 floor, and at 1260 one notch forward, which leaves it. Core Prime Industrial Area is 642 × 648 cells
-of 16 px, so its floor at 1024×768 is near 0.06 and the samples between the two carry a zoom below
+of 16 px, so its floor at 1024×768 is about 0.069 (704 / 10 240) and the samples between the two carry a zoom below
 16384, which only format 27 can hold [arithmetic; not yet read off the game's `zoom: floor` line
 or a recording's `tarec.py pov`]. The
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and

@@ -22,7 +22,7 @@
 
 /* THE WIDEST GATHER SPAN, in world px along either axis, whatever level or
    floor a consumer holds (tagpu_zoom_gather_span caps at it). It is what keeps
-   a terrain grid column at most 65536 / 32 + 2 = 2052, so the cell terms stay
+   a terrain grid column at most 65536 / 32 + 2 = 2050, so the cell terms stay
    exact integers in float. */
 #define TAGPU_GATHER_SPAN_MAX 65536
 

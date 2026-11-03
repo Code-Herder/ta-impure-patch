@@ -98,7 +98,7 @@ the arithmetic, Seven Islands (20 480² px) gives 0.0346 at 1024×768, about 0.0
   they covered at 0.25, and a zoom-out waits at a rung for the game thread (`reachheld=`).
 - **The terrain draw carries nothing per cell** (1b): one instance per cell of the gather's grid,
   derived in the vertex stage from the level's tile map. Its bound is the grid's side,
-  `TAGPU_TERR_MAX_SIDE` = 2052 cells, which follows from the gather rect's cap
+  `TAGPU_TERR_MAX_SIDE` = 2050 cells, which follows from the gather rect's cap
   `TAGPU_GATHER_SPAN_MAX` (65 536 px a side, `tagpu_terr.h`), which `tagpu_zoom_gather_span`
   applies whatever floor its caller holds: Seven Islands whole is 640 × 640 cells, inside it.
 - **ScrollSpeed** saturates at 255 below z = 0.125 (default 32). At the whole-map level there is

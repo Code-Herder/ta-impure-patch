@@ -3041,6 +3041,8 @@ const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 
 int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
 
+unsigned recr_segment_format(const RecReader* r) { return seg_header(r)->format; }
+
 int recr_segment_cells(const RecReader* r) { return r->in_seg && recr_holds_cells(seg_header(r)); }
 
 int recr_segment_controllers(const RecReader* r, unsigned char ctl[REC_PLAYERS])

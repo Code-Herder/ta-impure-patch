@@ -11114,7 +11114,7 @@ static void follow_visit(char* ta)
                                    W->tick, &p);
         if (s_fl.at.how && persp_follow(&p, s_fl.at.vw, s_fl.at.vh, &s_fl.at.x, &s_fl.at.y,
                                         &s_fl.at.level,
-                                        rec_pov_zoom_min(recr_header(s_rd)->format))) {
+                                        rec_pov_zoom_min(recr_segment_format(s_rd)))) {
             if (tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once))
                 s_cull_inputs++;
             s_fl.handed = 1;
