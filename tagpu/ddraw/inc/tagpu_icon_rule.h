@@ -116,8 +116,16 @@ static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int edge_
      UNKNOWN    circle, hollow
    INK, the outline, is a texel inside whose neighbour w device px away on
    either axis is outside, w = max(1, round(edge / 12)); the PLUS is ink, two
-   arms to 0.45 at least one device px and 1/7 wide; a HOLLOW shape keeps the
-   ink and a fill band 3w wide inside it, and its centre is outside.
+   arms to 0.45 at least one device px and 1/7 wide; a HOLLOW shape keeps a
+   RING, the texels whose distance to the silhouette's edge is at most
+   max(0.45 * its inradius, 1 device px), and its centre is outside. The ring
+   follows the shape's own inradius, not the ink's width: a band of a fixed
+   number of w filled an 8-px circle and was wider than the triangle's
+   incircle at every size, so the hollow classes looked like their solid twins
+   exactly where the icons are small. Tied to the inradius, the hole is 55 % of
+   the incircle at every size the 1-px floor does not bind, and the host test
+   asserts each hollow class differs from its solid twin at every size from
+   the smallest icon up.
 
    THE SHAPE IS DECIDED PER FRAGMENT from the quad's own (+-1, +-1) and its
    uv per device px, so it needs no atlas and no re-raster when the size or the
@@ -133,6 +141,23 @@ static __inline int tagpu_icon_sil(int sil, float x, float y)
     if (sil == TAGPU_ICON_SIL_SQUARE)  return ax <= 0.8f && ay <= 0.8f;
     if (sil == TAGPU_ICON_SIL_DIAMOND) return ax + ay <= 1.0f;
     return y <= 0.8f && y >= -0.95f && ax <= 0.95f * (y + 0.95f) / 1.75f;
+}
+
+/* How deep inside the silhouette p lies, in uv: its distance to the nearest
+   edge. Needed for the two hollow silhouettes only, the circle and the
+   triangle; the triangle's sides are 1.75 x - 0.95 y - 0.9025 = 0 mirrored,
+   normalised by their length 1.99123. */
+static __inline float tagpu_icon_depth(int sil, float x, float y)
+{
+    const float ax = x < 0.0f ? -x : x;
+    if (sil == TAGPU_ICON_SIL_CIRCLE) return 0.92f - sqrtf(x * x + y * y);
+    return fminf(0.8f - y, (0.9025f + 0.95f * y - 1.75f * ax) / 1.99123f);
+}
+/* ...and its inradius, the depth of its deepest point: the circle's radius,
+   the triangle's incircle (centre (0, 0.2348)) */
+static __inline float tagpu_icon_inradius(int sil)
+{
+    return sil == TAGPU_ICON_SIL_CIRCLE ? 0.92f : 0.5652f;
 }
 
 /* The silhouette and the two marks of each class, by TAGPU_ICLS_*. */
@@ -169,9 +194,7 @@ static __inline int tagpu_icon_shape(int cls, float px, float py, float fwx, flo
             (ax <= fmaxf(0.5f * fwx, 1.0f / 7.0f) || ay <= fmaxf(0.5f * fwy, 1.0f / 7.0f))) return 2;
     }
     if (tagpu_icon_cls_hollow(cls))
-        return (!tagpu_icon_sil(sil, px - 4.0f * wx, py) || !tagpu_icon_sil(sil, px + 4.0f * wx, py) ||
-                !tagpu_icon_sil(sil, px, py - 4.0f * wy) || !tagpu_icon_sil(sil, px, py + 4.0f * wy))
-               ? 1 : 0;
+        return tagpu_icon_depth(sil, px, py) <= fmaxf(0.45f * tagpu_icon_inradius(sil), fwx) ? 1 : 0;
     return 1;
 }
 
@@ -186,6 +209,10 @@ static __inline int tagpu_icon_shape(int cls, float px, float py, float fwx, flo
     "  if (s == 2) return a.x + a.y <= 1.0;\n" \
     "  return p.y <= 0.8 && p.y >= -0.95 && a.x <= 0.95 * (p.y + 0.95) / 1.75;\n" \
     "}\n" \
+    "float taIconDepth(int s, vec2 p){\n" \
+    "  if (s == 0) return 0.92 - length(p);\n" \
+    "  return min(0.8 - p.y, (0.9025 + 0.95 * p.y - 1.75 * abs(p.x)) / 1.99123);\n" \
+    "}\n" \
     "int taIconShape(int c, vec2 p, vec2 fw){\n" \
     "  int s = c == 1 ? 2 : (c == 2 || c == 3) ? 1 : (c == 4 || c == 5 || c == 6) ? 3 : 0;\n" \
     "  float w = max(1.0, floor(1.0 / (6.0 * fw.x) + 0.5));\n" \
@@ -199,8 +226,7 @@ static __inline int tagpu_icon_shape(int cls, float px, float py, float fwx, flo
     "        (a.x <= max(0.5 * fw.x, 1.0 / 7.0) || a.y <= max(0.5 * fw.y, 1.0 / 7.0))) return 2;\n" \
     "  }\n" \
     "  if (c == 6 || c == 0)\n" \
-    "    return (!taIconSil(s, p - vec2(4.0 * d.x, 0.0)) || !taIconSil(s, p + vec2(4.0 * d.x, 0.0)) ||\n" \
-    "            !taIconSil(s, p - vec2(0.0, 4.0 * d.y)) || !taIconSil(s, p + vec2(0.0, 4.0 * d.y))) ? 1 : 0;\n" \
+    "    return taIconDepth(s, p) <= max(0.45 * (s == 0 ? 0.92 : 0.5652), fw.x) ? 1 : 0;\n" \
     "  return 1;\n" \
     "}\n"
 

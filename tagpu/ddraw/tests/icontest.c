@@ -10,18 +10,20 @@
         promise that 1x stays the stock frame;
      4. each shape rasterised at edges 4..128: symmetric about x = 0, ink on
         its border, from 16 px the plus at the centre of the builder classes
-        alone and fill at the centre of the other solid ones, the nine
-        silhouettes pairwise different at 8 px, and the 16-px rasters' FNV
-        against a golden value.
+        alone and fill at the centre of the other solid ones; each hollow
+        class open at its centre and different from its solid twin at every
+        size from the smallest its silhouette can open at; the nine pairwise
+        different at every size from 7 px; and the 16-px rasters' FNV against
+        a golden value.
 
-   TWO PAIRS ARE NOT DIFFERENT AT 8 PX, and that is the shape rule's own
-   geometry, not this test's: a hollow shape keeps its ink and a fill band 3w
-   wide, w px each side of 4w in all, and an 8-px circle's radius is 3.7 px,
-   so UNKNOWN is COMBAT and AIR is AIRCOMBAT there. On the triangle the band
-   is wider than the shape's inradius (0.28 of the edge against 4w, about a
-   third of it) at every size, so AIR's centre is filled at every edge; the
-   circle's centre opens from 10 px wherever w rounds down. The test names
-   both pairs and asserts the other 34.
+   WHERE THE GEOMETRY ENDS. A hollow shape's ring is max(0.45 x its inradius,
+   1 px) deep (inc/tagpu_icon_rule.h), so its centre opens wherever a texel
+   lies deeper than that and is not ink: the circle (inradius 0.46 of the
+   edge) from 4 px, the triangle (0.28 of it) from 5 px -- a 4-px triangle's
+   deepest texel centre is 0.71 px inside, and every one of its texels is ink.
+   Below 7 px the 1-px ink alone decides some shapes: at 4 px the three
+   triangles are one outline and COMMANDER is COMBAT, and at 6 px COMMANDER is
+   COMBAT again. The generated edge's floor is 4 px.
 
    `icontest dump` prints the 16-px rasters. Exit 0 when nothing failed. */
 #include <stdio.h>
@@ -180,21 +182,33 @@ static unsigned fnv(const unsigned char* p, int n, unsigned h)
     return h;
 }
 
-#define GOLDEN16 0x90B7B3E9u
+#define GOLDEN16 0x4EC8F4CDu
+
+/* the smallest edge each silhouette's hollow centre can open at (above) */
+static int hollow_min(int cls)
+{
+    return tagpu_icon_cls_sil(cls) == TAGPU_ICON_SIL_CIRCLE ? 4 : 5;
+}
+#define DISTINCT_MIN 7
 
 static void test_shapes(int dump)
 {
-    static unsigned char eight[TAGPU_ICLS_N][64];
+    static unsigned char ras[TAGPU_ICLS_N][128 * 128];
     int c, e, i, j, k;
     unsigned h = 2166136261u;
-    for (c = 0; c < TAGPU_ICLS_N; c++)
-        for (e = 4; e <= 128; e++) {
-            int asym = 0, edgeInk = 1, any = 0;
+    for (e = 4; e <= 128; e++) {
+        for (c = 0; c < TAGPU_ICLS_N; c++) {
+            int asym = 0, edgeInk = 1, any = 0, open = 0;
+            const int sil = tagpu_icon_cls_sil(c);
             raster(c, e);
             for (j = 0; j < e; j++)
                 for (i = 0; i < e; i++) {
                     if (s_ras[j * e + i] != s_ras[j * e + (e - 1 - i)]) asym++;
                     if (s_ras[j * e + i]) any = 1;
+                    /* an unlit texel inside the silhouette: an open centre */
+                    if (!s_ras[j * e + i] &&
+                        tagpu_icon_sil(sil, (float)(2 * i + 1 - e) / (float)e, (float)(2 * j + 1 - e) / (float)e))
+                        open = 1;
                 }
             /* every lit texel next to the outside -- the unlit texels joined to
                the quad's edge, which leaves a hollow shape's centre out -- or
@@ -212,15 +226,18 @@ static void test_shapes(int dump)
             CHECK(any, "%s at %d px: nothing lit", NAME[c], e);
             CHECK(!asym, "%s at %d px: %d texels differ from their mirror", NAME[c], e, asym);
             CHECK(edgeInk, "%s at %d px: a lit texel on the border is not ink", NAME[c], e);
-            if (e >= 16) {
-                /* the centre texels: the plus on a builder, fill on a solid
-                   shape, nothing on a hollow one */
-                const int m = s_ras[(e / 2) * e + e / 2];
-                const int want = tagpu_icon_cls_plus(c) ? 2 : 1;
-                if (!tagpu_icon_cls_hollow(c))
+            if (tagpu_icon_cls_hollow(c)) {
+                if (e >= hollow_min(c)) CHECK(open, "%s at %d px: the hollow centre is closed", NAME[c], e);
+            } else {
+                CHECK(!open, "%s at %d px: a solid shape has a hole", NAME[c], e);
+                if (e >= 16) {
+                    /* the centre texels: the plus on a builder, fill otherwise */
+                    const int m = s_ras[(e / 2) * e + e / 2];
+                    const int want = tagpu_icon_cls_plus(c) ? 2 : 1;
                     CHECK(m == want, "%s at %d px: centre %d, want %d", NAME[c], e, m, want);
+                }
             }
-            if (e == 8) memcpy(eight[c], s_ras, 64);
+            memcpy(ras[c], s_ras, (size_t)e * e);
             if (e == 16) {
                 h = fnv(s_ras, 256, h);
                 if (dump) {
@@ -232,18 +249,19 @@ static void test_shapes(int dump)
                 }
             }
         }
-    for (c = 0; c < TAGPU_ICLS_N; c++)
-        for (k = c + 1; k < TAGPU_ICLS_N; k++) {
-            const int twins = (c == TAGPU_ICLS_UNKNOWN && k == TAGPU_ICLS_COMBAT) ||
-                              (c == TAGPU_ICLS_AIRCOMBAT && k == TAGPU_ICLS_AIR);
-            if (twins) {
-                if (!memcmp(eight[c], eight[k], 64))
-                    printf("icontest: %s and %s are the same at 8 px (the hollow band fills it)\n",
-                           NAME[c], NAME[k]);
-                continue;
-            }
-            CHECK(memcmp(eight[c], eight[k], 64) != 0, "%s and %s are the same at 8 px", NAME[c], NAME[k]);
-        }
+        /* a hollow class against its solid twin, from the size it opens at */
+        if (e >= hollow_min(TAGPU_ICLS_UNKNOWN))
+            CHECK(memcmp(ras[TAGPU_ICLS_UNKNOWN], ras[TAGPU_ICLS_COMBAT], (size_t)e * e) != 0,
+                  "UNKNOWN and COMBAT are the same at %d px", e);
+        if (e >= hollow_min(TAGPU_ICLS_AIR))
+            CHECK(memcmp(ras[TAGPU_ICLS_AIR], ras[TAGPU_ICLS_AIRCOMBAT], (size_t)e * e) != 0,
+                  "AIR and AIRCOMBAT are the same at %d px", e);
+        if (e >= DISTINCT_MIN)
+            for (c = 0; c < TAGPU_ICLS_N; c++)
+                for (k = c + 1; k < TAGPU_ICLS_N; k++)
+                    CHECK(memcmp(ras[c], ras[k], (size_t)e * e) != 0, "%s and %s are the same at %d px",
+                          NAME[c], NAME[k], e);
+    }
     if (dump) printf("16-px FNV 0x%08X\n", h);
     CHECK(h == GOLDEN16, "the 16-px rasters' FNV is 0x%08X, golden 0x%08X", h, GOLDEN16);
 }
