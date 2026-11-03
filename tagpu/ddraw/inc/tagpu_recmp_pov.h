@@ -39,13 +39,14 @@ typedef struct RecMpPov RecMpPov;
 typedef int (*RecMpSelectEmit)(void* ctx, unsigned origin, const void* body, unsigned bytes);
 
 /* Fixed room for every actor of the roster: two samples, the last click, and a published and a
-   staged selection of min(each, REC_SEL_MAX) entries. */
-RecMpPov* tagpu_recmp_pov_begin(const RecMpRoster* roster);
+   staged selection of min(each, REC_SEL_MAX) entries. A sample's zoom must be at least `zmin`:
+   rec_pov_zoom_min of the file being read, REC_POV_ZOOM_MIN live. */
+RecMpPov* tagpu_recmp_pov_begin(const RecMpRoster* roster, uint32_t zmin);
 void tagpu_recmp_pov_end(RecMpPov* pov);
 /* One envelope of kind RECMP_POV, RECMP_CLICK or RECMP_SELECT. Its origin must have announced its
    source roster in `maps` on the same stream, and its provenance must not go back. A sample and a
    click must be exactly their payload, with RecPov's and RecClick's fields in range
-   (rec_pov_ok, rec_click_ok). A selection chunk must be exactly its entries, its total at most
+   (rec_pov_ok at the begin's `zmin`, rec_click_ok). A selection chunk must be exactly its entries, its total at most
    the actor's block and REC_SEL_MAX, its slots strictly ascending across the transaction and
    inside the actor's block, and contiguous with the chunk before it on the stream: BEGIN starts
    at entry 0 with nothing staged, each further chunk takes the next sequence at the same source

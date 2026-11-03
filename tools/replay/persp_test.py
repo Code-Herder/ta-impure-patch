@@ -27,15 +27,15 @@ import tarec  # noqa: E402
 I32 = (-0x80000000, 0x7FFFFFFF)
 
 
-def sample(rng):
-    """One RecPov's fields as the C program reads them, inside rec_pov_ok's bounds, with
-    coordinates anywhere in int32 now and then."""
+def sample(rng, zmin):
+    """One RecPov's fields as the C program reads them, inside rec_pov_ok's bounds for a file whose
+    minimum zoom is `zmin`, with coordinates anywhere in int32 now and then."""
     wide = rng.random() < 0.1
     coord = (lambda: rng.randint(*I32)) if wide else (lambda: rng.randint(-4096, 20000))
     return (rng.randint(1, tarec.REC_POV_EVERY_MAX), rng.randint(0, 3),
             rng.choice((640, 800, 1024, 1280, 1920, 3840, rng.randint(1, tarec.REC_POV_VIEW_MAX))),
             rng.choice((480, 600, 768, 720, 1080, 2160, rng.randint(1, tarec.REC_POV_VIEW_MAX))),
-            rng.randint(tarec.REC_POV_ZOOM_MIN, tarec.REC_POV_ZOOM_MAX),
+            rng.randint(zmin, tarec.REC_POV_ZOOM_MAX),
             coord(), coord(), coord(), rng.randint(-512, 512), coord())
 
 
@@ -46,16 +46,18 @@ def case(rng):
     n = max(0, rng.choice((t0, t1)) + rng.randint(-40, 80))
     view = (rng.choice((0, -1, 640, 1024, 1920, 3840, rng.randint(1, 8000))),
             rng.choice((0, 480, 768, 1080, 2160, rng.randint(1, 8000))))
-    return count, (t0, t1), n, view, sample(rng), sample(rng)
+    # both formats a reader takes, each sample inside its own file's range
+    zmin = tarec.pov_zoom_min(rng.choice(tarec.REC_FORMATS))
+    return count, (t0, t1), n, view, zmin, sample(rng, zmin), sample(rng, zmin)
 
 
 def mirror(c):
     """The answer line tarec's mirror gives for case c, as the C program prints it."""
-    count, ticks, n, view, a, b = c
+    count, ticks, n, view, zmin, a, b = c
     pack = [tarec.REC_POV.pack(0, f[0], f[1], 0, *f[2:]) for f in (a, b)]
     held = [(ticks[i], pack[i]) for i in range(count)]
     how, f = tarec.persp_sample(held, n)
-    fit = tarec.persp_follow(f, *view) if f else None
+    fit = tarec.persp_follow(f, *view, zmin) if f else None
     fields = (f[1], f[2], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]) if f else (0,) * 10
     return " ".join(str(v) for v in (how, *fields, 1 if fit else 0, *(fit or (0, 0, 0))))
 
@@ -71,7 +73,7 @@ def run(out, n_cases, seed):
         raise RuntimeError("the C checks did not finish")
     rng = random.Random(seed)
     cases = [case(rng) for _ in range(n_cases)]
-    text = "\n".join(" ".join(str(v) for v in (c[0], *c[1], c[2], *c[3], *c[4], *c[5]))
+    text = "\n".join(" ".join(str(v) for v in (c[0], *c[1], c[2], *c[3], c[4], *c[5], *c[6]))
                      for c in cases) + "\n"
     (out / "cases.txt").write_text(text)
     lines = subprocess.run([exe, "cases"], input=text, check=True, capture_output=True,

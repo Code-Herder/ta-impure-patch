@@ -46,6 +46,9 @@ static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine  
    (tagpu_zoom_floor), which follows the map. */
 #define ZOOM_MAX  TAGPU_ZOOM_MAX
 
+_Static_assert(REC_POV_ZOOM_MIN == (unsigned)(TAGPU_ZOOM_FLOOR_LO * 65536.0f),
+               "a level the floor allows is a level a recording can carry");
+
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);
 static void anchor_step(int fromWheel, const TAGPU_PACKET* pk);

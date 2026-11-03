@@ -538,7 +538,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             if (ctl<1 || ctl>4 || w->mp.header.actor[i].local!=(ctl==1 || ctl==2)) return 0;
         }
         if (seats!=mask) return 0;
-        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
+        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh,REC_FORMAT);
         if (!w->mp_history) return 0;
     }
     /* the writer adds RT_HOLD to every skirmish header below, and the codec codes for it */
@@ -1405,7 +1405,7 @@ static int pov_record(Writer* w, unsigned kind, const unsigned char* b, unsigned
         if (len != sizeof p) return 0;
         memcpy(&p, b, sizeof p);
         s = p.player;
-        if (s >= REC_PLAYERS || !rec_pov_ok(&p) ||
+        if (s >= REC_PLAYERS || !rec_pov_ok(&p, REC_POV_ZOOM_MIN) ||
             (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= w->tick))
             return 0;
         if (w->npov[s] == 2) {

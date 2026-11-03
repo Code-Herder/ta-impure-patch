@@ -6,6 +6,7 @@ RECMP_ROOT_CREATE_BEGIN = 0x100
 # tagpu_recpov.h's bounds, as tagpu_recmp_pov.c checks a contribution's perspective
 REC_SEL_MAX = 1500
 RECMP_POV_PLAYER = 0xFF
+REC_POV_ZOOM_MIN, REC_POV_ZOOM_MIN_26 = 1024, 16384   # rec_pov_zoom_min: format 26's is 0.25
 
 
 class Roster:
@@ -176,6 +177,8 @@ class History:
     """Independent semantic source validation and application-only authority."""
     def __init__(self, header):
         self.header = {key: header[key] for key in ("multiplayer", "mp_seats", "slots", "units_each", "features")}
+        # a sample's smallest zoom is the file's format's (tagpu_recmp_history_begin)
+        self.zoom_min = REC_POV_ZOOM_MIN_26 if header.get("format") == 26 else REC_POV_ZOOM_MIN
         self.header["players"] = [p.copy() for p in header["players"]]
         self.ledger = Contributions(self.header["multiplayer"])
         self.roster = Seats(self.header["mp_seats"], self.ledger.actors,
@@ -576,7 +579,7 @@ class History:
             player, every, flags, zero, view_w, view_h, zoom = struct.unpack_from("<BBBBHHI", body)
             held = self.source_pov.get(origin, [])
             if (player != RECMP_POV_PLAYER or not 1 <= every <= 30 or flags & ~3 or zero or
-                    not 16384 <= zoom <= 524288 or not 1 <= view_w <= 16384 or not 1 <= view_h <= 16384 or
+                    not self.zoom_min <= zoom <= 524288 or not 1 <= view_w <= 16384 or not 1 <= view_h <= 16384 or
                     not after(held[-1] if held else None)):
                 raise ValueError("perspective sample fields/provenance")
             state["pov"] = bytes(body)

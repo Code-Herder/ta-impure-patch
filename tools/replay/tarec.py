@@ -93,7 +93,9 @@
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
-here, and REC_FORMAT says which; this tool reads REC_FORMAT alone. A recording is REC_MAGIC, then
+here, and REC_FORMAT says which; this tool reads REC_FORMATS, the closed list tagpu_recfmt.h's
+rec_format_supported takes (26 and 27 differ only in the camera's smallest zoom, pov_zoom_min).
+A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
 block, whose payload is a chunk of its run's frame, and a chained snapshot (RBF_CHAINED), whose
@@ -152,7 +154,8 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 26                           # the contest order's keys and the carry links at their place; the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 27                           # the camera's zoom down to 1/64; the contest order's keys and the carry links at their place; the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMATS = (26, REC_FORMAT)            # what a reader takes (rec_format_supported)
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -217,7 +220,8 @@ REC_SEL = struct.Struct("<BBHHH")          # player, flags, total, first, count:
 REC_SEL_ENTRY = struct.Struct("<HI")       # slot, birth: 6 bytes
 REC_POV_EVERY_MAX = 30
 REC_POV_WORLD, REC_POV_MINIMAP = 1, 2
-REC_POV_ZOOM_MIN, REC_POV_ZOOM_MAX = 16384, 524288
+REC_POV_ZOOM_MIN, REC_POV_ZOOM_MAX = 1024, 524288
+REC_POV_ZOOM_MIN_26 = 16384                       # format 26's minimum, 0.25
 REC_POV_VIEW_MAX = 16384
 REC_SEL_BEGIN, REC_SEL_END = 1, 2
 REC_SEL_MAX = 1500
@@ -461,8 +465,8 @@ def header(payload):
             if tag in h.setdefault("codec", {}):
                 raise Unreadable(f"header tag {tag} twice")
             h["codec"][tag] = bytes(b)
-    if h.get("format") != REC_FORMAT:
-        raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
+    if h.get("format") not in REC_FORMATS:
+        raise Unreadable(f"format {h.get('format')}, this tool reads {', '.join(map(str, REC_FORMATS))}")
     if (h.get("mode") == 3) != ("multiplayer" in h) or ("multiplayer" in h) != ("mp_seats" in h):
         raise Unreadable("network mode and contribution roster disagree")
     if "multiplayer" in h and "hold" in h:
@@ -532,15 +536,21 @@ def end(payload):
 
 # ---- the world -------------------------------------------------------------------------------
 
-def pov_fields(b):
-    """A RecPov's fields, each bounded as tagpu_recpov.h's rec_pov_ok bounds it."""
+def pov_zoom_min(fmt):
+    """The smallest zoom a recording of format `fmt` carries (tagpu_recpov.h, rec_pov_zoom_min)."""
+    return REC_POV_ZOOM_MIN_26 if fmt == 26 else REC_POV_ZOOM_MIN
+
+
+def pov_fields(b, fmt):
+    """A RecPov's fields, each bounded as tagpu_recpov.h's rec_pov_ok bounds it in a recording of
+    format `fmt`."""
     if len(b) != REC_POV.size:
         raise Unreadable(f"a sample of {len(b)} bytes")
     f = REC_POV.unpack(b)
     player, every, flags, zero, view_w, view_h, zoom = f[:7]
     if player >= REC_PLAYERS or not 1 <= every <= REC_POV_EVERY_MAX or \
             flags & ~(REC_POV_WORLD | REC_POV_MINIMAP) or zero or \
-            not REC_POV_ZOOM_MIN <= zoom <= REC_POV_ZOOM_MAX or \
+            not pov_zoom_min(fmt) <= zoom <= REC_POV_ZOOM_MAX or \
             not 1 <= view_w <= REC_POV_VIEW_MAX or not 1 <= view_h <= REC_POV_VIEW_MAX:
         raise Unreadable(f"a malformed sample {f}")
     return f
@@ -609,13 +619,14 @@ def persp_sample(samples, n):
     return PERSP_BETWEEN, tuple(out)
 
 
-def persp_follow(f, view_w, view_h):
-    """FOLLOW'S FIT (tagpu_persp.h, persp_follow) of a sample's fields to a view_w x view_h view:
-    (eye_x, eye_y, level x 65536), or None for a view of no size."""
+def persp_follow(f, view_w, view_h, zmin):
+    """FOLLOW'S FIT (tagpu_persp.h, persp_follow) of a sample's fields to a view_w x view_h view,
+    the level no lower than `zmin`, the recording's pov_zoom_min: (eye_x, eye_y, level x 65536), or
+    None for a view of no size."""
     if view_w <= 0 or view_h <= 0 or not f[4] or not f[5]:
         return None
     z = min(f[6] * view_w // f[4], f[6] * view_h // f[5])
-    z = max(REC_POV_ZOOM_MIN, min(REC_POV_ZOOM_MAX, z))
+    z = max(zmin, min(REC_POV_ZOOM_MAX, z))
     return _sat32(f[7] - view_w // 2), _sat32(f[8] - view_h // 2), z
 
 
@@ -905,7 +916,7 @@ class World:
                 if len(b) != 4 + REC_POV.size:
                     raise Unreadable(f"a dated sample of {len(b)} bytes")
                 tick, body = struct.unpack_from("<I", b)[0], bytes(b[4:])
-            f = pov_fields(body)
+            f = pov_fields(body, h.get("format") if h is not None else REC_FORMAT)
             seat = self.pov[f[0]]
             if self.tick is None or tick > self.tick or (seat and seat[-1][0] >= tick):
                 raise Unreadable(f"player {f[0]}'s sample at GameTime {tick} is not after its "
@@ -2694,7 +2705,7 @@ def cmd_pov(path, check):
 
     def on_record(w, kind, b):
         if kind == RK_POV:
-            f = pov_fields(b)
+            f = pov_fields(b, h.get("format"))
             where = "".join(n for bit, n in ((REC_POV_WORLD, " world"), (REC_POV_MINIMAP, " minimap"))
                             if f[2] & bit) or " outside"
             print(f"GameTime {w.tick} player {f[0]}: camera ({f[7]}, {f[8]}), view {f[4]}x{f[5]}, "
@@ -2768,7 +2779,7 @@ def cmd_pov_eye(path, n, view, seat):
             return 1
         seat = held[0]
     how, f = persp_sample(w.pov[seat], n)
-    fit = persp_follow(f, *view) if f else None
+    fit = persp_follow(f, *view, pov_zoom_min(h.get("format"))) if f else None
     if not fit:
         print(f"{path}: GameTime {n} player {seat}: no sample to follow")
         return 1

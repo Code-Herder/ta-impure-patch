@@ -61,24 +61,44 @@ static void checks(void)
 
     /* Follow's fit: the same screen keeps the level and centres the camera */
     two[0] = pov(3, REC_POV_WORLD, 1000, 800, 65536);
-    CHECK(persp_follow(&two[0], 640, 480, &x, &y, &z) && x == 680 && y == 560 && z == 65536);
+    CHECK(persp_follow(&two[0], 640, 480, &x, &y, &z, REC_POV_ZOOM_MIN) && x == 680 && y == 560 &&
+          z == 65536);
     /* a wider screen: the tighter axis (480 -> 600 is x1.25, 640 -> 1000 x1.5625) decides */
-    CHECK(persp_follow(&two[0], 1000, 600, &x, &y, &z) && x == 500 && y == 500 && z == 81920);
+    CHECK(persp_follow(&two[0], 1000, 600, &x, &y, &z, REC_POV_ZOOM_MIN) && x == 500 && y == 500 &&
+          z == 81920);
     /* truncated, so the recorder's area is never cut: 65536 * 700 / 640 = 71680 exactly,
        65536 * 500 / 480 = 68266.67 -> 68266 */
-    CHECK(persp_follow(&two[0], 700, 500, &x, &y, &z) && z == 68266);
+    CHECK(persp_follow(&two[0], 700, 500, &x, &y, &z, REC_POV_ZOOM_MIN) && z == 68266);
     /* the range */
     two[0].zoom = 524288;
-    CHECK(persp_follow(&two[0], 3840, 2160, &x, &y, &z) && z == REC_POV_ZOOM_MAX);
+    CHECK(persp_follow(&two[0], 3840, 2160, &x, &y, &z, REC_POV_ZOOM_MIN) && z == REC_POV_ZOOM_MAX);
+    /* the bottom is the recording's own: 16384 on half the view is 8192, which format 27 keeps
+       and format 26 holds at its 0.25 */
     two[0].zoom = 16384;
-    CHECK(persp_follow(&two[0], 320, 200, &x, &y, &z) && z == REC_POV_ZOOM_MIN);
+    CHECK(persp_follow(&two[0], 320, 240, &x, &y, &z, rec_pov_zoom_min(27)) && z == 8192);
+    CHECK(persp_follow(&two[0], 320, 240, &x, &y, &z, rec_pov_zoom_min(26)) && z == REC_POV_ZOOM_MIN_26);
+    two[0].zoom = REC_POV_ZOOM_MIN;
+    CHECK(persp_follow(&two[0], 320, 240, &x, &y, &z, rec_pov_zoom_min(27)) && z == REC_POV_ZOOM_MIN);
     /* an odd view: the eye is the camera less half of it, rounded down */
-    CHECK(persp_follow(&two[0], 641, 481, &x, &y, &z) && x == 680 && y == 560);
+    CHECK(persp_follow(&two[0], 641, 481, &x, &y, &z, REC_POV_ZOOM_MIN) && x == 680 && y == 560);
     /* no view, no answer */
-    CHECK(!persp_follow(&two[0], 0, 480, &x, &y, &z) && !persp_follow(&two[0], 640, -1, &x, &y, &z));
+    CHECK(!persp_follow(&two[0], 0, 480, &x, &y, &z, REC_POV_ZOOM_MIN) &&
+          !persp_follow(&two[0], 640, -1, &x, &y, &z, REC_POV_ZOOM_MIN));
     /* a camera at the end of int32 saturates */
     two[0].cam_x = INT32_MIN;
-    CHECK(persp_follow(&two[0], 640, 480, &x, &y, &z) && x == INT32_MIN);
+    CHECK(persp_follow(&two[0], 640, 480, &x, &y, &z, REC_POV_ZOOM_MIN) && x == INT32_MIN);
+
+    /* a sample's zoom against its file's minimum (rec_pov_ok, rec_pov_zoom_min) */
+    two[0] = pov(3, REC_POV_WORLD, 0, 0, 1024);
+    CHECK(rec_pov_ok(&two[0], rec_pov_zoom_min(27)));
+    two[0].zoom = 1023;
+    CHECK(!rec_pov_ok(&two[0], rec_pov_zoom_min(27)));
+    two[0].zoom = 16383;
+    CHECK(rec_pov_ok(&two[0], rec_pov_zoom_min(27)) && !rec_pov_ok(&two[0], rec_pov_zoom_min(26)));
+    two[0].zoom = 16384;
+    CHECK(rec_pov_ok(&two[0], rec_pov_zoom_min(26)));
+    two[0].zoom = REC_POV_ZOOM_MAX + 1;
+    CHECK(!rec_pov_ok(&two[0], rec_pov_zoom_min(27)) && !rec_pov_ok(&two[0], rec_pov_zoom_min(26)));
     printf("persp: every check holds\n");
 }
 
@@ -100,20 +120,21 @@ static int read_pov(RecPov* p)
     return 1;
 }
 
-/* count t0 t1 n view_w view_h, then two samples: every flags view_w view_h zoom cam_x cam_y
-   cur_x cur_h cur_z. Answers: how, the sample's fields, then the fit (ok, eye x, eye y, level). */
+/* count t0 t1 n view_w view_h zmin, then two samples: every flags view_w view_h zoom cam_x
+   cam_y cur_x cur_h cur_z. Answers: how, the sample's fields, then the fit (ok, eye x, eye y,
+   level). */
 static void cases(void)
 {
-    unsigned count, tick[2], n;
+    unsigned count, tick[2], n, zmin;
     int vw, vh;
-    while (scanf("%u %u %u %u %d %d", &count, &tick[0], &tick[1], &n, &vw, &vh) == 6) {
+    while (scanf("%u %u %u %u %d %d %u", &count, &tick[0], &tick[1], &n, &vw, &vh, &zmin) == 7) {
         RecPov two[2], out;
         int how, ok, x = 0, y = 0;
         uint32_t z = 0;
         if (!read_pov(&two[0]) || !read_pov(&two[1])) break;
         memset(&out, 0, sizeof out);
         how = persp_sample(count, two, tick, n, &out);
-        ok = how && persp_follow(&out, vw, vh, &x, &y, &z);
+        ok = how && persp_follow(&out, vw, vh, &x, &y, &z, zmin);
         printf("%d %u %u %u %u %u %d %d %d %d %d %d %d %d %u\n", how, out.every, out.flags,
                out.view_w, out.view_h, (unsigned)out.zoom, out.cam_x, out.cam_y, out.cur_x,
                out.cur_h, out.cur_z, ok, x, y, (unsigned)z);

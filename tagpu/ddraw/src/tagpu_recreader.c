@@ -1115,14 +1115,15 @@ static int list_record(RecReader* r, const unsigned char* b, unsigned len)
     return 1;
 }
 
-/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces. */
-static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick)
+/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces, its zoom
+   at least `zmin`, its file's minimum. */
+static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick, uint32_t zmin)
 {
     RecPov p;
     unsigned s;
     memcpy(&p, b, sizeof p);
     s = p.player;
-    if (s >= REC_PLAYERS || !rec_pov_ok(&p) || tick > w->tick ||
+    if (s >= REC_PLAYERS || !rec_pov_ok(&p, zmin) || tick > w->tick ||
         (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= tick))
         return 0;
     if (w->npov[s] == 2) {
@@ -1147,9 +1148,11 @@ static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsig
     if (h->has_mp || r->fbracket || r->ndeaths) return 0;
     switch (kind) {
     case RK_POV:
-        return !r->snap && len == sizeof(RecPov) && pov_take(w, b, w->tick);
+        return !r->snap && len == sizeof(RecPov) &&
+               pov_take(w, b, w->tick, rec_pov_zoom_min(h->format));
     case RK_POV_AT:
-        return r->snap && len == REC_POV_AT_BYTES && pov_take(w, b + 4, u32(b));
+        return r->snap && len == REC_POV_AT_BYTES &&
+               pov_take(w, b + 4, u32(b), rec_pov_zoom_min(h->format));
     case RK_CLICK: {
         RecClick c;
         if (r->snap || len != sizeof c) return 0;
@@ -1856,7 +1859,8 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
             s->i0 = nix;
             tagpu_recmp_history_end(mp); mp=NULL;
-            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h))) {
+            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h,
+                                                                s->h->format))) {
                 snprintf(why, cap, "invalid contribution roster or no memory for history"); goto done;
             }
             after_end = 0;
@@ -2396,7 +2400,8 @@ static int mp_read(RecReader* r, RecMpRead* m, uint64_t* ordinal,
         r->w.tick<m->tick || (ordinal &&
         *ordinal!=tagpu_recmp_history_ledger(m->history)->records)) {
         mp_read_free(m);
-        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h);
+        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h,
+                                             s->h->format);
         if (!m->history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
         m->epoch=r->scan_epoch; m->segment=segment; m->tick=0;
         m->index=s->i0; m->done=0;

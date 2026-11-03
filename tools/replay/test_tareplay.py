@@ -2549,10 +2549,16 @@ class Perspective(unittest.TestCase):
         how, f = tarec.persp_sample([(1, pov()), (8, pov(cam=(130, 170)))], 9)
         self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))   # 7 apart > 2 * every
         f = tarec.REC_POV.unpack(pov(cam=(1000, 800)))
-        self.assertEqual(tarec.persp_follow(f, 640, 480), (680, 560, 65536))
-        self.assertEqual(tarec.persp_follow(f, 1000, 600), (500, 500, 81920))
-        self.assertEqual(tarec.persp_follow(f, 700, 500)[2], 68266)
-        self.assertIsNone(tarec.persp_follow(f, 0, 480))
+        zmin = tarec.REC_POV_ZOOM_MIN
+        self.assertEqual(tarec.persp_follow(f, 640, 480, zmin), (680, 560, 65536))
+        self.assertEqual(tarec.persp_follow(f, 1000, 600, zmin), (500, 500, 81920))
+        self.assertEqual(tarec.persp_follow(f, 700, 500, zmin)[2], 68266)
+        self.assertIsNone(tarec.persp_follow(f, 0, 480, zmin))
+        # the bottom is the recording's own: half the view at 0.25 is 0.125 in format 27, and
+        # format 26's 0.25
+        f = tarec.REC_POV.unpack(pov(cam=(1000, 800), zoom=16384))
+        self.assertEqual(tarec.persp_follow(f, 320, 240, tarec.pov_zoom_min(27))[2], 8192)
+        self.assertEqual(tarec.persp_follow(f, 320, 240, tarec.pov_zoom_min(26))[2], 16384)
 
     def test_eye(self):
         path = Path(self.tmp.name) / "p.imprec"
@@ -2584,8 +2590,21 @@ class Perspective(unittest.TestCase):
             self.assertIn("unreadable", out)
         parts = list(self.good())
         parts[0] = self.head(fmt=7)
-        with self.assertRaisesRegex(tarec.Unreadable, f"format 7, not {tarec.REC_FORMAT}"):
+        with self.assertRaisesRegex(tarec.Unreadable,
+                                    f"format 7, not one of {', '.join(map(str, tarec.REC_FORMATS))}"):
             self.run_pov(*parts)
+
+    def test_zoom_minimum_is_the_files(self):
+        """A sample's smallest zoom is its file's format's (tagpu_recpov.h, rec_pov_zoom_min):
+        1/64 in format 27, 0.25 in format 26, which a reader still takes."""
+        for fmt, zoom, ok in ((27, 1024, True), (27, 1023, False), (26, 16384, True),
+                              (26, 16383, False)):
+            parts = list(self.good(second=pov(cam=(130, 200), zoom=zoom)))
+            parts[0] = self.head(fmt=fmt)
+            code, out = self.run_pov(*parts)
+            self.assertEqual(code == 0, ok, (fmt, zoom, out))
+            if not ok:
+                self.assertIn("unreadable", out)
 
 
 class CellsAfterEvents(unittest.TestCase):

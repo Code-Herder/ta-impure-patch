@@ -1316,7 +1316,7 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_text = tagpu_recmp_text_begin(&roster);
         s_mp_text_queue = tagpu_recmp_text_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        s_mp_pov = tagpu_recmp_pov_begin(&roster);
+        s_mp_pov = tagpu_recmp_pov_begin(&roster, REC_POV_ZOOM_MIN);
         if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
             !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue ||
             !s_mp_pov) {
@@ -3870,7 +3870,7 @@ static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p
     float level;
     if (w < 1 || w > (int)REC_POV_VIEW_MAX || h < 1 || h > (int)REC_POV_VIEW_MAX) return 0;
     tagpu_zoom_applied(&seq, &dx, &dy, &level, &epoch, &centre);
-    if (!(level >= TAGPU_ZOOM_FLOOR_HI)) level = TAGPU_ZOOM_FLOOR_HI;
+    if (!(level >= TAGPU_ZOOM_FLOOR_LO)) level = TAGPU_ZOOM_FLOOR_LO;
     if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
     memset(p, 0, sizeof *p);
     p->player = (uint8_t)player;

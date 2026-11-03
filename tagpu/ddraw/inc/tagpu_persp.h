@@ -40,11 +40,14 @@ int persp_sample(unsigned count, const RecPov pov[2], const unsigned tick[2], un
    view_w/view_h are the recorder's. The view's centre is eye + view/2 at every zoom
    (tagpu_zoom.c, "the camera's range"), so the eye is the sample's camera less half the viewer's
    view. The level, in Q16, is
-       z_v = clamp(z_r * min(view_w / rec_w, view_h / rec_h), REC_POV_ZOOM_MIN, REC_POV_ZOOM_MAX)
+       z_v = clamp(z_r * min(view_w / rec_w, view_h / rec_h), zmin, REC_POV_ZOOM_MAX)
    with each product taken in 64 bits and truncated: rounding down keeps view/z_v at least the
    recorder's rec/z_r on both axes, so everything the recorder saw is on the viewer's screen
-   unless the range's floor cut it. Returns 0, writing nothing, for a view of no size. */
+   unless the range's bottom cut it. `zmin` is the recording's own minimum (rec_pov_zoom_min of
+   its format), so a format-26 recording is followed as it always was; the viewer's render thread
+   then draws no lower than its own floor (tagpu_zoom.c, "the follow lever"). Returns 0, writing
+   nothing, for a view of no size. */
 int persp_follow(const RecPov* p, int view_w, int view_h, int* eye_x, int* eye_y,
-                 uint32_t* level_q16);
+                 uint32_t* level_q16, uint32_t zmin);
 
 #endif

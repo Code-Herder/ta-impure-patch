@@ -83,7 +83,8 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 26
+REC_FORMAT = 27
+REC_FORMATS = (26, REC_FORMAT)              # the block walk is the same for both
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES = 29, 30, 31, 47
@@ -3914,8 +3915,9 @@ def iter_blocks(path, decode=True, rest=True, before_stream=None, data=None, sta
             if kind == tarec.RB_HEADER:
                 es = entries(payload)
                 fmt = [struct.unpack("<I", b)[0] for t, b in es if t == tarec.RT_FORMAT and len(b) == 4]
-                if fmt != [REC_FORMAT]:
-                    raise Unreadable(f"format {fmt[0] if fmt else None}, not {REC_FORMAT}")
+                if len(fmt) != 1 or fmt[0] not in REC_FORMATS:
+                    raise Unreadable(f"format {fmt[0] if fmt else None}, not one of "
+                                     f"{', '.join(map(str, REC_FORMATS))}")
                 nslots = header_slots(es)
                 if root_slots is not None and nslots != root_slots:
                     raise Unreadable(f"a segment of {nslots} slots after {root_slots}")

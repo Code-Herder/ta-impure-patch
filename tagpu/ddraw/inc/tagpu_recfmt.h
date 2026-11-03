@@ -39,7 +39,10 @@
 #include "tagpu_reclanes.h"
 #include "tagpu_recrules.h"
 
-/* 26: format 25 with the contest order's keys (RK_EV_TURN), the carry links at their place
+/* 27: format 26 with the camera's zoom down to 1/64 (RecPov's zoom at least REC_POV_ZOOM_MIN,
+   1024): the zoom floor follows the map. Every block is format 26's, so a reader takes both, each
+   sample bounded by its file's own minimum (rec_pov_zoom_min). 26 was format 25 with the contest
+   order's keys (RK_EV_TURN), the carry links at their place
    (RK_EV_LINK) and Teleport's moves at theirs (RK_EV_PLACE). 25 was format 24 with
    RT_WALLCLOCK's start carrying the local time's offset from UTC at that instant beside it. 24
    was format 23 with the unit frame's listing, lane masks and residuals as one binary range
@@ -77,16 +80,17 @@
    carries the masks). 13 was format 12 with the stream written by the lossy filter
    (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream holds between
    refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test launch may write
-   the exact records beside the stream (RB_EXACT). A reader takes this format alone. The bytes: a
+   the exact records beside the stream (RB_EXACT). A reader takes formats 26 and 27, a closed
+   list (rec_format_supported). The bytes: a
    stream block may be a sectioned container whose unit frame carries the unit deltas, whose pool
    frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
    the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
    below). */
-#define REC_FORMAT        26
+#define REC_FORMAT        27
 
 static __inline int rec_format_supported(unsigned format)
 {
-    return format == REC_FORMAT;
+    return format == 26 || format == REC_FORMAT;
 }
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */

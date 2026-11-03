@@ -55,14 +55,14 @@ int persp_sample(unsigned count, const RecPov pov[2], const unsigned tick[2], un
 }
 
 int persp_follow(const RecPov* p, int view_w, int view_h, int* eye_x, int* eye_y,
-                 uint32_t* level_q16)
+                 uint32_t* level_q16, uint32_t zmin)
 {
     int64_t zx, zy, z;
     if (view_w <= 0 || view_h <= 0 || !p->view_w || !p->view_h) return 0;
     zx = (int64_t)p->zoom * view_w / p->view_w;
     zy = (int64_t)p->zoom * view_h / p->view_h;
     z = zx < zy ? zx : zy;
-    if (z < REC_POV_ZOOM_MIN) z = REC_POV_ZOOM_MIN;
+    if (z < zmin) z = zmin;
     if (z > REC_POV_ZOOM_MAX) z = REC_POV_ZOOM_MAX;
     *eye_x = sat32((int64_t)p->cam_x - view_w / 2);
     *eye_y = sat32((int64_t)p->cam_y - view_h / 2);
