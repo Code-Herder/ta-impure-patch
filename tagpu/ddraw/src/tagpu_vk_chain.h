@@ -49,8 +49,8 @@ void tagpu_vk_chain_end(VkCommandBuffer cb);
 void tagpu_vk_chain_check_begin(VkCommandBuffer cb);
 void tagpu_vk_chain_check_end(VkCommandBuffer cb);
 
-/* Give the pipeline back: the seam calls it after every consumer's `_down`, behind its
-   vkDeviceWaitIdle. With no device it forgets the handles instead: they died with it. */
+/* Give the pipeline back: the seam calls it after every consumer's `_down`, on its live device
+   and behind its vkDeviceWaitIdle. */
 void tagpu_vk_chain_down(const TAGPU_VKPASS* d);
 
 /* 1 while `tagpu_chaincheck.on` exists, re-read every 120 frames of `frame`. Defined by the seam

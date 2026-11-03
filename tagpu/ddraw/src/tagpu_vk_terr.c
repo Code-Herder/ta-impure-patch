@@ -643,10 +643,17 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
+    /* THE REDUCER'S COUNTERS. A refusal leaves `cnt` NULL and the slot draws at level 0
+       (`chain_maintain` returns on it): a chain that cannot stand never refuses a frame. */
     if (s_chainsOn &&
         !mk_buffer(d, 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s->cnt, &s->cntMem, &s->cntMap)) return 0;
+                   &s->cnt, &s->cntMem, &s->cntMap)) {
+        if (s->cntMap) { vkUnmapMemory(d->dev, s->cntMem); s->cntMap = NULL; }
+        if (s->cnt) { vkDestroyBuffer(d->dev, s->cnt, NULL); s->cnt = VK_NULL_HANDLE; }
+        if (s->cntMem) { vkFreeMemory(d->dev, s->cntMem, NULL); s->cntMem = VK_NULL_HANDLE; }
+        plog(d, "terr: no 16-byte counter buffer for a frame slot - that slot draws at level 0");
+    }
 
     memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
     ii.sampler = s_samp; ii.imageView = s->palView;

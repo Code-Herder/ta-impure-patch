@@ -58,7 +58,7 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v);
 /* `ent` IS THE QUAD'S ATLAS ENTRY, ITS INDEX + 1 (0: none), the key the fragment stage's mip chains
    are found by (tagpu_vk_feat.c's per-entry table). The entry's index stays put from the gather to
    the draw: the atlas repacks only at the top of a gather (tagpu_gaf_atlas_frame), never inside
-   one. It took the colour key's place, which nothing read: the hole is the base atlas's alpha. */
+   one. `aCM.x` carries no colour key: the hole is the base atlas's alpha. */
 
 /* Added to a vertex's mode (TAGPU_FXMODE_OPAQUE 1 / _ALPHA 2): the quad is the
    map edge's mirror of a feature, drawn in the edge's tone. The fragment stage
