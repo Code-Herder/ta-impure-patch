@@ -20,7 +20,6 @@
 
 #define IC_HIDE   0x01u          /* the model is not drawn                   */
 #define IC_SUPP   0x02u          /* cargo of a hidden unit: no model, no icon */
-#define IC_CARGO_HOPS 64         /* the engine's own guard on a cargo chain  */
 #define IC_LOG_FRAMES 300
 
 /* one queued icon */
@@ -72,7 +71,7 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     const TAGPU_PK_UNIT* units;
     LARGE_INTEGER t0;
     unsigned i;
-    int scale, dist, fade, c;
+    int scale, dist, fade, c, pass;
 
     s_on = 0; s_n = 0; s_nrec = 0; s_drop = 0;
     s_hidden = s_supp = s_dots = s_setpics = 0;
@@ -106,14 +105,16 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     s_ink = pk->gui_col[0];
     s_n = pk->n_units;
     units = tagpu_pk_units(pk);
-    /* NEVER AN ICON: a nanoframe -- it is the build's own picture -- or a unit
-       with no health left. The type row is bounded by the table's count, the
-       class by the class count and a set picture by the art's (tagpu_icon_type);
-       anything else is drawn as its model. */
+    /* NEVER AN ICON: a unit the unit pass does not draw -- it keeps the
+       engine's sprite, its bar and its digit --, a nanoframe -- it is the
+       build's own picture -- or a unit with no health left. The type row is
+       bounded by the table's count, the class by the class count and a set
+       picture by the art's (tagpu_icon_type); anything else is drawn as its
+       model. */
     for (i = 0; i < s_n; i++) {
         const TAGPU_PK_UNIT* u = &units[i];
         int a = 0, h = 0;
-        if (u->type_row < s_ntypes && !(u->nano > 0.0f) && u->health > 0) {
+        if ((u->flags & TAGPU_PK_U_NATIVE) && u->type_row < s_ntypes && !(u->nano > 0.0f) && u->health > 0) {
             const TAGPU_PK_UTYPE* t = &s_types[u->type_row];
             int size, edge;
             if (t->cls < TAGPU_ICLS_N) {
@@ -126,16 +127,31 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     }
     /* THE CARGO OF A HIDDEN UNIT is part of its picture -- a unit on a factory
        pad, one in a transport -- so it is neither a model nor an icon of its
-       own. Every hop is a packet index the publisher bounded (slot_of), checked
-       against this frame's count again, and the engine's own 64-hop guard
-       terminates a chain that loops. */
-    for (i = 0; i < s_n; i++) {
-        int ci, guard = 0;
-        if (!(s_flag[i] & IC_HIDE)) continue;
-        for (ci = units[i].cargo_first; ci >= 0 && (unsigned)ci < s_n && guard < IC_CARGO_HOPS; guard++) {
-            s_flag[ci] |= IC_SUPP;
-            ci = units[ci].cargo_next;
+       own, and nor is the cargo of that cargo: TAGPU_ICON_CARGO_HOPS rounds
+       each mark the cargo lists of every hidden or suppressed unit, so a chain
+       of carriers that many deep is followed down, and the pick's walk up the
+       carrier pointers (tagpu_zoom.c's icon_hit) follows the same chains the
+       same distance. Only a unit the unit pass draws is suppressed, and only
+       its cargo is marked in turn: a carrier the engine draws hides nothing,
+       as the pick's walk stops at one. Every hop is a packet index the
+       publisher bounded (slot_of), checked against this frame's count again,
+       and a list is followed at most TAGPU_ICON_CARGO_HOPS members, the
+       engine's own guard on a list that loops. */
+    for (pass = 0; pass < TAGPU_ICON_CARGO_HOPS; pass++) {
+        int changed = 0;
+        for (i = 0; i < s_n; i++) {
+            int ci, guard = 0;
+            if (!(s_flag[i] & (IC_HIDE | IC_SUPP))) continue;
+            for (ci = units[i].cargo_first; ci >= 0 && (unsigned)ci < s_n && guard < TAGPU_ICON_CARGO_HOPS;
+                 guard++) {
+                if ((units[ci].flags & TAGPU_PK_U_NATIVE) && !(s_flag[ci] & IC_SUPP)) {
+                    s_flag[ci] |= IC_SUPP;
+                    changed = 1;
+                }
+                ci = units[ci].cargo_next;
+            }
         }
+        if (!changed) break;
     }
     for (i = 0; i < s_n; i++) {
         if (s_flag[i] & IC_SUPP) s_supp++;

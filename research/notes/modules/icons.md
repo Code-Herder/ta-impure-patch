@@ -316,10 +316,15 @@ GUI's black; with no `radlogo` there are no radar dots and the shapes still draw
 A unit whose model is **hidden** gets no NU at all — no model, no shadow, no selection rect (BAR
 draws no footprint for an icon) — and the marker pass skips its health bar and group digit. The
 **cargo of a hidden unit** — a unit in a transport, a nanoframe on a factory's pad — is part of its
-carrier's picture: neither a model nor an icon. The walk follows the packet's `cargo_first` /
-`cargo_next`, every hop a packet index the publisher bounded and re-checked against the frame's
-count, under the engine's own 64-hop guard. A unit with an icon whose model is not hidden draws
-both, the icon over it, while the alpha ramps.
+carrier's picture: neither a model nor an icon, and nor is the cargo of that cargo. The render
+thread marks the cargo lists (`cargo_first` / `cargo_next`, every hop a packet index the publisher
+bounded and re-checked against the frame's count) of every hidden or already-suppressed unit, in up
+to 64 rounds (`TAGPU_ICON_CARGO_HOPS`), each list followed at most 64 members, the engine's own
+guard. Only a unit the native pass draws (`TAGPU_PK_U_NATIVE`) is ever an icon, hidden or
+suppressed, and only such a unit passes the suppression on: a unit the engine draws keeps its
+sprite, its bar and its digit, and hides no cargo. Cargo of a carrier whose model shows is decided
+by its own rule. A unit with an icon whose model is not hidden draws both, the icon over it, while
+the alpha ramps.
 
 **When icons are decided at all.** Only while the unit pass draws the units and the marker pass
 draws the icons (`tagpu_mark_draws`: armed and not passive) — a model is never hidden under an
@@ -361,14 +366,18 @@ drops the whole marker layer for the frame.
 (`game_level()`), with the game thread's own class table and the screen size `main+0x37E1F` /
 `+0x37E23`:
 
+- **Carried** (`+0x86` ≠ 0), asked first: **the picture's cargo rule** (*What an icon hides*),
+  walked up instead of down. Each carrier counts only as a record of the unit array — at or after
+  `[main+0x14357]`, a multiple of `0x118` from it and below the slot count `u16 main+0x14351`
+  (else `-1`); the walk stops at a carrier `tagpu_native_owns_unit` refuses and after 64 hops
+  (`TAGPU_ICON_CARGO_HOPS`, the render's bound); a carrier whose model is hidden makes the answer
+  "not hit", whatever the unit is — a nanoframe on a hidden factory's pad included, which nothing
+  draws (BAR gives cargo no icon; the band box `0x48C390` already skips carried units). The two
+  walks read the same links from either end [INFERRED: `+0x86` names the unit whose cargo list
+  `+0x8A`/`+0x8E` holds it]. Otherwise the unit's own rule, as below.
 - `-1`, the guarded engine test as before: the latest command record drew no icons, no table, a
-  unit `tagpu_native_owns_unit` refuses, a row
-  past the table, a nanoframe (`+0x104 > 0`), no health (`+0x108 ≤ 0`), or a model the rule does
-  not hide.
-- **Carried** (`+0x86` ≠ 0): the carrier counts only as a record of the unit array — at or after
-  `[main+0x14357]`, a multiple of `0x118` from it and below the slot count `u16 main+0x14351` —
-  and if the carrier's model is hidden the answer is "not hit" (BAR gives cargo no icon; the band
-  box `0x48C390` already skips carried units).
+  unit `tagpu_native_owns_unit` refuses, a row past the table, a nanoframe (`+0x104 > 0`), no
+  health (`+0x108 ≤ 0`), or a model the rule does not hide.
 - **Hidden**: hit when `(px − ax)² + (py − ay)² ≤ (0.45 · E / z)²`, with `ax = ((x − (eyeX << 16))
   >> 16) + 0x80` and `ay = ((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` — `0x48C6A0`'s
   own anchor without its corner offsets, in 64 bits. `0x48C6A0` is never called for such a unit, so
@@ -376,9 +385,9 @@ drops the whole marker layer for the frame.
   class's drawn edge, or `k ×` the longer side of the type's set picture in the art this thread
   published, the type's `icon` bounded by the art's picture count.
 
-*Why it is safe by construction*: every value comes from the unit's own record, its carrier's and
+*Why it is safe by construction*: every value comes from the unit's own record, its carriers' and
 the main block, read on the game thread that owns them inside the engine's own call; the row is
-bounded by the table's count and the carrier by the unit array. HotUnits is the cull and is
+bounded by the table's count and every carrier by the unit array. HotUnits is the cull and is
 untouched (one id per slot, `0x485596`). The pick follows the game thread's applied level and the
 picture the frame's level; the two are equal at rest and differ only while a zoom tween moves —
 a property, not a timing argument: nothing is read across threads. **The icons it answers by are

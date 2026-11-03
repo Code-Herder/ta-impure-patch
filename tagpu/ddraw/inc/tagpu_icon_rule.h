@@ -45,6 +45,15 @@
 #include <math.h>
 #include "tagpu_icontype.h"   /* TAGPU_ICLS_* */
 
+/* THE CARGO RULE, one for the picture and the pick: a unit carried -- through
+   any chain of carriers the unit pass draws -- by a unit whose model is hidden
+   under its icon is part of that carrier's picture, neither a model nor an
+   icon, and never hit. The chain is followed at most this many hops, the
+   engine's own guard on a cargo chain: the render thread propagates it down
+   the packet's cargo lists that many times (tagpu_icon.c), the pick walks up
+   the carrier pointers that many hops (tagpu_zoom.c's icon_hit). */
+#define TAGPU_ICON_CARGO_HOPS 64
+
 typedef struct TAGPU_ICON_VIEW {
     float base;              /* BAR's icon size base, px                       */
     float zS;                /* the level at which the frame spans BAR's distance */

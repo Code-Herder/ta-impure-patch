@@ -1831,10 +1831,20 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
 
 /* The pick of a unit drawn as an icon: 1 hit, 0 not hit, -1 not an icon (ask
    the engine). The invariant is above `VA_HITTEST`. Every value comes from the
-   unit's own record, its carrier's and the main block, read on the game
+   unit's own record, its carriers' and the main block, read on the game
    thread that owns them inside the engine's own call (`0x48CE15` in
-   `0x48CD80`); the row is bounded by the table's count and the carrier by
-   the unit array -- a stride-aligned record below the engine's slot count. The
+   `0x48CD80`); the row is bounded by the table's count and every carrier by
+   the unit array -- a stride-aligned record below the engine's slot count.
+   THE PICK FOLLOWS THE PICTURE'S CARGO RULE (TAGPU_ICON_CARGO_HOPS,
+   tagpu_icon.c's suppression): it walks up the carrier pointers +0x86 as far
+   as the render thread follows the cargo lists down, through carriers the
+   unit pass draws only, and a carrier whose model is hidden makes the unit
+   part of its picture -- not hit, whatever the unit is, a nanoframe on a
+   factory's pad included, since nothing draws it. Otherwise the unit's own
+   rule decides, as the picture draws it: cargo of a carrier that shows its
+   model is an icon of its own when the rule says so. The two walks read the
+   same links from either end [INFERRED: a unit's +0x86 names the unit whose
+   cargo list +0x8A/+0x8E holds it, the engine keeping the two together]. The
    pick follows the game thread's applied level and the picture the frame's
    level; the two are equal at rest and differ only while a zoom tween moves --
    a property, not a timing argument: no memory is read across threads.
@@ -1856,7 +1866,7 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     const float z = game_level();
     const char* carrier;
     TAGPU_ICON_VIEW v;
-    int scale, dist, fade, edge = 0, h;
+    int scale, dist, fade, edge = 0, h, hop;
     long long ax, ay, dx, dy;
     double r;
 
@@ -1867,10 +1877,8 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     tagpu_settings_icons(&scale, &dist, &fade);
     tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
                     scale, dist, fade);
-    h = icon_hides(tab, n, unit, &v, z, &edge);
-    if (h < 0) return -1;
     carrier = *(const char* const*)(unit + U_CARRIER);
-    if (carrier) {
+    for (hop = 0; carrier && hop < TAGPU_ICON_CARGO_HOPS; hop++) {
         const char* beg = *(const char* const*)(ta + OFF_UNITBEG);
         const unsigned slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
         size_t d;
@@ -1878,9 +1886,14 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
         if (!model_ptr_ok(beg) || carrier < beg) return -1;
         d = (size_t)(carrier - beg);
         if (d % UNIT_STRIDE || d / UNIT_STRIDE >= slots) return -1;
-        return icon_hides(tab, n, carrier, &v, z, &ce) == 1 ? 0 : -1;
+        /* a carrier the engine draws hides nothing, and the picture's
+           suppression stops there too */
+        if (!tagpu_native_owns_unit(carrier)) break;
+        if (icon_hides(tab, n, carrier, &v, z, &ce) == 1) return 0;
+        carrier = *(const char* const*)(carrier + U_CARRIER);
     }
-    if (!h) return -1;
+    h = icon_hides(tab, n, unit, &v, z, &edge);
+    if (h <= 0) return -1;
     ax = (((long long)*(const int*)(unit + U_X) - ((long long)*(const int*)(ta + OFF_EYEX) << 16)) >> 16) + 0x80;
     ay = (((long long)*(const int*)(unit + U_Z) - ((long long)*(const int*)(ta + OFF_EYEY) << 16)) >> 16)
          - ((long long)(*(const int*)(unit + U_ALT) >> 16) >> 1) + 0x20;

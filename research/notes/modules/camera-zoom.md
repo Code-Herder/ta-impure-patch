@@ -824,11 +824,14 @@ table the packet's publisher built on this thread, a unit whose model the icon r
 when the point lies within `0.45 × edge / z` world px of the anchor `0x48C6A0` projects —
 `((x − (eyeX << 16)) >> 16) + 0x80`, `((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` —
 computed in 64 bits, without the corner offsets and without calling `0x48C6A0`, so its int16
-narrowing is never met for such a unit. A unit carried by one whose model is hidden answers "not
-hit"; every other unit — a model, a nanoframe, a dead one, a type row past the table, a unit
-`tagpu_native_owns_unit` refuses — takes the guarded engine test above, so at 1×, where no model
-is hidden, the pick is the engine's. The carrier `+0x86` counts only as a stride-aligned record
-below the unit array's slot count (`main+0x14357`, `main+0x14351`). Answered picks are counted at
+narrowing is never met for such a unit. A unit carried — through any chain of carriers the native
+pass draws, up to 64 hops — by one whose model is hidden answers "not hit", a nanoframe on a hidden
+factory's pad included: the picture draws neither (*What an icon hides* in [strategic
+icons](icons.html)). Every other unit — a model, an unhidden nanoframe, a dead one, a type row past
+the table, a unit `tagpu_native_owns_unit` refuses — takes the guarded engine test above, so at 1×,
+where no model is hidden, the pick is the engine's. Each carrier `+0x86` counts only as a
+stride-aligned record below the unit array's slot count (`main+0x14357`, `main+0x14351`), and the
+walk stops at one the native pass does not draw. Answered picks are counted at
 most once a second: `zoom: icon pick - N hit(s), M miss(es) so far`.
 
 **The clip guard needs BOTH bounds, and the second one is the picture's [MEASURED 2026-09-09].**
