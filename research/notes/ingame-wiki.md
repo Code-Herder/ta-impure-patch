@@ -53,8 +53,7 @@ the mockup and the game. The fourth, **Players and the camera**, is a *players* 
 replay on a screen smaller than its map, with the replay HUD's players column -- Jump and Follow
 moving the camera to a seat's recorded view, Sight showing one seat's fog, sight and radar
 contacts, the overlays' switches and the stats window -- and every recorded seat's cursor, clicks
-and selection drawn over every replay view; it is built in both the mockup and the game, its
-landing in progress
+and selection drawn over every replay view; it plays in both the mockup and the game
 ([below](#the-game-frame-on-the-stage-the-replay-entries);
 [the replay entries' plan](ingame-wiki-replay-plan.html)).
 
@@ -3106,9 +3105,9 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Gaps
 
-- **The replay entries: Players and the camera is landing.** Watching, Take over a replay and
-  Rewind a skirmish are landed; Players and the camera is built in both the mockup and the game,
-  its landing in progress ([the plan](ingame-wiki-replay-plan.html), *Players, as built*).
+- **The replay entries are landed.** Watching, Rewind a skirmish, Take over a replay and
+  Players and the camera play in both the mockup and the game ([the plan](ingame-wiki-replay-plan.html),
+  *Players, as built*); what they leave open is the plan's *Open* and the roadmap row's *Not covered yet*.
 - **What Rewind does not yet hold.** The game lane, `rewind`, plays it on the base game
   only; under the five mods of the compatibility suite the `mods` lane holds its live bars (w7)
   and nothing else of the entry. Not measured in the game, so [INFERRED] where the wiki copies it: the open and the past with the
