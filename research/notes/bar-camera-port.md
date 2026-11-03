@@ -304,9 +304,10 @@ the rest of `R` and the residual on it rather than banking them.
     among clipped, unclipped, dropped and upside-down copies).
 * **Units stay on the map.** The minimap is unchanged, as BAR's is.
 
-The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad plus a per-instance
-`aCell` (col, row, cx, cy) as four signed shorts. A mirrored cell is one more instance, with its
-tile taken from the reflected cell and its flip bits in spare bits of the instance.
+The game's terrain is instanced: `tagpu_terr.c`'s vertex stage draws one quad per cell of the
+gather's grid and derives the cell from its instance index and the level's tile map, an R16UI image
+([terrain & depth](terrain-depth.html) §7.1). A mirrored cell is one more instance: the stage folds
+it onto the map, takes the tile of the cell it lands on and turns over each axis the fold turned.
 
 **What the build added to the plan** [BUILT 2026-09-24, [GPU status](gpu-status.html) §2.90]:
 

@@ -574,15 +574,23 @@ about a millisecond between them.
   already contain the hill" below.** It does, the amount is per-map, and each map's artist
   chose a different sun. The gap is now a number rather than a worry.
 - ~~**The Classic lane draws no terrain on current `main`**~~ **Closed 2026-09-23.**
-  `tagpu_terr.c`'s vertex shader, which the pack extracts, is instanced — `aCorner` per vertex
-  (`TAGPU_TERR_QUAD`, the engine's six-corner order), `aCell` per instance (four unnormalised
-  shorts: the cell's grid column and row, its tile's atlas column and row), `uOrigin`/`uTile0`/
-  `uTexel` — and the viewer's `buildTerrain` fed the old six-float vertex, so no cell landed
-  (65.8 % of the viewport black). It now feeds exactly that: one instance per visible cell and
-  the three uniforms the game sets. Checked against the lane's own twin: `pass=terrain` in
-  Classic against Classic++ unlit and indexed (`undither=0&amb=1&shadows=0&sun=off`) is **0
-  differing pixels** at 1×, 0.5× and 2× — two independent paths over one atlas. Not re-measured
-  against the game (`tascene ab`).
+  `tagpu_terr.c`'s vertex shader, which the pack extracts, is instanced with no instance buffer —
+  `aCorner` per vertex (`TAGPU_TERR_QUAD`, the engine's six-corner order), one instance per cell
+  of the swept grid, which the shader turns into its map cell (`uTile0` plus `(i % uCols,
+  i / uCols)`) and reads that cell's tile out of the tile map, an R16UI texture (`uTileMap`);
+  `uArea`, `uMirror` and `uAtlasN` say which cells draw nothing — and the viewer once fed the old
+  six-float vertex, so no cell landed (65.8 % of the viewport black). `tools/tascene-render.js`
+  `classicTerrain` now feeds exactly what the game does: the tile map on texture unit 7 (sent when
+  the array changes), a one-texel R32UI on unit 8 for the neighbourhood keys (the lab has no
+  restored atlas, so `uNbhd` is 0 and it is never read), the mirror off, and `cols × rows`
+  instances. Checked against the lane's own twin on the per-instance-record feed the tile map
+  replaced: `pass=terrain` in Classic against Classic++ unlit and indexed
+  (`undither=0&amb=1&shadows=0&sun=off`) was **0 differing pixels** at 1×, 0.5× and 2× — two
+  independent paths over one atlas. On the tile-map feed, `tools/wiki/scenecheck.mjs` pairs the
+  cells the gather hands the GPU at each wiki stage's camera — read back out of the grid and the
+  texture it uploaded, each drawn as the vertex stage derives it — with `tagpu_wikiscene.c`'s; the
+  twin comparison has not been repeated on it, and neither feed has been measured against the
+  game (`tascene ab`).
 - **Minimap letterboxing convention** (how a non-square map maps into the stored picture) was
   not determined — the corner pixel is map content, not padding, on all three maps sampled.
 - **Hires `.glb` parsing** leans on three.js's `GLTFLoader` in parse-only mode (read the

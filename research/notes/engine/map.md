@@ -465,10 +465,15 @@ and interior cells to the unclipped `0x4C6E70` (called at `0x484370`; its copy i
 **The allocations** [DISASSEMBLED]. LoadMap `0x483610` allocates the tile map at
 `0x48393C..0x483962` as `(pxH/32)·(pxW/32)` `u16` entries, from the map's own pixel size
 `main+0x14223`/`+0x14227` (`[ebp+0x28]`/`[ebp+0x2C]`, written as the cell counts shifted left by
-4 at `0x48388C..0x483898`). It stores the pointer at `0x483969` and copies the TNT's map data in.
+4 at `0x48388C..0x483898`). It stores the pointer at `0x483969` and copies the TNT's map data in
+(`rep movs` at `0x48397D`/`0x483984`).
 The tile set is `count·0x400 + 8` bytes (`0x483B53..0x483B63`), laid out as
-`{count, pixels = base + 8}` (`0x483B72`, `0x483B80`). So the stride equals the allocation's width,
+`{count, pixels = base + 8}` (`0x483B72`, `0x483B80`), its pixels copied in at
+`0x483B9C`/`0x483BA4`. So the stride equals the allocation's width,
 and nothing in the pass compares a row with `pxH/32`: it never reads `main+0x14237` at all.
+Those copies are the only writes either block gets: both are immutable until the map free
+`0x483DD0` releases them in the level teardown ([engine/memory](memory.md), the per-map field
+table and "The tile map and the tile set do not change within a level").
 
 **Where stock is right.** The pass paints cell `(i, j)` of the window at
 `(L − sx + 32j, T − sy + 32i)`. `ncols = ⌈(W + sx)/32⌉` carries the painted span to `L + W` or

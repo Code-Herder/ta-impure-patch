@@ -200,17 +200,28 @@ restore request is built, under the teardown fence (`tagpu_terr.c` is `fenced` o
 `thread-split.allow`). `nb_build` copies the map once and bounds every tile id in the copy by the
 atlas's tile count before it makes a key. **Nothing is patched.**
 
-**The hand-over** (`tagpu_terr.h`). The instance record is eight shorts (`TAGPU_TERR_ICOMP`): the
-grid cell, the tile's cell in the base atlas with the mirror flags, and the key's cell. The
-hand-over gains the key frames in atlas order, the centre-out order over them and the atlas's
-size; `nbOn` says this frame's records carry keys. The terrain's vertex shader samples the
-restored colour at the key's cell when `uNbhd` is set, and the base atlas's tile otherwise.
+**The hand-over** (`tagpu_terr.h`). The per-cell key, `s_cellKey`, crosses as `keys`: a u32 a map
+cell on the tile map's grid, under `keySerial`, which moves where `nb_build` installs the keys and
+where the restore drop frees them (a new level or a new tile set, `ensure_atlas`), so the Vulkan lane uploads them once per build into an
+`R32_UINT` image beside the level's tile map (binding 9, read by the vertex stage). They are handed
+over only on the tile map's grid (`keys` NULL otherwise), with the key frames in atlas order, the
+centre-out order over them and the atlas's size; `nbOn` says this frame's hand-over carries them. The
+keys never change between an install and a drop: a job paints the neighbourhood atlas, not the key.
+The terrain's vertex shader fetches a cell's key at the texel it fetches the cell's tile from — a
+cell past the map, the key of the cell it folds to — and samples the restored colour at the key's
+cell (column `key % nbCols`, row `key / nbCols`) when `uNbhd` is set, and the base atlas's tile
+otherwise. While a hand-over carries no keys the image keeps whatever it last held (one zero texel
+if it was never filled) and is not read, since `uNbhd` is then 0: resizing it away and back each
+time the keys come and go would retire an image at every restore drop.
 
 **The feed.** One terrain job, fed each frame (`nb_feed`): the keys of the cells on screen not yet
 queued go in, and while any key on screen is not painted — however it was queued, each key keeps
 its place in the FIFO queue — the job runs at prio 0 with the whole budget; otherwise the rest of
 the map follows centre-out, one batch queued behind the one in flight, at prio 6 with a 2 ms GPU
-cap (`tagpu_rcore_job_budget`). A resize that retires an image the job uses frees the job first:
+cap (`tagpu_rcore_job_budget`). The keys on screen are worked out on the CPU from the hand-over's
+grid, tile map and keys by the vertex stage's own rule (`nb_cell_key`: a cell the shader does not
+draw has no key, a cell past the map takes its fold's), in the grid's order. A resize that retires
+an image the job uses frees the job first:
 the retire ends the image's use only if nothing names it afterwards, which the terrain pass
 guarantees for its own descriptor sets and a live job would not. A new job's first barrier on its
 destination (`dst_ready`) now waits for every earlier user of the image, the transition out of

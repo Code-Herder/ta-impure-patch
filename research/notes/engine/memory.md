@@ -233,9 +233,9 @@ Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 | `main+0x14351` | the unit array's **slot count**, `u16` = `10·[main+0x37EE6] + 1` (the name is <span class="pill pill-warn">INFERRED</span>; the arithmetic is not) | `0x4854EF`, **before** `begin` | untouched |
 | `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` at `0x4855D6` | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
 | `main+0x14233` / `+0x14237` | map W / H in 16-px tiles | `LoadMap`, through `ebp = main+0x141FB` (`0x483627`): `[ebp+0x38]` at `0x483881`, `[ebp+0x3C]` at `0x483892` — **before every pointer below** | untouched; stale until the next load |
-| `main+0x1428B` | `TILE_MAP` | `[ebp+0x90]` at `0x483969` | `0x483DD0`: nulled at `0x483EED` |
+| `main+0x1428B` | `TILE_MAP` | `[ebp+0x90]` at `0x483969` (`ebp = main+0x141FB`), the block `MEM_Alloc 0x4D83B0` returned at `0x483962` for `(pxH/32)·(pxW/32)·2` bytes; filled by the one `rep movs` at `0x48397D`/`0x483984` straight after, from the TNT's tile-index data. **Never written again**: no other store to the pointer or through it in the exe, so the map is immutable from LoadMap to the teardown (below). Readers: the minimap build `0x466780` (`0x4668EB`, load time) and the terrain pass `0x483FA0` (`0x4840A6`, `0x4841A9`, `0x4841D6`, `0x484345`) | `0x483DD0`: `MEM_Free 0x4D85A0` at `0x483E9A` (loaded at `0x483E93`), nulled at `0x483EED` |
 | `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
-| `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68` | nulled at `0x483ECA` |
+| `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68`, one block of `count·0x400 + 8` bytes (`MEM_Alloc` at `0x483B63`); its contents written only there: `[set] = count` at `0x483B72`, `[set+4] = set + 8` at `0x483B80`, the pixels by the `rep movs` at `0x483B9C`/`0x483BA4`. **Never written again**, like the tile map. Readers: the minimap build (`0x4668F1`) and the terrain pass (`0x4840E7`, `0x484127`, `0x4841FF`, `0x48423F`, `0x484355`) | `MEM_Free` at `0x483E5C` (loaded at `0x483E55`), nulled at `0x483ECA` |
 | `main+0x1421F` | fog descriptor `{buf, cols, rows, cells}` | `[ebp+0x24]` at `0x483C28` (struct `0x483C03`, buffer `0x483C96`) | `free 0x4B4F20` twice at `0x483F06`/`0x483F0F`, nulled at `0x483F1C` |
 | `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool for the level: 2048 in stock, 8192 under the raised limits** ([The wreck pool](map.md#the-wreck-pool-and-a-feature-paid-for-and-left-standing)) | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0. The four size constants (`0x421F2A`, `0x421F41`, `0x421F7A`, `0x421F97`) are limits-table sites | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
 | `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots** (the `push` operand at `0x499A32`; 3000 under the raised limits), pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
@@ -247,6 +247,38 @@ The map-free routine also nulls `+0x141FB`, `+0x141FF`, `+0x14203`, `+0x14273`, 
 `+0x14297` (`0x483EA7..0x483F2E`). **Negative results:** no store to `+0x14233`/`+0x14237` exists
 outside `LoadMap`'s `ebp` form; no routine other than `0x4854A0` and `0x485980` touches `+0x14357`;
 nothing resizes the fog grid between map loads.
+
+**The tile map and the tile set do not change within a level** [DISASSEMBLED 2026-11-03, the
+pristine exe only]. How "no other store" was established, so its reach is known:
+
+- **Direct displacements.** `+0x1428B` and `+0x14283` appear 15 times in the whole listing: loads
+  in the minimap build, the map free and the terrain pass, and one store each, the map free's nulls
+  at `0x483EED` and `0x483ECA`.
+- **Base-register forms.** Every `lea r,[r+imm]` and `add r,imm` with `0x8000 ≤ imm ≤ 0x1428B`
+  (esp excluded) was followed 800 instructions for the residual displacement on any register. The
+  only accesses found are LoadMap's, through `ebp = main+0x141FB` (`0x483627`): the stores
+  `[ebp+0x90]` at `0x483969` and `[ebp+0x88]` at `0x483B68`, and the reloads of the latter at
+  `0x483B74` and `0x483B87`. The other bases near the field (`DrawGameScreen`'s `main+0x141FB` at
+  `0x469683`, the fog builder's at `0x4843D3`, the wreck pool init's at `0x421F33`, and the
+  `main+0x1420B`/`+0x14217`/`+0x1421B`/`+0x14253`/`+0x1426F` forms) never reach `+0x90`/`+0x88`.
+- **Escapes.** Each register loaded with either pointer was traced to the end of its use; none is
+  stored anywhere but its own stack frame. The terrain pass `0x483FA0..0x4843B3` has no store
+  outside `[esp+…]`.
+- **Indirect entries.** None of `0x483610`, `0x483DD0`, `0x483FA0`, `0x466780`, `0x4669B0`,
+  `0x491B60` or `0x4917D0` occurs as a little-endian dword in the file [MEASURED, byte search], so
+  their only entries are the direct calls: LoadMap's one caller `0x4918C0`, the map free's one
+  caller `0x491BB3` (in the teardown `0x491B60`).
+- **Not excluded:** a `rep movs`/`rep stos` over `main` outside the 25-instruction window searched
+  around each `0x511DE8` load (none found covers `+0x14283..+0x1428E`; the nearest start at
+  `main+0x142F3` and `+0x143A7`, above it) is [INFERRED] absent, and a computed address outside
+  the forms above is not excluded by construction. Code loaded beside the exe (TADR, a mod's DLL)
+  was not checked. Whether `MEM_Free` writes into the freed block does not matter: it runs only in
+  the teardown.
+
+The pointers are not a level's identity, though: the next level's `MEM_Alloc` can return the same
+address, and for a set of the same count [INFERRED; the heap's reuse was not tested]. So
+`tagpu_terr.c` keys its tile-map copy, its atlas, its height grid and its neighbourhood keys on the
+packet's `level_gen`, and uses the pointers only to tell a new set within a level.
 
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 

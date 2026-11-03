@@ -52,20 +52,22 @@ says; an extent that is not positive or not inside the map answers the whole map
 TNTs have even 16-px dimensions, so every stock extent is a whole number of tiles. The camera's
 centre range ends at the same words (§2.3c), so the view centre stops where the fold is.
 
-**Terrain: an off-map cell is one more instance** (`tagpu_terr_gather`). Every cell of the gather
-rect past the area (`areaC` × `areaR`, from the packet's `map_pxw/h`; only the row stride stays the
-tile map's) takes the tile of the cell it folds to, `tagpu_edge_reflect(m, n)` — the lab's
-triangle wave, `p = m mod 2n` taken into `[0, 2n)`, `p` or `2n − 1 − p`, so any distance past the
-map lands on a map cell and says whether the axis turned over. The instance carries the tile
-column with `TAGPU_TERR_MIRROR` (0x2000), each flipped axis's `TAGPU_TERR_FLIP` (0x4000), and on a
-flipped axis `TAGPU_TERR_FOLD_LO` (0x1000) / `TAGPU_TERR_FOLD_HI` (0x0800) when the cell's low or
-high edge lies on a fold (below): spare bits by bound, since a tile column is under 64 and a row
-under 1024 (a u16 tile index over 64 columns), so bits 11 to 14 are clear in every on-map record
-and a flagged one is still a positive short in the `SSCALED` attribute
-(`terr_mirror_flags_unchanged` holds the numbers). The vertex stage takes each flag off as an exact
-power of two and runs a flipped axis's corner the other way; the fragment stage draws a mirrored
-cell as the base atlas (or the restored twin where the reveal has painted it) through `taEdge`, with
-no fog of war and no light, and returns.
+**Terrain: an off-map cell is one more instance, and the vertex stage folds it**
+(`tagpu_terr.c`, the `VS` and the comment above it). The gather hands over its grid, the area
+(`areaW` × `areaH`, from the packet's `map_pxw/h`) and the switch (`mirror`, `v->mirror`), and
+draws every cell of the grid as an instance ([terrain & depth](../terrain-depth.html) §7.1). A cell
+past the area takes the tile of the cell it folds to by the lab's triangle wave, `p = m mod 2n`
+taken into `[0, 2n)`, `p` or `2n − 1 − p`, so any distance past the map lands on a map cell and
+says whether the axis turned over. Its C definition is `tagpu_edge_reflect` (`tagpu_fx.h`), which
+the feature pass's mirror and the restorer's on-screen key feed (`tagpu_vk_terr.c`
+`nb_cell_key`) use; the shader's `taEdgeFold` is the same wave with its dividend made non-negative
+first (`m + 2n·((−m)/2n + 1)` for `m < 0`), because GLSL leaves `%` undefined on a negative operand.
+`taEdgeFold` also answers the cell's folds — on a flipped axis, whether its low or high edge lies
+on a fold (`p mod n` is 0 or `n − 1`, below) — which only the shader needs. With the mirror off a
+cell past the area is not drawn: its six corners go to one point outside the clip volume. The
+vertex stage runs a flipped axis's corner the other way and passes the cell's mirror flag on; the
+fragment stage draws a mirrored cell as the base atlas (or the restored twin where the reveal has
+painted it) through `taEdge`, with no fog of war and no light, and returns.
 
 - **The tone, `TAGPU_GLSL_EDGE_FN`, is the lab's `EDGE_TONE` at the owner's knobs:** `o = max(−w,
   w − uMapPx, 0)` per axis, `t = |o| / 1536`, the colour mixed 0.75 toward its RGB mean, times 0.5,
@@ -80,7 +82,8 @@ no fog of war and no light, and returns.
   cell's origin)`. The vertex stage carries that function exactly at the quad's corners, so what
   decides a sample is WHICH quad it falls in — and on a flipped axis the cell whose `u` covers it
   is the cell's own span moved the other way by `e`. So **a flipped quad is nudged +NUDGE**, not
-  −NUDGE. At a **fold** — the map's own edge, or a map's width further out (`edge_folds`), where
+  −NUDGE. At a **fold** — the map's own edge, or a map's width further out (`taEdgeFold`'s `lo`
+  and `hi`), where
   the neighbour is the map or a copy the right way round, nudged −NUDGE — the shared corner keeps
   −NUDGE and its `u` takes the same function's value there, `32 + 2e` or `2e`, so the two quads
   meet with no gap and no overlap, and the guard ring is read only by the samples within `2e` of
@@ -96,12 +99,13 @@ no fog of war and no light, and returns.
   two divisions agree, and on-map cells land on the same pixels either way, since the origin
   moves one cell and the fraction 32 px together. The lab's mirror sweep had the same band and
   takes the same floor ([terrain depth](../terrain-depth.html)).
-- **`skipped` is still the off-map count under black**; under mirror the heartbeat's `mirror=N`
-  counts the cells drawn past the map (`terr: … off-map=0 mirror=705 …` at the north-west corner at
-  0.5× on Two Continents). The same line prints the tile map and the area side by side:
-  `terr: grid=… map=289x292 area=288x288 …` on Painted Desert (MEASURED 2026-10-25). Under black
-  a cell past the area is skipped like any other off-map cell, so the hidden strip is black there
-  too, as stock's view never reached it.
+- **The heartbeat counts no cells past the map**: the gather no longer visits a cell, so the
+  `terr:` line's `cells=` is the grid, `cols × rows`, every one an instance whether it draws or not,
+  and `mirror=` is the switch the grid was drawn under, `1` or `0`. Which cells fell past the area
+  follows from the line's own `tile0=`, `grid=` and `area=`. The same line prints the tile map and
+  the area side by side: `terr: grid=… map=289x292 area=288x288 …` on Painted Desert (MEASURED
+  2026-10-25). Under black a cell past the area is not drawn like any other off-map cell, so the
+  hidden strip is black there too, as stock's view never reached it.
 
 **Features: the map's own, as its TNT lays them out.** **The rule (the owner's ruling): the
 mirror's map is the MAP FILE alone** — what the map's TNT places, never what a game, a saved game,
@@ -413,7 +417,7 @@ discrete GPU on a private Xvfb display:
   border trees stock TA loses ([engine map](../exe-reverse-engineering.html), "LoadMap's feature
   placement, and a saved game").
 - **The feature pass drawing none leaves the ground alone**: under `feat.on=passive`, and with
-  `native.on` without its wreck half, the north-west corner at 1× reads `terr: … mirror=462`, the
+  `native.on` without its wreck half, the north-west corner at 1× drew 462 mirrored cells, the
   table is never carried (`carried=0`), the pass holds no copy (`mirror: map=-1` under `passive`), and
   the 448 × 352 corner block is lit in all 157 696 pixels — the same count as the shipped play set.
 - **A cut lands on the effects, never on the table.** A diagnostic build with a 576 KB reserve and
