@@ -1399,8 +1399,9 @@ async function main() {
   // free to rewrite a PNG's colours and would do it silently.
   tex2D(gl, 0, gl.R8, map.atlas.w, map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, atlasBuf);
   tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, palBuf);
-  // fog is off in the parity fixture, but the samplers must still be bound
-  tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
+  // fog is off in the parity fixture, but the samplers must still be bound:
+  // one word of fog source, R32UI as uFogSrc samples it (tagpu_fogsrc.h)
+  tex2D(gl, 2, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
   const DUMMY = new Uint8Array([0, 0, 0, 0]);
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
@@ -2170,9 +2171,9 @@ async function main() {
   }
   // the frame the Classic passes draw into: the game's frame, the zoom, the
   // pack's depth keys, and no fog (the parity fixture's fog is off; the
-  // samplers are still bound, to unit 2's 1 x 1 grid)
+  // samplers are still bound, to unit 2's one word of source)
   const frameNow = () => ({ GW, GH, zoom, zoomC: ZOOM_C, depth: scene.depth,
-                            fog: 0, fogOrg: [0, 0], fogDim: [1, 1],
+                            fog: 0, fogSize: [0, 0],
                             vp: [vpL, vpT, vw, vh], SS });
 
   // The exploration lane's terrain: the SAME 32-px tile grid, but each cell is

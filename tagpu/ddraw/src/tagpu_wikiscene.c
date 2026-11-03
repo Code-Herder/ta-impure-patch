@@ -169,33 +169,24 @@ void tagpu_wikiscene_fog(const uint8_t* fog, int w, int h, WSCENEFOG* out)
 {
     int bw, bh, bx, bz, i, any = 0;
     out->on = 0;
-    out->cols = out->rows = 0;
-    out->orgx = out->orgz = 16.0f;
+    out->w = out->h = out->stride = 0;
     if (!fog || w < 2 || h < 2 || w > WIKISCENE_MAP || h > WIKISCENE_MAP) return;
     for (i = 0; i < w * h; i++)
         if (fog[i]) { any = 1; break; }
     if (!any) return;
     bw = w >> 1;
     bh = h >> 1;
-    /* the corners of block (bx, bz) are the centres of it and of its right, lower and lower-right
-       neighbours; the far column and row replicate their own block (tagpu_glsl.h, the clamp stops
-       one cell short of the grid). 1 unexplored, 2 grey: the view's 2 is black, its 1 grey. */
+    out->w = bw;
+    out->h = bh;
+    out->stride = tagpu_fog_stride(bw);
+    memset(out->words, 0, (size_t)out->stride * (size_t)bh * sizeof out->words[0]);
+    /* the view's 2 is black (never explored, bit 0), its 1 grey (out of LOS, bit 1) */
     for (bz = 0; bz < bh; bz++)
         for (bx = 0; bx < bw; bx++) {
-            int j, b0 = 0, b1 = 0;
-            /* tl, tr, bl, br: bit j of each mask */
-            for (j = 0; j < 4; j++) {
-                int x = bx + (j & 1), z = bz + (j >> 1), f;
-                if (x > bw - 1) x = bw - 1;
-                if (z > bh - 1) z = bh - 1;
-                f = fog[z * 2 * w + x * 2];
-                if (f == 2) b0 |= 1 << j;
-                else if (f) b1 |= 1 << j;
-            }
-            out->grid[bz * bw + bx] = (uint16_t)(b0 | b1 << 8);
+            int f = fog[bz * 2 * w + bx * 2];
+            uint32_t v = f == 2 ? TAGPU_FOG_UNEXPLORED : f ? TAGPU_FOG_OUTOFLOS : 0u;
+            out->words[bz * out->stride + (bx >> 4)] |= v << (2 * (bx & 15));
         }
-    out->cols = bw;
-    out->rows = bh;
     out->on = 1;
 }
 

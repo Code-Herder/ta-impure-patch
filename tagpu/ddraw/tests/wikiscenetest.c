@@ -11,8 +11,9 @@
    y1, enc, mode, sub, feat, wax, waz]...], "body": [...]}}; then plays every demo of every entry in
    PAK (tools/hudpak.py --set wiki) to its end, and at tick 0, every 30th tick and the last copies
    the view as the record carries it (tagpu_wikistage_copy) and writes {"e", "d", "t", "fog": null
-   or {"cols", "rows", "org": [x, z], "grid": [...]}} with the grid's entries as their two bytes,
-   b0 then b1.
+   or {"cols", "rows", "org": [x, z], "grid": [...]}}: the fog source tagpu_wikiscene_fog makes,
+   expanded by tagpu_fog_entry -- what the stage's passes sample -- over its w x h entries from
+   origin (16, 16), each entry as two bytes, the black mask then the grey.
    Exit 0 when everything loaded and ran; the comparison is scenecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION   /* tagpu_wikistage.c links tagpu_hudtext.c, which needs it once */
 #include <stdio.h>
@@ -221,10 +222,14 @@ int main(int argc, char** argv)
                     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"fog\":", e->id, e->demo[j].id, s.tick);
                     if (!fog.on) fputs("null", stdout);
                     else {
-                        printf("{\"cols\":%d,\"rows\":%d,\"org\":[%.9g,%.9g],\"grid\":[", fog.cols, fog.rows,
-                               fog.orgx, fog.orgz);
-                        for (k = 0; k < fog.cols * fog.rows; k++)
-                            printf("%s%u,%u", k ? "," : "", fog.grid[k] & 0xFFu, fog.grid[k] >> 8);
+                        TAGPU_FOGSRC src;
+                        src.words = fog.words; src.w = fog.w; src.h = fog.h;
+                        src.stride = fog.stride; src.serial = 0;
+                        printf("{\"cols\":%d,\"rows\":%d,\"org\":[16,16],\"grid\":[", fog.w, fog.h);
+                        for (k = 0; k < fog.w * fog.h; k++) {
+                            unsigned m = tagpu_fog_entry(&src, k % fog.w, k / fog.w);
+                            printf("%s%u,%u", k ? "," : "", m & 0xFu, (m >> 4) & 0xFu);
+                        }
                         fputs("]}", stdout);
                     }
                     /* the types the demo's stage resolved: its scene's pack, `<entry>.<scene>` */

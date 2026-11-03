@@ -67,6 +67,21 @@ const WikiScene = (() => {
     return { grid, dim: [bw, bh], org: [16, 16] };
   }
 
+  /* ---- the fog source the stage's passes sample (tagpu/ddraw/inc/tagpu_fogsrc.h): one cell a block, bit 0 black
+     (unexplored), bit 1 grey, sixteen cells a 32-bit word, `stride` words a row -- tagpu_wikiscene_fog's packing. The
+     shaders expand it (tagpu_glsl.h taFogEntry) to fogGrid's blocks exactly, which tools/wiki/scenecheck.mjs pairs
+     on the C side. Returns null when no cell is fogged. */
+  function fogSource(fog, mw, mh) {
+    if (!fog || !fog.some(f => f)) return null;
+    const bw = mw >> 1, bh = mh >> 1, stride = (bw + 15) >> 4, words = new Uint32Array(stride * bh);
+    for (let bz = 0; bz < bh; bz++) for (let bx = 0; bx < bw; bx++) {
+      const f = fog[bz * 2 * mw + bx * 2];
+      const v = f === 2 || f === 'black' ? 1 : f ? 2 : 0;
+      words[bz * stride + (bx >> 4)] |= v << (2 * (bx & 15));
+    }
+    return { words, size: [bw, bh], stride };
+  }
+
   const F = Math.fround;
   // a player of the eight, else none (tagpu_wikistage.c `owner8`): a record is made only for one
   const owner8 = o => Number.isInteger(o) && o >= 0 && o < 8 ? o : -1;
@@ -104,14 +119,13 @@ const WikiScene = (() => {
     return out;
   }
 
-  /* The view `v`, the pack and the tick -> { units, wrecks, ghosts, fog, resolved }. A unit's slot is its index in the view,
+  /* The view `v`, the pack and the tick -> { units, wrecks, ghosts, resolved }. A unit's slot is its index in the view,
      the id its nanoframe's oscillators start from. A unit under construction is a nanoframe and casts no shadow
      (tagpu_native.c, build-state.md 7); one being reclaimed is neither (the engine's reclaim hits its hit points). */
   function build(v, pack, tick) {
-    const out = { units: [], wrecks: [], ghosts: [], fog: null, resolved: new Set(Object.keys((pack.units || {}).meshes || {})) };
+    const out = { units: [], wrecks: [], ghosts: [], resolved: new Set(Object.keys((pack.units || {}).meshes || {})) };
     if (!v || !v.map) return out;
     out.wrecks = wrecks(v, pack);
-    out.fog = fogGrid(v.map.fog, +v.map.w || 0, +v.map.h || 0);
     (v.units || []).forEach((u, i) => {
       const built = u.built == null ? 1 : Math.min(1, Math.max(0, F(+u.built)));
       const nano = built < 1 ? nanoState(F(1 - built), i, tick) : null;
@@ -134,6 +148,6 @@ const WikiScene = (() => {
     return out;
   }
 
-  return { build, wrecks, nanoState, fogGrid, yaw, GHOST_ALPHA };
+  return { build, wrecks, nanoState, fogGrid, fogSource, yaw, GHOST_ALPHA };
 })();
 if (typeof module !== 'undefined') module.exports = WikiScene;

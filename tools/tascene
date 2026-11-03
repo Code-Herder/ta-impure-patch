@@ -318,6 +318,7 @@ GLSL_ES_HEADER = ("#version 300 es\n"
                   "precision highp float;\n"
                   "precision highp int;\n"
                   "precision highp sampler2D;\n"
+                  "precision highp usampler2D;\n"        # the fog source (tagpu_glsl.h)
                   "precision highp sampler2DShadow;\n")   # the Classic++ shadow map's compare view
 
 

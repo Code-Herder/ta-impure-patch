@@ -9,8 +9,8 @@
    controls strip says so.
 
    What the image holds, in the world passes' order (tagpu_vk.c `world_records`):
-   - the terrain from the stage description's tiles and the features (deposits, vents), both under the engine's fog
-     grid (scene.js) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
+   - the terrain from the stage description's tiles and the features (deposits, vents), both under the fog source
+     (scene.js fogSource) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
      draws its whitebox ground under an image that is clear there;
    - every unit with a resolved model, its Classic silhouette or slant shadow first, then the bodies, a nanoframe in
      the engine's staging and then its wire; units take no fog. A unit whose script poses it (the frame's `poses`,
@@ -115,9 +115,9 @@ window.WikiGfx = (() => {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
     if (!gl) throw new Error('no WebGL2 context');
     const ground = !!d.T;
-    // the shared textures: the palette (unit 1) and the fog grid (unit 2, rewritten each frame)
+    // the shared textures: the palette (unit 1) and the fog source (unit 2, R32UI, rewritten each frame)
     TR.tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, d.pal);
-    const fogTex = TR.tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
+    const fogTex = TR.tex2D(gl, 2, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
     let terr = null, tiles = null, spr = null, sprVBO = null, anchors = [];
     if (ground) {
       TR.tex2D(gl, 0, gl.R8, pack.map.atlas.w, pack.map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.T[0]);
@@ -234,13 +234,13 @@ window.WikiGfx = (() => {
        Returns { complete, ground, resolved }. */
     function render(v, tick, poses) {
       const sc = WS.build(v, pack, tick);
-      const fog = sc.fog;
+      const fog = WS.fogSource(v.map.fog, +v.map.w || 0, +v.map.h || 0);
       const f = { GW, GH, zoom: 1, zoomC: [0, 0], depth: pack.depth, vp: [0, 0, GW, GH], SS,
-                  fog: fog ? 1 : 0, fogOrg: fog ? fog.org : [0, 0], fogDim: fog ? fog.dim : [1, 1] };
+                  fog: fog ? 1 : 0, fogSize: fog ? fog.size : [0, 0] };
       if (fog) {
         gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, fogTex);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, fog.dim[0], fog.dim[1], 0, gl.RG, gl.UNSIGNED_BYTE, fog.grid);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, fog.stride, fog.size[1], 0, gl.RED_INTEGER, gl.UNSIGNED_INT, fog.words);
         gl.activeTexture(gl.TEXTURE0);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);

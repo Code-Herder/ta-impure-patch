@@ -164,8 +164,8 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
   gl.vertexAttribDivisor(1, 1);
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
-                                "uPal", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel",
+                                "uPal", "uFogSrc", "uFogSize",
+                                "uFog", "uOrigin", "uTile0", "uTexel",
                                 "uLambert", "uRestored", "uBase", "uHDim",
                                 "uShadowOn"]);
   nameShadowUnits(gl, prog);
@@ -216,8 +216,8 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
     },
     // The draw, unlit: no height grid, so no lambert term. `f` is the frame:
     // GW, GH (the game frame), zoom, zoomC, depth (the pack's), and the fog
-    // grid's uniforms (fog: 0 off, else uFog's bits; fogOrg, fogDim), its RG8
-    // texture on unit 2.
+    // source's uniforms (fog: 0 off, else uFog's bits; fogSize, its cells),
+    // its R32UI texture on unit 2 (tagpu_fogsrc.h).
     draw(f, n) {
       gl.useProgram(prog);
       gl.uniform2f(U.uGame, f.GW, f.GH);
@@ -226,8 +226,8 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       gl.uniform1f(U.uDepthScale, f.depth.scale);
       gl.uniform1f(U.uEnc, f.depth.terrain);
       gl.uniform1i(U.uPal, 1);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, f.fogOrg[0], f.fogOrg[1]); gl.uniform2f(U.uFogDim, f.fogDim[0], f.fogDim[1]);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, f.fogSize[0], f.fogSize[1]);
       gl.uniform1i(U.uFog, f.fog);
       gl.uniform1i(U.uLambert, 0);
       gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
@@ -431,7 +431,7 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   }
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale",
-                                "uFogGrid", "uFogOrg", "uFogDim", "uFog",
+                                "uFogSrc", "uFogSize", "uFog",
                                 "uRestored", "uBase", "uMapPx", "uClip"]);
   const rects = [];
   for (const d of Object.values(feat.defs))
@@ -458,8 +458,8 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
       gl.uniform1f(U.uZoom, f.zoom);
       gl.uniform2f(U.uZoomC, f.zoomC[0], f.zoomC[1]);
       gl.uniform1f(U.uDepthScale, f.depth.scale);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, f.fogOrg[0], f.fogOrg[1]); gl.uniform2f(U.uFogDim, f.fogDim[0], f.fogDim[1]);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, f.fogSize[0], f.fogSize[1]);
       gl.uniform1i(U.uFog, f.fog);
       gl.uniform1i(U.uRestored, 0);
       gl.uniform1i(U.uBase, 17);
@@ -800,8 +800,8 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
                                 "uPal", "uShadow", "uAlpha",
                                 "uWaterT", "uWaterMode", "uDigT",
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
-                                "uZoomCF", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uLambert", "uRestored",
+                                "uZoomCF", "uFogSrc", "uFogSize",
+                                "uFog", "uLambert", "uRestored",
                                 "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
                                 "uShadowOn", "uNanoOn", "uNanoT", "uNanoC"]);
   nameShadowUnits(gl, prog);
@@ -833,8 +833,8 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       gl.uniform4f(U.uScafP, f.vp[0], f.vp[1], f.vp[2], f.vp[3]);
       gl.uniform1f(U.uSS, f.SS); gl.uniform1f(U.uZoomF, f.zoom);
       gl.uniform2f(U.uZoomCF, f.zoomC[0], f.zoomC[1]);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, 0, 0);
       gl.uniform1i(U.uFog, 0);
       // light=0: the base, the face-shade multiplier, and a lambert that is
       // exactly 1.0 (ambient 1, no shadow)

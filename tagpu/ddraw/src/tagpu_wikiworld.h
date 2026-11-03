@@ -9,7 +9,7 @@
    (tagpu_wikistate_scene) and the published 3D arena (tagpu_wiki3d_get), the stage's ground as the
    game draws a map -- the terrain hand-over (the description's tiles in tagpu_terr.c's atlas
    layout, one cell a 32-px tile), the feature hand-over (the deposits' and vents' frames in an
-   atlas of its own, their quads in tagpu_feat.c's form) and the engine's fog grid -- and the world
+   atlas of its own, their quads in tagpu_feat.c's form) and the fog source -- and the world
    target's geometry: the map at zoom 1, one world unit a game pixel, at the Supersampling
    setting's `ss`, composited into the image's rect (tagpu_wikistage_image), the fit the stage's
    ops are built with. The cells, quads and fog are tagpu_wikiscene.c's, which is paired with the
@@ -78,11 +78,18 @@
 /* the file a `tagpu_wiki.shot` capture is written to: the wiki's target, before the Gamma curve */
 #define WIKIWORLD_SHOT "tagpu_wiki3d_shot.ppm"
 
+#include "tagpu_fogsrc.h"
+
 struct TAGPU_FRAME;
 
 /* Once a frame, from tagpu_overlay_draw after tagpu_wikistate_present: this frame's hand-overs, or
    none (no stage drawn, the arena not loaded, the ground fallen back, the lever off). */
 void tagpu_wikiworld_frame(const struct TAGPU_FRAME* f);
+
+/* The stage's fog source this frame (inc/tagpu_fogsrc.h), for the seam to prepare the wiki's fog
+   image from (tagpu_vkw_fog_prepare), or NULL when no cell of the view is fogged. This module's,
+   valid until its next frame. */
+const TAGPU_FOGSRC* tagpu_wikiworld_fogsrc(void);
 
 /* what frame `frame`'s image needs, for the seam */
 typedef struct {

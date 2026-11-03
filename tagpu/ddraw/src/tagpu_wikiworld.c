@@ -12,7 +12,7 @@
    THE HAND-OVER SOURCES ANSWER FROM THE PRODUCER (tagpu_wikiworld.h): the terrain, the features,
    the target; the units' hand-over is the wiki's posed program's own, which this file feeds
    through the instances' entry points. EVERY OTHER ANSWER IS "NOTHING", and each is one the instance already takes from the
-   game's own module on a frame with nothing to give: no fog grid for the posed program, no shadow
+   game's own module on a frame with nothing to give: no shadow
    map and no scaffold (a null view, which the passes replace with their own 1x1 dummy; an
    UNDEFINED shadow format, on which the passes give the dummy their own depth format and keep a
    NEAREST compare sampler they never sample); no effects models; Classic++ off and the restorer
@@ -38,6 +38,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_packet.h"
 #include "tagpu_vk_world.h"
+#include "tagpu_vk_fog.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_unit.h"
@@ -359,7 +360,13 @@ static int             s_terrHave, s_featHave, s_tgtHave;
 static TAGPU_TERRHAND  s_terr;
 static TAGPU_FEATHAND  s_feat;
 static TAGPU_WORLDTGT  s_tgt;
-static WSCENEFOG       s_fog;
+/* THE STAGE'S FOG SOURCE (tagpu_wikiworld_fogsrc): `s_fog` the bits the seam's fog image holds,
+   kept while the next frame's (`s_fogNew`) are the same so the serial moves only when they change,
+   and `s_fogHave` this frame's answer */
+static WSCENEFOG       s_fog, s_fogNew;
+static TAGPU_FOGSRC    s_fogSrc;
+static unsigned        s_fogSerial;
+static int             s_fogHave;
 static uint32_t        s_shotWant, s_shotDone;
 static char            s_shotWhat[96];
 
@@ -743,13 +750,6 @@ static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, i
     return refused == 0;
 }
 
-static void fog_fields(float* org, float* cols, float* rows)
-{
-    org[0] = s_fog.orgx; org[1] = s_fog.orgz;
-    *cols = (float)s_fog.cols;
-    *rows = (float)s_fog.rows;
-}
-
 static void win_add(WINSTAT* w, int image, double ms)
 {
     w->frames++;
@@ -833,14 +833,14 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     const WIKIART* art;
     HUDRECT stage;
     LARGE_INTEGER t0;
-    float u, org[2];
+    float u;
     int ox, oy, entry, demo, x0, y0, x1, y1, ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
     int gw, gh, nrec, nunit, nShadow = 0, nBody = 0;
     const float *shadow = NULL, *body = NULL;
 
-    s_have = s_terrHave = s_featHave = s_tgtHave = 0;
+    s_have = s_terrHave = s_featHave = s_tgtHave = s_fogHave = 0;
     s_frRec = s_frUnit = s_frRefused = 0;
     QueryPerformanceCounter(&t0);
     lever(f->frame_counter);
@@ -905,13 +905,25 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_frRec = (unsigned)nrec;
     s_frUnit = 1;
     if (s_ground) {
-        tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fog);
+        tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fogNew);
+        if (s_fogNew.on) {
+            if (!s_fog.on || s_fogNew.w != s_fog.w || s_fogNew.h != s_fog.h ||
+                memcmp(s_fogNew.words, s_fog.words,
+                       (size_t)s_fogNew.stride * (size_t)s_fogNew.h * sizeof s_fog.words[0])) {
+                s_fog = s_fogNew;
+                s_fogSerial++;
+            }
+            s_fogSrc.words = s_fog.words;
+            s_fogSrc.w = s_fog.w; s_fogSrc.h = s_fog.h; s_fogSrc.stride = s_fog.stride;
+            s_fogSrc.serial = s_fogSerial;
+            s_fogHave = tagpu_fog_src_ok(&s_fogSrc);
+        }
         tagpu_gaf_atlas_frame(&s_fatlas);
     }
 
     /* THE TERRAIN, every cell of the map at zoom 1: tagpu_terr.c `terr_publish`'s fields at the
        stage's camera -- grid cell (0, 0) is the map's, its corner the target's, no restore, no
-       relief, no shadow map, the engine's fog grid when a cell is fogged */
+       relief, no shadow map, fog when a cell is fogged (the source, tagpu_wikiworld_fogsrc) */
     if (s_wantTerr && !s_noMap) {
         memset(&s_terr, 0, sizeof s_terr);
         s_terr.cells = s_cells; s_terr.ncell = s_scene.ncell;
@@ -921,18 +933,12 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_terr.depthScale = DEPTH_SCALE;
         s_terr.enc = TERR_ENC;
         s_terr.texelW = 1.0f / (float)ATLAS_W; s_terr.texelH = 1.0f / (float)s_tatlasH;
-        s_terr.fog = s_fog.on;
-        fog_fields(org, &s_terr.fogCols, &s_terr.fogRows);
-        s_terr.fogOrgX = org[0]; s_terr.fogOrgY = org[1];
+        s_terr.fog = s_fogHave;
         s_terr.norm = 1.0f;
         s_terr.mapPxW = (float)((v->w / 2) * 32); s_terr.mapPxH = (float)((v->h / 2) * 32);
         s_terr.atlas = s_tatlas; s_terr.atlasW = ATLAS_W; s_terr.atlasH = s_tatlasH;
         s_terr.atlasSerial = s_tatlasSerial;
         s_terr.pal = tagpu_pal_engine(); s_terr.palSerial = tagpu_pal_engine_serial();
-        if (s_fog.on) {
-            s_terr.fogGrid = s_fog.grid;
-            s_terr.fogGridCols = s_fog.cols; s_terr.fogGridRows = s_fog.rows;
-        }
         s_terr.vpL = 0; s_terr.vpT = 0; s_terr.vw = s_scene.gw; s_terr.vh = s_scene.gh;
         s_terr.scissorOn = 1;
         s_terr.ss = ss;
@@ -948,16 +954,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_feat.zoom = 1.0f;
         s_feat.zoomCx = (float)s_scene.gw * 0.5f; s_feat.zoomCy = (float)s_scene.gh * 0.5f;
         s_feat.depthScale = DEPTH_SCALE;
-        s_feat.fog = s_fog.on;
-        fog_fields(org, &s_feat.fogCols, &s_feat.fogRows);
-        s_feat.fogOrgX = org[0]; s_feat.fogOrgY = org[1];
+        s_feat.fog = s_fogHave;
         s_feat.mapPxW = (float)((v->w / 2) * 32); s_feat.mapPxH = (float)((v->h / 2) * 32);
         s_feat.nudgeW = TAGPU_EDGE_NUDGE_PX;
         tagpu_wikiworld_feat_atlas_hand(&s_feat);
-        if (s_fog.on) {
-            s_feat.fogGrid = s_fog.grid;
-            s_feat.fogGridCols = s_fog.cols; s_feat.fogGridRows = s_fog.rows;
-        }
         s_feat.vpL = 0; s_feat.vpT = 0; s_feat.vw = s_scene.gw; s_feat.vh = s_scene.gh;
         s_feat.scissorOn = 1;
         s_feat.ss = ss;
@@ -1091,14 +1091,11 @@ int tagpu_wikiworld_worldtgt(TAGPU_WORLDTGT* out)
     return 1;
 }
 
-/* the fog grid the posed program would ask for (tagpu_posedraw.c): units take no fog on the stage
-   (the plan's section 7), and the stage draws none */
-const unsigned short* tagpu_wikiworld_foggrid(int* cols, int* rows, int* cells)
+/* the stage's fog source this frame (tagpu_wikiworld.h): units take no fog on the stage (the plan's
+   section 7), the ground and its features do */
+const TAGPU_FOGSRC* tagpu_wikiworld_fogsrc(void)
 {
-    if (cols)  *cols = 0;
-    if (rows)  *rows = 0;
-    if (cells) *cells = 0;
-    return NULL;
+    return (s_have && s_fogHave) ? &s_fogSrc : NULL;
 }
 
 /* the target's scissor is on: the stage's passes clip to the whole map, as the game's do to its
