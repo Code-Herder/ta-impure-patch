@@ -30,6 +30,7 @@
 #include "tagpu_hudstate.h"
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
+#include "tagpu_settings.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -130,6 +131,7 @@ typedef struct {
     LONG delta;                    /* the message's raw wheel delta            */
     LONG xy;                       /* where it was aimed: x, y as two shorts   */
     LONG us;                       /* qpc_us() when it was taken               */
+    LONG mega;                     /* 1: bound to the mega map, 0: to the zoom */
 } NOTCH;
 static NOTCH         s_nq[NOTCHQ];
 static volatile LONG s_nqHead;                  /* written by the message thread only */
@@ -149,6 +151,13 @@ static float         s_remX, s_remY;            /* R: the displacement still owe
 static double        s_gPosted = 1.0;           /* the g already posted of R         */
 static LONG          s_wheelPend;               /* notches not yet logged            */
 static float         s_landMs = -1.0f;          /* the last tween's length, for the log */
+/* THE MEGA MAP is a state of the wheel, not of the view: engaged means the
+   target is the floor because a mega notch put it there, and `s_megaBack` is
+   the target it left. Anything else that sets the level -- the file, a
+   Follow, the mouse-world pin -- goes through wheel_rest and disengages it, so
+   a stale "engaged" can never send a later notch to an old level. */
+static int           s_megaOn;
+static float         s_megaBack = 1.0f;
 
 /* The performance counter in microseconds, modulo 2^32: both threads convert
    the same counter the same way, so a signed 32-bit difference of two stamps
@@ -161,6 +170,14 @@ static DWORD qpc_us(void)
         return GetTickCount() * 1000u;
     return (DWORD)((q.QuadPart / f.QuadPart) * 1000000LL +
                    (q.QuadPart % f.QuadPart) * 1000000LL / f.QuadPart);
+}
+
+/* The level the wheel cannot go below, and the one the mega map engages at:
+   the whole-map level once the floor follows the map (mega-map-plan.md,
+   landing 1); the fixed floor until then. */
+static float zoom_floor(void)
+{
+    return ZOOM_MIN;
 }
 
 /* One wheel message's factor on the distance. */
@@ -192,6 +209,7 @@ static void wheel_rest(float z)
     s_remX = s_remY = 0.0f;
     s_gPosted = 1.0;
     s_wheelPend = 0;
+    s_megaOn = 0;
 }
 
 /* Render thread: the wheel at rest at level z, the ring emptied. Returns the
@@ -271,10 +289,33 @@ static float wheel_level(const TAGPU_PACKET* pk)
     for (; t != h; t++) {
         const NOTCH* e = &s_nq[(ULONG)t % NOTCHQ];
         double izPrev = 1.0 / (double)s_wheelTgt;
-        double iz = izPrev * notch_factor(e->delta);
+        double iz;
+        int    centre = 0;
         float  z;
+        /* THE MEGA MAP. A mega notch back engages it: the target becomes the
+           floor, about the view centre, and the target it left is kept. While
+           it is engaged ANY notch forward leaves it -- TADR's gesture -- back
+           to the kept target, centred on the world point under the pointer.
+           A mega notch that has nothing to do (back while engaged, forward
+           while not) moves nothing, as TADR's does; a zoom notch back while
+           engaged is already at the floor and leaves it engaged. */
+        if (s_megaOn && e->delta > 0) {
+            iz = 1.0 / (double)s_megaBack;
+            s_megaOn = 0;
+            centre = 1;
+        } else if (e->mega) {
+            if (e->delta < 0 && !s_megaOn) {
+                s_megaBack = s_wheelTgt;
+                s_megaOn = 1;
+                iz = 1.0 / (double)zoom_floor();
+            } else {
+                iz = izPrev;
+            }
+        } else {
+            iz = izPrev * notch_factor(e->delta);
+        }
         if (iz < 1.0 / ZOOM_MAX) iz = 1.0 / ZOOM_MAX;
-        if (iz > 1.0 / ZOOM_MIN) iz = 1.0 / ZOOM_MIN;
+        if (iz > 1.0 / zoom_floor()) iz = 1.0 / zoom_floor();
         z = (float)(1.0 / iz);
         /* Land EXACTLY on 1.0 when the notches bring it there. 1x is the
            identity the whole stack tests for by equality — the transform, the
@@ -286,14 +327,17 @@ static float wheel_level(const TAGPU_PACKET* pk)
         s_wheelTgt = z;
         iz = 1.0 / (double)z;
         /* a notch IN holds the point it was aimed at, clamped into this
-           frame's viewport (above) */
-        if (iz < izPrev && vW > 0 && vH > 0) {
+           frame's viewport (above); leaving the mega map moves the view centre
+           ONTO that point instead: (a - c) * izPrev is its world offset from
+           the centre at the level being left */
+        if ((centre || iz < izPrev) && vW > 0 && vH > 0) {
             int   qx = (int)(short)(e->xy & 0xFFFF);
             int   qy = (int)(short)((e->xy >> 16) & 0xFFFF);
             float ax = (float)clampi(qx, vL, vL + vW - 1);
             float ay = (float)clampi(qy, vT, vT + vH - 1);
-            s_shiftX += (ax - cx) * (float)(izPrev - iz);
-            s_shiftY += (ay - cy) * (float)(izPrev - iz);
+            float k  = (float)(centre ? izPrev : izPrev - iz);
+            s_shiftX += (ax - cx) * k;
+            s_shiftY += (ay - cy) * k;
         }
         d += e->delta;
         lastUs = e->us;
@@ -566,6 +610,18 @@ void tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigne
 
 static int options_gui_owns_input(void);
 
+/* Message thread: is this wheel message the mega map's? Ctrl picks the one
+   the plain wheel does not do, and `wheel=` in impure.cfg says which that is:
+   `zoom` (the default) zooms on the plain wheel, `megamap` is TADR's binding.
+   Both doors carry the modifier keys in wparam's low word (wndproc.c's
+   hardware message, tagpu_shield.c's injected one). */
+static LONG wheel_is_mega(WPARAM wparam)
+{
+    int legacy = 0, ctrl = (LOWORD(wparam) & MK_CONTROL) != 0;
+    if (!tagpu_settings_get(TS_WHEEL, &legacy)) legacy = 0;
+    return (LONG)((ctrl ^ (legacy == 1)) & 1);
+}
+
 int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
 {
     static DWORD s_offTick;       /* message thread only */
@@ -641,6 +697,7 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
         e->delta = (LONG)delta;
         e->xy    = (LONG)(((unsigned)(unsigned short)y << 16) | (unsigned)(unsigned short)x);
         e->us    = (LONG)qpc_us();
+        e->mega  = wheel_is_mega(wparam);
         InterlockedExchange(&s_nqHead, h + 1);  /* publish: the slot is complete */
     }
     return 1;
