@@ -903,8 +903,10 @@ side had its own types.
   a demo would start on, every hash equal to `simparity.mjs --hash --layout` on the layout the
   check wrote (2026-10-27). `tagpu_wiki.check` now plays them for every side of that layout, with
   the side's casting on the mod's layout, at both Interface Types, and logs
-  `<entry>/<demo>/<side>/<iface> <hash>`, which `simparity.mjs --hash --side S --iface I` prints;
-  (d1) and (b2) compare every key, with `--pack` the side pack of the game's layout when it is the
+  `<entry>/<demo>/<side>/<iface> <hash>`, which `simparity.mjs --hash --side S --iface I` prints,
+  then `end`; the lane reads that output from a file, never a pipe, and refuses one without its
+  `end` (`simparity_hash`: under the gate's load a pipe once gave the players lane 365 of its 3795
+  records with exit 0). (d1) and (b2) compare every key, with `--pack` the side pack of the game's layout when it is the
   mod's, and fail on a context played on one side only, a different hash or a demo refused on one
   side only. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
 - **Try it in the game** (`wiki_regression.py try`) arms each demo's builds through the stage's

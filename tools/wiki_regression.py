@@ -881,6 +881,27 @@ def check_hashes(lines):
     return out
 
 
+def simparity_hash(args):
+    """`simparity.mjs --hash` with `args`: its lines, its closing `end` taken off. Its output goes to a file, never a
+    pipe: node writes a file synchronously, while a pipe's writes still queued when it calls process.exit are lost
+    [INFERRED: a players lane was given 365 of its 3795 records with exit 0 and nothing on stderr, three times under
+    the gate's load and never alone]; the closing `end` proves the answer whole whatever the cause. No deadline: a
+    simparity that never ends is a hang, which the gate's lane bound (GATE_LANE_S) ends."""
+    import tempfile
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as out:
+        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", *args], stdout=out,
+                           stderr=subprocess.PIPE, text=True)
+        out.seek(0)
+        lines = out.read().split("\n")
+    what = f"simparity --hash {' '.join(a for a in args if not a.startswith(('/', '{')) and len(a) < 80)}"
+    assert r.returncode == 0, f"{what}: {r.stderr.strip()[-1500:]}"
+    while lines and lines[-1] == "":
+        lines.pop()
+    assert lines and lines[-1] == "end", f"{what}: its answer ends after {len(lines)} lines without its closing `end`: " \
+                                         f"{r.stderr.strip()[-1500:]!r}"
+    return lines[:-1]
+
+
 def simparity_hashes(layout, pack=None, scripts=False):
     """sim.js's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
     sidebar layout file `layout` (tagpu_wiki.layout.json, the one the check played on and wrote: the running mod's,
@@ -892,11 +913,8 @@ def simparity_hashes(layout, pack=None, scripts=False):
     want = {}
     for k in range(len(lay["sides"]) if lay else 1):
         for i in (0, 1):
-            cmd = ["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", "--layout", str(layout), "--side", str(k),
-                   "--iface", str(i), *(["--pack", str(pack)] if pack else []), *(["--scripts"] if scripts else [])]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            assert r.returncode == 0, f"simparity --hash --side {k} --iface {i}: {r.stderr.strip()}"
-            for ln in r.stdout.splitlines():
+            for ln in simparity_hash(["--layout", str(layout), "--side", str(k), "--iface", str(i),
+                                      *(["--pack", str(pack)] if pack else []), *(["--scripts"] if scripts else [])]):
                 if ln.strip():
                     key, val = ln.split(None, 1)
                     want[f"{key}/{k}/{i}"] = REFUSED if val.startswith("refused") else val.strip()
@@ -2062,19 +2080,16 @@ def simparity_frames(d, asks, entry=WATCH):
             args += ["--pack", str(pack_for_layout(lay))]
         if d["ctx"]["cob"]:
             args.append("--scripts")
-        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", *args, "--frame",
-                            ",".join(f"{entry}/{k}@{t}" for k, t in asks)], capture_output=True, text=True, timeout=900)
+        lines = simparity_hash([*args, "--frame", ",".join(f"{entry}/{k}@{t}" for k, t in asks)])
     finally:
         lay.unlink(missing_ok=True)
-    assert r.returncode == 0, f"(v2) simparity --hash --frame: {r.stderr.strip()[-600:]}"
     out = {}
-    for ln in r.stdout.splitlines():
+    for ln in lines:
         # a demo replay.js refused to play gives no record at all: named, never a demo quietly missing
         assert not ln.startswith(f"{entry}/") or " refused " not in ln, f"(v2) simparity --hash --frame: {ln}"
         m = re.match(r"frame (\S+?)/(\S+?)@(\d+) ([0-9a-f]{16}) (.*)$", ln)
         if m and m.group(1) == entry:
             out[(m.group(2), int(m.group(3)))] = (m.group(4), json.loads(m.group(5)))
-    simparity_frames.stderr = r.stderr
     return out
 
 
@@ -3320,7 +3335,7 @@ def pl_candidates(d, demos):
     assert not short, f"(p2) simparity --frame did not answer {short} to their end: " + \
         ", ".join(f"{k} {sum(1 for q in got if q[0] == k)} records, {sum(1 for q, (_, r) in got.items() if q[0] == k and r['pending'])} "
                   f"pending, the last at {last[k][0]}" for k in demos) + \
-        f" (layout_src {d['layout_src']}, ctx {d['ctx']}); its stderr: {simparity_frames.stderr.strip()[-1500:]!r}"
+        f" (layout_src {d['layout_src']}, ctx {d['ctx']})"
     out = {k: [] for k in demos}
     for (k, t), (h, rec) in sorted(got.items(), key=lambda p: p[0][1]):
         if k in out and not any(t == q for q, _, _ in out[k]):

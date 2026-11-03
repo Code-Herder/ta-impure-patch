@@ -433,6 +433,8 @@ if (process.argv.includes('--hash')) {
       console.log(`${id}/${demo.id} ${stateHash(sim, sim.view())}`);
     }
   }
+  // the last line: a reader that does not see it has not been given the whole answer
+  console.log('end');
   if (host) host.close();
   process.exit(0);
 }
