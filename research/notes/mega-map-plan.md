@@ -59,9 +59,12 @@ re-clone to verify).
   (`SpringController.cpp:49`).
 
 **Translating the distance.** TA has no camera distance; its measure is the level `z`, and `1/z`
-is world px per screen px. BAR's 3000-elmo threshold becomes a level, calibrated in the lab
-(`tools/tascene-view.html`) against BAR's screen at the same visible span. [INFERRED: the order of
-magnitude is z ≈ 0.4 at 1080p; the landing measures it.]
+is world px per screen px. At BAR's 3000 elmos its 45° camera spans 2485 elmos of ground, 4970 TA
+px [INFERRED: 1 elmo ≈ 2 TA px], so the level at which a frame `gh` px tall spans the same is
+`z_S = gh / 4970`: **0.217 at 1080p**, 0.290 at 1440 (4K at HUD scale 150), 0.435 at 2160 — scaled
+by the `icondist` key as a percent of BAR's distance ([strategic icons](modules/icons.html),
+*The rule*). An earlier estimate here, z ≈ 0.4 at 1080p, was 2× off; a lab calibration against
+BAR's screen has not been made.
 
 ## What the floor is
 
@@ -107,27 +110,40 @@ the arithmetic, Seven Islands (20 480² px) gives 0.0346 at 1024×768, about 0.0
 
 ## The facts the icons need
 
-- **Class from the unit def** (`tools/tamem_ghidra.h:893-995`): flags +0x241 (builder 0x40,
-  isairbase 0x200, canfly 0x800, canhover 0x1000, floater bit 19), bmcode +0x22F, YardMap +0x14E,
-  weapons +0x1EE/+0x1F2/+0x1F6. **Commander**: the engine's own rule compares the unit's name with
-  the side's commander name (`engine/units.md:1051`); the FBI `commander` bit (+0x245 0x40000) has
-  false positives (ProTA ARMTHOVR), so the engine's rule is the one to use.
+- **Class from the unit def** (`tools/tamem_ghidra.h:893-995`; the bits the class rule reads are
+  checked in the FBI reader, [units](engine/units.html), *The other FBI tags a type is classed by*):
+  flags +0x241 (builder 0x40, isairbase 0x200, canfly 0x800, hidedamage 0x4000, canhover 0x1000,
+  floater bit 19), +0x245 showplayername 0x20000, bmcode +0x22F, YardMap +0x14E, weapons
+  +0x1EE/+0x1F2/+0x1F6. **Commander**: the engine's own rule compares the unit's name with the
+  side's commander name (`engine/units.md:1051`); the FBI `commander` bit (+0x245 0x40000) has
+  false positives (ProTA ARMTHOVR). The class rule takes the name rule **or** showplayername with
+  hidedamage (TADR's), so a decoy commander looks like a commander to everyone; the name rule alone
+  would expose decoys at icon level.
 - **Categories** (for mod icon sets, which key icons by FBI category tag) are not in the def: each
   category is a bitmask over UnitTypeID in a sorted name map at `0x51E6B4/B8`. **`0x488C50`
   inserts and allocates on a miss** — it must not be called with a mod's tag; a read-only walk of
   the map is needed.
 - **Visibility**: unit +0x110 bit 8 radar (sight sets it too), bit 9 sonar, bit 10 jammed; the
   engine's radar list at main+0x14363 (10-byte entries, count +0x1436B), rebuilt every tick by
-  `0x466DC0` — TADR's megamap draws from it. Ours today (`tagpu_native.c:2436-2450`) skips cloaked
-  enemies, unexplored tiles and grey-fogged foreign units.
-- **Selected** +0x110 bit 4; **hovered** main+0x2CBA; **team colour** PlayerInfo+0x96 (the minimap
-  dot's own colour comes from `0x4B7F30` — UNKNOWN what it computes).
+  `0x466DC0` — TADR's megamap draws from it. **Stock draws a radar contact on the minimap alone**
+  and picks one there alone ([ui](engine/ui.html), *The minimap, located*; [input](engine/input.html),
+  the `0x48CD80` row), so BAR's "radar-only enemies are always icons" would change 1×. Ours are the
+  minimap's own dot under the icons' distance rule, not pickable in the world view, decided from
+  the packet's +0x110 for the units the gather's cloak and fog tests refuse — no copy of the radar
+  list. BAR's "real icon once identified" and out-of-radar ghost buildings have no TA counterpart.
+- **Selected** +0x110 bit 4; **hovered** main+0x2CBA; **team colour** PlayerInfo+0x96. The minimap
+  dot is frame PlayerInfo+0x96 of `radlogo`, fetched by `0x4B7F30` (the frame pointer, bounded by the
+  sequence's count), and its team colour is the frame's hotspot texel [MEASURED on the retail
+  `fx.GAF`].
 - **The packet** carries +0x241 per unit but not bmcode, YardMap, weapons, +0x245 or categories:
-  the class is computed on the game thread at level load, per type, and the packet carries it.
+  the class is computed on the game thread at the level's first in-play fill, per type, and the
+  packet carries the table.
 - **Picking an icon**: BAR widens the unit's pick radius to the icon (`iconRadius`,
   `UnitDrawerData.cpp:391`). The engine picks by model bounds through HotUnits/`GetUnitAtMouse`;
-  HotUnits' capacity is UNKNOWN. A 2-px unit under a 16-px icon must be clickable — research item
-  for landing 3.
+  **HotUnits holds 10 × MaxUnits ids, one per culled slot** (`0x485596`, `0x48BC6A`), so a wider
+  pick changes what the hit test answers, not how many units are asked. Ours answers a hidden-model
+  unit by its icon's circle at the hit test's one call `0x48CE15`
+  ([strategic icons](modules/icons.html), *The pick*).
 
 ## Mod icon sets (TADR's format)
 
@@ -141,12 +157,20 @@ Every TADR mod sets `MegaMapConfig=.\Icon\iconcfg.ini` (TA Zero: `.\ZIcon\`) in 
   `BUILDING`, `AIRCRAFTCOMBAT`, `AIRCONS`, `MOBILECOMBAT`, `NONE`, `UNKNOWN`, `NUKEICON` (`.PCX`),
   plus `<side commander>.PCX` per side (ARM, CORE, GOK). Mayhem, TA Zero and Twilight ship this.
 - `UseDefaultIcon=FALSE`: `[Icon]` maps an FBI category tag to a PCX; `Unknow`, `Nothing`,
-  `NukeIcon` are special keys. ProTA 4.8 ships 25 (KBOT, VEHFAC, SHIPCONS, HOVER, EXP, …).
-- Escalation and retail ship none → the generated set.
+  `NukeIcon` are special keys. ProTA 4.8 ships 24 entries: the three specials and 21 categories
+  (AIR, AIRCONS, AIRFAC, BUILDING, EXP, EXPFAC, HOVER, HOVCONS, HOVFAC, KBOT, KBOTCONS, KBOTFAC,
+  MINE, SHIP, SHIPCONS, SHIPFAC, SUB, SUBCONS, VEHICLE, VEHCONS, VEHFAC).
+- **Escalation** ships a set in custom mode in its TAF install and its RAR — nine categories, AIR,
+  LAB, BLDG, BIG, LRG, FAT, AIRCONS, CONS, BIGCON; the escalation-gold-10.2.0 fixture's `TAESC.ini`
+  names `.\Icon\iconcfg.ini` but has no such folder. **Retail** has no TADR ini → the generated set.
 
 The icons are read from the player's install at run time and never shipped, so the
 redistribution question does not arise. TADR itself is never loaded (the takeover), only its
-ini and art read. Which ini a given install's TADR reads is a research item for landing 4.
+ini and art read. **The ini TADR reads** is the one named by the exe's string at `0x5098A3`
+(`TAIniStr`, `HardCodeFunctions.cpp:799`), which the Community Patch Loader rewrites at start; its
+`[Preferences]` `MegaMapConfig` names the icon config relative to the current directory, cut at its
+last `;` (the research for landings 3–4, `.data/mega-map/facts-2026-11-03-icons.md` §E–§F in the
+main checkout).
 
 ## Decisions on landing 1 (owner, 2026-11-03)
 
@@ -243,12 +267,24 @@ is per-frame working copies, not information, so the landing is split to remove 
 2. **The mega map binding.** A modifier bit in the notch slot; Ctrl+wheel back engages, wheel
    forward leaves at the pointer at the remembered level; legacy controls as an `impure.cfg` key
    and a menu row. Replay Follow and the file lever keep their priority.
-3. **Strategic icons, BAR's rule.** Class per type at level load (game thread); the packet carries
-   it; an icon draw in the marker pass (`tagpu_mark_emit_art` already draws one texel per screen
-   pixel at a world point); the model suppressed while iconified, by the same predicate the gather
-   uses; radar-only enemies as the radar dot from the engine's radar list; selected white; order by
-   class then depth; icon pick radius. Generated shapes. Settings: icon scale, icon distance (a
-   closed list, as every `impure.cfg` key is).
+3. **Strategic icons, BAR's rule.** *Built 2026-11-03 on its worktree; the in-game checks are
+   open* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
+   frame, every class at the floor, the fade band's alphas, command on icons, radar dots, the 4K
+   numbers, the cost, the keys). The module: [strategic icons](modules/icons.html). A class per
+   type, built on the game thread at the level's first in-play fill and carried in the packet;
+   generated shapes by class, drawn by the marker pass with a texture kind, an atlas and an FS
+   branch of their own (the order art's path is fogged and single-coloured, so it was not reused);
+   the model, its shadow, its selection rect, health bar and group digit not drawn while the icon
+   covers it, and a hidden unit's cargo neither a model nor an icon; radar contacts as the
+   minimap's dot under the same distance rule, from the packet's +0x110; selected white; BAR's
+   order (layer, then far to near); the pick by the icon's circle at `0x48CE15`. A 7-px floor on
+   the drawn edge, the smallest at which the nine classes are pairwise different, with the switch
+   kept on BAR's unfloored size. Three closed-list `impure.cfg` keys — `iconscale`, `icondist`
+   and the fade band `iconfade` (default 33, so 1× stays stock up to a 2600-px-tall frame) — and
+   **no menu rows**: the front-end screen has no free slot and three rows would run the in-game
+   panel 46 px past 640×480, so rows wait for a panel layout that fits. The class table's and the
+   art's game-thread code sits in `tagpu_packet_pub.c`, an existing publisher, so
+   `thread-split.allow` gains no line.
 4. **Mod icon sets.** Find the install's TADR ini, read `iconcfg.ini`, decode the PCX through the
    palette into an atlas (FillColor → team colour, TransparentColor → alpha, SelectedColor only
    when selected); categories through a read-only walk of the category map.

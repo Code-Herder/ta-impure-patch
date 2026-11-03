@@ -20,6 +20,11 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on);
 /* 1 when this frame decided icons at all (tagpu_icon_frame's `on`, and the
    packet carried a type table and the art is published). */
 int  tagpu_icon_on(void);
+/* tagpu_icon_on() as the last tagpu_icon_frame since the previous call left
+   it, and 0 when none ran -- a frame that left the overlay before the native
+   pass -- for the command record (tagpu_zoom_frame_end), which carries it to
+   the game thread's pick. Clears it. */
+int  tagpu_icon_cmd_take(void);
 /* Of packet unit `i`, this frame: the class icon's alpha (0 = no icon); 1 when
    its model is not drawn; 1 when it is cargo of a unit whose model is not drawn,
    and so neither a model nor an icon. 0 for an index out of this frame's

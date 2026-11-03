@@ -1222,7 +1222,12 @@ the fence.
 `0x429870` loads the `"fx"` bank through cache accessor `0x429700` and
 resolves named sequences into individual fields — `"smoke 1"` → `+0x147CF`, the five
 rendertype-4 sprite sequences → `+0x147BB..+0x147CB`, the rendertype-5 flare → `+0x147F3`, the
-projectile ground-shadow blob → `+0x1480F`. **Its only caller is `0x49134D`**, inside `0x491200`,
+projectile ground-shadow blob → `+0x1480F`, and the minimap's dot art: `"radlogo"` (`0x5036A0`)
+→ `+0x147DF`, stored at **`0x42991E`**, and `"radlogohigh"` (`0x503694`) → `+0x147E3`, stored at
+**`0x429935`** [DISASSEMBLED 2026-11-03]. Those two stores are the only writes of either field in
+the image, and `0x466EEB` / `0x466F21` in the minimap's dot rebuild `0x466DC0` the only reads
+([ui](ui.html), *The minimap, located*); that is what lets the strategic icons decode `radlogo`
+once a process ([strategic icons](../modules/icons.html)). **Its only caller is `0x49134D`**, inside `0x491200`,
 **whose only caller is `0x49EA62`** inside `0x49E830` — WinMain, reached from the SEH wrapper
 `0x49EDC0` with the four `WinMain` arguments. So those sequences are loaded once per process. This
 is the lifetime argument for a sub-particle's or a projectile's sequence pointer crossing the

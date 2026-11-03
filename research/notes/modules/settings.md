@@ -248,6 +248,12 @@ are all sized from it — and the panel is **composed at runtime** from the play
 than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
 copy of this layout, not its source.
 
+**The strategic icons' three keys have no row on either panel** — `iconscale`, `icondist`,
+`iconfade` in `impure.cfg` ([renderers](../renderers.html) §2.10b, [strategic icons](icons.html)).
+The front-end screen's two columns are full, and three more rows would grow the in-game panel by
+84 px, to 494, which from engine row 32 runs 46 px past a 640×480 screen. Rows wait for a panel
+layout that fits 640×480; until then the keys are set in the file and read live.
+
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
 created and deleted; `tagpu_fps.on` created and deleted (§2.14); and **both**

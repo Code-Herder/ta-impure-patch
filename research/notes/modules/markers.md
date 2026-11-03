@@ -173,6 +173,14 @@ drawn in. Each string lands once in a shelf-packed 512×256 atlas; the quads are
 SCREEN size and snapped to the device pixel grid by pre-image, because a bitmap glyph at a
 fractional anchor resolves each 1-px stroke across two device pixels.
 
+**The strategic icons are a draw of this pass** ([strategic icons](icons.html), *The draw*): one
+blended, unfogged, untested quad an icon, constant screen size and snapped like the text, drawn
+second — after the selection rects, under the orders, the bars, the digits and every UI layer —
+with its own texture kind (`TAGPU_MK_TEX_ICON`), its own atlas and the FS branch `uText == 2`. The
+health-bar loop and the group digits skip a unit whose model an icon hides, and the draw list's
+cap `TAGPU_MK_MAXDRAW` is 24, room above the 16 draws a full frame records (a draw past it drops the
+whole marker layer for the frame).
+
 **Window A is retired, and the identity blend LUT with it.** `0x439740` is the only
 alpha-composited marker: it reads the destination pixel through `tab[(src<<8)|dst]`, and while
 we captured the block into a buffer of ours that destination was the fill key, so the waypoint

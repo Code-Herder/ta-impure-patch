@@ -952,6 +952,24 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
    never from a table, because mods recolour it. */
 #define OFF_RADLOGO        0x147DF   /* GAF sequence*: radlogo                */
 #define ICONART_FRMAX      16        /* the largest logo frame kept, a side    */
+/* THE LAYOUT is tagpu_iconart_pack's: the logo frames, then the mod set's
+   pictures, left to right a texel apart -- the gap keeps a neighbour out of
+   a filtered edge -- in rows from texel (1, 1). It refuses a layout that
+   would leave the atlas, but the worst case cannot: every picture is at most
+   ICONART_PICMAX square, so a picture advances a row by at most a cell of
+   ICONART_PICMAX + 1 and a row holds at least ICONART_ROWCELLS of them (the
+   next fits while 1 + cells x ICONART_CELL <= the width), and a row is at
+   most a cell tall. The assert holds the rows the most pictures the build
+   reads -- TAGPU_ICONART_LOGOS frames and TAGPU_ICONART_SETS pictures -- take
+   against the atlas's height, so the logos with a full set always fit, and
+   so do the logos alone the build falls back to. */
+#define ICONART_PICMAX     (ICONART_FRMAX > TAGPU_PCX_MAXW ? ICONART_FRMAX : TAGPU_PCX_MAXW)
+#define ICONART_CELL       (ICONART_PICMAX + 1)
+#define ICONART_ROWCELLS   ((TAGPU_ICONART_W - 1) / ICONART_CELL)
+#define ICONART_PICS       (TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS)
+_Static_assert(TAGPU_PCX_MAXH <= TAGPU_PCX_MAXW && ICONART_FRMAX <= ICONART_PICMAX &&
+               1 + ((ICONART_PICS + ICONART_ROWCELLS - 1) / ICONART_ROWCELLS) * ICONART_CELL
+               <= TAGPU_ICONART_H, "every picture the build reads has a place in the atlas");
 
 static unsigned char  s_iconPix[TAGPU_ICONART_W * TAGPU_ICONART_H];
 static TAGPU_ICONART  s_iconArt;
@@ -1128,8 +1146,8 @@ static int iconart_team(const unsigned char* pix, const unsigned char* cov, int 
 static void iconart_build(const char* ta)
 {
     static unsigned char cov[ICONART_FRMAX * ICONART_FRMAX];
-    static TAGPU_ICONSRC src[TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS];
-    static TAGPU_ICONRECT rect[TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS];
+    static TAGPU_ICONSRC src[ICONART_PICS];
+    static TAGPU_ICONRECT rect[ICONART_PICS];
     const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
     int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed;
     char b[200];
@@ -1165,14 +1183,14 @@ static void iconart_build(const char* ta)
     }
     /* THE MARKERS are chosen over every picture the atlas holds
        (tagpu_iconart_pack): the smallest indices no drawn texel holds. A set
-       that leaves fewer than three free, or does not fit, is dropped and the
-       logos are packed alone -- ten 4x4 frames draw at most 160 texels, so
-       three are always free for them; a logo set that drew every index would
-       leave no art at all. */
+       that leaves fewer than three free is dropped and the logos are packed
+       alone (the assert above rules out a set that does not fit). The retail
+       art, ten 4x4 frames, draws at most 160 texels, so three are free for
+       it; a mod's logo art can draw every index, and then there is no art. */
     nset = s_isN;
     packed = tagpu_iconart_pack(src, i + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     if (!packed && nset) {
-        plog("icons: the mod set does not fit the art beside the radar logo - not drawn");
+        plog("icons: the mod set leaves no three free palette indices beside the radar logo - not drawn");
         nset = s_isN = 0; s_isNone = s_isUnknown = -1;
         packed = tagpu_iconart_pack(src, i, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     }

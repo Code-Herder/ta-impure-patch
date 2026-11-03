@@ -40,6 +40,7 @@ static unsigned char s_flag[TAGPU_PK_DESIGN_SLOTS];
 static ICREC         s_rec[TAGPU_PK_DESIGN_SLOTS];
 static unsigned      s_n, s_nrec, s_drop;
 static int           s_on;
+static int           s_cmdOn;                   /* s_on, until the record takes it */
 static TAGPU_ICON_VIEW s_view;
 static float         s_zoom;
 static int           s_size[TAGPU_ICLS_N], s_edge[TAGPU_ICLS_N], s_dotK;
@@ -141,10 +142,12 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
         else if (s_flag[i] & IC_HIDE) s_hidden++;
     }
     s_on = 1;
+    s_cmdOn = 1;
     s_usFrame = us_since(&t0);
 }
 
 int tagpu_icon_on(void)               { return s_on; }
+int tagpu_icon_cmd_take(void)         { const int on = s_cmdOn; s_cmdOn = 0; return on; }
 int tagpu_icon_alpha(unsigned i)      { return s_on && i < s_n && !(s_flag[i] & IC_SUPP) ? s_alpha[i] : 0; }
 int tagpu_icon_hidden(unsigned i)     { return s_on && i < s_n && (s_flag[i] & IC_HIDE) != 0; }
 int tagpu_icon_suppressed(unsigned i) { return s_on && i < s_n && (s_flag[i] & IC_SUPP) != 0; }

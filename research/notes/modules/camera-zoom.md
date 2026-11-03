@@ -266,8 +266,8 @@ kept target, with the view centre moved onto the world point under the pointer. 
 nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
 TADR's does — engaging at the floor would keep the floor as the level to return to, and the next
 notch forward would pan without zooming; a zoom notch
-back while engaged is already at the floor and leaves it engaged. The design and the strategic
-icons it shares a code path with: [mega map plan](../mega-map-plan.html).
+back while engaged is already at the floor and leaves it engaged. The design: [mega map plan](../mega-map-plan.html); the strategic
+icons the zoomed-out levels show, and their pick: [strategic icons](icons.html).
 
 **Which wheel is the mega map's** is decided on the message thread, per notch, by
 `wheel_is_mega`: Ctrl picks the action the plain wheel does not do, and `wheel=` says which that
@@ -755,7 +755,7 @@ the zoom on and no `tagpu_vpwide.off` — the true rect verified, *and* a zoomed
 | `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface AND to the TRUE viewport rect** (2026-09-09, below), because `0x4C6B10` is a bare four-dword store with no clamping: the surface clamp keeps a wide rect from licensing a write outside the allocation, the viewport clamp keeps one from licensing a write outside the rect our key fill erases |
 | `0x499221` | `call 0x498DA0` — the mouse → world / map cell / hovered feature conversion, and the ONE reader that uses L and T as the screen→world **origin** (`world = eye + clamp(pos, L, R) − L`) | call-site redirect; redone with the TRUE origin and the WIDE clamp, a straight pass-through whenever the rect is not ours |
 | `0x4B5E5F` / `0x4B5EC0` / `0x4B5F0C` | the three arms of TA's own window procedure's `0x200..0x206` jump table, each unpacking the mouse `lParam` with `AND 0xffff` + `SHR 0x10` | **byte patch** → `MOVSX ECX,CX` + `SAR EAX,0x10`. `LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrived as 65516 and the event was lost; this is Microsoft's own `GET_X_LPARAM`, and for any position a real mouse can report it is bit-for-bit identical |
-| `0x48CE15` | `call 0x48C6A0` (`E8 86 F8 FF FF`) — the unit hit test's one call, inside `GetUnitAtMouse 0x48CD80` | call-site redirect to `tagpu_zoom_hit_guard` (`tagpu_zoom.c`), stdcall `(unit, point)`, `ret 8` like the original; it calls `0x48C6A0` through when the unit's narrowing cannot wrap and answers "not hit" otherwise (below). Installed with the rest of the widening half and byte-matched with it, so at every level, 1× included |
+| `0x48CE15` | `call 0x48C6A0` (`E8 86 F8 FF FF`) — the unit hit test's one call, inside `GetUnitAtMouse 0x48CD80` | call-site redirect to `tagpu_zoom_hit_guard` (`tagpu_zoom.c`), stdcall `(unit, point)`, `ret 8` like the original; a unit drawn as a strategic icon it answers by the icon's circle, any other it passes to `0x48C6A0` when the unit's narrowing cannot wrap and answers "not hit" otherwise (below). Installed with the rest of the widening half and byte-matched with it, so at every level, 1× included |
 
 **The rect's bound is its four edges, not its width.** `tagpu_vpwide_rect_at` is the rect at a
 level for the true viewport: exactly the range the cursor transform `u = (s − c)/z + c` produces
@@ -799,6 +799,19 @@ that, which the widened rect reaches only when the floor is bound by lparam (a s
 screen) or for an aircraft tens of thousands of px up. A refusal is counted in the log, at most once
 a second: `zoom: hit guard - N unit hit test(s) answered "not hit" so far, whose int16 narrowing
 could wrap (the last: model M, R R)`. No run has read that count yet.
+
+**A unit drawn as a strategic icon is answered by its icon, before all of that** (`icon_hit`;
+[strategic icons](icons.html), *The pick*). At the game thread's applied level and with the class
+table the packet's publisher built on this thread, a unit whose model the icon rule hides is hit
+when the point lies within `0.45 × edge / z` world px of the anchor `0x48C6A0` projects —
+`((x − (eyeX << 16)) >> 16) + 0x80`, `((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` —
+computed in 64 bits, without the corner offsets and without calling `0x48C6A0`, so its int16
+narrowing is never met for such a unit. A unit carried by one whose model is hidden answers "not
+hit"; every other unit — a model, a nanoframe, a dead one, a type row past the table, a unit
+`tagpu_native_owns_unit` refuses — takes the guarded engine test above, so at 1×, where no model
+is hidden, the pick is the engine's. The carrier `+0x86` counts only as a stride-aligned record
+below the unit array's slot count (`main+0x14357`, `main+0x14351`). Answered picks are counted at
+most once a second: `zoom: icon pick - N hit(s), M miss(es) so far`.
 
 **The clip guard needs BOTH bounds, and the second one is the picture's [MEASURED 2026-09-09].**
 Clamping the widened rect to the surface allocation is a memory-safety bound and nothing more: it
