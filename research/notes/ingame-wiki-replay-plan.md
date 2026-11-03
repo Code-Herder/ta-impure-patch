@@ -138,7 +138,7 @@ type's sight figures, the side layout's `sight` table, and the Players set's `ju
 | P0 | **A takeover starts the live game running** (the game, its own landing ahead of T1, owner's answer QB = A, 2026-11-01): the takeover ends the playing's pause (`tk_run`), the wiki does not open while a takeover is queued, and the live HUD draws from the frame whose visit armed the fork. MEASURED before it (M0-T, main `587ca2a7`): the live game stood paused at R − 1 = 1500 for 54 s and 68 s until the Pause key, no HUD drew meanwhile, the recording started only at the key, and the toast showed on the live HUD only when the game ran within its 1.8 s | the game's change; tareplay's W checks the game runs with no input | **landed 2026-11-01** (`fa62ae5e`) |
 | T1-T3 | **Take over a replay**: a cursor for every seat (C1), the takeover data (C2), the replay's Take over (C3), the entry (C4), the mockup's frame and the DLL's (F1, G1), the threads and Try it in the DLL (G2), and the docs, as one landing | the picker, the Forks bay, the lanes, Save as a replay, Delete, the eviction; a second seat's cursor (decision 16) | **landed 2026-11-01** (`e96fa13f`; *Take over, as built*, below) |
 | P0′ | **Sight shows the viewed seat's rates at once** (the game, its own landing ahead of P1-P3, owner's answer OQ-D = A, 2026-11-01): a Sight change lowers the newly viewed record's DisplayTimer `+0xF8`, when at or above GameTime, by whole steps of 30 to the last value of its phase below GameTime, so the draw that follows re-reads that record's resource-bar rates once and leaves the timer in its phase (`bar_rates_due`; [render.md](engine/render.md), *The memo's layout*). MEASURED before it (M0-P2, main `28c1c6e0`): paused at GameTime 300 after Sight 0, full map, 1, full map, 2, full map, 3, full map, the second Sight on seat 1 showed the memo's rates 72.5 / 1.0 / 0.5 / 0, seat 3's, against seat 1's 12.5 / 1.0 / 0.5 / 0, and back on the full map, whose rates are all 0, the bar still read `+72 −1`. A paused seek's rates follow the same engine rule and are left for a later landing after Players, by the owner's choice of 2026-11-01, and so are a takeover that leaves the game paused and a return to now, which change the view around the seek's timer write (render.md, *What the Sight store does not cover*) | the game's change; tareplay's W checks the bar's rates are the viewed record's after Sight seat, full map, seat, full map, and could not run when the two records' rates are equal | **landed 2026-11-01** (`384b36d1`) |
-| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | **built, landing in progress** (*Players, as built*, below; the stats chart's halo and Rewind's page cost open) |
+| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | **built, landing in progress** (*Players, as built*, below) |
 
 Watching went first because it builds the frame, the two clocks, seek and the kills, which every
 other entry stands on, without forks. **Rewind is second**, the owner's own example, whose fork
@@ -361,9 +361,10 @@ players the game seats after a takeover (decision 8's line), per-seat columns (Q
 step (QC), and the refusals no wiki state reaches (the file worker's queue and tickets, `Cannot
 watch F<n>`, `Cannot delete F<n>`, `Take over refused`, `Cannot go back to m:ss`).
 
-**Players, as built.** Built in both the mockup and the game; the landing is in progress, with
-two items open: the stats chart's halo on the stage, whose fix is in progress, and Rewind's page
-cost in the gate (*The measured costs*), under investigation. The game's own change it copies,
+**Players, as built.** Built in both the mockup and the game; the landing is in progress. The
+stats chart's halo the game seemed to lack was the mockup's error: `hud.js` read the wiki's
+`rgb(r,g,b)` seat colours as NaN, so every seat looked dark and took the halo the game rightly
+draws for dark colours only (`c5009c94`). The game's own change it copies,
 P0′ (Sight shows the viewed seat's rates at once), landed first. The owner's answers, each the
 recommended one:
 
@@ -447,7 +448,7 @@ Selections off, Cursors on; **stats** -- the window opened, army, kills, the tea
   MEASURED native -O2); `simcheck.mjs`'s goals' claim holds in every context again.
 
 **Not closed by Players** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the stats
-chart's halo and Rewind's page cost, open in this landing (above); the game lane plays the entry on
+the game lane plays the entry on
 the base game only; health bars are drawn in no entry; the radar-only claim is skipped in TA
 Twilight and TA Zero (OQ-F); the bar's rates after a paused seek, a paused takeover and Back to
 now (a later landing). Left out on purpose or [INFERRED]: the replay's playback delay, Follow's
@@ -548,8 +549,10 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
   thread at most 0.722 ms in one frame over 383 frames; the render thread's stage HUD at most
   0.250 ms in a frame and the bars 0.184 ms, over 390 frames. The lane passed in 1 939 s. In the
   same gate Watching's page (v5) 0.634 ms over 231 frames, Take over's (t5) 0.584 over 445, the
-  page demos' (d5) 1.917 over 1 617, and **Rewind's (r5) 1.015 ms over 505 frames** with its
-  longest seek 87 demo steps and 3.4 s -- the cost under investigation in this landing.
+  page demos' (d5) 1.917 over 1 617, and Rewind's (r5) 1.015 ms over 505 frames with its
+  longest seek 87 demo steps and 3.4 s. Those two are the full gate's load: the same tree with
+  only the rewind and demos lanes, two at once (`-j 2`), measured r5 0.410 ms over 504 frames and
+  d5 0.608 ms over 1 733 (MEASURED 2026-11-02).
 - **A players replay's fills** (MEASURED 2026-11-02, wikitest's replay layer timed fill by fill as
   `tagpu_wiki.c` paces them, 64 game ticks a fill, native -O2, the fixture layout, best of 9): the
   worst fill 72 to 76 µs, the mean 33 to 40, the first 46 to 47, init 32 to 40 µs (the sight tables

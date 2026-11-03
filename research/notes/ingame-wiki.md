@@ -3091,10 +3091,7 @@ of the function it imitates; the code cites each address where it applies it.
 
 - **The replay entries: Players and the camera is landing.** Watching, Take over a replay and
   Rewind a skirmish are landed; Players and the camera is built in both the mockup and the game,
-  its landing in progress ([the plan](ingame-wiki-replay-plan.html), *Players, as built*). Two
-  items are open in that landing: **the stats chart's halo** (the dark halo of the chart's lines
-  on the stage), whose fix is in progress, and **Rewind's page cost** (1.015 ms over 505 frames
-  in the 2026-11-02 gate, twice the 0.5 ms target), under investigation.
+  its landing in progress ([the plan](ingame-wiki-replay-plan.html), *Players, as built*).
 - **What Rewind does not yet hold.** The game lane, `rewind`, plays it on the base game
   only; under the five mods of the compatibility suite the `mods` lane holds its live bars (w7)
   and nothing else of the entry. Not measured in the game, so [INFERRED] where the wiki copies it: the open and the past with the
