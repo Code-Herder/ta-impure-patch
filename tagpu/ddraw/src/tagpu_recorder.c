@@ -3870,7 +3870,7 @@ static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p
     float level;
     if (w < 1 || w > (int)REC_POV_VIEW_MAX || h < 1 || h > (int)REC_POV_VIEW_MAX) return 0;
     tagpu_zoom_applied(&seq, &dx, &dy, &level, &epoch, &centre);
-    if (!(level >= TAGPU_ZOOM_MIN)) level = TAGPU_ZOOM_MIN;
+    if (!(level >= TAGPU_ZOOM_FLOOR_HI)) level = TAGPU_ZOOM_FLOOR_HI;
     if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
     memset(p, 0, sizeof *p);
     p->player = (uint8_t)player;

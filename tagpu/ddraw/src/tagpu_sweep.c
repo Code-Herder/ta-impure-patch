@@ -210,7 +210,7 @@ static int live(TagpuWorld* w)
 static double zoom(void)
 {
     double z = (double)tagpu_zoom_level();
-    return z >= 0.05 && z <= 16.0 ? z : 1.0;
+    return z >= TAGPU_ZOOM_FLOOR_LO && z <= 16.0 ? z : 1.0;
 }
 
 static int point_px(int v) { return v >> 16; }

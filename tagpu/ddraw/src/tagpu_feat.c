@@ -121,7 +121,7 @@
 /* THE BUCKETS GROW; THESE ARE ONLY WHERE THEY START. One anchor is one quad
    (more with sub-frames), and how many anchors are on screen is the map's
    density times the zoomed-out view — neither of which is a constant. As
-   fixed caps they fail: a 3840x2160 view at the 0.25x zoom floor over Town
+   fixed caps they fail: a 3840x2160 view at 0.25x over Town
    & Country offers 6206 anchors against a body bucket of 5461 and a shadow
    bucket of 2730 (MEASURED 2026-09-09 from a live session,
    `feat: ... DROPPED(full=3872)`), and because the gather walks rows from the
@@ -391,12 +391,13 @@ static const char* FS =
        at the fold less e on screen, e = TAGPU_EDGE_NUDGE / zoom world px (the
        shared corner keeps the map's nudge, tagpu_terr.c), so a sample belongs
        to the side its point moved by e lies on. Every clip below tests that
-       point, `s`, never vWorld itself: at the 0.25x floor every sample centre
+       point, `s`, never vWorld itself: at 0.25x every sample centre
        is a whole world px, so with the eye's parity a whole column or row of
        samples lies ON a fold, where vWorld alone would sit on the line and
        take whichever side the interpolation's rounding gave it. THE MARGIN IS
        THE INVARIANT: a sample on a fold is e from the line -- 1/8 world px at
-       the floor, 128 ulps of a world coordinate under 16 384, and at every
+       0.25x and more below it, 128 ulps of a world coordinate under 16 384 at
+       0.25x, and at every
        zoom 8 ss times the rasteriser's snap of the ground's own edge (1/256 of
        a framebuffer px, subPixelPrecisionBits 8, as the reference setup's GPU
        and llvmpipe report). What the margin cannot decide is a sample that lies
@@ -586,7 +587,7 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     ub = flip ? e->u0 : e->u1;
     /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
        whole game px, so a sample centre can fall exactly on a texel boundary --
-       at the 0.25x floor every sample centre is a whole world px -- and there
+       at 0.25x every sample centre is a whole world px -- and there
        the texel NEAREST reads, and whether the quad covers the sample at all,
        would be the rounding's: it follows where the frame sits in the atlas,
        and a turned quad rounds the other way from an upright one. So every
@@ -598,8 +599,8 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
        IT IS A 1/32-PX SHIFT AT EVERY ZOOM, the ground's own: every sample reads
        the texel under its point plus e = NUDGE / zoom world px. On the dyadic
        zooms from 0.5x to 8x no sample lies within e before a texel boundary (at
-       1x a sample is 1/4 world px inside its texel), so none changes; at the
-       floor every tie takes the texel after it; and at the wheel's other
+       1x a sample is 1/4 world px inside its texel), so none changes; at
+       0.25x every tie takes the texel after it; and at the wheel's other
        resting levels (its 1.14 steps, tagpu_zoom.c) every sample within e
        before a boundary reads the next texel -- which is where the ground
        under the sprite is read too. Which zoom has the ties is the zoom

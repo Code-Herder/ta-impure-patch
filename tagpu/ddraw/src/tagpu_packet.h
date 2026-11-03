@@ -640,9 +640,10 @@ typedef struct TAGPU_PK_PART {
 /* THE TABLES' REACH. The world rect the publisher built the anchor table and
    the models' cull over, `[reach_lo, reach_hi]` per axis (x, then projected y):
    the window tagpu_zoom_pub_window publishes about the packet's eye -- the
-   gather slab at the zoom floor grown by the lead. The render thread's reach
-   bound (tagpu_zoom.c) holds the eye it draws from until its gather slab lies
-   inside it, so no frame gathers past what the packet carries. */
+   gather slab at `reach_level` grown by the lead. The render thread draws at
+   no level below `reach_level` (tagpu_zoom.c, "the reach ladder"), and its
+   reach bound holds the eye it draws from until its gather slab lies inside
+   the rect, so no frame gathers past what the packet carries. */
 /* ---- THE UI LAYER'S RENDER HALF -----------------------------------------
    The four engine reads tagpu_gui_surf.c's render half needs, every
    present: the cursor's sprite record through the graphics globals, the
@@ -1109,6 +1110,12 @@ typedef struct TAGPU_PACKET {
     /* ---- the tables' reach ---- */
     int32_t  reach_lo[2], reach_hi[2];/* world x, projected y: the rect the anchor
                                          table and the models' cull cover        */
+    float    reach_level;             /* the level the rect was taken at: the
+                                         command's reach rung, clamped to the
+                                         game thread's floor                     */
+    float    zoom_floor;              /* the game thread's floor at this draw: the
+                                         render thread's floor for the frames it
+                                         draws from this packet                  */
 
     /* ---- the UI layer's render half ---- */
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
@@ -1222,6 +1229,10 @@ typedef struct TAGPU_CMD {
                                    world px, since the epoch began — the game
                                    thread applies `cum - applied` and clamps   */
     float    zoom;              /* the zoom level in force this frame          */
+    float    reach_zoom;        /* the lowest level this view may draw before
+                                   its next record is applied, as a rung of the
+                                   reach ladder (tagpu_zoom_rung): the game
+                                   thread takes the tables' reach at it       */
     uint32_t live;              /* a zoomed world is on screen: the level above
                                    is what the picture is drawn at; 0 = the
                                    game thread applies 1.0 (the engine's own
@@ -1394,6 +1405,11 @@ void tagpu_packet_frame_end(unsigned frame_counter);
    is off (nothing is then applied on the game thread either: the engine keeps
    its own camera range, rect and scroll rate). */
 int  tagpu_cmd_post(const TAGPU_CMD* c);
+
+/* The cmd_seq of the last record tagpu_cmd_post posted, which a packet's
+   cmd_ack_seq names once the game thread has applied it. Render thread: the
+   poster's own state. */
+unsigned tagpu_cmd_posted_seq(void);
 
 /* The per-frame counters the heartbeat needs from the publisher's side, so
    that one log line carries both halves. Registered once by the publisher. */

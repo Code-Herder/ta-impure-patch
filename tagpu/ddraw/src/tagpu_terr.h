@@ -20,6 +20,12 @@
 #include "tagpu_fx.h"
 #include "tagpu_restoreglsl.h"  /* TAGPU_RGLSL_FRAME -- a CPU struct, no GL in it */
 
+/* THE WIDEST GATHER SPAN, in world px along either axis, whatever level or
+   floor a consumer holds (tagpu_zoom_gather_span caps at it). It is what keeps
+   a terrain grid column at most 65536 / 32 + 2 = 2052, so the cell terms stay
+   exact integers in float. */
+#define TAGPU_GATHER_SPAN_MAX 65536
+
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
 /* build this frame's quads; returns the CELL count (0 = nothing to draw) —
    one instanced quad each, see the vertex shader in tagpu_terr.c */
@@ -34,8 +40,8 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
    rect they all agree on.
 
    THE BUDGET IS THE SCREEN, not a constant. `vw`/`vh` are the true 1x world
-   viewport, and the widest rect any zoom can ask for is that viewport at
-   TAGPU_ZOOM_MIN — so the staging is reserved for exactly that and grows when
+   viewport, and the widest rect this staging is sized for is that viewport at
+   TAGPU_ZOOM_FLOOR_HI — so the staging is reserved for exactly that and grows when
    the player changes resolution. Nothing here names a resolution, and no
    screen is a special case: MEASURED, 1024x768 reserves 10672 cells,
    2560x1440 54208, 3840x2160 124488 and 5120x2880 223568 (16 bytes a cell:

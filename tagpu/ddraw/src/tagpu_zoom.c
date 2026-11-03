@@ -31,6 +31,8 @@
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
+#include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -40,11 +42,8 @@ static volatile LONG  s_live;          /* a zoomed world is on screen right now 
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
 
-/* The range every lever shares. The transform is fine outside it; these are the
-   levels the rest of the stack has been checked at. */
-/* the range itself is published in tagpu_zoom.h — the passes that size a
-   gather from it need the same two numbers */
-#define ZOOM_MIN  TAGPU_ZOOM_MIN
+/* The top of the range every lever shares; the bottom is the floor
+   (tagpu_zoom_floor), which follows the map. */
 #define ZOOM_MAX  TAGPU_ZOOM_MAX
 
 static void zlog(const char* m);
@@ -67,7 +66,7 @@ static int  clampi(int v, int lo, int hi);
    x0.86 on the distance and x1.163 on the level; one out is x1.14 and x0.877,
    so in-then-out lands on 1.020, not on 1. The factor is taken per MESSAGE,
    as Recoil takes it per event, and the target distance is clamped to
-   [1/ZOOM_MAX, 1/ZOOM_MIN] after each one, as the lab does.
+   [1/ZOOM_MAX, 1/floor] after each one, as the lab does.
 
    THE TWEEN. 250 ms of the performance counter, counted from the latest notch,
    from the level DRAWN when the notch is taken to the target, along
@@ -172,12 +171,17 @@ static DWORD qpc_us(void)
                    (q.QuadPart % f.QuadPart) * 1000000LL / f.QuadPart);
 }
 
-/* The level the wheel cannot go below, and the one the mega map engages at:
-   the whole-map level once the floor follows the map (mega-map-plan.md,
-   landing 1); the fixed floor until then. */
-static float zoom_floor(void)
+/* THE FLOOR, RENDER THREAD: the level the wheel cannot go below and the one
+   the mega map engages at. Set once a frame, at the top of read_lever and
+   before any pass runs, from the packet the frame is drawn from (the game
+   thread's floor_compute); every consumer this frame reads this value, so the
+   wheel, the levers, the reach bound and the native pass's gather cannot
+   disagree about it. */
+static float s_floor = TAGPU_ZOOM_FLOOR_HI;
+
+float tagpu_zoom_floor(void)
 {
-    return ZOOM_MIN;
+    return s_floor;
 }
 
 /* One wheel message's factor on the distance. */
@@ -256,6 +260,32 @@ static void wheel_pin(float z)
     }
 }
 
+/* Start a tween toward the target, counted from `at`: from the level last
+   DRAWN, which is the tween's own unless the reach bound or the reach ladder
+   held it for that frame (predict, reach_ladder). */
+static void tween_start(DWORD at)
+{
+    s_izFrom = 1.0f / s_lever;
+    s_izTo   = 1.0f / s_wheelTgt;
+    s_tweenUs = at;
+    s_tweening = 1;
+    s_landMs = -1.0f;
+}
+
+/* THE FLOOR MOVED (a level load, a resize, a map's extent). Engaged means the
+   target is the floor, so the target moves with it, along a tween as the mega
+   notch's does; otherwise a target the new floor leaves below it rests at the
+   floor. Render thread, from read_lever before the wheel is read. */
+static void floor_moved(void)
+{
+    if (s_megaOn) {
+        s_wheelTgt = s_floor;
+        tween_start(qpc_us());
+    } else if (s_wheelTgt < s_floor) {
+        wheel_rest(s_floor);
+    }
+}
+
 /* Take the notches since the last frame, in order, and draw the tween at this
    frame's time. Leaves s_batch/s_shiftX/s_shiftY for anchor_step.
 
@@ -307,10 +337,10 @@ static float wheel_level(const TAGPU_PACKET* pk)
             /* engaging needs a level to leave: at the floor already it
                would keep the floor as the level to return to, and the next
                notch forward would pan onto the pointer without zooming */
-            if (e->delta < 0 && !s_megaOn && s_wheelTgt > zoom_floor()) {
+            if (e->delta < 0 && !s_megaOn && s_wheelTgt > s_floor) {
                 s_megaBack = s_wheelTgt;
                 s_megaOn = 1;
-                iz = 1.0 / (double)zoom_floor();
+                iz = 1.0 / (double)s_floor;
             } else {
                 iz = izPrev;
             }
@@ -318,7 +348,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
             iz = izPrev * notch_factor(e->delta);
         }
         if (iz < 1.0 / ZOOM_MAX) iz = 1.0 / ZOOM_MAX;
-        if (iz > 1.0 / zoom_floor()) iz = 1.0 / zoom_floor();
+        if (iz > 1.0 / s_floor) iz = 1.0 / s_floor;
         z = (float)(1.0 / iz);
         /* Land EXACTLY on 1.0 when the notches bring it there. 1x is the
            identity the whole stack tests for by equality — the transform, the
@@ -351,10 +381,6 @@ static float wheel_level(const TAGPU_PACKET* pk)
     if (n) {
         LONG back;
         s_batch  = 1;
-        /* the level last DRAWN, which is the tween's own unless the reach bound
-           held it for that frame (predict) */
-        s_izFrom = 1.0f / s_lever;
-        s_izTo   = 1.0f / s_wheelTgt;
         /* The tween counts from the latest notch's own stamp, not from this
            frame. The head is read BEFORE the clock, so every stamp taken is
            at or before `now`; a negative difference — a stamp from another
@@ -365,12 +391,10 @@ static float wheel_level(const TAGPU_PACKET* pk)
            posted whole in one step (anchor_step) — a camera jump of at most
            the gesture's own displacement, clamped like any other step. */
         back = (LONG)(now - (DWORD)lastUs);
-        s_tweenUs = back > 0 ? now - (DWORD)back : now;
         /* A tween even when the level does not move (a notch at the end of
            the range): R may still owe the displacement of the tween it cut,
            and it is paid out along this one rather than in one frame. */
-        s_tweening = 1;
-        s_landMs = -1.0f;
+        tween_start(back > 0 ? now - (DWORD)back : now);
         s_wheelPend += d;
     } else if (s_wheelPend && !s_tweening) {
         /* ONE line per gesture, when it lands, not one per frame that carried
@@ -427,7 +451,8 @@ static float wheel_level(const TAGPU_PACKET* pk)
 
    In read_lever the follow lever stands between the file and the wheel. A
    packet whose epoch is nonzero, not the one this thread broke, and whose
-   level is in the lever's range puts the follow in force:
+   level is in the lever's range puts the follow in force, at its level or
+   at this viewer's floor where the recorded level is below it:
      no notch queued: the wheel is pinned at rest to the follow level and no
        anchor is applied; when the frame is drawn at that level the epoch is
        `seen`, which is what ends a Jump on the game thread;
@@ -439,7 +464,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
 static unsigned s_followBroken;            /* the epoch a notch ended            */
 static unsigned s_followSeen;              /* the latest epoch drawn at its level */
 
-#define FOLLOW_Q16_MIN ((unsigned)(ZOOM_MIN * 65536.0f))
+#define FOLLOW_Q16_MIN REC_POV_ZOOM_MIN
 #define FOLLOW_Q16_MAX ((unsigned)(ZOOM_MAX * 65536.0f))
 
 /* The follow epoch this packet puts in force, or 0. */
@@ -457,11 +482,116 @@ static int   s_predX, s_predY, s_havePred;
 static unsigned s_reachHeld, s_reachPaused, s_reachBack;
 static int      s_reachHeldMax;
 
+/* ---- the reach ladder --------------------------------------------------------
+
+   THE TABLES' REACH FOLLOWS THE LEVEL, and this is what makes that safe. The
+   game thread builds the packet's anchor table and the models' cull over a
+   window about its eye (tagpu_packet_pub.c, table_reach): the slab at the
+   packet's `reach_level` grown by the lead. A floor-sized window would be the
+   whole map at every level on a large map, so the window is taken at the
+   level this thread asks for instead, as a rung of the ladder
+   (tagpu_zoom_rung): every record carries `reach_zoom`, the rung of the
+   lowest level this view may draw before its next record is applied -- the
+   level drawn, the wheel's target and the lever's own, whichever is lowest.
+
+   THE INVARIANT: every packet the game thread can still publish carries
+   tables taken at a rung of a request this thread posted -- the current
+   packet's `reach_level`, or one of the requests still in flight -- and the
+   frame is drawn at no level below any of them. So the slab at the drawn
+   level lies inside the reach of every packet that can arrive (the gather
+   span falls as the level rises), the reach bound's interval is not empty for
+   want of a level, and a newer packet can never ask for a HIGHER level than
+   the one last drawn: a zoom-out waits at a rung for the game thread instead
+   of popping back. The request includes the wheel's target, so a notch out
+   asks for its target's rung on the frame it arrives; the wait is the game
+   thread's lag, at a rung crossing only (`levelheld` in the native
+   heartbeat).
+
+   IN FLIGHT means posted and not yet acknowledged: a request leaves the ring
+   when a packet's `cmd_ack_seq` reaches its seq, from which on every packet
+   carries the reach of that record or a later one. A full ring merges its two
+   oldest entries into one with the later seq and the larger rung, which only
+   holds the level higher for longer. A new epoch does NOT empty the ring: the
+   game thread applies a record's reach whatever its epoch (the epoch gates
+   only the eye delta), so a request of the old level still decides the reach
+   of a packet of the new one. Render thread only. */
+#define REACH_INFLIGHT 8
+static struct { unsigned seq; float rung; } s_inflight[REACH_INFLIGHT];
+static int      s_nInflight;
+static float    s_reach = TAGPU_ZOOM_FLOOR_HI;   /* this frame's packet's reach_level */
+static float    s_asked = 1.0f;                  /* the level the levers named this frame */
+static float    s_zmin = TAGPU_ZOOM_FLOOR_HI;    /* ...and the lowest it may be drawn at  */
+static unsigned s_reachLevelHeld;
+
+float tagpu_zoom_rung(float z, float floor)
+{
+    static const float ladder[] = { 0.25f, 0.125f, 0.0625f, 0.03125f, 0.015625f };
+    float r = ladder[sizeof ladder / sizeof ladder[0] - 1];
+    int i;
+    for (i = 0; i < (int)(sizeof ladder / sizeof ladder[0]); i++)
+        if (z >= ladder[i]) { r = ladder[i]; break; }
+    if (r < floor) r = floor;
+    if (r > TAGPU_ZOOM_FLOOR_HI) r = TAGPU_ZOOM_FLOOR_HI;
+    return r;
+}
+
+/* The level this frame may be drawn at, at least: the floor, the packet's
+   reach level and every rung still in flight. */
+static float reach_ladder(const TAGPU_PACKET* pk, float z)
+{
+    float zmin = s_floor > s_reach ? s_floor : s_reach;
+    int i, n = 0;
+
+    for (i = 0; i < s_nInflight; i++) {
+        if (pk && (int)(s_inflight[i].seq - pk->cmd_ack_seq) <= 0) continue;
+        s_inflight[n++] = s_inflight[i];
+        if (s_inflight[i].rung > zmin) zmin = s_inflight[i].rung;
+    }
+    s_nInflight = n;
+    s_zmin = zmin;
+    if (z < zmin) { z = zmin; s_reachLevelHeld++; }
+    return z;
+}
+
+/* A request posted as `seq`, into the ring (see "the reach ladder"). */
+static void reach_posted(unsigned seq, float rung)
+{
+    if (s_nInflight == REACH_INFLIGHT) {
+        int i;
+        if (s_inflight[0].rung > s_inflight[1].rung) s_inflight[1].rung = s_inflight[0].rung;
+        for (i = 1; i < REACH_INFLIGHT; i++) s_inflight[i - 1] = s_inflight[i];
+        s_nInflight--;
+    }
+    s_inflight[s_nInflight].seq = seq;
+    s_inflight[s_nInflight].rung = rung;
+    s_nInflight++;
+}
+
 float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
 {
-    unsigned fe = follow_in_force(pk);          /* see "the follow lever" */
-    float    fz = fe ? (float)pk->follow_level / 65536.0f : 1.0f;
+    unsigned fe;
+    float    fz;
     int      following = 0;
+
+    /* THE FLOOR AND THE REACH LEVEL, once a frame and first: every consumer
+       below reads them. A packet with no sane floor (the level end's) is the
+       fixed one; no packet keeps the last. */
+    {
+        float fl = (pk && pk->zoom_floor >= TAGPU_ZOOM_FLOOR_LO &&
+                    pk->zoom_floor <= TAGPU_ZOOM_FLOOR_HI)
+                   ? pk->zoom_floor : (pk ? TAGPU_ZOOM_FLOOR_HI : s_floor);
+        if (fl != s_floor) {
+            s_floor = fl;
+            floor_moved();
+        }
+        s_reach = (pk && pk->reach_level >= TAGPU_ZOOM_FLOOR_LO &&
+                   pk->reach_level <= TAGPU_ZOOM_FLOOR_HI) ? pk->reach_level : s_floor;
+    }
+    fe = follow_in_force(pk);                   /* see "the follow lever" */
+    /* a recorded level below this viewer's floor is drawn at the floor, and
+       is still the follow's level for `seen` */
+    fz = fe ? (float)pk->follow_level / 65536.0f : 1.0f;
+    if (fe && fz < s_floor) fz = s_floor;
 
     /* NO ZOOM WITHOUT THE MOUSE-WORLD REPAIR, and this is the gate that makes
        that structural rather than merely documented.
@@ -489,6 +619,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
                  "SCREEN position. Arm tagpu_zoom.on (or tagpu_vpwide.on).");
         wheel_reset(1.0f);
         s_zoom = 1.0f;
+        s_asked = 1.0f;
         anchor_step(0, pk);
         predict(pk, 1.0f, 0);
         s_lever = 1.0f;
@@ -527,10 +658,12 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
     } else {
         char zb[32]; DWORD zn = 0;
         if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
-            float fz;
+            float lv;
             zb[zn] = 0;
-            fz = (float)atof(zb);
-            if (fz >= ZOOM_MIN && fz <= ZOOM_MAX) z = fz;
+            lv = (float)atof(zb);
+            /* the file says a level; the floor of this map and screen is what
+               can be drawn */
+            if (lv >= TAGPU_ZOOM_FLOOR_LO && lv <= ZOOM_MAX) z = lv < s_floor ? s_floor : lv;
         }
         CloseHandle(zh);
         /* On a torn read `z` is still `s_zoom`, the LAST GOOD level, which is
@@ -547,11 +680,14 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        together. Only the wheel anchors — the file lever has no gesture behind
        it and every zoom fixture drives it. */
     anchor_step(fromWheel, pk);
-    /* the reach bound may hold the level for this frame (predict), so the
-       published level is written once, after it */
+    /* the reach ladder and the reach bound may hold the level for this frame
+       (reach_ladder, predict), so the published level is written once, after
+       both */
+    s_asked = z;
+    z = reach_ladder(pk, z);
     z = predict(pk, z, 1);
-    /* seen only when the frame is drawn AT the follow level: the reach bound
-       may draw it at the last frame's instead (predict) */
+    /* seen only when the frame is drawn AT the follow level: the reach ladder
+       or the reach bound may draw it at another (reach_ladder, predict) */
     if (following && z == fz) s_followSeen = fe;
     s_zoom = z;
     s_lever = z;
@@ -570,34 +706,41 @@ int tagpu_zoom_predicted_eye(int* eyeX, int* eyeY)
     return 1;
 }
 
-int tagpu_zoom_gather_span(int v, float z)
+int tagpu_zoom_gather_span(int v, float z, float floor)
 {
-    int span = v;
-    if (z > 0.05f && z < 1.0f) {
-        /* the floor's span is the cap: a level that slipped below the floor
-           cannot ask for an unbounded rect */
-        int cap = (int)((float)v / TAGPU_ZOOM_MIN) + 64;
-        span = (int)((float)v / z) + 64;
-        if (span > cap) span = cap;
-    }
-    return span < v ? v : span;
+    float f;
+    int span;
+    if (!(z == z)) return v;
+    /* a level below the floor is drawn at the floor's span, never at the 1x
+       one: that would cull a visible ring */
+    if (z < floor) z = floor;
+    if (z >= 1.0f) return v;
+    /* THE ABSOLUTE CAP, compared in float before the conversion: it bounds the
+       value whatever floor the caller handed in, a zero or a negative one
+       included */
+    f = (float)v / z + 64.0f;
+    if (!(f <= (float)TAGPU_GATHER_SPAN_MAX)) span = TAGPU_GATHER_SPAN_MAX;
+    else span = f > (float)v ? (int)f : v;
+    return span;
 }
 
-void tagpu_zoom_pub_window(int eye, int v, int* lo, int* span)
+void tagpu_zoom_pub_window(int eye, int v, float level, int* lo, int* span)
 {
-    int s = tagpu_zoom_gather_span(v, ZOOM_MIN);
+    int s = tagpu_zoom_gather_span(v, level, level);
     int pad = TAGPU_GATHER_MARGIN + (v > 0 ? v / TAGPU_LEAD_DIV : 0);
 
     *lo = eye - (s - v) / 2 - pad;
     *span = s + 2 * pad;
 }
 
-void tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back)
+void tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back,
+                           unsigned* levelHeld)
 {
     *frames = s_reachHeld;
     *maxPx = s_reachHeldMax;
     *paused = s_reachPaused;
     *back = s_reachBack;
+    *levelHeld = s_reachLevelHeld;
 }
 
 static int options_gui_owns_input(void);
@@ -733,6 +876,11 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    wrote, so changing the preference in the options screen is picked up on the
    next draw instead of being overwritten by a stale cache.
 
+   THE BYTE SATURATES AT 255: from the default base of 32, every level below
+   0.125 scrolls 255 world px a tick, so below it the edge scroll moves the
+   screen slower the further out the view is. The field is a u8 and the
+   engine's scroll poll reads it as one; nothing here widens it.
+
    AND THE FIELD IS PERSISTED, which is why `zoom_save_scroll` below exists.
    `0x430F00` (save-all-preferences, called from a dozen places — e.g. `0x416D03`
    sets the scroll speed and `0x416D09` immediately saves) writes this live byte
@@ -746,12 +894,17 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
 #define OFF_SCROLLSPEED  0x1434D
 #define OFF_GUI_FLAGS    0x37EBE   /* bit 0: ARMOPT/exit/preferences owns input */
 
-/* game thread only: the level the last command carried, and whether it is
-   live — what every game-thread reader in this file uses in place of the
-   render thread's s_zoom/s_live, so no float crosses the threads — and
-   whether the centre range is in force (camera_centre() below) */
+/* game thread only: the level the last command carried, clamped to the
+   floor this thread computed, and whether it is live — what every game-thread
+   reader in this file uses in place of the render thread's s_zoom/s_live, so
+   no float crosses the threads — and whether the centre range is in force
+   (camera_centre() below) */
 static float s_gLevel = 1.0f;
 static int   s_gLive, s_gCentre;
+/* game thread only: the floor (floor_compute) and the level the packet's
+   tables' reach is taken at (the record's reach rung, clamped to the floor) */
+static float s_gFloor = TAGPU_ZOOM_FLOOR_HI;
+static float s_gReach = TAGPU_ZOOM_FLOOR_HI;
 /* game thread only: the level the minimap's view box main+0x142CB was last scaled by; every
    write of it goes through zoom_minimap_rect once tagpu_zoom_init installed the redirects
    (g_mmInstalled), and without them the engine's clamp writes the 1x box, so it is not kept */
@@ -775,7 +928,7 @@ static void apply_scroll_rate(char* ta)
     z = game_level();
     /* Without the save guard installed (tagpu_zoom.on absent) the scaled value
        would reach the player's registry, so leave the field alone entirely. */
-    v = (g_mmInstalled && z > 0.05f && z != 1.0f)
+    v = (g_mmInstalled && z >= TAGPU_ZOOM_FLOOR_LO && z != 1.0f)
         ? (int)((float)s_scrollBase / z + 0.5f) : (int)s_scrollBase;
     if (v < 1) v = 1;
     if (v > 255) v = 255;
@@ -1040,7 +1193,7 @@ static void __stdcall zoom_minimap_rect(int* r)
     cy = (float)(r[1] + r[3]) * 0.5f;
     hw = (float)(r[2] - r[0]) * 0.5f;
     hh = (float)(r[3] - r[1]) * 0.5f;
-    if (zm > 0.05f && zm != 1.0f) { hw /= zm; hh /= zm; }
+    if (zm >= TAGPU_ZOOM_FLOOR_LO && zm != 1.0f) { hw /= zm; hh /= zm; }
     if (hw < 0.0f) hw = 0.0f;           /* a 1x box under one minimap pixel */
     if (hh < 0.0f) hh = 0.0f;
 
@@ -1366,6 +1519,112 @@ static void release_follow(char* ta, const char* who)
     }
 }
 
+/* ---- the floor: the game thread's -------------------------------------------
+
+   THE FLOOR IS THE LEVEL AT WHICH THE WHOLE MAP FITS THE SCREEN, bounded by
+   what a click can carry. Two terms, each a property of the level:
+
+     fit      min(W / spanX, H / spanY) over the centre range
+              (camera_range, centre = 1) -- the range the camera moves in,
+              which is the scroll extent bounded by the tile map, so the
+              same arithmetic the camera and the mirror fold end at. At it
+              the view spans the whole extent. It is the lower end of the
+              search, not a predicate.
+     lparam   the widened rect at the level has every edge in [-32768, 32767]
+              (tagpu_vpwide_rect_at): the button lParam carries the engine
+              point as two int16s (tagpu_vpwide.c, "THE RECT IS THE
+              TRANSFORM'S RANGE"). vpwide's refusal calls the same function,
+              so the floor and the refusal are one predicate.
+
+   The engine's unit hit test narrows to int16 as well, and is not a term:
+   its one call is guarded at any level (tagpu_zoom_hit_guard).
+
+   The search runs on Q16 levels q / 65536 from ceil(max(fit, 1/64) x 65536)
+   up to 0.25: the lowest when it is `ok`, else the smallest `ok` one by
+   bisection (the rect only grows as the level falls, so `ok` is monotone),
+   else 0.25. So the floor is a multiple of 1/65536, and every float compare
+   against it, and its Q16 form in a recording, is exact. It FAILS CLOSED to
+   0.25 where the viewport or the map cannot be read. Recomputed only when
+   one of its inputs moved (the true rect, the extent, the PLOT), and logged
+   then: `zoom: floor` names the term that bound it. Game thread, from the
+   apply at the top of every in-play draw, before the level is set. */
+static int s_floorKey[8], s_floorKeyOk;    /* game thread only */
+
+static int floor_ok(int L, int T, int W, int H, unsigned q)
+{
+    int aL, aT, aR, aB;
+    return tagpu_vpwide_rect_at(L, T, W, H, (float)q / 65536.0f, &aL, &aT, &aR, &aB);
+}
+
+static void floor_compute(const char* ta)
+{
+    int L, T, W, H, extW, extH, mapW, mapH, loX, hiX, loY, hiY, key[8];
+    unsigned q = 16384u;
+    float fit = 0.0f;
+    const char* by;
+
+    tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
+    extW = *(const int*)(ta + OFF_EXTENT_W);
+    extH = *(const int*)(ta + OFF_EXTENT_H);
+    mapW = plot_px(*(const int*)(ta + OFF_PLOT_C));
+    mapH = plot_px(*(const int*)(ta + OFF_PLOT_R));
+    key[0] = L; key[1] = T; key[2] = W; key[3] = H;
+    key[4] = extW; key[5] = extH; key[6] = mapW; key[7] = mapH;
+    if (s_floorKeyOk && !memcmp(key, s_floorKey, sizeof key)) return;
+    memcpy(s_floorKey, key, sizeof key);
+    s_floorKeyOk = 1;
+
+    if (W < 64 || W > 16384 || H < 64 || H > 16384 ||
+        !camera_range(W, H, extW, extH, mapW, mapH, 1, &loX, &hiX, &loY, &hiY) ||
+        hiX <= loX || hiY <= loY) {
+        by = "no viewport or map to fit";
+    } else {
+        double lo, fx = (double)W / (double)(hiX - loX), fy = (double)H / (double)(hiY - loY);
+        unsigned qlo;
+        fit = (float)(fx < fy ? fx : fy);
+        lo = fit > TAGPU_ZOOM_FLOOR_LO ? (double)fit : (double)TAGPU_ZOOM_FLOOR_LO;
+        qlo = lo >= 0.25 ? 16384u : (unsigned)ceil(lo * 65536.0);
+        if (qlo >= 16384u) {
+            by = "0.25";
+        } else if (floor_ok(L, T, W, H, qlo)) {
+            q = qlo;
+            by = fit > TAGPU_ZOOM_FLOOR_LO ? "fit" : "1/64";
+        } else if (!floor_ok(L, T, W, H, 16384u)) {
+            by = "0.25 (the rect is not int16 even there)";
+        } else {
+            unsigned bad = qlo;
+            while (q - bad > 1u) {
+                unsigned mid = bad + (q - bad) / 2u;
+                if (floor_ok(L, T, W, H, mid)) q = mid; else bad = mid;
+            }
+            by = "lparam";
+        }
+    }
+    s_gFloor = (float)q / 65536.0f;
+    {
+        char b[200];
+        _snprintf(b, sizeof b, "zoom: floor %.4f (fit %.4f) on %dx%d, extent %dx%d, map %dx%d - bound by %s",
+                  (double)s_gFloor, (double)fit, W, H, extW, extH, mapW, mapH, by);
+        b[sizeof b - 1] = 0;
+        zlog(b);
+    }
+}
+
+float tagpu_zoom_game_floor(void)
+{
+    return s_gFloor;
+}
+
+float tagpu_zoom_applied_level(void)
+{
+    return s_gLevel;
+}
+
+float tagpu_zoom_reach_level(void)
+{
+    return s_gReach;
+}
+
 /* ---- the apply: the game thread's half of every command ---------------------
 
    GAME THREAD, at the top of every in-play draw (tagpu_packet_pub.c's
@@ -1456,8 +1715,20 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        posts live = 0, which is 1.0 here: the engine's own rect and rate come
        back at the next draw. */
     s_applyLive = 1;
+    floor_compute(ta);
     s_gLevel  = c ? c->zoom : 1.0f;
     s_gLive   = c ? (int)c->live : 0;
+    /* THE LEVEL AT OR ABOVE THIS THREAD'S FLOOR: the render thread's floor is
+       a frame old, and every game-thread consumer of the level -- the rect,
+       the minimap box, the scroll rate, the recorder -- reads one at or above
+       the floor computed here. The record passed cmd_valid, so the level is
+       finite and at least TAGPU_ZOOM_FLOOR_LO. */
+    if (s_gLevel < s_gFloor) s_gLevel = s_gFloor;
+    /* the tables' reach: the record's rung, never below the floor, and the
+       floor (the widest) with no record -- the safe default */
+    s_gReach = c ? c->reach_zoom : s_gFloor;
+    if (s_gReach < s_gFloor) s_gReach = s_gFloor;
+    if (s_gReach > TAGPU_ZOOM_FLOOR_HI) s_gReach = TAGPU_ZOOM_FLOOR_HI;
     /* THEN THE RANGE: centred only on a draw whose ground is ours. `terr` is
        the request the publisher latches for this same draw right after this
        call (`terr || rect still wide`), so the centre range is in force only
@@ -1617,6 +1888,10 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
 void tagpu_zoom_level_end(char* ta)
 {
     s_gLevel = 1.0f; s_gLive = 0;
+    /* the floor fails closed until the next level's first apply computes its
+       own */
+    s_gFloor = s_gReach = TAGPU_ZOOM_FLOOR_HI;
+    s_floorKeyOk = 0;
     /* a new epoch: nothing owed to the old level survives into the next */
     s_epoch++;
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
@@ -1779,11 +2054,22 @@ void tagpu_zoom_frame_end(void)
     rec.drop_follow = (s_cumX != s_ackX || s_cumY != s_ackY) ? 1u : 0u;
     rec.follow_broken = s_followBroken;
     rec.follow_seen   = s_followSeen;
+    /* THE REACH REQUEST: the rung of the lowest level this view may draw
+       before its next record is applied -- the level drawn, the wheel's
+       target (so a notch out asks for its target on the frame it arrives)
+       and the level the levers named -- held in the ring once posted ("the
+       reach ladder") */
+    {
+        float r = s_zoom;
+        if (s_wheelTgt < r) r = s_wheelTgt;
+        if (s_asked < r) r = s_asked;
+        rec.reach_zoom = tagpu_zoom_rung(r, s_floor);
+    }
     tagpu_input_cmd(&rec);
     tagpu_hudstate_cmd(&rec.hud);
     tagpu_gui_sweep_cmd(&rec.sweep);
     tagpu_wikistate_cmd(&rec.wiki);
-    tagpu_cmd_post(&rec);
+    if (tagpu_cmd_post(&rec)) reach_posted(tagpu_cmd_posted_seq(), rec.reach_zoom);
 }
 
 float tagpu_zoom_level(void)
@@ -1796,7 +2082,7 @@ float tagpu_zoom_level(void)
 static int view(float* z, float* cx, float* cy, int* L, int* T, int* W, int* H)
 {
     float zz = s_live ? s_zoom : 1.0f;
-    if (zz <= 0.05f || zz == 1.0f) return 0;
+    if (!(zz >= TAGPU_ZOOM_FLOOR_LO) || zz == 1.0f) return 0;
     *L = (int)s_vpL; *T = (int)s_vpT; *W = (int)s_vw; *H = (int)s_vh;
     if (*W <= 0 || *H <= 0) return 0;
     *z = zz;
@@ -2263,21 +2549,23 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    the other, for any gesture, reversal or lag.
 
    THE SLAB, per axis (vh for y): `[e + (vw - S)/2 - M, e + (vw - S)/2 + S + M]`,
-   S = tagpu_zoom_gather_span(vw, z) and M = TAGPU_GATHER_MARGIN — the native
+   S = tagpu_zoom_gather_span(vw, z, floor) and M = TAGPU_GATHER_MARGIN — the native
    pass's own test, whose S is this one or shorter (its terrain reservation only
    trims), which only narrows the slab about the same centre; it contains the
    view. At every level, the 1x one included.
 
-   WHAT IT HOLDS. The reach is the floor's slab about the packet's eye grown by
-   the lead on each side, and S never exceeds the floor's, so the interval holds
-   every eye within the lead of the packet's, at every level: at z >= 1 the
-   slab is the 1x one and the clamp could bind only on a step of 1.75 viewports.
+   WHAT IT HOLDS. The reach is the slab at the packet's reach level about its
+   eye, grown by the lead on each side, and the frame is drawn at no level
+   below the reach level (the reach ladder), so S never exceeds the reach's
+   slab and the interval holds every eye within the lead of the packet's, at
+   every level: at z >= 1 the slab is the 1x one and the reach at least the
+   0.25 one, and the clamp could bind only on a step of 1.75 viewports.
    The clamp is the identity for every gesture that only zooms in (each notch's
    eye term is at most `(vw/2)` times its drop in distance, and the eye and the
    distance are lerped along the same ease, so the view stays a subset of the
    one before it) -- except LEAVING THE MEGA MAP, whose eye term is
    `(a - c)` times the whole distance it leaves from rather than its drop (up
-   to 2 viewports from the 0.25 floor), so its new view is not inside the old
+   to half a viewport times 1/floor), so its new view is not inside the old
    one and a lagging game thread can hold it like any long step -- and for any displacement the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
@@ -2294,7 +2582,7 @@ static void reach_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey, int* 
 
     *fit = 1;
     if (vw <= 0 || vh <= 0) return;
-    sw = tagpu_zoom_gather_span(vw, z); sh = tagpu_zoom_gather_span(vh, z);
+    sw = tagpu_zoom_gather_span(vw, z, s_floor); sh = tagpu_zoom_gather_span(vh, z, s_floor);
     dLx = (vw - sw) / 2 - TAGPU_GATHER_MARGIN; dRx = dLx + sw + 2 * TAGPU_GATHER_MARGIN;
     dLy = (vh - sh) / 2 - TAGPU_GATHER_MARGIN; dRy = dLy + sh + 2 * TAGPU_GATHER_MARGIN;
     *fit = reach_fit(&x, dLx, dRx, pk->reach_lo[0], pk->reach_hi[0]) &
@@ -2334,7 +2622,9 @@ static float s_drawnZ;
    the one that last frame's eye was clamped into, so that eye is still in
    it, and every eye between it and `u` is too. A NEWER packet's interval at a
    level is non-decreasing in the eye it was published about (the reach is
-   that eye's floor slab grown by the lead, its size fixed by the viewport), so
+   that eye's slab at the reach level grown by the lead, its size fixed by the
+   viewport and the packet's reach_level, which is at most the level last
+   drawn: the reach ladder), so
    it still holds last frame's eye unless the packet's own eye moved against
    the gesture — the game thread applying a step of another gesture, or its own
    camera writers. Only then is the step taken anyway, and counted (`back=` in
@@ -2345,7 +2635,10 @@ static float s_drawnZ;
    as long as that lasted. So the rule is applied only when the bound fitted
    the eye into a non-empty interval, and the retry is taken only when it did
    too; a centred frame is drawn as the bound left it and counted by the native
-   pass (`out=`). */
+   pass (`out=`). The retry draws at the last frame's level only while that
+   level is at or above the reach ladder's for this frame (the floor, this
+   packet's reach level, every rung in flight): below it the slab could leave
+   the reach of this packet or of one still to come. */
 static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
 {
     int ux, uy, ex, ey, loX, hiX, loY, hiY, fit;
@@ -2378,7 +2671,8 @@ static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
         (against(ex, ux, s_drawnX) || against(ey, uy, s_drawnY))) {
         int hx = ux, hy = uy, hfit;
         reach_bound(pk, s_drawnZ, &hx, &hy, &hfit);
-        if (hfit && !against(hx, ux, s_drawnX) && !against(hy, uy, s_drawnY)) {
+        if (hfit && s_drawnZ >= s_zmin &&
+            !against(hx, ux, s_drawnX) && !against(hy, uy, s_drawnY)) {
             ex = hx; ey = hy; z = s_drawnZ;
             s_reachPaused++;
         } else {

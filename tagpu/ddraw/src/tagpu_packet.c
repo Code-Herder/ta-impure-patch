@@ -110,6 +110,7 @@
 #include "tagpu_packet_pub.h"
 #include "crc32.h"
 #include "tagpu_log.h"
+#include "tagpu_zoom.h"     /* TAGPU_ZOOM_FLOOR_LO/HI: the command's level bounds */
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
 #define PK_RESERVE    TAGPU_PK_RESERVE     /* address space per FRAME slot    */
@@ -473,6 +474,11 @@ int tagpu_cmd_post(const TAGPU_CMD* c)
     return ok;
 }
 
+unsigned tagpu_cmd_posted_seq(void)
+{
+    return s_lastPosted.cmd_seq;
+}
+
 /* ------------------------------------------------------- the consumer ---- */
 
 /* One area inside the record: 4-aligned, after the header, and inside the
@@ -818,7 +824,9 @@ static const char* cmd_valid(const void* rec)
 {
     const TAGPU_CMD* c = (const TAGPU_CMD*)rec;
     if (c->used_bytes != sizeof(TAGPU_CMD)) return "cmd size";
-    if (!(c->zoom >= 0.05f && c->zoom <= 16.0f)) return "cmd zoom";
+    if (!(c->zoom >= TAGPU_ZOOM_FLOOR_LO && c->zoom <= 16.0f)) return "cmd zoom";
+    if (!(c->reach_zoom >= TAGPU_ZOOM_FLOOR_LO && c->reach_zoom <= TAGPU_ZOOM_FLOOR_HI))
+        return "cmd reach";
     if (c->live > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
     /* the hold is clamped at its source (tagpu_input.c) so that a wild number
        in the file cannot refuse the whole record and with it every other

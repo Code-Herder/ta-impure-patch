@@ -1107,11 +1107,12 @@ void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h)
     int guard = 64;
     if (*w < 32) *w = 32;
     if (*h < 32) *h = 32;
-    /* the widest rect this viewport can ever ask for: itself at the zoom floor.
-       vw/vh are the true 1x viewport, already range-checked by the caller. */
+    /* the rect this staging is sized for: the viewport at 0.25x; a level below
+       it is trimmed to that. vw/vh are the true 1x viewport, already
+       range-checked by the caller. */
     if (vw > 0 && vh > 0)
-        terr_reserve(span_cells((int)((float)vw / TAGPU_ZOOM_MIN) + 64,
-                                (int)((float)vh / TAGPU_ZOOM_MIN) + 64));
+        terr_reserve(span_cells((int)((float)vw / TAGPU_ZOOM_FLOOR_HI) + 64,
+                                (int)((float)vh / TAGPU_ZOOM_FLOOR_HI) + 64));
     while (guard-- > 0) {
         if (span_cells(*w, *h) <= s_instCells) return;
         *w -= *w / 32 + 1;

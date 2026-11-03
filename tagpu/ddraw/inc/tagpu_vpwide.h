@@ -141,6 +141,14 @@ void tagpu_vpwide_counters(unsigned* applies, unsigned* wh_mismatch);
    itself. */
 void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H);
 
+/* The addressable rect at level `z` for the true viewport (tL, tT, tW, tH), as
+   L, T, R, B inclusive: the transform's range plus a pixel of slack. Returns 1
+   when all four edges lie in [-32768, 32767] -- what a button lParam can
+   carry -- and that is both vpwide's refusal and the zoom floor's lparam term
+   (tagpu_vpwide.c, "THE RECT IS THE TRANSFORM'S RANGE"). Pure, any thread. */
+int  tagpu_vpwide_rect_at(int tL, int tT, int tW, int tH, float z,
+                          int* aL, int* aT, int* aR, int* aB);
+
 /* Is the `0x498DA0` mouse->world repair INSTALLED? The zoom transform may not go
    live without it: `fake_GetCursorPos` answers the true pointer, so the engine's
    1:1 screen->world arithmetic is only handed the unzoomed `u` because this

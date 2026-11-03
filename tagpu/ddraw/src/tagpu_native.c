@@ -2189,12 +2189,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        viewport, so zooming out reaches further into the map instead of leaving
        the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit.
        The span is v/z + 64 below 1 (the 64 is the partial cells at the edge),
-       capped at the zoom floor's — a bound on the value and not on the
-       resolution, so a zoom that somehow slipped below the floor cannot ask
-       for an unbounded rect. The reach bound on the eye this frame is drawn
-       from (tagpu_zoom.c) reads the same expression. */
+       taken at this frame's floor for a level below it and capped at
+       TAGPU_GATHER_SPAN_MAX — a bound on the value and not on the resolution,
+       so a level that somehow slipped below the floor cannot ask for an
+       unbounded rect. The reach bound on the eye this frame is drawn from
+       (tagpu_zoom.c) reads the same expression with the same floor. */
     int evpL, evpT;
-    int evw = tagpu_zoom_gather_span(vw, s_zoom), evh = tagpu_zoom_gather_span(vh, s_zoom);
+    int evw = tagpu_zoom_gather_span(vw, s_zoom, tagpu_zoom_floor());
+    int evh = tagpu_zoom_gather_span(vh, s_zoom, tagpu_zoom_floor());
     /* Reserve the terrain staging for THIS VIEWPORT at the zoom floor and trim
        the rect to what could be reserved. Unconditional, at every zoom: the
        reservation is what the gather draws out of, so a 1x frame needs it made
@@ -3143,17 +3145,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* THE PASS'S HEARTBEAT. It reports what was handed OVER rather than what
        was drawn, which is the only thing this pass decides. */
     if ((f->frame_counter % 300) == 0) {
-        char hb[320];
-        unsigned held, paused, back; int heldMax;
-        tagpu_zoom_reach_held(&held, &heldMax, &paused, &back);
+        char hb[384];
+        unsigned held, paused, back, levelHeld; int heldMax;
+        tagpu_zoom_reach_held(&held, &heldMax, &paused, &back, &levelHeld);
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
                   "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u "
-                  "fog=%dx%d out=%u held=%u/%dpx paused=%u back=%u nopieces=%u",
+                  "fog=%dx%d out=%u held=%u/%dpx paused=%u back=%u reachheld=%u "
+                  "floor=%.4f nopieces=%u",
                   f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
                   nselDrawn, nsel, s_nsbox, s_sboxFull,
                   s_fogHave ? s_fogSrc.w : 0, s_fogHave ? s_fogSrc.h : 0,
-                  s_fogOut, held, heldMax, paused, back, s_unitNoPieces);
+                  s_fogOut, held, heldMax, paused, back, levelHeld,
+                  (double)tagpu_zoom_floor(), s_unitNoPieces);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

@@ -1038,12 +1038,13 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                `mid` is the centre row of the view about the packet's eye,
                clamped into the rect. A frame is drawn from that eye plus the
                steps the game thread has not applied yet, as far as the reach
-               bound lets them through — at the zoom floor at most the lead
-               (vh/4, 33 rows at 4K), since the reach is published about the
-               packet's eye. A frame loses
+               bound lets them through — at most the lead (vh/4, 33 rows at
+               4K), since the reach is published about the packet's eye. A
+               frame loses
                nothing while the band kept holds its own slab, placed at that
-               offset from `mid` — 560 rows at the floor at 4K; the densest
-               stock map puts 12 633 anchors in the WHOLE rect. Put back in row
+               offset from `mid` — 560 rows at 0.25 at 4K, the whole map at a
+               floor that fits it; the densest stock map puts 12 633 anchors
+               in the WHOLE rect. Put back in row
                order afterwards: the depth keys come from each anchor's own
                row and column, and the order is what the table has always
                promised. A truncation sets TAGPU_PK_TRUNC_ANCHORS, once per
@@ -1125,7 +1126,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                rows of nonsense `node` pointers into the packet — dereferenced
                later on the RENDER thread. The engine's own draw path does not
                bound it, but it only forms the address for the cells it is
-               drawing; this walk covers the zoom-floor rect plus a margin,
+               drawing; this walk covers the tables' reach plus a margin,
                which is most of a screen of cells the engine never touches.
                WR_COUNT is the pool the level allocates (tagpu_engine.h), and
                also the value its allocators hand back for "none". */
@@ -2283,16 +2284,22 @@ static void wide_tick(void)
 
 /* THE TABLES' REACH, written into the header before the tables are filled: the
    window tagpu_zoom_pub_window publishes about the packet's eye on each axis --
-   the native pass's gather slab at the zoom floor, plus TAGPU_GATHER_MARGIN,
-   grown by the lead the render thread's unapplied eye steps are sized to fit in.
-   The anchor table and the models' cull cover it, and the render thread's reach
-   bound (tagpu_zoom.c) holds the eye it draws from until its slab lies inside
-   it, so a frame never gathers past what this packet carries. */
+   the native pass's gather slab at the reach level (the rung the render thread
+   asked for, clamped to the floor by this draw's apply), plus
+   TAGPU_GATHER_MARGIN, grown by the lead the render thread's unapplied eye
+   steps are sized to fit in. The anchor table and the models' cull cover it;
+   the render thread draws at no level below `reach_level` (tagpu_zoom.c, "the
+   reach ladder") and its reach bound holds the eye it draws from until its
+   slab lies inside the rect, so a frame never gathers past what this packet
+   carries. The floor rides beside it: the render thread's floor for the
+   frames drawn from this packet. */
 static void table_reach(TAGPU_PACKET* p)
 {
     int axis, l, span;
+    p->reach_level = tagpu_zoom_reach_level();
+    p->zoom_floor = tagpu_zoom_game_floor();
     for (axis = 0; axis < 2; axis++) {
-        tagpu_zoom_pub_window(p->eye[axis], p->vp[2 + axis], &l, &span);
+        tagpu_zoom_pub_window(p->eye[axis], p->vp[2 + axis], p->reach_level, &l, &span);
         p->reach_lo[axis] = l;
         p->reach_hi[axis] = l + span;
     }
