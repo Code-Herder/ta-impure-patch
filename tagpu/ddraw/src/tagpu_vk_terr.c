@@ -127,6 +127,7 @@
 #include "tagpu_vk_terr.h"
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
+#include "tagpu_vk_fog.h"               /* the slot's fog image, binding 43 */
 #include "tagpu_vk_restore.h"
 #include "tagpu_restore_guard.h"        /* tagpu_rguard_fault */
 #include "tagpu_vk_stage.h"
@@ -134,7 +135,7 @@
 #include "spirv/tagpu_terr.spv.h"
 
 #define UBLK_VS  80                        /* std140, the generated header's   */
-#define UBLK_FS  192
+#define UBLK_FS  176
 
 /* ---- the entry points ----------------------------------------------------
    Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
@@ -312,13 +313,15 @@ typedef struct {
 
     TAGPU_VKSTAGE   stage;                 /* the map-scoped uploads, when due  */
 
-    VkImage         pal, fog;              /* the two small per-slot images    */
-    VkDeviceMemory  palMem, fogMem;
-    VkImageView     palView, fogView;
-    VkBuffer        smallStage;
+    VkImage         pal;                   /* the palette, per slot            */
+    VkDeviceMemory  palMem;
+    VkImageView     palView;
+    VkBuffer        smallStage;            /* its staging                      */
     VkDeviceMemory  smallMem;
     unsigned char*  smallMap;
-    int             fogW, fogH;            /* what the fog image is sized for  */
+    unsigned        fogGen;                /* the fog image binding 43 names
+                                              (tagpu_vk_fog_view's generation);
+                                              0 = none written                 */
 
     VkDescriptorSet dset;
     int             built;                 /* the fixed-size half is made      */
@@ -336,11 +339,9 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
    (the scaffold's rule). Every one of these sizes an allocation or a memcpy.
    The atlas is 64 cells on a 34-texel pitch, so its width is 2176 and its
    height grows with the tile count; the height grid is the map in 16-px cells,
-   which tagpu_terr.c already refuses past 4096; the fog grid is the wide-fog
-   builder's and is a few tens of cells. */
+   which tagpu_terr.c already refuses past 4096. */
 #define ATLAS_MAXDIM 16384
 #define HEIGHT_MAXDIM 4096
-#define FOG_MAXDIM    1024
 /* THE CELL COUNT IS ONE OF THEM. It sizes both the
    instance buffer (`ncell * ICOMP * sizeof(short)`) and vkCmdDraw's
    instanceCount, so it belongs under this paragraph's own rule as much as the
@@ -350,18 +351,13 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
    THAN THE PRODUCER'S: a pass that refused a cell count the gather legitimately
    published would drop the terrain from the whole viewport. */
 #define CELL_MAX      (3 * 1024 * 1024)
-/* ONE STAGING BUFFER CARRIES BOTH SMALL UPLOADS: the palette (256 x 1 RGBA),
-   then the fog grid (cols x rows RG8, a few KB and a different size whenever
-   the view walks far enough for the grid to be re-laid). One allocation, two
-   vkCmdCopyBufferToImage regions at two offsets -- and it is rebuilt with the
-   fog image, by the same call, so the buffer and the image it feeds can never
-   disagree about the size. */
+/* THE PALETTE'S STAGING (256 x 1 RGBA), made with the slot's fixed half. The
+   fog image is the slot's in tagpu_vk_fog.c, shared with every world pass. */
 #define SMALL_PALOFF 0                     /* 256 x RGBA8                      */
 #define SMALL_FIXED  (256 * 4)             /* what the fixed upload takes      */
-#define SMALL_FOGOFF SMALL_FIXED           /* the grid, cols x rows RG8        */
-/* Both are a multiple of 4 and of their own texel block size, which is what
-   vkCmdCopyBufferToImage requires of a bufferOffset. The two big uploads share
-   one buffer on the same rule -- the height grid at 0 and the base atlas at the
+/* The two big uploads share one buffer, each at an offset that is a multiple
+   of 4 and of its texel block size, which is what vkCmdCopyBufferToImage
+   requires of a bufferOffset -- the height grid at 0 and the base atlas at the
    grid's size rounded up to 4. */
 #define ALIGN4(n) (((n) + 3u) & ~(VkDeviceSize)3u)
 
@@ -548,17 +544,17 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
     kill_image(d, &s->pal, &s->palMem, &s->palView);
-    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
-    s->fogW = s->fogH = 0;
     /* the set this slot holds names nothing live any more, and `record` tests
        exactly that before it draws */
     s->boundBase = s->boundHeight = s->boundShadow = VK_NULL_HANDLE;
+    s->fogGen = 0;
     s->built = 0;
 }
 
-/* The fixed-size half of a slot: the palette image, and the descriptor write
-   that never changes again. The shared images' bindings are NOT here -- they
-   are rewritten on every prepare (see `shared_bind`). */
+/* The fixed-size half of a slot: the palette image and its staging, and the
+   descriptor write that never changes again. The shared images' bindings are
+   NOT here -- they are rewritten on every prepare (see `shared_bind`), and the
+   fog image's whenever its generation moves (`fog_bind`). */
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
     VkDescriptorImageInfo ii;
@@ -567,6 +563,9 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     if (s->built) return 1;
     if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED,
                   &s->pal, &s->palMem, &s->palView)) return 0;
+    if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
 
     memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
     ii.sampler = s_samp; ii.imageView = s->palView;
@@ -579,35 +578,27 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     return 1;
 }
 
-/* This slot's fog-grid image at `w` x `h`, rebuilt when the dimensions move --
-   which they do whenever the view walks far enough for the grid to be re-laid.
-   Free because the slot is ours: see §2.28's one-line invariant. */
-static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
+/* Binding 43, the slot's fog image (tagpu_vk_fog.h), rewritten when the image
+   it names is not the one the slot holds now -- legal here because this is
+   the slot's own `prepare`, after the seam's wait on its fence and after
+   tagpu_vk_fog_prepare for the same slot. Through `s_samp`, NEAREST: the image
+   is R32_UINT and the shader only texelFetches it. 0 when there is no image. */
+static int fog_bind(const TAGPU_VKPASS* d, SLOT* s, uint32_t slot)
 {
     VkDescriptorImageInfo ii;
     VkWriteDescriptorSet wr;
-    if (s->fogW == w && s->fogH == h && s->fog && s->smallStage) return 1;
-    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
-    s->fogW = s->fogH = 0;
-    if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED,
-                  &s->fog, &s->fogMem, &s->fogView)) return 0;
-    /* the staging buffer goes with it: the fog grid's bytes are its tail, so
-       its size follows the grid's and the two are made in one place */
-    if (s->smallMap) { vkUnmapMemory(d->dev, s->smallMem); s->smallMap = NULL; }
-    if (s->smallStage) { vkDestroyBuffer(d->dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
-    if (s->smallMem) { vkFreeMemory(d->dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
-    if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED + (VkDeviceSize)w * h * 2,
-                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
+    unsigned gen;
+    VkImageView v = tagpu_vk_fog_view((int)slot, &gen);
+    if (!v) return 0;
+    if (s->fogGen == gen) return 1;
     memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
-    ii.sampler = s_samp; ii.imageView = s->fogView;
+    ii.sampler = s_samp; ii.imageView = v;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     wr.dstSet = s->dset; wr.dstBinding = 43; wr.descriptorCount = 1;
     wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &ii;
     vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
-    s->fogW = w; s->fogH = h;
+    s->fogGen = gen;
     return 1;
 }
 
@@ -687,12 +678,12 @@ static int build_samplers(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkFormatProperties fp;
     int i;
-    /* the four formats this pass samples, asked for rather than assumed: the
-       height grid's, the fog grid's, the palette's and the base atlas's, and
-       the shadow dummy's */
-    static const VkFormat need[4] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM,
-                                      VK_FORMAT_R8G8B8A8_UNORM, SHADOW_DUMMY_FMT };
-    for (i = 0; i < 4; i++) {
+    /* the formats this pass samples, asked for rather than assumed: the
+       height grid's, the palette's and the base atlas's, and the shadow
+       dummy's (the fog image's is tagpu_vk_fog.c's to ask) */
+    static const VkFormat need[3] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+                                      SHADOW_DUMMY_FMT };
+    for (i = 0; i < 3; i++) {
         vkGetPhysicalDeviceFormatProperties(d->pd, need[i], &fp);
         if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
             plog(d, "terr: this device cannot sample format %d - the pass stays down",
@@ -701,7 +692,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
         }
     }
     /* NEAREST AND CLAMP_TO_EDGE. The base atlas is the only one the shader
-       reaches through this sampler at all -- the palette, the fog grid and the
+       reaches through this sampler at all -- the palette, the fog source and the
        height grid are all texelFetch -- and NEAREST is the engine's own tile
        blit: every screen pixel one tile texel, never a blend of two. */
     sci.magFilter = VK_FILTER_NEAREST;
@@ -797,7 +788,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     /* THE BINDINGS ARE THE GENERATOR'S, NOT THIS FILE'S: tools/spirv-gen.py
        allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
        block, 32 the fragment stage's, and 40.. its samplers in declaration
-       order -- uPal, uAtlasRGB, uHeight, uFogGrid, uShadowCmp, uShadowRaw,
+       order -- uPal, uAtlasRGB, uHeight, uFogSrc, uShadowCmp, uShadowRaw,
        uBase. The std140 offsets are printed in the generated header and
        are the contract for what goes into those buffers. */
     memset(b, 0, sizeof b);
@@ -926,7 +917,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     /* The two uniform blocks are written now and never again -- they name a
        fixed range of a buffer whose CONTENTS change per frame. The samplers are
        written when there is an image to name: 40 by `slot_build`, 43 by
-       `slot_fog`, 44 and 45 by `shadow_build`, and 41/42/46 (and 44/45 again)
+       `fog_bind`, 44 and 45 by `shadow_build`, and 41/42/46 (and 44/45 again)
        on every prepare by `shared_bind`. */
     for (i = 0; i < d->slots; i++) {
         VkDescriptorBufferInfo bi[2];
@@ -1489,7 +1480,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        which is not a place to find out that the fog branch took a garbage
        uFog. */
     union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
-    int fogW = 1, fogH = 1, hW = 1, hH = 1;
+    int fogW = 0, fogH = 0, hW = 1, hH = 1;
     int doHeight;
 
     if (s_state == ST_REFUSED) return 0;
@@ -1599,15 +1590,13 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         hW = t.hW; hH = t.hH;
     }
-    if (t.fogGrid) {
-        if (t.fogGridCols < 1 || t.fogGridRows < 1 ||
-            t.fogGridCols > FOG_MAXDIM || t.fogGridRows > FOG_MAXDIM) {
-            plog(d, "terr: a %dx%d fog grid is outside what this pass carries - nothing drawn",
-                 t.fogGridCols, t.fogGridRows);
-            return 0;
-        }
-        fogW = t.fogGridCols; fogH = t.fogGridRows;
-    }
+    /* FOG ON WITH NO SOURCE IS NOT A FRAME THIS PASS MAY DRAW: unfogged ground
+       where the engine's frame is fogged would be a silent difference, so the
+       frame stands down -- the answer this file gives for the restored atlas
+       and the shadow map. The size is the slot's own image's, so uFogSize and
+       the image the shader fetches from are one source (tagpu_vk_fog.c). */
+    tagpu_vk_fog_size((int)slot, &fogW, &fogH);
+    if ((t.fog & 1) && (fogW < 1 || fogH < 1)) return 0;
 
     s = &s_slot[slot];
     /* THIS SLOT IS OURS -- the seam waited on fence[slot] at the top of this
@@ -1674,7 +1663,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
     }
     if (!slot_build(d, s)) goto refuse;
-    if (!slot_fog(d, s, fogW, fogH)) goto refuse;
+    if (!fog_bind(d, s, slot)) goto refuse;
 
     ibytes = (VkDeviceSize)t.ncell * TAGPU_TERR_ICOMP * sizeof(short);
     if (!slot_inst(d, s, ibytes)) goto refuse;
@@ -1781,34 +1770,16 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                 "the restorer - the terrain draws the base atlas for this session");
     }
 
-    /* THE TWO SMALL IMAGES, per slot, so the one-line invariant covers them:
-       UNDEFINED in, because the whole of each is re-sent every frame and there
-       are therefore no contents to preserve and no layout to carry. */
+    /* THE PALETTE, per slot, so the one-line invariant covers it: UNDEFINED
+       in, because the whole of it is re-sent every frame and there are
+       therefore no contents to preserve and no layout to carry. */
     memcpy(s->smallMap + SMALL_PALOFF, t.pal, 256 * 4);
-    /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order, so the buffer goes up as it is. With no
-       grid this frame
-       the image is one zero cell, which the shader never reads -- taFog is
-       called only on the `uFog & 1` branch. */
-    if (t.fogGrid) memcpy(s->smallMap + SMALL_FOGOFF, t.fogGrid,
-                          (size_t)fogW * fogH * 2);
-    else           memset(s->smallMap + SMALL_FOGOFF, 0, 2);
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->fog, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 256, 1);
-    copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fog, fogW, fogH);
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->fog, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1832,30 +1803,29 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     memset(&ub, 0, sizeof ub);
     ub.i[0]  = restored;                         /* uRestored     int @0   */
     ub.f[2]  = t.hDimW;  ub.f[3]  = t.hDimH;     /* uHDim        vec2 @8   */
-    ub.f[4]  = t.fogOrgX; ub.f[5] = t.fogOrgY;   /* uFogOrg      vec2 @16  */
-    ub.f[6]  = t.fogCols; ub.f[7] = t.fogRows;   /* uFogDim      vec2 @24  */
-    ub.i[8]  = t.fog;                            /* uFog          int @32  */
-    ub.i[9]  = t.lambert;                        /* uLambert      int @36  */
-    ub.f[12] = t.sun[0]; ub.f[13] = t.sun[1];
-    ub.f[14] = t.sun[2];                         /* uSun         vec3 @48  */
-    ub.f[15] = t.amb;                            /* uAmb        float @60  */
-    ub.f[16] = t.norm;                           /* uNorm       float @64  */
-    ub.i[17] = t.shadowOn;                       /* uShadowOn     int @68  */
+    ub.i[4]  = fogW;     ub.i[5]  = fogH;        /* uFogSize    ivec2 @16  */
+    ub.i[6]  = t.fog;                            /* uFog          int @24  */
+    ub.i[7]  = t.lambert;                        /* uLambert      int @28  */
+    ub.f[8]  = t.sun[0]; ub.f[9]  = t.sun[1];
+    ub.f[10] = t.sun[2];                         /* uSun         vec3 @32  */
+    ub.f[11] = t.amb;                            /* uAmb        float @44  */
+    ub.f[12] = t.norm;                           /* uNorm       float @48  */
+    ub.i[13] = t.shadowOn;                       /* uShadowOn     int @52  */
     /* THE REST OF THE CAST-SHADOW BLOCK, and only when the map is on. With it
        off they stay ZERO, in a block nothing reads. The offsets are the
        generated header's. */
     if (t.shadowOn) {
-        ub.f[20] = t.shadowSun[0];               /* uShadowSun   vec3 @80  */
-        ub.f[21] = t.shadowSun[1];
-        ub.f[22] = t.shadowSun[2];
-        memcpy(&ub.f[24], t.shadowMat, 16 * sizeof(float));  /* mat4 @96   */
-        ub.f[40] = t.shScale[0];                 /* uShScale     vec3 @160 */
-        ub.f[41] = t.shScale[1];
-        ub.f[42] = t.shScale[2];
-        ub.f[43] = t.penumbra;                   /* uPenumbra   float @172 */
-        ub.f[44] = t.shade;                      /* uShade      float @176 */
+        ub.f[16] = t.shadowSun[0];               /* uShadowSun   vec3 @64  */
+        ub.f[17] = t.shadowSun[1];
+        ub.f[18] = t.shadowSun[2];
+        memcpy(&ub.f[20], t.shadowMat, 16 * sizeof(float));  /* mat4 @80   */
+        ub.f[36] = t.shScale[0];                 /* uShScale     vec3 @144 */
+        ub.f[37] = t.shScale[1];
+        ub.f[38] = t.shScale[2];
+        ub.f[39] = t.penumbra;                   /* uPenumbra   float @156 */
+        ub.f[40] = t.shade;                      /* uShade      float @160 */
     }
-    ub.f[46] = t.mapPxW; ub.f[47] = t.mapPxH;    /* uMapPx       vec2 @184 */
+    ub.f[42] = t.mapPxW; ub.f[43] = t.mapPxH;    /* uMapPx       vec2 @168 */
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF, ub.f, UBLK_FS);
 
     s_ncell = t.ncell;

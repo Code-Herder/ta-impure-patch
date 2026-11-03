@@ -145,6 +145,8 @@
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
 #include "tagpu_vk_world.h"
+#include "tagpu_vk_fog.h"
+#include "tagpu_native.h"           /* tagpu_native_fogsrc: the frame's fog source */
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
@@ -1898,11 +1900,13 @@ static void vk_down(void)
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
+        tagpu_vk_fog_down(&s_pass);
         /* the wiki's instances of the world passes (tagpu_scene.h), behind the same wait */
         tagpu_vkw_unit_down(&s_pass);
         tagpu_vkw_feat_down(&s_pass);
         tagpu_vkw_terr_down(&s_pass);
         tagpu_vkw_world_down(&s_pass);
+        tagpu_vkw_fog_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
            what they are drawn with: each `_down` above gives its job back, and
            this then gives back the pipelines, the activations and the render
@@ -2619,6 +2623,14 @@ static int vk_present(void)
                 a wrong one. */
             draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
 
+            /* THE FOG IMAGE BEFORE EVERY PASS THAT SAMPLES IT. One image a
+               slot holds the frame's fog source (tagpu_vk_fog.h), and each
+               world pass points its slot's descriptor at it in its own
+               `prepare`, so this has to have run first; its upload is a
+               transfer, which is why it is out here and not inside a render
+               pass. It puts no pixel anywhere, so `ndraw` does not count it. */
+            tagpu_vk_fog_prepare(&s_pass, cb, (int)fi, tagpu_native_fogsrc());
+
             /* THE REFERENCE IS FILLED HERE AND DRAWN NOWHERE. This uploads the
                bytes the GAME thread captured into this slot's R8 image -- the
                original software rasteriser's own output, kept as a texture so
@@ -2702,6 +2714,8 @@ static int vk_present(void)
                 QueryPerformanceCounter(&wiki_t0);
                 wiki_world = tagpu_vkw_world_prepare(&s_pass, cb, fi, &wtw, &wth);
                 if (wiki_world) {
+                    /* the stage's own fog image, before its passes, for the game's reason */
+                    tagpu_vkw_fog_prepare(&s_pass, cb, (int)fi, tagpu_wikiworld_fogsrc());
                     wiki_terr = tagpu_vkw_terr_prepare(&s_pass, cb, fi);
                     wiki_feat = tagpu_vkw_feat_prepare(&s_pass, cb, fi);
                     if (wiki_want.unit) {
@@ -3098,10 +3112,13 @@ static void passes_down(void)
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
+    /* the fog images are sized by `d->slots` like every per-slot resource */
+    tagpu_vk_fog_down(&s_pass);
     tagpu_vkw_unit_down(&s_pass);
     tagpu_vkw_feat_down(&s_pass);
     tagpu_vkw_terr_down(&s_pass);
     tagpu_vkw_world_down(&s_pass);
+    tagpu_vkw_fog_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
        staging and its timestamp pairs are sized by `d->slots`, which is
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above

@@ -86,11 +86,9 @@
                     mirror's serial says the bytes moved, and only the tiles
                     the atlas's dirty map says were written.
 
-     the FOG GRID   a few KB. Per-slot, because at that size the one-line
-                    invariant is worth more than the memory and a dimension
-                    change (every time the view moves far enough) is then free:
-                    the slot is rebuilt at the moment we are handed it, which is
-                    the moment we own it.
+     the FOG        not this pass's: the slot's fog image (tagpu_vk_fog.h),
+                    shared by every world pass, which this pass's set names
+                    (binding 41) from the generation it last wrote.
 
    The base atlas's STAGING buffer is per-slot either way and cannot be
    anything else: a barrier orders GPU work and the hazard there is a CPU
@@ -126,6 +124,7 @@
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"
 #include "tagpu_vk_stage.h"
+#include "tagpu_vk_fog.h"               /* the slot's fog image, binding 41 */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -162,8 +161,7 @@
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -278,26 +276,14 @@ typedef struct {
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's upload, when due */
 
-    VkImage         fog;                   /* the fog grid, per slot           */
-    VkDeviceMemory  fogMem;
-    VkImageView     fogView;
-    VkBuffer        smallStage;
-    VkDeviceMemory  smallMem;
-    unsigned char*  smallMap;
-    int             fogW, fogH;            /* what the fog image is sized for  */
+    unsigned        fogGen;                /* the fog image binding 41 names
+                                              (tagpu_vk_fog_view's generation);
+                                              0 = none written                 */
 
     VkDescriptorSet dset;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
-/* the fog grid is RG8 and the widest the wide-fog builder produces is well
-   inside this; a bound here is what keeps a handed-over number from sizing an
-   allocation (the scaffold's rule, tagpu_vk_scaffold.c) */
-#define FOG_MAXDIM 1024
-/* THE FOG GRID'S STAGING BUFFER (cols x rows RG8, a few KB and a different
-   size whenever the view walks far enough for the grid to be re-laid) is
-   rebuilt with the fog image, by the same call, so the buffer and the image it
-   feeds can never disagree about the size. */
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -441,41 +427,6 @@ static int resolve(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* ---- barriers ----------------------------------------------------------- */
-
-static void img_barrier(VkCommandBuffer cb, VkImage img,
-                        VkImageLayout from, VkImageLayout to,
-                        VkPipelineStageFlags srcStage, VkAccessFlags srcAcc,
-                        VkPipelineStageFlags dstStage, VkAccessFlags dstAcc)
-{
-    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-    b.oldLayout = from;
-    b.newLayout = to;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = img;
-    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    b.subresourceRange.levelCount = 1;
-    b.subresourceRange.layerCount = 1;
-    b.srcAccessMask = srcAcc;
-    b.dstAccessMask = dstAcc;
-    vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &b);
-}
-
-/* one buffer->image copy of a w x h rect at the image's origin */
-static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
-                      VkImage dst, int w, int h)
-{
-    VkBufferImageCopy rg;
-    memset(&rg, 0, sizeof rg);
-    rg.bufferOffset = srcOff;
-    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    rg.imageSubresource.layerCount = 1;
-    rg.imageExtent.width = (uint32_t)w;
-    rg.imageExtent.height = (uint32_t)h;
-    rg.imageExtent.depth = 1;
-    vkCmdCopyBufferToImage(cb, src, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
-}
-
 /* ---- the slot ----------------------------------------------------------- */
 
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
@@ -486,41 +437,30 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->vmem)  { vkFreeMemory(dev, s->vmem, NULL); s->vmem = VK_NULL_HANDLE; }
     s->vcap = 0;
     tagpu_vk_stage_drop(d, &s->stage);
-    if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
-    if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
-    if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
-    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
-    s->fogW = s->fogH = 0;
+    s->fogGen = 0;
 }
 
-/* This slot's fog-grid image at `w` x `h`, rebuilt when the dimensions move --
-   which they do whenever the view walks far enough for the grid to be re-laid.
-   Free because the slot is ours: see the file header. */
-static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
+/* Binding 41, the slot's fog image (tagpu_vk_fog.h), rewritten when the image
+   it names is not the one the slot holds now -- legal here because this is
+   the slot's own `prepare`, after the seam's wait on its fence and after
+   tagpu_vk_fog_prepare for the same slot. Through `s_samp`, NEAREST: the image
+   is R32_UINT and the shader only texelFetches it. 0 when there is no image. */
+static int fog_bind(const TAGPU_VKPASS* d, SLOT* s, uint32_t slot)
 {
     VkDescriptorImageInfo ii;
     VkWriteDescriptorSet wr;
-    if (s->fogW == w && s->fogH == h && s->fog && s->smallStage) return 1;
-    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
-    s->fogW = s->fogH = 0;
-    if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM, IMG_SAMPLED, &s->fog, &s->fogMem, &s->fogView)) return 0;
-    /* the staging buffer goes with it: the fog grid's bytes are its tail, so
-       its size follows the grid's and the two are made in one place */
-    if (s->smallMap) { vkUnmapMemory(d->dev, s->smallMem); s->smallMap = NULL; }
-    if (s->smallStage) { vkDestroyBuffer(d->dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
-    if (s->smallMem) { vkFreeMemory(d->dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
-    if (!mk_buffer(d, (VkDeviceSize)w * h * 2,
-                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
+    unsigned gen;
+    VkImageView v = tagpu_vk_fog_view((int)slot, &gen);
+    if (!v) return 0;
+    if (s->fogGen == gen) return 1;
     memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
-    ii.sampler = s_samp; ii.imageView = s->fogView;
+    ii.sampler = s_samp; ii.imageView = v;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     wr.dstSet = s->dset; wr.dstBinding = 41; wr.descriptorCount = 1;
     wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &ii;
     vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
-    s->fogW = w; s->fogH = h;
+    s->fogGen = gen;
     return 1;
 }
 
@@ -549,10 +489,10 @@ static int build_sampler(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkFormatProperties fp;
     int i;
-    /* the two formats this pass samples, asked for rather than assumed: the
-       fog grid's and the atlases' */
-    static const VkFormat need[2] = { VK_FORMAT_R8G8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
-    for (i = 0; i < 2; i++) {
+    /* the format this pass samples, asked for rather than assumed: the
+       atlases' (the fog image's is tagpu_vk_fog.c's to ask) */
+    static const VkFormat need[1] = { VK_FORMAT_R8G8B8A8_UNORM };
+    for (i = 0; i < 1; i++) {
         vkGetPhysicalDeviceFormatProperties(d->pd, need[i], &fp);
         if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
             plog(d, "feat: this device cannot sample format %d - the pass stays down",
@@ -563,7 +503,8 @@ static int build_sampler(const TAGPU_VKPASS* d)
     /* NEAREST AND CLAMP_TO_EDGE, one sampler for every binding. The base
        atlas is sampled as the engine blits a sprite, one texel per pixel and
        never a blend of two -- which is also what makes its alpha an exact
-       hole test -- and the fog grid's corner masks are fetched, not filtered. */
+       hole test -- and the fog source is an integer image, fetched, never
+       filtered. */
     sci.magFilter = VK_FILTER_NEAREST;
     sci.minFilter = VK_FILTER_NEAREST;
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -603,7 +544,7 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     /* THE BINDINGS ARE THE GENERATOR'S, NOT THIS FILE'S: tools/spirv-gen.py
        allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
        block, 32 the fragment stage's, and 40.. its samplers in declaration
-       order -- uAtlasRGB, uFogGrid, uBase. The std140 offsets are printed in
+       order -- uAtlasRGB, uFogSrc, uBase. The std140 offsets are printed in
        the generated header and are the contract for what goes into those
        buffers. */
     memset(b, 0, sizeof b);
@@ -748,11 +689,12 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     /* The two uniform blocks are written now and never again -- they name a
        fixed range of a buffer whose CONTENTS change per frame. The samplers are
        written when there is an image to name: 40 and 42 by `atlas_build`,
-       41 by `slot_fog`. */
+       41 by `fog_bind`. */
     for (i = 0; i < d->slots; i++) {
         VkDescriptorBufferInfo bi[2];
         VkWriteDescriptorSet w[2];
         s_slot[i].dset = sets[i];
+        s_slot[i].fogGen = 0;                 /* a new set names no fog image */
         memset(bi, 0, sizeof bi); memset(w, 0, sizeof w);
         bi[0].buffer = s_ubuf; bi[0].offset = i * s_ustride;              bi[0].range = UBLK_VS;
         bi[1].buffer = s_ubuf; bi[1].offset = i * s_ustride + s_ublock;   bi[1].range = UBLK_FS;
@@ -1339,7 +1281,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        which is not a place to find out that the fog branch took a garbage
        uFog. */
     union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
-    int fogW = 1, fogH = 1;
+    int fogW = 0, fogH = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -1383,22 +1325,19 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     if (!h.pal) return 0;
     if (h.nShadow < 0 || h.nBody < 0 || h.nMShadow < 0 || h.nMBody < 0 ||
         h.nShadow + h.nBody + h.nMShadow + h.nMBody < 1) return 0;
-    if (h.fogGrid) {
-        if (h.fogGridCols < 1 || h.fogGridRows < 1 ||
-            h.fogGridCols > FOG_MAXDIM || h.fogGridRows > FOG_MAXDIM) {
-            plog(d, "feat: a %dx%d fog grid is outside what this pass carries - nothing drawn",
-                 h.fogGridCols, h.fogGridRows);
-            return 0;
-        }
-        fogW = h.fogGridCols; fogH = h.fogGridRows;
-    }
+    /* FOG ON WITH NO SOURCE IS NOT A FRAME THIS PASS MAY DRAW: an unfogged
+       tree over fogged ground would be a silent difference. The size is the
+       slot's own image's, so uFogSize and the image the shader fetches from
+       are one source (tagpu_vk_fog.c). */
+    tagpu_vk_fog_size((int)slot, &fogW, &fogH);
+    if ((h.fog & 1) && (fogW < 1 || fogH < 1)) return 0;
 
     s = &s_slot[slot];
     /* THIS SLOT IS OURS -- the seam waited on fence[slot] at the top of this
        frame, so the submit that last used these buffers, these images and this
        descriptor set has completed. That is what makes every write below safe
        with no device-wide wait. */
-    if (!slot_fog(d, s, fogW, fogH)) goto refuse;
+    if (!fog_bind(d, s, slot)) goto refuse;
 
     vbytes = (VkDeviceSize)(h.nShadow + h.nBody + h.nMShadow + h.nMBody) * VST * sizeof(float);
     if (!slot_verts(d, s, vbytes)) goto refuse;
@@ -1469,25 +1408,6 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     } else s_saidRestored = 0;
     twin_bind(d, s);
 
-    /* THE FOG GRID, per slot, so the one-line invariant covers it: UNDEFINED
-       in, because the whole of it is re-sent every frame and there are
-       therefore no contents to preserve and no layout to carry. */
-    /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order, so the buffer is copied as it stands into
-       the VK_FORMAT_R8G8_UNORM image. With no grid this frame
-       the image is one zero cell, which the shader never reads -- taFog is
-       called only on the `uFog & 1` branch. */
-    if (h.fogGrid) memcpy(s->smallMap, h.fogGrid, (size_t)fogW * fogH * 2);
-    else           memset(s->smallMap, 0, 2);
-    img_barrier(cb, s->fog, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->smallStage, 0, s->fog, fogW, fogH);
-    img_barrier(cb, s->fog, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
     /* The two uniform blocks, at the std140 offsets the generated header
        prints -- the numbers the hand-over carries. */
     memset(&ub, 0, sizeof ub);
@@ -1498,12 +1418,11 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
     memset(&ub, 0, sizeof ub);
     ub.i[0] = h.restored;                              /* uRestored    int @0  */
-    ub.f[2] = h.fogOrgX; ub.f[3] = h.fogOrgY;          /* uFogOrg     vec2 @8  */
-    ub.f[4] = h.fogCols; ub.f[5] = h.fogRows;          /* uFogDim     vec2 @16 */
-    ub.i[6] = h.fog;                                   /* uFog         int @24 */
-    ub.f[8] = h.mapPxW; ub.f[9] = h.mapPxH;            /* uMapPx      vec2 @32 */
-    ub.i[10] = h.clip;                                 /* uClip        int @40 */
-    ub.f[11] = h.nudgeW;                               /* uNudgeW    float @44 */
+    ub.i[2] = fogW; ub.i[3] = fogH;                    /* uFogSize   ivec2 @8  */
+    ub.i[4] = h.fog;                                   /* uFog         int @16 */
+    ub.f[6] = h.mapPxW; ub.f[7] = h.mapPxH;            /* uMapPx      vec2 @24 */
+    ub.i[8] = h.clip;                                  /* uClip        int @32 */
+    ub.f[9] = h.nudgeW;                                /* uNudgeW    float @36 */
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK_FS);
 
     s_nShadow = h.nShadow;

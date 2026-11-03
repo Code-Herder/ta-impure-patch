@@ -2,18 +2,18 @@
 #define TAGPU_SCENE_H
 /* tagpu_scene.h -- the second scene: the world passes compiled again for the in-game wiki's stage.
 
-   Seven files draw one scene: the world target (tagpu_vk_world.c), the terrain, feature and unit
-   passes (tagpu_vk_terr.c, tagpu_vk_feat.c, tagpu_vk_unit.c), the posed program
-   (tagpu_posedraw.c), the geometry bake (tagpu_posebake.c) and the unit material layer
-   (tagpu_render3do.c). Their state -- per-slot buffers, atlases and their single acked serial,
-   bake caches bounded by one scene's records, latches -- is file-scope statics, and a second scene
-   drawn through the same statics would be corrupted, not merely wrong
+   Eight files draw one scene: the world target (tagpu_vk_world.c), the fog image its passes share
+   (tagpu_vk_fog.c), the terrain, feature and unit passes (tagpu_vk_terr.c, tagpu_vk_feat.c,
+   tagpu_vk_unit.c), the posed program (tagpu_posedraw.c), the geometry bake (tagpu_posebake.c)
+   and the unit material layer (tagpu_render3do.c). Their state -- per-slot buffers, atlases and
+   their single acked serial, bake caches bounded by one scene's records, latches -- is file-scope
+   statics, and a second scene drawn through the same statics would be corrupted, not merely wrong
    (research/notes/ingame-wiki-3d-stage-plan.md, "The world passes"). So the Makefile compiles each
-   of the seven twice: `src/<name>.o` is the game's world, unchanged, and `src/<name>.wiki.o`,
-   compiled with -DTAGPU_SCENE_WIKI, is the wiki's stage. Each of the seven includes this header
+   of the eight twice: `src/<name>.o` is the game's world, unchanged, and `src/<name>.wiki.o`,
+   compiled with -DTAGPU_SCENE_WIKI, is the wiki's stage. Each of the eight includes this header
    first. Without TAGPU_SCENE_WIKI it does nothing; with it, it does four things:
 
-     1. It renames every external symbol the seven define (tagpu_vk_* -> tagpu_vkw_*,
+     1. It renames every external symbol the eight define (tagpu_vk_* -> tagpu_vkw_*,
         tagpu_r3d_* -> tagpu_r3dw_*, tagpu_posedraw_* -> tagpu_pdw_*, tagpu_posebake_* ->
         tagpu_pbw_*), so every call between the wiki's instances stays among them.
      2. It points the instances' hand-over sources at the wiki's producer, tagpu_wikiworld.c.
@@ -44,7 +44,7 @@
    thread only, and neither calls the other (list 1 keeps every call inside its own instance), so
    no two bakes are ever inside a walk at once. The 5.3 MB it costs is paid once.
 
-   IT DECLARES NOTHING FOR A CALLER OUTSIDE THE SEVEN: nothing outside them calls the wiki's
+   IT DECLARES NOTHING FOR A CALLER OUTSIDE THE EIGHT: nothing outside them calls the wiki's
    instances, and a caller's declarations belong with the caller. */
 
 #ifdef TAGPU_SCENE_WIKI
@@ -59,6 +59,11 @@
 #define tagpu_vk_world_record           tagpu_vkw_world_record
 #define tagpu_vk_world_record_direct    tagpu_vkw_world_record_direct
 #define tagpu_vk_world_shot             tagpu_vkw_world_shot
+
+#define tagpu_vk_fog_down               tagpu_vkw_fog_down
+#define tagpu_vk_fog_prepare            tagpu_vkw_fog_prepare
+#define tagpu_vk_fog_size               tagpu_vkw_fog_size
+#define tagpu_vk_fog_view               tagpu_vkw_fog_view
 
 #define tagpu_vk_terr_ab_frame          tagpu_vkw_terr_ab_frame
 #define tagpu_vk_terr_down              tagpu_vkw_terr_down
@@ -93,7 +98,6 @@
 #define tagpu_posedraw_begin            tagpu_pdw_begin
 #define tagpu_posedraw_begin_ghost      tagpu_pdw_begin_ghost
 #define tagpu_posedraw_end              tagpu_pdw_end
-#define tagpu_posedraw_fog_carried      tagpu_pdw_fog_carried
 #define tagpu_posedraw_frame            tagpu_pdw_frame
 #define tagpu_posedraw_fx               tagpu_pdw_fx
 #define tagpu_posedraw_handover         tagpu_pdw_handover
@@ -142,7 +146,6 @@
 #define tagpu_feat_atlas_owed           tagpu_wikiworld_feat_atlas_owed
 #define tagpu_feat_atlas_ack            tagpu_wikiworld_feat_atlas_ack
 #define tagpu_native_worldtgt           tagpu_wikiworld_worldtgt
-#define tagpu_native_foggrid            tagpu_wikiworld_foggrid
 #define tagpu_native_scissor_on         tagpu_wikiworld_scissor_on
 
 /* ---- 3. the game-only modules: an inert answer each --------------------------------------- */

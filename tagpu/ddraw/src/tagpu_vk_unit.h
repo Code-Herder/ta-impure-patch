@@ -77,10 +77,12 @@ int  tagpu_vk_unit_fx_count(unsigned frame);
 
 /* The five facts about a frame that stand this pass down, as the effects
    gather can know them before it gathers (tagpu_native.c `modelsOn`). Each is
-   what the frame's hand-over will then carry: `shadowOn` and `fogCarried` are
-   the posed pass's own answers (tagpu_posedraw.h), `otherDraws` its count so
-   far this frame plus the last frame's, `fogWant` whether the frame samples
-   the fog overlay, `scafOn` whether the scaffold overlay is asked for, and
+   what the frame will then carry: `shadowOn` is the posed pass's own answer
+   (tagpu_posedraw.h), `otherDraws` its count so far this frame plus the last
+   frame's, `fogWant` whether the frame samples the fog overlay, `fogCarried`
+   whether the native pass holds a fog source this frame (tagpu_native_fogsrc,
+   which the seam prepares the slot's fog image from), `scafOn` whether the
+   scaffold overlay is asked for, and
    the texel mirrors' four fields as `tagpu_posedraw_mirrors` reads them. */
 typedef struct {
     int shadowOn;
@@ -102,8 +104,8 @@ typedef struct {
    not yet grown every slot by a models' share one would not take; no when
    `q` says the frame will stand the pass down. A stand-down the forecast
    knows -- the scaffold, cast shadows on a device that will not filter the
-   depth map, draws the hand-over does not carry, a fog grid it could not
-   carry, a texel mirror not there yet -- costs no frame of effects (the frame
+   depth map, draws the hand-over does not carry, fog wanted with no source,
+   a texel mirror not there yet -- costs no frame of effects (the frame
    after uncarried draws stop still takes its models back, the forecast
    counting the last frame's); any other, and a slot the models' share will
    not grow, costs the frame it begins on, and the models are then held back

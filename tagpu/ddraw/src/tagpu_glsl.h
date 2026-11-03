@@ -25,52 +25,54 @@
     "    }\n" \
     "  }\n"
 
-/* ---- fog of war: the engine's own screen fog grid ----------------------
-   One copy of the rule for all four native passes (terrain-depth.md 5).
-   The engine does NOT test the LOS/MAPPED source maps per pixel; it builds a
+/* ---- fog of war: the engine's corner masks, expanded from the source -----
+   One copy of the rule for every native pass (terrain-depth.md 5).
+   The engine does NOT test the LOS/MAPPED maps per pixel; it builds a
    view-anchored grid of 32-px cells (0x4843C0, behind *(main+0x1421F)) whose
    two bytes are 4-bit CORNER masks — b0 = corners that are unexplored, b1 =
    corners that are explored but out of LOS — and the overlay (0x4848E0)
    paints b0==0xF solid black, b1==0xF a full shade remap, and every other
-   value one of 14 GAF edge sprites. The grid lattice is offset half a cell
-   from the map cells: a corner sits at a map cell's centre, which is why
-   sampling the source maps per fragment lands ~16 px off and misses the
-   feathered edge entirely.
+   value one of 14 GAF edge sprites. The lattice is offset half a cell from the
+   map cells: a corner sits at a map cell's centre, which is why sampling the
+   source maps per fragment lands ~16 px off and misses the feathered edge.
 
-   Bilinear coverage over the four corner bits, thresholded at 0.5, is those
-   14 shapes: 0xF -> everywhere, 0x3 (both top corners) -> exactly the top
-   half, a lone corner -> its quadrant. We get a clean edge where the engine
-   dithers one, which is the same class of approximation as the LHT flash and
-   the feature shadows.
+   THE SOURCE, NOT THE GRID. uFogSrc is the whole map's two bits a cell —
+   bit 0 never explored, bit 1 out of LOS (true LOS folded in when packed) —
+   sixteen cells a 32-bit texel, `uFogSize` (w, h) cells, read with texelFetch
+   (inc/tagpu_fogsrc.h, THE FORMAT). taFogEntry expands entry `c`, whose origin
+   is world (32 c + 16), exactly as the builder would:
+     1. the entry is clamped to [-1, size - 1]: past the entry that straddles an
+        edge, every entry repeats it;
+     2. the four-corner OR of cells c (bit 1), c + (1,0) (bit 2), c + (0,1)
+        (bit 4) and c + (1,1) (bit 8), a cell off the map giving 0 — the
+        engine's `jae` skip;
+     3. the four border completions `0x4846A1..0x4848CD`, in the engine's
+        order, on both nibbles: top (y == -1) 1 |= 4, 2 |= 8; bottom
+        (y == h - 1) 4 |= 1, 8 |= 2; left (x == -1) 4 |= 8, 1 |= 2; right
+        (x == w - 1) 8 |= 4, 2 |= 1.
+   taFog then does step 4: g = (w - 16)/32, c = floor(g), the entry at c,
+   f = g - c from the unclamped g, each nibble's coverage at f.
+   THE BOUND: a cell outside [0, w) x [0, h) is answered 0 before any fetch, so
+   every texelFetch is inside [0, (w + 15)/16) x [0, h), the image's extent
+   (tagpu_vk_fog.c sizes it from the same source). A frame with no source has
+   uFogSize (0, 0) and fetches nothing.
+   THE C MIRROR IS `tagpu_fog_entry` (inc/tagpu_fogsrc.h); edit both or
+   neither. tools/replay/fog_expand_test.py holds it to the builder's window
+   replication, and tagpu_fogwide_check.on holds both to the engine's grid in a
+   live game (`differ=`, `mirror-differ=`).
+
+   Bilinear coverage over the four corner bits, thresholded at 0.5, is the
+   engine's 14 shapes: 0xF -> everywhere, 0x3 (both top corners) -> exactly the
+   top half, a lone corner -> its quadrant. We get a clean edge where the
+   engine dithers one, which is the same class of approximation as the LHT
+   flash and the feature shadows.
 
    uFog bit0 = fog on, bit1 = this draw HIDES in grey rather than darkening:
    the engine never draws units or effects outside LOS, while terrain,
-   features and wreckage stay visible, in grey (TAGPU_GLSL_FOG_GREY_RGB).
-
-   THE CLAMP STOPS ONE CELL SHORT OF THE GRID, and that is a bound, not a
-   margin. A builder fills entry gx from map cells col0+gx and col0+gx+1, so
-   the LAST column of any grid — the engine's and ours alike — never has its
-   RIGHT corners written, and the last row never has its bottom ones (it is
-   why fogw_window asks for two spare columns and the engine's own border
-   completion works on cols-2). Clamping to `uFogDim - 0.001` would put every
-   sample past the grid at f.x = 1 in that column, i.e. on the corners nobody
-   wrote: coverage 0, which reads as NO FOG. That is the worst way to fail — a
-   zoomed-out frame the grid does not span comes out with the outer ring in
-   full daylight rather than merely smeared. `uFogDim - 1.0` lands such a
-   sample at f = 0 in the last entry instead, on the corners the builder did
-   write, so the region past the grid REPLICATES its edge — the same thing
-   fogw_edge_fill does off the map, and what the engine's own single off-map
-   row already amounts to. It decides a pixel only on a BARE frame (no wide
-   grid in the packet, counted by the native pass): on every other frame the
-   fog bound (tagpu_zoom.c) keeps every drawn fragment inside `[0, dim - 1]`
-   of the grid it samples — the engine's is taken only when the 1x rect about
-   the drawn eye lies in its fully written cells, and the wide one spans the
-   gathers' whole slab, a TAGPU_GATHER_MARGIN past the view on each side, for
-   any eye the frame is drawn from. */
+   features and wreckage stay visible, in grey (TAGPU_GLSL_FOG_GREY_RGB). */
 #define TAGPU_GLSL_FOG_UNIFORMS \
-    "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
-    "uniform vec2 uFogOrg;\n"         /* world x,z of grid cell (0,0)      */ \
-    "uniform vec2 uFogDim;\n"         /* cols, rows                        */ \
+    "uniform usampler2D uFogSrc;\n"   /* R32UI: 16 cells a texel, 2 bits each */ \
+    "uniform ivec2 uFogSize;\n"       /* the map in cells; (0,0) = no source */ \
     "uniform int uFog;\n"
 #define TAGPU_GLSL_FOG_FN \
     "float taFogCov(int m, vec2 f){\n" \
@@ -78,12 +80,29 @@
     "  float bl = float((m >> 2) & 1), br = float((m >> 3) & 1);\n" \
     "  return mix(mix(tl, tr, f.x), mix(bl, br, f.x), f.y);\n" \
     "}\n" \
+    "int taFogCell(int x, int y){\n" \
+    "  if (x < 0 || y < 0 || x >= uFogSize.x || y >= uFogSize.y) return 0;\n" \
+    "  uint w = texelFetch(uFogSrc, ivec2(x >> 4, y), 0).r;\n" \
+    "  return int((w >> uint(2 * (x & 15))) & 3u);\n" \
+    "}\n" \
+    "int taFogEntry(ivec2 c){\n" \
+    "  if (uFogSize.x < 1 || uFogSize.y < 1) return 0;\n" \
+    "  c = clamp(c, ivec2(-1), uFogSize - 1);\n" \
+    "  int a = taFogCell(c.x, c.y),     b = taFogCell(c.x + 1, c.y);\n" \
+    "  int d = taFogCell(c.x, c.y + 1), e = taFogCell(c.x + 1, c.y + 1);\n" \
+    "  int m = (a & 1) | (b & 1) << 1 | (d & 1) << 2 | (e & 1) << 3 |\n" \
+    "          (a >> 1) << 4 | (b >> 1) << 5 | (d >> 1) << 6 | (e >> 1) << 7;\n" \
+    "  if (c.y == -1)             m |= (m >> 2) & 0x33;\n" \
+    "  if (c.y == uFogSize.y - 1) m |= (m << 2) & 0xCC;\n" \
+    "  if (c.x == -1)             m |= (m >> 1) & 0x55;\n" \
+    "  if (c.x == uFogSize.x - 1) m |= (m << 1) & 0xAA;\n" \
+    "  return m;\n" \
+    "}\n" \
     "vec2 taFog(vec2 w){\n" \
-    "  vec2 g = clamp((w - uFogOrg) * (1.0/32.0), vec2(0.0),\n" \
-    "                 max(uFogDim - 1.0, vec2(0.0)));\n" \
+    "  vec2 g = (w - 16.0) * (1.0/32.0);\n" \
     "  vec2 c = floor(g);\n" \
-    "  vec2 e = texelFetch(uFogGrid, ivec2(c), 0).rg * 255.0 + 0.5;\n" \
-    "  return vec2(taFogCov(int(e.x) & 15, g - c), taFogCov(int(e.y) & 15, g - c));\n" \
+    "  int m = taFogEntry(ivec2(c));\n" \
+    "  return vec2(taFogCov(m & 15, g - c), taFogCov((m >> 4) & 15, g - c));\n" \
     "}\n"
 /* early, before any colour work: what the engine would not have drawn at all */
 #define TAGPU_GLSL_FOG_DISCARD \
