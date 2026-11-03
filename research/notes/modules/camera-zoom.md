@@ -212,7 +212,9 @@ answer. A poll that tears is a poll that hands the engine back the frame.
 reach), pulled back about the view centre like any notch out, and the target it left is kept
 (`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
 kept target, with the view centre moved onto the world point under the pointer. A mega notch with
-nothing to do (back while engaged, forward while not) moves nothing, as TADR's does; a zoom notch
+nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
+TADR's does — engaging at the floor would keep the floor as the level to return to, and the next
+notch forward would pan without zooming; a zoom notch
 back while engaged is already at the floor and leaves it engaged. The design and the strategic
 icons it shares a code path with: [mega map plan](../mega-map-plan.html).
 
@@ -229,7 +231,9 @@ the store has no say and the wheel zooms.
 pointer by moving the target centre `(a − c)(iz_prev − iz_new)`; leaving moves it
 `(a − c) · iz_prev` — the pointer's world offset from the centre at the level being left — through
 the same owed displacement `R`, so the eye lands where the model says at any frame rate and a notch
-inside the tween carries it whole.
+inside the tween carries it whole. Unlike a notch in, leaving does not keep the new view inside the
+old one — its step is up to two viewports from the 0.25 floor — so under a lagging game thread the
+reach bound can hold it (`held=`), as it holds any long step; the bound is what makes that safe.
 
 **Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
 mouse-world pin each set the level through `wheel_rest`, which disengages, so a later notch forward
@@ -536,8 +540,8 @@ the last level for as long as the centring lasted. The tween restarts from the l
 drawn, so a notch taken during a pause does not jump.
 
 The native heartbeat carries the witnesses — `fog=WxH out=N held=N/Mpx paused=N back=N
-nopieces=N`: `fog` is the source the last frame drew with (`0x0` without one: `tagpu_fogwide.off`,
-or a packet that carried none); `out` counts presented frames whose slab is not inside the
+nopieces=N`: `fog` is the source the last frame drew with (`0x0` for a packet that carried none, on which
+the native pass draws no unit but the watched player's own and no wreck); `out` counts presented frames whose slab is not inside the
 packet's reach, and must read 0; `held` counts frames the bound held back and the largest hold;
 `paused` the frames drawn at the last frame's level; `back` the frames that moved against the
 gesture anyway, and must read 0; `nopieces` the units inside a frame's slab that the packet carried

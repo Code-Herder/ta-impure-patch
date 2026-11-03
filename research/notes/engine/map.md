@@ -2158,8 +2158,8 @@ M0-P1 above).
 under `tagpu_fogwide_check.on`, rebuilt over the engine's own window and compared. **0 differing
 bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and 1555 non-zero cells
 respectively — measured on the window builder that read the maps directly; the replication is now
-`tagpu_fog_build_window` (`tagpu_fogsrc.c`) over the packed fog source, and that oracle is yet to
-be repeated on it. The overlay that consumes the grid is `terrain-depth.md` §5.1; what is new here
+`tagpu_fog_build_window` (`tagpu_fogsrc.c`) over the packed fog source, and the oracle repeated on
+it reads `differ=0` on all 536 lines of a 158-s fight at 1920×1080 (MEASURED 2026-11-03). The overlay that consumes the grid is `terrain-depth.md` §5.1; what is new here
 is its **allocation** and the **cell-by-cell reads** of `0x4843C0`. Our renderer does not sample
 this grid at all: it expands the whole map's source the same way (`terrain-depth.md` §8,
 `inc/tagpu_fogsrc.h`).]

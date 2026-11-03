@@ -193,8 +193,8 @@ is per-frame working copies, not information, so the landing is split to remove 
    test checks that all 24 orders agree and that dropping or turning round each completion is
    caught, instead of a swapped order failing; and the browser lab and the wiki mockup extract the
    DLL's GLSL, so both now bind an R32UI source (`tools/tascene` declares `usampler2D`'s
-   precision). `tagpu_fogwide.off` now means no fog on the Vulkan lane: there is no grid left to
-   fall back to.
+   precision). There is no off switch for the fog: a frame without a source fails closed, drawing
+   no unit but the watched player's own and no wreck.
 1b. **Terrain instances once per level.**
 1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
    extent and the true viewport, bounded by the int16 click rect; the hit-test guard at

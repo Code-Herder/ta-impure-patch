@@ -1077,12 +1077,16 @@ completion is a no-op on a wholly off-map line while ours completes the straddli
 oracle leaves both lines out and counts them as `skipped=`. Off the engine's grid there is no
 reference at all, which is what the host test (`tools/replay/fog_expand_test.py`) covers: it holds
 `tagpu_fog_entry` to the window build over random maps and windows, and shows that dropping or
-turning round any one completion is caught. The live `differ=0` measured against the window
-builder this replaced (0 of 720 cells at 1024×768, 0 of 1972 at 1920×1080) has not yet been
-repeated on the source (V1a-3).
+turning round any one completion is caught. Live, on the source: **536 oracle lines in a 158-s
+200-v-200 fight under true LOS at 1920×1080, every one `differ=0 mirror-differ=0`** (`skipped=0` in
+the fight, 180 at the map's corners), MEASURED 2026-11-03; and the world frames at 1×, 0.5× and
+0.25×, at the map's centre and two corners, in true LOS and mapping only, **byte-identical** to the
+window builder's (nanoframes compared at one game tick).
 
-`tagpu_fogwide.off` in the gamedir stops the pack live, polled on the game thread at the top of the
-tick; the Vulkan lane then draws no fog at all — there is no other source to fall back to.
+**There is no off switch.** A frame whose packet carries no source — a pack, an append or a copy
+that failed, a puppet level before the viewed seat's counters exist — samples no fog, and the
+native pass's gates **fail closed** on it: no unit but the watched player's own and no wreck is
+drawn (`tagpu_native.c`). Fog is never off for a player; an inactive mode is an all-zero source.
 
 ## Appendix — address & offset tables
 

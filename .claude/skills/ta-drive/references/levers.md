@@ -194,7 +194,6 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `mirror.on` / `mirror.off` | live (30 frames) | the map edge: the world reflected past the map, or black. On the play defaults, where the store's `edge=mirror\|black` decides it; under `tagpu_defaults.off` (every tacli control launch) it is **black** unless `mirror.on` is armed. The render thread logs `native: map edge = mirror` or `= black` on every change, the one line to read |
-| `fogwide.off` | live | the fog source off: **no fog at all** on Vulkan, at every zoom |
 | `fogwide_check.on` | live | the oracle: `fogwide check: CxR compared=N of cells=M skipped=K differ=N engine-nonzero=N truelos=0|1 mirror-compared=N mirror-differ=N` every 120th tick. It rebuilds the engine's own window from our packed source and compares it with the engine's grid, **`differ=0`**, and checks the shared expansion (`tagpu_fog_entry`) against that build, **`mirror-differ=0`**. `skipped` is the border lines where the engine's literal completion row or column and ours differ, both left out — 0 for an eye in the engine's own `[0, extent − W]`, non-zero near the map's edge in the centre range |
 
 Driving the camera at a zoom other than 1:
@@ -262,7 +261,7 @@ out of LOS in true-LOS mode), packed on the game thread and expanded in every pa
 engine expands its own grid; its heartbeat is `fogwide: WxH source, N KB, packs=N in 5.0s = R/s
 ticks=N pack=…/… us (mean/max)` once per five seconds of wall time. **`packs=0` is not a fault at
 LosType 12** (`--los 0`) on a fully mapped scene: nothing changes, so nothing repacks — read the
-word at `*0x511DE8+0x14281` before chasing it. `fogwide.off` is **no fog at all** on Vulkan.
+word at `*0x511DE8+0x14281` before chasing it. Fog has no off switch: a frame with no source (`fog=0x0`) draws no unit but the watched player's own and no wreck.
 
 The native heartbeat's fog fields: `fog=WxH` is the source the last frame handed over (`0x0` with
 none). **`out=` must read 0** — frames whose drawn slab was not inside the packet's tables'
@@ -434,7 +433,7 @@ that map's size.
 These appear in older notes and commit messages. No file in the tree reads them; creating one
 changes nothing and logs nothing, which is the failure mode to recognise.
 
-`tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
+`tagpu_fogwide.off`, `tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
 `tagpu_writeback.on`, `tagpu_posedraw.on`, `tagpu_posefix.off`, `tagpu_posewatch.on`,
 `tagpu_poserecon.on`, `tagpu_purevk.on`, `tagpu_selgeom.on`, `tagpu_shade.off`,
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,

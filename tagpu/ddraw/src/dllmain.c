@@ -193,8 +193,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            (tagpu_fogwide.h). No engine patch of its own: it is ticked on the
            game thread, at terrown's fog-overlay call site when that is ours
            and otherwise, on the Vulkan renderer, in the packet publisher's
-           `after`; the tick does nothing until this has run.
-           `tagpu_fogwide.off` turns it off. */
+           `after`; the tick does nothing until this has run. There is no
+           switch: a frame without the source hides every unit the watched
+           player does not own (tagpu_native.c), so fog has no off. */
         tagpu_fogwide_init();
 
         /* tagpu: own the engine's world-space UI markers — health bars

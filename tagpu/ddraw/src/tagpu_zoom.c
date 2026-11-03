@@ -304,7 +304,10 @@ static float wheel_level(const TAGPU_PACKET* pk)
             s_megaOn = 0;
             centre = 1;
         } else if (e->mega) {
-            if (e->delta < 0 && !s_megaOn) {
+            /* engaging needs a level to leave: at the floor already it
+               would keep the floor as the level to return to, and the next
+               notch forward would pan onto the pointer without zooming */
+            if (e->delta < 0 && !s_megaOn && s_wheelTgt > zoom_floor()) {
                 s_megaBack = s_wheelTgt;
                 s_megaOn = 1;
                 iz = 1.0 / (double)zoom_floor();
@@ -2272,7 +2275,10 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    The clamp is the identity for every gesture that only zooms in (each notch's
    eye term is at most `(vw/2)` times its drop in distance, and the eye and the
    distance are lerped along the same ease, so the view stays a subset of the
-   one before it), and for any displacement the game thread has not applied
+   one before it) -- except LEAVING THE MEGA MAP, whose eye term is
+   `(a - c)` times the whole distance it leaves from rather than its drop (up
+   to 2 viewports from the 0.25 floor), so its new view is not inside the old
+   one and a lagging game thread can hold it like any long step -- and for any displacement the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
    of drawing past it. While a frame is held, a click is still mapped by the

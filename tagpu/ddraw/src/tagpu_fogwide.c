@@ -62,8 +62,6 @@ static int              s_pubValid;                       /* s_bits holds a sour
 static int              s_pubW, s_pubH, s_pubStride;
 static unsigned         s_pubData;                        /* bumped per pack       */
 
-static volatile LONG    s_off;                            /* tagpu_fogwide.off */
-
 /* game thread only: the heartbeat, so the cost of a pack is a number and not an estimate.
    Emitted on WALL TIME — see fogw_heartbeat for why not on ticks. */
 static unsigned         s_hbTicks, s_hbPacks;
@@ -305,7 +303,6 @@ static int fogw_room(size_t words)
 }
 
 static void fogw_heartbeat(void);
-static void fogw_poll_off(void);
 
 /* DllMain only. There is nothing to create; the entry point exists so the
    module has an explicit arming point and the tick has something to test. */
@@ -320,12 +317,11 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
     int changed, stride;
 
     if (!s_init) return;                    /* attach did not run */
-    fogw_poll_off();
 
     /* EVERY bail-out withdraws the published source: a tick that stops
        packing must not leave the publisher copying bits an LOS state that
        keeps moving has left behind. */
-    if (s_off || !fogw_source(ta, &s)) {
+    if (!fogw_source(ta, &s)) {
         s_pubValid = 0;
         return;
     }
@@ -413,34 +409,13 @@ static void fogw_heartbeat(void)
     s_hbTicks = s_hbPacks = 0; s_hbUs = s_hbUsMax = 0.0;
 }
 
-/* Polled by the PRODUCER, on the game thread, at the top of the tick — not by
-   a consumer. Polled by the consumer, the lever works only while something is
-   consuming the source: on any frame the native pass never reaches the fog
-   block, `s_off` is not refreshed and the game thread goes on packing bits
-   nobody reads, with `tagpu_fogwide.off` sitting in the gamedir doing nothing.
-   The producer is the one that must obey it, and it is also the thread that can
-   then publish "invalid" and take the consumer down with it in one step. The
-   engine's own loop does file I/O throughout, and tagpu_opt.c's readers poll
-   from this thread on the same cadence. */
-static void fogw_poll_off(void)
-{
-    static DWORD tick;                       /* game thread only */
-    static int   first = 1;
-    DWORD now = GetTickCount();
-    if (first || now - tick > 250) {
-        first = 0;
-        tick = now;
-        s_off = (GetFileAttributesA("tagpu_fogwide.off") != INVALID_FILE_ATTRIBUTES);
-    }
-}
-
 /* THE GAME THREAD'S HAND-OFF. The packet's publisher calls this from the same
    DrawGameScreen the tick above ran in, on this thread, and COPIES the words
    into the frame packet. There is no other reader: the render thread takes the
    copy out of its packet and this pointer never leaves the game thread. */
 int tagpu_fogwide_source(TAGPU_FOGSRC* out)
 {
-    if (s_off || !s_init || !s_pubValid || !s_bits) return 0;
+    if (!s_init || !s_pubValid || !s_bits) return 0;
     fogw_view(out);
     return 1;
 }

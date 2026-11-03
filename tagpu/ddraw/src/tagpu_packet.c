@@ -131,7 +131,8 @@
    table first, then the pieces, units, wrecks and anchors, then the map's own
    features while the mirror is taking them (tagpu_packet_pub.c, fill_frame),
    so those are the part a reserve that is too small would cut -- and a frame
-   without its fog source draws no fog-gated world, a truncated unit, piece or
+   without its fog source draws no unit but the watched player's own and no
+   wreck (tagpu_native.c), a truncated unit, piece or
    wreck table refuses the frame's whole unit hand-over, and a cut map-feature
    table holds the mirror off for another packet. The tables' sum below is
    every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,

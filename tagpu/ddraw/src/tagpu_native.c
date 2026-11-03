@@ -2301,7 +2301,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            (LosType=14, a reachable skirmish setting) — and with the engine's
            overlay suppressed, that would delete the grey band outright instead
            of merely disagreeing with it. A frame whose packet carries no source
-           (`tagpu_fogwide.off`, a pack or a copy that failed) draws no fog. */
+           (a pack, an append or a copy that failed) samples no fog; the unit
+           gate below fails CLOSED on it instead. */
         if (s_fogHave) fogMode = 1 | (lostype & 2);
     }
     /* THE WITNESS: this frame's gather slab inside the rect the packet's
@@ -2408,6 +2409,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         int team = pu->logo != TAGPU_PK_LOGO_NONE ? pu->logo : owner;
         int cloaked = (pu->cloak & 4) != 0;
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
+        /* NO SOURCE, NO FOREIGN UNITS. Fog is never off for a player -- an
+           inactive mode is an all-zero source, not a missing one -- so a frame
+           without the source cannot say where the watched player sees, and
+           drawing every unit in the packet would reveal the whole map's
+           armies. Only the watched player's own are drawn until a source
+           arrives. */
+        if (!s_fogHave && owner != watched) continue;
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
             int fog = tagpu_fog_at(&s_fogSrc, wx, wy - wz / 2);
@@ -2643,7 +2651,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     ay < evpT - TAGPU_GATHER_MARGIN ||
                     ay > evpT + evh + TAGPU_GATHER_MARGIN) continue;
                 /* wreckage is remembered furniture: hidden only where the
-                   map is unexplored, visible (darkened) in grey */
+                   map is unexplored, visible (darkened) in grey -- and hidden
+                   everywhere on a frame with no source, which cannot say where
+                   the map is explored (the unit gate's rule, below) */
+                if (!s_fogHave) continue;
                 if ((fogMode & 1) &&
                     (tagpu_fog_at(&s_fogSrc, rx, ry - rz / 2) & 1))
                     continue;

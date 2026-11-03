@@ -83,9 +83,8 @@ void tagpu_fogwide_tick(char* ta, int rebuilt);
 
 /* GAME THREAD, from the packet's publisher, in the same DrawGameScreen the tick
    above ran in. Fills `out` with the source to copy into this frame's packet and
-   returns 1, or returns 0 when there is none: the module is off
-   (`tagpu_fogwide.off`), attach did not run, nothing has been packed yet, or a
-   bail-out withdrew it. `out->words` is this module's and is read on this thread
+   returns 1, or returns 0 when there is none: attach did not run, nothing has
+   been packed yet, or a bail-out withdrew it. `out->words` is this module's and is read on this thread
    only. */
 int tagpu_fogwide_source(TAGPU_FOGSRC* out);
 

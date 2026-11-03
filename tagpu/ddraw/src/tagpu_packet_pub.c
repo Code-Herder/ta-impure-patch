@@ -2774,7 +2774,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        replay's overlays, the effects, the UI's render half, the font, and last
        the effects models' five tables, the one layer
        an engine count can drive past the design point (fill_fxmodels). A
-       frame without its fog source draws no fog-gated world, one without its
+       frame without its fog source draws no unit but the watched player's own
+       and no wreck, one without its
        unit tables drops its whole unit hand-over, and one without its
        map-feature table leaves the mirror off another packet; one without an
        effect layer, the minimap or the models is missing that alone. */
