@@ -23,8 +23,8 @@ renderer: it is a jump to the whole-map level, TADR's gesture on our camera.
   (`Icon/iconcfg.ini`) when its install ships one.
 
 **Why not TADR's design.** TADR's megamap is a separate 2D picture of the map with its own input
-translation for every order. Ours already draws the world, and selects and commands in it, below
-1×; the only things missing are the levels below 0.25 and the icons. The TADR-port notes listed the
+translation for every order. Ours draws the world, and selects and commands in it, at every level
+down to the whole map; what the game shows there is the world itself, with icons for the units. The TADR-port notes listed the
 megamap as a deliberate exclusion (`tadr-port/quality-of-life.md`, `tadr-merge-exploration.md`);
 this plan replaces that line, and the landing that ships it corrects those notes.
 

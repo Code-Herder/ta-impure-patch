@@ -507,7 +507,7 @@ static int      s_reachHeldMax;
    the one last drawn: a zoom-out waits at a rung for the game thread instead
    of popping back. The request includes the wheel's target, so a notch out
    asks for its target's rung on the frame it arrives; the wait is the game
-   thread's lag, at a rung crossing only (`levelheld` in the native
+   thread's lag, at a rung crossing only (`reachheld=` in the native
    heartbeat).
 
    IN FLIGHT means posted and not yet acknowledged: a request leaves the ring
