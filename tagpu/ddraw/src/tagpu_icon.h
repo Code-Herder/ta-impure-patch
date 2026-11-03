@@ -30,10 +30,12 @@ int  tagpu_icon_suppressed(unsigned i);
 /* Either of the two above: the unit has no model on screen, so its health bar
    and group digit are not drawn either (BAR fades them out there). */
 int  tagpu_icon_hides(unsigned i);
-/* Queue packet unit `u` (index `i`) at its anchor (ax, ay): its class icon
-   when `dot` is 0, else the radar dot -- its owner's radar logo frame -- under
-   the same distance rule. `sel` fills it white. 1 when queued; 0 when the rule
-   or the art gives it nothing, or the list is full (counted). */
+/* Queue packet unit `u` (index `i`) at its anchor (ax, ay): when `dot` is 0
+   its type's icon -- the mod set's picture for it, else its class's shape --
+   else a radar contact's, under the same distance rule: the set's NONE
+   picture, else the radar dot, its owner's radar logo frame. `sel` fills it
+   white. 1 when queued; 0 when the rule or the art gives it nothing, or the
+   list is full (counted). */
 int  tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int sel, int dot);
 /* From the marker gather: the queued icons sorted into BAR's order -- by
    layer, then far to near, then packet index -- and emitted through

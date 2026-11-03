@@ -1795,16 +1795,18 @@ static unsigned s_iconHits, s_iconMisses;
    icon's edge in *edge; 0 when it is drawn as a model; -1 when the rule does
    not apply -- a row past the class table, a nanoframe, a unit with no health.
    The row is unit+0xA6, bounded by the table's count, which is the level's
-   UNITINFOCount. */
+   UNITINFOCount. The icon is the one the picture draws (tagpu_icon_type): a
+   mod set's picture, from the art this thread published, or the class's
+   shape. */
 static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
                       const TAGPU_ICON_VIEW* v, float z, int* edge)
 {
     const unsigned row = *(const unsigned short*)(unit + U_MODELID);
-    int hide;
+    int hide, size;
     if (row >= n || tab[row].cls >= TAGPU_ICLS_N) return -1;
     if (*(const float*)(unit + U_NANO) > 0.0f || *(const short*)(unit + U_HEALTH) <= 0) return -1;
-    *edge = tagpu_icon_gen_edge(v, tab[row].cls);
-    tagpu_icon_eval(v, z, tagpu_icon_bar_edge(v, tab[row].cls), *edge, tab[row].r_px, &hide);
+    tagpu_icon_type(v, tagpu_icontype_art(), tab[row].cls, tab[row].icon, &size, edge);
+    tagpu_icon_eval(v, z, size, *edge, tab[row].r_px, &hide);
     return hide;
 }
 

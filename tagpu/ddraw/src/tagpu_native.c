@@ -2432,8 +2432,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (refused) {
             /* A RADAR DOT is exactly the minimap's dot (0x466DC0) restricted to
                the units this gather refuses: a radar or sonar contact
-               (`+0x110 & 0x300`) with a model. Under the icon distance rule, so
-               none at 1x; never pickable in the world view, as in stock. */
+               (`+0x110 & 0x300`) with a model -- drawn as the logo's dot, or as
+               a mod set's NONE picture (tagpu_icon_push). Under the icon
+               distance rule, so none at 1x; never pickable in the world view,
+               as in stock. */
             if ((st & ST_RADARSEEN) && pu->model_id) tagpu_icon_push(pui, pu, ax, ay, 0, 1);
             continue;
         }

@@ -73,7 +73,8 @@ DFNS(DECL)
 #define VS_ZOOM     8
 #define VS_ZOOMC   16
 
-#define FS_SZ      48          /* LFS's block: FS's four, then uGrid at 32 */
+#define FS_SZ      48          /* LFS's block: FS's four, then uGrid at 32;
+                                  FS's own ends at 40, uIconSelCol's end    */
 #define FS_KEY      0
 #define FS_TEXT     4
 #define FS_FOGSIZE  8
@@ -82,8 +83,10 @@ DFNS(DECL)
 #define FS_ICONSEL   24
 #define FS_ICONWHITE 28        /* ...and the GUI's white and black          */
 #define FS_ICONINK   32
+#define FS_ICONSELCOL 36       /* ...and what a selected set picture's
+                                  SelectedColor texels show               */
 #define FS_GRID    32          /* LFS only, a line draw's; an icon draw's block
-                                  holds FS_ICONINK there */
+                                  holds FS_ICONINK and FS_ICONSELCOL there */
 
 #define MVST       8           /* floats a vertex: x,y u,v wx,wz colour z */
 #define MK_VSTRIDE (MVST * 4)
@@ -946,6 +949,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                 put_i(p, FS_ICONSEL, s_h.iconSel);
                 put_i(p, FS_ICONWHITE, s_h.iconWhite);
                 put_i(p, FS_ICONINK, s_h.iconInk);
+                put_i(p, FS_ICONSELCOL, s_h.iconSelCol);
             }
             put_i(p, FS_TEXT, s_h.draws[i].text);
             put_i(p, FS_FOGSIZE, fogW);
@@ -1050,8 +1054,9 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        extent: on a frame the offscreen target refused the world goes into the
        swapchain image at whatever scale that is, and a wrong scale does not
        blur a line, it moves every pixel of it. Written into every LINE draw's
-       block, the only ones LFS draws: an icon draw's block holds uIconInk at
-       the same offset 32 (FS_ICONINK), which this must not overwrite. */
+       block, the only ones LFS draws: an icon draw's block holds uIconInk and
+       uIconSelCol at the grid's offsets 32 and 36 (FS_ICONINK,
+       FS_ICONSELCOL), which this must not overwrite. */
     {
         int g[4];
         tagpu_line_grid(g, (int)(s_h.gw + 0.5f), (int)(s_h.gh + 0.5f),

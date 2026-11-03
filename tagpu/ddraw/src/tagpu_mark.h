@@ -176,10 +176,12 @@ typedef struct TAGPU_MKHAND {
        nothing. Written once, so it is uploaded once per slot. */
     const unsigned char* art; int artW, artH, artKey;
     /* tagpu_icontype_art: one palette index a texel, `iconKey` where a frame
-       draws nothing, `iconFill` and `iconSel` its two markers; `iconWhite`
-       and `iconInk` the GUI's white and black, a selected icon's fill and
-       every shape's outline. Written once, so it is uploaded once per slot. */
-    const unsigned char* icon; int iconW, iconH, iconKey, iconFill, iconSel, iconWhite, iconInk;
+       draws nothing, `iconFill` and `iconSel` its two markers, `iconSelCol`
+       what a `sel` texel shows on a selected unit (a mod set's SelectedColor);
+       `iconWhite` and `iconInk` the GUI's white and black, a selected icon's
+       fill and every shape's outline. Written once, so it is uploaded once per
+       slot. */
+    const unsigned char* icon; int iconW, iconH, iconKey, iconFill, iconSel, iconSelCol, iconWhite, iconInk;
     /* THE PALETTE, AS BYTES: 256 RGBA8 texels of `tagpu_pal_engine()`, the
        shape `tagpu_fx.h` uses for it, from which the consumer builds its own
        image. The fog is not here: the consumer samples the slot's fog image

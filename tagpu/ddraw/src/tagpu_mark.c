@@ -332,13 +332,14 @@ static const char* FS =
     "uniform int uText;\n"
     TAGPU_GLSL_FOG_UNIFORMS
     /* the icons' markers and colours (TAGPU_MKHAND), declared after the fog's
-       so spirv-gen lays them at 20, 24, 28 and 32 of the block: LFS is not
-       touched and keeps its uGrid at 32, which tagpu_vk_mark.c writes into a
-       line draw's block alone */
+       so spirv-gen lays them at 20, 24, 28, 32 and 36 of the block: LFS is
+       not touched and keeps its uGrid at 32, which tagpu_vk_mark.c writes into
+       a line draw's block alone */
     "uniform int uIconFill;\n"
     "uniform int uIconSel;\n"
     "uniform int uIconWhite;\n"
     "uniform int uIconInk;\n"
+    "uniform int uIconSelCol;\n"
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_ICON_FN
     "void main(){\n"
@@ -363,7 +364,8 @@ static const char* FS =
        y = alpha + 256 * shape, each under 2^12, so the interpolated value
        rounds back to the integer at every fragment. Shape 0 is art: the
        atlas's key is nothing, its SelectedColor marker shows only when
-       selected and its FillColor marker takes the team colour, or white.
+       selected, in the set's own SelectedColor, and its FillColor marker
+       takes the team colour, or white.
        Any other shape is generated here, from the quad's own (+-1, +-1) and
        fwidth -- taken before any branch on the shape, in control flow every
        fragment of the draw shares -- so it needs no atlas and no re-raster
@@ -377,7 +379,7 @@ static const char* FS =
     "    if (sh == 0) {\n"
     "      pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
     "      if (pi == uKey) discard;\n"
-    "      if (pi == uIconSel) { if (!sel) discard; }\n"
+    "      if (pi == uIconSel) { if (!sel) discard; pi = uIconSelCol; }\n"
     "      else if (pi == uIconFill) pi = sel ? uIconWhite : (t & 255);\n"
     "    } else {\n"
     "      int m = taIconShape(sh - 1, vUV, fw);\n"
@@ -1848,6 +1850,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             if (ia) {
                 s_mkPub.icon = ia->pix; s_mkPub.iconW = ia->w; s_mkPub.iconH = ia->h;
                 s_mkPub.iconKey = ia->key; s_mkPub.iconFill = ia->fill; s_mkPub.iconSel = ia->sel;
+                s_mkPub.iconSelCol = ia->selcol;
             }
             s_mkPub.iconWhite = gui ? gui[GUI_WHITE] : GUI_WHITE;
             s_mkPub.iconInk = gui ? gui[GUI_BLACK] : GUI_BLACK;

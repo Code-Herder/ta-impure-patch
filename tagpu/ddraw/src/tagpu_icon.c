@@ -27,7 +27,7 @@
 typedef struct {
     unsigned long long key;      /* layer << 48 | sortable(ay) << 16 | index  */
     float    ax, ay;
-    const TAGPU_ICONRECT* art;   /* the radar dot's frame, NULL for a shape  */
+    const TAGPU_ICONRECT* art;   /* a picture in the art, NULL for a shape   */
     unsigned short ew, eh;       /* edge, screen px                          */
     unsigned char team, sel, alpha, shape;
 } ICREC;
@@ -48,7 +48,7 @@ static const TAGPU_ICONART*  s_art;
 static const TAGPU_PK_UTYPE* s_types;
 static unsigned      s_ntypes;
 /* the log's numbers: this frame's counts by class, and the cost */
-static unsigned      s_cls[TAGPU_ICLS_N], s_hidden, s_supp, s_dots;
+static unsigned      s_cls[TAGPU_ICLS_N], s_hidden, s_supp, s_dots, s_setpics;
 static LARGE_INTEGER s_freq;
 static double        s_usFrame, s_usEmit;
 static unsigned      s_frames;
@@ -74,7 +74,7 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     int scale, dist, fade, c;
 
     s_on = 0; s_n = 0; s_nrec = 0; s_drop = 0;
-    s_hidden = s_supp = s_dots = 0;
+    s_hidden = s_supp = s_dots = s_setpics = 0;
     memset(s_cls, 0, sizeof s_cls);
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&t0);
@@ -106,15 +106,19 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     s_n = pk->n_units;
     units = tagpu_pk_units(pk);
     /* NEVER AN ICON: a nanoframe -- it is the build's own picture -- or a unit
-       with no health left. The type row is bounded by the table's count and the
-       class by the class count; anything else is drawn as its model. */
+       with no health left. The type row is bounded by the table's count, the
+       class by the class count and a set picture by the art's (tagpu_icon_type);
+       anything else is drawn as its model. */
     for (i = 0; i < s_n; i++) {
         const TAGPU_PK_UNIT* u = &units[i];
         int a = 0, h = 0;
         if (u->type_row < s_ntypes && !(u->nano > 0.0f) && u->health > 0) {
             const TAGPU_PK_UTYPE* t = &s_types[u->type_row];
-            if (t->cls < TAGPU_ICLS_N)
-                a = tagpu_icon_eval(&s_view, zoom, s_size[t->cls], s_edge[t->cls], t->r_px, &h);
+            int size, edge;
+            if (t->cls < TAGPU_ICLS_N) {
+                tagpu_icon_type(&s_view, s_art, t->cls, t->icon, &size, &edge);
+                a = tagpu_icon_eval(&s_view, zoom, size, edge, t->r_px, &h);
+            }
         }
         s_alpha[i] = (unsigned char)a;
         s_flag[i] = h ? IC_HIDE : 0u;
@@ -163,29 +167,49 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
     if (s_nrec >= TAGPU_PK_DESIGN_SLOTS) { s_drop++; return 0; }
     r = &s_rec[s_nrec];
     if (dot) {
-        /* the minimap's dot: the owner's logo frame, at an integer scale */
+        /* a radar contact: the mod set's NONE picture -- its art for an
+           unidentified contact -- at the set's scale when it has one, else
+           the minimap's dot, the owner's logo frame at its own scale */
         const TAGPU_ICONRECT* f;
-        int e;
-        if (u->logo >= s_art->nlogo) return 0;
-        f = &s_art->logo[u->logo];
-        e = s_dotK * (f->w > f->h ? f->w : f->h);
+        int k, e;
+        if (s_art->none >= 0 && s_art->none < s_art->nset && s_art->none < TAGPU_ICONART_SETS) {
+            f = &s_art->set[s_art->none];
+            k = tagpu_icon_art_k(&s_view);
+            r->team = u->logo < s_art->nlogo ? s_art->team[u->logo] : s_ink;
+        } else {
+            if (u->logo >= s_art->nlogo) return 0;
+            f = &s_art->logo[u->logo];
+            k = s_dotK;
+            r->team = s_art->team[u->logo];
+        }
+        e = k * (f->w > f->h ? f->w : f->h);
         r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, e, e, 0u, &hide);
         if (!r->alpha) return 0;
         r->art = f;
-        r->ew = (unsigned short)(s_dotK * f->w); r->eh = (unsigned short)(s_dotK * f->h);
+        r->ew = (unsigned short)(k * f->w); r->eh = (unsigned short)(k * f->h);
         r->shape = 0;
-        r->team = s_art->team[u->logo];
         layer = 1;                       /* BAR's unidentified contact: drawOrder 1 */
         s_dots++;
     } else {
         const TAGPU_PK_UTYPE* t;
+        const TAGPU_ICONRECT* pic;
+        int size, edge;
         if (!s_alpha[i] || u->type_row >= s_ntypes) return 0;
         t = &s_types[u->type_row];
         if (t->cls >= TAGPU_ICLS_N) return 0;
+        pic = tagpu_icon_type(&s_view, s_art, t->cls, t->icon, &size, &edge);
         r->alpha = s_alpha[i];
-        r->art = NULL;
-        r->ew = r->eh = (unsigned short)s_edge[t->cls];
-        r->shape = (unsigned char)(t->cls + 1);
+        r->art = pic;
+        if (pic) {
+            /* the set's picture at the art scale, its own aspect kept */
+            const int k = tagpu_icon_art_k(&s_view);
+            r->ew = (unsigned short)(k * pic->w); r->eh = (unsigned short)(k * pic->h);
+            r->shape = 0;
+            s_setpics++;
+        } else {
+            r->ew = r->eh = (unsigned short)edge;
+            r->shape = (unsigned char)(t->cls + 1);
+        }
         r->team = u->logo < s_art->nlogo ? s_art->team[u->logo] : s_ink;
         layer = t->layer & 3u;
         s_cls[t->cls]++;
@@ -229,11 +253,11 @@ void tagpu_icon_emit(void)
         if (s_on) combatA = tagpu_icon_eval(&s_view, s_zoom, s_size[TAGPU_ICLS_COMBAT], s_edge[TAGPU_ICLS_COMBAT],
                                           0u, &dh);
         _snprintf(b, sizeof b,
-                  "icons: on=%d units=%u icons=%u hidden=%u cargo=%u dots=%u drop=%u "
+                  "icons: on=%d units=%u icons=%u set=%u hidden=%u cargo=%u dots=%u drop=%u "
                   "base=%.2f zS=%.4f z=%.3f alpha(combat)=%d alpha(dot)=%d "
                   "edges=%d/%d/%d/%d/%d/%d/%d/%d/%d dotk=%d "
                   "by-class=%u/%u/%u/%u/%u/%u/%u/%u/%u us=%.1f+%.1f",
-                  s_on, s_n, s_nrec, s_hidden, s_supp, s_dots, s_drop,
+                  s_on, s_n, s_nrec, s_setpics, s_hidden, s_supp, s_dots, s_drop,
                   s_view.base, s_view.zS, s_zoom, combatA, dotA,
                   s_edge[0], s_edge[1], s_edge[2], s_edge[3], s_edge[4], s_edge[5], s_edge[6],
                   s_edge[7], s_edge[8], s_dotK,

@@ -12,7 +12,10 @@
         more at every icon scale on every frame, and BAR's size where the
         floor does not bind; the switch follows BAR's size and the cover
         test the drawn edge where it does;
-     5. each shape rasterised at every edge from the floor to 128 px:
+     5. what a type is drawn as: a mod set's picture at the art scale when
+        its index names one of the art's, its class's shape otherwise --
+        with no set, an index past the set, or no art;
+     6. each shape rasterised at every edge from the floor to 128 px:
         symmetric about x = 0, ink on its border, no hole in a solid shape,
         an open centre in a hollow one, from 16 px the plus at the centre of
         the builder classes alone and fill at the centre of the other solid
@@ -300,6 +303,42 @@ static void test_shapes(int dump)
     CHECK(h == GOLDEN16, "the 16-px rasters' FNV is 0x%08X, golden 0x%08X", h, GOLDEN16);
 }
 
+/* ---- 5. a type's icon: a set picture or the class's shape ---- */
+static void test_type(void)
+{
+    static TAGPU_ICONART art;
+    TAGPU_ICON_VIEW v;
+    const TAGPU_ICONRECT* r;
+    int size, edge, c;
+
+    memset(&art, 0, sizeof art);
+    art.nset = 2;
+    art.set[0].w = 10; art.set[0].h = 10;
+    art.set[1].w = 18; art.set[1].h = 12;
+    tagpu_icon_view(&v, 3840, 2160, 100, 100, 33);           /* base 20.16: k 2 */
+    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
+    CHECK(r == &art.set[0] && size == 20 && edge == 20, "set picture 0 at 4K: %d/%d", size, edge);
+    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 1, &size, &edge);
+    CHECK(r == &art.set[1] && size == 36 && edge == 36, "a picture's longer side decides: %d/%d", size, edge);
+    tagpu_icon_view(&v, 1920, 1080, 100, 100, 33);           /* base 10.08: k 1 */
+    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
+    CHECK(r && size == 10 && edge == 10, "set picture 0 at 1080p: %d/%d", size, edge);
+    tagpu_icon_view(&v, 640, 480, 100, 100, 33);             /* base 3.36: k 1, no floor */
+    r = tagpu_icon_type(&v, &art, TAGPU_ICLS_COMBAT, 0, &size, &edge);
+    CHECK(r && size == 10 && edge == 10, "a picture has no floor and no shrink: %d/%d", size, edge);
+    for (c = 0; c < TAGPU_ICLS_N; c++) {
+        static const unsigned none[4] = { TAGPU_ICON_NOSET, 2, 63, 64 };
+        int k;
+        for (k = 0; k < 4; k++) {
+            r = tagpu_icon_type(&v, &art, c, none[k], &size, &edge);
+            CHECK(!r && size == tagpu_icon_bar_edge(&v, c) && edge == tagpu_icon_gen_edge(&v, c),
+                  "class %d, index %u past the set: the shape", c, none[k]);
+        }
+        r = tagpu_icon_type(&v, NULL, c, 0, &size, &edge);
+        CHECK(!r && edge == tagpu_icon_gen_edge(&v, c), "class %d with no art: the shape", c);
+    }
+}
+
 int main(int argc, char** argv)
 {
     const int dump = argc > 1 && !strcmp(argv[1], "dump");
@@ -307,6 +346,7 @@ int main(int argc, char** argv)
     test_ramp();
     test_one();
     test_floor();
+    test_type();
     test_shapes(dump);
     printf("icontest: %d check(s), %d failed\n", s_checks, s_fail);
     return s_fail ? 1 : 0;
