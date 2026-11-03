@@ -196,7 +196,22 @@ int tagpu_iconset_ini_name_ok(const char* s, size_t cap)
 
 int tagpu_iconset_relpath_ok(const char* s)
 {
-    return s[0] && s[0] != '\\' && s[0] != '/' && !strchr(s, ':');
+    const char* seg = s;
+    if (!s[0] || s[0] == '\\' || s[0] == '/' || strchr(s, ':')) return 0;
+    /* no segment that climbs: `..`, and every segment Win32 reads as it --
+       only dots and blanks with two dots or more, since the path parser drops
+       a segment's trailing dots and blanks */
+    for (;;) {
+        const char* e = seg;
+        int dots = 0, other = 0;
+        for (; *e && *e != '\\' && *e != '/'; e++) {
+            if (*e == '.') dots++;
+            else if (*e != ' ') other = 1;
+        }
+        if (!other && dots >= 2) return 0;
+        if (!*e) return 1;
+        seg = e + 1;
+    }
 }
 
 int tagpu_iconset_side_ok(const char* s, size_t cap)

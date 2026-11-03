@@ -76,8 +76,11 @@ int tagpu_ini_byte(const char* value, int dflt);
    Loader rewrites: 1..32 characters of [A-Za-z0-9_.-] and a NUL within `cap`
    bytes of `s`. Reads at most `cap` bytes. */
 int tagpu_iconset_ini_name_ok(const char* s, size_t cap);
-/* A path the set may name, relative to the folder it is resolved against:
-   non-empty, no drive (`:`), not rooted (a leading `\` or `/`). */
+/* A path the set may name, relative to the folder it is resolved against
+   and inside it: non-empty, no drive (`:`), not rooted (a leading `\` or
+   `/`), and no segment that climbs -- `..`, or any segment of dots and
+   blanks with two dots or more, which Win32 reads as `..` once it drops the
+   trailing ones. `.` stays allowed (`.\Icon\iconcfg.ini`). */
 int tagpu_iconset_relpath_ok(const char* s);
 /* A side's name as a file name: 1..`cap`-1 printable characters, none of
    `\ / : * ? " < > |`, and a NUL within `cap` bytes. Reads at most `cap`. */

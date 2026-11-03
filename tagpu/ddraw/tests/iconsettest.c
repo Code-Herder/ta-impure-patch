@@ -311,6 +311,7 @@ static const char* const CFG_CUSTOM =
     "Tank = TANK.PCX\r\n"
     "unknow=unk.pcx\r\n"
     "Plane=sub\\plane.pcx\r\n"
+    "Up=..\\..\\outside.pcx\r\n"
     "Bad=C:\\abs.pcx\r\n"
     "Rooted=\\abs.pcx\r\n"
     "NukeIcon=nuke.pcx\r\n"
@@ -350,7 +351,7 @@ static void test_cfg(void)
     tagpu_iconcfg_parse(CFG_CUSTOM, strlen(CFG_CUSTOM), &c);
     CHECK(c.fill == 33 && c.transparent == 9 && c.selected == 89 && c.custom,
           "custom mode: fill %d trans %d sel %d custom %d", c.fill, c.transparent, c.selected, c.custom);
-    CHECK(c.n == 5 && c.refused == 4, "custom lines %d refused %d", c.n, c.refused);
+    CHECK(c.n == 5 && c.refused == 5, "custom lines %d refused %d", c.n, c.refused);
     k = tagpu_iconset_plan(&c, sides, 2, e, TAGPU_ICONSET_PLAN);
     CHECK(k == 2 + 5, "custom plan has %d entries", k);
     CHECK(e[2].kind == TAGPU_ISE_NONE && !strcmp(e[2].file, "none.pcx"), "NOTHING is NONE");
@@ -387,7 +388,13 @@ static void test_names(void)
     CHECK(!tagpu_iconset_ini_name_ok(longname, 40), "33 characters");
     CHECK(!tagpu_iconset_ini_name_ok("abcdef", 3), "no NUL within the bytes it may read");
     CHECK(tagpu_iconset_relpath_ok(".\\Icon\\iconcfg.ini") && tagpu_iconset_relpath_ok("x.pcx") &&
-          tagpu_iconset_relpath_ok("..\\up.pcx"), "relative paths");
+          tagpu_iconset_relpath_ok("sub/x.pcx") && tagpu_iconset_relpath_ok("a..b\\x.pcx") &&
+          tagpu_iconset_relpath_ok("..x.pcx") && tagpu_iconset_relpath_ok(".\\.\\x.pcx"), "relative paths");
+    CHECK(!tagpu_iconset_relpath_ok("..\\up.pcx") && !tagpu_iconset_relpath_ok("Icon\\..\\..\\x.ini") &&
+          !tagpu_iconset_relpath_ok("a/../b.pcx") && !tagpu_iconset_relpath_ok("..") &&
+          !tagpu_iconset_relpath_ok("x\\..") && !tagpu_iconset_relpath_ok("...\\x.pcx") &&
+          !tagpu_iconset_relpath_ok(".. \\x.pcx") && !tagpu_iconset_relpath_ok(". .\\x.pcx"),
+          "a segment that climbs is refused");
     CHECK(!tagpu_iconset_relpath_ok("") && !tagpu_iconset_relpath_ok("\\root.ini") &&
           !tagpu_iconset_relpath_ok("/root.ini") && !tagpu_iconset_relpath_ok("C:\\x.ini") &&
           !tagpu_iconset_relpath_ok("x:y"), "absolute paths refused");

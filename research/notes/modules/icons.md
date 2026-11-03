@@ -181,8 +181,9 @@ before the art's release store):
    start-up to the mod's, so by the first in-play fill it is the mod's. It is taken only as 1..32
    characters of `[A-Za-z0-9_.-]` and a NUL within 33 bytes; anything else is no set.
 2. `<exe dir>\<name>`, at most 64 KB → `[Preferences] MegaMapConfig`. Absent, empty, too long, or
-   not relative (a drive `:`, or a leading `\` or `/`) → no set, so only the install's own files
-   are read. TADR resolves the value against the current directory; the exe's folder is used here
+   not a path inside the folder (a drive `:`, a leading `\` or `/`, or a segment that climbs: `..`,
+   or any segment of dots and blanks with two dots or more, which Win32 reads as `..`) → no set, so
+   only the install's own files are read; an `[Icon]` line's file passes the same test. TADR resolves the value against the current directory; the exe's folder is used here
    [INFERRED equal under every launcher in use: tacli and the loaders start TA in its folder].
 3. **The iconcfg**, at most 64 KB, at `<exe dir>\<value>`; the pictures' folder is that path cut at
    its last `\` or `/`.
@@ -206,7 +207,7 @@ else TADR's defaults 0, 9 and 89; `UseDefaultIcon` is TRUE when its lower-cased 
   `MOBILECOMBAT`, `FACTORY`, `BUILDING`, `NONE`, `UNKNOWN`, `NUKEICON` (`.PCX`);
 - **custom mode**: every `[Icon]` line in file order, the value the file — the key `Nothing` is
   NONE, `Unknow` UNKNOWN, `NukeIcon` NUKEICON (case-insensitive), any other key the category it
-  names. A line whose value is empty or not relative is refused and counted.
+  names. A line whose value is empty or not a path inside the folder (as above) is refused and counted.
 
 At most 64 pictures, each file at most 4 KB; one that does not read or decode is skipped and named
 in the log. When NONE or UNKNOWN loads twice, the last one is the set's, as in TADR.
