@@ -377,14 +377,17 @@ through the banded path, which waits — is sent on these events and no others:
 
 - a pass's first upload after it is built, so the session's first level and every teardown (a
   swapchain rebuild, which is what a resize runs);
-- the terrain's new atlas and height grid at a level's start;
+- the terrain's new atlas, height grid and tile map at a level's start, and its neighbourhood keys
+  when Classic++'s restore request builds them (`nb_build`: the level's first frames, or the frame
+  Classic++ assets is switched on);
 - a palette move (the engine serial);
 - an atlas made or lost, its mirror armed, or a new level begun on it
   (`tagpu_gaf_atlas_forget`, which writes the whole page, so a level opens with every visible
   frame at once, as it does with the terrain's new atlas).
 
 Each pass logs the cause with the upload: `<pass>: the whole base atlas, N KB, through the banded
-path - <cause>`, and the terrain `terr: the base atlas and the height grid, N KB, …`.
+path - <cause>`, and the terrain `terr: <whichever of the base atlas, the height grid, the tile
+map and the keys are due>, N KB, through the banded path - <cause>`.
 **The one route from play** is a feature repack on a device that refused the move buffer
 (`tagpu_vk_stage_move_ready`): the pass then takes the repack as a whole page, and the line says
 `a repack this copy cannot move - A WAIT IN PLAY`. A recycle — a full unit or effects atlas

@@ -80,8 +80,11 @@ Islands at 20480² px, is about 0.034 at 1024×768, 0.050 at 1920×1080 and 0.10
   the map keeps small maps cheap; a large map at the whole-map level needs the grid sized to the
   level in force, which touches the fog handshake (`tagpu_zoom.c`, *never clear bit 3 from the
   render thread*).
-- **Terrain staging** is reserved at `vw / floor` and capped at 3 Mi cells (`tagpu_terr.c:95,1113`):
-  Seven Islands whole is 409 600 cells, inside the cap.
+- **The terrain draw carries nothing per cell** (1b): one instance per cell of the gather's grid,
+  derived in the vertex stage from the level's tile map. Its bound is the grid's side,
+  `TAGPU_TERR_MAX_SIDE` = 2052 cells, which follows from the gather rect's cap
+  `TAGPU_GATHER_SPAN_MAX` (65 536 px a side, `tagpu_terr.h`): Seven Islands whole is 640 × 640
+  cells, inside it.
 - **ScrollSpeed** saturates at 255 below z = 0.125 (default 32). At the whole-map level there is
   nothing to scroll to; stated, not fixed.
 - **The recorder's camera** clamps the level to 0.25..8: the writer (`tagpu_recorder.c:3873`),
@@ -151,8 +154,9 @@ is per-frame working copies, not information, so the landing is split to remove 
   needed. RLE was considered and not taken: the GPU needs random access, and bit-packing gives the
   same saving without a decode.
 - **Terrain instances are built once per level** if their records are static (tile position and
-  cell position; whether the restorer key changes as tiles complete is to be checked), replacing
-  four per-frame mapped copies and an 11.6 MB copy a frame at the floor.
+  cell position, and the restorer key, which a job completing does not change: it paints the
+  neighbourhood atlas, not the key), replacing four per-frame mapped copies and an 11.6 MB copy a
+  frame at the floor.
 - **The MP recording version stays** unchanged: only a mixed-build game is affected, and the newest
   build's recording is whole.
 - **The engine hit test's int16 narrowing is guarded at its one call** (`0x48CE15` in
@@ -195,7 +199,21 @@ is per-frame working copies, not information, so the landing is split to remove 
    DLL's GLSL, so both now bind an R32UI source (`tools/tascene` declares `usampler2D`'s
    precision). There is no off switch for the fog: a frame without a source fails closed, drawing
    no unit but the watched player's own and no wreck.
-1b. **Terrain instances once per level.**
+1b. **Terrain from per-level data.** *Built 2026-11-03 on its worktree; the in-game checks V1b-1..3
+   are open.* No record is stored per cell: the draw is `cols × rows` instances of the unit quad, and
+   the vertex stage derives each cell from `gl_InstanceIndex`, the level's tile map (R16_UINT) and
+   the neighbourhood keys (R32_UINT), both uploaded once a level as waits, behind a
+   TRANSFER → VERTEX_SHADER barrier on the frame that draws ([terrain & depth](terrain-depth.html)
+   §7.1). The copy, the atlas, the height grid and the keys are keyed on the packet's `level_gen`,
+   not on the tile-set pointer, which the next level's allocation can repeat. Gone: the per-frame
+   records, their CPU staging and its reservation (`tagpu_terr_clamp_span`), and the four per-slot
+   mapped instance buffers. What the spec did not foresee: the staging's own barrier makes a copy
+   visible to the fragment stage only, so the vertex stage needed its own; the restorer's
+   on-screen key feed read the records, and now works the keys out on the CPU by the shader's rule;
+   resizing the keys image away and back as the keys came and went would have retired an image at
+   every restore drop and blanked the terrain while two retires were pending, so the image keeps
+   what it holds; and the browser lab and the wiki mockup extract the DLL's terrain shader, so both
+   draw from an R16UI tile-map texture too.
 1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
    extent and the true viewport, bounded by the int16 click rect; the hit-test guard at
    `0x48CE15`; the seven guards (the cursor transform `view()` is the seventh), the vpwide cap and

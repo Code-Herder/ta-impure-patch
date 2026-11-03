@@ -593,17 +593,52 @@ full-viewport layer inverts it.**
 ### 7.1 The pass
 
 Armed by `tagpu_terr.on` (tokens `log`, `passive`, `over`, `key=N`). It rides the
-native pass's frame like the feature pass, walks the same grid §2 walks, and emits
-one quad per visible cell. **The quad is an INSTANCE since 2026-09-09**: one static
-six-corner buffer, and per cell four shorts — its column and row in the gather's
-grid, its tile's column and row in the atlas — that the vertex shader turns back
-into the position, UV and world coordinate the per-vertex stream used to carry.
-Every term is an integer far below 2²⁴, so the floats are the same floats, bit for
-bit (verified: 0 differing pixels at 1× against the pre-change build). The reason
-is size: at 144 bytes a cell a 3840×2160 view at the 0.25× zoom floor needs 17.9 MB
-of staging and as much uploaded every frame; at 8 bytes it needs 972 KB, which is
-what let the fixed 32768-cell budget become a reservation made from the live
-viewport (`tagpu_terr_clamp_span`). Three things fall out of §2 exactly as predicted:
+native pass's frame like the feature pass and sizes the same grid §2 walks — the map cell
+its corner is (`tile0`), its columns and rows, the screen point of its corner — and
+nothing per cell. **Each cell is an INSTANCE, and no record of it is stored**: the
+draw is one static six-corner quad drawn `cols × rows` times, and the vertex stage
+derives everything about a cell from `gl_InstanceIndex` and two images that change
+only with the level (`tagpu_terr.c`, the comment above `VS`, states each term beside
+its C original):
+
+- **Which cell.** Instance `i` is grid column `i % cols`, row `i / cols`, map cell
+  `tile0` plus that. The Vulkan draw passes `firstInstance` 0, so the index is the
+  cell's.
+- **Its tile** is a `texelFetch` of **the level's tile map**, an `R16_UINT` image of
+  the engine's own `TILE_MAP` (§1) at its own size, copied once a level by the gather
+  while the Vulkan lane is armed (`ensure_tilemap`, render thread, under the teardown fence that every read of the map
+  in `tagpu_terr.c` is under — the file is `fenced` on `thread-split.allow`) and
+  uploaded once by the Vulkan lane: 2 bytes a map cell, 800 KB on Seven Islands
+  (640 × 640 cells). A cell past the
+  engine's area takes the tile of the cell it folds to (the mirrored edge,
+  [modules/map-edge](modules/map-edge.html)); with the mirror off, and for a tile index
+  at or past the atlas's count, all six corners go to one point outside the clip
+  volume and the cell has no fragment.
+- **Its neighbourhood key** (Classic++'s restore, [modules/restorer](modules/restorer.html)
+  §2.103) is a `texelFetch` of an `R32_UINT` image on the same grid, read only under
+  `uNbhd`.
+
+**The copy is keyed on the level, not on a pointer.** LoadMap `0x483610` allocates
+`TILE_MAP` (pointer stored at `0x483969`) and fills it with its one `rep movs`
+(`0x48397D`/`0x483984`); the map free `0x483DD0`, inside the level teardown, frees it
+(`0x483E9A`) and nulls the pointer (`0x483EED`). No other instruction in the exe stores
+to the pointer or through it, so the map does not change between the two
+[DISASSEMBLED; the method and its limits in [engine/memory](engine/memory.html), the
+per-map field table]. The next level's allocation can return the same address, so the
+copy is keyed on the packet's `level_gen`; a copy of other dimensions is re-made too.
+
+**Every term is an exact integer in float**, so position, UV and world point are bit
+for bit the floats a CPU would compute: a grid column or row is under
+`TAGPU_TERR_MAX_SIDE` (2052), a map cell under 2048, an atlas column under 64 and an
+atlas row under 1024. The bound on the grid is a refusal, not a hope: the native pass
+clamps the rect every pass gathers over to `TAGPU_GATHER_SPAN_MAX` (65 536 world px a
+side, `tagpu_terr.h`), the gather bails on a side past 2052, and `tagpu_vk_terr.c`
+refuses a grid outside `[1, 2052]`, a tile map past 2048 a side and an area that is not
+inside the tile map. That last one is what keeps every `texelFetch` inside its image:
+the fetched cell is on the map inside the area, or `tagpu_edge_reflect`'s answer in
+`[0, area)`. What crosses from the gather to the draw a frame is therefore the grid's
+numbers, whatever the zoom; what grows with the zoom-out is the instance count alone.
+Three things fall out of §2 exactly as predicted:
 
 - **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
   flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under
@@ -666,9 +701,18 @@ has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` tex
 32×32 cells on a **34-texel pitch**, 64 per row: **2176×2720 for 5062 tiles (5.9 MB)**,
 sized from the count and capped at `GL_MAX_TEXTURE_SIZE`. The spare texel on each side
 is the cell's own outermost row/column repeated — a guard rail, not padding, and §7.6's
-fifth failure mode is why. A map change is the `TILE_SET` pointer or its count moving;
-measured live (before the pitch changed), switching Two Continents → Anteer Strait **in
-the same process** rebuilt it for 7051 tiles.
+fifth failure mode is why. A map change is a new level — the packet's `level_gen`
+moving — or the `TILE_SET` pointer or its count moving. `TILE_SET` is as immutable as
+the tile map: LoadMap stores its pointer at `0x483B68` and writes its count and pixels
+at `0x483B72`, `0x483B80` and `0x483B9C`/`0x483BA4`, and the map free frees it
+(`0x483E5C`) and nulls it (`0x483ECA`), with no other store [DISASSEMBLED]. But the
+next level's `MEM_Alloc` can hand a set of the same count the same address, so pointer
+and count alone would keep the previous level's atlas; the height grid and the
+restorer's keys are keyed on the level for the same reason. Within a level the pointer
+test still tells a rebuild of the same set (a device limit, a mirror asked for late),
+which keeps the restore, from a new set, which drops it. Measured live (before the
+pitch changed), switching Two Continents → Anteer Strait **in the same process**
+rebuilt it for 7051 tiles.
 
 **Fog needed one change, and only one.** Terrain is now the bottom layer, so where the
 overlay paints an unexplored cell **solid black it must paint black rather than

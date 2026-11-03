@@ -250,8 +250,11 @@ renderer draw its units and ghosts.
   arena's stage of that entry (`tagpu_wiki3d_get`, matched by id; a stage that did not resolve, or
   whose map is not the view's, is the whitebox's), it builds once a stage the scene
   (`tagpu_wikiscene_ground`: every cell's tile, the deposits' and vents' quads with
-  `tagpu_feat.c`'s depth bands), the R8 terrain atlas in `tagpu_terr.c`'s layout (64 tiles a row,
-  34-texel pitch, a one-texel replicated border) from the arena's tiles, and the features' frames
+  `tagpu_feat.c`'s depth bands), the stage's tile map (each 32-px cell's tile index, row by row,
+  what the terrain's vertex stage draws from; a ground whose cells are not exactly its tile grid is
+  refused: `the ground's cells are not its tile grid`), the R8 terrain atlas in `tagpu_terr.c`'s
+  layout (64 tiles a row, 34-texel pitch, a one-texel replicated border) from the arena's tiles,
+  and the features' frames
   in an atlas of its own (`TAGPU_GAFATLAS`, 512 square, 128 entries, a key plane, no allowance),
   painted then, with every quad's six vertices as `emit_frame` makes them (the edge nudge, each
   corner's own world point); and every frame the fog source (`tagpu_wikiscene_fog`: one cell a
@@ -259,7 +262,9 @@ renderer draw its units and ghosts.
   seam prepares the stage's own fog image from it, `tagpu_vkw_fog_prepare(…,
   tagpu_wikiworld_fogsrc())`, its serial moved only when the bits change) and three
   hand-overs: the terrain's (`gw` = map cells × 16, zoom 1, the eye at the map's corner, the
-  viewport the whole map, the scissor on, no relief, restore or shadow), the features' (the same
+  viewport the whole map, the grid the whole tile map and the area the same, mirror and
+  neighbourhood keys off, the scissor on, no relief, restore or shadow; the tile map's serial moves
+  with each stage built, so the Vulkan lane uploads it once a stage), the features' (the same
   camera), and the target's (`TAGPU_WORLDTGT`: `gw` × `gh` at `tagpu_settings_ss`, composited at
   `tagpu_wikistage_image`'s rect on the attachment -- the stage fit's map rect, each edge snapped
   to the device pixel as `stage.js` snaps it). The lever `tagpu_wiki3d.on`, read every 30 frames:

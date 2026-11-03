@@ -166,20 +166,21 @@ fixed static arrays with caps, never allocations:
 The eight surviving `malloc` sites are all amortised, not per-frame churn: the scaffold buffer
 reallocs only when the viewport size changes (`tagpu_scaffold.c:368`), the 3DO cache grows only
 `if (need > v->cap)` and converges (`tagpu_r3dcache.c:68`; the module is deleted since 2026-09-23), the marker blend table is built once
-(`tagpu_markown.c:207`), the terrain atlas is per tile-set load (`tagpu_terr.c:345`), and the
+(`tagpu_markown.c:207`), the terrain atlas is per level (`tagpu_terr.c` `ensure_atlas`), and the
 capture buffer is behind a trigger file (`tagpu_overlay.c:160`).
 
 **The table above is missing one, and 2026-09-09 removed it.** The terrain pass had a
 `s_verts[32768 × 6 × 6]` of its own — **4.50 MiB**, the same size as the fx buckets — which this
-list never recorded. It is gone: a terrain cell is four shorts and an instanced quad now, and
-the staging is a **ninth amortised `realloc`**, reserved from the live viewport at the zoom
-floor and grown only when the viewport changes (`tagpu_terr.c` `terr_reserve`, through
-`tagpu_terr_clamp_span`). MEASURED with `i686-w64-mingw32-size` across the change: `.bss`
-**42,216,340 → 37,497,780**, a drop of exactly 4,718,560 bytes. What it costs back is
-viewport-sized and small — MEASURED off the `terr: staging` line, **83 KB at 1024×768, 423 KB at
-2560×1440, 972 KB at 3840×2160, 1746 KB at 5120×2880** —
-so every resolution below 4K is ahead on both counts, and the fixed array it replaced could not
-have covered 4K at all (17.9 MiB would have been needed).
+list never recorded. It is gone: a terrain cell is an instance of one static quad, and nothing
+per cell is stored or copied a frame — the vertex stage derives each cell from its instance index
+and the level's tile map ([terrain & depth](terrain-depth.html) §7.1). MEASURED with
+`i686-w64-mingw32-size` across the change that removed the array: `.bss`
+**42,216,340 → 37,497,780**, a drop of exactly 4,718,560 bytes. What the terrain holds instead is
+map-sized and allocated once a level, whatever the viewport: the tile map's copy, 2 bytes a map cell
+(`tagpu_terr.c` `ensure_tilemap`, a `malloc` per level while the Vulkan lane is armed; 800 KB on
+Seven Islands, 640 × 640 cells), beside the atlas and height-grid mirrors it already kept. The fixed
+array it replaced could not have covered 4K at the zoom floor at all (17.9 MiB would have been
+needed).
 
 ### GPU side — 235 MiB, and not address space
 

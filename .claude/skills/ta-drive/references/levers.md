@@ -97,8 +97,12 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   engine overlay and still look right. Arming `terr.on` after launch does nothing visible —
   relaunch. Expect `terr: atlas built
   2176x<h> for <n> tiles`, `terr: height grid WxH uploaded` (without it Classic++ terrain draws
-  unlit), and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
-  restored atlas.
+  unlit), `terr: tile map WxH copied for level N (serial S, K cells past the atlas)` once a level,
+  and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
+  restored atlas. Its heartbeat, every 60 frames: `terr: grid=CxR tile0=(x,y) frac=(fx,fy)
+  map=WxH area=WxH cells=N zoomvp=WxH mirror=1|0 junk=K atlas=…`, where `cells` is the whole grid
+  (`C × R`, one instance each, drawn or not) and `junk` the tile map's cells whose tile is past the
+  atlas, counted once at the copy.
 - **`feat.on`** takes the draw only while `native.on` carries `wrecks` (3D wreckage is drawn from
   the same leaf); otherwise it logs `nothing emitted: native.on needs "wrecks"` and `atlas=0`.
   Heartbeat under `log`: `feat: rect=… anchors= flat= tall= … 3dwreck= … outside= trunc= -> body=
@@ -247,7 +251,8 @@ Driving the camera at a zoom other than 1:
   logged — `0 of 0` on a map with no features, whose ground then mirrors. A build that fails
   (`packet: LoadMap: the map's own features NOT taken: …`) leaves the level with no table and the
   edge black; every LoadMap empties the hand-over first, so no earlier load's table stands in.
-  Under GDI nothing is built. Heartbeats: `terr: … mirror=N` (off-map cells drawn), `feat: … |
+  Under GDI nothing is built. Heartbeats: `terr: … mirror=1|0` (the switch the grid is drawn
+  under; the line counts no off-map cells), `feat: … |
   mirror: map=K anchors= body= shadow=` under `log` (`map=-1` while the pass holds no copy), and
   `packet: … mapfeat=K carried=N`, where `carried` stops climbing once the feature pass holds the
   table.
