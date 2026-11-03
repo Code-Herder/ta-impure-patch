@@ -2417,7 +2417,8 @@ has one.
 
 **What it costs, and the one thing that made it worth caching.** The whole publish is **p50 70 µs,
 p99 322 µs** at 354 units, 5443 pieces, 35 wrecks and 760 anchors. The anchor scan alone was **168
-of the first 200 µs**: the rect is the viewport at the zoom floor plus a margin, 465 × 273 cells
+of the first 200 µs**: the rect — the tables' reach plus a margin, measured when that was the
+viewport at 0.25× — was 465 × 273 cells
 here, and 126 945 `u16` loads is what that costs. The grid is SIM STATE — the def index, the flags
 nibble and the wreck index are written by the tick and by nothing else — so two publishes of one
 tick over one rect must produce the same table, and the second reuses the first. Measured over one

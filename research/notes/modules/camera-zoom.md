@@ -43,8 +43,8 @@ reads the head, then the slots, then publishes the tail) — and the level itsel
 exactly one place, `tagpu_zoom_read_lever()` on the render thread, which takes the slots in order.
 **The notch is BAR's**: each one multiplies the target *distance* `iz = 1/z` by
 `max(0.1, 1 − 0.14 n)`, `n` = delta / `WHEEL_DELTA` (Recoil's `ScrollWheelSpeed −20 × 0.007`), so
-×1.163 in and ×0.877 out, and the target is clamped to `[1/8, 4]` in `iz` — 0.25..8 in `z` —
-after each message, as the lab does.
+×1.163 in and ×0.877 out, and the target is clamped to `[1/8, 1/floor]` in `iz` — the floor..8
+in `z` (below) — after each message, as the lab does.
 **The ease is BAR's too**: a 250 ms tween on the QPC clock from the level currently drawn to the
 target, `g = 1 − (1 − f)⁴` applied to `iz`, starting at the notch's own timestamp, so its length
 is the same at any frame rate; a notch mid-tween retargets from the drawn level toward the
@@ -54,6 +54,56 @@ test for by equality. At the end of a gesture, once the tween has landed, the lo
 `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch`. While the file is in force
 the wheel is *pinned* to it, which is what makes deleting the file a handover rather than a
 jump.
+
+**The floor follows the map.** The lowest level is not a constant: it is `min(0.25, fit)`,
+computed on the **game thread** by `floor_compute` in `tagpu_zoom.c`, from the zoom apply at the
+top of every in-play draw, before the level is set. Two terms, each a property of the level:
+
+* **fit** — `min(W / spanX, H / spanY)`, W×H the true viewport and the spans the centre range
+  the camera moves in (`camera_range` with the centre on: the scroll extent bounded by the tile
+  map, §2.3c), so at the fit level the view spans the whole extent. It is the lower end of the
+  search, not a predicate.
+* **lparam** — the widened rect at the level has all four edges in `[−32768, 32767]`, which is
+  what a button `lParam` can carry (`tagpu_vpwide_rect_at`, §2.3b). vpwide's refusal calls the same
+  function, so the floor and the refusal are one predicate with two callers.
+
+The search runs on Q16 levels `q / 65536` from `ceil(max(fit, 1/64) × 65536)` up to 16384 (0.25):
+the lowest when it passes the lparam test, else the smallest passing one by bisection (the rect only
+grows as the level falls, so the test is monotone), else 0.25. So the floor is a multiple of 1/65536,
+every float compare against it is exact, and it is never above `TAGPU_ZOOM_FLOOR_HI` (0.25), which
+is the floor of every map the screen covers at 0.25×. It **fails closed** to 0.25 where the
+viewport (outside 64..16384) or the map cannot be read, and at the level end until the next level's
+first apply. It is recomputed only when one of its inputs moved — the true rect, the extent, the
+PLOT size — and logged then, naming the term that bound it:
+`zoom: floor F (fit G) on WxH, extent WxH, map WxH - bound by fit|lparam|0.25|1/64` (`0.25 (the
+rect is not int16 even there)` and `no viewport or map to fit` are the two fail-closed forms). By
+the arithmetic, Seven Islands (extent 20448 × 20352) gives 0.0346 at 1024×768 and 0.1030 at
+3840×2160, both bound by fit; at 640×480 (a 512 × 416 viewport) a map whose extent is taller
+than 26 624 px stops at 1/64, and at 5120×1440 (4992 × 1376) Seven Islands stops at about 0.083,
+where the rect's right edge reaches 32 767, bound by lparam [arithmetic from the code's formulas;
+not yet read off a `zoom: floor` line in game].
+
+**Every reader takes the floor from one place a thread.** The game thread clamps the record's
+level to its own floor before any game-thread reader sees it (`tagpu_zoom_apply`: the rect, the
+minimap box, the scroll rate, the recorder), so a render-thread floor a frame old cannot reach the
+engine. The packet carries it (`zoom_floor`), and the render thread takes it once a frame at the
+top of `tagpu_zoom_read_lever` (`tagpu_zoom_floor()`, validated into `[1/64, 0.25]`, 0.25 for a
+packet without one), before any pass runs: the wheel clamps at it, the mega notch engages at it
+(§2.3m), the reach ladder and the native gather size their slabs with it. When it moves (a level
+load, a resize, a map's extent) an engaged mega map's target moves with it along a tween, and a
+wheel target it leaves below it rests at it (`floor_moved`). **The other two levers**:
+`tagpu_zoom.txt` parses a level in `[1/64, 8]` and is drawn no lower than the floor; a Follow's
+recorded level below this viewer's floor is drawn at the floor and is still the Follow's level for
+"seen". `TAGPU_ZOOM_FLOOR_LO` (1/64, Q16 1024) is the sanity bound on every level *value* — a
+packet's, a file's, a recording's, a command's — and the seven guards that once fell back to 1×
+below 0.05 now take it: the gather span (`tagpu_zoom_gather_span`), the scroll rate, the minimap
+box, the cursor transform's `view()`, vpwide's apply and `tagpu_vpwide_rect_at`, `cmd_valid` and
+the sweep's level. `tagpu_zoom_gather_span(v, z, floor)` takes a level below the floor at the
+floor's span (never the 1× one, which would cull a visible ring) and caps the span at
+`TAGPU_GATHER_SPAN_MAX`, 65 536 world px (`tagpu_terr.h`), whatever floor its caller holds.
+`ScrollSpeed` (`main+0x1434D`, a byte) saturates at 255 below 0.125 from the default base of 32,
+so below that the edge scroll moves the screen slower the further out the view is; stated, not
+widened.
 
 A notch at the viewport centre moves no eye at all, and **a notch out adds no displacement
 wherever it is aimed**: zoom-out pulls straight back from the view centre, as BAR's does
@@ -153,8 +203,8 @@ level does not move; once the menu is closed the same notch zooms again.
 **What the dead gate was also holding down**, all of it restored by the one line, because each
 reads `live` off the command record `tagpu_zoom_frame_end` posts:
 
-* **`vpwide`** never widened the addressable rect — `tagpu_vpwide_apply` takes `z = (c && c->live)
-  ? c->zoom : 1.0f` — so every click and band box in the outer ring at zoom < 1 was dropped, the
+* **`vpwide`** never widened the addressable rect — `tagpu_vpwide_apply` takes the zoom apply's
+  level (the record's, clamped to the floor) only when the record is `live`, and 1.0 otherwise — so every click and band box in the outer ring at zoom < 1 was dropped, the
   feature §2.3b exists for. Verified after: at `z = 0.513`, clicks on `armsolar` and `armrad`
   (1x screen x = 1110 and 1370, both off the window) select 1 unit each, the gap between them
   selects 0, and a band box over the ring takes the 2 units inside it.
@@ -208,8 +258,9 @@ answer. A poll that tears is a poll that hands the engine back the frame.
 ### 2.3m The mega map binding (`tagpu_zoom.c`, `wheel=` in `impure.cfg`)
 
 **The mega map is a state of the wheel, not a second view.** A notch back on the mega map's wheel
-**engages** it: the target level becomes the floor (`zoom_floor()`, the lowest level the wheel can
-reach), pulled back about the view centre like any notch out, and the target it left is kept
+**engages** it: the target level becomes the floor (`tagpu_zoom_floor()`, this frame's floor and
+the lowest level the wheel can reach, §2.3 *The floor follows the map*; while engaged the target
+follows the floor when it moves), pulled back about the view centre like any notch out, and the target it left is kept
 (`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
 kept target, with the view centre moved onto the world point under the pointer. A mega notch with
 nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
@@ -232,7 +283,8 @@ pointer by moving the target centre `(a − c)(iz_prev − iz_new)`; leaving mov
 `(a − c) · iz_prev` — the pointer's world offset from the centre at the level being left — through
 the same owed displacement `R`, so the eye lands where the model says at any frame rate and a notch
 inside the tween carries it whole. Unlike a notch in, leaving does not keep the new view inside the
-old one — its step is up to two viewports from the 0.25 floor — so under a lagging game thread the
+old one — its step is up to half a viewport times `1/floor`, two viewports from 0.25× and more
+from a lower floor — so under a lagging game thread the
 reach bound can hold it (`held=`), as it holds any long step; the bound is what makes that safe.
 
 **Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
@@ -240,7 +292,8 @@ mouse-world pin each set the level through `wheel_rest`, which disengages, so a 
 can never send the camera back to a level from before them.
 
 **MEASURED 2026-11-02** (Two Continents, 1024×768, viewport `(128,32 896×704)`, the play arm set,
-the floor still 0.25):
+on a build whose floor was a fixed 0.25; the floor that follows the map puts Two Continents' at
+about 0.056 there [arithmetic], so the engaged level now reads that):
 
 | gesture | level | eye |
 |---|---|---|
@@ -461,17 +514,44 @@ frame gathers lies inside the rect the packet's tables were built over — its *
 `reach_lo/hi` — so a unit inside it carries its pieces, the anchor table holds its rows and the
 effects models were culled against it. *The bound:* `predict()` in `tagpu_zoom.c` clamps the eye
 the frame is drawn from, per axis, until the slab `[e + (vw − S)/2 − M, e + (vw − S)/2 + S + M]`
-(S = `tagpu_zoom_gather_span(vw, z)`, M = `TAGPU_GATHER_MARGIN`, 256) lies inside the reach
-(`reach_bound`), at every level, 1× included. It reads only the packet's numbers, so it holds for
-any gesture, reversal or lag.
+(S = `tagpu_zoom_gather_span(vw, z, floor)`, M = `TAGPU_GATHER_MARGIN`, 256) lies inside the
+reach (`reach_bound`), at every level, 1× included. It reads only the packet's numbers, so it holds
+for any gesture, reversal or lag.
 
 **The reach is a window about the packet's eye** (`table_reach` in `tagpu_packet_pub.c`):
-`tagpu_zoom_pub_window` per axis — the slab at the floor (0.25) about that eye, grown by **the
-lead**, a quarter of the viewport on each side (`TAGPU_LEAD_DIV`). S never exceeds the floor's, so
-the interval holds every eye within the lead of the packet's: the clamp is the identity for a
-gesture that only zooms in and for an unapplied displacement inside the lead, and what it holds
-back is a larger one, for as long as that lasts. At z ≥ 1 the slab is the 1× one and the clamp
-could bind only on a step of 1.75 viewports. The interval is empty only for a packet whose reach
+`tagpu_zoom_pub_window` per axis — the slab at the packet's **reach level** (`reach_level`) about
+that eye, grown by **the lead**, a quarter of the viewport on each side (`TAGPU_LEAD_DIV`). The
+anchor table and the effects models' cull are built over it. The frame is drawn at no level below
+the reach level (the reach ladder, below), so S never exceeds the reach's slab and the interval
+holds every eye within the lead of the packet's: the clamp is the identity for a gesture that only
+zooms in and for an unapplied displacement inside the lead, and what it holds back is a larger one,
+for as long as that lasts. At z ≥ 1 the slab is the 1× one and the reach at least the 0.25× one,
+so the clamp could bind only on a step of 1.75 viewports.
+
+**The reach follows the level, through a ladder and a ring** (`tagpu_zoom.c`, "the reach ladder").
+A reach taken at the floor would be the whole map at every level on a large map — every unit's
+pieces copied and the whole map's anchors scanned on every draw at 1× — so the window is taken at
+a level the render thread asks for instead. Every command record carries **`reach_zoom`**: the
+rung of the ladder (0.25, 0.125, 0.0625, 0.03125, 1/64, `tagpu_zoom_rung`, clamped to
+`[floor, 0.25]`) at or below the lowest level the view may draw before its next record is applied
+— the level drawn, the wheel's target (so a notch out asks for its target's rung on the frame it
+arrives) and the level the levers named. `cmd_valid` refuses one outside `[1/64, 0.25]`. The game
+thread takes the reach at it, clamped to its own floor and to 0.25, and at the floor when there
+is no record (`s_gReach`, published as `p->reach_level` beside `reach_lo/hi`). The ladder rather
+than the level itself because the publisher's anchor scan is cached per rect within a tick
+(`s_aRect`/`s_aTick`): a continuous level would move the rect on every draw of a gesture and
+rescan per draw instead of per tick. *The invariant:* every packet the game thread can still
+publish carries tables taken at a rung of a request the render thread posted — the current
+packet's `reach_level`, or one of the requests still **in flight** (posted, and not yet reached by a
+packet's `cmd_ack_seq`) — and the frame is drawn at no level below the floor, the packet's reach
+level or any rung in flight (`reach_ladder`). So the slab at the drawn level lies inside the reach
+of every packet that can arrive, and a newer packet never asks for a higher level than the one last
+drawn: a zoom-out waits at a rung for the game thread instead of popping back, counted as
+**`reachheld=`** on the `native:` line. The ring holds eight requests; a full ring merges its two
+oldest into one with the later seq and the larger rung, which only holds the level higher for
+longer. **A new epoch does not empty the ring**: the game thread applies a record's reach whatever
+its epoch (the epoch gates only the eye delta), so a request of the old level still decides a new
+packet's reach, and it leaves the ring only when `cmd_ack_seq` reaches it. The interval is empty only for a packet whose reach
 was not taken for its own viewport; the slab is then centred on the reach and the frame counted
 (`out=`). The units carried with their pieces are those whose projected anchor (`wy − wz/2`, the
 pass's own test, so no bound on altitude is needed) lies in the reach (`TAGPU_PK_U_INRECT`); one
@@ -484,9 +564,9 @@ that does not fit in the room the table has left, and that row and every later o
 are dropped, the row at the same distance on the other side among them. An overflow of the
 65 536-entry table therefore keeps a band `[mid − a, mid + b]`, `b − a ∈ {0, 1}`, and says so once
 per scan (`trunc=` on the `feat:` line). A frame is drawn from the packet's eye plus the steps the
-game thread has not applied yet, as far as the bound lets them through — at the floor at most the
-lead (`vh/4`, 33 rows at 4K). A frame loses nothing while the band holds its own slab at that
-offset from `mid`, 560 rows at the floor at 4K. The scan is reused within
+game thread has not applied yet, as far as the bound lets them through — at most the lead
+(`vh/4`, 33 rows at 4K). A frame loses nothing while the band holds its own slab at that offset
+from `mid`: 560 rows at 0.25× at 4K, the whole map at a floor that fits it. The scan is reused within
 a tick only when the tick, the rect and `mid` all match. The densest stock map, Canal Crossing, puts 12 633 anchors in one rect at 4K
 with the lead — every feature it has, 19 % of the table; next are Cavedog Links CC at 10 289 and
 Plains and Passes at 9 603, each also whole; at 1080p Canal Crossing's worst rect holds 9 740
@@ -530,17 +610,21 @@ gesture puts it, on either axis, the frame is drawn at the last frame's level in
 pauses with the eye, and the eye moves only toward the gesture. The bound itself clamps the eye at
 that level, so the invariant is untouched. It is enough because, for one packet, last frame's eye
 is inside that level's interval by construction, and a newer packet's interval is non-decreasing in
-the eye it was built about (its reach is that eye's floor slab, its size fixed by the viewport) —
-so it fails only when the packet's own eye moved against the gesture (a step of another gesture,
+the eye it was built about (its reach is that eye's slab at the packet's reach level, its size fixed
+by the viewport and that level, which is at most the level last drawn: the reach ladder) — so it
+fails only when the packet's own eye moved against the gesture (a step of another gesture,
 the engine's own camera writers); then the step is taken, because the invariant is the one that
 cannot give, and counted as `back`. The rule applies only when the bound fitted the eye into a
 non-empty interval (`fit` out of `reach_bound`), and the retry is taken only when it fitted too: a
 centred eye is not a step the gesture asked for in either direction, and pausing on it would hold
-the last level for as long as the centring lasted. The tween restarts from the level actually
+the last level for as long as the centring lasted. The retry draws at the last frame's level only
+while that level is at or above the reach ladder's for this frame: below it the slab could leave
+the reach of this packet or of one still to come. The tween restarts from the level actually
 drawn, so a notch taken during a pause does not jump.
 
 The native heartbeat carries the witnesses — `fog=WxH out=N held=N/Mpx paused=N back=N
-nopieces=N`: `fog` is the source the last frame drew with (`0x0` for a packet that carried none, on which
+reachheld=N floor=F nopieces=N`: `reachheld` counts the frames whose level the reach ladder raised
+(a zoom-out waiting at a rung for the game thread), and `floor` is this frame's floor; `fog` is the source the last frame drew with (`0x0` for a packet that carried none, on which
 the native pass draws no unit but the watched player's own and no wreck); `out` counts presented frames whose slab is not inside the
 packet's reach, and must read 0; `held` counts frames the bound held back and the largest hold;
 `paused` the frames drawn at the last frame's level; `back` the frames that moved against the
@@ -567,8 +651,10 @@ the lead and 4 and 61 px with it; on Xvfb 24 and 949 px before, 11 and 474 px wi
 them paused, and 779 px with the apply forced 200 ms behind); at 4K on Xvfb 13 and 2511 px before,
 8 and 1578 px with it. On Xvfb llvmpipe draws a handful of frames a second, so each held frame there
 spans several posted steps and its hold counts compare only with each other. Every run read `back`
-and `out` 0. **Not re-measured since the reach replaced the fog bound** (the mega-map plan's
-V1a-1); the window is the same `tagpu_zoom_pub_window`, so the holds are expected to be unchanged.
+and `out` 0. **Not re-measured since the reach replaced the fog bound, nor since it follows the
+level** (the mega-map plan's V1a-1 and 1c's checks): at 0.25× and above the window is the same
+`tagpu_zoom_pub_window` at the same level, so the holds there are expected to be unchanged; below
+0.25× neither the holds nor `reachheld=` have been measured.
 
 **The source is packed on every tracked in-play draw of a Vulkan session**, whoever owns the
 fog site. `terr_fogtick` ticks it at the engine's fog call `0x469D8E` on a draw latched to our
@@ -669,6 +755,50 @@ the zoom on and no `tagpu_vpwide.off` — the true rect verified, *and* a zoomed
 | `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface AND to the TRUE viewport rect** (2026-09-09, below), because `0x4C6B10` is a bare four-dword store with no clamping: the surface clamp keeps a wide rect from licensing a write outside the allocation, the viewport clamp keeps one from licensing a write outside the rect our key fill erases |
 | `0x499221` | `call 0x498DA0` — the mouse → world / map cell / hovered feature conversion, and the ONE reader that uses L and T as the screen→world **origin** (`world = eye + clamp(pos, L, R) − L`) | call-site redirect; redone with the TRUE origin and the WIDE clamp, a straight pass-through whenever the rect is not ours |
 | `0x4B5E5F` / `0x4B5EC0` / `0x4B5F0C` | the three arms of TA's own window procedure's `0x200..0x206` jump table, each unpacking the mouse `lParam` with `AND 0xffff` + `SHR 0x10` | **byte patch** → `MOVSX ECX,CX` + `SAR EAX,0x10`. `LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrived as 65516 and the event was lost; this is Microsoft's own `GET_X_LPARAM`, and for any position a real mouse can report it is bit-for-bit identical |
+| `0x48CE15` | `call 0x48C6A0` (`E8 86 F8 FF FF`) — the unit hit test's one call, inside `GetUnitAtMouse 0x48CD80` | call-site redirect to `tagpu_zoom_hit_guard` (`tagpu_zoom.c`), stdcall `(unit, point)`, `ret 8` like the original; it calls `0x48C6A0` through when the unit's narrowing cannot wrap and answers "not hit" otherwise (below). Installed with the rest of the widening half and byte-matched with it, so at every level, 1× included |
+
+**The rect's bound is its four edges, not its width.** `tagpu_vpwide_rect_at` is the rect at a
+level for the true viewport: exactly the range the cursor transform `u = (s − c)/z + c` produces
+about the true viewport's centre, computed with the same formula, plus one pixel of slack each way.
+The button `lParam` carries `u` as two int16s (`MAKELPARAM`, unpacked with `MOVSX` by the patched
+arms above), so a rect whose four edges lie in `[−32768, 32767]` is one in which every click is
+delivered exactly, and the rect may be up to 65 535 px wide; every engine reader of the rect
+compares in 32 bits (`0x48BAE0`, `0x4B6720`, `0x4B67D0`, `0x4C1320`; engine map, *Who reads the
+eye*). The apply refuses any other rect (it restores the true one), and the zoom floor's lparam
+term is the same function (§2.3, *The floor follows the map*), so the refusal fires only on a level
+the floor did not produce. The level the apply widens from is the zoom apply's, already clamped to
+the floor on the same thread.
+
+**The unit hit test narrows to int16, so its one call is guarded.** `0x48C6A0(unit, point)` takes
+the model's root box from `0x4CB650(MODEL_PTRS[unit+0xA6], &min, &max, 0)`, builds four corners at
+`min.y`, rotates each by the unit's turn (`0x4B6CC0`) and forms `x − (eyeX << 16) + c.x`,
+`alt + c.y` and `z − (eyeY << 16) − c.z` in 32 bits, keeping bits 16..31 of each (`sar 0x10`,
+`movsx`, `0x48C73C..0x48C7A3`); then `0x4C1320` tests the pointer against the quad with two signed
+32-bit products an edge (engine map, the `0x48C6A0` row of *Who reads the eye*). Nothing the engine
+keeps bounds the position it narrows — aircraft off the map or climbing, carried units, the network
+record's raw positions, Teleport ([units](../engine/units.html), *What bounds a unit's position*)
+— and the widened rect lets a far unit into HotUnits. A wrapped corner makes a self-intersecting
+quad that `0x4C1320` can accept for a pointer elsewhere on the screen: a mis-pick or a wrong hover.
+So `tagpu_zoom_hit_guard` runs the engine's test only when (1) the model id `WORD [unit+0xA6]` is
+below `UNITINFOCount` (`main+0x1438F`) and `MODEL_PTRS` (`main+0x14377`) and its entry pass the
+pointer filter — the bound `model_root` uses; (2) `R`, the ceiling of the largest corner norm of
+that root box in px plus 2, is at most 8191; (3) in 64-bit arithmetic, with px the 16.16 value
+shifted down 16 as the engine's `sar` does, `|x − eyeX| + R`, `|z − eyeY| + R` and `|alt| + R` are
+each at most 32 767. *Why it is a bound by construction* (the comment beside the guard carries the
+whole argument): two's-complement sums are exact modulo 2³², so each kept value is the true one
+whenever the true sum lies in int32, whatever the intermediates did; condition 3 puts every true
+sum inside int16 on all three axes, and with the pointer inside the int16 rect and `R ≤ 8191` each
+of `0x4C1320`'s products stays under 1.7 × 10⁹ < 2³¹. "Not hit" is the only answer that names no
+wrong unit. `R` is cached per model id in a game-thread table built at a level's first in-play
+apply and cleared at its level end (`MODEL_PTRS` is written at the level load, `0x42D6AA`, and nulled
+only by the teardown, `0x42DCD8`); an id the table has no entry for is measured on the spot with the
+same `0x4CB650` call. `GetUnitAtMouse` runs on the game thread, the table's. *What it costs*: at 1×
+nothing — every HotUnit is on a screen at most 16 384 px wide; below 1× a unit is unpickable (no
+hover, no click) only while it is more than about `32 767 − R` px from the eye or flying above about
+that, which the widened rect reaches only when the floor is bound by lparam (a super-ultrawide
+screen) or for an aircraft tens of thousands of px up. A refusal is counted in the log, at most once
+a second: `zoom: hit guard - N unit hit test(s) answered "not hit" so far, whose int16 narrowing
+could wrap (the last: model M, R R)`. No run has read that count yet.
 
 **The clip guard needs BOTH bounds, and the second one is the picture's [MEASURED 2026-09-09].**
 Clamping the widened rect to the surface allocation is a memory-safety bound and nothing more: it

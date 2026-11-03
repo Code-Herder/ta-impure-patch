@@ -78,7 +78,7 @@ typedef struct RecPov {           /* 32 bytes */
     uint8_t  flags;               /* REC_POV_*: main+0x2CC6 bit 1 / bit 0                     */
     uint8_t  zero;
     uint16_t view_w, view_h;      /* main+0x37E37 / +0x37E3B                                  */
-    uint32_t zoom;                /* applied level x 65536, 16384..524288                     */
+    uint32_t zoom;                /* applied level x 65536, rec_pov_zoom_min(format)..524288  */
     int32_t  cam_x, cam_y;        /* target main+0x14327/+0x1432B + view/2, world px          */
     int32_t  cur_x, cur_h, cur_z; /* main+0x2CAC/+0x2CB0/+0x2CB4 sign-extended (E4)           */
 } RecPov;
@@ -107,7 +107,7 @@ snapshot refuses `RK_POV` and `RK_CLICK`, and every kind keeps one length everyw
 
 Validation, the same in the C readers, the history and both Python mirrors:
 - **Exact lengths:** 32, 20, 36 for `RK_POV_AT`, and `8 + 6*count`.
-- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in range, `view_w`/`view_h` in 1..16384.
+- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read; the contribution envelope is unchanged, so `RECMP_VERSION` stays 2.
 - **`RecClick`:** `button` 1 or less, `region` 3 or less, `itype` 1 or less.
 - **`RecSel`:** `total` at most the seat's block (`units_each`) and REC_SEL_MAX, `first + count <= total`, slots strictly ascending and inside the seat's block, and a transaction contiguous on its stream that publishes only at END.
 - **Coordinates are data:** never an index, bounded at use by the projection's clip.
@@ -194,7 +194,7 @@ multiplayer the composed application tick):
   starts epoch `E` (a game-thread counter). It is refused while the seat has no sample.
 - **The frame visit** computes, after any seek, the viewer's eye `cam - (W_v/2, H_v/2)` from
   `main+0x37E37/+0x37E3B` and the level. Owner Q1 recommends fitting the recorded view:
-  `z_v = clamp(z_r * min(W_v/W_r, H_v/H_r), 0.25, 8)`, in Q16 integer arithmetic. It then calls
+  `z_v = clamp(z_r * min(W_v/W_r, H_v/H_r), zmin, 8)`, in Q16 integer arithmetic, `zmin` the recording's own minimum (`persp_follow(..., zmin)`: 0.25 for format 26, 1/64 for 27); the render thread then draws a level below this viewer's floor at the floor. It then calls
   the new `tagpu_zoom_follow(ta, eyeX, eyeY, levelQ16, E, once)`. That function hands the
   position to the next apply, and on GDI, where no apply runs, writes it at once with
   `tagpu_zoom_place_eye`'s bookkeeping.
@@ -272,7 +272,7 @@ replay HUD's rows, `src/tagpu_hudinput.c`), and `tacli replay follow|jump|pov`. 
 
 - **The fit rounds down.** Each of `z_r * W_v / W_r` and `z_r * H_v / H_r` is truncated in 64-bit
   integers before the minimum and the clamp, so the viewer's view/z_v is never smaller than the
-  recorder's view/z_r unless the 0.25 floor cuts it. The eye is `cam - W_v/2` with the half
+  recorder's view/z_r unless the recording's minimum or the viewer's floor cuts it. The eye is `cam - W_v/2` with the half
   rounded down, saturated to int32.
 - **Interpolation starts from `a`.** The fields the clock does not interpolate (`player`,
   `every`, `flags`) and, unless both samples are `REC_POV_WORLD`, the cursor are `a`'s. With one
@@ -518,7 +518,12 @@ commander and puts two Peewees inside the drag box. Its `keys` steps are `pmove`
 `pmove`, `up:lbutton`, each a step of its own so the engine sees the move between the press and the
 release); a Shift `pclick` on the commander (`down:shift` … `up:shift`, which the shield turns into
 `MK_SHIFT`); a `prclick` on the ground, which orders the three to move; a left `pclick` on empty
-ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; and `wheel:1`. The
+ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; `wheel:1`; then,
+at tick 1080, the mega map (`down:ctrl`, `wheel:-1`, `up:ctrl`), which takes the view to the zoom
+floor, and at 1260 one notch forward, which leaves it. Core Prime Industrial Area is 642 × 648 cells
+of 16 px, so its floor at 1024×768 is near 0.06 and the samples between the two carry a zoom below
+16384, which only format 27 can hold [arithmetic; not yet read off the game's `zoom: floor` line
+or a recording's `tarec.py pov`]. The
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
 `mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down.
 

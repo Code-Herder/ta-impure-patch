@@ -179,7 +179,7 @@ and the level's tile map ([terrain & depth](terrain-depth.html) §7.1). MEASURED
 map-sized and allocated once a level, whatever the viewport: the tile map's copy, 2 bytes a map cell
 (`tagpu_terr.c` `ensure_tilemap`, a `malloc` per level while the Vulkan lane is armed; 800 KB on
 Seven Islands, 640 × 640 cells), beside the atlas and height-grid mirrors it already kept. The fixed
-array it replaced could not have covered 4K at the zoom floor at all (17.9 MiB would have been
+array it replaced could not have covered 4K at 0.25× at all (17.9 MiB would have been
 needed).
 
 ### GPU side — 235 MiB, and not address space

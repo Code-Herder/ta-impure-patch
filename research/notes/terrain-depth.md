@@ -973,7 +973,7 @@ terrain vertex shader, *after* the zoom scale so it is the same sub-pixel distan
 every zoom. That puts a coincident fragment centre inside the **following** quad, where
 it samples that cell's first texel — the thing it is standing on — and the cadence stays
 uniform. 1/32 px is ~300× the float noise in a coordinate that size and 1/8 of a texel at
-the 0.25 zoom floor, so it cannot be lost.
+0.25× (more below it: `NUDGE/zoom` world px), so it cannot be lost.
 
 **It shifts the picture 1/32 px at every zoom**, not only where a sample lies on a boundary:
 every fragment reads the texel under its world point plus `e = 1/32 ÷ zoom` world px. On the

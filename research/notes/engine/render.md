@@ -2579,8 +2579,8 @@ carries such a node as the arithmetic describes it, uncorrupted, up to its own b
 vertices, 512 faces and 32 points a face.
 
 **It poses only what a frame can show.** Before the rotation, and before it reads a face, the
-publisher tests the model against the frame's reach — the published window at the zoom floor
-plus the lead (`reach_lo/hi`), the rect every frame drawn from that packet stays inside — with
+publisher tests the model against the frame's reach — the published window at the packet's reach
+level plus the lead (`reach_lo/hi`, [camera and zoom](../modules/camera-zoom.html) §2.3), the rect every frame drawn from that packet stays inside — with
 a margin from the node's rest vertices (`2·r + 4` pixels, `r` their largest `|x|+|y|+|z|`), and a
 model outside it is not posed, whatever its faces would have answered. It differs from the
 engine only in cost: `0x49BE60` poses every model projectile, and none the publisher skips could
