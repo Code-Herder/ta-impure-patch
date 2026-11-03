@@ -1902,6 +1902,13 @@ sits four rows below the bar**, `sy + 0x0E` against the bar's `sy + 0x0A`. There
 test on the digit: `DrawHealthBars` returns early on a dead unit, but the digit is drawn from
 the caller and does not care.
 
+**Under Sight on an AI seat the digit shows the AI's role groups**: the bar and the digit are drawn
+for the viewed player's units, and the AI's tick assigns its selectable units groups of their own
+every 30 calls (`0x408830`, [orders.md](orders.md), *Direct AI order activity observer*: a builder
+gets 4 [INFERRED for a commander: through the builder bit, which the 4 measured fits]). MEASURED
+2026-11-01 (M0-P, `main` `28c1c6e0`): in a replay of a four-seat skirmish, Sight on AI seats 1 and 2
+drew a white 4 under that seat's commander's health bar, and the human seat's commander showed none.
+
 ## The unit blit's shadow branches — mapped by us
 
 [MEASURED 2026-09-03, this project — `objdump` of the pristine Steam build, plus the live A/B in
