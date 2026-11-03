@@ -1244,12 +1244,15 @@ const TAGPU_ICONART* tagpu_icontype_art(void)
 
    WHY IT IS SAFE TO READ: the map and its masks are engine heap objects that
    only the teardown frees (0x488BF0, whose one caller is 0x491C3A in the
-   teardown 0x491B60, game thread) and only game-thread code inserts into
-   (0x488C50 through 0x488FB0, which can reallocate the array: the Ctrl keys
-   0x48D9AC, 0x48DC39, 0x48D9E5, 0x48BF38 and 0x41C338, and the console
-   Reload's 0x42D1F0); this walk runs on the game thread inside the in-play
-   publish, so neither can happen during it -- a lifetime by thread
-   ownership. The level's load filled the map on the loader thread (0x42BF40
+   teardown 0x491B60, game thread) and, during play, only game-thread code
+   inserts into (0x488C50 through 0x488FB0, which can move every entry: the
+   Ctrl keys 0x41C338, 0x48BF38, 0x48D9AC and 0x48D9E5 (0x48DC39 has no
+   caller), the SHARE give 0x49342D, and the console -- Reload 0x417490 ->
+   0x42D1F0 -> 0x42BF40, and the AI plan's weight/limit 0x488D30 (0x488E34),
+   which outside the load run only through it); this walk runs on the game
+   thread inside the in-play publish, so neither can happen during it -- a
+   lifetime by thread ownership. It keeps no entry pointer past this call:
+   an insert moves the entries. The level's load filled the map on the loader thread (0x42BF40
    through 0x42CC40 and 0x488E70) before its last act sets main+0x38D75 bit 1
    (0x497C5F), which the game thread read before its first in-play frame
    (0x498342). The map's bounds and every entry's two pointers pass ptr_ok,
