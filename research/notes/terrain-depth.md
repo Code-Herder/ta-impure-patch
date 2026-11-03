@@ -629,11 +629,11 @@ copy is keyed on the packet's `level_gen`; a copy of other dimensions is re-made
 
 **Every term is an exact integer in float**, so position, UV and world point are bit
 for bit the floats a CPU would compute: a grid column or row is under
-`TAGPU_TERR_MAX_SIDE` (2052), a map cell under 2048, an atlas column under 64 and an
+`TAGPU_TERR_MAX_SIDE` (2050), a map cell under 2048, an atlas column under 64 and an
 atlas row under 1024. The bound on the grid is a refusal, not a hope: the native pass
 clamps the rect every pass gathers over to `TAGPU_GATHER_SPAN_MAX` (65 536 world px a
-side, `tagpu_terr.h`), the gather bails on a side past 2052, and `tagpu_vk_terr.c`
-refuses a grid outside `[1, 2052]`, a tile map past 2048 a side and an area that is not
+side, `tagpu_terr.h`), the gather bails on a side past 2050, and `tagpu_vk_terr.c`
+refuses a grid outside `[1, 2050]`, a tile map past 2048 a side and an area that is not
 inside the tile map. That last one is what keeps every `texelFetch` inside its image:
 the fetched cell is on the map inside the area, or `tagpu_edge_reflect`'s answer in
 `[0, area)`. What crosses from the gather to the draw a frame is therefore the grid's
@@ -1048,7 +1048,7 @@ terrain vertex shader, *after* the zoom scale so it is the same sub-pixel distan
 every zoom. That puts a coincident fragment centre inside the **following** quad, where
 it samples that cell's first texel — the thing it is standing on — and the cadence stays
 uniform. 1/32 px is ~300× the float noise in a coordinate that size and 1/8 of a texel at
-the 0.25 zoom floor, so it cannot be lost.
+0.25× (more below it: `NUDGE/zoom` world px), so it cannot be lost.
 
 **It shifts the picture 1/32 px at every zoom**, not only where a sample lies on a boundary:
 every fragment reads the texel under its world point plus `e = 1/32 ÷ zoom` world px. On the

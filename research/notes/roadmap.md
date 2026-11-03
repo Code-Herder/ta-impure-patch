@@ -106,9 +106,9 @@ even black margin on all four sides. The trim starts biting at about **0.5×** o
 which is ordinary zoom-out and not the "extreme" the old note assumed. At 1920×1080 the floor
 asks for 29868 cells against the 32768, which is why it had never been seen.
 
-**Neither number is a number any more.** The rect is bounded by `vw / TAGPU_ZOOM_MIN + 64` —
+**Neither number is a number any more.** The rect is bounded by `tagpu_zoom_gather_span` —
 this frame's own viewport at the zoom floor, which is the widest rect any zoom can ask for by
-construction — and the terrain staging is *reserved* from that same expression, once, when the
+construction, capped at `TAGPU_GATHER_SPAN_MAX` (the floor follows the map since mega map 1c) — and the terrain staging is *reserved* from that same expression, once, when the
 viewport changes. `tagpu_terr_clamp_span()` survives as the guard on the gather's bail (a bail
 hands the draw back and flashes, which is the one failure that reads as a bug) and now fires
 only if the reservation is refused. `tagpu_native.c`'s viewport sanity bound went 4096 → 16384

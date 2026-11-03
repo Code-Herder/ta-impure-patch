@@ -400,7 +400,7 @@ range plus the caster allowance, held constant — so the per-frame height scan 
 The blocker search and the PCF kernel stay in world units as the lab has them.
 
 **The texel rule, refined 2026-09-06 (§2.12).** The zoom is continuous and eased
-(`tagpu_zoom.c`: 10 % geometric notches, 0.25..8, eased over frames), so a texel that is a
+(`tagpu_zoom.c`: 10 % geometric notches, the floor..8, eased over frames), so a texel that is a
 smooth function of zoom would re-anchor the grid every frame of an ease. **Decided: octaves.**
 The *base* texel is the lab's density at 1× — the light-space extent of the 1× window plus the
 caster margins, over `shadowres`; the texel is `base·2^k` with the smallest integer `k`
@@ -760,11 +760,11 @@ feature pass already reads (§3), drawn once per frame in the depth pass. Two Co
 672 × 800 cells. It joins the GL reset protocol like every other object.
 
 ### 2.9 Classic++ applies at every zoom
-Under `vpwide` the view reaches 16× the area at the 0.25 floor. **Decided: all zooms.** The
+Under `vpwide` the view reaches 16× the area at 0.25×, and more below it where the zoom floor follows a large map. **Decided: all zooms.** The
 shadow map's world-per-texel follows the zoom: ~~2048² at zoom ≥ 0.5, 4096² below~~ **2048² at
 zoom ≥ 1, 4096² below, the texel by octave (§2.7, refined 2026-09-06)**; the PCF minimum
 radius follows the texel. Restored textures are mipmapped to level 2, which covers
-0.25 at `ss=2`. The unit vertex cap is unchanged because the depth pass reuses the frame's
+0.25 at `ss=2`; below 0.25× the atlas aliases (the mega map plan's mipmaps landing). The unit vertex cap is unchanged because the depth pass reuses the frame's
 one vertex buffer. The softer shadows at the floor are judged in play — the lab's Classic++
 lane runs at zoom 1 by construction and cannot show them (§4).
 

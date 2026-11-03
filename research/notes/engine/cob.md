@@ -1363,7 +1363,10 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   only when `flag` is non-zero** (`0x4CB780` `test ebp,ebp; je`). The sibling is walked with the
   *caller's* offset, the child with the accumulated one. `DrawUnitSelectBoxRect` passes
   `flag = 0` (`push $0` @`0x46A55A`), so a selection box is the ROOT PIECE's vertices unioned
-  with the model origin — which is what makes it smaller than the model.
+  with the model origin — which is what makes it smaller than the model. The unit hit test
+  `0x48C6A0` takes the same root box (`flag = 0`, the call at `0x48C6D5`), so the pick area is
+  the root piece too (engine map, *Who reads the eye*). Stdcall, `ret 0x10` (`0x4CB692`); the
+  vertex loop in `0x4CB6A0` walks `node+0x24` at a stride of 12 bytes (`0x4CB769`).
 
 **`0x4B6CC0(in, out, angles)`** rotates one vector by the three words, and **fixes the order**.
 *[CORRECTED 2026-09-08: the argument order is `(in, out, angles)` — `0x4B6CC4` takes arg1 as the

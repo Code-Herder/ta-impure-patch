@@ -1083,7 +1083,11 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   `+0xA6` is nonzero (`0x48BB3E`). Its callers are `0x48D5A5`, `0x495C6D`, `0x495E5D` and
   `0x49697B`; the last is on every path of the frame callback `0x496790` to the draw call
   `0x4969CD`, and nothing jumps into `0x496980..0x4969CD` from outside it, so the engine's draw
-  always reads a list culled after the frame's steps.
+  always reads a list culled after the frame's steps. Its storage is allocated by the level's
+  unit-array allocation `0x4854A0` as `20 · MaxUnits` bytes — ten `u16` slots per
+  `MaxUnits` (`main+0x37EE6`, `0x485568..0x48557D`), the unit array's own count, stored at
+  `0x485596` — so it can hold every unit slot, and a rect widened to the whole map lists every
+  unit in it.
 - **The bar loop** `0x469C09..0x469D1F`, inside `DrawGameScreen 0x468CF0`, walks that list and
   never tests a slot's type. It draws a bar only when option-word bit 0 is set (damagebars,
   `0x469C97`) and the slot's owner record `+0x146` equals the viewed record (`0x46967D..0x469689`,
@@ -1102,6 +1106,44 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   units outside a step (a seek, a takeover, a rewind), changes the viewed record (Sight), or moves
   the eye (Follow where no zoom apply runs). A visit that did any of those ends with `0x48BAE0`
   again, so the draw reads a list built after them.
+
+### What bounds a unit's position — not enough for an int16 narrowing [DISASSEMBLED 2026-11-03]
+
+The question the unit hit test `0x48C6A0` asks (engine map, *Who reads the eye*): it narrows
+`position − eye ± the model's corner` to int16, so it is exact only for a unit within about 32 000
+px of the eye on x and z and below about 32 000 px of altitude. **No engine code keeps every unit
+there**, so `tagpu_zoom_hit_guard` checks the position at call time instead of relying on a bound
+taken at a level load. What was found, from `objdump -d -M intel` of `pristine/TotalA.exe.pristine`:
+
+- **The air course sets an unclamped target altitude.** `0x490690`, beyond 160 wu of its target
+  (`0x490716 cmp ebx,0xA00000; jle`), stores `(cruisealt + B) << 16` to the course's `+0x10`
+  (`0x490727..0x49074F`, and `0x490754..0x49076B` for the other arm), with `cruisealt` the def's
+  signed word `+0x21C` and B a byte — the sea level `main+0x1427F` when def `+0x241` bit 22 is set,
+  else byte `+1` of the unit's `+0x82` bucket [INFERRED: the cell's height byte]. No clamp
+  follows. (The attack manoeuvre's own target is clamped to `0x1FF0000`, 511 wu, at
+  `0x44E4EE..0x44E4FA`.)
+- **Off the map the vertical step is skipped.** In the air step `0x43D290`, when the unit's
+  `+0x82` is the off-map bucket `[main+0x142B7]` (`0x43D4B8..0x43D4CE`, `je 0x43D505`), the
+  assignment `vy = clamp(target_y − y, ±speed/4)` at `0x43D4D0..0x43D502` does not run, so a climb
+  only decays by the damping [the residual's size is INFERRED from the arithmetic, not measured].
+- **No function clamps x and z to the map.** The bound for a ground unit is the relink's cell test:
+  for a unit whose owner's type byte `player+0x73` is 1 or 2 (`0x43D8E3..0x43D8F7`), `0x47DB70`
+  (called at `0x43D912`) refuses a cell off the grid (`0x47DB85..0x47DBD0`, against
+  `main+0x14233`/`+0x14237`) unless the layer is 2 (`0x47DDA5..0x47DDAE`: off the grid it returns
+  `layer == 2`), and the placement then holds x and z to the footprint cell. **Exempt**: aircraft
+  (layer 2), units of any other owner type, carried units, and the two paths below.
+- **The set-position `0x48A9F0(unit, x, alt, z, layer)`** compares only to see whether the cell or
+  layer changed (`0x48AA35..0x48AA56`); no range test. Its callers include the carried-unit path
+  and **Teleport**: the order-type-11 handler `0x406AA0` moves each unit in the teleporter's box by
+  the order point less the teleporter's position and calls it at `0x406BC0`.
+- **The `0x2C` network record's full-position path** reads three 32-bit values off the wire
+  (`0x415DC0(0x20)` ×3, `0x48B5CA..0x48B5EB`) and stores them to `+0x6A`/`+0x6E`/`+0x72` with no
+  check (`0x48B679..0x48B67F` on the same-cell path) — the sending peer's engine is the only bound.
+
+Layer-1 units (ground, hover, ships, structures) keep an altitude within about ±257 wu, from the
+terrain and sea-level fits `0x48A490`/`0x48A870` [the scout's reading, not re-read here]; the cases
+above are the ones without a bound. How far past
+the map's edge an aircraft can fly was not derived [not established].
 
 ### Kill-all for a player — `0x486F10(player)`, stdcall, `ret 4`
 

@@ -21,11 +21,16 @@
        mouse routing test `0x469DF6`, `GetUnitAtMouse 0x48CD80` (whose first
        instruction is `IsPositionInRect(vpRect, mouse)`), the HotUnits cull
        `0x48BAE0`, the projectile and debris visibility tests. These are the
-       readers the widening is FOR, and they need nothing else from us but
-       one guard: GetUnitAtMouse's unit hit test `0x48C6A0` narrows each
-       unit's corners less the eye to int16, so its one call `0x48CE15` is
+       readers the widening is FOR. On the click path they need one guard
+       more: GetUnitAtMouse's unit hit test `0x48C6A0` narrows each unit's
+       corners less the eye to int16, so its one call `0x48CE15` is
        redirected to tagpu_zoom_hit_guard, which answers "not hit" for a unit
-       whose narrowing could wrap.
+       whose narrowing could wrap. Other engine paths narrow a position less
+       the eye to int16 too -- the eye loads at `0x46A5C3` (into `0x467A50`),
+       `0x420B57`, `0x4211E8` and `0x49C0A1`, each followed by the 16.16
+       difference's high word read back as int16 (`movsx WORD`) [DISASSEMBLED]
+       -- and are not guarded: they draw, into frames our renderer replaces,
+       so a wrap there is a wrong pixel nobody sees, never a wrong pick.
 
      ORIGIN: `0x498DA0` alone computes `world = eye + clamp(pos, L, R) - L`, so
        L and T are the origin there, not a bound. Measured: moving L 128->0 and

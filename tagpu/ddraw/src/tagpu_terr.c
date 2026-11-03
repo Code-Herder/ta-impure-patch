@@ -365,7 +365,7 @@ typedef char terr_atlas_consts_unchanged[
 
    EVERY VALUE IS EXACT IN FLOAT, so aPos, aUV and aWorld are bit for bit the
    floats a CPU would compute. A grid column or row is under
-   TAGPU_TERR_MAX_SIDE (2052: tagpu_vk_terr.c refuses a larger grid), a map
+   TAGPU_TERR_MAX_SIDE (2050: tagpu_vk_terr.c refuses a larger grid), a map
    cell under 2048 (`mapW16 <= 4096`, and the tile map's stride is half that),
    an atlas column 63 and an atlas row 1023 (a tile index is a u16) -- all
    integers far below 2^24, as is every product and sum below. A key's column
@@ -1367,13 +1367,16 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     s_cols = cols; s_rows = rows;
     s_mirror = v->mirror ? 1 : 0;
 
-    /* this frame has a grid -- `cols * rows > 0`, past the bail above -- and
-       the Vulkan lane's map-scoped uploads complete before the frame that
-       needs them draws, so a frame that publishes is a frame that draws: the
-       engine's terrain pass may be skipped. Handing it back here clears
-       `filled`, so the composite stops inverting on the SAME frame the grid
-       is published for -- which is why the hand-back never shows a frame of
-       bare key fill. */
+    /* this frame has a grid -- `cols * rows > 0`, past the bail above -- so
+       the engine's terrain pass may be skipped. A frame that publishes does
+       not always draw: the Vulkan lane's prepare can still return without
+       drawing after the hand-over, while a resize of a shared image waits
+       for a retire to clear (shared_resize, one at a time) or when a staging
+       upload cannot begin or copy -- a level's first frames can skip the
+       terrain draw that way until the retire clears, and the next frame that
+       prepares draws it. Handing the pass back here clears `filled`, so the
+       composite stops inverting on the SAME frame the grid is published
+       for. */
     tagpu_terrown_set_skip(own);
     tagpu_terrown_beat(v->frame_counter);
 

@@ -23,8 +23,8 @@ renderer: it is a jump to the whole-map level, TADR's gesture on our camera.
   (`Icon/iconcfg.ini`) when its install ships one.
 
 **Why not TADR's design.** TADR's megamap is a separate 2D picture of the map with its own input
-translation for every order. Ours already draws the world, and selects and commands in it, below
-1×; the only things missing are the levels below 0.25 and the icons. The TADR-port notes listed the
+translation for every order. Ours draws the world, and selects and commands in it, at every level
+down to the whole map; what the game shows there is the world itself, with icons for the units. The TADR-port notes listed the
 megamap as a deliberate exclusion (`tadr-port/quality-of-life.md`, `tadr-merge-exploration.md`);
 this plan replaces that line, and the landing that ships it corrects those notes.
 
@@ -63,35 +63,47 @@ is world px per screen px. BAR's 3000-elmo threshold becomes a level, calibrated
 (`tools/tascene-view.html`) against BAR's screen at the same visible span. [INFERRED: the order of
 magnitude is z ≈ 0.4 at 1080p; the landing measures it.]
 
-## What the floor holds today
+## What the floor is
 
-`TAGPU_ZOOM_MIN 0.25` (`inc/tagpu_zoom.h:12`). The fit level of the largest stock map, Seven
-Islands at 20480² px, is about 0.034 at 1024×768, 0.050 at 1920×1080 and 0.102 at 3840×2160.
+**The floor follows the map** (landing 1c; [camera and zoom](modules/camera-zoom.html) §2.3,
+*The floor follows the map*). It is `min(0.25, fit)`: `fit` the level at which the scroll extent
+fits the true viewport, searched on Q16 levels and bounded by the one int16 limit a widened view
+meets in a click — the widened rect's four edges, through `tagpu_vpwide_rect_at`, which is also
+vpwide's refusal. The game thread computes it at every in-play draw and logs it when it moves
+(`zoom: floor … bound by fit|lparam|0.25|1/64`); the packet carries it to the render thread. By
+the arithmetic, Seven Islands (20 480² px) gives 0.0346 at 1024×768, about 0.05 at 1920×1080 and
+0.1030 at 3840×2160, all bound by fit; a map the screen covers at 0.25× keeps 0.25.
 
-- **Six fixed `z > 0.05` guards** fall back to 1× below 0.05: the gather span
-  (`tagpu_zoom.c:540`), the vpwide addressable rect (`tagpu_vpwide.c:587`), the command record
-  (`tagpu_packet.c:830`), the minimap box (`tagpu_zoom.c:994`), the ScrollSpeed scaling
-  (`tagpu_zoom.c:729`) and the sweep (`tagpu_sweep.c:212`). Each must follow the floor.
-- **vpwide refuses a rect past 32768 px** (`tagpu_vpwide.c:625`); Seven Islands at 4K needs ~36 300.
-  Engine-bound mouse coordinates are int16 (`tagpu_zoom.c:1940`), so the rect itself cannot grow
-  past that — the cap needs an argument, not a bigger number.
-- **The wide fog grid is built every sim tick at the floor's size**, whatever the level in force
-  (`tagpu_fogwide.c:620-645`; 145 µs at 0.25). Its cost grows with 1/floor². A floor that follows
-  the map keeps small maps cheap; a large map at the whole-map level needs the grid sized to the
-  level in force, which touches the fog handshake (`tagpu_zoom.c`, *never clear bit 3 from the
-  render thread*).
+- **The seven guards** that fell back to 1× below 0.05 — the gather span, the vpwide addressable
+  rect, the command record's `cmd_valid`, the minimap box, the ScrollSpeed scaling, the sweep's
+  level and the cursor transform's `view()` — validate a level against `TAGPU_ZOOM_FLOOR_LO`
+  (1/64) instead, the sanity bound on every level value. `TAGPU_ZOOM_MIN` is gone, with
+  `TAGPU_ZOOM_FLOOR_HI` (0.25) and `TAGPU_ZOOM_FLOOR_LO` in its place.
+- **vpwide's bound is the rect's four edges in int16**, not a 32 768-px width: the button
+  `lParam` carries the engine point as two int16s and every engine reader of the rect compares in
+  32 bits, so a rect up to 65 535 px wide is exact. Seven Islands at 4K needs about 36 000.
+- **The engine's unit hit test narrows to int16**, and nothing the engine keeps bounds what it
+  narrows (aircraft off the map or climbing, carried units, network positions, Teleport:
+  [units](engine/units.html), *What bounds a unit's position*). Its one call, `0x48CE15` in
+  `GetUnitAtMouse`, goes through `tagpu_zoom_hit_guard`, which answers "not hit" for a unit whose
+  narrowing could wrap ([input](engine/input.html), *Who reads the eye*).
+- **The fog** is the whole map's source (1a), so no level outruns it.
+- **The tables' reach follows the level** through a ladder (0.25, 0.125, 0.0625, 0.03125, 1/64)
+  and an in-flight ring of the render thread's requests (`reach_zoom` on the command record,
+  `reach_level` on the packet): at 1× the anchor table and the models' cull cover the window
+  they covered at 0.25, and a zoom-out waits at a rung for the game thread (`reachheld=`).
 - **The terrain draw carries nothing per cell** (1b): one instance per cell of the gather's grid,
   derived in the vertex stage from the level's tile map. Its bound is the grid's side,
-  `TAGPU_TERR_MAX_SIDE` = 2052 cells, which follows from the gather rect's cap
-  `TAGPU_GATHER_SPAN_MAX` (65 536 px a side, `tagpu_terr.h`): Seven Islands whole is 640 × 640
-  cells, inside it.
+  `TAGPU_TERR_MAX_SIDE` = 2050 cells, which follows from the gather rect's cap
+  `TAGPU_GATHER_SPAN_MAX` (65 536 px a side, `tagpu_terr.h`), which `tagpu_zoom_gather_span`
+  applies whatever floor its caller holds: Seven Islands whole is 640 × 640 cells, inside it.
 - **ScrollSpeed** saturates at 255 below z = 0.125 (default 32). At the whole-map level there is
   nothing to scroll to; stated, not fixed.
-- **The recorder's camera** clamps the level to 0.25..8: the writer (`tagpu_recorder.c:3873`),
-  `rec_pov_ok` (`tagpu_recpov.h:85`, which makes an out-of-range sample *malformed*), and Follow
-  (`tagpu_persp.c:65`). **Decided (owner, 2026-11-02): widen the format's range** under a new
-  format version, so a replay shows the whole-map view the player saw; older recordings still read.
-- The file lever and the Follow lever ignore levels below 0.25 (`tagpu_zoom.c:395-403, 486`).
+- **The recorder's camera** goes down to 1/64 in recording format 27 (`REC_POV_ZOOM_MIN` 1024);
+  format 26 recordings still read, with their own 16384 minimum, and Follow draws a recorded level
+  below the viewer's floor at the floor. The multiplayer contribution version is unchanged.
+- **The file lever** parses `[1/64, 8]` and **the Follow lever** takes any recorded level; both
+  are drawn no lower than the floor.
 
 ## The facts the icons need
 
@@ -171,7 +183,8 @@ is per-frame working copies, not information, so the landing is split to remove 
   features, the level chosen from the supersampled target's pixel footprint, so 1× and above stay
   byte-identical.
 - **Stated, not fixed**: ScrollSpeed saturates at 255 below 0.125; 5120×1440 on a 20 480-px map
-  stops at ~0.089 (int16 clicks); 640×480 on maps over ~26 000 px stops at 1/64.
+  stops at ~0.083 (int16 clicks; the edges carry no margin); 640×480 on maps whose extent is
+  taller than 26 624 px stops at 1/64.
 
 - **The spec, v2** (`.data/mega-map/landing1-spec-v2.md`), and the owner's calls on it:
   - the packet's unit and feature tables keep a window that follows the level in force, through
@@ -214,14 +227,19 @@ is per-frame working copies, not information, so the landing is split to remove 
    every restore drop and blanked the terrain while two retires were pending, so the image keeps
    what it holds; and the browser lab and the wiki mockup extract the DLL's terrain shader, so both
    draw from an R16UI tile-map texture too.
-1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
-   extent and the true viewport, bounded by the int16 click rect; the hit-test guard at
-   `0x48CE15`; the seven guards (the cursor transform `view()` is the seventh), the vpwide cap and
-   the two levers follow it; every pass's fog-width cap goes; the recorder's camera range widened
-   under a new format version (27).
-   *Verified*: wheel to the whole map on Seven Islands at 1024×768 and 4K; click and band-box
-   selection and a move order at that level; `tagpu_fogwide_check.on` `differ=0`; frame and tick
-   time at the floor. Sim-adjacent if the fog grid changes → review at `high`.
+1c. **The floor follows the map.** *Built 2026-11-03 on this worktree; the in-game checks are
+   open* (spec v2 §4.6: the floor line and the rect at 1024×768 and 4K on Seven Islands, click and
+   band-box selection and a move order at the floor, a hover at the screen's edge with the hit
+   guard's count, the anchor and model counts at 1× and at the floor, the `vk: VA` line, the
+   small-map regression, a format-26 recording, and the replay gate). A runtime floor
+   `min(0.25, fit)` bounded by the int16 click rect, one predicate with vpwide's refusal; the seven
+   guards take 1/64; the tables' reach follows the level through the ladder and the ring; the
+   hit-test guard at `0x48CE15`; recording format 27 carries the camera down to 1/64, with the
+   perspective test group turning a mega notch at tick 1080. What the spec v1 planned and v2
+   dropped: the per-pass fog caps and the wide grid at the level (1a made them unnecessary) and a
+   level-load hit-test margin (the guard replaces it). Not yet read off the game: the floor
+   numbers above are arithmetic, and no `zoom: hit guard` count or `reachheld=` has been seen.
+   Review at `high` (sync between the threads, a new byte patch, the recording format).
 M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 the terrain and M2
    the features. *Built 2026-11-03 on its worktree; the in-game checks are open.* The spec is
    `.data/mega-map/mipmaps-spec.md` in the main checkout. Each terrain atlas, base and restored, has

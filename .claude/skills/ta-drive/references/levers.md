@@ -87,7 +87,7 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
   dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
   lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
-  fog=WxH out=N held=N/Mpx paused=N back=N nopieces=N` — what was handed over to the Vulkan passes, not what
+  fog=WxH out=N held=N/Mpx paused=N back=N reachheld=N floor=F nopieces=N` — what was handed over to the Vulkan passes, not what
   they drew; the fog fields are below. A model that will not bake (over 256
   pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
   `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
@@ -193,7 +193,7 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 | lever | when read | what |
 |---|---|---|
 | `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
-| `tagpu_zoom.txt` | every frame | a bare float 0.25–8.0; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
+| `tagpu_zoom.txt` | every frame | a bare float 1/64–8.0 (0.015625–8), drawn no lower than the map's zoom floor; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
@@ -214,10 +214,23 @@ Driving the camera at a zoom other than 1:
   area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
 - **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
   Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back jumps the target
-  to the floor about the view centre; any notch forward while engaged returns to the level it
+  to the floor about the view centre (and follows the floor if it moves while engaged); any notch forward while engaged returns to the level it
   left, centred on the point under the pointer. Inject it with `keys <i> down:ctrl pmove:X,Y
   wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
   control launch always has Ctrl+wheel as the mega map.
+- **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
+  extent fits the true viewport, bounded so the widened rect's four edges stay int16. The game
+  thread logs it when it changes (a level's first draw, a resize): `zoom: floor 0.0346 (fit 0.0346)
+  on 896x704, extent 20448x20352, map 20480x20480 - bound by fit` (Seven Islands at 1024x768 by
+  the arithmetic; not yet read off a run) — the term is `fit`, `lparam`,
+  `1/64` or `0.25` (a map the screen covers at 0.25x). Read the floor there or off the `native:`
+  line's `floor=`, never assume 0.25. The wheel and the mega notch stop at it; `tagpu_zoom.txt`
+  and a Follow below it draw at it. `ScrollSpeed` saturates at 255 below 0.125, so edge scroll is
+  slow at a deep floor.
+- **The unit hit test is guarded at every level**: a unit whose position is more than about 32 000
+  px from the eye (or that high) answers "not hit" to hover and click, and the game thread logs
+  `zoom: hit guard - N unit hit test(s) answered "not hit" so far, …` at most once a second. It
+  reads 0 in ordinary play; a count there is a far or off-map aircraft, not a fault.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -
@@ -429,7 +442,7 @@ that map's size.
 |---|---|---|---|
 | `packet: pub= skip= overrun= foreign= … trunc= refill= viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `trunc` (a frame published cut: the slot could not grow to the fill); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); the `world:` segment's units, wrecks and anchors `trunc`; `layerbad`, `subbad` and `lost` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments; `recodd` in the `fog:` segment (a draw that cleared the engine fog grid's is-current bit without building it) | `skip` is the FRESH gate doing its job; `refill` counts fills done again after the slot grew under them, a few at a level's start; the segments' counts are per publish, from the fill that was published; the `world:` pieces `trunc` reads at most the packet's `trunc`; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
 | `fx: proj= … -> lines= sprites= flashq= models= runs= (lost= why= of cap ) atlas=` | 60 | | `models=` the effects models drawn this frame, `runs=` their rasterised runs, `cap` the frame's bound on them; `lost=` models taken back with their records and `why=` the rasteriser's last refusal: 1 a model the packet did not carry, 2 a texel the unit atlas has not painted yet (its allowance: a few frames at a level's start), 3 no room (a frame's runs past 131 072, a face past 65 536 scanlines, or a rasteriser buffer that would not grow). A `lost=` that stays non-zero with the runs well below 131 072 is a fault. The packet's own `fx:` segment carries `models=N/Vv lost=`: the models carried, their vertices, and the models the publisher could not carry. A frame whose models the posed or the unit pass dropped says so once, `posedraw: N effects model(s) could not be carried …`, `unit: … the effects are not drawn, the units are`, or `unit: the slot would not take … the models are left out until every slot takes them`: that frame draws its units and none of its effects, and after the last one the frames that follow take back only their model records until every slot holds them |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog=WxH out= held=N/Mpx paused= back= nopieces=` | 300 | `out`, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; `fog=` is the fog source's size and the rest the reach bound's witness (§"Camera, viewport and fog") |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog=WxH out= held=N/Mpx paused= back= reachheld= floor= nopieces=` | 300 | `out`, `back`, `nopieces` | what was handed over, not what was drawn; `reachheld=` the frames the reach ladder held at a rung, `floor=` this frame's zoom floor; `sel=N/M` is rects handed to the marker pass of selected units on screen; `fog=` is the fog source's size and the rest the reach bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
 | `vk: terr: chain check: …`, `vk: feat: chain check: …` (`chaincheck.on`) | 120 render frames | `cpu-differ`, `gpu-differ`, `rest gpu-differ`, `twin gpu-differ` | the lines are in *The Vulkan lane*; `skipped` and `none` are not failures |
