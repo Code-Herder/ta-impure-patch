@@ -7,8 +7,8 @@ Watching, landed (`a149e0ce`); the second, Rewind a skirmish, landed (`078ac2cb`
 simulation, replay and frame, Try it yourself's world input on the live frame and its game lane;
 the game's own takeover fix it needed, P0, landed (`fa62ae5e`); the third, Take over a replay,
 landed (`e96fa13f`) -- a cursor for every seat, the picker, the Forks bay and its lanes, the takeover into a live
-game as any seat, Try it in the game and its game lane; Players
-and the camera not built.** The owner
+game as any seat, Try it in the game and its game lane; the fourth, Players and the camera,
+landed (`b0d8b276`)** (*Players, as built*, below). The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -122,8 +122,11 @@ press the replay HUD's `play`, `speed`, `rew`, `fwd`, `track` (with `to`, and `d
 `bookmark`, `leave` and `leave:no`; Rewind's the live HUD's `rewind`, `rew`, `fwd`, `track`,
 `live_play` and `live_now`; Take over's the replay HUD's, its Take over set's `takeover`, `takeas`
 (with `seat`), `lanes`, `lane`, `main`, `export` and `delete` (the last three with `fork`) and, after
-the takeover, the live HUD's. The overlays, Sight, Follow, Jump and the stats window wait for
-Players and the camera.
+the takeover, the live HUD's; and for Players `"players": true` and `"screen"` on the entry, a
+seat's `"camera"` and `"team"`, the camera input `{at, seat, camera, over}`, a kill's `"by"`, a
+type's sight figures, the side layout's `sight` table, and the Players set's `jump`, `sight` and
+`follow` (with `seat`), `cursors`, `clicks`, `selections`, `chat`, `stats`, `close` and `chip`
+(with `chip`).
 
 ## The landings
 
@@ -135,7 +138,7 @@ Players and the camera.
 | P0 | **A takeover starts the live game running** (the game, its own landing ahead of T1, owner's answer QB = A, 2026-11-01): the takeover ends the playing's pause (`tk_run`), the wiki does not open while a takeover is queued, and the live HUD draws from the frame whose visit armed the fork. MEASURED before it (M0-T, main `587ca2a7`): the live game stood paused at R − 1 = 1500 for 54 s and 68 s until the Pause key, no HUD drew meanwhile, the recording started only at the key, and the toast showed on the live HUD only when the game ran within its 1.8 s | the game's change; tareplay's W checks the game runs with no input | **landed 2026-11-01** (`fa62ae5e`) |
 | T1-T3 | **Take over a replay**: a cursor for every seat (C1), the takeover data (C2), the replay's Take over (C3), the entry (C4), the mockup's frame and the DLL's (F1, G1), the threads and Try it in the DLL (G2), and the docs, as one landing | the picker, the Forks bay, the lanes, Save as a replay, Delete, the eviction; a second seat's cursor (decision 16) | **landed 2026-11-01** (`e96fa13f`; *Take over, as built*, below) |
 | P0′ | **Sight shows the viewed seat's rates at once** (the game, its own landing ahead of P1-P3, owner's answer OQ-D = A, 2026-11-01): a Sight change lowers the newly viewed record's DisplayTimer `+0xF8`, when at or above GameTime, by whole steps of 30 to the last value of its phase below GameTime, so the draw that follows re-reads that record's resource-bar rates once and leaves the timer in its phase (`bar_rates_due`; [render.md](engine/render.md), *The memo's layout*). MEASURED before it (M0-P2, main `28c1c6e0`): paused at GameTime 300 after Sight 0, full map, 1, full map, 2, full map, 3, full map, the second Sight on seat 1 showed the memo's rates 72.5 / 1.0 / 0.5 / 0, seat 3's, against seat 1's 12.5 / 1.0 / 0.5 / 0, and back on the full map, whose rates are all 0, the bar still read `+72 −1`. A paused seek's rates follow the same engine rule and are left for a later landing after Players, by the owner's choice of 2026-11-01, and so are a takeover that leaves the game paused and a return to now, which change the view around the seek's timer write (render.md, *What the Sight store does not cover*) | the game's change; tareplay's W checks the bar's rates are the viewed record's after Sight seat, full map, seat, full map, and could not run when the two records' rates are equal | **landed 2026-11-01** (`384b36d1`) |
-| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
+| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | **landed 2026-11-02** (`b0d8b276`; *Players, as built*, below) |
 
 Watching went first because it builds the frame, the two clocks, seek and the kills, which every
 other entry stands on, without forks. **Rewind is second**, the owner's own example, whose fork
@@ -235,8 +238,10 @@ it on its own.
 **Not closed by Rewind** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the game
 lane plays Rewind on the base game only -- under the five mods of the compatibility suite the
 `mods` lane holds its live bars (w7) and nothing else of the entry; the eviction is checked by
-LIVE_TRACE and shown by no Rewind demo (Take over's demo 4 shows it); the arrow and diamond the game draws round the recorded
-commander in the past are the overlays', P1's [INFERRED]; the live game has no speed of its own
+LIVE_TRACE and shown by no Rewind demo (Take over's demo 4 shows it); the arrow and the
+selection rectangle the game draws round the recorded commander in the past are the replay's
+overlays of the human seat (MEASURED 2026-11-01, M0-P4: Cursors removed the arrow alone,
+Selections the rectangle alone), drawn by the wiki's past view since P1; the live game has no speed of its own
 (one game tick a demo step, the game's 1×), and the Pause key during a rewind is not modelled.
 
 **Take over, as built.** One landing again, on Rewind's fork machinery, after the game's own fix
@@ -348,11 +353,110 @@ read, at least 10 s late, and after P0 one window grab 1.06 s after the row drew
 ENERGY 6 917 while the memo's floats read 0.29 s later already held 9 861 / 9 894 -- so the wiki's
 ease from 0 is [INFERRED]; why the bottom bar stays the load's when the viewed side changes is
 measured, not read in the engine ([engine/ui.md](engine/ui.md)); the viewed seat's contact bits,
-which the game's takeover changes (`+0x110` bit 9 cleared on every unit but the taken seat's,
-meaning not established), have no counterpart in the wiki. Left out on purpose: the computer
+which the game's takeover changes, have no counterpart in a takeover entry: `+0x110` bit 9 is the
+radar pass's sonar contact, and its clearing on every unit but the taken seat's is the pass
+replacing the watcher's all-units bits with the taken seat's own, no unit in its sonar range
+([engine/recorder.md](engine/recorder.md), `0x467440`'s row). Left out on purpose: the computer
 players the game seats after a takeover (decision 8's line), per-seat columns (QA), the watch-again
 step (QC), and the refusals no wiki state reaches (the file worker's queue and tickets, `Cannot
 watch F<n>`, `Cannot delete F<n>`, `Take over refused`, `Cannot go back to m:ss`).
+
+**Players, as built.** Built in both the mockup and the game; the landing is in progress. The
+stats chart's halo the game seemed to lack was the mockup's error: `hud.js` read the wiki's
+`rgb(r,g,b)` seat colours as NaN, so every seat looked dark and took the halo the game rightly
+draws for dark colours only (`c5009c94`). The game's own change it copies,
+P0′ (Sight shows the viewed seat's rates at once), landed first. The owner's answers, each the
+recommended one:
+
+- **OQ-A** (2026-11-01): the entry's screen is smaller than its map; the seats' cameras are
+  recorded data; the viewer's camera moves only by Jump and Follow.
+- **OQ-B** (2026-11-01): the overlays are drawn in every replay view, the Players controls inert
+  on every other entry.
+- **OQ-C** (2026-11-01): radar contacts as the game makes them.
+- **OQ-D** (2026-11-01): Sight shows the viewed seat's rates at once, by fixing the game (P0′).
+- **The bar's rates after a paused seek, a paused takeover and Back to now** are left for a later
+  landing, and **health bars** are a gap of every entry, not of this one.
+- **OQ-E** (2026-11-02, after C1): a layout stores the sight tables only for the radius indices
+  its setup's types reach, sparse by index, with no cap on `numtables`; every one of the six
+  setups keeps its tables.
+- **OQ-F** (2026-11-02, after C4): TA Twilight (sight 600 to 650 on a field 1 536 wide) and TA
+  Zero (radar equal to sight) cannot show the Sight demo's hidden units or its radar-only
+  contact. The captions are worded to be true in every mod, and the two claims are checked only
+  in castings whose figures make them observable, `simcheck.mjs` naming each skip.
+
+| step | what it carries | commits |
+|---|---|---|
+| C1 | the data: players entries, `screen`, the seats' cameras and teams, the camera input, a kill's `by`, the Players set's controls, the view rule, the death bound, the castings' sight figures and model heights, the side layout's sight table | `9aca7124` |
+| G1, engine-free half | `HOP_TRI`, the second chart slot, the world target's scissor | `3ddabfd7` |
+| C1b | the sight tables sparse by index, only the ones the setup's types reach (OQ-E) | `32cb95b9` |
+| C2 | the simulation: kills and losses, the deaths, the clicks, `moved`, a seat's lit grid and contacts, the army value, hash items 12 and 14 | `d08a1007` |
+| C2b | the deaths held to the engine's 20 live temporary sight records | `9256cd20` |
+| C3 | the replay layer: the camera, Sight with the bar's phase rule, the pass, the switches, the samples, the players hash block; `simparity.mjs`'s players fixture and PLAYERS_TRACE | `2e0ca4b0` |
+| F1 | the mockup's presentation: the screen and the eye, Sight's fog, units and minimap, the overlays, the Players set and the stats window on the stage | `a1096fc0` |
+| C4 | `art/wiki/entries/players.json` and its five demos, its row in `art/wiki/tree.json` (Replays, after Rewind), `art/wiki/stage/players.field.json`, `simcheck.mjs`'s PLAYERS_CLAIMS | `8a9bd954` |
+| OQ-F | Sight's captions true in every mod; the two figure-bound claims skipped by name | `2748c214` |
+| Rewind's goal | `rewind/steps`' move to (400, 250), which every casting's commander reaches | `e569e589` |
+| G1 | the game draws the entry as the mockup does: the record's players block, the view's eye and overlays, Sight, the stage HUD's Players set and stats window in chart slot 1 | `55e7195a` |
+| the fill | a footprint's metal coverage from sums built at load | `2dcbb41a` |
+| the skips | a radar-contact skip names each type's radar and sonar apart | `1945e8fb` |
+| G2 | Try it on the Players set in the game, the `players` lane (p1)-(p5) in the gate, the image's clip in `TAGPU_CMD_WIKI` | `0c551df1` |
+| D | the documentation pass | the `docs:` commit |
+
+The scene: a 96 × 48 field with a 64 × 30 screen, three seats -- Ada and Cleo of ARM on team 0,
+Bram of CORE on team 1 -- each with a recorded camera; Take over's six types with their FBIs'
+figures (ARMCOM and CORCOM sight 290, radar and sonar 400; ARMCK 235, ARMMEX and ARMSOLAR 210,
+CORAK 275). Every demo's game is 1 800 ticks: Ada builds a solar and sends her commander east,
+her camera gliding after it; Bram's w1 goes west and his commander east, his camera following;
+Cleo builds a solar and queues an extractor and a second solar; w1 dies at 1100 by Ada and
+Cleo's scene solar s2 at 1500 by Bram. The five demos (`end` 600, 700, 640, 620 and 640 demo
+ticks): **jump** -- Jump on Bram's row, then Ada's; **follow** -- Follow on Bram's row, and again
+(Free cam); **sight** -- the track to 930, Sight on Bram through w1's death vision and Ada's
+commander as a radar contact, and again (the full map); **overlays** -- Cursors, Clicks and
+Selections off, Cursors on; **stats** -- the window opened, army, kills, the team split, closed.
+
+**Decisions taken in the build**, each held by both simulations or both frames and checked:
+
+- **Sight's top bar is the viewed seat's, its rates by the game's phase rule.** A Sight change,
+  held while a seek is pending, re-reads the newly viewed record's rates once and keeps its
+  30-tick phase, `bar_rates_due` copied; a seek's end sets every DisplayTimer to the shown tick.
+  The memo eases from 0 toward the seat's stored values.
+- **The pass runs on the record's deadline**: at a Sight change, a seek's end and on every played
+  tick that reaches a multiple of 30, at 2× to 8× as at 1×, as the game's radar pass runs on the
+  viewed record's 30-tick deadline `+0xF0`, checked every tick ([engine/recorder.md](engine/recorder.md),
+  `0x467440`), while the minimap's dots move every tick.
+- **The deaths are bounded as the engine bounds them** (C2b): the engine keeps one list of at
+  most 20 live temporary sight records, filled only for the viewed player's deaths, so a 21st
+  death within the 61 ticks a record lives is lost in the game; the wiki drops it the same way,
+  and the data rule keeps every authored script under it.
+- **The sight tables are sparse** (OQ-E, C1b): only the radius indices a setup's types reach,
+  so Twilight's 94 tables cost 11 stored, 15 212 cells.
+- **The view rule holds every tick, not every move**: a camera may glide under a resting pointer,
+  and the game records a seat's cursor on the world only on its player's screen.
+- **The stage HUD's chart is its own slot** (slot 1), so the replay HUD's stats window and the
+  stage's never share an image.
+- **The overlays switch only on a players entry**: the switches are values of every replay, all on
+  outside a players entry, so the watching frames of Watching and Take over gained every seat's
+  cursors, clicks and selections, and Rewind's past the human seat's.
+- **Demo 3's wait stands at 57** (the track's trip runs to its release at 30 + 26) and **its
+  track goes to 930**: from 1040 w1's death vision was gone long before the caption naming it;
+  from 930 it falls round that caption, and the first radar-only pass, at 1170, before the radar
+  caption. **Demo 4's start view** holds w1, Cleo's units and the three cursors. **Cleo's queue**
+  spends more than a cut seat's 200 in every pack, for the stall claims every game demo carries.
+  **The killed solar is s2, a scene unit**, since a kill names one.
+- **Rewind's `steps` goal moved to (400, 250)**: TA Zero's 3 × 3 commanders could not stand at
+  (400, 300) beside w1, so every leg searched the whole grid (964 µs a fill, 69 µs at the new goal,
+  MEASURED native -O2); `simcheck.mjs`'s goals' claim holds in every context again.
+
+**Not closed by Players** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the stats
+the game lane plays the entry on
+the base game only; health bars are drawn in no entry; the radar-only claim is skipped in TA
+Twilight and TA Zero (OQ-F); the bar's rates after a paused seek, a paused takeover and Back to
+now (a later landing). Left out on purpose or [INFERRED]: the replay's playback delay, Follow's
+engine ends, a drag of the camera or the stats window, chat, altitude in the stamp, jamming and
+stealth, the radar dots' blink, the AI groups' digit under Sight, and the footprint corners
+standing in for `0x465AC0`'s model-box points. Two engine defect candidates the data rules keep out
+rather than reproduce: radius index 0 reading before the table, and the byte counters' wrap past
+about 37 stacked units ([engine/map.md](engine/map.md), *The sight table and the stamp*).
 
 ## The measured costs
 
@@ -435,12 +539,36 @@ MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the
   PAUSE), and in multiplayer the time touches only the viewer's frame time, never the simulation
   [INFERRED: not measured]. The lanes keep printing the figure beside the target, so a regression
   still shows.
-- **The packet**: `TAGPU_PK_WIKI` 167 704 bytes, the frame record 1 680 of them with Rewind's live
-  fields and Take over's block (the picker, the lanes, the human seat, the fork limit and its
+- **Players in the game** (MEASURED 2026-11-02, `wiki_regression.py`'s full gate at G2, the
+  `players` lane at 1920 × 1080; every lane of the gate passed): (p1) a watching frame 1152 × 544
+  on the 64 × 30 screen, the viewport 1024 × 480 at the eye (0, 0), the image's clip the world rect
+  and the image the 1536 × 768 map at the eye; (p3) the column and both bars pixel-equal to the
+  mockup's in every held state; (p4) Jump on Bram's and Ada's rows, Follow and Follow again, Sight
+  and the switches through device clicks, GameTime and the key ring unmoved; (p5) the seek to 1798
+  in 85 demo steps and 3.2 s with Sight on Bram and the stats window open. The page cost the game
+  thread at most 0.722 ms in one frame over 383 frames; the render thread's stage HUD at most
+  0.250 ms in a frame and the bars 0.184 ms, over 390 frames. The lane passed in 1 939 s. In the
+  same gate Watching's page (v5) 0.634 ms over 231 frames, Take over's (t5) 0.584 over 445, the
+  page demos' (d5) 1.917 over 1 617, and Rewind's (r5) 1.015 ms over 505 frames with its
+  longest seek 87 demo steps and 3.4 s. Those two are the full gate's load: the same tree with
+  only the rewind and demos lanes, two at once (`-j 2`), measured r5 0.410 ms over 504 frames and
+  d5 0.608 ms over 1 733 (MEASURED 2026-11-02).
+- **A players replay's fills** (MEASURED 2026-11-02, wikitest's replay layer timed fill by fill as
+  `tagpu_wiki.c` paces them, 64 game ticks a fill, native -O2, the fixture layout, best of 9): the
+  worst fill 72 to 76 µs, the mean 33 to 40, the first 46 to 47, init 32 to 40 µs (the sight tables
+  are read at load); before the coverage sums of `2dcbb41a` 91 to 95, 47 to 54, 61 to 63 and 24 to
+  28. What is left is the simulation's own work a tick: the units' moves 62 % (evacuation 37 %) and
+  Quick Build's hover 34 %. The same change took Take over's worst fill from 48-63 to 33-43 µs and
+  Watching's from 39-47 to 27-33. A seat's lit grid on the worst scene costs 26.6 µs and its
+  contacts 11 µs (C2, native -O2).
+- **The packet**: `TAGPU_PK_WIKI` 172 744 bytes, the view `WIKISTAGEVIEW` 167 816 of them with the
+  eye and viewport, the overlays and Sight's minimap; the frame record 4 600 with Rewind's live
+  fields, Take over's block (the picker, the lanes, the human seat, the fork limit and its
   warning, the chain's last, the fill, the picker's R and eviction, three forks, `top_side`, the
-  cursor's `watched`), the head 328 with the replay's serial; `try_world` sits in padding.
-  `TAGPU_CMD_WIKI` 10 056, the live strip's drawn span (`hud_first`, `hud_G`) and the drawn lanes
-  (`nlane`, `lane_id[3]`) included (sizeof on the DLL's compiler, 2026-11-01).
+  cursor's `watched`) and the players block (2 896 bytes of it the samples); the head 328 with the
+  replay's serial; `try_world` sits in padding. `TAGPU_CMD_WIKI` 10 072, the live strip's drawn
+  span (`hud_first`, `hud_G`), the drawn lanes (`nlane`, `lane_id[3]`) and the image's rect and
+  clip (`img[4]`, `clip[4]`) included (sizeof on the DLL's compiler, 2026-11-02).
 
 ## What R0 found
 
@@ -499,8 +627,9 @@ player's screen and input*; [input.md](engine/input.md), the order byte's cancel
 
 Not measured: the open and the past with the pointer on the strip; the memo frame by frame after
 a seek (the reads were 15 frames apart and it had converged); what keys or buttons the player holds
-through a fork or Back to now; the arrow and diamond the game draws round the recorded commander in
-the past, [INFERRED] the replay overlays.
+through a fork or Back to now. The arrow and the rectangle the game draws round the recorded
+commander in the past were measured later, in M0-P4: they are the replay overlays of the human
+seat.
 
 ## Open
 

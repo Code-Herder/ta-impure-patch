@@ -120,17 +120,21 @@ const WikiStage = (() => {
         if (b > a && d > c) { g.fillStyle = col; g.fillRect(a, c, b - a, d - c); }
       };
       for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) cellAt(x, z, shade(z * mw + x));
-      const fog = M.fog || [];
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) { const f = fog[z * mw + x]; if (f) cellAt(x, z, fogColour(f)); }
-      // a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its owner's colour
-      for (const u of v.units || []) {
+      // the fog: the map's, or under a players frame's Sight the pass's (v.mini), grey on each cell of an unlit block
+      const fog = M.fog || [], mini = v.mini || null;
+      const fogAt = (x, z) => mini ? ((x >> 1) < mini.gw && (z >> 1) < mini.gh && mini.lit[(z >> 1) * mini.gw + (x >> 1)] ? 0 : 1) : fog[z * mw + x];
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) { const f = fogAt(x, z); if (f) cellAt(x, z, fogColour(f)); }
+      // a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its owner's colour: every unit's,
+      // or under Sight the pass's dots
+      for (const u of mini ? mini.dots : v.units || []) {
         const p = pt(u); if (!p) continue;
         const [px, py] = SIDE.dotAt(p.x, p.z, m, mw * cell, mh * cell);
         g.fillStyle = TEAM[u.owner | 0] || '#ccc';
         g.beginPath(); g.arc(CX(m.offx + px + .5), Z(m.offy + py + .5), 1.5 * s, 0, 2 * Math.PI); g.fill();
       }
-      // the camera box: the stage shows the whole map, so it is the picture's border
-      ring(box(m.offx, m.offy, m.w, m.h), SIDE_WB.box);
+      // the camera box (SIDE.cameraBox): the picture's border while the stage shows the whole map
+      const cb = SIDE.cameraBox(m, mw * cell, mh * cell, k.eye || null);
+      ring(box(cb[0], cb[1], cb[2] - cb[0] + 1, cb[3] - cb[1] + 1), SIDE_WB.box);
     }
 
     const scr = L && L.screens[sv.screen];
@@ -171,9 +175,12 @@ const WikiStage = (() => {
   }
   /* The content rect of a view: the map's, or with the column (v.side) the column and the map, as tall as the taller,
      which is the map: the sim grows a map with the column until it is as tall (decision 9). A frame view (v.frame,
-     frame.js view) is the whole game screen, Wg x Hg from the column's left edge and the top bar's top (frame.js size). */
+     frame.js view) is the whole game screen, Wg x Hg from the column's left edge and the top bar's top (frame.js size),
+     a players frame's the column, its viewport and the bars. */
   function content(v) {
     const M = v.map, cell = +M.cell || 16, mw = (+M.w || 1) * cell, mh = (+M.h || 1) * cell;
+    // a players frame (frame.js view's `eye`) is its screen's: the viewport stands where the map does
+    if (v.frame && v.eye) return { x0: -SIDE_W, z0: -FRAME_BAR, w: SIDE_W + v.eye.w, h: v.eye.h + 2 * FRAME_BAR };
     if (v.frame) return { x0: -SIDE_W, z0: -FRAME_BAR, w: SIDE_W + mw, h: Math.max(mh + 2 * FRAME_BAR, v.side ? +v.side.h || 0 : 0) };
     return v.side ? { x0: -SIDE_W, w: SIDE_W + mw, h: Math.max(mh, +v.side.h || 0) } : { x0: 0, w: mw, h: mh };
   }
@@ -235,7 +242,15 @@ const WikiStage = (() => {
     }
     const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1, C = content(v);
     const { s, ox, oz } = fit(C, W, H, U);
-    const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s, shade = grounds(M);
+    /* TWO TRANSFORMS: FX, FZ the frame's (the column at -128, the bars), and X, Z the world's, the frame's less the eye
+       of a players frame (frame.js view's `eye`), whose viewport shows the map from the eye. Without an eye they are one
+       function, so every op of a frame without a camera is what it was. */
+    const E = v.frame && v.eye ? v.eye : null;
+    const FX = x => ox + x * s, FZ = z => oz + z * s;
+    const X = E ? x => FX(x - E.x) : FX, Z = E ? z => FZ(z - E.z) : FZ, cp = cell * s, shade = grounds(M);
+    // the cells the viewport meets, [c0, c1) x [r0, r1): the ground, its grid and its fog are drawn there alone
+    const c0 = E ? clamp(Math.floor(E.x / cell), 0, mw) : 0, c1 = E ? clamp(Math.ceil((E.x + E.w) / cell), 0, mw) : mw;
+    const r0 = E ? clamp(Math.floor(E.z / cell), 0, mh) : 0, r1 = E ? clamp(Math.ceil((E.z + E.h) / cell), 0, mh) : mh;
     // a name on its box. One longer than `max`, 1.5 times its box unless given, shrinks until it fits, as the HUD fits
     // its text
     const label = (t, b, col, max = b.w * 1.5) => {
@@ -247,17 +262,19 @@ const WikiStage = (() => {
     };
     // the game's left sidebar, before the map: the cursor and the overlays are drawn over it
     const F = v.frame ? o.frame || {} : null;
-    const emblems = F ? drawFrame(g, v, F, o, { X, Z, s, U, C, label, shade, mark }) : null;
+    const emblems = F ? drawFrame(g, v, F, o, { X: FX, Z: FZ, s, U, C, label, shade, mark, eye: E }) : null;
     if (!F && v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade, dz: 0 }); }
-    // THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none of it lands on them
+    /* THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none of it lands on them --
+       the map's width and the rows between the bars, or a players frame's viewport */
     if (F) {
-      const vp = { x0: snap(X(0)), y0: snap(Z(0)), x1: snap(X(mw * cell)), y1: snap(Z(C.h - 2 * FRAME_BAR)) };
+      const vp = E ? { x0: snap(FX(0)), y0: snap(FZ(0)), x1: snap(FX(E.w)), y1: snap(FZ(E.h)) }
+        : { x0: snap(X(0)), y0: snap(Z(0)), x1: snap(X(mw * cell)), y1: snap(Z(C.h - 2 * FRAME_BAR)) };
       g.save(); g.beginPath(); g.rect(vp.x0, vp.y0, vp.x1 - vp.x0, vp.y1 - vp.y0); g.clip();
     }
 
     if (at('ground')) {
       // the ground, in the shades of grounds()
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
         g.fillStyle = shade(z * mw + x);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
@@ -266,11 +283,11 @@ const WikiStage = (() => {
       if (cp >= 5) {
         g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
         const cols = [];
-        for (let x = 0; x <= mw; x++) cols.push(Math.round(X(x * cell)));
-        for (const px of cols) { g.moveTo(px + .5, Z(0)); g.lineTo(px + .5, Z(mh * cell)); }
-        for (let z = 0; z <= mh; z++) {
-          const pz = Math.round(Z(z * cell)) + .5, end = X(mw * cell);
-          let a = X(0);
+        for (let x = c0; x <= c1; x++) cols.push(Math.round(X(x * cell)));
+        for (const px of cols) { g.moveTo(px + .5, Z(r0 * cell)); g.lineTo(px + .5, Z(r1 * cell)); }
+        for (let z = r0; z <= r1; z++) {
+          const pz = Math.round(Z(z * cell)) + .5, end = X(c1 * cell);
+          let a = X(c0 * cell);
           for (const px of cols) { if (px > a) { g.moveTo(a, pz); g.lineTo(px, pz); } a = px + 1; }
           if (end > a) { g.moveTo(a, pz); g.lineTo(end, pz); }
         }
@@ -293,9 +310,9 @@ const WikiStage = (() => {
         g.lineWidth = lw; g.strokeStyle = FEAT_WB[look + 'Edge'];
         g.strokeRect(x0 + lw / 2, y0 + lw / 2, w - lw, h - lw);
       }
-      // fog, in fogColour's
+      // fog, in fogColour's, on the cells the ground is drawn on
       const fog = M.fog || [];
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
         const f = fog[z * mw + x]; if (!f) continue;
         g.fillStyle = fogColour(f);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
@@ -303,7 +320,8 @@ const WikiStage = (() => {
     }
     // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear), each
     // edge snapped to the device pixel as the game's composite rect is (tagpu_wikistage_image): the composite's
-    // viewport is whole pixels, so the image may sit up to half a pixel from the fit, the same way in both
+    // viewport is whole pixels, so the image may sit up to half a pixel from the fit, the same way in both. A players
+    // frame's map stands at the eye and the viewport clip is the composite's scissor (TAGPU_WORLDTGT's)
     if (im) {
       const x0 = snap(X(0)), y0 = snap(Z(0));
       im.draw(g, { x: x0, y: y0, w: snap(X(mw * cell)) - x0, h: snap(Z(mh * cell)) - y0 });
@@ -396,6 +414,7 @@ const WikiStage = (() => {
     }
     if (v.reclaim) { mark('over'); drawSweep(g, v, { X, Z, cell, cp, U, text, measure }); }
     if (F) {
+      drawOverlays(g, v, F, { X, Z, s, U, box, mark });
       g.restore();
       return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, emblems, cursor: drawTop(F, o, W, H, U) };
     }
@@ -421,6 +440,53 @@ const WikiStage = (() => {
       text(t, x0 + 3 * U, y0 + h / 2, sz, 'left', SWEEP.kind[v.reclaim.kind] || SWEEP.text);
     }
     return { s, ox, oz, cell, mw, mh, x0: C.x0, cw: C.w, ch: C.h, cursor: drew };
+  }
+
+  /* THE REPLAY'S OVERLAYS on a frame (frame.js view: `osel`, `oclick`, `ocur`), drawn last in the world, inside the
+     viewport clip and over everything of R2, as the game draws them last with the fog off (tagpu_mark.c, THE REPLAY'S
+     OVERLAYS): first each unit's selection by its owner seat, the stage's own selection brackets in that seat's colour
+     (the game draws the engine's selection rectangle in the seat's colour, MEASURED m0p-facts.md P4; `selected`, the
+     player's own, stays the white brackets above); then the clicks' rings, oldest first, each 16 straight segments
+     one frame pixel wide in the seat's colour with a radius of 4 + 12 (15 - age) / 15 frame pixels; then the cursors'
+     arrows in seat order, each OV_ARROW's five triangles (HOP_TRI) in the seat's colour and then its seven edges one
+     frame pixel wide in the GUI's black. A ring's and an arrow's sizes are the marker pass's screen pixels, here frame
+     pixels scaled by the fit (PD11: a shape in device pixels would grow against the frame as the stage shrinks); each
+     anchors on its world point snapped to the device pixel (ov_anchor's snap_device). `F.colour(k)` is seat k's
+     colour (frame.js seatColour), the stand-ins without it; `F.edge` the GUI's black, the stand-in black without it. */
+  const OV_ARROW = [[0, 0], [0, 15], [4, 11], [7, 17], [9, 16], [6, 10], [11, 10]];
+  const OV_ARROW_TRI = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]], OV_SEG = 16, CLICK_SHOW = 15;
+  function drawOverlays(g, v, F, k) {
+    const { X, Z, s, U, box, mark } = k, col = q => (F.colour ? F.colour(q) : TEAM[q]) || '#ccc';
+    mark('over');
+    for (const u of v.units || []) {
+      if (!u.osel || !pt(u)) continue;
+      const b = box(u), m = 3 * U, x0 = b.x - m, y0 = b.y - m, x1 = b.x + b.w + m, y1 = b.y + b.h + m, a = Math.min(b.w, b.h) * .35 + m;
+      g.strokeStyle = col(u.owner | 0); g.lineWidth = Math.max(1, 1.5 * U); g.beginPath();
+      for (const [x, y, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+        g.moveTo(x + dx * a, y); g.lineTo(x, y); g.lineTo(x, y + dy * a);
+      }
+      g.stroke();
+    }
+    g.lineWidth = s;
+    for (const c of v.oclick || []) {
+      const age = clamp(c.age | 0, 0, CLICK_SHOW - 1), r = (4 + 12 * (CLICK_SHOW - age) / CLICK_SHOW) * s;
+      const cx = snap(X(c.x)), cy = snap(Z(c.z));
+      g.strokeStyle = col(c.seat); g.beginPath();
+      for (let i = 0; i < OV_SEG; i++) {
+        const a0 = 2 * Math.PI * i / OV_SEG, a1 = 2 * Math.PI * (i + 1) / OV_SEG;
+        g.moveTo(cx + r * Math.cos(a0), cy + r * Math.sin(a0)); g.lineTo(cx + r * Math.cos(a1), cy + r * Math.sin(a1));
+      }
+      g.stroke();
+    }
+    for (const c of v.ocur || []) {
+      const ax = snap(X(c.x)), ay = snap(Z(c.z)), P = OV_ARROW.map(([x, y]) => [ax + x * s, ay + y * s]);
+      g.fillStyle = col(c.seat); g.beginPath();
+      for (const [a, b, d] of OV_ARROW_TRI) { g.moveTo(...P[a]); g.lineTo(...P[b]); g.lineTo(...P[d]); g.closePath(); }
+      g.fill();
+      g.strokeStyle = F.edge || '#000'; g.lineWidth = s; g.beginPath();
+      for (let i = 0; i < OV_ARROW.length; i++) { g.moveTo(...P[i]); g.lineTo(...P[(i + 1) % OV_ARROW.length]); }
+      g.stroke();
+    }
   }
 
   /* THE CURSOR at canvas point (px, py): the game's own when the cursors are loaded (loadCursors), as the game draws

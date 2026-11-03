@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10056 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10072 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -45,9 +45,10 @@
 
    TWO LENGTHS. The area is TAGPU_PK_WIKI_HEAD bytes -- everything before `stage` -- while there is
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so
-   the 158 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles; MEASURED as
-   sizeof on the DLL's compiler) and a frame:game entry's frame record after it (WIKIFRAMEREC,
-   1680 bytes; the whole area 167704, the head 328, MEASURED as sizeof on the DLL's compiler) are
+   the 164 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles, 2 KB a replay's
+   overlays and minimap pass; MEASURED as sizeof on the DLL's compiler) and a frame:game entry's
+   frame record after it (WIKIFRAMEREC, 4600 bytes, 2896 of them a players record's samples; the
+   whole area 172744, the head 328, MEASURED as sizeof on the DLL's compiler) are
    carried only while they are shown. The reader takes
    `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
    tagpu_pk_wiki_frame). */
@@ -159,6 +160,14 @@ typedef struct TAGPU_CMD_WIKI {
                                    takes a place only below nlane, and the game thread acts on
                                    an id only while it names a live fork of the replay
                                    rep_serial names (tagpu_wiki.c drawn_lanes)               */
+    int16_t  img[4];            /* a game frame's 3D image as that frame placed it, client
+                                   pixels [x0, y0, x1, y1): tagpu_wikistage_image of the view
+                                   and the stage it drew, the rect tagpu_wikiworld.c composites
+                                   the world target into; all 0 on any other frame           */
+    int16_t  clip[4];           /* and the rect that image is clipped to, the frame's viewport
+                                   (a players frame's screen): its scissor. DATA, read by the
+                                   state dump alone, which the players lane compares with the
+                                   frame's fit                                               */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */

@@ -1430,7 +1430,24 @@ def unit_record(path, where, k, language):
             "canreclamate": atoi(k.get("canreclamate")) & 1,
             # activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE)
             "activatewhenbuilt": atoi(k.get("activatewhenbuilt")) & 1,
+            # SightDistance, RadarDistance and SonarDistance: the def's words +0x202, +0x204 and +0x206, the number's
+            # low 16 bits (0x42C3B3), which every reader takes signed (movsx at 0x48230D, 0x467565..0x467576)
+            "sightdistance": word(k.get("sightdistance")), "radardistance": word(k.get("radardistance")),
+            "sonardistance": word(k.get("sonardistance")),
+            # the model: Objectname, read into 0x20 bytes, and a missing one the UnitName (0x42BF40, 0x42C0D1)
+            "object": (k["objectname"] if "objectname" in k else name).strip()[:31],
             "title": display_name(k, language, name)}
+
+
+def i16(v):
+    """An integer's low 16 bits, sign-extended: what a 16-bit field holds of it."""
+    v &= 0xFFFF
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+def word(v):
+    """A TDF number stored in a 16-bit field and read back signed."""
+    return i16(atoi(v))
 
 
 def unit_index(eng, report):
@@ -2058,17 +2075,184 @@ def side_casting(units, commander, menu):
                    for c in CASTS]
 
 
-def cast_record(u, builds, corpse):
+MODEL_PIECES = 256         # a model's pieces at most (tagpu_wikiasset.c MAXPIECE)
+MODEL_NODEV = 4096         # a piece's vertices at most (MAXNODEV)
+MODEL_CAP = 8 << 20        # a 3DO's bytes at most (CAP_3DO)
+
+
+def model_height(blob):
+    """def+0x170 of a type whose model is `blob`, a 3DO: 0x4CB5F0's height over the root's sibling chain -- the most
+    of 0 and, for each piece, its vertices' y and its child chain's height, each plus the piece's y offset, in 16.16
+    with 32-bit wrapping adds (0x4CB5F0..0x4CB641, DISASSEMBLED) -- whose integer part's low byte the type loader
+    leaves at +0x170 (the dword at +0x16E, 0x42D7BF..0x42D7CA). Read from the file's own pieces: a piece's header,
+    0x34 bytes, inside the file and of version 1, its vertex count at most MODEL_NODEV and its vertices inside the
+    file, no piece reached twice and at most MODEL_PIECES of them. (byte, None), or (None, why) for a model outside
+    those bounds. tagpu_wikiasset.c height_chain is the same rule."""
+    seen = set()
+
+    def i32(v):
+        return (v + 2 ** 31) % 2 ** 32 - 2 ** 31
+
+    # a chain from `off`, the root's at 0: a link of 0 ends a chain, so only a link is tested for one
+    def chain(off):
+        m = 0
+        while True:
+            if off in seen:
+                raise ValueError(f"the piece at 0x{off:x} is reached twice")
+            if len(seen) >= MODEL_PIECES:
+                raise ValueError(f"more than {MODEL_PIECES} pieces")
+            seen.add(off)
+            if off + 0x34 > len(blob):
+                raise ValueError(f"a piece at 0x{off:x} lies past the file")
+            version, nvert = struct.unpack_from("<II", blob, off)
+            (oy,), (vo,), (sib, child) = (struct.unpack_from("<i", blob, off + 0x14), struct.unpack_from("<I", blob, off + 0x24),
+                                          struct.unpack_from("<II", blob, off + 0x2C))
+            if version != 1:
+                raise ValueError(f"a piece of version {version}, not 1")
+            if nvert > MODEL_NODEV or vo + 12 * nvert > len(blob):
+                raise ValueError("a piece's vertices pass 4096 or lie past the file")
+            for i in range(nvert):
+                m = max(m, i32(struct.unpack_from("<i", blob, vo + 12 * i + 4)[0] + oy))
+            if child:
+                m = max(m, i32(chain(child) + oy))
+            if not sib:
+                return m
+            off = sib
+
+    if len(blob) > MODEL_CAP:
+        return None, f"a 3DO past {MODEL_CAP} bytes"
+    try:
+        return (chain(0) >> 16) & 0xFF, None
+    except ValueError as e:
+        return None, str(e)
+
+
+def unit_height(eng, u):
+    """A type's model height (model_height) from `<objects3d>\\<Objectname>.3DO`: (byte, where it came from), or (0,
+    why) when there is no model or model_height refuses it, as tagpu_wikiasset.c unit_height reports."""
+    hit = eng.load(eng.dirs["objects3d"], u["object"], "3DO")
+    if hit is None:
+        return 0, f"no {eng.dirs['objects3d']}\\{u['object']}.3DO"
+    h, why = model_height(hit[0])
+    if h is None:
+        return 0, f"{hit[1]}: {why}"
+    return h, f"{hit[1]} ({hit[2]})"
+
+
+SIGHT_REACH = 63           # a point's offset from the unit's block, blocks on each axis (WIKI_SIGHT_REACH)
+SIGHT_IDX = 32             # the radius indices stored at most (WIKI_SIGHT_IDX)
+SIGHT_CELLS = 32768        # the cells of the stored tables together (WIKI_SIGHT_CELLS)
+SIGHT_MIN = 32             # a players entry's type's sightDistance at least (WIKI_SIGHT_MIN)
+SIGHT_LINE = 511           # a line's value as 0x4C48C0 reads it into its 0x200-byte buffer
+SIGHT_CAP = 8 << 20        # the file's bytes at most (tagpu_wikiasset.c CAP_LOS): the largest measured, Twilight's, is 2 718 022
+
+
+def entry_sights():
+    """Every sightDistance a players entry of the wiki's tree gives one of its own types, at least SIGHT_MIN: with the
+    bound casts', the sights whose tables a layout stores (sight_table). The tree's entries are the ones the DLL's
+    archive reads (tagpu_wikidata.c), so the DLL's producer (tagpu_wikiasset.c sight_read) takes the same set."""
+    tree = json.loads((REPO / "art" / "wiki" / "tree.json").read_text())
+
+    def leaves(n):
+        return [n["entry"]] if "entry" in n else [e for c in n.get("children", []) for e in leaves(c)]
+
+    out = set()
+    for eid in dict.fromkeys(e for n in tree["tree"] for e in leaves(n)):
+        f = ENTRIES / f"{eid}.json"
+        entry = json.loads(f.read_text()) if f.exists() else {}
+        if entry.get("players") is not True:
+            continue
+        for d in entry.get("units", {}).values():
+            s = d.get("sightDistance") if isinstance(d, dict) else None
+            if isinstance(s, int) and not isinstance(s, bool) and SIGHT_MIN <= s <= 32767:
+                out.add(s)
+    return out
+
+
+def sight_table(eng, report, sights):
+    """The layout's `sight`: `<gamedata>\\los.tdf` as the engine's loader stores it, reduced to count grids
+    (tagpu_wikidata.h WIKISIGHT states the loader, DISASSEMBLED 0x433130, 0x433380, 0x4336F0), for the radius indices
+    `sights` reach and no other: numtables from [TABLEINFO], and for each idx = min(trunc(s / 32), numtables - 1) of
+    a sight s in `sights` (each at least SIGHT_MIN, so idx is 1 or more) TABLE<idx> as {idx, cells}, its cells
+    [[dc, dr, n], ...] in (dr, dc) order, the tables by idx. numtables, numlines and a line's count are the TDF
+    number's low 16 bits, signed; a line's value is cut at SIGHT_LINE bytes and split on ', ' (strtok), each token C's
+    atoi; each pair (x, y), each a 16-bit word, is stored as the offsets (x, -y), (y, x), (-x, y), (-y, -x); a count
+    of 0 or less, a missing line or a missing section adds nothing. None, with a report line, when the file is
+    missing, passes SIGHT_CAP bytes, does not parse or breaks a bound: numtables below 2, more than SIGHT_IDX indices,
+    and in a stored table a line short of its count's numbers, an offset past SIGHT_REACH or a count of a cell past
+    255, or past SIGHT_CELLS cells over the stored tables. A table no sight reaches is never read. tagpu_wikiasset.c
+    sight_read is the same rule."""
+    hit = eng.load(eng.dirs["gamedata"], "los", "TDF")
+    el = "sight table"
+    if hit is None:
+        report.append({"element": el, "refused": f"no {eng.dirs['gamedata']}\\los.tdf: Sight lights every block"})
+        return None
+    if len(hit[0]) > SIGHT_CAP:
+        report.append({"element": el, "refused": f"{hit[1]}: past {SIGHT_CAP} bytes: Sight lights every block"})
+        return None
+    try:
+        secs = tavfs.tdf_sections(hit[0])
+    except tavfs.TdfError as e:
+        report.append({"element": el, "refused": f"{hit[1]}: the engine's parser refuses it: {e}"})
+        return None
+    sec = lambda n: next((x for x in secs if x["_name"].lower() == n), None)
+
+    def no(why):
+        report.append({"element": el, "refused": f"{hit[1]}: {why}: Sight lights every block"})
+        return None
+
+    info = sec("tableinfo")
+    nt = word(info["keys"].get("numtables")) if info else 0
+    if nt < 2:
+        return no(f"numtables {nt} is below 2")
+    idxs = sorted({min(s // 32, nt - 1) for s in sights if s >= SIGHT_MIN})
+    if len(idxs) > SIGHT_IDX:
+        return no(f"the types reach {len(idxs)} tables, past {SIGHT_IDX}")
+    tables, cells = [], 0
+    for idx in idxs:
+        t = sec(f"table{idx}")
+        keys = t["keys"] if t else {}
+        grid = {}
+        for k in range(1, max(0, word(keys.get("numlines"))) + 1):
+            line = keys.get(f"line{k}")
+            if line is None:
+                continue
+            tok = [x for x in re.split(r"[, ]", line[:SIGHT_LINE]) if x]
+            c = word(tok[0]) if tok else 0
+            if c <= 0:
+                continue
+            if len(tok) < 1 + 2 * c:
+                return no(f"TABLE{idx} line{k} has fewer than its {c} points")
+            for j in range(c):
+                x, y = word(tok[1 + 2 * j]), word(tok[2 + 2 * j])
+                for dc, dr in ((x, -y), (y, x), (-x, y), (-y, -x)):
+                    dc, dr = i16(dc), i16(dr)
+                    if abs(dc) > SIGHT_REACH or abs(dr) > SIGHT_REACH:
+                        return no(f"TABLE{idx} line{k} reaches past {SIGHT_REACH} blocks")
+                    grid[dc, dr] = grid.get((dc, dr), 0) + 1
+        if any(n > 255 for n in grid.values()):
+            return no(f"TABLE{idx} counts a block past 255 times")
+        cells += len(grid)
+        if cells > SIGHT_CELLS:
+            return no(f"the stored tables pass {SIGHT_CELLS} cells")
+        tables.append({"idx": idx, "cells": [[dc, dr, grid[dc, dr]] for dc, dr in sorted(grid, key=lambda p: (p[1], p[0]))]})
+    report.append({"element": el, "path": hit[1], "where": hit[2], "numtables": nt, "indices": idxs, "cells": cells})
+    return {"numtables": nt, "tables": tables}
+
+
+def cast_record(u, builds, corpse, height):
     """A bound cast as the casting carries it: the entry's own keys (art/wiki/entries), the type in the case the
-    layout's build buttons spell it, `builds` naming casts, not types, and `corpse` its wreck (corpse_record)."""
+    layout's build buttons spell it, `builds` naming casts, not types, `corpse` its wreck (corpse_record) and `height`
+    its model's (unit_height)."""
     return {"type": u["name"].upper(), "title": u["title"], "footprint": [u["fx"], u["fz"]],
             "buildTime": u["buildtime"], "workerTime": u["workertime"], "buildDistance": u["builddistance"],
             "maxVelocity": u["maxvelocity"], "canstop": u["canstop"], "canreclamate": u["canreclamate"],
             "activatewhenbuilt": u["activatewhenbuilt"], "extracts": u["extractsmetal"],
             "energyMake": u["energymake"], "energyUse": u["energyuse"], "buildCostMetal": u["buildcostmetal"],
             "buildCostEnergy": u["buildcostenergy"], "metalMake": u["metalmake"], "metalStorage": u["metalstorage"],
-            "energyStorage": u["energystorage"], "vent": bool(u["g"]), "g": u["g"], "builds": builds,
-            "corpse": corpse}
+            "energyStorage": u["energystorage"], "sightDistance": u["sightdistance"],
+            "radarDistance": u["radardistance"], "sonarDistance": u["sonardistance"], "modelHeight": height,
+            "vent": bool(u["g"]), "g": u["g"], "builds": builds, "corpse": corpse}
 
 
 FEAT_NAME_MAX = 31         # a feature record's name and object, bytes (sim.js checkFeature, WIKIFEATDEF)
@@ -2158,7 +2342,7 @@ def bar_art(eng, art, s, fonts, report):
             "rects": {r: rects[r] for r in BAR_RECTS}, "ecol": ecol, "mcol": mcol, "font": fonts[source][0]}
 
 
-def side_pack(eng, mod, descs, rows, out, pal, report):
+def side_pack(eng, mod, descs, rows, out, pal, report, sights):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
     its casting and the pages of its cast types. `rows` holds each stage's scene rows, which its map grows from beside
@@ -2199,7 +2383,8 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
             casts[c], row["corpse"] = None, None
             if t:
                 corpse, row["corpse"] = corpse_record(eng, units[t])
-                casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)], corpse)
+                height, row["model"] = unit_height(eng, units[t])
+                casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)], corpse, height)
         casting.append({"side": s["name"], "commander": s["commander"], "casts": casts, "report": why})
 
     # each side's types: its bound cast types that have a page, read with that side's prefix (the `<prefix>DL` page
@@ -2267,7 +2452,8 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
                                    f"no live button for the {d} {unit}"})
     height = max([SIDE_MIN_H] + [s["y"] + s["h"] for s in screens.values()])
     layout = {"format": 1, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
-              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens}
+              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens,
+              "sight": sight_table(eng, report, sights | {k["sightDistance"] for c in casting for k in c["casts"].values() if k})}
 
     # PANELSIDE of every layout side, and the dots
     side_art = {"panelside": []}
@@ -2533,7 +2719,7 @@ def main(argv=None):
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, descs, rows, out, palette, report)
+            pack = side_pack(eng, args.mod, descs, rows, out, palette, report, entry_sights())
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1

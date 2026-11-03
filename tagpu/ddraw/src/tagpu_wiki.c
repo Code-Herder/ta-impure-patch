@@ -693,6 +693,20 @@ static void try_release_all(int send)
     s_downReal = 0;
 }
 
+/* THE DRAWN FRAME'S FIT on stage hit `h` and its size in game pixels: the held frame view's map and
+   viewport (a players entry's screen, which every frame of the entry shares) beside the drawn
+   frame's column, through the function the render thread fits it with */
+static void frame_fit(const TAGPU_CMD_WIKIHIT* h, WIKISTAGEFIT* f, int* Wg, int* Hg)
+{
+    const int E = s_frameView.screen;
+    WIKIFRAMESIZE sz;
+    tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, E ? s_frameView.vp_w : 0, E ? s_frameView.vp_h : 0,
+                        h->x1 - h->x0, h->y1 - h->y0, s_hit.u, f);
+    tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, 0, 0, &sz);
+    *Wg = E ? WIKIFRAME_SIDE_W + s_frameView.vp_w : sz.Wg;
+    *Hg = E ? s_frameView.vp_h + 2 * WIKIFRAME_BAR : sz.Hg;
+}
+
 /* A LIVE FRAME'S WORLD POINT (frame.js onWorld, wiki.js liveWorld): client point (cx, cy) through the
    drawn frame's fit -- its `stage` hit, its unit and its column's rows, with tagpu_wikistage_fit, the
    one function both threads fit a frame with -- when the topmost control of that frame under the point
@@ -712,8 +726,7 @@ static int live_world(int cx, int cy, double* wx, double* wz)
     if (!live_try() || !s_frameHave) return 0;
     h = hit_src(cx, cy, key, &src);
     if (!h || src != WIKIHIT_PAGE || strcmp(key, "stage")) return 0;
-    tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
-    tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+    frame_fit(h, &f, &Wg, &Hg);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;
@@ -749,7 +762,7 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
     /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the
        entry's map grown beside the drawn frame's column, as the simulation grows it */
-    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0,
+    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0, 0, 0,
                         h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
@@ -1385,6 +1398,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
 {
     WIKIREPLAYVIEW rv;
     WIKISIM* g;
+    const WIKIVIEW* ov_gv = NULL;
     const char* cap;
     uint32_t t = 0;
     int shown, mode, human;
@@ -1419,6 +1433,10 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&s_frameView, g);
         s_frameView.tick = g->tick;
+        /* THE OVERLAYS AND SIGHT read the world's view again: the pose ended the first one's
+           lifetime, and nothing steps or presses the simulation before the frame view reads it
+           below (tagpu_wikiframe_view's `gv`) */
+        ov_gv = tagpu_wikisim_view_as(g, human);
         if (mode == WIKIFRAME_PAST) {
             WIKISIM* L = tagpu_wikireplay_game(&s_rep);
             tagpu_wikistage_side(&s_frameView, L ? tagpu_wikisim_view_as(L, human) : NULL, s_laySrc);
@@ -1426,7 +1444,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         s_frameHave = 1;
     }
     tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held,
-                           tagpu_wikiframe_seat_side(s_lay, s_ctx.side, human), &w->frame);
+                           tagpu_wikiframe_top_side(&rv, s_lay, s_ctx.side), &s_rep, &w->frame);
     /* THE ONE CURSOR (rewind-spec.md 9.5): the armed building's ghost goes with the simulation's cursor,
        drawn in a demo whenever it is the one drawn, and in Try it only while the player's pointer lies
        on the live frame's world (stage_world), where the stage draws the simulation's cursor at the
@@ -1436,9 +1454,19 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         double x, z;
         w->try_world = (uint8_t)(s_repTry && w->frame.simcur && w->ptr_x >= 0 && stage_world(w->ptr_x, w->ptr_y, &x, &z));
     }
-    if (shown)
+    if (shown) {
+        /* what the replay adds to the world it shows: its overlays at the shown tick, and a players
+           replay's camera on the entry's screen and Sight */
+        WIKIFRAMEOV ov;
+        ov.tick = s_frameView.tick;
+        ov.click_from = rv.click_from;
+        ov.players = rv.players ? &rv : NULL;
+        ov.screen_w = rv.players ? e->screen_w : 0;
+        ov.screen_h = rv.players ? e->screen_h : 0;
+        ov.gv = ov_gv;
         tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && (!s_repTry || w->try_world),
-                             human);
+                             human, &ov);
+    }
     if (!s_frameHave) {
         /* a seek began before any world was shown (a capture asked mid-seek): wiki.js says the same */
         if (!w->msg[0]) lstrcpynA(w->msg, "loading\xE2\x80\xA6", sizeof w->msg);
@@ -1629,7 +1657,20 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
         }
         fprintf(f, "]}");
     }
-    fprintf(f, "}}");
+    fprintf(f, "},\"sight\":");
+    if (!L->sight.numtables) fputs("null", f);
+    else {
+        fprintf(f, "{\"numtables\":%d,\"tables\":[", L->sight.numtables);
+        for (i = 0; i < L->sight.nidx && i < WIKI_SIGHT_IDX; i++) {
+            fprintf(f, "%s{\"idx\":%d,\"cells\":[", i ? "," : "", L->sight.idx[i]);
+            for (k = L->sight.first[i]; k < L->sight.first[i + 1] && k < WIKI_SIGHT_CELLS; k++)
+                fprintf(f, "%s[%d,%d,%d]", k > L->sight.first[i] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+                        L->sight.cell[k].n);
+            fputs("]}", f);
+        }
+        fputs("]}", f);
+    }
+    fputc('}', f);
 }
 
 static double ms_between(LARGE_INTEGER t0, LARGE_INTEGER t1)
@@ -2173,10 +2214,12 @@ static void casting_json(FILE* f, const WIKICASTING* c)
         fprintf(f, ",\"footprint\":[%d,%d],\"buildTime\":%.17g,\"workerTime\":%.17g,\"buildDistance\":%.17g,"
                    "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"energyUse\":%.17g,"
                    "\"buildCostMetal\":%.17g,\"buildCostEnergy\":%.17g,\"metalMake\":%.17g,\"metalStorage\":%.17g,"
-                   "\"energyStorage\":%.17g,\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,\"vent\":%s,\"g\":[",
+                   "\"energyStorage\":%.17g,\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,"
+                   "\"sightDistance\":%d,\"radarDistance\":%d,\"sonarDistance\":%d,\"modelHeight\":%d,\"vent\":%s,\"g\":[",
                 k->fx, k->fz, k->build_time, k->worker_time, k->build_distance, k->max_velocity, k->extracts,
                 k->energy_make, k->energy_use, k->build_cost_metal, k->build_cost_energy, k->metal_make, k->metal_storage,
-                k->energy_storage, k->canstop, k->canreclamate, k->activate_when_built, k->vent ? "true" : "false");
+                k->energy_storage, k->canstop, k->canreclamate, k->activate_when_built, k->sight_distance, k->radar_distance,
+                k->sonar_distance, k->model_height, k->vent ? "true" : "false");
         for (z = n = 0; z < WIKI_FP_MAX; z++)
             for (x = 0; x < WIKI_FP_MAX; x++)
                 if (k->g[z] >> x & 1u) fprintf(f, "%s[%d,%d]", n++ ? "," : "", x, z);
@@ -2244,7 +2287,55 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
         fprintf(f, "%s{\"id\":%d,\"from\":%d,\"end\":%d,\"parent\":%d,\"seat\":%d,\"flags\":%d}", k ? "," : "",
                 (int)r->fork[k].id, (int)r->fork[k].from, (int)r->fork[k].end, (int)r->fork[k].parent, r->fork[k].seat,
                 r->fork[k].flags);
-    fprintf(f, "],\"top_side\":%d}", r->top_side);
+    fprintf(f, "],\"top_side\":%d", r->top_side);
+    if (r->pl) {
+        int s;
+        fprintf(f, ",\"pl\":1,\"sight\":%d,\"follow\":%d,\"tog\":%d,\"folded\":%d,\"stat_open\":%d,\"stat_team\":%d,"
+                   "\"stat_measure\":%d,\"npt\":%d,\"period\":%d,\"base\":%d,\"team\":[", r->sight, r->follow, r->tog,
+                r->folded, r->stat_open, r->stat_team, r->stat_measure, r->npt, r->period, (int)r->base);
+        for (k = 0; k < r->nseat && k < WIKI_SEATS; k++) fprintf(f, "%s%d", k ? "," : "", r->team[k]);
+        fprintf(f, "],\"cam\":%d,\"series\":[", r->cam);
+        for (k = 0; k < r->nseat && k < WIKI_SEATS; k++) {
+            fprintf(f, "%s[", k ? "," : "");
+            for (s = 0; s < r->npt && s < WIKI_STAT_PTS; s++) fprintf(f, "%s%.9g", s ? "," : "", r->series[k][s]);
+            fputc(']', f);
+        }
+        fputc(']', f);
+    }
+    fputc('}', f);
+}
+
+/* A PLAYERS FRAME'S VIEW as the record carries it to the render thread (WIKISTAGEVIEW, filled by
+   tagpu_wikiframe_view), for the players lane, which compares it with frame.js view's: the eye and the
+   viewport, the overlays (each seat's cursor, each click with its age, each unit's overlay
+   selection), the units drawn (Sight hides those on no lit block), the map's fog a digit a cell, and
+   under Sight the minimap's pass -- its grid's bits a digit a block and its dots */
+static void view_json(FILE* f, const WIKISTAGEVIEW* v)
+{
+    const int n = v->w > 0 && v->h > 0 && v->w <= WIKISTAGE_MAP && v->h <= WIKISTAGE_MAP ? v->w * v->h : 0;
+    int i;
+    fprintf(f, "{\"screen\":%d,\"eye\":[%d,%d,%d,%d],\"ocur\":[", v->screen, (int)v->eye_x, (int)v->eye_z, v->vp_w, v->vp_h);
+    for (i = 0; i < v->ncur && i < WIKI_SEATS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d]", i ? "," : "", v->cur[i].x, v->cur[i].z, v->cur[i].seat);
+    fprintf(f, "],\"oclick\":[");
+    for (i = 0; i < v->nclick && i < WIKI_CLICKS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d,%d]", i ? "," : "", v->click[i].x, v->click[i].z, v->click[i].seat, v->click[i].age);
+    fprintf(f, "],\"units\":[");
+    for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
+        fprintf(f, "%s[%.9g,%.9g,%d,%d]", i ? "," : "", v->unit[i].x, v->unit[i].z, v->unit[i].owner, v->unit[i].osel);
+    fprintf(f, "],\"fog\":\"");
+    for (i = 0; i < n; i++) fputc('0' + (v->fog[i] <= 9 ? v->fog[i] : 9), f);
+    fprintf(f, "\",\"mini\":");
+    if (!v->mini) {
+        fputs("null}", f);
+        return;
+    }
+    fprintf(f, "{\"gw\":%d,\"gh\":%d,\"lit\":\"", v->mini_gw, v->mini_gh);
+    for (i = 0; i < v->mini_gw * v->mini_gh && i < WIKISTAGE_FOG * 8; i++) fputc('0' + (v->mini_lit[i >> 3] >> (i & 7) & 1), f);
+    fprintf(f, "\",\"dots\":[");
+    for (i = 0; i < v->ndot && i < WIKISTAGE_UNITS; i++)
+        fprintf(f, "%s[%d,%d,%d]", i ? "," : "", v->dot[i].tx, v->dot[i].tz, v->dot[i].owner);
+    fputs("]}}", f);
 }
 
 /* A timeline's last log entry as [kind, key] (a move's key ""), or null for an empty log: what a
@@ -2408,10 +2499,20 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                    "\"press_held\":", rv.tick, rv.clock, rv.game_tick, rv.end, rv.playhead, rv.paused, rv.speed,
                 rv.target, rv.gen, rv.walked, rv.left, s_repTry);
         jstr(f, s_press.held, sizeof s_press.held);
+        {
+            char said[HUD_TOASTLEN];
+            tagpu_wikiframe_toast_words(&rv, w->frame.seat, w->frame.nseat, said);
+            fprintf(f, ",\"toast_at\":%d,\"toast_said\":", rv.toast_kind < 0 ? -1 : rv.toast_at);
+            jstr(f, said, sizeof said);
+        }
         if (rv.live) live_json(f, &rv);
         if (rv.tk) tk_json(f, &rv);
         fprintf(f, "},\"try_world\":%d,\"frame\":", w->try_world);
         frame_json(f, &w->frame);
+        if (w->has_stage && w->stage.frame && w->frame.pl) {
+            fprintf(f, ",\"view\":");
+            view_json(f, &w->stage);
+        }
     }
     /* the caption as the record carries it, filled, its UTF-8 as it is */
     fprintf(f, ",\"caption\":");
@@ -2448,11 +2549,13 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         if (h) {
             WIKISTAGEFIT ft;
             int Wg, Hg;
-            tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &ft);
-            tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+            frame_fit(h, &ft, &Wg, &Hg);
             fprintf(f, ",\"frame_fit\":{\"canvas\":[%d,%d],\"s\":%.17g,\"ox\":%.17g,\"oz\":%.17g,\"Wg\":%d,\"Hg\":%d}",
                     h->x0, h->y0, ft.s, ft.ox, ft.oz, Wg, Hg);
         }
+        /* the image's rect and its clip as the drawn frame placed them (TAGPU_CMD_WIKI img, clip) */
+        fprintf(f, ",\"frame_img\":[%d,%d,%d,%d],\"frame_clip\":[%d,%d,%d,%d]", s_hit.img[0], s_hit.img[1], s_hit.img[2],
+                s_hit.img[3], s_hit.clip[0], s_hit.clip[1], s_hit.clip[2], s_hit.clip[3]);
     }
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
        (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */

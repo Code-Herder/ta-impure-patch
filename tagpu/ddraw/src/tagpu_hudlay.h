@@ -131,8 +131,15 @@ typedef struct {
                 whole into r, sampled nearest, as HOPF_SPRITE draws a cell (tagpu_wikistage.c);
      HOP_BAR    the wiki stage's game frame's bar `part` (0 the top, 1 the bottom), composed in the
                 running mod's pictures (tagpu_wikibar.h): the top-left `size` x 32 texels of
-                HUD_TEX_BAR's rows 32 part.. drawn whole into r, sampled nearest. */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR };
+                HUD_TEX_BAR's rows 32 part.. drawn whole into r, sampled nearest;
+     HOP_TRI    a filled triangle, unsnapped as a canvas path is: its first point (r.x, r.y), its
+                second (r.x + r.w, r.y + r.h) as a line's, and its third (`shade`, `size`), a point
+                in units like the first, not an offset. The two fields are reused because a
+                triangle has no shadow and no stroke; every field is still DATA to the draw, which
+                bounds the instance by the three points and draws nothing for a triangle with no
+                area or a point that is not finite (tagpu_huddraw.c). A canvas's filled
+                three-point subpath. */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE, HOP_BAR, HOP_TRI };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
@@ -163,14 +170,15 @@ typedef struct {
     int16_t  part;          /* HOP_PART: the kit index                                    */
     HUDRECT  r;
     HUDRECT  clip;          /* w < 0: none                                                */
-    uint32_t rgba;          /* HOP_SOLID, HOP_DOT, HOP_LINE: the colour; HOP_PART, HOP_TEXT:
+    uint32_t rgba;          /* HOP_SOLID, HOP_DOT, HOP_LINE, HOP_TRI: the colour; HOP_PART, HOP_TEXT:
                                0xFFFFFF00 | opacity                                          */
-    float    shade;         /* HOPF_SHADE                                                 */
+    float    shade;         /* HOPF_SHADE; HOP_TRI: the third point's x                    */
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
     uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */
     uint8_t  grp;           /* 0, or the group it is drawn in: HUDOPS `grp[grp - 1]`        */
     float    size;          /* HOP_TEXT: the font size in units, after `fit`; HOPF_DROP: the
-                               shadow's offset; HOPF_RING: the edge's depth; a line's and the chart's stroke width */
+                               shadow's offset; HOPF_RING: the edge's depth; a line's and the chart's stroke width;
+                               HOP_TRI: the third point's y */
     uint16_t run, nrun;     /* HOP_TEXT: its runs; HOP_HOT: run = the key's offset in text */
 } HUDOP;
 
@@ -381,5 +389,17 @@ static inline void tagpu_hud_ring(const HUDOP* op, float px, float X[4], float Y
 /* Whether the state's teams are told apart: two or more, one of them with two players (hud.js,
    `headed`). The column's headers, the teams chip and the stats window's team split follow it. */
 int tagpu_hudlay_headed(const HUDSTATE* st);
+
+/* THE STATS WINDOW'S GROUPS of a state whose seats, markers, teams, stats.team and stats.npt are
+   set (index.html `state()` makes the mockup's alike; the in-game wiki's frame.js statGroups is the
+   twin): with stats.team clear, a group a seat, in its colour, with the time of its first
+   commander-death marker (-1 none); with it set, a group a team, "Team N", in the chart's team
+   colours `team_rgb` (`nteam_rgb` of them; NULL: grey), its samples its seats' summed in f32. A
+   sample is data from the recording, so one that is not a finite number below 1e30 in magnitude is
+   taken as 0. `v` holds `nrow` rows of samples `stride` floats apart, row k seat k's, a seat past
+   them read at row seat % nrow; NULL with stats.npt 0. stats.npt is held to HUD_MAXPT and `stride`.
+   The game's stats (tagpu_hudstate.c) and the in-game wiki's stage HUD (tagpu_wikiframe.c) call
+   it, so the two windows group alike by construction. Pure. */
+void tagpu_hudlay_stat_groups(HUDSTATE* st, const float* v, int nrow, int stride, const uint32_t* team_rgb, int nteam_rgb);
 
 #endif

@@ -400,7 +400,19 @@ tests the object's owner record for active and controller 2 at
 and dispatches due planner objects from ten slots at AI+0x11 through their
 vtable at `0x408C8E`. Group assignment classifies live units and calls
 `0x480250` at `0x4088FA`; it does not directly construct orders in the
-disassembled body. `0x408BF0` contains a similar assignment/planner loop
+disassembled body. **The groups it assigns** [DISASSEMBLED 2026-11-01,
+`0x408830..0x408914`, called at `0x408C68`]: for each selectable unit
+(`+0x110` bit 5) of its record's block, after setting the move and fire
+states, a unit still in group 0 (`+0xAC`) goes to group 1 when it has no mover
+(`+0x110` bit 29) -- 5 instead with `+0x110` bit 31 -- else 4 for a def with
+`+0x241` bit 6 [INFERRED: a builder, the MOBILEBUILD bit], else 8 with bit 11
+[INFERRED: an aircraft], else 7 when def `+0x1C0` is above 0, else 3 with
+`+0x110` bit 31, else none (`0x408894..0x4088FA`). **Under Sight on an AI seat
+these show**: the group digit `0x469CD1..0x469CF9` draws `'0' + +0xAC` under
+each unit of the viewed player whose group is not 0 ([render.md](render.md),
+*the group digit*), so M0-P's shots (2026-11-01, a replay with Sight on AI
+seats 1 and 2) show a white 4 under that seat's commander, and the human's
+commander none. `0x408BF0` contains a similar assignment/planner loop
 without the controller gate; the activity observer does not use it.
 
 `0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`

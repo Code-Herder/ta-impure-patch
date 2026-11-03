@@ -82,6 +82,7 @@ static int s_drawThis;                  /* `record` may composite this frame  */
 static int s_saidBig;                   /* the per-factor bound said once  */
 static int s_saidBigProduct;            /* ...and the product's, its own   */
 static int s_vx, s_vy, s_vw, s_vh;      /* where the block lands, this frame  */
+static int s_clip, s_cx, s_cy, s_cw, s_ch;  /* the target's scissor, this frame */
 static unsigned s_nFrames, s_nBuilds, s_saidAt;
 static int s_lastW, s_lastH, s_lastSS, s_lastDevres;
 
@@ -1037,6 +1038,8 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     }
 
     s_vx = t.vx; s_vy = t.vy; s_vw = t.vw; s_vh = t.vh;
+    s_clip = t.clip != 0;
+    s_cx = t.cx; s_cy = t.cy; s_cw = t.cw; s_ch = t.ch;
     *tw = (uint32_t)w; *th = (uint32_t)h;
     s_drawThis = 1;
     s_nFrames++;
@@ -1130,6 +1133,21 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     if (rx + rw > (int)w) rw = (int)w - rx;
     if (ry + rh > (int)h) rh = (int)h - ry;
     if (rw < 1 || rh < 1) return;
+    /* THE TARGET'S OWN SCISSOR, intersected, never widened: the scissor above
+       already lies inside the render area, so what is left of it does too. In
+       64 bits because the rect is a producer's arithmetic and its far edge is
+       a sum; an empty intersection draws nothing. */
+    if (s_clip) {
+        long long x0 = rx, y0 = ry, x1 = (long long)rx + rw, y1 = (long long)ry + rh;
+        const long long kx1 = (long long)s_cx + s_cw, ky1 = (long long)s_cy + s_ch;
+        if (s_cw < 1 || s_ch < 1) return;
+        if (s_cx > x0) x0 = s_cx;
+        if (s_cy > y0) y0 = s_cy;
+        if (kx1 < x1) x1 = kx1;
+        if (ky1 < y1) y1 = ky1;
+        if (x1 <= x0 || y1 <= y0) return;
+        rx = (int)x0; ry = (int)y0; rw = (int)(x1 - x0); rh = (int)(y1 - y0);
+    }
 
     /* NO FLIP, AND THE ARGUMENT NEEDS TO KNOW WHICH WAY UP NEITHER IMAGE IS.
        DVS pairs `uv = 0` with clip `y = -1`; under a POSITIVE height that sends

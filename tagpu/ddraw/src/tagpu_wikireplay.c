@@ -46,6 +46,7 @@ static int is_done(const WIKIREPLAY* r)
 }
 
 static void live_act(WIKIREPLAY* r, int c, int value);
+static int pl_act(WIKIREPLAY* r, int c, int value);
 static int pick_act(WIKIREPLAY* r, int c, int value);
 static int lane_act(WIKIREPLAY* r, int c, int value);
 static int chain_step(WIKIREPLAY* r, WIKISIM* s);
@@ -108,8 +109,11 @@ static void seek(WIKIREPLAY* r, int t)
         r->gen++;
         r->quiet = 0;
         r->target = t == 0 ? -1 : t;
-    } else if (t > r->game->tick) r->target = t;
-    else {
+        r->pend = 1;
+    } else if (t > r->game->tick) {
+        r->target = t;
+        r->pend = 1;
+    } else {
         if (r->target >= 0) r->quiet = r->game->snd_total;
         r->target = -1;
     }
@@ -145,6 +149,7 @@ static void act(WIKIREPLAY* r, int c, int value)
     }
     playhead = r->target >= 0 ? r->target : r->game->tick;
     if (r->tk && (pick_act(r, c, value) || lane_act(r, c, value))) return;
+    if (r->players && pl_act(r, c, value)) return;
     switch (c) {
     case WIKI_HUD_PLAY:
         if (playhead == chain_last(r)) {
@@ -247,9 +252,11 @@ static void feed(WIKIREPLAY* r, int c)
             r->watched = r->selected;
             r->has_cursor = 1;
             r->to = e->hud;
-            /* a trip's value: the track's tick, a picker row's seat, a lane's fork, -1 for any
-               other button */
-            r->value = e->hud == WIKI_HUD_TRACK ? e->to : e->hud == WIKI_HUD_TAKEAS ? e->seat : e->fork >= 0 ? e->fork : -1;
+            /* a trip's value: the track's tick, a picker row's or a players row's seat, a chip's
+               WIKI_CHIP_*, a lane's fork, -1 for any other button */
+            r->value = e->hud == WIKI_HUD_TRACK ? e->to
+                     : e->hud == WIKI_HUD_TAKEAS || e->hud == WIKI_HUD_JUMP || e->hud == WIKI_HUD_SIGHT || e->hud == WIKI_HUD_FOLLOW ? e->seat
+                     : e->hud == WIKI_HUD_CHIP ? e->chip : e->fork >= 0 ? e->fork : -1;
             r->at = c;
             r->drag = e->hud == WIKI_HUD_TRACK ? e->drag : -1;
             r->over = r->drag >= 0 ? e->over : 0;
@@ -258,8 +265,21 @@ static void feed(WIKIREPLAY* r, int c)
     }
 }
 
+static void make_pass(WIKIREPLAY* r, int g);
+
+/* THE PASS'S DEADLINE, the viewed record's +0xF0 (replay.js passDue states the engine's rule and
+   why it is the next multiple of 30 above the last pass's tick, 30 before any): the first played
+   tick at or past it makes the pass. pass_at is -1 or a shown tick, at most the game's end, so
+   the product cannot overflow. */
+static int pass_due(const WIKIREPLAY* r)
+{
+    return r->pass_at < 0 ? WIKI_REPLAY_PASS : WIKI_REPLAY_PASS * (r->pass_at / WIKI_REPLAY_PASS + 1);
+}
+
 /* the game's part of a step: a seek's ticks, else the speed's, along the selected chain; the ticks
-   it ran */
+   it ran. A players replay's pass is made on each played tick that reaches its deadline, at that
+   tick's world, as the engine's players phase runs it every tick; a seek's ticks make none, its
+   end does (pl_tail). */
 static int play(WIKIREPLAY* r)
 {
     WIKISIM* g = r->game;
@@ -276,6 +296,10 @@ static int play(WIKIREPLAY* r)
         while (r->acc >= 10 && g->tick < chain_last(r) && !g->done && chain_step(r, g)) {
             r->acc -= 10;
             ran++;
+            if (r->players && g->tick >= pass_due(r)) {
+                make_pass(r, g->tick);
+                if (r->failed) break;
+            }
         }
         if (g->tick == chain_last(r)) {
             r->paused = 1;
@@ -699,6 +723,7 @@ static void live_play(WIKIREPLAY* r)
             r->target = -1;
             r->quiet = r->past->snd_total;
             r->dt = r->past->tick;
+            r->click_from = r->past->tick;
         }
     }
 }
@@ -1068,6 +1093,250 @@ static void lane_fill(WIKIREPLAY* r)
     if (r->armed && (!r->lanes || !live_fork(r, r->armed))) r->armed = 0;
 }
 
+/* ---- PLAYERS (tagpu_wikireplay.h, PLAYERS; replay.js's functions, under its names) ---- */
+
+/* the demo's scene, whose seats the Players set names */
+static const WIKISCENE* scene_of(const WIKIREPLAY* r)
+{
+    return &r->e->scenes[r->d->on];
+}
+
+/* seat k's camera at game tick t into *x, *z: 1, or 0 when its camera was not recorded
+   (tagpu_wikidata_seat_cam, replay.js camOf) */
+static int cam_of(const WIKIREPLAY* r, int k, int t, int* x, int* z)
+{
+    return tagpu_wikidata_seat_cam(scene_of(r), &r->d->game, k, t, x, z);
+}
+
+/* a Players press's value the door takes (replay.js plValue): a row's seat one of the scene's, a
+   chip a WIKI_CHIP_*, a team row's fold below WIKI_SEATS. The value is DATA: the press's or the
+   script's, bounded here before anything indexes by it. */
+static int pl_value(const WIKIREPLAY* r, int c, int value)
+{
+    switch (c) {
+    case WIKI_HUD_JUMP:
+    case WIKI_HUD_SIGHT:
+    case WIKI_HUD_FOLLOW: return value >= 0 && value < scene_of(r)->nseat && value < WIKI_SEATS;
+    case WIKI_HUD_CHIP: return value >= 0 && value < WIKI_NCHIP;
+    case WIKI_HUD_FOLD: return value >= 0 && value < WIKI_SEATS;
+    default: return 1;
+    }
+}
+
+/* the teams are told apart (replay.js HEADED, tagpu_hudlay_headed): two teams or more, one of
+   them of two seats or more, seat k's team the scene's (the loader gives an absent one k), as
+   the record's teams are (tagpu_wikiframe.c pl_block). Otherwise the HUD draws the teams chip
+   disabled, with no hot box, so the game takes no press on it. BOUND: the seats counted are the
+   game's, at most WIKI_SEATS, and a team value is the loader's 0..WIKI_SEATS - 1. */
+static int teams_headed(const WIKIREPLAY* r)
+{
+    const WIKISCENE* sc = scene_of(r);
+    int n[WIKI_SEATS] = { 0 }, k, t, nteam = 0, big = 0;
+    for (k = 0; k < r->game->nseat && k < WIKI_SEATS; k++) {
+        t = k < sc->nseat ? sc->seat[k].team : k;
+        if (t < 0 || t >= WIKI_SEATS) t = k;
+        nteam += n[t]++ == 0;
+        big |= n[t] > 1;
+    }
+    return nteam > 1 && big;
+}
+
+/* THE PLAYERS SET's KEYS (tagpu_hudinput.c act; replay.js plAct states the rules): 1 when the
+   press is one of them; a value outside pl_value is ignored and counted. */
+static int pl_act(WIKIREPLAY* r, int c, int value)
+{
+    int x, z;
+    if (!tagpu_wikidata_hud_players(c) && c != WIKI_HUD_FOLD) return 0;
+    if (!pl_value(r, c, value)) {
+        r->ignored++;
+        return 1;
+    }
+    switch (c) {
+    case WIKI_HUD_JUMP:
+    case WIKI_HUD_FOLLOW:
+        if (!cam_of(r, value, 0, &x, &z)) {
+            r->toast_kind = WIKI_TOAST_CAMERA;
+            r->toast_at = r->tick;
+            r->toast_value = value;
+            r->toast_evict = r->toast_seat = -1;
+        } else if (c == WIKI_HUD_JUMP) {
+            r->jump_req = value;
+            r->follow = -1;
+        } else {
+            r->follow = r->follow == value ? -1 : value;
+            r->jump_req = -1;
+        }
+        break;
+    case WIKI_HUD_SIGHT: r->sight_req = r->sight == value ? -1 : value; break;
+    case WIKI_HUD_CURSORS: r->tog ^= HUD_TOG_CURSORS; break;
+    case WIKI_HUD_CLICKS: r->tog ^= HUD_TOG_CLICKS; break;
+    case WIKI_HUD_SELECTIONS: r->tog ^= HUD_TOG_SELECTIONS; break;
+    case WIKI_HUD_CHAT: r->tog ^= HUD_TOG_CHAT; break;
+    case WIKI_HUD_STATS: r->stat_open = !r->stat_open; break;
+    case WIKI_HUD_CLOSE: r->stat_open = 0; break;
+    case WIKI_HUD_CHIP:
+        if (value >= WIKI_CHIP_METAL) r->stat_measure = value - WIKI_CHIP_METAL;
+        else if (value == WIKI_CHIP_PLAYER || teams_headed(r)) r->stat_team = value == WIKI_CHIP_TEAM;
+        break;
+    default: /* WIKI_HUD_FOLD */
+        r->folded ^= 1 << value;
+        break;
+    }
+    return 1;
+}
+
+/* THE BAR'S RE-READ DUE at a Sight change, tagpu_replay.c bar_rates_due copied (replay.js ratesDue
+   states it): record v's DisplayTimer lowered to the last deadline of its own 30-tick phase below
+   `now`. Each subtraction is bounded first: the timer is at least `now` where `back` is taken, and
+   `back` is subtracted only from a `now` at least as large. `v` is a seat below WIKI_SEATS or the
+   watcher's WIKI_SEATS: the callers bound it. */
+static void rates_due(WIKIREPLAY* r, int v, int now)
+{
+    int back;
+    if (!now || r->pdt[v] < now) return;
+    back = WIKI_REPLAY_RATE - (r->pdt[v] - now) % WIKI_REPLAY_RATE;
+    r->pdt[v] = now >= back ? now - back : 0;
+}
+
+/* THE PASS at shown tick g (replay.js makePass states the engine's rule): the viewed seat's lit grid
+   over the layout's sight table, a fog bit per block, and the ids of the units its contacts mark,
+   from the game's world, which stands at g; empty under the full map. BOUND: the grid is
+   tagpu_wikisim_sight_lit's, at most WIKI_SIGHT_GRID blocks, so its bits fit pass_fog; the ids are
+   the view's units' at most, each copied within WIKI_ID_MAX. LIFETIME: the id block is the
+   replay's, grown here and freed by tagpu_wikireplay_free. Memory running out fails the replay. */
+static void make_pass(WIKIREPLAY* r, int g)
+{
+    uint8_t lit[WIKI_SIGHT_GRID];
+    const WIKIVIEW* v;
+    uint8_t* con;
+    int n, i, k;
+    r->pass_at = g;
+    r->pass_blocks = 0;
+    r->npass_id = 0;
+    memset(r->pass_fog, 0, sizeof r->pass_fog);
+    if (r->sight < 0) return;
+    v = tagpu_wikisim_view(r->game);
+    n = tagpu_wikisim_sight_lit(v, r->lay ? &r->lay->sight : NULL, r->sight, g, lit);
+    for (i = 0; i < n; i++)
+        if (lit[i]) r->pass_fog[i >> 3] |= (uint8_t)(1u << (i & 7));
+    r->pass_blocks = n;
+    if (!v->nunit) return;
+    if (!(con = (uint8_t*)malloc((size_t)v->nunit))) {
+        r->failed = 1;
+        return;
+    }
+    tagpu_wikisim_contacts(v, lit, r->sight, con);
+    for (i = k = 0; i < v->nunit; i++) k += con[i] != 0;
+    if (k > r->cpass_id) {
+        char (*p)[WIKI_ID_MAX] = (char (*)[WIKI_ID_MAX])realloc(r->pass_id, (size_t)k * sizeof *p);
+        if (!p) {
+            free(con);
+            r->failed = 1;
+            return;
+        }
+        r->pass_id = p;
+        r->cpass_id = k;
+    }
+    for (i = 0; i < v->nunit; i++)
+        if (con[i]) snprintf(r->pass_id[r->npass_id++], WIKI_ID_MAX, "%s", v->unit[i].id ? v->unit[i].id : "");
+    free(con);
+}
+
+/* EACH STEP'S TAIL (replay.js plTail states the order and why), after the game's part, every step,
+   paused or not, at the shown tick: the camera; with no seek pending a seek's end and a Sight
+   request, each making the pass (every other pass is play's, at its deadline); the top bar. The
+   seats it indexes are bounded: Follow's and Jump's by pl_value and the camera's presence,
+   Sight's by pl_value, so below the scene's seats. */
+static void pl_tail(WIKIREPLAY* r)
+{
+    int g, x, z, v, due = 0;
+    if (r->target < 0) r->shown = r->game->tick;
+    g = r->shown;
+    if (r->jump_req >= 0) {
+        if (cam_of(r, r->jump_req, g, &x, &z)) {
+            r->cam_x = x;
+            r->cam_z = z;
+        }
+        r->jump_req = -1;
+    } else if (r->follow >= 0 && cam_of(r, r->follow, g, &x, &z)) {
+        r->cam_x = x;
+        r->cam_z = z;
+    }
+    if (r->target < 0) {
+        if (r->pend) {
+            for (v = 0; v <= WIKI_SEATS; v++) r->pdt[v] = g;
+            r->click_from = g;
+            r->pend = 0;
+            due = 1;
+        }
+        if (r->sight_req != WIKI_REPLAY_NOT_ASKED) {
+            if (r->sight_req != r->sight) {
+                r->sight = r->sight_req;
+                rates_due(r, r->sight >= 0 ? r->sight : WIKI_SEATS, g);
+                due = 1;
+            }
+            r->sight_req = WIKI_REPLAY_NOT_ASKED;
+        }
+        if (due) make_pass(r, g);
+        if (r->failed) return;
+        if (r->sight >= 0 && r->sight < r->game->nseat) {
+            const WIKIECON* e = &r->game->econ[r->sight];
+            r->p_e = e->e;
+            r->p_m = e->m;
+            r->p_emax = e->emax;
+            r->p_mmax = e->mmax;
+            r->p_ei = e->ei;
+            r->p_eo = e->eo;
+            r->p_mi = e->mi;
+            r->p_mo = e->mo;
+        } else r->p_e = r->p_m = r->p_emax = r->p_mmax = r->p_ei = r->p_eo = r->p_mi = r->p_mo = 0;
+    }
+    r->pbe = ease(r->pbe, r->p_e, r->p_emax);
+    r->pbm = ease(r->pbm, r->p_m, r->p_mmax);
+    v = r->sight >= 0 ? r->sight : WIKI_SEATS;
+    if (r->pdt[v] < g) {
+        r->pdt[v] += WIKI_REPLAY_RATE;
+        r->prates[0] = (float)r->p_ei;
+        r->prates[1] = (float)r->p_eo;
+        r->prates[2] = (float)r->p_mi;
+        r->prates[3] = (float)r->p_mo;
+    }
+}
+
+/* a seek's end outside a players replay: the click ring starts at the tick it ended on
+   (tagpu_wikireplay.h, THE CLICK RING); pl_tail does it in its own order in a players replay */
+static void seek_end(WIKIREPLAY* r)
+{
+    if (r->target < 0 && r->pend) {
+        r->click_from = r->game->tick;
+        r->pend = 0;
+    }
+}
+
+/* THE WALKER'S SAMPLES (replay.js statWalk states the measures and their order), a players
+   replay's: at each walked tick at or past base + n period, every seat's seven. BOUND:
+   WIKI_STAT_PTS samples, the walker's seats at most WIKI_SEATS. */
+static void stat_walk(WIKIREPLAY* r)
+{
+    const WIKISIM* w = r->walker;
+    int k;
+    if (!r->players) return;
+    while (r->npt < WIKI_STAT_PTS && w->tick >= r->pbase + r->npt * r->period) {
+        for (k = 0; k < r->stat_nseat && k < w->nseat; k++) {
+            const WIKIECON* z = &w->econ[k];
+            float* o = r->sv[r->npt][k];
+            o[0] = (float)z->mi;
+            o[1] = (float)z->ei;
+            o[2] = (float)z->units;
+            o[3] = tagpu_wikisim_army(w, k);
+            o[4] = (float)z->kills;
+            o[5] = (float)z->losses;
+            o[6] = (float)z->wm;
+        }
+        r->npt++;
+    }
+}
+
 /* the viewer's script in the order it is fed: by tick, then file order (the pointers' order) */
 static int by_tick(const void* a, const void* b)
 {
@@ -1093,6 +1362,7 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     if (ctx) r->ctx = *ctx;
     r->live = e->frame == WIKI_FRAME_GAME && e->live;
     r->tk = e->frame == WIKI_FRAME_GAME && e->takeover;
+    r->players = e->frame == WIKI_FRAME_GAME && e->players;
     if (!(r->game = game_new(r, 0, err, errn))) return 0;
     /* a live replay has no walker: the live HUD has no markers */
     if (!r->live && !(r->walker = game_new(r, 1, err, errn))) {
@@ -1119,6 +1389,20 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     r->toast_kind = -1;
     r->toast_evict = -1;
     r->toast_seat = -1;
+    if (r->players) {
+        /* the players state at the start (replay.js's states each value and why): the camera at
+           eye (0, 0), no Follow, Jump or Sight, no Sight asked, every switch on, the window closed
+           on its first measure, split by player, every DisplayTimer 0, no pass; the period fits the
+           span in the game's 512 samples (tagpu_hudmarks.c walk_start), 30 for every wiki game */
+        r->follow = r->jump_req = r->sight = -1;
+        r->sight_req = WIKI_REPLAY_NOT_ASKED;
+        r->tog = WIKI_REPLAY_TOG_ALL;
+        r->stat_measure = WIKI_STAT_MEASURE0;
+        r->pass_at = -1;
+        r->stat_nseat = e->scenes[d->on].nseat < WIKI_SEATS ? e->scenes[d->on].nseat : WIKI_SEATS;
+        r->period = WIKI_REPLAY_RATE * ((r->end - r->pbase + WIKI_REPLAY_RATE * 511 - 1) / (WIKI_REPLAY_RATE * 511));
+        if (r->period < WIKI_REPLAY_RATE) r->period = WIKI_REPLAY_RATE;
+    }
     if (r->tk) {
         /* the rows: the original, its last the game's end, then each kept fork as it was played,
            its part the entry's (only read). THE BOUND: at most REC_FORK_LIMIT kept forks, the
@@ -1153,6 +1437,7 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
        the clock's tick 0 */
     if (!r->live) {
         publish(r);
+        stat_walk(r);
         if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
     } else {
         /* the original timeline; the memo before the level's first frame: seat 0's stored values
@@ -1181,7 +1466,8 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
 /* ONE STEP, a demo tick: while the walk runs, WIKI_REPLAY_WALK of its ticks and nothing else; then
    the viewer's clock (a held wait releases when no seek is pending and stalls past its max) and the
    game's part; live, the arm's fill and the top bar's frame after it; a takeover replay's watch
-   mode, the picker's and the arm's fill and the background walk after it */
+   mode, the picker's and the arm's fill and the background walk after it; a players replay, its
+   tail */
 void tagpu_wikireplay_step(WIKIREPLAY* r)
 {
     int i, n, ran;
@@ -1189,7 +1475,10 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
     r->tick++;
     if (r->walker && !r->bg) {
         n = chain_last(r) - r->walker->tick < WIKI_REPLAY_WALK ? chain_last(r) - r->walker->tick : WIKI_REPLAY_WALK;
-        for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) publish(r);
+        for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) {
+            publish(r);
+            stat_walk(r);
+        }
         if (!r->failed) {
             if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
             else r->walked = r->walker->tick;
@@ -1213,6 +1502,8 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
             lane_fill(r);
         }
         if (r->tk && !r->failed) bg_walk(r, ran);
+        if (r->players && !r->failed) pl_tail(r);
+        else if (!r->failed) seek_end(r);
     }
     r->done = is_done(r);
 }
@@ -1272,8 +1563,10 @@ void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value)
     if (r->done || (r->walker && !r->bg) || control < 0 || control >= WIKI_NPRESS) return;
     if (r->live ? !tagpu_wikidata_hud_presses(control, 1)
                 : !(control == WIKI_HUD_LEAVE_YES || tagpu_wikidata_hud_presses(control, 0)
-                    || (r->tk && tagpu_wikidata_hud_takeover(control))))
+                    || (r->tk && tagpu_wikidata_hud_takeover(control))
+                    || (r->players && (tagpu_wikidata_hud_players(control) || control == WIKI_HUD_FOLD))))
         return;
+    if (r->players && !pl_value(r, control, value)) return;
     act(r, control, value);
     r->done = is_done(r);
 }
@@ -1363,6 +1656,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->question = r->question;
     v->was_paused = r->question ? r->was_paused : 0;
     v->left = r->left;
+    v->click_from = r->click_from;
     if (r->live || r->tk) {
         v->ntl = r->ntl;
         for (i = 0; i < r->ntl; i++) {
@@ -1398,6 +1692,34 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
         v->walker_tick = r->walker ? r->walker->tick : -1;
         v->tk_full = r->tk_full;
     }
+    if ((v->players = r->players)) {
+        v->cam_x = r->cam_x;
+        v->cam_z = r->cam_z;
+        v->follow = r->follow;
+        v->jump_req = r->jump_req;
+        v->sight = r->sight;
+        v->sight_req = r->sight_req;
+        v->tog = r->tog;
+        v->folded = r->folded;
+        v->stat_open = r->stat_open;
+        v->stat_measure = r->stat_measure;
+        v->stat_team = r->stat_team;
+        v->shown = r->shown;
+        v->pend = r->pend;
+        v->pbe = r->pbe;
+        v->pbm = r->pbm;
+        memcpy(v->prates, r->prates, sizeof v->prates);
+        memcpy(v->pdt, r->pdt, sizeof v->pdt);
+        v->pass_at = r->pass_at;
+        v->pass_blocks = r->pass_blocks;
+        memcpy(v->pass_fog, r->pass_fog, sizeof v->pass_fog);
+        v->npass_contact = r->npass_id;
+        v->pass_contact = (const char (*)[WIKI_ID_MAX])r->pass_id;
+        v->npt = r->npt;
+        v->nseat = r->stat_nseat;
+        v->base = r->pbase;
+        v->period = r->period;
+    }
     if (!(v->live = r->live)) return;
     v->rw = r->rw;
     v->G = r->G;
@@ -1422,6 +1744,12 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->dt = r->dt;
     v->back = r->back;
     v->full = r->nlogged >= WIKI_REPLAY_LOG - WIKI_REPLAY_LOG_KEEP;
+}
+
+float tagpu_wikireplay_stat(const WIKIREPLAY* r, int n, int seat, int m)
+{
+    if (!r->players || n < 0 || n >= r->npt || seat < 0 || seat >= r->stat_nseat || m < 0 || m >= WIKI_STAT_MEASURES) return 0;
+    return r->sv[n][seat][m];
 }
 
 /* ---- the replay's hash, in tagpu_wikireplay.h's order ---- */
@@ -1463,6 +1791,7 @@ static void fnv_str(uint64_t* h, const char* str)
 }
 
 static void live_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp);
+static void players_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp);
 
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
 {
@@ -1518,6 +1847,7 @@ uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
     fnv_u32(&h, (uint32_t)(g & 0xFFFFFFFFu));
     fnv_u32(&h, (uint32_t)(g >> 32));
     if (v.live) live_hash(r, &v, &h);
+    if (v.players) players_hash(r, &v, &h);
     if (!v.tk) return h;
     fnv_int(&h, v.tk_mode);
     fnv_int(&h, v.human);
@@ -1588,9 +1918,47 @@ static void live_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp
     *hp = h;
 }
 
+/* the hash's players block, tagpu_wikireplay.h's order */
+static void players_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp)
+{
+    uint64_t h = *hp;
+    int i, k, m;
+    fnv_int(&h, v->cam_x);
+    fnv_int(&h, v->cam_z);
+    fnv_int(&h, v->follow);
+    fnv_int(&h, v->jump_req);
+    fnv_int(&h, v->sight);
+    fnv_int(&h, v->sight_req);
+    fnv_int(&h, v->tog);
+    fnv_int(&h, v->folded);
+    fnv_int(&h, v->stat_open ? 1 : 0);
+    fnv_int(&h, v->stat_measure);
+    fnv_int(&h, v->stat_team ? 1 : 0);
+    fnv_int(&h, v->click_from);
+    fnv_int(&h, v->shown);
+    fnv_int(&h, v->pend ? 1 : 0);
+    fnv_f32(&h, v->pbe);
+    fnv_f32(&h, v->pbm);
+    for (i = 0; i < 4; i++) fnv_f32(&h, v->prates[i]);
+    for (i = 0; i <= WIKI_SEATS; i++) fnv_int(&h, v->pdt[i]);
+    fnv_int(&h, v->pass_at);
+    fnv_int(&h, v->pass_blocks);
+    fnv_bytes(&h, v->pass_fog, (size_t)(v->pass_blocks + 7) / 8);
+    fnv_int(&h, v->npass_contact);
+    for (i = 0; i < v->npass_contact; i++) fnv_str(&h, v->pass_contact[i]);
+    fnv_int(&h, v->npt);
+    fnv_int(&h, v->base);
+    fnv_int(&h, v->period);
+    for (i = 0; i < v->npt; i++)
+        for (k = 0; k < v->nseat; k++)
+            for (m = 0; m < WIKI_STAT_MEASURES; m++) fnv_f32(&h, r->sv[i][k][m]);
+    *hp = h;
+}
+
 void tagpu_wikireplay_free(WIKIREPLAY* r)
 {
     int i;
+    free(r->pass_id);
     game_free(r->game);
     game_free(r->walker);
     game_free(r->past);

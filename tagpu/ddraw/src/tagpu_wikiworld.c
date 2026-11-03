@@ -834,7 +834,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     HUDRECT stage;
     LARGE_INTEGER t0;
     float u;
-    int ox, oy, entry, demo, x0, y0, x1, y1, ss;
+    int ox, oy, entry, demo, r[4], clip[4], ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
     int gw, gh, nrec, nunit, nShadow = 0, nBody = 0;
@@ -965,13 +965,18 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_featHave = s_feat.atlas && s_feat.pal;
     }
     /* THE TARGET: the map at the Supersampling setting's ss, composited into the image's rect --
-       the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment */
-    tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, v->frame, stage, u, &x0, &y0, &x1, &y1);
+       the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment. A frame
+       clips it to its viewport, the rect the stage's world ops clip to: a players frame's map is
+       larger than its viewport and stands at the eye; any other frame's lies inside it */
+    tagpu_wikistage_image(v, stage, u, r, clip);
     s_tgt.gw = gw; s_tgt.gh = gh;
     s_tgt.ss = ss;
     s_tgt.devres = 0;
-    s_tgt.vx = ox + x0; s_tgt.vy = oy + y0;
-    s_tgt.vw = x1 - x0; s_tgt.vh = y1 - y0;
+    s_tgt.vx = ox + r[0]; s_tgt.vy = oy + r[1];
+    s_tgt.vw = r[2] - r[0]; s_tgt.vh = r[3] - r[1];
+    s_tgt.clip = v->frame;
+    s_tgt.cx = ox + clip[0]; s_tgt.cy = oy + clip[1];
+    s_tgt.cw = clip[2] - clip[0]; s_tgt.ch = clip[3] - clip[1];
     s_tgt.frame = f->frame_counter;
     s_tgtHave = s_tgt.vw > 0 && s_tgt.vh > 0;
 

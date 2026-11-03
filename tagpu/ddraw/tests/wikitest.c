@@ -72,6 +72,15 @@
    {"REFRESH_TICKS", "FORK_LIMIT", "TIMELINES"}, then one line per case; simparity.mjs asks
    replay.js's twins the same.
 
+   `wikitest sightcost PAK N` times tagpu_wikisim_sight_lit and tagpu_wikisim_contacts on the costs
+   spec's worst scene, N fills each: a 96 x 48 map (a 48 x 24 grid), 128 units of one seat of a type
+   of sight 290 (the archive's fixture table, TABLE8's 212 offsets) spread over the map, each one
+   also a 400-radar, activated, finished commander, 128 units of another seat, and 20 deaths of
+   the first seat within the death vision; prints {"fill_us", "contacts_us", "lit"}, the mean
+   microseconds of one call and the blocks the fill lit. The contacts are timed over an unlit grid,
+   so every target takes the distance tests to all 128 radars, the pass's worst. Build it optimised for a figure that means
+   anything.
+
    `wikitest malformed` loads data the loader must survive -- each case an archive or an entry
    built here -- and prints one line per case, "ok <case>" or "FAILED <case>: why". The native
    build runs under AddressSanitizer, so a write past an allocation fails the run as well.
@@ -80,6 +89,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "tagpu_json.h"
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
@@ -512,6 +522,8 @@ static void view_as(WIKISIM* s, int map, int seat)
             key("lost", 0); printf("%d", z->lost);
             key("out", 0); fputs(z->out ? "true" : "false", stdout);
             key("cmdLost", 0); fputs(z->cmd_lost ? "true" : "false", stdout);
+            key("kills", 0); printf("%d", z->kills);
+            key("losses", 0); printf("%d", z->losses);
             putchar('}');
         }
         putchar(']');
@@ -529,6 +541,52 @@ static void view_as(WIKISIM* s, int map, int seat)
             putchar('[');
             for (k = 0; k < 8; k++) { if (k) putchar(','); num(d[k]); }
             putchar(']');
+        }
+        putchar(']');
+        key("cursors", 0);
+        putchar('[');
+        for (i = 0; i < v->ncursor; i++) {
+            printf("%s{", i ? "," : "");
+            key("x", 1); num(v->cursor[i].x);
+            key("z", 0); num(v->cursor[i].z);
+            key("on", 0); fputs(v->cursor[i].on ? "true" : "false", stdout);
+            putchar('}');
+        }
+        putchar(']');
+        key("clicks", 0);
+        putchar('[');
+        for (i = 0; i < v->nclick; i++) {
+            printf("%s{", i ? "," : "");
+            key("tick", 1); printf("%d", v->click[i].tick);
+            key("seat", 0); printf("%d", v->click[i].seat);
+            key("x", 0); num(v->click[i].x);
+            key("z", 0); num(v->click[i].z);
+            putchar('}');
+        }
+        putchar(']');
+        key("deaths", 0);
+        putchar('[');
+        for (i = 0; i < v->ndeath; i++) {
+            printf("%s{", i ? "," : "");
+            key("tick", 1); printf("%d", v->death[i].tick);
+            key("owner", 0); printf("%d", v->death[i].owner);
+            key("x", 0); num(v->death[i].x);
+            key("z", 0); num(v->death[i].z);
+            key("type", 0); str(name(s, v->death[i].type));
+            putchar('}');
+        }
+        putchar(']');
+        key("types", 0);
+        putchar('[');
+        for (i = 0; i < v->ntype; i++) {
+            printf("%s{", i ? "," : "");
+            key("name", 1); str(name(s, i));
+            key("sightDistance", 0); printf("%d", v->type[i].sight_distance);
+            key("radarDistance", 0); printf("%d", v->type[i].radar_distance);
+            key("sonarDistance", 0); printf("%d", v->type[i].sonar_distance);
+            key("activates", 0); fputs(v->type[i].activates ? "true" : "false", stdout);
+            key("modelHeight", 0); printf("%d", v->type[i].model_height);
+            putchar('}');
         }
         fputs("]}", stdout);
     }
@@ -559,7 +617,40 @@ static void hash(const WIKISIM* s)
     printf("\"%08lx%08lx\"", (unsigned long)(h >> 32), (unsigned long)(h & 0xFFFFFFFFu));
 }
 
-static void frame(WIKISIM* s, const char* entry, const char* demo, int map)
+/* A PLAYERS GAME'S SIGHT at the tick the sim stands at (simparity.mjs sightOut), per seat of the
+   game: its lit grid's FNV-1a 32 as 8 hex digits and its lit blocks' count, then its contacts as
+   a string of 0 and 1 in the view's unit order. `t` the layout's sight table, NULL for none. */
+static void sight_out(WIKISIM* s, const WIKISIGHT* t)
+{
+    static uint8_t lit[WIKI_SIGHT_GRID];
+    const WIKIVIEW* v = tagpu_wikisim_view(s);
+    uint8_t* con = (uint8_t*)malloc((size_t)v->nunit + 1);
+    int k, i, n;
+    putchar('[');
+    for (k = 0; k < v->nseat; k++) {
+        uint32_t h = 0x811C9DC5u;
+        int on = 0;
+        n = tagpu_wikisim_sight_lit(v, t, k, s->tick, lit);
+        for (i = 0; i < n; i++) {
+            h = (h ^ lit[i]) * 0x01000193u;
+            on += lit[i] != 0;
+        }
+        printf("%s{", k ? "," : "");
+        key("lit", 1); printf("\"%08lx\"", (unsigned long)h);
+        key("n", 0); printf("%d", on);
+        key("c", 0); putchar('"');
+        if (con) {
+            tagpu_wikisim_contacts(v, lit, k, con);
+            for (i = 0; i < v->nunit; i++) putchar('0' + con[i]);
+        }
+        fputs("\"}", stdout);
+    }
+    putchar(']');
+    free(con);
+}
+
+/* one tick's line; with `sight` (a players game's, `t` its table or NULL) also its sight_out */
+static void frame_sight(WIKISIM* s, const char* entry, const char* demo, int map, int sight, const WIKISIGHT* t)
 {
     const WIKIVIEW* v;
     int i;
@@ -576,8 +667,15 @@ static void frame(WIKISIM* s, const char* entry, const char* demo, int map)
         key(v->unit[i].id, i == 0);
         orders(s, v->unit[i].id);
     }
-    fputs("}}\n", stdout);
+    putchar('}');
+    if (sight) {
+        key("s", 0);
+        sight_out(s, t);
+    }
+    fputs("}\n", stdout);
 }
+
+static void frame(WIKISIM* s, const char* entry, const char* demo, int map) { frame_sight(s, entry, demo, map, 0, NULL); }
 
 /* the casting a file holds, one side's record, into `k`; 1, else 0 with a message on stderr */
 static int casting_file(const char* path, WIKICASTING* k)
@@ -730,10 +828,10 @@ static int game(const char* path, const char* entry, const char* layout, const c
             refused_line(g.e.id, g.e.demo[j].id, err);
             continue;
         }
-        frame(&s, g.e.id, g.e.demo[j].id, 1);
+        frame_sight(&s, g.e.id, g.e.demo[j].id, 1, g.e.players, g.lay ? &g.lay->sight : NULL);
         while (!s.done) {
             tagpu_wikisim_step(&s);
-            frame(&s, g.e.id, g.e.demo[j].id, s.done);
+            frame_sight(&s, g.e.id, g.e.demo[j].id, s.done, g.e.players, g.lay ? &g.lay->sight : NULL);
         }
         if (s.oom) {
             fprintf(stderr, "wikitest: %s/%s ran out of memory\n", g.e.id, g.e.demo[j].id);
@@ -854,6 +952,35 @@ static void tk_view(const WIKIREPLAYVIEW* v)
     fputs("]}", stdout);
 }
 
+/* a players replay's `players` block in replay.js's shape */
+static void players_view(const WIKIREPLAYVIEW* v)
+{
+    int i;
+    printf(",\"players\":{\"cam\":{\"x\":%d,\"z\":%d},\"follow\":%d,\"jumpReq\":%d,\"sight\":%d,\"sightReq\":%d,\"tog\":%d,"
+           "\"folded\":%d,\"stat\":{\"open\":%s,\"measure\":%d,\"team\":%s},\"clickFrom\":%d,\"shown\":%d,\"pend\":%s,"
+           "\"bar\":{\"be\":", v->cam_x, v->cam_z, v->follow, v->jump_req, v->sight, v->sight_req, v->tog, v->folded,
+           v->stat_open ? "true" : "false", v->stat_measure, v->stat_team ? "true" : "false", v->click_from, v->shown,
+           v->pend ? "true" : "false");
+    f32(v->pbe);
+    fputs(",\"bm\":", stdout);
+    f32(v->pbm);
+    fputs(",\"rates\":[", stdout);
+    for (i = 0; i < 4; i++) {
+        if (i) putchar(',');
+        f32(v->prates[i]);
+    }
+    fputs("],\"dt\":[", stdout);
+    for (i = 0; i <= WIKI_SEATS; i++) printf("%s%d", i ? "," : "", v->pdt[i]);
+    printf("]},\"pass\":{\"at\":%d,\"blocks\":%d,\"fog\":\"", v->pass_at, v->pass_blocks);
+    for (i = 0; i < (v->pass_blocks + 7) / 8; i++) printf("%02x", v->pass_fog[i]);
+    fputs("\",\"contacts\":[", stdout);
+    for (i = 0; i < v->npass_contact; i++) {
+        if (i) putchar(',');
+        str(v->pass_contact[i]);
+    }
+    printf("]},\"npt\":%d,\"nseat\":%d,\"base\":%d,\"period\":%d}", v->npt, v->nseat, v->base, v->period);
+}
+
 /* the replay's view in replay.js's R.view() shape */
 static void replay_view(const WIKIREPLAYVIEW* v)
 {
@@ -867,6 +994,7 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("caption", 0); if (v->caption) str(v->caption); else fputs("null", stdout);
     key("failed", 0); fputs(v->failed ? "true" : "false", stdout);
     key("ignored", 0); printf("%d", v->ignored);
+    key("clickFrom", 0); printf("%d", v->click_from);
     key("game", 0);
     printf("{\"tick\":%d,\"end\":%d,\"playhead\":%d,\"paused\":%s,\"speed\":%d,\"acc\":%d,\"target\":%d,\"gen\":%d,\"quiet\":%d}",
            v->game_tick, v->end, v->playhead, v->paused ? "true" : "false", v->speed, v->acc, v->target, v->gen, v->quiet);
@@ -898,7 +1026,8 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("toast", 0);
     if (v->toast_kind >= 0) {
         static const char* const TOASTS[] = { "added", "removed", "playing_on", "cannot", "armed", "playing_from", "refused",
-                                              "taking_over", "cannot_take", "saved", "cannot_save", "click_delete", "deleted" };
+                                              "taking_over", "cannot_take", "saved", "cannot_save", "click_delete", "deleted",
+                                              "camera" };
         printf("{\"kind\":\"%s\",\"at\":%d,\"value\":%d", TOASTS[v->toast_kind], v->toast_at, v->toast_value);
         if (v->live || v->tk) printf(",\"evict\":%d", v->toast_evict);
         if (v->toast_seat >= 0) printf(",\"seat\":%d", v->toast_seat);
@@ -910,11 +1039,13 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("left", 0); fputs(v->left ? "true" : "false", stdout);
     if (v->live) live_view(v);
     if (v->tk) tk_view(v);
+    if (v->players) players_view(v);
     putchar('}');
 }
 
-/* one demo tick of a replay: its hash and view, then the game's hash, view and orders */
-static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int map)
+/* one demo tick of a replay: its hash and view, then the game's hash, view and orders; a players
+   replay's also the game's sight_out over `t`, its layout's table (NULL none) */
+static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int map, const WIKISIGHT* t)
 {
     WIKIREPLAYVIEW rv;
     WIKISIM* s = tagpu_wikireplay_game(r);
@@ -939,6 +1070,10 @@ static void replay_frame(WIKIREPLAY* r, const char* entry, const char* demo, int
             orders(s, v->unit[i].id);
         }
         putchar('}');
+        if (rv.players) {
+            key("s", 0);
+            sight_out(s, t);
+        }
     } else fputs(",\"gh\":null,\"v\":null,\"o\":null", stdout);
     fputs("}\n", stdout);
 }
@@ -958,10 +1093,10 @@ static int replay(const char* path, const char* entry, const char* layout, const
             refused_line(g.e.id, g.e.demo[j].id, err);
             continue;
         }
-        replay_frame(&r, g.e.id, g.e.demo[j].id, 1);
+        replay_frame(&r, g.e.id, g.e.demo[j].id, 1, g.lay ? &g.lay->sight : NULL);
         while (!r.done) {
             tagpu_wikireplay_step(&r);
-            replay_frame(&r, g.e.id, g.e.demo[j].id, r.done);
+            replay_frame(&r, g.e.id, g.e.demo[j].id, r.done, g.lay ? &g.lay->sight : NULL);
         }
         tagpu_wikireplay_free(&r);
     }
@@ -969,10 +1104,12 @@ static int replay(const char* path, const char* entry, const char* layout, const
     return 0;
 }
 
-/* a press of Try it's by replay.js's name: a control, or the question's Yes, which no script names */
+/* a press of Try it's by replay.js's name: a control, or the question's Yes or a team row's fold,
+   which no script names */
 static int press_of(const char* name)
 {
-    return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : tagpu_wikidata_hud(name);
+    return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : name && !strcmp(name, "fold") ? WIKI_HUD_FOLD
+         : tagpu_wikidata_hud(name);
 }
 
 /* a WIKI_KEY_* by sim.js's name, or -1 */
@@ -1014,7 +1151,7 @@ static int replaytrace(const char* path, const char* entry, const char* layout, 
         return rc;
     }
     for (;;) {
-        replay_frame(&r, g.e.id, g.e.demo[0].id, r.tick == 0 || r.done || r.tick >= last);
+        replay_frame(&r, g.e.id, g.e.demo[0].id, r.tick == 0 || r.done || r.tick >= last, g.lay ? &g.lay->sight : NULL);
         if (r.done || r.tick >= last) break;
         for (p = tj_is(tj_get(root, "presses"), TJ_ARR) ? tj_get(root, "presses")->first : NULL; p; p = p->next) {
             const char* what = tj_str(tj_at(p, 1), NULL);
@@ -1296,6 +1433,10 @@ static void casting_out(const WIKICASTING* k)
         key("canstop", 0); printf("%d", d->canstop);
         key("activatewhenbuilt", 0); printf("%d", d->activate_when_built);
         key("canreclamate", 0); printf("%d", d->canreclamate);
+        key("sightDistance", 0); printf("%d", d->sight_distance);
+        key("radarDistance", 0); printf("%d", d->radar_distance);
+        key("sonarDistance", 0); printf("%d", d->sonar_distance);
+        key("modelHeight", 0); printf("%d", d->model_height);
         key("vent", 0); printf("%d", d->vent);
         key("g", 0);
         for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);
@@ -1352,7 +1493,20 @@ static void layout_out(const WIKILAYOUT* L)
         }
         fputs("}}", stdout);
     }
-    puts("]}");
+    fputs("],\"sight\":", stdout);
+    if (!L->sight.numtables) fputs("null", stdout);
+    else {
+        printf("{\"numtables\":%d,\"tables\":[", L->sight.numtables);
+        for (i = 0; i < L->sight.nidx; i++) {
+            printf("%s{\"idx\":%d,\"cells\":[", i ? "," : "", L->sight.idx[i]);
+            for (k = L->sight.first[i]; k < L->sight.first[i + 1]; k++)
+                printf("%s[%d,%d,%d]", k > L->sight.first[i] ? "," : "", L->sight.cell[k].dc, L->sight.cell[k].dr,
+                       L->sight.cell[k].n);
+            fputs("]}", stdout);
+        }
+        fputs("]}", stdout);
+    }
+    puts("}");
 }
 
 static int data(const char* path)
@@ -1399,7 +1553,7 @@ static int constants(void)
 {
     static const WIKITRIPROW rows[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
     static const int speeds[WIKI_REPLAY_NSPEED] = WIKI_REPLAY_SPEEDS;
-    int k;
+    int k, n;
     printf("{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"PICK\":%d,\"PICK_DOWN\":%d,\"PICK_UP\":%d,\"TRIP_ROWS\":[",
            WIKI_TRIP, WIKI_TRIP_DOWN, WIKI_TRIP_UP, WIKI_PICK, WIKI_PICK_DOWN, WIKI_PICK_UP);
     for (k = 0; k < WIKI_TRIP_NROWS; k++)
@@ -1414,6 +1568,16 @@ static int constants(void)
            WIKI_REPLAY_SPEED0, WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, WIKI_REPLAY_STEP, WIKI_REPLAY_NEAR, WIKI_REPLAY_BOOKS,
            WIKI_REPLAY_MARKS, WIKI_REPLAY_FILL, WIKI_REPLAY_HUD_DOWN, WIKI_REPLAY_HUD_UP, HUD_MK_DEATH, HUD_MK_DEFEAT,
            WIKI_GAME_END_MAX);
+    fputs("{\"CHIPS\":[", stdout);
+    for (k = 0; k < WIKI_NCHIP; k++) { if (k) putchar(','); str(tagpu_wikidata_chip_name(k)); }
+    printf("],\"PLAYERS_CONTROLS\":[");
+    for (k = 0, n = 0; k < WIKI_NHUD; k++)
+        if (tagpu_wikidata_hud_players(k)) { if (n++) putchar(','); str(tagpu_wikidata_hud_name(k)); }
+    printf("],\"PLAYERS_DEATHS\":%d,\"PLAYERS_DEATH_SPAN\":%d,\"SIGHT_MIN\":%d,\"SIGHT_NUMTABLES\":%d,\"SIGHT_IDX\":%d,"
+           "\"SIGHT_REACH\":%d,\"SIGHT_CELLS\":%d,\"STAT_MEASURES\":%d,\"STAT_MEASURE0\":%d,\"STAT_PTS\":%d,\"TOG_ALL\":%d,"
+           "\"NOT_ASKED\":%d,\"PASS\":%d}\n", WIKI_PLAYERS_DEATHS, WIKI_PLAYERS_DEATH_SPAN, WIKI_SIGHT_MIN,
+           WIKI_SIGHT_NUMTABLES, WIKI_SIGHT_IDX, WIKI_SIGHT_REACH, WIKI_SIGHT_CELLS, WIKI_STAT_MEASURES, WIKI_STAT_MEASURE0,
+           WIKI_STAT_PTS, (int)WIKI_REPLAY_TOG_ALL, WIKI_REPLAY_NOT_ASKED, WIKI_REPLAY_PASS);
     return 0;
 }
 
@@ -1645,6 +1809,69 @@ static int malformed(void)
     return 0;
 }
 
+/* THE SIGHT'S COST (the usage above): the worst scene of the costs spec, fills timed with clock() */
+static int sightcost(const char* path, int n)
+{
+    static WIKIVUNIT unit[256];
+    static WIKIDEATH death[20];
+    static uint8_t lit[WIKI_SIGHT_GRID], dark[WIKI_SIGHT_GRID], con[256];
+    static char ids[256][16];   /* "u" and any int, which -Wformat-truncation asks room for */
+    WIKIVTYPE type[1];
+    WIKIVIEW v;
+    WIKILAYOUT* L;
+    size_t npak;
+    char err[256], *pak = slurp(path, &npak);
+    clock_t t0;
+    double fill, cont;
+    int i, on = 0;
+    if (!pak) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
+    if (!(L = tagpu_wikidata_layout_pak((const unsigned char*)pak, npak, "side/fixture.json", err, sizeof err))) {
+        fprintf(stderr, "wikitest: %s\n", err);
+        free(pak);
+        return 2;
+    }
+    memset(&v, 0, sizeof v);
+    memset(type, 0, sizeof type);
+    type[0].sight_distance = 290;
+    type[0].radar_distance = 400;
+    type[0].activates = 1;
+    type[0].model_height = 39;
+    for (i = 0; i < 256; i++) {
+        snprintf(ids[i], sizeof ids[i], "u%d", i);
+        unit[i].id = ids[i];
+        unit[i].owner = i < 128 ? 0 : 1;
+        unit[i].x = 16 + (i % 16) * 96 + (i / 128) * 40;
+        unit[i].z = 64 + ((i / 16) % 8) * 80;
+        unit[i].built = 1;
+    }
+    for (i = 0; i < 20; i++) {
+        death[i].tick = 0;
+        death[i].x = 100 + i * 70;
+        death[i].z = 400;
+    }
+    v.w = 96;
+    v.h = 48;
+    v.game = 1;
+    v.nunit = 256;
+    v.unit = unit;
+    v.ndeath = 20;
+    v.death = death;
+    v.ntype = 1;
+    v.type = type;
+    if (n < 1) n = 1;
+    t0 = clock();
+    for (i = 0; i < n; i++) tagpu_wikisim_sight_lit(&v, &L->sight, 0, 30, lit);
+    fill = (double)(clock() - t0) * 1e6 / CLOCKS_PER_SEC / n;
+    t0 = clock();
+    for (i = 0; i < n; i++) tagpu_wikisim_contacts(&v, dark, 0, con);
+    cont = (double)(clock() - t0) * 1e6 / CLOCKS_PER_SEC / n;
+    for (i = 0; i < 48 * 24; i++) on += lit[i] != 0;
+    printf("{\"fill_us\":%.2f,\"contacts_us\":%.2f,\"lit\":%d}\n", fill, cont, on);
+    free(L);
+    free(pak);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     int rc;
@@ -1688,6 +1915,7 @@ int main(int argc, char** argv)
     if (argc == 2 && !strcmp(argv[1], "constants")) return constants();
     if (argc == 3 && !strcmp(argv[1], "rules")) return rules(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
+    if (argc == 4 && !strcmp(argv[1], "sightcost")) return sightcost(argv[2], atoi(argv[3]));
     fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]"
             " | wikitest game PAK ENTRY LAYOUT CASTING RIVAL IFACE COB SCRIPTED"
             " | wikitest sweep PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
@@ -1695,6 +1923,6 @@ int main(int argc, char** argv)
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
             " | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"
             " | wikitest constants | wikitest rules FILE"
-            " | wikitest malformed\n");
+            " | wikitest malformed | wikitest sightcost PAK N\n");
     return 2;
 }

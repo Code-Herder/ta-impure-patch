@@ -12,19 +12,23 @@
 typedef struct {
     float ndc[4];       /* x0, y0, x1, y1 in clip space (y down: no viewport flip)            */
     float px[4];        /* the same, in device pixels: the dot's circle, the shade's box; a
-                           line's two ends; a drop shadow's box; a ring's circle, unsnapped; a
-                           chart band's segments j0, j1 and its column                        */
-    float uv[4];        /* u0, v0, u1, v1; a drop shadow's offset down, in u0 and u1          */
+                           line's two ends; a triangle's first two points; a drop shadow's
+                           box; a ring's circle, unsnapped; a chart band's segments j0, j1 and
+                           its column                                                         */
+    float uv[4];        /* u0, v0, u1, v1; a drop shadow's offset down, in u0 and u1; a
+                           triangle's third point less its first, in (u0, v0) and (u1, v1) --
+                           an offset, so a group's move of px moves the whole triangle        */
     float rgba[4];      /* premultiplied; a part's opacity in all four                        */
     float clip[4];      /* x0, y0, x1, y1 in device pixels; x1 < x0: none                     */
     float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma, a line's half
                            width or a ring's depth in pixels, dim brightness, saturate        */
 } HUDINST;
 
-enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING };
+enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING, HUDM_TRI };
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
-   HUD_TEX_CHART, HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h),
+   HUD_TEX_CHART or HUD_TEX_CHART_WIKI (the chart's image of slot 0 or 1, THE CHART'S LINES AS
+   DATA below), HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h),
    HUD_TEX_SIDE (the wiki stage's composed sidebar column, HUD_SIDE_W x HUD_SIDE_H RGBA8, the
    same) or HUD_TEX_BAR (the wiki stage's game frame's two bars, HUD_BAR_W x HUD_BAR_H RGBA8: rows
    0..31 the top bar, 32..63 the bottom bar, tagpu_wikibar.h).
@@ -40,6 +44,7 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_BAR    (-7)
 #define HUD_BAR_W      2048         /* the widest bar: 16 x WIKISTAGE_MAP, frame x 128 .. Wg - 1 */
 #define HUD_BAR_H      64           /* the top bar's 32 rows, then the bottom bar's 32          */
+#define HUD_TEX_CHART_WIKI (-8)
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
@@ -105,10 +110,13 @@ typedef struct {
     const float*    grp;        /* each group's opacity; NULL with ngrp 0: none              */
     int             ngrp;
     const HUDCHART* chart;      /* NULL: no chart                                            */
+    int             chart_slot; /* the chart's image its HOP_CHART ops draw from: 0 the replay
+                                   HUD's (HUD_TEX_CHART), 1 the wiki stage HUD's
+                                   (HUD_TEX_CHART_WIKI); any other value draws no chart      */
     int             watch;      /* an op whose instances the build counts; -1: none          */
 } HUDOPLIST;
 
-/* `ops` as a list. */
+/* `ops` as a list, its chart in slot 0. */
 HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops);
 
 /* tagpu_huddraw_build, of a list; `*watched` (NULL: not asked) the instances op `ops->watch`, one
@@ -129,18 +137,25 @@ const unsigned char* tagpu_huddraw_atlas(unsigned* gen, int* y0, int* y1);
 /* The changed rows below `y` are on the device. */
 void                 tagpu_huddraw_atlas_sent(int y);
 
-/* THE CHART'S LINES AS DATA: one RGBA32F image the chart mode reads with texelFetch, in device
-   pixels on the attachment. Row 0 holds (groups, points, the line's and the halo's half width),
-   the halo at its opacity, the halo opaque, and (the cross's half size, its half width,
-   HUD_CHART_BOX), so the shader names no size of its own. Row 1 + g is group g: texel 0 its
-   colour, premultiplied; texel 1 (its halo, its cross, the cross's centre); texels 2 ..
-   2 + HUD_MAXPT - 1 its points; texel HUD_CHART_BOX + k the y range in which column k's
-   instances can see it. `gen` changes with the contents; the image is sent whole. */
+/* THE CHART'S LINES AS DATA: an RGBA32F image the chart mode reads with texelFetch, in device
+   pixels on the attachment, one a slot. TWO SLOTS, because two HUDs can draw a chart in one frame
+   -- the replay HUD's stats window, and the wiki stage HUD's over the same replay -- and one image
+   would hold whichever was prepared last while the other's bands named its points. Each slot's
+   image, bands and generation are its own: a build of a list in one slot neither reads nor moves
+   the other's, so a frame that draws both draws each from its own image.
+   Row 0 holds (groups, points, the line's and the halo's half width), the halo at its opacity,
+   the halo opaque, and (the cross's half size, its half width, HUD_CHART_BOX), so the shader
+   names no size of its own. Row 1 + g is group g: texel 0 its colour, premultiplied; texel 1
+   (its halo, its cross, the cross's centre); texels 2 .. 2 + HUD_MAXPT - 1 its points; texel
+   HUD_CHART_BOX + k the y range in which column k's instances can see it. `gen` changes with the
+   slot's contents; the image is sent whole. */
 #define HUD_CHART_SEG   8                                       /* segments a column          */
 #define HUD_CHART_COLS  ((HUD_MAXPT - 1 + HUD_CHART_SEG - 1) / HUD_CHART_SEG)
 #define HUD_CHART_BOX   (2 + HUD_MAXPT)
 #define HUD_CHART_W     (HUD_CHART_BOX + HUD_CHART_COLS)
 #define HUD_CHART_H     (HUD_MAXSEAT + 1)
-const float* tagpu_huddraw_chart(unsigned* gen);
+#define HUD_CHART_SLOTS 2
+/* Slot `slot`'s image and its generation; NULL, and `*gen` 0, for a slot that is not one. */
+const float* tagpu_huddraw_chart(int slot, unsigned* gen);
 
 #endif

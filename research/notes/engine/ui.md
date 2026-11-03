@@ -928,7 +928,9 @@ that is not G does not count.
 
 - **A left release is a click** when the press is less than 25 clock units old (30 a second,
   MEASURED) and the release point less than 32 world units from the press point on x and on z
-  (`0x499421..0x499441`, the clock `0x4B6340`; *The cursor chain*, below, has the pseudo-code and
+  (`0x499421..0x499441`, the clock `0x4B6340`: the press's stamp `main+0x2CB6` plus 25 compared
+  with the clock at `0x499435`, the two distances at `0x499439..0x499441`; the in-game wiki records
+  a click on this branch, as on the press's `0x4993C5..0x4993D0`; *The cursor chain*, below, has the pseudo-code and
   the points it compares); it then calls `0x498F70` (`0x4995AE..0x4995B3`), at both Interface
   Types. So a click's order
   lands at the release, where type 1's right press orders at the press.

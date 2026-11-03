@@ -2054,6 +2054,8 @@ typedef struct {
     int       has_mwd;                  /* MinWaterDepth given: a unit without it is a land unit  */
     int       weapon1, fort;            /* Weapon1 not blank; TEDClass FORT without case          */
     int       has_g;                    /* the yard holds a G cell (yard_g)                       */
+    int       sight, radar, sonar;      /* SightDistance, RadarDistance, SonarDistance: fbi_word   */
+    char      object[SNAME];            /* Objectname, a missing one the UnitName, 31 bytes at most */
     uint16_t  g[WIKI_FP_MAX];           /* its G rows, when the footprint is within WIKI_FP_MAX   */
     unsigned char title[TITLE_RAW];     /* the display name's code-page bytes; ntitle 0: the name */
     int       ntitle;
@@ -2670,6 +2672,15 @@ static void yard_g(SUNIT* u, const char* yard)
 
 typedef struct { SIDE* S; } FBIWALK;
 
+/* a TDF number stored in a 16-bit field and read back signed: atoi's low 16 bits, sign-extended
+   (gfx.py `word`) */
+static int fbi_word(const char* v)
+{
+    uint32_t bits;
+    tagpu_guifile_num(v, NULL, &bits);
+    return (int)(int16_t)(uint16_t)bits;
+}
+
 static int fbi_each(void* ctx, const TAGPU_VFILE* f)
 {
     SIDE* S = ((FBIWALK*)ctx)->S;
@@ -2700,6 +2711,19 @@ static int fbi_each(void* ctx, const TAGPU_VFILE* f)
         /* activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "activatewhenbuilt"), NULL, &bits);
         u->activate_when_built = (int)(bits & 1u);
+        /* SightDistance, RadarDistance and SonarDistance: the def's words +0x202, +0x204 and +0x206,
+           the number's low 16 bits (0x42C3B3), which every reader takes signed (movsx at 0x48230D,
+           0x467565..0x467576) */
+        u->sight = fbi_word(tagpu_guifile_get(g, sec, "sightdistance"));
+        u->radar = fbi_word(tagpu_guifile_get(g, sec, "radardistance"));
+        u->sonar = fbi_word(tagpu_guifile_get(g, sec, "sonardistance"));
+        /* the model: Objectname, read into 0x20 bytes, and a missing one the UnitName (0x42BF40,
+           0x42C0D1) */
+        t = tagpu_guifile_get(g, sec, "objectname");
+        if (t) {
+            py_strip(&t, &nn);
+            snprintf(u->object, sizeof u->object, "%.*s", (int)(nn < 31 ? nn : 31), t);
+        } else snprintf(u->object, sizeof u->object, "%.31s", u->name);
         /* BMcode: a missing key reads 0, a structure: esi, zeroed at 0x42C0F0, is pushed as the
            default at 0x42C401 with no write to it between (DISASSEMBLED) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "bmcode"), &u->bmcode, NULL);
@@ -3870,6 +3894,238 @@ static void corpses_find(SIDE* S, SCASTING* C, int nside)
     if (w.left) tagpu_vfs_enum(S->vfs, S->in->names.features, "*.tdf", 1, corpse_each, &w);
 }
 
+/* THE MODEL'S HEIGHT, def+0x170 (WIKICASTDEF model_height), of a type whose model is the 3DO `b`
+   of `n` bytes, read from the file's own pieces (gfx.py `model_height`, the same rule): 0x4CB5F0's
+   height over the sibling chain from `off` -- the most of 0 and, for each piece, its vertices' y
+   and its child chain's height, each plus the piece's y offset, in 16.16 with wrapping adds -- into
+   *top. THE BOUNDS: a piece's header inside the file and of version 1, its vertex count at most
+   MAXNODEV and its vertices inside the file, no piece reached twice and at most MAXPIECE of them,
+   which bounds the recursion too; 0 with `why` past one. */
+typedef struct { const unsigned char* b; uint32_t n; uint32_t seen[MAXPIECE]; int nseen; char why[120]; } HWALK;
+static int height_chain(HWALK* w, uint32_t off, int32_t* top)
+{
+    int32_t m = 0;
+    /* the root's chain starts at offset 0: a link of 0 ends a chain, so only a link is tested */
+    do {
+        const unsigned char* o;
+        uint32_t nvert, vo, child, i;
+        int32_t y;
+        int k;
+        for (k = 0; k < w->nseen; k++)
+            if (w->seen[k] == off) { snprintf(w->why, sizeof w->why, "the piece at 0x%lx is reached twice", (unsigned long)off); return 0; }
+        if (w->nseen >= MAXPIECE) { snprintf(w->why, sizeof w->why, "more than %d pieces", MAXPIECE); return 0; }
+        w->seen[w->nseen++] = off;
+        if (!inside(w->n, off, O_SIZE)) { snprintf(w->why, sizeof w->why, "a piece at 0x%lx lies past the file", (unsigned long)off); return 0; }
+        o = w->b + off;
+        nvert = rd32(o + O_NVERT);
+        vo = rd32(o + O_VERTS);
+        if (rd32(o + O_VERSION) != 1) { snprintf(w->why, sizeof w->why, "a piece of version %lu, not 1", (unsigned long)rd32(o)); return 0; }
+        if (nvert > MAXNODEV || !inside(w->n, vo, (uint64_t)nvert * 12)) {
+            snprintf(w->why, sizeof w->why, "a piece's vertices pass %d or lie past the file", MAXNODEV);
+            return 0;
+        }
+        for (i = 0; i < nvert; i++)
+            if ((y = (int32_t)(rd32(w->b + vo + 12 * i + 4) + rd32(o + O_X + 4))) > m) m = y;
+        if ((child = rd32(o + O_CHILD)) != 0) {
+            int32_t c;
+            if (!height_chain(w, child, &c)) return 0;
+            if ((y = (int32_t)((uint32_t)c + rd32(o + O_X + 4))) > m) m = y;
+        }
+        off = rd32(o + O_SIB);
+    } while (off);
+    *top = m;
+    return 1;
+}
+
+/* a type's model height from <objects3d>\<Objectname>.3DO (gfx.py `unit_height`): the byte, or 0
+   with a report line when there is no model or height_chain refuses it */
+static int unit_height(SIDE* S, const SUNIT* u)
+{
+    TAGPU_VFILE f;
+    HWALK* w;
+    int32_t top;
+    int h = 0;
+    char el[SNAME + 8];
+    snprintf(el, sizeof el, "model %s", u->name);
+    if (!side_find(S, S->in->names.objects3d, u->object, "3DO", &f)) {
+        side_rep(S, "refused", "no %s\\%s.3DO", el, S->in->names.objects3d, u->object);
+        return 0;
+    }
+    if (!(w = (HWALK*)calloc(1, sizeof *w))) { S->failed = 1; return 0; }
+    if ((w->b = side_read(S, &f, CAP_3DO, el)) != NULL) {
+        w->n = f.size;
+        if (height_chain(w, 0, &top)) h = (int)(((uint32_t)top >> 16) & 0xFFu);
+        else side_rep(S, "refused", "%s: %s", el, f.path, w->why);
+        free((void*)w->b);
+    }
+    free(w);
+    return h;
+}
+
+/* THE SIGHT TABLE (tagpu_wikidata.h WIKISIGHT; gfx.py `sight_table`, the same rule) of
+   <gamedata>\los.tdf into `t`, for the radius indices the setup's types reach and no other: the
+   sight of every cast `casting` binds over its `nside` sides and of every type a players entry of
+   `data` defines (gfx.py `entry_sights`), each at least WIKI_SIGHT_MIN, as idx = min(trunc(sight /
+   32), numtables - 1). numtables from [TABLEINFO]; for each idx, TABLE<idx>'s numlines lines, each
+   value cut at SIGHT_LINE bytes (0x4C48C0 reads it into a 0x200-byte buffer) and split on ", "
+   (strtok, 0x504A00), its count and its numbers the TDF number's low 16 bits, signed; each pair
+   (x, y) counted at the offsets (x, -y), (y, x), (-x, y), (-y, -x), each a 16-bit word. A count of
+   0 or less, a missing line or a missing section adds nothing, and a table no sight reaches is
+   never read. numtables 0, with a report line, when the file is missing, passes CAP_LOS bytes,
+   does not parse or breaks a bound of WIKISIGHT's. */
+#define CAP_LOS     (8u << 20)  /* the largest measured, Twilight's, is 2 718 022 bytes */
+#define SIGHT_LINE  511
+#define SIGHT_SIDE  (2 * WIKI_SIGHT_REACH + 1)
+
+/* strtok's next token of `*p` on the delimiters ", ", NUL-terminated in place, or NULL; reentrant,
+   since the side load may run beside another thread's strtok */
+static char* sight_token(char** p)
+{
+    char *s = *p, *e;
+    while (*s == ',' || *s == ' ') s++;
+    if (!*s) { *p = s; return NULL; }
+    for (e = s; *e && *e != ',' && *e != ' '; e++) {}
+    *p = *e ? e + 1 : e;
+    *e = 0;
+    return s;
+}
+
+/* the radius indices `sight` reaches over numtables `nt`, added to the increasing set idx[0..*n);
+   0 when the set would pass WIKI_SIGHT_IDX */
+static int sight_reach(int* idx, int* n, int nt, int sight)
+{
+    int k, i;
+    if (sight < WIKI_SIGHT_MIN) return 1;
+    i = sight / 32 < nt - 1 ? sight / 32 : nt - 1;
+    for (k = 0; k < *n && idx[k] < i; k++) {}
+    if (k < *n && idx[k] == i) return 1;
+    if (*n == WIKI_SIGHT_IDX) return 0;
+    memmove(&idx[k + 1], &idx[k], (size_t)(*n - k) * sizeof *idx);
+    idx[k] = i;
+    (*n)++;
+    return 1;
+}
+
+static void sight_read(SIDE* S, WIKISIGHT* t, const WIKICASTING* casting, int nside)
+{
+    static const char EL[] = "sight table";
+    const WIKIDATA* data = S->in->data;
+    TAGPU_VFILE f;
+    TAGPU_GUIFILE* g = NULL;
+    unsigned char* b;
+    uint16_t* grid = NULL;
+    char why[200];
+    int nt, q, i, j, ok = 1, ncell = 0;
+    memset(t, 0, sizeof *t);
+    if (!side_find(S, S->in->names.gamedata, "los", "TDF", &f)) {
+        side_rep(S, "refused", "no %s\\los.tdf: Sight lights every block", EL, S->in->names.gamedata);
+        return;
+    }
+    if (!(b = side_read(S, &f, CAP_LOS, EL))) return;
+    g = tagpu_guifile_parse(b, f.size, why, sizeof why);
+    free(b);
+    if (!g) { side_rep(S, "refused", "%s: the engine's parser refuses it: %s", EL, f.path, why); return; }
+    nt = fbi_word(tagpu_guifile_get(g, tagpu_guifile_find(g, 0, "TABLEINFO"), "numtables"));
+    if (nt < 2) {
+        snprintf(why, sizeof why, "numtables %d is below 2", nt);
+        goto no;
+    }
+    for (i = 0; i < nside; i++)
+        for (q = 0; q < WIKI_NCAST; q++)
+            if (casting[i].cast[q].bound) ok &= sight_reach(t->idx, &t->nidx, nt, casting[i].cast[q].sight_distance);
+    for (i = 0; data && i < data->nentry; i++)
+        for (j = 0; data->entry[i].players && j < data->entry[i].ndef; j++)
+            ok &= sight_reach(t->idx, &t->nidx, nt, data->entry[i].def[j].sight_distance);
+    if (!ok) {
+        snprintf(why, sizeof why, "the types reach more than %d tables", WIKI_SIGHT_IDX);
+        goto no;
+    }
+    if (!(grid = (uint16_t*)malloc(SIGHT_SIDE * SIGHT_SIDE * sizeof *grid))) { S->failed = 1; goto out; }
+    for (q = 0; q < t->nidx; q++) {
+        char nm[24], line[SIGHT_LINE + 1];
+        const int idx = t->idx[q];
+        int sec, nl, k, dc, dr;
+        snprintf(nm, sizeof nm, "TABLE%d", idx);
+        sec = tagpu_guifile_find(g, 0, nm);
+        nl = fbi_word(tagpu_guifile_get(g, sec, "numlines"));
+        memset(grid, 0, SIGHT_SIDE * SIGHT_SIDE * sizeof *grid);
+        for (k = 1; k <= nl; k++) {
+            const char* v;
+            char *tok, *at = line;
+            int c, j2;
+            snprintf(nm, sizeof nm, "line%d", k);
+            if (!(v = tagpu_guifile_get(g, sec, nm))) continue;
+            snprintf(line, sizeof line, "%s", v);
+            if (!(tok = sight_token(&at)) || (c = fbi_word(tok)) <= 0) continue;
+            for (j2 = 0; j2 < c; j2++) {
+                const char *tx = sight_token(&at), *ty = tx ? sight_token(&at) : NULL;
+                int x, y, r;
+                if (!ty) {
+                    snprintf(why, sizeof why, "TABLE%d line%d has fewer than its %d points", idx, k, c);
+                    goto no;
+                }
+                x = fbi_word(tx);
+                y = fbi_word(ty);
+                for (r = 0; r < 4; r++) {
+                    const int a = r == 0 ? x : r == 1 ? y : r == 2 ? -x : -y, e = r == 0 ? -y : r == 1 ? x : r == 2 ? y : -x;
+                    dc = (int)(int16_t)(uint16_t)a;
+                    dr = (int)(int16_t)(uint16_t)e;
+                    if (dc < -WIKI_SIGHT_REACH || dc > WIKI_SIGHT_REACH || dr < -WIKI_SIGHT_REACH || dr > WIKI_SIGHT_REACH) {
+                        snprintf(why, sizeof why, "TABLE%d line%d reaches past %d blocks", idx, k, WIKI_SIGHT_REACH);
+                        goto no;
+                    }
+                    /* a cell past 255 is refused below, so one held at 256 says so */
+                    if (grid[(dr + WIKI_SIGHT_REACH) * SIGHT_SIDE + dc + WIKI_SIGHT_REACH] < 256)
+                        grid[(dr + WIKI_SIGHT_REACH) * SIGHT_SIDE + dc + WIKI_SIGHT_REACH]++;
+                }
+            }
+        }
+        /* in (dr, dc) order: rows first, as WIKISIGHT holds them */
+        for (dr = -WIKI_SIGHT_REACH; dr <= WIKI_SIGHT_REACH; dr++)
+            for (dc = -WIKI_SIGHT_REACH; dc <= WIKI_SIGHT_REACH; dc++) {
+                const unsigned n = grid[(dr + WIKI_SIGHT_REACH) * SIGHT_SIDE + dc + WIKI_SIGHT_REACH];
+                if (!n) continue;
+                if (n > 255) {
+                    snprintf(why, sizeof why, "TABLE%d counts a block past 255 times", idx);
+                    goto no;
+                }
+                if (ncell == WIKI_SIGHT_CELLS) {
+                    snprintf(why, sizeof why, "the stored tables pass %d cells", WIKI_SIGHT_CELLS);
+                    goto no;
+                }
+                t->cell[ncell].dc = (int8_t)dc;
+                t->cell[ncell].dr = (int8_t)dr;
+                t->cell[ncell++].n = (uint8_t)n;
+            }
+        t->first[q + 1] = ncell;
+    }
+    t->numtables = nt;
+    side_rep(S, "numtables", "%d", EL, nt);
+    side_rep(S, "stored", "%d tables, %d cells", EL, t->nidx, ncell);
+    goto out;
+no:
+    memset(t, 0, sizeof *t);
+    side_rep(S, "refused", "%s: %s: Sight lights every block", EL, f.path, why);
+out:
+    free(grid);
+    tagpu_guifile_free(g);
+}
+
+/* a layout's sight table in the pack's form (gfx.py `sight_table`): null, or {numtables, tables} */
+static void sight_json(SB* b, const WIKISIGHT* t)
+{
+    int i, k;
+    if (!t->numtables) { sb_raw(b, "null"); return; }
+    sb_raw(b, "{\"numtables\":%d,\"tables\":[", t->numtables);
+    for (i = 0; i < t->nidx; i++) {
+        sb_raw(b, "%s{\"idx\":%d,\"cells\":[", i ? "," : "", t->idx[i]);
+        for (k = t->first[i]; k < t->first[i + 1]; k++)
+            sb_raw(b, "%s[%d,%d,%d]", k > t->first[i] ? "," : "", t->cell[k].dc, t->cell[k].dr, t->cell[k].n);
+        sb_raw(b, "]}");
+    }
+    sb_raw(b, "]}");
+}
+
 /* the cast's WIKICASTDEF from its unit, whose fit cast_unfit and the footprint bound have passed,
    and its wreck, NULL for none.
    BOUND: the title is at most 31 code points of at most 3 UTF-8 bytes (U+20AC and U+2122 are the
@@ -3910,6 +4166,9 @@ static void cast_fill(const SUNIT* u, uint16_t builds, const WIKIFEATDEF* corpse
     k->canstop = u->canstop;
     k->canreclamate = u->canreclamate;
     k->activate_when_built = u->activate_when_built;
+    k->sight_distance = u->sight;
+    k->radar_distance = u->radar;
+    k->sonar_distance = u->sonar;
     k->vent = u->has_g;
     memcpy(k->g, u->g, sizeof k->g);
     k->builds = builds;
@@ -3982,6 +4241,8 @@ static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* 
         sb_num(b, k->metal_storage);
         sb_raw(b, ",\"energyStorage\":");
         sb_num(b, k->energy_storage);
+        sb_raw(b, ",\"sightDistance\":%d,\"radarDistance\":%d,\"sonarDistance\":%d,\"modelHeight\":%d", k->sight_distance,
+               k->radar_distance, k->sonar_distance, k->model_height);
         sb_raw(b, ",\"vent\":%s,\"g\":[", k->vent ? "true" : "false");
         for (n = 0, i = 0; i < k->fx * k->fz; i++)
             if (k->g[i / k->fx] >> (i % k->fx) & 1u) sb_raw(b, "%s[%d,%d]", n++ ? "," : "", i % k->fx, i / k->fx);
@@ -4440,6 +4701,7 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             for (d = 0; d < WIKI_NCAST; d++)
                 if (picks[k].pick[d] >= 0 && menu_has(menu(&W, t), picks[k].pick[d])) builds |= (uint16_t)(1u << d);
             cast_fill(&S.unit[t], builds, picks[k].has[c] ? &picks[k].corpse[c] : NULL, &casting[k].cast[c]);
+            casting[k].cast[c].model_height = unit_height(&S, &S.unit[t]);
         }
     }
 
@@ -4573,6 +4835,8 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
         }
         free(remap);
     }
+    sight_read(&S, &lay->sight, casting, nlay_side);
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
     if (!tagpu_wikilayout_check(lay, why, sizeof why)) { snprintf(err, sizeof err, "the layout is refused: %s", why); goto done; }
 
     /* PANELSIDE of every layout side, then the dots: registered after the screens, as the pack
@@ -4775,7 +5039,9 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 }
                 sb_raw(&S.rep, "]}");
             }
-            sb_raw(&S.rep, "}},\"casting\":[");
+            sb_raw(&S.rep, "},\"sight\":");
+            sight_json(&S.rep, &lay->sight);
+            sb_raw(&S.rep, "},\"casting\":[");
             for (k = 0; k < nlay_side; k++) {
                 sb_raw(&S.rep, "%s", k ? "," : "");
                 casting_json(&S.rep, &S, &S.side[kept[k]], &picks[k], &casting[k]);

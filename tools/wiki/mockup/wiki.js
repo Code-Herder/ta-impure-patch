@@ -526,6 +526,12 @@ function barArt(side, colour, Wg, Hg, num, top) {
   return { draw: (g, part, size, r) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
     g.drawImage(BARCV, 0, WikiBar.BAR_H / 2 * part, size, WikiBar.BAR_H / 2, r.x, r.y, r.w, r.h); g.imageSmoothingEnabled = sm; } };
 }
+/* the GUI's black, GUI colour 0x00 of the side pack's colour table in its palette (tagpu_mark.c GUI_BLACK, which edges the
+   game's overlay arrows), or the stand-in black without the pack's table */
+function guiBlack(art) {
+  const p = art && art.gui && art.pal ? art.gui[0] : -1;
+  return p >= 0 ? `rgb(${art.pal[p * 4]},${art.pal[p * 4 + 1]},${art.pal[p * 4 + 2]})` : '#000';
+}
 function drawReplay() {
   const g = stage.getContext('2d'), W = stage.width, H = stage.height, U = G.gh / 720;
   let rv, mode = 'watch', human = 0;
@@ -544,18 +550,22 @@ function drawReplay() {
   // THE SOUND: what a seek re-simulated is heard already -- each new game or finished seek starts the count at `quiet`
   if (rv.game.gen !== FR.gen || rv.game.quiet !== FR.quiet) { FR.gen = rv.game.gen; FR.quiet = rv.game.quiet; heard = rv.game.quiet; }
   if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard, (mode === 'past' ? rep.past : rep.game)?.types);
-  const side = simCtx ? simCtx.side : 0;
-  const rec = FR.gv ? WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held, WikiFrame.seatSide(simLayout, side, human)) : null;
+  const side = simCtx ? simCtx.side : 0, e = entry();
+  // a players replay's record carries its seats' teams and cameras and the stats window's samples (frame.js record)
+  const pl = rv.players && e ? { seats: WikiFrame.plSeats(e, demo()), stat: rep.stat } : null;
+  const rec = FR.gv ? WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held, WikiFrame.topSide(rv, simLayout, side), pl) : null;
   /* THE ONE CURSOR in Try it: after a fork the simulation's follows the player's pointer while it is over the world and
      on no control of the HUD, and is the one drawn there, the browser's hidden (rewind-spec.md 9.5) */
   const onWorld = !!(rec && rec.simcur && repTry && PTR && overStage && liveWorld(PTR));
   const gv = mode === 'past' && FR.gv ? { ...FR.gv, side: FR.lside || undefined } : FR.gv;
-  const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld), human);
+  // the world shown with the replay's overlays, at the tick it was copied at, and a players entry's camera and Sight
+  const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld), human,
+    { tick: FR.tick, clickFrom: rv.clickFrom, players: rv.players || null, screen: rv.players && e ? e.screen : null });
   if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
   const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
   const fx = hudSnap(fit.ox + C.x0 * fit.s), fy = hudSnap(fit.oz + C.z0 * fit.s), hpx = Hg * fit.s / WikiFrame.HUD_H;
   const p = pack(), art = gameLook() && p && p.art && simLayout === p.layout ? p.art : null;
-  const st = WikiFrame.hudState(rec, Wg, Hg, art);
+  const st = WikiFrame.hudState(rec, Wg, Hg, art, HUD_OK ? HUD.layout : null);
   const units = q => ({ x: (q.x - fx) / hpx, y: (q.y - fy) / hpx });
   const dlg = WikiFrame.dialog(fit, Wg, Hg);
   const game = WikiFrame.gamePoint(rec, fit, fx, fy, hpx);
@@ -567,25 +577,38 @@ function drawReplay() {
     Object.assign(stageHud.style, { left: `${sr.left - br.left - box.clientLeft + fx / G.k}px`, top: `${sr.top - br.top - box.clientTop + fy / G.k}px`,
       width: `${Wg * fit.s / G.k}px`, height: `${Hg * fit.s / G.k}px` });
     stageHud.style.setProperty('--u', `${hpx / G.k}px`);
-    // a control's key as tagpu_hudlay.c makes it: its act, and a Take over row's seat or a lane's place (frame.js indexed)
+    /* a control's key as tagpu_hudlay.c makes it: its act, and a row's or a Take over row's seat, a lane's place, a
+       team header's team or a chip's name (frame.js indexed) */
     const keyOf = e => 'track' in e.dataset ? 'track' : e.dataset.act
-      + (e.dataset.seat != null ? `:${e.dataset.seat}` : e.dataset.fork != null ? `:${e.dataset.fork}` : '');
+      + (e.dataset.seat != null ? `:${e.dataset.seat}` : e.dataset.fork != null ? `:${e.dataset.fork}`
+        : e.dataset.team != null ? `:${e.dataset.team}` : e.dataset.act === 'chip' && e.dataset.val != null ? `:${e.dataset.val}` : '');
     const boxes = () => [...stageHud.querySelectorAll('[data-act], [data-track]')].map(e => ({
       key: keyOf(e), off: e.classList.contains('off'),
       ub: (e.dataset.ub || '0 0 0 0').split(' ').map(Number), ends: +e.dataset.ends || 0 }));
     const pr = rec.cur.on ? WikiFrame.pressed(rec) : rec;
     let among = null;
-    if (pr !== rec) { HUD.draw(stageHud, WikiFrame.hudState(pr, Wg, Hg, art), hpx, G.k); among = boxes(); }
+    if (pr !== rec) { HUD.draw(stageHud, WikiFrame.hudState(pr, Wg, Hg, art, HUD.layout), hpx, G.k); among = boxes(); }
     HUD.draw(stageHud, st, hpx, G.k);
     const down = rec.held && [...stageHud.querySelectorAll('.art.hot[data-act]')].find(e => keyOf(e) === rec.held);
     if (down) HUD.press(down, true);
     FR.boxes = boxes();
-    const M = fv.map, cell = +M.cell || 16;
-    const rest = units({ x: fit.ox + (+M.w || 1) * cell / 2 * fit.s, y: fit.oz + (+M.h || 1) * cell / 2 * fit.s });
+    const rp = WikiFrame.restOf(fv), rest = units({ x: fit.ox + rp.x * fit.s, y: fit.oz + rp.z * fit.s });
     const no = units({ x: dlg.no.x + dlg.no.w / 2, y: dlg.no.y + dlg.no.h / 2 });
     const simShape = () => ({ shape: WikiFrame.SHAPES[rec.sim.shape] || 'arrow', age: rec.sim.age });
+    /* THE ROW UNDER THE CURSOR (a point in units) shows its hover strip, as the game's HUD lays the strip out only on
+       the row the pointer is over (tagpu_hudlay.c row): the stage HUD takes no pointer events, so the browser's
+       :hover never sees the scripted cursor or the player's pointer */
+    const hoverRow = q => {
+      if (!q || q.x == null) return;
+      const X = Math.floor(q.x * hpx + 0.5), Y = Math.floor(q.y * hpx + 0.5);
+      const row = FR.boxes.filter(b => b.key.startsWith('row:') && X >= hudSnap(b.ub[0] * hpx) && X < hudSnap((b.ub[0] + b.ub[2]) * hpx)
+        && Y >= hudSnap(b.ub[1] * hpx) && Y < hudSnap((b.ub[1] + b.ub[3]) * hpx)).pop();
+      const hov = row && stageHud.querySelector(`.row[data-seat="${row.key.slice(4)}"] > .hov`);
+      if (hov) hov.style.visibility = 'visible';
+    };
     if (rec.cur.on) {
       const pt = WikiFrame.point(rec, among || FR.boxes, hpx, rest, no, game);
+      hoverRow(pt);
       HUD.hint(stageHud, pt.x, pt.y, st);
       cursor = { x: fx + pt.x * hpx, y: fy + pt.y * hpx };
     } else if (rec.simcur && !repTry && game) {
@@ -594,6 +617,7 @@ function drawReplay() {
       cursor = { x: fx + game.x * hpx, y: fy + game.y * hpx, ...simShape() };
     } else {
       const q = PTR && overStage ? units(PTR) : null;
+      hoverRow(q);
       HUD.hint(stageHud, q && q.x, q && q.y, st);
       if (onWorld) cursor = { x: PTR.x, y: PTR.y, ...simShape() };
     }
@@ -601,7 +625,9 @@ function drawReplay() {
   FR.rec = rec;
   FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor, fit, side_h: fv.side ? fv.side.h : 0,
     bar: { side, top: rec.top_side, colour: rec.colour } };
-  const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), FR.poses) : null;
+  // the poses of the units the view draws: under Sight the view leaves some out, and `slots` says which it kept
+  const poses = fv.slots && FR.poses ? fv.slots.map(i => FR.poses[i] ?? null) : FR.poses;
+  const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), poses) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
     ground: r.ground, resolved: t => r.resolved.has(t),
@@ -610,7 +636,9 @@ function drawReplay() {
   FIT = WikiStage.draw(g, fv, { W, H, U, icons: ICONS, cursors: CURSORS, tick: FR.tick, cursor: false, image,
     side: { layout: simLayout, art: sideArt(fv, simLayout) },
     frame: { bar: barArt(side, rec.colour, Wg, Hg, rec.bar, rec.top_side), button: LAY.button, top: stageTop.getContext('2d'),
-      question: rec.question ? dlg : null, held: PRESS.held, cursor, live: rec.live } });
+      question: rec.question ? dlg : null, held: PRESS.held, cursor, live: rec.live,
+      // the overlays' seat colours, the HUD's (frame.js seatColour), and the GUI's black their arrows are edged in
+      colour: k => WikiFrame.seatColour(art, k), edge: guiBlack(art) } });
   FR.hud.emblems = FIT ? FIT.emblems : null;
   stage.classList.toggle('try', onWorld);
   const off = locked(entry()) || !!(FR.gv && FR.gv.locked);

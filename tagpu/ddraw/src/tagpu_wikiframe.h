@@ -12,6 +12,12 @@
    bar on Hg - 32..Hg - 1 right of it, the map at the viewport's top left (the camera at 0, 0 at
    zoom 1). tagpu_wikistage.c draws it (WIKISTAGEFRAME).
 
+   PLAYERS, a players entry's replay (frame.js's header states it): the frame is the entry's
+   screen's, not the map's, its viewport a window on the map at THE EYE; Sight shows the viewed
+   seat's world and minimap; the record carries the players block the stage HUD's Players set and
+   stats window are drawn from. THE OVERLAYS -- every recorded seat's cursor, clicks and selection
+   -- are in the watcher's view of every replay, and the human seat's in the past's.
+
    THE TWO THREADS. The record is filled on the game thread from the replay's view and its game's
    view (tagpu_wikiframe_record), carried by value, and bounded on the render thread's own copy by
    tagpu_wikiframe_bound before anything reads it: every value in it is DATA until then. Every
@@ -46,8 +52,24 @@ struct WIKISIDE;
 /* the caption once Leave, then Yes has ended Try it yourself (decision 23; wiki.js S_LEFT) */
 #define WIKIFRAME_LEFT    "In the game, this goes back to the Replays browser."
 
-/* The frame's size in game pixels of a map w x h cells and a column of `side_h` rows (0 none). */
-void tagpu_wikiframe_size(int w, int h, int side_h, int* Wg, int* Hg);
+/* THE FRAME'S SIZE (frame.js size) in game pixels of a map w x h cells and a column of `side_h`
+   rows (0 none), on a players entry's screen of sw x sh cells (0 none: the map's): Wg x Hg, the
+   map's extent mw x mh and the viewport vw x vh, the world between the column and the bars. With
+   no screen the viewport is as wide as the map and as deep as the frame leaves, the map at its
+   top. */
+typedef struct { int Wg, Hg, mw, mh, vw, vh; } WIKIFRAMESIZE;
+void tagpu_wikiframe_size(int w, int h, int side_h, int sw, int sh, WIKIFRAMESIZE* out);
+
+/* THE FRAME'S SIZE OF A FRAME VIEW: a players frame's from its viewport (tagpu_wikistage_eye),
+   any other's from its map and column -- stage.js content's width and height for the view. */
+void tagpu_wikiframe_view_size(const WIKISTAGEVIEW* v, int* Wg, int* Hg);
+
+/* THE EYE (frame.js eye) of camera (cx, cz), a view's centre in world units, on a frame of size
+   `sz`: the viewport's top left, held to the map less the viewport -- the engine's eye clamp
+   0x41C3C0 (engine/input.md), its extent the map's rather than Impure's half-off range, since the
+   stage draws no ground past the map. Integers: the camera is (tagpu_wikidata_seat_cam), and the
+   viewport is whole cells wide and rows deep. */
+void tagpu_wikiframe_eye(int cx, int cz, const WIKIFRAMESIZE* sz, int* ex, int* ez);
 
 /* ---- the record ------------------------------------------------------------------------------ */
 
@@ -138,19 +160,52 @@ typedef struct {
     int8_t        top_side;
     int32_t       chain_last, fill_to, pick_R, pick_evict;
     WIKIFRAMEFORK fork[WIKIFRAME_FORKS];
+    /* PLAYERS (`pl` 0 leaves the rest 0), a players replay's: Sight's and Follow's seats (-1 the
+       full map, the free camera), the overlay switches (HUD_TOG_*), the folded team rows (bit t),
+       the stats window open, split by team and its measure (an index of the WIKI_STAT_MEASURES,
+       WIKI_CHIP_METAL's first), the samples' count, period and base (game ticks), each seat's
+       team, whether each seat's camera was recorded (bit k), and `series`, each seat's samples of
+       the window's measure (the measure the game's TAGPU_PK_HUDSTAT carries). Under Sight the top
+       bar is the viewed seat's: its numbers the replay's memo, `colour` and `top_side` that seat's
+       (MEASURED, m0p-facts.md P2: CORE's red badge under Sight on seat 1). */
+    uint8_t       pl;
+    int8_t        sight, follow;
+    uint8_t       tog, folded, stat_open, stat_team, stat_measure;
+    uint8_t       team[WIKI_SEATS];
+    uint8_t       cam;
+    uint16_t      npt, period;
+    int32_t       base;
+    float         series[WIKI_SEATS][WIKI_STAT_PTS];
 } WIKIFRAMEREC;
 
-/* THE INDEXED CONTROLS of the Take over set, as tagpu_hudlay.c keys them: a picker row
-   `takeas:<row>` (a row is its seat: the record lists the seats in order), and a lane's
-   `lane:<k>`, `export:<k>` and `delete:<k>`, k its place in the record's fork list. 1 when `key` is
-   one, with its control (WIKI_HUD_*) and index; the index is below WIKI_SEATS for a row and below
-   WIKIFRAME_FORKS for a lane's. */
+/* THE INDEXED CONTROLS of the Take over set and the Players set, as tagpu_hudlay.c keys them: a
+   picker row `takeas:<row>` (a row is its seat: the record lists the seats in order), a lane's
+   `lane:<k>`, `export:<k>` and `delete:<k>`, k its place in the record's fork list; a hovered
+   row's `jump:<seat>`, `sight:<seat>` and `follow:<seat>`, a team header's `fold:<team>`
+   (WIKI_HUD_FOLD) and a stats chip's `chip:<name>`, its index the chip's WIKI_CHIP_*. 1 when `key`
+   is one, with its control (WIKI_HUD_*) and index: below WIKI_SEATS for a row, a seat or a team,
+   below WIKIFRAME_FORKS for a lane's and below WIKI_NCHIP for a chip. */
 int tagpu_wikiframe_indexed(const char* key, int* control, int* index);
+
+/* The seat whose row's hover strip holds key `key` (`jump:<seat>`, `sight:<seat>`,
+   `follow:<seat>`), or -1: the HUD lays the strip out only on the row under the pointer
+   (tagpu_hudlay.c row), so a cursor resolves such a key on the HUD laid out with the pointer on
+   that row (tagpu_wikiframe_row_point). */
+int tagpu_wikiframe_hover_seat(const char* key);
+
+/* The pointer over seat `seat`'s row of a HUD `ops` laid out at `px` device pixels a unit: the
+   centre of its `row:<seat>` box on the device pixels it is drawn on, in units. 0 when the HUD
+   draws no such row (folded away or scrolled off): the key then resolves to the rest point. */
+int tagpu_wikiframe_row_point(const HUDOPS* ops, int seat, float px, float* mx, float* my);
 
 /* The layout side seat `seat` plays on, the top bar's in a takeover's live game: seat 0 the load's
    `side`; any other seat the opponent's, the first layout side other than `side`, which a game
    entry's rival units are cast by (tagpu_wiki.c rival_of); `side` with no layout or no other side. */
 int tagpu_wikiframe_seat_side(const WIKILAYOUT* lay, int side, int seat);
+
+/* THE TOP BAR'S SIDE of replay view `rv` (frame.js topSide): the human seat's in a takeover's live
+   game, the viewed seat's under a players replay's Sight, else the load's `side` (seat 0's). */
+int tagpu_wikiframe_top_side(const WIKIREPLAYVIEW* rv, const WIKILAYOUT* lay, int side);
 
 /* The replay HUD's control `c` (WIKI_HUD_*, leave:yes included) by the key the HUD's hit map and
    the replay name it; "" for none. A control a demo presses is one of the WIKI_NHUD. */
@@ -161,17 +216,26 @@ const char* tagpu_wikiframe_key(int c);
    over NAME); one past them is named "". */
 void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out);
 
+/* The words of the replay's last toast, set at demo tick rv->toast_at, whatever its age: "" for
+   none. The state dump reports them so a check reads the toast a press set however late it looks,
+   where the frame's toast is gone 54 demo ticks after (tagpu_wiki.c's dump). */
+void tagpu_wikiframe_toast_words(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out);
+
 /* THE FRAME RECORD from replay view `rv` and the game view `gv` it shows (NULL: no seats), the
    load's layout side `side`, `try_it` (the presses are the player's), in Try it the control the
-   press machine holds (`try_held`, NULL or "" none), and `top_side`, the layout side of the human
-   seat (tagpu_wikiframe_seat_side), which the record takes only in a takeover's live game. In a
-   live game `gv` is the human seat's view (tagpu_wikisim_view_as). THE LIFETIME: called after the
+   press machine holds (`try_held`, NULL or "" none), and `top_side`, the top bar's layout side
+   (tagpu_wikiframe_top_side), which the record takes only in a takeover's live game and under a
+   players replay's Sight. In a live game `gv` is the human seat's view (tagpu_wikisim_view_as).
+   A players replay's record carries the players block: its seats' teams and recorded cameras
+   from the demo's scene and its series from the replay's samples (tagpu_wikireplay_stat) when
+   `rep` is the replay `rv` is of; with `rep` NULL each seat is a team of its own, no camera is
+   recorded and every sample is 0 (frame.js record with no `pl`). THE LIFETIME: called after the
    fill's last tagpu_wikireplay_step or _press, because `gv` points into the game simulation's view
    arrays, which the next step or press may free; the record holds values only, so it outlives
    them. The cursor's glide is on the viewer's clock, the toast's age on the demo tick (frame.js,
    THE GLIDE). */
 void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int side, int try_it, const char* try_held,
-                            int top_side, WIKIFRAMEREC* out);
+                            int top_side, const WIKIREPLAY* rep, WIKIFRAMEREC* out);
 
 /* THE BOUND, on the render thread's own copy before anything reads it: the record is DATA until
    here. Flags to 0/1; nseat to WIKI_SEATS and nmark to WIKIFRAME_MARKS; end to 1..WIKI_GAME_END_MAX
@@ -191,7 +255,14 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
    else the side; nfork to WIKIFRAME_FORKS, a fork whose id is outside 1..RECR_TIMELINES - 1
    dropped, its from and end to 0..end, its flags to their three bits and a seat outside
    0..nseat - 1 to 0xFF (named "Unknown seat", as the game's HUD names one); chain_last, fill_to
-   and pick_R to 0..end; pick_evict -1 or an id of 1..RECR_TIMELINES - 1, else -1. */
+   and pick_R to 0..end; pick_evict -1 or an id of 1..RECR_TIMELINES - 1, else -1. Players: a
+   record that is not pl has its whole block 0; sight and follow to -1..nseat - 1, else -1; tog to
+   the four overlay bits, folded to WIKI_SEATS bits, the flags to 0/1, stat_measure below
+   WIKI_STAT_MEASURES, else the first; npt to WIKI_STAT_PTS and every sample past it 0, each one
+   kept through the stats window's finite test (tagpu_hudlay_stat_groups); period and base to
+   0..WIKI_GAME_END_MAX; a team outside 0..WIKI_SEATS - 1 the seat's own index; cam to the
+   record's seats. THE TOP BAR'S SIDE is kept, below `nside`, in a takeover's live game and under a
+   players record's Sight, and is the side in every other record. */
 void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo);
 
 /* ---- the watcher's view ------------------------------------------------------------------------ */
@@ -220,9 +291,34 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
    with no unit under it; nothing selected, no ghost, sites, queued sites, cursor, lines, drag, sweep
    or keys (MEASURED, M0 #2).
    No frame view keeps a cursor of its own. A live view without a column takes the idle MAIN2 of
-   `side`; none at all when the layout has no such side. */
+   `side`; none at all when the layout has no such side.
+   WHAT THE REPLAY ADDS (`ov`, frame.js view's `ov`; NULL adds nothing). The watcher's view and the
+   past's carry THE OVERLAYS from the game view `gv` the copy was taken of, each switched by the
+   replay's switches (all on but in a players replay): each seat's cursor while it is on the map,
+   in seat order; the clicks made at or after `click_from` whose age tick + 1 - t is 0..14, oldest
+   first (PD12: the game ages a click against GameTime + 1, tagpu_replay.c:11284); and each unit's
+   owner's selection (`osel`) -- every seat's to the watcher, the human seat's in the past. A
+   players entry's frame (`screen_w` x `screen_h` cells) carries THE EYE from the replay's camera
+   and its viewport (tagpu_wikiframe_eye). Under a players replay's Sight the watcher's view is the
+   viewed seat s's (frame.js sightView): its lit grid over `lay`'s sight table at `tick`
+   (tagpu_wikisim_sight_lit), the map's fog a cell its block's, clear where lit and grey where not
+   (the skirmish's True LOS mapped mode: no black); the units drawn seat s's and any other whose
+   footprint's four corners (x +- 8 fx, z +- 8 fz) meet a lit block [INFERRED: they stand in for
+   0x465AC0's four model-box points, so a unit may show a block earlier or later than in the game
+   at a sight's edge]; and the minimap's pass -- its fog bits, and a dot for each unit of seat s
+   and each still live unit the pass's contacts name, at its place now (0x466DC0 rebuilds the dots
+   every tick, the pass runs on the record's deadline). THE LIFETIME: `gv` is read during the call
+   only; it is the view the copy was taken of, unstepped since. */
+typedef struct {
+    int32_t               tick;         /* the shown tick: the world's (the copy's v->tick)   */
+    int32_t               click_from;   /* the replay's click ring's start                    */
+    const WIKIREPLAYVIEW* players;      /* a players replay's view, NULL for any other        */
+    int                   screen_w, screen_h;   /* a players entry's screen, cells; 0: none  */
+    const WIKIVIEW*       gv;           /* the game view the copy was taken of                */
+} WIKIFRAMEOV;
 enum { WIKIFRAME_WATCH, WIKIFRAME_PLAYER, WIKIFRAME_PAST };
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human);
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human,
+                          const WIKIFRAMEOV* ov);
 
 /* ---- the stage HUD ---------------------------------------------------------------------------- */
 
@@ -246,10 +342,18 @@ uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k);
    the watched one, the armed Delete and, while the picker is open, the one it would replace by
    their places, the picker drawn while open and the Take over button down while asked, sought or
    open, the lanes as open as the record says and fork_max the record's.
-   THE CHART: the stats window stays closed, so no build of this state emits HOP_CHART. That is what
-   keeps the HUD pass's one chart image the replay HUD's; the stage must have its own before it
-   opens the window (P). */
-void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, const struct WIKISIDE* sd, HUDSTATE* st);
+   A PLAYERS RECORD sets the Players set as the game's present does: Sight and Follow on their
+   seats, the switches from its bits (Stats from the window's state), the folded team rows, the
+   teams from each seat's team in seat order (tagpu_hudstate.c teams joins the mutual alliances in
+   that order, and a team's seats are mutually allied), and the stats window at the layout's place
+   (`gl`'s win_x, win_y: the stage has no drag) with its measure, its split and its groups
+   (tagpu_hudlay_stat_groups over the record's series, in `gl`'s team colours) at a sample every
+   period / 30 s from base / 30 s; `gl` NULL takes the place and colours frame.js's stand-ins hold.
+   THE CHART: every other record keeps the stats window closed, so its build emits no HOP_CHART; a
+   players record's open window draws its chart in the stage HUD's own slot (tagpu_huddraw_chart,
+   slot 1). */
+void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, const struct WIKISIDE* sd,
+                              const HUDGLOBALS* gl, HUDSTATE* st);
 
 /* LEAVE'S QUESTION in canvas device pixels for the fit `fit` of a frame Wg x Hg: YESORNO.GUI's own
    rects (retail totala1.hpi, MEASURED with tools/wiki/tavfs.py, 2026-10-31) -- the panel 400 x 100
@@ -281,8 +385,11 @@ void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, 
    Back to main recording, pressed on a lane the list holds and no longer watches (cur.watched),
    `f` with the lanes open and that fork the watched one, the lanes as drawn at that press:
    watching a lane is what draws its Back to main recording and widens the lane to hold it
-   (tagpu_hudlay.c lanes), the other flags only fill; for any other record `f` itself. Its boxes
-   only: the HUD drawn is `f`'s own. 1 when `out` differs from `f`. */
+   (tagpu_hudlay.c lanes), the other flags only fill; for a players record whose trip goes to or
+   leaves the stats window's close with the window closed, `f` with the window open, as drawn at
+   that press -- the window stands at the layout's place whatever its state, so its close lies
+   where it was; for any other record `f` itself. Its boxes only: the HUD drawn is `f`'s own. 1
+   when `out` differs from `f`. */
 int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out);
 
 /* THE CURSOR'S POINT, in HUD units, for a bounded record: each key at its control's HOP_HOT box
@@ -292,10 +399,13 @@ int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out);
    [0, end] or live the strip's [first, G] -- at the box's centre y; leave:no at the question's No
    (`no_x`, `no_y` in units; NaN when the question is not drawn: the rest point); @game at seat 0's
    cursor (`game_x`, `game_y`, tagpu_wikiframe_game_point; NaN: the rest point); "" and a key no box
-   holds at the rest point. Then the glide from one to the other. `ops` is the HUD of
-   tagpu_wikiframe_pressed's record. framecheck claims no demo names a key that does not resolve. */
-void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* ops, float px, double ends, double rest_x, double rest_y,
-                           double no_x, double no_y, double game_x, double game_y, double* x, double* y);
+   holds at the rest point. Then the glide from one to the other. `from` and `to` are the HUDs of
+   tagpu_wikiframe_pressed's record the trip's two ends are resolved among: one and the same, but
+   for a key of a row's hover strip (tagpu_wikiframe_hover_seat), laid out only with the pointer on
+   its row (tagpu_wikiframe_row_point). framecheck claims no demo names a key that does not
+   resolve. */
+void tagpu_wikiframe_point(const WIKIFRAMEREC* f, const HUDOPS* from, const HUDOPS* to, float px, double ends, double rest_x,
+                           double rest_y, double no_x, double no_y, double game_x, double game_y, double* x, double* y);
 
 /* A FRAME POINT OF THE WORLD (frame.js onWorld), world units: on the column, x in [-128, 0) and z in
    [-32, Hg - 32), or on the map, x in [0, mw) and z in [0, mh); a bar, or the viewport below a map

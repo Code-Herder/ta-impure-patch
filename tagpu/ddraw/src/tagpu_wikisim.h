@@ -280,11 +280,30 @@ typedef struct { double eP, eR, eG, eD, mP, mR, mG, mD; } WIKILEDGER;
    (+0xA8, +0xA4); mi, mo, ei, eo the last pass's income (produced) and spending (requested)
    (+0x9C, +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units alive, a nanoframe
    included (+0x144); lost, the commanders lost (+0x106); out, the count gone from above 0 to 0;
-   cmd_lost, a commander lost (+0x149 bit 0 cleared: the base storage stops counting) */
+   cmd_lost, a commander lost (+0x149 bit 0 cleared: the base storage stops counting); kills and
+   losses, the units it killed and lost (+0xFC, +0xFE; tagpu_wikisim.c kill) */
 typedef struct {
     double m, e, bm, be, mmax, emax, mi, mo, ei, eo, wm, we;
-    int    units, lost, out, cmd_lost;
+    int    units, lost, out, cmd_lost, kills, losses;
 } WIKIECON;
+
+/* A CLICK of a game's seat (tagpu_wikisim.c click_action): the tick its input was fed on, the
+   seat, and the seat's map cursor. A game keeps the WIKI_CLICKS most recent, the replay overlay's
+   ring (OV_RING, tagpu_replay.c:484). */
+#define WIKI_CLICKS 64
+typedef struct { int tick, seat; double x, z; } WIKICLICK;
+
+/* A DEATH in a game (tagpu_wikisim.c kill), for the replay's death vision: the tick the kill was
+   fed on, the unit's owner, its type (an index of the entry's types) and its place. Only a death
+   the engine's temporary sight record add keeps is one (kill states the rule). */
+typedef struct { int tick, owner, type; double x, z; } WIKIDEATH;
+
+/* a game view's seat's cursor: its map cursor, `on` once it has moved and while it is over the map */
+typedef struct { double x, z; int on; } WIKIVCURSOR;
+
+/* a game view's type's sight figures (WIKIDEF's), the stamp's and the radar pass's: activates is
+   ActivateWhenBuilt (def+0x241 bit 18), the only way a wiki unit is switched on */
+typedef struct { int sight_distance, radar_distance, sonar_distance, activates, model_height; } WIKIVTYPE;
 
 typedef struct WIKIUNIT {
     char             id[WIKI_ID_MAX];
@@ -535,6 +554,17 @@ typedef struct {
     const WIKIECON*  econ;
     int              econ_mode, starved, bad_kill, nkill;
     const WIKILEDGER* ledger;
+    /* a game simulation's overlays and sight (`game` 1): each input seat's cursor (ncursor = nin),
+       the clicks kept, oldest first, the deaths in the order made, and each of the entry's types'
+       sight figures, index-aligned with the bound entry's types (a unit's and a death's `type`) */
+    int              ncursor;
+    const WIKIVCURSOR* cursor;
+    int              nclick;
+    const WIKICLICK* click;
+    int              ndeath;
+    const WIKIDEATH* death;
+    int              ntype;
+    const WIKIVTYPE* type;
     /* a game simulation's input seats (WIKISIM.nin) and its viewed seat; with more than one, seats
        1..nin - 1's own parts, input[k - 1] for seat k (sim.js's view.inputs) */
     int              nin, viewed;
@@ -572,8 +602,9 @@ struct WIKISIMBOUND;
    building (-1 none) and the drag; the placement gesture and its last evaluation; the spacing per
    type; the reclaim sweep -- armed (main+0x2CC3 == 12, exclusive with a building armed), its kind,
    and its gesture: the press point, the last point over the map, past the threshold or not; the
-   hover; and fed, the inputs the seat's script (seat 0's trips too) has fed since the sim was made,
-   its kills and waits not counted: the replay layer's clash rule reads it, and no hash does. */
+   hover; fed, the inputs the seat's script (seat 0's trips too) has fed since the sim was made,
+   its kills and waits not counted: the replay layer's clash rule reads it, and no hash does; and
+   moved, whether it has moved its cursor (the view's cursors). */
 typedef struct {
     double           cursor_x, cursor_z;
     int              cursor_shape, cursor_since;
@@ -591,6 +622,8 @@ typedef struct {
     int              rmode, kind, has_rg, rg_drag;
     double           rg_x0, rg_z0, rg_x1, rg_z1;
     int              fed;
+    int              moved;         /* the seat has moved its cursor: the game records a seat's
+                                       cursor from its first move. Not hashed: it decides nothing */
 } WIKISEATIN;
 
 /* ---- the simulation: the caller owns it; tick and done are its to read, the rest is private ---- */
@@ -604,6 +637,15 @@ typedef struct {
     int              game, econ_mode, nseat, starved, bad_kill, nkill;
     WIKISEAT         seat[WIKI_SEATS];
     WIKIECON         econ[WIKI_SEATS];
+    /* a game's clicks, a ring at nclicks % WIKI_CLICKS (nclicks the clicks made), and its deaths
+       the sight record add keeps, in the order made and never removed. BOUND: at most
+       WIKI_FEATS_MAX deaths, which the data rule holds a game's kills to, its script's and every
+       fork part's; one past it is not recorded, in either twin. The deaths are hashed (item 14),
+       the clicks are not. */
+    WIKICLICK        clicks[WIKI_CLICKS];
+    int              nclicks;
+    WIKIDEATH        death[WIKI_FEATS_MAX];
+    int              ndeath;
     int              iface;         /* the Interface Type, 0 or 1 */
 
     /* the entry it plays: the one it was made from, or with a casting the bound entry, which
@@ -618,6 +660,11 @@ typedef struct {
     double           SM, PACE;
     double*          metal;
     unsigned char*   fog;
+    int*             rich;          /* (W + 1) x (H + 1): the cells metal_at finds above SurfaceMetal,
+                                       summed from the map's top-left corner, so a footprint's
+                                       coverage is four reads. Built in init after fill_metal and
+                                       fill_fog, the only writes of metal and fog, so the sums hold
+                                       for the sim's life. */
     int              nvent;
     PlaceCell*       vent;
     WIKIPOINT*       vent_centre;
@@ -728,6 +775,9 @@ typedef struct {
     WIKIVFEAT        vfeat[WIKI_FEATS_MAX];
     WIKILEDGER*      vledger;
     int              cvledger;
+    WIKIVCURSOR      vcursor[WIKI_SEATS];
+    WIKICLICK        vclick[WIKI_CLICKS];
+    WIKIVTYPE        vtype[WIKI_MAX_DEFS];
     /* the view's seats 1..nin - 1: their parts, and their sites, PLACE_MAX_SITES a seat, allocated
        by init when nin is above 1 */
     WIKIVSEAT        vinput[WIKI_SEATS - 1];
@@ -876,11 +926,15 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
     12. a game simulation's only (nothing at all in any other): the seat count, and per seat its
         units, lost, out and cmd_lost, then its m, mmax, mi, mo, wm, e, emax, ei, eo and we; then
         the economy's mode (0 refuse, 1 stall), starved, bad_kill and the kills made; then each
-        unit's ledger in the view's order, its eP, eR, eG, eD, mP, mR, mG and mD.
+        unit's ledger in the view's order, its eP, eR, eG, eD, mP, mR, mG and mD. Each seat's
+        record ends with its kills and losses, after we.
     13. a game simulation with more than one input seat only (nothing otherwise): the input seats'
         count and the viewed seat; then for each seat k = 1..nin - 1 its ghost (item 4's form), its
         gesture's sites (item 5's), its cursor, keys, armed type, spacing and drag (item 6's, without
         the caption), and its reclaim armed, kind and ring (item 11's tail).
+    14. a game simulation's only (nothing at all in any other): the deaths' count and each one's
+        tick, owner, x, z (doubles) and type name, in the order made. The clicks and each seat's
+        `moved` are not hashed: they decide nothing, and simparity compares the views.
    Items 1-12 read seat 0's input, item 3 every seat's selection. A game whose script and parts
    name no seat but 0 has one input seat and views seat 0, so item 13 adds nothing to its hash.
    The view's other fields follow from these: queued sites and order lines from the units and
@@ -889,6 +943,27 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape
    began is history rather than state, and is left out. */
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);
+
+/* THE LIT GRID of `seat` in a game's view `v` at the shown tick `g`, over the layout's sight table
+   `t` (NULL or numtables 0: none), into `out`, (v->w >> 1) x (v->h >> 1) bytes row-major; their
+   count, or 0 when the grid would pass WIKI_SIGHT_GRID. The rule, the engine's stamp reduced to
+   the stage, is tagpu_wikisim.c's comment; sim.js sightLit is its twin. Without a table every
+   block is 1 (Sight lights every block). Pure: it reads `v` and `t` only. */
+#define WIKI_SIGHT_GRID  ((WIKI_MAP_MAX / 2) * (WIKI_MAP_MAX / 2))
+#define WIKI_SIGHT_SPAN  60      /* a death at tick d lights its seat's grid through d + 60: the
+                                    temporary sight record's expiry (tagpu_wikisim.c) */
+int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out);
+
+/* THE ARMY VALUE of `seat` in a game simulation (sim.js's gameNow army, which states the game's
+   rule): the metal cost of each of its live, finished units of a mobile type that is not its
+   commander, summed in f32 in the units' order; 0 for a seat it does not have. Pure. */
+float tagpu_wikisim_army(const WIKISIM* s, int seat);
+
+/* THE CONTACTS of `seat` in a game's view `v`, over its lit grid `lit` (tagpu_wikisim_sight_lit's
+   for the same view): per view unit, index-aligned with v->unit, 1 when the radar pass would mark
+   it, else 0, into `out` (v->nunit bytes). The rule is tagpu_wikisim.c's comment; sim.js
+   sightContacts is its twin. Pure. */
+void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uint8_t* out);
 
 /* THE FORK (sim.js's sim.fork; research/notes/ingame-wiki-replay-plan.md, decision 8): a game
    simulation's timeline handed over at R to `seat`, the world of R - 1 kept whole, and the `n`

@@ -14,8 +14,13 @@
    is not live) in units, for the frame fitted into FIT_W x FIT_H device pixels at FIT_U a unit;
    "ends": the track's inset; "boxes": the controls the cursor is resolved among, laid out by
    tagpu_hudlay_build from that state or, for a return glide, from tagpu_wikiframe_pressed's, [key,
-   x, y, w, h] in units; "pt": tagpu_wikiframe_point's point; "chart": 1 when a build emitted
-   HOP_CHART; "unresolved": a cursor key no box holds, or ""}. A demo the replay
+   x, y, w, h] in units, then for a cursor's end on a row's hover strip that strip's controls as
+   the HUD lays them out with the pointer on the row (tagpu_wikiframe_row_point), the HUD the end
+   is resolved on; "pt": tagpu_wikiframe_point's point; "chart": 1 when a build emitted
+   HOP_CHART; "unresolved": a cursor key no box holds, or ""}. A players replay's frame is the
+   entry's screen's, its rest point the viewport's centre; its record carries the players block,
+   from the replay, and its HUD state the Players set with the HUD layout's window place and team
+   colours. A demo the replay
    refuses is one line {"e", "d", "refused"}.
    THE TICKS: tick 0, every 15th, the last, and each tick on which the viewer's clock stands at a
    trip's start, at its press (HUD_DOWN on) or at its release; in Try it, every tick.
@@ -197,7 +202,25 @@ static void dump_rec(const WIKIFRAMEREC* f)
     for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++)
         printf("%s{\"id\":%d,\"from\":%d,\"end\":%d,\"parent\":%d,\"seat\":%d,\"flags\":%d}", k ? "," : "", (int)f->fork[k].id,
                (int)f->fork[k].from, (int)f->fork[k].end, (int)f->fork[k].parent, f->fork[k].seat, f->fork[k].flags);
-    printf("],\"top_side\":%d}", f->top_side);
+    printf("],\"top_side\":%d", f->top_side);
+    if (f->pl) {
+        int s;
+        printf(",\"pl\":1,\"sight\":%d,\"follow\":%d,\"tog\":%d,\"folded\":%d,\"stat_open\":%d,\"stat_team\":%d,"
+               "\"stat_measure\":%d,\"npt\":%d,\"period\":%d,\"base\":%d,\"team\":[", f->sight, f->follow, f->tog, f->folded,
+               f->stat_open, f->stat_team, f->stat_measure, f->npt, f->period, (int)f->base);
+        for (k = 0; k < f->nseat && k < WIKI_SEATS; k++) printf("%s%d", k ? "," : "", f->team[k]);
+        printf("],\"cam\":%d,\"series\":[", f->cam);
+        for (k = 0; k < f->nseat && k < WIKI_SEATS; k++) {
+            printf("%s[", k ? "," : "");
+            for (s = 0; s < f->npt && s < WIKI_STAT_PTS; s++) {
+                if (s) putchar(',');
+                fnum(f->series[k][s]);
+            }
+            putchar(']');
+        }
+        putchar(']');
+    }
+    putchar('}');
 }
 
 static void dump_state(const HUDSTATE* st)
@@ -243,7 +266,29 @@ static void dump_state(const HUDSTATE* st)
     fputs(",\"toast\":", stdout); str(st->toast);
     printf(",\"stats\":{\"open\":%d,\"measure\":", st->stats.open);
     str(st->stats.measure);
-    printf(",\"team\":%d,\"npt\":%d,\"ngroup\":%d}", st->stats.team, st->stats.npt, st->stats.ngroup);
+    printf(",\"team\":%d,\"npt\":%d,\"ngroup\":%d,\"x\":", st->stats.team, st->stats.npt, st->stats.ngroup);
+    fnum(st->stats.x);
+    fputs(",\"y\":", stdout);
+    fnum(st->stats.y);
+    fputs(",\"dt\":", stdout);
+    fnum(st->stats.dt);
+    fputs(",\"t0\":", stdout);
+    fnum(st->stats.t0);
+    fputs(",\"group\":[", stdout);
+    for (k = 0; k < st->stats.ngroup && k < HUD_MAXSEAT; k++) {
+        const HUDGROUP* g = &st->stats.group[k];
+        printf("%s{\"name\":", k ? "," : "");
+        str(g->name);
+        printf(",\"colour\":\"%06x\",\"death\":", (unsigned)g->colour);
+        fnum(g->death);
+        fputs(",\"v\":[", stdout);
+        for (j = 0; j < st->stats.npt && j < HUD_MAXPT; j++) {
+            if (j) putchar(',');
+            fnum(g->v[j]);
+        }
+        fputs("]}", stdout);
+    }
+    fputs("]}", stdout);
     F_(ends); F_(len); F_(fill_to); I_(nfork); I_(fork_max); I_(timeline); I_(lanes_open); I_(picker); I_(pick_down);
     I_(replace); I_(armed); I_(live); I_(live_open); I_(rw_down); I_(rw_arm);
     fputs(",\"fork\":[", stdout);
@@ -335,6 +380,37 @@ static const HUDOP* hot_of(const HUDOPS* o, const char* k)
     return b;
 }
 
+/* the HUD built from `base` with the pointer on seat `seat`'s row of `ops`, into `out` (tagpu_wikistate.c
+   hover_hud); `ops` when it draws no such row */
+static const HUDOPS* hover_hud(const HUDLAY* hud, const HUDSTATE* base, const HUDOPS* ops, int seat, float px, HUDOPS* out)
+{
+    static HUDSTATE st;
+    char err[256];
+    float mx, my;
+    if (!tagpu_wikiframe_row_point(ops, seat, px, &mx, &my)) return ops;
+    st = *base;
+    st.mx = mx;
+    st.my = my;
+    if (!tagpu_hudlay_build(hud, &st, out, err, sizeof err)) {
+        fprintf(stderr, "wikiframetest: the hovered HUD's build failed: %s\n", err);
+        exit(2);
+    }
+    return out;
+}
+
+/* the controls of a row's hover strip in `o` ("jump:", "sight:", "follow:"), each as a box */
+static void hover_boxes(const HUDOPS* o, int* nbox)
+{
+    int i;
+    for (i = 0; i < o->n; i++) {
+        const HUDOP* p = &o->op[i];
+        if (p->kind != HOP_HOT || tagpu_wikiframe_hover_seat(o->text + p->run) < 0) continue;
+        printf("%s[", (*nbox)++ ? "," : "");
+        str(o->text + p->run);
+        printf(",%.9g,%.9g,%.9g,%.9g]", p->r.x, p->r.y, p->r.w, p->r.h);
+    }
+}
+
 /* one line: the record, its HUD state, the HUD's controls laid out from it and the cursor's point;
    the lanes the frame draws into `lane` (WIKIFRAME_FORKS ids), their count returned, for the press
    machine's events after it */
@@ -342,23 +418,26 @@ static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const cha
                 const WIKILAYOUT* lay, HUDOPS* ops, int32_t* lane)
 {
     static HUDSTATE st, pst;
+    static HUDOPS hov[2];
     char err[256];
     WIKIREPLAYVIEW rv;
     WIKIFRAMEREC rec, b, pr;
     WIKISTAGESIDE sd;
     WIKISTAGEFIT fit;
     WIKIFRAMEDLG dlg;
+    WIKIFRAMESIZE sz;
     const WIKIVIEW* gv;
+    const HUDOPS *from, *to;
     const double ends = tagpu_hudlay_globals(hud)->track_ends;
     double fx, fy, rx, ry, nx, ny, gx, gy, x, y;
     float px;
-    int Wg, Hg, i, chart = 0, side_h, nbox = 0, human;
+    int Wg, Hg, i, chart = 0, side_h, nbox = 0, human, sw, sh, fs, ts, pressed;
     const char* unresolved = "";
     tagpu_wikireplay_view(r, &rv);
     /* the human seat's view, as tagpu_wiki.c replay_fill takes it */
     human = rv.live ? rv.human : 0;
     gv = r->game ? tagpu_wikisim_view_as(r->game, human) : NULL;
-    tagpu_wikiframe_record(&rv, gv, 0, try_it, held, tagpu_wikiframe_seat_side(lay, 0, human), &rec);
+    tagpu_wikiframe_record(&rv, gv, 0, try_it, held, tagpu_wikiframe_top_side(&rv, lay, 0), r, &rec);
     printf("{\"e\":");
     str(e);
     fputs(",\"d\":", stdout);
@@ -368,17 +447,22 @@ static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const cha
     b = rec;
     tagpu_wikiframe_bound(&b, lay ? lay->nside : 0, 0);
     side_h = tagpu_wikiframe_idle_side(lay, 0, &sd) ? sd.h : 0;
-    tagpu_wikiframe_size(gv ? gv->w : 1, gv ? gv->h : 1, side_h, &Wg, &Hg);
-    tagpu_wikistage_fit(gv ? gv->w : 1, gv ? gv->h : 1, side_h, 1, FIT_W, FIT_H, FIT_U, &fit);
+    /* a players replay's frame is its entry's screen's */
+    sw = rv.players ? r->e->screen_w : 0;
+    sh = rv.players ? r->e->screen_h : 0;
+    tagpu_wikiframe_size(gv ? gv->w : 1, gv ? gv->h : 1, side_h, sw, sh, &sz);
+    Wg = sz.Wg;
+    Hg = sz.Hg;
+    tagpu_wikistage_fit(gv ? gv->w : 1, gv ? gv->h : 1, side_h, 1, sw ? sz.vw : 0, sw ? sz.vh : 0, FIT_W, FIT_H, FIT_U, &fit);
     px = (float)(Hg * fit.s / WIKIFRAME_HUD_H);
     fx = floor(fit.ox + fit.x0 * fit.s + 0.5 + 1.0 / 64);
     fy = floor(fit.oz + fit.z0 * fit.s + 0.5 + 1.0 / 64);
-    rx = (fit.ox + (gv ? gv->w : 1) * WIKI_CELL / 2.0 * fit.s - fx) / px;
-    ry = (fit.oz + (gv ? gv->h : 1) * WIKI_CELL / 2.0 * fit.s - fy) / px;
+    rx = (fit.ox + (sw ? sz.vw : sz.mw) / 2.0 * fit.s - fx) / px;
+    ry = (fit.oz + (sw ? sz.vh : sz.mh) / 2.0 * fit.s - fy) / px;
     tagpu_wikiframe_dialog(&fit, Wg, Hg, &dlg);
     nx = (dlg.no.x + dlg.no.w / 2.0 - fx) / px;
     ny = (dlg.no.y + dlg.no.h / 2.0 - fy) / px;
-    tagpu_wikiframe_hudstate(&b, Wg, Hg, px, NULL, &st);
+    tagpu_wikiframe_hudstate(&b, Wg, Hg, px, NULL, tagpu_hudlay_globals(hud), &st);
     fputs(",\"st\":", stdout);
     dump_state(&st);
     if (!tagpu_hudlay_build(hud, &st, ops, err, sizeof err)) {
@@ -387,8 +471,8 @@ static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const cha
     }
     for (i = 0; i < ops->n; i++) chart |= ops->op[i].kind == HOP_CHART;
     /* the cursor's controls are the HUD's the trip pressed: a return glide's, the strip as it stood */
-    if (tagpu_wikiframe_pressed(&b, &pr)) {
-        tagpu_wikiframe_hudstate(&pr, Wg, Hg, px, NULL, &pst);
+    if ((pressed = tagpu_wikiframe_pressed(&b, &pr))) {
+        tagpu_wikiframe_hudstate(&pr, Wg, Hg, px, NULL, tagpu_hudlay_globals(hud), &pst);
         if (!tagpu_hudlay_build(hud, &pst, ops, err, sizeof err)) {
             fprintf(stderr, "wikiframetest: the pressed HUD's build failed: %s\n", err);
             exit(2);
@@ -396,7 +480,12 @@ static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const cha
         for (i = 0; i < ops->n; i++) chart |= ops->op[i].kind == HOP_CHART;
     }
     tagpu_wikiframe_game_point(&b, &fit, fx, fy, px, &gx, &gy);
-    tagpu_wikiframe_point(&b, ops, px, ends, rx, ry, nx, ny, gx, gy, &x, &y);
+    /* a row's hover strip is resolved on the HUD with the pointer on its row */
+    fs = b.cur.on ? tagpu_wikiframe_hover_seat(b.cur.from) : -1;
+    ts = b.cur.on ? tagpu_wikiframe_hover_seat(b.cur.to) : -1;
+    from = fs >= 0 ? hover_hud(hud, pressed ? &pst : &st, ops, fs, px, &hov[0]) : ops;
+    to = ts < 0 ? ops : ts == fs ? from : hover_hud(hud, pressed ? &pst : &st, ops, ts, px, &hov[1]);
+    tagpu_wikiframe_point(&b, from, to, px, ends, rx, ry, nx, ny, gx, gy, &x, &y);
     fputs(",\"px\":", stdout);
     fnum(px);
     printf(",\"rest\":[%.17g,%.17g],\"no\":[%.17g,%.17g]", rx, ry, nx, ny);
@@ -410,10 +499,12 @@ static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const cha
         str(ops->text + p->run);
         printf(",%.9g,%.9g,%.9g,%.9g]", p->r.x, p->r.y, p->r.w, p->r.h);
     }
+    if (from != ops) hover_boxes(from, &nbox);
+    if (to != ops && to != from) hover_boxes(to, &nbox);
     if (b.cur.on) {
-        if (b.cur.from[0] && strcmp(b.cur.from, "leave:no") && strcmp(b.cur.from, WIKIFRAME_AT_GAME) && !hot_of(ops, b.cur.from))
+        if (b.cur.from[0] && strcmp(b.cur.from, "leave:no") && strcmp(b.cur.from, WIKIFRAME_AT_GAME) && !hot_of(from, b.cur.from))
             unresolved = b.cur.from;
-        if (b.cur.to[0] && strcmp(b.cur.to, "leave:no") && strcmp(b.cur.to, WIKIFRAME_AT_GAME) && !hot_of(ops, b.cur.to))
+        if (b.cur.to[0] && strcmp(b.cur.to, "leave:no") && strcmp(b.cur.to, WIKIFRAME_AT_GAME) && !hot_of(to, b.cur.to))
             unresolved = b.cur.to;
     }
     printf("],\"pt\":[%.17g,%.17g],\"chart\":%d,\"unresolved\":", x, y, chart);
@@ -644,9 +735,9 @@ static void hostile(const HUDLAY* hud, HUDOPS* ops, WIKIFRAMEREC* f, const char*
     char err[256];
     double x, y;
     tagpu_wikiframe_bound(f, nside, nlogo);
-    tagpu_wikiframe_hudstate(f, 768, 544, 1.5f, NULL, &st);
+    tagpu_wikiframe_hudstate(f, 768, 544, 1.5f, NULL, NULL, &st);
     said(ok(f) && tagpu_hudlay_build(hud, &st, ops, err, sizeof err), what);
-    tagpu_wikiframe_point(f, ops, 1.5f, 6, 10, 10, NAN, NAN, NAN, NAN, &x, &y);
+    tagpu_wikiframe_point(f, ops, ops, 1.5f, 6, 10, 10, NAN, NAN, NAN, NAN, &x, &y);
     said(x == x && y == y, "  and its point is a number");
 }
 

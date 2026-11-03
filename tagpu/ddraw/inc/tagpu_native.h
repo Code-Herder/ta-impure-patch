@@ -70,12 +70,23 @@ int tagpu_native_scissor_on(void);
    from "a new one" compares the extent it is about to build, as
    tagpu_vk_world.c's `slot_size` does.
 
+   THE SCISSOR is a second rect the composite stays inside, beside the block's
+   own, for a producer whose block holds more than it shows. The game's world
+   sets none -- its block is its viewport; the wiki's stage sets a frame's
+   viewport, which a players frame's map, standing at its eye, is larger than
+   (tagpu_wikiworld.c); a zeroed target has none, so a producer that does not
+   set the field draws exactly as without it.
+
    Render thread only. */
 typedef struct {
     int      gw, gh;      /* the GAME's own resolution -- not the window's     */
     int      ss;          /* samples per game pixel: the target is gw*ss,gh*ss */
     int      devres;      /* the 1x resolve is skipped; read the ss buffer     */
     int      vx, vy, vw, vh;  /* where the block lands, HUD shift applied      */
+    int      clip;        /* 0: no scissor but the block's and the attachment's */
+    int      cx, cy, cw, ch;  /* with `clip`: the composite draws only inside
+                             [cx, cx + cw) x [cy, cy + ch), device pixels on the
+                             attachment; empty (cw or ch <= 0) draws nothing    */
     unsigned frame;
 } TAGPU_WORLDTGT;
 int tagpu_native_worldtgt(TAGPU_WORLDTGT* out);

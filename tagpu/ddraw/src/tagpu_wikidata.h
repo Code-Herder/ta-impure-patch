@@ -88,6 +88,8 @@ typedef struct {
                                        finished, or made whole, is switched on (0x41B9A6) */
     int         canreclamate;       /* FBI canreclamate, def+0x245 bit 0x400: RECLAIM is live for
                                        a selection holding it, and the sweep orders it */
+    int         sight_distance, radar_distance, sonar_distance, model_height;
+                                    /* THE SIGHT FIGURES (WIKICASTDEF's): absent 0 */
     uint64_t    builds;             /* bit i: its build list names type i of the entry */
 } WIKIDEF;
 
@@ -149,7 +151,11 @@ typedef struct {
 #define WIKI_SEAT_NAME 32
 #define WIKI_SEAT_MIN  200
 #define WIKI_SEAT_MAX  10000
-typedef struct { char name[WIKI_SEAT_NAME]; int metal, energy; } WIKISEAT;
+/* A PLAYERS ENTRY'S SEAT also carries `camera`, its view's centre at the game's first tick (world
+   units, integers, the view inside the map at the entry's screen: tagpu_wikidata_seat_cam), and
+   `team`, 0..WIKI_SEATS - 1, absent its own index; seats of one team are allied to each other. A
+   seat with no camera is one whose camera was not recorded. */
+typedef struct { char name[WIKI_SEAT_NAME]; int metal, energy; int has_camera, cam_x, cam_z, team; } WIKISEAT;
 
 /* One of the entry's scenes, or a demo's additions to the one it plays on: the demo's units,
    metal, vents and fog go after the scene's, and its selection and cursor replace the scene's when
@@ -175,9 +181,10 @@ typedef struct {
 
 /* RECLAIM: arm reclaim through RECLAIM (`reclaim: true`); PICK: click the popup's row of `pick`;
    KILL: a game script's kill of the unit `kill` names; HUD: a viewer's press of the replay HUD's
-   control `hud` */
+   control `hud`; CAMERA: a players entry's seat's camera moved, recorded data the simulation never
+   reads (tagpu_wikidata_seat_cam) */
 enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32,
-       WIKI_IN_KILL = 64, WIKI_IN_HUD = 128 };
+       WIKI_IN_KILL = 64, WIKI_IN_HUD = 128, WIKI_IN_CAMERA = 256 };
 
 /* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
    IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
@@ -192,15 +199,26 @@ enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_U
    the game's keys, hud-in-game.md), WIKI_NHUD of them: the replay HUD's eight, then the live HUD's
    own three, then the replay HUD's Take over set (tagpu_hudinput.c pick_act and lane_act): Take
    over, a picker row, the Forks bay, a lane, Back to main recording, a lane's Save as a replay and
-   its Delete. A replay entry's script presses the replay HUD's, a live entry's the live HUD's,
-   which share rew, fwd and track (tagpu_wikidata_hud_presses), a takeover entry's all three sets
-   (tagpu_wikidata_hud_takeover). leave:yes is the player's alone, never a script's: Try it
-   yourself may press it (replay.js PRESSES, tagpu_wikireplay_press), so it is numbered after the
-   script's controls and has no name the loader reads. */
+   its Delete; then the Players set (tagpu_hudinput.c act): a row's Jump, Sight and Follow, the
+   four overlay switches, the stats window's button, its close and a chip. A replay entry's script
+   presses the replay HUD's, a live entry's the live HUD's, which share rew, fwd and track
+   (tagpu_wikidata_hud_presses), a takeover entry's all three sets (tagpu_wikidata_hud_takeover), a
+   players entry's the replay HUD's and the Players set (tagpu_wikidata_hud_players). leave:yes and a
+   team row's fold are the player's alone, never a script's: Try it yourself may press them
+   (replay.js PRESSES, tagpu_wikireplay_press), so they are numbered after the script's controls and
+   have no name the loader reads. */
 enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
        WIKI_HUD_LEAVE_NO, WIKI_HUD_REWIND, WIKI_HUD_LIVE_PLAY, WIKI_HUD_LIVE_NOW, WIKI_HUD_TAKEOVER, WIKI_HUD_TAKEAS,
-       WIKI_HUD_LANES, WIKI_HUD_LANE, WIKI_HUD_MAIN, WIKI_HUD_EXPORT, WIKI_HUD_DELETE, WIKI_NHUD,
-       WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_NPRESS };
+       WIKI_HUD_LANES, WIKI_HUD_LANE, WIKI_HUD_MAIN, WIKI_HUD_EXPORT, WIKI_HUD_DELETE, WIKI_HUD_JUMP, WIKI_HUD_SIGHT,
+       WIKI_HUD_FOLLOW, WIKI_HUD_CURSORS, WIKI_HUD_CLICKS, WIKI_HUD_SELECTIONS, WIKI_HUD_CHAT, WIKI_HUD_STATS,
+       WIKI_HUD_CLOSE, WIKI_HUD_CHIP, WIKI_NHUD,
+       WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_HUD_FOLD, WIKI_NPRESS };
+
+/* THE STATS WINDOW'S CHIPS a `chip` press names (sim.js's CHIPS, in its order): the two splits, then
+   art/hud/layout.json's window.measures keys in that file's order (tools/wiki/castcheck.mjs holds
+   the list to the file) */
+enum { WIKI_CHIP_PLAYER, WIKI_CHIP_TEAM, WIKI_CHIP_METAL, WIKI_CHIP_ENERGY, WIKI_CHIP_UNITS, WIKI_CHIP_ARMY,
+       WIKI_CHIP_KILLS, WIKI_CHIP_LOSSES, WIKI_CHIP_EXCESS, WIKI_NCHIP };
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
 typedef struct {
@@ -220,9 +238,14 @@ typedef struct {
                                            reclaim and pick: it is no caption alone, which a
                                            trip's ticks admit (tagpu_wikidata_trips) */
     int              seat;              /* a game input's seat, whose input state it acts on, and a
-                                           takeas press's row, the seat it takes over (0 when absent,
-                                           and on every other input): 0..WIKI_SEATS - 1 */
+                                           takeas, jump, sight or follow press's row, the seat it
+                                           names (0 when absent, and on every other input):
+                                           0..WIKI_SEATS - 1 */
     int              fork;              /* a lane, export or delete press's fork id, -1 for none */
+    int              cam_x, cam_z;      /* WIKI_IN_CAMERA: the view's centre it glides to over `over`
+                                           ticks, world units */
+    int              by;                /* WIKI_IN_KILL: the killer's seat, -1 for none */
+    int              chip;              /* a chip press's WIKI_CHIP_*, -1 for none */
 } WIKIINPUT;
 
 /* A GAME ENTRY'S DEMO'S GAME: the game script, played by a game simulation (WIKI_PLAY_GAME) on game
@@ -233,6 +256,20 @@ typedef struct {
    GAME_END_MAX, GAME_KILLS. */
 #define WIKI_GAME_KILLS   64
 #define WIKI_GAME_END_MAX 5400
+/* A PLAYERS ENTRY'S DEATHS, its game script's kills: at most WIKI_PLAYERS_DEATHS units of one seat
+   at ticks within any WIKI_PLAYERS_DEATH_SPAN consecutive ticks. The engine's temporary sight
+   record add 0x482910 refuses a 21st live record (0x48292C, the scout's P1.5), and a record made at
+   d is still live at an add at d' while d >= d' - 61 (the expiry 0x482130 after the step ending at
+   d' - 1 keeps d + 60 >= d' - 1). The simulation applies that refusal itself (tagpu_wikisim.c
+   kill), so a fork part's kills are held to it too; this rule keeps an authored script from ever
+   reaching it, so its death vision is every death of the viewed seat within 60 ticks exactly. */
+#define WIKI_PLAYERS_DEATHS     20
+#define WIKI_PLAYERS_DEATH_SPAN 62
+/* THE SIGHT FLOOR of a players entry's type (its own and every one a casting binds): the stamp's
+   radius index is trunc(SightDistance / 32), read from the def's signed word (movsx at 0x48230D),
+   and index 0 makes 0x433500 return the 16 bytes before the table's buffer (`begin + (idx - 1) *
+   16`, no guard: the scout's P1.2), which the engine leaves undefined; so the wiki never makes one */
+#define WIKI_SIGHT_MIN    32
 typedef struct {
     int              ninput;
     WIKIINPUT*       input;             /* in file order */
@@ -302,6 +339,10 @@ typedef struct {
                                            the rewind, never a replay */
     int              takeover;          /* a game entry's `takeover`: its demos play a replay with the
                                            replay HUD's Take over (never with `live`) */
+    int              players;           /* a game entry's `players`: its demos play a replay with the
+                                           Players set and a camera (never with `live` or `takeover`) */
+    int              screen_w, screen_h;/* a players entry's `screen`, cells: the game screen its
+                                           recordings were made on; 0 on any other entry */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
     WIKIFEATDEF*     feat;              /* the `features` table, in the file's order */
     int              nscene;            /* 1 or more, every map the first one's size */
@@ -378,6 +419,21 @@ int         tagpu_wikidata_hud_presses(int hud, int live);
 /* 1 when `hud` is one of the replay HUD's Take over set (sim.js's TAKEOVER_CONTROLS), else 0; a
    takeover entry's demo presses these and both sets above */
 int         tagpu_wikidata_hud_takeover(int hud);
+/* 1 when `hud` is one of the Players set (sim.js's PLAYERS_CONTROLS), else 0; a players entry's demo
+   presses these and the replay HUD's, and no other entry's presses one */
+int         tagpu_wikidata_hud_players(int hud);
+/* sim.js's name of a chip: "player", "team", "metal", ... "excess"; NULL out of range */
+const char* tagpu_wikidata_chip_name(int chip);
+
+/* A SEAT'S CAMERA, sim.js's seatCam: the centre of seat `seat`'s view at game tick `t`, into *x, *z;
+   1, or 0 when the seat has no camera (its scene gives none: "Camera was not recorded"). The
+   scene's `camera`, then each of the seat's camera inputs in file order: at tick t the last one
+   with at <= t gives its point once t >= at + over, else each axis a + trunc((b - a) (t - at) /
+   over) from the point a it stood at at `at` -- persp_sample's arithmetic on the authored samples
+   (research/notes/tadr-port/demo-recorder-perspective-streams.md, *The perspective clock*).
+   Integers only; the loader holds a seat's camera inputs in tick order with no glide over another.
+   `sc` is the demo's entry scene, `g` its game. */
+int         tagpu_wikidata_seat_cam(const WIKISCENE* sc, const WIKIGAME* g, int seat, int t, int* x, int* z);
 
 /* THE REFRESH WALK (sim.js refreshAt): the last GameTime up to T that the recorder's writer flags a
    refresh (reclossy_is_refresh) in a segment whose first iteration is `first`, walked from it with
@@ -428,6 +484,20 @@ typedef struct {
     int      canstop;               /* (canstop & 1), as WIKIDEF's */
     int      activate_when_built;   /* (activatewhenbuilt & 1), as WIKIDEF's */
     int      canreclamate;          /* (canreclamate & 1), as WIKIDEF's */
+    /* THE SIGHT FIGURES, an absent one 0. sight_distance, radar_distance and sonar_distance are the
+       FBI's SightDistance, RadarDistance and SonarDistance as the def holds them, the words +0x202,
+       +0x204 and +0x206 (the FBI reader stores the number's low 16 bits, 0x42C3B3), read signed as
+       every reader does (movsx: the stamp at 0x48230D, the radar pass at 0x467565..0x467576):
+       -32768..32767. model_height is def+0x170, the byte 0..255: the type loader stores
+       0x4CB5F0(model) at +0x16E (0x42D7BF..0x42D7CA), so +0x170 is the integer part's low byte of
+       the model's height: over a sibling chain from the root, the most of 0 and, for each piece,
+       its vertices' y and its child chain's height, each plus the piece's y offset, in 16.16
+       (0x4CB5F0..0x4CB641, DISASSEMBLED; the side load's tagpu_wikiasset.c height_chain and gfx.py
+       model_height compute it from the 3DO, the 3D load's model_top from its arena). MEASURED
+       2026-11-01 (M0-P1, the def bytes read in game): ARMCOM 39, ARMCK 27, ARMSOLAR 38, CORAK 26.
+       A cast is activated when finished exactly when activate_when_built is set, the radar pass's
+       test (+0x10E bit 0, set at 0x486135..0x486148 and 0x41B9AC..0x41B9BF). */
+    int      sight_distance, radar_distance, sonar_distance, model_height;
     int      vent;                  /* has a G cell */
     uint16_t g[WIKI_FP_MAX];        /* as WIKIDEF's; inside fx x fz */
     uint16_t builds;                /* bit c: its build menu holds cast c's type */
@@ -492,6 +562,10 @@ static inline int tagpu_wiki_map_rows(int scene_rows, int column_rows)
    WIKI_GROUND_ROWS rows needs w >= 62. tagpu_wikidata_entry refuses a game entry that fails it,
    as sim.js checkGame does, so every frame the stage draws is at least 4:3 by construction. */
 int tagpu_wikidata_frame_fits(int w, int h);
+/* THE SAME BOUND FOR A PLAYERS ENTRY, whose frame is its screen's (sw x sh cells): Wg = 128 + 16 sw,
+   Hg = max(16 sh + 64, the deepest column's WIKI_SIDE_ROWS), 3 Wg >= 4 Hg. tagpu_wikidata_entry
+   takes it instead of the map's on a players entry, as sim.js checkGame does. */
+int tagpu_wikidata_screen_fits(int sw, int sh);
 #define WIKI_SIDE_SCREENS  48
 #define WIKI_SIDE_GADGETS  64    /* a screen's gadgets, and the length of the view's states */
 #define WIKI_SIDE_PAGES    7     /* the page is unit+0x110 bits 23..25: at most 7 numbered pages */
@@ -535,6 +609,61 @@ typedef struct {
     int  orders;                    /* the <NAME>0 screen's index, or -1 */
 } WIKIPAGES;
 
+/* THE SIGHT TABLE of a layout's mod: <gamedata>\los.tdf as the engine's loader stores it
+   (0x433130, 0x433380, 0x4336F0, 0x4339E0, DISASSEMBLED; the scout's P1.1), reduced to count
+   grids. The loader makes `numtables` elements, element i from [TABLE<i+1>]; each of its `numlines`
+   lines (`line<k>=count, x1, y1, ...`, strtok on ", ", each number atoi) is stored four times, as
+   rays k, N+k, 2N+k and 3N+k, each pair (x, y) as the (column, row) offset (x, -y), (y, x), (-x, y)
+   and (-y, -x): two reflections and two axis swaps, no point merged. The stamp 0x482270 adds one to
+   the unit's own block (0x48239E) and one to the block under every point of every ray of element
+   idx - 1, idx = min(trunc(sight / 32), numtables - 1) (0x48230D..0x482366, 0x433500), where the
+   height test passes -- on the stage's flat ground everywhere (MEASURED M0-P1: no block of the
+   set unlit). So a table loses nothing as a COUNT GRID, each offset with the number of ray points
+   on it, in any order. MEASURED M0-P1 with the stock file (numtables 9): a unit's lit set is its
+   table's offsets and its own block, 213 / 177 / 137 blocks at idx 8 / 7 / 6.
+   ONLY THE TABLES THE SETUP'S TYPES REACH ARE KEPT, sparse by index: the idx of each sight of a
+   cast the layout's castings bind and of each type a players entry of the wiki's tree defines,
+   at least WIKI_SIGHT_MIN (tagpu_wikiasset.c sight_read, gfx.py `sight_table`). Stored table k is
+   radius index idx[k] (strictly increasing, each 1..numtables - 1) and cell[first[k] ..
+   first[k + 1]), its offsets strictly increasing by (dr, dc). A type whose index is not stored
+   plays in no players entry's game over this table (tagpu_wikidata_sight_ok): a cast is left
+   unbound and an entry's own type refuses the game, so the stamp never reads a table the layout
+   does not hold. numtables is not bounded above beyond the engine's signed word (the clamp
+   makes every index below it); MEASURED 2026-11-02 over the compat setups' files: numtables 9
+   (stock), 64 (Mayhem), 90 (ProTA, Escalation), 94 (Twilight), 63 (TA Zero), and the tables their
+   castings reach 4 / 6 / 6 / 11 / 6 / 7 indices of 560 / 1200 / 1200 / 15212 / 1800 / 3900 cells,
+   Twilight's reaching 38 blocks with a count of 39. THE BOUNDS a producer holds or keeps no table
+   (numtables 0: Sight lights every block, with a report line): numtables at least 2 (1 or less
+   gives idx 0 for every unit, the read before the buffer); at most WIKI_SIGHT_IDX indices, about
+   three times Twilight's 11; in a stored table every point within WIKI_SIGHT_REACH blocks on both
+   axes, a count 1..255 and every line's numbers present (a missing one is atoi(NULL), undefined in
+   the engine); and the stored tables' cells together at most WIKI_SIGHT_CELLS, about twice
+   Twilight's 15212 (3 bytes a cell: 96 KB a layout). */
+#define WIKI_SIGHT_NUMTABLES 32767
+#define WIKI_SIGHT_REACH  63
+#define WIKI_SIGHT_IDX    32
+#define WIKI_SIGHT_CELLS  32768
+typedef struct { int8_t dc, dr; uint8_t n; } WIKISIGHTCELL;
+typedef struct {
+    int           numtables;        /* 0: the layout has no table */
+    int           nidx;             /* the tables stored */
+    int           idx[WIKI_SIGHT_IDX];
+    int           first[WIKI_SIGHT_IDX + 1];
+    WIKISIGHTCELL cell[WIKI_SIGHT_CELLS];
+} WIKISIGHT;
+
+/* THE RADIUS INDEX of a sight over a layout's table, the engine's min(trunc(sight / 32),
+   numtables - 1); 0 below WIKI_SIGHT_MIN or with no table (numtables 0), where no table is read */
+int tagpu_wikidata_sight_index(const WIKISIGHT* t, int sight);
+/* The stored table a sight stamps with: k with t->idx[k] its radius index, or -1 when it has none
+   (below WIKI_SIGHT_MIN, no table, or an index the layout does not store) */
+int tagpu_wikidata_sight_table(const WIKISIGHT* t, int sight);
+/* 1 when a type of `sight` plays in a players entry's game over table `t` (NULL: no layout): its
+   sight at least WIKI_SIGHT_MIN (THE SIGHT FLOOR) and, when `t` holds a table, its radius index
+   stored. A cast that fails it is left unbound (tagpu_wikisim.c bind), an entry's own type refuses
+   the game (tagpu_wikisim_init), as sim.js's sightFits */
+int tagpu_wikidata_sight_ok(const WIKISIGHT* t, int sight);
+
 typedef struct WIKILAYOUT {
     int         format, width, height;
     int         nside;
@@ -543,6 +672,7 @@ typedef struct WIKILAYOUT {
     WIKIPAGES   type[WIKI_SIDE_TYPES];
     int         nscreen;
     WIKISCREEN  screen[WIKI_SIDE_SCREENS];
+    WIKISIGHT   sight;
 } WIKILAYOUT;
 
 /* Every bound sim.js's checkLayout holds, over a filled layout: 1 when it holds them all, else 0

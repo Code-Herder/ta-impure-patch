@@ -935,6 +935,49 @@ int tagpu_hudlay_headed(const HUDSTATE* st)
     return 0;
 }
 
+/* a sample read from the recording: one that is not a finite number is drawn as 0 */
+static float sample(float v)
+{
+    return v == v && v < 1e30f && v > -1e30f ? v : 0.0f;
+}
+
+void tagpu_hudlay_stat_groups(HUDSTATE* st, const float* v, int nrow, int stride, const uint32_t* team_rgb, int nteam_rgb)
+{
+    HUDSTATS* S = &st->stats;
+    int i, j, k;
+    if (S->npt > HUD_MAXPT) S->npt = HUD_MAXPT;
+    if (S->npt > stride) S->npt = stride;
+    if (!v || nrow <= 0 || S->npt < 0) S->npt = 0;
+#define AT(seat_, k_) v[(size_t)((seat_) % nrow) * (size_t)stride + (size_t)(k_)]
+    if (!S->team) {
+        S->ngroup = st->nseat < HUD_MAXSEAT ? st->nseat : HUD_MAXSEAT;
+        for (i = 0; i < S->ngroup; i++) {
+            HUDGROUP* g = &S->group[i];
+            memcpy(g->name, st->seat[i].name, sizeof g->name);
+            g->colour = st->seat[i].colour;
+            g->death = -1.0f;
+            for (j = 0; j < st->nmark && j < HUD_MAXMARK; j++)
+                if (st->mark[j].kind == HUD_MK_DEATH && st->mark[j].seat == i && (g->death < 0 || st->mark[j].t < g->death))
+                    g->death = st->mark[j].t;
+            for (k = 0; k < S->npt; k++) g->v[k] = sample(AT(i, k));
+        }
+        return;
+    }
+    S->ngroup = st->nteam < HUD_MAXSEAT ? st->nteam : HUD_MAXSEAT;
+    for (i = 0; i < S->ngroup; i++) {
+        HUDGROUP* g = &S->group[i];
+        snprintf(g->name, sizeof g->name, "Team %d", i + 1);
+        g->colour = team_rgb && nteam_rgb > 0 ? team_rgb[i % nteam_rgb] : 0x808080;
+        g->death = -1.0f;
+        for (k = 0; k < S->npt; k++) {
+            float s = 0;
+            for (j = 0; j < st->team_n[i] && j < HUD_MAXSEAT; j++) s += sample(AT(st->team_seat[i][j], k));
+            g->v[k] = s;
+        }
+    }
+#undef AT
+}
+
 static void header(C* c, int t, double ox, double oy);
 static void row(C* c, int seat, double ox, double oy);
 

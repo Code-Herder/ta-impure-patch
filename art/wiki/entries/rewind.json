@@ -31,6 +31,10 @@
       "energyStorage": 0,
       "builds": ["ARMMEX", "ARMSOLAR"],
       "name": "Commander",
+      "sightDistance": 290,
+      "radarDistance": 400,
+      "sonarDistance": 400,
+      "modelHeight": 39,
       "from": "ARMCOM.fbi; build list: the casts of its menu the entry has"
     },
     "ARMCK": {
@@ -52,6 +56,8 @@
       "builds": ["ARMMEX", "ARMSOLAR"],
       "name": "Construction KBot",
       "corpse": "armck_dead",
+      "sightDistance": 235,
+      "modelHeight": 27,
       "from": "ARMCK.fbi; build list: the casts of its menu the entry has"
     },
     "ARMMEX": {
@@ -68,6 +74,8 @@
       "energyStorage": 0,
       "name": "Metal Extractor",
       "corpse": "armmex_dead",
+      "sightDistance": 210,
+      "modelHeight": 28,
       "from": "ARMMEX.fbi"
     },
     "ARMSOLAR": {
@@ -83,6 +91,8 @@
       "energyStorage": 0,
       "name": "Solar Collector",
       "corpse": "armsolar_dead",
+      "sightDistance": 210,
+      "modelHeight": 38,
       "from": "ARMSOLAR.fbi"
     },
     "CORCOM": {
@@ -104,6 +114,10 @@
       "metalStorage": 0,
       "energyStorage": 0,
       "name": "Commander",
+      "sightDistance": 290,
+      "radarDistance": 400,
+      "sonarDistance": 400,
+      "modelHeight": 38,
       "from": "CORCOM.fbi"
     },
     "CORAK": {
@@ -122,6 +136,8 @@
       "energyStorage": 0,
       "name": "A.K.",
       "corpse": "corak_dead",
+      "sightDistance": 275,
+      "modelHeight": 26,
       "from": "CORAK.fbi"
     }
   },
@@ -270,7 +286,7 @@
           {"at": 400, "seat": 0, "move": [200, 300]},
           {"at": 402, "down": "select"},
           {"at": 404, "up": "select"},
-          {"at": 406, "seat": 0, "move": [400, 300]},
+          {"at": 406, "seat": 0, "move": [400, 250]},
           {"at": 408, "down": "order"},
           {"at": 410, "up": "order"}
         ]

@@ -2,8 +2,11 @@
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
    usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1]
-                                       [--no-scripts] [--trace]
+                                       [--no-scripts] [--shard K/N] [--trace]
      exit 0 when every demo and rule passes, 1 otherwise
+     --shard K/N (K from 1) plays only every Nth of the contexts, from the Kth, and shard 1 alone the rule cases: the N
+       shards together check what one run does. Each context is checked on its own (the identity casting's
+       comparison with the entry's own types plays both inside it), so no claim spans two shards.
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
    input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
@@ -37,8 +40,15 @@
    tick up to its last input (releaseSweep), which must not stop it. Then every demo plays as a replay (replay.js, runReplay) on its game and is checked on every
    replay's claims (replayClaims: its end, the walk and its markers, the seek claim) and its own (REPLAY_CLAIMS, by the
    demo's id); a live entry's demo plays its live mode (runLive) and is checked on every live replay's claims
-   (liveClaims: the seek, fork, now and release claims, L held still, the end) and its own (LIVE_CLAIMS). Their tallies
-   print after the demos', so the demos' lines read as before.
+   (liveClaims: the seek, fork, now and release claims, L held still, the end) and its own (LIVE_CLAIMS); a takeover
+   entry's demo its watch mode and takeover (runTakeover, takeoverClaims, TAKEOVER_CLAIMS); a players entry's demo the
+   replay with the Players set (runReplay with the game's world each step, replayClaims, countBound and PLAYERS_CLAIMS:
+   the camera, Sight, the overlays and the stats window, and what they name inside the viewport). A claim the
+   context's figures make unobservable (Sight's hidden unit and radar-only contact), decided from the figures and the
+   units' places and never from the code under test, prints as SKIP under its demo's line, with the context and why,
+   and the replays' tally lists it: it neither fails nor passes unseen. Every game's
+   claims include THE GOALS' CLAIM, in every context, that each move order of its script goes where its unit's
+   planner reaches. Their tallies print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -65,20 +75,20 @@ const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.ar
 /* the pack under --pack (its side.json, whose layout and castings the demos play with) and the layout the demos play
    in: set by main() from the command line, so that importing this module for ENTRY_RULES reads no argument of the
    importer's */
-let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE;
+let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE, SHARD = 1, SHARDS = 1;
 const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0] : [Number(i)]; };
 /* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
    fixture casting answers, with its rival beside it (`rivals`); a pack gives one context per layout side, with that
    side's casting (index-aligned with layout.sides) and as the rival the first other side's, as the DLL's context
    gives them (tagpu_wiki.c rival_of), and interface. Only a game entry's rival units read the rival. */
 function contexts() {
-  const cs = baseContexts();
-  if (process.argv.includes('--no-scripts')) return cs;
+  const cs = baseContexts(), mine = all => all.filter((c, k) => k % SHARDS === SHARD - 1);
+  if (process.argv.includes('--no-scripts')) return mine(cs);
   const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`) : [];
   const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
-  if (!Object.keys(scripts(packs)).length) return cs;
+  if (!Object.keys(scripts(packs)).length) return mine(cs);
   const host = cobHost();
-  return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))];
+  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))]);
 }
 function baseContexts() {
   if (PACK) {
@@ -1409,10 +1419,14 @@ function expectedLock(entry, d, casting) {
 }
 /* ---- THE GAME ENTRIES (research/notes/ingame-wiki-replay-plan.md): every entry under art/wiki/entries/ whose frame
    is "game", named by the tree or not, each demo's game script played by WikiSim.game in every context ---- */
-// the cast record a game entry's unit `t` binds to: the rival casting's for a rival unit, else the casting's
+/* the cast record a game entry's unit `t` binds to: the rival casting's for a rival unit, else the casting's; in a
+   players entry null for a cast whose sight is below the floor or whose radius index the layout's table does not store,
+   which the binder leaves unbound (sim.js sightFits). Every context plays on LAYOUT, whose table that is. */
 const gameCast = (entry, ctx, t) => {
-  const u = entry.units[t], k = u && (u.rival ? ctx.casting && ctx.rival : ctx.casting);
-  return k ? k.casts[u.cast] : undefined;
+  const u = entry.units[t], k = u && (u.rival ? ctx.casting && ctx.rival : ctx.casting), c = k ? k.casts[u.cast] : undefined;
+  if (!c || entry.players !== true) return c;
+  const s = c.sightDistance ?? 0, S = LAYOUT && LAYOUT.sight;
+  return s >= WikiSim.SIGHT_MIN && (!S || WikiSim.sightTable(S, s)) ? c : null;
 };
 // the tick and type a game stops on under the badge: a scene unit, or a build, of a cast its casting leaves unbound
 function gameLock(entry, d, ctx) {
@@ -1437,14 +1451,15 @@ function runGame(entry, d, layout, ctx, mode) {
   sim.free();
   return { sim, all, last: all[all.length - 1], log: sim.log, cobNotes };
 }
-/* A GAME'S CLAIMS, in refuse mode: it plays to its end, never stalled, starved or stopped by a kill that found no unit;
-   no two bodies overlap; each kill of a finished unit whose cast leaves a wreck placed it, or the placement's rule 1
+/* A GAME'S CLAIMS, in refuse mode: every move order goes where its unit's planner reaches (goalClaims); it plays to its
+   end, never stalled, starved or stopped by a kill that found no unit; no two bodies overlap; each kill of a finished unit whose cast leaves a wreck placed it, or the placement's rule 1
    or 2 refused it (listed), and an unfinished unit's kill left none; each kill of a finished unit made a death event
    when the context has a sound source, which the player (sound.js death, tagpu_wiki.c death_play) plays as the killed
    type's death WAV, or not at all where its cell is black. `notes` lists the refused wrecks; `deaths` counts the
    deaths that play a WAV, that play none (the type has no WAV) and that are in the black. */
 function gameClaims(entry, d, ctx, r, ok, notes, deaths) {
   const v = r.last.v;
+  goalClaims(r, ok);
   ok(v.clock === d.game.end && v.locked === null, `played to its end, tick ${d.game.end} (tick ${v.clock}, locked ${v.locked})`);
   ok(!v.stalled && !v.game.starved && !v.game.badKill, `never stalled, starved or killing no unit (${v.stalled}, ${v.game.starved}, ${v.game.badKill})`);
   const met = r.all.findIndex(f => !apart(f.v));
@@ -1525,24 +1540,28 @@ function releaseSweep(entry, d, layout, ctx, ok) {
 /* A replay's frames: `all`, the replay's view each demo tick; `F(c)`, the first frame on viewer clock c (the step that
    fed c; the walk's frames are all on clock 0); `ends`, every seek that ended, each with its demo tick, the game tick
    it ended on, the replay's view there, the game's view, orders and log, and whether it ended on its target (rather
-   than in a feed that played on); `gv`, the game's view at the end. */
+   than in a feed that played on); `gv`, the game's view at the end. A players replay's frames also carry `w`, the
+   game's world (worldOf), and its result `stat`, the walker's samples (stat[n][k][m], R.stat's). */
 function runReplay(entry, d, layout, ctx) {
-  const R = WikiReplay.play(entry, d, layout, ctx), all = [R.view()], ends = [];
+  const R = WikiReplay.play(entry, d, layout, ctx), PL = entry.players === true, ends = [];
+  const frame = () => PL ? { ...R.view(), w: worldOf(R.game) } : R.view(), all = [frame()];
   const ids = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].map(u => u.id);
   while (!all[all.length - 1].done) {
     const prev = all[all.length - 1];
     R.step();
-    const rv = R.view();
+    const rv = frame();
     all.push(rv);
     if (prev.game.target >= 0 && rv.game.target < 0 && R.game)
       ends.push({ tick: rv.tick, T: R.game.tick, rv, v: R.game.view(), o: ids.map(id => R.game.orders(id)), log: R.game.log.slice(),
         onTarget: R.game.tick === prev.game.target });
   }
-  const gv = R.game ? R.game.view() : null;
+  const gv = R.game ? R.game.view() : null, p = PL ? all[all.length - 1].players : null;
+  const stat = p ? Array.from({ length: p.npt }, (_, n) => Array.from({ length: p.nseat }, (_, k) =>
+    WikiReplay.MEASURES.map((_, m) => R.stat(n, k, m)))) : null;
   R.free();
   const first = new Map();
   all.forEach(f => { if (!first.has(f.clock)) first.set(f.clock, f); });
-  return { all, ends, gv, last: all[all.length - 1], F: c => first.get(c), ids };
+  return { all, ends, gv, last: all[all.length - 1], F: c => first.get(c), ids, stat };
 }
 // a viewer's presses of `control`, each with its release's clock tick (a drag's: at + HUD_DOWN + over)
 const pressesOf = (d, control) => (d.inputs || []).filter(e => e.hud === control)
@@ -2147,6 +2166,405 @@ const TAKEOVER_CLAIMS = {
   },
 };
 
+/* ---- THE PLAYERS REPLAYS: every demo of a players entry (`"players": true`) played by replay.js with the Players set,
+   checked on every replay's claims and its own (players-spec.md sections 9 and 10). The claims read the replay's
+   players state and the game's world; what the frame draws of them (the eye's picture, the fog, the dots, the
+   overlays' shapes, the stats window's groups) is framecheck's and stagecheck's. ---- */
+/* the game's world a players claim reads, each step: the units' places, bodies, owners, selections and progress, the
+   deaths, cursors, clicks and types' sight figures (what sightLit and sightContacts read), each seat's top-bar figures,
+   and the map's size without its cells */
+function worldOf(s) {
+  const v = s.view();
+  return { map: { w: v.map.w, h: v.map.h },
+    units: v.units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, fx: u.fx, fz: u.fz, selected: u.selected, built: u.built })),
+    game: { deaths: v.game.deaths, types: v.game.types, cursors: v.game.cursors, clicks: v.game.clicks,
+      bars: s.gameNow().seats.map(z => z.bar) } };
+}
+/* THE VIEWPORT a players frame shows with the viewer's camera `cam` (a centre), as [x0, z0, x1, z1] in world units: the
+   entry's screen, 16 sw by 16 sh, its eye the camera less half of it clamped into the map (players-spec.md 2 and 7.1;
+   the engine's 0x41C3C0). That is the shallowest column's viewport, Hv = max(16 sh + 64, the column's rows) - 64; a
+   deeper one's eye clamps no further right or down and its far edge no nearer, so what lies in this one lies in the
+   viewport of every layout. */
+function viewport(entry, cam) {
+  const m = first(entry).map, W = 16 * entry.screen[0], H = 16 * entry.screen[1];
+  const x = Math.min(Math.max(cam.x - W / 2, 0), 16 * m.w - W), z = Math.min(Math.max(cam.z - H / 2, 0), 16 * m.h - H);
+  return [x, z, x + W, z + H];
+}
+const inside = (r, q) => q[0] >= r[0] && q[1] >= r[1] && q[2] <= r[2] && q[3] <= r[3];
+const bodyOf = u => [u.x - 8 * u.fx, u.z - 8 * u.fz, u.x + 8 * u.fx, u.z + 8 * u.fz];
+const unitIn = (w, id) => w.units.find(u => u.id === id);
+const camAt = (entry, d, k, t) => { const c = WikiSim.seatCam(entry, d, k, t); return { x: c[0], z: c[1] }; };
+const sameCam = (a, b) => a.x === b.x && a.z === b.z;
+/* the sight grid's blocks rect r meets, its edges included: every block the four corners the frame tests fall on
+   (players-spec.md 7.4 step 3), and the blocks between them */
+function blocksOf(w, r) {
+  const gw = w.map.w >> 1, gh = w.map.h >> 1, out = [];
+  for (let b = Math.max(0, Math.floor(r[1]) >> 5); b <= Math.min(gh - 1, Math.floor(r[3]) >> 5); b++)
+    for (let a = Math.max(0, Math.floor(r[0]) >> 5); a <= Math.min(gw - 1, Math.floor(r[2]) >> 5); a++) out.push(b * gw + a);
+  return out;
+}
+// unit u is on no lit block of `lit`: the frame leaves it out of the map's units
+const unseen = (w, lit, u) => blocksOf(w, bodyOf(u)).every(i => !lit[i]);
+const blockBox = (w, i) => { const gw = w.map.w >> 1, a = i % gw, b = (i - a) / gw; return [32 * a, 32 * b, 32 * a + 32, 32 * b + 32]; };
+/* each named unit of the frames' worlds inside the viewport of the frame's camera, on every clock from `from` to `to`
+   the game shows its own tick (no seek pending) */
+function viewClaim(entry, rr, ok, from, to, ids, what) {
+  let bad = null;
+  for (const f of rr.all) {
+    if (bad || f.clock < from || f.clock >= to || f.game.target >= 0) continue;
+    const vp = viewport(entry, f.players.cam), miss = ids.find(id => { const u = unitIn(f.w, id); return !u || !inside(vp, bodyOf(u)); });
+    if (miss) bad = `${miss} on clock ${f.clock}`;
+  }
+  ok(!bad, `${what} inside the viewport from clock ${from} to ${to - 1}${bad ? ` (not ${bad})` : ''}`);
+}
+/* THE COUNTERS' BOUND (players-spec.md 13): no block of any seat's lit grid reaches 256, where the engine's byte
+   wraps. A stamp adds at most 1 + its table's largest count to a block, so a seat's stamps at a tick -- its units, and
+   its deaths still in sight -- bound every block of its grid; the sum stays below 256 at every tick of the game (`g`,
+   runGame's frames). Without a table every block is 1. */
+function countBound(g, layout, ok) {
+  const S = layout && layout.sight;
+  if (!S) { ok(true, 'no sight table: every block of a lit grid is 1'); return; }
+  let worst = 0, at = null;
+  for (const f of g.all) {
+    const T = new Map(f.v.game.types.map(t => [t.name, t])), sum = new Map();
+    const peak = t => { const k = T.get(t), q = k && WikiSim.sightTable(S, k.sightDistance); return k ? 1 + (q ? Math.max(0, ...q.cells.map(c => c[2])) : 0) : 0; };
+    for (const u of f.v.units) sum.set(u.owner, (sum.get(u.owner) || 0) + peak(u.type));
+    for (const e of f.v.game.deaths) if (f.t <= e.tick + WikiSim.SIGHT_SPAN) sum.set(e.owner, (sum.get(e.owner) || 0) + peak(e.type));
+    for (const [k, n] of sum) if (n > worst) { worst = n; at = [f.t, k]; }
+  }
+  ok(worst < 256, `no block of a seat's lit grid reaches 256: the stamps bound it by ${worst}${at ? ` (seat ${at[1]} at tick ${at[0]})` : ''}`);
+}
+/* THE TOAST OF A CAMERA NOT RECORDED (players-spec.md PD2): with Bram's scene camera and his camera inputs gone, Jump
+   and then Follow on his row each toast it on their release, and the camera stays on eye (0, 0) with Follow off */
+function noCameraClaim(entry, d, layout, ctx, ok) {
+  const e = withFirst(entry, sc => ({ ...sc, seats: sc.seats.map((z, k) => { if (k !== 1) return z; const { camera, ...rest } = z; return rest; }) }));
+  const dm = { ...d, end: 100, game: { ...d.game, inputs: d.game.inputs.filter(x => !('camera' in x && x.seat === 1)) },
+    inputs: [{ at: 10, hud: 'jump', seat: 1 }, { at: 50, hud: 'follow', seat: 1 }] };
+  const rr = runReplay(e, dm, layout, ctx);
+  const toasts = [...pressesOf(dm, 'jump'), ...pressesOf(dm, 'follow')].map(p => rr.F(p.release))
+    .filter(f => f.toast && f.toast.kind === 'camera' && f.toast.value === 1 && f.toast.at === f.tick).length;
+  ok(toasts === 2 && rr.all.every(f => sameCam(f.players.cam, { x: 0, z: 0 }) && f.players.follow === -1),
+    `with Bram's camera not recorded, Jump and Follow on his row each toast "Camera was not recorded" (${toasts} of 2) and move nothing`);
+}
+/* THE CAMERA UNDER THE SCRIPT: on each clock the camera the presses give -- eye (0, 0) until one acts, then a Jump's
+   seat's camera at its release's shown tick, or a Follow's at every shown tick -- equal to the replay's, and Follow's
+   seat as the presses toggle it */
+function cameraClaim(entry, d, rr, ok) {
+  const acts = [...pressesOf(d, 'jump'), ...pressesOf(d, 'follow')].sort((a, b) => a.release - b.release);
+  let cam = { x: 0, z: 0 }, follow = -1, bad = null;
+  for (const f of rr.all) {
+    for (const p of acts) if (p.release === f.clock && !f.done && rr.F(f.clock) === f) {
+      if (p.hud === 'jump') { cam = camAt(entry, d, p.seat, f.players.shown); follow = -1; }
+      else follow = follow === p.seat ? -1 : p.seat;
+    }
+    if (follow >= 0) cam = camAt(entry, d, follow, f.players.shown);
+    if (!bad && (!sameCam(f.players.cam, cam) || f.players.follow !== follow))
+      bad = `clock ${f.clock}: (${f.players.cam.x}, ${f.players.cam.z}) Follow ${f.players.follow}, want (${cam.x}, ${cam.z}) Follow ${follow}`;
+  }
+  ok(!bad, `the camera is eye (0, 0) until a press acts, then the Jump's or the Follow's seat's at the shown tick${bad ? ` (not on ${bad})` : ''}`);
+}
+/* THE GOALS' CLAIM, a game's: every move order of its script goes to a place its unit's planner reaches (sim.js THE
+   PLANNER). On every tick the order stands, some node within a cell of the point stands the unit's body inside the map
+   and clear of every body but those it overlaps already -- units, walking or not, and features -- and joins the nodes
+   the unit stands on through clear nodes, sides or corners with both sides clear. A goal no node reaches makes every
+   leg's search expand the whole grid, the dearest tick a game has. A claim on a build site, which the planner also
+   counts, is not counted here: the sites a script builds on are the placement's, which refuses a blocked one. Every
+   context is held to it, a pack's casting too: a mod's bodies differ (TA Zero's commanders are 3 x 3), so a goal is
+   authored with room for the largest body any casting gives its unit, not only the fixture's. */
+function goalClaims(r, ok) {
+  const unreached = [];
+  for (const f of r.all) for (const u of f.v.units) {
+    const o = (f.o[u.id] || [])[0];
+    if (!o || o.k !== 'move' || unreached.some(x => x.id === u.id && x.x === o.x && x.z === o.z)) continue;
+    if (!reaches(f.v, u, o.x, o.z)) unreached.push({ id: u.id, x: o.x, z: o.z, t: f.t });
+  }
+  ok(!unreached.length, `every move order goes to a place its unit's planner reaches${unreached.length ?
+    ` (not ${unreached.map(x => `${x.id} to (${x.x}, ${x.z}) at tick ${x.t}`).join('; ')})` : ''}`);
+}
+// unit u of world v reaches a node within a cell of (x, z): the planner's goal test, searched as A* with early exit
+function reaches(v, u, x, z) {
+  const W = v.map.w, H = v.map.h, fx = u.fx, fz = u.fz, NW = W - fx + 1, NH = H - fz + 1;
+  if (NW < 1 || NH < 1) return false;
+  const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3], now = bodyOf(u), occ = new Uint8Array(W * H);
+  const rects = [...v.units.filter(w => w !== u).map(bodyOf), ...v.feats.map(e => [16 * e.ox, 16 * e.oz, 16 * (e.ox + e.fx), 16 * (e.oz + e.fz)])];
+  for (const b of rects) {
+    if (hit(now, b)) continue;
+    for (let j = Math.max(0, Math.floor(b[1] / 16)); j < Math.min(H, Math.ceil(b[3] / 16)); j++)
+      for (let i = Math.max(0, Math.floor(b[0] / 16)); i < Math.min(W, Math.ceil(b[2] / 16)); i++) occ[j * W + i] = 1;
+  }
+  const free = n => { const i = n % NW, j = (n - i) / NW; for (let b = 0; b < fz; b++) for (let a = 0; a < fx; a++) if (occ[(j + b) * W + i + a]) return false; return true; };
+  const dist = n => { const i = n % NW, j = (n - i) / NW; return Math.hypot((i + fx / 2) * 16 - x, (j + fz / 2) * 16 - z); };
+  // a binary heap of [the distance left to the goal ring, node], nearest first
+  const seen = new Uint8Array(NW * NH), heap = [];
+  const push = n => {
+    seen[n] = 1;
+    heap.push([Math.max(0, dist(n) - 16), n]);
+    for (let k = heap.length - 1; k > 0;) { const q = (k - 1) >> 1; if (heap[q][0] <= heap[k][0]) break; [heap[q], heap[k]] = [heap[k], heap[q]]; k = q; }
+  };
+  const pop = () => {
+    const top = heap[0], end = heap.pop();
+    if (heap.length) {
+      heap[0] = end;
+      for (let k = 0; ;) {
+        const l = 2 * k + 1, r = l + 1;
+        let m = k;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === k) break;
+        [heap[m], heap[k]] = [heap[k], heap[m]]; k = m;
+      }
+    }
+    return top[1];
+  };
+  const a = u.x / 16 - fx / 2, b = u.z / 16 - fz / 2;
+  for (let j = Math.floor(b); j <= Math.ceil(b); j++) for (let i = Math.floor(a); i <= Math.ceil(a); i++)
+    if (i >= 0 && j >= 0 && i < NW && j < NH && !seen[j * NW + i] && free(j * NW + i)) push(j * NW + i);
+  while (heap.length) {
+    const n = pop();
+    if (dist(n) <= 16) return true;
+    const i = n % NW, j = (n - i) / NW;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const ni = i + di, nj = j + dj, q = nj * NW + ni;
+      if (ni < 0 || nj < 0 || ni >= NW || nj >= NH || seen[q] || !free(q)) continue;
+      if (di && dj && (!free(j * NW + ni) || !free(nj * NW + i))) continue;
+      push(q);
+    }
+  }
+  return false;
+}
+// the engine's radar pass deadline, 30 GameTime (0x46507D..0x465092), the claim's own figure rather than the code's
+const PASS_TICKS = 30;
+// a lit grid as the pass's fog bits in the view's hex: block i is bit i & 7 of byte i >> 3
+function fogHex(lit) {
+  const b = new Uint8Array((lit.length + 7) >> 3);
+  lit.forEach((x, i) => { if (x) b[i >> 3] |= 1 << (i & 7); });
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+/* THE PASS AT 2x AND FASTER (PD17): Sight on Bram, then speed 20, 40 and 80, each entered from an odd game tick, so
+   that a step's 2, 4 or 8 ticks never show a multiple of 30. The pass still keeps the engine's deadline: on every
+   clock under 4x and 8x it is the one made at the last multiple of 30 at or below the shown tick, each of the window's
+   multiples of 30 gets one, and its fog is Bram's lit grid in the game played straight to that tick (`g`) */
+function cadenceClaim(entry, d, layout, ctx, g, ok) {
+  const dm = { ...d, end: 220, inputs: [{ at: 10, hud: 'sight', seat: 1 }, { at: 40, hud: 'speed' }, { at: 70, hud: 'speed' },
+    { at: 140, hud: 'speed' }] };
+  const rr = runReplay(entry, dm, layout, ctx), S = layout && layout.sight, world = new Map(g.all.map(f => [f.t, f.v]));
+  for (const sp of [40, 80]) {
+    const run = rr.all.filter(f => f.game.speed === sp && f.game.target < 0 && f.players.sight === 1);
+    const from = run.length ? rr.all[rr.all.indexOf(run[0]) - 1].game.tick : -1, to = run.length ? run[run.length - 1].game.tick : -1;
+    const due = [];
+    for (let m = PASS_TICKS * (Math.floor(from / PASS_TICKS) + 1); m <= to; m += PASS_TICKS) due.push(m);
+    const made = [...new Set(run.map(f => f.players.pass.at))].filter(t => t > from);
+    const stale = run.find(f => f.players.pass.at !== PASS_TICKS * Math.floor(f.players.shown / PASS_TICKS));
+    const wrong = made.find(t => { const v = world.get(t), f = run.find(x => x.players.pass.at === t);
+      return !v || f.players.pass.fog !== fogHex(WikiSim.sightLit(v, S, 1, t)); });
+    ok(run.length > 0 && from % 2 === 1 && run.every(f => f.game.tick % 2 === 1) && !stale && same(made, due) && wrong === undefined,
+      `at speed ${sp} from the odd tick ${from} to ${to} the pass is made at each multiple of 30, ${due.length} of them, with Bram's ` +
+      `lit grid of that tick${stale ? ` (not on clock ${stale.clock}: the pass of ${stale.players.pass.at} at ${stale.players.shown})` : ''}` +
+      `${wrong !== undefined ? ` (the fog of ${wrong} is not his lit grid there)` : ''}${!same(made, due) ? ` (made ${made.join(' ')})` : ''}`);
+  }
+}
+/* EACH PLAYERS DEMO'S OWN CLAIMS, by its id (players-spec.md section 9, the authored timings; the ticks read from the
+   data) */
+const PLAYERS_CLAIMS = {
+  /* Jump on Bram's row puts the camera where his was at the release and leaves it there while his own moves on; Jump
+     on Ada's row puts it on hers; Follow stays off; eye (0, 0) before; each player's units inside the view the camera
+     gives; a seat whose camera was not recorded toasts */
+  jump(d, rr, ok, entry, ctx, layout) {
+    const [a, b] = pressesOf(d, 'jump'), A = rr.F(a.release), B = rr.F(b.release);
+    cameraClaim(entry, d, rr, ok);
+    const e0 = viewport(entry, rr.F(a.release - 1).players.cam);
+    ok(a.seat === 1 && b.seat === 0 && e0[0] === 0 && e0[1] === 0,
+      'the first Jump is Bram\'s, the second Ada\'s, and the eye before them is (0, 0), the map\'s top-left corner (PD15)');
+    const at = camAt(entry, d, 1, A.players.shown), moved = rr.all.find(f => f.clock > a.release && f.clock < b.release &&
+      !sameCam(camAt(entry, d, 1, f.players.shown), at));
+    ok(moved && sameCam(rr.F(b.release - 1).players.cam, at),
+      `Bram's camera moves on after the Jump (from clock ${moved && moved.clock}) while the viewer's stays at (${at.x}, ${at.z})`);
+    ok(!sameCam(B.players.cam, A.players.cam), `Jump on Ada's row moves the camera to hers, (${B.players.cam.x}, ${B.players.cam.z})`);
+    viewClaim(entry, rr, ok, a.release, b.release, ['c1', 'w1'], 'Bram\'s commander and walker');
+    viewClaim(entry, rr, ok, b.release, d.end + 1, ['c0', 'b0'], 'Ada\'s commander and builder');
+    noCameraClaim(entry, d, layout, ctx, ok);
+  },
+  /* Follow on Bram's row keeps the camera on his at every shown tick while it is on, his camera gliding meanwhile;
+     Follow again lets go and the camera stays; his units inside the view while it follows */
+  follow(d, rr, ok, entry) {
+    const [a, b] = pressesOf(d, 'follow');
+    cameraClaim(entry, d, rr, ok);
+    ok(a.seat === 1 && b.seat === 1 && rr.all.every(f => f.players.follow === (f.clock >= a.release && f.clock < b.release ? 1 : -1)),
+      `Follow is Bram's from clock ${a.release} to ${b.release - 1}, then off`);
+    const s = rr.F(a.release).players.cam, e = rr.F(b.release - 1).players.cam;
+    ok(!sameCam(s, e) && rr.all.every(f => f.clock < b.release || sameCam(f.players.cam, e)),
+      `the camera goes with his, from (${s.x}, ${s.z}) to (${e.x}, ${e.z}), and stays there after Follow again`);
+    viewClaim(entry, rr, ok, a.release, b.release, ['c1', 'w1'], 'Bram\'s commander and walker');
+  },
+  /* Sight on Bram, through a seek: the eye stays (0, 0); the seek's end sets every DisplayTimer to its tick; from the
+     release the bar's rates are Bram's at each re-read and its memo eases from 0 toward his stored values; some unit
+     of Ada's or Cleo's is hidden on some shown tick; w1's death lights its stamp's blocks through d + 60 and no longer
+     from d + 61; from the first pass after that which marks c0 and finds it on no lit block -- his commander's radar --
+     c0 stays a contact, hidden and inside the view, until Sight lets go; then the full map: no fog, no contact, the
+     bar's rates 0 and its memo 0. Without a sight table every block is lit and nothing is hidden.
+
+     THE TWO CLAIMS A MOD'S FIGURES CAN RULE OUT (owner's decision OQ-F): a hidden unit and c0 as a radar-only contact.
+     The captions state the rule, true in every mod, so these two check the demo shows it wherever the casting's
+     figures let it -- the types' sight, radar and sonar, through the layout's tables, at the units' positions -- and
+     are skipped by name (`skip`) where they do not: Twilight's CORAK sees 600 and its commanders 650 on a field 1536
+     wide, and TA Zero's commanders have radar equal to sight. A unit outside Bram's sight is observable when one of
+     Ada's or Cleo's stands on no block his units and live deaths light on any tick of the game (`g`, runGame's
+     frames); the claim then needs one on some clock under Sight, the window the demo shows. A radar-only contact is
+     observable when, at some pass deadline after the death vision that the demo shows under Sight (a multiple of 30,
+     PD17), c0 stands on no block Bram's lit grid lights and closer than max(radar, sonar) to one of his live,
+     finished, activated units with a radar or sonar, at the places the game played straight gives (`g`). That rule
+     reads the types' figures and the units' places alone, and sightLit, which castcheck holds to M0-P1's measured
+     sets; never sightContacts, the code under test, so a contact it loses fails the claim rather than skipping it.
+     Where the rule says observable the claim runs and needs the replay's own pass to mark c0, from a pass by the
+     radar caption to Sight's release, inside the view; where it says not, the claim is skipped by name, and
+     sightContacts making c0 a contact there fails, the rule and the simulation disagreeing. */
+  sight(d, rr, ok, entry, ctx, layout, g, skip) {
+    const [on, off] = pressesOf(d, 'sight'), S = layout && layout.sight;
+    cadenceClaim(entry, d, layout, ctx, g, ok);
+    ok(on.seat === 1 && off.seat === 1 && rr.all.every(f => f.players.sight === (f.clock >= on.release && f.clock < off.release ? 1 : -1)),
+      `Sight is Bram's from clock ${on.release} to ${off.release - 1}, then the full map`);
+    ok(rr.all.every(f => sameCam(f.players.cam, { x: 0, z: 0 })), 'the camera stays on eye (0, 0)');
+    const end = rr.ends[0];
+    ok(end && end.rv.players.bar.dt.every(t => t === end.T), `the seek's end sets every DisplayTimer to its tick${end ? `, ${end.T}` : ''}`);
+    const under = rr.all.filter(f => f.players.sight === 1 && f.game.target < 0), rates = f => f.w.game.bars[1];
+    const reread = under.filter((f, i) => i === 0 || f.players.bar.dt[1] !== under[i - 1].players.bar.dt[1]);
+    const wrong = reread.find(f => JSON.stringify(f.players.bar.rates) !== JSON.stringify([rates(f).ei, rates(f).eo, rates(f).mi, rates(f).mo].map(Math.fround)));
+    ok(under[0] === rr.F(on.release) && under[0].players.bar.dt[1] !== rr.F(on.release - 1).players.bar.dt[1] && !wrong,
+      `the bar re-reads Bram's rates on Sight's own step and on each of his record's re-reads (${reread.length})${wrong ? `, not on clock ${wrong.clock}` : ''}`);
+    const pre = rr.F(on.release - 1).players.bar, M = under.find(f => f.players.bar.be === Math.trunc(rates(f).e));
+    ok(pre.be === 0 && pre.bm === 0 && under[0].players.bar.be > 0 && M,
+      `the memo eases from 0 toward Bram's stored energy, ${Math.trunc(rates(under[0]).e)}, and reaches it${M ? ` on clock ${M.clock}` : ''}`);
+    const last = rr.F(off.release);
+    ok(rr.all.filter(f => f.clock >= off.release).every(f => f.players.pass.blocks === 0 && !f.players.pass.contacts.length &&
+      f.players.bar.be === 0 && f.players.bar.bm === 0) && last.players.bar.rates.every(x => x === 0),
+      'Sight again: the full map, no fog and no contact, the bar\'s rates re-read as 0 and its memo 0');
+    if (!S) {
+      ok(under.every(f => f.players.pass.blocks > 0 && !f.w.units.some(u => unseen(f.w, WikiSim.sightLit(f.w, S, 1, f.players.shown), u))),
+        'no sight table: every block is lit under Sight, and no unit is hidden');
+      return;
+    }
+    const lit = f => WikiSim.sightLit(f.w, S, 1, f.players.shown);
+    const hides = (w, L) => w.units.some(u => u.owner !== 1 && unseen(w, L, u));
+    // Bram's types and their figures, which a skip names
+    const types = new Map(g.all[0].v.game.types.map(t => [t.name, t]));
+    const bram = [...new Set(g.all.flatMap(f => f.v.units.filter(u => u.owner === 1).map(u => u.type)))].map(n => types.get(n)).filter(Boolean);
+    const sights = bram.map(t => `${t.name} ${t.sightDistance}`).join(', ');
+    const HIDDEN = 'some unit of Ada\'s or Cleo\'s is outside Bram\'s sight on a clock under it';
+    if (!g.all.some(f => hides(f.v, WikiSim.sightLit(f.v, S, 1, f.t))))
+      skip(HIDDEN, `no unit of Ada's or Cleo's stands outside his sight on any tick of the game (his units' sight: ${sights})`);
+    else {
+      const shown = under.find(f => hides(f.w, lit(f)));
+      ok(shown, `${HIDDEN}${shown ? `, first on clock ${shown.clock}` : ''}`);
+    }
+    // w1's death: the blocks its stamp alone lights at its tick
+    const kill = d.game.inputs.find(e => e.kill === 'w1'), seen = under.find(f => f.w.game.deaths.some(e => e.tick === kill.at && e.owner === 1));
+    const death = seen && seen.w.game.deaths.find(e => e.tick === kill.at && e.owner === 1);
+    if (!death) { ok(false, `w1's death at ${kill.at} is in the world under Sight`); return; }
+    const alone = WikiSim.sightLit({ ...seen.w, units: [], game: { ...seen.w.game, deaths: [death] } }, S, 1, death.tick);
+    const D = [...alone.keys()].filter(i => alone[i]), span = death.tick + WikiSim.SIGHT_SPAN;
+    const held = under.filter(f => f.players.shown >= death.tick && f.players.shown <= span), after = under.filter(f => f.players.shown > span);
+    const dark = after.find(f => { const L = lit(f), only = WikiSim.sightLit({ ...f.w, game: { ...f.w.game, deaths: f.w.game.deaths.filter(e => e !== death && !(e.tick === death.tick && e.owner === 1)) } }, S, 1, f.players.shown);
+      return D.some(i => L[i] !== only[i]); });
+    const darkened = after[0] ? (() => { const L = lit(after[0]); return D.filter(i => !L[i]); })() : [], gone = darkened.length;
+    ok(held.length && held[held.length - 1].players.shown === span && held.every(f => { const L = lit(f); return D.every(i => L[i]); }) &&
+      after.length && after[0].players.shown === span + 1 && !dark && gone > 0,
+      `w1's death lights its ${D.length} blocks while the shown tick is ${death.tick}..${span}; from ${span + 1} only Bram's live units light them (${gone} go dark)`);
+    // the set reaches about 256 units round the death, past the view's 480 rows: its own block and some that go dark show
+    const own = (() => { const k = seen.w.game.types.find(t => t.name === death.type), h = Math.min(255, k.modelHeight + 1);
+      return ((Math.floor(death.z) - (h >> 1)) >> 5) * (seen.w.map.w >> 1) + (Math.floor(death.x) >> 5); })();
+    const shows = darkened.filter(i => inside(viewport(entry, { x: 0, z: 0 }), blockBox(seen.w, i))).length;
+    ok(alone[own] && inside(viewport(entry, { x: 0, z: 0 }), blockBox(seen.w, own)) && shows > 0,
+      `the death's own block lies inside the viewport, and ${shows} of the ${gone} blocks that go dark`);
+    // the radar contact: the first pass after the death vision that marks c0 on no lit block
+    const passes = under.filter((f, i) => f.players.pass.at > span && (i === 0 || f.players.pass.at !== under[i - 1].players.pass.at));
+    const CONTACT = 'a pass after the death vision marks c0 a contact on no lit block';
+    const world = new Map(g.all.map(f => [f.t, f.v]));
+    const deadlines = [...new Set(under.map(f => f.players.shown))].filter(t => t > span && t % PASS_TICKS === 0);
+    // c0 on no lit block and inside the reach of a radar or sonar of Bram's, from the raw figures (the claim's comment)
+    const reached = t => {
+      const v = world.get(t), c0 = v && unitIn(v, 'c0');
+      if (!c0 || !unseen(v, WikiSim.sightLit(v, S, 1, t), c0)) return false;
+      const T = new Map(v.game.types.map(k => [k.name, k]));
+      return v.units.some(u => { const k = T.get(u.type), R = k ? Math.max(k.radarDistance, k.sonarDistance) : 0;
+        return u.owner === 1 && u.built >= 1 && k && k.activates && R > 0 && Math.hypot(u.x - c0.x, u.z - c0.z) < R; });
+    };
+    if (!deadlines.some(reached)) {
+      const radars = bram.map(t => `${t.name} radar ${t.radarDistance}, sonar ${t.sonarDistance}${t.activates ? '' : ' (not activated)'}, sight ${t.sightDistance}`).join('; ');
+      skip(CONTACT, `at no pass after the death vision does the world make c0 a contact of Bram's on no lit block (${radars})`);
+      const contact = deadlines.find(t => { const v = world.get(t), L = v && WikiSim.sightLit(v, S, 1, t), k = v ? v.units.findIndex(u => u.id === 'c0') : -1;
+        return k >= 0 && WikiSim.sightContacts(v, L, 1)[k] === 1 && unseen(v, L, v.units[k]); });
+      ok(contact === undefined, `the simulation makes c0 no radar-only contact where the raw figures reach none${contact !== undefined ? ` (it does at ${contact})` : ''}`);
+      return;
+    }
+    const P = passes.find(f => { const u = unitIn(f.w, 'c0'); return u && f.players.pass.contacts.includes('c0') && unseen(f.w, lit(f), u); });
+    const cap = (d.inputs.find(e => typeof e.caption === 'string' && e.caption.includes('radar')) || {}).at;
+    if (!P) { ok(false, CONTACT); return; }
+    const k1 = rr.all.findIndex(f => f === P), lost = rr.all.slice(k1).find(f => f.clock < off.release && f.game.target < 0 && (() => {
+      const u = unitIn(f.w, 'c0');
+      return !u || !f.players.pass.contacts.includes('c0') || !unseen(f.w, lit(f), u) || !inside(viewport(entry, f.players.cam), bodyOf(u));
+    })());
+    ok(P.clock <= cap && !lost,
+      `from the pass at ${P.players.pass.at} (clock ${P.clock}, by the caption at ${cap}) to clock ${off.release - 1} c0 is a contact on no lit block, inside the view${lost ? ` (not on clock ${lost.clock})` : ''}`);
+  },
+  /* the switches: the three cursors (each seat's from its first move) before the first switch, Bram's select click on w1
+     at its tick ringed while its age is 1..14, each seat's selection; each switch flips its overlay alone, from its
+     release; all of them inside the start view */
+  overlays(d, rr, ok, entry) {
+    const flips = ['cursors', 'clicks', 'selections'].flatMap(n => pressesOf(d, n).map(p => [p.release, WikiReplay.TOG[n]]));
+    const bad = rr.all.find(f => f.players.tog !== flips.reduce((t, [c, b]) => f.clock >= c ? t ^ b : t, WikiReplay.TOG_ALL));
+    ok(!bad, `each switch flips its overlay alone from its release (${flips.map(x => x[0]).join(', ')})${bad ? `, not on clock ${bad.clock}` : ''}`);
+    const vp = viewport(entry, { x: 0, z: 0 }), c1 = pressesOf(d, 'cursors')[0], F = rr.F(c1.release - 1);
+    ok(rr.all.every(f => sameCam(f.players.cam, { x: 0, z: 0 })), 'the camera stays on eye (0, 0)');
+    ok(F.w.game.cursors.length === 3 && F.w.game.cursors.every(c => c.on && inside(vp, [c.x, c.z, c.x, c.z])) && F.players.tog & WikiReplay.TOG.cursors,
+      `before the first switch, at clock ${F.clock}, the three cursors are on, inside the view`);
+    const sel = d.game.inputs.find(e => e.seat === 1 && e.down === 'select'), ring = [];
+    for (let n = sel.at; n < sel.at + 14; n++) {
+      const f = rr.all.find(x => x.game.target < 0 && x.players.shown === n && x.clock > 0), c = f && f.w.game.clicks.find(x => x.tick === sel.at && x.seat === 1);
+      if (f && c && n + 1 - c.tick >= 1 && n + 1 - c.tick < 15 && f.players.clickFrom <= c.tick && f.players.tog & WikiReplay.TOG.clicks &&
+        inside(vp, [c.x, c.z, c.x, c.z])) ring.push(n);
+    }
+    ok(ring.length === 14, `Bram's select click of tick ${sel.at} is in the ring, inside the view, with Clicks on, at its ages 1..14 (${ring.length} of 14)`);
+    const sels = f => [0, 1, 2].map(k => f.w.units.filter(u => u.owner === k && u.selected && inside(vp, bodyOf(u))).map(u => u.id).join(' '));
+    // Ada selects b0 first and c0 later; the frame before her second click shows b0
+    const [, ada] = d.game.inputs.filter(e => e.seat === 0 && e.down === 'select').map(e => e.at);
+    const s = pressesOf(d, 'selections')[0], early = rr.F(ada - 1), late = rr.F(s.release - 1);
+    ok(JSON.stringify(sels(early)) === '["b0","w1","c2"]' && JSON.stringify(sels(late)) === '["c0","w1","c2"]' && late.players.tog & WikiReplay.TOG.selections,
+      `each seat's selection, inside the view with Selections on: b0, w1 and c2 at clock ${early.clock}, c0, w1 and c2 at ${late.clock} (${sels(early)}; ${sels(late)})`);
+  },
+  /* the stats window: opened on units by player, the army and kills measures, the team split, closed; its samples, 61
+     at a period of 30, each seat's measures of the game played straight to their tick; the kills: Ada's from w1's
+     death, Bram's from the solar's */
+  stats(d, rr, ok, entry, ctx, layout) {
+    const rel = n => pressesOf(d, n).map(p => p.release), [open] = rel('stats'), [close] = rel('close');
+    const chips = pressesOf(d, 'chip').map(p => [p.release, p.chip]), M = WikiReplay.MEASURES;
+    const want = c => {
+      const s = { open: c >= open && c < close, measure: WikiReplay.MEASURE0, team: false };
+      for (const [r, n] of chips) if (c >= r) { if (n === 'team' || n === 'player') s.team = n === 'team'; else s.measure = M.indexOf(n); }
+      return s;
+    };
+    const bad = rr.all.find(f => JSON.stringify(f.players.stat) !== JSON.stringify(want(f.clock)));
+    ok(!bad && chips.map(c => c[1]).join() === 'army,kills,team',
+      `opened on units by player, then army, kills and the team split, closed at ${close}${bad ? ` (not on clock ${bad.clock})` : ''}`);
+    const p = rr.last.players, N = Math.trunc(d.game.end / p.period) + 1;
+    ok(p.npt === N && p.period === 30 && p.base === 0 && rr.stat.length === N, `${N} samples at a period of 30 from tick 0 (${p.npt}, ${p.period})`);
+    const s = WikiSim.game(entry, d, layout, ctx, 'refuse'), at = n => n * p.period;
+    let off = null;
+    for (let n = 0; n < N && !off; n++) {
+      while (s.tick < at(n) && !s.done) s.step();
+      const z = s.gameNow().seats.map(q => [q.mi, q.ei, q.units, q.army, q.kills, q.losses, q.wm].map(Math.fround));
+      if (JSON.stringify(z) !== JSON.stringify(rr.stat[n])) off = n;
+    }
+    s.free();
+    ok(off === null, `each sample is every seat's seven measures of the game played straight to its tick${off !== null ? ` (not sample ${off})` : ''}`);
+    const kills = M.indexOf('kills'), from = id => Math.ceil(d.game.inputs.find(e => e.kill === id).at / p.period);
+    const k0 = from('w1'), k1 = from('s2');
+    ok(rr.stat.every((q, n) => q[0][kills] === (n >= k0 ? 1 : 0) && q[1][kills] === (n >= k1 ? 1 : 0) && q[2][kills] === 0),
+      `kills: Ada 1 from sample ${k0}, Bram 1 from sample ${k1}, Cleo none`);
+    const teams = first(entry).seats.map(z => z.team);
+    ok(teams[0] === teams[2] && teams[1] !== teams[0], 'Ada and Cleo are one team, Bram another');
+  },
+};
+
 function main() {
 const packDir = arg('--pack');
 if (packDir !== undefined) {
@@ -2154,6 +2572,11 @@ if (packDir !== undefined) {
   PACK = JSON.parse(fs.readFileSync(`${PACK_DIR}/side.json`, 'utf8'));
 }
 LAYOUT = process.argv.includes('--null-layout') ? null : PACK ? PACK.layout : FIXTURE;
+const shard = arg('--shard');
+if (shard !== undefined) {
+  [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(shard) || []).slice(1).map(Number);
+  if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) { console.error(`simcheck: --shard ${shard} is not K/N with 1 <= K <= N`); process.exit(2); }
+}
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
@@ -2217,7 +2640,7 @@ const games = fs.readdirSync(`${ROOT}art/wiki/entries`).filter(f => f.endsWith('
 const gameTally = {}, replayTally = {};
 for (const c of games.length ? contexts() : []) {
   const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [], deaths: [0, 0, 0] };
-  const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [] };
+  const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [], skipped: [] };
   /* each game once (demos that share their scene and their game script play the same game), then every demo as a
      replay on it */
   const played = new Map();
@@ -2263,6 +2686,8 @@ for (const c of games.length ? contexts() : []) {
    replay's claims and the demo's own */
 function replayDemo(c, id, entry, d, lock, g, rt) {
   const notes = [], ok = (cond, what) => notes.push([!!cond, what]);
+  // a claim this context's figures rule out (PLAYERS_CLAIMS sight): named with why, never silent, and not a failure
+  const skips = [], skip = (what, why) => skips.push([what, why]);
   try {
     if (!g) throw new Error('its game did not play');
     const rr = entry.takeover ? runTakeover(entry, d, c.layout, c.ctx) : entry.live ? runLive(entry, d, c.layout, c.ctx)
@@ -2276,6 +2701,11 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
       takeoverClaims(entry, d, c.layout, c.ctx, rr, ok);
       if (TAKEOVER_CLAIMS[d.id]) TAKEOVER_CLAIMS[d.id](d, rr, ok, entry, c.ctx, c.layout);
       else ok(false, `the takeover demo ${d.id} has claims of its own (TAKEOVER_CLAIMS)`);
+    } else if (entry.players) {
+      replayClaims(entry, d, c.layout, c.ctx, rr, g, ok);
+      countBound(g, c.layout, ok);
+      if (PLAYERS_CLAIMS[d.id]) PLAYERS_CLAIMS[d.id](d, rr, ok, entry, c.ctx, c.layout, g, skip);
+      else ok(false, `the players demo ${d.id} has claims of its own (PLAYERS_CLAIMS)`);
     } else if (entry.live) {
       liveClaims(entry, d, c.layout, c.ctx, rr, ok);
       if (LIVE_CLAIMS[d.id]) LIVE_CLAIMS[d.id](d, rr, ok, entry, c.ctx);
@@ -2289,10 +2719,13 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
   const pass = notes.every(n => n[0]);
   if (!pass) failed++;
   rt[pass ? 'pass' : 'fail']++;
-  console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] replay ${id}/${d.id} -- ${d.title}${lock ? ` (its game stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+  for (const [what] of skips) rt.skipped.push(`${id}/${d.id}: ${what}`);
+  console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] replay ${id}/${d.id} -- ${d.title}${lock ? ` (its game stops on tick ${lock.t}: ${lock.type} unbound)` : ''}` +
+    `${skips.length ? ` (${skips.length} claim${skips.length > 1 ? 's' : ''} not observable here, skipped)` : ''}`);
   for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
+  for (const [what, why] of skips) console.log(`     SKIP ${what} -- not observable in ${PACK ? `${PACK.mod} ` : ''}${c.label}: ${why}`);
 }
-for (const id of PACK ? [] : ids) {
+for (const id of PACK || SHARD !== 1 ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
   for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
     let pass = false;
@@ -2312,8 +2745,10 @@ for (const [label, t] of Object.entries(gameTally))
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 for (const [label, t] of Object.entries(replayTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} replays ${label}] ${t.pass} pass, ${t.fail} fail` +
-    `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}`);
-console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
+    `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}` +
+    `${t.skipped.length ? `; skipped, not observable with these figures: ${t.skipped.join('; ')}` : ''}`);
+console.log(`${SHARDS > 1 ? `shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', no rule cases' : ''}: ` : ''}` +
+  (failed ? `${failed} check(s) failed` : 'all demos and rules pass'));
 process.exit(failed ? 1 : 0);   // also ends the scripts' host
 }
 

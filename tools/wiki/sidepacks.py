@@ -13,12 +13,17 @@ pack's layout into tools/wiki/mockup/sim.js's checkLayout under node, the bound 
 one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
 what pins it.
 
+From the stock pack it also writes the fixture layouts' `sight` (art/wiki/side/fixture.json and fixture-tall.json),
+the stock game's sight table as gfx.py reduces it to count grids -- the tables the stock castings and the tree's players
+entries reach -- so that the wiki's fallback layout lights what the stock game lights (`fixture_sight`).
+
 This mapping is test tooling; the picture rule and the cast rule in gfx.py name no mod. `unknown`
 has no pack: the mockup gives it the fixture layout.
 """
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +34,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 OUT = HERE / "mockup" / "gfx"
 ENTRIES = REPO / "art" / "wiki" / "entries"
+FIXTURES = [REPO / "art" / "wiki" / "side" / f for f in ("fixture.json", "fixture-tall.json")]
 SIM = HERE / "mockup" / "sim.js"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "tools" / "compat"))
@@ -125,7 +131,8 @@ def check_layout(pack: Path):
 # figures, which only a game entry's economy reads.
 FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
            ("canstop", 0), ("canreclamate", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
-STATED = ("energyMake", "energyUse", "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage")
+STATED = ("energyMake", "energyUse", "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage",
+          "sightDistance", "radarDistance", "sonarDistance", "modelHeight")
 
 
 def stock_identity(pack):
@@ -185,6 +192,25 @@ def stock_identity(pack):
     return bad
 
 
+def fixture_sight(pack):
+    """The stock pack's sight table written into each fixture layout as its `sight`, in place of the one it holds, one
+    stored table ({idx, cells}) a line before `screens`. Returns the files it changed."""
+    sight = pack["layout"].get("sight")
+    if sight is None:
+        return []
+    block = '  "sight": {"numtables": %d, "tables": [\n%s\n  ]},\n' % (
+        sight["numtables"], ",\n".join("    " + json.dumps(t, separators=(",", ":")) for t in sight["tables"]))
+    changed = []
+    for f in FIXTURES:
+        text = f.read_text()
+        new = re.sub(r'  "sight": .*?\n(?=  "screens": )', lambda m: block, text, flags=re.S) if '  "sight": ' in text else \
+            text.replace('  "screens": ', block + '  "screens": ', 1)
+        if new != text:
+            f.write_text(new)
+            changed.append(f.name)
+    return changed
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="sidepacks.py", description=__doc__.split("\n")[0])
     ap.add_argument("mods", nargs="*", help=f"the packs to build (default: all of {', '.join(SETUPS)})")
@@ -227,9 +253,19 @@ def main(argv=None):
         print(f"  {msg}")
         failed += not ok
         if mod == "stock":
-            bad = stock_identity(json.loads((out_root / "side" / mod / "side.json").read_text()))
+            pack = json.loads((out_root / "side" / mod / "side.json").read_text())
+            bad = stock_identity(pack)
             print("  stock identity: " + ("ok" if not bad else "FAILED\n    " + "\n    ".join(bad)))
             failed += bool(bad)
+            # the fixtures are written only from the packs the mockup reads, never from a scratch --out
+            if pack["layout"].get("sight") is None:
+                print("  fixture sight: FAILED, the stock pack has no sight table")
+                failed += 1
+            elif args.out:
+                print("  fixture sight: not written (--out)")
+            else:
+                changed = fixture_sight(pack)
+                print("  fixture sight: " + (f"{', '.join(changed)} written" if changed else "unchanged"))
     return 1 if failed else 0
 
 

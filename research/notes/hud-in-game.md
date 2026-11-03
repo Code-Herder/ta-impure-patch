@@ -563,7 +563,10 @@ the recorder writes nothing for it.
   of op: `HOP_LINE`, an antialiased stroke with butt ends; `HOP_CHART`, the chart's lines;
   `HOPF_DROP` on a solid, a CSS outer box shadow; and `HOPF_BASE` on a text, an SVG `<text>` on
   its baseline at its anchor.
-- **The chart's lines are data**, one RGBA32F image (`tagpu_huddraw_chart`): row 0 the globals
+- **The chart's lines are data**, one RGBA32F image a chart slot (`tagpu_huddraw_chart(slot, …)`,
+  `HUD_CHART_SLOTS` 2: slot 0 this HUD's, `HUD_TEX_CHART`, slot 1 the in-game wiki's stage HUD's,
+  `HUD_TEX_CHART_WIKI`; a list's `chart_slot` picks the image its `HOP_CHART` reads, so two stats
+  windows in one frame never share one): row 0 the globals
   (the counts, the line's and the halo's half widths, the halo's colours, the cross's size), row
   1 + g group g (its colour, its halo and cross flags, its points and, per column of eight
   segments, the y range its lines can reach). The instances are bands of those columns, so a

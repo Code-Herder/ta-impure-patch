@@ -113,16 +113,27 @@ both clamp it against the size of a data table. Neither uses it as a distance.
 `FUN_00482270` (add) and `FUN_00481D50` (remove) do:
 
 ```c
-idx = SightDistance / 32;                       /* floor, >= 0            */
+idx = SightDistance / 32;                       /* truncated, floored at 0 */
 if (idx >= FUN_00433520(0x51E6A0) - 1)          /* count of loaded tables */
     idx = count - 1;
 fan = FUN_00433500(&DAT_0051E6A0, idx);         /* element idx - 1 !      */
 ```
 
+**`idx` 0 reads before the table**: `0x433500` returns `begin + (idx − 1)·16` with no guard, so a
+SightDistance below 32, or a `numtables` of 1 or less, makes the stamp read the 16 bytes before the
+element buffer as its rays -- undefined, and never reached by stock (no stock unit's SightDistance
+is below 32). An engine-defect candidate, not patched ([engine/map.md](engine/map.md), *The sight
+table and the stamp*).
+
 `FUN_00433130` fills that container from `gamedata/los.tdf`: `[TABLEINFO] numtables=N`,
 then element `i` ← section `TABLE(i+1)` for `i = 0..N-1`. Each `lineK = count, x1,y1, …`
-is one ray of cell offsets, mirrored into four quadrants at load. So element `idx-1` is
-`TABLE(idx)`, whose comment is literally `// Radius of idx`:
+is stored **four times**, as rays k, N+k, 2N+k and 3N+k, its pairs mapped to (column, row)
+offsets **(x, −y), (y, x), (−x, y), (−y, −x)** -- two reflections and two axis swaps
+(`0x433380`, the handlers of `0x4336F0`'s jump table `0x4339A4`), not the four sign images. The
+stock file's lines are swap-symmetric, so its loaded union is eight-fold, (±a, ±b) and (±b, ±a):
+MEASURED 2026-11-01, a unit lights 213 / 177 / 137 blocks at idx 8 / 7 / 6 with its own, where the
+four sign images alone give 203 / 169 / 131. No point is merged: a block gets one increment per ray
+point on it. So element `idx-1` is `TABLE(idx)`, whose comment is literally `// Radius of idx`:
 
 > **radius in cells = min(SightDistance / 32, numtables − 1)**
 
