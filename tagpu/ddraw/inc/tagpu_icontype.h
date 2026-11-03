@@ -31,4 +31,38 @@ struct TAGPU_PK_UTYPE;
    its end, or for a level with more types than the table holds. */
 const struct TAGPU_PK_UTYPE* tagpu_icontype_table(unsigned* n);
 
+/* ---- THE ICON ART ----------------------------------------------------
+   One 256x256 atlas of palette indices: the radar logo's frames (`radlogo`,
+   one per logo colour, the minimap's dot) and, with a mod's icon set, its
+   icons. Every texel no frame draws holds `key`; `fill` and `sel` are the two
+   markers a set icon's FillColor and SelectedColor texels are rewritten to.
+   The three are the smallest indices no frame's drawn texel holds, so a
+   marker can never be a colour of the art.
+
+   WRITTEN ONCE, ON THE GAME THREAD, at the first in-play fill of the process,
+   and published by a release store; never written or freed after it. A
+   pointer taken after tagpu_icontype_art() answered stays valid and
+   unchanging for the process, on any thread. */
+#define TAGPU_ICONART_W     256
+#define TAGPU_ICONART_H     256
+#define TAGPU_ICONART_LOGOS 16
+#define TAGPU_ICONART_SETS  64
+typedef struct TAGPU_ICONRECT {
+    uint16_t x, y, w, h;     /* the frame's texels in the atlas               */
+    int16_t  hx, hy;         /* its hotspot                                    */
+} TAGPU_ICONRECT;
+typedef struct TAGPU_ICONART {
+    const unsigned char* pix; int w, h;      /* TAGPU_ICONART_W x _H indices    */
+    int key, fill, sel;                      /* markers no art texel holds       */
+    int nlogo;                               /* radar logo frames, by logo colour */
+    TAGPU_ICONRECT logo[TAGPU_ICONART_LOGOS];
+    unsigned char team[TAGPU_ICONART_LOGOS]; /* each logo's team colour: the
+                                                frame's texel at its hotspot   */
+    int nset;                                /* a mod set's icons; 0 = none     */
+    TAGPU_ICONRECT set[TAGPU_ICONART_SETS];
+    int none, unknown;                       /* set indices, -1 = absent        */
+} TAGPU_ICONART;
+/* Any thread: the art, NULL until the game thread has published it. */
+const TAGPU_ICONART* tagpu_icontype_art(void);
+
 #endif

@@ -939,6 +939,110 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
     /* UNKNOWN */ 1, /* COMMANDER */ 3, /* FACTORY */ 0, /* BUILDING */ 0,
     /* AIRCONS */ 2, /* AIRCOMBAT */ 2, /* AIR */ 2, /* CONS */ 1, /* COMBAT */ 1 };
 
+/* ---- the icon art (tagpu_icontype.h) ----
+   THE RADAR LOGO, `radlogo` (main+0x147DF, the sequence the minimap's dots
+   are drawn from by 0x466DC0: frame PlayerInfo+0x96 through 0x4B7F30). It is
+   SESSION art: 0x429870 loads it, whose one caller is start-up's 0x49134D,
+   and the only writers of the pointer are 0x42991E and 0x429935 in that load
+   [DISASSEMBLED]. So the first in-play fill reads the session's frames, and
+   they never change after. The team colour of a logo is its frame's texel at
+   the hotspot -- MEASURED 2026-11-03 on the retail fx.GAF: ten 4x4 frames,
+   hotspot (1,1), a 2x2 centre of the colour in a ring -- read from the frame,
+   never from a table, because mods recolour it. */
+#define OFF_RADLOGO        0x147DF   /* GAF sequence*: radlogo                */
+#define ICONART_FRMAX      16        /* the largest logo frame kept, a side    */
+
+static unsigned char  s_iconPix[TAGPU_ICONART_W * TAGPU_ICONART_H];
+static unsigned char  s_iconCov[TAGPU_ICONART_W * TAGPU_ICONART_H];   /* this thread's */
+static TAGPU_ICONART  s_iconArt;
+static volatile LONG  s_iconArtReady;
+
+/* a frame's team colour: its texel at the hotspot, or its commonest drawn
+   texel when the hotspot draws nothing; -1 for a frame that draws nothing */
+static int iconart_team(const unsigned char* pix, const unsigned char* cov, int w, int h, int hx, int hy)
+{
+    int count[256], k, best = -1;
+    if (hx >= 0 && hy >= 0 && hx < w && hy < h && cov[hy * w + hx]) return pix[hy * w + hx];
+    memset(count, 0, sizeof count);
+    for (k = 0; k < w * h; k++) if (cov[k]) count[pix[k]]++;
+    for (k = 0; k < 256; k++) if (count[k] && (best < 0 || count[k] > count[best])) best = k;
+    return best;
+}
+
+static void iconart_build(const char* ta)
+{
+    static unsigned char pix[ICONART_FRMAX * ICONART_FRMAX], cov[ICONART_FRMAX * ICONART_FRMAX];
+    const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
+    int used[256], marks[3], i = 0, x = 1, k, px, nfr = 0;
+    char b[160];
+
+    memset(&s_iconArt, 0, sizeof s_iconArt);
+    memset(s_iconPix, 0, sizeof s_iconPix);
+    memset(s_iconCov, 0, sizeof s_iconCov);
+    memset(used, 0, sizeof used);
+    if (ptr_ok(seq)) {
+        nfr = tagpu_gaf_seq_nframes(seq);
+        for (i = 0; i < nfr && i < TAGPU_ICONART_LOGOS; i++) {
+            const unsigned char* g = tagpu_gaf_seq_frame(seq, i);
+            TAGPU_GAFGEOM gm;
+            TAGPU_ICONRECT* r = &s_iconArt.logo[i];
+            int t, row;
+            if (!g || !tagpu_gaf_frame_geom(g, &gm)) break;
+            if (gm.w <= 0 || gm.h <= 0 || gm.w > ICONART_FRMAX || gm.h > ICONART_FRMAX) break;
+            if (!tagpu_gaf_decode_cov(g, gm.w, gm.h, pix, cov)) break;
+            /* a raw frame "covers" every texel (tagpu_gaf.h): its key is the
+               blitter's test, so it is applied here */
+            if (!*(const unsigned char*)(g + TAGPU_GF_COMP))
+                for (px = 0; px < gm.w * gm.h; px++) if (pix[px] == gm.ck) cov[px] = 0;
+            t = iconart_team(pix, cov, gm.w, gm.h, gm.hotx, gm.hoty);
+            if (t < 0) break;
+            for (row = 0; row < gm.h; row++) {
+                memcpy(s_iconPix + (size_t)(1 + row) * TAGPU_ICONART_W + x, pix + row * gm.w, (size_t)gm.w);
+                memcpy(s_iconCov + (size_t)(1 + row) * TAGPU_ICONART_W + x, cov + row * gm.w, (size_t)gm.w);
+            }
+            for (px = 0; px < gm.w * gm.h; px++) if (cov[px]) used[pix[px]] = 1;
+            r->x = (uint16_t)x; r->y = 1; r->w = (uint16_t)gm.w; r->h = (uint16_t)gm.h;
+            r->hx = (int16_t)gm.hotx; r->hy = (int16_t)gm.hoty;
+            s_iconArt.team[i] = (unsigned char)t;
+            x += ICONART_FRMAX + 1;
+        }
+    }
+    /* the three markers: the smallest indices no drawn texel holds. Ten 4x4
+       frames draw at most 160 texels, so three are always free while the art
+       is the logo's alone. */
+    for (k = 0, px = 0; px < 256 && k < 3; px++) if (!used[px]) marks[k++] = px;
+    if (k < 3) {
+        /* every index is drawn: nothing can mark "not drawn", so no art */
+        memset(s_iconArt.logo, 0, sizeof s_iconArt.logo);
+        memset(s_iconPix, 0, sizeof s_iconPix);
+        i = 0; marks[0] = 0; marks[1] = 1; marks[2] = 2;
+    } else {
+        for (px = 0; px < TAGPU_ICONART_W * TAGPU_ICONART_H; px++)
+            if (!s_iconCov[px]) s_iconPix[px] = (unsigned char)marks[0];
+    }
+    s_iconArt.pix = s_iconPix;
+    s_iconArt.w = TAGPU_ICONART_W; s_iconArt.h = TAGPU_ICONART_H;
+    s_iconArt.key = marks[0]; s_iconArt.fill = marks[1]; s_iconArt.sel = marks[2];
+    s_iconArt.nlogo = i;
+    s_iconArt.nset = 0; s_iconArt.none = -1; s_iconArt.unknown = -1;
+    /* THE PUBLICATION. Every byte of the atlas and of s_iconArt is stored above,
+       on this thread, before this release store; nothing writes or frees either
+       after it, for the life of the process. So a render-thread reader that
+       sees the flag through tagpu_icontype_art's acquire load reads finished
+       bytes, and a pointer it took stays valid and unchanging -- the order
+       art's argument (tagpu_order.c). Not InterlockedExchange: mingw spells it
+       __sync_lock_test_and_set, whose contract is acquire-only. */
+    __atomic_store_n(&s_iconArtReady, 1, __ATOMIC_RELEASE);
+    _snprintf(b, sizeof b, "icons: art %d radar logo frame(s) of %d, key %d fill %d sel %d",
+              i, nfr, s_iconArt.key, s_iconArt.fill, s_iconArt.sel);
+    b[sizeof b - 1] = 0; plog(b);
+}
+
+const TAGPU_ICONART* tagpu_icontype_art(void)
+{
+    return __atomic_load_n(&s_iconArtReady, __ATOMIC_ACQUIRE) == 1 ? &s_iconArt : NULL;
+}
+
 /* The table for the level in play, built at its first in-play fill; a no-op
    once built for it. A level with more types than the table holds has none,
    and every unit of it is drawn as its model. */
@@ -946,6 +1050,8 @@ static void utype_level(const char* ta)
 {
     const char* udefs = *(const char* const*)(ta + OFF_UNITDEFS);
     unsigned n = RDU32(ta, OFF_UDEFCOUNT), nsides = RDU32(ta, OFF_SIDES), row;
+    /* the art first, once per process: it is the session's, not the level's */
+    if (!s_iconArtReady) iconart_build(ta);
     if (s_utypeHave && s_utypeLevel == s_levelGen) return;
     if (!ptr_ok(udefs)) return;                     /* no defs yet: the next fill */
     s_utypeLevel = s_levelGen; s_utypeHave = 1; s_utypeN = 0;
