@@ -182,7 +182,8 @@ before the art's release store):
    characters of `[A-Za-z0-9_.-]` and a NUL within 33 bytes; anything else is no set.
 2. `<exe dir>\<name>`, at most 64 KB → `[Preferences] MegaMapConfig`. Absent, empty, too long, or
    not a path inside the folder (a drive `:`, a leading `\` or `/`, or a segment that climbs: `..`,
-   or any segment of dots and blanks with two dots or more, which Win32 reads as `..`) → no set, so
+   or, as Win32's path parser trims trailing dots and blanks, any segment of only dots and blanks with
+   two dots or more) → no set, so
    only the install's own files are read; an `[Icon]` line's file passes the same test. TADR resolves the value against the current directory; the exe's folder is used here
    [INFERRED equal under every launcher in use: tacli and the loaders start TA in its folder].
 3. **The iconcfg**, at most 64 KB, at `<exe dir>\<value>`; the pictures' folder is that path cut at
@@ -258,7 +259,9 @@ bounded by `TAGPU_LIM_TYPES`, the mask's bits under Impure's raise. **`0x488C50`
 on a miss it inserts, so a category the map lacks is simply absent.
 
 *Why the walk is safe*: the map and its masks are freed only by the teardown (`0x488BF0`, whose one
-caller is `0x491C3A`, game thread), and during play every inserter — the Ctrl keys, the SHARE give,
+caller is `0x491C3A`, game thread) and by the process-exit destructor `0x488A00`, which the map's
+static initialiser registers at `0x4889D5` (through `0x4E4AC0` [INFERRED: the CRT's `atexit`]) and
+which runs only as the process leaves, after its last in-play frame; and during play every inserter — the Ctrl keys, the SHARE give,
 the console's `Reload` and the AI plan's `weight`/`limit` reached through the console — runs on the
 game thread; the walk runs on the game thread inside the in-play publish, so neither happens during
 it — a lifetime by thread ownership. The level's load filled the map on the loader thread, the AI
@@ -372,7 +375,11 @@ drops the whole marker layer for the frame.
 ## The pick
 
 `tagpu_zoom_hit_guard`, the call `0x48CE15` inside `GetUnitAtMouse 0x48CD80`, first asks
-`icon_hit` ([camera and zoom](camera-zoom.html) §2.3b). At the game thread's applied level
+`icon_hit` ([camera and zoom](camera-zoom.html) §2.3b). **The pick needs that redirect**, which
+`tagpu_vpwide.c` installs with the rest of its widening half under `tagpu_vpwide.on` (a play default,
+taken off with `zoom`): without it the engine's own model test answers every click, icons
+included, and an icon whose model is hidden is picked only where the engine's box for the model
+lies. At the game thread's applied level
 (`game_level()`), with the game thread's own class table and the screen size `main+0x37E1F` /
 `+0x37E23`:
 
@@ -438,7 +445,9 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   index both threads bound by the art's picture count.
 - **The mod set** is read on the game thread inside the first in-play fill, before the art's
   release store: the ini name at `0x5098A3` and the sides' names in the main block, then the files,
-  each bounded before it is read and DATA to the pure parsers. The load list it keeps is the game
+  each bounded before it is read and DATA to the pure parsers. **The reads block that frame**: at
+  most 71 small files opened and read in turn (the TADR ini, the iconcfg, five sides' pictures and
+  64 more), once a process, on the first in-play frame. The load list it keeps is the game
   thread's own, read again only by the per-level walk on the same thread.
 - **The category walk** runs on the game thread inside the in-play fill, once a level: a lifetime
   by thread ownership (*Mod icon sets*).

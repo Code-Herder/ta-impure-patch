@@ -78,9 +78,9 @@ int tagpu_ini_byte(const char* value, int dflt);
 int tagpu_iconset_ini_name_ok(const char* s, size_t cap);
 /* A path the set may name, relative to the folder it is resolved against
    and inside it: non-empty, no drive (`:`), not rooted (a leading `\` or
-   `/`), and no segment that climbs -- `..`, or any segment of dots and
-   blanks with two dots or more, which Win32 reads as `..` once it drops the
-   trailing ones. `.` stays allowed (`.\Icon\iconcfg.ini`). */
+   `/`), and no segment that climbs -- `..`, or, since Win32's path parser
+   trims a segment's trailing dots and blanks, any segment of only dots and
+   blanks with two dots or more. `.` stays allowed (`.\Icon\iconcfg.ini`). */
 int tagpu_iconset_relpath_ok(const char* s);
 /* A side's name as a file name: 1..`cap`-1 printable characters, none of
    `\ / : * ? " < > |`, and a NUL within `cap` bytes. Reads at most `cap`. */

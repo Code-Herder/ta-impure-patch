@@ -886,7 +886,11 @@ FBI loader.
   (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first
   read, `UnitName` into `def+0x20` (`0x42BFA7`). Nothing has been read from the file at
   `0x42BF97`, and the stolen `push 0x5119B8` carries no relative operand: that is
-  `tagpu_datakeys.c`'s observer. **Two callers**: `0x42D722` (above) and `0x42D269` (below).
+  `tagpu_datakeys.c`'s observer. It reads `side` into `def+0xA0` with a length of 0x1E (`push
+  0x1e` at `0x42ACB0`, `lea edx,[ebp+0xa0]` at `0x42ACB6`, then `0x4C48C0` at `0x42ACC2`)
+  [DISASSEMBLED], so the def's Side field is 0x1E bytes, not TADR's `Side[8]`; the strategic
+  icons' side pictures compare within it (`tagpu_packet_pub.c`, `iset_level`). **Two callers**:
+  `0x42D722` (above) and `0x42D269` (below).
 - **`0x4C48C0`, the TDF string reader**, `thiscall(section, buf, key, len, dflt)`, `ret 0x10`:
   a binary search of the section's keys with `_stricmp 0x4F8A70`. Found: `strncpy` (`0x4E4760`)
   of `len` bytes, then `buf[len-1] = 0`, and it returns 1 — a value that fills the buffer is cut

@@ -944,8 +944,8 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
    THE RADAR LOGO, `radlogo` (main+0x147DF, the sequence the minimap's dots
    are drawn from by 0x466DC0: frame PlayerInfo+0x96 through 0x4B7F30). It is
    SESSION art: 0x429870 loads it, whose one caller is start-up's 0x49134D,
-   and the only writers of the pointer are 0x42991E and 0x429935 in that load
-   [DISASSEMBLED]. So the first in-play fill reads the session's frames, and
+   and the only writer of the pointer is 0x42991E in that load; 0x429935
+   beside it stores `radlogohigh` at main+0x147E3 [DISASSEMBLED]. So the first in-play fill reads the session's frames, and
    they never change after. The team colour of a logo is its frame's texel at
    the hotspot -- MEASURED 2026-11-03 on the retail fx.GAF: ten 4x4 frames,
    hotspot (1,1), a 2x2 centre of the colour in a ring -- read from the frame,
@@ -1243,8 +1243,11 @@ const TAGPU_ICONART* tagpu_icontype_art(void)
    whatever order the map is in.
 
    WHY IT IS SAFE TO READ: the map and its masks are engine heap objects that
-   only the teardown frees (0x488BF0, whose one caller is 0x491C3A in the
-   teardown 0x491B60, game thread) and, during play, only game-thread code
+   only two things free: the teardown (0x488BF0, whose one caller is 0x491C3A
+   in the teardown 0x491B60, game thread) and the process-exit destructor
+   0x488A00, which the map's static initialiser registers at 0x4889D5 through
+   0x4E4AC0 [INFERRED: the CRT's atexit] and which runs only once the process
+   is leaving, after its last in-play frame; and, during play, only game-thread code
    inserts into (0x488C50 through 0x488FB0, which can move every entry: the
    Ctrl keys 0x41C338, 0x48BF38, 0x48D9AC and 0x48D9E5 (0x48DC39 has no
    caller), the SHARE give 0x49342D, and the console -- Reload 0x417490 ->

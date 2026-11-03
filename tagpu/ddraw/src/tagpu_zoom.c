@@ -880,14 +880,11 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    cap, and nothing saturates: the screen scrolls at the 1x rate at every level.
 
    THE BYTE HAS ONE CLASS OF WRITER, THE ENGINE. Nothing in this DLL writes
-   `main+0x1434D`. Its writers are the registry load (`0x42FB7F`, the 0x20
-   default at `0x42FB8F`), the typed command `ScrollSpeed` (`0x416D03`), the
-   SPEEDS slider (`0x45C20C`), the restores from the options snapshot
-   `0x512F71` (`0x45EC0A`, `0x45FECB`, `0x45CA93`, `0x45CD8C`) and the 0x20
-   defaults (`0x45ECC2`, `0x45C70D`). So every engine reader -- the snapshot
-   (`0x45CE48`, `0x4602B6`), the save `0x430F9D`, the camera reset `0x41C2BD`
-   -- sees the player's own value, and the zoom exists only in EBX, from the
-   call at `0x41CEAB` to the poll's `pop ebx` at `0x41D0B3`.
+   `main+0x1434D`; every engine access of it is listed in
+   research/notes/engine/input.md (its `main+0x1434D` row, from a raw scan of
+   the displacement), so every engine reader sees the player's own value, and
+   the zoom exists only in EBX, from the call at `0x41CEAB` to the poll's
+   `pop ebx` at `0x41D0B3`.
 
    THE STEP IS BOUNDED. A positive engine step becomes one in
    [1, 0x80 / TAGPU_ZOOM_FLOOR_LO] = [1, 8192] world px; 0, a negative step and

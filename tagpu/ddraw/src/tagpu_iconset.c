@@ -198,9 +198,9 @@ int tagpu_iconset_relpath_ok(const char* s)
 {
     const char* seg = s;
     if (!s[0] || s[0] == '\\' || s[0] == '/' || strchr(s, ':')) return 0;
-    /* no segment that climbs: `..`, and every segment Win32 reads as it --
-       only dots and blanks with two dots or more, since the path parser drops
-       a segment's trailing dots and blanks */
+    /* no segment that climbs: `..`, and, to be safe from the path parser's
+       trimming of a segment's trailing dots and blanks, every segment of only
+       dots and blanks with two dots or more */
     for (;;) {
         const char* e = seg;
         int dots = 0, other = 0;

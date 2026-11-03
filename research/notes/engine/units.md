@@ -620,7 +620,10 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   `[def+0x241]` right by 11 and tests bit 0 (`0x43DD36..0x43DD41`): set, the air step `0x43D290`
   (`0x43DD46`, its only caller); clear, the ground step `0x43CD20` (`0x43DD4D`); then the placement
   `0x43D6D0` (`0x43DD55`). The unit frame takes a type as an aircraft when RT_AIR has a row for its
-  type index (the image's `+0xA6`, one less than the def's ID at `+0x92`).
+  type index, the unit's `+0xA6`: the type's row, which is also its def's ID (`+0x21E`, renumbered
+to the row after the name sort, `0x42D634`) and indexes the def the unit holds at `+0x92` (`UnitDef
++ 0x249 · [+0xA6]`); a category mask's bit is that row too (`0x48BF30` loads `[unit+0xA6]` at
+`0x48BFB3` and tests the mask with it at `0x48BFCE`).
 - **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
   `0x43CFDB`, `cx` loaded at `0x43CFD1`).
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
