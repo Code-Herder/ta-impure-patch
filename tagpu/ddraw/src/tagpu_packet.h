@@ -1271,6 +1271,9 @@ typedef struct TAGPU_CMD {
                                    wheel, and the apply stops writing         */
     uint32_t follow_seen;       /* the latest follow epoch the render thread
                                    drew at its level: a Jump ends there       */
+    uint32_t icons;             /* this frame drew the strategic icons
+                                   (tagpu_icon_on): the game thread answers a
+                                   pick by an icon only while it is 1, a level */
     TAGPU_CMD_HUD hud;          /* the replay HUD's controls, a level         */
     TAGPU_CMD_SWEEP sweep;      /* the reclaim popup as drawn, a level        */
     TAGPU_CMD_WIKI wiki;        /* the in-game wiki's controls, a level       */

@@ -36,6 +36,7 @@
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
 #include "tagpu_icon_rule.h"  /* the icons' rule: whether a unit's model is hidden */
 #include "tagpu_native.h"     /* tagpu_native_owns_unit: who draws a unit, for the pick */
+#include "tagpu_icon.h"       /* tagpu_icon_cmd_take: whether a frame drew icons, for the record */
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -911,6 +912,8 @@ static int   s_gLive, s_gCentre;
    tables' reach is taken at (the record's reach rung, clamped to the floor) */
 static float s_gFloor = TAGPU_ZOOM_FLOOR_HI;
 static float s_gReach = TAGPU_ZOOM_FLOOR_HI;
+/* game thread only: the last record drew the strategic icons (icon_hit) */
+static int   s_gIcons;
 /* game thread only: the level the minimap's view box main+0x142CB was last scaled by; every
    write of it goes through zoom_minimap_rect once tagpu_zoom_init installed the redirects
    (g_mmInstalled), and without them the engine's clamp writes the 1x box, so it is not kept */
@@ -1816,7 +1819,18 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    the unit array -- a stride-aligned record below the engine's slot count. The
    pick follows the game thread's applied level and the picture the frame's
    level; the two are equal at rest and differ only while a zoom tween moves --
-   a property, not a timing argument: no memory is read across threads. */
+   a property, not a timing argument: no memory is read across threads.
+   THE ICONS ARE THOSE THE PICTURE DREW. The render thread draws them only
+   while the unit pass and the marker pass both draw (tagpu_native.c's call of
+   tagpu_icon_frame), and the command record that ends each render frame
+   carries that frame's answer (`icons`, a level like `zoom`; 0 from a frame
+   that left before the native pass). The apply copies the latest record at
+   the top of each in-play draw, and GetUnitAtMouse runs on this thread from
+   the in-game handlers (0x499278, 0x491D18), so a click is answered with the
+   answer of the frame whose record the last apply took: the frame the player
+   saw, or the one before it at a switch -- the same one-record lag the level
+   has -- and never an icon no frame drew. No record yet is the engine's
+   test. */
 static int icon_hit(const char* ta, const char* unit, const int* point)
 {
     unsigned n;
@@ -1831,7 +1845,7 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     /* a unit the native pass does not draw keeps the engine's sprite and no
        icon -- the gather's own first test, asked here on this thread as the
        packet's fill asks it */
-    if (!tab || !tagpu_native_owns_unit(unit)) return -1;
+    if (!s_gIcons || !tab || !tagpu_native_owns_unit(unit)) return -1;
     tagpu_settings_icons(&scale, &dist, &fade);
     tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
                     scale, dist, fade);
@@ -2029,6 +2043,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* the tables' reach: the record's rung, never below the floor, and the
        floor (the widest) with no record -- the safe default */
     s_gReach = c ? c->reach_zoom : s_gFloor;
+    s_gIcons = c ? (int)c->icons : 0;
     if (s_gReach < s_gFloor) s_gReach = s_gFloor;
     if (s_gReach > TAGPU_ZOOM_FLOOR_HI) s_gReach = TAGPU_ZOOM_FLOOR_HI;
     /* THEN THE RANGE: centred only on a draw whose ground is ours. `terr` is
@@ -2360,6 +2375,9 @@ void tagpu_zoom_frame_end(void)
     rec.drop_follow = (s_cumX != s_ackX || s_cumY != s_ackY) ? 1u : 0u;
     rec.follow_broken = s_followBroken;
     rec.follow_seen   = s_followSeen;
+    /* whether this frame drew the icons: 0 on every path that left before
+       the native pass decided them, as on a frame that decided none */
+    rec.icons       = tagpu_icon_cmd_take() ? 1u : 0u;
     /* THE REACH REQUEST: the rung of the lowest level this view may draw
        before its next record is applied -- the level drawn, the wheel's
        target (so a notch out asks for its target on the frame it arrives)

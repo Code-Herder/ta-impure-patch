@@ -226,7 +226,8 @@ drops the whole marker layer for the frame.
 (`game_level()`), with the game thread's own class table and the screen size `main+0x37E1F` /
 `+0x37E23`:
 
-- `-1`, the guarded engine test as before: no table, a unit `tagpu_native_owns_unit` refuses, a row
+- `-1`, the guarded engine test as before: the latest command record drew no icons, no table, a
+  unit `tagpu_native_owns_unit` refuses, a row
   past the table, a nanoframe (`+0x104 > 0`), no health (`+0x108 ≤ 0`), or a model the rule does
   not hide.
 - **Carried** (`+0x86` ≠ 0): the carrier counts only as a record of the unit array — at or after
@@ -243,7 +244,15 @@ the main block, read on the game thread that owns them inside the engine's own c
 bounded by the table's count and the carrier by the unit array. HotUnits is the cull and is
 untouched (one id per slot, `0x485596`). The pick follows the game thread's applied level and the
 picture the frame's level; the two are equal at rest and differ only while a zoom tween moves —
-a property, not a timing argument: nothing is read across threads. Hover sets `main+0x2CBA`
+a property, not a timing argument: nothing is read across threads. **The icons it answers by are
+those the picture drew**: the render thread draws them only while the unit pass and the marker
+pass both draw, and the command record that ends each render frame carries that frame's answer
+(`TAGPU_CMD.icons`, a level like `zoom`, checked to 0 or 1 by `cmd_valid`; 0 from a frame that
+left before the native pass). The apply copies the latest record at the top of each in-play draw,
+and `GetUnitAtMouse` runs on the game thread from the in-game handlers (`0x499278`, `0x491D18`),
+so a click is answered with the answer of the frame whose record the last apply took — the frame
+the player saw, or the one before it at a switch, the same one-record lag the level has — and
+never by an icon no frame drew; with no record yet, the engine's test. Hover sets `main+0x2CBA`
 through the same answer; the band box `0x48C390` tests each unit's anchor, the point an icon is
 centred on, and needs no change.
 
@@ -300,9 +309,6 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   `+0x176`/`+0x17A`/`+0x17E`, `0x48CE1E..0x48CE75`), which need not be the icon drawn on top.
 - **An icon whose unit the HotUnits cull does not list** is not pickable, so the strip of an icon
   hanging over the view's edge from a unit outside the addressable rect answers nothing.
-- **The pick does not know whether the marker pass draws.** It asks the unit pass's ownership but
-  not `tagpu_mark_draws`, so with the marker pass passive or off the models are drawn while the
-  pick still answers a hidden-by-rule unit by its icon's circle.
 - **A unit the native pass does not own** keeps the engine's sprite and gets no icon.
 - Nuke projectiles get no icon; a building out of radar leaves no ghost icon (BAR keeps one);
   BAR's "real icon once identified" for a radar contact has no TA counterpart.
