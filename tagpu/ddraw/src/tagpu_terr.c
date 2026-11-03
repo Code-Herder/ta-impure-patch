@@ -34,8 +34,9 @@
    built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
    64 per row (a 2D array image is not viable: 5062 tiles on Two Continents
    against the usual 2048-layer cap). The spare texel on each side is a
-   replicated edge guard, not padding — see CELL_PITCH. A map change is the TILE_SET pointer or its
-   count moving. */
+   replicated edge guard, not padding — see CELL_PITCH. A map change is a new
+   level (`ensure_atlas`, keyed on the packet's level generation), or the
+   TILE_SET pointer or its count moving. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -274,6 +275,7 @@ static int    s_atlasBuilt;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
+static unsigned s_atlasLevel;          /* the packet's level_gen it was built under */
 static int    s_maxTex;
 /* THE 2D IMAGE LIMIT THIS PASS HAS ALREADY REFUSED, or 0. Latched on the VALUE
    rather than as a flag, so a device swap (the GPU picker re-picks) is asked
@@ -307,6 +309,7 @@ static int    s_rectTx0, s_rectTy0, s_rectCols, s_rectRows, s_rectValid;
 static int    s_hW, s_hH;              /* 0 while there is no usable grid    */
 static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
+static unsigned s_hLevel;              /* ...and the level it was, too      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
 
 /* THE LEVEL'S TILE MAP, copied once a level (`ensure_tilemap`): `s_tmW` x
@@ -606,18 +609,19 @@ static const char* FS =
 #pragma GCC diagnostic pop
 
 /* ---- the height grid: one R8 texel per 16-px cell, once per map ----
-   Keyed on ITS OWN inputs -- the grid pointer, the dims, and the tile set the
-   atlas was built from (LoadMap could hand a same-sized map the same
-   allocation, and the set's identity is what this module already trusts to
-   say "new map") -- and re-checked every frame by ensure_height, because the
-   set can be ready a frame before the grid is. A build that fails leaves
+   Keyed on THE LEVEL (the packet's level generation, `ensure_atlas`'s key and
+   for the same reason: LoadMap can hand the next level's grid the previous
+   one's allocation, so no pointer says "new map") and on its own inputs --
+   the grid pointer, the dims, and the tile set the atlas was built from --
+   and re-checked every frame by ensure_height, because the set can be ready
+   a frame before the grid is. A build that fails leaves
    s_hW 0, which is what the hand-over gates the lambert on -- the dimensions,
    never a texture name, which a previous map's build would leave standing --
    and is retried every 60 frames
    until it succeeds or the inputs change. Without a grid Classic++ terrain
    draws UNLIT -- the restored colour and the grey rule stay, only the
    lambert is skipped (uHDim 0 in the shader). */
-static void build_height(const char* ta, unsigned frame)
+static void build_height(const char* ta, unsigned frame, unsigned level)
 {
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
     int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
@@ -630,7 +634,7 @@ static void build_height(const char* ta, unsigned frame)
        below this point either fails, leaving no mirror, or installs one at the
        size it also sets. */
     free(s_hMirror); s_hMirror = NULL;
-    s_hGrid = grid; s_hSet = s_setPtr; s_hFrame = frame;
+    s_hGrid = grid; s_hSet = s_setPtr; s_hLevel = level; s_hFrame = frame;
     if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || w > s_maxTex || h > s_maxTex) {
         flog("terr: height grid dims out of range -- Classic++ terrain draws unlit");
         return;
@@ -669,28 +673,40 @@ static void build_height(const char* ta, unsigned frame)
 
 /* once per frame after the atlas is known: (re)build when the inputs moved,
    or when the last attempt failed and 60 frames have passed */
-static void ensure_height(const char* ta, unsigned frame)
+static void ensure_height(const char* ta, unsigned frame, unsigned level)
 {
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
     int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
-    int same = s_hGrid == (const void*)grid && s_hSet == s_setPtr;
+    int same = s_hGrid == (const void*)grid && s_hSet == s_setPtr && s_hLevel == level;
     /* the mirror term is `ensure_atlas`'s, for the same reason: the only way to
        obtain one for a grid that is already uploaded is to build it again, once */
     if (s_hW > 0 && same && s_hW == w && s_hH == h &&
         (!s_mirrorWant || s_hMirror)) return;
     if (s_hW == 0 && same && s_hFrame != 0 && frame - s_hFrame < 60) return;
-    build_height(ta, frame);
+    build_height(ta, frame, level);
 }
 
-/* ---- the atlas: built once per map, never per frame ---- */
-static int ensure_atlas(const char* ta)
+/* ---- the atlas: built once per map, never per frame ----
+   KEYED ON THE LEVEL. LoadMap 0x483610 allocates the tile set and stores its
+   pointer at 0x483B68, writes its count and pixels at 0x483B72..0x483BA4 and
+   nowhere else, and the map-free routine 0x483DD0 frees and nulls it
+   (0x483ECA) inside the level teardown: from LoadMap to the teardown the set
+   is immutable (DISASSEMBLED 2026-11-03, every store to and through
+   main+0x14283). But the next level's MEM_Alloc can return the same address
+   for a set of the same count -- the same map loaded twice, or two maps with
+   equal tile counts -- so pointer and count are not a level's identity, and
+   keyed on them alone the atlas, the height grid and the neighbourhood keys
+   would stay the previous level's. The packet's `level_gen` moves at every
+   level end, and the world passes run only on an in-play packet
+   (tagpu_native.c), so the generation the gather is handed is a live level's:
+   it is the key. The pointer and count tests stay beside it for what they
+   catch within a level -- a device-limit rebuild or a mirror asked for late
+   is the same set, and only a new level or a new set drops the restore. */
+static int ensure_atlas(const char* ta, unsigned level)
 {
-    /* Per map: LoadMap 0x483610 builds the set and stores its pointer at
-       0x483B68, and the map-free routine 0x483DD0 nulls it (0x483ECA) inside
-       the teardown cascade tagpu_reclaim fences. That lifetime is the argument
-       for the two probes below; they are sanity nets, and the identity test
-       is what keeps the megabyte one off the per-frame path (cross-thread-
-       engine-reads.md §4). */
+    /* The lifetime above is the argument for the two probes below; they are
+       sanity nets, and the identity test is what keeps the megabyte one off
+       the per-frame path (cross-thread-engine-reads.md §4). */
     const int* set = *(const int* const*)(ta + OFF_TILESET);
     const unsigned char* pix;
     unsigned char* buf;
@@ -708,8 +724,8 @@ static int ensure_atlas(const char* ta)
        so the only way to obtain one for an atlas that is already built is to
        build it again -- once, on the first frame after the lane arms. Every
        later frame takes the early return. */
-    if (s_atlasBuilt && s_setPtr == (const void*)set && s_setCount == count &&
-        (!s_mirrorWant || s_atlasMirror)) return 1;
+    if (s_atlasBuilt && s_atlasLevel == level && s_setPtr == (const void*)set &&
+        s_setCount == count && (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
     rows = (count + ATLAS_COLS - 1) / ATLAS_COLS;
@@ -761,13 +777,16 @@ static int ensure_atlas(const char* ta)
 
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
-    /* a different set is a new map: drop a restore still running on the old
-       one and start over */
-    if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
+    /* a new level or a different set is a new map: drop a restore still
+       running on the old one -- its frame list and its neighbourhood keys --
+       and start over */
+    if (s_atlasLevel != level || s_setPtr != (const void*)set || s_setCount != count ||
+        s_setPix != pix) {
         s_rgbState = 0;
         rlist_drop();
     }
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
+    s_atlasLevel = level;
     s_atlasBuilt = 1;
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
@@ -1220,8 +1239,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
         s_dimBad = 0;
         s_maxTex = m;
     }
-    if (!ensure_atlas(ta)) return terr_bail();
-    ensure_height(ta, v->frame_counter);
+    if (!ensure_atlas(ta, v->packet->level_gen)) return terr_bail();
+    ensure_height(ta, v->frame_counter, v->packet->level_gen);
     restore_step(ta);
 
     /* THE GATHER IS UNCONDITIONAL: it is NOT gated on owning the engine's
