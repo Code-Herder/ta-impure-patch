@@ -163,6 +163,19 @@ is per-frame working copies, not information, so the landing is split to remove 
 - **Stated, not fixed**: ScrollSpeed saturates at 255 below 0.125; 5120×1440 on a 20 480-px map
   stops at ~0.089 (int16 clicks); 640×480 on maps over ~26 000 px stops at 1/64.
 
+- **The spec, v2** (`.data/mega-map/landing1-spec-v2.md`), and the owner's calls on it:
+  - the packet's unit and feature tables keep a window that follows the level in force, through
+    a ladder of levels and an in-flight ring — the fog no longer needs one, the tables still do;
+  - the packet reserves room for a fog source up to 2048 × 2048 cells (5 slots × 1 MiB, reserved,
+    committed only as used): the render thread reads no engine memory, so the game thread copies
+    the source into the packet, and a map the terrain draws must also have its fog;
+  - at 1× a fogged unit or wreck straddling the bottom or right screen edge is now hidden, as the
+    engine's rule says; the old grid ended a cell past the view and left it drawn.
+- **The tile map and tile set are immutable for a level** (scout, DISASSEMBLED,
+  `.data/mega-map/facts-2026-11-03-A.md`): one writer each in LoadMap `0x483610`, one free in the
+  teardown's `0x483DD0`. The tile-set pointer can repeat across two loads, so 1b keys its upload
+  on a level serial, not on the pointer.
+
 ## Landings
 
 1a. **Fog from its source bits**, whole map, one shared texture, expanded in the shader.
