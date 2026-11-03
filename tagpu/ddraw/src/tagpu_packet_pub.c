@@ -1276,8 +1276,11 @@ const TAGPU_ICONART* tagpu_icontype_art(void)
 #define VA_CATMAP_END      0x0051E6B8u
 #define CATMAP_MAX         65536u       /* entries the walk accepts           */
 #define CAT_NAME_MAX       64           /* bytes of a name it compares        */
-#define UD_SIDE            0xA0         /* char Side[8]                       */
-#define UD_SIDE_CAP        8
+#define UD_SIDE            0xA0         /* char Side[], the FBI's `side`      */
+#define UD_SIDE_CAP        0x1E         /* its room: the FBI reader stores it
+                                           with a cap of 0x1E (`push 0x1e` at
+                                           0x42ACB0, `lea edx,[ebp+0xa0]` at
+                                           0x42ACB6) [DISASSEMBLED]           */
 #define UD_YARDMAP         0x14E        /* yard map pointer; 0 = none         */
 #define WTM_STOCKPILE      0x10000000u  /* W_MASK bit 28: a stockpile weapon  */
 

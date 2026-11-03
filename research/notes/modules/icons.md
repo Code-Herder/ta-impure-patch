@@ -231,7 +231,7 @@ is TADR's rule (`ExternQuickKey.cpp`):
 
 | entry | its types |
 |---|---|
-| a side's picture | that side's commanders: `showplayername` ∧ `hidedamage` (decoys included) whose `Side` (def `+0xA0`, 8 bytes) equals the side's name, ASCII case-insensitively |
+| a side's picture | that side's commanders: `showplayername` ∧ `hidedamage` (decoys included) whose `Side` (def `+0xA0`, read within its 0x1E bytes: the FBI reader stores `side` there with a cap of 0x1E, `push 0x1e` at `0x42ACB0`) equals the side's name, ASCII case-insensitively (TADR copies both into 8 bytes with `strcpy_s` first, so it compares names of up to 7 characters) |
 | COMMANDER | every such commander |
 | AIRCRAFTCOMBAT | `canfly` ∧ a weapon that is no stockpile (WeaponTypeMask `+0x111` bit 28 clear, read only from a record of the weapon array) ∧ ¬builder ∧ no yard map ∧ ¬commander |
 | AIRCONS | `canfly` ∧ builder ∧ no yard map ∧ ¬commander |
