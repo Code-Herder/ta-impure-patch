@@ -35,6 +35,7 @@
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
 #include "tagpu_icon_rule.h"  /* the icons' rule: whether a unit's model is hidden */
+#include "tagpu_native.h"     /* tagpu_native_owns_unit: who draws a unit, for the pick */
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -1703,8 +1704,8 @@ float tagpu_zoom_game_floor(void)
    a unit never reaches `0x48C6A0`, so the narrowing the conditions above
    guard cannot wrap for it. A unit carried by one whose model is hidden is
    never hit (BAR gives cargo no icon of its own); every other unit -- a
-   model, a nanoframe, a dead one, a type the class table does not cover --
-   goes to the guarded engine test as before. HotUnits is the cull and is
+   model, a nanoframe, a dead one, a type the class table does not cover, one
+   the native pass does not draw -- goes to the guarded engine test as before. HotUnits is the cull and is
    untouched (one id per slot, `0x485596`): an icon changes what a hit test
    answers, not which units are asked. Counted: `zoom: icon pick`, at most
    once a second. */
@@ -1827,7 +1828,10 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     long long ax, ay, dx, dy;
     double r;
 
-    if (!tab) return -1;
+    /* a unit the native pass does not draw keeps the engine's sprite and no
+       icon -- the gather's own first test, asked here on this thread as the
+       packet's fill asks it */
+    if (!tab || !tagpu_native_owns_unit(unit)) return -1;
     tagpu_settings_icons(&scale, &dist, &fade);
     tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
                     scale, dist, fade);
