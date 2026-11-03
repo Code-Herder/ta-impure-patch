@@ -255,12 +255,14 @@ bounded by `TAGPU_LIM_TYPES`, the mask's bits under Impure's raise. **`0x488C50`
 on a miss it inserts, so a category the map lacks is simply absent.
 
 *Why the walk is safe*: the map and its masks are freed only by the teardown (`0x488BF0`, whose one
-caller is `0x491C3A`, game thread) and inserted into during play only by game-thread code; the walk
-runs on the game thread inside the in-play publish, so neither happens during it — a lifetime by
-thread ownership. The level's load filled the map on the loader thread before `main+0x38D75` bit 1
-(`0x497C5F`), which the game thread read before its first in-play frame. `ptr_ok` is a filter on
-values, not the argument. The units page names the one inserter whose thread is not established,
-the AI plan's `Weight`/`Limit` commands.
+caller is `0x491C3A`, game thread), and during play every inserter — the Ctrl keys, the SHARE give,
+the console's `Reload` and the AI plan's `weight`/`limit` reached through the console — runs on the
+game thread; the walk runs on the game thread inside the in-play publish, so neither happens during
+it — a lifetime by thread ownership. The level's load filled the map on the loader thread, the AI
+plan's inserts included, before `main+0x38D75` bit 1 (`0x497C5F`), which the game thread read before
+its first in-play frame. `ptr_ok` is a filter on values, not the argument. The walk keeps no entry
+pointer past its own call: an insert can move every entry ([units](../engine/units.html), *The
+unit-category map*). What it takes is a snapshot for the level.
 
 **Drawing a set picture.** A type whose `icon` names one of the published art's pictures is drawn
 with it (`tagpu_icon_type`, `inc/tagpu_icon_rule.h`): at the art scale `k = max(1, round(base /
@@ -459,10 +461,10 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   an absolute `MegaMapConfig` is refused.
 - **A value is cut at its first `;`**; TADR cuts `MegaMapConfig` at its last, so a value holding
   two `;` reads differently.
-- **The category walk runs once a level.** A category the console's reload adds to mid-level
-  (`0x42D1F0`, [units](../engine/units.html), *The unit-category map*) is seen at the next level.
-- **The walk's safety rests on every play-time inserter being on the game thread**; the AI plan's
-  `Weight`/`Limit` path into `0x488C50` (`0x488D30`) is the one whose thread is not established.
+- **The category walk runs once a level**, so its picture per type is a snapshot: a type the
+  console's `Reload` adds to a category in play takes its picture from the next level
+  ([units](../engine/units.html), *The unit-category map*). The empty categories the keys, the SHARE
+  give or a console `weight`/`limit` can add hold no type, so they change no picture.
 - **Side pictures are read at the first in-play fill of the process**: the side names then are
   the set's for the process.
 - **Overlapping icons**: the engine's own tie-break picks among hits (the smallest key over def

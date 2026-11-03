@@ -201,8 +201,12 @@ name)` at `0x488C7E`, and on "less" `ebx` moves past the probe (`lea ebx,[ebx+es
 `0x488C8D`). An entry that compares equal returns its mask (`mov eax,[ebx+0x4]`, `0x488CB5`); on a
 miss it allocates a 0x40-byte block (`push 0x40; call 0x4B4F10`, `0x488CC2`), clears 16 dwords
 (`0x488CD2..0x488CDB`) and inserts `{name, block}` at the lower_bound through `0x488FB0`
-(`ecx = 0x51E6B0`, `0x488D06`) [INFERRED: a vector insert that can reallocate the array — its body
-was not read here]. **Every call with a name the map lacks adds an empty category**, so a reader
+(`ecx = 0x51E6B0`, `0x488D06`, its only call site). **`0x488FB0(pos, n, &value)`**, `ret 0xC`, is
+a vector insert on `{+4 begin, +8 end, +0xC capacity}`: without room (`0x488FB3..0x488FCC`) it
+allocates `size + max(size, n)` entries (`0x48901C`), copies the entries over, releases the old
+names (`0x4C9390`, `0x4890BE`), **frees the old array** (`0x4B4F20`, `0x4890CE`) and rewrites the
+three pointers (`0x4890E1..0x48911A`); with room it shifts the tail up a slot. Either way every entry
+at or after the insert point changes address; the mask blocks do not move. **Every call with a name the map lacks adds an empty category**, so a reader
 that must not change the map never calls it. Its argument and the TADR collision at `0x488CC2`:
 [the engine map's index page](../exe-reverse-engineering.md), *Where other patchers meet ours*.
 
@@ -222,22 +226,36 @@ is `0x491C3A`**, in the teardown `0x491B60` on the game thread ([memory](memory.
 | `0x48D9AC`, `0x48D9E5` | the group recall `0x48D9A0` (one caller, `0x495FFD` in the key switch) | `"CTRL_F"` (`0x508DA0`), both | play, game thread |
 | `0x48DC39` | `0x48DC30` | `"CTRL_F"` | **no call site and no literal `0x0048DC30` in the image** |
 | `0x49342D` | `0x4933E0`, the SHARE dialog's give (caller `0x493673`, under the gadget `SHARUNIT`; [recorder](recorder.html), `0x488700` row) | `"Commander"` | play, game thread |
-| `0x488E34` | `0x488D30`, which fills the AI plan's stack masks for its `Weight` and `Limit` commands `0x406DB0`/`0x406E40` (callers `0x406DE9`, `0x406E7D`) | the command's category | **not established**: `0x406F00` registers the two commands once at start-up (from `0x43C050` ← `0x491200`, `0x43C32F`); where the plan's commands run was not traced |
+| `0x488E34` | `0x488D30`, the AI plan's `weight` and `limit` commands `0x406DB0`/`0x406E40` (callers `0x406DE9`, `0x406E7D`): a name that is no unit type is looked up as a category | the command's category | the level load, loader thread (the AI plan `0x4648E0`, from `0x464990` ← `0x4919C8` in `LoadGameData_Main`); play, game thread, only through the console (below) |
+| (the FBI reader's sites above) | the console's `Reload` `0x417490` (`.data` row `0x5020C0` = {`"Reload"`, `0x417490`, mask 4}) → `0x42D1F0` (`0x4174BE`) → `0x42BF40` (`0x42D269`), for one type | its tags and `category` tokens; it can also add bits to existing masks | play, game thread (the console) |
 
-The FBI reader is also re-run for one type by `0x42D1F0` (at `0x42D269`), whose one caller
-`0x4174BE` is in the console command code that compares its token with `"Reload"` (`0x5021A8`,
-at `0x416F85`) [INFERRED: the same function; the branch was not traced], so a reload can add bits
-to a mask mid-level.
+**The console** — `0x406F00` registers `plan`, `weight` and `limit` (mask 8) in the engine's text-command
+registry once at start-up (`0x43C32F` in `0x43C050` ← `0x491200`). A text runs through `0x4B7A30(text,
+len, scratch, mask)`, a line through the dispatch `0x4B7900(argv, mask)`, which calls a row's handler
+only when `row.mask & mask` (`0x4B79CD..0x4B79D9`). The AI plan load `0x4648E0` runs its file
+through `0x4B7A30` with mask −1 (`0x464937`) and then the per-type texts of each AI player through
+`0x409F80`/`0x40A040` (`0x40A00E`, `0x40A0CE`). In play `0x4B7900` is reached only from `0x417B50`
+(`0x417B9B`), whose callers are the TALK screen's OnCommand `0x493BF0` for a chat line starting `+`
+(`0x493E36`, mask at most 7, so `weight`/`limit` cannot be typed) and the in-game key handler's `\`
+case (`0x496393`, only with `main+0x37F2F` bit 1, `0x496380..0x49638A`), which re-runs the last
+console line with mask −1. Mask-4 commands reach the mask-8 ones with mask −1: `ReloadAIProfiles`
+(row `0x5020CC` → `0x4174D0` → `0x40A100` → `0x4648E0` at `0x40A142`), `Include` (row `0x502078` →
+`0x4177E0`, a `debugdat` text through `0x4B7A30` at `0x417855`) and the default handler `0x417890`
+(`0x417A22`). All of these run inside the game thread's in-game handlers [INFERRED for the TALK
+OnCommand: the GUI pump's in-play callers are the game thread's; not every pump caller was traced].
 
 **When a reader may walk it.** The level load fills the map on the loader thread (`0x42BF40` ←
 `0x42D2E0` ← `LoadGameData_Main 0x4917D0`), before that thread's last act sets `main+0x38D75`
 bit 1 (`0x497C5F`), which the game thread reads (`0x498342`) before its first in-play frame
-([process](process.html), *The in-play publish point*). During play the inserters above that are
-traced run on the game thread, and the free runs only in the game thread's teardown. So a walk on
-the game thread, inside the in-play draw, sees a map that nothing reallocates or frees while it
-runs — the strategic icons' per-level walk, which reads the entries and never calls `0x488C50`
-([strategic icons](../modules/icons.html), *Mod icon sets*). The AI plan's path is the one inserter
-whose thread this page does not establish.
+([process](process.html), *The in-play publish point*); the AI plan's load-time inserts run in that
+same body, before the store. During play every inserter runs on the game thread — the keys, the
+SHARE give and the console — and the free runs only in the game thread's teardown. So a walk on the
+game thread, inside the in-play draw, sees a map that nothing reallocates or frees while it runs —
+the strategic icons' per-level walk, which reads the entries and never calls `0x488C50`
+([strategic icons](../modules/icons.html), *Mod icon sets*). **What such a walk takes is a snapshot**:
+a key, a SHARE give or a console command after it can add an empty category, `Reload` can add bits
+to a mask, and an insert can move every entry, so an entry pointer is good only within the walk
+that took it.
 
 ### The unit and player records, byte by byte: the savers, the replay layout's rows and what the values carry [DISASSEMBLED + MEASURED 2026-09-29]
 
