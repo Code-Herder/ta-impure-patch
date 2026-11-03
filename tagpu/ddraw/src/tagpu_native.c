@@ -2356,8 +2356,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* THE STRATEGIC ICONS' DECISIONS for this frame, before the walk that reads
        them (tagpu_icon.h): which unit is an icon, which model is hidden under
        one. Only while this pass draws the units and the marker pass draws the
-       icons -- a model is never hidden under an icon nothing would draw. */
-    tagpu_icon_frame(pk, s_zoom, s_armed && markOn && tagpu_mark_draws());
+       icons, and its icon bucket has a quad for every unit -- a model is never
+       hidden under an icon nothing would draw. */
+    tagpu_icon_frame(pk, s_zoom, s_armed && markOn && tagpu_mark_draws() &&
+                                 tagpu_mark_icon_room(pk->n_units));
     if (s_armed) {                 /* units are gathered only by the unit pass */
     for (unsigned pui = 0; pui < pk->n_units && (unsigned)nu < ucap; pui++) {
         const TAGPU_PK_UNIT* pu = &pkUnits[pui];

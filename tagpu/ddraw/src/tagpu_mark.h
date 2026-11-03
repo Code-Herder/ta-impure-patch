@@ -44,6 +44,10 @@ int  tagpu_mark_armed(unsigned frame_counter);   /* re-reads tagpu_mark.on (30f)
 /* 1 when this frame's markers are drawn by this pass: armed and not passive.
    What draws the strategic icons, so the unit pass hides no model without it. */
 int  tagpu_mark_draws(void);
+/* Room for `n_units` strategic icons this frame: 1 when the icon bucket holds
+   that many quads (grown here if it must). The unit pass asks it before it
+   decides any icon, so no model is hidden under an icon that has no quad. */
+int  tagpu_mark_icon_room(unsigned n_units);
 
 /* Is the CURSOR LAYER ours this frame — the build placement square, the drag
    band box and the pointer? Exactly gather_cursor's own gate (the lever, its

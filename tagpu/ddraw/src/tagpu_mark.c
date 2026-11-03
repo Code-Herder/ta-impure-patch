@@ -1397,6 +1397,18 @@ static int grow_verts(float** p, unsigned* cap, unsigned need)
     return 1;
 }
 
+/* THE ICON BUCKET IS GROWN HERE, BEFORE THE ICONS ARE DECIDED, and nowhere
+   else: tagpu_icon_frame hides a model only on a frame this answered 1 for,
+   and a frame queues at most one icon a packet unit (its class icon or its
+   radar contact, never both), so every icon of a frame with hidden models
+   has its quad -- tagpu_mark_emit_icon's capacity test can refuse none. The
+   bucket is not touched again until the next frame's call. */
+int tagpu_mark_icon_room(unsigned n_units)
+{
+    if (n_units > 0xFFFFFFFFu / QUADV) return 0;
+    return grow_verts(&s_icon, &s_iconCap, n_units * QUADV);
+}
+
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
@@ -1418,8 +1430,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        bucket that would not grow keeps its old size, and the caps below then
        count what they refuse. */
     if (!grow_verts(&s_barv, &s_barvCap, pk->n_units * 2u * QUADV) ||
-        !grow_verts(&s_sel, &s_selCap, pk->n_units * 4u) ||
-        !grow_verts(&s_icon, &s_iconCap, pk->n_units * QUADV)) {
+        !grow_verts(&s_sel, &s_selCap, pk->n_units * 4u)) {
         if (!s_saidGrow) {
             s_saidGrow = 1;
             flog("mark: a unit-scaled marker bucket would not grow to the packet's "

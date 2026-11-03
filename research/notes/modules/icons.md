@@ -343,7 +343,10 @@ under the orders, the bars, the digits and every UI layer, not fogged (the gathe
 unit it judged visible, or a radar contact), not depth-tested, blended at the icon's alpha.
 
 `tagpu_mark_emit_icon` puts one quad of `edge` screen px on the unit's anchor, its corner on the
-device grid (`snap_device`), into a bucket grown to the packet's unit count. The fill colour, the
+device grid (`snap_device`), into a bucket of one quad a packet unit. **The bucket is grown before
+any icon is decided** (`tagpu_mark_icon_room`, asked by the native pass in the same condition as
+`tagpu_mark_draws`): a frame on which it would not grow decides no icon and hides no model, and a
+frame queues at most one icon a unit, so an icon of a frame that hid a model always has its quad. The fill colour, the
 selection, the alpha and the shape **ride the vertex's world slot as two integers under 2¹²** —
 `team + 256 · selected` and `alpha + 256 · shape` — so the interpolated value rounds back to the
 integer at every fragment. The marker FS's `uText == 2` is the icon branch (text is `uText == 1`):
@@ -484,5 +487,11 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
 - **An icon whose unit the HotUnits cull does not list** is not pickable, so the strip of an icon
   hanging over the view's edge from a unit outside the addressable rect answers nothing.
 - **A unit the native pass does not own** keeps the engine's sprite and gets no icon.
+- **A Vulkan marker frame refused after the icons were decided** loses its icons while the models
+  they hide stay hidden: the marker pass's own refusals — in `tagpu_vk_mark_prepare` a draw out of
+  its vertex block, an icon draw with no atlas or an image that would not upload, in `mk_draw` a
+  draw past `TAGPU_MK_MAXDRAW` — drop the whole marker layer of that frame, which is a failed frame — the
+  orders, bars and cursor are missing too — logged once a site, not a state the icons can prevent
+  from the gather.
 - Nuke projectiles get no icon, so a set's NUKEICON is loaded and never drawn; a building out of radar leaves no ghost icon (BAR keeps one);
   BAR's "real icon once identified" for a radar contact has no TA counterpart.
