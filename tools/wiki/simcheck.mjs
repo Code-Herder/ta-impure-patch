@@ -2,8 +2,11 @@
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
    usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1]
-                                       [--no-scripts] [--trace]
+                                       [--no-scripts] [--shard K/N] [--trace]
      exit 0 when every demo and rule passes, 1 otherwise
+     --shard K/N (K from 1) plays only every Nth of the contexts, from the Kth, and shard 1 alone the rule cases: the N
+       shards together check what one run does. Each context is checked on its own (the identity casting's
+       comparison with the entry's own types plays both inside it), so no claim spans two shards.
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
    input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
@@ -72,20 +75,20 @@ const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.ar
 /* the pack under --pack (its side.json, whose layout and castings the demos play with) and the layout the demos play
    in: set by main() from the command line, so that importing this module for ENTRY_RULES reads no argument of the
    importer's */
-let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE;
+let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE, SHARD = 1, SHARDS = 1;
 const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0] : [Number(i)]; };
 /* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
    fixture casting answers, with its rival beside it (`rivals`); a pack gives one context per layout side, with that
    side's casting (index-aligned with layout.sides) and as the rival the first other side's, as the DLL's context
    gives them (tagpu_wiki.c rival_of), and interface. Only a game entry's rival units read the rival. */
 function contexts() {
-  const cs = baseContexts();
-  if (process.argv.includes('--no-scripts')) return cs;
+  const cs = baseContexts(), mine = all => all.filter((c, k) => k % SHARDS === SHARD - 1);
+  if (process.argv.includes('--no-scripts')) return mine(cs);
   const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`) : [];
   const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
-  if (!Object.keys(scripts(packs)).length) return cs;
+  if (!Object.keys(scripts(packs)).length) return mine(cs);
   const host = cobHost();
-  return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))];
+  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))]);
 }
 function baseContexts() {
   if (PACK) {
@@ -2569,6 +2572,11 @@ if (packDir !== undefined) {
   PACK = JSON.parse(fs.readFileSync(`${PACK_DIR}/side.json`, 'utf8'));
 }
 LAYOUT = process.argv.includes('--null-layout') ? null : PACK ? PACK.layout : FIXTURE;
+const shard = arg('--shard');
+if (shard !== undefined) {
+  [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(shard) || []).slice(1).map(Number);
+  if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) { console.error(`simcheck: --shard ${shard} is not K/N with 1 <= K <= N`); process.exit(2); }
+}
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
@@ -2717,7 +2725,7 @@ function replayDemo(c, id, entry, d, lock, g, rt) {
   for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
   for (const [what, why] of skips) console.log(`     SKIP ${what} -- not observable in ${PACK ? `${PACK.mod} ` : ''}${c.label}: ${why}`);
 }
-for (const id of PACK ? [] : ids) {
+for (const id of PACK || SHARD !== 1 ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
   for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
     let pass = false;
@@ -2739,7 +2747,8 @@ for (const [label, t] of Object.entries(replayTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} replays ${label}] ${t.pass} pass, ${t.fail} fail` +
     `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}` +
     `${t.skipped.length ? `; skipped, not observable with these figures: ${t.skipped.join('; ')}` : ''}`);
-console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
+console.log(`${SHARDS > 1 ? `shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', no rule cases' : ''}: ` : ''}` +
+  (failed ? `${failed} check(s) failed` : 'all demos and rules pass'));
 process.exit(failed ? 1 : 0);   // also ends the scripts' host
 }
 

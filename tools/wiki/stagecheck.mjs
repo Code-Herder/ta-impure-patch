@@ -1,8 +1,11 @@
 /* stagecheck.mjs -- the in-game wiki stage's check: tagpu/ddraw/src/tagpu_wikistage.c's ops against the mockup's
    tools/wiki/mockup/stage.js, call for op.
 
-   usage: node tools/wiki/stagecheck.mjs
+   usage: node tools/wiki/stagecheck.mjs [--shard K/N]
      exit 0 when every frame pairs, 1 when one differs, 2 when the C side cannot be built or run
+     --shard K/N (K from 1) draws only every Nth of the passes (a sidebar at a size, with the kit's cursors or the
+       game's), from the Kth, and plays and measures only the sidebars those passes draw: the N shards together check
+       what one run does. Each shard builds its C side in a temporary folder of its own.
 
    For every demo of every entry, at tick 0, every 30th tick and its last, stage.js draws sim.js's view into a recording
    context, and a native build of tagpu_wikistage.c (tagpu/ddraw/tests/wikistagetest.c, over tagpu_wikisim.c's view
@@ -91,6 +94,12 @@ const WikiReplay = require('./mockup/replay.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const TOL = 1 / 64;
+const SHARD_ARG = process.argv.includes('--shard') ? process.argv[process.argv.indexOf('--shard') + 1] : '1/1';
+const [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(SHARD_ARG) || []).slice(1).map(Number);
+if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
+  console.error(`stagecheck: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
+  process.exit(2);
+}
 const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
   'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c',
@@ -328,7 +337,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stagecheck-'));
 let code = 0;
 try {
   /* ---- the C side, built natively with the sanitizers ---- */
-  const exe = path.join(DDRAW, 'tests/wikistagetest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
+  const exe = path.join(tmp, 'wikistagetest-native');   // this process's own: shards build at once
   run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikistagetest.c', ...SRCS, '-lm'], { cwd: DDRAW });
   const pak = path.join(tmp, 'wiki.bin');
@@ -393,11 +402,16 @@ try {
     { name: 'no sidebar', file: null, sizes: SIZES },
     ...(Object.keys(SCRIPTS).length ? [{ name: 'fixture scripted', file: 'side/fixture.json', sizes: SIZES.slice(0, 1), cob: true }] : []),
   ];
+  // this shard's passes, and the sidebars they draw: only those are played and measured
+  const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
+    sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))))
+    .filter((p, i) => i % SHARDS === SHARD - 1);
+  const DRAWN = SIDEBARS.filter(sb => PASSES.some(p => p.sb === sb));
   const cobFile = path.join(tmp, 'cob.json');
   fs.writeFileSync(cobFile, JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
     [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
   let nspray = 0, nsprayed = 0, nplayers = 0, nmoved = 0, nsight = 0, noverlay = 0;
-  for (const sb of SIDEBARS) {
+  for (const sb of DRAWN) {
     sb.layout = sb.file && JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki', sb.file), 'utf8'));
     sb.frames = [];
     entries.forEach((entry, i) => {
@@ -508,7 +522,9 @@ try {
 
   /* ---- the measure: every string a dry run asks for, measured by the C side ---- */
   const asked = new Set();
-  for (const sb of SIDEBARS) for (const sz of sb.sizes) for (const f of sb.frames) draw(f.v, sz, null, asked, null, f.tick, null, sb.layout, f.live);
+  // each sidebar and size of the shard's passes once: the game's cursors draw no string the kit's do not
+  const measured = [...new Map(PASSES.map(p => [`${p.sb.name}/${p.k}`, p])).values()];
+  for (const { sb, k } of measured) for (const f of sb.frames) draw(f.v, sb.sizes[k], null, asked, null, f.tick, null, sb.layout, f.live);
   const strings = [...asked].filter(s => s !== '');
   if (strings.some(s => s.includes('\n'))) throw new CannotRun('a measured string holds a line break');
   fs.writeFileSync(path.join(tmp, 'strings.txt'), strings.join('\n') + '\n');
@@ -520,8 +536,6 @@ try {
      stage.js's ---- */
   let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0, nside = 0, nsideim = 0, ngrp = 0, nall = 0;
   let nframe = 0, nbar = 0, nclip = 0, ntop = 0;
-  const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
-    sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))));
   for (const { sb, sprites, k: si, sz } of PASSES) {
     const cur = sprites ? cursorsAt(si) : null, frames = sb.frames;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
@@ -594,7 +608,7 @@ try {
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${nplayers} players frames (the eye off (0, 0) in ${nmoved}, Sight in ${nsight}, an overlay in ${noverlay}); ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SHARDS > 1 ? `shard ${SHARD} of ${SHARDS}, ${PASSES.length} of the passes: ${PASSES.map(p => p.sz.name).join(', ')}` : `${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's`}), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${nplayers} players frames (the eye off (0, 0) in ${nmoved}, Sight in ${nsight}, an overlay in ${noverlay}); ${DRAWN.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

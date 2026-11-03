@@ -4494,29 +4494,42 @@ def mods(names, shots):
     assert not bad, f"failed on {bad}"
 
 
-# the gate's shards of each simparity run (simparity.mjs --shard): its 48 contexts of demo plays in four processes
-SIMPARITY_SHARDS = 4
+# the gate's shards of each simparity run (simparity.mjs --shard): its 48 contexts of demo plays, two to a process --
+# context k and k + 24, one played without the units' scripts (~87 s alone, ~20 s on the unbound casting) and one
+# with them (~190 s), so the shards cost alike (MEASURED 2026-11-03, native, an idle reference setup)
+SIMPARITY_SHARDS = 24
+# and of each simcheck run (simcheck.mjs --shard): the fixture's 16 contexts, 8 without the scripts then 8 with them,
+# four to a process, two of each kind
+SIMCHECK_SHARDS = 4
+# and of stagecheck (stagecheck.mjs --shard): its 16 passes, four to a process; alone it spends ~104 s playing and
+# measuring, then 27 to 91 s a pass (MEASURED 2026-11-03, 1115 s in all), so a shard takes some 190 to 300 s
+STAGECHECK_SHARDS = 4
 
 
-def offline_runs(shards=1):
+def offline_runs(shards=1, check_shards=1):
     """OFFLINE_CHECKS: every check of the wiki that plays no game, as (name, argv) -- the mockup's demos on the
     fixture, without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then
     the DLL's code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and
     under Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
     (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
     them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits each
-    simparity run into that many processes, which together check what one does."""
+    simparity run, `check_shards` each simcheck run and stagecheck into that many processes, which together check what
+    one does. The longest come first, as a pool starts the checks in this order."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
     wiki = TREE / "tools/wiki"
-    runs = [("simcheck", [wiki / "simcheck.mjs"]), ("simcheck --null-layout", [wiki / "simcheck.mjs", "--null-layout"])]
-    runs += [(f"simcheck --pack {d.name}", [wiki / "simcheck.mjs", "--pack", d]) for d in packs]
+    checks = [("simcheck", [wiki / "simcheck.mjs"]), ("simcheck --null-layout", [wiki / "simcheck.mjs", "--null-layout"])]
+    checks += [(f"simcheck --pack {d.name}", [wiki / "simcheck.mjs", "--pack", d]) for d in packs]
+    runs = [("stagecheck", [wiki / "stagecheck.mjs"])] if check_shards == 1 else \
+        [(f"stagecheck --shard {k}/{STAGECHECK_SHARDS}", [wiki / "stagecheck.mjs", "--shard", f"{k}/{STAGECHECK_SHARDS}"])
+         for k in range(1, STAGECHECK_SHARDS + 1)]
+    runs += checks if check_shards == 1 else [(f"{name} --shard {k}/{check_shards}", [*cmd, "--shard", f"{k}/{check_shards}"])
+                                             for name, cmd in checks for k in range(1, check_shards + 1)]
     for wine in ([], ["--wine"]):
         runs += [(" ".join(["simparity", *wine]), [wiki / "simparity.mjs", *wine])] if shards == 1 else \
             [(" ".join(["simparity", *wine, f"--shard {k}/{shards}"]), [wiki / "simparity.mjs", *wine, "--shard", f"{k}/{shards}"])
              for k in range(1, shards + 1)]
     runs += [("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
-             ("sidecheck", [wiki / "sidecheck.mjs"]), ("stagecheck", [wiki / "stagecheck.mjs"]),
-             ("scenecheck", [wiki / "scenecheck.mjs"])]
+             ("sidecheck", [wiki / "sidecheck.mjs"]), ("scenecheck", [wiki / "scenecheck.mjs"])]
     runs = [(name, ["node", *cmd]) for name, cmd in runs]
     runs += [("wikilaycheck --check-only", [sys.executable, wiki / "wikilaycheck.py", "--check-only"])]
     if not packs:
@@ -4667,7 +4680,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     import tarun
     runlock.hold(TREE, f"wiki_regression gate (-j {jobs})")
     shots.mkdir(parents=True, exist_ok=True)
-    offline = offline_runs(SIMPARITY_SHARDS) if offline_jobs else []
+    offline = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS) if offline_jobs else []
     items = [("offline", [{"id": n, "pool": "offline", "order": k} for k, (n, _) in enumerate(offline)]),
              ("game", [{"id": m, "pool": "game", "order": k} for k, m in enumerate(modes)]),
              ("mods", [{"id": n, "pool": "game", "order": len(modes) + k} for k, n in enumerate(setups)])]
@@ -4786,7 +4799,8 @@ def main():
                                               "takeover: three Take over frames beside the mockup's; "
                                               "players: the Players demos' states beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
-    p.add_argument("--offline-jobs", type=int, default=8, help="gate: the offline checks run at once, 0 for none")
+    p.add_argument("--offline-jobs", type=int, help="gate: the offline checks run at once, 0 for none; by default the "
+                                                    "threads the game lanes leave, two to a lane, and at least 4")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
     a = p.parse_args()
@@ -4797,7 +4811,8 @@ def main():
             offline_checks()
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
-            gate(a.shots, a.jobs, a.offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
+            offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, (os.cpu_count() or 8) - 2 * a.jobs)
+            gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
         elif a.mode == "mp":
             mp(a.instance)
         elif a.mode == "mods":

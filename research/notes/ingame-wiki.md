@@ -1218,10 +1218,14 @@ unless said).
   `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
   `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and `wikilaycheck.py --check-only`, one after
   another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
-- **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on eight workers
-  (`--offline-jobs`), each `simparity` run as four shards (`simparity.mjs --shard K/4`: every
-  fourth of its 48 contexts of demo plays, the rule, refusal, data and malformed cases on shard 1,
-  each shard's C side built in a temporary folder of its own), and,
+- **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
+  game lanes leave, two to a lane and at least four (`--offline-jobs`; 20 at `-j 6` on 32 threads),
+  `stagecheck` first as four shards (`stagecheck.mjs --shard K/4`: every fourth of its 16 passes,
+  each shard playing and measuring only the sidebars its passes draw); each `simparity` run as 24 shards
+  (`simparity.mjs --shard K/24`: contexts K and K + 24 of its 48, one played without the units'
+  scripts and one with them, so the shards cost alike; the rule, refusal, data and malformed cases
+  on shard 1, each shard's C side built in a temporary folder of its own) and each `simcheck` run
+  as four (`simcheck.mjs --shard K/4`: every fourth context, the rule cases on shard 1), and,
   on `-j` workers (6 by default), each of `sp`, `page`, `demos`, `try`, `asset`, `stage3d`,
   `units`, `cursor`, `watch` and `rewind` with `--launch` on its own instance `wikigate-<mode>`, made afresh on its
   own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
