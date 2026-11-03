@@ -249,10 +249,15 @@ this frame's slice runs after every `prepare` (`tagpu_vk.c`), so the chain trail
 slice — an ordering, not a race — and a cell not reduced yet shows its base chain for that frame.
 Three facts make it hold:
 
-- **(a) A new terrain job starts from a cleared destination**: every terrain job is made with
-  `repaint` 0, and `dst_ready` clears the image at the job's first OUT. So on a new job (`s_rjGen`,
-  which every terrain job made moves) the chain is cleared while `painted` is 0 and reduced whole
-  once anything is painted.
+- **(a) A new terrain job clears its destination at its first OUT, not when it is made**: every
+  terrain job is made with `repaint` 0, and `dst_ready` clears the image at the job's first OUT,
+  the same record that moves `painted`. Until then level 0 is what the previous job left. So on a
+  new job (`s_rjGen`, which every terrain job made moves) with nothing painted, the chain is
+  **kept** while the picture stands — a job made again on an unchanged request, after a failure
+  once the restorer epoch moves, keeps `have` — and **cleared** while it does not; the job's first
+  paint is reduced **whole**, never through the list, because that OUT cleared level 0 first. The
+  rule is `tagpu_chain_rest_step` (`inc/tagpu_chain.h`), which `tools/replay/chain_test.py` drives
+  through a failure, a restart and a new request against a model of level 0.
 - **(b) The neighbourhood queue is FIFO** (*The feed* above: one size class, and `form_batch`
   takes the head's class in queue order). So `painted = P` means places `[0, P)` are painted, and
   the ledger reduces only the keys of the places painted since its last frame — `s_nbAt[place]`,

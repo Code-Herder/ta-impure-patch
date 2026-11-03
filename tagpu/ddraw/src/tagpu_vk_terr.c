@@ -336,6 +336,7 @@ static float     s_hZoom;                  /* the uZoom of the frame `prepare` l
 /* THE LEDGER (`chain_maintain`): the frames of the current job the restored chain covers, and
    for the neighbourhood job's done line, the keys reduced one by one and the pushes they took */
 static int       s_rcDone, s_rcKeys, s_rcPushes;
+static int       s_rcWhole;                /* the generation's first paint is still to reduce */
 static int       s_rcSaidLate;             /* "painted is past what was queued", said once a job */
 static unsigned  s_chkFrame;               /* the oracle's last check, in render-thread frames */
 #define CHK_BYTES   (16 * TAGPU_CHAIN_TEXELS * 4)   /* 16 cells, every level: 21 824 bytes */
@@ -1803,10 +1804,15 @@ static void chain_check_read(const TAGPU_VKPASS* d, SLOT* s, const TAGPU_TERRHAN
    not a race, and exact for the paints it covers; a cell not reduced yet shows its base chain for
    that frame. Three facts make it hold:
 
-     (a) A NEW TERRAIN JOB STARTS FROM A CLEARED DESTINATION: every terrain job is made with
-         `repaint` 0 (`restore_want`'s tagpu_vk_restore_job_new), and the restorer's `dst_ready`
-         clears it at the job's first OUT. So a cleared chain is that destination's reduction
-         while `painted` is 0, and once anything is painted a whole reduction is.
+     (a) A NEW TERRAIN JOB CLEARS ITS DESTINATION AT ITS FIRST OUT, not when it is made: every
+         terrain job is made with `repaint` 0 (`restore_want`'s tagpu_vk_restore_job_new), and
+         the restorer's `dst_ready` clears at the first OUT, which is also what moves `painted`.
+         So until `painted` moves, level 0 is what the previous job left: a job made again on an
+         unchanged request -- after a failure, once the restorer epoch moves -- keeps `have`, and
+         the chain is KEPT, not cleared; and the generation's first paint is reduced WHOLE, never
+         through the list, because that OUT cleared level 0 first. The rule is
+         tagpu_chain_rest_step (inc/tagpu_chain.h), which tools/replay/chain_test.c drives through
+         a restart.
      (b) THE NEIGHBOURHOOD QUEUE IS FIFO: every neighbourhood frame is one size class, and
          `form_batch` takes the head's class in queue order (tagpu_restore_core.c;
          compute-restorer.md "Not painted is exact"). So painted = P means places [0, P) are
@@ -1833,7 +1839,7 @@ static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 {
     SLOT* s = &s_slot[slot];
     VkImage fresh[2];
-    int nFresh = 0, baseOk, restOk, doB = 0, clrR = 0, wholeR = 0, nList = 0, newGen = 0;
+    int nFresh = 0, baseOk, restOk, doB = 0, clrR = 0, keepR = 0, wholeR = 0, nList = 0, newGen = 0;
     int painted = 0, check = 0, checkR = 0, P = 0, i;
     s_lodOk = 0;
     if (!s_chainsOn || !s->cnt || !s->csB || !s->csR) return;
@@ -1850,16 +1856,21 @@ static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         (!s_chainB.sh.have || s_chainB.srcSerial != s_base.serial || s_chainB.srcPal != s_basePal))
         doB = 1;
 
-    /* 3. THE RESTORED CHAIN, the ledger above */
+    /* 3. THE RESTORED CHAIN, the ledger above: the action is tagpu_chain_rest_step's, and it
+          updates the chain's state as the action is recorded below. A list the queue cannot
+          back becomes a whole reduction, which leaves the same state. */
     if (restOk) {
+        const int from = s_rcDone;
+        int act;
         painted = s_rgbAtlas.have ? s_rjPainted : 0;
-        if (!s_chainR.sh.have || s_chainR.gen != s_rjGen) {
-            newGen = 1;
-            if (painted > 0) wholeR = 1; else clrR = 1;
-        } else if (painted > s_rcDone) {
-            if (!s_nbMode) {
-                wholeR = 1;
-            } else if (s_nbGen != s_rjGen || !s_nbAt || painted > s_nbAdded) {
+        newGen = !s_chainR.sh.have || s_chainR.gen != s_rjGen;
+        act = tagpu_chain_rest_step(&s_chainR.sh.have, &s_chainR.gen, &s_rcDone, &s_rcWhole,
+                                    s_rjGen, s_rgbAtlas.have, s_rjPainted, s_nbMode);
+        clrR = act == TAGPU_RC_CLEAR;
+        keepR = act == TAGPU_RC_KEEP;
+        wholeR = act == TAGPU_RC_WHOLE;
+        if (act == TAGPU_RC_LIST) {
+            if (s_nbGen != s_rjGen || !s_nbAt || painted > s_nbAdded) {
                 /* the count is data that does not hold against the queue it counts */
                 if (!s_rcSaidLate) {
                     s_rcSaidLate = 1;
@@ -1870,17 +1881,17 @@ static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             } else {
                 int cells = s_chainR.cols * s_chainR.rows;
                 P = painted;
-                if (P - s_rcDone > s_rcCap) {
+                if (P - from > s_rcCap) {
                     int cap = s_rcCap ? s_rcCap : 256;
                     uint32_t* g;
-                    while (cap < P - s_rcDone) cap *= 2;
+                    while (cap < P - from) cap *= 2;
                     g = (uint32_t*)realloc(s_rcCells, (size_t)cap * sizeof *g);
                     if (g) { s_rcCells = g; s_rcCap = cap; }
                 }
-                if (P - s_rcDone > s_rcCap) {
+                if (P - from > s_rcCap) {
                     wholeR = 1;
                 } else {
-                    for (i = s_rcDone; i < P; i++) {
+                    for (i = from; i < P; i++) {
                         int k = s_nbAt[i];
                         /* a key is bounded by the chain's own cells before it names one */
                         if (k < 0 || k >= cells) { wholeR = 1; break; }
@@ -1906,7 +1917,9 @@ static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             chk_free(d, s);
         else
             check = 1;
-        checkR = check && restOk && painted > 0;
+        /* the restored chain whenever the atlas is a picture -- the kept window of a restart
+           included, where it mirrors the previous job's level 0 */
+        checkR = check && restOk && s_rgbAtlas.have;
     }
 
     if (doB || check) chain_set(d, s, s->csB, s_base.view, &s_chainB);
@@ -1939,16 +1952,12 @@ static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             s_rcPushes += (nList + 23) / 24;
         }
         tagpu_vk_chain_end(cb);
-        if (clrR || wholeR || nList) {
-            s_chainR.sh.have = 1;
-            if (newGen) {
-                plog(d, "terr: chain rest %dx%d %s %d cells, job %u", s_chainR.sh.w, s_chainR.sh.h,
-                     clrR ? "cleared" : "reduced whole", s_chainR.cols * s_chainR.rows, s_rjGen);
-                s_rcKeys = 0; s_rcPushes = 0; s_rcSaidLate = 0;
-            }
-            s_chainR.gen = s_rjGen;
-            s_rcDone = painted;
-        }
+    }
+    if (newGen && (clrR || keepR || wholeR)) {
+        plog(d, "terr: chain rest %dx%d %s %d cells, job %u", s_chainR.sh.w, s_chainR.sh.h,
+             clrR ? "cleared" : keepR ? "kept (level 0 stands until the job's first paint)"
+                  : "reduced whole", s_chainR.cols * s_chainR.rows, s_rjGen);
+        s_rcKeys = 0; s_rcPushes = 0; s_rcSaidLate = 0;
     }
 
     s_lodOk = baseOk && s_chainB.laid && s_chainB.sh.have &&
@@ -2653,7 +2662,7 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     chain_kill(d, &s_chainR);
     if (s_sampChain) { vkDestroySampler(dev, s_sampChain, NULL); s_sampChain = VK_NULL_HANDLE; }
     free(s_rcCells); s_rcCells = NULL; s_rcCap = 0;
-    s_rcDone = s_rcKeys = s_rcPushes = s_rcSaidLate = 0;
+    s_rcDone = s_rcKeys = s_rcPushes = s_rcSaidLate = s_rcWhole = 0;
     s_lodOk = s_restChain = 0;
     s_chainsOn = 0;
     s_chkFrame = 0;

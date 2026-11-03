@@ -9,8 +9,10 @@ random tiles, opaque, transparent, keyed and clipped; `tagpu_chain_texel`, the m
 terrain fragment stage's taChain, to stay inside its cell's block and to hold the texel level 0
 samples; `tagpu_chain_level` to give each level the spec names; the features' table form to reduce
 a frame's tiles from the frame alone; and `tagpu_chain_ftexel`, the mirror of the feature fragment
-stage's taFChain, to find each texel's own cell and block. So a live `cpu-differ=0` means the
-device's arithmetic is this one, and this one is the shader's.
+stage's taFChain, to find each texel's own cell and block; and `tagpu_chain_rest_step`, the
+restored terrain chain's ledger, to keep the chain a mirror of the restored atlas's level 0 through
+a job's failure, its restart on the same request and a new request. So a live `cpu-differ=0` means
+the device's arithmetic is this one, and this one is the shader's.
 
     python3 tools/replay/chain_test.py [--cases N] [--seed S] [--out DIR]
 """

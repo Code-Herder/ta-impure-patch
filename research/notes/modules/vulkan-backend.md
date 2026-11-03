@@ -829,8 +829,10 @@ check has been read, of a chain current once the frame's work is recorded:
   while the atlas, the palette and, for the features, the allocation are still the ones reduced
   from (`skipped` otherwise).
 - The lines and what must read 0: the `ta-drive` skill's `references/levers.md`, *The heartbeats*.
-  **A known transient**: the terrain's `rest gpu-differ` can read non-zero for a check when a
-  restore job restarts on the same request, and then 0; the cause is not established.
+  The restored chain mirrors the restored atlas's level 0 on every frame the atlas is a picture,
+  across a restore job made again on the same request too (`tagpu_chain_rest_step`: the chain is
+  kept until the new job's first OUT clears level 0, and that paint is reduced whole), so the
+  terrain's `rest gpu-differ` reads 0 across a restart; the check covers the kept window.
 
 **Cost.**
 

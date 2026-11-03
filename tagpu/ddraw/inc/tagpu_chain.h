@@ -56,6 +56,29 @@ void tagpu_chain_ref(const unsigned char* rgba, int rowBytes, int sx, int sy, in
    sample at in-tile coordinate (px, py), cell (cx, cy); (*x, *y) at image level L-1. */
 void tagpu_chain_texel(int L, int cx, int cy, float px, float py, int* x, int* y);
 
+/* THE RESTORED TERRAIN CHAIN'S LEDGER (tagpu_vk_terr.c `chain_maintain`): what one frame does to
+   the chain so that it MIRRORS THE RESTORED ATLAS'S LEVEL 0 whenever that atlas is a picture.
+   In: the chain's state -- `have` (anything recorded into it), `gen` (the job it follows), `done`
+   (the painted count it covers), `whole` (its next paint must be reduced whole) -- which this
+   updates as though the action were recorded, and the frame's facts: `job` (the restore job's
+   generation), `picture` (the atlas is a picture), `painted` (the job's count), `fifo` (painted
+   = P names places [0, P) of a queue, so a list may follow it).
+   THE RULE. The restorer clears its destination at a job's FIRST OUT, not when the job is made.
+     * A new generation with something painted: the clear has happened, so the chain is reduced
+       WHOLE.
+     * A new generation with nothing painted on a standing picture -- a job made again on an
+       unchanged request -- leaves level 0 as the last job left it: the chain is KEPT (or reduced
+       whole if it holds nothing yet), and that generation's first paint is reduced whole,
+       because that OUT clears level 0 first.
+     * A new generation with no picture: CLEAR (nothing samples it, and the first paint will be a
+       whole reduction).
+     * The same generation, painted moved: a LIST of the places painted since, under a FIFO queue
+       once the generation's first paint has been reduced whole; otherwise WHOLE.
+   Returns TAGPU_RC_*. */
+enum { TAGPU_RC_NONE = 0, TAGPU_RC_CLEAR, TAGPU_RC_KEEP, TAGPU_RC_WHOLE, TAGPU_RC_LIST };
+int tagpu_chain_rest_step(int* have, unsigned* gen, int* done, int* whole, unsigned job,
+                          int picture, int painted, int fifo);
+
 /* ...and its FRAME FORM, the texel the feature fragment stage fetches (tagpu_feat.c `taFChain`):
    level L (1..5), the frame's table record rec = { x | y << 16, w | h << 16, its first cell, its
    tiles across } (w, h >= 1), a sample at atlas UV (u, v) of a `dim`-square atlas; (*x, *y) at

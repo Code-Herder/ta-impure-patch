@@ -22,6 +22,12 @@
        texel of random frames at every level: the cell its tile was given, a level texel whose
        block holds the texel and at least one valid texel, and for a sample nudged past the frame's
        edge, a texel of the frame's own cells.
+   (f) `tagpu_chain_rest_step`, the restored terrain chain's ledger, driven frame by frame against
+       a model of the restored atlas's level 0 as the restorer changes it -- the destination
+       cleared at a job's first OUT, paints in queue order (FIFO, the neighbourhood atlas) or not
+       (per tile) -- through a job that fails, the same request restored again (the restart that
+       keeps the picture), and a new request: the chain must mirror level 0 on every frame the
+       atlas is a picture, which is what the oracle's `rest gpu-differ=0` reads.
 
      chain_test [seed] [cases] */
 #include "tagpu_chain.h"
@@ -264,6 +270,60 @@ static void test_ftexel(int cases)
     }
 }
 
+/* (f) */
+#define RN 48
+static void test_rest(int fifo, int rounds)
+{
+    int level0[RN], chain[RN], key[RN], i, r;
+    int have = 0, done = 0, whole = 0, kept = 0;
+    unsigned gen = 0;
+    for (i = 0; i < RN; i++) { level0[i] = chain[i] = 0; key[i] = i; }
+    for (r = 0; r < rounds; r++) {
+        /* one job's life: `fail` frames of slices before it fails (0: it finishes), then the
+           same request made again, then a new request */
+        unsigned job = 0;
+        int picture = 0, phase, frame;
+        for (phase = 0; phase < 3; phase++) {
+            int count = 0, started = 0, live = 1, fail = phase == 0 ? rndi(1, 6) : 0;
+            job++;
+            if (phase == 2) picture = 0;            /* the request moved: not a picture */
+            /* a new job's queue order */
+            for (i = RN - 1; i > 0; i--) { int j = rndi(0, i), t = key[i]; key[i] = key[j]; key[j] = t; }
+            for (frame = 0; frame < 40; frame++) {
+                int act, from = done;
+                if (live && count > 0) picture = 1;
+                act = tagpu_chain_rest_step(&have, &gen, &done, &whole, (unsigned)(r * 3) + job,
+                                            picture, count, fifo);
+                if (act == TAGPU_RC_CLEAR) for (i = 0; i < RN; i++) chain[i] = 0;
+                if (act == TAGPU_RC_KEEP) kept++;
+                if (act == TAGPU_RC_WHOLE) for (i = 0; i < RN; i++) chain[i] = level0[i];
+                if (act == TAGPU_RC_LIST) {
+                    CHECK(fifo);
+                    for (i = from; i < count; i++) chain[key[i]] = level0[key[i]];
+                }
+                if (picture) for (i = 0; i < RN; i++) CHECK(chain[i] == level0[i]);
+                /* the restorer's slice, after every prepare */
+                if (live && phase == 0 && fail && frame >= fail) live = 0;
+                if (live && count < RN) {
+                    int b = rndi(1, 7), k;
+                    if (!started) { for (i = 0; i < RN; i++) level0[i] = 0; started = 1; }
+                    if (b > RN - count) b = RN - count;
+                    if (fifo)
+                        for (k = 0; k < b; k++) level0[key[count + k]] = (int)job * 100 + count + k + 1;
+                    else            /* per-tile: any not yet painted, out of order */
+                        for (k = 0; k < b; k++) {
+                            int pl = rndi(count + k, RN - 1), t = key[pl];
+                            key[pl] = key[count + k]; key[count + k] = t;
+                            level0[t] = (int)job * 100 + count + k + 1;
+                        }
+                    count += b;
+                }
+            }
+        }
+    }
+    CHECK(kept > 0);
+}
+
 static void test_level(void)
 {
     const float gw = 640.0f, gh = 480.0f;
@@ -305,6 +365,9 @@ int main(int argc, char** argv)
     printf("frame: every tile of a keyed frame reduces from the frame alone, as the reference does\n");
     test_ftexel(cases / 20 > 0 ? cases / 20 : 1);
     printf("ftexel: every texel of every frame finds its own cell, and a block that holds it\n");
+    test_rest(1, cases / 10 > 0 ? cases / 10 : 1);
+    test_rest(0, cases / 10 > 0 ? cases / 10 : 1);
+    printf("rest: the restored chain mirrors level 0 through failures, restarts and new requests\n");
     printf("every check holds\n");
     return 0;
 }

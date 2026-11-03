@@ -1,5 +1,5 @@
 /* tagpu_chain_ref.c -- the C side of the mip chains (inc/tagpu_chain.h): the level rule, the
-   reference reduction and the fragment stages' lookups. Engine-free, Win32-free and stateless, so
+   reference reduction, the fragment stages' lookups and the restored terrain chain's ledger. Engine-free, Win32-free and stateless, so
    the DLL, both scenes' passes and tools/replay/chain_test.c all compile this one file. */
 #include "tagpu_chain.h"
 #include <math.h>
@@ -106,4 +106,28 @@ void tagpu_chain_ftexel(int L, const unsigned rec[4], float u, float v, int dim,
     qy = (iy & 31) >> L; if (qy > limy - 1) qy = limy - 1;
     *x = (c & (TAGPU_CHAIN_FCOLS - 1)) * n + qx;
     *y = (c / TAGPU_CHAIN_FCOLS) * n + qy;
+}
+
+/* The rule is inc/tagpu_chain.h's, beside the declaration. */
+int tagpu_chain_rest_step(int* have, unsigned* gen, int* done, int* whole, unsigned job,
+                          int picture, int painted, int fifo)
+{
+    int a;
+    if (!picture || painted < 0) painted = 0;
+    if (!*have || *gen != job) {
+        a = painted > 0 ? TAGPU_RC_WHOLE
+          : !picture    ? TAGPU_RC_CLEAR
+          : *have       ? TAGPU_RC_KEEP
+                        : TAGPU_RC_WHOLE;
+        *whole = painted == 0;
+    } else if (painted > *done) {
+        a = (!fifo || *whole) ? TAGPU_RC_WHOLE : TAGPU_RC_LIST;
+        *whole = 0;
+    } else {
+        return TAGPU_RC_NONE;
+    }
+    *have = 1;
+    *gen = job;
+    *done = painted;
+    return a;
 }
