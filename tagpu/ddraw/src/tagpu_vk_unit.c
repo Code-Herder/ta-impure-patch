@@ -2107,6 +2107,16 @@ static void vs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
     b->i[44] = base[2];                                /* uVisBase     int @176*/
 }
 
+/* THE BODY BLOCK'S PER-DRAW FIELDS, as word indices into UBLK: the shadow
+   and nanoframe-wire draws reuse the body block with some of these moved
+   (draw_unit_blocks), so the indices are named once here and every writer
+   uses the names -- a field added or removed above them moves all three
+   writers together. They must match fs_body's GLSL block. */
+enum {
+    FB_FOG = 14, FB_SHADOW = 15, FB_ALPHA = 16, FB_WATERT = 17,
+    FB_WATERMODE = 18, FB_DIGT = 19, FB_NANOON = 20, FB_NANOT = 21
+};
+
 /* The fragment stage's BODY block. */
 static void fs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r)
 {
@@ -2119,14 +2129,14 @@ static void fs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r)
     b->f[9]  = h->zoom;                                /* uZoomF    float @36  */
     b->f[10] = h->zoomCx; b->f[11] = h->zoomCy;        /* uZoomCF    vec2 @40  */
     b->i[12] = s_fogW; b->i[13] = s_fogH;              /* uFogSize  ivec2 @48  */
-    b->i[14] = r->fog;                                 /* uFog        int @56  */
-    b->i[15] = 0;                                      /* uShadow     int @60  */
-    b->f[16] = r->alpha;                               /* uAlpha    float @64  */
-    b->f[17] = r->waterT;                              /* uWaterT   float @68  */
-    b->i[18] = r->waterMode;                           /* uWaterMode  int @72  */
-    b->f[19] = r->digT;                                /* uDigT     float @76  */
-    b->i[20] = r->nanoOn;                              /* uNanoOn     int @80  */
-    b->f[21] = r->nanoT;                               /* uNanoT    float @84  */
+    b->i[FB_FOG]       = r->fog;                       /* uFog        int @56  */
+    b->i[FB_SHADOW]    = 0;                            /* uShadow     int @60  */
+    b->f[FB_ALPHA]     = r->alpha;                     /* uAlpha    float @64  */
+    b->f[FB_WATERT]    = r->waterT;                    /* uWaterT   float @68  */
+    b->i[FB_WATERMODE] = r->waterMode;                 /* uWaterMode  int @72  */
+    b->f[FB_DIGT]      = r->digT;                      /* uDigT     float @76  */
+    b->i[FB_NANOON]    = r->nanoOn;                    /* uNanoOn     int @80  */
+    b->f[FB_NANOT]     = r->nanoT;                     /* uNanoT    float @84  */
     b->f[24] = r->nanoC[0]; b->f[25] = r->nanoC[1];
     b->f[26] = r->nanoC[2];                            /* uNanoC     vec3 @96  */
     b->i[27] = h->lambert;                             /* uLambert    int @108 */
@@ -2263,12 +2273,12 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        the completed branch and the digger's inline branch only. Getting this
        wrong erases the Kbot lab's shadow below the waterline, so it is pinned
        here rather than passed in. */
-    b.i[17] = 1;                                       /* uShadow              */
-    b.f[18] = 0.5f;                                    /* uAlpha               */
-    b.i[22] = 0;                                       /* uNanoOn              */
+    b.i[FB_SHADOW] = 1;
+    b.f[FB_ALPHA]  = 0.5f;
+    b.i[FB_NANOON] = 0;
     if (r->shKind == TAGPU_PDSH_SLANT) {
-        b.f[19] = -1e9f;                               /* uWaterT              */
-        b.f[21] = -1e9f;                               /* uDigT                */
+        b.f[FB_WATERT] = -1e9f;
+        b.f[FB_DIGT]   = -1e9f;
     }
     memcpy(ub + fglOff2, b.f, FGL_SZ);
 
@@ -2276,12 +2286,12 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        The body block with four fields moved: uShadow 0, uNanoOn 0 (the outline
        is not re-classified by the recolour it traces), uWaterMode 0 and
        uAlpha 1. The waterline and digger thresholds stay the unit's own. */
-    b.i[17] = 0;                                       /* uShadow              */
-    b.f[18] = 1.0f;                                    /* uAlpha               */
-    b.f[19] = r->waterT;                               /* uWaterT              */
-    b.i[20] = 0;                                       /* uWaterMode           */
-    b.f[21] = r->digT;                                 /* uDigT                */
-    b.i[22] = 0;                                       /* uNanoOn              */
+    b.i[FB_SHADOW]    = 0;
+    b.f[FB_ALPHA]     = 1.0f;
+    b.f[FB_WATERT]    = r->waterT;
+    b.i[FB_WATERMODE] = 0;
+    b.f[FB_DIGT]      = r->digT;
+    b.i[FB_NANOON]    = 0;
     memcpy(ub + fglOff3, b.f, FGL_SZ);
 }
 
