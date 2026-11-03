@@ -97,8 +97,13 @@ the arithmetic, Seven Islands (20 480² px) gives 0.0346 at 1024×768, about 0.0
   `TAGPU_TERR_MAX_SIDE` = 2050 cells, which follows from the gather rect's cap
   `TAGPU_GATHER_SPAN_MAX` (65 536 px a side, `tagpu_terr.h`), which `tagpu_zoom_gather_span`
   applies whatever floor its caller holds: Seven Islands whole is 640 × 640 cells, inside it.
-- **ScrollSpeed** saturates at 255 below z = 0.125 (default 32). At the whole-map level there is
-  nothing to scroll to; stated, not fixed.
+- **The scroll step** is fixed by its own landing (`.data/mega-map/scrollspeed-spec.md`). The
+  zoom scaled the byte `ScrollSpeed` and stated that it saturated at 255 below 0.125; it stopped
+  working earlier, because the poll caps the byte times the elapsed ticks at 0x80 (`0x41CEAA`): at
+  z = 0.25 for the default 32. Writing the byte also cost a save guard, and the options screen's
+  snapshot and restores fooled its cached base (a doubled value saved, or the player's choice
+  overwritten). Now the poll's capped step is divided by the level in its register at `0x41CEAA`
+  and the byte is never written, so the screen scrolls at the 1x rate at every level.
 - **The recorder's camera** goes down to 1/64 in recording format 27 (`REC_POV_ZOOM_MIN` 1024);
   format 26 recordings still read, with their own 16384 minimum, and Follow draws a recorded level
   below the viewer's floor at the floor. The multiplayer contribution version is unchanged.
@@ -182,7 +187,7 @@ is per-frame working copies, not information, so the landing is split to remove 
 - **Mipmaps get their own landing after the floor**: per-tile mip chains for the terrain atlases and
   features, the level chosen from the supersampled target's pixel footprint, so 1× and above stay
   byte-identical.
-- **Stated, not fixed**: ScrollSpeed saturates at 255 below 0.125; 5120×1440 on a 20 480-px map
+- **Stated, not fixed**: 5120×1440 on a 20 480-px map
   stops at ~0.083 (int16 clicks; the edges carry no margin); 640×480 on maps whose extent is
   taller than 26 624 px stops at 1/64.
 

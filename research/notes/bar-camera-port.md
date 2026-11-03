@@ -64,7 +64,7 @@ what replaces it.
 | **ease** | each presented frame covers a quarter of the remaining log-distance and snaps at 0.0025. A notch is 82 % done in 6 frames and lands in 13, so its length follows the present rate (0.22 s at 60 Hz) | a 250 ms tween from the **drawn** pose to the new target along g = 1 − (1 − f)⁴. Centre and 1/z are lerped in straight lines. 24 % of the notch lands in the first 60 Hz frame and 80 % by 83 ms. Its length is the same at any frame rate |
 | **edge** | black | `mirror` (§1.4) |
 | **range** | the floor..8; the floor is `min(0.25, fit)`, the level at which the map fits the screen ([camera and zoom](modules/camera-zoom.html) §2.3) | 0.25..8 in the lab. BAR's own range depends on the map (§1.2) |
-| **scroll rate** | the same on screen at every zoom (`apply_scroll_rate` scales `ScrollSpeed` by 1/z) | unchanged. BAR's is the same property (§1.2) |
+| **scroll rate** | the same on screen at every zoom (`zoom_scroll_step` divides the scroll poll's capped step by z at `0x41CEAA`) | unchanged. BAR's is the same property (§1.2) |
 
 The notch counts from 0.25× to 8× are 36 for the game, 23 in and 27 out for BAR.
 
