@@ -40,6 +40,7 @@
 #include "tagpu_vk_world.h"
 #include "tagpu_vk_fog.h"
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk_chain.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_posebake.h"
@@ -1185,6 +1186,13 @@ int tagpu_wikiworld_ab_arm(const char* tag)
 
 int tagpu_wikiworld_grow_stress(void)
 {
+    return 0;
+}
+
+/* the mip chains' oracle checks the game's world only */
+int tagpu_wikiworld_chaincheck_armed(unsigned frame)
+{
+    (void)frame;
     return 0;
 }
 

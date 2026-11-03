@@ -153,6 +153,11 @@ function shadeK(pal, shd, rows, neutral) {
 // base atlas goes to texture unit 16, the program's sampler for it, the tile
 // map to unit 7 and the neighbourhood keys -- one zero texel: this lane has no
 // restored atlas, so uNbhd is 0 and the shader never reads it -- to unit 8.
+// THE MIP CHAINS (tagpu_chain.h) are the DLL's alone: the lab draws at uLod 0
+// with uRestChain 0, today's picture, and names both chain samplers on unit
+// 16 -- a sampler2D, as they are. Never on unit 2, 7 or 8: those hold
+// usampler2D textures, and two sampler types on one unit fail WebGL's
+// draw-time validation.
 function classicTerrain(gl, vs, fs, atlas, r8, pal) {
   const prog = program(gl, vs, fs, "terrain");
   const vao = gl.createVertexArray();
@@ -170,7 +175,7 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
                                 "uCols", "uArea", "uMirror", "uAtlasN", "uNbhd", "uNbCols",
                                 "uTileMap", "uKeys",
                                 "uLambert", "uRestored", "uBase", "uHDim",
-                                "uShadowOn"]);
+                                "uShadowOn", "uLod", "uRestChain", "uChainBase", "uChainRest"]);
   nameShadowUnits(gl, prog);
   tex2D(gl, 16, gl.RGBA8, atlas.w, atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
         baseAtlas(pal, r8, atlas.w, atlas.h, null, 0));
@@ -246,6 +251,8 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       gl.uniform1i(U.uLambert, 0);
       gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
       gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
+      gl.uniform1i(U.uLod, 0); gl.uniform1i(U.uRestChain, 0);
+      gl.uniform1i(U.uChainBase, 16); gl.uniform1i(U.uChainRest, 16);
       gl.bindVertexArray(vao);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
       gl.bindVertexArray(null);

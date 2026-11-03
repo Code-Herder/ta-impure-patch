@@ -130,10 +130,13 @@
 #include "tagpu_restore_guard.h"        /* tagpu_rguard_fault */
 #include "tagpu_vk_stage.h"
 #include "tagpu_pal.h"                  /* tagpu_pal_expand */
+#include "tagpu_vk_chain.h"             /* the mip chains' reducer */
+#include "tagpu_chain.h"                /* their format, level rule and C reference */
 #include "spirv/tagpu_terr.spv.h"
 
 #define UBLK_VS  112                       /* std140, the generated header's   */
-#define UBLK_FS  176
+#define UBLK_FS  192
+#define UOFF_LOD 176                       /* uLod's offset in the FS block, written at `record` */
 
 /* ---- the entry points ----------------------------------------------------
    Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
@@ -158,7 +161,8 @@
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdCopyBufferToImage) \
-    X(vkCmdPipelineBarrier) X(vkCmdClearDepthStencilImage)
+    X(vkCmdPipelineBarrier) X(vkCmdClearDepthStencilImage) \
+    X(vkCmdFillBuffer) X(vkCmdCopyImageToBuffer)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -299,6 +303,43 @@ static int           s_rjPainted;          /* job_painted at the last report  */
 static int           s_nbMode, s_nbChosen;
 static unsigned      s_nbFor, s_nbEpoch;
 
+/* ---- THE MIP CHAINS (inc/tagpu_chain.h) ------------------------------------------------------
+   Below a texel a target pixel the fragment stage reads a tile's prefiltered levels instead of
+   one NEAREST texel of level 0, so a sub-pixel pan no longer changes which texel a pixel shows.
+   Two chains, each a SHARED image with the same retire as the atlases (item 3 of the header) and
+   one storage view per level besides its sampled view `sh.view` over all five: `s_chainB` of the
+   base atlas, `s_chainR` of the restored one. A chain has its atlas's grid of 34-texel cells,
+   16 texels a cell at image level 0: `cols` x `rows`. `laid` says the image has left UNDEFINED
+   (it is GENERAL from then on, tagpu_vk_chain.c); `sh.have` that a reduction or a clear has been
+   recorded into it since it was made. `srcSerial`/`srcPal` are the base atlas's serial and
+   palette the base chain was reduced from; `gen` is the restore job generation (`s_rjGen`) the
+   restored chain's ledger follows. `noCols`/`noRows` is a size the device or the memory rule
+   refused, which is not asked for again until the atlas's size moves or the device goes. */
+#define CHAIN_USAGE (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | \
+                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+#define CELL_PITCH  34                     /* tagpu_terr.c's, which both atlases are laid on */
+#define CELL_BORDER 1
+typedef struct {
+    SHARED      sh;
+    VkImageView lvl[TAGPU_CHAIN_LEVELS], oldLvl[TAGPU_CHAIN_LEVELS];
+    int         cols, rows, noCols, noRows;
+    int         laid;
+    unsigned    srcSerial, srcPal, gen;
+} CHAIN;
+static CHAIN     s_chainB, s_chainR;
+static int       s_chainsOn;               /* tagpu_vk_chain_up said yes at build */
+static VkSampler s_sampChain;
+/* THE BASE CHAIN IS CURRENT, set at `prepare` and read at `record`: what `uLod` is gated on, and
+   what binding 47 names. `s_restChain` is uRestChain, and what binding 48 names. */
+static int       s_lodOk, s_restChain;
+static float     s_hZoom;                  /* the uZoom of the frame `prepare` left to draw */
+/* THE LEDGER (`chain_maintain`): the frames of the current job the restored chain covers, and
+   for the neighbourhood job's done line, the keys reduced one by one and the pushes they took */
+static int       s_rcDone, s_rcKeys, s_rcPushes;
+static int       s_rcSaidLate;             /* "painted is past what was queued", said once a job */
+static unsigned  s_chkFrame;               /* the oracle's last check, in render-thread frames */
+#define CHK_BYTES   (16 * TAGPU_CHAIN_TEXELS * 4)   /* 16 cells, every level: 21 824 bytes */
+
 
 /* what `record` was left to draw: the grid's cells, one instance each */
 static uint32_t s_cells;
@@ -336,6 +377,25 @@ typedef struct {
        `record` refuses to draw unless they are still the live views, and
        `slot_free` clears them. See the retire's second rule. */
     VkImageView     boundBase, boundHeight, boundShadow, boundMap, boundKeys;
+    VkImageView     boundChainB, boundChainR;
+
+    /* THE REDUCER'S TWO SETS, base and restored, from this pass's pool: written in this slot's
+       `prepare` right before every use (`chain_set`), never on another slot's */
+    VkDescriptorSet csB, csR;
+    /* binding 6's counter buffer, 16 bytes, mapped: the oracle's four counters, and otherwise
+       the valid descriptor a writing dispatch never touches */
+    VkBuffer        cnt;
+    VkDeviceMemory  cntMem;
+    unsigned char*  cntMap;
+    /* THE ORACLE'S COPY of 16 base cells, every level, and what it was taken against; it exists
+       only while tagpu_chaincheck.on does. `chkOwed`: a check was recorded on this slot and is
+       read at its next `prepare`, after the fence. */
+    VkBuffer        chk;
+    VkDeviceMemory  chkMem;
+    unsigned char*  chkMap;
+    int             chkOwed, chkRest, chkCols, chkCells, chkRestCells, chkNb;
+    unsigned        chkSerial, chkPal, chkGen;
+    int             chkPainted;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
@@ -423,9 +483,10 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
    render target, and a colour attachment has to say so at create
    time. It is passed rather than added to every image here because the flag is
    not free -- a driver may pick a different tiling for an image that can be
-   rendered to -- and the rest are never rendered to. */
+   rendered to -- and the rest are never rendered to. `levels` is 1 for every image but the
+   mip chains, whose view `view` then spans all of them. */
 static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
-                    VkImageAspectFlags aspect, VkImageUsageFlags usage,
+                    VkImageAspectFlags aspect, VkImageUsageFlags usage, int levels,
                     VkImage* img, VkDeviceMemory* mem, VkImageView* view)
 {
     VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
@@ -439,7 +500,7 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
     ici.extent.width = (uint32_t)w;
     ici.extent.height = (uint32_t)h;
     ici.extent.depth = 1;
-    ici.mipLevels = 1;
+    ici.mipLevels = (uint32_t)levels;
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -459,7 +520,7 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
     ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ivi.format = fmt;
     ivi.subresourceRange.aspectMask = aspect;
-    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.levelCount = (uint32_t)levels;
     ivi.subresourceRange.layerCount = 1;
     if (vkCreateImageView(d->dev, &ivi, NULL, view) != VK_SUCCESS) return 0;
     return 1;
@@ -531,6 +592,16 @@ static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
 
 /* ---- the slot ----------------------------------------------------------- */
 
+/* The oracle's copy buffer goes with the lever, and with the slot. An owed check goes with it:
+   its numbers were never read, and the next check is 120 frames away. */
+static void chk_free(const TAGPU_VKPASS* d, SLOT* s)
+{
+    if (s->chkMap) { vkUnmapMemory(d->dev, s->chkMem); s->chkMap = NULL; }
+    if (s->chk) { vkDestroyBuffer(d->dev, s->chk, NULL); s->chk = VK_NULL_HANDLE; }
+    if (s->chkMem) { vkFreeMemory(d->dev, s->chkMem, NULL); s->chkMem = VK_NULL_HANDLE; }
+    s->chkOwed = 0;
+}
+
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
 {
     VkDevice dev = d->dev;
@@ -542,10 +613,17 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
     kill_image(d, &s->pal, &s->palMem, &s->palView);
+    /* the counters and the oracle's copy: the reducer's sets name the counters, and are written
+       again before their next use (`chain_set`) */
+    if (s->cntMap) { vkUnmapMemory(dev, s->cntMem); s->cntMap = NULL; }
+    if (s->cnt) { vkDestroyBuffer(dev, s->cnt, NULL); s->cnt = VK_NULL_HANDLE; }
+    if (s->cntMem) { vkFreeMemory(dev, s->cntMem, NULL); s->cntMem = VK_NULL_HANDLE; }
+    chk_free(d, s);
     /* the set this slot holds names nothing live any more, and `record` tests
        exactly that before it draws */
     s->boundBase = s->boundHeight = s->boundShadow = VK_NULL_HANDLE;
     s->boundMap = s->boundKeys = VK_NULL_HANDLE;
+    s->boundChainB = s->boundChainR = VK_NULL_HANDLE;
     s->fogGen = 0;
     s->built = 0;
 }
@@ -560,11 +638,15 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     VkWriteDescriptorSet wr;
 
     if (s->built) return 1;
-    if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED,
+    if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED, 1,
                   &s->pal, &s->palMem, &s->palView)) return 0;
     if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
+    if (s_chainsOn &&
+        !mk_buffer(d, 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s->cnt, &s->cntMem, &s->cntMap)) return 0;
 
     memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
     ii.sampler = s_samp; ii.imageView = s->palView;
@@ -617,7 +699,7 @@ static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h,
         sh->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
     }
     sh->w = sh->h = 0; sh->serial = 0; sh->have = 0;
-    if (!mk_image(d, w, h, fmt, VK_IMAGE_ASPECT_COLOR_BIT, usage,
+    if (!mk_image(d, w, h, fmt, VK_IMAGE_ASPECT_COLOR_BIT, usage, 1,
                   &sh->img, &sh->mem, &sh->view)) {
         /* mk_image can fail after vkCreateImage succeeded, so the half-made
            object is given back here: the caller's "is there an image at all"
@@ -689,6 +771,12 @@ static int build_samplers(const TAGPU_VKPASS* d)
     sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     sci.maxLod = 0.0f;
     if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) return 0;
+    /* THE CHAINS' SAMPLER, bindings 47 and 48. The fragment stage only texelFetches them, which
+       ignores the sampler; the levels are named because the lab's GL ES needs a mipmapped
+       minification filter to fetch at a level above 0, and the two should say the same thing. */
+    sci.maxLod = (float)(TAGPU_CHAIN_LEVELS - 1);
+    if (vkCreateSampler(d->dev, &sci, NULL, &s_sampChain) != VK_SUCCESS) return 0;
+    sci.maxLod = 0.0f;
     /* THE COMPARE SAMPLER: compare LESS_OR_EQUAL, with MIN and MAG **LINEAR**
        -- taShadowAt's 16-tap PCF is bilinear, and that filtering is half of what
        makes the penumbra smooth -- so this one is LINEAR too.
@@ -737,7 +825,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
 
 static int build_pipeline(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[11];
+    VkDescriptorSetLayoutBinding b[13];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -762,27 +850,27 @@ static int build_pipeline(const TAGPU_VKPASS* d)
        allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
        block, 8.. its samplers in declaration order -- uTileMap, uKeys -- 32
        the fragment stage's block, and 40.. its samplers -- uPal, uAtlasRGB,
-       uHeight, uFogSrc, uShadowCmp, uShadowRaw, uBase. The std140 offsets
-       are printed in the generated header and are the contract for what goes
-       into those buffers. */
+       uHeight, uFogSrc, uShadowCmp, uShadowRaw, uBase, uChainBase,
+       uChainRest. The std140 offsets are printed in the generated header and
+       are the contract for what goes into those buffers. */
     memset(b, 0, sizeof b);
     b[0].binding = 0;  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (i = 2; i < 9; i++) {
+    for (i = 2; i < 11; i++) {
         b[i].binding = (uint32_t)(40 + (i - 2));
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (i = 9; i < 11; i++) {
-        b[i].binding = (uint32_t)(8 + (i - 9));
+    for (i = 11; i < 13; i++) {
+        b[i].binding = (uint32_t)(8 + (i - 11));
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     }
-    dli.bindingCount = 11; dli.pBindings = b;
+    dli.bindingCount = 13; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -867,31 +955,41 @@ out:
 
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
-    VkDescriptorPoolSize ps[2];
+    VkDescriptorPoolSize ps[4];
     VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
-    VkDescriptorSet sets[TAGPU_VK_SLOTS];
+    VkDescriptorSetLayout lay[3 * TAGPU_VK_SLOTS];
+    VkDescriptorSet sets[3 * TAGPU_VK_SLOTS];
     VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    uint32_t i;
+    uint32_t i, chains = s_chainsOn ? 1u : 0u;
 
+    /* per slot: the graphics set (two blocks, eleven samplers), and with the chains up the
+       reducer's two sets (one sampler, five storage images and one storage buffer each) */
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 9;
-    dpi.maxSets = d->slots;
-    dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps[1].descriptorCount = d->slots * (11 + 2 * chains);
+    ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          ps[2].descriptorCount = d->slots * 10;
+    ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[3].descriptorCount = d->slots * 2;
+    dpi.maxSets = d->slots * (1 + 2 * chains);
+    dpi.poolSizeCount = chains ? 4 : 2; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
 
     for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
+    for (i = d->slots; i < d->slots * (1 + 2 * chains); i++) lay[i] = tagpu_vk_chain_dsl();
     dai.descriptorPool = s_dpool;
-    dai.descriptorSetCount = d->slots;
+    dai.descriptorSetCount = d->slots * (1 + 2 * chains);
     dai.pSetLayouts = lay;
     if (vkAllocateDescriptorSets(d->dev, &dai, sets) != VK_SUCCESS) return 0;
+    for (i = 0; chains && i < d->slots; i++) {
+        s_slot[i].csB = sets[d->slots + 2 * i];
+        s_slot[i].csR = sets[d->slots + 2 * i + 1];
+    }
 
     /* The two uniform blocks are written now and never again -- they name a
        fixed range of a buffer whose CONTENTS change per frame. The samplers are
        written when there is an image to name: 40 by `slot_build`, 43 by
-       `fog_bind`, 44 and 45 by `shadow_build`, and 8/9/41/42/46 (and 44/45
-       again) on every prepare by `shared_bind`. */
+       `fog_bind`, 44 and 45 by `shadow_build`, and 8/9/41/42/46/47/48 (and
+       44/45 again) on every prepare by `shared_bind`. */
     for (i = 0; i < d->slots; i++) {
         VkDescriptorBufferInfo bi[2];
         VkWriteDescriptorSet w[2];
@@ -913,7 +1011,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 static int shadow_build(const TAGPU_VKPASS* d)
 {
     uint32_t i;
-    if (!mk_image(d, 1, 1, SHADOW_DUMMY_FMT, VK_IMAGE_ASPECT_DEPTH_BIT, IMG_SAMPLED,
+    if (!mk_image(d, 1, 1, SHADOW_DUMMY_FMT, VK_IMAGE_ASPECT_DEPTH_BIT, IMG_SAMPLED, 1,
                   &s_shImg, &s_shMem, &s_shView)) return 0;
     for (i = 0; i < d->slots; i++) {
         VkDescriptorImageInfo ii[2];
@@ -961,15 +1059,15 @@ static void shadow_ready(VkCommandBuffer cb)
     s_shReady = 1;
 }
 
-/* Point this slot's 8, 9, 41, 42 and 46 -- and the shadow pair, 44 and 45 --
+/* Point this slot's 8, 9, 41, 42, 46, 47 and 48 -- and the shadow pair, 44 and 45 --
    at the shared images as they stand now.
    ON EVERY PREPARE, and that is the point: it is the one instant the seam's
    fence proves this set is not in use, so a shared image that had to be
    replaced is picked up here rather than by a write that reaches every slot. */
 static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    VkDescriptorImageInfo ii[7];
-    VkWriteDescriptorSet wr[7];
+    VkDescriptorImageInfo ii[9];
+    VkWriteDescriptorSet wr[9];
     memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
     /* 46 is uBase, NEAREST: the tile texel as the engine blits it */
     ii[0].sampler = s_samp; ii[0].imageView = s_base.view;
@@ -1040,11 +1138,30 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
     ii[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     wr[5] = wr[0]; wr[5].dstBinding = 8; wr[5].pImageInfo = &ii[5];
     wr[6] = wr[0]; wr[6].dstBinding = 9; wr[6].pImageInfo = &ii[6];
-    vkUpdateDescriptorSets(d->dev, 7, wr, 0, NULL);
+    /* 47 AND 48 ARE THE CHAINS, uChainBase and uChainRest, GENERAL for life
+       (tagpu_vk_chain.c). Each names its chain exactly when the flag that
+       lets the shader fetch from it is set -- `s_lodOk` (uLod > 0 at all) and
+       `s_restChain` (uRestChain), both computed in this `prepare` before this
+       call, from the same facts -- and otherwise the base atlas's view in its
+       own layout: a valid descriptor that nothing samples. Both flags require
+       the chain `laid`, so a chain is never named while it is still UNDEFINED:
+       a statically-used binding in the wrong layout is the mismatch binding 41's
+       comment describes. */
+    ii[7].sampler = s_sampChain;
+    ii[7].imageView = s_lodOk ? s_chainB.sh.view : s_base.view;
+    ii[7].imageLayout = s_lodOk ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ii[8].sampler = s_sampChain;
+    ii[8].imageView = s_restChain ? s_chainR.sh.view : s_base.view;
+    ii[8].imageLayout = s_restChain ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr[7] = wr[0]; wr[7].dstBinding = 47; wr[7].pImageInfo = &ii[7];
+    wr[8] = wr[0]; wr[8].dstBinding = 48; wr[8].pImageInfo = &ii[8];
+    vkUpdateDescriptorSets(d->dev, 9, wr, 0, NULL);
     s_slot[slot].boundBase   = ii[0].imageView;
     s_slot[slot].boundHeight = ii[2].imageView;
     s_slot[slot].boundMap    = ii[5].imageView;
     s_slot[slot].boundKeys   = ii[6].imageView;
+    s_slot[slot].boundChainB = ii[7].imageView;
+    s_slot[slot].boundChainR = ii[8].imageView;
 }
 
 static int build(const TAGPU_VKPASS* d)
@@ -1091,6 +1208,9 @@ static int build(const TAGPU_VKPASS* d)
     memcpy(qmap, quad, sizeof quad);
     if (!build_samplers(d)) return 0;
     if (!build_pipeline(d)) return 0;
+    /* THE REDUCER IS ASKED HERE, ONCE PER BUILD: its answer sizes the pool. A device that will
+       not reduce draws every zoom from the atlases' level 0, the picture without chains. */
+    s_chainsOn = tagpu_vk_chain_up(d);
     if (!build_descriptors(d)) return 0;
     if (!shadow_build(d)) return 0;
 
@@ -1206,6 +1326,9 @@ static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 #define NB_TRICKLE_MS    2.0
 static unsigned        s_rjGen, s_nbGen;
 static int*            s_nbPos;             /* per key: its place, -1 unqueued */
+static int*            s_nbAt;              /* per place: its key, the inverse of
+                                               s_nbPos over [0, s_nbAdded) -- the
+                                               restored chain's ledger reads it */
 static int             s_nbQN;              /* its length, the request's keys  */
 static int             s_nbCursor;          /* the next place in `nbOrder`     */
 static int             s_nbAdded;           /* keys queued, in queue order     */
@@ -1215,13 +1338,19 @@ static TAGPU_RNBFRAME* s_nbTmp;
 static int             s_nbTmpCap;
 static DWORD           s_nbT0;
 static int             s_nbSaidDone;
+/* THE DONE LINE IS SAID AFTER THE CHAIN'S LEDGER of the same `prepare` (`chain_maintain`), so it
+   can say what the ledger reduced for it: `s_nbDoneOwed` holds it from `nb_feed` until then, with
+   the milliseconds it measured */
+static int             s_nbDoneOwed;
+static unsigned long   s_nbDoneMs;
 
 static void nb_feed_free(void)
 {
     free(s_nbPos); s_nbPos = NULL; s_nbQN = 0;
+    free(s_nbAt); s_nbAt = NULL;
     free(s_nbTmp); s_nbTmp = NULL; s_nbTmpCap = 0;
     s_nbCursor = s_nbAdded = s_nbLastSeen = 0;
-    s_nbSaidDone = 0;
+    s_nbSaidDone = 0; s_nbDoneOwed = 0;
 }
 
 static int nb_room(int n)
@@ -1278,7 +1407,8 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     int i, n, r, c, pending, painted;
     if (s_nbGen != s_rjGen || s_nbQN != t->nbN) {
         nb_feed_free();
-        if (t->nbN < 1 || !(s_nbPos = (int*)malloc((size_t)t->nbN * sizeof *s_nbPos))) return 0;
+        if (t->nbN < 1 || !(s_nbPos = (int*)malloc((size_t)t->nbN * sizeof *s_nbPos)) ||
+            !(s_nbAt = (int*)malloc((size_t)t->nbN * sizeof *s_nbAt))) return 0;
         for (i = 0; i < t->nbN; i++) s_nbPos[i] = -1;
         s_nbQN = t->nbN; s_nbGen = s_rjGen; s_nbT0 = GetTickCount();
     }
@@ -1298,6 +1428,7 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
                 }
                 if (!nb_room(n + 1)) return 0;
                 s_nbPos[k] = s_nbAdded + n;
+                s_nbAt[s_nbAdded + n] = k;
                 s_nbTmp[n++] = t->nbFrames[k];
             }
         if (!nb_push(n, 1)) return 0;
@@ -1310,6 +1441,7 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
             int k = t->nbOrder[s_nbCursor++];
             if (k < 0 || k >= s_nbQN || s_nbPos[k] >= 0) continue;
             s_nbPos[k] = s_nbAdded + n;
+            s_nbAt[s_nbAdded + n] = k;
             s_nbTmp[n++] = t->nbFrames[k];
         }
         if (!nb_push(n, 0)) return 0;
@@ -1318,8 +1450,8 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     tagpu_vk_restore_job_feeding(s_rjob, s_nbAdded < s_nbQN);
     if (!s_nbSaidDone && s_nbAdded == s_nbQN && tagpu_vk_restore_job_idle(s_rjob)) {
         s_nbSaidDone = 1;
-        plog(d, "terr: every neighbourhood painted here - %d keys, %lu ms since the job began",
-             s_nbQN, (unsigned long)(GetTickCount() - s_nbT0));
+        s_nbDoneOwed = 1;
+        s_nbDoneMs = (unsigned long)(GetTickCount() - s_nbT0);
     }
     return 1;
 }
@@ -1380,6 +1512,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         if (s_nbMode && t->nbOn && !tagpu_vk_restore_job_failed(s_rjob) && !nb_feed(d, t)) {
             plog(d, "terr: the neighbourhood job could not be fed; what it painted "
                     "stands until the request changes, and nothing more is queued");
+            /* the count of what stands, for the restored chain's ledger: the job's last word */
+            s_rjPainted = tagpu_vk_restore_job_painted(s_rjob);
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL;
             s_rjTried = 1;
@@ -1474,6 +1608,386 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
          t->restoreSerial);
 }
 
+/* ---- THE MIP CHAINS, maintained ---------------------------------------------------------- */
+
+static void chain_kill_views(const TAGPU_VKPASS* d, VkImageView* v)
+{
+    int i;
+    for (i = 0; i < TAGPU_CHAIN_LEVELS; i++)
+        if (v[i]) { vkDestroyImageView(d->dev, v[i], NULL); v[i] = VK_NULL_HANDLE; }
+}
+
+static void chain_kill(const TAGPU_VKPASS* d, CHAIN* c)
+{
+    chain_kill_views(d, c->lvl);
+    chain_kill_views(d, c->oldLvl);
+    kill_image(d, &c->sh.img, &c->sh.mem, &c->sh.view);
+    kill_image(d, &c->sh.oldImg, &c->sh.oldMem, &c->sh.oldView);
+    memset(c, 0, sizeof *c);
+}
+
+/* `shared_resize` for a chain of `cols` x `rows` cells, and its level views retire with it: the
+   same one-retire-at-a-time rule and the same `pending` mask, cleared by `chain_slot_done` at the
+   top of each slot's `prepare`. 0 when a retire is still clearing or the device refused the image
+   (and then `sh.img` is NULL); either way the frame draws on, at level 0 for this chain. */
+static int chain_resize(const TAGPU_VKPASS* d, CHAIN* c, int cols, int rows)
+{
+    SHARED* sh = &c->sh;
+    int i;
+    if (sh->img && c->cols == cols && c->rows == rows) return 1;
+    if (sh->oldImg) return 0;
+    if (sh->img) {
+        sh->oldImg = sh->img; sh->oldMem = sh->mem; sh->oldView = sh->view;
+        memcpy(c->oldLvl, c->lvl, sizeof c->lvl);
+        memset(c->lvl, 0, sizeof c->lvl);
+        sh->img = VK_NULL_HANDLE; sh->mem = VK_NULL_HANDLE; sh->view = VK_NULL_HANDLE;
+        sh->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
+    }
+    sh->w = sh->h = 0; sh->have = 0;
+    c->cols = c->rows = 0; c->laid = 0; c->srcSerial = c->srcPal = c->gen = 0;
+    if (!mk_image(d, cols * TAGPU_CHAIN_CELL, rows * TAGPU_CHAIN_CELL, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_IMAGE_ASPECT_COLOR_BIT, CHAIN_USAGE, TAGPU_CHAIN_LEVELS,
+                  &sh->img, &sh->mem, &sh->view))
+        goto fail;
+    for (i = 0; i < TAGPU_CHAIN_LEVELS; i++) {
+        VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        ivi.image = sh->img;
+        ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ivi.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ivi.subresourceRange.baseMipLevel = (uint32_t)i;
+        ivi.subresourceRange.levelCount = 1;
+        ivi.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(d->dev, &ivi, NULL, &c->lvl[i]) != VK_SUCCESS) goto fail;
+    }
+    c->cols = cols; c->rows = rows;
+    sh->w = cols * TAGPU_CHAIN_CELL; sh->h = rows * TAGPU_CHAIN_CELL;
+    return 1;
+fail:
+    chain_kill_views(d, c->lvl);
+    kill_image(d, &sh->img, &sh->mem, &sh->view);
+    return 0;
+}
+
+/* `shared_slot_done` for a chain, and the argument is the same: see it. */
+static void chain_slot_done(const TAGPU_VKPASS* d, CHAIN* c, uint32_t slot)
+{
+    if (!c->sh.oldImg) return;
+    c->sh.pending &= ~(1u << slot);
+    if (c->sh.pending == 0) {
+        chain_kill_views(d, c->oldLvl);
+        kill_image(d, &c->sh.oldImg, &c->sh.oldMem, &c->sh.oldView);
+    }
+}
+
+/* Size `c` for the atlas `w` x `h` on CELL_PITCH, unless that size was refused. `fits` asks the
+   memory rule first (D10, the restored chain's), and a refusal of either kind is said once per
+   size. 1 when the chain stands at the atlas's grid. */
+static int chain_for(const TAGPU_VKPASS* d, CHAIN* c, int w, int h, int fits, const char* what)
+{
+    int cols = w / CELL_PITCH, rows = h / CELL_PITCH;
+    char why[160];
+    if (cols < 1 || rows < 1 || cols * CELL_PITCH != w || rows * CELL_PITCH != h) return 0;
+    if (c->sh.img && c->cols == cols && c->rows == rows) return 1;
+    if (c->noCols == cols && c->noRows == rows) return 0;
+    if (c->sh.oldImg) return 0;                /* a retire is clearing: the next frame */
+    if (fits && !tagpu_vk_restore_fits(d, (unsigned long long)cols * (unsigned long long)rows *
+                                          TAGPU_CHAIN_TEXELS * 4ull, why, sizeof why)) {
+        c->noCols = cols; c->noRows = rows;
+        plog(d, "terr: the restored chain does not fit: %s - the far zoom draws the base chain "
+                "under Classic++", why);
+        return 0;
+    }
+    if (!chain_resize(d, c, cols, rows)) {
+        if (c->sh.oldImg) return 0;
+        c->noCols = cols; c->noRows = rows;
+        plog(d, "terr: the device refused the %s chain of %dx%d cells - the far zoom draws %s",
+             what, cols, rows, fits ? "the base chain under Classic++" : "level 0");
+        return 0;
+    }
+    return 1;
+}
+
+/* THE REDUCER'S SET, written in this slot's `prepare` before its first use in this command
+   buffer and not again in it: a set may not be updated once a command buffer being recorded has
+   bound it. `src` is the atlas's level 0, sampled in SHADER_READ_ONLY_OPTIMAL, its layout between
+   uploads and between the restorer's slices. */
+static void chain_set(const TAGPU_VKPASS* d, const SLOT* s, VkDescriptorSet set, VkImageView src,
+                      const CHAIN* c)
+{
+    VkDescriptorImageInfo ii[1 + TAGPU_CHAIN_LEVELS];
+    VkDescriptorBufferInfo bi;
+    VkWriteDescriptorSet wr[2 + TAGPU_CHAIN_LEVELS];
+    int i;
+    memset(ii, 0, sizeof ii); memset(&bi, 0, sizeof bi); memset(wr, 0, sizeof wr);
+    ii[0].sampler = s_samp; ii[0].imageView = src;
+    ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr[0].dstSet = set; wr[0].dstBinding = 0; wr[0].descriptorCount = 1;
+    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &ii[0];
+    for (i = 0; i < TAGPU_CHAIN_LEVELS; i++) {
+        ii[1 + i].imageView = c->lvl[i];
+        ii[1 + i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        wr[1 + i] = wr[0];
+        wr[1 + i].dstBinding = (uint32_t)(1 + i);
+        wr[1 + i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        wr[1 + i].pImageInfo = &ii[1 + i];
+    }
+    bi.buffer = s->cnt; bi.offset = 0; bi.range = 16;
+    wr[6] = wr[0];
+    wr[6].dstBinding = 6;
+    wr[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    wr[6].pImageInfo = NULL; wr[6].pBufferInfo = &bi;
+    vkUpdateDescriptorSets(d->dev, 2 + TAGPU_CHAIN_LEVELS, wr, 0, NULL);
+}
+
+/* the neighbourhood ledger's cells, x | y << 16, grown as a slice needs and kept */
+static uint32_t* s_rcCells;
+static int       s_rcCap;
+
+/* THE ORACLE'S HALF AT THE NEXT `prepare` of the slot that recorded a check: its fence has
+   signalled, so the counters and the copy are the device's finished words. The copy is compared
+   with tagpu_chain_ref over the same cells, from the hand-over's atlas through its palette as the
+   upload expands them -- only while the atlas and the palette are still the ones the chain was
+   reduced from. */
+static void chain_check_read(const TAGPU_VKPASS* d, SLOT* s, const TAGPU_TERRHAND* t)
+{
+    const uint32_t* n = (const uint32_t*)s->cntMap;
+    char cpu[24], rest[96];
+    if (!s->chkOwed) return;
+    s->chkOwed = 0;
+    if (!n || !s->chkMap) return;
+    if (t->atlas && t->pal && t->atlasSerial == s->chkSerial && t->palSerial == s->chkPal) {
+        unsigned char tile[32 * 32 * 4], ref[TAGPU_CHAIN_TEXELS * 4];
+        int j, i, bad = 0;
+        for (j = 0; j < 16; j++) {
+            int c = (int)((long long)j * s->chkCells / 16);
+            int cx = c % s->chkCols, cy = c / s->chkCols;
+            const unsigned char* got = s->chkMap + (size_t)j * TAGPU_CHAIN_TEXELS * 4;
+            if ((cx + 1) * CELL_PITCH > t->atlasW || (cy + 1) * CELL_PITCH > t->atlasH) { bad = -1; break; }
+            tagpu_pal_expand(tile, t->atlas, NULL, t->atlasW, cx * CELL_PITCH + CELL_BORDER,
+                             cy * CELL_PITCH + CELL_BORDER, 32, 32, t->pal, NULL);
+            tagpu_chain_ref(tile, 32 * 4, 0, 0, 32, 32, ref);
+            for (i = 0; i < TAGPU_CHAIN_TEXELS; i++)
+                if (memcmp(ref + i * 4, got + i * 4, 4)) bad++;
+        }
+        if (bad < 0) _snprintf(cpu, sizeof cpu, "outside");
+        else _snprintf(cpu, sizeof cpu, "%d", bad);
+    } else {
+        _snprintf(cpu, sizeof cpu, "skipped");
+    }
+    cpu[sizeof cpu - 1] = 0;
+    if (s->chkRest)
+        _snprintf(rest, sizeof rest, "rest gpu-differ=%u/%u job=%u painted=%d mode=%s",
+                  n[2], n[3], s->chkGen, s->chkPainted, s->chkNb ? "nbhd" : "tile");
+    else
+        _snprintf(rest, sizeof rest, "rest none");
+    rest[sizeof rest - 1] = 0;
+    plog(d, "terr: chain check: base cells=16 cpu-differ=%s gpu-differ=%u/%u | %s",
+         cpu, n[0], n[1], rest);
+}
+
+/* THE LEDGER'S INVARIANT. After `chain_maintain` the restored chain is reduce(level 0) for every
+   cell, where level 0 is as the previous frame's restore slice left it -- the slice of THIS frame
+   runs after every `prepare` (tagpu_vk.c), so the chain trails level 0 by one slice: an ordering,
+   not a race, and exact for the paints it covers; a cell not reduced yet shows its base chain for
+   that frame. Three facts make it hold:
+
+     (a) A NEW TERRAIN JOB STARTS FROM A CLEARED DESTINATION: every terrain job is made with
+         `repaint` 0 (`restore_want`'s tagpu_vk_restore_job_new), and the restorer's `dst_ready`
+         clears it at the job's first OUT. So a cleared chain is that destination's reduction
+         while `painted` is 0, and once anything is painted a whole reduction is.
+     (b) THE NEIGHBOURHOOD QUEUE IS FIFO: every neighbourhood frame is one size class, and
+         `form_batch` takes the head's class in queue order (tagpu_restore_core.c;
+         compute-restorer.md "Not painted is exact"). So painted = P means places [0, P) are
+         painted, and each place's key is `s_nbAt[place]`.
+         IF NEIGHBOURHOOD FRAMES EVER GET A SECOND SIZE CLASS, (b) FAILS; the oracle's
+         `rest gpu-differ` names it.
+     (c) PER-TILE FRAMES ARE NOT FIFO -- two size classes, wrapping and not -- so that chain is
+         reduced whole whenever `painted` moves: bounded by the atlas's cells (at most 64 x 482),
+         and only for the one-shot list (226-258 ms on the reference setup, MEASURED,
+         compute-restorer.md).
+
+   `painted` is the job's count while the picture stands (`s_rgbAtlas.have`, which also says the
+   atlas has left UNDEFINED and may be sampled) and 0 otherwise; a job given up keeps its last
+   count in `s_rjPainted`, so the paints of its last slice are still reduced. The generation key is
+   `s_rjGen`, moved by every terrain job made, and uRestChain requires `gen == s_rjGen`.
+
+   IT RUNS HERE, IN THE PASS'S `prepare`, AND NOT AS A CALLBACK IN THE RESTORER'S SLICE: a crash
+   inside tagpu_vk_restore_step is blamed on the restorer and turns it off for the driver
+   (compute-restorer.md D14), and the chain's code must not run there.
+
+   Called once per `prepare`, after `restore_want` (so the job and its count are this frame's) and
+   before `shared_bind`, which names what this decides. */
+static void chain_maintain(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    SLOT* s = &s_slot[slot];
+    VkImage fresh[2];
+    int nFresh = 0, baseOk, restOk, doB = 0, clrR = 0, wholeR = 0, nList = 0, newGen = 0;
+    int painted = 0, check = 0, checkR = 0, P = 0, i;
+    s_lodOk = 0;
+    if (!s_chainsOn || !s->cnt || !s->csB || !s->csR) return;
+
+    /* 1. THE SIZES, the atlases' grids. A chain that cannot stand forces its consumer to
+          level 0 (or to the base chain) and never refuses a frame. */
+    baseOk = s_base.img && s_base.view && chain_for(d, &s_chainB, s_base.w, s_base.h, 0, "base");
+    restOk = s_rgbAtlas.img && s_rgbAtlas.view &&
+             chain_for(d, &s_chainR, s_rgbAtlas.w, s_rgbAtlas.h, 1, "restored");
+
+    /* 2. THE BASE CHAIN: once per map and per palette move, after the banded upload, which is
+          complete before its call returned (tagpu_vk_stage.h) */
+    if (baseOk && s_base.have &&
+        (!s_chainB.sh.have || s_chainB.srcSerial != s_base.serial || s_chainB.srcPal != s_basePal))
+        doB = 1;
+
+    /* 3. THE RESTORED CHAIN, the ledger above */
+    if (restOk) {
+        painted = s_rgbAtlas.have ? s_rjPainted : 0;
+        if (!s_chainR.sh.have || s_chainR.gen != s_rjGen) {
+            newGen = 1;
+            if (painted > 0) wholeR = 1; else clrR = 1;
+        } else if (painted > s_rcDone) {
+            if (!s_nbMode) {
+                wholeR = 1;
+            } else if (s_nbGen != s_rjGen || !s_nbAt || painted > s_nbAdded) {
+                /* the count is data that does not hold against the queue it counts */
+                if (!s_rcSaidLate) {
+                    s_rcSaidLate = 1;
+                    plog(d, "terr: the restored chain's ledger cannot follow the queue (painted %d, "
+                            "queued %d) - it reduces the whole chain", painted, s_nbAdded);
+                }
+                wholeR = 1;
+            } else {
+                int cells = s_chainR.cols * s_chainR.rows;
+                P = painted;
+                if (P - s_rcDone > s_rcCap) {
+                    int cap = s_rcCap ? s_rcCap : 256;
+                    uint32_t* g;
+                    while (cap < P - s_rcDone) cap *= 2;
+                    g = (uint32_t*)realloc(s_rcCells, (size_t)cap * sizeof *g);
+                    if (g) { s_rcCells = g; s_rcCap = cap; }
+                }
+                if (P - s_rcDone > s_rcCap) {
+                    wholeR = 1;
+                } else {
+                    for (i = s_rcDone; i < P; i++) {
+                        int k = s_nbAt[i];
+                        /* a key is bounded by the chain's own cells before it names one */
+                        if (k < 0 || k >= cells) { wholeR = 1; break; }
+                        s_rcCells[nList++] = (uint32_t)(k % s_chainR.cols) |
+                                             (uint32_t)(k / s_chainR.cols) << 16;
+                    }
+                    if (wholeR) nList = 0;
+                }
+            }
+        }
+    }
+
+    /* 4. THE ORACLE (tagpu_chaincheck.on), every 120 frames, on a slot whose last check was read,
+          and only of a chain that is current once the work above is recorded (`s_lodOk`, below).
+          Decided here because the sets are written once, before their first use. */
+    if (!tagpu_vk_chaincheck_armed(d->frame)) {
+        chk_free(d, s);
+    } else if (!s->chkOwed && d->frame - s_chkFrame >= 120 && baseOk && s_base.have) {
+        if (!s->chk && !mk_buffer(d, CHK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                  &s->chk, &s->chkMem, &s->chkMap))
+            chk_free(d, s);
+        else
+            check = 1;
+        checkR = check && restOk && painted > 0;
+    }
+
+    if (doB || check) chain_set(d, s, s->csB, s_base.view, &s_chainB);
+    if (wholeR || nList || checkR) chain_set(d, s, s->csR, s_rgbAtlas.view, &s_chainR);
+    if (doB || clrR || wholeR || nList) {
+        TAGPU_CHAINJOB j;
+        if (doB && !s_chainB.laid) { fresh[nFresh++] = s_chainB.sh.img; s_chainB.laid = 1; }
+        if (!s_chainR.laid && (clrR || wholeR || nList)) { fresh[nFresh++] = s_chainR.sh.img; s_chainR.laid = 1; }
+        tagpu_vk_chain_begin(cb, fresh, nFresh);
+        memset(&j, 0, sizeof j);
+        j.pitch = CELL_PITCH; j.border = CELL_BORDER;
+        if (doB) {
+            j.first = 0; j.count = s_chainB.cols * s_chainB.rows; j.cols = s_chainB.cols;
+            tagpu_vk_chain_record(cb, s->csB, &j);
+            s_chainB.sh.have = 1;
+            s_chainB.srcSerial = s_base.serial; s_chainB.srcPal = s_basePal;
+            plog(d, "terr: chain base %dx%d (5 levels) reduced, %d cells, atlas serial %u",
+                 s_chainB.sh.w, s_chainB.sh.h, j.count, s_base.serial);
+        }
+        if (clrR) {
+            tagpu_vk_chain_clear(cb, s_chainR.sh.img);
+        } else if (wholeR) {
+            j.first = 0; j.count = s_chainR.cols * s_chainR.rows; j.cols = s_chainR.cols;
+            j.cells = NULL;
+            tagpu_vk_chain_record(cb, s->csR, &j);
+        } else if (nList) {
+            j.first = 0; j.count = nList; j.cols = s_chainR.cols; j.cells = s_rcCells;
+            tagpu_vk_chain_record(cb, s->csR, &j);
+            s_rcKeys += nList;
+            s_rcPushes += (nList + 23) / 24;
+        }
+        tagpu_vk_chain_end(cb);
+        if (clrR || wholeR || nList) {
+            s_chainR.sh.have = 1;
+            if (newGen) {
+                plog(d, "terr: chain rest %dx%d %s %d cells, job %u", s_chainR.sh.w, s_chainR.sh.h,
+                     clrR ? "cleared" : "reduced whole", s_chainR.cols * s_chainR.rows, s_rjGen);
+                s_rcKeys = 0; s_rcPushes = 0; s_rcSaidLate = 0;
+            }
+            s_chainR.gen = s_rjGen;
+            s_rcDone = painted;
+        }
+    }
+
+    s_lodOk = baseOk && s_chainB.laid && s_chainB.sh.have &&
+              s_chainB.srcSerial == s_base.serial && s_chainB.srcPal == s_basePal;
+
+    if (check && s_lodOk) {
+        VkBufferImageCopy rg[16 * TAGPU_CHAIN_LEVELS];
+        TAGPU_CHAINJOB j;
+        int n = 0, cells = s_chainB.cols * s_chainB.rows, L;
+        int restNow = checkR && s_chainR.laid && s_chainR.sh.have && s_chainR.gen == s_rjGen;
+        vkCmdFillBuffer(cb, s->cnt, 0, 16, 0);
+        tagpu_vk_chain_check_begin(cb);
+        memset(&j, 0, sizeof j);
+        j.pitch = CELL_PITCH; j.border = CELL_BORDER;
+        j.first = 0; j.count = cells; j.cols = s_chainB.cols; j.check = 1;
+        tagpu_vk_chain_record(cb, s->csB, &j);
+        if (restNow) {
+            j.count = s_chainR.cols * s_chainR.rows; j.cols = s_chainR.cols; j.check = 2;
+            tagpu_vk_chain_record(cb, s->csR, &j);
+        }
+        /* 16 cells c_j = j * cells / 16, every level, packed as tagpu_chain_ref lays one out */
+        memset(rg, 0, sizeof rg);
+        for (i = 0; i < 16; i++) {
+            int c = (int)((long long)i * cells / 16), cx = c % s_chainB.cols, cy = c / s_chainB.cols;
+            VkDeviceSize at = (VkDeviceSize)i * TAGPU_CHAIN_TEXELS * 4;
+            for (L = 0; L < TAGPU_CHAIN_LEVELS; L++) {
+                int side = TAGPU_CHAIN_CELL >> L;
+                rg[n].bufferOffset = at;
+                rg[n].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                rg[n].imageSubresource.mipLevel = (uint32_t)L;
+                rg[n].imageSubresource.layerCount = 1;
+                rg[n].imageOffset.x = cx * side; rg[n].imageOffset.y = cy * side;
+                rg[n].imageExtent.width = (uint32_t)side; rg[n].imageExtent.height = (uint32_t)side;
+                rg[n].imageExtent.depth = 1;
+                at += (VkDeviceSize)side * side * 4;
+                n++;
+            }
+        }
+        vkCmdCopyImageToBuffer(cb, s_chainB.sh.img, VK_IMAGE_LAYOUT_GENERAL, s->chk, (uint32_t)n, rg);
+        tagpu_vk_chain_check_end(cb);
+        s->chkOwed = 1;
+        s->chkRest = restNow;
+        s->chkCols = s_chainB.cols; s->chkCells = cells;
+        s->chkSerial = s_chainB.srcSerial; s->chkPal = s_chainB.srcPal;
+        s->chkGen = s_rjGen; s->chkPainted = s_rcDone; s->chkNb = s_nbMode;
+        s_chkFrame = d->frame;
+    }
+}
+
 int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     TAGPU_TERRHAND t;
@@ -1504,6 +2018,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         shared_slot_done(d, &s_base, slot);
         shared_slot_done(d, &s_tmap, slot);
         shared_slot_done(d, &s_keys, slot);
+        chain_slot_done(d, &s_chainB, slot);
+        chain_slot_done(d, &s_chainR, slot);
     }
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING PER-SLOT
@@ -1823,13 +2339,19 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        the `restored` computation below, which is what its `have` feeds. */
     restore_want(d, &t);
 
-    /* THE SET IS WRITTEN AFTER `restore_want` AND BEFORE `restored` IS USED,
-       because `s_rgbAtlas.have` is what both of them read and `restore_want` is
-       what moves it. Bound earlier, the frame on which the first cell is painted
-       would say `uRestored` and `uNbhd` -- the neighbourhood layout's cell
-       coordinates -- while binding 41 still named the base atlas, and the shader
-       would read the tile atlas at keys' cells: one frame of the wrong tiles. */
-    shared_bind(d, slot);
+    /* THE MIP CHAINS, after the request (the ledger follows this frame's job and count) and
+       before the set names them: the oracle's last check first, then this frame's work */
+    chain_check_read(d, s, &t);
+    chain_maintain(d, cb, slot);
+    if (s_nbDoneOwed) {
+        s_nbDoneOwed = 0;
+        if (s_chainR.gen == s_rjGen && s_chainR.sh.have)
+            plog(d, "terr: every neighbourhood painted here - %d keys, %lu ms since the job began, "
+                    "chain reduced %d keys in %d pushes", s_nbQN, s_nbDoneMs, s_rcKeys, s_rcPushes);
+        else
+            plog(d, "terr: every neighbourhood painted here - %d keys, %lu ms since the job began",
+                 s_nbQN, s_nbDoneMs);
+    }
 
     /* WHETHER THE SHADER SAMPLES THE RESTORED ATLAS IS THIS LANE'S OWN FACT,
        NOT THE PRODUCER'S REQUEST. `t.restored` says a restore request STANDS
@@ -1857,6 +2379,12 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        atlas instead. The keys image holds this hand-over's keys here: the
        upload above either sent them or returned. */
     if (s_nbMode && (!t.nbOn || !keysIn)) restored = 0;
+    /* uRestChain: the restored atlas is sampled at all, and its chain is laid out, holds this
+       job's ledger (`chain_maintain`) and has its atlas's grid. A restored chain that could not
+       stand leaves it 0, and the far zoom draws the base chain under Classic++. */
+    s_restChain = restored && s_chainR.sh.view && s_chainR.laid && s_chainR.sh.have &&
+                  s_chainR.gen == s_rjGen &&
+                  s_chainR.cols * CELL_PITCH == s_rgbAtlas.w && s_chainR.rows * CELL_PITCH == s_rgbAtlas.h;
     /* SAID ONCE, AND ONLY FOR THE CASE WAITING CANNOT FIX: a request stands and
        this lane has latched a refusal, so the terrain draws the base atlas for
        the rest of the session. The ordinary not-yet-painted frames say nothing --
@@ -1866,6 +2394,15 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         plog(d, "terr: a Classic++ restore request stands but this lane refused "
                 "the restorer - the terrain draws the base atlas for this session");
     }
+
+    /* THE SET IS WRITTEN AFTER `restore_want`, because `s_rgbAtlas.have` is
+       what binding 41's choice and `restored` both read and `restore_want` is
+       what moves it. Bound earlier, the frame on which the first cell is painted
+       would say `uRestored` and `uNbhd` -- the neighbourhood layout's cell
+       coordinates -- while binding 41 still named the base atlas, and the shader
+       would read the tile atlas at keys' cells: one frame of the wrong tiles.
+       And after `chain_maintain` and `s_restChain`, which decide 47 and 48. */
+    shared_bind(d, slot);
 
     /* THE PALETTE, per slot, so the one-line invariant covers it: UNDEFINED
        in, because the whole of it is re-sent every frame and there are
@@ -1928,10 +2465,12 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         ub.f[40] = t.shade;                      /* uShade      float @160 */
     }
     ub.f[42] = t.mapPxW; ub.f[43] = t.mapPxH;    /* uMapPx       vec2 @168 */
+    ub.i[44] = 0;                                /* uLod          int @176, `record`'s */
+    ub.i[45] = s_restChain;                      /* uRestChain    int @180 */
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF, ub.f, UBLK_FS);
 
     s_cells = (uint32_t)t.cols * (uint32_t)t.rows;
-    s_hGw = t.gw; s_hGh = t.gh;
+    s_hGw = t.gw; s_hGh = t.gh; s_hZoom = t.zoom;
     s_hVpL = t.vpL; s_hVpT = t.vpT; s_hVw = t.vw; s_hVh = t.vh;
     s_hScissorOn = t.scissorOn;
 
@@ -1995,11 +2534,23 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (slot >= TAGPU_VK_SLOTS ||
         s_slot[slot].boundBase != s_base.view ||
         s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_base.view) ||
-        s_slot[slot].boundMap != s_tmap.view || s_slot[slot].boundKeys != s_keys.view)
+        s_slot[slot].boundMap != s_tmap.view || s_slot[slot].boundKeys != s_keys.view ||
+        s_slot[slot].boundChainB != (s_lodOk ? s_chainB.sh.view : s_base.view) ||
+        s_slot[slot].boundChainR != (s_restChain ? s_chainR.sh.view : s_base.view))
         return;
     {
         VkImageView sv = tagpu_vk_shadow_view(d->frame, slot);
         if (s_slot[slot].boundShadow != (sv ? sv : s_shView)) return;
+    }
+
+    /* THE LEVEL, HERE AND NOWHERE EARLIER: the extent the pass records into is this function's
+       argument, and the level is the footprint on it (tagpu_chain_level, which has the proof
+       that 1x and above are level 0). Gated on the base chain being current, the fact binding 47
+       was written from. The block is this slot's own, host-coherent, and read only by this slot's
+       submit, which comes after this call. */
+    {
+        int L = s_lodOk ? tagpu_chain_level(s_hZoom, s_hGw, s_hGh, w, h) : 0;
+        memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF + UOFF_LOD, &L, sizeof L);
     }
 
     /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
@@ -2070,6 +2621,7 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
         s_slot[i].dset = VK_NULL_HANDLE;   /* goes back with the pool below */
+        s_slot[i].csB = s_slot[i].csR = VK_NULL_HANDLE;
     }
     /* THE RESTORE JOB GOES BACK BEFORE THE IMAGE IT NAMES. The job holds a
        framebuffer over `s_rgbAtlas.view`, and a view still named by a live
@@ -2085,6 +2637,16 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     s_saidRestored = 0;                 /* ...and so does the line it printed */
     s_nbChosen = 0; s_nbMode = 0;       /* ...and the layout a new device picks */
     nb_feed_free();
+    /* THE CHAINS, with their sampler and the ledger: a new device starts them from nothing, and
+       their sets went with the pool below */
+    chain_kill(d, &s_chainB);
+    chain_kill(d, &s_chainR);
+    if (s_sampChain) { vkDestroySampler(dev, s_sampChain, NULL); s_sampChain = VK_NULL_HANDLE; }
+    free(s_rcCells); s_rcCells = NULL; s_rcCap = 0;
+    s_rcDone = s_rcKeys = s_rcPushes = s_rcSaidLate = 0;
+    s_lodOk = s_restChain = 0;
+    s_chainsOn = 0;
+    s_chkFrame = 0;
     kill_image(d, &s_rgbAtlas.img, &s_rgbAtlas.mem, &s_rgbAtlas.view);
     kill_image(d, &s_rgbAtlas.oldImg, &s_rgbAtlas.oldMem, &s_rgbAtlas.oldView);
     memset(&s_rgbAtlas, 0, sizeof s_rgbAtlas);

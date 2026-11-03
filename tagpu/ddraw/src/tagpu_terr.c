@@ -413,6 +413,10 @@ static const char* VS =
     "uniform usampler2D uTileMap;\n"  /* R16UI: the level's tile indices      */
     "uniform usampler2D uKeys;\n"     /* R32UI: each map cell's key           */
     "out vec2 vUV; out vec2 vWorld; flat out float vMirror; out vec2 vUVR;\n"
+    /* the mip chains' inputs (taChain in the FS): the base atlas's cell and the
+       restored atlas's, carried as floats as vMirror is -- exact integers under
+       2^24, and no integer varying for the GL-330 transform or the lab's ES */
+    "flat out vec4 vCells; out vec2 vIn;\n"
     /* tagpu_edge_reflect over a non-negative dividend, and the cell's folds */
     "int taEdgeFold(int m, int n, out float flip, out float lo, out float hi){\n"
     "  int n2 = 2 * n;\n"
@@ -428,6 +432,7 @@ static const char* VS =
     "void taNoCell(){\n"
     "  gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);\n"
     "  vUV = vec2(0.0); vWorld = vec2(0.0); vMirror = 0.0; vUVR = vec2(0.0);\n"
+    "  vCells = vec4(0.0); vIn = vec2(0.0);\n"
     "}\n"
     "void main(){\n"
     "  int c = gl_InstanceID % uCols, r = gl_InstanceID / uCols;\n"
@@ -487,6 +492,13 @@ static const char* VS =
     "  vec2 e = f * fold * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom);\n"
     "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + e) * uTexel;\n"
     "  vUVR = uNbhd == 1 ? (aKey * 34.0 + 1.0 + k * 32.0 + e) * uTexelN : aUV;\n"
+    /* THE CHAINS' CELLS AND THE IN-TILE COORDINATE: the cell each atlas holds
+       this tile in (the restored one's is the key's under uNbhd, as vUVR's),
+       and k * 32 + e, the very function both UVs are built on less the cell's
+       origin -- so where level 0 reads texel floor(vIn) of its cell, a chain
+       level reads the block that holds it, the nudge and the flip included. */
+    "  vCells = vec4(t, uNbhd == 1 ? aKey : t);\n"
+    "  vIn = k * 32.0 + e;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - (1.0 - 2.0 * back) * " TAGPU_EDGE_NUDGE ";\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
@@ -495,6 +507,7 @@ static const char* VS =
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; in vec2 vWorld; flat in float vMirror; in vec2 vUVR;\n"
+    "flat in vec4 vCells; in vec2 vIn;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
                                           unexplored black (FOG_TERRAIN)    */
@@ -514,8 +527,31 @@ static const char* FS =
     /* declared LAST, so the block offsets every other uniform already has are
        the ones the generated header printed before it */
     TAGPU_GLSL_EDGE_UNIFORMS
+    /* THE MIP CHAINS, declared after everything above for the same reason:
+       the level this frame draws at (tagpu_chain_level, written at the pass's
+       `record`), whether the restored atlas's chain is current, and the two
+       chains (inc/tagpu_chain.h) */
+    "uniform int uLod;\n"
+    "uniform int uRestChain;\n"
+    "uniform sampler2D uChainBase;\n"
+    "uniform sampler2D uChainRest;\n"
     TAGPU_GLSL_LIGHT_FN
     TAGPU_GLSL_EDGE_FN
+    /* A CHAIN TEXEL. Tile level L is image level L-1, `32 >> L` texels a cell
+       side, and cell (cx, cy) is at (cx, cy) * (32 >> L) there.
+       THE BOUND: q is clamped into the cell's block, and the cell is inside
+       the atlas grid the chain has -- a tile index under uAtlasN (the vertex
+       stage culls the rest) or a key under the neighbourhood atlas's count --
+       so every fetch is inside image level L-1.
+       THE PROPERTY: for p in [0, 32) the block holds floor(p), the texel level
+       0 samples; the nudge is inside p, so ties break as they do at level 0.
+       THE C MIRROR is tagpu_chain_texel (src/tagpu_chain_ref.c): EDIT BOTH OR
+       NEITHER. */
+    "vec4 taChain(sampler2D s, vec2 cell, vec2 p){\n"
+    "  int n = 32 >> uLod;\n"
+    "  ivec2 q = clamp(ivec2(floor(p / float(1 << uLod))), ivec2(0), ivec2(n - 1));\n"
+    "  return texelFetch(s, ivec2(cell) * n + q, uLod - 1);\n"
+    "}\n"
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
        the map; elevation and x/z are the same world units. The height is the
@@ -580,10 +616,16 @@ static const char* FS =
     /* A CELL PAST THE MAP is the tile of the cell it mirrors, in the edge's
        tone and nothing else: no fog of war -- there is no ground out there to
        have explored -- and no light, for the reason at taEdge. The restored
-       colour where the reveal has painted it, as on the map. */
+       colour where the reveal has painted it, as on the map, and from the
+       chains below level 0 by the rule of the branch further down. */
     "  if (vMirror > 0.5) {\n"
-    "    vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "    frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
+    "    if (uLod == 0) {\n"
+    "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
+    "    } else {\n"
+    "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vIn).rgb, vWorld), 1.0);\n"
+    "    }\n"
     "    return;\n"
     "  }\n"
     /* terrain is the bottom layer: it paints the fog's black instead of
@@ -598,9 +640,22 @@ static const char* FS =
        and `uLambert` 0: the base atlas, NEAREST, as the engine's tiles. The
        quad spans exactly the tile's 32 texels, so no filtering to get wrong;
        a fragment landing exactly on the far edge reads the cell's replicated
-       guard texel rather than the next cell (CELL_PITCH). */
-    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "  vec3 c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
+       guard texel rather than the next cell (CELL_PITCH).
+       BELOW A TEXEL A TARGET PIXEL (uLod >= 1, tagpu_chain_level) the same
+       choice is made between the two atlases' chains at that level: the
+       restored chain's alpha is its level 0's painted mark reduced, so a cell
+       shows restored or base exactly as level 0 picks. uLod 0 is the atlases
+       exactly as at 1x -- the same statements on the same inputs -- and the
+       branch is on a uniform, so texture()'s implicit derivatives stay in
+       uniform control flow. */
+    "  vec3 c;\n"
+    "  if (uLod == 0) {\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
+    "    c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
+    "  } else {\n"
+    "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
+    "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vIn).rgb;\n"
+    "  }\n"
     "  if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
     "                                   taW, taWx, taWy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
