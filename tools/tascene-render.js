@@ -829,7 +829,11 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       // the water/dig tests are `vVY <= threshold`; -1e9 disables both
       gl.uniform1f(U.uWaterT, -1e9); gl.uniform1i(U.uWaterMode, 0);
       gl.uniform1f(U.uDigT, -1e9);
-      gl.uniform1i(U.uScaf, 2); gl.uniform1i(U.uScafOn, 0);
+      // the scaffold is off here, but its float sampler still needs a unit no
+      // integer sampler names: unit 2 is the fog source's usampler (R32UI),
+      // and two samplers of different types on one unit refuse the draw
+      // (INVALID_OPERATION). Unit 0 holds an R8 texture, as on the lab page.
+      gl.uniform1i(U.uScaf, 0); gl.uniform1i(U.uScafOn, 0);
       gl.uniform4f(U.uScafP, f.vp[0], f.vp[1], f.vp[2], f.vp[3]);
       gl.uniform1f(U.uSS, f.SS); gl.uniform1f(U.uZoomF, f.zoom);
       gl.uniform2f(U.uZoomCF, f.zoomC[0], f.zoomC[1]);
