@@ -2499,6 +2499,12 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                    "\"press_held\":", rv.tick, rv.clock, rv.game_tick, rv.end, rv.playhead, rv.paused, rv.speed,
                 rv.target, rv.gen, rv.walked, rv.left, s_repTry);
         jstr(f, s_press.held, sizeof s_press.held);
+        {
+            char said[HUD_TOASTLEN];
+            tagpu_wikiframe_toast_words(&rv, w->frame.seat, w->frame.nseat, said);
+            fprintf(f, ",\"toast_at\":%d,\"toast_said\":", rv.toast_kind < 0 ? -1 : rv.toast_at);
+            jstr(f, said, sizeof said);
+        }
         if (rv.live) live_json(f, &rv);
         if (rv.tk) tk_json(f, &rv);
         fprintf(f, "},\"try_world\":%d,\"frame\":", w->try_world);

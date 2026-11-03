@@ -216,6 +216,11 @@ const char* tagpu_wikiframe_key(int c);
    over NAME); one past them is named "". */
 void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out);
 
+/* The words of the replay's last toast, set at demo tick rv->toast_at, whatever its age: "" for
+   none. The state dump reports them so a check reads the toast a press set however late it looks,
+   where the frame's toast is gone 54 demo ticks after (tagpu_wiki.c's dump). */
+void tagpu_wikiframe_toast_words(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out);
+
 /* THE FRAME RECORD from replay view `rv` and the game view `gv` it shows (NULL: no seats), the
    load's layout side `side`, `try_it` (the presses are the player's), in Try it the control the
    press machine holds (`try_held`, NULL or "" none), and `top_side`, the top bar's layout side

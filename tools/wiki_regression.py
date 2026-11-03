@@ -974,25 +974,15 @@ def mockup_shot(state, path, out=None):
     import wikilaycheck as wl
     from PIL import Image
     gw, gh = state["res"]
-    httpd = SourceFileLoader("wikiserve", str(TREE / "tools/wiki/serve.py")).load_module().server(quiet=True)
-    tmp = path.parent / f".mock{os.getpid()}"
-    tmp.mkdir(parents=True, exist_ok=True)
-    cfg = tmp / "pw.json"
     game = state.get("look") == "game"
-    launch = {"ignoreDefaultArgs": ["--hide-scrollbars"]}
-    if game:
-        import stage3dcheck
-        launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
-    cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
-                                           "launchOptions": launch}}))
-    pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
-    run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
-    try:
-        run("open", "about:blank")
+    url = (f"/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit&sidebar=mod&mod={state.get('mod', 'stock')}"
+           f"&rewind=0{'&gfx=game' if game else ''}&entry={state['entry']}&demo={state['demo_n'] + 1}")
+    m = MockupPage.at(path.parent, game)
+    run = m.run
+    if m.url != url:
+        m.url, m.tick = None, None
         run("resize", str(gw + 34), str(gh + 900))
-        run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit"
-                    f"&sidebar=mod&mod={state.get('mod', 'stock')}&rewind=0{'&gfx=game' if game else ''}"
-                    f"&entry={state['entry']}&demo={state['demo_n'] + 1}")
+        run("goto", f"http://127.0.0.1:{m.httpd.server_address[1]}{url}")
         # THE PAGE SETTLED: the fonts, the window, the mod's sidebar pack, and with the game look the demo's stage --
         # WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each 'pending' only while a load it waits on is
         # in flight, and every such load resolves or fails (WikiGfx.settled), so the wait has no deadline and its
@@ -1010,35 +1000,84 @@ def mockup_shot(state, path, out=None):
             pass
         assert ready == "ready", f"the mockup page did not settle ({state['entry']}, " \
                                  f"demo {state['demo_n'] + 1}{', game look' if game else ''}): {ready}"
-        v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
-                                  # the demo afresh and paused in one task, whatever the load left it at: past
-                                  # the tick, or done (play on a done demo restarts it playing), and no frame
-                                  # runs between the two
-                                  " $('#c-replay').click(); if (S.playing) $('#c-play').click();"
-                                  " const sim = WikiPage.sim(), rep = WikiPage.replay();"
-                                  f" if (sim) while (sim.tick < {state['tick']} && !sim.done) sim.step();"
-                                  f" else while (rep.view().tick < {state['tick']} && !rep.view().done) rep.step();"
-                                  " for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));"
-                                  " const f = $('#frame').getBoundingClientRect();"
-                                  " const F = WikiPage.frameDrawn && WikiPage.frameDrawn(), q = F && F.cursor,"
-                                  " c = $('#stage'), r = c.getBoundingClientRect();"
-                                  " const at = q ? [r.left + q.x * r.width / c.width - f.left, r.top + q.y * r.height / c.height - f.top] : null;"
-                                  " const k = $('#stagehud [data-chart]'), b = k && k.getBoundingClientRect();"
-                                  " const ch = b ? [b.left, b.top, b.right, b.bottom, k.dataset.chart, k.getAttribute('viewBox')] : null;"
-                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim ? sim.tick : rep.view().tick, at, ch]); }").stdout)
-        fx, fy, fw, fh, tick, cursor_at, chart = json.loads(v)
-        assert (round(fw), round(fh)) == (gw, gh) and tick == state["tick"], \
-            f"the mockup's frame is {fw} x {fh} at tick {tick}, not {gw} x {gh} at {state['tick']}"
-        run("screenshot", f"--filename={tmp / 'page.png'}")
-        Image.open(tmp / "page.png").crop((round(fx), round(fy), round(fx) + gw, round(fy) + gh)).save(path)
-        print(f"wiki: the mockup at the same state grabbed to {path}")
-        if out is not None:
-            out["chart"] = chart and chart_box(chart, round(fx), round(fy))
-        return cursor_at
-    finally:
-        run("close")
-        httpd.shutdown()
-        shutil.rmtree(tmp, ignore_errors=True)
+        m.url = url
+    # THE DEMO AT THE TICK: afresh and paused in one task, whatever the load left it at (past the tick, or done: play
+    # on a done demo restarts it playing), and no frame runs between the two; or, on a page this process paused at an
+    # earlier tick of the same demo, stepped on from there -- the same state, as the simulation is deterministic and
+    # only these steps drive the paused page
+    fresh = m.tick is None or m.tick > state["tick"]
+    m.tick = None
+    v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
+                              + (" $('#c-replay').click(); if (S.playing) $('#c-play').click();" if fresh else
+                                 " if (S.playing) throw new Error('the page this process paused is playing');")
+                              + " const sim = WikiPage.sim(), rep = WikiPage.replay();"
+                              f" if (sim) while (sim.tick < {state['tick']} && !sim.done) sim.step();"
+                              f" else while (rep.view().tick < {state['tick']} && !rep.view().done) rep.step();"
+                              " for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));"
+                              " const f = $('#frame').getBoundingClientRect();"
+                              " const F = WikiPage.frameDrawn && WikiPage.frameDrawn(), q = F && F.cursor,"
+                              " c = $('#stage'), r = c.getBoundingClientRect();"
+                              " const at = q ? [r.left + q.x * r.width / c.width - f.left, r.top + q.y * r.height / c.height - f.top] : null;"
+                              " const k = $('#stagehud [data-chart]'), b = k && k.getBoundingClientRect();"
+                              " const ch = b ? [b.left, b.top, b.right, b.bottom, k.dataset.chart, k.getAttribute('viewBox')] : null;"
+                              " return JSON.stringify([f.left, f.top, f.width, f.height, sim ? sim.tick : rep.view().tick, at, ch]); }").stdout)
+    assert v, f"the mockup page could not be stepped to tick {state['tick']} ({state['entry']}, demo {state['demo_n'] + 1})"
+    fx, fy, fw, fh, tick, cursor_at, chart = json.loads(v)
+    assert (round(fw), round(fh)) == (gw, gh) and tick == state["tick"], \
+        f"the mockup's frame is {fw} x {fh} at tick {tick}, not {gw} x {gh} at {state['tick']}"
+    m.tick = tick
+    run("screenshot", f"--filename={m.tmp / 'page.png'}")
+    Image.open(m.tmp / "page.png").crop((round(fx), round(fy), round(fx) + gw, round(fy) + gh)).save(path)
+    print(f"wiki: the mockup at the same state grabbed to {path}")
+    if out is not None:
+        out["chart"] = chart and chart_box(chart, round(fx), round(fy))
+    return cursor_at
+
+
+class MockupPage:
+    """mockup_shot's page, one a process: its server, its playwright-cli browser and the page it has open, kept from
+    one picture to the next so that a picture of the same demo needs no load, and one at a later tick no replay from
+    the start. A new look (the game's, on the GPU, or the whitebox) launches a browser of its own; the process's exit
+    closes the last."""
+    open_ = None
+
+    @classmethod
+    def at(cls, folder, game):
+        if cls.open_ and cls.open_.game == game:
+            return cls.open_
+        if cls.open_:
+            cls.open_.close()
+        cls.open_ = cls(folder, game)
+        return cls.open_
+
+    def __init__(self, folder, game):
+        import atexit
+        self.game, self.url, self.tick = game, None, None
+        self.httpd = SourceFileLoader("wikiserve", str(TREE / "tools/wiki/serve.py")).load_module().server(quiet=True)
+        self.tmp = folder / f".mock{os.getpid()}"
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        cfg = self.tmp / "pw.json"
+        launch = {"ignoreDefaultArgs": ["--hide-scrollbars"]}
+        if game:
+            import stage3dcheck
+            launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
+        cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
+                                               "launchOptions": launch}}))
+        pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
+        self.run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=self.tmp)
+        self.run("open", "about:blank")
+        self.closed = False
+        atexit.register(self.close)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.run("close")
+        self.httpd.shutdown()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        if MockupPage.open_ is self:
+            MockupPage.open_ = None
 
 
 def chart_box(chart, ox, oy):
@@ -2213,9 +2252,10 @@ def watch_v4(c):
     c.keys("dup:%d,%d" % (at(0.75), y))
     d = settled("(v4) the track's release did not land at 75 %",
                 lambda d: not d["replay"]["press_held"] and abs(d["replay"]["playhead"] - tick(at(0.75))) <= per + 1)
+    t0 = d["replay"]["tick"]
     hud_click(d, "bookmark")
-    d = settled("(v4) bookmark gave no toast", lambda d: d["frame"]["toast"])
-    toast = d["frame"]["toast"]
+    d = settled("(v4) bookmark gave no toast", lambda d: toast_since(d, t0))
+    toast = toast_since(d, t0)
     paused = d["replay"]["paused"]
     hud_click(d, "leave")
     d = settled("(v4) leave did not open the question", lambda d: d["frame"]["question"])
@@ -2515,6 +2555,14 @@ def settled_live(c, what, pred=lambda d: True, seconds=60):
                      what, seconds=seconds)
 
 
+def toast_since(d, t0):
+    """The words of the toast the replay set at or after demo tick t0, "" if it set none since: the frame shows a
+    toast 54 demo ticks (WIKIFRAME_TOAST), which a dump on a loaded machine can come after, so a press's toast is
+    read from the replay's own (tagpu_wikiframe_toast_words), whatever its age"""
+    r = d["replay"]
+    return r["toast_said"] if r["toast_at"] >= t0 else ""
+
+
 def span_tick(d, x):
     """The track's tick under client column x as the game maps it on the strip's drawn span (tagpu_wiki.c track_tick)"""
     x0, x1, _ = d["hud_run"]
@@ -2583,20 +2631,22 @@ def rewind_r4(c):
     d = settled_live(c, "(r4) the track's release did not land at 60 %",
                      lambda d: not d["replay"]["press_held"] and near(d, at(0.6)))
     said.append(f"the track pressed at 30 % and dragged to 60 % showed {live_of(d)['now']}")
-    start = c.mark()
+    start, t0 = c.mark(), d["replay"]["tick"]
     hud_click(c, d, "live_play")
     d = settled_live(c, "(r4) Play from here neither armed nor forked",
                      lambda d: live_of(d)["arm"] == ARM_ARMED or len(live_of(d)["timelines"]) == 2)
     if len(live_of(d)["timelines"]) < 2:
-        assert d["frame"]["toast"].startswith("Click again to play from"), f"(r4) the arm's toast: {d['frame']['toast']!r}"
-        said.append(f"Play from here armed at {live_of(d)['arm_R']} ('{d['frame']['toast']}')")
+        armed = toast_since(d, t0)
+        assert armed.startswith("Click again to play from"), f"(r4) the arm's toast: {armed!r}"
+        said.append(f"Play from here armed at {live_of(d)['arm_R']} ('{armed}')")
+        t0 = d["replay"]["tick"]
         hud_click(c, d, "live_play")
         d = settled_live(c, "(r4) the second Play from here did not fork", lambda d: len(live_of(d)["timelines"]) == 2)
     L = live_of(d)
     tl = L["timelines"][1]
     assert L["rw"] == RW_IDLE and L["selected"] == 1 and tl["parent"] == 0 and tl["mode"] == ECON_STALL, \
         f"(r4) the fork: rw {L['rw']}, selected {L['selected']}, {tl}"
-    assert d["frame"]["toast"].startswith("Playing from"), f"(r4) the fork's toast: {d['frame']['toast']!r}"
+    assert toast_since(d, t0).startswith("Playing from"), f"(r4) the fork's toast: {toast_since(d, t0)!r}"
     fork_line = wait_line(c, start, r"wiki: the rewind forked F1 at", "(r4) the fork's time was not said")
     said.append(f"forked F1 at {tl['R']} in stall mode ({fork_line.split('wiki: ', 1)[1]})")
 
@@ -3011,12 +3061,14 @@ def takeover_t4(c):
     said.append(f"lane:0 watched F{lanes[0]} and Back to main recording returned at {d['replay']['playhead']} "
                 f"({d['replay']['tick'] - k0} demo steps, {time.monotonic() - t0:.1f} s, "
                 f"{d['replay']['gen'] - g0} of the two switches sought)")
+    t0 = d["replay"]["tick"]
     hud_click(c, d, "export:1")
     d = tk_settled(c, f"(t4) Save did not save F{lanes[1]}", lambda d: lanes[1] in tk_of(d)["saved"]
-                   and d["frame"]["toast"] == f"F{lanes[1]} saved as a replay of its own")
+                   and toast_since(d, t0) == f"F{lanes[1]} saved as a replay of its own")
+    t0 = d["replay"]["tick"]
     hud_click(c, d, "export:1")
     d = tk_settled(c, f"(t4) a second Save of F{lanes[1]} was not refused",
-                   lambda d: d["frame"]["toast"] == f"Cannot save F{lanes[1]}")
+                   lambda d: toast_since(d, t0) == f"Cannot save F{lanes[1]}")
     said.append(f"F{lanes[1]} saved, then 'Cannot save F{lanes[1]}'")
     k0, t0 = d["replay"]["tick"], time.monotonic()
     hud_click(c, d, "takeover")
@@ -3031,7 +3083,7 @@ def takeover_t4(c):
     rows = {h["key"] for h in d["hits"] if h.get("src") == HIT_HUD and h["key"].startswith("takeas:")}
     assert {"takeas:0", "takeas:1"} <= rows, f"(t4) the picker's rows: {sorted(rows)}"
     said.append(f"Take over snapped {p} to {R - 1} ({snap[0]} demo steps, {snap[1]:.1f} s) and warned of F{ev}")
-    start = c.mark()
+    start, t1 = c.mark(), d["replay"]["tick"]
     hud_click(c, d, "takeas:1")
     d = tk_settled(c, "(t4) Bram's row did not take over",
                    lambda d: tk_of(d)["mode"] == "live" and tk_of(d)["human"] == 1 and d["replay"].get("live"))
@@ -3040,7 +3092,7 @@ def takeover_t4(c):
     me = T["timelines"][T["selected"]]
     assert not gone["live"] and me["R"] == R and me["seat"] == 1 and me["parent"] == 0, \
         f"(t4) after the takeover: F{ev} {gone}, the new timeline {me}"
-    assert d["frame"]["toast"].startswith("Taking over Bram at"), f"(t4) the takeover's toast: {d['frame']['toast']!r}"
+    assert toast_since(d, t1).startswith("Taking over Bram at"), f"(t4) the takeover's toast: {toast_since(d, t1)!r}"
     fork_line = wait_line(c, start, r"wiki: the takeover forked F\d+ at", "(t4) the takeover's time was not said")
     said.append(f"Bram taken over as F{me['id']} at {R} (F{ev} gone; {fork_line.split('wiki: ', 1)[1]})")
 
@@ -3089,13 +3141,15 @@ def takeover_t4(c):
     hud_click(c, d, "lanes")
     d = tk_settled(c, "(t4) the bay did not open again", lambda d: len(d["hud_lanes"]) == 3)
     lanes = d["hud_lanes"]
+    t0 = d["replay"]["tick"]
     hud_click(c, d, "delete:2")
     d = tk_settled(c, f"(t4) Delete did not arm F{lanes[2]}", lambda d: tk_of(d)["armed"] == lanes[2]
-                   and d["frame"]["toast"] == f"Click again to delete F{lanes[2]}")
+                   and toast_since(d, t0) == f"Click again to delete F{lanes[2]}")
+    t0 = d["replay"]["tick"]
     hud_click(c, d, "delete:2")
     d = tk_settled(c, f"(t4) the second Delete did not delete F{lanes[2]}",
                    lambda d: not next(t for t in tk_of(d)["timelines"] if t["id"] == lanes[2])["live"]
-                   and d["frame"]["toast"] == f"F{lanes[2]} deleted" and len(d["hud_lanes"]) == 2)
+                   and toast_since(d, t0) == f"F{lanes[2]} deleted" and len(d["hud_lanes"]) == 2)
     said.append(f"F{lanes[2]}'s Delete armed and then deleted it (lanes {d['hud_lanes']})")
     lanes = d["hud_lanes"]
     hud_click(c, d, "lane:0")
@@ -3554,7 +3608,8 @@ def pl_inert(c, d):
         hud_click(c, d, "play")
         d = settled("play did not pause", lambda d: d["replay"]["paused"])
     d = pl_row(c, d, 1, settled)
-    keep = lambda d: (d["frame"]["playhead"], d["replay"]["paused"], d["frame"]["toast"], d["frame"]["tk"], d["frame"]["pick"])
+    keep = lambda d: (d["frame"]["playhead"], d["replay"]["paused"], d["replay"]["toast_at"], d["replay"]["toast_said"],
+                      d["frame"]["tk"], d["frame"]["pick"])
     k0, said = keep(d), []
     for key in PL_INERT:
         h = next((h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD and h["key"] == key), None)

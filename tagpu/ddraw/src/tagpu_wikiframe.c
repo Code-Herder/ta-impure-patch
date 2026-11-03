@@ -143,12 +143,19 @@ static const char* clock_at(char* b, size_t n, int T)
 
 void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out)
 {
-    char c[16];
     out[0] = 0;
     if (rv->toast_kind < 0) return;
     /* Play from here's arm says what the second click does for as long as the arm holds */
     if (rv->tick - rv->toast_at >= WIKIFRAME_TOAST && !(rv->toast_kind == WIKI_TOAST_ARMED && rv->live && rv->arm == WIKI_ARM_ARMED))
         return;
+    tagpu_wikiframe_toast_words(rv, seat, nseat, out);
+}
+
+void tagpu_wikiframe_toast_words(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out)
+{
+    char c[16];
+    out[0] = 0;
+    if (rv->toast_kind < 0) return;
     clock_of(c, sizeof c, rv->toast_value, rv->live ? rv->first : 0);
     switch (rv->toast_kind) {
     case WIKI_TOAST_REMOVED: copy(out, HUD_TOASTLEN, "Bookmark removed"); break;
