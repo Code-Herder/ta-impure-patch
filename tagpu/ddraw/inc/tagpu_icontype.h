@@ -61,6 +61,9 @@ typedef struct TAGPU_ICONART {
     int nset;                                /* a mod set's icons; 0 = none     */
     TAGPU_ICONRECT set[TAGPU_ICONART_SETS];
     int none, unknown;                       /* set indices, -1 = absent        */
+    int selcol;                              /* what a `sel` texel shows when its
+                                                unit is selected: the set's own
+                                                SelectedColor                    */
 } TAGPU_ICONART;
 /* Any thread: the art, NULL until the game thread has published it. */
 const TAGPU_ICONART* tagpu_icontype_art(void);

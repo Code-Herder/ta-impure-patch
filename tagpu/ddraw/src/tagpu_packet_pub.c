@@ -119,6 +119,7 @@
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
 #include "tagpu_icontype.h"  /* the icons' type table, built here at the in-play fill */
+#include "tagpu_iconset.h"   /* a mod's icon set: its files' parsers, pure */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -953,9 +954,164 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
 #define ICONART_FRMAX      16        /* the largest logo frame kept, a side    */
 
 static unsigned char  s_iconPix[TAGPU_ICONART_W * TAGPU_ICONART_H];
-static unsigned char  s_iconCov[TAGPU_ICONART_W * TAGPU_ICONART_H];   /* this thread's */
 static TAGPU_ICONART  s_iconArt;
 static volatile LONG  s_iconArtReady;
+/* the logo frames as decoded, before the packer places them: this thread's */
+static unsigned char  s_logoPix[TAGPU_ICONART_LOGOS][ICONART_FRMAX * ICONART_FRMAX];
+static unsigned char  s_logoCls[TAGPU_ICONART_LOGOS][ICONART_FRMAX * ICONART_FRMAX];
+
+/* ---- a mod's own icon set (inc/tagpu_iconset.h) ----
+   WHERE IT IS. TADR reads `[Preferences] MegaMapConfig` from its own ini,
+   whose name is the string at 0x5098A3 in the running exe -- `totala.ini` as
+   shipped, rewritten by the Community Patch Loader at start-up to the mod's
+   (`mayhem.ini`, `ProTA.ini`, `taesc.ini`, `tazero.ini`), so by the first
+   in-play fill it is the mod's. The value is a path relative to the game's
+   folder, the iconcfg.ini; its folder holds the pictures. TADR resolves it
+   against the current directory; the exe's folder is used here [INFERRED
+   equal under every launcher in use: tacli and the loaders start TA in its
+   folder], and an absolute path is refused, so only the install's own files
+   are read.
+
+   ONCE A PROCESS, on the game thread, at the first in-play fill, before the
+   art's one release store: the files are read from the player's install and
+   parsed by tagpu_iconset.c, the pictures packed into the art beside the
+   logo frames, and nothing here is written again. Every file is bounded
+   before it is read (an ini at ISET_TEXT_MAX, a picture at ISET_PCX_MAX), and
+   everything in one is DATA to the parser. A set that is absent or does not
+   load changes nothing: the art is the logo's alone and every type keeps its
+   generated shape. TADR's code never runs. */
+#define VA_TADR_INI        0x005098A3u  /* char[]: TADR's ini's file name     */
+#define TADR_INI_CAP       33           /* the name's room read: 32 and a NUL */
+#define OFF_SIDE_NAME      0x37F3D      /* each side's name, its record's +0  */
+#define SIDE_NAME_CAP      0x1E
+#define ISET_TEXT_MAX      0x10000u     /* an ini's bytes                     */
+#define ISET_PCX_MAX       0x1000u      /* a picture's bytes                  */
+#define ISET_PIX           (TAGPU_PCX_MAXW * TAGPU_PCX_MAXH)
+
+/* the set as loaded, index = its picture's place in s_iconArt.set: this
+   thread's, written before the art's release store and read after it only
+   on this thread (the per-level walk) */
+static TAGPU_ISENTRY  s_isEnt[TAGPU_ICONART_SETS];
+static int            s_isN, s_isNone = -1, s_isUnknown = -1, s_isSelected;
+static unsigned char  s_isPix[TAGPU_ICONART_SETS][ISET_PIX];
+static unsigned char  s_isCls[TAGPU_ICONART_SETS][ISET_PIX];
+static int            s_isW[TAGPU_ICONART_SETS], s_isH[TAGPU_ICONART_SETS];
+
+/* The whole file at `path` into buf when it is 1..cap bytes; 0 otherwise. */
+static int iconset_read(const char* path, void* buf, unsigned cap, unsigned* got)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    LARGE_INTEGER size;
+    DWORD n = 0;
+    int ok;
+    *got = 0;
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    ok = GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart <= (LONGLONG)cap &&
+         ReadFile(f, buf, (DWORD)size.QuadPart, &n, NULL) && n == (DWORD)size.QuadPart;
+    CloseHandle(f);
+    if (ok) *got = n;
+    return ok;
+}
+
+/* `a\b` into out (MAX_PATH), or 0 when it does not fit */
+static int iconset_join(char* out, const char* a, const char* b)
+{
+    const int k = _snprintf(out, MAX_PATH, "%s\\%s", a, b);
+    if (k < 0 || k >= MAX_PATH) { out[0] = 0; return 0; }
+    return 1;
+}
+
+/* the folder of `path`: cut at its last separator, either spelling */
+static void iconset_folder(char* path)
+{
+    char* cut = NULL;
+    char* p;
+    for (p = path; *p; p++) if (*p == '\\' || *p == '/') cut = p;
+    if (cut) *cut = 0;
+}
+
+static void iconset_load(const char* ta)
+{
+    static char           text[ISET_TEXT_MAX];
+    static TAGPU_ICONCFG  cfg;
+    static TAGPU_ISENTRY  plan[TAGPU_ICONSET_PLAN];
+    static unsigned char  pcx[ISET_PCX_MAX];
+    char dir[MAX_PATH], path[MAX_PATH], folder[MAX_PATH], val[TAGPU_INI_VALMAX], ini[TADR_INI_CAP];
+    char skipped[256], b[512], side[TAGPU_ICONSET_SIDES][SIDE_NAME_CAP];
+    const char* sides[TAGPU_ICONSET_SIDES];
+    unsigned got, nsides = RDU32(ta, OFF_SIDES), s;
+    int np, i, nskip = 0, sk = 0;
+    DWORD dn;
+
+    s_isN = 0; s_isNone = s_isUnknown = -1;
+    skipped[0] = 0;
+    if (!tagpu_iconset_ini_name_ok((const char*)VA_TADR_INI, TADR_INI_CAP)) {
+        plog("icons: no mod set - the exe names no TADR ini");
+        return;
+    }
+    memcpy(ini, (const char*)VA_TADR_INI, sizeof ini);
+    ini[sizeof ini - 1] = 0;
+    dn = GetModuleFileNameA(NULL, dir, sizeof dir);
+    if (dn == 0 || dn >= sizeof dir) return;
+    iconset_folder(dir);
+    if (!iconset_join(path, dir, ini) || !iconset_read(path, text, sizeof text, &got) ||
+        tagpu_ini_get(text, got, "Preferences", "MegaMapConfig", val, sizeof val) != 1 ||
+        !tagpu_iconset_relpath_ok(val)) {
+        _snprintf(b, sizeof b, "icons: no mod set - %s names no MegaMapConfig of the install's own", ini);
+        b[sizeof b - 1] = 0; plog(b);
+        return;
+    }
+    if (!iconset_join(path, dir, val) || !iconset_read(path, text, sizeof text, &got)) {
+        _snprintf(b, sizeof b, "icons: no mod set - %s's MegaMapConfig %s does not read", ini, val);
+        b[sizeof b - 1] = 0; plog(b);
+        return;
+    }
+    tagpu_iconcfg_parse(text, got, &cfg);
+    memcpy(folder, path, sizeof folder);
+    iconset_folder(folder);
+    /* the sides' names, for the per-side commanders' pictures: below both the
+       count the loader stored and the five records the engine keeps, each
+       copied only when tagpu_iconset_side_ok finds it a file name ending
+       within its record's 0x1E bytes */
+    if (nsides > TAGPU_ICONSET_SIDES) nsides = TAGPU_ICONSET_SIDES;
+    for (s = 0; s < TAGPU_ICONSET_SIDES; s++) {
+        const char* nm = ta + OFF_SIDE_NAME + (size_t)s * SIDE_STRIDE;
+        sides[s] = NULL;
+        if (s < nsides && tagpu_iconset_side_ok(nm, SIDE_NAME_CAP)) {
+            memcpy(side[s], nm, SIDE_NAME_CAP);
+            sides[s] = side[s];
+        }
+    }
+    np = tagpu_iconset_plan(&cfg, sides, (int)nsides, plan, TAGPU_ICONSET_PLAN);
+    for (i = 0; i < np; i++) {
+        int w, h;
+        const TAGPU_ISENTRY* e = &plan[i];
+        if (s_isN < TAGPU_ICONART_SETS && iconset_join(path, folder, e->file) &&
+            iconset_read(path, pcx, sizeof pcx, &got) &&
+            tagpu_pcx_decode(pcx, got, s_isPix[s_isN], ISET_PIX, &w, &h)) {
+            tagpu_iconset_classify(s_isPix[s_isN], w * h, cfg.transparent, cfg.fill, cfg.selected,
+                                   s_isCls[s_isN]);
+            s_isW[s_isN] = w; s_isH[s_isN] = h;
+            s_isEnt[s_isN] = *e;
+            if (e->kind == TAGPU_ISE_NONE) s_isNone = s_isN;           /* the last named, as TADR */
+            if (e->kind == TAGPU_ISE_UNKNOWN) s_isUnknown = s_isN;
+            s_isN++;
+            continue;
+        }
+        nskip++;
+        if (sk < (int)sizeof skipped - 2) {
+            const int k = _snprintf(skipped + sk, sizeof skipped - (size_t)sk, " %s", e->file);
+            sk = k < 0 ? (int)sizeof skipped : sk + k;
+            skipped[sizeof skipped - 1] = 0;
+        }
+    }
+    s_isSelected = cfg.selected;
+    _snprintf(b, sizeof b, "icons: mod set %s from %s (%s), %s mode, %d picture(s) loaded of %d, "
+              "%d [Icon] line(s) refused, skipped:%s", folder, ini, val, cfg.custom ? "custom" : "default",
+              s_isN, np, cfg.refused, nskip ? skipped : " none");
+    b[sizeof b - 1] = 0; plog(b);
+}
 
 /* a frame's team colour: its texel at the hotspot, or its commonest drawn
    texel when the hotspot draws nothing; -1 for a frame that draws nothing */
@@ -971,22 +1127,21 @@ static int iconart_team(const unsigned char* pix, const unsigned char* cov, int 
 
 static void iconart_build(const char* ta)
 {
-    static unsigned char pix[ICONART_FRMAX * ICONART_FRMAX], cov[ICONART_FRMAX * ICONART_FRMAX];
+    static unsigned char cov[ICONART_FRMAX * ICONART_FRMAX];
+    static TAGPU_ICONSRC src[TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS];
+    static TAGPU_ICONRECT rect[TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS];
     const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
-    int used[256], marks[3], i = 0, x = 1, k, px, nfr = 0;
-    char b[160];
+    int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed;
+    char b[200];
 
     memset(&s_iconArt, 0, sizeof s_iconArt);
-    memset(s_iconPix, 0, sizeof s_iconPix);
-    memset(s_iconCov, 0, sizeof s_iconCov);
-    memset(used, 0, sizeof used);
     if (ptr_ok(seq)) {
         nfr = tagpu_gaf_seq_nframes(seq);
         for (i = 0; i < nfr && i < TAGPU_ICONART_LOGOS; i++) {
             const unsigned char* g = tagpu_gaf_seq_frame(seq, i);
+            unsigned char* pix = s_logoPix[i];
             TAGPU_GAFGEOM gm;
-            TAGPU_ICONRECT* r = &s_iconArt.logo[i];
-            int t, row;
+            int t;
             if (!g || !tagpu_gaf_frame_geom(g, &gm)) break;
             if (gm.w <= 0 || gm.h <= 0 || gm.w > ICONART_FRMAX || gm.h > ICONART_FRMAX) break;
             if (!tagpu_gaf_decode_cov(g, gm.w, gm.h, pix, cov)) break;
@@ -996,35 +1151,49 @@ static void iconart_build(const char* ta)
                 for (px = 0; px < gm.w * gm.h; px++) if (pix[px] == gm.ck) cov[px] = 0;
             t = iconart_team(pix, cov, gm.w, gm.h, gm.hotx, gm.hoty);
             if (t < 0) break;
-            for (row = 0; row < gm.h; row++) {
-                memcpy(s_iconPix + (size_t)(1 + row) * TAGPU_ICONART_W + x, pix + row * gm.w, (size_t)gm.w);
-                memcpy(s_iconCov + (size_t)(1 + row) * TAGPU_ICONART_W + x, cov + row * gm.w, (size_t)gm.w);
-            }
-            for (px = 0; px < gm.w * gm.h; px++) if (cov[px]) used[pix[px]] = 1;
-            r->x = (uint16_t)x; r->y = 1; r->w = (uint16_t)gm.w; r->h = (uint16_t)gm.h;
-            r->hx = (int16_t)gm.hotx; r->hy = (int16_t)gm.hoty;
+            for (px = 0; px < gm.w * gm.h; px++)
+                s_logoCls[i][px] = cov[px] ? TAGPU_ITX_DRAWN : TAGPU_ITX_KEY;
+            src[i].pix = pix; src[i].cls = s_logoCls[i]; src[i].w = gm.w; src[i].h = gm.h;
+            s_iconArt.logo[i].hx = (int16_t)gm.hotx; s_iconArt.logo[i].hy = (int16_t)gm.hoty;
             s_iconArt.team[i] = (unsigned char)t;
-            x += ICONART_FRMAX + 1;
         }
     }
-    /* the three markers: the smallest indices no drawn texel holds. Ten 4x4
-       frames draw at most 160 texels, so three are always free while the art
-       is the logo's alone. */
-    for (k = 0, px = 0; px < 256 && k < 3; px++) if (!used[px]) marks[k++] = px;
-    if (k < 3) {
-        /* every index is drawn: nothing can mark "not drawn", so no art */
+    iconset_load(ta);
+    for (k = 0; k < s_isN; k++) {
+        src[i + k].pix = s_isPix[k]; src[i + k].cls = s_isCls[k];
+        src[i + k].w = s_isW[k]; src[i + k].h = s_isH[k];
+    }
+    /* THE MARKERS are chosen over every picture the atlas holds
+       (tagpu_iconart_pack): the smallest indices no drawn texel holds. A set
+       that leaves fewer than three free, or does not fit, is dropped and the
+       logos are packed alone -- ten 4x4 frames draw at most 160 texels, so
+       three are always free for them; a logo set that drew every index would
+       leave no art at all. */
+    nset = s_isN;
+    packed = tagpu_iconart_pack(src, i + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    if (!packed && nset) {
+        plog("icons: the mod set does not fit the art beside the radar logo - not drawn");
+        nset = s_isN = 0; s_isNone = s_isUnknown = -1;
+        packed = tagpu_iconart_pack(src, i, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    }
+    if (!packed) {
         memset(s_iconArt.logo, 0, sizeof s_iconArt.logo);
         memset(s_iconPix, 0, sizeof s_iconPix);
         i = 0; marks[0] = 0; marks[1] = 1; marks[2] = 2;
-    } else {
-        for (px = 0; px < TAGPU_ICONART_W * TAGPU_ICONART_H; px++)
-            if (!s_iconCov[px]) s_iconPix[px] = (unsigned char)marks[0];
     }
+    for (k = 0; k < i; k++) {
+        s_iconArt.logo[k].x = rect[k].x; s_iconArt.logo[k].y = rect[k].y;
+        s_iconArt.logo[k].w = rect[k].w; s_iconArt.logo[k].h = rect[k].h;
+    }
+    for (k = 0; k < nset; k++) s_iconArt.set[k] = rect[i + k];
     s_iconArt.pix = s_iconPix;
     s_iconArt.w = TAGPU_ICONART_W; s_iconArt.h = TAGPU_ICONART_H;
     s_iconArt.key = marks[0]; s_iconArt.fill = marks[1]; s_iconArt.sel = marks[2];
     s_iconArt.nlogo = i;
-    s_iconArt.nset = 0; s_iconArt.none = -1; s_iconArt.unknown = -1;
+    s_iconArt.nset = nset;
+    s_iconArt.none = nset ? s_isNone : -1;
+    s_iconArt.unknown = nset ? s_isUnknown : -1;
+    s_iconArt.selcol = nset ? s_isSelected : 0;
     /* THE PUBLICATION. Every byte of the atlas and of s_iconArt is stored above,
        on this thread, before this release store; nothing writes or frees either
        after it, for the life of the process. So a render-thread reader that
@@ -1033,8 +1202,8 @@ static void iconart_build(const char* ta)
        art's argument (tagpu_order.c). Not InterlockedExchange: mingw spells it
        __sync_lock_test_and_set, whose contract is acquire-only. */
     __atomic_store_n(&s_iconArtReady, 1, __ATOMIC_RELEASE);
-    _snprintf(b, sizeof b, "icons: art %d radar logo frame(s) of %d, key %d fill %d sel %d",
-              i, nfr, s_iconArt.key, s_iconArt.fill, s_iconArt.sel);
+    _snprintf(b, sizeof b, "icons: art %d radar logo frame(s) of %d, %d mod set picture(s), "
+              "key %d fill %d sel %d", i, nfr, nset, s_iconArt.key, s_iconArt.fill, s_iconArt.sel);
     b[sizeof b - 1] = 0; plog(b);
 }
 
