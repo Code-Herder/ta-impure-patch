@@ -179,6 +179,16 @@ is per-frame working copies, not information, so the landing is split to remove 
 ## Landings
 
 1a. **Fog from its source bits**, whole map, one shared texture, expanded in the shader.
+   *Built 2026-11-03 on this worktree; the in-game checks V1a-1..6 are open.* Offline: the build's
+   checks, `tools/replay/fog_expand_test.py`, `tools/wiki/scenecheck.mjs` (the stage's fog source
+   expands to the mockup's grid byte for byte), and the lab's extracted GLSL ES compiled by
+   glslang. Two things the spec did not foresee: the completion order cannot matter on a whole-map
+   expansion — two completions meet only at a corner entry, which holds one map cell — so the host
+   test checks that all 24 orders agree and that dropping or turning round each completion is
+   caught, instead of a swapped order failing; and the browser lab and the wiki mockup extract the
+   DLL's GLSL, so both now bind an R32UI source (`tools/tascene` declares `usampler2D`'s
+   precision). `tagpu_fogwide.off` now means no fog on the Vulkan lane: there is no grid left to
+   fall back to.
 1b. **Terrain instances once per level.**
 1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
    extent and the true viewport, bounded by the int16 click rect, terrain staging and the largest

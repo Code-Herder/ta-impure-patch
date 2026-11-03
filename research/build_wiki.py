@@ -73,7 +73,7 @@ PAGES = [
     ("effects",                    "Effects (fire, explosions, debris)", "Renderer"),
     ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
     ("atlas-packing",              "The GAF sprite atlas",        "Renderer"),
-    ("fog-grid-sizing",            "Sizing the wide fog grid",    "Renderer"),
+    ("fog-grid-sizing",            "Sizing the wide fog grid (retired)", "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),

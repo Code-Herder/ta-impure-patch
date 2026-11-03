@@ -74,8 +74,8 @@ it); while it owes a models' share a slot would not grow by (`s_fxShort`, below)
 the frame's **forecast** stands it down. The forecast (`TAGPU_VKFXASK`) is the five stand-downs
 that persist from one frame to the next, as the gather can know them: cast shadows on a device
 that will not filter the depth map, the draws the hand-over will not carry (this frame's count
-so far plus the last frame's whole), a fog overlay the frame samples with a grid the posed pass
-could not carry, the scaffold overlay armed, and a texel mirror — the unit atlas's, the
+so far plus the last frame's whole), a fog overlay the frame samples with no fog source in the
+native pass (so none in the slot's fog image), the scaffold overlay armed, and a texel mirror — the unit atlas's, the
 palette, the face-shade table — not there yet, read through the hand-over's own readers
 (`tagpu_posedraw_mirrors`). It is put through the same `frame_down` that `upload_draw` applies
 to the hand-over, the mirrors through one predicate (`mirrors_there`), so the two cannot

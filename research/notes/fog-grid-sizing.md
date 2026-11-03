@@ -1,19 +1,17 @@
-# Sizing the wide fog grid
+# Sizing the wide fog grid (retired)
 
-The wide fog grid ([terrain & depth](terrain-depth.html) §8) is the lattice `tagpu_fogwide.c`
-builds so that fog covers a zoomed-out view instead of stopping at the edge of the 1× viewport.
-This page is about **how big it is**, which is currently answered by two constants that disagree
-with each other and with the screen.
+The wide fog grid was the lattice `tagpu_fogwide.c` built so that fog covered a zoomed-out view
+instead of stopping at the edge of the 1× viewport. This page was about **how big it was**.
 
-**BUILT 2026-09-10.** The page is kept as the reasoning behind the change, not as a proposal:
-§6.2 is what shipped, and §8 records what each of its open questions was answered with and what
-was measured. Everything below is computed from the code's own arithmetic — `fogw_window` in
-`tagpu_fogwide.c` and the `cols > 512 || rows > 512` test in `tagpu_fog_at`
-(`tagpu_fx.c`) — evaluated over every eye residue, not estimated. The window has since grown by
-a lead of a quarter of the viewport on each side ([GPU status](gpu-status.html) §2.3e): 147 ×
-120 cells at 1024×768, 273 × 164 at 1920×1080 and 543 × 316 at 3840×2160. The windows below are
-the ones before it; the sizing argument is unchanged, since the capacity is still taken from the
-same expression at the worst residue.
+**THE SUBJECT OF THIS PAGE IS GONE.** There is no wide fog grid any more: since mega map landing
+1a the packet carries the fog **source** for the whole map — two bits per 32-px cell, Seven
+Islands 640 × 640 cells in 100 KB, the packet's reserve sized for a 2048 × 2048-cell map — and
+every reader expands it as the engine's builder does ([terrain & depth](terrain-depth.html) §8,
+`inc/tagpu_fogsrc.h`). There is no window to size, no capacity to choose, no residue to take the
+worst of, and `fogw_window`, `fogw_capacity` and the `tagpu_fog_at` dimension test this page
+reasons about no longer exist. Nothing below describes current code. It is kept for its
+reasoning and measurements about the window design (built 2026-09-10, §6.2 and §8), which is
+where a reader looking for why the window was abandoned will find what it cost.
 
 <div class="tablewrap fg">
 <style>

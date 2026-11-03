@@ -190,8 +190,8 @@ on the game thread that TA's simulation never reads, and every wiki file is `pre
 
 ### 2.12d The wiki's stage in 3D: the world passes compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tagpu_wikiscene.c`, `tagpu_scene_wiki.h`, `tools/scene-check.sh`; every Vulkan level with the wiki open)
 
-The seven files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_terr.c`,
-`tagpu_vk_feat.c`, `tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and
+The eight files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_fog.c`,
+`tagpu_vk_terr.c`, `tagpu_vk_feat.c`, `tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and
 `tagpu_render3do.c` — are compiled **twice**: `src/<name>.o` is the game's world, and
 `src/<name>.wiki.o`, built with `-DTAGPU_SCENE_WIKI`, is the in-game wiki's stage, each with its
 own statics. Both are linked. Design: [the 3D stage plan](../ingame-wiki-3d-stage-plan.html),
@@ -201,12 +201,11 @@ frame's packet (`gfx_opt`). The wiki's copies of the world target, the terrain a
 draw the stage's ground; its copies of the unit pass, the pose bake, the pose draw and the 3DO
 renderer draw its units and ghosts.
 
-- **What `tagpu_scene.h` does under the macro**, included first by each of the seven: renames
+- **What `tagpu_scene.h` does under the macro**, included first by each of the eight: renames
   every external symbol they define (`tagpu_vk_*` → `tagpu_vkw_*`, `tagpu_r3d_*` → `tagpu_r3dw_*`,
   `tagpu_posedraw_*` → `tagpu_pdw_*`, `tagpu_posebake_*` → `tagpu_pbw_*`); points their hand-over
   sources (`tagpu_terr_handover`, `tagpu_feat_handover`, `tagpu_feat_atlas_hand/owed/ack`,
-  `tagpu_native_worldtgt`, `tagpu_native_foggrid`, `tagpu_native_scissor_on`) at
-  `tagpu_wikiworld_*`; points every call into a game-only module (the cast-shadow map, the
+  `tagpu_native_worldtgt`, `tagpu_native_scissor_on`) at `tagpu_wikiworld_*`; points every call into a game-only module (the cast-shadow map, the
   scaffold, the effects pass, the Classic++ restorer, `tagpu_classicpp_assets`/`_light`, the fault
   lever, `tagpu_vk_ab_arm`, `tagpu_grow_stress`) at an inert answer in `tagpu_wikiworld.c`; and
   sizes the bake's caches, the unit pass's vertex-buffer table and their lookup hashes from the
@@ -229,7 +228,10 @@ renderer draw its units and ghosts.
   34-texel pitch, a one-texel replicated border) from the arena's tiles, and the features' frames
   in an atlas of its own (`TAGPU_GAFATLAS`, 512 square, 128 entries, a key plane, no allowance),
   painted then, with every quad's six vertices as `emit_frame` makes them (the edge nudge, each
-  corner's own world point); and every frame the fog grid (`tagpu_wikiscene_fog`) and three
+  corner's own world point); and every frame the fog source (`tagpu_wikiscene_fog`: one cell a
+  32-unit block, bit 0 the view's black, bit 1 its grey, in `inc/tagpu_fogsrc.h`'s format; the
+  seam prepares the stage's own fog image from it, `tagpu_vkw_fog_prepare(…,
+  tagpu_wikiworld_fogsrc())`, its serial moved only when the bits change) and three
   hand-overs: the terrain's (`gw` = map cells × 16, zoom 1, the eye at the map's corner, the
   viewport the whole map, the scissor on, no relief, restore or shadow), the features' (the same
   camera), and the target's (`TAGPU_WORLDTGT`: `gw` × `gh` at `tagpu_settings_ss`, composited at

@@ -116,7 +116,7 @@ A note in the ta-drive skill claimed the opposite — that pausing the sim stops
 wrong.]*
 
 **Where this may already have bitten — and the argument AGAINST the obvious suspect.**
-`tagpu_fog_at`'s guard exists because the render thread faulted twice on 2026-09-03 reading the
+The render thread faulted twice on 2026-09-03 reading the
 fog descriptor `{u16* buf; int cols; int rows; int cells}` out of `*(main+0x1421F)` off a base of
 `-9` = `0xFFFFFFF7` (earlier `-318` = `0xFFFFFEC2`), root cause never found. A torn `buf` looks
 like the answer and probably is not: composing either value needs **three `0xFF` bytes**, and
@@ -127,7 +127,9 @@ reading survives only if the slot already held `0xFF` poison — in which case t
 is the freed-and-reused descriptor, i.e. a **lifetime** fault, not an alignment one. Both readings
 are recorded in `fog-grid-sizing.md` §2. The test that separates them in one fault: log the other
 three descriptor fields at the guard trip — a tear gives one bad field and three consistent ones,
-a reused slot gives four that are garbage together. The defensive shape
+a reused slot gives four that are garbage together. No render-thread path reads that descriptor
+any more (the frame packet carries a copy of the fog source; only the game-thread oracle reads the
+grid), so the question can no longer be settled on our side. The defensive shape
 already in `tagpu_native.c` is the one to copy for any multi-field engine struct read across
 threads: bound every field AND check a **relation the builder guarantees** —
 `cells == ((cols*rows + 7) & ~7)`, the round-up at `0x483C84` — because a tear almost certainly
@@ -219,7 +221,7 @@ record at `[esp+0x2E0]`. The destructor `0x463C40` frees `[this+0x27]` and `[thi
 `0x4B4F20` and nulls neither; its two calls, `0x454538` and `0x454607`, destroy that stack-local
 record, whose `+0x7C` the constructor zeroed and `0x464700` (whose one caller walks `main`'s
 records) never fills. So the local player's counters, which the builder `0x4843C0` and
-`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), live from the level's
+`tagpu_fogwide`'s packer read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), live from the level's
 load to its teardown, and MAPPED from the map load to the teardown: every in-play draw falls inside
 both. `tagpu_fogwide` reads them from inside every in-play draw, at the fog site or, on the
 Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).

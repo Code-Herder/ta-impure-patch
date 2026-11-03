@@ -38,7 +38,8 @@ native pass that replaces it. Gate **G13a**.*
 6. **Only defs flagged `+0xFF` bit3 are LOS-gated at all** — and only until the local
    player has seen the tile. Everything else is drawn regardless of fog and then covered
    by the fog overlay, which is why the native pass mirrors the fog rule per fragment
-   (off the engine's own fog grid — §9) rather than culling.
+   (the engine's corner masks, expanded from the whole map's fog source — §9) rather
+   than culling.
 
 ---
 
@@ -221,8 +222,8 @@ the units**, so every unit body is tested against the depth features just wrote.
   nothing yields `(0.5·rgb, 0.5)`, which the composite resolves as a 50 % blend with the
   engine's terrain underneath — the same thing the engine's ALP table does, without
   needing the terrain in our buffer.
-- **Fog** is mirrored per fragment like every other native shader — since G13c off the
-  engine's own screen fog grid rather than the LOS/MAPPED source maps (§9) — and each
+- **Fog** is mirrored per fragment like every other native shader — the engine's corner
+  masks, not a per-cell test of the LOS/MAPPED maps (§9) — and each
   vertex carries **its own** world position —
   anchor plus the corner's offset — so a tree straddling the fog edge fades across it
   instead of all at once. Getting this wrong (feeding the shader screen coordinates) made
@@ -486,16 +487,20 @@ and the source maps do not reproduce it.
    terrain-depth.md §5.2.
 2. **The source map disagrees with the drawn frame.** Read in the *same frame*
    at the same cells: MAPPED said explored for cols 80..98 of row 20 while the
-   grid — and the screenshot — had only 92..96 lit. That discrepancy is still
-   unexplained and is written up in terrain-depth.md §5.2; it is moot for
-   rendering, because the grid is by construction what the engine drew.
+   grid — and the screenshot — had only 92..96 lit. Read with the builder's own
+   index, `(plotC·cy)/2 + cx` u16 per tile, MAPPED does reproduce the grid: the
+   builder replicated in C over those reads matched the engine's grid byte for
+   byte (0 of 720 cells at 1024×768 and 0 of 1972 at 1920×1080,
+   [terrain & depth](terrain-depth.html) §8's oracle).
 
 **The fix.** One shared GLSL snippet (`tagpu_glsl.h`, `TAGPU_GLSL_FOG_*`) used by
 all four passes, replacing four copy-pasted blocks and the `uLos`/`uMap` texture
 pair with a single `uFogGrid`:
 
-- the grid uploads as an **RG8 texture with no conversion** — its two bytes per
-  cell already *are* `r = unexplored corner mask, g = out-of-LOS corner mask`;
+- the corner masks are the builder's: today every pass expands them per fragment
+  from the whole map's fog source, two bits a cell in an R32UI image, exactly as
+  `0x4843C0` would (`taFogEntry`; [terrain & depth](terrain-depth.html) §8),
+  which no zoom or eye can outrun;
 - **bilinear coverage over the four corner bits, thresholded at 0.5**, is the 14
   edge shapes (`0xF` → everywhere, `0x3` → exactly the top half, a lone corner →
   its quadrant). We get a clean edge where the engine dithers one — the same
@@ -515,8 +520,8 @@ SKIRMISH mapping toggle is clear) the grid carries a fully populated grey mask w
 `b0` is all zero, so the engine paints a grey band and our shaders drew none of it.
 It was invisible while the engine still drew its own overlay over its own terrain, and
 became a missing band the moment G13b suppressed that overlay. The gate is now simply
-*"the grid uploaded"* — by the paragraph above, an inactive mode is already an all-zero
-mask, so there is nothing else to test. (Measured that this does **not** double-darken
+*"the frame has a fog source"* — by the paragraph above, an inactive mode is already an
+all-zero mask, so there is nothing else to test. (Measured that this does **not** double-darken
 where the engine's overlay is still live: the overlay remaps the 8bpp offscreen while
 our fragments composite over it afterwards, so it can never touch them — mean grey-band
 luminance 62.21 engine vs 61.77 ours. terrain-depth.md §7.5–7.6.)
@@ -566,5 +571,5 @@ rule that grey shows terrain but not units.
 | `main+0x14273` / `main+0x14281` | MAPPED bitmap / `LosType` |
 | `main+0x2A43` / `main+0x1B63 + id·0x14B` | local player id / PlayerStruct (`+0x7C` LOS map) |
 | `main+0x37F06` | gfx options, **bit4 = FShadow** |
-| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; per 32-px view cell 2 bytes = `(unexplored, out-of-LOS)` **4-bit corner masks**, origin `32·col0+16` — the fog source for every native pass (§9) |
+| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; per 32-px view cell 2 bytes = `(unexplored, out-of-LOS)` **4-bit corner masks**, origin `32·col0+16` — what the engine's overlay draws; our passes expand the same masks from the whole map's fog source, and only the oracle reads this grid (§9) |
 | `*(TAProgram+0xCC)` | u8[256] fog shade remap: the grey band's darken, applied to the palette index (§9) |

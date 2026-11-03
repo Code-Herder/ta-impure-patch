@@ -2055,11 +2055,15 @@ back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 
 [MEASURED 2026-09-09, this project — `objdump -d -M intel` of the pristine Steam build over
-`0x483BB8..0x483CA6` and `0x4843C0..0x4848D6`, plus a live oracle: `tagpu_fogwide.c` replicates
-the builder in C and, under `tagpu_fogwide_check.on`, rebuilds over the engine's own window and
-compares. **0 differing bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and
-1555 non-zero cells respectively. The overlay that consumes the grid is `terrain-depth.md` §5.1;
-what is new here is its **allocation** and the **cell-by-cell reads** of `0x4843C0`.]
+`0x483BB8..0x483CA6` and `0x4843C0..0x4848D6`, plus a live oracle: the builder replicated in C and,
+under `tagpu_fogwide_check.on`, rebuilt over the engine's own window and compared. **0 differing
+bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and 1555 non-zero cells
+respectively — measured on the window builder that read the maps directly; the replication is now
+`tagpu_fog_build_window` (`tagpu_fogsrc.c`) over the packed fog source, and that oracle is yet to
+be repeated on it. The overlay that consumes the grid is `terrain-depth.md` §5.1; what is new here
+is its **allocation** and the **cell-by-cell reads** of `0x4843C0`. Our renderer does not sample
+this grid at all: it expands the whole map's source the same way (`terrain-depth.md` §8,
+`inc/tagpu_fogsrc.h`).]
 
 ### The allocation, at map load — `0x483BB8..0x483CA6`
 
@@ -2120,9 +2124,11 @@ allocation arithmetic above for every viewport from 64 to 16384 and every eye re
 slack is **1 px** (a 64-px viewport at `eye % 32 == 15`) and **16 px** for the negative eyes the
 zoom's widened camera range produces. At the 1792×1016 viewport of a 1920×1080 screen — measured
 `cols = 58`, `rows = 34` — it is `16 − r` or `48 − r` px horizontally and `24 − r` or `56 − r`
-vertically, `r` being `eye % 32`. Ours *does* meet it, because a zoomed-out view reaches past the
-grid by design, which is why `taFog` clamps to `uFogDim − 1.0` and not to the last cell
-(`terrain-depth.md` §8a).
+vertically, `r` being `eye % 32`. Our expansion never meets it: it has no window, so every entry
+takes all four of its cells, the off-map ones as 0, and the edge completions supply what the map
+does not. Only `tagpu_fog_build_window`, the oracle's replication over the engine's own window,
+reproduces the short last column and row, and the oracle compares the expansion only on the
+entries that build fully defines.
 
 ### The four border completions — `0x4846A1..0x4848CD`, and the index that is only right by luck
 
@@ -2130,7 +2136,11 @@ Off the map there is no cell to darken a corner, so each edge copies the corner 
 outward: top `4→1, 8→2` (`0x4846AE`), bottom `1→4, 2→8` (`0x484731`), left `8→4, 2→1`
 (`0x4847CA`), right `4→8, 1→2` (`0x48485A`); each pair is gated on `LosType & 2` for the grey
 byte and unconditional for the black one, and **the four run in that order**, reading bits an
-earlier one may have set.
+earlier one may have set. On a whole-map expansion the order cannot matter: two completions meet
+only at a corner entry, which holds one map cell, so its three other corners are all copies of
+that one [MEASURED 2026-11-03: `tools/replay/fog_expand_test.py` runs all 24 orders against the
+window build, 0 disagreements; dropping or turning round any one completion differs on 0.66–1.97
+million of 9.18 million compared entries].
 
 The engine writes them into grid **row 0**, **row `rows−2`**, **column 0** and **column
 `cols−2`**. Those are not the general answer — they are the straddling entries only while the
@@ -2148,14 +2158,16 @@ off it on the other:
 The two columns agree whenever the window overshoots by exactly one cell, which is the only case
 an eye in the engine's own range produces. A window that reaches further must use the derived
 index, or the completion lands rows out in open water and the shoreline entry keeps a half-set
-mask. `fogwide`'s window always does; the engine's does whenever the camera's centre range has
-put the eye past `[0, extent − W]`, and the native pass then draws from `fogwide`'s grid instead
-(`tagpu_zoom_wide_fog`). The addresses stay inside the grid either way — each completion loops
-over the grid's own `[0, cols)` or `[0, rows)` — so what goes wrong is the content, not memory.
+mask. `tagpu_fog_build_window` always does, and the whole-map expansion has the derived index
+by construction (the completion is on entry −1 or `w − 1`, `h − 1`); the engine's window reaches
+further whenever the camera's centre range has put the eye past `[0, extent − W]`, which our
+renderer does not care about, since it never samples the engine's grid. The addresses stay inside
+the grid either way — each completion loops over the grid's own `[0, cols)` or `[0, rows)` — so
+what goes wrong is the content, not memory.
 
 Off the straddle the literal line lies wholly off the map, where every entry is zero, so the
 engine's completion there is a no-op and the two builders differ only on the lines of that table:
-the engine leaves the straddling line half-set, ours completes it. `fogwide`'s oracle
+the engine leaves the straddling line half-set, ours completes it. The oracle
 (`tagpu_fogwide_check.on`) therefore leaves both lines out of the comparison for each completion
 whose gate is up and whose two indices differ, and reports them as `skipped=`.
 
@@ -2262,7 +2274,7 @@ the loader thread: 1.86–2.18 ms on Two Continents (672 × 800 cells), 6.89 ms 
 | what | where | lifetime, and the check that stands for it |
 | --- | --- | --- |
 | the fog overlay's call site | `0x4848E0`, called once from `0x469D8E` inside DrawGameScreen | **behind `test ebx,ebx / je` at `0x469D85`, and `ebx` there is the function's FIRST ARGUMENT** — reloaded from `[esp+0x228]` at `0x469BC9` against a frame of `sub esp,0x214` plus four pushes, i.e. the entry `[esp+4]`, which is `drawUnits`. The in-play call at `0x4969CD` passes 1 for both arguments, so this site runs on every in-play draw and an observer on it can be used as a per-draw liveness stamp [VERIFIED 2026-09-12] |
-| the engine's screen fog grid | descriptor `*(main+0x1421F)` = `{u16* buf, i32 cols, i32 rows, i32 cells}` | built once per map by LoadMap (`0x483C03` / `0x483C96`) and only REWRITTEN by the builder `0x4843C0`; freed by the map-free `0x483DD0` inside the teardown cascade. **The relation is the check**: the builder rounds the cell count up to a multiple of 8 before allocating (`0x483C84`: add 7, and ~7), so `cells == ((cols*rows + 7) & ~7)` says the three numbers describe one block. The grid's world origin is `32·col0 + 16`, `col0` the builder's half-cell-rounded eye, stored nowhere — which is why the publisher keeps a build record of the eye each build read, off LosType bit 3 (row "who sets `main+0x14281` bit 3"), rather than taking the one the packet carries |
+| the engine's screen fog grid | descriptor `*(main+0x1421F)` = `{u16* buf, i32 cols, i32 rows, i32 cells}` | built once per map by LoadMap (`0x483C03` / `0x483C96`) and only REWRITTEN by the builder `0x4843C0`; freed by the map-free `0x483DD0` inside the teardown cascade. **The relation is the check**: the builder rounds the cell count up to a multiple of 8 before allocating (`0x483C84`: add 7, and ~7), so `cells == ((cols*rows + 7) & ~7)` says the three numbers describe one block. The grid's world origin is `32·col0 + 16`, `col0` the builder's half-cell-rounded eye, stored nowhere. Our renderer does not read the grid (it expands the whole map's fog source, `terrain-depth.md` §8); only the fog oracle (`tagpu_fogwide_check.on`) does, and the publisher's build record off LosType bit 3 (row "who sets `main+0x14281` bit 3") is what tells it, and the source's packer, that a build ran in the draw |
 | the minimap's three 8bpp surfaces | `main+0x142DF` the fog base, `+0x142E3` the unshaded base, `+0x142DB` the fog+dots composite; each a `{i32 w, i32 h, i32 pitch, u8* base}` descriptor | the minimap build `0x4669B0`, from the level load at `0x4919C3`, stores all three once; `0x466AA0` frees and NULLS them inside the teardown cascade. A descriptor carries a base AND a pitch, so a torn one is a wild read and not a stale picture: the publisher cross-checks `w`/`h` across all three and refuses a pitch below the width or past 4096 |
 | the minimap's box and view rect | `main+0x142E7`/`+0x142E9`/`+0x142EB`/`+0x142ED` the box the engine fitted it into (i16, ITS screen px), `+0x142CB` the view box (4 × i32, screen px, edges inclusive), `+0xDD9` its palette index | values. `+0x142F1` bit 1 is NOT a gate: it is `DrawMinimap 0x466B00`'s dirty flag and `0x466B16` clears it in the same breath |
 | the level's minimap picture | `main+0x1426B`, a GAF frame (TED_GENERATED_PIC) | **alive for the WHOLE LEVEL** [CORRECTED 2026-09-12, objdump of the pristine build — this fork's own notes said it was alive only inside `BuildMinimapSurface 0x466780`, and that is false]. LoadMap loads it (`0x4838F5` → `0x4B8DA0`) and stores it at `0x483900`, or stores NULL at `0x483936` when the file is absent; `0x466780` reads it at `0x46684F` and does NOT null it; the only thing that frees it is `0x483DFE` (`MEM_Free 0x4D85A0`) inside `0x483DD0`, followed by the null at `0x483E0B` — and `0x483DD0`'s only caller is `0x491BB3`, inside the level teardown cascade `0x491B60`. So the packet's publisher can decode it itself on the level's first in-play draw, and that is what let the fork delete its last loader-thread observer |
