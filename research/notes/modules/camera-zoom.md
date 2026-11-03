@@ -95,8 +95,7 @@ wheel target it leaves below it rests at it (`floor_moved`). **The other two lev
 `tagpu_zoom.txt` parses a level in `[1/64, 8]` and is drawn no lower than the floor; a Follow's
 recorded level below this viewer's floor is drawn at the floor and is still the Follow's level for
 "seen". `TAGPU_ZOOM_FLOOR_LO` (1/64, Q16 1024) is the sanity bound on every level *value* — a
-packet's, a file's, a recording's, a command's — and the seven guards that once fell back to 1×
-below 0.05 now take it: the gather span (`tagpu_zoom_gather_span`), the scroll rate, the minimap
+packet's, a file's, a recording's, a command's — and these eight guards take it: the gather span (`tagpu_zoom_gather_span`), the scroll rate, the minimap
 box, the cursor transform's `view()`, vpwide's apply and `tagpu_vpwide_rect_at`, `cmd_valid` and
 the sweep's level. `tagpu_zoom_gather_span(v, z, floor)` takes a level below the floor at the
 floor's span (never the 1× one, which would cull a visible ring) and caps the span at
@@ -780,8 +779,11 @@ record's raw positions, Teleport ([units](../engine/units.html), *What bounds a 
 — and the widened rect lets a far unit into HotUnits. A wrapped corner makes a self-intersecting
 quad that `0x4C1320` can accept for a pointer elsewhere on the screen: a mis-pick or a wrong hover.
 So `tagpu_zoom_hit_guard` runs the engine's test only when (1) the model id `WORD [unit+0xA6]` is
-below `UNITINFOCount` (`main+0x1438F`) and `MODEL_PTRS` (`main+0x14377`) and its entry pass the
-pointer filter — the bound `model_root` uses; (2) `R`, the ceiling of the largest corner norm of
+not 0 and is below `UNITINFOCount` (`main+0x1438F`), and `MODEL_PTRS` (`main+0x14377`) and its
+entry pass the pointer filter — the bound `model_root` uses. Id 0 is no model: the load's fill loop
+starts at 1 (`mov esi,1` at `0x42D69E`, bounded at `0x42D6B6`) over a block `0x4D83B0` does not
+clear, so entry 0 is whatever the heap left there, and `GetUnitAtMouse` skips id 0 before its call
+(`0x48CE05`) [DISASSEMBLED]; (2) `R`, the ceiling of the largest corner norm of
 that root box in px plus 2, is at most 8191; (3) in 64-bit arithmetic, with px the 16.16 value
 shifted down 16 as the engine's `sar` does, `|x − eyeX| + R`, `|z − eyeY| + R` and `|alt| + R` are
 each at most 32 767. *Why it is a bound by construction* (the comment beside the guard carries the
@@ -790,9 +792,13 @@ whenever the true sum lies in int32, whatever the intermediates did; condition 3
 sum inside int16 on all three axes, and with the pointer inside the int16 rect and `R ≤ 8191` each
 of `0x4C1320`'s products stays under 1.7 × 10⁹ < 2³¹. "Not hit" is the only answer that names no
 wrong unit. `R` is cached per model id in a game-thread table built at a level's first in-play
-apply and cleared at its level end (`MODEL_PTRS` is written at the level load, `0x42D6AA`, and nulled
-only by the teardown, `0x42DCD8`); an id the table has no entry for is measured on the spot with the
-same `0x4CB650` call. `GetUnitAtMouse` runs on the game thread, the table's. *What it costs*: at 1×
+apply while the `0x48CE15` redirect is in, and stamped with the publisher's level serial
+(`tagpu_packet_pub_level_gen`), which moves at every level end whichever thread noticed it — a
+teardown seen off the game thread returns before `tagpu_zoom_level_end` runs, so the serial, not
+that call, is what retires a table. The guard reads the table only while its stamp is the current
+serial (`MODEL_PTRS` is written at the level load, `0x42D6AA`, and nulled only by the teardown,
+`0x42DCD8`); any other call is measured on the spot with the same `0x4CB650` call. The zoom floor's
+cache is keyed on the same serial. `GetUnitAtMouse` runs on the game thread, the table's. *What it costs*: at 1×
 nothing — every HotUnit is on a screen at most 16 384 px wide; below 1× a unit is unpickable (no
 hover, no click) only while it is more than about `32 767 − R` px from the eye or flying above about
 that, which the widened rect reaches only when the floor is bound by lparam (a super-ultrawide

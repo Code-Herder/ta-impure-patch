@@ -33,6 +33,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
+#include "tagpu_packet_pub.h" /* tagpu_packet_pub_level_gen: what the level caches key on */
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -1548,10 +1549,12 @@ static void release_follow(char* ta, const char* who)
    else 0.25. So the floor is a multiple of 1/65536, and every float compare
    against it, and its Q16 form in a recording, is exact. It FAILS CLOSED to
    0.25 where the viewport or the map cannot be read. Recomputed only when
-   one of its inputs moved (the true rect, the extent, the PLOT), and logged
+   one of its inputs moved (the true rect, the extent, the PLOT) or the
+   level did (the publisher's serial, which moves at every level end, even
+   one whose teardown skipped tagpu_zoom_level_end), and logged
    then: `zoom: floor` names the term that bound it. Game thread, from the
    apply at the top of every in-play draw, before the level is set. */
-static int s_floorKey[8], s_floorKeyOk;    /* game thread only */
+static int s_floorKey[9], s_floorKeyOk;    /* game thread only */
 
 static int floor_ok(int L, int T, int W, int H, unsigned q)
 {
@@ -1561,7 +1564,7 @@ static int floor_ok(int L, int T, int W, int H, unsigned q)
 
 static void floor_compute(const char* ta)
 {
-    int L, T, W, H, extW, extH, mapW, mapH, loX, hiX, loY, hiY, key[8];
+    int L, T, W, H, extW, extH, mapW, mapH, loX, hiX, loY, hiY, key[9];
     unsigned q = 16384u;
     float fit = 0.0f;
     const char* by;
@@ -1573,6 +1576,7 @@ static void floor_compute(const char* ta)
     mapH = plot_px(*(const int*)(ta + OFF_PLOT_R));
     key[0] = L; key[1] = T; key[2] = W; key[3] = H;
     key[4] = extW; key[5] = extH; key[6] = mapW; key[7] = mapH;
+    key[8] = (int)tagpu_packet_pub_level_gen();
     if (s_floorKeyOk && !memcmp(key, s_floorKey, sizeof key)) return;
     memcpy(s_floorKey, key, sizeof key);
     s_floorKeyOk = 1;
@@ -1646,9 +1650,14 @@ float tagpu_zoom_game_floor(void)
    redirects that call here with the widened rect (the rect is what lets a
    far unit into HotUnits). The engine's test runs only when
 
-     1. the model id `WORD [unit+0xA6]` is below UNITINFOCount main+0x1438F
-        and MODEL_PTRS main+0x14377 and its entry pass the pointer filter
-        -- the bound tagpu_native.c's model_root uses;
+     1. the model id `WORD [unit+0xA6]` is not 0 and is below UNITINFOCount
+        main+0x1438F, and MODEL_PTRS main+0x14377 and its entry pass the
+        pointer filter -- the bound tagpu_native.c's model_root uses. Id 0
+        is no model: the load's fill loop starts at 1 (`mov esi,1` at
+        `0x42D69E`, `cmp [UNITINFOCount],esi` at `0x42D6B6`) over a block
+        `0x4D83B0` does not clear, so entry 0 holds whatever the heap left
+        there, and GetUnitAtMouse itself skips id 0 before the call
+        (`0x48CE05`) [DISASSEMBLED];
      2. R, the ceiling of the largest norm over the eight corners of that
         root box, in px, plus 2, is at most 8191;
      3. in 64-bit arithmetic, with px the 16.16 value shifted down 16
@@ -1682,13 +1691,17 @@ float tagpu_zoom_game_floor(void)
    bound by lparam (super-ultrawide), or an aircraft tens of thousands of px
    up. Counted: `zoom: hit guard` in the log, at most once a second.
 
-   R IS CACHED PER MODEL ID, built at the first in-play apply of a level and
-   cleared at its end (tagpu_zoom_level_end): MODEL_PTRS is written at the
-   level load (`0x42D6AA`) and nulled only by the teardown (`0x42DCD8`), so
-   the models the table was measured from outlive it, and a table that is
-   not built -- a publisher that applies nothing has no level end to clear it
-   either -- measures every call on the spot with the same `0x4CB650` call,
-   correct and only slower. GetUnitAtMouse runs on the game thread, the
+   R IS CACHED PER MODEL ID, KEYED ON THE LEVEL: the table is built at the
+   first in-play apply of a level, while the 0x48CE15 redirect is in, and is
+   stamped with the publisher's level serial (tagpu_packet_pub_level_gen),
+   which moves at every level end whichever thread noticed it -- including a
+   teardown seen off the game thread, which returns before
+   tagpu_zoom_level_end runs. The guard reads the table only while its stamp
+   is the current serial. MODEL_PTRS is written at the level load (`0x42D6AA`)
+   and nulled only by the teardown (`0x42DCD8`), so the models a table of the
+   current level was measured from outlive it; any other call -- no table,
+   or one of an older level -- measures on the spot with the same `0x4CB650`
+   call, correct and only slower. GetUnitAtMouse runs on the game thread, the
    table's thread. */
 #define VA_HITTEST       0x0048C6A0u   /* stdcall(unit, point), ret 8           */
 #define VA_MODELBOX      0x004CB650u   /* stdcall(model, min*, max*, flag), ret 0x10 */
@@ -1705,9 +1718,10 @@ float tagpu_zoom_game_floor(void)
 typedef int  (__stdcall *PFN_HITTEST)(const char* unit, const int* point);
 typedef void (__stdcall *PFN_MODELBOX)(const void* model, int* mn, int* mx, int flag);
 
-/* game thread only: R per model id, 0 = not measured */
+/* game thread only: R per model id, 0 = not measured, of the level whose
+   serial + 1 is s_hitGen (0: no table) */
 static unsigned short s_hitR[HIT_MODELS];
-static int      s_hitBuilt;
+static unsigned s_hitGen;
 static unsigned s_hitRefused;
 
 static int model_ptr_ok(const void* p)
@@ -1716,7 +1730,7 @@ static int model_ptr_ok(const void* p)
 }
 
 /* R of model `m` in px, HIT_R_TOO_BIG above HIT_R_MAX, 0 when there is no
-   model to measure. `m` is below UNITINFOCount (the caller's bound). */
+   model to measure. `m` is in [1, UNITINFOCount) (the caller's bound). */
 static unsigned hit_measure(const char* ta, unsigned m)
 {
     const void* const* ptrs = *(const void* const* const*)(ta + OFF_MODELPTRS);
@@ -1744,12 +1758,14 @@ static unsigned hit_model_count(const char* ta)
     return n <= HIT_MODELS ? n : 0u;
 }
 
-/* The table, once a level: from the level's first in-play apply. */
-static void hit_table_build(const char* ta)
+/* The table of the level whose serial is `gen`, from its first in-play
+   apply. Entry 0 stays 0: id 0 is no model. */
+static void hit_table_build(const char* ta, unsigned gen)
 {
     unsigned n = hit_model_count(ta), m;
-    for (m = 0; m < n; m++) s_hitR[m] = (unsigned short)hit_measure(ta, m);
-    s_hitBuilt = 1;
+    memset(s_hitR, 0, sizeof s_hitR);
+    for (m = 1; m < n; m++) s_hitR[m] = (unsigned short)hit_measure(ta, m);
+    s_hitGen = gen + 1u;
 }
 
 /* Condition 3: the 16.16 value's px (floored, the engine's `sar`) less `eye`,
@@ -1768,8 +1784,8 @@ int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
     if (ta_ok(ta) && model_ptr_ok(unit)) {
         m = *(const unsigned short*)(unit + U_MODELID);
         n = hit_model_count(ta);
-        if (m < n) {
-            r = s_hitBuilt ? s_hitR[m] : 0u;
+        if (m != 0 && m < n) {
+            r = s_hitGen == tagpu_packet_pub_level_gen() + 1u ? s_hitR[m] : 0u;
             if (!r) r = hit_measure(ta, m);
         }
         if (r && r <= HIT_R_MAX &&
@@ -1897,7 +1913,10 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        back at the next draw. */
     s_applyLive = 1;
     floor_compute(ta);
-    if (!s_hitBuilt) hit_table_build(ta);
+    {
+        unsigned gen = tagpu_packet_pub_level_gen();
+        if (tagpu_vpwide_mouse_world_live() && s_hitGen != gen + 1u) hit_table_build(ta, gen);
+    }
     s_gLevel  = c ? c->zoom : 1.0f;
     s_gLive   = c ? (int)c->live : 0;
     /* THE LEVEL AT OR ABOVE THIS THREAD'S FLOOR: the render thread's floor is
@@ -2074,10 +2093,9 @@ void tagpu_zoom_level_end(char* ta)
        own */
     s_gFloor = s_gReach = TAGPU_ZOOM_FLOOR_HI;
     s_floorKeyOk = 0;
-    /* the hit guard's radii are this level's models': the next level measures
-       its own (on the spot until its first apply builds the table) */
-    s_hitBuilt = 0;
-    memset(s_hitR, 0, sizeof s_hitR);
+    /* the hit guard's radii are this level's models': the serial has moved,
+       so the table is no longer read, and the next level's first apply
+       builds its own */
     /* a new epoch: nothing owed to the old level survives into the next */
     s_epoch++;
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
