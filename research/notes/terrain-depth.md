@@ -629,11 +629,11 @@ copy is keyed on the packet's `level_gen`; a copy of other dimensions is re-made
 
 **Every term is an exact integer in float**, so position, UV and world point are bit
 for bit the floats a CPU would compute: a grid column or row is under
-`TAGPU_TERR_MAX_SIDE` (2052), a map cell under 2048, an atlas column under 64 and an
+`TAGPU_TERR_MAX_SIDE` (2050), a map cell under 2048, an atlas column under 64 and an
 atlas row under 1024. The bound on the grid is a refusal, not a hope: the native pass
 clamps the rect every pass gathers over to `TAGPU_GATHER_SPAN_MAX` (65 536 world px a
-side, `tagpu_terr.h`), the gather bails on a side past 2052, and `tagpu_vk_terr.c`
-refuses a grid outside `[1, 2052]`, a tile map past 2048 a side and an area that is not
+side, `tagpu_terr.h`), the gather bails on a side past 2050, and `tagpu_vk_terr.c`
+refuses a grid outside `[1, 2050]`, a tile map past 2048 a side and an area that is not
 inside the tile map. That last one is what keeps every `texelFetch` inside its image:
 the fetched cell is on the map inside the area, or `tagpu_edge_reflect`'s answer in
 `[0, area)`. What crosses from the gather to the draw a frame is therefore the grid's
