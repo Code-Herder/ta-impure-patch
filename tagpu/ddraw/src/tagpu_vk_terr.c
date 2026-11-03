@@ -1768,9 +1768,9 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            its source scope is the FRAGMENT stage, and a source stage mask
            takes in every logically earlier stage, the vertex stage among them,
            which is all a write-after-read needs. What the stage's barrier does
-           not give is the other direction -- it makes the copy visible to the
-           FRAGMENT stage only -- so `s_vsOwed` owes the vertex stage its own,
-           recorded below on the frame that draws. */
+           not give is the other direction -- it makes the copy and its layout
+           transition visible to the FRAGMENT stage only -- so `s_vsOwed` owes
+           the vertex stage its own, recorded below on the frame that draws. */
         if (doMap) {
             rc = tagpu_vk_stage_copy(d, cb, &s->stage, s_tmap.img, s_tmap.have,
                                      (const unsigned char*)t.tileMap, t.mapW * 2, t.mapW, t.mapH, 2);
@@ -1808,13 +1808,20 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        each of those copies visible to every vertex stage that follows, this
        frame's and every later frame's, on any slot. Owed until recorded:
        a copy made on a frame that then returned without drawing is covered
-       by the next frame that draws. */
+       by the next frame that draws.
+       ITS SOURCE STAGES ARE TRANSFER AND FRAGMENT. The copy's own barrier
+       (tagpu_vk_stage.c, barrier_out) carries the layout transition to
+       SHADER_READ_ONLY_OPTIMAL, and a transition is ordered only before that
+       barrier's second scope, the FRAGMENT stage. TRANSFER alone orders the
+       vertex stage after the copy but not after the transition; FRAGMENT in
+       this first scope chains through barrier_out's second, so the vertex
+       stage's texelFetch also follows the transition. */
     if (s_vsOwed) {
         VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
-                             0, 1, &mb, 0, NULL, 0, NULL);
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
         s_vsOwed = 0;
     }
 
