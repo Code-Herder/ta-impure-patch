@@ -222,6 +222,34 @@ is per-frame working copies, not information, so the landing is split to remove 
    *Verified*: wheel to the whole map on Seven Islands at 1024×768 and 4K; click and band-box
    selection and a move order at that level; `tagpu_fogwide_check.on` `differ=0`; frame and tick
    time at the floor. Sim-adjacent if the fog grid changes → review at `high`.
+M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 the terrain and M2
+   the features. *Built 2026-11-03 on its worktree; the in-game checks are open.* The spec is
+   `.data/mega-map/mipmaps-spec.md` in the main checkout. Each terrain atlas, base and restored, has
+   a separate 5-level RGBA8 chain image, one 16-texel cell per tile on the atlas's own grid; the
+   features cut every GAF frame into 32 × 32 tiles from its own origin and give each a cell of two
+   shared 64 × 128-cell chains, base and twin, found through a per-slot table by the vertex's entry
+   index. The level is `⌈log₂ of the footprint⌉` on the extent the pass records into, and level 0
+   exactly when a texel covers a target pixel, so 1× and above draw what they drew without chains,
+   by construction ([terrain & depth](terrain-depth.html) §7.1, [features](features.html) §5). One
+   compute reducer builds every chain on the device ([modules/vulkan-backend](modules/vulkan-backend.html),
+   *The mip chains' reducer*); the restored terrain chain follows the job through a ledger that rests
+   on the neighbourhood queue being FIFO ([modules/restorer](modules/restorer.html) §2.103).
+   *Run offline*: the build's checks and `tools/replay/chain_test.py` (the reference against an
+   emulation of the shader, both lookups, the level rule). *Open*: the 1× and 0.5× A/B against a
+   build without chains, Classic and Classic++ (byte-identical expected); the change confined to the
+   terrain and feature captures at 0.25×; `tagpu_chaincheck.on` across a reveal, a second map and
+   the per-tile fallback (every `differ` 0); the shimmer measure at the floor and at 0.125 against the
+   control; the `vk: VA` line, frame time and GPU time; the wiki stage's ground; the replay landing
+   gate. Not covered by the design: units and 3DO textures, effects, and the shimmer that is not
+   texture aliasing (Classic++ lighting from the height grid, the shadow PCF, the fog's cell edge).
+   Departures from the spec, as built: the oracle's counters are a pair per check (cells seen
+   beside the mismatches); chain images also carry TRANSFER_SRC (the oracle's copy); a refused
+   terrain chain size is latched until the atlas's size or the device changes; the feature chains
+   are made on the first hand-over with atlas entries; the feature twin's chain is never cleared,
+   only left undrawn until it is reduced for the current job; the table and rects go through the
+   slot's staging in the frame (`tagpu_vk_stage_take`) and a frame that cannot fit them draws level
+   0; binding 43 names the slot's fog image until the table is written; and the counters are a
+   16-byte mapped buffer a slot, new mapped memory where the spec had none.
 2. **The mega map binding.** A modifier bit in the notch slot; Ctrl+wheel back engages, wheel
    forward leaves at the pointer at the remembered level; legacy controls as an `impure.cfg` key
    and a menu row. Replay Follow and the file lever keep their priority.

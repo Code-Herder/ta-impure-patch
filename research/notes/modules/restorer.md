@@ -241,6 +241,42 @@ off allocates none), the terrain restores per tile as in §2.102, on tiny.
 `tagpu_restorefault.on`'s `nbfit` drives the first, `nballoc` the second on the first map after
 the pass comes up.
 
+**The restored chain and its ledger** (`tagpu_vk_terr.c` `chain_maintain`). Below a texel a target
+pixel the terrain reads a 5-level mip chain of the restored atlas, per tile or per key
+([terrain & depth](../terrain-depth.html) §7.1), kept equal cell by cell to what the job has painted.
+After `chain_maintain` the chain is the reduction of level 0 as the previous frame's slice left it:
+this frame's slice runs after every `prepare` (`tagpu_vk.c`), so the chain trails level 0 by one
+slice — an ordering, not a race — and a cell not reduced yet shows its base chain for that frame.
+Three facts make it hold:
+
+- **(a) A new terrain job starts from a cleared destination**: every terrain job is made with
+  `repaint` 0, and `dst_ready` clears the image at the job's first OUT. So on a new job (`s_rjGen`,
+  which every terrain job made moves) the chain is cleared while `painted` is 0 and reduced whole
+  once anything is painted.
+- **(b) The neighbourhood queue is FIFO** (*The feed* above: one size class, and `form_batch`
+  takes the head's class in queue order). So `painted = P` means places `[0, P)` are painted, and
+  the ledger reduces only the keys of the places painted since its last frame — `s_nbAt[place]`,
+  the inverse of the feed's place map, in pushes of 24 cells. A count past what was queued is data
+  that does not hold: it is said once (`terr: the restored chain's ledger cannot follow the queue
+  …`) and the whole chain is reduced.
+- **(c) Per-tile frames are not FIFO** (two size classes, wrapping and not), so that chain is
+  reduced whole whenever `painted` moves, which happens only during its one-shot list.
+
+**If neighbourhood frames ever get a second size class, (b) fails**, and the chain oracle's
+`rest gpu-differ` names it (`tagpu_chaincheck.on`). `painted` is the job's count while the picture
+stands (`s_rgbAtlas.have`) and 0 otherwise; a job given up keeps its last count, so its last
+slice's paints are still reduced. The ledger runs in the pass's `prepare`, never as a callback in
+the restorer's slice: a crash inside `tagpu_vk_restore_step` is blamed on the restorer and turns it
+off for the driver (§2.102). `uRestChain` is 1 only while the chain is laid out, holds this job's
+ledger (`gen == s_rjGen`) and has the restored atlas's grid. The chain — 29.5 % of the atlas it
+follows, about 57 MiB on Two Continents — asks D10's rule before it is made; a refusal (`terr: the
+restored chain does not fit: <why> - the far zoom draws the base chain under Classic++`, latched for
+that size) leaves the base chain below a texel a target pixel and level 0 untouched. The feed's
+done line says what the ledger did for the job: `terr: every neighbourhood painted here - N keys,
+M ms since the job began, chain reduced K keys in D pushes`. The feature pass's twin has a chain
+too, reduced whole whenever the job, its painted count or the atlas's allocation moves, and not
+drawn until it has been reduced for the current job ([features](../features.html) §5).
+
 **The self-test** gains a neighbourhood probe on tiny: nine frames over a 3 × 3 map, checked
 against one reflect-padded restore of the whole map on the CPU (22,696 bytes within 0 levels).
 

@@ -363,9 +363,17 @@ of ours draws, no golden source is captured, and every `tacli` verb except `eye`
 | `devres.on` | the world at the device's resolution: `ss` follows `ceil(k)` (`references/ui-layer.md`) |
 | `fps.on` | the frame-rate readout (the lever over the FPS counter row), drawn from TA's own glyphs; needs the font the packet carries, which `markown` produces — with only `fps.on` armed the packet reads `font=0/0B` and the readout draws nothing |
 | `scaffold.on` | the scene-depth scaffold overlay; a debug instrument that tints every tall feature purple. Not in the arm set |
+| `chaincheck.on` | live, re-read every 120 frames: the mip chains' oracle, in the game's world only (never the wiki's stage). Every 120 frames each pass checks every cell of its chains on the GPU and 16 base cells, every level, against the C reference: `vk: terr: chain check: base cells=16 cpu-differ=N gpu-differ=N/S | rest gpu-differ=N/S job=G painted=P mode=nbhd|tile` (or `| rest none`) and `vk: feat: chain check: base slots=16 cpu-differ=N gpu-differ=N (seen S) | twin gpu-differ=N (seen S), cells=C overflow=K` (or `twin gpu-differ=none`). Every `differ` must read 0; `S` is the cells checked; `cpu-differ=skipped` means the atlas, palette or allocation moved since the copy, `outside` a cell past the hand-over's atlas. The terrain's `rest gpu-differ` can read non-zero for a check when a restore job restarts on the same request. Below a texel a target pixel (zoom × ss < 1) the terrain and features draw from these chains |
 | `tagpu_<pass>.ab` | a one-frame capture of the presented frame as `tagpu_<pass>_vk.ppm` — `references/measuring.md` |
 
 Read `tacli log <i> -g '^vk:'` for the window, the device, the swapchain and the census.
+**The mip chains say once per device** if the device will not reduce: `vk: chains off: <reason> -
+the far zoom draws the atlases at level 0` (then every zoom draws level 0 and shimmers below
+`1/ss`). On a map they log `vk: terr: chain base WxH (5 levels) reduced, N cells, atlas serial S`
+once per map and palette move, `vk: terr: chain rest WxH cleared|reduced whole N cells, job G` per
+restore job, `vk: terr: the restored chain does not fit: … - the far zoom draws the base chain
+under Classic++` when D10 refuses it, and `vk: feat: chain cells laid out for atlas generation G
+(repack R) - N entries, C of 8192 cells, overflow=K` per atlas layout; `overflow=` should read 0.
 **An in-process map change brings the whole lane down and back up** (`vk: render thread stopping
 - down`, then a fresh `vk: swapchain`): a second map is a fresh lane, its atlases rebuilt at
 that map's size.
@@ -424,6 +432,7 @@ that map's size.
 | `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog=WxH out= held=N/Mpx paused= back= nopieces=` | 300 | `out`, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; `fog=` is the fog source's size and the rest the reach bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
+| `vk: terr: chain check: …`, `vk: feat: chain check: …` (`chaincheck.on`) | 120 render frames | `cpu-differ`, `gpu-differ`, `rest gpu-differ`, `twin gpu-differ` | the lines are in *The Vulkan lane*; `skipped` and `none` are not failures |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |
 | `surf: golden source WxH on the GAME thread -- captured= unchanged= refused= …` | 300 captures | `refused` | `us avg=` is the game-thread cost (55–58 µs at 1024x768) |
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps= hud=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down; `hud=1` while the replay HUD draws |
