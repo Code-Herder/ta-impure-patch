@@ -80,8 +80,8 @@
    `+0x37E1F`/`+0x37E23` — fields we never write — and W/H are checked against
    that every frame and put back when they disagree.
 
-   MP-safety is the `ScrollSpeed` argument unchanged: the viewport rect is
-   camera state that no other machine ever sees.
+   It is MP-safe: the viewport rect is camera state that no other machine
+   ever sees.
 
    Armed by `tagpu_vpwide.on` at DLL attach, like every other code-patching
    pass. Nothing is written to the rect unless the patches installed AND the

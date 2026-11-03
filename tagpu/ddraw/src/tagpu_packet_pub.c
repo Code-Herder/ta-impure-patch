@@ -23,7 +23,7 @@
                record the render thread posted is taken and applied on
                this thread — the camera range (centred while the ground
                is ours), the zoom level (the addressable rect, the minimap
-               box, ScrollSpeed), the cursor anchor's eye
+               box, the scroll step), the cursor anchor's eye
                delta, the camera hold, the follow release — so the frame
                the engine is about to draw, its fog rebuild and its minimap
                box all see the commanded camera (tagpu_zoom_apply,
@@ -3121,8 +3121,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     /* the level's camera state is handed back here, on the game thread, before
        the shell draws: the engine's own range flag, viewport rect and scroll
        rate — no in-play draw will apply a command until the next level's
-       first one, and the shell must not inherit a widened rect or a scaled
-       ScrollSpeed (its options screen shows that byte) */
+       first one, and the shell must not inherit a widened rect */
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
         tagpu_resource_level_end();
