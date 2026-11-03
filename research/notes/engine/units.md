@@ -70,6 +70,18 @@ remote human, remote AI. `0x48664B..0x486660` tests the dword and then 1 and 2 f
 (`cmp dword [eax],ebp`, `mov cl,[eax+0x73]`); `0x489C99` compares 3 and `0x428446` compares 4; the string's one other reference, `0x431B73`, is outside the FBI reader and
 was not followed.
 
+**The other FBI tags a type is classed by**, each read by the FBI reader `0x42BF40` with
+`0x4C46C0`, masked to one bit and merged into its word [DISASSEMBLED 2026-11-03]: `bmcode` → the
+byte `+0x22F` (`0x42C402..0x42C422`; 0 = the type cannot move); `builder` → `+0x241` bit `0x40`
+(`0x42C4B2..0x42C4DD`); `isairbase` → `+0x241` bit `0x200` (`0x42C5CB..0x42C5FC`); `hidedamage` →
+`+0x241` bit `0x4000` (`0x42C643..0x42C66A`); `canfly` → `+0x241` bit `0x800`
+(`0x42C6E1..0x42C70C`); `showplayername` → `+0x245` bit `0x20000` (`0x42CB50..0x42CB82`). The
+strategic icons class every type from these, the name `+0x20`, the three weapon pointers
+`+0x1EE`/`+0x1F2`/`+0x1F6` and the sides' commander names `main+0x37F5F + 0x232·s` for
+`s < min([main+0x37F39], 5)` — the side count the sidedata loader `0x431A60` stores at `0x4324FB`,
+and the five records its free loop `0x431A20` walks (`0x431A4A..0x431A56`)
+([strategic icons](../modules/icons.html), *The class rule*).
+
 **Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
 count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,
 after which `0x485502` allocates the array too small). These places write it:
@@ -1087,7 +1099,10 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   unit-array allocation `0x4854A0` as `20 · MaxUnits` bytes — ten `u16` slots per
   `MaxUnits` (`main+0x37EE6`, `0x485568..0x48557D`), the unit array's own count, stored at
   `0x485596` — so it can hold every unit slot, and a rect widened to the whole map lists every
-  unit in it.
+  unit in it. The next allocation is the minimap's radar list `main+0x14363`, `100 · MaxUnits`
+  bytes of 10-byte entries (`0x485588..0x4855AA`), also one entry per slot ([ui](ui.html), *The
+  minimap, located*). A hit test that answers differently — the strategic icons' circle at
+  `0x48CE15` — changes what `0x48CD80` returns, not how many ids the list holds.
 - **The bar loop** `0x469C09..0x469D1F`, inside `DrawGameScreen 0x468CF0`, walks that list and
   never tests a slot's type. It draws a bar only when option-word bit 0 is set (damagebars,
   `0x469C97`) and the slot's owner record `+0x146` equals the viewed record (`0x46967D..0x469689`,

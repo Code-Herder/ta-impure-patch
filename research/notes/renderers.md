@@ -1344,6 +1344,9 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `placespacing` | none | `NAME:n,NAME:n`: the multi-building placement's spacing per building type, by its unit name (`ARMSOLAR:2`), `n` 1..16 empty cells between neighbouring sites; a type at 0 has no entry, at most 64 types, a name of `[A-Za-z0-9_-]` only. No row: Alt+Z / Alt+X with a building armed step it ([quality of life](tadr-port/quality-of-life.html#what-impure-does)) |
 | `wheel` | `zoom` | `zoom` or `megamap`: what the plain wheel does over the world; Ctrl+wheel does the other. `megamap` is TADR's binding. The *Mega map wheel* row (Ctrl+wheel / Wheel) in both panels; read at every notch ([camera and zoom](modules/camera-zoom.html) §2.3m) |
 | `replayhud` | 100 | 75, 100, 125 or 150: the replay HUD's own scale, in percent; one HUD unit is the screen height / 720 times it, whatever `hudscale` is ([The replay HUD in game](hud-in-game.html)). No settings row: the HUD's own scale button writes it, cycling the four |
+| `iconscale` | 100 | 75, 100, 125, 150 or 200: the strategic icons' size, percent of BAR's (`UnitIconScaleUI` 1.05) ([strategic icons](modules/icons.html)) |
+| `icondist` | 100 | 50, 75, 100, 150 or 200: the distance the icons take over at, percent of BAR's 3000 elmos; 200 = icons only from twice as far |
+| `iconfade` | 33 | 0, 33 or 67: the fade band, percent; 0 = BAR's hard switch, 67 = Recoil's own. 33 keeps 1× the stock frame on every frame up to about 2600 px tall. The three icon keys have no row (a panel that holds them must still fit 640×480), are read live by both threads, and under `tagpu_defaults.off` take these defaults |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's

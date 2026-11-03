@@ -253,8 +253,10 @@ and ARMCK's order chain read back after every step.
   `globals+0xC0`.
     - **Fog**, `0x466C20`: an unexplored cell takes GUI colour 0. An explored cell out of sight
       takes the 256-byte grey remap at `globals+0xCC` of its base pixel (`0x466D33..0x466D44`).
-    - **Dots**, `0x466DC0`: each unit gets a `radlogo` frame (its owner's PlayerInfo `+0x96`) from
-      `fx.GAF`, and the unit under the pointer also gets `radlogohigh` frame 0.
+    - **Dots**, `0x466DC0`: each unit with a model that is the viewed player's, a radar or sonar
+      contact, or seen with no LOS mode or as a watcher gets a `radlogo` frame (its owner's
+      PlayerInfo `+0x96`) from `fx.GAF`, and the unit under the pointer also gets `radlogohigh`
+      frame 0 (*The minimap, located*, below, has the rule and the radar list it fills).
     - **The camera box**, `0x466B70`, is drawn in GUI colour `0x0E` (`main+0xDD9`).
 - The top screen at (0, 128).
 
@@ -532,8 +534,11 @@ the grey remap, then the box shader at -20*), the frame is chosen at `0x4A6071..
 
 - **Not greyed and held:** the pressed word `+0x138` is nonzero, and the frame is base `+0x13B`
   plus it (`0x4A6110..0x4A614B`).
-- **The lookup.** `0x4B7F30(seq, frame)`, called at `0x4A616D`, answers NULL past the sequence's
-  count, and the test `0x4A6172..0x4A6176` then skips the blit. So a held button whose picture has one frame draws
+- **The lookup.** `0x4B7F30(seq, frame)` (stdcall, `ret 8`) returns `*(frame**)(seq + 0x28 +
+  frame · 8)`, and NULL for a negative frame or one at or past the WORD count at `seq + 0`
+  (`0x4B7F30..0x4B7F51`) [DISASSEMBLED 2026-11-03]. Its NULL test of `seq` (`0x4B7F48`) comes after
+  it has read that count (`0x4B7F41`), so a NULL sequence faults rather than answering NULL. Called
+  at `0x4A616D`, it answers NULL past the sequence's count, and the test `0x4A6172..0x4A6176` then skips the blit. So a held button whose picture has one frame draws
   no picture, and the panel under it shows. In the six setups only `IGPATCH` has one frame.
 - **The hotspot.** The blit adds the frame's hotspot back before CopyGafToContext subtracts it
   (`0x4A6188..0x4A61BE`), so a button's frame lands with its top left on the gadget's. Retail's
@@ -2296,7 +2301,36 @@ callers `0x465072`, `0x48191F`). **Of those three writers only `0x4B7F90` is an 
 they draw still reaches the twin, but only because the base copy at the head of `0x466DC0` reads
 `+0x142DF`, which no observed leaf writes and which is therefore never seeded — so that copy
 publishes as a pixel op carrying `+0x142DB`'s final bytes, arcs and points included. The
-correctness depends on `+0x142DF` staying unseeded ([GL UI renderer](../gui-renderer.html) §7). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
+correctness depends on `+0x142DF` staying unseeded ([GL UI renderer](../gui-renderer.html) §7).
+
+**The dots and the radar list, `0x466DC0`** [DISASSEMBLED 2026-11-03, `objdump` of
+`pristine/TotalA.exe.pristine`]. It zeroes the count `main+0x1436B` (`0x466DDA`) and walks the
+unit array `[main+0x14357, main+0x1435B]` (inclusive, stride `0x118`). A unit gets a dot when its
+model `+0xA6` is not 0 (`0x466E4E`) **and** one of: no LOS mode (`main+0x14281 & 3` clear,
+`0x466E14..0x466E1D`), the watcher bit 9 of `main+0x37F2F` (`0x466E23..0x466E32`), a radar or
+sonar contact (`+0x110 & 0x300`, `0x466E64..0x466E6A`), or an owner byte `+0xFF` equal to the
+viewed record `main+0x2A43` (`0x466E6F..0x466E7D`). The dot is frame PlayerInfo `+0x96` (the
+owner's logo colour) of `radlogo` `main+0x147DF`, fetched by `0x4B7F30` at `0x466EFB` and blitted
+by `0x4B7F90`; the unit whose `+0xA8` equals the hovered id `main+0x2CBA` also gets frame 0 of
+`radlogohigh` `main+0x147E3` (`0x466F11..0x466F37`). Each dot is appended to the **radar list**
+`main+0x14363` as a 10-byte entry `{u16 id +0xA8, i32 x, i32 y}` in minimap pixels, the offsets
+`+0x142E7`/`+0x142E9` added (`0x46713B..0x467180`). The list is allocated per level beside
+HotUnits, `100 · MaxUnits` bytes — `10 · MaxUnits` entries — at `0x4855AA` in `0x4854A0`, and
+freed and nulled by `0x485980` (`0x4859BC..0x4859D4`). Its only other reader is
+`GetUnitAtMouse`'s minimap branch ([input](input.html), the `0x48CD80` row), and `radlogo`'s only
+reads are the two in this function (both fields are written once a process by `0x429870`,
+[weapons](weapons.html), *The effect GAF sequences are a SESSION asset*). **So stock draws a radar
+contact on the minimap alone**: the world view's unit sweep walks HotUnits, which lists only the
+viewed player's units and those `0x465AC0` says are in LOS ([units](units.html), *The draw's unit
+list*). **The team colour is the frame's hotspot texel** [MEASURED 2026-11-03 on the retail
+`anims\fx.GAF`, a scratchpad read through `tools/wiki/gfx.py`]: ten `radlogo` frames, each 4 × 4
+with hotspot (1, 1) and key 9, a 2 × 2 centre of one colour in a ring — centres 227, 212, 255, 235,
+108, 218, 208, 245, 131, 67, rings 89 (frame 7: 86); `radlogohigh` frame 0 is 6 × 6, hotspot
+(2, 2), a ring of 81. The colours in TADR's commented-out switch beside `PlayerDotColor`
+(`vendor/TADR/src/DDraw/UnitMinimap.cpp`) differ from these in four places, so a reader takes the
+colour from the frame, never from a table.
+
+**Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
 prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
 `0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
 `0x4BF8C0(ctx, main+0x142CB, colour)` at `0x466B5E`; **that colour is the BYTE at `main+0xDD9`,
