@@ -97,6 +97,7 @@
 #include "tagpu_recpov.h"   /* REC_CLICK_SHOW: how long a recorded click's ring lasts */
 #include "tagpu_icontype.h" /* the icons' art atlas */
 #include "tagpu_icon_rule.h" /* the icons' generated shapes, TAGPU_GLSL_ICON_FN */
+#include "tagpu_icon.h"      /* the icons this frame queued, and the models they hide */
 #include "tagpu_log.h"
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -783,6 +784,11 @@ static void put_outline(float* base, int* nv, int l, int t, int r, int b, int co
    bar gate below has no such test: the engine's own pair goes to the reference
    surface, not the screen, so it is not a second, differently placed one.
    `passive` is, because that lever's whole job is to hand the draw back. */
+int tagpu_mark_draws(void)
+{
+    return s_armed == 1 && !s_passive;
+}
+
 int tagpu_mark_cursor_ours(void)
 {
     return s_armed == 1 && s_cursor && !s_passive;
@@ -1434,6 +1440,9 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     /* the lines of a frame the A/B may claim, kept before the clip for the
        oracle; the claim in tagpu_mark_render writes them */
     tagpu_line_ab_begin(&s_lab, s_ab && !s_abDone);
+    /* the strategic icons the unit gather queued, in BAR's order: they need
+       the zoom and the device grid latched above */
+    tagpu_icon_emit();
     /* first, and outside every gate below: neither the cursor nor the order
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
@@ -1471,6 +1480,9 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         float fpx, fpa, fpd;            /* world x, ALTITUDE, map depth        */
         float wx, wz;
         if (u->owner != (unsigned)watched) continue;
+        /* no model on screen, no bar and no digit: BAR fades both out where
+           its icons take over */
+        if (tagpu_icon_hides(ui)) continue;
 
         /* THE BAR SITS ON WHOEVER DREW THE BODY. That is the invariant, and it needs
            two branches because two different things draw units.

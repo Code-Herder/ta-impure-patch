@@ -41,6 +41,9 @@
 #include "tagpu_fx.h"
 
 int  tagpu_mark_armed(unsigned frame_counter);   /* re-reads tagpu_mark.on (30f) */
+/* 1 when this frame's markers are drawn by this pass: armed and not passive.
+   What draws the strategic icons, so the unit pass hides no model without it. */
+int  tagpu_mark_draws(void);
 
 /* Is the CURSOR LAYER ours this frame — the build placement square, the drag
    band box and the pointer? Exactly gather_cursor's own gate (the lever, its

@@ -83,6 +83,7 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
+#include "tagpu_icon.h"     /* the strategic icons: which unit is one, which model hides */
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_set_structshadow */
 #include "tagpu_posebake.h"
@@ -116,6 +117,8 @@
 #define ST_STRUCT    0x20000000u /* state bit: engine takes the cached-shadow */
                                  /* (nanoframe/structure) blit path          */
 #define ST_SONAR     0x200u    /* state bit: submerged enemy shown tinted    */
+#define ST_RADARSEEN 0x300u    /* state bits: a radar or sonar contact, the
+                                  minimap's dot test (0x466DC0)              */
 #define UD_DIGGER    0x40000000u /* FBI mask bit30: clip below ground level  */
 /* The per-unit composite's depth plane arrives as the packet's
    TAGPU_PK_U_DEPTHPLANE; its offsets (Object3do+0x10, GAFFrame+0x14) are in
@@ -2350,6 +2353,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int nu = 0, nwr = 0, nsel = 0;
     unsigned uiGates = pk->ui_gates;
     const TAGPU_PK_UNIT* pkUnits = tagpu_pk_units(pk);
+    /* THE STRATEGIC ICONS' DECISIONS for this frame, before the walk that reads
+       them (tagpu_icon.h): which unit is an icon, which model is hidden under
+       one. Only while this pass draws the units and the marker pass draws the
+       icons -- a model is never hidden under an icon nothing would draw. */
+    tagpu_icon_frame(pk, s_zoom, s_armed && markOn && tagpu_mark_draws());
     if (s_armed) {                 /* units are gathered only by the unit pass */
     for (unsigned pui = 0; pui < pk->n_units && (unsigned)nu < ucap; pui++) {
         const TAGPU_PK_UNIT* pu = &pkUnits[pui];
@@ -2358,7 +2366,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (!(pu->flags & TAGPU_PK_U_NATIVE)) continue;
         pc = tagpu_pk_pieces(pk, pu->piece_off, pu->piece_n);
         short wx = (short)(pu->pos[0] >> 16), wz = (short)(pu->pos[1] >> 16), wy = (short)(pu->pos[2] >> 16);
-        if (!pc) {
+        if (!pc && !(pu->flags & TAGPU_PK_U_INRECT)) {
             /* no pose to draw. A unit OUTSIDE the reach the packet was
                published over that lies inside this frame's slab is one the
                frame should have drawn — the reach covers every slab the reach
@@ -2366,17 +2374,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                centre (`out=`). One inside the reach with no pieces has none
                to carry (a model of 0 or more than TAGPU_PK_MAXPIECE) or lost
                them to a full arena, which the packet counts as a truncation. */
-            if (!(pu->flags & TAGPU_PK_U_INRECT)) {
-                int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
-                if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
-                    sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
-                    s_pendNoPieces++;
-            }
-            continue;
+            int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
+            if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
+                sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
+                s_pendNoPieces++;
         }
+        /* a unit with no pose can still be an icon: its anchor, the slab and
+           the gates below need only its position, its type and its owner */
+        if (!pc && !tagpu_icon_on()) continue;
         int ix = pu->pos[0], iz = pu->pos[1], iy = pu->pos[2];
         float fx = (float)ix / 65536.0f, fz = (float)iz / 65536.0f, fy = (float)iy / 65536.0f;
-        if (s_subpix) {
+        if (s_subpix && pc) {
             unsigned slot = pu->slot;
             if (slot < SPX_SLOTS) {
                 SPX* e = &s_spx[slot];
@@ -2404,22 +2412,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            is the slot number only in a game that never picked another */
         int team = pu->logo != TAGPU_PK_LOGO_NONE ? pu->logo : owner;
         int cloaked = (pu->cloak & 4) != 0;
-        if (cloaked && owner != watched) continue;    /* enemies never see cloak */
+        int refused = 0;
         /* NO SOURCE, NO FOREIGN UNITS. Fog is never off for a player -- an
            inactive mode is an all-zero source, not a missing one -- so a frame
            without the source cannot say where the watched player sees, and
            drawing every unit in the packet would reveal the whole map's
            armies. Only the watched player's own are drawn until a source
-           arrives. */
+           arrives -- and no radar dot either. */
         if (!s_fogHave && owner != watched) continue;
+        if (cloaked && owner != watched) refused = 1;   /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
-        if (fogMode & 1) {
+        else if (fogMode & 1) {
             int fog = tagpu_fog_at(&s_fogSrc, wx, wy - wz / 2);
-            if (fog & 1) continue;                    /* unexplored: black    */
+            if (fog & 1) refused = 1;                 /* unexplored: black    */
             /* grey shows terrain, never units — the engine draws no unit it
                cannot currently see. Our own stay: they are what makes LOS. */
-            if ((fog & 2) && owner != watched) continue;
+            else if ((fog & 2) && owner != watched) refused = 1;
         }
+        if (refused) {
+            /* A RADAR DOT is exactly the minimap's dot (0x466DC0) restricted to
+               the units this gather refuses: a radar or sonar contact
+               (`+0x110 & 0x300`) with a model. Under the icon distance rule, so
+               none at 1x; never pickable in the world view, as in stock. */
+            if ((st & ST_RADARSEEN) && pu->model_id) tagpu_icon_push(pui, pu, ax, ay, 0, 1);
+            continue;
+        }
+        /* THE ICON, and the model it may hide: cargo of a hidden unit is
+           neither; a unit past the rule's distance gets its class icon; one
+           whose model is smaller than that icon gets no NU at all -- no model,
+           no shadow, no selection rect (BAR draws no footprint for an icon). */
+        if (tagpu_icon_suppressed(pui)) continue;
+        if (tagpu_icon_alpha(pui))
+            tagpu_icon_push(pui, pu, ax, ay, (st & 0x10) && (uiGates & 4), 0);
+        if (tagpu_icon_hidden(pui)) continue;
+        if (!pc) continue;
         /* sub-pixel evidence: with tagpu_spxlog.on present, log the emitted
            anchor of every SELECTED unit each present frame (60 Hz numeric
            filmstrip: subpix on = smooth fractions between sim steps) */
