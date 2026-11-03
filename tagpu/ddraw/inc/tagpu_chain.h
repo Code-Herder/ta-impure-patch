@@ -29,6 +29,17 @@
 #define TAGPU_CHAIN_CELL   16       /* a cell's side at image level 0 (tile level 1)                  */
 #define TAGPU_CHAIN_TEXELS 341      /* 256 + 64 + 16 + 4 + 1: one cell's chain, every level           */
 
+/* THE FEATURE CHAINS (tagpu_vk_feat.c). A GAF frame of w x h has no implied place for a chain --
+   the feature atlas is a shelf atlas of frames of any size at any origin -- so it is cut, from its
+   own first texel, into ceil(w/32) x ceil(h/32) tiles, each clipped to the frame, and each tile
+   takes one cell of a chain image FCOLS x FROWS cells, given out in the atlas's entry order. A
+   level-L block measured from the frame's origin lies inside one such tile, because 2^L divides
+   32, so the tiles' chains are the frame's own and never touch another frame's texels. The
+   fragment stage's taFChain hard-codes the FCOLS of 64 as `& 63` and `>> 6`. */
+#define TAGPU_CHAIN_FCOLS  64
+#define TAGPU_CHAIN_FROWS  128
+#define TAGPU_CHAIN_FCELLS (TAGPU_CHAIN_FCOLS * TAGPU_CHAIN_FROWS)
+
 /* The level a frame draws at, 0..TAGPU_CHAIN_LEVELS: the finest whose texel covers at least one
    target pixel. `zoom` is the pass's uZoom, (gw, gh) the game frame its vertex stage divides by
    (uGame), (w, h) the extent the pass records into. See the proof at the definition. */
@@ -44,5 +55,11 @@ void tagpu_chain_ref(const unsigned char* rgba, int rowBytes, int sx, int sy, in
 /* The texel the terrain's fragment stage fetches (tagpu_terr.c `taChain`): level L (1..5), a
    sample at in-tile coordinate (px, py), cell (cx, cy); (*x, *y) at image level L-1. */
 void tagpu_chain_texel(int L, int cx, int cy, float px, float py, int* x, int* y);
+
+/* ...and its FRAME FORM, the texel the feature fragment stage fetches (tagpu_feat.c `taFChain`):
+   level L (1..5), the frame's table record rec = { x | y << 16, w | h << 16, its first cell, its
+   tiles across } (w, h >= 1), a sample at atlas UV (u, v) of a `dim`-square atlas; (*x, *y) at
+   image level L-1 of a chain TAGPU_CHAIN_FCOLS cells wide. */
+void tagpu_chain_ftexel(int L, const unsigned rec[4], float u, float v, int dim, int* x, int* y);
 
 #endif

@@ -382,8 +382,55 @@ static const char* FS =
     TAGPU_GLSL_EDGE_UNIFORMS
     "uniform int uClip;\n"            /* 1 while the mirror draws (below) */
     "uniform float uNudgeW;\n"        /* TAGPU_EDGE_NUDGE / zoom, world px  */
+    /* THE MIP CHAINS (inc/tagpu_chain.h), declared after everything above for the same reason:
+       the level this frame draws at (tagpu_chain_level, written at the pass's `record`), whether
+       the twin's chain is current, the per-entry table and the two chains (tagpu_vk_feat.c) */
+    "uniform int uLod;\n"
+    "uniform int uRestChain;\n"
+    "uniform usampler2D uFTab;\n"
+    "uniform sampler2D uFChainB;\n"
+    "uniform sampler2D uFChainR;\n"
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_EDGE_FN
+    /* AN ENTRY'S RECORD: x | y << 16, w | h << 16, its first chain cell (0xFFFFFFFF: none), its
+       tiles across. THE BOUND: e < 4096, the table's 64 x 64, by the caller's test. */
+    "uvec4 taFRec(int e){ return texelFetch(uFTab, ivec2(e & 63, e >> 6), 0); }\n"
+    /* A CHAIN TEXEL OF A FRAME. The sample's atlas texel -- the one NEAREST reads at level 0 --
+       is taken into the frame, its 32 x 32 tile names the cell, and q is the level texel that holds
+       it. Tile level L is image level L-1, `32 >> L` texels a cell side, cell c at
+       (c % 64, c / 64) of a chain 64 cells wide.
+       THE BOUND: ip is inside the frame, so tl is one of its tiles and c is below its first cell
+       plus its cell count, which the allocator keeps <= 8192, the chain's 64 x 128; q is inside
+       the tile's valid blocks (lim), so no level texel is read whose block holds no frame texel.
+       THE C MIRROR is tagpu_chain_ftexel (src/tagpu_chain_ref.c): EDIT BOTH OR NEITHER. */
+    "vec4 taFChain(sampler2D s, uvec4 r, vec2 uv){\n"
+    "  ivec2 o = ivec2(int(r.x & 0xFFFFu), int(r.x >> 16)), wh = ivec2(int(r.y & 0xFFFFu), int(r.y >> 16));\n"
+    "  ivec2 ip = clamp(ivec2(floor(uv * vec2(textureSize(uBase, 0)))) - o, ivec2(0), wh - 1);\n"
+    "  ivec2 tl = ip >> 5;\n"
+    "  int c = int(r.z) + tl.y * int(r.w) + tl.x;\n"
+    "  int n = 32 >> uLod;\n"
+    "  ivec2 lim = (min(wh - tl * 32, ivec2(32)) + (1 << uLod) - 1) >> uLod;\n"
+    "  ivec2 q = min((ip & 31) >> uLod, lim - 1);\n"
+    "  return texelFetch(s, ivec2(c & 63, c >> 6) * n + q, uLod - 1);\n"
+    "}\n"
+    /* BELOW A TEXEL A TARGET PIXEL (uLod >= 1): the base and the twin of the quad's entry, from
+       its chains -- the twin's alpha is its level 0's restored mark reduced, so a texel is
+       restored or not as level 0 picks, and the base's is the frame's coverage there, so the hole
+       is the majority's. An entry with no cells (`ent` 0, past the table, or refused by the
+       allocator) reads level 0 instead, through textureLod at 0: the texel texture() gives under
+       this NEAREST sampler with maxLod 0, without implicit derivatives in a branch on the
+       entry. */
+    "void taFLevel(out vec4 b, out vec4 t){\n"
+    "  int e = int(vCM.x + 0.5) - 1;\n"
+    "  uvec4 r = (e >= 0 && e < 4096) ? taFRec(e) : uvec4(0u, 0u, 0xFFFFFFFFu, 0u);\n"
+    "  if (r.z == 0xFFFFFFFFu) {\n"
+    "    b = textureLod(uBase, vUV, 0.0);\n"
+    "    t = uRestored == 1 ? textureLod(uAtlasRGB, vUV, 0.0) : vec4(0.0);\n"
+    "  } else {\n"
+    "    b = taFChain(uFChainB, r, vUV);\n"
+    "    t = uRestChain == 1 ? taFChain(uFChainR, r, vUV) : vec4(0.0);\n"
+    "  }\n"
+    "}\n"
     "void main(){\n"
     "  int m = int(vCM.y + 0.5);\n"
     /* THE FOLDS ARE THE GROUND'S, AND SO IS EVERY SAMPLE ON ONE. The terrain
@@ -420,9 +467,15 @@ static const char* FS =
     "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
     "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
     "    if (s.x < x0 || s.x >= x0 + uMapPx.x) discard;\n"
-    "    vec4 mb = texture(uBase, vUV);\n"
-    "    if (mb.a < 0.5) discard;\n"
-    "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    vec4 mb, mt;\n"
+    "    if (uLod == 0) {\n"
+    "      mb = texture(uBase, vUV);\n"
+    "      if (mb.a < 0.5) discard;\n"
+    "      mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    } else {\n"
+    "      taFLevel(mb, mt);\n"
+    "      if (mb.a < 0.5) discard;\n"
+    "    }\n"
     "    float ma = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     "    frag = vec4(taEdge(mt.a > 0.5 ? mt.rgb : mb.rgb, vWorld) * ma, ma);\n"
     "    return;\n"
@@ -445,12 +498,21 @@ static const char* FS =
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
-    "  vec4 b = texture(uBase, vUV);\n"
+    /* uLod 0 is the atlases exactly as at 1x -- the same statements on the same inputs -- and the
+       branch is on a uniform, so texture()'s implicit derivatives stay in uniform control flow */
+    "  vec4 b, t;\n"
+    "  if (uLod == 0) {\n"
+    "    b = texture(uBase, vUV);\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
        the depth buffer too -- a tree occludes only where it has pixels. The
        base's alpha is 0 exactly where the frame's index is its key (NEAREST,
        the texel the index was) */
-    "  if (b.a < 0.5) discard;\n"
+    "    if (b.a < 0.5) discard;\n"
+    "    t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  } else {\n"
+    "    taFLevel(b, t);\n"
+    "    if (b.a < 0.5) discard;\n"
+    "  }\n"
     "  float a = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     /* the twin's colour where the lazy restore has painted it (alpha 1 --
        tagpu_gaf.h), the base atlas's otherwise -- always, under Classic --
@@ -458,7 +520,6 @@ static const char* FS =
        its own; the lab's lambertAt -- a tree on a shaded slope sits in the
        shade rather than on top of it; 1.0 under `light=0`), then the grey band
        as the RGB rule (renderers.md 2.6). Premultiplied. */
-    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
     "  vec3 c = t.a > 0.5 ? t.rgb : b.rgb;\n"
     "  c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
@@ -582,7 +643,12 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
         /* a deferral is not a failure: the anchor's rollback counts it */
         if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
     }
-    c = (float)e->ck / 255.0f;
+    /* `ent`: the entry's index + 1 (tagpu_feat.h), below ATLAS_MAX because `e` is one of
+       s_atlasEnts' first `n` */
+    {
+        const ptrdiff_t ei = e - s_atlas.ents;
+        c = (ei >= 0 && ei < s_atlas.n) ? (float)(ei + 1) : 0.0f;
+    }
     ua = flip ? e->u1 : e->u0;
     ub = flip ? e->u0 : e->u1;
     /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
@@ -1570,6 +1636,9 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     tagpu_feat_atlas_hand(&s_pub);
+    /* the entries the vertices' `ent` indexes, as they stand after this gather */
+    s_pub.ents = s_atlas.ents; s_pub.nEnts = s_atlas.n;
+    s_pub.entsGen = s_atlas.gen; s_pub.entsRepacks = s_atlas.repacks;
     /* THE REQUEST, NOT THE PICTURE: the restored twin's texels are never
        read back (tagpu_gaf.h), so the list is the only restore route this
        hand-over carries. */

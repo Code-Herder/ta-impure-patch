@@ -35,7 +35,7 @@ DFNS(DECL)
 
 /* the push constants, field for field TAGPU_CHAIN_COMMON_CS's: 128 bytes */
 typedef struct {
-    int32_t  first, count, list, cols, pitch, border, check, spare;
+    int32_t  first, count, list, cols, pitch, border, check, table;
     uint32_t cell[24];
 } PUSH;
 typedef char chain_push_is_128[sizeof(PUSH) == 128 ? 1 : -1];
@@ -86,7 +86,7 @@ static const char* build(const TAGPU_VKPASS* d)
     VkQueueFamilyProperties qp[16];
     uint32_t nq = 16, i;
     VkFormatProperties fp;
-    VkDescriptorSetLayoutBinding b[7];
+    VkDescriptorSetLayoutBinding b[8];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPushConstantRange pr;
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
@@ -107,15 +107,15 @@ static const char* build(const TAGPU_VKPASS* d)
         return "R8G8B8A8_UNORM is not a storage image here, which the specification requires";
 
     memset(b, 0, sizeof b);
-    for (i = 0; i < 7; i++) {
+    for (i = 0; i < 8; i++) {
         b[i].binding = i;
         b[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-                            : i == 6 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                            : i >= 6 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                      : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    dli.bindingCount = 7; dli.pBindings = b;
+    dli.bindingCount = 8; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS)
         return "the descriptor set layout was refused";
     memset(&pr, 0, sizeof pr);
@@ -168,6 +168,7 @@ void tagpu_vk_chain_record(VkCommandBuffer cb, VkDescriptorSet set, const TAGPU_
     if (s_state != ST_READY || j->count < 1) return;
     memset(&pc, 0, sizeof pc);
     pc.cols = j->cols; pc.pitch = j->pitch; pc.border = j->border; pc.check = j->check;
+    pc.table = j->table;
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipe);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_plo, 0, 1, &set, 0, NULL);
     if (!j->cells) {
@@ -202,9 +203,12 @@ void tagpu_vk_chain_record(VkCommandBuffer cb, VkDescriptorSet set, const TAGPU_
    barrier's first scope is every command submitted earlier on the queue -- not only earlier in
    this command buffer (the restorer's own argument, tagpu_vk_restore.c above its slice barrier)
    -- so this one orders, before any reduction or clear of this frame:
-     * the base atlas's banded upload, whose submits precede this command buffer (RAW on the
-       source);
-     * every earlier OUT of the restorer into the restored atlas (RAW on the source);
+     * the base atlas's banded upload, whose submits precede this command buffer, and an
+       in-frame copy or a repack's move (tagpu_vk_stage.c) earlier in it, whose last barrier
+       leaves the image SHADER_READ_ONLY for FRAGMENT -- in this barrier's first scope by
+       stage, and its layout transition chained through FRAGMENT (RAW on the source);
+     * every earlier OUT of the restorer into the restored atlas, and a repack's move of the
+       feature twin (RAW on the source);
      * every earlier frame's draw that sampled a chain (WAR before the reduction rewrites it);
      * every earlier reduction, clear and oracle copy of a chain (WAW, and WAR for the copy).
 
@@ -223,9 +227,15 @@ void tagpu_vk_chain_record(VkCommandBuffer cb, VkDescriptorSet set, const TAGPU_
        rather than left to the restorer's own transition into GENERAL (`dst_layout`), whose first
        scope does include COMPUTE.
      * Its FRAGMENT destination chains into a later re-upload of a base atlas
-       (tagpu_vk_stage.c `barrier_in`, whose source stage is FRAGMENT): that is what orders our
-       COMPUTE reads of the base atlas before the upload's writes (WAR). A compute stage is not
-       "logically earlier" than FRAGMENT, so without this chain that barrier would not cover them.
+       (tagpu_vk_stage.c `barrier_in`, whose source stage is FRAGMENT) and a later repack's move
+       of the feature atlas or its twin (`move_record`, likewise): that is what orders our
+       COMPUTE reads of either before those writes (WAR). A compute stage is not "logically
+       earlier" than FRAGMENT, so without this chain those barriers would not cover them.
+
+   THE FEATURE PASS'S SOURCE RECTS (binding 7) are a shared buffer it copies into before `begin`
+   behind a barrier of its own -- COMPUTE | TRANSFER before the copy (every earlier reduction's
+   read and copy), COMPUTE after it (tagpu_vk_feat.c `fchain_upload`) -- and its per-slot tables
+   are sampled, never reduced.
 
    THE CHAIN IMAGES STAY GENERAL FOR LIFE, written as storage, sampled as GENERAL, copied out as
    GENERAL: one layout and nothing to track. The atlases' level 0 keeps its layouts, which are the

@@ -9,12 +9,15 @@
      * range mode (`list` 0): cells first .. first+count-1, row-major over `cols`;
      * list mode (`list` 1): `count` <= 24 entries of `cell[]`, each x | y << 16.
    A cell's source tile starts at cell * pitch + border of the atlas (34 and 1 for both terrain
-   atlases). `check` 0 writes the chain; 1 and 2 compare it instead and count into the counter
-   pair Chk.n[2 * (check - 1)] (mismatched texels) and the one after it (cells seen), so the base
-   chain's check and the restored one's share one buffer and never one counter. */
+   atlases) and is 32 x 32 -- the GRID form. With `table` 1 (range mode only; the feature pass's
+   frames) cell i's source is Src.r[2i] = sx | sy << 16 and its valid size Src.r[2i+1] =
+   tw | th << 16, each <= 32: a tile of a frame clipped to the frame (tagpu_vk_feat.c, which bounds
+   both to the atlas). `check` 0 writes the chain; 1 and 2 compare it instead and count into the
+   counter pair Chk.n[2 * (check - 1)] (mismatched texels) and the one after it (cells seen), so
+   the base chain's check and the restored one's share one buffer and never one counter. */
 #define TAGPU_CHAIN_COMMON_CS \
     "layout(push_constant) uniform PC {\n" \
-    "  int first, count, list, cols, pitch, border, check, spare;\n" \
+    "  int first, count, list, cols, pitch, border, check, table;\n" \
     "  uint cell[24];\n" \
     "} pc;\n"
 
@@ -33,10 +36,15 @@
    A texel reads back exactly as round(v * 255) (an RGBA8 texel is k / 255) and is written as
    (k + 0.25) / 255, which stores k under a truncating and a rounding conversion alike.
 
-   THE BOUND. A workgroup reads only its own cell's 32 x 32 interior, so no tile is mixed with
-   another, and writes only its own cell's block at each level, so two workgroups never write one
-   texel. A workgroup past `count` returns whole: `wg` is uniform across it, so every barrier()
-   below stays in uniform control flow. */
+   THE BOUND. A workgroup reads only its own cell's 32 x 32 interior -- in the table form only the
+   tw x th of it the cell's tile covers, so no texel of another frame or of a frame's border --
+   so no tile is mixed with another, and writes only its own cell's block at each level, so two
+   workgroups never write one texel. A texel outside the valid size counts in neither B nor O, and
+   a level texel whose block holds none is written 0, which nothing samples (tagpu_feat.c
+   taFChain clamps into the valid blocks). Src is read at 2i and 2i + 1 for i < first + count,
+   which the caller keeps inside the buffer it binds. A workgroup past `count` returns whole: `wg`
+   is uniform across it, so every barrier() below stays in uniform control flow. Binding 7 is a
+   valid buffer in the grid form too (the terrain binds its counters there) and is not read. */
 #define TAGPU_CHAIN_REDUCE_CS \
     "layout(local_size_x = 8, local_size_y = 8) in;\n" \
     "layout(binding = 0) uniform sampler2D uSrc;\n" \
@@ -46,6 +54,7 @@
     "layout(binding = 4, rgba8) uniform image2D uL4;\n" \
     "layout(binding = 5, rgba8) uniform image2D uL5;\n" \
     "layout(std430, binding = 6) buffer Chk { uint n[4]; } chk;\n" \
+    "layout(std430, binding = 7) readonly buffer Src { uint r[]; } src;\n" \
     "shared uvec4 s2[64]; shared uint b2[64];\n" \
     "shared uvec4 s3[16]; shared uint b3[16];\n" \
     "shared uvec4 s4[4];  shared uint b4[4];\n" \
@@ -75,10 +84,16 @@
     "  int wg = int(gl_WorkGroupID.y) * 1024 + int(gl_WorkGroupID.x);\n" \
     "  if (wg >= pc.count) return;\n" \
     "  ivec2 c;\n" \
+    "  int i = pc.first + wg;\n" \
     "  if (pc.list != 0) { uint e = pc.cell[wg]; c = ivec2(int(e & 0xFFFFu), int(e >> 16)); }\n" \
-    "  else { int i = pc.first + wg; c = ivec2(i % pc.cols, i / pc.cols); }\n" \
+    "  else c = ivec2(i % pc.cols, i / pc.cols);\n" \
     "  ivec2 so = c * pc.pitch + pc.border;\n" \
     "  ivec2 vs = ivec2(32);\n" \
+    "  if (pc.table != 0) {\n" \
+    "    uint a = src.r[2 * i], b = src.r[2 * i + 1];\n" \
+    "    so = ivec2(int(a & 0xFFFFu), int(a >> 16));\n" \
+    "    vs = ivec2(int(b & 0xFFFFu), int(b >> 16));\n" \
+    "  }\n" \
     "  ivec2 l = ivec2(gl_LocalInvocationID.xy);\n" \
     "  uvec4 q2 = uvec4(0u); uint n2 = 0u;\n" \
     "  for (int j = 0; j < 2; j++)\n" \

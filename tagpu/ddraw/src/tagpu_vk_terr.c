@@ -963,13 +963,13 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     uint32_t i, chains = s_chainsOn ? 1u : 0u;
 
     /* per slot: the graphics set (two blocks, eleven samplers), and with the chains up the
-       reducer's two sets (one sampler, five storage images and one storage buffer each) */
+       reducer's two sets (one sampler, five storage images and two storage buffers each) */
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = d->slots * (11 + 2 * chains);
     ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          ps[2].descriptorCount = d->slots * 10;
-    ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[3].descriptorCount = d->slots * 2;
+    ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[3].descriptorCount = d->slots * 4;
     dpi.maxSets = d->slots * (1 + 2 * chains);
     dpi.poolSizeCount = chains ? 4 : 2; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -1711,13 +1711,14 @@ static int chain_for(const TAGPU_VKPASS* d, CHAIN* c, int w, int h, int fits, co
 /* THE REDUCER'S SET, written in this slot's `prepare` before its first use in this command
    buffer and not again in it: a set may not be updated once a command buffer being recorded has
    bound it. `src` is the atlas's level 0, sampled in SHADER_READ_ONLY_OPTIMAL, its layout between
-   uploads and between the restorer's slices. */
+   uploads and between the restorer's slices. Binding 7, the table form's source rects, names the
+   counters too: the grid form never reads it, and the set needs a valid buffer there. */
 static void chain_set(const TAGPU_VKPASS* d, const SLOT* s, VkDescriptorSet set, VkImageView src,
                       const CHAIN* c)
 {
     VkDescriptorImageInfo ii[1 + TAGPU_CHAIN_LEVELS];
     VkDescriptorBufferInfo bi;
-    VkWriteDescriptorSet wr[2 + TAGPU_CHAIN_LEVELS];
+    VkWriteDescriptorSet wr[3 + TAGPU_CHAIN_LEVELS];
     int i;
     memset(ii, 0, sizeof ii); memset(&bi, 0, sizeof bi); memset(wr, 0, sizeof wr);
     ii[0].sampler = s_samp; ii[0].imageView = src;
@@ -1738,7 +1739,9 @@ static void chain_set(const TAGPU_VKPASS* d, const SLOT* s, VkDescriptorSet set,
     wr[6].dstBinding = 6;
     wr[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     wr[6].pImageInfo = NULL; wr[6].pBufferInfo = &bi;
-    vkUpdateDescriptorSets(d->dev, 2 + TAGPU_CHAIN_LEVELS, wr, 0, NULL);
+    wr[7] = wr[6];
+    wr[7].dstBinding = 7;
+    vkUpdateDescriptorSets(d->dev, 3 + TAGPU_CHAIN_LEVELS, wr, 0, NULL);
 }
 
 /* the neighbourhood ledger's cells, x | y << 16, grown as a slice needs and kept */

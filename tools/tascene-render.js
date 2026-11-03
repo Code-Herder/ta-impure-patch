@@ -440,6 +440,12 @@ function gatherFeatures(p) {
 // The Classic sprite program over `vbo` (SVST floats a vertex), and the
 // feature base atlas on unit 17 from the R8 atlas on unit 5 (which the caller
 // uploads). `feat` is the pack's features (atlas, defs).
+// THE MIP CHAINS (tagpu_vk_feat.c) are the DLL's alone: the lab draws at uLod
+// 0, today's picture, with uRestChain 0; uFChainB/R name unit 17, a sampler2D
+// as they are, and uFTab the fog source's unit 2, a usampler2D as it is -- two
+// sampler types on one unit fail WebGL's draw-time validation. The vertices
+// still carry the colour key where the DLL's carry the entry index (aCM.x),
+// which only the uLod >= 1 branch reads.
 function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   const prog = program(gl, vs, fs, "sprite");
   const vao = gl.createVertexArray();
@@ -453,7 +459,8 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale",
                                 "uFogSrc", "uFogSize", "uFog",
-                                "uRestored", "uBase", "uMapPx", "uClip"]);
+                                "uRestored", "uBase", "uMapPx", "uClip",
+                                "uLod", "uRestChain", "uFTab", "uFChainB", "uFChainR"]);
   const rects = [];
   for (const d of Object.values(feat.defs))
     for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
@@ -484,6 +491,9 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
       gl.uniform1i(U.uFog, f.fog);
       gl.uniform1i(U.uRestored, 0);
       gl.uniform1i(U.uBase, 17);
+      gl.uniform1i(U.uLod, 0); gl.uniform1i(U.uRestChain, 0);
+      gl.uniform1i(U.uFTab, 2);
+      gl.uniform1i(U.uFChainB, 17); gl.uniform1i(U.uFChainR, 17);
       // aLam, the anchor's ground lambert, is not in the parity vertex: the
       // generic value stands in, and light=0 bakes exactly 1.0 there
       gl.vertexAttrib1f(4, 1.0);

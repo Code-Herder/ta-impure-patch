@@ -14,6 +14,14 @@
    (c) `tagpu_chain_level` at the cases the spec names: 1x / 0.5x / 0.25x at ss = 2 are levels
        0 / 0 / 1; 0.034x is 4 at ss = 2 and 5 at ss = 1; 1/64 at ss = 1 is capped at 5; a NaN
        zoom is 0; an extent smaller than the game frame at 1x is at least 1.
+   (d) THE FEATURES' TABLE FORM: a keyed frame of any size, cut into tiles from its first texel as
+       tagpu_vk_feat.c's allocator cuts it, each tile reduced in the reducer's order from its rect
+       and valid size, equals `tagpu_chain_ref` -- and stays the same when every texel outside the
+       frame is scrambled, so no level reads another frame.
+   (e) `tagpu_chain_ftexel` -- the C mirror of the feature fragment stage's taFChain -- for every
+       texel of random frames at every level: the cell its tile was given, a level texel whose
+       block holds the texel and at least one valid texel, and for a sample nudged past the frame's
+       edge, a texel of the frame's own cells.
 
      chain_test [seed] [cases] */
 #include "tagpu_chain.h"
@@ -173,6 +181,89 @@ static void test_texel(void)
     }
 }
 
+/* (d): frames in a 160 x 160 image */
+#define FW 160
+static unsigned char s_fimg[FW * FW * 4];
+static void test_frame(int cases)
+{
+    unsigned char a[TAGPU_CHAIN_TEXELS * 4], b[TAGPU_CHAIN_TEXELS * 4];
+    static unsigned char keep[400][TAGPU_CHAIN_TEXELS * 4];
+    int c, i, tx, ty, t, x, y;
+    for (c = 0; c < cases; c++) {
+        int w = rndi(1, 100), h = rndi(1, 100), ox = rndi(1, FW - 101), oy = rndi(1, FW - 101);
+        for (i = 0; i < FW * FW; i++) {
+            unsigned char* p = s_fimg + i * 4;
+            p[0] = (unsigned char)rnd(); p[1] = (unsigned char)rnd(); p[2] = (unsigned char)rnd();
+            p[3] = (rnd() & 3) ? 255 : 0;
+        }
+        tx = (w + 31) >> 5; ty = (h + 31) >> 5;
+        for (t = 0; t < tx * ty; t++) {
+            int ax = t % tx, ay = t / tx;
+            int sx = ox + 32 * ax, sy = oy + 32 * ay;
+            int tw = w - 32 * ax < 32 ? w - 32 * ax : 32, th = h - 32 * ay < 32 ? h - 32 * ay : 32;
+            tagpu_chain_ref(s_fimg, FW * 4, sx, sy, tw, th, a);
+            gpu(s_fimg, FW * 4, sx, sy, tw, th, b);
+            CHECK(!memcmp(a, b, sizeof a));
+            memcpy(keep[t], a, sizeof a);
+        }
+        /* everything outside the frame, scrambled: no tile's chain moves */
+        for (y = 0; y < FW; y++)
+            for (x = 0; x < FW; x++)
+                if (x < ox || x >= ox + w || y < oy || y >= oy + h) {
+                    unsigned char* p = s_fimg + (y * FW + x) * 4;
+                    p[0] = (unsigned char)rnd(); p[3] = (unsigned char)rnd();
+                }
+        for (t = 0; t < tx * ty; t++) {
+            int ax = t % tx, ay = t / tx;
+            int tw = w - 32 * ax < 32 ? w - 32 * ax : 32, th = h - 32 * ay < 32 ? h - 32 * ay : 32;
+            gpu(s_fimg, FW * 4, ox + 32 * ax, oy + 32 * ay, tw, th, b);
+            CHECK(!memcmp(keep[t], b, sizeof b));
+        }
+    }
+}
+
+/* (e) */
+static void test_ftexel(int cases)
+{
+    const int dim = 2048;
+    static const float fr[3] = { 0.01f, 0.5f, 0.99f };
+    int c, L, ix, iy, k;
+    for (c = 0; c < cases; c++) {
+        int w = rndi(1, 200), h = rndi(1, 200), ox = rndi(1, dim - 201), oy = rndi(1, dim - 201);
+        int tx = (w + 31) >> 5, ty = (h + 31) >> 5;
+        int base = rndi(0, TAGPU_CHAIN_FCELLS - tx * ty);
+        unsigned rec[4];
+        rec[0] = (unsigned)ox | (unsigned)oy << 16;
+        rec[1] = (unsigned)w | (unsigned)h << 16;
+        rec[2] = (unsigned)base; rec[3] = (unsigned)tx;
+        for (L = 1; L <= TAGPU_CHAIN_LEVELS; L++) {
+            int n = 32 >> L;
+            for (iy = -1; iy <= h; iy++)
+                for (ix = -1; ix <= w; ix++)
+                    for (k = 0; k < 3; k++) {
+                        /* -1 and w (h) are samples the edge nudge carries just past the frame */
+                        float u = ((float)(ox + ix) + (ix < 0 ? 0.99f : ix >= w ? 0.01f : fr[k])) / (float)dim;
+                        float v = ((float)(oy + iy) + (iy < 0 ? 0.99f : iy >= h ? 0.01f : fr[k])) / (float)dim;
+                        int jx = ix < 0 ? 0 : ix >= w ? w - 1 : ix, jy = iy < 0 ? 0 : iy >= h ? h - 1 : iy;
+                        int cell = base + (jy >> 5) * tx + (jx >> 5), x, y, qx, qy;
+                        int vw = w - (jx & ~31) < 32 ? w - (jx & ~31) : 32;
+                        int vh = h - (jy & ~31) < 32 ? h - (jy & ~31) : 32;
+                        tagpu_chain_ftexel(L, rec, u, v, dim, &x, &y);
+                        CHECK(cell < TAGPU_CHAIN_FCELLS);
+                        CHECK(x / n == cell % TAGPU_CHAIN_FCOLS && y / n == cell / TAGPU_CHAIN_FCOLS);
+                        CHECK(x >= 0 && x < TAGPU_CHAIN_FCOLS * n && y >= 0 && y < TAGPU_CHAIN_FROWS * n);
+                        qx = x % n; qy = y % n;
+                        /* the block holds the texel, and so at least one valid texel */
+                        CHECK(qx << L <= (jx & 31) && (jx & 31) < (qx + 1) << L);
+                        CHECK(qy << L <= (jy & 31) && (jy & 31) < (qy + 1) << L);
+                        CHECK(qx << L < vw && qy << L < vh);
+                        if (ix >= 0 && ix < w && iy >= 0 && iy < h) continue;
+                        k = 3;              /* one sample a nudged edge texel */
+                    }
+        }
+    }
+}
+
 static void test_level(void)
 {
     const float gw = 640.0f, gh = 480.0f;
@@ -210,6 +301,10 @@ int main(int argc, char** argv)
     printf("texel: every level's fetch inside its block, and holding floor(p) on [0, 32)\n");
     test_level();
     printf("level: every case as the spec names it\n");
+    test_frame(cases / 10 > 0 ? cases / 10 : 1);
+    printf("frame: every tile of a keyed frame reduces from the frame alone, as the reference does\n");
+    test_ftexel(cases / 20 > 0 ? cases / 20 : 1);
+    printf("ftexel: every texel of every frame finds its own cell, and a block that holds it\n");
     printf("every check holds\n");
     return 0;
 }

@@ -1,5 +1,5 @@
 /* tagpu_chain_ref.c -- the C side of the mip chains (inc/tagpu_chain.h): the level rule, the
-   reference reduction and the fragment stage's lookup. Engine-free, Win32-free and stateless, so
+   reference reduction and the fragment stages' lookups. Engine-free, Win32-free and stateless, so
    the DLL, both scenes' passes and tools/replay/chain_test.c all compile this one file. */
 #include "tagpu_chain.h"
 #include <math.h>
@@ -82,4 +82,28 @@ void tagpu_chain_texel(int L, int cx, int cy, float px, float py, int* x, int* y
     if (qy > n - 1) qy = n - 1;
     *x = cx * n + qx;
     *y = cy * n + qy;
+}
+
+/* The C mirror of tagpu_feat.c's `taFChain`: EDIT BOTH OR NEITHER. The sample's atlas texel is the
+   one NEAREST reads at level 0, taken into the frame (the clamp keeps an edge nudge's sample on
+   the frame); its tile names the cell, and q is clamped to the tile's last level texel that holds
+   a valid texel -- which (ip & 31) >> L already is for any ip inside the frame. */
+void tagpu_chain_ftexel(int L, const unsigned rec[4], float u, float v, int dim, int* x, int* y)
+{
+    int ox = (int)(rec[0] & 0xFFFFu), oy = (int)(rec[0] >> 16);
+    int w = (int)(rec[1] & 0xFFFFu), h = (int)(rec[1] >> 16);
+    int ix = (int)floorf(u * (float)dim) - ox, iy = (int)floorf(v * (float)dim) - oy;
+    int tx, ty, c, n = 32 >> L, limx, limy, qx, qy;
+    if (ix < 0) ix = 0;
+    if (ix > w - 1) ix = w - 1;
+    if (iy < 0) iy = 0;
+    if (iy > h - 1) iy = h - 1;
+    tx = ix >> 5; ty = iy >> 5;
+    c = (int)rec[2] + ty * (int)rec[3] + tx;
+    limx = ((w - tx * 32 < 32 ? w - tx * 32 : 32) + (1 << L) - 1) >> L;
+    limy = ((h - ty * 32 < 32 ? h - ty * 32 : 32) + (1 << L) - 1) >> L;
+    qx = (ix & 31) >> L; if (qx > limx - 1) qx = limx - 1;
+    qy = (iy & 31) >> L; if (qy > limy - 1) qy = limy - 1;
+    *x = (c & (TAGPU_CHAIN_FCOLS - 1)) * n + qx;
+    *y = (c / TAGPU_CHAIN_FCOLS) * n + qy;
 }

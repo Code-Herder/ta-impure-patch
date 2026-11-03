@@ -52,9 +52,14 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v);
    vertex layout copied into a second file is two things that can drift. Each
    entry is {location, components, byte offset}; tagpu_vk_feat.c builds its
    VkVertexInputAttributeDescription array from it. */
-#define TAGPU_FEAT_VST    10       /* x,y,enc, u,v, ck,mode, wx,wz, lam */
+#define TAGPU_FEAT_VST    10       /* x,y,enc, u,v, ent,mode, wx,wz, lam */
 #define TAGPU_FEAT_NATTR  5
 #define TAGPU_FEAT_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28}, {4,1,36} }
+/* `ent` IS THE QUAD'S ATLAS ENTRY, ITS INDEX + 1 (0: none), the key the fragment stage's mip chains
+   are found by (tagpu_vk_feat.c's per-entry table). The entry's index stays put from the gather to
+   the draw: the atlas repacks only at the top of a gather (tagpu_gaf_atlas_frame), never inside
+   one. It took the colour key's place, which nothing read: the hole is the base atlas's alpha. */
+
 /* Added to a vertex's mode (TAGPU_FXMODE_OPAQUE 1 / _ALPHA 2): the quad is the
    map edge's mirror of a feature, drawn in the edge's tone. The fragment stage
    reads the mode as bits (tagpu_feat.c's FS). */
@@ -163,6 +168,15 @@ typedef struct TAGPU_FEATHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreGen;
+    /* THE ATLAS'S ENTRIES, which the vertices' `ent` indexes: the atlas's own array and its `n`,
+       with the two counters that move whenever an entry's rect does -- `gen` (a reset, a loss,
+       a repack) and `repacks`. Within one pair of them the entries' rects stand and new ones are
+       appended, so a consumer that lays out a cell per entry rebuilds on a move and extends on a
+       longer `nEnts` (tagpu_vk_feat.c's chain cells). Valid for the frame, under this record's
+       rule above; NULL and 0 from a hand-over with no atlas entries (the wiki's stage). */
+    const struct TAGPU_GAFENT* ents;
+    int                        nEnts;
+    unsigned                   entsGen, entsRepacks;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()     */
     unsigned              palSerial;  /* tagpu_pal_engine_serial()           */
 

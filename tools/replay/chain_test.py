@@ -7,8 +7,10 @@ with the host's C compiler (both files are engine-free and Win32-free), and runs
 to equal an emulation of the reducer's own order of work (src/tagpu_chain_comp.h REDUCE_CS) on
 random tiles, opaque, transparent, keyed and clipped; `tagpu_chain_texel`, the mirror of the
 terrain fragment stage's taChain, to stay inside its cell's block and to hold the texel level 0
-samples; and `tagpu_chain_level` to give each level the spec names. So a live `cpu-differ=0` means
-the device's arithmetic is this one, and this one is the shader's.
+samples; `tagpu_chain_level` to give each level the spec names; the features' table form to reduce
+a frame's tiles from the frame alone; and `tagpu_chain_ftexel`, the mirror of the feature fragment
+stage's taFChain, to find each texel's own cell and block. So a live `cpu-differ=0` means the
+device's arithmetic is this one, and this one is the shader's.
 
     python3 tools/replay/chain_test.py [--cases N] [--seed S] [--out DIR]
 """
