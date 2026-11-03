@@ -133,11 +133,45 @@ The icons are read from the player's install at run time and never shipped, so t
 redistribution question does not arise. TADR itself is never loaded (the takeover), only its
 ini and art read. Which ini a given install's TADR reads is a research item for landing 4.
 
+## Decisions on landing 1 (owner, 2026-11-03)
+
+The landing-1 spec (`.data/mega-map/landing1-spec.md` in the main checkout) put the cost of the
+whole-map level on Seven Islands at 4K at about +110 MB of a 32-bit address space. Almost all of it
+is per-frame working copies, not information, so the landing is split to remove them first:
+
+- **The fog grid is shipped as its source.** Today each 32-px cell carries two 4-bit corner masks
+  in two bytes — an expansion of 2 source bits per map cell (out of LOS in true-LOS mode; never
+  explored), sized to a view window that at the floor is twice the map, and uploaded by each of 5
+  passes for each of 4 frames in flight: ~33 MB. The source for the whole map is
+  `losW × losH × 2` bits — about 100 KB on Seven Islands. Packed on the game thread, held in one
+  texture per frame slot that every pass shares, expanded in the shader as `0x4843C0` expands it
+  (corner OR, then the four border completions in the engine's order), checked against the
+  engine's grid by the existing oracle. A grid that always covers the whole map cannot be outrun
+  by a zoom or an eye step, so the spec's fog-level ladder and its in-flight handshake are not
+  needed. RLE was considered and not taken: the GPU needs random access, and bit-packing gives the
+  same saving without a decode.
+- **Terrain instances are built once per level** if their records are static (tile position and
+  cell position; whether the restorer key changes as tiles complete is to be checked), replacing
+  four per-frame mapped copies and an 11.6 MB copy a frame at the floor.
+- **The MP recording version stays** unchanged: only a mixed-build game is affected, and the newest
+  build's recording is whole.
+- **The engine hit test's int16 narrowing is bounded at level load**: the floor keeps the rect
+  inside the limit the largest model box over `UNITINFOCount` implies.
+- **Mipmaps get their own landing after the floor**: per-tile mip chains for the terrain atlases and
+  features, the level chosen from the supersampled target's pixel footprint, so 1× and above stay
+  byte-identical.
+- **Stated, not fixed**: ScrollSpeed saturates at 255 below 0.125; 5120×1440 on a 20 480-px map
+  stops at ~0.089 (int16 clicks); 640×480 on maps over ~26 000 px stops at 1/64.
+
 ## Landings
 
-1. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
-   extent and the true viewport; the six guards, the vpwide cap and the two levers follow it; the
-   wide fog grid's cost argued or re-sized; the recorder's camera range widened under a new format version.
+1a. **Fog from its source bits**, whole map, one shared texture, expanded in the shader.
+1b. **Terrain instances once per level.**
+1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
+   extent and the true viewport, bounded by the int16 click rect, terrain staging and the largest
+   model box; the seven guards (the cursor transform `view()` is the seventh), the vpwide cap and
+   the two levers follow it; every pass's fog-width cap goes; the recorder's camera range widened
+   under a new format version (27).
    *Verified*: wheel to the whole map on Seven Islands at 1024×768 and 4K; click and band-box
    selection and a move order at that level; `tagpu_fogwide_check.on` `differ=0`; frame and tick
    time at the floor. Sim-adjacent if the fog grid changes → review at `high`.
