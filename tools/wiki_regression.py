@@ -4800,7 +4800,8 @@ def main():
                                               "players: the Players demos' states beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
     p.add_argument("--offline-jobs", type=int, help="gate: the offline checks run at once, 0 for none; by default the "
-                                                    "threads the game lanes leave, two to a lane, and at least 4")
+                                                    "threads the game lanes leave (two to a lane), at one and a half to "
+                                                    "a check (node, the scripts' host, the C side), and at least 4")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
     a = p.parse_args()
@@ -4811,7 +4812,7 @@ def main():
             offline_checks()
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
-            offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, (os.cpu_count() or 8) - 2 * a.jobs)
+            offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, ((os.cpu_count() or 8) - 2 * a.jobs) * 2 // 3)
             gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
         elif a.mode == "mp":
             mp(a.instance)

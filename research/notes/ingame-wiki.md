@@ -1219,7 +1219,8 @@ unless said).
   `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and `wikilaycheck.py --check-only`, one after
   another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
 - **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
-  game lanes leave, two to a lane and at least four (`--offline-jobs`; 20 at `-j 6` on 32 threads),
+  game lanes leave, two to a lane, at one and a half a check and at least four (`--offline-jobs`;
+  13 at `-j 6` on 32 threads: 20 took the load to 59 and starved the lanes' mockup page),
   `stagecheck` first as four shards (`stagecheck.mjs --shard K/4`: every fourth of its 16 passes,
   each shard playing and measuring only the sidebars its passes draw); each `simparity` run as 24 shards
   (`simparity.mjs --shard K/24`: contexts K and K + 24 of its 48, one played without the units'
