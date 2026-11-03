@@ -398,7 +398,10 @@ left before the native pass). The apply copies the latest record at the top of e
 and `GetUnitAtMouse` runs on the game thread from the in-game handlers (`0x499278`, `0x491D18`),
 so a click is answered with the answer of the frame whose record the last apply took — the frame
 the player saw, or the one before it at a switch, the same one-record lag the level has — and
-never by an icon no frame drew; with no record yet, the engine's test. Hover sets `main+0x2CBA`
+never by an icon no frame drew. Only a record of the current level's epoch counts (`c->epoch ==
+s_epoch`, the epoch the level end bumps), and `tagpu_zoom_level_end` clears the answer, so a record
+posted before the render thread saw a level end never answers for the next level; with no such
+record yet, the engine's test. Hover sets `main+0x2CBA`
 through the same answer; the band box `0x48C390` tests each unit's anchor, the point an icon is
 centred on, and needs no change.
 

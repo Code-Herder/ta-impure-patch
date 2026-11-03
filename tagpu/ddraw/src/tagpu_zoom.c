@@ -913,7 +913,8 @@ static int   s_gLive, s_gCentre;
    tables' reach is taken at (the record's reach rung, clamped to the floor) */
 static float s_gFloor = TAGPU_ZOOM_FLOOR_HI;
 static float s_gReach = TAGPU_ZOOM_FLOOR_HI;
-/* game thread only: the last record drew the strategic icons (icon_hit) */
+/* game thread only: the last record of this level's epoch drew the
+   strategic icons (icon_hit); 0 from the level end until one does */
 static int   s_gIcons;
 /* game thread only: the level the minimap's view box main+0x142CB was last scaled by; every
    write of it goes through zoom_minimap_rect once tagpu_zoom_init installed the redirects
@@ -1857,8 +1858,10 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    the in-game handlers (0x499278, 0x491D18), so a click is answered with the
    answer of the frame whose record the last apply took: the frame the player
    saw, or the one before it at a switch -- the same one-record lag the level
-   has -- and never an icon no frame drew. No record yet is the engine's
-   test. */
+   has -- and never an icon no frame drew. Only a record of this level's epoch
+   counts, and the level end clears the answer, so a record posted before the
+   render thread saw the level end cannot answer for the next level. No such
+   record yet is the engine's test. */
 static int icon_hit(const char* ta, const char* unit, const int* point)
 {
     unsigned n;
@@ -2078,7 +2081,11 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* the tables' reach: the record's rung, never below the floor, and the
        floor (the widest) with no record -- the safe default */
     s_gReach = c ? c->reach_zoom : s_gFloor;
-    s_gIcons = c ? (int)c->icons : 0;
+    /* the icons answer the pick only from a record of THIS level's epoch: a
+       record the render thread posted before it saw the level end is the old
+       level's frame, and the level end cleared the answer, so no click is
+       answered by circles no frame of this level drew */
+    s_gIcons = (c && c->epoch == s_epoch) ? (int)c->icons : 0;
     if (s_gReach < s_gFloor) s_gReach = s_gFloor;
     if (s_gReach > TAGPU_ZOOM_FLOOR_HI) s_gReach = TAGPU_ZOOM_FLOOR_HI;
     /* THEN THE RANGE: centred only on a draw whose ground is ours. `terr` is
@@ -2240,6 +2247,8 @@ void tagpu_zoom_level_end(char* ta)
        own */
     s_gFloor = s_gReach = TAGPU_ZOOM_FLOOR_HI;
     s_floorKeyOk = 0;
+    /* no frame of the next level has drawn an icon yet */
+    s_gIcons = 0;
     /* the hit guard's radii are this level's models': the serial has moved,
        so the table is no longer read, and the next level's first apply
        builds its own */
