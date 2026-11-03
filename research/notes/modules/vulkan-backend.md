@@ -756,7 +756,7 @@ pipeline, so the two teardowns are independent.
   empties a chain, all five levels.
 - The seam calls `tagpu_vk_chain_down` and `tagpu_vkw_chain_down` after every pass's `_down`: a
   set may not be written once its layout is gone. With no device `_down` forgets the handles
-  instead (`tagpu_vk_chain_lost`), and the next device is asked again.
+  instead of destroying them, as the restorer's does, and the next device is asked again.
 
 **The shader** (`TAGPU_CHAIN_REDUCE_CS`, 8 × 8 invocations, one workgroup a cell; push constants
 128 bytes, Vulkan's guaranteed minimum: `first, count, list, cols, pitch, border, check, table,

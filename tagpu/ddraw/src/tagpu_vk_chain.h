@@ -50,9 +50,8 @@ void tagpu_vk_chain_check_begin(VkCommandBuffer cb);
 void tagpu_vk_chain_check_end(VkCommandBuffer cb);
 
 /* Give the pipeline back: the seam calls it after every consumer's `_down`, behind its
-   vkDeviceWaitIdle. With no device it forgets instead (`_lost`): the handles died with it. */
+   vkDeviceWaitIdle. With no device it forgets the handles instead: they died with it. */
 void tagpu_vk_chain_down(const TAGPU_VKPASS* d);
-void tagpu_vk_chain_lost(void);
 
 /* 1 while `tagpu_chaincheck.on` exists, re-read every 120 frames of `frame`. Defined by the seam
    (tagpu_vk.c) beside the A/B levers, so the wiki's instances get tagpu_wikiworld.c's inert 0

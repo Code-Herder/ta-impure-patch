@@ -237,9 +237,11 @@ the units**, so every unit body is tested against the depth features just wrote.
   implied place for a chain — the atlas packs frames of any size at any origin — so each frame is
   cut, from its own first texel, into `⌈w/32⌉ × ⌈h/32⌉` tiles clipped to the frame, and each tile
   takes one cell of two shared chain images, the base atlas's (`s_fcB`) and the restored twin's
-  (`s_fcR`): 64 × 128 cells, 1024 × 2048 at level 0, 5 levels, 11.2 MB each, made once a device
-  on the first hand-over with atlas entries (the twin's only if the twin image stands then) and
-  never resized; a refusal is said once and not asked again on that device. A level-L block measured from the frame's
+  (`s_fcR`): 64 × 128 cells, 1024 × 2048 at level 0, 5 levels, 11.2 MB each, made on a
+  hand-over with atlas entries and never resized (`fchain_build`). The base chain is asked for
+  once a device, and a refusal stands for the device's life; the twin's chain whenever a twin
+  image stands without one, so a twin made later gets its chain on the next such hand-over, and a
+  refusal stands for that twin image only. A level-L block measured from the frame's
   origin lies inside one tile because `2^L` divides 32, so no level mixes two frames.
     - **The allocation** (`fchain_alloc`, render thread) gives cells in entry order, each tile's
       source rect clipped to its frame and the frame's to the atlas. It is rebuilt whole when the

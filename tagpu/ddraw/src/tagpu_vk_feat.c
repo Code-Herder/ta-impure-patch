@@ -223,6 +223,7 @@ static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
 static int            s_arHave;
+static unsigned       s_arGen;             /* moved by every twin image made: the twin chain's ask */
 
 /* THE BASE ATLAS: the same square in RGBA8, every texel its index's colour
    through the hand-over's palette -- the engine's table -- and alpha 0 at its
@@ -869,19 +870,23 @@ static void fsrc_kill(const TAGPU_VKPASS* d)
     s_fSrcSerial = 0;
 }
 
-/* THE CHAINS, made once, on the first hand-over that has entries to give cells to -- the wiki's
-   stage hands over none and never pays for them -- and kept until the pass comes down: their size
-   is the allocator's, not the atlas's, so nothing re-makes them under a frame in flight, and the
-   descriptors that name them are written on every prepare. The base chain and the source rects'
-   buffer are what any level above 0 needs; the twin's chain only what Classic++ needs there, and
-   without it Classic++ draws the base chain below a texel a target pixel. A refusal is not asked
-   again on this device (`s_fBuilt`). */
-static int s_fBuilt;
+/* THE CHAINS, made on a hand-over that has entries to give cells to -- the wiki's stage hands
+   over none and never pays for them -- and kept until the pass comes down: their size is the
+   allocator's, not the atlas's, so nothing re-makes them under a frame in flight, and the
+   descriptors that name them are written on every prepare. Called on every such hand-over.
+     * THE BASE CHAIN and the source rects' buffer, what any level above 0 needs, are asked for
+       once a device (`s_fBuilt`): a refusal is the device's answer for its life.
+     * THE TWIN'S CHAIN, what Classic++ needs there, is asked for whenever a twin image stands and
+       has no chain -- so a twin made after the base chain gets one on the next hand-over -- and
+       a refusal is kept for that twin image only (`s_fcRNo`, its `s_arGen`): a twin made again
+       is asked again. Without it Classic++ draws the base chain below a texel a target pixel. */
+static int      s_fBuilt;
+static unsigned s_fcRNo;                   /* the twin image (`s_arGen`) refused a chain */
 static void fchain_build(const TAGPU_VKPASS* d)
 {
-    if (!s_chainsOn || s_fBuilt) return;
-    s_fBuilt = 1;
-    if (!s_fcB.img) {
+    if (!s_chainsOn) return;
+    if (!s_fBuilt && !s_fcB.img) {
+        s_fBuilt = 1;
         if (!fchain_make(d, &s_fcB) ||
             !mk_buffer(d, (VkDeviceSize)TAGPU_CHAIN_FCELLS * 8,
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -894,9 +899,11 @@ static void fchain_build(const TAGPU_VKPASS* d)
         }
         s_fSrcSerial = 0;
     }
-    if (s_arImg && !s_fcR.img && !fchain_make(d, &s_fcR))
+    if (s_fcB.img && s_arImg && !s_fcR.img && s_fcRNo != s_arGen && !fchain_make(d, &s_fcR)) {
+        s_fcRNo = s_arGen;
         plog(d, "feat: the device refused the restored twin's chain - the far zoom draws the "
                 "base chain under Classic++");
+    }
 }
 
 /* The shared images, and the two descriptor bindings that name them. */
@@ -935,6 +942,8 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         plog(d, "feat: no %d MB device image for the Classic++ restored twin - "
                 "the features draw the base atlas",
              (dim * dim * 4) >> 20);
+    } else if (++s_arGen == 0) {
+        s_arGen = 1;                       /* 0 is the refusal mark's "none" */
     }
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         VkDescriptorImageInfo ib;
@@ -2230,7 +2239,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     if (s_sampChain) { vkDestroySampler(dev, s_sampChain, NULL); s_sampChain = VK_NULL_HANDLE; }
     s_fEnts = NULL; s_fN = s_fCells = s_fOverflow = 0; s_fSaidFull = 0;
     s_fGen = s_fRepacks = 0;
-    s_fBuilt = 0;
+    s_fBuilt = 0; s_fcRNo = 0;
     s_lodOk = s_restChain = 0;
     s_chkFrame = 0;
     s_chainsOn = 0;

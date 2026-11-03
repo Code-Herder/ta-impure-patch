@@ -335,17 +335,12 @@ void tagpu_vk_chain_check_end(VkCommandBuffer cb)
                 VK_ACCESS_HOST_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
 }
 
-void tagpu_vk_chain_lost(void)
-{
-    s_pipe = VK_NULL_HANDLE; s_plo = VK_NULL_HANDLE; s_dsl = VK_NULL_HANDLE;
-    s_state = ST_UNBUILT;
-}
-
 void tagpu_vk_chain_down(const TAGPU_VKPASS* d)
 {
-    /* ST_UNBUILT, not ST_REFUSED: the verdict is a fact about the device going away with it, and
-       the next one is asked again */
-    if (!d || !d->dev) { tagpu_vk_chain_lost(); return; }
-    if (vkDestroyPipeline) kill_all(d);
+    /* WITH NO DEVICE THE HANDLES DIED WITH IT and are forgotten, not destroyed -- the restorer's
+       `_down` does the same. ST_UNBUILT, not ST_REFUSED, either way: the verdict is a fact about
+       the device going away with it, and the next one is asked again. */
+    if (d && d->dev && vkDestroyPipeline) kill_all(d);
+    s_pipe = VK_NULL_HANDLE; s_plo = VK_NULL_HANDLE; s_dsl = VK_NULL_HANDLE;
     s_state = ST_UNBUILT;
 }

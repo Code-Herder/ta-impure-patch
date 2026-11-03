@@ -72,7 +72,6 @@
 #define tagpu_vk_chain_down             tagpu_vkw_chain_down
 #define tagpu_vk_chain_dsl              tagpu_vkw_chain_dsl
 #define tagpu_vk_chain_end              tagpu_vkw_chain_end
-#define tagpu_vk_chain_lost             tagpu_vkw_chain_lost
 #define tagpu_vk_chain_record           tagpu_vkw_chain_record
 #define tagpu_vk_chain_up               tagpu_vkw_chain_up
 
