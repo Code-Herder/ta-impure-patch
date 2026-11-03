@@ -44,7 +44,8 @@ int persp_sample(unsigned count, const RecPov pov[2], const unsigned tick[2], un
    with each product taken in 64 bits and truncated: rounding down keeps view/z_v at least the
    recorder's rec/z_r on both axes, so everything the recorder saw is on the viewer's screen
    unless the range's bottom cut it. `zmin` is the recording's own minimum (rec_pov_zoom_min of
-   its format), so a format-26 recording is followed as it always was; the viewer's render thread
+   the format of the segment being read, recr_segment_format), so a format-26 recording is
+   followed as it always was; the viewer's render thread
    then draws no lower than its own floor (tagpu_zoom.c, "the follow lever"). Returns 0, writing
    nothing, for a view of no size. */
 int persp_follow(const RecPov* p, int view_w, int view_h, int* eye_x, int* eye_y,

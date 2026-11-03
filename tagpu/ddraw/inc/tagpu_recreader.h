@@ -334,6 +334,9 @@ unsigned recr_chain_ids(const RecReader* r, unsigned* ids, unsigned cap);
 /* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
    file's own segment, never a takeover's timeline, which a skirmish level records */
 int recr_segment_mp(const RecReader* r);
+/* the format of the chain's segment being read (the first header's until the segments are found):
+   a fork's segment carries the format of the build that recorded it, which need not be the root's */
+unsigned recr_segment_format(const RecReader* r);
 /* 1 when that segment holds its cells (recr_holds_cells): every skirmish segment a writer of
    this format makes (REC_SKIRMISH_HOLDS), a multiplayer file's takeover timeline among them */
 int recr_segment_cells(const RecReader* r);
