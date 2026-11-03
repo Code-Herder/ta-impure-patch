@@ -1,0 +1,7 @@
+landing-review: high, two independent reviewers, on main...397a43f8 (mega map 1b + 1c, merged)
+findings=12 acted=11 deferred=1 rejected=0
+HIGH: hit guard measured MODEL_PTRS[0] (never written by the engine) -> 4f4fc377 (skip id 0, table keyed on the level serial, built only with the redirect installed)
+MEDIUM: vertex-stage barrier did not chain with the copy's layout transition -> c3407c88
+MEDIUM: older-build MP peer refuses camera samples below 0.25 (owner's RECMP_VERSION decision) -> notes state the consequence, 04dbb4b7
+LOW: R table / floor relied on level_end running -> 4f4fc377; Follow took the file's first header format -> 6df9dda8; nb_feed walked the whole grid -> 1186a528; 2050 not 2052, 'publishes = draws', vpwide guard wording, Core Prime 0.069, guard count -> 04dbb4b7; engine map additions f097a7a9
+DEFERRED: ScrollSpeed 'we wrote it' collides at saturation (and a pre-existing Cancel restore adopts a scaled value) -> needs a new engine patch (scale at the read); specced as a follow-up landing
