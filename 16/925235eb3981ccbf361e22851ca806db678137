@@ -1,0 +1,4 @@
+landing-review: medium, one reviewer, on 6d983a3a...16925235 (mega map mipmaps M1+M2)
+findings=4 acted=4 rejected=0
+MEDIUM: not yet verified in game; the restored chain's restart transient unexplained -> cause found (a new generation cleared the chain while level 0 still held the old paints) and fixed by construction, 0414c1f9 (tagpu_chain_rest_step, host test case f); in-game checks pending before landing
+LOW: terrain refused when its 16-byte counter buffer failed; dead no-device branch in chain_down; journal comment in tagpu_feat.h -> 01a24cfb
