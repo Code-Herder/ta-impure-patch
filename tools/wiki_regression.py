@@ -2069,9 +2069,12 @@ def simparity_frames(d, asks, entry=WATCH):
     assert r.returncode == 0, f"(v2) simparity --hash --frame: {r.stderr.strip()[-600:]}"
     out = {}
     for ln in r.stdout.splitlines():
+        # a demo replay.js refused to play gives no record at all: named, never a demo quietly missing
+        assert not ln.startswith(f"{entry}/") or " refused " not in ln, f"(v2) simparity --hash --frame: {ln}"
         m = re.match(r"frame (\S+?)/(\S+?)@(\d+) ([0-9a-f]{16}) (.*)$", ln)
         if m and m.group(1) == entry:
             out[(m.group(2), int(m.group(3)))] = (m.group(4), json.loads(m.group(5)))
+    simparity_frames.stderr = r.stderr
     return out
 
 
@@ -3307,7 +3310,17 @@ def pl_candidates(d, demos):
     """Every demo tick of each demo of `demos` to its end, through simparity: {demo: [(tick, hash, record), ...]} in
     tick order, each record with its frame view (simparity --frame's `view`)"""
     byid = {dm["id"]: dm for dm in entry_demos(PLAYERS)}
-    got = simparity_frames(d, [(k, t) for k in demos for t in range(1, int(byid[k]["end"]) + 120)], PLAYERS)
+    asks = [(k, t) for k in demos for t in range(1, int(byid[k]["end"]) + 120)]
+    got = simparity_frames(d, asks, PLAYERS)
+    # each demo answered to its end, its replay stepped to every tick asked (past the demo's end once it is done), and
+    # with no seek under way at its end
+    last = {k: max(((t, rec) for (q, t), (_, rec) in got.items() if q == k), default=(0, None), key=lambda p: p[0])
+            for k in demos}
+    short = [k for k in demos if last[k][0] < int(byid[k]["end"]) or last[k][1]["pending"]]
+    assert not short, f"(p2) simparity --frame did not answer {short} to their end: " + \
+        ", ".join(f"{k} {sum(1 for q in got if q[0] == k)} records, {sum(1 for q, (_, r) in got.items() if q[0] == k and r['pending'])} "
+                  f"pending, the last at {last[k][0]}" for k in demos) + \
+        f" (layout_src {d['layout_src']}, ctx {d['ctx']}); its stderr: {simparity_frames.stderr.strip()[-1500:]!r}"
     out = {k: [] for k in demos}
     for (k, t), (h, rec) in sorted(got.items(), key=lambda p: p[0][1]):
         if k in out and not any(t == q for q, _, _ in out[k]):
