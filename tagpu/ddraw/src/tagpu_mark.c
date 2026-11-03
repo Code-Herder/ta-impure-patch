@@ -95,6 +95,8 @@
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
 #include "tagpu_recpov.h"   /* REC_CLICK_SHOW: how long a recorded click's ring lasts */
+#include "tagpu_icontype.h" /* the icons' art atlas */
+#include "tagpu_icon_rule.h" /* the icons' generated shapes, TAGPU_GLSL_ICON_FN */
 #include "tagpu_log.h"
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -260,6 +262,8 @@ static float  s_orda[MAXORDA * MVST];   /* order markers: art quads           */
 static float  s_ordl[MAXORDL * MVST];   /* order markers: line records        */
 static float  s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits    */
 static float* s_sel;   static unsigned s_selCap;   /* selection rects, lines  */
+static float* s_icon;  static unsigned s_iconCap;  /* strategic icons, verts */
+static int    s_nicon, s_iconover;     /* their verts / icons refused, a frame  */
 static int    s_saidGrow;
 static int   s_nsel, s_selover;        /* their lines / rects refused, a frame */
 static int   s_lfar;                   /* lines past TAGPU_LINE_FAR           */
@@ -326,7 +330,16 @@ static const char* FS =
     "uniform int uKey;\n"
     "uniform int uText;\n"
     TAGPU_GLSL_FOG_UNIFORMS
+    /* the icons' markers and colours (TAGPU_MKHAND), declared after the fog's
+       so spirv-gen lays them at 20, 24, 28 and 32 of the block: LFS is not
+       touched and keeps its uGrid at 32, which tagpu_vk_mark.c writes into a
+       line draw's block alone */
+    "uniform int uIconFill;\n"
+    "uniform int uIconSel;\n"
+    "uniform int uIconWhite;\n"
+    "uniform int uIconInk;\n"
     TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_ICON_FN
     "void main(){\n"
     /* Markers drawn before the engine's fog overlay are darkened by it and
        vanish where it paints solid black — terrain already paints that black,
@@ -341,9 +354,36 @@ static const char* FS =
        the glyph covers this fragment and the colour comes from the vertex — which
        keeps the atlas colour-free and lets the same string be drawn in any
        colour for one raster. */
-    "  if (uText != 0) {\n"
+    "  if (uText == 1) {\n"
     "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
+    /* A STRATEGIC ICON (tagpu_mark_emit_icon). Its words ride the world slot,
+       which an unfogged draw does not read: x = team + 256 * selected,
+       y = alpha + 256 * shape, each under 2^12, so the interpolated value
+       rounds back to the integer at every fragment. Shape 0 is art: the
+       atlas's key is nothing, its SelectedColor marker shows only when
+       selected and its FillColor marker takes the team colour, or white.
+       Any other shape is generated here, from the quad's own (+-1, +-1) and
+       fwidth -- taken before any branch on the shape, in control flow every
+       fragment of the draw shares -- so it needs no atlas and no re-raster
+       when the size or the supersampling changes: taIconShape is
+       tagpu_icon_shape() of inc/tagpu_icon_rule.h, which the host test checks. */
+    "  } else if (uText == 2) {\n"
+    "    vec2 fw = fwidth(vUV);\n"
+    "    int t = int(vWorld.x + 0.5), q = int(vWorld.y + 0.5);\n"
+    "    int sh = q >> 8;\n"
+    "    bool sel = (t & 256) != 0;\n"
+    "    if (sh == 0) {\n"
+    "      pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
+    "      if (pi == uKey) discard;\n"
+    "      if (pi == uIconSel) { if (!sel) discard; }\n"
+    "      else if (pi == uIconFill) pi = sel ? uIconWhite : (t & 255);\n"
+    "    } else {\n"
+    "      int m = taIconShape(sh - 1, vUV, fw);\n"
+    "      if (m == 0) discard;\n"
+    "      pi = m == 2 ? uIconInk : (sel ? uIconWhite : (t & 255));\n"
+    "    }\n"
+    "    a = float(q & 255) / 255.0;\n"
     /* a negative u marks the flat path: the vertex carries a palette index
        instead of a texel (health bars) */
     "  } else if (vUV.x < 0.0) {\n"
@@ -652,6 +692,41 @@ int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
     put_at(s_orda, i + 4, x1, y1, u1, v1, wx, wz, alpha);
     put_at(s_orda, i + 5, x0, y1, u0, v1, wx, wz, alpha);
     s_norda += QUADV;
+    return 1;
+}
+
+/* One strategic icon. CONSTANT SCREEN SIZE, as the order art: `edge` game
+   px after the zoom whatever the zoom, centred on the unit's anchor, its
+   corner put on the device grid by pre-image (`snap_device`) so art lands
+   texel-whole. The fill colour, the selection, the opacity and the shape ride
+   the world slot as two small integers (FS's icon branch says why there). */
+int tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int shape,
+                         int edge_w, int edge_h, int team, int sel, int alpha)
+{
+    float x0, y0, x1, y1, u0, v0, u1, v1, tw, sa;
+    const int i = s_nicon;
+    if ((unsigned)s_nicon + QUADV > s_iconCap) { s_iconover++; return 0; }
+    x0 = ax - (float)((double)edge_w * 0.5 * s_px);
+    y0 = ay - (float)((double)edge_h * 0.5 * s_px);
+    snap_device(&x0, &y0);
+    x1 = x0 + (float)((double)edge_w * s_px);
+    y1 = y0 + (float)((double)edge_h * s_px);
+    if (r) {
+        u0 = (float)r->x / (float)TAGPU_ICONART_W;          v0 = (float)r->y / (float)TAGPU_ICONART_H;
+        u1 = (float)(r->x + r->w) / (float)TAGPU_ICONART_W; v1 = (float)(r->y + r->h) / (float)TAGPU_ICONART_H;
+        shape = 0;
+    } else {
+        u0 = v0 = -1.0f; u1 = v1 = 1.0f;
+    }
+    tw = (float)((team & 255) | (sel ? 256 : 0));
+    sa = (float)((alpha & 255) | ((shape & 15) << 8));
+    put_at(s_icon, i + 0, x0, y0, u0, v0, tw, sa, 0.0f);
+    put_at(s_icon, i + 1, x1, y0, u1, v0, tw, sa, 0.0f);
+    put_at(s_icon, i + 2, x0, y1, u0, v1, tw, sa, 0.0f);
+    put_at(s_icon, i + 3, x1, y0, u1, v0, tw, sa, 0.0f);
+    put_at(s_icon, i + 4, x1, y1, u1, v1, tw, sa, 0.0f);
+    put_at(s_icon, i + 5, x0, y1, u0, v1, tw, sa, 0.0f);
+    s_nicon += QUADV;
     return 1;
 }
 
@@ -1324,6 +1399,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 
     s_nbar = 0; s_cBar = 0; s_norda = 0; s_nordl = 0; s_nordx = 0;
     s_nsel = 0; s_selover = 0; s_lfar = 0;
+    s_nicon = 0; s_iconover = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
     s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
@@ -1334,7 +1410,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        bucket that would not grow keeps its old size, and the caps below then
        count what they refuse. */
     if (!grow_verts(&s_barv, &s_barvCap, pk->n_units * 2u * QUADV) ||
-        !grow_verts(&s_sel, &s_selCap, pk->n_units * 4u)) {
+        !grow_verts(&s_sel, &s_selCap, pk->n_units * 4u) ||
+        !grow_verts(&s_icon, &s_iconCap, pk->n_units * QUADV)) {
         if (!s_saidGrow) {
             s_saidGrow = 1;
             flog("mark: a unit-scaled marker bucket would not grow to the packet's "
@@ -1562,7 +1639,7 @@ static void mk_draw(int first, int count, int lines, int text, int fog, int tex,
     s_mkD[s_mkDn].lines = lines; s_mkD[s_mkDn].text = text;
     s_mkD[s_mkDn].fog = fog;     s_mkD[s_mkDn].tex = tex;
     s_mkD[s_mkDn].depth = depth;
-    s_mkD[s_mkDn].blend = tex == TAGPU_MK_TEX_ART;
+    s_mkD[s_mkDn].blend = tex == TAGPU_MK_TEX_ART || tex == TAGPU_MK_TEX_ICON;
     s_mkDn++;
 }
 
@@ -1589,7 +1666,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, ovtBase, ovlBase, placeBase, swBase;
+    int total, textBase = 0, selBase = 0, iconBase, ovtBase, ovlBase, placeBase, swBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1608,7 +1685,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_markown_set_digits(s_digits);
     }
 
-    if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 &&
+    if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 && s_nicon == 0 &&
         s_norda == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0 &&
         s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0) return;
 
@@ -1638,7 +1715,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nordx) mk_push(s_ordx, s_nordx);
     selBase = textBase + s_nordx;
     if (s_nsel) mk_push(s_sel, s_nsel);
-    ovtBase = selBase + s_nsel;
+    iconBase = selBase + s_nsel;
+    if (s_nicon) mk_push(s_icon, s_nicon);
+    ovtBase = iconBase + s_nicon;
     if (s_novt) mk_push(s_ovt, s_novt);
     ovlBase = ovtBase + s_novt;
     if (s_novl) mk_push(s_ovl, s_novl);
@@ -1660,6 +1739,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nsel) {
         mk_draw(selBase, s_nsel, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 1);
     }
+    /* THE STRATEGIC ICONS, second: over the world and the selection rects,
+       under the orders, the bars, the digits and every UI layer, as BAR draws
+       them. Not fogged -- the gather placed each over a unit it judged
+       visible, or a radar contact -- and not depth-tested. */
+    if (s_nicon) mk_draw(iconBase, s_nicon, 0, 2, 0, TAGPU_MK_TEX_ICON, 0);
 
     /* The engine's own order inside the block: order markers and their
        ShowRanges labels first (`0x469BFC`), then the health bars over them
@@ -1746,6 +1830,16 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
         s_mkPub.art = tagpu_order_art(&s_mkPub.artKey);
         s_mkPub.artW = TAGPU_ORDART_W; s_mkPub.artH = TAGPU_ORDART_H;
+        {
+            const TAGPU_ICONART* ia = tagpu_icontype_art();
+            const unsigned char* gui = v->packet ? v->packet->gui_col : NULL;
+            if (ia) {
+                s_mkPub.icon = ia->pix; s_mkPub.iconW = ia->w; s_mkPub.iconH = ia->h;
+                s_mkPub.iconKey = ia->key; s_mkPub.iconFill = ia->fill; s_mkPub.iconSel = ia->sel;
+            }
+            s_mkPub.iconWhite = gui ? gui[GUI_WHITE] : GUI_WHITE;
+            s_mkPub.iconInk = gui ? gui[GUI_BLACK] : GUI_BLACK;
+        }
         /* the palette tagpu_vk_mark.c binds, as bytes -- the shape tagpu_fx.h
            uses for it */
         s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
@@ -1764,22 +1858,24 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_log) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 120) {
-            char b[320];
+            char b[400];
             int nstr = 0, ndrop = 0;
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d "
+                "mark: bars=%d sel=%d selover=%d icons=%d iconover=%d cursor=%d place=%d placered=%d placetake=%d "
                 "sweep=%d swover=%d ordart=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake,
+                s_cBar, s_nsel / 4, s_selover, s_nicon / QUADV, s_iconover, s_ncurs / QUADV, s_cPlace,
+                s_cPlaceRed, s_cPlaceTake,
                 s_cSweep, s_swover, s_norda / QUADV,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");
+            b[sizeof b - 1] = 0;
             flog(b);
         }
     }

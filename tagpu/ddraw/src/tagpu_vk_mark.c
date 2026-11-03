@@ -78,7 +78,12 @@ DFNS(DECL)
 #define FS_TEXT     4
 #define FS_FOGSIZE  8
 #define FS_FOG     16
-#define FS_GRID    32          /* LFS only; padding past FS's own block */
+#define FS_ICONFILL  20        /* FS only, an icon draw's: the art's markers */
+#define FS_ICONSEL   24
+#define FS_ICONWHITE 28        /* ...and the GUI's white and black          */
+#define FS_ICONINK   32
+#define FS_GRID    32          /* LFS only, a line draw's; an icon draw's block
+                                  holds FS_ICONINK there */
 
 #define MVST       8           /* floats a vertex: x,y u,v wx,wz colour z */
 #define MK_VSTRIDE (MVST * 4)
@@ -87,7 +92,7 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 /* IMG_NONE is the 1x1 0xFF stand-in that fills a sampler binding with no
    picture this frame. The fog image is not one of these: it is the slot's in
    tagpu_vk_fog.c, shared with every world pass. */
-enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_ART, IMG_N };
+enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_ART, IMG_ICON, IMG_N };
 
 static int s_state;
 static int s_downOwed, s_downPaying;
@@ -127,8 +132,10 @@ static VkDescriptorPool      s_pool;
    measured 3 891 pixels. */
 static VkDescriptorSet       s_setN[TAGPU_VK_SLOTS];
 static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
-/* and a third, the order art's palette-index atlas (tagpu_order_art) */
+/* and a third, the order art's palette-index atlas (tagpu_order_art), and a
+   fourth, the strategic icons' (tagpu_icontype_art) */
 static VkDescriptorSet       s_setA[TAGPU_VK_SLOTS];
+static VkDescriptorSet       s_setI[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;          /* NEAREST: every texel here is an
                                                  index or a coverage byte */
 
@@ -187,11 +194,11 @@ static int s_saidFog, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO: one latch over several distinct refusals lets
    the first to fire silence a DIFFERENT one for the rest of the session. */
-static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidArtA;
+static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidArtA, s_saidIconA;
 /* ONE LATCH PER SITE. A single latch shared by six upload sites hides every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. */
-static int s_saidImgT, s_saidImgP, s_saidImgS, s_saidImgA;
+static int s_saidImgT, s_saidImgP, s_saidImgS, s_saidImgA, s_saidImgI;
 static int s_saidNoDraw, s_saidSlot;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -378,8 +385,8 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkDescriptorPoolSize ps[2];
     VkDescriptorPoolCreateInfo pi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkDescriptorSetLayout lay[3 * TAGPU_VK_SLOTS];
-    VkDescriptorSet       all[3 * TAGPU_VK_SLOTS];
+    VkDescriptorSetLayout lay[4 * TAGPU_VK_SLOTS];
+    VkDescriptorSet       all[4 * TAGPU_VK_SLOTS];
     VkDescriptorSetAllocateInfo ai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     uint32_t i;
@@ -405,23 +412,24 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     }
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    ps[0].descriptorCount = 2 * 3 * d->slots;
+    ps[0].descriptorCount = 2 * 4 * d->slots;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = NSAMP * 3 * d->slots;
-    pi.maxSets = 3 * d->slots;
+    ps[1].descriptorCount = NSAMP * 4 * d->slots;
+    pi.maxSets = 4 * d->slots;
     pi.poolSizeCount = 2; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_pool) != VK_SUCCESS) {
         s_pool = VK_NULL_HANDLE; return 0;
     }
-    for (i = 0; i < 3 * d->slots; i++) lay[i] = s_dsl;
+    for (i = 0; i < 4 * d->slots; i++) lay[i] = s_dsl;
     ai.descriptorPool = s_pool;
-    ai.descriptorSetCount = 3 * d->slots;
+    ai.descriptorSetCount = 4 * d->slots;
     ai.pSetLayouts = lay;
     if (vkAllocateDescriptorSets(d->dev, &ai, all) != VK_SUCCESS) return 0;
     for (i = 0; i < d->slots; i++) {
         s_setN[i] = all[i];
         s_setT[i] = all[d->slots + i];
         s_setA[i] = all[2 * d->slots + i];
+        s_setI[i] = all[3 * d->slots + i];
     }
     /* NEAREST on all three, and it is not a style choice: uLayer's texel IS a
        palette index and interpolating two of them gives a colour that is in
@@ -666,6 +674,7 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot, VkImageView fog)
     write_one(d, slot, s_setN[slot], &s_img[slot][IMG_NONE], fog);
     write_one(d, slot, s_setT[slot], &s_img[slot][IMG_TEXT], fog);
     write_one(d, slot, s_setA[slot], &s_img[slot][IMG_ART], fog);
+    write_one(d, slot, s_setI[slot], &s_img[slot][IMG_ICON], fog);
 }
 
 int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
@@ -814,10 +823,18 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         "nothing drawn while that is true"); }
             return 0;
         }
-        /* a blended draw is the order art's triangles and nothing else */
-        if (g->blend && (g->lines || g->tex != TAGPU_MK_TEX_ART)) {
+        if (g->tex == TAGPU_MK_TEX_ICON &&
+            !(s_h.icon && s_h.iconW > 0 && s_h.iconH > 0)) {
+            if (!s_saidIconA) { s_saidIconA = 1;
+                plog(d, "mark: an icon draw arrived with no icon atlas - "
+                        "nothing drawn while that is true"); }
+            return 0;
+        }
+        /* a blended draw is the order art's or the icons' triangles and
+           nothing else */
+        if (g->blend && (g->lines || (g->tex != TAGPU_MK_TEX_ART && g->tex != TAGPU_MK_TEX_ICON))) {
             if (!s_saidBound) { s_saidBound = 1;
-                plog(d, "mark: draw %d is blended but not order-art triangles", i); }
+                plog(d, "mark: draw %d is blended but not order-art or icon triangles", i); }
             return 0;
         }
     }
@@ -827,6 +844,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         ssz += (VkDeviceSize)s_h.textW * s_h.textH;
     if (s_h.art && s_h.artW > 0 && s_h.artH > 0)
         ssz += (VkDeviceSize)s_h.artW * s_h.artH;
+    if (s_h.icon && s_h.iconW > 0 && s_h.iconH > 0)
+        ssz += (VkDeviceSize)s_h.iconW * s_h.iconH;
     ssz += 256 * 4;                                  /* the palette */
     /* AND THE 1x1 STAND-IN'S OWN BYTE. Reserving for the images the hand-over
        carries and forgetting the one this pass makes for itself draws nothing:
@@ -875,6 +894,15 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         off += (VkDeviceSize)s_h.artW * s_h.artH;
     }
+    /* THE ICON ART IS WRITTEN ONCE TOO (tagpu_icontype_art): once per slot */
+    if (s_h.icon && s_h.iconW > 0 && s_h.iconH > 0 && !s_img[slot][IMG_ICON].have) {
+        if (!img_size(d, &s_img[slot][IMG_ICON], s_h.iconW, s_h.iconH, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_ICON], s_h.icon, s_h.iconW, 1, off)) {
+            if (!s_saidImgI) { s_saidImgI = 1; plog(d, "mark: the %dx%d icon art would not upload", s_h.iconW, s_h.iconH); }
+            return 0;
+        }
+        off += (VkDeviceSize)s_h.iconW * s_h.iconH;
+    }
     if (s_h.pal) {
         if (!img_size(d, &s_img[slot][IMG_PAL], 256, 1, VK_FORMAT_R8G8B8A8_UNORM) ||
             !img_up(d, cb, slot, &s_img[slot][IMG_PAL], s_h.pal, 256 * 4, 4, off)) {
@@ -911,7 +939,14 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         VkDeviceSize fstride = align_up(FS_SZ, s_ualign);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + at;
-            put_i(p, FS_KEY, s_h.draws[i].tex == TAGPU_MK_TEX_ART ? s_h.artKey : s_h.key);
+            put_i(p, FS_KEY, s_h.draws[i].tex == TAGPU_MK_TEX_ART  ? s_h.artKey :
+                             s_h.draws[i].tex == TAGPU_MK_TEX_ICON ? s_h.iconKey : s_h.key);
+            if (s_h.draws[i].tex == TAGPU_MK_TEX_ICON) {
+                put_i(p, FS_ICONFILL, s_h.iconFill);
+                put_i(p, FS_ICONSEL, s_h.iconSel);
+                put_i(p, FS_ICONWHITE, s_h.iconWhite);
+                put_i(p, FS_ICONINK, s_h.iconInk);
+            }
             put_i(p, FS_TEXT, s_h.draws[i].text);
             put_i(p, FS_FOGSIZE, fogW);
             put_i(p, FS_FOGSIZE + 4, fogH);
@@ -1014,14 +1049,16 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        ends on -- the game frame at the hand-over's ss -- and THIS target's
        extent: on a frame the offscreen target refused the world goes into the
        swapchain image at whatever scale that is, and a wrong scale does not
-       blur a line, it moves every pixel of it. Written into every draw's
-       block; only LFS reads it. */
+       blur a line, it moves every pixel of it. Written into every LINE draw's
+       block, the only ones LFS draws: an icon draw's block holds uIconInk at
+       the same offset 32 (FS_ICONINK), which this must not overwrite. */
     {
         int g[4];
         tagpu_line_grid(g, (int)(s_h.gw + 0.5f), (int)(s_h.gh + 0.5f),
                         (int)(s_h.ss + 0.5f), (int)w, (int)h);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + s_fsOff[i];
+            if (!s_h.draws[i].lines) continue;
             put_i(p, FS_GRID, g[0]);
             put_i(p, FS_GRID + 4, g[1]);
             put_i(p, FS_GRID + 8, g[2]);
@@ -1048,11 +1085,12 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
         /* UNIT 0 IS PER DRAW: the text draws sample the coverage atlas, the
-           order art its own, and everything else the 1x1 stand-in. A TEX_NONE draw does not
+           order art and the icons their own, and everything else the 1x1 stand-in. A TEX_NONE draw does not
            read it at all (its vertices carry u < 0, the flat path), so the
            stand-in is there to fill the binding rather than to be sampled. */
         set = g->tex == TAGPU_MK_TEX_TEXT ? s_setT[slot] :
-              g->tex == TAGPU_MK_TEX_ART  ? s_setA[slot] : s_setN[slot];
+              g->tex == TAGPU_MK_TEX_ART  ? s_setA[slot] :
+              g->tex == TAGPU_MK_TEX_ICON ? s_setI[slot] : s_setN[slot];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
                                 0, 1, &set, 2, dyno);
         /* a line draw's `first`/`count` are records: one six-vertex band
@@ -1087,7 +1125,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
         s_uboMem[i] = s_vbMem[i] = s_stgMem[i] = VK_NULL_HANDLE;
         s_uboMap[i] = s_vbMap[i] = s_stgMap[i] = NULL;
         s_uboCap[i] = s_vbCap[i] = s_stgCap[i] = 0;
-        s_setN[i] = s_setT[i] = s_setA[i] = VK_NULL_HANDLE;
+        s_setN[i] = s_setT[i] = s_setA[i] = s_setI[i] = VK_NULL_HANDLE;
     }
     if (s_pipeTri) { vkDestroyPipeline(d->dev, s_pipeTri, NULL); s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeTriA) { vkDestroyPipeline(d->dev, s_pipeTriA, NULL); s_pipeTriA = VK_NULL_HANDLE; }
@@ -1102,8 +1140,8 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidFog = s_saidRoom = s_saidPal = 0;
-    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidArtA = 0;
-    s_saidImgT = s_saidImgP = s_saidImgS = 0;
+    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidArtA = s_saidIconA = 0;
+    s_saidImgT = s_saidImgP = s_saidImgS = s_saidImgA = s_saidImgI = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;
 }

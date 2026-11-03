@@ -78,6 +78,16 @@ int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
 struct TAGPU_ORDART_FRAME;
 int  tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
                          float alpha, float wx, float wz);
+/* One strategic icon (tagpu_icon.c), centred on (ax, ay): `edge_w` x
+   `edge_h` SCREEN px at every zoom, its corner on the device grid. `r` is its
+   art's rect in tagpu_icontype_art's atlas with `shape` 0, or NULL with
+   `shape` a generated shape, TAGPU_ICLS_* + 1, decided per fragment
+   (inc/tagpu_icon_rule.h). Filled in palette index `team`, white when `sel`,
+   at opacity `alpha` 0..255; never fogged -- every icon is of a unit the
+   gather already judged visible, or a radar contact. 0 = the bucket is full. */
+struct TAGPU_ICONRECT;
+int  tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int shape,
+                          int edge_w, int edge_h, int team, int sel, int alpha);
 /* One unit's SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md
    §1): the closed loop p0->p1->p2->p3->p0 as four lines, in palette index
    `colidx`, fogged at (wx, wz).
@@ -120,7 +130,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
    become a text draw. */
 enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
        TAGPU_MK_TEX_TEXT = 2,   /* tagpu_text.c's coverage atlas */
-       TAGPU_MK_TEX_ART  = 3 }; /* tagpu_order_art's palette-index atlas */
+       TAGPU_MK_TEX_ART  = 3,   /* tagpu_order_art's palette-index atlas */
+       TAGPU_MK_TEX_ICON = 4 }; /* tagpu_icontype_art's palette-index atlas */
 
 typedef struct TAGPU_MKDRAW {
     int first, count;           /* vertices into `verts` below, or for a
@@ -135,10 +146,16 @@ typedef struct TAGPU_MKDRAW {
                                    written): the selection rects alone. Every
                                    other draw is the frame's top layer.      */
     int blend;                  /* 1 = blended at the vertex alpha: the order
-                                   art alone, TAGPU_MK_TEX_ART triangles     */
+                                   art's and the icons' triangles,
+                                   TAGPU_MK_TEX_ART and TAGPU_MK_TEX_ICON    */
 } TAGPU_MKDRAW;
 
-#define TAGPU_MK_MAXDRAW 16
+/* THE LIST'S CAP. A full frame records 16 draws -- the selection rects, the
+   icons, the order art and lines, the labels, the bars, the digits, the
+   cursor, the placement, four of the sweep and three of the overlays -- and a
+   draw past the cap drops the whole marker layer for the frame (`mk_draw`), so
+   the cap keeps room above that. */
+#define TAGPU_MK_MAXDRAW 24
 
 typedef struct TAGPU_MKHAND {
     unsigned frame;
@@ -155,6 +172,11 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_order_art: one palette index a texel, `artKey` where a frame draws
        nothing. Written once, so it is uploaded once per slot. */
     const unsigned char* art; int artW, artH, artKey;
+    /* tagpu_icontype_art: one palette index a texel, `iconKey` where a frame
+       draws nothing, `iconFill` and `iconSel` its two markers; `iconWhite`
+       and `iconInk` the GUI's white and black, a selected icon's fill and
+       every shape's outline. Written once, so it is uploaded once per slot. */
+    const unsigned char* icon; int iconW, iconH, iconKey, iconFill, iconSel, iconWhite, iconInk;
     /* THE PALETTE, AS BYTES: 256 RGBA8 texels of `tagpu_pal_engine()`, the
        shape `tagpu_fx.h` uses for it, from which the consumer builds its own
        image. The fog is not here: the consumer samples the slot's fog image
