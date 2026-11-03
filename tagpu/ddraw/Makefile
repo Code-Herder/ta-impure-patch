@@ -85,6 +85,21 @@ COVERED  := $(shell awk '$$1 !~ /^\#/ && $$3 == "sim" {print $$1}' thread-split.
 $(addsuffix $(OBJEXT), $(basename $(COVERED))): CFLAGS += -finstrument-functions -finstrument-functions-once -ffunction-sections
 endif
 
+# EVERY SECTION AT A PAGE-ALIGNED FILE OFFSET: FileAlignment = SectionAlignment
+# = 4096. Wine maps a PE section from the file only when its file offset and
+# its RVA agree modulo the page; any other section it read()s into anonymous
+# memory, which is what Wine reports as PagefileUsage -- the `vk: VA`
+# committed-peak. At ld's default 512 the agreement is a lottery that any
+# change to the code before a section can flip: `.rsrc` (13.8 MiB, the art)
+# moved from 0x438000 to 0x43AC00 between two builds a few KB apart and the
+# process's committed peak rose 13.7 MB before Vulkan was even up (MEASURED
+# 2026-11-03, Town & Country and Seven Islands, every run). Page alignment makes
+# every section mappable whatever precedes it, for at most a page of padding a
+# section in the file. Windows maps an image through its section object at
+# either alignment. Appended after both LDFLAGS assignments above, so the
+# coverage build carries it as well.
+LDFLAGS  += -Wl,--file-alignment,4096
+
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 
