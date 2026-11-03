@@ -155,8 +155,14 @@ is per-frame working copies, not information, so the landing is split to remove 
   four per-frame mapped copies and an 11.6 MB copy a frame at the floor.
 - **The MP recording version stays** unchanged: only a mixed-build game is affected, and the newest
   build's recording is whole.
-- **The engine hit test's int16 narrowing is bounded at level load**: the floor keeps the rect
-  inside the limit the largest model box over `UNITINFOCount` implies.
+- **The engine hit test's int16 narrowing is guarded at its one call** (`0x48CE15` in
+  `GetUnitAtMouse`, the only reference to `0x48C6A0`): the engine's test runs only when the unit's
+  model is valid, its root-box radius `R` (the engine's own `0x4CB650`) is at most 8191, and
+  `|x − eyeX|`, `|z − eyeY|`, `|alt|` each plus `R` fit int16 in 64-bit arithmetic; otherwise "not
+  hit". It checks the actual position at call time, so it holds for units the engine does not bound
+  — aircraft off the map or above cruise, teleports, carried units, network positions (scout batch
+  B, `.data/mega-map/facts-2026-11-03-B.md`). It replaces a level-load bound from the model box,
+  which those units defeat (owner, 2026-11-03).
 - **Mipmaps get their own landing after the floor**: per-tile mip chains for the terrain atlases and
   features, the level chosen from the supersampled target's pixel footprint, so 1× and above stay
   byte-identical.
@@ -191,8 +197,8 @@ is per-frame working copies, not information, so the landing is split to remove 
    fall back to.
 1b. **Terrain instances once per level.**
 1c. **The floor follows the map.** A runtime floor `min(0.25, fit)` with `fit` from the scroll
-   extent and the true viewport, bounded by the int16 click rect, terrain staging and the largest
-   model box; the seven guards (the cursor transform `view()` is the seventh), the vpwide cap and
+   extent and the true viewport, bounded by the int16 click rect; the hit-test guard at
+   `0x48CE15`; the seven guards (the cursor transform `view()` is the seventh), the vpwide cap and
    the two levers follow it; every pass's fog-width cap goes; the recorder's camera range widened
    under a new format version (27).
    *Verified*: wheel to the whole map on Seven Islands at 1024×768 and 4K; click and band-box
