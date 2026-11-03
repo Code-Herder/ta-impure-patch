@@ -8,9 +8,9 @@
    posts. The GAME half — the engine's own clamp and minimap-rect sites this
    module redirects, plus tagpu_zoom_apply() at the top of every in-play draw
    — is the only code here that touches the eye, the scroll target, the
-   follow slots, the minimap box and its dirty bit, the fog flag and
-   ScrollSpeed, and it does so on the thread that owns them. Every static is
-   marked with the thread that owns it. */
+   follow slots, the minimap box and its dirty bit, the fog flag and the
+   scroll poll's step, and it does so on the thread that owns them. Every
+   static is marked with the thread that owns it. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -45,7 +45,7 @@ static volatile float s_zoom = 1.0f;
 static volatile LONG  s_vpL, s_vpT, s_vw, s_vh;
 static volatile LONG  s_live;          /* a zoomed world is on screen right now */
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
-static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
+static int            g_mmInstalled;   /* tagpu_zoom_init() redirected the minimap rect */
 
 /* The top of the range every lever shares; the bottom is the floor
    (tagpu_zoom_floor), which follows the map. */
@@ -360,7 +360,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
         z = (float)(1.0 / iz);
         /* Land EXACTLY on 1.0 when the notches bring it there. 1x is the
            identity the whole stack tests for by equality — the transform, the
-           minimap rect and the scroll rate each short-circuit on `z == 1.0f` —
+           minimap rect and the scroll step each short-circuit on `z == 1.0f` —
            so a target within a thousandth of it is taken as it. BAR's notches
            do not cancel (in-then-out is 1.020), so this is reached only by a
            sequence that happens to land inside the band. */
@@ -614,7 +614,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        hard to see.
 
        THE LEVERS ARE UNGATED BY ANY ARM FILE. `tagpu_zoom.on` installs the
-       minimap/ScrollSpeed/camera-range patches and nothing else; the file, the
+       minimap/scroll-step/camera-range patches and nothing else; the file, the
        follow and the wheel are read here, and the native pass publishes the view, with no
        arm file consulted at all. So a build with `native.on` and `terr.on` but
        no `zoom.on` could be wheeled to 0.5x and reach exactly that state. Pin
@@ -865,41 +865,41 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
     s_fresh = 1;
 }
 
-/* ---- scroll rate -----------------------------------------------------------
+/* ---- the scroll step ---------------------------------------------------------
 
-   `main+0x1434D` is the engine's scroll speed (u8): the registry value
-   "ScrollSpeed" under HKCU\Software\Cavedog Entertainment\Total Annihilation,
-   loaded at 0x42FB62 and defaulted to 0x20 when the value is missing. It is a
-   distance in WORLD pixels per scroll tick, so at zoom z the same pointer dwell
-   at the screen edge moves the view z times less far across the SCREEN, and
-   scrolling at 0.25x feels glued. Scale it by 1/z and the screen moves at the
-   same rate at every zoom.
+   THE SCROLL POLL `0x41CE90` (one call, `0x496976`, on the GAME THREAD) steps
+   the eye by `ScrollSpeed main+0x1434D (u8) x main+0x38A3F` (the 30-Hz ticks
+   since the scheduler's last call), capped at 0x80, and returns before any key
+   or edge test when the step is 0 (`0x41CE99..0x41CEBA`, DISASSEMBLED). One
+   register, EBX, carries that step to edge scroll and the arrow keys alike, in
+   all four directions (`0x41CFA1`/`0x41CFCC`/`0x41CFFB`/`0x41D025`). The step
+   is in WORLD pixels, so at zoom z the picture moves z times as far across the
+   SCREEN: the step is divided by the level IN THE REGISTER, AFTER THE CAP
+   (`zoom_scroll_step`, through the stub at `0x41CEAA`). For z > 0,
+   min(a, b)/z = min(a/z, b/z), so that equals scaling both the byte and the
+   cap, and nothing saturates: the screen scrolls at the 1x rate at every level.
 
-   Written on the GAME THREAD, from the apply at the top of every in-play draw
-   (before the scroll poll of the NEXT frame reads it), and safe to write: the
-   eye is not simulated — it is a per-player camera preference that no other
-   machine ever sees — so this cannot perturb the sim or an MP session.
+   THE BYTE HAS ONE CLASS OF WRITER, THE ENGINE. Nothing in this DLL writes
+   `main+0x1434D`. Its writers are the registry load (`0x42FB7F`, the 0x20
+   default at `0x42FB8F`), the typed command `ScrollSpeed` (`0x416D03`), the
+   SPEEDS slider (`0x45C20C`), the restores from the options snapshot
+   `0x512F71` (`0x45EC0A`, `0x45FECB`, `0x45CA93`, `0x45CD8C`) and the 0x20
+   defaults (`0x45ECC2`, `0x45C70D`). So every engine reader -- the snapshot
+   (`0x45CE48`, `0x4602B6`), the save `0x430F9D`, the camera reset `0x41C2BD`
+   -- sees the player's own value, and the zoom exists only in EBX, from the
+   call at `0x41CEAB` to the poll's `pop ebx` at `0x41D0B3`.
 
-   The base is re-read from the engine whenever the value is not the one we last
-   wrote, so changing the preference in the options screen is picked up on the
-   next draw instead of being overwritten by a stale cache.
+   THE STEP IS BOUNDED. A positive engine step becomes one in
+   [1, 0x80 / TAGPU_ZOOM_FLOOR_LO] = [1, 8192] world px; 0, a negative step and
+   every step at z == 1.0f are the engine's own. The eye it moves is clamped at
+   `0x41D054` (`0x41C3C0`: zoom_eye_clamp when the camera range is installed)
+   before anything reads it.
 
-   THE BYTE SATURATES AT 255: from the default base of 32, every level below
-   0.125 scrolls 255 world px a tick, so below it the edge scroll moves the
-   screen slower the further out the view is. The field is a u8 and the
-   engine's scroll poll reads it as one; nothing here widens it.
-
-   AND THE FIELD IS PERSISTED, which is why `zoom_save_scroll` below exists.
-   `0x430F00` (save-all-preferences, called from a dozen places — e.g. `0x416D03`
-   sets the scroll speed and `0x416D09` immediately saves) writes this live byte
-   to the registry at `0x430FAE`. Left alone, a zoomed session would persist the
-   SCALED number as the player's preference, and because the next launch loads it
-   as the new base it would COMPOUND across launches (32 → 64 → 128 …). So the
-   one call site that persists it is redirected to save the player's own value.
-   The options screen still displays the scaled number while zoomed, which is at
-   least the rate scrolling is actually running at. */
+   THE EYE IS NOT SIMULATED: it is a per-player camera preference that no
+   other machine ever sees, and the step is not simulation state, so this
+   cannot perturb the sim, a replay or an MP session. */
+#define SCROLL_STEP_CAP  0x80          /* the poll's own cap, 0x41CEAA..0x41CEB3 */
 #define TA_MAINPP        0x00511DE8u
-#define OFF_SCROLLSPEED  0x1434D
 #define OFF_GUI_FLAGS    0x37EBE   /* bit 0: ARMOPT/exit/preferences owns input */
 
 /* game thread only: the level the last command carried, clamped to the
@@ -919,30 +919,32 @@ static int   s_gIcons;
    write of it goes through zoom_minimap_rect once tagpu_zoom_init installed the redirects
    (g_mmInstalled), and without them the engine's clamp writes the 1x box, so it is not kept */
 static float s_rectLevel = 1.0f;
-static unsigned char s_scrollBase, s_scrollWrote;   /* game thread only */
 
 static float game_level(void)
 {
     return s_gLive ? s_gLevel : 1.0f;
 }
 
-static void apply_scroll_rate(char* ta)
+/* GAME THREAD, called from the scroll poll `0x41CE90` through the stub at
+   `0x41CEAA` (scroll_step_install). `step` is EBX before the cap -- the byte
+   times the elapsed ticks -- and the return value is EBX from `0x41CEB8` on.
+   The engine's signed cap is reproduced first, so at z == 1.0f the step is the
+   engine's bit for bit. The level is this thread's own (game_level: the last
+   apply's, at or above TAGPU_ZOOM_FLOOR_LO; the guard below also turns a NaN
+   back into the engine's step), so the result is at most 0x80 / (1/64) = 8192,
+   and it is at least 1 rather than 0 because 0 makes the poll return at
+   `0x41CEBA` and a held key would do nothing. */
+static int __cdecl zoom_scroll_step(int step)
 {
-    unsigned char* p = (unsigned char*)(ta + OFF_SCROLLSPEED);
     float z;
     int v;
 
-    if (*p != s_scrollWrote) s_scrollBase = *p;   /* the engine or the player */
-    if (!s_scrollBase) return;
-
+    if (step > SCROLL_STEP_CAP) step = SCROLL_STEP_CAP;     /* the replaced cmp/jle/mov, signed */
+    if (step <= 0) return step;                              /* 0 skips the poll at 0x41CEBA */
     z = game_level();
-    /* Without the save guard installed (tagpu_zoom.on absent) the scaled value
-       would reach the player's registry, so leave the field alone entirely. */
-    v = (g_mmInstalled && z >= TAGPU_ZOOM_FLOOR_LO && z != 1.0f)
-        ? (int)((float)s_scrollBase / z + 0.5f) : (int)s_scrollBase;
-    if (v < 1) v = 1;
-    if (v > 255) v = 255;
-    *p = s_scrollWrote = (unsigned char)v;
+    if (z == 1.0f || !(z >= TAGPU_ZOOM_FLOOR_LO)) return step;
+    v = iround((float)step / z);
+    return v < 1 ? 1 : v;          /* <= SCROLL_STEP_CAP / TAGPU_ZOOM_FLOOR_LO = 8192 */
 }
 
 /* ---- the camera's range ----------------------------------------------------
@@ -1052,8 +1054,6 @@ static void apply_scroll_rate(char* ta)
    site that starts it is redirected and the world point clamped to the
    SCROLL EXTENT (zoom_tpos_guard), which keeps the hovered cell real. */
 
-#define SAVE_SETTING_VA  0x004B6A50u   /* stdcall(section,name,dword), ret 0xC */
-#define SITE_SAVESCROLL  0x00430FAEu   /* the one site that persists ScrollSpeed */
 #define MINIMAP_RECT_VA  0x00466B70u   /* stdcall(RECT*), ret 4              */
 #define SITE_MMRECT1_VA  0x0041C426u   /* call 0x466B70 — eye clamped at top */
 #define SITE_MMRECT2_VA  0x0041C442u   /* call 0x466B70 — ...and at bottom   */
@@ -2044,7 +2044,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     int  loX, hiX, loY, hiY, moved = 0, applied = 0;
 
     /* THE LEVEL FIRST: every game-thread reader in this file — the minimap
-       rect's scale, the scroll rate — uses the level the last record carried,
+       rect's scale, the scroll step — uses the level the last record carried,
        never the render thread's own float. A frame that drew nothing zoomed
        posts live = 0, which is 1.0 here: the engine's own rect and rate come
        back at the next draw. */
@@ -2058,7 +2058,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     s_gLive   = c ? (int)c->live : 0;
     /* THE LEVEL AT OR ABOVE THIS THREAD'S FLOOR: the render thread's floor is
        a frame old, and every game-thread consumer of the level -- the rect,
-       the minimap box, the scroll rate, the recorder -- reads one at or above
+       the minimap box, the scroll step, the recorder -- reads one at or above
        the floor computed here. The record passed cmd_valid, so the level is
        finite and at least TAGPU_ZOOM_FLOOR_LO. */
     if (s_gLevel < s_gFloor) s_gLevel = s_gFloor;
@@ -2218,10 +2218,6 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
         *(unsigned char*)(ta + OFF_MM_DIRTY) |= 2u;
     }
-
-    /* and the scroll rate, every draw: base/z, or the base when nothing is
-       zoomed — before the next frame's scroll poll reads it */
-    apply_scroll_rate(ta);
 }
 
 void tagpu_zoom_level_end(char* ta)
@@ -2252,7 +2248,6 @@ void tagpu_zoom_level_end(char* ta)
         clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY), loX, hiX, loY, hiY);
         clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
     }
-    if (ta_ok(ta)) apply_scroll_rate(ta);                     /* the player's own value, for the options screen */
 }
 
 /* THE SCENARIO CAMERA (tagpu_scenario.c's place_camera). GAME THREAD, from
@@ -2381,7 +2376,7 @@ void tagpu_zoom_frame_end(void)
     s_fresh = 0;
     /* THE RECORD: this frame's level and whether a zoomed world is on screen
        (the game thread derives the addressable rect, the minimap box and the
-       scroll rate from the pair), the anchor's cumulative delta, whether any
+       scroll step from the pair), the anchor's cumulative delta, whether any
        of it is still unacknowledged (the follow release rides that, so a
        record the game thread never took loses nothing: the next one carries
        the same request), and the camera hold. Posted on EVERY path out of the
@@ -3080,15 +3075,6 @@ static void __stdcall zoom_tpos_guard(int x, int y, int* out)
     ((PFN_GETTPOS)VA_GETTPOS)(x, y, out);
 }
 
-/* Keep our scaling out of the player's registry — see the block above. Game
-   thread, like the apply that writes the byte it guards. */
-static void __stdcall zoom_save_scroll(void* section, const char* name, int value)
-{
-    if (s_scrollBase && (unsigned char)value == s_scrollWrote)
-        value = (int)s_scrollBase;
-    ((void (__stdcall *)(void*, const char*, int))SAVE_SETTING_VA)(section, name, value);
-}
-
 /* an `E8 <rel32>` at `site` whose target is `expect`? */
 static int site_is(unsigned int site, unsigned int expect)
 {
@@ -3112,6 +3098,68 @@ static int redirect(unsigned int site, void* target)
     return tagpu_detour_write(site, b, 5);
 }
 
+#define SCROLL_POLL_VA   0x0041CE90u   /* the scroll poll, one call 0x496976          */
+#define SCROLL_CAP_VA    0x0041CEAAu   /* its cap: cmp ebx,0x80 / push edi / jle / mov */
+#define SCROLL_CAP_LEN   14            /* ... up to 0x41CEB8, test ebx,ebx            */
+
+/* 0x41CE90..0x41CEBF, DISASSEMBLED: main into EAX, the byte main+0x1434D times
+   the elapsed ticks main+0x38A3F into EBX, the signed cap at 0x80, the zero
+   test -- what zoom_scroll_step's argument rests on. */
+static const unsigned char SCROLL_POLL_HEAD[48] = {
+    0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x83, 0xEC, 0x24, 0x53, 0x33, 0xDB, 0x8A,
+    0x98, 0x4D, 0x43, 0x01, 0x00, 0x55, 0x0F, 0xAF, 0x98, 0x3F, 0x8A, 0x03,
+    0x00, 0x56, 0x81, 0xFB, 0x80, 0x00, 0x00, 0x00, 0x57, 0x7E, 0x05, 0xBB,
+    0x80, 0x00, 0x00, 0x00, 0x85, 0xDB, 0x0F, 0x84, 0xF0, 0x01, 0x00, 0x00 };
+
+/* THE SCROLL POLL'S CAP becomes `push edi; call stub; nop x8`, and the stub
+   hands EBX to zoom_scroll_step and puts the result back in EBX.
+
+   IN PLACE BEFORE IT CAN RUN: this runs from DllMain's process attach, before
+   the exe's entry point and so before any thread that could execute the poll;
+   the stub is complete before the site points at it; and the site is matched
+   over all 48 bytes first, which establishes EAX = main and EBX = byte x ticks.
+   No branch lands inside `0x41CEAB..0x41CEB7` (DISASSEMBLED: every rel8, rel32
+   and jcc32 in .text; the `jle` targets `0x41CEB8`), and `push edi` runs at
+   the stock depth, so the stack at `0x41CEB8` is the engine's.
+
+   EVERY REGISTER BUT EBX IS KEPT: `[esp+0x10]` is pushad's EBX slot (EDI, ESI,
+   EBP, ESP, EBX, EDX, ECX, EAX from esp+0), and `push ebx; call; add esp,4`
+   leaves esp back at that frame. The flags are not kept and need not be:
+   `test ebx,ebx` at `0x41CEB8` sets every flag the `je` after it reads.
+
+   THE SITE'S rel32 IS COMPUTED BY HAND, against the address after the call
+   (`0x41CEB0`): tagpu_detour_rel encodes against the buffer it writes into,
+   which is right for the stub and wrong for `site[]`.
+
+   ITS OWN BYTE MATCH, outside the zoom's all-or-nothing list: nothing else
+   rests on it and it rests on nothing else, so an exe whose poll differs keeps
+   the zoom and scrolls at the engine's step, with no byte of ours involved. */
+static int scroll_step_install(void)
+{
+    unsigned char site[SCROLL_CAP_LEN];
+    unsigned char* s;
+    unsigned char* p;
+
+    if (!bytes_are(SCROLL_POLL_VA, SCROLL_POLL_HEAD, (int)sizeof SCROLL_POLL_HEAD)) return 0;
+    if (!(s = p = tagpu_detour_stub())) return 0;
+    *p++ = 0x60;                                              /* pushad                 */
+    *p++ = 0x53;                                              /* push ebx               */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)zoom_scroll_step); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                    /* add esp,4              */
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;       /* mov [esp+0x10],eax     */
+    *p++ = 0x61;                                              /* popad                  */
+    *p++ = 0xC3;                                              /* ret                    */
+    site[0] = 0x57;                                           /* push edi               */
+    site[1] = 0xE8;
+    *(unsigned int*)(site + 2) = (unsigned int)(size_t)s - (SCROLL_CAP_VA + 6u);
+    memset(site + 6, 0x90, SCROLL_CAP_LEN - 6);
+    if (!tagpu_detour_write(SCROLL_CAP_VA, site, SCROLL_CAP_LEN)) {
+        tagpu_detour_stub_free(s);
+        return 0;
+    }
+    return 1;
+}
+
 void tagpu_zoom_init(void)
 {
     static const unsigned blocks[2][2] = {
@@ -3127,7 +3175,6 @@ void tagpu_zoom_init(void)
        different exe arms nothing rather than half of it. */
     if (!site_is(SITE_MMRECT1_VA, MINIMAP_RECT_VA) ||
         !site_is(SITE_MMRECT2_VA, MINIMAP_RECT_VA) ||
-        !site_is(SITE_SAVESCROLL, SAVE_SETTING_VA) ||
         !site_is(SITE_GETTPOS, VA_GETTPOS) ||
         !site_is(SITE_DEBUGOVL, DEBUGOVL_VA) ||
         !bytes_are(EYECLAMP_VA, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
@@ -3135,13 +3182,17 @@ void tagpu_zoom_init(void)
         !bytes_are(CENTOBJ_BLOCK, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
         !bytes_are(FOLLOWCLAMP_VA, FOLLOW_STOLEN, (int)sizeof FOLLOW_STOLEN)) {
         zlog("zoom: NOT armed — engine bytes differ at one of "
-             "0x41C426/0x41C442/0x430FAE/0x498EF9/0x468DBA/0x41C3C0/"
+             "0x41C426/0x41C442/0x498EF9/0x468DBA/0x41C3C0/"
              "0x41C808/0x41C93B/0x41CAF7");
         return;
     }
+    zlog(scroll_step_install()
+         ? "zoom: scroll step armed at 0x41CEAA -- the scroll poll's step is divided by the "
+           "level; ScrollSpeed main+0x1434D is never written"
+         : "zoom: scroll step NOT armed -- the scroll poll 0x41CE90..0x41CEBF differs from the "
+           "retail bytes, or no stub; edge and arrow scroll keep the engine's step at every zoom");
     ok  = redirect(SITE_MMRECT1_VA, (void*)zoom_minimap_rect);
     ok &= redirect(SITE_MMRECT2_VA, (void*)zoom_minimap_rect);
-    ok &= redirect(SITE_SAVESCROLL, (void*)zoom_save_scroll);
     g_mmInstalled = ok;
     if (!ok) { zlog("zoom: PARTIAL — see above"); return; }
 
@@ -3162,7 +3213,7 @@ void tagpu_zoom_init(void)
                                             (int)sizeof EYE_STOLEN,
                                             &g_clampOurs, 0, zoom_eye_clamp);
     if (!g_eyeInstalled) {
-        zlog("zoom: PARTIAL — minimap and ScrollSpeed only, the camera "
+        zlog("zoom: PARTIAL — minimap and the scroll step only, the camera "
              "range did NOT install");
         return;
     }
@@ -3175,10 +3226,10 @@ void tagpu_zoom_init(void)
         for (i = 0; i < 2; i++)
             built &= tagpu_detour_land(blocks[i][0], stubs[1 + i], (int)sizeof EYE_STOLEN);
     }
-    zlog(built ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, "
+    zlog(built ? "zoom: ARMED (minimap rect 0x466B70 x2, "
                  "camera centre range 0x41C3C0 + target clamps 0x41C808/"
                  "0x41C93B/0x41CAF7 + world guard 0x498EF9 + debug overlay guard "
-                 "0x468DBA); the eye, the target, the follow and ScrollSpeed are "
+                 "0x468DBA); the eye, the target and the follow are "
                  "written on the game thread from the frame packet's command apply"
                : "zoom: ARMED without every target clamp (0x41C808/"
                  "0x41C93B/0x41CAF7) — a centring or a follow near a map edge "

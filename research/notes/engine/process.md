@@ -258,7 +258,6 @@ anchor's delta is a cumulative sum, so an overwritten record loses nothing), and
 | `main+0x142CB` (the minimap view rect) | recomputed through `0x466B70` after any eye the apply moved | the engine's own wrapper, scaled by 1/z as the two redirected sites inside `0x41C3C0` are |
 | `main+0x142F1` bit 1 (DrawMinimap's dirty flag) | **set** after any eye the apply moved | the `orb $2` every engine eye writer makes before its `0x41C3C0` call (`0x41C598`, `0x41D04D`, …); safe here because it is the game thread, the one `0x466B16` clears it on |
 | `main+0x14281` bit 3 (the screen fog grid is current) | **cleared** after any eye the apply moved | the same clear `0x41CB6B` makes; safe here because it is the game thread (the row on this bit in the camera module) |
-| `main+0x1434D` (`ScrollSpeed`) | every in-play draw: `base / z`, or the base when nothing is zoomed | the base re-read whenever the byte is not the one last written |
 | `main+0x37E27..0x37E33` (the viewport rect L, T, R, B) | widened to the transform's range at zoom < 1, restored otherwise | `tagpu_vpwide_apply`; W/H at `+0x37E37`/`+0x37E3B` are never written, and a mismatch against the screen-derived size is COUNTED (`vpwh=`, 0 on the landing) instead of repaired, since `0x497F40`'s own stores and ours are on one thread now |
 
 And what the `after` READS for the packet that landing 2 added: the viewport rect as it stands
@@ -266,8 +265,7 @@ And what the `after` READS for the packet that landing 2 added: the viewport rec
 copied) and the gamma factor `[0x51FBD0]+0x614` (bounded to 0.05..8.0), plus the apply's own
 record of what it applied (`cmd_ack_seq`, the cumulative delta), which is how the render thread
 reconciles the eye it predicted. At the level teardown the apply's state is handed back on the
-game thread as well — the range flag cleared, `ScrollSpeed` restored to the base, the rect
-restored — before the shell draws.
+game thread as well — the range flag cleared, the rect restored — before the shell draws.
 
 **The observer chain on `0x468CF0`.** `tagpu_menu.c` observes the site first (`before` only, the
 tick of its trigger poll; it never hijacks the return) and `tagpu_packet_pub.c` chains after it
@@ -1066,9 +1064,10 @@ wrote 32).
 - **Our DLL**: the fork's `debug.c` reads `HKLM` version values, in `make DEBUG=1` builds only;
   `utils.c` reads a Voobly key only when `age.dll` is loaded; `indeo.c` writes four `vidc.iv*`
   values under `HKCU\…\Drivers32` at attach and deletes them at detach, which test mode skips
-  (the game plays Smacker and loads no Video for Windows codec). `tagpu_zoom.c` saves
-  `scrollspeed` through `SaveSetting 0x4B6A50`, so it reaches the registry through TA's own
-  imports.
+  (the game plays Smacker and loads no Video for Windows codec). Nothing of ours writes
+  `scrollspeed`: the engine's own save `0x430F00` does, through `SaveSetting 0x4B6A50` and so
+  through TA's own imports, and the byte it saves is never written by the DLL ([input](input.html),
+  *Fields this module owns*).
 - **Not examined**: the system DLLs that may touch the registry for the game (DirectPlay,
   DirectSound); what `ShellExecuteA` starts, from `0x4DA5B0` or from `online.dll`; what the
   extension DLLs read, what `online.dll`'s child processes do, and `mptaext.dll` itself; and

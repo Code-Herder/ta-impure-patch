@@ -1800,7 +1800,8 @@ clicked, two peeks each read GameTime 1 with the bit set; after `resume` the lev
 scroll poll `0x41CE90` (called at `0x496976`, on paused frames too unless `main+0x37EBE` bit 0, an
 in-game GUI screen, is set: `0x496969`/`0x49696F`) steps the camera by the byte `main+0x1434D`
 (ScrollSpeed) times the dword `main+0x38A3F` (`0x41CE9B..0x41CEA2`), capped at `0x80`, and skips
-the step when it is 0 (`0x41CEBA`). `main+0x38A3F` is the 30-Hz clock's ticks since the
+the step when it is 0 (`0x41CEBA`); at a zoom level other than 1, Impure divides the capped step
+by the level ([camera and zoom](../modules/camera-zoom.html) §2.3), which leaves 0 at 0. `main+0x38A3F` is the 30-Hz clock's ticks since the
 scheduler's previous call (`0x495243..0x495249`, the clock `0x4B6340`), which a paused frame does
 not call (`0x496926`), so a held level keeps the last running frame's value: a frame shorter than
 a 30-Hz tick leaves 0, and then no arrow moves the camera. MEASURED 2026-10-09 (c2-weapon-keys,

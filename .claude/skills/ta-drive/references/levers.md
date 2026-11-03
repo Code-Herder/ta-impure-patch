@@ -192,7 +192,7 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 
 | lever | when read | what |
 |---|---|---|
-| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
+| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the scroll step (`0x41CEAA`), and the camera's centre range. Logs `zoom: scroll step armed at 0x41CEAA -- the scroll poll's step is divided by the level; ScrollSpeed main+0x1434D is never written` and `zoom: ARMED (minimap rect 0x466B70 x2, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
 | `tagpu_zoom.txt` | every frame | a bare float 1/64–8.0 (0.015625–8), drawn no lower than the map's zoom floor; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
@@ -225,8 +225,9 @@ Driving the camera at a zoom other than 1:
   the arithmetic; not yet read off a run) — the term is `fit`, `lparam`,
   `1/64` or `0.25` (a map the screen covers at 0.25x). Read the floor there or off the `native:`
   line's `floor=`, never assume 0.25. The wheel and the mega notch stop at it; `tagpu_zoom.txt`
-  and a Follow below it draw at it. `ScrollSpeed` saturates at 255 below 0.125, so edge scroll is
-  slow at a deep floor.
+  and a Follow below it draw at it. Edge and arrow scroll move the screen at the 1x rate at
+  every level, the floor included: the scroll poll's step is divided by the level at `0x41CEAA`,
+  and `ScrollSpeed` `main+0x1434D` keeps the player's value.
 - **The unit hit test is guarded at every level**: a unit whose position is more than about 32 000
   px from the eye (or that high) answers "not hit" to hover and click, and the game thread logs
   `zoom: hit guard - N unit hit test(s) answered "not hit" so far, …` at most once a second. It

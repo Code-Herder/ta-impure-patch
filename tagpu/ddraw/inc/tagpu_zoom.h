@@ -76,8 +76,9 @@ struct TAGPU_CMD;
    for the input path — and it writes NOTHING into engine memory: everything the zoom
    needs the engine to do travels as a COMMAND RECORD (tagpu_packet.h,
    TAGPU_CMD) that the game thread takes at the top of every in-play draw and
-   applies there, on the thread that owns the camera, the viewport rect and
-   the scroll rate (tagpu_zoom_apply, from tagpu_packet_pub.c's observer). The
+   applies there, on the thread that owns the camera and the viewport rect
+   (tagpu_zoom_apply, from tagpu_packet_pub.c's observer); the scroll poll
+   reads the level it sets, on the same thread. The
    message thread reads the published view to convert input: five aligned
    32-bit loads, so a reader can at worst see one field from the previous
    frame — a sub-millisecond lag on a pointer, not a correctness problem.
@@ -100,8 +101,9 @@ struct TAGPU_CMD;
        minimap is screen-space and correct at 1:1 — we only rescale the rect it
        was going to draw, and clamp it to the minimap.
 
-     THE SCROLLSPEED SAVE (0x430FAE) keeps the rate we scale (see the apply)
-       out of the player's registry, where it would compound across launches.
+     THE SCROLL POLL'S STEP (0x41CEAA) is divided by the level in its
+       register, so the screen scrolls at the 1x rate at every level;
+       ScrollSpeed main+0x1434D is never written.
 
      THE CAMERA'S RANGE (0x41C3C0, the eye clamp) is BAR's centre clamp: the
        ground point at the view centre stays on the map at every zoom, so the
@@ -259,7 +261,7 @@ void  tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh);
    takes the view back down to 1:1, so a zoom lever left lying in the gamedir
    cannot bend menu clicks. And it POSTS THIS FRAME'S COMMAND RECORD: the level
    and whether it is live (the game thread derives the addressable rect, the
-   minimap box and the scroll rate from them), the anchor's cumulative delta,
+   minimap box and the scroll step from them), the anchor's cumulative delta,
    the camera hold (tagpu_input.c), the follow release, and the replay
    Follow epochs a notch ended and the render thread drew. A frame that drew
    nothing zoomed therefore hands the engine its own rect and rate back at the
@@ -283,7 +285,7 @@ float tagpu_zoom_level(void);
    store to the eye exists inside DrawGameScreen, so nothing moves the camera
    between the apply and the read. In order: the level it carries becomes
    the level every game-thread reader here uses (the minimap rect's scale,
-   the scroll rate); the camera range is chosen — the centre range when
+   the scroll step); the camera range is chosen — the centre range when
    `terr`, the render thread's terrain request that the publisher latches
    for this same draw right after, else the engine's own; the replay's
    Follow ended when the scroll target is not where its last write left it,
@@ -303,8 +305,7 @@ float tagpu_zoom_level(void);
    the minimap's view box recomputed, bit 1 of main+0x142F1 set (the
    minimap's dirty flag) and bit 3 of main+0x14281 cleared (the screen fog
    grid's is-current flag), both safe HERE, on the game thread, and nowhere
-   else; and ScrollSpeed is driven at base/z. `ta` is validated by the
-   caller. */
+   else. `ta` is validated by the caller. */
 void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c, int terr);
 
 /* GAME THREAD: the floor the last apply computed (TAGPU_ZOOM_FLOOR_HI until a
@@ -337,8 +338,7 @@ unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m);
 
 /* GAME THREAD, from the level teardown (the packet publisher's level end):
    the level's camera state handed back — the engine's own range back in
-   force with the eye and the target walked into it, ScrollSpeed restored to
-   the player's own value — before the shell draws; nothing applies a
+   force with the eye and the target walked into it — before the shell draws; nothing applies a
    command again until the next level's first in-play draw. The command
    EPOCH is bumped here and the applied delta reset, so a record posted for
    the old level (a notch in its last frames) carries no delta into the new

@@ -12,7 +12,7 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 |---|---|---|
 | `0x41C426` | `call 0x466B70` — minimap view rect, eye clamped at top | call-site redirect; the engine fills the rect, we rescale it by 1/z |
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
-| `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
+| `0x41CEAA` | the scroll poll `0x41CE90`'s cap on its step: `cmp ebx,0x80; push edi; jle; mov ebx,0x80` (14 bytes, up to `test ebx,ebx` at `0x41CEB8`) | **byte patch** `push edi; call stub; nop×8`, on its own 48-byte match of `0x41CE90..0x41CEBF` at process attach, outside the list the rest of this table is matched by all-or-nothing; the stub (`pushad`, `zoom_scroll_step(ebx)`, the result into pushad's EBX slot, `popad`, `ret`) returns the engine's signed cap divided by the game thread's level, so EBX alone changes |
 | `0x41C3C0` | the eye clamp — `eye = clamp(eye, 0, extent − W)`, `extent` the scroll extent `main+0x1422B`/`+0x1422F` (§2.3c), plus the minimap rect as its last act | **`leaf_call` detour, 5 stolen**, on a flag that is up whenever the module is installed; the replacement clamps to the range in force (§2.3c) and calls the same minimap wrapper |
 | `0x41C808`, `0x41C93B` | the inline target clamps of the smooth arms of centre-on-point `0x41C7C0` and centre-on-object `0x41C8E0` | **block replacement**: the block's first instruction (5 bytes) becomes a jump to a stub that clamps the scroll target into the range in force and resumes at the function's tail (`0x41C8BF`, `0x41C9F3`). `SetCamera 0x41C4C0`'s smooth arm (`0x41C4EC`) has the same shape and is **not** patched: no caller reaches it (engine map, row `0x41C4C0`) |
 | `0x41CAF7` | the per-frame camera follow's inline target clamp, inside the stepper `0x41CA10` | **block replacement** (6 bytes), resuming at `0x41CB44`; clamps the target into the range in force and clears fog bit 3, as the block's own tail did |
@@ -49,7 +49,7 @@ in `z` (below) — after each message, as the lab does.
 target, `g = 1 − (1 − f)⁴` applied to `iz`, starting at the notch's own timestamp, so its length
 is the same at any frame rate; a notch mid-tween retargets from the drawn level toward the
 previous target × the new factor. A target inside `(0.999, 1.001)` **snaps to exactly `1.0f`**,
-so 1× stays the byte-identical identity the transform, the minimap rect and the scroll rate all
+so 1× stays the byte-identical identity the transform, the minimap rect and the scroll step all
 test for by equality. At the end of a gesture, once the tween has landed, the log says
 `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch`. While the file is in force
 the wheel is *pinned* to it, which is what makes deleting the file a handover rather than a
@@ -85,7 +85,7 @@ not yet read off a `zoom: floor` line in game].
 
 **Every reader takes the floor from one place a thread.** The game thread clamps the record's
 level to its own floor before any game-thread reader sees it (`tagpu_zoom_apply`: the rect, the
-minimap box, the scroll rate, the recorder), so a render-thread floor a frame old cannot reach the
+minimap box, the scroll step, the recorder), so a render-thread floor a frame old cannot reach the
 engine. The packet carries it (`zoom_floor`), and the render thread takes it once a frame at the
 top of `tagpu_zoom_read_lever` (`tagpu_zoom_floor()`, validated into `[1/64, 0.25]`, 0.25 for a
 packet without one), before any pass runs: the wheel clamps at it, the mega notch engages at it
@@ -95,14 +95,26 @@ wheel target it leaves below it rests at it (`floor_moved`). **The other two lev
 `tagpu_zoom.txt` parses a level in `[1/64, 8]` and is drawn no lower than the floor; a Follow's
 recorded level below this viewer's floor is drawn at the floor and is still the Follow's level for
 "seen". `TAGPU_ZOOM_FLOOR_LO` (1/64, Q16 1024) is the sanity bound on every level *value* — a
-packet's, a file's, a recording's, a command's — and these eight guards take it: the gather span (`tagpu_zoom_gather_span`), the scroll rate, the minimap
+packet's, a file's, a recording's, a command's — and these eight guards take it: the gather span (`tagpu_zoom_gather_span`), the scroll step, the minimap
 box, the cursor transform's `view()`, vpwide's apply and `tagpu_vpwide_rect_at`, `cmd_valid` and
 the sweep's level. `tagpu_zoom_gather_span(v, z, floor)` takes a level below the floor at the
 floor's span (never the 1× one, which would cull a visible ring) and caps the span at
 `TAGPU_GATHER_SPAN_MAX`, 65 536 world px (`tagpu_terr.h`), whatever floor its caller holds.
-`ScrollSpeed` (`main+0x1434D`, a byte) saturates at 255 below 0.125 from the default base of 32,
-so below that the edge scroll moves the screen slower the further out the view is; stated, not
-widened.
+**The scroll step is divided by the level, in its register, after the engine's cap.** The scroll
+poll `0x41CE90` steps the eye by `ScrollSpeed main+0x1434D × main+0x38A3F` (the 30-Hz ticks since
+the scheduler's last call), capped at 0x80, and edge scroll and the arrow keys share that one step
+in EBX (engine map, [input](../engine/input.html), row `0x41CE90…0x41D060`). `zoom_scroll_step`
+divides the capped step by the game thread's level (`min(a, b)/z = min(a/z, b/z)`, so this equals
+scaling the byte and the cap together): the picture scrolls at the 1× screen rate at every level,
+with nothing saturating, and a positive step stays in `[1, 0x80 / (1/64)] = [1, 8192]` world px. At
+`z == 1.0f`, and for a step of 0, it is the engine's own. **Nothing of ours writes
+`main+0x1434D`**, so the options screen, its snapshot and restores, the camera reset and the
+save see the player's own value, and nothing has to keep a scaled value out of the registry.
+**Gaps**: a player whose registry already holds a value the old byte scaling doubled keeps it
+(the options screen snapshots the byte, which while zoomed was the scaled one, and a `Cancel` or
+`UNDO` put that back where the scaling took it as the player's own and the save kept it) — nothing can tell it
+from a chosen one, and the slider or SPEEDS' `RESTORE` resets it; and at z > 1 the step rounds
+per poll, ±0.5 world px, up to ±4 screen px at 8×.
 
 A notch at the viewport centre moves no eye at all, and **a notch out adds no displacement
 wherever it is aimed**: zoom-out pulls straight back from the view centre, as BAR's does
@@ -1193,7 +1205,7 @@ at least its timestamp. *(Found by the landing review, not by the change.)*
 §2.8), and WITHOUT EITHER THERE IS NO ZOOM.**
 The repair is not optional once the engine is told the truth — and the zoom's own levers,
 `tagpu_zoom.txt` and the wheel, are gated by no arm file at all (`zoom.on` installs the
-minimap/`ScrollSpeed`/camera-range patches and nothing more; the lever is read by
+minimap/scroll-step/camera-range patches and nothing more; the lever is read by
 `tagpu_zoom_read_lever()` and the view published by the native pass, neither of which consults an
 arm file). A build with `native.on` and `terr.on` but no `zoom.on` could therefore be wheeled to
 0.5× into exactly the state this section exists to prevent: clicks landing correctly, because the
