@@ -385,12 +385,19 @@ window.WikiGfx = (() => {
       return { canvas: st.canvas, ...r };
     } catch (x) { console.error('wiki gfx:', x); stages[key] = { error: x }; return null; }
   }
-  // what a scripted check reads: whether an entry's stage has settled -- drawn in 3D, or failed and so whitebox -- or,
-  // with the graphics off or gfx/ absent, that nothing is coming
-  const ready = entry => { const st = stages[shown[entry]]; return mode !== 'game' || state === 'missing' ||
-    (state === 'ready' && !!st && !(st instanceof Promise)); };
+  /* what a scripted check reads: whether an entry's stage has settled -- 'ready' once it is drawn in 3D, or failed and
+     so whitebox, or with the graphics off or gfx/ absent, when nothing is coming; 'pending' while a fetch it waits on
+     is in flight; else why it never will be. Every fetch here resolves or fails, so a check may wait for anything but
+     'pending' with no deadline */
+  const settled = entry => {
+    if (mode !== 'game' || state === 'missing') return 'ready';
+    if (state !== 'ready') return 'pending';
+    if (!index || !index.entries || !index.entries[entry]) return `no stage ${entry} in ${BASE}index.json`;
+    const st = stages[shown[entry]];
+    return !st || st instanceof Promise ? 'pending' : 'ready';
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', control); else control();
   if (mode === 'game') load();
-  return { frame, url, on, ready, state: () => state, SS };
+  return { frame, url, on, settled, state: () => state, SS };
 })();

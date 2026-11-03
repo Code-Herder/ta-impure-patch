@@ -539,15 +539,18 @@ def main():
             run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit&{query}")
             # the mod's sidebar pack waited for too: a demo started before it arrived restarts on its
             # layout, which can stop it at a build that layout cannot reach, under the badge
-            # waited for inside the page in one call, and a page that is not ready by the bound stops the
-            # check rather than measuring a page still loading
-            ok = result(run("eval", "async () => { const ok = () => !!(window.WikiPage && document.querySelectorAll('#text p').length"
-                            " && document.querySelector('#win canvas.skin') && getComputedStyle(document.querySelector('#e-title')).fontFamily.includes('Oswald')"
-                            " && document.fonts.status === 'loaded' && !document.querySelector('#sidebar-note').textContent.startsWith('loading'));"
-                            " const t0 = performance.now(); while (!ok() && performance.now() - t0 < 10000)"
-                            " await new Promise(r => setTimeout(r, 50)); return ok(); }").stdout)
+            # waited for with no deadline: each condition waits on a load that resolves or fails (the entry's
+            # text, the fonts, the pack, whose note leaves 'loading' either way), so the page always settles
+            # and a page still loading is never measured. Each eval waits a slice inside the page (a
+            # playwright-cli call is a process) and says where it stands; the slice decides nothing
+            while (ok := result(run("eval", "async () => { const ok = () => !!(window.WikiPage && document.querySelectorAll('#text p').length"
+                                    " && document.querySelector('#win canvas.skin') && getComputedStyle(document.querySelector('#e-title')).fontFamily.includes('Oswald')"
+                                    " && document.fonts.status === 'loaded' && !document.querySelector('#sidebar-note').textContent.startsWith('loading'));"
+                                    " const t0 = performance.now(); while (!ok() && performance.now() - t0 < 10000)"
+                                    " await new Promise(r => setTimeout(r, 50)); return ok(); }").stdout)) is False:
+                pass
             if ok is not True:
-                sys.exit(f"wikilaycheck: the mockup page for {name} was not ready within 10 s")
+                sys.exit(f"wikilaycheck: the mockup page for {name} could not be read: {ok}")
             code = (COLLECT.replace("ACTIONS", json.dumps(acts)).replace("KITPARTS", json.dumps(kitparts))
                     .replace("FALLBACK", json.dumps(fallback)).replace("ROLEMAP", json.dumps(roles)))
             r = run("eval", code)
