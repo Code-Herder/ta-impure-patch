@@ -238,9 +238,10 @@ typedef struct {
 #define IMG_RESTORED  (IMG_SAMPLED | VK_IMAGE_USAGE_STORAGE_BIT)
 static SHARED s_height;                    /* the height grid, R8             */
 /* THE LEVEL'S TILE MAP, R16_UINT at the map's size, and THE NEIGHBOURHOOD
-   KEYS, R32_UINT on the same grid -- or one zero texel while the hand-over
-   has none, which the shader never reads (it fetches a key only under
-   uNbhd, which `prepare` sets only with this level's keys in the image).
+   KEYS, R32_UINT on the same grid while the hand-over carries keys -- and
+   whatever it last held while it carries none, which the shader never reads
+   (it fetches a key only under uNbhd, which `prepare` sets only with this
+   hand-over's keys in the image).
    The vertex stage texelFetches both, bindings 8 and 9; each `serial` is the
    hand-over's `mapSerial` / `keySerial` it holds. */
 static SHARED s_tmap;
@@ -1641,15 +1642,19 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (!s_height.img) goto refuse;
         return 0;
     }
-    /* THE TILE MAP AND THE KEYS, the level's: the keys image is the tile
-       map's size while the hand-over carries keys, and one texel while it
-       does not -- nothing reads it then (uNbhd is 0, below) */
+    /* THE TILE MAP AND THE KEYS, the level's. The keys image is the tile
+       map's size while the hand-over carries keys. While it carries none,
+       nothing reads the image (uNbhd is 0, below), so it is left as it is --
+       an earlier map's keys, or one texel when there was never an image --
+       and is not resized away and back each time the keys come and go: every
+       resize is a retire, and a second one pending blanks the terrain. */
     keysIn = t.keys != NULL;
     if (!shared_resize(d, &s_tmap, t.mapW, t.mapH, VK_FORMAT_R16_UINT, IMG_SAMPLED)) {
         if (!s_tmap.img) goto refuse;
         return 0;
     }
-    if (!shared_resize(d, &s_keys, keysIn ? t.mapW : 1, keysIn ? t.mapH : 1,
+    if ((keysIn || !s_keys.img) &&
+        !shared_resize(d, &s_keys, keysIn ? t.mapW : 1, keysIn ? t.mapH : 1,
                        VK_FORMAT_R32_UINT, IMG_SAMPLED)) {
         if (!s_keys.img) goto refuse;
         return 0;
@@ -1776,7 +1781,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             s_vsOwed = 1;
         }
         if (doKeys) {
-            /* no keys: one zero texel, which the shader never reads */
+            /* no keys, and an image never filled: one zero texel at its
+               origin, which the shader never reads -- what the copy is for is
+               the layout, SHADER_READ_ONLY_OPTIMAL as binding 9 names it,
+               which the barriers around it give the whole image */
             static const unsigned zero = 0;
             rc = keysIn
                 ? tagpu_vk_stage_copy(d, cb, &s->stage, s_keys.img, s_keys.have,
