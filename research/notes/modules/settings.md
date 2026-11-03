@@ -125,15 +125,15 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](../exe-reverse-engineering.html).
 
-**The front-end screen carries fifteen rows in two columns.** `VISUALS.GUI` is re-emitted into
+**The front-end screen carries eighteen rows in two columns.** `VISUALS.GUI` is re-emitted into
 the same `.ufo` with five of the stock gadgets moved (`GAMMA`, `VIDSLDR` and their three
 captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the stock `SHADING`,
-`ANTI` and `BSHADOWS` toggles removed, and thirteen rows of our own:
+`ANTI` and `BSHADOWS` toggles removed, and sixteen rows of our own:
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Vsync (on / off: the present mode and the frame limiter's one cap; a row of the in-game panel's table shown in this column — renderers §2.10c), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
-| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter, Map edge |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Vsync (on / off: the present mode and the frame limiter's one cap; a row of the in-game panel's table shown in this column — renderers §2.10c), Gamma (stock), **GPU (Vulkan)** (`tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free), **Mega map wheel** (Ctrl+wheel / Wheel, `wheel=` — which wheel engages the mega map, [camera and zoom](camera-zoom.html) §2.3m; a row of the in-game panel's table, caption at 404 and control at 420, the column's last slot: the Impure options column is full and the shell screen ends at 480) |
+| **Impure options** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter, Map edge, Resource snapping, Quick mex/geo |
 
 Four things this rests on, each measured rather than assumed:
 
@@ -240,9 +240,10 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-`PANEL_H` went 212 → 240 for the seventh row: `ROW_Y0 34 + ROW_PITCH 28 × 6 = 202` and `ROW_H` is
-20, so the last row ends at 222 and 240 leaves the 18 px the six-row panel left below 194. One
-define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
+The in-game panel is `PANEL_H` 410 px tall for twelve rows: `ROW_Y0 34 + ROW_PITCH 28 × 11 = 342`,
+`ROW_H` 20, so the last row (Mega map wheel) ends at 362, the floor rule `DIV_BOT` is at 370 and the
+Resource profile caption sits under it at 378. At 640×480 the panel hangs from engine row 32 and
+ends at 442. One define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
 are all sized from it — and the panel is **composed at runtime** from the player's install rather
 than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
 copy of this layout, not its source.

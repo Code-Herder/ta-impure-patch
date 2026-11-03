@@ -205,6 +205,51 @@ with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and
 own a draw must never have a "not yet" state that the render thread publishes on its way to an
 answer. A poll that tears is a poll that hands the engine back the frame.
 
+### 2.3m The mega map binding (`tagpu_zoom.c`, `wheel=` in `impure.cfg`)
+
+**The mega map is a state of the wheel, not a second view.** A notch back on the mega map's wheel
+**engages** it: the target level becomes the floor (`zoom_floor()`, the lowest level the wheel can
+reach), pulled back about the view centre like any notch out, and the target it left is kept
+(`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
+kept target, with the view centre moved onto the world point under the pointer. A mega notch with
+nothing to do (back while engaged, forward while not) moves nothing, as TADR's does; a zoom notch
+back while engaged is already at the floor and leaves it engaged. The design and the strategic
+icons it shares a code path with: [mega map plan](../mega-map-plan.html).
+
+**Which wheel is the mega map's** is decided on the message thread, per notch, by
+`wheel_is_mega`: Ctrl picks the action the plain wheel does not do, and `wheel=` says which that
+is — `zoom` (the default: the wheel zooms, Ctrl+wheel is the mega map) or `megamap` (TADR's
+binding). Both doors carry the modifier keys in `wparam`'s low word (the hardware message in
+`wndproc.c`, the injected one built in `tagpu_shield.c`), so the slot records the answer
+(`NOTCH.mega`) and the render thread never reads the store. The row is *Mega map wheel*
+(Ctrl+wheel / Wheel) in both panels ([settings](settings.html) §2.12); under `tagpu_defaults.off`
+the store has no say and the wheel zooms.
+
+**Leaving is the zoom-in anchor with a different factor.** A notch in holds the point under the
+pointer by moving the target centre `(a − c)(iz_prev − iz_new)`; leaving moves it
+`(a − c) · iz_prev` — the pointer's world offset from the centre at the level being left — through
+the same owed displacement `R`, so the eye lands where the model says at any frame rate and a notch
+inside the tween carries it whole.
+
+**Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
+mouse-world pin each set the level through `wheel_rest`, which disengages, so a later notch forward
+can never send the camera back to a level from before them.
+
+**MEASURED 2026-11-02** (Two Continents, 1024×768, viewport `(128,32 896×704)`, the play arm set,
+the floor still 0.25):
+
+| gesture | level | eye |
+|---|---|---|
+| two plain notches back at `(900,600)`, from 1× | 0.769 | `(2376,726)` |
+| Ctrl+wheel back at `(900,600)` | **0.250** (a plain notch gives 0.674) | `(2376,726)`, unmoved |
+| Ctrl+wheel back again | 0.250 | unmoved |
+| plain notch forward at `(300,200)` | **0.769**, the kept target | **`(1272,−10)`** = `(2376,726) + (−276,−184) × 4` |
+| plain notch forward at the centre, not engaged | 0.895 (×1.163) | unmoved |
+| Ctrl+wheel forward, not engaged | 0.895 | unmoved |
+
+The same sequence under `--defaults` with `wheel=megamap` gives the same levels and eyes with the
+roles swapped, and a click on the in-game row changes the next notch's meaning without a relaunch.
+
 ### 2.3e Zoom to the cursor (`tagpu_zoom.c`, no arm file)
 
 **Only a notch IN anchors, each at its own point, and the displacement is paid along the tween
