@@ -1,0 +1,5 @@
+landing-review: high, two independent reviewers, on f097a7a9...c683dfe0 (mega map icons 3 + mod icon sets 4 + ScrollSpeed step at 0x41CEAA)
+findings=16 acted=16 rejected=0
+MEDIUM: pick vs drawing disagreed on cargo (nanoframe on a hidden factory's pad pickable; one hop vs the chain) -> 83563e90
+LOW: non-native units got hide flags -> 83563e90; s_gIcons not epoch-gated / not cleared at level end -> 7b717831; models hidden without an icon quad on a bucket-grow failure -> 9ae98e92 (Vulkan whole-frame refusal documented as a gap); def Side cap 8 not 0x1E -> cd217c7d; set pictures and radar contacts could show at 1x (k rounding) -> 1b2831a7 (switch at BAR's size; tests to 2560 px tall); '..' paths -> c873f9ad; comments/docs (radlogohigh, atexit free 0x488A00, units.md +0xA6, scroll reader list, vpwide dependency, blocking set load) -> 8a76f85e
+Process: in-game checks of icons and of the scroll step are run before landing
