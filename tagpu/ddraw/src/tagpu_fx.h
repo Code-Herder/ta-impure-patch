@@ -7,6 +7,7 @@
 #include "tagpu.h"
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
 #include "tagpu_packet.h"        /* the effect and particle tables' caps: the buckets' sizes */
+#include "tagpu_fogsrc.h"
 
 /* everything the effects gather/render needs from the native pass's frame.
    THE ENGINE POINTER IS NOT IN IT (frame packet exchange), and neither
@@ -49,12 +50,12 @@ typedef struct TAGPU_FXVIEW {
        at 1x they change nothing. */
     int evpL, evpT, evw, evh;
     int fogMode;                 /* bit0 = the engine's fog overlay is live    */
-                                 /* (the grid itself says what it paints);     */
+                                 /* (the source itself says what it paints);   */
                                  /* bit1 = LosType true-LOS mode, diagnostic   */
-    const unsigned short* fogGrid;  /* engine screen fog grid, corner masks    */
-    int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
-    int fogCells;                   /* cells the BUFFER holds — the real bound */
-    int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
+    const TAGPU_FOGSRC* fog;     /* the frame's fog source (inc/tagpu_fogsrc.h),
+                                    the whole map's; non-NULL whenever bit0 is
+                                    set, and the native pass's copy, valid for
+                                    this frame */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
 
@@ -150,9 +151,11 @@ unsigned tagpu_fx_caps(void);                   /* the PACKET's copy of TAProgra
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */
 /* the fragment shaders' fog rule (tagpu_glsl.h) on the CPU, for gather-side
    gates: bit0 = the engine paints this point black, bit1 = it shade-remaps it.
-   wzp is the PROJECTED world z (y - alt/2), the space the grid is built in. */
-int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
-                  int orgX, int orgY, int wx, int wzp);
+   wzp is the PROJECTED world z (y - alt/2), the space the engine's grid is
+   built in. Every point has its fog, on the map or off it: the source is the
+   whole map's and the expansion clamps (tagpu_fog_entry). 0 when `f` is not a
+   source tagpu_fog_src_ok accepts. */
+int  tagpu_fog_at(const TAGPU_FOGSRC* f, int wx, int wzp);
 
 /* ---- the hand-over to the Vulkan pass ----------------------------------------
 
@@ -247,8 +250,9 @@ typedef struct TAGPU_FXHAND {
        hide in grey rather than darkening -- so it is the number the shader
        takes and not `fogMode & 1`. */
     int   restored;                   /* Classic++ restored atlas in use      */
-    int   fog;                        /* uFog, as the shader takes it         */
-    float fogOrgX, fogOrgY, fogCols, fogRows;
+    int   fog;                        /* uFog, as the shader takes it; the
+                                         source it samples is the slot's fog
+                                         image (tagpu_vk_fog.h)              */
     float scafP[4];                   /* vpL, vpT, vw, vh, in frame px        */
     float uss;                        /* the supersample factor as the FS sees it */
     float zoomF, zoomCFx, zoomCFy;
@@ -294,8 +298,6 @@ typedef struct TAGPU_FXHAND {
        flash vertices is refused rather than drawn with no colour for its
        flashes. */
     const unsigned char*  lht;        /* 32 x 3 bytes, or NULL                */
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
-    int                   fogGridCols, fogGridRows;
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame. tagpu_vk_feat.c has the argument for

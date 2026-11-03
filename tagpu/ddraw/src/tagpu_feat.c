@@ -1541,29 +1541,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
 /* Everything the gather above produced, for the Vulkan edition of this pass
    (tagpu_feat.h): each field is a uniform's value, a pointer into the vertex
    arrays, or a buffer the consumer uploads an image from. */
-/* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
-   slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
-   tagpu_packet_frame_end() -- which render_vk.c calls BEFORE `tagpu_vk_frame`
-   runs the Vulkan lane, so a pointer handed on from here is read past its
-   contract. An
-   alias would hold only because the give-back happens at the next acquire,
-   which is also where the `poison` lever fills the slot: the one stale read
-   that lever cannot see, and outside frame_end's tail==head check as well.
-   The atlas and the height grid are handed over as buffers this module owns;
-   the copy makes the fog grid the same, and makes the file header's "a pass
-   reads no engine state" true of the whole hand-over.
-
-   `cells * 2` is the grid's own size, cols x rows 16-bit cells as the packet
-   publishes them; the 1024-a-side cap bounds the ALLOCATION, and the pass
-   re-checks it (FOG_MAXDIM) because a bound in one file is a bound only while
-   both are read together. */
-#define FOG_COPY_MAXDIM 1024
-static unsigned short* s_fogCopy;
-static int             s_fogCopyCells;
-
 static void feat_publish(const TAGPU_FXVIEW* v, int total)
 {
-    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorAsked` is the latch the
        arm beat sets when the Vulkan lane is up (see there); while it is 0 the
        lane is not armed, nothing will ever call the hand-over, and the memset
@@ -1589,8 +1568,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
-    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
-    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     tagpu_feat_atlas_hand(&s_pub);
     /* THE REQUEST, NOT THE PICTURE: the restored twin's texels are never
        read back (tagpu_gaf.h), so the list is the only restore route this
@@ -1600,26 +1577,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
     }
-    /* the grid as the fragment shader will read it, and only when it will:
-       `uFog` 0 means taFog is never called and uFogGrid never sampled. */
-    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
-        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
-        int cells = v->fogCols * v->fogRows;
-        if (cells > s_fogCopyCells) {
-            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
-            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
-        }
-        if (s_fogCopy && cells <= s_fogCopyCells) {
-            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
-            s_pub.fogGrid = s_fogCopy;
-            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
-        }
-    }
-    /* fog on with no grid is not a frame this pass may draw, so it publishes
-       NOTHING -- the copy can fail, and the port would sample a 1x1 image while
-       uFogDim carried the real size. Refused the way the restored atlas already
-       is; tagpu_terr.c has the argument in full. */
-    fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass's own decision (tagpu_native.c `s_scissorOn`). A pass that clipped
@@ -1637,7 +1594,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        point into `s_verts`, which this file `realloc`s, and `s_pub.atlas` into
        the GAF mirror -- so the hand-over is this frame's or it is nothing. */
     s_pub.frame = v->frame_counter;
-    s_pubHave = total > 0 && !fogBad;
+    s_pubHave = total > 0;
 }
 
 /* The atlas's half of the hand-over (tagpu_feat.h), and the palette its

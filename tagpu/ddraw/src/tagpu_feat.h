@@ -89,9 +89,9 @@ typedef struct TAGPU_FEATHAND {
     float depthScale;
 
     /* The fragment stage's. `restored` is the Classic++ restored-colour
-       branch; `fog` is the engine's overlay bit. */
+       branch; `fog` is the engine's overlay bit: the source it samples is
+       the slot's fog image (tagpu_vk_fog.h), not a field of this record. */
     int   restored, fog;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float mapPxW, mapPxH;                  /* uMapPx: the map on the tile grid */
     int   clip;                            /* uClip: 1 while the mirror draws, so the
                                               map's own quads stay in its columns */
@@ -165,8 +165,6 @@ typedef struct TAGPU_FEATHAND {
     unsigned                 restoreGen;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()     */
     unsigned              palSerial;  /* tagpu_pal_engine_serial()           */
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
-    int                   fogGridCols, fogGridRows;
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.

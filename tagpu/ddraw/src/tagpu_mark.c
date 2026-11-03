@@ -1746,17 +1746,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
         s_mkPub.art = tagpu_order_art(&s_mkPub.artKey);
         s_mkPub.artW = TAGPU_ORDART_W; s_mkPub.artH = TAGPU_ORDART_H;
-        /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
-           tagpu_fx.h uses for the same three */
+        /* the palette tagpu_vk_mark.c binds, as bytes -- the shape tagpu_fx.h
+           uses for it */
         s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
-        s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;
-        s_mkPub.fogGridCols = v->fogCols; s_mkPub.fogGridRows = v->fogRows;
         s_mkPub.key = tagpu_markown_key();
         s_mkPub.gw = (float)v->gw; s_mkPub.gh = (float)v->gh;
         s_mkPub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
         s_mkPub.zoomCx = v->zoomCx; s_mkPub.zoomCy = v->zoomCy;
-        s_mkPub.fogOrgX = (float)v->fogOrgX; s_mkPub.fogOrgY = (float)v->fogOrgY;
-        s_mkPub.fogCols = (float)v->fogCols; s_mkPub.fogRows = (float)v->fogRows;
         s_mkPub.ss = v->ss > 0 ? v->ss : 1.0f;
         s_mkPub.vpL = v->vpL; s_mkPub.vpT = v->vpT;
         s_mkPub.vw = v->vw;   s_mkPub.vh = v->vh;

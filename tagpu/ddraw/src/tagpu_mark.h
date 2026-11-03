@@ -155,19 +155,15 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_order_art: one palette index a texel, `artKey` where a frame draws
        nothing. Written once, so it is uploaded once per slot. */
     const unsigned char* art; int artW, artH, artKey;
-    /* THE TWO SHARED TEXTURES, AS BYTES: the consumer builds its own
-       images from them. They come over in the shapes `tagpu_fx.h` already uses
-       for the same two, so the two consumers agree about what they are:
-       the palette is 256 RGBA8 texels of `tagpu_pal_engine()` and the fog grid
-       is cols x rows of RG8. A draw that wants fog and whose grid did not
-       cross is refused rather than drawn unfogged. */
+    /* THE PALETTE, AS BYTES: 256 RGBA8 texels of `tagpu_pal_engine()`, the
+       shape `tagpu_fx.h` uses for it, from which the consumer builds its own
+       image. The fog is not here: the consumer samples the slot's fog image
+       (tagpu_vk_fog.h), and a draw that wants fog while that image holds no
+       source is refused rather than drawn unfogged. */
     const unsigned char*  pal;        /* 256 x RGBA8 */
     unsigned              palSerial;
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
-    int                   fogGridCols, fogGridRows;
     int   key;                  /* uKey: the index an untouched layer texel holds */
     float gw, gh, zoom, zoomCx, zoomCy;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float ss;                   /* the line width a one-screen-pixel line takes */
     /* 1 on the ONE frame `tagpu_mark.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane

@@ -78,7 +78,7 @@ int  tagpu_terr_key(void);
    Everything the gather built for this pass, so that tagpu_vk_terr.c draws it
    without re-deriving any of it: the instances are the array the gather
    filled, the uniforms are the numbers the gather computed, the texels are
-   buffers this file owns (the atlas, the height grid, the fog copy) and the
+   buffers this file owns (the atlas and the height grid) and the
    engine's palette table, and the shader is tagpu_terr.c's GLSL through
    tools/spirv-gen.py.
 
@@ -170,7 +170,8 @@ typedef struct TAGPU_TERRHAND {
 
     /* The fragment stage's. `restored` is the Classic++ restored-colour
        branch, `lambert` the `light=` half of the preset, `shadowOn` the
-       cast-shadow one, `fog` the engine's overlay bit.
+       cast-shadow one, `fog` the engine's overlay bit: the source it samples
+       is the slot's fog image (tagpu_vk_fog.h), not a field of this record.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
        the producer's `s_rFrames`, the published field itself.
@@ -193,7 +194,6 @@ typedef struct TAGPU_TERRHAND {
        drawn with, the sun the knobs name, uShScale = (texel, depth span,
        1/res), and the two shading scalars. */
     float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;
     /* uMapPx: the engine's area on the tile grid (tagpu_edge_area), its 32-px
@@ -264,8 +264,6 @@ typedef struct TAGPU_TERRHAND {
     unsigned             heightSerial;
     const unsigned char* pal;         /* 256 x RGBA8, tagpu_pal_engine()    */
     unsigned             palSerial;   /* tagpu_pal_engine_serial()          */
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog off */
-    int                  fogGridCols, fogGridRows;
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.

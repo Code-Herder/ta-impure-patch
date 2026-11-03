@@ -134,7 +134,7 @@ unsigned tagpu_gui_minimap_have(void);
    the game thread may overwrite the bytes those ops point into -- and the
    Vulkan pass does not run until two calls later. So the render half copies
    what the port needs, as it applies each op, into an arena of its own, as
-   tagpu_terr.c copies its fog grid out of the packet for the same reason.
+   tagpu_native.c copies the fog source out of the packet for the same reason.
 
    IT IS OPT IN. Nothing is copied until `tagpu_gui_mirror_want(1)` is called,
    which the Vulkan pass does when its lever is armed and undoes when it is

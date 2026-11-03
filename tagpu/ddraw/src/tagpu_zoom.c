@@ -1504,9 +1504,9 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     }
 
     /* THE SCENARIO CAMERA, once: here and not where the scenario runs, so the
-       draw that moves the eye is the draw that builds its fog grids — both
-       grids in the packet this draw publishes are built at the eye it
-       carries (tagpu_zoom_place_eye). */
+       draw that moves the eye is the draw that rebuilds the engine's fog grid
+       and the packet this draw publishes carries the eye it was drawn at
+       (tagpu_zoom_place_eye). */
     if (s_placeOn) {
         s_placeOn = 0;
         eye[0] = s_placeX; eye[1] = s_placeY;

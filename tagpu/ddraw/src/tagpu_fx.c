@@ -690,7 +690,7 @@ static void effect_end(void)
 }
 
 /* the shaders' fog rule (tagpu_glsl.h) on the CPU — bilinear coverage over the
-   grid's four corner bits, thresholded at 0.5 */
+   entry's four corner bits, thresholded at 0.5 */
 static float fog_cov(unsigned m, float fx, float fy)
 {
     float tl = (float)( m       & 1u), tr = (float)((m >> 1) & 1u);
@@ -699,127 +699,86 @@ static float fog_cov(unsigned m, float fx, float fy)
     return top + (bot - top) * fy;
 }
 
-/* ---- the fog-grid guard -----------------------------------------------------
+/* ---- the fog source's guard -------------------------------------------------
 
-   `grid` is the ENGINE's own screen fog buffer, read raw out of its struct once
-   a frame (tagpu_native.c) and indexed here, later, on the render thread. A
-   `!grid` test alone lets a NON-NULL garbage value walk straight through — and
-   on 2026-09-03 one did: a hard read fault at
-   `tagpu_fog_at+0x10c` off a base of -9 (and, in an earlier instance, -318),
-   from tagpu_sfx_gather, which killed the render thread and left the process up
-   and the game frozen. Reproduced with the file zoom lever and NO wheel input,
-   so it is not the wheel; what it wants is a zoomed-out view, live effects and
-   the camera moving, which is when the engine rebuilds this buffer under us.
-
-   THE ROOT CAUSE IS NOT FOUND YET. This turns the crash into a dropped fog
-   sample so the session survives to be examined, and — because a log line in a
-   98 MB file is invisible while you are playing — says so on screen, ONCE, from
-   a thread of its own so the renderer never blocks on the dialog. */
+   `f` is the native pass's per-frame copy of the packet's fog source
+   (tagpu_native.c `s_fogSrc`), taken by the acquire's bounds and re-checked by
+   tagpu_fog_src_ok when it was copied, so its words are exactly `stride * h`
+   long. The guard below re-asks the same questions of the values, because a
+   bound in one file is a bound only while both are read together, and the
+   pointer's range test is a sanity filter on a value, never the safety
+   argument: the safety is that the copy sized its own buffer from the numbers
+   it carries. A trip is a bug in that hand-over, so it is logged and shown,
+   ONCE, from a thread of its own so the renderer never blocks on the dialog. */
 
 static volatile LONG s_fogAlarmed;
-/* 512: the formatted message is ~290 bytes, and _snprintf silently truncates
+/* 512: the formatted message is ~260 bytes, and _snprintf silently truncates
    mid-word, dropping exactly the half that says what to do. */
 static char s_fogAlarm[512];
 
 static DWORD WINAPI fog_alarm_thread(LPVOID p)
 {
     (void)p;
-    MessageBoxA(NULL, s_fogAlarm, "tagpu: fog grid guard tripped",
+    MessageBoxA(NULL, s_fogAlarm, "tagpu: fog source guard tripped",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
     return 0;
 }
 
-static void fog_alarm(const char* why, const unsigned short* grid, int cols,
-                      int rows, int orgX, int orgY, int wx, int wzp)
+static void fog_alarm(const char* why, const TAGPU_FOGSRC* f, int wx, int wzp)
 {
-    /* The LOG fires every trip (throttled); only the DIALOG is one-shot. The
-       two checks below catch different faults — a moved buffer and dims that
-       have come apart from it — and with a root cause still open the second,
-       differing trip is the evidence most worth having. Gating both on one flag
-       would throw it away. */
+    /* The LOG fires every trip (throttled); only the DIALOG is one-shot, so a
+       second, different trip still reaches the log. */
     static DWORD tick;
     DWORD now = GetTickCount();
+    const void* words = f ? (const void*)f->words : NULL;
+    int w = f ? f->w : 0, h = f ? f->h : 0, stride = f ? f->stride : 0;
     if (now - tick > 1000) {
         tick = now;
-        tagpu_logf("FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)",
-                   why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
+        tagpu_logf("FOGGUARD %s words=%p w=%d h=%d stride=%d world=(%d,%d)",
+                   why, words, w, h, stride, wx, wzp);
     }
     if (InterlockedCompareExchange(&s_fogAlarmed, 1, 0) != 0) return;
     _snprintf(s_fogAlarm, sizeof s_fogAlarm,
-              "The fog-grid guard caught a bad read and dropped it.\n\n"
-              "%s\ngrid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n\n"
-              "Without the guard this is the crash that freezes the renderer.\n"
-              "The game is still running. Please tell Claude, and keep the log.",
-              why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
+              "The fog source guard caught a bad read and dropped it.\n\n"
+              "%s\nwords=%p w=%d h=%d stride=%d world=(%d,%d)\n\n"
+              "The game is still running. Please report it, and keep the log.",
+              why, words, w, h, stride, wx, wzp);
     s_fogAlarm[sizeof s_fogAlarm - 1] = 0;
-    /* never on the render thread: a modal dialog there stops the frame loop and
-       we would be diagnosing our own hang instead of the engine's grid */
+    /* never on the render thread: a modal dialog there stops the frame loop */
     {
-        HANDLE h = CreateThread(NULL, 0, fog_alarm_thread, NULL, 0, NULL);
-        if (h) CloseHandle(h);
+        HANDLE hd = CreateThread(NULL, 0, fog_alarm_thread, NULL, 0, NULL);
+        if (hd) CloseHandle(hd);
     }
 }
 
-int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
-                 int orgX, int orgY, int wx, int wzp)
+int tagpu_fog_at(const TAGPU_FOGSRC* f, int wx, int wzp)
 {
-    if (!grid || cols <= 0 || rows <= 0) return 0;
-    /* A plausible userland pointer, and nothing narrower: the grid can be a
-       heap allocation, and the process heap of a 0x400000 image can sit below
-       0x600000. Nothing is given up — both faults this
-       guard has actually caught were a base of -9 and one of -318. */
-    if ((size_t)grid <= 0x10000u || (size_t)grid > tagpu_user_top()) {
-        fog_alarm("grid pointer is not a plausible allocation",
-                  grid, cols, rows, orgX, orgY, wx, wzp);
+    float gx, gy, fx, fy;
+    int cx, cy, r = 0;
+    unsigned e;
+    if (!f || !f->words) return 0;
+    /* A plausible userland pointer, and nothing narrower: the copy is a heap
+       allocation, and the process heap of a 0x400000 image can sit below
+       0x600000. */
+    if ((size_t)f->words <= 0x10000u || (size_t)f->words > tagpu_user_top()) {
+        fog_alarm("the words are not a plausible allocation", f, wx, wzp);
         return 0;
     }
-    /* and the dims, against the packet's own ceiling. Both grids ARE the
-       packet: the numbers and the bytes are one record whose `len == cols *
-       rows * 2` the acquire proved, so this is a ceiling on a plausible
-       dimension and the `cells` test below is the bound that matters. */
-    if (cols > TAGPU_PK_FOG_DIMCAP || rows > TAGPU_PK_FOG_DIMCAP) {
-        fog_alarm("grid dims exceed the packet's ceiling",
-                  grid, cols, rows, orgX, orgY, wx, wzp);
+    /* THE BOUND: 1..TAGPU_FOG_MAXDIM a side and the stride the width implies,
+       so tagpu_fog_entry's largest index, stride * h - 1, is inside the words */
+    if (!tagpu_fog_src_ok(f)) {
+        fog_alarm("the dimensions are not a source's", f, wx, wzp);
         return 0;
     }
-    /* AND THE CELL COUNT, which is the bound that actually matters and which is
-       exact by construction. The largest index this function can form is
-       cols*rows - 1, so the exposure is cols*rows*2 bytes past `grid` — and
-       `grid` points into the frame packet, whose acquire
-       checked that the area is exactly cols*rows entries long and lies inside
-       the record. A caller that does not know what it is passing passes 0,
-       which refuses. */
-    if (cells <= 0 || (long)cols * rows > (long)cells) {
-        fog_alarm("grid dims exceed the cells the buffer holds",
-                  grid, cols, rows, orgX, orgY, wx, wzp);
-        return 0;
-    }
-    float gx = (float)(wx  - orgX) * (1.0f / 32.0f);
-    float gy = (float)(wzp - orgY) * (1.0f / 32.0f);
-    /* The grid only spans the VIEW, while the gather accepts anchors up to
-       256 px outside it. Off-grid means "off-screen", not "off-map", so this
-       reports no fog and leaves the caller's own viewport cull to decide —
-       clamping to the border cell instead would cull anything whose anchor
-       sits past the edge over dark ground, popping sprites in as you scroll.
-
-       THE SHADERS DO NOT CLAMP THE SAME WAY: taFog clamps to `uFogDim - 1.0`,
-       one whole cell short, because the last column of any grid never has its
-       right corners written. The band `gx in [cols-1, cols)` here would
-       interpolate toward those unwritten corners. No caller samples it: the
-       unit and wreck gathers test the point they sample against the gathers'
-       slab, which the fog bound on the drawn eye (tagpu_zoom.c) keeps inside
-       `[0, cols - 1]` on the wide grid; tagpu_fx_tile_visible, the feature,
-       effect and particle gate, moves a point in the band onto the band's
-       left edge `cols - 1`, whose right corners carry no weight. On the
-       engine's grid the unit gathers still reach the band past the view's
-       right and bottom edges, for an anchor off the screen. */
-    if (gx < 0.0f || gy < 0.0f ||
-        gx >= (float)cols || gy >= (float)rows) return 0;
-    int cx = (int)gx, cy = (int)gy;
-    unsigned e = grid[cy * cols + cx];
-    int r = 0;
-    if (fog_cov(e        & 0xFu, gx - (float)cx, gy - (float)cy) >= 0.5f) r |= 1;
-    if (fog_cov((e >> 8) & 0xFu, gx - (float)cx, gy - (float)cy) >= 0.5f) r |= 2;
+    /* step 4 (inc/tagpu_fogsrc.h): the entry under the point and the point's
+       place inside it, floor and fraction taken from the unclamped g */
+    gx = (float)(wx  - 16) * (1.0f / 32.0f);
+    gy = (float)(wzp - 16) * (1.0f / 32.0f);
+    fx = floorf(gx); fy = floorf(gy);
+    cx = (int)fx; cy = (int)fy;
+    e = tagpu_fog_entry(f, cx, cy);
+    if (fog_cov( e       & 0xFu, gx - fx, gy - fy) >= 0.5f) r |= 1;
+    if (fog_cov((e >> 4) & 0xFu, gx - fx, gy - fy) >= 0.5f) r |= 2;
     return r;
 }
 
@@ -827,30 +786,13 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    leaves (tagpu_sfx.c) and the feature gate 0x4658E0 (tagpu_feat.c) run the
    same test. BOTH fog bands hide: the engine draws no effect it cannot
    currently see, and 0x4658E0 likewise tests the LOS counter when LosType&2
-   and MAPPED otherwise — which is exactly the pairing the grid encodes, since
-   the builder only writes the grey mask in true-LOS mode. */
+   and MAPPED otherwise — which is exactly the pairing the source encodes,
+   since the out-of-LOS bit is set only in true-LOS mode. Every point is
+   answered from the source, however far past the view or the map it lies. */
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
-    /* ONLY THE UNWRITTEN BAND MOVES. The last column and row of the grid this
-       frame samples (the packet's, wide or engine's: `fogGrid`/`fogCols`/
-       `fogOrg`) are short their right and bottom corners, so a point in
-       `(org + 32 (cols - 1), org + 32 cols)` is answered at the band's left
-       edge, where those corners carry no weight. Every other point keeps the
-       answer the grid gives it — inside the written cells its own value, past
-       the grid tagpu_fog_at's "no fog" — so a laser or a lightning bolt, gated
-       on its head wherever that head is, reads the same fog it always did.
-       The feature sweep's points (a footprint's far corner, a row above the
-       effective rect) and the effect and particle tables' (every effect on
-       the map) reach past the gathers' slab, which is why the bound on the
-       slab does not cover them and this does. */
-    int bx, by;
-    if (!(v->fogMode & 1) || !v->fogGrid) return 1;
-    bx = v->fogOrgX + 32 * (v->fogCols - 1);
-    by = v->fogOrgY + 32 * (v->fogRows - 1);
-    if (wx > bx && wx < bx + 32) wx = bx;
-    if (wzp > by && wzp < by + 32) wzp = by;
-    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
-                        v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
+    if (!(v->fogMode & 1) || !v->fog) return 1;
+    return tagpu_fog_at(v->fog, wx, wzp) == 0;
 }
 
 /* the rect the engine's own explosion and debris passes cull against, out of
@@ -1218,19 +1160,11 @@ const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_mo
 
 /* ---- the Vulkan hand-over (the fourth world pass) -------------------------
    tagpu_fx.h is the contract. Published AFTER the gather, from the very
-   arrays, numbers and texels it built.
-
-   THE FOG GRID IS COPIED, never aliased. `v->fogGrid` points into the frame
-   packet, whose declared lifetime ends at tagpu_packet_frame_end() -- earlier
-   in render_vk.c's iteration than the tagpu_vk_frame that would read it.
-   tagpu_terr.c has the argument in full; this is the same one. */
-#define FOG_COPY_MAXDIM 1024
-static unsigned short* s_fogCopy;
-static int             s_fogCopyCells;
+   arrays, numbers and texels it built. The fog is not in it: the pass samples
+   the slot's fog image (tagpu_vk_fog.h). */
 
 static void fx_publish(const TAGPU_FXVIEW* v, int total)
 {
-    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     int b;
     /* NOTHING IS PUBLISHED UNTIL A VULKAN PASS WILL RUN. `s_mirrorAsked` is
        the latch `consumer_ask` sets the first time `tagpu_vk_owns_present()`
@@ -1254,8 +1188,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     /* bit1 set as well: effects hide in grey rather than darkening */
     s_pub.fog = (v->fogMode & 1) | 2;
-    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
-    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.scafP[0] = (float)v->vpL; s_pub.scafP[1] = (float)v->vpT;
     s_pub.scafP[2] = (float)v->vw;  s_pub.scafP[3] = (float)v->vh;
     s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
@@ -1272,25 +1204,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
        and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
        rather than guess one. */
     s_pub.lht = s_lhtInit ? s_lhtRGB : NULL;
-    /* the grid as the fragment shader will read it, and only when it will:
-       uFog bit0 clear means taFog never samples uFogGrid. */
-    if ((s_pub.fog & 1) && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
-        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
-        int cells = v->fogCols * v->fogRows;
-        if (cells > s_fogCopyCells) {
-            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
-            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
-        }
-        if (s_fogCopy && cells <= s_fogCopyCells) {
-            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
-            s_pub.fogGrid = s_fogCopy;
-            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
-        }
-    }
-    /* fog on with no grid is not a frame this pass may draw, so it publishes
-       NOTHING -- the copy can fail, and the port would sample a 1x1 image while
-       uFogDim carried the real size. */
-    fogBad = ((s_pub.fog & 1) && !s_pub.fogGrid);
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass decides it (tagpu_native.c `s_scissorOn`). */
@@ -1304,7 +1217,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
        (nfx)`, so a frame that gathered nothing never publishes while the next
        gather overwrites `s_verts` underneath the standing hand-over. */
     s_pub.frame = v->frame_counter;
-    s_pubHave = total > 0 && !fogBad;
+    s_pubHave = total > 0;
 }
 
 /* The atlas's half of the hand-over and the engine's table it is expanded

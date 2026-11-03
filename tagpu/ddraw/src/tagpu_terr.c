@@ -1384,31 +1384,11 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
    (tagpu_terr.h). Nothing is computed here that the draw did not already use:
    each field is the value that went into a uniform, a pointer into the array
    the upload took, or the buffer a texture was uploaded from. */
-/* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
-   slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
-   tagpu_packet_frame_end() -- which render_vk.c calls BEFORE it runs
-   `tagpu_vk_frame`, so a pointer handed on from here is read past its contract. An
-   alias would hold only because the give-back happens at the next acquire,
-   which is also where the `poison` lever fills the slot: the one stale read
-   that lever cannot see, and outside frame_end's tail==head check as well.
-   The atlas and the height grid are handed over as buffers this module owns;
-   the copy makes the fog grid the same, and makes the file header's "a pass
-   reads no engine state" true of the whole hand-over.
-
-   `cells * 2` is the grid's exact length: the packet's acquire refuses a grid
-   whose length is not `cols * rows * 2` (tagpu_packet.c), so the read is
-   bounded by that check; the 1024-a-side cap bounds the ALLOCATION, and the pass re-checks it (FOG_MAXDIM)
-   because a bound in one file is a bound only while both are read together. */
-#define FOG_COPY_MAXDIM 1024
-static unsigned short* s_fogCopy;
-static int             s_fogCopyCells;
-
 /* THIS FRAME'S HAND-OVER, filled and flagged. Everything the consumer draws
    the terrain from is named here and nowhere else, and `s_pubHave` is set on
    the last line so a half-filled struct is never visible as a ready one. */
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
-    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorWant` is the latch the
        arm beat sets when the Vulkan lane is up (see there); while it is 0 the
        lane is not armed, nothing will ever call the hand-over, and the memset
@@ -1438,8 +1418,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        a grep checks. Reviving cast shadows means writing a producer; see
        `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
     s_pub.shadowOn = 0;
-    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
-    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.hDimW = (float)s_hW; s_pub.hDimH = (float)s_hH;
     s_pub.sun[0] = L->sun[0]; s_pub.sun[1] = L->sun[1]; s_pub.sun[2] = L->sun[2];
     s_pub.amb = L->amb;
@@ -1473,33 +1451,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     /* THE ENGINE'S TABLE, unscaled: the world composite applies the Gamma
        factor once, to the finished image (tagpu_pal.h) */
     s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
-    /* the grid as the fragment shader will read it, and only when it will:
-       `uFog` 0 means taFog is never called and uFogGrid never sampled, so no
-       grid is published then. */
-    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
-        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
-        int cells = v->fogCols * v->fogRows;
-        if (cells > s_fogCopyCells) {
-            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
-            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
-        }
-        if (s_fogCopy && cells <= s_fogCopyCells) {
-            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
-            s_pub.fogGrid = s_fogCopy;
-            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
-        }
-    }
-    /* FOG ON WITH NO GRID IS NOT A FRAME THIS PASS MAY DRAW, so it publishes
-       NOTHING rather than a frame it cannot describe. The copy can fail -- a
-       refused `realloc`, which is precisely the address-space pressure this
-       phase exists to measure, or a grid past FOG_COPY_MAXDIM -- and publishing
-       `fog` 1 with a NULL grid would have the Vulkan lane sample a 1x1 image
-       while `uFogDim` carried the real size and draw wrong fog, silently.
-       Clearing `fog` instead would be just as silent a difference the other
-       way (unfogged ground where the engine's frame is fogged), so the answer
-       is the one this file already gives for the restored atlas and the shadow
-       map: stand down for the frame. */
-    fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists -- the feature
        pass's reasoning (tagpu_feat.c), and terrain covers the whole viewport,
@@ -1518,7 +1469,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        that is enforced, because the flag alone cannot be: a frame whose gather
        bailed never reaches this function to clear it. */
     s_pub.frame = v->frame_counter;
-    s_pubHave = s_ncell > 0 && !fogBad;
+    s_pubHave = s_ncell > 0;
 }
 
 /* Hand it over, ONCE (tagpu_terr.h). */
