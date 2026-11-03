@@ -14,23 +14,24 @@
 
 /* THE GATHERS' SLACK, in world px: tagpu_native.c accepts a unit, wreck or
    ghost anchor up to this far outside its effective rect
-   (tagpu_zoom_gather_span), and tagpu_fogwide.c builds the wide fog grid with
-   the same margin around the same rect at the zoom floor. One number, so the
-   grid cannot come out narrower than the slab the gathers test against it. */
+   (tagpu_zoom_gather_span), and the packet's tables' reach
+   (tagpu_zoom_pub_window) carries the same margin around the same rect at the
+   zoom floor. One number, so the reach cannot come out narrower than the slab
+   the gathers test against it. */
 #define TAGPU_GATHER_MARGIN 256
 
 /* THE LEAD, as the divisor of the viewport on each axis: a quarter of it, in
    world px, on every side. The render thread draws from a predicted eye that
    runs ahead of the one the game thread published by the steps it has not
-   applied yet, and the fog bound (tagpu_zoom.c, predict) holds that eye only
-   when its slab would leave the wide fog grid. Every window the game thread
+   applied yet, and the reach bound (tagpu_zoom.c, predict) holds that eye only
+   when its slab would leave the packet's reach. The reach the game thread
    publishes about its eye is therefore the floor's slab grown by this much —
-   the wide fog grid (tagpu_fogwide.c), the units carried with their pieces and
-   the feature anchors (tagpu_packet_pub.c) — all through
+   the units carried with their pieces, the feature anchors and the effects
+   models' cull (tagpu_packet_pub.c, table_reach) — through
    tagpu_zoom_pub_window, so an eye the bound accepts finds each of those
-   tables covering its slab. The slab itself (the native pass's tests, the
-   fog gates) stays at TAGPU_GATHER_MARGIN about the eye it draws from, and
-   the bound reads the grid's own origin and size, not this number. */
+   tables covering its slab. The slab itself (the native pass's tests) stays at
+   TAGPU_GATHER_MARGIN about the eye it draws from, and the bound reads the
+   packet's own `reach_lo/hi`, not this number. */
 #define TAGPU_LEAD_DIV 4
 
 struct TAGPU_PACKET;
@@ -143,42 +144,30 @@ void  tagpu_zoom_init(void);
    viewport describe, and the PREDICTED eye for this frame — the packet's eye
    plus every delta the game thread has not acknowledged yet — is what
    tagpu_zoom_predicted_eye() answers until the next call. The level returned
-   is the lever's, or the last frame's where the fog bound would otherwise
+   is the lever's, or the last frame's where the reach bound would otherwise
    draw the view against the gesture (tagpu_zoom.c, predict). */
 float tagpu_zoom_read_lever(const struct TAGPU_PACKET* pk);
 
 /* The level tagpu_zoom_read_lever() settled on this frame (the file's or the
-   wheel's, or the last frame's where the fog bound held it), whether or not a
+   wheel's, or the last frame's where the reach bound held it), whether or not a
    zoomed world is on screen. */
 float tagpu_zoom_lever(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
-   camera range in force and then into the fog grid this frame samples (the
-   fog bound, tagpu_zoom.c). Exact once the packet catches up (the next
+   camera range in force and then until its gather slab lies inside the
+   packet's tables' reach (the reach bound, tagpu_zoom.c). Exact once the
+   packet catches up (the next
    in-play draw applies the same deltas), so a wheel notch is drawn on the
    frame it happens and does not wobble. Returns 0 — and leaves the outputs
    alone — when there is no in-game packet: then there is no world to draw. */
 int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 
-/* 1 when this frame is to sample the WIDE fog grid (tagpu_fogwide) rather
-   than the engine's, decided with the predicted eye by
-   tagpu_zoom_read_lever(). The engine's is taken only where it spans this
-   frame's view: the level this frame draws with (tagpu_zoom_lever()) is at
-   least 1, the grid's own window reaches no more than one cell past the map
-   (past that the engine places its border completions off the map), and the
-   1x rect about the predicted eye lies in the grid's fully written cells —
-   tested on the packet's own numbers. Otherwise the wide one, with the
-   predicted eye already clamped so the gathers' whole slab lies inside it.
-   A packet with no wide grid leaves the frame on the engine's grid whatever
-   this answers — the native pass counts that frame as bare. Render thread. */
-int   tagpu_zoom_wide_fog(void);
-
 /* The span a pass gathers over along one axis, for the 1x viewport's extent
    `v` at level `z`: v/z + 64 below 1 (the 64 is the partial cells at the
    edge), never more than the zoom floor's and never less than v. The native
-   pass takes it and may only shorten it (its terrain reservation);
-   tagpu_fogwide.c sizes its window with it at the floor; the fog bound
+   pass takes it and may only shorten it (its terrain reservation); the
+   publisher sizes the tables' reach with it at the floor; the reach bound
    clamps the predicted eye with it. One expression for all three. */
 int   tagpu_zoom_gather_span(int v, float z);
 
@@ -188,13 +177,13 @@ int   tagpu_zoom_gather_span(int v, float z);
    is its first world px and `*span` its width. Pure arithmetic, any thread. */
 void  tagpu_zoom_pub_window(int eye, int v, int* lo, int* span);
 
-/* The fog bound's cost since the DLL loaded: frames whose predicted eye it
+/* The reach bound's cost since the DLL loaded: frames whose predicted eye it
    held back and the largest hold in world px along either axis; frames it
    drew at the last frame's level so the view would not move against the
    gesture (`paused`); and frames that moved against it anyway because the
-   grid's own eye had (`back`, the monotone rule's witness). For the native
+   packet's own eye had (`back`, the monotone rule's witness). For the native
    pass's heartbeat. Render thread. */
-void  tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back);
+void  tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back);
 
 /* A mouse message on its way into the engine, offered to the wheel first.
    Returns 1 when the wheel took it — the caller must then NOT pass it on.

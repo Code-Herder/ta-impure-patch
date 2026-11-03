@@ -39,7 +39,7 @@
    mouse and the build cursor, the engine's shade table); the four effect
    tables — projectiles, explosions, flying debris and the ten particle
    layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
-   the whole 256-byte GUI colour LUT they need; the two fog grids; the UI
+   the whole 256-byte GUI colour LUT they need; the fog of war's source bits; the UI
    layer's render half; and a playback's overlays, its recorded cursors and
    clicks with each recorded player's colour; the sites a multi-building
    placement previews; and the reclaim sweep's ring. Every table has its `off`/`n` here. The acquire is
@@ -50,6 +50,7 @@
 #include <stdint.h>
 #include "tagpu_limits.h"   /* the effect pools' sizes: the tables hold every record */
 #include "tagpu_wikipk.h"   /* the in-game wiki's record and its part of the command record */
+#include "tagpu_fogsrc.h"   /* the fog source's format and TAGPU_FOG_MAXDIM */
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
    engine's own blitter 0x4CCF60 accepts: [rows][0][yoff][code][u16 6][w][bits]
@@ -154,8 +155,9 @@ typedef struct TAGPU_PK_UNIT {
 #define TAGPU_PK_U_DEPTHPLANE 0x01u  /* the composite has a depth plane (path B) */
 #define TAGPU_PK_U_NATIVE     0x02u  /* tagpu_native_owns_unit() said yes, on the
                                         GAME thread, with the def in hand        */
-#define TAGPU_PK_U_INRECT     0x04u  /* inside the fog reach: pieces carried when
-                                        the model has any and the arena has room */
+#define TAGPU_PK_U_INRECT     0x04u  /* inside the tables' reach: pieces carried
+                                        when the model has any and the arena has
+                                        room                                     */
 #define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
                                         tile was inside the map                   */
 
@@ -565,8 +567,9 @@ typedef struct TAGPU_PK_FXMODEL {
 #define TAGPU_PK_TABLE_MAX  0x100000u
 /* THE ADDRESS SPACE OF ONE FRAME SLOT (tagpu_packet.c says what it is sized
    for); no fill can land more bytes than this, so it bounds the effects
-   models' five tables together as well */
-#define TAGPU_PK_RESERVE    (20u << 20)
+   models' five tables together as well. Its front holds the fog source at its
+   worst case, a 2048 x 2048-cell map's 1 MiB; Seven Islands uses 100 KB of it. */
+#define TAGPU_PK_RESERVE    (21u << 20)
 /* every model the records can name: a projectile's body and its flame, a
    debris piece, an explosion's body */
 #define TAGPU_PK_MAX_FXMODEL (2u * (unsigned)TAGPU_LIM_PROJ + (unsigned)TAGPU_LIM_PSYS + \
@@ -621,36 +624,25 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_LHT_ROWS    32u
 #define TAGPU_PK_LHT_BYTES   (TAGPU_PK_LHT_ROWS * 256u)
 
-/* ---- THE FOG GRIDS ------------------------------------------------------
-   Two lattices of 32-px cells, each cell two bytes of 4-bit corner masks — low
-   byte the unexplored corners, high byte the out-of-LOS ones, laid out exactly
-   as an RG8 texture so the bytes upload with no conversion.
+/* ---- THE FOG SOURCE -----------------------------------------------------
+   The fog of war as the bits the engine's builder 0x4843C0 tests per map cell,
+   for the WHOLE map: two bits a 32-px LOS cell, sixteen cells a word, `stride =
+   (w + 15) / 16` words a row (inc/tagpu_fogsrc.h, THE FORMAT). Packed on the game
+   thread inside the draw by tagpu_fogwide.c and copied in after it, so there is
+   one buffer, no lock and nothing to retire; every reader expands it as the
+   builder would (tagpu_fogsrc.h, THE EXPANSION).
 
-   THE ENGINE'S OWN, `*(main+0x1421F)`, spans the 1x viewport and about two
-   cells more. It is built once per map by LoadMap and only REWRITTEN by the
-   builder 0x4843C0, which the terrain owner calls from the engine's own fog
-   site — so a render-thread read of the buffer, or of the descriptor beside
-   it, races the game thread rewriting them (`tagpu_fog_at`'s guard answers a
-   hard fault off a base of -9 whose root cause was never found). Both cross
-   as ONE record whose
-   bounds the acquire checks: `fog_len` must be exactly `fog_cols * fog_rows *
-   2` and must lie inside the packet, so the largest index a consumer can form
-   is inside the bytes it was given, by construction rather than by a probe.
-
-   THE WIDE ONE is tagpu_fogwide's replication of the same builder over a
-   window the whole zoom range fits in — the same lattice, the same rule, more
-   cells — used by a frame drawn at zoom < 1, where the engine's stops partway
-   across the screen. The grid is built on the game thread inside the draw and
-   copied into the packet after it, so there is one buffer, no lock, and
-   nothing to retire.
-
-   THE ORIGIN IS THE PUBLISHER'S. `fog_org` is the world point of cell (0,0) —
-   `32*col0 + 16` — derived from the eye the grid was actually built at (the
-   engine grid's build record, tagpu_packet_pub.c `fog_rec_after`). The
-   render thread's PREDICTED eye — the packet's eye plus a cursor-anchor step
-   the game thread has not applied yet — would put the lattice off its own
-   bytes whenever something is unacknowledged. (The pass also takes the wide
-   grid whenever anything is unacknowledged.) */
+   THE BOUND IS THE ACQUIRE'S. `1 <= w, h <= TAGPU_FOG_MAXDIM`, `stride == (w +
+   15) / 16`, the offset 4-aligned and `off + stride * h * 4` inside the record
+   (tagpu_packet.c): every word `tagpu_fog_cell` can read, `stride * h` of them,
+   is inside the bytes the consumer was handed. `fogsrc_serial` moves whenever the
+   bits do, so a consumer that keeps a copy re-copies only then. */
+/* THE TABLES' REACH. The world rect the publisher built the anchor table and
+   the models' cull over, `[reach_lo, reach_hi]` per axis (x, then projected y):
+   the window tagpu_zoom_pub_window publishes about the packet's eye -- the
+   gather slab at the zoom floor grown by the lead. The render thread's reach
+   bound (tagpu_zoom.c) holds the eye it draws from until its gather slab lies
+   inside it, so no frame gathers past what the packet carries. */
 /* ---- THE UI LAYER'S RENDER HALF -----------------------------------------
    The four engine reads tagpu_gui_surf.c's render half needs, every
    present: the cursor's sprite record through the graphics globals, the
@@ -687,10 +679,6 @@ typedef struct TAGPU_PK_PART {
                                       is a GAF frame, so TAGPU_GAF_DECMAX (640)
                                       is its own decoder's ceiling as well      */
 
-#define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real
-                                      bound is `len == cols*rows*2` inside the
-                                      record, checked once at acquire          */
-
 /* truncation bits, one per table (TAGPU_PK_TRUNC_FONT/STRESS are above) */
 #define TAGPU_PK_TRUNC_UNITS   0x4u
 #define TAGPU_PK_TRUNC_PIECES  0x8u
@@ -702,8 +690,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_DEBRIS  0x200u
 #define TAGPU_PK_TRUNC_PART    0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
-#define TAGPU_PK_TRUNC_FOG     0x1000u
-#define TAGPU_PK_TRUNC_FOGW    0x2000u
+#define TAGPU_PK_TRUNC_FOGSRC  0x1000u
 #define TAGPU_PK_TRUNC_PLACE   0x4000u    /* the placement's sites did not fit:
                                              they still replace the square   */
 #define TAGPU_PK_TRUNC_MM      0x8000u
@@ -1112,15 +1099,16 @@ typedef struct TAGPU_PACKET {
                                          (TAProgram+0xC8), the explosion flash's
                                          colour ramp                             */
 
-    /* ---- the two fog grids ---- */
-    int32_t  fog_cols, fog_rows;      /* the ENGINE's screen grid; 0 = none this
-                                         frame (the descriptor did not hold up) */
-    int32_t  fog_org[2];              /* world x, projected z of its cell (0,0) */
-    uint32_t fog_off, fog_len;        /* fog_cols * fog_rows * 2 bytes          */
-    int32_t  fogw_cols, fogw_rows;    /* the WIDE grid; 0 = the module is off,
-                                         not building, or has published nothing */
-    int32_t  fogw_org[2];
-    uint32_t fogw_off, fogw_len;
+    /* ---- the fog source ---- */
+    int32_t  fogsrc_w, fogsrc_h;      /* cells; 0 = none this frame: the module is
+                                         off, has packed nothing, or the copy did
+                                         not fit                                 */
+    int32_t  fogsrc_stride;           /* words a row, (fogsrc_w + 15) / 16       */
+    uint32_t fogsrc_off;              /* stride * h words from here              */
+    uint32_t fogsrc_serial;           /* moves whenever the bits do              */
+    /* ---- the tables' reach ---- */
+    int32_t  reach_lo[2], reach_hi[2];/* world x, projected y: the rect the anchor
+                                         table and the models' cull cover        */
 
     /* ---- the UI layer's render half ---- */
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
@@ -1267,7 +1255,7 @@ static __inline const TAGPU_PK_WRECK* tagpu_pk_wrecks(const TAGPU_PACKET* p)
 static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
 { return p->n_anchors ? (const TAGPU_PK_ANCHOR*)(const void*)((const unsigned char*)p + p->off_anchors) : (const TAGPU_PK_ANCHOR*)0; }
 /* One unit's or wreck's piece run, or NULL when the entry carries none: it sat
-   outside the fog reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
+   outside the tables' reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
    more than TAGPU_PK_MAXPIECE, or the arena was full. `piece_off` was
    checked to lie inside the pieces area with room for `piece_n` entries. */
 static __inline const TAGPU_PK_PIECE* tagpu_pk_pieces(const TAGPU_PACKET* p, unsigned off, unsigned n)
@@ -1278,14 +1266,11 @@ static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
 /* The LHT lighten table, same shape, or NULL. */
 static __inline const unsigned char* tagpu_pk_lht(const TAGPU_PACKET* p)
 { return p->lht_len == TAGPU_PK_LHT_BYTES ? (const unsigned char*)p + p->lht_off : (const unsigned char*)0; }
-/* ---- the fog grids. Each is NULL, or `cols * rows` u16 corner
-   masks — the acquire proved the length is exactly that and that it lies
-   inside the record, so `grid[cy * cols + cx]` for cx < cols, cy < rows is
-   inside the bytes by construction. ---- */
-static __inline const unsigned short* tagpu_pk_fog(const TAGPU_PACKET* p)
-{ return p->fog_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fog_off) : (const unsigned short*)0; }
-static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
-{ return p->fogw_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fogw_off) : (const unsigned short*)0; }
+/* ---- the fog source: NULL, or `fogsrc_stride * fogsrc_h` words -- the acquire
+   proved they lie inside the record and that the stride is the width's, so every
+   word tagpu_fog_cell reads for a cell of the map is inside the bytes. ---- */
+static __inline const uint32_t* tagpu_pk_fogsrc(const TAGPU_PACKET* p)
+{ return p->fogsrc_w ? (const uint32_t*)(const void*)((const unsigned char*)p + p->fogsrc_off) : (const uint32_t*)0; }
 /* ---- the UI layer's render half ---- */
 /* the three minimap surfaces interleaved, mm_w * mm_h RGB triples, or NULL */
 static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)

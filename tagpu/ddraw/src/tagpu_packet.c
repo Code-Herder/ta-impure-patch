@@ -127,32 +127,30 @@
 #define PK_SUFFIX     8u                   /* crc, tail_seq                    */
 
 /* THE FRAME SLOT'S RESERVE HOLDS THE FRONT LAYERS AND THE UNIT-SCALED TABLES
-   AT THE DESIGN POINT. The publisher lays down the two fog grids and the shade
+   AT THE DESIGN POINT. The publisher lays down the fog source and the shade
    table first, then the pieces, units, wrecks and anchors, then the map's own
    features while the mirror is taking them (tagpu_packet_pub.c, fill_frame),
    so those are the part a reserve that is too small would cut -- and a frame
-   below 1x without its fog grids is drawn bare, a truncated unit, piece or
+   without its fog source draws no fog-gated world, a truncated unit, piece or
    wreck table refuses the frame's whole unit hand-over, and a cut map-feature
    table holds the mirror off for another packet. The tables' sum below is
    every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
    ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
    model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
    the anchor table, and the map-feature table at its cap: 20.1 MB under the
-   raised limits. The front is sized by the screen, not by a count, so it is an
-   allowance: on a 3840x2160 screen (a 3712 x 2096 viewport inside the stock
-   HUD) the wide grid is 543 x 316 cells, 343 176 B (tagpu_fogwide.c,
-   fogw_capacity, at the zoom floor), the engine's grid 118 x 68, 16 048 B
-   (0x483BB8's allocation), and the shade table 8 KB [COMPUTED]; the allowance
-   is 512 KB. What follows -- build orders, effects, the UI's render half, the
-   font -- is bounded by its own caps and truncates on its own bit, which costs
-   that layer alone. The reserve is address space, five slots of it in a
-   32-bit process whose largest free block has been logged as low as 43.6 MB
-   (gpu-status.md §2.86), so it is sized to the design point rather than
-   rounded up; pages are committed as the packets grow (`slot_commit`), so a
-   game pays only for what it publishes. */
+   raised limits. The front is the fog source at its cap -- TAGPU_FOG_MAXDIM
+   cells a side, 2 bits a cell, 1 MiB, the price of fog on a 65 536-px map --
+   plus the 8 KB shade table and slack [COMPUTED]. What follows -- build
+   orders, effects, the UI's render half, the font -- is bounded by its own
+   caps and truncates on its own bit, which costs that layer alone. The reserve
+   is address space, five slots of it in a 32-bit process whose largest free
+   block has been logged as low as 43.6 MB (gpu-status.md §2.86), so it is
+   sized to the design point rather than rounded up; pages are committed as the
+   packets grow (`slot_commit`), so a game pays only for what it publishes. */
 #define PK_DESIGN_PIECES 36u
 #define PK_DESIGN_WRECK_PIECES 19u
-#define PK_DESIGN_FRONT (512u << 10)
+#define PK_DESIGN_FRONT ((unsigned)TAGPU_FOG_MAXDIM / 16u * (unsigned)TAGPU_FOG_MAXDIM * 4u + \
+                         (64u << 10))
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
@@ -373,7 +371,7 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
     /* A FILL THAT DID NOT FIT IS DONE AGAIN, NOT PUBLISHED, WHILE THE SLOT
        CAN GROW TO IT. Published, it is a frame with tables missing — at a
        level's start, when the world tables first outgrow a slot, a frame with
-       no fog grid, no shade table and no units, which the native pass draws
+       no fog source, no shade table and no units, which the native pass draws
        with no fog at all. The slot is still this side's alone (W, not yet
        exchanged), so committing more of its pages and filling it again is
        invisible to the consumer: the head stored above stays, and the tail is
@@ -758,31 +756,23 @@ static const char* frame_valid(const void* rec)
             if (q[k].layer >= TAGPU_PK_NLAYER) return "particle layer";
         }
     }
-    /* THE TWO FOG GRIDS. The bound a consumer needs is not a cap
-       on the dimensions — it is that the bytes it was given hold every index it
-       can form. `len == cols * rows * 2`, checked here against the record's own
-       extent, IS that bound: the largest index is cols*rows - 1 and the area is
-       exactly cols*rows entries long. The dimension ceiling below is a sanity
-       filter on two numbers read out of engine memory, not the safety
-       argument. */
-    if (p->fog_len || p->fog_cols || p->fog_rows) {
-        if (p->fog_cols <= 0 || p->fog_rows <= 0 ||
-            p->fog_cols > TAGPU_PK_FOG_DIMCAP || p->fog_rows > TAGPU_PK_FOG_DIMCAP)
-            return "fog grid dims";
-        if (p->fog_len != (unsigned)p->fog_cols * (unsigned)p->fog_rows * 2u ||
-            !area_ok(p, p->fog_off, p->fog_len))
-            return "fog grid area";
+    /* THE FOG SOURCE. The bound a consumer needs is that every word it can
+       read is inside the bytes it was handed: `tagpu_fog_cell` reads word
+       `cy * stride + (cx >> 4)` for cx < w, cy < h only, and with `stride ==
+       (w + 15) / 16` that is below `stride * h`, the area checked here against
+       the record's own extent. The dimension ceiling is the reserve's design
+       point and the format's (tagpu_fogsrc.h). */
+    if (p->fogsrc_w || p->fogsrc_h || p->fogsrc_stride || p->fogsrc_off) {
+        if (p->fogsrc_w < 1 || p->fogsrc_h < 1 ||
+            p->fogsrc_w > TAGPU_FOG_MAXDIM || p->fogsrc_h > TAGPU_FOG_MAXDIM ||
+            p->fogsrc_stride != tagpu_fog_stride(p->fogsrc_w))
+            return "fog source dims";
+        if (!area_ok(p, p->fogsrc_off,
+                     (unsigned)p->fogsrc_stride * (unsigned)p->fogsrc_h * 4u))
+            return "fog source area";
     }
-    if (p->fogw_len || p->fogw_cols || p->fogw_rows) {
-        if (p->fogw_cols <= 0 || p->fogw_rows <= 0 ||
-            p->fogw_cols > TAGPU_PK_FOG_DIMCAP || p->fogw_rows > TAGPU_PK_FOG_DIMCAP)
-            return "wide fog grid dims";
-        if (p->fogw_len != (unsigned)p->fogw_cols * (unsigned)p->fogw_rows * 2u ||
-            !area_ok(p, p->fogw_off, p->fogw_len))
-            return "wide fog grid area";
-    }
-    /* THE UI's TWO MINIMAP AREAS, bounded the same way the fog grids
-       are: the length has to be exactly what the dimensions describe, so the
+    /* THE UI's TWO MINIMAP AREAS, bounded the same way the fog source
+       is: the length has to be exactly what the dimensions describe, so the
        largest index a consumer can form is inside the bytes it was handed. */
     if (p->mm_len || p->mm_w || p->mm_h) {
         if (p->mm_w <= 0 || p->mm_h <= 0 ||

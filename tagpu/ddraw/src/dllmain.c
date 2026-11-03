@@ -189,11 +189,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            lazy rebuild. */
         tagpu_terrown_init();
 
-        /* fogwide: the fog grid over the ZOOMED-OUT view (tagpu_fogwide.h).
-           No engine patch of its own: it is ticked on the game thread, at
-           terrown's fog-overlay call site when that is ours and otherwise, on
-           the Vulkan renderer, in the packet publisher's `after`; the tick
-           does nothing until this has run. It builds at every zoom;
+        /* fogwide: the fog of war's source bits for the whole map
+           (tagpu_fogwide.h). No engine patch of its own: it is ticked on the
+           game thread, at terrown's fog-overlay call site when that is ours
+           and otherwise, on the Vulkan renderer, in the packet publisher's
+           `after`; the tick does nothing until this has run.
            `tagpu_fogwide.off` turns it off. */
         tagpu_fogwide_init();
 

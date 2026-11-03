@@ -265,8 +265,8 @@ static void wheel_pin(float z)
    this frame. So each anchor is clamped into the viewport this frame is drawn
    with (the packet's `vp`, the TRUE 1x rect; the last published one when
    there is no packet), and the centre `c` is that viewport's: |a - c| <= W/2
-   by construction, which is the bound fogw_window's "a zoom-in is always
-   covered" rests on. For every notch the producer took against the same
+   by construction, which is the bound the reach bound's "a gesture that only
+   zooms in is never held" rests on. For every notch the producer took against the same
    viewport the clamp is the identity. */
 static float wheel_level(const TAGPU_PACKET* pk)
 {
@@ -348,7 +348,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
     if (n) {
         LONG back;
         s_batch  = 1;
-        /* the level last DRAWN, which is the tween's own unless the fog bound
+        /* the level last DRAWN, which is the tween's own unless the reach bound
            held it for that frame (predict) */
         s_izFrom = 1.0f / s_lever;
         s_izTo   = 1.0f / s_wheelTgt;
@@ -449,10 +449,10 @@ static unsigned follow_in_force(const TAGPU_PACKET* pk)
 }
 
 /* the eye this frame is drawn from (render thread) */
-static int   s_predX, s_predY, s_havePred, s_fogWide;
-/* the fog bound's cost and the monotone rule's witness (tagpu_zoom_fog_held) */
-static unsigned s_fogHeld, s_fogPaused, s_fogBack;
-static int      s_fogHeldMax;
+static int   s_predX, s_predY, s_havePred;
+/* the reach bound's cost and the monotone rule's witness (tagpu_zoom_reach_held) */
+static unsigned s_reachHeld, s_reachPaused, s_reachBack;
+static int      s_reachHeldMax;
 
 float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
 {
@@ -544,10 +544,10 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        together. Only the wheel anchors — the file lever has no gesture behind
        it and every zoom fixture drives it. */
     anchor_step(fromWheel, pk);
-    /* the fog bound may hold the level for this frame (predict), so the
+    /* the reach bound may hold the level for this frame (predict), so the
        published level is written once, after it */
     z = predict(pk, z, 1);
-    /* seen only when the frame is drawn AT the follow level: the fog bound
+    /* seen only when the frame is drawn AT the follow level: the reach bound
        may draw it at the last frame's instead (predict) */
     if (following && z == fz) s_followSeen = fe;
     s_zoom = z;
@@ -565,17 +565,6 @@ int tagpu_zoom_predicted_eye(int* eyeX, int* eyeY)
     if (!s_havePred) return 0;
     *eyeX = s_predX; *eyeY = s_predY;
     return 1;
-}
-
-/* RENDER THREAD. Which fog grid THIS frame samples, decided by predict() with
-   every term this frame's: the level read_lever settles on (the one the native
-   pass draws with), not tagpu_zoom_level(), whose `live` is raised by this
-   frame's own publish_view after the grid is chosen — the first in-play frame
-   after the shell, with the wheel level kept below 1, would otherwise draw
-   zoomed out on the engine's grid. */
-int tagpu_zoom_wide_fog(void)
-{
-    return s_fogWide;
 }
 
 int tagpu_zoom_gather_span(int v, float z)
@@ -600,12 +589,12 @@ void tagpu_zoom_pub_window(int eye, int v, int* lo, int* span)
     *span = s + 2 * pad;
 }
 
-void tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back)
+void tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back)
 {
-    *frames = s_fogHeld;
-    *maxPx = s_fogHeldMax;
-    *paused = s_fogPaused;
-    *back = s_fogBack;
+    *frames = s_reachHeld;
+    *maxPx = s_reachHeldMax;
+    *paused = s_reachPaused;
+    *back = s_reachBack;
 }
 
 static int options_gui_owns_input(void);
@@ -2079,19 +2068,18 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    unit of it is z screen px, and the anchor can sit up to z/2 px from the
    pointer while a gesture is in flight — 0.5 px at 1x, 4 px at 8x. Holding it
    exactly would mean giving the transform an off-centre scale centre, which
-   every rect derived from the viewport (vpwide's addressable rect, fogwide's
-   window, the ring test) currently assumes away.
+   every rect derived from the viewport (vpwide's addressable rect, the tables'
+   reach, the ring test) currently assumes away.
 
    THE FOG. The game thread's apply invalidates the screen fog grid on the
    draw it steps the eye (bit 3 of main+0x14281, cleared on the thread that
    owns it), so the engine's grid is rebuilt for the commanded eye inside that
-   same draw whether the fog draw is the engine's or terrown's replica. What
-   remains is the frame drawn from the PREDICTED eye before that packet
-   arrives: the fog bound (predict) takes the engine's grid only where it
-   spans the view and otherwise the wide one, clamping the drawn eye into it,
-   each by the origin and size the grid carries. Nothing here
-   depends on terrown owning the fog draw: the invalidation is the engine's
-   own mechanism.
+   same draw whether the fog draw is the engine's or terrown's replica. Our
+   passes do not read that grid: they expand the whole map's fog source the
+   packet carries (tagpu_fogsrc.h), which no eye can outrun, so the frame drawn
+   from the PREDICTED eye before that packet arrives has its fog wherever it
+   looks. What that frame needs bounded is its gather, and the reach bound
+   (predict) clamps the drawn eye into the rect the packet's tables cover.
 
    A FOLLOWED CAMERA IS RELEASED RATHER THAN FOUGHT. The stepper recomputes the
    scroll target from the followed unit every frame (`0x41CAF7`) and clamps it
@@ -2252,7 +2240,7 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
 /* The eye interval that puts `[e + dL, e + dR]` inside `[lo, hi]`, and `*e`
    clamped into it; returns 1. An empty interval centres the span on
    `[lo, hi]` and returns 0. */
-static int fog_fit(int* e, int dL, int dR, int lo, int hi)
+static int reach_fit(int* e, int dL, int dR, int lo, int hi)
 {
     int a = lo - dL, b = hi - dR;
     if (a > b) { *e = a + (b - a) / 2; return 0; }
@@ -2260,116 +2248,52 @@ static int fog_fit(int* e, int dL, int dR, int lo, int hi)
     return 1;
 }
 
-/* 1 when the engine's grid in this packet reaches more than one cell past the
-   map on some side. Its builder writes the four border completions on the
-   grid's literal first and last-but-one rows and columns, and those are the
-   entries straddling the map edge only while its window overshoots the map by
-   at most one cell (exe map, "The four border completions": left and top
-   need `col0 >= -1`, right and bottom `col0 + cols <= PLOT_C/2 + 1`). Past
-   that the completions land off the map and a fogged map edge fades to lit
-   across its last half cell; the wide grid derives the straddling index
-   instead. Judged on the grid's OWN window — the origin `32 col0 + 16` and the
-   size the packet carries with it — and never on the packet's eye, which is
-   not the eye the grid was built at whenever something moved the camera
-   between the two. The map's size is the PLOT grid's (`map_w16/h16`, 16-px
-   cells), halved into the fog lattice's 32-px cells — not the scroll extent
-   `map_pxw/h`, which is 32 px narrower and 128 px shorter and would refuse
-   the grid the engine builds at the bottom of its own range. */
-static int engine_grid_misplaced(const TAGPU_PACKET* pk)
-{
-    /* `org - 16` is a multiple of 32 on either sign, so the division is exact */
-    int c0 = (pk->fog_org[0] - 16) / 32, r0 = (pk->fog_org[1] - 16) / 32;
-    int w = pk->map_w16 / 2, h = pk->map_h16 / 2;       /* PLOT_C/2, PLOT_R/2 */
-    return c0 < -1 || c0 + pk->fog_cols > w + 1 ||
-           r0 < -1 || r0 + pk->fog_rows > h + 1;
-}
+/* THE REACH BOUND ON THE DRAWN EYE. The invariant: every unit, wreck, ghost and
+   feature anchor this frame gathers lies inside the rect the packet's tables
+   were built over -- its `reach_lo/hi` (tagpu_packet_pub.c, table_reach), the
+   window tagpu_zoom_pub_window publishes about the packet's eye. A unit inside
+   it carries its pieces, the anchor table holds its rows and the effects
+   models were culled against it, so a frame that gathers inside it finds every
+   table covering its slab. It rests on a bound and not on the game thread
+   keeping up: the slab comes from this frame's level and viewport, the reach
+   from the packet's own numbers, and the eye is clamped until one lies inside
+   the other, for any gesture, reversal or lag.
 
-/* THE FOG BOUND ON THE DRAWN EYE. The invariant: every fog sample this frame
-   takes from a grid lies inside that grid's fully written cells — the sample
-   of every drawn pixel (taFog, at the world point under it), and on the wide
-   grid every CPU sample (tagpu_fog_at): the unit and wreck gathers test the
-   point they sample against the slab below, and the feature, effect and
-   particle gate moves a point in the grid's unwritten last column or row
-   onto its written edge and answers every other point where it lies
-   (tagpu_fx_tile_visible). It rests on a bound and not on the game thread
-   keeping up: the domain comes from this frame's level and viewport, the
-   grid's span from the packet's own numbers, and the eye is clamped until one
-   lies inside the other, for any gesture, reversal or lag.
+   THE SLAB, per axis (vh for y): `[e + (vw - S)/2 - M, e + (vw - S)/2 + S + M]`,
+   S = tagpu_zoom_gather_span(vw, z) and M = TAGPU_GATHER_MARGIN — the native
+   pass's own test, whose S is this one or shorter (its terrain reservation only
+   trims), which only narrows the slab about the same centre; it contains the
+   view. At every level, the 1x one included.
 
-   THE DOMAIN, per axis (vh for y). The drawn pixels: every world pass is
-   scissored to the viewport, so a fragment's world point lies in the view
-   `e + vw/2 +- (vw/2)/z`, inside the 1x rect `[e, e + vw]` at z >= 1. The
-   slab: `[e + (vw - S)/2 - M, e + (vw - S)/2 + S + M]`, S =
-   tagpu_zoom_gather_span(vw, z) and M = TAGPU_GATHER_MARGIN — the native
-   pass's own test, whose S is this one or shorter (its terrain reservation
-   only trims), which only narrows the slab about the same centre; it
-   contains the view.
-   THE SPAN, the same for both grids: `[org, org + 32 (cols - 1)]`. The last
-   column of any grid is short its right corners (the builder fills entry gx
-   from cells gx and gx + 1), so a point past that edge would read corners
-   nobody wrote.
-
-   THE CHOICE. The engine's grid when the level is at least 1, its window is
-   the engine's own construction (engine_grid_misplaced) and the 1x rect
-   about the drawn eye lies in its span — true for the eye it was built at,
-   for every view: the builder sizes the grid `view/32 + 2` cells, `+ 3` when
-   the view is not a multiple of 32 (`0x483C1E..0x483C79`), from the eye
-   rounded to a half cell, so the span reaches 1..32 px past the far edge of
-   the 1x rect for a multiple of 32 (30 x 24 cells for the 896 x 704 view at
-   1024x768, MEASURED 2026-09-24) and `33 - m .. 64 - m` px for a view `m`
-   px past one (9..40 for the 1016 rows at 1080p, 17..48 for 2096 at 4K);
-   false for an anchor step past that slack. Otherwise the wide
-   grid, with the eye clamped so the slab lies in its span. That interval
-   holds every eye within the lead of the one the grid was built about, at
-   every level, since fogw_window cuts the slab at the floor about that eye
-   grown by the lead (tagpu_zoom_pub_window) and S never exceeds the floor's,
-   so it is empty only for a grid built for another viewport or trimmed by a
-   failed allocation. The clamp is the identity for every gesture that only
-   zooms in (fogw_window's argument), and for any displacement the game
-   thread has not applied that is within the lead; what it holds back is a
-   larger one, and the drawn eye waits at the edge of what the grid covers
-   for as many frames as that takes, instead of drawing past it. The
-   prediction runs one posted step ahead of the game thread by design, and
-   the lead is sized to absorb that step (gpu-status §2.3e has the
-   numbers). The clamp reads the grid's own origin and size, never the lead:
-   a grid a failed allocation trimmed is bounded by what it holds. While a
-   frame is held, a click is still mapped by the game
-   thread through the eye it applies, up to the hold from where it is drawn.
-   With no wide grid in the packet (`fogwide.off`, a failed build) a frame
-   whose engine grid qualifies but for the 1x rect is held into that grid; any
-   other such frame — below 1x, or on a misplaced engine grid — is drawn BARE,
-   unclamped over the engine's grid, and the native pass counts it. An empty
-   interval centres the domain on the grid. The native pass also counts any
-   frame whose domain is not inside its grid, as the bound's witness.
-   Returns 1 when the frame is to sample the wide grid; `*fit` is 0 when an
-   interval it clamped into was empty and the domain was centred instead. */
-static int fog_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey, int* fit)
+   WHAT IT HOLDS. The reach is the floor's slab about the packet's eye grown by
+   the lead on each side, and S never exceeds the floor's, so the interval holds
+   every eye within the lead of the packet's, at every level: at z >= 1 the
+   slab is the 1x one and the clamp could bind only on a step of 1.75 viewports.
+   The clamp is the identity for every gesture that only zooms in (each notch's
+   eye term is at most `(vw/2)` times its drop in distance, and the eye and the
+   distance are lerped along the same ease, so the view stays a subset of the
+   one before it), and for any displacement the game thread has not applied
+   that is within the lead; what it holds back is a larger one, and the drawn
+   eye waits at the edge of the reach for as many frames as that takes, instead
+   of drawing past it. While a frame is held, a click is still mapped by the
+   game thread through the eye it applies, up to the hold from where it is
+   drawn. The interval is empty only for a packet whose reach was not taken for
+   its own viewport; the domain is then centred on the reach, `*fit` is 0, and
+   the native pass counts any frame whose slab is not inside the reach (`out=`)
+   as the bound's witness. */
+static void reach_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey, int* fit)
 {
     int vw = pk->vp[2], vh = pk->vp[3], x = *ex, y = *ey;
-    int engine = z >= 1.0f && pk->fog_cols > 0 && pk->fog_rows > 0 &&
-                 !engine_grid_misplaced(pk);
+    int sw, sh, dLx, dRx, dLy, dRy;
 
     *fit = 1;
-    if (vw <= 0 || vh <= 0) return 1;
-    if (engine) {
-        int ox = pk->fog_org[0], oy = pk->fog_org[1];
-        int hx = ox + 32 * (pk->fog_cols - 1), hy = oy + 32 * (pk->fog_rows - 1);
-        if (x >= ox && x + vw <= hx && y >= oy && y + vh <= hy) return 0;
-        if (!tagpu_pk_fogw(pk)) {
-            *fit = fog_fit(&x, 0, vw, ox, hx) & fog_fit(&y, 0, vh, oy, hy);
-            *ex = x; *ey = y;
-            return 0;
-        }
-    }
-    if (tagpu_pk_fogw(pk)) {
-        int sw = tagpu_zoom_gather_span(vw, z), sh = tagpu_zoom_gather_span(vh, z);
-        int dLx = (vw - sw) / 2 - TAGPU_GATHER_MARGIN, dRx = dLx + sw + 2 * TAGPU_GATHER_MARGIN;
-        int dLy = (vh - sh) / 2 - TAGPU_GATHER_MARGIN, dRy = dLy + sh + 2 * TAGPU_GATHER_MARGIN;
-        *fit = fog_fit(&x, dLx, dRx, pk->fogw_org[0], pk->fogw_org[0] + 32 * (pk->fogw_cols - 1)) &
-               fog_fit(&y, dLy, dRy, pk->fogw_org[1], pk->fogw_org[1] + 32 * (pk->fogw_rows - 1));
-        *ex = x; *ey = y;
-    }
-    return 1;
+    if (vw <= 0 || vh <= 0) return;
+    sw = tagpu_zoom_gather_span(vw, z); sh = tagpu_zoom_gather_span(vh, z);
+    dLx = (vw - sw) / 2 - TAGPU_GATHER_MARGIN; dRx = dLx + sw + 2 * TAGPU_GATHER_MARGIN;
+    dLy = (vh - sh) / 2 - TAGPU_GATHER_MARGIN; dRy = dLy + sh + 2 * TAGPU_GATHER_MARGIN;
+    *fit = reach_fit(&x, dLx, dRx, pk->reach_lo[0], pk->reach_hi[0]) &
+           reach_fit(&y, dLy, dRy, pk->reach_lo[1], pk->reach_hi[1]);
+    *ex = x; *ey = y;
 }
 
 /* 1 when the drawn eye `d` steps away from `prev` against the gesture, which
@@ -2386,42 +2310,40 @@ static float s_drawnZ;
 
 /* The eye this frame is drawn from: the packet's, plus the deltas the game
    thread has not applied yet, clamped into the range in force and then by
-   the fog bound. `z` is the level the levers ask for; the level to draw at is
-   returned.
+   the reach bound. `z` is the level the levers ask for; the level to draw at
+   is returned.
 
    THE DRAWN VIEW NEVER MOVES AGAINST THE GESTURE, on either axis. The bound's
-   upper end `org + 32 (cols - 1) - (vw + S)/2 - M` falls as the level falls
-   (S grows), so by itself it walks a held eye backward frame by frame during
-   a zoom-out that cuts a zoom-in whose displacement the game thread has not
-   applied, and snaps it forward when a packet lands — a sawtooth, one tooth
-   per packet (gpu-status §2.3 has the numbers). When the bound would step
-   the eye away from where the gesture puts it, the frame is drawn at the
-   LAST frame's level instead, so the zoom pauses with the eye; the eye then
-   moves only toward the gesture. The grid is chosen and the eye clamped for
-   that level by the same bound, so the fog invariant is untouched: the
-   monotone rule only picks which level the bound is evaluated at.
+   upper end `reach_hi - (vw + S)/2 - M` falls as the level falls (S grows), so
+   by itself it walks a held eye backward frame by frame during a zoom-out that
+   cuts a zoom-in whose displacement the game thread has not applied, and snaps
+   it forward when a packet lands — a sawtooth, one tooth per packet
+   (gpu-status §2.3 has the numbers). When the bound would step the eye away
+   from where the gesture puts it, the frame is drawn at the LAST frame's level
+   instead, so the zoom pauses with the eye; the eye then moves only toward the
+   gesture. The eye is clamped for that level by the same bound, so the reach
+   invariant is untouched: the monotone rule only picks which level the bound
+   is evaluated at.
    Why the last level is enough: for one packet its interval at that level is
    the one that last frame's eye was clamped into, so that eye is still in
-   it, and every eye between it and `u` is too. A NEWER packet's wide
-   interval at a level is non-decreasing in the eye it was built about (the
-   window is that eye's floor slab snapped down to the 32-px lattice, its
-   size fixed by the viewport), so it still holds last frame's eye unless the
-   grid's own eye moved against the gesture — the game thread applying a
-   step of another gesture, or its own camera writers — or the grid was
-   trimmed by a failed allocation. Only then is the step taken anyway, and
-   counted (`back=` in the native heartbeat): the fog invariant is the one
-   that cannot give.
-   THE RULE NEEDS AN INTERVAL. Where the one at this level is empty — a grid
-   trimmed narrower than the slab — the bound centres the domain on the grid,
-   and a centred eye is not a step the gesture asked for in either direction:
-   pausing on it would hold the last level for as long as the trim lasted. So
-   the rule is applied only when the bound fitted the eye into a non-empty
-   interval, and the retry is taken only when it did too; a centred frame is
-   drawn as the bound left it and counted by the native pass (`out=`). */
+   it, and every eye between it and `u` is too. A NEWER packet's interval at a
+   level is non-decreasing in the eye it was published about (the reach is
+   that eye's floor slab grown by the lead, its size fixed by the viewport), so
+   it still holds last frame's eye unless the packet's own eye moved against
+   the gesture — the game thread applying a step of another gesture, or its own
+   camera writers. Only then is the step taken anyway, and counted (`back=` in
+   the native heartbeat): the reach invariant is the one that cannot give.
+   THE RULE NEEDS AN INTERVAL. Where the one at this level is empty, the bound
+   centres the domain on the reach, and a centred eye is not a step the gesture
+   asked for in either direction: pausing on it would hold the last level for
+   as long as that lasted. So the rule is applied only when the bound fitted
+   the eye into a non-empty interval, and the retry is taken only when it did
+   too; a centred frame is drawn as the bound left it and counted by the native
+   pass (`out=`). */
 static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
 {
-    int ux, uy, ex, ey, loX, hiX, loY, hiY, wide, fit;
-    s_havePred = 0; s_fogWide = 0;
+    int ux, uy, ex, ey, loX, hiX, loY, hiY, fit;
+    s_havePred = 0;
     if (!pk) { s_haveDrawn = 0; return z; }
     /* A NEW EPOCH — the level ended on the game thread, which reset what it
        had applied to zero: the sum posted from here on starts from zero too,
@@ -2445,23 +2367,23 @@ static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
         clamp_pair(&ex, &ey, loX, hiX, loY, hiY);
     ux = ex; uy = ey;
     /* LAST, so nothing moves the eye after the bound is established */
-    wide = fog_bound(pk, z, &ex, &ey, &fit);
+    reach_bound(pk, z, &ex, &ey, &fit);
     if (mayHold && fit && s_haveDrawn &&
         (against(ex, ux, s_drawnX) || against(ey, uy, s_drawnY))) {
-        int hx = ux, hy = uy, hfit, hw = fog_bound(pk, s_drawnZ, &hx, &hy, &hfit);
+        int hx = ux, hy = uy, hfit;
+        reach_bound(pk, s_drawnZ, &hx, &hy, &hfit);
         if (hfit && !against(hx, ux, s_drawnX) && !against(hy, uy, s_drawnY)) {
-            ex = hx; ey = hy; wide = hw; z = s_drawnZ;
-            s_fogPaused++;
+            ex = hx; ey = hy; z = s_drawnZ;
+            s_reachPaused++;
         } else {
-            s_fogBack++;
+            s_reachBack++;
         }
     }
     if (ex != ux || ey != uy) {
         int d = abs(ex - ux) > abs(ey - uy) ? abs(ex - ux) : abs(ey - uy);
-        s_fogHeld++;
-        if (d > s_fogHeldMax) s_fogHeldMax = d;
+        s_reachHeld++;
+        if (d > s_reachHeldMax) s_reachHeldMax = d;
     }
-    s_fogWide = wide;
     s_predX = ex; s_predY = ey; s_havePred = 1;
     s_drawnX = ex; s_drawnY = ey; s_drawnZ = z; s_haveDrawn = 1;
     return z;
