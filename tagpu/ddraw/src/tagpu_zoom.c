@@ -1615,6 +1615,184 @@ float tagpu_zoom_game_floor(void)
     return s_gFloor;
 }
 
+/* ---- the hit test's guard ----------------------------------------------------
+
+   THE ENGINE'S UNIT HIT TEST NARROWS TO INT16, AND NOTHING THE ENGINE KEEPS
+   BOUNDS WHAT IT NARROWS. `0x48C6A0(unit, point)` [DISASSEMBLED] takes the
+   model's root box from `0x4CB650(MODEL_PTRS[unit+0xA6], &min, &max, 0)`
+   (stdcall, `ret 0x10`; flag 0: the root piece's vertices unioned with the
+   origin, 16.16), builds four corners of it at min.y (`0x48C6DA..0x48C725`),
+   rotates each by the unit's turn with `0x4B6CC0` (three planar rotations,
+   `fsincos` and `fistp` in `0x4B7173`: the norm is kept to well under a
+   world px), and forms, in 32 bits, `x - (eyeX << 16) + c.x`,
+   `alt + c.y` and `z - (eyeY << 16) - c.z` (`0x48C73C..0x48C7A3`), keeping
+   bits 16..31 of each (`sar 0x10`, `movsx`). x is `[unit+0x6A]`, the
+   altitude `[unit+0x6E]`, z `[unit+0x72]`, all 16.16, and the eye
+   main+0x1431F/+0x14323 in px. No engine code bounds the position
+   [DISASSEMBLED]: the air course sets an aircraft's target altitude to
+   cruisealt plus a byte with no clamp (`0x49074F`), off the map the vertical
+   step is skipped so a climb only decays (`0x43D4B8`), no function clamps x
+   and z for aircraft, carried units (`0x48A9F0`), the `0x2C` network record's
+   raw positions (`0x48B679`) or Teleport (`0x406AA0`). So no margin taken at a
+   level load can bound the narrowing.
+
+   THE GUARD IS ON THE ONE CALL. `call 0x48C6A0` at `0x48CE15`, inside
+   GetUnitAtMouse `0x48CD80`, is the only reference to `0x48C6A0` in the
+   disassembly, and its address as a dword (`A0 C6 48 00`) occurs nowhere in
+   the image, so no table or pushed address reaches it. tagpu_vpwide.c
+   redirects that call here with the widened rect (the rect is what lets a
+   far unit into HotUnits). The engine's test runs only when
+
+     1. the model id `WORD [unit+0xA6]` is below UNITINFOCount main+0x1438F
+        and MODEL_PTRS main+0x14377 and its entry pass the pointer filter
+        -- the bound tagpu_native.c's model_root uses;
+     2. R, the ceiling of the largest norm over the eight corners of that
+        root box, in px, plus 2, is at most 8191;
+     3. in 64-bit arithmetic, with px the 16.16 value shifted down 16
+        (floored, as the engine's `sar`), |x - eyeX| + R, |z - eyeY| + R and
+        |alt| + R are each at most 32767;
+
+   and the answer is otherwise "not hit".
+
+   WHY THAT IS A BOUND BY CONSTRUCTION. Two's-complement arithmetic is exact
+   modulo 2^32, so each kept value is the true one whenever the TRUE sum lies
+   in int32, whatever the intermediates did (`eyeX << 16` itself wraps for
+   |eyeX| >= 32768); its high half is then floor(sum / 65536), which lies in
+   [px - eye - R, px - eye + R] for a rotated corner of norm at most R, and
+   condition 3 puts that inside int16 on all three axes -- so the true sum is
+   in int32 and the kept value is exact. `0x4C1320` [DISASSEMBLED] then
+   compares, per edge, `(xj - xi)(py - yi)` with `(yj - yi)(px - xi)` as two
+   separate signed 32-bit products. The point is the dispatched mouse point,
+   which GetUnitAtMouse has already found inside the rect at main+0x37E27
+   (`0x4B6720`), whose edges are int16 (tagpu_vpwide_rect_at); a corner is
+   x in [-32768 + 0x80, 32767 + 0x80] and y = z - alt/2 + 0x20 within about
+   +-49 200. So a point-to-corner difference is under 65 700 in x and
+   82 000 in y, and an edge of the rotated box is at most 2R + 1 in x and
+   3R + 3 in y; with R <= 8191 each product is under 1.7 x 10^9 < 2^31. A
+   unit the guard turns away is one whose engine answer could have wrapped,
+   and "not hit" is the only answer that names no wrong unit.
+
+   WHAT IT COSTS. At 1x every HotUnit is on a screen at most 16 384 px wide,
+   far inside the limit. Below 1x a unit is unpickable (no hover, no click)
+   only while it is more than about 32 767 - R px from the eye or flying
+   above about that -- a unit straddling the far edge of a rect the floor
+   bound by lparam (super-ultrawide), or an aircraft tens of thousands of px
+   up. Counted: `zoom: hit guard` in the log, at most once a second.
+
+   R IS CACHED PER MODEL ID, built at the first in-play apply of a level and
+   cleared at its end (tagpu_zoom_level_end): MODEL_PTRS is written at the
+   level load (`0x42D6AA`) and nulled only by the teardown (`0x42DCD8`), so
+   the models the table was measured from outlive it, and a table that is
+   not built -- a publisher that applies nothing has no level end to clear it
+   either -- measures every call on the spot with the same `0x4CB650` call,
+   correct and only slower. GetUnitAtMouse runs on the game thread, the
+   table's thread. */
+#define VA_HITTEST       0x0048C6A0u   /* stdcall(unit, point), ret 8           */
+#define VA_MODELBOX      0x004CB650u   /* stdcall(model, min*, max*, flag), ret 0x10 */
+#define OFF_MODELPTRS    0x14377       /* Model3DONode* [UNITINFOCount]         */
+#define OFF_UDEFCOUNT    0x1438F       /* u32 UNITINFOCount                     */
+#define U_X              0x6A          /* 16.16 world x                         */
+#define U_ALT            0x6E          /* 16.16 altitude                        */
+#define U_Z              0x72          /* 16.16 world z                         */
+#define U_MODELID        0xA6          /* u16 index into MODEL_PTRS             */
+#define HIT_R_MAX        8191u
+#define HIT_R_TOO_BIG    0xFFFFu       /* a model whose R exceeds HIT_R_MAX     */
+#define HIT_MODELS       0x10000u      /* every u16 model id                    */
+
+typedef int  (__stdcall *PFN_HITTEST)(const char* unit, const int* point);
+typedef void (__stdcall *PFN_MODELBOX)(const void* model, int* mn, int* mx, int flag);
+
+/* game thread only: R per model id, 0 = not measured */
+static unsigned short s_hitR[HIT_MODELS];
+static int      s_hitBuilt;
+static unsigned s_hitRefused;
+
+static int model_ptr_ok(const void* p)
+{
+    return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top();
+}
+
+/* R of model `m` in px, HIT_R_TOO_BIG above HIT_R_MAX, 0 when there is no
+   model to measure. `m` is below UNITINFOCount (the caller's bound). */
+static unsigned hit_measure(const char* ta, unsigned m)
+{
+    const void* const* ptrs = *(const void* const* const*)(ta + OFF_MODELPTRS);
+    int mn[3], mx[3], k;
+    double r2 = 0.0, r;
+
+    if (!model_ptr_ok(ptrs) || !model_ptr_ok(ptrs[m])) return 0;
+    ((PFN_MODELBOX)VA_MODELBOX)(ptrs[m], mn, mx, 0);
+    /* the largest norm over the eight corners: each axis at its larger
+       magnitude */
+    for (k = 0; k < 3; k++) {
+        double a = fabs((double)mn[k]), b = fabs((double)mx[k]);
+        double c = a > b ? a : b;
+        r2 += c * c;
+    }
+    r = ceil(sqrt(r2) / 65536.0) + 2.0;
+    return r > (double)HIT_R_MAX ? HIT_R_TOO_BIG : (unsigned)r;
+}
+
+/* UNITINFOCount when `m` is below it and it is a count a u16 id can index;
+   0 otherwise */
+static unsigned hit_model_count(const char* ta)
+{
+    unsigned n = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+    return n <= HIT_MODELS ? n : 0u;
+}
+
+/* The table, once a level: from the level's first in-play apply. */
+static void hit_table_build(const char* ta)
+{
+    unsigned n = hit_model_count(ta), m;
+    for (m = 0; m < n; m++) s_hitR[m] = (unsigned short)hit_measure(ta, m);
+    s_hitBuilt = 1;
+}
+
+/* Condition 3: the 16.16 value's px (floored, the engine's `sar`) less `eye`,
+   plus R, inside int16. */
+static int hit_axis_fits(int v1616, long long eye, unsigned r)
+{
+    long long d = (long long)(v1616 >> 16) - eye;
+    return (d < 0 ? -d : d) + (long long)r <= 32767;
+}
+
+int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    unsigned m = 0, r = 0, n;
+
+    if (ta_ok(ta) && model_ptr_ok(unit)) {
+        m = *(const unsigned short*)(unit + U_MODELID);
+        n = hit_model_count(ta);
+        if (m < n) {
+            r = s_hitBuilt ? s_hitR[m] : 0u;
+            if (!r) r = hit_measure(ta, m);
+        }
+        if (r && r <= HIT_R_MAX &&
+            hit_axis_fits(*(const int*)(unit + U_X), *(const int*)(ta + OFF_EYEX), r) &&
+            hit_axis_fits(*(const int*)(unit + U_Z), *(const int*)(ta + OFF_EYEY), r) &&
+            hit_axis_fits(*(const int*)(unit + U_ALT), 0, r))
+            return ((PFN_HITTEST)VA_HITTEST)(unit, point);
+    }
+    s_hitRefused++;
+    {
+        static DWORD tick;                   /* game thread only */
+        DWORD now = GetTickCount();
+        if (now - tick > 1000) {
+            char b[200];
+            tick = now;
+            _snprintf(b, sizeof b,
+                      "zoom: hit guard - %u unit hit test(s) answered \"not hit\" so far, whose int16 "
+                      "narrowing could wrap (the last: model %u, R %u)",
+                      s_hitRefused, m, r);
+            b[sizeof b - 1] = 0;
+            zlog(b);
+        }
+    }
+    return 0;
+}
+
 float tagpu_zoom_applied_level(void)
 {
     return s_gLevel;
@@ -1716,6 +1894,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        back at the next draw. */
     s_applyLive = 1;
     floor_compute(ta);
+    if (!s_hitBuilt) hit_table_build(ta);
     s_gLevel  = c ? c->zoom : 1.0f;
     s_gLive   = c ? (int)c->live : 0;
     /* THE LEVEL AT OR ABOVE THIS THREAD'S FLOOR: the render thread's floor is
@@ -1892,6 +2071,10 @@ void tagpu_zoom_level_end(char* ta)
        own */
     s_gFloor = s_gReach = TAGPU_ZOOM_FLOOR_HI;
     s_floorKeyOk = 0;
+    /* the hit guard's radii are this level's models': the next level measures
+       its own (on the spot until its first apply builds the table) */
+    s_hitBuilt = 0;
+    memset(s_hitR, 0, sizeof s_hitR);
     /* a new epoch: nothing owed to the old level survives into the next */
     s_epoch++;
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;

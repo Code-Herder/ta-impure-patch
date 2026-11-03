@@ -82,6 +82,13 @@
 #define VA_GETTPOS        0x00484B50u  /* GetTPosition, stdcall, ret 0x0C     */
 #define VA_GRIDPLOT       0x00481550u  /* GetGridPosPLOT, stdcall, ret 8      */
 #define VA_GRIDFEAT       0x00421E60u  /* GetGridPosFeature, stdcall, ret 4   */
+/* THE UNIT HIT TEST'S ONE CALL, inside GetUnitAtMouse 0x48CD80: `E8 86 F8 FF
+   FF`, the only reference to 0x48C6A0 in the image. It narrows each unit's
+   corners less the eye to int16, which a unit the widened rect lets into
+   HotUnits can overflow, so it goes through tagpu_zoom_hit_guard with the
+   rest of the widening half (tagpu_zoom.c, "the hit test's guard"). */
+#define VA_HITTEST        0x0048C6A0u  /* stdcall(unit, point), ret 8         */
+#define SITE_HITTEST      0x0048CE15u
 
 /* The three places TA's own window procedure unpacks a mouse lParam, one per
    arm of its 0x200..0x206 jump table (move, button-up, button-down). All three
@@ -732,11 +739,12 @@ void tagpu_vpwide_init(void)
         (!site_is(SITE_SETCLIP1, VA_SETCLIP) ||
          !site_is(SITE_SETCLIP2, VA_SETCLIP) ||
          !site_is(SITE_SETCLIP3, VA_SETCLIP) ||
+         !site_is(SITE_HITTEST, VA_HITTEST) ||
          !bytes_are(SITE_UNPACK1, UNPACK_WAS) ||
          !bytes_are(SITE_UNPACK2, UNPACK_WAS) ||
          !bytes_are(SITE_UNPACK3, UNPACK_WAS))) {
         flog("vpwide: NOT widening — engine bytes differ at one of "
-             "0x468D85/0x46964F/0x469F95/"
+             "0x468D85/0x46964F/0x469F95/0x48CE15/"
              "0x4B5E5F/0x4B5EC0/0x4B5F0C");
         s_widenArmed = 0;
     }
@@ -745,6 +753,7 @@ void tagpu_vpwide_init(void)
         ok &= redirect(SITE_SETCLIP1, (void*)vpw_setclip);
         ok &= redirect(SITE_SETCLIP2, (void*)vpw_setclip);
         ok &= redirect(SITE_SETCLIP3, (void*)vpw_setclip);
+        ok &= redirect(SITE_HITTEST, (void*)tagpu_zoom_hit_guard);
         ok &= tagpu_detour_write(SITE_UNPACK1, UNPACK_NOW, 9);
         ok &= tagpu_detour_write(SITE_UNPACK2, UNPACK_NOW, 9);
         ok &= tagpu_detour_write(SITE_UNPACK3, UNPACK_NOW, 9);
@@ -752,8 +761,9 @@ void tagpu_vpwide_init(void)
     s_installed = ok;
     if (!ok)             flog("vpwide: PARTIAL — see above");
     else if (s_widenArmed) flog("vpwide: ARMED (mouse->world 0x498DA0, surface "
-                                "clip 0x4C6B10 x3, wndproc lParam sign-extend "
-                                "x3); the rect only widens while zoom < 1");
+                                "clip 0x4C6B10 x3, unit hit test guard 0x48CE15, "
+                                "wndproc lParam sign-extend x3); the rect only "
+                                "widens while zoom < 1");
     else if (s_repairArmed) flog("vpwide: mouse->world repair only (0x498DA0) — "
                                 "the viewport rect is never widened");
     else                 flog("vpwide: mouse->world capture only (0x498DA0) — "
