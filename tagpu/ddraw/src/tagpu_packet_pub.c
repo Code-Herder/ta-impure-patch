@@ -118,6 +118,7 @@
 #include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
+#include "tagpu_icontype.h"  /* the icons' type table, built here at the in-play fill */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -345,8 +346,8 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
    packet carries. Past this file every index is a packet index into a table
    whose length the consumer's own bounds check has already verified.
 
-   THE LAYOUT, and why it is this order: header | pieces | units | wrecks |
-   anchors | font | shd. A unit's `piece_off` has to be an absolute byte offset
+   THE LAYOUT, and why it is this order: header | pieces | units | unit types |
+   wrecks | anchors | font | shd. A unit's `piece_off` has to be an absolute byte offset
    when the entry is written, so the piece arena has to start at a known place
    — which means first. The unit and wreck entries are therefore built in
    file-static scratch and copied in afterwards; the anchors likewise, because
@@ -406,6 +407,7 @@ typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
 typedef char pk_mapfeat_size[(sizeof(TAGPU_PK_MAPFEAT) == 8) ? 1 : -1];
+typedef char pk_utype_size [(sizeof(TAGPU_PK_UTYPE) == 8) ? 1 : -1];
 
 static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 /* what fill_frame last wrote. Read back by roster_log immediately after the
@@ -851,6 +853,139 @@ static unsigned fill_mapfeat(TAGPU_PACKET* p, unsigned* cursor)
     return e;
 }
 
+/* ================= THE STRATEGIC ICONS' TYPE TABLE ========================
+   One TAGPU_PK_UTYPE per UnitDef row (tagpu_icontype.h): the class BAR's icon
+   rule gives the type, its draw layer and its model's radius. Built once a
+   level, at the level's first in-play fill, and carried whole in every
+   in-play packet right after the units table.
+
+   GAME THREAD ONLY. Every def field is read on the thread that owns the def
+   array, inside the in-play publish, where the loader thread has finished
+   (the file comment's "THE LOADER THREAD"); every row is below
+   n = UNITINFOCount, the count the level teardown's 0x42DB90 loops to; a side
+   is below both the count the loader stored and the five records the engine
+   keeps; a weapon slot counts only when it is a record of the weapon array.
+
+   THE CLASS RULE, first match wins:
+     1. COMMANDER -- the type's UnitName is a side's commander name, or the
+        type has both showplayername and hidedamage (TADR's rule), so a decoy
+        commander is a commander to everyone;
+     2. immobile (bmcode 0): a builder that is no air base is a FACTORY, any
+        other a BUILDING;
+     3. canfly: a builder is an AIRCONS, an armed type an AIRCOMBAT, else AIR;
+     4. a builder that is no air base is a CONS, an armed type a COMBAT, else
+        UNKNOWN.
+   "Armed" is TADR's: one of the def's three weapon slots holds a weapon. */
+#define OFF_SIDES          0x37F39   /* u32: the sides this game loaded       */
+#define OFF_SIDE_CMD       0x37F5F   /* each side's commander name, 0x20 bytes:
+                                        +0x22 into its record, which the loader
+                                        0x431A60 lays out from main+0x37F3D    */
+#define SIDE_STRIDE        0x232
+#define SIDE_ROOM          5u        /* the engine's side records: its free loop
+                                        stops at five (0x431A20)               */
+#define UD_WEAPONS         0x1EE     /* three weapon pointers, +0x1EE/1F2/1F6  */
+#define UD_BMCODE          0x22F     /* u8: 0 = the type cannot move           */
+#define UD_TYPEMASK2       0x245     /* u32, the second FBI word               */
+#define UDM_BUILDER        0x40u     /* UD_TYPEMASK bits                       */
+#define UDM_AIRBASE        0x200u
+#define UDM_CANFLY         0x800u
+#define UDM_HIDEDAMAGE     0x4000u
+#define UDM2_SHOWNAME      0x20000u  /* UD_TYPEMASK2: showplayername           */
+
+static TAGPU_PK_UTYPE s_utype[TAGPU_LIM_TYPES];
+static unsigned       s_utypeN;
+/* THE LEVEL KEY is the publisher's own level counter, not a sentinel reset at
+   load (the map features' rule): `s_utypeHave` with `s_utypeLevel ==
+   s_levelGen` is "built for the level in play". tagpu_packet_pub_level_end
+   clears it on the game thread as well, so neither the fill nor the hit guard
+   can use one level's table in the next. */
+static unsigned       s_utypeLevel;
+static int            s_utypeHave;
+
+static int utype_armed(const char* def)
+{
+    int k;
+    for (k = 0; k < 3; k++) {
+        const void* w = *(const void* const*)(def + UD_WEAPONS + k * 4);
+        if (w && tagpu_limits_weapon_index(w) >= 1) return 1;
+    }
+    return 0;
+}
+
+static int utype_commander(const char* ta, const char* def, unsigned nsides)
+{
+    unsigned s;
+    if (!def[UD_NAME]) return 0;
+    for (s = 0; s < nsides; s++)
+        if (!_strnicmp(def + UD_NAME, ta + OFF_SIDE_CMD + (size_t)s * SIDE_STRIDE, 0x20)) return 1;
+    return (RDU32(def, UD_TYPEMASK2) & UDM2_SHOWNAME) && (RDU32(def, UD_TYPEMASK) & UDM_HIDEDAMAGE);
+}
+
+static int utype_class(const char* ta, const char* def, unsigned nsides)
+{
+    const unsigned m = RDU32(def, UD_TYPEMASK);
+    const int builder = (m & UDM_BUILDER) != 0, airbase = (m & UDM_AIRBASE) != 0;
+    if (utype_commander(ta, def, nsides)) return TAGPU_ICLS_COMMANDER;
+    if (RDU8(def, UD_BMCODE) == 0) return builder && !airbase ? TAGPU_ICLS_FACTORY : TAGPU_ICLS_BUILDING;
+    if (m & UDM_CANFLY)
+        return builder ? TAGPU_ICLS_AIRCONS : utype_armed(def) ? TAGPU_ICLS_AIRCOMBAT : TAGPU_ICLS_AIR;
+    if (builder && !airbase) return TAGPU_ICLS_CONS;
+    return utype_armed(def) ? TAGPU_ICLS_COMBAT : TAGPU_ICLS_UNKNOWN;
+}
+
+/* BAR's drawOrder per class (icontypes.lua): structures under ground units
+   under aircraft under commanders */
+static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
+    /* UNKNOWN */ 1, /* COMMANDER */ 3, /* FACTORY */ 0, /* BUILDING */ 0,
+    /* AIRCONS */ 2, /* AIRCOMBAT */ 2, /* AIR */ 2, /* CONS */ 1, /* COMBAT */ 1 };
+
+/* The table for the level in play, built at its first in-play fill; a no-op
+   once built for it. A level with more types than the table holds has none,
+   and every unit of it is drawn as its model. */
+static void utype_level(const char* ta)
+{
+    const char* udefs = *(const char* const*)(ta + OFF_UNITDEFS);
+    unsigned n = RDU32(ta, OFF_UDEFCOUNT), nsides = RDU32(ta, OFF_SIDES), row;
+    if (s_utypeHave && s_utypeLevel == s_levelGen) return;
+    if (!ptr_ok(udefs)) return;                     /* no defs yet: the next fill */
+    s_utypeLevel = s_levelGen; s_utypeHave = 1; s_utypeN = 0;
+    if (n < 1 || n > (unsigned)TAGPU_LIM_TYPES) {
+        char b[160];
+        _snprintf(b, sizeof b, "icons: %u unit types, past the table's %u - no icons this level",
+                  n, (unsigned)TAGPU_LIM_TYPES);
+        b[sizeof b - 1] = 0; plog(b);
+        return;
+    }
+    if (nsides > SIDE_ROOM) nsides = SIDE_ROOM;
+    memset(s_utype, 0, (size_t)n * sizeof s_utype[0]);
+    for (row = 0; row < n; row++) {
+        const char* def = udefs + (size_t)row * UDEF_STRIDE;
+        TAGPU_PK_UTYPE* t = &s_utype[row];
+        unsigned r;
+        /* row 0 is the engine's "no model": it stays UNKNOWN with no radius */
+        t->cls   = (unsigned char)(row ? utype_class(ta, def, nsides) : TAGPU_ICLS_UNKNOWN);
+        t->layer = UTYPE_LAYER[t->cls];
+        t->icon  = TAGPU_ICON_NOSET;
+        /* unit+0xA6 is both the model id and the type row, so the hit guard's
+           radius per model id is this row's model radius */
+        r = row ? tagpu_zoom_hit_radius(ta, row) : 0u;
+        t->r_px = (unsigned short)(r > 0xFFFFu ? 0xFFFFu : r);
+    }
+    s_utypeN = n;
+}
+
+static void utype_level_end(void)
+{
+    s_utypeHave = 0; s_utypeN = 0;
+}
+
+const TAGPU_PK_UTYPE* tagpu_icontype_table(unsigned* n)
+{
+    const int built = s_utypeHave && s_utypeLevel == s_levelGen && s_utypeN;
+    *n = built ? s_utypeN : 0u;
+    return built ? s_utype : NULL;
+}
+
 /* The four tables, into the slot the producer holds. Returns the byte count
    the fill NEEDED — past cap_bytes means something did not fit, and the
    primitive grows the write slot and fills it again before publishing
@@ -879,6 +1014,8 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     int inL, inT, inR, inB;
     int midRow;
 
+    /* the icons' type table for this level, before the tables it rides after */
+    utype_level(ta);
     p->feat_defcount = RD32(ta, OFF_FEATCOUNT);
     p->sweep_cols  = RD32(ta, OFF_SWEEP_C);
     p->sweep_rows  = RD32(ta, OFF_SWEEP_R);
@@ -1183,6 +1320,9 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 
     e = append_table(p, cursor, s_uScratch, nu, (unsigned)sizeof(TAGPU_PK_UNIT),
                      &p->off_units, &p->n_units, TAGPU_PK_TRUNC_UNITS);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_utype, s_utypeN, (unsigned)sizeof(TAGPU_PK_UTYPE),
+                     &p->utype_off, &p->utype_n, TAGPU_PK_TRUNC_UTYPE);
     if (e > need) need = e;
     e = append_table(p, cursor, s_wScratch, nw, (unsigned)sizeof(TAGPU_PK_WRECK),
                      &p->off_wrecks, &p->n_wrecks, TAGPU_PK_TRUNC_WRECKS);
@@ -3149,6 +3289,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
     /* and its features are a different map's (keyed on the level either way) */
     s_mfHeld = 0; s_mfN = 0; s_mfTrunc = 0;
+    /* and the icons' type table its types */
+    utype_level_end();
 }
 
 /* ---- the observers ------------------------------------------------------- */

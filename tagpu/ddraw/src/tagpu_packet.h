@@ -161,6 +161,25 @@ typedef struct TAGPU_PK_UNIT {
 #define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
                                         tile was inside the map                   */
 
+/* 8 B, one per UnitDef row, indexed by PK_UNIT.type_row: what the strategic icons
+   need to know of a unit's TYPE (tagpu_icontype.h). Built once a level on the
+   game thread and carried whole in every in-play packet. The consumer bounds
+   `type_row < utype_n`; `utype_n == 0` -- no table this level, or it did not
+   fit this packet (TAGPU_PK_TRUNC_UTYPE) -- means no icons this frame, and
+   every unit is drawn as its model. `cls` is DATA to the consumer, which
+   treats a value at or past TAGPU_ICLS_N as no icon. */
+typedef struct TAGPU_PK_UTYPE {
+    uint8_t  cls;            /* TAGPU_ICLS_* (inc/tagpu_icon_rule.h)            */
+    uint8_t  layer;          /* the draw order: 0 structures, 1 ground, 2 air,
+                                3 commanders (BAR's drawOrder)                  */
+    uint8_t  icon;           /* a mod icon set's entry; TAGPU_ICON_NOSET = none */
+    uint8_t  pad;
+    uint16_t r_px;           /* the model's radius in world px, the hit guard's
+                                R (tagpu_zoom.c): 0 = no model, 0xFFFF = past
+                                the guard's limit                               */
+    uint16_t pad2;
+} TAGPU_PK_UTYPE;
+
 /* 24 B, piece_n per unit, in the model's own order (parents first).
    `node` IS DEREFERENCED, and that is deliberate: it is the per-TYPE
    Model3DONode template, which the level teardown cascade frees (0x42DB90)
@@ -709,6 +728,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_WIKI    0x1000000u /* the in-game wiki's record        */
 #define TAGPU_PK_TRUNC_SWEEP   0x2000000u /* the sweep's items did not fit this
                                              packet, or were more than its cap */
+#define TAGPU_PK_TRUNC_UTYPE   0x4000000u /* the unit-type table did not fit:
+                                             no icons this frame              */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,
@@ -977,6 +998,8 @@ typedef struct TAGPU_PACKET {
                                          asks for a sub-rect of it               */
     uint32_t unit_dup;                /* live units sharing a stable id in THIS
                                          packet: the collision oracle, and a gate */
+    uint32_t utype_off, utype_n;      /* PK_UTYPE, one per UnitDef row; 0 = no
+                                         icons this frame                        */
     /* THE PER-MAP ARRAY BASES ARE NOT HERE, AND THAT IS DELIBERATE. FeatureDef
        `main+0x1426F`, the wreck records `+0x1420B` and `MODEL_PTRS` `+0x14377`
        are POINTERS the level teardown frees AND THEN NULLS — `0x4221F8` then
@@ -1265,6 +1288,9 @@ static __inline const TAGPU_PK_WRECK* tagpu_pk_wrecks(const TAGPU_PACKET* p)
 { return p->n_wrecks ? (const TAGPU_PK_WRECK*)(const void*)((const unsigned char*)p + p->off_wrecks) : (const TAGPU_PK_WRECK*)0; }
 static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
 { return p->n_anchors ? (const TAGPU_PK_ANCHOR*)(const void*)((const unsigned char*)p + p->off_anchors) : (const TAGPU_PK_ANCHOR*)0; }
+/* the unit-type table, `utype_n` entries indexed by PK_UNIT.type_row, or NULL */
+static __inline const TAGPU_PK_UTYPE* tagpu_pk_utypes(const TAGPU_PACKET* p)
+{ return p->utype_n ? (const TAGPU_PK_UTYPE*)(const void*)((const unsigned char*)p + p->utype_off) : (const TAGPU_PK_UTYPE*)0; }
 /* One unit's or wreck's piece run, or NULL when the entry carries none: it sat
    outside the tables' reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
    more than TAGPU_PK_MAXPIECE, or the arena was full. `piece_off` was

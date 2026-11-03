@@ -1760,6 +1760,13 @@ static int hit_axis_fits(int v1616, long long eye, unsigned r)
     return (d < 0 ? -d : d) + (long long)r <= 32767;
 }
 
+unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m)
+{
+    if (m >= hit_model_count(ta)) return 0;
+    if (s_hitBuilt && s_hitR[m]) return s_hitR[m];
+    return hit_measure(ta, m);
+}
+
 int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
 {
     const char* ta = *(const char* const*)TA_MAINPP;

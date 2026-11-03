@@ -328,6 +328,13 @@ float tagpu_zoom_reach_level(void);
    tagpu_zoom.c, "the hit test's guard". stdcall, `ret 8`, as the original. */
 int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point);
 
+/* GAME THREAD: R, the hit guard's radius of model `m` in world px -- the
+   largest corner norm of its root box, plus 2 -- out of the level's table when
+   it is built, else measured on the spot. 0 when there is no model, 0xFFFF
+   past the guard's limit; 0 for an `m` at or past UNITINFOCount. `ta` is the
+   main block, validated by the caller. */
+unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m);
+
 /* GAME THREAD, from the level teardown (the packet publisher's level end):
    the level's camera state handed back — the engine's own range back in
    force with the eye and the target walked into it, ScrollSpeed restored to

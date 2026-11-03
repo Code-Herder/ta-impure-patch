@@ -139,9 +139,10 @@
    every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
    ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
    model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
-   the anchor table, and the map-feature table at its cap: 20.1 MB under the
-   raised limits. The front is the fog source at its cap -- TAGPU_FOG_MAXDIM
-   cells a side, 2 bits a cell, 1 MiB, the price of fog on a 65 536-px map --
+   the anchor table, the map-feature table at its cap and the unit-type table
+   at TAGPU_LIM_TYPES rows: 20.3 MB under the raised limits. The front is the
+   fog source at its cap -- TAGPU_FOG_MAXDIM cells a side, 2 bits a cell,
+   1 MiB, the price of fog on a 65 536-px map --
    plus the 8 KB shade table and slack [COMPUTED]. What follows -- build
    orders, effects, the UI's render half, the font -- is bounded by its own
    caps and truncates on its own bit, which costs that layer alone. The reserve
@@ -157,7 +158,8 @@
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + \
-    TAGPU_PK_MAX_MAPFEAT * sizeof(TAGPU_PK_MAPFEAT) + 64u /* the tables' 4-alignment */)
+    TAGPU_PK_MAX_MAPFEAT * sizeof(TAGPU_PK_MAPFEAT) + \
+    (unsigned)TAGPU_LIM_TYPES * sizeof(TAGPU_PK_UTYPE) + 64u /* the tables' 4-alignment */)
 typedef char pk_reserve_design[(PK_RESERVE >= PK_DESIGN_FRONT + PK_UNIT_WORST) ? 1 : -1];
 
 /* the record's prefix and suffix, wherever the instance's suffix sits */
@@ -566,6 +568,10 @@ static const char* frame_valid(const void* rec)
     if (!table_ok(p, p->off_pieces, p->n_pieces, sizeof(TAGPU_PK_PIECE))) return "pieces table";
     if (!table_ok(p, p->off_wrecks, p->n_wrecks, sizeof(TAGPU_PK_WRECK))) return "wrecks table";
     if (!table_ok(p, p->off_anchors, p->n_anchors, sizeof(TAGPU_PK_ANCHOR))) return "anchors table";
+    /* the unit-type table: its consumer indexes it by a unit's type row, which
+       it bounds by `utype_n` */
+    if (!table_ok(p, p->utype_off, p->utype_n, sizeof(TAGPU_PK_UTYPE))) return "unit type table";
+    if (p->utype_n > (unsigned)TAGPU_LIM_TYPES) return "more unit types than the table holds";
     /* the build-orders table (the build ghost). Its consumer walks it with the
        raw pointer and no cap of its own, which is this line's whole point:
        every table a consumer indexes by `n_` alone is checked HERE. */
