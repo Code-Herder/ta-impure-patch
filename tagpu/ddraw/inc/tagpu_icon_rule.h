@@ -19,16 +19,25 @@
    THE PREDICATE, per unit type, from the frame's level z:
 
      base  = max(1, max(gw, gh) * 0.005 * 1.05 * scale/100)   (BAR's UnitIconScaleUI)
-     mult  = S / base                     S = the icon's edge in px
+     mult  = S / base                     S = the icon's BAR size in px
+                                          (tagpu_icon_bar_edge)
      z_S   = gh / (4970 * dist/100)
      d'    = z_S / (z * mult)             BAR's iconZoomDist / mult / FadeStart
      b     = fade/100                     BAR's (FadeStart - FadeVanish) / FadeStart
      alpha = 0                         if d' < 1 - b
            = 64 + 191 (d' - (1-b)) / b if b > 0 and d' < 1   (the engine's fade ramp)
            = 255                       otherwise
-     hide  = d' > 1 and R * z < 0.45 * S                     (BAR's 0.9 * S/2)
+     hide  = d' > 1 and R * z < 0.45 * E                     (BAR's 0.9 * S/2)
 
-   R is the type's model radius in world px. A hidden model's icon is opaque
+   R is the type's model radius in world px and E the edge the icon is drawn
+   at. THE SWITCH IS BAR'S: d' takes the size BAR's rule gives, before the
+   drawn edge's 7-px floor (tagpu_icon_gen_edge), so a frame or a scale small
+   enough for the floor to bind does not move the level the icons take over
+   at; only the cover test, which asks whether the icon as drawn hides the
+   model, takes the drawn edge E. The two are equal wherever the floor does
+   not bind -- on a frame whose longer side is over 1545 px at scale 100,
+   2060 at scale 75 (tests/icontest.c) -- and at scale 75 on a 1920x1080
+   frame COMBAT is 6 px by BAR's rule and drawn at 7. A hidden model's icon is opaque
    by construction (d' > 1 gives 255). With the defaults (scale 100, dist 100,
    fade 33) z = 1 gives alpha 0 for every class while gh is at most about
    0.67 * 4970 * min(mult), ~2600: at 1x the frame is the stock frame on every
@@ -61,14 +70,27 @@ static __inline void tagpu_icon_view(TAGPU_ICON_VIEW* v, int gw, int gh, int sca
     v->band = fade <= 0 ? 0.0f : fade >= 99 ? 0.99f : (float)fade / 100.0f;
 }
 
-/* A generated shape's edge in px: BAR's size compressed toward 1
-   (0.75 * size + 0.25), so the classes stay legible at small bases, and never
-   under 4 px. A class out of range is UNKNOWN's. */
-static __inline int tagpu_icon_gen_edge(const TAGPU_ICON_VIEW* v, int cls)
+/* A class's icon size by BAR's rule, in px: BAR's size compressed toward 1
+   (0.75 * size + 0.25), so the classes stay legible at small bases. It is the
+   predicate's S. A class out of range is UNKNOWN's. */
+static __inline int tagpu_icon_bar_edge(const TAGPU_ICON_VIEW* v, int cls)
 {
     const float sz = TAGPU_ICON_BARSIZE[(unsigned)cls < TAGPU_ICLS_N ? cls : TAGPU_ICLS_UNKNOWN];
     const int e = (int)floorf(v->base * (0.75f * sz + 0.25f) + 0.5f);
-    return e > 4 ? e : 4;
+    return e > 1 ? e : 1;
+}
+
+/* The edge a generated shape is drawn at: BAR's size, never under
+   TAGPU_ICON_EDGE_MIN. 7 px is the smallest edge at which all nine classes'
+   shapes are pairwise different (tests/icontest.c asserts it, and that 6 is
+   not): below it the 1-px ink alone decides the smaller shapes, and the three
+   triangles or the diamond and the circle come out as the same picture -- a
+   class that reads as another is a wrong answer, not a small one. */
+#define TAGPU_ICON_EDGE_MIN 7
+static __inline int tagpu_icon_gen_edge(const TAGPU_ICON_VIEW* v, int cls)
+{
+    const int e = tagpu_icon_bar_edge(v, cls);
+    return e > TAGPU_ICON_EDGE_MIN ? e : TAGPU_ICON_EDGE_MIN;
 }
 
 /* Art is drawn at an integer scale, never resampled: a mod set's 10-px unit
@@ -85,16 +107,17 @@ static __inline int tagpu_icon_dot_k(const TAGPU_ICON_VIEW* v)
     return k > 1 ? k : 1;
 }
 
-/* The predicate at level z for an icon `edge_px` wide over a model of radius
-   `r_px`: the icon's alpha, 0..255, and in *hide whether the model is not
-   drawn. 0 and no hide for a level, edge or view that cannot be evaluated. */
-static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int edge_px, unsigned r_px,
-                                    int* hide)
+/* The predicate at level z for an icon of BAR size `size_px` drawn `edge_px`
+   wide over a model of radius `r_px`: the icon's alpha, 0..255, and in *hide
+   whether the model is not drawn. Art has no floor and passes its edge as
+   both. 0 and no hide for a level, size or view that cannot be evaluated. */
+static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int size_px, int edge_px,
+                                    unsigned r_px, int* hide)
 {
     float d;
     *hide = 0;
-    if (!(z > 0.0f) || edge_px <= 0 || !(v->zS > 0.0f)) return 0;
-    d = v->zS * v->base / (z * (float)edge_px);
+    if (!(z > 0.0f) || size_px <= 0 || edge_px <= 0 || !(v->zS > 0.0f)) return 0;
+    d = v->zS * v->base / (z * (float)size_px);
     if (d < 1.0f - v->band) return 0;
     *hide = d > 1.0f && (float)r_px * z < 0.45f * (float)edge_px;
     if (v->band > 0.0f && d < 1.0f)

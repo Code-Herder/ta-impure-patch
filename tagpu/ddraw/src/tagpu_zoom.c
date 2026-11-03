@@ -1804,7 +1804,7 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
     if (row >= n || tab[row].cls >= TAGPU_ICLS_N) return -1;
     if (*(const float*)(unit + U_NANO) > 0.0f || *(const short*)(unit + U_HEALTH) <= 0) return -1;
     *edge = tagpu_icon_gen_edge(v, tab[row].cls);
-    tagpu_icon_eval(v, z, *edge, tab[row].r_px, &hide);
+    tagpu_icon_eval(v, z, tagpu_icon_bar_edge(v, tab[row].cls), *edge, tab[row].r_px, &hide);
     return hide;
 }
 

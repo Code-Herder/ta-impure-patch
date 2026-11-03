@@ -42,7 +42,7 @@ static unsigned      s_n, s_nrec, s_drop;
 static int           s_on;
 static TAGPU_ICON_VIEW s_view;
 static float         s_zoom;
-static int           s_edge[TAGPU_ICLS_N], s_dotK;
+static int           s_size[TAGPU_ICLS_N], s_edge[TAGPU_ICLS_N], s_dotK;
 static unsigned char s_ink;                     /* gui_col[0], a logo-less fill */
 static const TAGPU_ICONART*  s_art;
 static const TAGPU_PK_UTYPE* s_types;
@@ -97,7 +97,10 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     tagpu_settings_icons(&scale, &dist, &fade);
     tagpu_icon_view(&s_view, pk->screen[0], pk->screen[1], scale, dist, fade);
     s_zoom = zoom;
-    for (c = 0; c < TAGPU_ICLS_N; c++) s_edge[c] = tagpu_icon_gen_edge(&s_view, c);
+    for (c = 0; c < TAGPU_ICLS_N; c++) {
+        s_size[c] = tagpu_icon_bar_edge(&s_view, c);
+        s_edge[c] = tagpu_icon_gen_edge(&s_view, c);
+    }
     s_dotK = tagpu_icon_dot_k(&s_view);
     s_ink = pk->gui_col[0];
     s_n = pk->n_units;
@@ -111,7 +114,7 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
         if (u->type_row < s_ntypes && !(u->nano > 0.0f) && u->health > 0) {
             const TAGPU_PK_UTYPE* t = &s_types[u->type_row];
             if (t->cls < TAGPU_ICLS_N)
-                a = tagpu_icon_eval(&s_view, zoom, s_edge[t->cls], t->r_px, &h);
+                a = tagpu_icon_eval(&s_view, zoom, s_size[t->cls], s_edge[t->cls], t->r_px, &h);
         }
         s_alpha[i] = (unsigned char)a;
         s_flag[i] = h ? IC_HIDE : 0u;
@@ -166,7 +169,7 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
         if (u->logo >= s_art->nlogo) return 0;
         f = &s_art->logo[u->logo];
         e = s_dotK * (f->w > f->h ? f->w : f->h);
-        r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, e, 0u, &hide);
+        r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, e, e, 0u, &hide);
         if (!r->alpha) return 0;
         r->art = f;
         r->ew = (unsigned short)(s_dotK * f->w); r->eh = (unsigned short)(s_dotK * f->h);
@@ -221,9 +224,10 @@ void tagpu_icon_emit(void)
     if (s_frames % IC_LOG_FRAMES == 0) {
         char b[400];
         int dh = 0;
-        const int dotA = s_on ? tagpu_icon_eval(&s_view, s_zoom, 4 * s_dotK, 0u, &dh) : 0;
+        const int dotA = s_on ? tagpu_icon_eval(&s_view, s_zoom, 4 * s_dotK, 4 * s_dotK, 0u, &dh) : 0;
         int combatA = 0;
-        if (s_on) combatA = tagpu_icon_eval(&s_view, s_zoom, s_edge[TAGPU_ICLS_COMBAT], 0u, &dh);
+        if (s_on) combatA = tagpu_icon_eval(&s_view, s_zoom, s_size[TAGPU_ICLS_COMBAT], s_edge[TAGPU_ICLS_COMBAT],
+                                          0u, &dh);
         _snprintf(b, sizeof b,
                   "icons: on=%d units=%u icons=%u hidden=%u cargo=%u dots=%u drop=%u "
                   "base=%.2f zS=%.4f z=%.3f alpha(combat)=%d alpha(dot)=%d "
