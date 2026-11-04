@@ -107,7 +107,7 @@ async function load() {
   if (S.entry && /^[a-z0-9_]+$/.test(S.entry) && !ids.includes(S.entry)) ids.push(S.entry);
   await Promise.all(ids.map(id => fetch(`${ART}entries/${id}.json`)
     .then(r => { if (!r.ok) throw new Error(`entries/${id}.json: ${r.status}`); return r.json(); })
-    .then(j => { const why = WikiText.checkEntry(j); ENT[id] = why ? { error: `entries/${id}.json: ${why}` } : j; },
+    .then(j => { const why = WikiText.checkEntry(j) || WikiSim.checkText(j); ENT[id] = why ? { error: `entries/${id}.json: ${why}` } : j; },
       x => { ENT[id] = { error: x.message }; })));
 }
 const entry = () => (S.entry && ENT[S.entry] && !ENT[S.entry].error) ? ENT[S.entry] : null;
@@ -268,6 +268,8 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
    (#drawer). The row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every
    node back in the normal page's order. ---- */
 function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
+/* a text entry (sim.js checkText): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
+const isText = e => !!e && !e.frame && !(Array.isArray(e.demos) && e.demos.length);
 function arrange() {
   const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
   if (on) {
@@ -284,6 +286,7 @@ function arrange() {
     wb.append(row);
   }
   win.classList.toggle('theatre', on);
+  $('#entry').classList.toggle('text', isText(entry()));
   $('#about').hidden = !(on && S.about);
   $('#drawer').hidden = !(on && S.drawer);
   sizeStage();
@@ -338,7 +341,8 @@ const frameEntry = () => { const e = entry(); return !!e && e.frame === 'game'; 
    pack's folder holds the sounds.json the sim takes its source from, as the game's sim takes it from the 3D load that
    gives the scripts */
 let heard = 0;
-const soundRoot = () => { const d = stageDir(); return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
+// the sounds of the pack the stage draws from; with no stage (no entry, or a text entry) the gfx root, which holds none
+const soundRoot = () => { const d = stageDir() || ''; return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
 // a press on one of the page's controls: the engine's in-game menu controls say `Options` (tagpu_wiki.c button_sound)
 const buttonSound = () => { if (typeof WikiSound !== 'undefined') WikiSound.named(soundRoot(), 'Options'); };
 /* THE REPLAY'S LIFETIME (replay.js): it owns its simulations and their COB worlds, so it is freed whenever it is

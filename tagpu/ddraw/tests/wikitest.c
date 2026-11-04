@@ -1347,7 +1347,8 @@ static int trace(const char* path)
 /* One case's verdict: 1 accepted, else 0 with why in `err`. The steps are sim.js's make() in its
    order, each one the C side has: the casting's reader (checkCasting, which sim.js's binder
    calls first), the entry's loader (text.js's checkEntry among its refusals), the layout's, and
-   tagpu_wikisim_init in the case's context. */
+   tagpu_wikisim_init in the case's context. A `loader` case is the entry's loader alone, as wiki.js
+   loads an entry: a text entry has no demo to make a sim of. */
 static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
 {
     const TJV *layout = tj_get(v, "layout"), *casting = tj_get(v, "casting"), *rival = tj_get(v, "rival");
@@ -1364,6 +1365,11 @@ static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
     ctx.cob = NULL;
     ctx.snd = NULL;
     ctx.rival = rival && !tj_is(rival, TJ_NULL) ? &rk : NULL;
+    if (tj_is(tj_get(v, "loader"), TJ_TRUE)) {
+        if (!tagpu_wikidata_entry(&e, entry, strlen(entry), err, errn)) return 0;
+        tagpu_wikidata_entry_free(&e);
+        return 1;
+    }
     if (ctx.cast && !tagpu_wikidata_casting(casting, &k, err, errn)) return 0;
     if (ctx.rival && !tagpu_wikidata_casting(rival, &rk, err, errn)) return 0;
     if (!tagpu_wikidata_entry(&e, entry, strlen(entry), err, errn)) return 0;
@@ -1707,7 +1713,9 @@ static int tree_case(const char* name, const char* tree, int nodes)
 }
 
 /* every case, its verdict in its line: the count is simparity.mjs's, as the comparison is */
-/* lists given as objects: each reads as empty, never as as many unread elements as members */
+/* lists given as objects: each reads as empty, never as as many unread elements as members. The
+   one list given as a list is `demos`: given as an object it refuses the entry (a text entry's
+   rule, tagpu_wikidata_entry), and with none the entry is a text entry, which carries no scenes */
 static int entry_case(void)
 {
     static const char TEXT[] =
@@ -1715,7 +1723,7 @@ static int entry_case(void)
         "\"units\":{\"ARMMEX\":{\"footprint\":[2,2],\"buildTime\":10}},"
         "\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8},\"metal\":{\"r\":1},\"vents\":{\"v\":[1,1]},"
         "\"units\":{\"u\":{\"type\":\"ARMMEX\",\"at\":[1,1]}},\"selected\":{\"s\":\"u\"}}},"
-        "\"demos\":{\"d\":{}}}";
+        "\"demos\":[{}]}";
     WIKIENTRY e;
     char err[256], why[320];
     int ok;
@@ -1725,13 +1733,13 @@ static int entry_case(void)
              ok ? "loaded" : err, ok ? e.ntext : -1, ok ? e.scenes[0].nmetal : -1, ok ? e.scenes[0].nvent : -1,
              ok ? e.scenes[0].nunit : -1, ok ? e.scenes[0].nselected : -1, ok ? e.ndemo : -1);
     ok = ok && !e.ntext && !e.scenes[0].nmetal && !e.scenes[0].nvent && !e.scenes[0].nunit && !e.scenes[0].nselected
-         && !e.ndemo;
+         && e.ndemo == 1;
     tagpu_wikidata_entry_free(&e);
     return said(ok, "entry-lists-as-objects", why);
 }
 
 /* a unit whose "facing" is the JSON `facing` (NULL: none): refused when `refused`, else loaded
-   as the unit vector (hx, hz), compared exactly */
+   as the unit vector (hx, hz), compared exactly. The entry has one demo, so it is no text entry */
 static int facing_case(const char* name, const char* facing, int refused, double hx, double hz)
 {
     char text[512], err[256], why[512];
@@ -1740,7 +1748,7 @@ static int facing_case(const char* name, const char* facing, int refused, double
     snprintf(text, sizeof text,
              "{\"format\":2,\"id\":\"f\",\"units\":{\"ARMCK\":{\"footprint\":[2,2],\"buildTime\":10,"
              "\"maxVelocity\":1}},\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8},\"units\":[{\"type\":\"ARMCK\","
-             "\"at\":[40,40]%s%s}]}}}", facing ? ",\"facing\":" : "", facing ? facing : "");
+             "\"at\":[40,40]%s%s}]}},\"demos\":[{}]}", facing ? ",\"facing\":" : "", facing ? facing : "");
     err[0] = 0;
     loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
     if (loaded && e.scenes[0].nunit != 1) snprintf(err, sizeof err, "loaded %d units", e.scenes[0].nunit);
@@ -1752,14 +1760,14 @@ static int facing_case(const char* name, const char* facing, int refused, double
     return said(ok, name, why);
 }
 
-/* an entry of one type, ARMX, whose record is `unit`: refused when `refused`, else loaded with
-   cast `cast` and G rows `g` (its first four), compared exactly */
+/* an entry of one type, ARMX, whose record is `unit`, and one demo: refused when `refused`, else
+   loaded with cast `cast` and G rows `g` (its first four), compared exactly */
 static int unit_case(const char* name, const char* unit, int refused, int cast, const unsigned* g)
 {
     char text[512], err[256], why[512];
     WIKIENTRY e;
     int loaded, ok, i;
-    snprintf(text, sizeof text, "{\"format\":2,\"id\":\"u\",\"units\":{\"ARMX\":%s},\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8}}}}", unit);
+    snprintf(text, sizeof text, "{\"format\":2,\"id\":\"u\",\"units\":{\"ARMX\":%s},\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8}}},\"demos\":[{}]}", unit);
     err[0] = 0;
     loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
     snprintf(why, sizeof why, "%s: cast %d, g %u %u %u %u; expected %scast %d, g %u %u %u %u", loaded ? "loaded" : err,

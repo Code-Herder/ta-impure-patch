@@ -453,8 +453,8 @@ def load_entries():
 
 
 def stages(entries):
-    """(entry, scene name) for every scene of every entry: a stage each."""
-    return [(e, n) for e in entries for n in e["scenes"]]
+    """(entry, scene name) for every scene of every entry: a stage each (a text entry has none)."""
+    return [(e, n) for e in entries for n in e.get("scenes") or {}]
 
 
 def cmd_build(vfs, args):

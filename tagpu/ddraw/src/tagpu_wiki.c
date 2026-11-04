@@ -2535,9 +2535,11 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             fprintf(f, "]");
         }
     }
-    /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows */
-    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scenes[0].w : 0,
-            e ? e->scenes[0].h : 0, (int)s_hit.side_h, (int)s_hit.view);
+    /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows; [0,0]
+       for an entry with no scenes (a text entry), whose `scenes` is NULL */
+    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u,
+            e && e->nscene > 0 ? e->scenes[0].w : 0, e && e->nscene > 0 ? e->scenes[0].h : 0, (int)s_hit.side_h,
+            (int)s_hit.view);
     /* a whole game frame as the drawn frame fitted it, from the same canvas and the same function the
        render thread draws it with (tagpu_wikistage_fit, `frame` 1): the canvas's client corner, the
        scale, the map's origin on the canvas and the frame's size in game pixels -- what the lanes

@@ -567,6 +567,18 @@ const WikiSim = (() => {
     return entry.scenes[on];
   }
 
+  /* A TEXT ENTRY: a page entry whose `demos` is absent or an empty list. Its page is its title, subtitle, badge and
+     text and no stage, so it carries nothing a stage or the asset loader would read: no frame, scenes, units, features
+     or pace. A `demos` present and not a list refuses any entry. The message, or null; tagpu_wikidata_entry refuses at
+     load what this refuses, in this order and with these words. */
+  const TEXT_KEYS = [['frame', 'a frame'], ['scenes', 'scenes'], ['units', 'units'], ['features', 'features'], ['pace', 'a pace']];
+  function checkText(entry) {
+    if (entry.demos !== undefined && !Array.isArray(entry.demos)) return 'has demos that are not a list';
+    if (entry.demos !== undefined && entry.demos.length) return null;
+    for (const [k, what] of TEXT_KEYS) if (entry[k] !== undefined) return `is a text entry with ${what}`;
+    return null;
+  }
+
   /* the demo's scene with the demo's additions: units, features, metal, vents and fog appended; selected, cursor and
      the reclaim kind replaced when the demo gives them */
   function merge(entry, demo) {
@@ -3699,6 +3711,8 @@ const WikiSim = (() => {
     checkCasting, bindEntry, CASTS,
     // the scene a demo plays on (null: the first), refused as tagpu_wikidata_entry refuses the entry
     sceneOf,
+    // a text entry's refusal (null: none), as tagpu_wikidata_entry's
+    checkText,
     // the button an action presses at an Interface Type, for the keys strip and the captions' button words
     button,
     // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares

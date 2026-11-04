@@ -78,6 +78,10 @@ CASES = [
     ("1024-stock-buildshapes-scrolled", (1024, 768), "mod=stock&entry=buildshapes&demo=2",
      {"scroll": {"text": "max"}, "tick": 30}),
     ("1024-esc-quickbuild-scrolled", (1024, 768), "mod=escalation&entry=quickbuild", {"scroll": {"text": 37}}),
+    # a text entry, no demos: no stage, caption, keys or controls, its text taking their room
+    ("1080-stock-megamap", (1920, 1080), "mod=stock&entry=megamap", {}),
+    ("1024-stock-megamap-scrolled", (1024, 768), "mod=stock&entry=megamap", {"scroll": {"text": "max"}}),
+    ("4k-tazero-megamap", (3840, 2160), "mod=tazero&entry=megamap", {}),
     # Try it yourself: the stage across the whole row
     ("1080-stock-quickbuild-try", (1920, 1080), "mod=stock&entry=quickbuild", {"try": True}),
     ("4k-stock-buildshapes-try", (3840, 2160), "mod=stock&entry=buildshapes&demo=2", {"try": True}),

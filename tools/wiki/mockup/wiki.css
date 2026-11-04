@@ -129,6 +129,9 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #ctl .sp { display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
 #c-try { margin-left: calc(var(--w-controls-try) * var(--u)); }
 #p-text { flex: 0 0 calc(var(--w-text-share) * 1%); }
+/* a text entry (no demos): no stage, caption, keys or controls; its text takes their room */
+#entry.text .srow, #entry.text #caption, #entry.text #keys, #entry.text #ctl { display: none; }
+#entry.text #p-text { flex: 1 1 0; }
 #text p { margin: 0 0 calc(var(--w-text-para) * var(--u)); }
 #text .err { color: #c03030; }
 

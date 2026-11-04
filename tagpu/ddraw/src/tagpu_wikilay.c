@@ -824,6 +824,8 @@ static void entry_col(C* c, R col)
     const double top = col.y + U(c, g->entry_pad[0]), ch = col.h - U(c, g->entry_pad[0]);
     const int wink = light(c, c->l->part[P_WINDOW]);
     const int lk = locked(c, c->st->entry) || c->st->sim_locked;
+    /* a text entry (tagpu_wikidata_entry): a page entry with no demos */
+    const int text = e && !e->ndemo && e->frame == WIKI_FRAME_PAGE;
     const char* title = e ? filled_or(c, FILL_TITLE, e, e->title, e->id) : S_CHOOSE;
     const char* sub = e ? filled(c, FILL_SUB, e, e->subtitle) : "";
     double th, sh, bh, ph, fixed, srow, y, ctl_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h), keys_h = U(c, g->keys_h);
@@ -846,6 +848,15 @@ static void entry_col(C* c, R col)
         /* #badge: align-self flex-start, so as wide as its content */
         badge(c, x, y);
         y += bh + gap;
+    }
+    if (text) {
+        /* #entry.text: the column is the title, the subtitle, the badge and the text, which takes
+           the column's rest as the stage row takes it on a demo's page (flex 1 1 0). No stage,
+           caption, keys strip or controls, so no `stage` hit is drawn and the frame record's
+           stage rect stays zero: nothing on the render thread looks up a stage for it. */
+        panel(c, WIKI_SCROLL_TEXT, rect(x, y, w, fmax(0, ch - (th + sh + bh + gap * (2 + lk)))), text_rows,
+              "scroll:text");
+        return;
     }
     /* the stage row: the bezel, the row's full width */
     stage_in(c, rect(x, y, w, srow));

@@ -491,7 +491,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
     pending_models = []                     # (dict to fill, path, where, model, why) once bound
 
     # a stage per scene, entry by entry in the scenes' order, as the native load makes them
-    scenes = [(eid, name) for eid in entries for name in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text())["scenes"]]
+    scenes = [(eid, name) for eid in entries for name in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text()).get("scenes") or {}]
     for eid, name in scenes:
         desc = json.loads((REPO / f"art/wiki/stage/{eid}.{name}.json").read_text())
         st = {"entry": eid, "scene": name, "cells": desc["cells"], "sources": [], "tiles": [], "features": []}

@@ -1597,10 +1597,22 @@ static int screen_on_map(R* r, const WIKIENTRY* e)
     return 1;
 }
 
+/* A TEXT ENTRY carries none of what a stage or the asset loader reads: each key refused by name,
+   in sim.js checkText's order and with its words */
+static int text_keys(R* r, const TJV* root)
+{
+    static const char* const KEY[][2] = { { "frame", "a frame" }, { "scenes", "scenes" }, { "units", "units" },
+                                          { "features", "features" }, { "pace", "a pace" } };
+    size_t i;
+    for (i = 0; i < sizeof KEY / sizeof KEY[0]; i++)
+        if (tj_get(root, KEY[i][0])) return refuse(r, "is a text entry with", KEY[i][1]);
+    return 1;
+}
+
 int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, size_t errn)
 {
     R r;
-    const TJV *root, *c;
+    const TJV *root, *c, *dv;
     double pace;
     int i = 0;
     memset(e, 0, sizeof *e);
@@ -1635,6 +1647,18 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
         refuse(&r, "has a players that is not a game entry's true or false", NULL);
     else if (e->live + e->takeover + e->players > 1)
         refuse(&r, "is a replay, a live game, a takeover's replay or a players' replay, never two", NULL);
+    else if ((dv = tj_get(root, "demos")) && !tj_is(dv, TJ_ARR))
+        refuse(&r, "has demos that are not a list", NULL);
+    else if (!count(dv)) {
+        /* A TEXT ENTRY (sim.js checkText): a page entry with no demos, `demos` absent or empty. Its
+           page is its title, subtitle, badge and text and no stage, so it may carry nothing a stage
+           or the asset loader would read (text_keys), and only its strings are read: `scenes`,
+           `demo`, the defs and the features stay NULL with their counts 0. `nscene == 0` is the
+           bound every stage-side reader of a selected entry tests (tagpu_wiki3d_stage, the
+           dump's `map`). */
+        if (text_keys(&r, root) && strings(&r, tj_get(root, "text"), &e->text, &e->ntext))
+            strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked);
+    }
     else if (!screen(&r, e, tj_get(root, "screen"))) {}
     else if (e->frame == WIKI_FRAME_GAME && count(tj_get(root, "demos")) > WIKI_THEATRE_TABS)
         refuse(&r, "is a game entry with more demos than the theatre's tabs", NULL);

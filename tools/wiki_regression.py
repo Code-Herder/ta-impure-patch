@@ -83,7 +83,7 @@ sp, in order:
       log says the window closed at the level's end, and an injected key reaches the engine's key
       ring at the results screen.
 
---shot PATH grabs the presented frame with the window open, at (b) and in page at (p2), for the
+--shot PATH grabs the presented frame with the window open, at (b) and in page at (p2) and (p8), for the
 owner: the whole window by its id on the instance's display (`import -window`, the ta-capture
 skill's window grab).
 page, on the same launch as sp:
@@ -96,7 +96,11 @@ page, on the same launch as sp:
   (p7) four real wheel notches sent at once through the instance's X server (xdotool), which the
        window procedure pumps between two frames, scroll the text four steps, not one -- run where
        the text scrolls past two notches; (p4), (p5) and (p7) are not run where it does not scroll;
-  (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh.
+  (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh;
+  (p8) reopened, the Camera category's entry selects Mega map and strategic icons, a text entry: no
+       demo, no sim and no stage, none of the stage's controls drawn, and its text panel taller than
+       buildshapes' at (p2) on the same screen (the dump with it selected is the run of the dump's
+       `map` guard); with --shot, a second grab beside the first.
 demos, on the same launch as sp:
   (d1) tagpu_wiki.check plays every demo to its end in the game, on the sidebar layout a demo would
        start on, on each of its sides at both interface types, and every logged hash equals `node
@@ -140,7 +144,7 @@ try, on the same launch as sp:
        releases, and the engine's key ring unmoved over the whole mode;
   (t5) reopened, the window is in Try it, afresh; Back to demo, and Esc.
 watch, on the same launch as sp (the presentation spec's 6.5):
-  (v1) entry:7 picks Watching, drawn as a game frame: the theatre's drawer, demo:0..6, play, replay, x1, x2, try and
+  (v1) Watching's entry picks it, drawn as a game frame: the theatre's drawer, demo:0..6, play, replay, x1, x2, try and
        about are the page's controls (the hit map's `src` 0), the stage HUD's (`src` 1) lie inside the `stage` hit;
        About puts its text's `scroll:text` first in the map, the drawer its `entry:*` (and closes About);
   (v2) each demo paused (tagpu_wiki.pause, under the turbo) at each of its viewer's trips' presses: the frame record
@@ -789,8 +793,11 @@ def text_scroll(c, d):
     return d
 
 
+MEGAMAP = "megamap"                            # (p8) the text entry: Quality of Life > Camera
+
+
 def page(c, shot=None):
-    """(p1)..(p6): the page's controls, against the dump's state."""
+    """(p1)..(p8): the page's controls, against the dump's state."""
     held_at(c, HELD_AT)
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and "entry:3" in keys_of(d, "entry:"), "(p1) the page was not drawn")
@@ -809,10 +816,11 @@ def page(c, shot=None):
     print("wiki page: (p2) the second entry and its second demo selected")
     if shot:
         grab(c, shot)
+    text_h = text_height(c, d)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, Take over,
-    # Rewind and Players are drawn either way
-    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", *(f"entry:{tree_node(e)}" for e in (TAKEOVER, REWIND, PLAYERS))])
+    # Building's leaves are nodes 2 and 3; Reclaiming's and Camera's entries and the Replays category's Watching, Take
+    # over, Rewind and Players are drawn either way
+    rest = sorted(f"entry:{tree_node(e)}" for e in ("reclaim", MEGAMAP, WATCH, TAKEOVER, REWIND, PLAYERS))
     press(c, d, "fold:1")
     d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == rest, "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
@@ -830,9 +838,27 @@ def page(c, shot=None):
     assert (d["entry"], d["demo"], d["folds"]) == ("buildshapes", "line", []), \
         f"(p6) the reopened page lost its selection: {d['entry']}/{d['demo']} folds {d['folds']}"
     assert fresh(d, t0), f"(p6) the demo did not start afresh at the open: tick {d['tick']}"
-    c.keys("esc")
-    wait_dump(c, lambda d: not d["open"], "(p6) Esc did not close it again")
     print("wiki page: (p6) closed and reopened on the same entry and demo, the demo afresh")
+
+    press(c, d, f"entry:{tree_node(MEGAMAP)}")
+    d = wait_dump(c, lambda d: d["entry"] == MEGAMAP and d["drawn_entry"] == tree_leaf(MEGAMAP) and d["demo"] == ""
+                  and d["sim"] == 0 and d["stage"] == 0,
+                  f"(p8) entry:{tree_node(MEGAMAP)} did not select and draw the text entry {MEGAMAP}")
+    drawn = sorted({h["key"] for h in d["hits"]} & {"stage", "play", "replay", "x1", "x2", "try"})
+    assert not drawn, f"(p8) the text entry drew the stage's controls {drawn}"
+    h = text_height(c, d)
+    assert h > text_h, f"(p8) the text entry's text panel is {h} px tall, not taller than buildshapes' {text_h}"
+    print(f"wiki page: (p8) {MEGAMAP} is a text entry: no demo, sim or stage, its text {h} px tall against {text_h}")
+    if shot:
+        grab(c, Path(shot).with_name(f"{Path(shot).stem}-text{Path(shot).suffix}"))
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(p8) Esc did not close it")
+
+
+def text_height(c, d):
+    """The drawn text panel's height, from the hit map's `scroll:text`"""
+    x0, y0, x1, y1 = c.hit(d, "scroll:text")
+    return y1 - y0
 
 
 def xdo(c, *args):
@@ -1994,7 +2020,6 @@ def reclaim(c, shots, res):
 # spec's 6.5) ----
 
 WATCH = "watching"
-WATCH_NODE = 7                                 # entry:7: the tree's Replays > Watching (art/wiki/tree.json)
 WATCH_DEMOS = ("play", "speed", "rewfwd", "track", "markers", "bookmarks", "leave")
 WATCH_PAGE = ("drawer", "play", "replay", "x1", "x2", "try", "about")
 # (v3) each demo held at a tick it shows its point at, no seek pending there (a capture then shows no world): play
@@ -2036,10 +2061,10 @@ def watch_open(c):
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"], "(v1) the page was not drawn")
     if d["entry"] != WATCH:
-        c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{WATCH_NODE}")))
+        c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{tree_node(WATCH)}")))
     return wait_dump(c, lambda d: d["entry"] == WATCH and d["drawn_entry"] >= 0 and d.get("drawn_frame")
                      and any(h.get("src") == HIT_HUD for h in d["hits"]),
-                     "(v1) entry:7 did not draw Watching's game frame with its stage HUD", seconds=60)
+                     f"(v1) entry:{tree_node(WATCH)} did not draw Watching's game frame with its stage HUD", seconds=60)
 
 
 def watch_v1(c, d):
@@ -2377,6 +2402,16 @@ def tree_node(entry):
     k = walk(json.loads((TREE / "art/wiki/tree.json").read_text())["tree"])
     assert k is not None, f"art/wiki/tree.json has no entry {entry}"
     return k
+
+
+def tree_leaf(entry):
+    """The entry's index among the tree's entries in depth-first order, which is the order the DLL loads them in
+    (tagpu_wikidata.c, the nodes in preorder): the dump's `drawn_entry` for a frame drawn with it selected"""
+    def leaves(nodes):
+        return [e for x in nodes for e in ([x["entry"]] if "entry" in x else leaves(x.get("children", [])))]
+    order = list(dict.fromkeys(leaves(json.loads((TREE / "art/wiki/tree.json").read_text())["tree"])))
+    assert entry in order, f"art/wiki/tree.json has no entry {entry}"
+    return order.index(entry)
 
 
 def entry_demos(entry):

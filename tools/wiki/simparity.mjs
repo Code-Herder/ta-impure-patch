@@ -52,7 +52,8 @@
    an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side, and every
    data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their kills, and their
    viewer's scripts, made into replays) -- each made into a sim by text.js's checkEntry and sim.js and by the C readers
-   and init. Then the data read back: every casting of
+   and init; and a text entry's data rule (sim.js checkText), loaded alone by each side's loader, whose refusals must
+   say the same words. Then the data read back: every casting of
    tools/wiki/casting-fixture.json and of every pack present under tools/wiki/mockup/gfx/side/ (gitignored, built
    by tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by tagpu_wikidata.c and
    compared field by field with what sim.js's checkCasting and checkLayout accept, a refused casting by its message.
@@ -1260,6 +1261,25 @@ function gameRefusalCases(game, page) {
   return cases;
 }
 
+/* ---- A TEXT ENTRY'S REFUSALS (sim.js checkText, tagpu_wikidata_entry's text branch): the text entry as authored, and
+   edited to carry what only a stage reads or a `demos` that is not a list. No demo is played: each side's loader
+   alone (`loader`), wiki.js's checkEntry and checkText against tagpu_wikidata_entry, and a refusal's words alike ---- */
+function textRefusalCases() {
+  const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/megamap.json'), 'utf8'));
+  const cases = [];
+  const text = (name, want, edit) => { const e = JSON.parse(JSON.stringify(entry)); edit(e);
+    cases.push({ name: `text entry: ${name}`, want, loader: true, scripted: 0, layout: null, side: 0, iface: 1, casting: null, entry: e }); };
+  text('as authored', 'accepted', () => {});
+  text('demos absent', 'accepted', e => { delete e.demos; });
+  text('demos an object', 'refused', e => { e.demos = {}; });
+  text('with scenes', 'refused', e => { e.scenes = {}; });
+  text('with units', 'refused', e => { e.units = {}; });
+  text('with features', 'refused', e => { e.features = {}; });
+  text('with a pace', 'refused', e => { e.pace = { build: 2 }; });
+  text('with a game frame', 'refused', e => { e.frame = 'game'; });
+  return cases;
+}
+
 /* ---- THE TAKEOVER ENTRY'S REFUSALS (sim.js checkGame's takeover rules, kept forks and a part's seat; checkViewer's
    Take over set; the C loader's entry, game, forks, kept and viewer_input): each case the takeover fixture `tk`, or the
    page entry `page`, edited, its first demo (or the one an edit keeps) played as a game, or as a replay where only
@@ -2407,26 +2427,30 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
          they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
          plays, and a takeover or a players entry's data rules are their fixtures' cases */
       const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover && !game.players).flatMap(([, game]) => gameRefusalCases(game, entry)),
-        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry)];
+        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry),
+        ...textRefusalCases()];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
-                         rival: c.rival ?? null, replay: !!c.replay }) + '\n' +
+                         rival: c.rival ?? null, replay: !!c.replay, loader: !!c.loader }) + '\n' +
         JSON.stringify(c.entry) + '\n').join(''));
       const got = lines(wikitest(['refuse', 'refuse.jsonl']));
       all.forEach((c, i) => {
         let js = 'accepted', why = '';
         try {
           // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
-          const bad = WikiText.checkEntry(c.entry);
+          const bad = WikiText.checkEntry(c.entry) || (c.loader ? WikiSim.checkText(c.entry) : null);
           if (bad) throw new Error(bad);
           const ctx = { side: c.side, casting: c.casting, iface: c.iface, rival: c.rival ?? null };
           if (c.replay) WikiReplay.play(c.entry, c.entry.demos[0], c.layout, ctx).free();
           else if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse');
-          else (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx);
+          // a loader case plays no demo: the loader's refusals above are the whole case
+          else if (!c.loader) (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx);
         } catch (e) { js = 'refused'; why = e.message; }
         const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
+        // a loader case's refusal says the same words on both sides: the C line ends with sim.js's message
+        const words = !c.loader || js !== 'refused' || (got[i] || '').endsWith(`: ${why}`);
         refusals++;
-        if (cv === js && js === c.want) console.log(`equal  refusal -- ${c.name}: both ${js}`);
+        if (cv === js && js === c.want && words) console.log(`equal  refusal -- ${c.name}: both ${js}`);
         else { failed++; refuseBad++; console.log(`DIFFER refusal -- ${c.name}: C ${got[i] || '(none)'}; sim.js ${js}${why ? ` (${why})` : ''}; wanted ${c.want}`); }
       });
     }

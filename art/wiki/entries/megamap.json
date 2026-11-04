@@ -1,0 +1,17 @@
+{
+  "format": 2,
+  "id": "megamap",
+  "title": "Mega map and strategic icons",
+  "subtitle": "Ctrl+wheel back zooms all the way out, the wheel forward comes back where you point, and far out the units are drawn as icons.",
+  "text": [
+    "The wheel zooms the view. Forward zooms in and keeps the point under the pointer where it is; back zooms out from the middle of the view, as far as the level at which the whole map fits the screen, or a quarter of the normal scale on a map that already fits at that.",
+    "Ctrl+wheel back is the mega map: one notch shows the whole map. Any notch forward then brings back the zoom you left, centred on the point under the pointer: point at any place on the map and roll the wheel forward to be there.",
+    "To have the plain wheel do the mega map, as some players are used to, set Mega map wheel to Wheel in Impure's options, on the Visuals screen or from the gear in the top bar during a game. The wheel is then the mega map and Ctrl+wheel zooms. In impure.cfg this is wheel=megamap; the default is wheel=zoom.",
+    "Far enough out, each unit is drawn as an icon: a flat shape in its owner's colour, white while it is selected, the same size on the screen at any zoom. An icon fades in over its unit as you zoom out, and the unit's model is no longer drawn once the icon covers it; bigger kinds of unit change later. You click, drag a box round and give orders to icons as you do to units.",
+    "The shape tells you what the unit is: a diamond is a commander, a square a building, a triangle an aircraft and a circle any other unit. A plus inside marks a builder, so a square with a plus is a factory, and a hollow triangle or circle is a unit that neither builds nor carries a weapon.",
+    "An enemy you see only on radar is drawn, that far out, as its minimap dot, and cannot be clicked in the view, as in the stock game. Mods that ship a set of icon pictures for a mega map, such as Total Mayhem, ProTA, TA Zero and TA Twilight, have their units drawn with those pictures instead, read from your install.",
+    "Three settings are not in the options yet; set them in impure.cfg in the game's folder, one key=value a line. iconscale is the icons' size in percent: 100, or 75, 125, 150 or 200. icondist is how far out the icons take over, in percent: 100, or 50 and 75 to bring them in sooner, 150 and 200 later. iconfade is the stretch of zoom over which an icon fades in, in percent: 33, or 0 to switch at once and 67 to fade over more of it."
+  ],
+  "lockedIn": [],
+  "demos": []
+}

@@ -1,5 +1,6 @@
 { "format": 1,
   "tree": [ { "title": "Quality of Life", "children": [
               { "title": "Building", "children": [ { "entry": "quickbuild" }, { "entry": "buildshapes" } ] },
-              { "title": "Reclaiming", "children": [ { "entry": "reclaim" } ] } ] },
+              { "title": "Reclaiming", "children": [ { "entry": "reclaim" } ] },
+              { "title": "Camera", "children": [ { "entry": "megamap" } ] } ] },
             { "title": "Replays", "children": [ { "entry": "watching" }, { "entry": "takeover" }, { "entry": "rewind" }, { "entry": "players" } ] } ] }

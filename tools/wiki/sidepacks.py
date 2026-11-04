@@ -149,7 +149,7 @@ def stock_identity(pack):
             bad.append(f"the stock {side['side']} commander is {cmd and cmd['type']}, sidedata names {side['commander']}")
     for f in sorted(ENTRIES.glob("*.json")):
         e = json.loads(f.read_text())
-        units, feats = e["units"], e.get("features") or {}
+        units, feats = e.get("units") or {}, e.get("features") or {}
         for t, u in units.items():
             rival = u.get("rival") is True
             casting = pack["casting"][1 if rival else 0]["casts"]

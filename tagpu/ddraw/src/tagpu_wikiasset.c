@@ -5642,9 +5642,14 @@ const WIKI3D* tagpu_wiki3d_get(void)
 
 const WIKI3DSTAGE* tagpu_wiki3d_stage(const WIKI3D* w, const WIKIENTRY* e, int demo)
 {
-    /* `on` is an index tagpu_wikidata_entry bounded by nscene */
-    const char* scene = e->scenes[demo >= 0 && demo < e->ndemo ? e->demo[demo].on : 0].name;
+    const char* scene;
     int i;
+    /* an entry with no scenes (a text entry) has no stage: the bound is the loader's nscene. No
+       caller asks for one, since a text entry draws no `stage` hit; this is the bound a later
+       caller cannot step past */
+    if (!e || e->nscene <= 0) return NULL;
+    /* `on` is an index tagpu_wikidata_entry bounded by nscene */
+    scene = e->scenes[demo >= 0 && demo < e->ndemo ? e->demo[demo].on : 0].name;
     for (i = 0; w && i < w->nstage; i++)
         if (!strcmp(w->stage[i].entry, e->id) && !strcmp(w->stage[i].scene, scene)) return &w->stage[i];
     return NULL;

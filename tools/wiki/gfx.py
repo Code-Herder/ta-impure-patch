@@ -792,8 +792,9 @@ def stage_types(entry, casting=None):
     side's type for that cast in `casting` (a side pack's list), each name once. A bound demo's units carry the
     casting's type names (sim.js bindEntry) and an unbound cast keeps the entry's own type, so the pack holds a model
     for either."""
-    names = list(entry["units"])
-    casts = [u.get("cast") for u in entry["units"].values()]
+    units = entry.get("units") or {}             # a text entry has none
+    names = list(units)
+    casts = [u.get("cast") for u in units.values()]
     for side in casting or []:
         for c in casts:
             k = side["casts"].get(c)
@@ -2638,7 +2639,7 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
     for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
         (out_root / "shaders" / name).write_text(src)
     index, full, types = {}, {}, {}
-    for entry, name in ((e, n) for e in entries for n in e["scenes"]):
+    for entry, name in ((e, n) for e in entries for n in e.get("scenes") or {}):
         sid = f"{entry['id']}.{name}"
         dpath = stage_dir / f"{sid}.json"
         desc = json.loads(dpath.read_text()) if dpath.exists() else None
@@ -2708,7 +2709,7 @@ def main(argv=None):
     entries = [json.loads(f.read_text()) for f in sorted(ENTRIES.glob("*.json"))]
     descs, rows = {}, {}
     for entry in entries:
-        for name, sc in entry["scenes"].items():
+        for name, sc in (entry.get("scenes") or {}).items():
             sid = f"{entry['id']}.{name}"
             dpath = stage_dir / f"{sid}.json"
             desc = json.loads(dpath.read_text()) if dpath.exists() else None

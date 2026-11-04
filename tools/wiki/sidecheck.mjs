@@ -96,7 +96,7 @@ function synthetic(name, layout, seed, opts, entries) {
   });
   const bases = {};
   // a base per stage, `<entry>.<scene>`, every scene of an entry being its first one's size
-  entries.flatMap(e => Object.keys(e.scenes).map(n => [`${e.id}.${n}`, e.scenes[n].map])).forEach(([id, map], i) => {
+  entries.flatMap(e => Object.keys(e.scenes || {}).map(n => [`${e.id}.${n}`, e.scenes[n].map])).forEach(([id, map], i) => {
     const m = WikiSide.geometry(map.w * 16, map.h * 16), want = opts.bases[i % opts.bases.length];
     if (want !== 'none') bases[id] = bytes(m.w * m.h - (want === 'short' ? 1 : 0));
   });
