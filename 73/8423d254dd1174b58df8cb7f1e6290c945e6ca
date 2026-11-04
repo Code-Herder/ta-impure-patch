@@ -1,0 +1,7 @@
+landing-review: medium, one reviewer, on worktree-mega_map_modicons...738423d2 (mega map 2 centring + mega map 5 wiki text entry + stb GPOS kerning sum)
+findings=4 acted=4 rejected=0
+LOW: stage_world read scenes[0] with no nscene test (text entry has none) -> nscene bound added
+LOW: stb returned a partial sum at an unsupported/malformed subtable -> ends that lookup only
+LOW: simcheck.mjs iterated entry.demos unguarded -> entry.demos || []
+LOW: ingame-wiki.md 'on the host' -> 'on the reference setup'
+Checked sound: mega_eye = midpoint of camera_range(centre=1), same rectangle as floor_compute's fit; the shift subtracts what anchor_step still owes (tween cut, same-batch notches); clamp under cam_centre 0 documented; thread split (packet copies only); the C reader bounded on a text entry; tools' tree indices; docs vs tagpu_settings.c/tagpu_menu.c/icon rule.
