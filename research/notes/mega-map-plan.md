@@ -312,7 +312,13 @@ is per-frame working copies, not information, so the landing is split to remove 
    else the set's UNKNOWN, else its generated shape; a radar contact draws the set's NONE. Both
    threads size a set picture through one function, so the pick's circle is the picture's. The
    game-thread code sits in `tagpu_packet_pub.c`, so `thread-split.allow` gains no line.
-5. **Documentation** rides with each landing; the last one adds an in-game wiki entry.
+5. **Documentation** rides with each landing; the last one adds an in-game wiki entry. *Built
+   2026-11-03 on its worktree; the wiki gate and the in-game look are open.* The entry is **Mega
+   map and strategic icons**, under Quality of Life → Camera, a text entry: its title, subtitle and
+   seven paragraphs on the gesture, the legacy wheel, the icons and their shapes, radar dots, mod
+   sets and the three `impure.cfg` keys, with no stage, because the wiki's stage has no camera
+   level and the icon rule shows no icon on any map it holds ([the in-game
+   wiki](ingame-wiki.html), *A text entry: Mega map and strategic icons*).
 
 Presentation only: nothing here writes simulation state. The recorder question in landing 1 is
 the one place it meets the replay.

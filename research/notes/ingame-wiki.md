@@ -98,9 +98,10 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
-Seven entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
+Eight entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
 **Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
-Sweep**. Under **Replays**, a top-level category after it, the four replay entries in this order:
+Sweep**; in Camera, **Mega map and strategic icons**, a text entry
+([below](#a-text-entry-mega-map-and-strategic-icons)). Under **Replays**, a top-level category after it, the four replay entries in this order:
 **Watching a game**, **Take over a replay**, **Rewind a skirmish** and **Players and the camera**
 ([the replay entries' plan](ingame-wiki-replay-plan.html)).
 
@@ -178,6 +179,10 @@ Sweep**. Under **Replays**, a top-level category after it, the four replay entri
 - **Try it yourself takes over the stage from the selected demo's scene**: the same map, units
   and fog, with the script stopped and the controls handed to the player. Back to demo returns.
 - **The entry's text** scrolls below the controls.
+- **An entry with no demos is a text entry** and lays out as its title, subtitle, badge and text,
+  the text taking the stage's room; the demos column says No demos (`wiki.js` `#entry.text`,
+  `tagpu_wikilay.c` `entry_col`). No `stage`, `play`, `replay`, `x1`, `x2` or `try` hit is drawn,
+  so the frame record's stage rect stays zero and nothing looks up a stage for it.
 - **An entry with `"frame": "game"` takes the theatre layout instead**: the stage's bezel across the
   window's body; under it one row -- Entries (the tree, as a drawer over the stage's left,
   `columns[0]` wide), the demos as numbered tabs keyed `demo:i` (at most `WIKI_THEATRE_TABS`, 9,
@@ -1382,6 +1387,47 @@ The rocks and trees all block units; every feature is reclaimable. A rock takes 
 touches it (52 for rock4, 66 for rock2), a tree 140: the countdown is not scaled by WorkerTime
 (`exe-reverse-engineering.md`, the Reclaim handler `0x404AD0`).
 
+## A text entry: Mega map and strategic icons
+
+The entry describes the mega map and the strategic icons ([mega map plan](mega-map-plan.html),
+[camera zoom](modules/camera-zoom.html) §2.3m, [strategic icons](modules/icons.html)) in seven
+paragraphs and has no demos: the stage cannot show either.
+
+**The stage has no camera level.** Every frame of it is at zoom 1, the eye moves only in a players
+entry (*The frame*, below), the 2D ops' world transform has no level term, and the 3D stage
+renders the whole map at zoom 1 and composites it at the stage's fit. No wheel reaches either
+simulation: the wiki's `wheel()` scrolls the panel under the pointer, and `sim.js` has no wheel
+input.
+
+**The icon rule shows no icon on any map the wiki holds.** `inc/tagpu_icon_rule.h` gives
+`d' ≈ (gh/z)/(4970·mult)`: a class turns into an icon only once the frame spans about 4970·mult
+world px top to bottom, about 3 980 px for COMBAT (mult 0.80) and 8 090 px for COMMANDER (1.628) at
+the default `icondist`, whatever the screen's resolution or UI scale. A wiki map's ground is at most
+48 rows (768 px, `WIKI_GROUND_ROWS`), so its floor is 0.25, and a game frame is 480 to 768 game px
+tall, so at the floor it spans at most about 1 900 to 3 100 world px. MEASURED 2026-11-03, the
+header compiled with gcc on the host, defaults (scale 100, dist 100, fade 33), R = 20 px, alpha
+0..255:
+
+| frame, level | COMMANDER | FACTORY | BUILDING | AIRCONS | AIRCOMBAT/AIR | CONS | COMBAT | hidden |
+|---|---|---|---|---|---|---|---|---|
+| wiki 1152×768, z 0.25 | 0 | 0 | 0 | 0 | 109 | 0 | 109 | none |
+| wiki 1152×544, z 0.25 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | none |
+| wiki 1152×768, z 0.25, `icondist=50` | 109 | 217 | 255 | 255 | 255 | 255 | 255 | none |
+| game 1920×1080, z 0.25 | 0 | 0 | 183 | 99 | 240 | 183 | 255 | none |
+| game 1920×1080, z 0.05 | 255 | 255 | 255 | 255 | 255 | 255 | 255 | all |
+| game 3840×2160, z 0.25 | 255 | 255 | 255 | 255 | 255 | 255 | 255 | all |
+
+So the game's rule shows at most a faint COMBAT/AIR icon over its model on a wiki map, and hides no
+model; a demo cannot show what the rules would not do. The bound is the map's world size and the
+frame's game size, not the frame kind: maps of 250 to 500 cells would be needed.
+
+**What a stage would need (a gap, not built).** A page entry with a `screen` and a scene `camera`;
+a wheel input (`{ "at", "wheel", "mega" }`) in both simulations; the zoom's rule (the notch factor,
+the per-notch target, the anchor terms, the ease, the floor, the centre range) shared between
+`tagpu_zoom.c` and both simulations as a pure header, with simparity hashing the camera; every
+stage op through the level; the minimap's camera box at 1/z; Try it's wheel over the stage; and the
+3D stage at a level. That shows the wheel gesture on a small map; it still shows no icon.
+
 ## The game frame on the stage: the replay entries
 
 An entry with `"frame": "game"` teaches the replay system: the stage shows a whole game screen, and
@@ -2240,6 +2286,14 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   rule; without the sidebar it sets the kind at once. **`{ "down": "e" }`** presses E. `"facing": [x, z]` is
   any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
   faces `(0, 1)` whatever it gives.
+- **A text entry** is a page entry whose `demos` is absent or an empty list: its page is its title,
+  subtitle, badge and text and no stage ([*The page*](#the-page)). It carries no `frame`, `scenes`,
+  `units`, `features` or `pace`, since the asset loader and the pack builders read every entry's
+  scenes and units; a `demos` present and not a list refuses any entry. Both readers refuse with the
+  same words (`sim.js` `checkText`, `tagpu_wikidata_entry`): `has demos that are not a list`,
+  `is a text entry with a frame`, `… with scenes`, `… with units`, `… with features`,
+  `… with a pace`. The DLL's loader reads only a text entry's strings, so its `scenes`, `demo`, defs
+  and features stay empty, and `nscene == 0` is the bound the stage-side readers test.
 - **A game entry**, `"frame": "game"` (any other value refuses the entry), is played as a replay
   of a small game on the theatre's whole game frame ([below](#the-game-frame-on-the-stage-the-replay-entries)).
   Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`) refuse one that breaks
