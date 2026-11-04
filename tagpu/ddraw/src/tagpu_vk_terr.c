@@ -1300,6 +1300,15 @@ static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
                 "the terrain restores per tile", t->nbW, t->nbH);
         return 0;
     }
+    /* `nbfit` refuses this atlas alone, so the per-tile layout it drives keeps
+       its restored chain, which asks tagpu_vk_restore_fits for itself */
+    if (tagpu_rguard_fault("nbfit")) {
+        _snprintf(why, sizeof why, "tagpu_restorefault.on's nbfit says no");
+        why[sizeof why - 1] = 0;
+        plog(d, "terr: the %dx%d neighbourhood atlas (%d keys) does not fit: %s - "
+                "the terrain restores per tile", t->nbW, t->nbH, t->nbN, why);
+        return 0;
+    }
     if (!tagpu_vk_restore_fits(d, (unsigned long long)t->nbW * (unsigned long long)t->nbH * 4ull,
                                why, sizeof why)) {
         plog(d, "terr: the %dx%d neighbourhood atlas (%d keys) does not fit: %s - "
