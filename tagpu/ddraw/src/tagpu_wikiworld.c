@@ -40,6 +40,7 @@
 #include "tagpu_vk_world.h"
 #include "tagpu_vk_fog.h"
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk_chain.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_posebake.h"
@@ -230,19 +231,18 @@ static int verts(int b, const WSCENEQUAD* q, int n)
         const TAGPU_GAFENT* e;
         const unsigned char* g;
         float* o = s_fv[b] + (size_t)i * 6 * FVST;
-        float x0 = q[i].x0 - nu, x1 = q[i].x1 - nu, y0 = q[i].y0 - nu, y1 = q[i].y1 - nu, c;
+        float x0 = q[i].x0 - nu, x1 = q[i].x1 - nu, y0 = q[i].y0 - nu, y1 = q[i].y1 - nu;
         int k;
         const float cx[6] = { x0, x1, x0, x1, x1, x0 }, cy[6] = { y0, y0, y1, y0, y1, y1 };
         if (q[i].feat < 0 || q[i].feat >= WIKISCENE_FEATS || q[i].sub >= WIKISCENE_SUBS) return 0;
         g = s_sframe[q[i].feat][b == 0][q[i].sub];
         if (!g || !(e = tagpu_gaf_atlas_get(&s_fatlas, g))) return 0;
-        c = (float)e->ck / 255.0f;
         for (k = 0; k < 6; k++) {
             const int right = cx[k] == x1, low = cy[k] == y1;
             float* v = o + k * FVST;
             v[0] = cx[k]; v[1] = cy[k]; v[2] = q[i].enc;
             v[3] = right ? e->u1 : e->u0; v[4] = low ? e->v1 : e->v0;
-            v[5] = c; v[6] = (float)q[i].mode;
+            v[5] = 0.0f; v[6] = (float)q[i].mode;   /* `ent` 0: no chain cells here */
             v[7] = cx[k]; v[8] = cy[k]; v[9] = 1.0f;
         }
     }
@@ -1185,6 +1185,13 @@ int tagpu_wikiworld_ab_arm(const char* tag)
 
 int tagpu_wikiworld_grow_stress(void)
 {
+    return 0;
+}
+
+/* the mip chains' oracle checks the game's world only */
+int tagpu_wikiworld_chaincheck_armed(unsigned frame)
+{
+    (void)frame;
     return 0;
 }
 

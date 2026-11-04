@@ -714,6 +714,81 @@ which keeps the restore, from a new set, which drops it. Measured live (before t
 pitch changed), switching Two Continents → Anteer Strait **in the same process**
 rebuilt it for 7051 tiles.
 
+**Below a texel a target pixel the terrain reads the tile's mip chain** (`inc/tagpu_chain.h`,
+`src/tagpu_chain_ref.c`, `tagpu_vk_terr.c`, `tagpu_terr.c`'s `taChain`; the features do the same
+per frame, [Features](features.html) §5). The world is drawn into a target `gw·ss × gh·ss`
+(`tagpu_vk_world.c` `prepare`) and the composite resolves it with one LINEAR tap an output pixel,
+which at ss = 2 is the exact 2×2 box. A tile's 32 texels span `32·z` game px, so one texel spans
+`f = z·ss` target px. **While `z·ss ≥ 1` every texel is reached by at least one sample and the box
+resolve averages them**: nothing aliases, and level 0 — the atlases sampled NEAREST, as at 1× — is
+the right picture (z ≥ 0.5 at the default ss = 2). **Below `1/ss` a target pixel covers `1/f`
+texels a side and NEAREST picks one**, and which one moves with every sub-pixel pan: that is the
+far zoom's shimmer. Supersampling cannot reach it — at Seven Islands' whole-map level at 1024×768
+(z ≈ 0.034, ss = 2) a target pixel covers about 15 texels a side, so ss would have to be about 30
+— while a chain prefilters each tile once and costs one fetch a sample. So the two complement each
+other: ss× keeps geometry edges, the band `[1/ss, 1)` and everything that is not a texture (the
+fog's edge, the light, the shadows); the chains take texture minification below `1/ss`, exactly
+where the supersampling stops being enough.
+
+- **The level is one integer a frame**, `tagpu_chain_level(zoom, gw, gh, w, h)`: `f = zoom ·
+  min(w/gw, h/gh)` on the extent the pass records into, and `L` the smallest level with
+  `f·2^L ≥ 1`, capped at 5 — `L = ⌈log₂(1/f)⌉`, the finest level whose texel still covers a target
+  pixel. Its first test is `f < 1`, so **`L = 0` exactly when `f ≥ 1`**. With the world target
+  standing `w = gw·ss`, so `f = zoom·ss` exactly (a float times an integer ≤ 8, in double): every
+  zoom ≥ 1, and 0.5 at ss = 2, is level 0 by construction, and the shader's level-0 arm is the
+  statements the pass had without chains, on the same inputs — **1× and above are byte-identical by
+  construction**. A frame drawn without a world target takes the client's real footprint, so a
+  client smaller than the game frame is minified at 1× and gets `L ≥ 1`: the one 1× picture that
+  changes, and it was aliasing. The level rounds up, so no texel is ever skipped, at up to 2×
+  softer than round-to-nearest, which would keep level 0 down to 0.354× at ss = 2 and skip up to
+  29 % of the texels there. One level a frame is exact because terrain and feature quads are
+  screen-aligned and scaled by one zoom; it needs no derivatives. `uLod` is written into the
+  slot's fragment block at `record` (offset 176), the only place the extent is known, and is 0
+  while the base chain is not current (`s_lodOk`).
+- **The layout.** Each terrain atlas — the base atlas, and under Classic++ the restored one (per
+  tile or per neighbourhood key) — has a separate 5-level RGBA8 image with one 16-texel **cell** per
+  34-texel atlas cell, on the atlas's own grid (`cols = atlasW/34`, `rows = atlasH/34`; an atlas
+  that is not a whole multiple gets no chain). Image level `k` holds tile level `k+1`, `16 >> k`
+  texels a cell side. A whole-atlas chain would mix tiles from level 1 on, because the 34-texel
+  pitch puts a 2×2 block across the guard texel and the neighbour. A cell is 341 texels against
+  the atlas cell's 1 156, so a chain is 29.5 % of its atlas: 64 × 80 cells, 7.0 MB, for Two
+  Continents' per-tile base; 209 × 209 cells, about 57 MiB, for its 192 MB neighbourhood atlas
+  [the sizes' arithmetic].
+- **The reduction** is the integer mean of the level-0 bytes at every level, one rounding a level
+  and none compounded: over a level-L block `B` and its texels `O` with alpha ≥ 128,
+  `rgb = (Σ_O rgb + |O|/2) / |O|` and `a = (|O|·255 + |B|/2) / |B|`. A base tile has no hole, so it
+  gets its rounded box mean; a restored cell not painted yet has alpha 0 at level 0 and so at every
+  level. It runs on the device ([modules/vulkan-backend](modules/vulkan-backend.html), *The mip
+  chains' reducer*), and `tagpu_chain_ref` is its C reference.
+- **The lookup** (`taChain`, mirrored by `tagpu_chain_texel`). The vertex stage carries each
+  tile's two cells, `vCells` — the base atlas's and the restored atlas's, the key's under `uNbhd` as
+  `vUVR` is — and its in-tile coordinate `vIn = k·32 + e`, the function both UVs are built on less
+  the cell's origin, nudge and flip included. The fragment stage `texelFetch`es
+  `cell·(32 >> L) + clamp(floor(vIn / 2^L), 0, (32 >> L) − 1)` at image level `L − 1`: for `vIn` in
+  `[0, 32)` that block holds `floor(vIn)`, the texel level 0 samples, and the clamp keeps every
+  fetch inside the cell. Above level 0 the restored-or-base choice is the one level 0 makes, on the
+  chains' alpha; the mirrored edge takes the same pair. The branch is on a uniform, so
+  `texture()`'s implicit derivatives stay in uniform control flow.
+- **When the chains are reduced** (`chain_maintain`, once a `prepare`, after `restore_want` and
+  before `shared_bind`): the base chain whole once per map and per palette move (the base atlas's
+  serial and palette), after the banded upload; the restored chain by a ledger that follows the
+  restore job ([modules/restorer](modules/restorer.html) §2.103). Binding 47 (`uChainBase`) names
+  the base chain exactly when `uLod` may be above 0 (`s_lodOk`) and 48 (`uChainRest`) the restored
+  one exactly when `uRestChain` is 1; otherwise each names the base atlas's view, a valid descriptor
+  nothing samples, and neither names a chain before it has left `UNDEFINED`.
+- **A chain that cannot stand never refuses a frame.** A device that will not reduce
+  (`vk: chains off: <reason> - the far zoom draws the atlases at level 0`) draws every zoom from
+  level 0; a base chain the device refuses draws level 0; a restored chain refused by the memory
+  rule (D10, `vk: terr: the restored chain does not fit: …`) or the device draws the base chain
+  under Classic++ below `1/ss` — no shimmer, the dithered average's colours there only. A refused
+  size is not asked for again until the atlas's size moves or the device goes.
+- **What chains do not cover.** Units and 3DO textures: their per-face footprint is not uniform,
+  so one level a frame does not apply (Classic++'s restored unit atlas is mipped to level 2 on its
+  padded layout, [renderers](renderers.html) §1; the base unit atlas is NEAREST). Effects. And the shimmer that is not texture aliasing:
+  Classic++ lighting from the 16-px height grid, the cast-shadow PCF, the fog's 32-px cell edge.
+  The in-game A/B of 1× and 0.5×, the oracle run (`tagpu_chaincheck.on`) and the shimmer measure
+  are open ([mega map plan](mega-map-plan.html), *Landings*).
+
 **Fog needed one change, and only one.** Terrain is now the bottom layer, so where the
 overlay paints an unexplored cell **solid black it must paint black rather than
 discard** — there is nothing behind it any more. That is `TAGPU_GLSL_FOG_TERRAIN` in

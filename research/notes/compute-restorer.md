@@ -321,6 +321,11 @@ instance enables only when the loader offers it — or, where the query is not o
 that heap. The log says which rule answered. On the reference setup: 192 MB against half of the
 10,203 MB the driver says is free, of 12,282 MB.
 
+**The terrain's restored mip chain asks the same rule** before it is made: 29.5 % of the atlas it
+follows, about 57 MiB for Two Continents' 192 MB. A refusal does not change the layout choice — the
+neighbourhood atlas stands and level 0 is untouched — it only leaves the base atlas's chain drawn
+below a texel a target pixel under Classic++ ([modules/restorer](modules/restorer.html) §2.103).
+
 **The per-tile fallback** is landing 1's atlas and frames, on tiny. It is taken when the fit says
 no, when the device refuses the image, when the keys need an image wider than the device allows
 or than the terrain pass carries (16384), when the map names a tile past the atlas, and while a
@@ -363,7 +368,10 @@ schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tag
   key is painted exactly when the job has painted more frames than its place in the queue, which
   each key keeps. That holds for a key the trickle queued as much as for one queued on screen, so
   a key scrolled onto the screen puts the job at prio 0 however it was queued, and waits behind at
-  most the keys queued before it: the two trickle batches and the screen's own.
+  most the keys queued before it: the two trickle batches and the screen's own. The terrain's
+  restored mip chain rests on the same fact: its ledger reduces only the keys of the places painted
+  since its last frame ([modules/restorer](modules/restorer.html) §2.103), so a second size class of
+  neighbourhood frame would break both, and the chain oracle's `rest gpu-differ` would name it.
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
   counted across the slice, and is passed over for the rest of it, which the other jobs keep —
   except that its batch in flight runs on at the full budget while another job waits behind it;

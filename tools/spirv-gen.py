@@ -120,11 +120,12 @@ than source ones -- they belong to the pass being ported, not here:
     A flipped viewport puts it back, but a pass that reads it (the GUI sharp
     layer, the restorer) should say so where it sets its viewport up.
 
-THE RESTORER'S COMPUTE SHADERS are the one set that is not translated.
-`tagpu_restore_comp.h` holds them as macros written in Vulkan GLSL, since
-nothing ever compiled them for GL; the transform below does not apply to them,
+THE COMPUTE SHADERS are the one set that is not translated. Two headers hold
+them as macros written in Vulkan GLSL, since nothing ever compiled them for GL:
+`tagpu_restore_comp.h`, the restorer's, and `tagpu_chain_comp.h`, the mip
+chains' reducer (`COMPUTE_HDRS`). The transform below does not apply to them,
 glslang preprocesses them itself, and each is its own program (a compute
-pipeline has one stage). The conv shader is compiled once per LAYER SHAPE, and
+pipeline has one stage). The restorer's conv shader is compiled once per LAYER SHAPE, and
 the shapes are READ OUT OF THE SHIPPED WEIGHT FILES (`restore_shapes`) rather
 than written down, so the weights are part of what the headers are generated
 from: a model with a shape no variant covers fails the build until it is
@@ -220,18 +221,28 @@ PROGRAMS = [
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
 ]
 
-# ---------------------------------------------------------------- the restorer
+# ---------------------------------------------------------- the compute headers
 #
-# THE RESTORER'S COMPUTE SHADERS, read out of a HEADER rather than a .c:
-# `tagpu_restore_comp.h` holds them as macros, `TAGPU_RESTORE_<NAME>_CS`, and no
-# C file includes it -- this tool is its only reader. They are Vulkan GLSL as
-# written, so they skip the GL-330 transform and its residual check entirely;
-# what they share with the rest is the hash chain and the emitted header.
+# THE COMPUTE SHADERS, read out of HEADERS rather than a .c: each header holds
+# its shaders as macros, `<PREFIX><NAME>_CS`, and no C file includes it -- this
+# tool is its only reader. They are Vulkan GLSL as written, so they skip the
+# GL-330 transform and its residual check entirely; what they share with the
+# rest is the hash chain and the emitted header.
 #
-# A shader is assembled as `#version 450`, the variant's `#define` lines,
-# TAGPU_RESTORE_COMMON_CS (the push constants and the slot record every one of
-# them declares), and then its own macro. glslang does the preprocessing.
-COMPUTE_HDR    = "tagpu_restore_comp"
+# A shader is assembled as `#version 450`, the variant's `#define` lines, the
+# header's `<PREFIX>COMMON_CS` (the push constants, and whatever else every
+# shader of that header declares), and then its own macro. glslang does the
+# preprocessing.
+#
+# One row per header: its name under src/, its macro prefix, and the shaders it
+# must hold. The restorer's (tagpu_vk_restore.c) generates one CONV variant per
+# layer shape of the shipped models (`restore_shapes`); the mip chains' reducer
+# (tagpu_vk_chain.c) has no variants.
+COMPUTE_HDRS = [
+    ("tagpu_restore_comp", "TAGPU_RESTORE_", {"FILL_CS", "CONV_CS", "OUT_CS", "MIP_CS"}),
+    ("tagpu_chain_comp",   "TAGPU_CHAIN_",   {"REDUCE_CS"}),
+]
+COMPUTE_NAMES  = {h for h, _, _ in COMPUTE_HDRS}
 RESTORE_MODELS = ("tiny", "full")
 
 
@@ -302,17 +313,17 @@ SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
 # shader, giving each attribute's location.
 ATTR_LOCATIONS = {}
 
-# Sources that are not `src/<name>.c`. `tagpu_restore_comp` is a header because
-# its shaders are macros (see extract_compute).
+# Sources that are not `src/<name>.c`. The compute headers are headers because
+# their shaders are macros (see extract_compute).
 HEADER_SOURCES = {# THE SHADOW SHADERS HAVE NO .c OF THEIR OWN. Their name
                   # stays `tagpu_shadow` in `SOURCES` and `PROGRAMS` on purpose
                   # -- the name is what generates the `inc/spirv/*.spv.h` that
                   # `tagpu_vk_shadow.c` includes.
                   "tagpu_shadow": "src/tagpu_shadow_glsl.h"}
 
-# The restorer's compute header is emitted last, as one more source; its
-# shaders are not in PROGRAMS, since a compute pipeline has one stage.
-SOURCES.append(COMPUTE_HDR)
+# The compute headers are emitted last, one more source each; their shaders
+# are not in PROGRAMS, since a compute pipeline has one stage.
+SOURCES.extend(h for h, _, _ in COMPUTE_HDRS)
 
 CC = os.environ.get("CC", "i686-w64-mingw32-gcc")
 
@@ -353,23 +364,23 @@ def unescape(s):
     return "".join(out)
 
 
-_MACRO = re.compile(r'^#define\s+TAGPU_RESTORE_(\w+_CS)\b')
-
-
-def extract_compute():
-    """The compute shaders out of tagpu_restore_comp.h, one entry per variant,
-    each the whole text glslang compiles.
+def extract_compute(hdr, prefix, want):
+    """The compute shaders out of the header `src/<hdr>.h`, whose macros are
+    `<prefix><NAME>_CS`, one entry per variant, each the whole text glslang
+    compiles. `want` is the set of NAME_CS the header must hold, no more.
 
     READ OUT OF THE HEADER AND NOT OUT OF A PREPROCESSED .c, because these are
-    macros that no translation unit expands. `#if LAST` in CONV is left for
-    glslang: the text is Vulkan GLSL, and nothing here parses its interface."""
-    path = DDRAW / "src" / ("%s.h" % COMPUTE_HDR)
+    macros that no translation unit expands. `#if LAST` in the restorer's CONV
+    is left for glslang: the text is Vulkan GLSL, and nothing here parses its
+    interface."""
+    macro = re.compile(r'^#define\s+%s(\w+_CS)\b' % re.escape(prefix))
+    path = DDRAW / "src" / ("%s.h" % hdr)
     if not path.exists():
         die("%s is not there" % path)
     lines = path.read_text().split("\n")
     bodies, i = {}, 0
     while i < len(lines):
-        m = _MACRO.match(lines[i])
+        m = macro.match(lines[i])
         if not m:
             i += 1
             continue
@@ -383,14 +394,13 @@ def extract_compute():
         i += 1
     common = bodies.pop("COMMON_CS", None)
     if common is None:
-        die("%s has no TAGPU_RESTORE_COMMON_CS" % path)
-    want = {"FILL_CS", "CONV_CS", "OUT_CS", "MIP_CS"}
+        die("%s has no %sCOMMON_CS" % (path, prefix))
     if set(bodies) != want:
         die("%s: expected the shaders %s and found %s"
             % (path, sorted(want), sorted(bodies)))
     out = {}
     for short, body in bodies.items():
-        if short == "CONV_CS":
+        if hdr == "tagpu_restore_comp" and short == "CONV_CS":
             for cin, cout, last, th in restore_shapes():
                 pre = ("#version 450\n#define CIN %d\n#define COUT %d\n#define LAST %d\n"
                        "#define TH %d\n" % (cin, cout, last, th))
@@ -863,7 +873,7 @@ def build_all():
     Shader with `.vk` filled in."""
     texts = {}
     for cfile in SOURCES:
-        if cfile == COMPUTE_HDR:
+        if cfile in COMPUTE_NAMES:
             continue
         for name, src in extract(cfile).items():
             texts["%s::%s" % (cfile, name)] = normalise_blocks(src)
@@ -934,11 +944,12 @@ def build_all():
 
     # THE COMPUTE SHADERS, untranslated: each is compiled as written, so its
     # Vulkan text IS its source and the residual check has nothing to compare.
-    for name, src in extract_compute().items():
-        key = "%s::%s" % (COMPUTE_HDR, name)
-        sh = Shader(key, "comp", src)
-        sh.vk = src
-        shaders[key] = sh
+    for hdr, prefix, want in COMPUTE_HDRS:
+        for name, src in extract_compute(hdr, prefix, want).items():
+            key = "%s::%s" % (hdr, name)
+            sh = Shader(key, "comp", src)
+            sh.vk = src
+            shaders[key] = sh
 
     return [shaders[k] for k in sorted(shaders)]
 
@@ -994,7 +1005,7 @@ def emit(cfile, shaders, words):
          " *",
          " * The Vulkan (SPIR-V) edition of %s's shaders. The source of"
          % (HEADER_SOURCES.get(cfile,
-                               "%s%s" % (cfile, ".h" if cfile == COMPUTE_HDR else ".c"))),
+                               "%s%s" % (cfile, ".h" if cfile in COMPUTE_NAMES else ".c"))),
          " * truth is the GLSL string in that file; this is its translation, and",
          " * `make` fails if the two have drifted (tools/spirv-check.sh).",
          " *",
