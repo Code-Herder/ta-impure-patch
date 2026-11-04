@@ -2588,7 +2588,7 @@ for (const c of contexts()) {
   tally[c.label] = { pass: 0, fail: 0, locked: [], off: [] };
   for (const id of pageIds) {
     const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
-    for (const d of entry.demos) {
+    for (const d of entry.demos || []) {
       const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = expectedLock(entry, d, c.ctx.casting);
       const off = turnedOff(entry);
       try {

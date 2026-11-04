@@ -2503,7 +2503,8 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
    /* Impure: every pair-adjustment LOOKUP adds its value, as OpenType applies
       each lookup in turn (Chrome sums them; Barlow Condensed kerns ".c" in a
       second lookup); within one lookup the first subtable that holds the pair
-      decides. Upstream returned the first lookup's value alone. */
+      decides, and a subtable this reader cannot read ends only its own lookup.
+      Upstream returned the first lookup's value alone. */
    stbtt_int32 total = 0;
 
    if (!info->gpos) return 0;
@@ -2549,7 +2550,7 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint16 pairValueCount = ttUSHORT(pairValueTable);
                   stbtt_uint8 *pairValueArray = pairValueTable + 2;
 
-                  if (coverageIndex >= pairSetCount) return total;
+                  if (coverageIndex >= pairSetCount) goto next_lookup; // malformed
 
                   needle=glyph2;
                   r=pairValueCount-1;
@@ -2574,7 +2575,7 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                      }
                   }
                } else
-                  return total;
+                  goto next_lookup; // unsupported value format
                break;
             }
 
@@ -2592,8 +2593,8 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint8 *class1Records, *class2Records;
                   stbtt_int16 xAdvance;
 
-                  if (glyph1class < 0 || glyph1class >= class1Count) return total; // malformed
-                  if (glyph2class < 0 || glyph2class >= class2Count) return total; // malformed
+                  if (glyph1class < 0 || glyph1class >= class1Count) goto next_lookup; // malformed
+                  if (glyph2class < 0 || glyph2class >= class2Count) goto next_lookup; // malformed
 
                   class1Records = table + 16;
                   class2Records = class1Records + 2 * (glyph1class * class2Count);
@@ -2601,12 +2602,12 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   total += xAdvance;
                   goto next_lookup;
                } else
-                  return total;
+                  goto next_lookup; // unsupported value format
                break;
             }
 
             default:
-               return total; // Unsupported position format
+               goto next_lookup; // unsupported position format
          }
       }
    next_lookup:;

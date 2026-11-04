@@ -759,7 +759,8 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     if (s_hit.frame) return live_world(cx, cy, wx, wz);
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
-    if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
+    /* a text entry has no scene (nscene 0), the bound every stage-side reader tests */
+    if (!h || e->nscene <= 0 || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
     /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the
        entry's map grown beside the drawn frame's column, as the simulation grows it */
     tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0, 0, 0,

@@ -1405,7 +1405,7 @@ world px top to bottom, about 3 980 px for COMBAT (mult 0.80) and 8 090 px for C
 the default `icondist`, whatever the screen's resolution or UI scale. A wiki map's ground is at most
 48 rows (768 px, `WIKI_GROUND_ROWS`), so its floor is 0.25, and a game frame is 480 to 768 game px
 tall, so at the floor it spans at most about 1 900 to 3 100 world px. MEASURED 2026-11-03, the
-header compiled with gcc on the host, defaults (scale 100, dist 100, fade 33), R = 20 px, alpha
+header compiled with gcc on the reference setup, defaults (scale 100, dist 100, fade 33), R = 20 px, alpha
 0..255:
 
 | frame, level | COMMANDER | FACTORY | BUILDING | AIRCONS | AIRCOMBAT/AIR | CONS | COMBAT | hidden |
