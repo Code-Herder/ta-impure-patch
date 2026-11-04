@@ -51,6 +51,7 @@ ALLOW=(
     'tagpu_vk_max_image_dim'
     'tagpu_vk_max_storage_range'
     'tagpu_line_*'               # the lines' grid arithmetic
+    'tagpu_chain_*'              # the mip chains' level rule and C reference (tagpu_chain.h), pure
     'tagpu_log'                  # the log sink, which serialises its own writers
     'tagpu_logf'
     'tagpu_settings_ss'          # the Supersampling setting, read

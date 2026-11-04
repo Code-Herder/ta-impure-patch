@@ -149,6 +149,7 @@
 #include "tagpu_native.h"           /* tagpu_native_fogsrc: the frame's fog source */
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk_chain.h"
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
@@ -661,6 +662,21 @@ int tagpu_vk_ab_arm(const char* tag)
     vklog("ab: \"%s\" is not one of the eight ported passes - nothing unlinked "
           "and no claim granted", tag);
     return 0;
+}
+
+/* THE MIP CHAINS' ORACLE LEVER (tagpu_vk_chain.h), re-read every 120 frames: the cadence the
+   oracle runs at, so a lever put down is noticed by its next check. Here and not in the chain
+   module because that module is compiled twice and the wiki's instances must not run the game's
+   oracle: tagpu_scene.h points them at tagpu_wikiworld.c's 0. Render thread only. */
+int tagpu_vk_chaincheck_armed(unsigned frame)
+{
+    static int armed = -1;
+    static unsigned at;
+    if (armed < 0 || frame - at >= 120) {
+        armed = exists("tagpu_chaincheck.on");
+        at = frame;
+    }
+    return armed;
 }
 
 /* THE RENDERER CHOICE IS THE ARMING when this backend owns the present. Called
@@ -1907,6 +1923,10 @@ static void vk_down(void)
         tagpu_vkw_terr_down(&s_pass);
         tagpu_vkw_world_down(&s_pass);
         tagpu_vkw_fog_down(&s_pass);
+        /* THE MIP CHAINS' REDUCERS, after the passes whose descriptor sets were allocated with
+           their layout: a set may not be written once its layout is gone */
+        tagpu_vk_chain_down(&s_pass);
+        tagpu_vkw_chain_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
            what they are drawn with: each `_down` above gives its job back, and
            this then gives back the pipelines, the activations and the render

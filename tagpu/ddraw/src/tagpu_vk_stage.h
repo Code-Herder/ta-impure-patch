@@ -137,6 +137,13 @@ int  tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
    know which path its rects take asks the same question. */
 int  tagpu_vk_stage_fits(const TAGPU_VKSTAGE* st, VkDeviceSize bytes);
 
+/* `bytes` of the slot's buffer for a caller's own in-frame copy, at an offset aligned to `align`
+   (a power of two: 16 takes any format's texel block): the pointer to fill and `*off`, the offset
+   its vkCmdCopy* names, held until the frame's submit like any in-frame upload; NULL when they do
+   not fit what the slot mapped, and then nothing is held. */
+unsigned char* tagpu_vk_stage_take(TAGPU_VKSTAGE* st, VkDeviceSize bytes, VkDeviceSize align,
+                                   VkDeviceSize* off);
+
 /* THE MOVE: an atlas repack's cells carried across `img` ON THE DEVICE, so a
    consumer whose copy was current before the repack takes nothing from the
    host but the paints it lacked (tagpu_gaf.h `moves`). The rows the old cells

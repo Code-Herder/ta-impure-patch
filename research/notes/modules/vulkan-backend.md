@@ -1,6 +1,6 @@
 # The Vulkan backend
 
-The lane, the shader pipeline, float depth, lines, hardware portability, vsync and presentation lifetime.
+The lane, the shader pipeline, float depth, lines, hardware portability, vsync, presentation lifetime and the mip chains' reducer.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note. Section numbers are those of the retired [GPU status](../gpu-status.md) page, which indexes them.*
 
@@ -223,14 +223,18 @@ today's shaders and not one of which would have announced itself:
 `tools/glslang-fetch.sh` into gitignored `tools/glslang/` — a dev-loop tool, the same shape as
 `tools/ghidra/` and `tools/vendor/`.
 
-**The restorer's five shaders are NOT among the thirty-four**, and the reason is a fact about them
-rather than a shortcut. `tagpu_restore_glsl.h`'s shaders are compiled at run time under a prefix
-the DEVICE decides — `NK` from `GL_MAX_UNIFORM_BLOCK_SIZE` and `GL_MAX_DRAW_BUFFERS` divided by
-the weights' widest k-block, `WMAX` from `NK` times a number read out of the weights file. `NK`
-changes how many fragment outputs the conv pass declares (`#if NK > 1` … `> 4`), so it cannot be a
-specialisation constant, and pre-compiling means enumerating a cross product of a device limit and
-a data file. That is a decision about what the shipped weights are allowed to be — G19e's, when
-the restorer pass is actually ported.
+**The compute shaders are not among the thirty-four and are not translated.** Two headers hold
+them as macros written in Vulkan GLSL, one row each in `COMPUTE_HDRS` (its name under `src/`, its
+macro prefix and the shaders it must hold): `tagpu_restore_comp.h` (`TAGPU_RESTORE_`: FILL, CONV,
+OUT, MIP — the restorer's, [modules/restorer](restorer.html) §2.102) and `tagpu_chain_comp.h`
+(`TAGPU_CHAIN_`: REDUCE — the mip chains' reducer, below). No C file includes either; the generator
+is their only reader. A shader is assembled as `#version 450`, the variant's `#define` lines, the
+header's `<PREFIX>COMMON_CS` and its own macro, and glslang does the preprocessing. Its Vulkan text
+is its source, so the residual check has nothing to compare; the three hashes and `spirv-check.sh`
+cover it as they cover the rest. The restorer's CONV is compiled once per layer shape, the shapes
+read out of the shipped weight files (`restore_shapes`), so a model with a shape no variant covers
+fails the build until the headers are regenerated; the reducer has no variants. Each header emits
+one more `inc/spirv/*.spv.h` beside the eleven above.
 
 ### 2.91 Float depth, the world and the sun-shadow map (`tagpu_vk.c`, `tagpu_vk_shadow.c`, `tagpu_posedraw.c`, `tagpu_shadow_glsl.h`) — G21a
 
@@ -717,3 +721,134 @@ passes with the generation marker. Normal and stock-limits builds pass.
 **Still open:** brief blank frames (0.117 s at end of loading in the Greenhaven
 capture), live compositor timing and Windows presentation verification. Cold start and failed
 or invalidated lanes still initialize a device. No engine/simulation state is written here.
+
+### The mip chains' reducer (`tagpu_vk_chain.c`, `src/tagpu_chain_comp.h`, `inc/tagpu_chain.h`, `src/tagpu_chain_ref.c`)
+
+**What it is.** One compute pipeline that writes a source atlas's per-tile mip chains from its
+level 0 on the device, for the terrain and the feature passes. The format, the level rule and the
+lookups are the passes' ([terrain & depth](../terrain-depth.html) §7.1, [features](../features.html)
+§5). The reduction is the GPU's because the restored atlases exist only on the device, and
+`vkCmdBlitImage` would round per driver and cross tiles. It runs on the render thread and reads no
+engine state, so it is not on `thread-split.allow`. It is compiled a second time for the wiki's
+stage (`SCENE_SRCS`; `tagpu_scene.h` renames it `tagpu_vkw_chain_*`), and each instance has its own
+pipeline, so the two teardowns are independent.
+
+**The contract** (`tagpu_vk_chain.h`).
+
+- `tagpu_vk_chain_up` builds the pipeline once a device: 1 when the seam's queue family has
+  COMPUTE and `R8G8B8A8_UNORM` is a storage image (the specification requires it; it is asked
+  anyway). A 0 is said once, `vk: chains off: <reason> - the far zoom draws the atlases at level 0`,
+  and every consumer then draws at level 0. Each pass asks at its own build, because the answer
+  sizes its descriptor pool.
+- **The consumer owns everything but the pipeline**: the chain images (5 levels, RGBA8,
+  SAMPLED | STORAGE | TRANSFER_SRC | TRANSFER_DST — TRANSFER_DST for the clear, TRANSFER_SRC for the
+  oracle's copy — and `GENERAL` for life: written as storage, sampled and copied as `GENERAL`, one
+  layout and nothing to track), two sets a slot (base and restored) from its own pool with
+  `tagpu_vk_chain_dsl()`, written in the slot's `prepare` before their first use in that command
+  buffer, and a 16-byte host-visible counter buffer a slot.
+- **The set's bindings**: 0 the atlas's level 0, `SHADER_READ_ONLY_OPTIMAL`; 1..5 one storage view a
+  chain level; 6 the counters, four uints, the check mode's two pairs; 7 the table form's source
+  rects, two uints a cell. The terrain names its counters at 7, which the grid form never reads.
+- `tagpu_vk_chain_record` records one reduction: **range** mode (cells `first .. first+count−1`,
+  row-major over `cols`, one dispatch of up to 1 024 workgroups along x), **list** mode (`count`
+  cells `x | y << 16`, 24 a push), the **table** form (range mode only: each cell's source rect and
+  valid size from binding 7), and `check` 1 or 2 to compare instead of write. `tagpu_vk_chain_clear`
+  empties a chain, all five levels.
+- The seam calls `tagpu_vk_chain_down` and `tagpu_vkw_chain_down` after every pass's `_down`: a
+  set may not be written once its layout is gone. Both calls run on the live device behind the
+  seam's `vkDeviceWaitIdle`, and the next device is asked again.
+
+**The shader** (`TAGPU_CHAIN_REDUCE_CS`, 8 × 8 invocations, one workgroup a cell; push constants
+128 bytes, Vulkan's guaranteed minimum: `first, count, list, cols, pitch, border, check, table,
+cell[24]`). Each invocation reads its 4 × 4 block of level 0, writes its four level-1 texels and its
+level-2 texel, and leaves its level-2 sums in shared memory; invocations x, y < 4 write level 3 from
+those, x, y < 2 level 4 and (0, 0) level 5, a barrier between. A sum of sums is the sum over the
+union, so every level is the level-0 bytes reduced once. The sums are exact uints and the divisions
+integer, never float: a driver may divide floats through the reciprocal, and the restorer measured
+a float floor-divide off by one on an AMD driver. A texel reads back as `round(v·255)` and is
+written as `(k + 0.25)/255`, which stores `k` under a truncating and a rounding conversion alike.
+
+- **The bound.** A workgroup reads only its own cell's 32 × 32 interior — in the table form only
+  the `tw × th` of it its tile covers, so no texel of another frame or of a frame's border — and
+  writes only its own cell's block at each level, so no tile is mixed with another and no two
+  workgroups write one texel. A workgroup past `count` returns whole; `wg` is uniform across it, so
+  every `barrier()` stays in uniform control flow. A level texel whose block holds no valid texel
+  is written 0, and nothing samples it.
+- **The C mirror** is `tagpu_chain_ref`, edit both or neither. `tools/replay/chain_test.py` builds it
+  with `tools/replay/chain_test.c` natively and holds it to an emulation of the shader's own order
+  of work on random tiles (opaque, transparent, keyed, clipped), with the two lookups and the level
+  rule.
+
+**The GPU ordering** (the comment above `tagpu_vk_chain_begin`). Everything is on the seam's one
+queue, in the frame's command buffer, before `vkCmdBeginRenderPass`, inside a world pass's
+`prepare`: after the fog upload, and before the restorer's slice, which the seam records last of
+`prepare`.
+
+- **`begin`**: one global memory barrier, TRANSFER | COMPUTE | FRAGMENT (TRANSFER_WRITE |
+  SHADER_WRITE) → TRANSFER | COMPUTE (TRANSFER_WRITE | SHADER_READ | SHADER_WRITE), plus
+  `UNDEFINED` → `GENERAL` for each chain never laid out. A barrier's first scope is every command
+  submitted earlier on the queue, so it orders: the base atlas's banded upload, and an in-frame copy
+  or a repack's move earlier in this buffer, whose last barrier leaves the image for FRAGMENT, which
+  this one's first scope includes (RAW on the source); every earlier OUT of the restorer into a
+  restored atlas or the feature twin (RAW); every earlier draw that sampled a chain (WAR); every
+  earlier reduction, clear and oracle copy of a chain (WAW, and WAR for the copy).
+- **A clear** sits between barriers of its own: COMPUTE | FRAGMENT | TRANSFER → TRANSFER before it,
+  TRANSFER_WRITE → COMPUTE and FRAGMENT after it, in `GENERAL`.
+- **No barrier between one frame's dispatches**: they write disjoint cells and read only the
+  atlases' level 0, which nothing writes between them.
+- **`end`**: COMPUTE (SHADER_WRITE) → FRAGMENT | COMPUTE (SHADER_READ | SHADER_WRITE). It makes the
+  chains visible to the frame's draw. Its COMPUTE destination is the execution dependency that
+  orders the reductions' reads of a restored atlas before the restorer's OUT later in the frame
+  (WAR). Its FRAGMENT destination is what orders the reductions' reads of a base atlas or the
+  feature twin before a later re-upload (`tagpu_vk_stage.c` `barrier_in`) or a later repack's move
+  (`move_record`), both of whose barriers wait on FRAGMENT: **that WAR rests on chaining**, because
+  a compute stage is not logically earlier than FRAGMENT, and without `end`'s FRAGMENT destination
+  those barriers would not cover it.
+- **The feature pass's source rects** are a shared buffer copied before `begin` behind barriers of
+  its own: COMPUTE | TRANSFER → TRANSFER before the copy (every earlier reduction's read of it and
+  copy into it), TRANSFER → COMPUTE after it (`fchain_upload`). Its per-slot tables are sampled,
+  never reduced.
+- **The oracle**: `tagpu_vk_chain_check_begin` follows the counters' `vkCmdFillBuffer` and this
+  frame's `end`, making the fill and every chain write visible to the check dispatches and the
+  copies; `tagpu_vk_chain_check_end` makes the counters and the copies visible to the host at the
+  slot's next `prepare`, and repeats `end`'s two execution dependencies for the check's own reads
+  of the atlases.
+
+**The oracle** (`tagpu_chaincheck.on`). The seam reads the lever every 120 frames
+(`tagpu_vk_chaincheck_armed`, `tagpu_vk.c`), so the wiki's instances, pointed at
+`tagpu_wikiworld.c`'s 0, never run it. Each pass runs it every 120 frames on a slot whose previous
+check has been read, of a chain current once the frame's work is recorded:
+
+- **GPU self-consistency**: a check-mode dispatch over every cell compares what the chain holds
+  with what the reduction would write and counts the mismatched texels, with the cells seen beside
+  them — pair 1 the base chain, pair 2 the restored (terrain) or twin (features) chain. It catches a
+  stale chain: a missed key, a missed clear, a map change.
+- **The GPU's arithmetic against C**: 16 base cells, `c_j = j · cells / 16`, every level, are copied
+  out (21 824 bytes, a host-visible buffer that exists only while the lever does) and compared with
+  `tagpu_chain_ref` over the hand-over's level-0 bytes expanded as the upload expands them — only
+  while the atlas, the palette and, for the features, the allocation are still the ones reduced
+  from (`skipped` otherwise).
+- The lines and what must read 0: the `ta-drive` skill's `references/levers.md`, *The heartbeats*.
+  The restored chain mirrors the restored atlas's level 0 on every frame the atlas is a picture,
+  across a restore job made again on the same request too (`tagpu_chain_rest_step`: the chain is
+  kept until the new job's first OUT clears level 0, and that paint is reduced whole), so the
+  terrain's `rest gpu-differ` reads 0 across a restart; the check covers the kept window.
+
+**Cost.**
+
+- **Device-local memory**: a terrain chain is 29.5 % of its atlas (341 texels a 1 156-texel cell):
+  7.0 MB for Two Continents' per-tile base, about 57 MiB for its neighbourhood atlas, asked of the
+  restorer's memory rule (D10) before it is made. The feature chains are fixed: 2 × 11.2 MB, plus a
+  64 KB source-rect buffer and a 64 KB table a slot.
+- **Mapped memory**: a 16-byte host-visible counter buffer a slot in each pass that has the chains
+  up, mapped for the slot's life — new, and small — and the oracle's 21 824-byte copy a slot only
+  while the lever exists. The feature table and rects go through the slot's existing bounded
+  staging (`tagpu_vk_stage_take`), so they add no mapping.
+- **Heap and statics**: the terrain's place → key map (`s_nbAt`, 4 B a key, 175 KB on Two
+  Continents' 43 658 keys) and its list of cells for a slice's pushes; the feature allocation's two
+  64 KB static tables, in each of the two instances.
+- **GPU time**: a whole reduction reads each cell's 1 024 level-0 texels once; the base chain is
+  reduced once per map and palette move, the neighbourhood ledger only the keys a slice painted,
+  the feature chains in the frames a map's features are first seen and while the twin is painted.
+  Not measured yet: the `vk: VA` line, the render-thread frame time and the reductions' GPU time
+  (the mega map plan's open checks).

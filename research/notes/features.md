@@ -228,8 +228,54 @@ the units**, so every unit body is tested against the depth features just wrote.
   anchor plus the corner's offset — so a tree straddling the fog edge fades across it
   instead of all at once. Getting this wrong (feeding the shader screen coordinates) made
   every feature vanish the moment fog was switched on; it is the one bug this gate had.
-- **Frames come from `tagpu_gaf.c`** (below): a 2048² `GL_R8` shelf atlas, 4096 entries,
-  raw / TA-RLE / sub-frame lists, sampled `NEAREST` so the texel *is* the palette index.
+- **Frames come from `tagpu_gaf.c`** (below): a 2048² shelf atlas, 4096 entries, raw / TA-RLE
+  / sub-frame lists, expanded on the device into an RGBA8 base atlas
+  ([modules/colour](modules/colour.html) §2.88) that is sampled `NEAREST` while a texel covers a
+  target pixel.
+- **Below a texel a target pixel, the frame's mip chain** (`tagpu_vk_feat.c`, `tagpu_feat.c`'s
+  `taFChain`; why and the level rule: [terrain & depth](terrain-depth.html) §7.1). A frame has no
+  implied place for a chain — the atlas packs frames of any size at any origin — so each frame is
+  cut, from its own first texel, into `⌈w/32⌉ × ⌈h/32⌉` tiles clipped to the frame, and each tile
+  takes one cell of two shared chain images, the base atlas's (`s_fcB`) and the restored twin's
+  (`s_fcR`): 64 × 128 cells, 1024 × 2048 at level 0, 5 levels, 11.2 MB each, made on a
+  hand-over with atlas entries and never resized (`fchain_build`). The base chain is asked for
+  once a device, and a refusal stands for the device's life; the twin's chain whenever a twin
+  image stands without one, so a twin made later gets its chain on the next such hand-over, and a
+  refusal stands for that twin image only. A level-L block measured from the frame's
+  origin lies inside one tile because `2^L` divides 32, so no level mixes two frames.
+    - **The allocation** (`fchain_alloc`, render thread) gives cells in entry order, each tile's
+      source rect clipped to its frame and the frame's to the atlas. It is rebuilt whole when the
+      atlas's entries move — a new array, generation or repack, or fewer entries — and extended as
+      entries are added; the hand-over carries the atlas's own `ents`, `nEnts`, `entsGen` and
+      `entsRepacks` for it. An entry past the 8 192 cells gets none and draws at level 0; the
+      first is logged (`feat: the chain's 8192 cells are given out - entry N (WxH) and any that do
+      not fit after it draw at level 0`), and every rebuild logs `feat: chain cells laid out for
+      atlas generation G (repack R) - N entries, C of 8192 cells, overflow=K`.
+    - **A quad finds its cells by its entry.** The vertex's `aCM.x` carries the entry's index + 1
+      (`ent`, 0 for none) where it carried the colour key, which nothing read (the hole is the base
+      atlas's alpha); the entry's index stands from the gather to the draw, because the atlas
+      repacks only at the top of a gather. A **per-slot** 64 × 64 `RGBA32UI` table (binding 43,
+      `uFTab`) holds each entry's `(x | y<<16, w | h<<16, first cell or 0xFFFFFFFF, tiles
+      across)`, written in that slot's `prepare` from the hand-over its vertices come from, under
+      the same fence, so a frame's table and vertices cannot disagree. The fragment stage reads an
+      entry only below 4096; one with no cells reads level 0 through `textureLod(…, 0)`.
+    - **The lookup** takes the sample's level-0 texel into the frame, its tile names the cell and
+      the level texel is clamped to the tile's valid blocks (`tagpu_chain_ftexel` is the C
+      mirror). The hole above level 0 is the coverage majority (`b.a < 0.5` on the chain's alpha,
+      which is the covered fraction of the block), and the twin's colour is taken where its
+      chain's alpha says painted, as at level 0.
+    - **The table and the source rects** (a 64 KB device-local buffer, the reducer's binding 7)
+      go through the slot's bounded staging on the frame the tiles do (`tagpu_vk_stage_take`); a
+      frame that cannot fit them draws at level 0. Both chains are reduced whole, never ledgered:
+      the base chain when the device's base copy (serial, palette, move) or the allocation moved,
+      the twin's when the restore job, its painted count or the allocation moved. The twin's chain
+      is not drawn (`uRestChain` 0) until it has been reduced for the current job, and a twin
+      that painted nothing is not a picture. A repack moves `entsRepacks`, so the allocation is
+      rebuilt and the chains are reduced whole after the move; the WAR between the move and earlier reductions'
+      reads rests on the reducer's `end` barrier chaining through FRAGMENT
+      ([modules/vulkan-backend](modules/vulkan-backend.html), *The mip chains' reducer*).
+    - **The wiki's stage** hands over no entries and writes `ent` 0, so it never makes the feature
+      chains, and it draws at zoom 1 (level 0) anyway.
 
 Log every 60 frames:
 

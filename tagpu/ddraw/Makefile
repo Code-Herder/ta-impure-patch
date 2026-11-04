@@ -103,13 +103,14 @@ LDFLAGS  += -Wl,--file-alignment,4096
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 
-# THE WIKI'S SCENE (src/tagpu_scene.h): the eight files that draw one world scene are compiled a
+# THE WIKI'S SCENE (src/tagpu_scene.h): the nine files that draw one world scene are compiled a
 # second time, with -DTAGPU_SCENE_WIKI, into the in-game wiki's stage -- src/<name>.wiki.o beside
 # the game's src/<name>.o, each in every build's suffix -- and both copies are linked. The two
 # share no static, which C's linkage guarantees; the link fails on a symbol tagpu_scene.h did not
 # rename, and scene-check below on a call from a wiki copy into a module only the game has.
-SCENE_SRCS := src/tagpu_vk_world.c src/tagpu_vk_fog.c src/tagpu_vk_terr.c src/tagpu_vk_feat.c \
-              src/tagpu_vk_unit.c src/tagpu_posedraw.c src/tagpu_posebake.c src/tagpu_render3do.c
+SCENE_SRCS := src/tagpu_vk_world.c src/tagpu_vk_fog.c src/tagpu_vk_chain.c src/tagpu_vk_terr.c \
+              src/tagpu_vk_feat.c src/tagpu_vk_unit.c src/tagpu_posedraw.c src/tagpu_posebake.c \
+              src/tagpu_render3do.c
 SCENE_OBJS := $(addsuffix .wiki$(OBJEXT), $(basename $(SCENE_SRCS)))
 OBJS     += $(SCENE_OBJS)
 

@@ -441,6 +441,18 @@ int tagpu_vk_stage_fits(const TAGPU_VKSTAGE* st, VkDeviceSize bytes)
     return st->buf && st->map && ALIGN4(st->used) + bytes <= st->cap;
 }
 
+unsigned char* tagpu_vk_stage_take(TAGPU_VKSTAGE* st, VkDeviceSize bytes, VkDeviceSize align,
+                                   VkDeviceSize* off)
+{
+    VkDeviceSize o;
+    if (align < 4) align = 4;
+    o = (st->used + align - 1) & ~(align - 1);
+    if (!st->buf || !st->map || o + bytes > st->cap) return NULL;
+    st->used = o + bytes;
+    *off = o;
+    return st->map + o;
+}
+
 /* ---- the move ------------------------------------------------------------ */
 
 int tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int dim,

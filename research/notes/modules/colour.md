@@ -167,7 +167,9 @@ beside its index mirror, and it is the only atlas image the world passes upload:
 - **The key is per frame, so it has a plane of its own.** `tagpu_gaf.c` writes `keym` beside the
   index mirror in the same paint and the same allocation, 0 where a texel is its frame's key;
   `tagpu_pal_expand` makes that alpha 0 with RGB 0. Every reader discards at `alpha < 0.5`, which
-  is exactly the old per-vertex `index == ck` test.
+  is exactly the old per-vertex `index == ck` test. Below a texel a target pixel the feature pass
+  reads the frame's mip chain instead, whose alpha is the covered fraction of the block, so the
+  hole there is the majority's ([features](../features.html) §5).
 - **The effects' flash level rides in the alpha.** The flash remaps an index through the LHT by
   `index − 0x4F`; the base stores `TAGPU_FX_FLASH_ALPHA(i) = 255 − clamp(i − 0x4F, 0, 31)`, never
   below 224, so the hole test is unchanged and the shader recovers the level as
@@ -317,6 +319,12 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
       (`tagpu_vk_stage_expand_rects`). The atlas's allowance is what makes them fit. When they do
       not — a slot that could map less than they need — nothing is recorded and the pass skips
       the frame. The seam's fence on the slot is what frees the buffer.
+    - **A caller's own in-frame bytes share the slot's buffer** (`tagpu_vk_stage_take`: an
+      aligned range of what the slot mapped, held until the frame's submit like any in-frame
+      upload, or NULL). The feature pass's mip-chain table and source rects go this way on the
+      frame its tiles do, its ask to `base_upload` including them; a frame that cannot fit them
+      draws the features at level 0 ([features](../features.html) §5). The ask stays inside
+      `TAGPU_VK_STAGE_CAP`, so the bound below is unchanged.
     - **A whole page goes out in bands**, and only on the events *What sends a whole page* lists:
       whole rows through the rest of the buffer, each band copied by a submit of the module's own
       command buffer to the seam's queue and waited on (its fence, one second) before the next
