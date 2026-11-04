@@ -57,6 +57,7 @@ _Static_assert(REC_POV_ZOOM_MIN == (unsigned)(TAGPU_ZOOM_FLOOR_LO * 65536.0f),
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);
 static void anchor_step(int fromWheel, const TAGPU_PACKET* pk);
+static int  mega_centre_shift(const TAGPU_PACKET* pk, float* dx, float* dy);
 static float predict(const TAGPU_PACKET* pk, float z, int mayHold);
 static int  iround(float v);
 static int  clampi(int v, int lo, int hi);
@@ -328,12 +329,14 @@ static float wheel_level(const TAGPU_PACKET* pk)
         const NOTCH* e = &s_nq[(ULONG)t % NOTCHQ];
         double izPrev = 1.0 / (double)s_wheelTgt;
         double iz;
-        int    centre = 0;
+        int    centre = 0, whole = 0;
         float  z;
         /* THE MEGA MAP. A mega notch back engages it: the target becomes the
-           floor, about the view centre, and the target it left is kept. While
-           it is engaged ANY notch forward leaves it -- TADR's gesture -- back
-           to the kept target, centred on the world point under the pointer.
+           floor and the view centre moves onto the map's centre, so the whole
+           map is on screen from wherever it was engaged, and the target it
+           left is kept. While it is engaged ANY notch forward leaves it --
+           TADR's gesture -- back to the kept target, centred on the world
+           point under the pointer.
            A mega notch that has nothing to do (back while engaged, forward
            while not) moves nothing, as TADR's does; a zoom notch back while
            engaged is already at the floor and leaves it engaged. */
@@ -349,6 +352,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
                 s_megaBack = s_wheelTgt;
                 s_megaOn = 1;
                 iz = 1.0 / (double)s_floor;
+                whole = 1;
             } else {
                 iz = izPrev;
             }
@@ -379,6 +383,13 @@ static float wheel_level(const TAGPU_PACKET* pk)
             float k  = (float)(centre ? izPrev : izPrev - iz);
             s_shiftX += (ax - cx) * k;
             s_shiftY += (ay - cy) * k;
+        }
+        if (whole) {
+            float dx, dy;
+            if (mega_centre_shift(pk, &dx, &dy)) {
+                s_shiftX += dx;
+                s_shiftY += dy;
+            }
         }
         d += e->delta;
         lastUs = e->us;
@@ -1317,6 +1328,26 @@ static int range_pk(const TAGPU_PACKET* p, int* loX, int* hiX, int* loY, int* hi
     return camera_range(p->vp[2], p->vp[3], p->map_pxw, p->map_pxh,
                         plot_px(p->map_w16), plot_px(p->map_h16),
                         p->cam_centre != 0, loX, hiX, loY, hiY);
+}
+
+/* THE MAP'S CENTRE AS AN EYE: the middle of the centre range, which puts the
+   view centre on the middle of `[0, min(extent, tile map)]` on each axis --
+   the rectangle floor_compute's `fit` spans, so at the floor the whole of it
+   is on screen. From the packet's copies of floor_compute's own inputs (the
+   true viewport, the extent, the PLOT grid; range_pk), and the centre range
+   whatever the packet's `cam_centre` says: the eye is the one the mega map
+   lands at, at the floor, where the rect is wide and the apply holds the
+   camera to that range. 0, outputs untouched, with no range to take it from. */
+static int mega_eye(const TAGPU_PACKET* p, float* ex, float* ey)
+{
+    int loX, hiX, loY, hiY;
+
+    if (!camera_range(p->vp[2], p->vp[3], p->map_pxw, p->map_pxh,
+                      plot_px(p->map_w16), plot_px(p->map_h16), 1, &loX, &hiX, &loY, &hiY))
+        return 0;
+    *ex = (float)(loX + hiX) * 0.5f;
+    *ey = (float)(loY + hiY) * 0.5f;
+    return 1;
 }
 
 /* Clamp one x/y pair into the range where it is stored. 1 when it moved. */
@@ -2824,7 +2855,8 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
         s_remY = s_remY * (float)(1.0 - s_gPosted) + s_shiftY;
         s_gPosted = 0.0;
     }
-    /* NOTHING OWED — the common case, and every zoom-out that cut no zoom-in.
+    /* NOTHING OWED — the common case, and every zoom-out that cut no zoom-in
+       and engaged no mega map.
        Exactly zero, not "small": a notch aimed at the viewport centre adds
        0 * k, so the centred gesture never reaches the lines below, which is
        what makes the A/B control structural. */
@@ -2883,6 +2915,25 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
     if (cutY) { s_remY = 0.0f; s_residY = 0.0f; }
     s_cumX += qx - px;
     s_cumY += qy - py;
+}
+
+/* THE DISPLACEMENT ENGAGING THE MEGA MAP OWES: from the eye the wheel's
+   gesture lands at as of this notch to the map's centre (mega_eye). The eye
+   it lands at is this frame's (the packet's plus what is posted and not yet
+   acknowledged, as anchor_step steps from), plus the carry, what the tween
+   this batch cuts still owes, and the terms this frame's earlier notches have
+   already added. Paid through R like any notch's term, so it tweens with the
+   level and anchor_step clamps it into the range per axis. 0 with no packet
+   or no range: the level still falls, about the view centre. Render thread,
+   from wheel_level. */
+static int mega_centre_shift(const TAGPU_PACKET* pk, float* dx, float* dy)
+{
+    float tx, ty, owed = (float)(1.0 - s_gPosted);
+
+    if (!pk || !pk->in_game || !mega_eye(pk, &tx, &ty)) return 0;
+    *dx = tx - ((float)(pk->eye[0] + (s_cumX - pk->cmd_ack_dx)) + s_residX + s_remX * owed + s_shiftX);
+    *dy = ty - ((float)(pk->eye[1] + (s_cumY - pk->cmd_ack_dy)) + s_residY + s_remY * owed + s_shiftY);
+    return 1;
 }
 
 /* The eye interval that puts `[e + dL, e + dR]` inside `[lo, hi]`, and `*e`

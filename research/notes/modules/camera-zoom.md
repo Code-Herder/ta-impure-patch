@@ -271,8 +271,8 @@ answer. A poll that tears is a poll that hands the engine back the frame.
 **The mega map is a state of the wheel, not a second view.** A notch back on the mega map's wheel
 **engages** it: the target level becomes the floor (`tagpu_zoom_floor()`, this frame's floor and
 the lowest level the wheel can reach, §2.3 *The floor follows the map*; while engaged the target
-follows the floor when it moves), pulled back about the view centre like any notch out, and the target it left is kept
-(`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
+follows the floor when it moves), the view centre moves onto the map's centre, and the target it
+left is kept (`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
 kept target, with the view centre moved onto the world point under the pointer. A mega notch with
 nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
 TADR's does — engaging at the floor would keep the floor as the level to return to, and the next
@@ -289,6 +289,24 @@ binding). Both doors carry the modifier keys in `wparam`'s low word (the hardwar
 (Ctrl+wheel / Wheel) in both panels ([settings](settings.html) §2.12); under `tagpu_defaults.off`
 the store has no say and the wheel zooms.
 
+**Engaging shows the whole map from wherever it is engaged.** The floor is the level at which
+the centre range's rectangle fits the viewport (§2.3), but the range keeps only the view centre on
+the map (§2.3c), so a pull-back about the view centre from a corner would leave most of the map off
+screen. Engaging therefore also moves the eye to the middle of the centre range (`mega_eye`):
+the view centre on the middle of `[0, min(extent, tile map)]` on each axis — the same rectangle the
+floor's `fit` is computed from, taken from the packet's copies of the floor's own inputs (`vp`,
+`map_pxw/h`, `map_w16/h16`), so the render thread reads nothing new. The displacement is the
+target eye less the eye the gesture lands at as of that notch — this frame's eye (the packet's plus
+what is posted and not yet acknowledged), the carry, what the tween being cut still owes, and the
+terms of the frame's earlier notches (`mega_centre_shift`) — and it is paid through `R` like a
+notch's term, so the eye tweens with the level and `anchor_step` clamps it per axis. Like leaving,
+its step is not inside the old view (up to about half the map), so under a lagging game thread the
+reach bound can hold it (`held=`). With no packet in play or no range to take the centre from, the
+level still falls, about the view centre. A map whose scroll extent is narrower than the viewport
+at 1× is the one case the first frames' clamp can cut: while the packet still carries the engine's
+range (`cam_centre` 0, a draw whose ground is not ours) its `[0, extent − W]` holds the eye at 0, and an
+axis the clamp cuts drops what it owes (§2.3e).
+
 **Leaving is the zoom-in anchor with a different factor.** A notch in holds the point under the
 pointer by moving the target centre `(a − c)(iz_prev − iz_new)`; leaving moves it
 `(a − c) · iz_prev` — the pointer's world offset from the centre at the level being left — through
@@ -303,8 +321,10 @@ mouse-world pin each set the level through `wheel_rest`, which disengages, so a 
 can never send the camera back to a level from before them.
 
 **MEASURED 2026-11-02** (Two Continents, 1024×768, viewport `(128,32 896×704)`, the play arm set,
-on a build whose floor was a fixed 0.25; the floor that follows the map puts Two Continents' at
-about 0.056 there [arithmetic], so the engaged level now reads that):
+on a build whose floor was a fixed 0.25 and whose engage left the eye where it was; the floor that
+follows the map puts Two Continents' at about 0.056 there [arithmetic], so the engaged level now
+reads that, and the engaged eye is the map's centre, `(10720/2 − 448, 12672/2 − 352)` =
+`(4912, 5984)` [arithmetic, not yet read off the game] — the rows below are that build's):
 
 | gesture | level | eye |
 |---|---|---|
