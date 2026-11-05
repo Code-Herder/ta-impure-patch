@@ -144,6 +144,16 @@ static __inline const TAGPU_ICONRECT* tagpu_icon_type(const TAGPU_ICON_VIEW* v, 
     return NULL;
 }
 
+/* The model radius the cover test takes for a type. A hollow generated shape
+   covers any model: its hole would show the model and read as its solid twin,
+   so it is drawn alone from the level it is opaque. Both threads ask this, so
+   the picture and the pick agree on which model is gone. A set's picture has
+   no hollow class, and takes the model's own radius. */
+static __inline unsigned tagpu_icon_cover_r(const TAGPU_ICONRECT* pic, int cls, unsigned r_px)
+{
+    return !pic && (cls == TAGPU_ICLS_AIR || cls == TAGPU_ICLS_UNKNOWN) ? 0u : r_px;
+}
+
 /* A radar contact's BAR size, S for the switch whatever it is drawn as (the
    logo frame or a set's NONE picture): 0.8 x base, the size the dot's scale
    k_r is rounded from, NOT 4 x k_r. The two are equal at 1080p (8 px) and at

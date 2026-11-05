@@ -1981,6 +1981,8 @@ float tagpu_zoom_game_floor(void)
 #define U_HEALTH         0x108         /* s16                                   */
 #define OFF_UNITBEG      0x14357       /* UnitStruct* the unit array starts at  */
 #define OFF_UNITSLOTS    0x14351       /* u16: its slot count, 10 x MaxUnits + 1 */
+#define OFF_HOTUNITS     0x1435F       /* u16*: HotUnits, the ids GetUnitAtMouse walks */
+#define OFF_HOTCOUNT     0x14367       /* its count */
 #define UNIT_STRIDE      0x118
 #define OFF_SCREENW      0x37E1F       /* i32 the engine's screen, W and H      */
 #define OFF_SCREENH      0x37E23
@@ -2063,11 +2065,12 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
                       const TAGPU_ICON_VIEW* v, float z, int* edge)
 {
     const unsigned row = *(const unsigned short*)(unit + U_MODELID);
+    const TAGPU_ICONRECT* pic;
     int hide, size;
     if (row >= n || tab[row].cls >= TAGPU_ICLS_N) return -1;
     if (*(const float*)(unit + U_NANO) > 0.0f || *(const short*)(unit + U_HEALTH) <= 0) return -1;
-    tagpu_icon_type(v, tagpu_icontype_art(), tab[row].cls, tab[row].icon, &size, edge);
-    tagpu_icon_eval(v, z, size, *edge, tab[row].r_px, &hide);
+    pic = tagpu_icon_type(v, tagpu_icontype_art(), tab[row].cls, tab[row].icon, &size, edge);
+    tagpu_icon_eval(v, z, size, *edge, tagpu_icon_cover_r(pic, tab[row].cls, tab[row].r_px), &hide);
     return hide;
 }
 
@@ -2103,24 +2106,16 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    counts, and the level end clears the answer, so a record posted before the
    render thread saw the level end cannot answer for the next level. No such
    record yet is the engine's test. */
-static int icon_hit(const char* ta, const char* unit, const int* point)
+static int icon_circle(const char* ta, const TAGPU_PK_UTYPE* tab, unsigned n,
+                       const TAGPU_ICON_VIEW* vp, float z, const char* unit, const int* point,
+                       long long* dist2)
 {
-    unsigned n;
-    const TAGPU_PK_UTYPE* tab = tagpu_icontype_table(&n);
-    const float z = game_level();
+    TAGPU_ICON_VIEW v = *vp;
     const char* carrier;
-    TAGPU_ICON_VIEW v;
-    int scale, dist, fade, edge = 0, h, hop;
+    int edge = 0, h, hop;
     long long ax, ay, dx, dy;
     double r;
 
-    /* a unit the native pass does not draw keeps the engine's sprite and no
-       icon -- the gather's own first test, asked here on this thread as the
-       packet's fill asks it */
-    if (!s_gIcons || !tab || !tagpu_native_owns_unit(unit)) return -1;
-    tagpu_settings_icons(&scale, &dist, &fade);
-    tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
-                    scale, dist, fade);
     carrier = *(const char* const*)(unit + U_CARRIER);
     for (hop = 0; carrier && hop < TAGPU_ICON_CARGO_HOPS; hop++) {
         const char* beg = *(const char* const*)(ta + OFF_UNITBEG);
@@ -2144,7 +2139,54 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     dx = (long long)point[0] - ax;
     dy = (long long)point[1] - ay;
     r = 0.45 * (double)edge / (double)z;
-    return (double)(dx * dx + dy * dy) <= r * r;
+    *dist2 = dx * dx + dy * dy;
+    return (double)*dist2 <= r * r;
+}
+
+/* THE NEAREST ICON ANSWERS. The engine keeps, among its hits, the smallest of
+   a key from each unit's +0x92 record (0x48CE1E..0x48CE75), which says nothing
+   about the pointer, so where two icons overlap the pointer on one's centre
+   could name the other. So a hit stands only when no other icon under the
+   pointer has a nearer centre, an equal distance going to the lower record:
+   exactly one icon answers, whatever order the engine asks in. The walk is the
+   engine's own list, HotUnits (main+0x1435F, count +0x14367), past the same
+   zero model id it skips (0x48CE05), each id bounded by the slot count; it
+   runs only for a unit already hit, on the thread that owns these records. */
+static int icon_hit(const char* ta, const char* unit, const int* point)
+{
+    unsigned n, i, count, slots;
+    const TAGPU_PK_UTYPE* tab = tagpu_icontype_table(&n);
+    const float z = game_level();
+    const unsigned short* hot;
+    const char* beg;
+    TAGPU_ICON_VIEW v;
+    int scale, dist, fade, hit;
+    long long mine = 0;
+
+    /* a unit the native pass does not draw keeps the engine's sprite and no
+       icon -- the gather's own first test, asked here on this thread as the
+       packet's fill asks it */
+    if (!s_gIcons || !tab || !tagpu_native_owns_unit(unit)) return -1;
+    tagpu_settings_icons(&scale, &dist, &fade);
+    tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
+                    scale, dist, fade);
+    hit = icon_circle(ta, tab, n, &v, z, unit, point, &mine);
+    if (hit != 1) return hit;
+    hot = *(const unsigned short* const*)(ta + OFF_HOTUNITS);
+    count = *(const unsigned*)(ta + OFF_HOTCOUNT);
+    beg = *(const char* const*)(ta + OFF_UNITBEG);
+    slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
+    if (!model_ptr_ok(hot) || !model_ptr_ok(beg) || count > slots) return 1;
+    for (i = 0; i < count; i++) {
+        const unsigned id = hot[i];
+        const char* other = beg + (size_t)id * UNIT_STRIDE;
+        long long theirs = 0;
+        if (id >= slots || other == unit || !*(const unsigned short*)(other + U_MODELID)) continue;
+        if (!tagpu_native_owns_unit(other)) continue;
+        if (icon_circle(ta, tab, n, &v, z, other, point, &theirs) == 1 &&
+            (theirs < mine || (theirs == mine && other < unit))) return 0;
+    }
+    return 1;
 }
 
 unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m)

@@ -1516,6 +1516,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         /* no model on screen, no bar and no digit: BAR fades both out where
            its icons take over */
         if (tagpu_icon_hides(ui)) continue;
+        /* an opaque icon over a model it does not hide reads as an icon too: a
+           bar drawn over the marker's quad would cross the picture. A fading
+           icon keeps the bar, so the health stays until the icon has taken over */
+        if (tagpu_icon_alpha(ui) == 255) continue;
 
         /* THE BAR SITS ON WHOEVER DREW THE BODY. That is the invariant, and it needs
            two branches because two different things draw units.

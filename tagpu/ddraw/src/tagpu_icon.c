@@ -118,8 +118,8 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
             const TAGPU_PK_UTYPE* t = &s_types[u->type_row];
             int size, edge;
             if (t->cls < TAGPU_ICLS_N) {
-                tagpu_icon_type(&s_view, s_art, t->cls, t->icon, &size, &edge);
-                a = tagpu_icon_eval(&s_view, zoom, size, edge, t->r_px, &h);
+                const TAGPU_ICONRECT* pic = tagpu_icon_type(&s_view, s_art, t->cls, t->icon, &size, &edge);
+                a = tagpu_icon_eval(&s_view, zoom, size, edge, tagpu_icon_cover_r(pic, t->cls, t->r_px), &h);
             }
         }
         s_alpha[i] = (unsigned char)a;
