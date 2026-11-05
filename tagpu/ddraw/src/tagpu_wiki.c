@@ -373,7 +373,7 @@ static int      s_side = -2;                    /* the last fill's engine side, 
 static int      s_iface = 1;                    /* the last fill's Interface Type, 0 or 1        */
 static WIKISIMCTX s_ctx;                        /* the context s_sim was started with            */
 static int      s_cast = -1;                    /* the layout side whose casting s_ctx holds, -1 */
-static int      s_about, s_drawer;              /* the theatre's About and its drawer: at most one */
+static int      s_about;                        /* the theatre's About is open */
 
 /* ---- the replay ------------------------------------------------------------------------------
    A FRAME:GAME ENTRY'S DEMO IS A REPLAY (tagpu_wikireplay.h): its viewer's script plays the replay
@@ -1072,10 +1072,10 @@ static void start(void)
 }
 
 /* wiki.js `pick`: entry `e`, its demo `k`, playing from the start; another entry closes the
-   theatre's About and its drawer */
+   theatre's About */
 static void pick(int e, int k)
 {
-    if (e != s_entry) s_about = s_drawer = 0;
+    if (e != s_entry) s_about = 0;
     s_entry = e;
     s_demo = k;
     s_playing = 1;
@@ -1098,7 +1098,7 @@ static void page_open(void)
     s_costFrames = 0;
     s_drag = -1;
     s_saidHead = 0;
-    s_about = s_drawer = 0;
+    s_about = 0;
     /* a sound object the load did not make, the settings muting then, is made now they do not */
     tagpu_wikisound_arm(sound_of(), (uintptr_t)g_ddraw.hwnd);
     if (d && s_entry < 0)
@@ -1160,9 +1160,9 @@ static void page_press(const char* key)
         button_sound();
         s_fold[i >> 5] ^= 1u << (i & 31);
     } else if ((i = key_index(key, "entry:", d->nnode)) >= 0) {
-        /* a pick from the drawer closes it, as every pick of an entry closes About and the drawer */
+        /* every pick of an entry closes About */
         button_sound();
-        s_about = s_drawer = 0;
+        s_about = 0;
         if (d->node[i].entry >= 0 && d->node[i].entry != s_entry) {
             s_try = 0;
             pick(d->node[i].entry, 0);
@@ -1193,14 +1193,8 @@ static void page_press(const char* key)
         button_sound();
         s_speed = 2;
     } else if (!strcmp(key, "about")) {
-        /* About and the drawer: opening one closes the other (wiki.js `panel`) */
         button_sound();
         s_about = !s_about;
-        s_drawer = 0;
-    } else if (!strcmp(key, "drawer")) {
-        button_sound();
-        s_drawer = !s_drawer;
-        s_about = 0;
     }
 }
 
@@ -1554,7 +1548,6 @@ static void page_fill(TAGPU_PK_WIKI* w)
     w->shot = s_shot;
     w->rep_serial = s_repSerial;
     w->about = (uint8_t)s_about;
-    w->drawer = (uint8_t)s_drawer;
     w->leave_held = (uint8_t)(!frame_try() ? 0 : !strcmp(s_press.held, "yes") ? 1 : !strcmp(s_press.held, "no") ? 2 : 0);
     memset(&w->frame, 0, sizeof w->frame);
     if (s_repOn && e) replay_fill(w, e);
@@ -2483,11 +2476,11 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
        and what the page cost */
     fprintf(f, "\"playing\":%d,\"speed\":%d,\"sim\":%d,\"tick\":%d,\"done\":%d,\"hash\":\"%016llx\","
                "\"stage\":%d,\"cost_max_ms\":%.4f,\"cost_frames\":%u,\"clock_s\":%.6f,\"clipped\":%.6f,"
-               "\"turbo\":%d,\"pause_at\":%d,\"about\":%d,\"drawer\":%d,\"msg\":",
+               "\"turbo\":%d,\"pause_at\":%d,\"about\":%d,\"msg\":",
             s_playing, s_speed, demo_on(), demo_tick(), done(),
             s_simOn ? (unsigned long long)tagpu_wikisim_hash(&s_sim)
                     : s_repOn ? (unsigned long long)tagpu_wikireplay_hash(&s_rep) : 0ull,
-            w->has_stage, s_costMax, s_costFrames, s_clockS, s_clipped, s_turbo, s_pauseAt, s_about, s_drawer);
+            w->has_stage, s_costMax, s_costFrames, s_clockS, s_clipped, s_turbo, s_pauseAt, s_about);
     jstr(f, s_msg, sizeof s_msg);
     /* a replay: its transport, and the frame record this fill placed, in tools/wiki/framecheck.mjs's
        shape (tests/wikiframetest.c dump_rec) */

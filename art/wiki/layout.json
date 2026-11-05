@@ -29,7 +29,7 @@
  "controls": {"gap": 4, "pair": 2, "try": 6, "h": 17, "pad": 7, "min": 24},
  "text": {"share": 24, "para": 5},
 
- "theatre_about": "The theatre, the page of an entry with \"frame\": \"game\": the stage across the body over one row (the Entries drawer's control, the demos' numbered tabs, the demo's title, the controls and About) and the caption. `about` is the About panel's share of the body's width in %, over the stage's right; `stage_min` the least height of its stage, in units. The drawer is `columns[0]` wide and the row takes `controls`.",
+ "theatre_about": "The theatre, the page of an entry with \"frame\": \"game\": the tree's column, `columns[0]` wide and the body's whole height, with the entry's demos under its row; beside it the stage over one row (the demo's title, the controls and About) and the caption. `about` is the About panel's share of the stage's bezel's width in %, over the stage's right; `stage_min` the least height of its stage, in units. The row takes `controls`.",
  "theatre": {"about": 38, "stage_min": 240},
 
  "roles_about": "Each text of the window in the replay HUD's style nearest its role (art/hud/layout.json `styles`): the titles in the stats window's title; a category in the team header; an entry or a demo in a player row's name, a demo's number in the HUD's numbers; the subtitle and the body text in the stats window's foot, its one mixed-case style; the caption, a line written at a moment, in the toast; the controls in the transport's labels; the badge in the stats window's chips; a keycap in a transport button's small label; the keys strip's '+' in the HUD's labels.",

@@ -70,8 +70,8 @@ typedef struct TAGPU_PK_WIKI {
     uint8_t  config;            /* the Config sprocket the top bar shows from this layer: 0 none
                                    (the engine drew its own), 1 up, 2 down (tagpu_menu_bar_cog).
                                    Data: the render thread draws none for any other value     */
-    uint8_t  about, drawer;     /* the theatre's About panel and its Entries drawer are open; at
-                                   most one, and data: the render thread takes each as 0 or 1  */
+    uint8_t  about;             /* the theatre's About panel is open; data: the render thread
+                                   takes it as 0 or 1                                          */
     uint8_t  leave_held;        /* Try it on a replay: the answer of Leave's question held down,
                                    0 none, 1 Yes, 2 No; data: the render thread draws any other
                                    value as none                                             */

@@ -593,8 +593,7 @@ const WikiSim = (() => {
   /* ---- THE GAME ENTRY (research/notes/ingame-wiki-replay-plan.md): an entry whose `frame` is "game" shows a small
      game, and each demo's `game` is its game script, played by a game simulation (WikiSim.game) on game ticks. Its
      data rules, refused here as tagpu_wikidata.c refuses them at load: ----
-     - `frame` absent or "game"; a game entry has no `pace` and at most THEATRE_TABS demos, one numbered tab each in
-       the theatre's row (tagpu_wikilay.c), so the row's fixed part fits at 1024 x 768 by construction.
+     - `frame` absent or "game"; a game entry has no `pace`.
      - a unit may carry `rival` (a boolean: it is the opponent's, cast by the rival casting) and `corpse` (a row of
        the entry's `features`, its wreck) only in a game entry, and any entry's unit the economy's figures, ECON each
        finite and >= 0, energyUse below ECON_MAX in magnitude.
@@ -635,7 +634,7 @@ const WikiSim = (() => {
        is the game's), a refresh the recorder's writer flags walked from that first (refreshAt), since a fork starts
        only there (tagpu_replay.c takeover_point); seat one of the scene's (THE SEAT RULE); end an integer from..the
        game's end; inputs as a part's, at a tick from..its end. A demo of any other entry carries no `kept`. ---- */
-  const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400, THEATRE_TABS = 9;
+  const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400;
   /* a demo's fork parts, at most (tagpu_wikidata.h WIKI_DEMO_FORKS); and the timelines a recording holds, the
      recorder's RECR_TIMELINES, which bounds a part's id: tagpu_wikidata.c reads it from tagpu_recrules.h itself,
      and simparity's refusal cases hold this to that */
@@ -797,7 +796,6 @@ const WikiSim = (() => {
   function checkGame(entry, demo) {
     const game = isGame(entry);
     if (game && 'pace' in entry) throw new Error('a game entry has no pace');
-    if (game && Array.isArray(entry.demos) && entry.demos.length > THEATRE_TABS) throw new Error(`a game entry has at most ${THEATRE_TABS} demos`);
     if ('live' in entry && !(game && typeof entry.live === 'boolean')) throw new Error('live is a game entry\'s, true or false');
     if ('takeover' in entry && !(game && typeof entry.takeover === 'boolean')) throw new Error('takeover is a game entry\'s, true or false');
     if ('players' in entry && !(game && typeof entry.players === 'boolean')) throw new Error('players is a game entry\'s, true or false');
@@ -3707,9 +3705,9 @@ const WikiSim = (() => {
     SND_NAMES,
     // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1
     UNTILS,
-    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS, and the
+    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, and the
     // features and kills of WIKI_FEATS_MAX) and its death sound's kind
-    SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, FEATS_MAX, SND_DEATH,
+    SEATS, GAME_KILLS, GAME_END_MAX, FEATS_MAX, SND_DEATH,
     // the game frame's 4:3 bound on a game entry's map (checkGame), and a players entry's on its screen
     frameFits, screenFits,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order), a replay entry's and a live entry's,

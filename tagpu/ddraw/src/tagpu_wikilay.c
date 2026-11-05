@@ -54,7 +54,6 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_X2        "2\xC3\x97"             /* 2× */
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
-#define S_ENTRIES   "Entries"
 #define S_ABOUT     "About"
 /* a keycap a WIKI_KEY_*, in their order: one for every key, which the assert holds, so no key held
    shows another's name or none */
@@ -581,6 +580,28 @@ static int locked(const C* c, int e)
     return 0;
 }
 
+/* A theatre's entry heads its own demos: their rows under its row, `w` wide at `x`, from `y0` in the
+   list, the selected row being the demo. Returns their height. */
+static double tree_demos(C* c, const PANEL* p, const WIKIENTRY* e, double x, double y0, double w, int emit)
+{
+    double y = 0;
+    int i;
+    char key[HUD_KEYLEN];
+    for (i = 0; i < e->ndemo; i++) {
+        ROW rw;
+        memset(&rw, 0, sizeof rw);
+        rw.part = c->l->part[i == c->st->demo ? P_ROW_SEL : P_ROW];
+        rw.role = R_DEMO;
+        rw.text = filled_or(c, FILL_ROW, e, e->demo[i].title, e->demo[i].id);
+        rw.mark = "";
+        rw.mark_icon = -1;
+        snprintf(key, sizeof key, "demo:%d", i);
+        rw.key = key;
+        y += row(c, &rw, x, p->cy + y0 + y, w, &p->view, emit);
+    }
+    return y;
+}
+
 /* the tree's rows `w` wide, in preorder, a folded category's descendants left out: returns their
    height */
 static double tree_rows(C* c, const PANEL* p, double w, int emit)
@@ -602,11 +623,19 @@ static double tree_rows(C* c, const PANEL* p, double w, int emit)
         rw.mark_w = U(c, g->mark);
         if (nd->entry >= 0) {
             const WIKIENTRY* e = &c->d->entry[nd->entry];
+            const int game = e->frame == WIKI_FRAME_GAME, sel = nd->entry == c->st->entry;
             rw.text = filled_or(c, FILL_ROW, e, e->title, e->id);
-            rw.mark_icon = c->l->icon_dot;
+            rw.mark_icon = !game ? c->l->icon_dot : sel ? c->l->icon_open : c->l->icon_shut;
             rw.locked = locked(c, nd->entry);
-            if (nd->entry == c->st->entry) rw.part = c->l->part[P_ROW_SEL];
+            if (sel && !game) rw.part = c->l->part[P_ROW_SEL];
             snprintf(key, sizeof key, "entry:%d", i);
+            rw.key = key;
+            y += row(c, &rw, p->cx + ind, p->cy + y, w - ind, &p->view, emit);
+            if (sel && game) {
+                const double in2 = ind + U(c, g->indent);
+                y += tree_demos(c, p, e, p->cx + in2, y, w - in2, emit);
+            }
+            continue;
         } else {
             rw.text = nd->title ? nd->title : "";
             rw.mark_icon = folded(c->st, i) ? c->l->icon_shut : c->l->icon_open;
@@ -913,51 +942,38 @@ static void about_panel(C* c, R box)
     panel(c, WIKI_SCROLL_TEXT, rect(x, y, w, fmax(0, ch - th - sh - bh - gap * (2 + lk))), text_rows, "scroll:text");
 }
 
-/* The theatre in the window's body: a grid column of the stage's bezel, which takes what the
-   others leave, the row and the caption, the layout's gap between, then About or the drawer over
-   the stage.
+/* The theatre in the window's body: the tree's column, as wide as on the normal page and the body's
+   whole height, with the entry's demos under its row (tree_rows); beside it, the layout's gap
+   between, a grid column of the stage's bezel, which takes what the others leave, the row and the
+   caption; then About over the stage.
 
-   THE ROW (#t-row) is a flex row, the controls' gap between its items: the drawer's control, the
-   demos' tabs (keyed demo:i, as the normal page's list, ctl_pair apart), the badge when locked,
-   the demo's title, and the controls with About. The title is the one item that grows and
+   THE ROW (#t-row) is a flex row, the controls' gap between its items: the badge when locked, the
+   demo's title, and the controls with About. The title is the one item that grows and
    shrinks (flex 1 1 0): it takes the row's free space and clips its line to it, so every control
    keeps its size and place whatever the title. `row_cut` says the fixed part did not fit.
 
-   ABOUT AND THE DRAWER ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, which
-   the wiki's pass in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that they lie
-   over, and which the hit map (tagpu_wikistate.c) puts before every other control. At most one is
-   built: About when both are set. */
+   ABOUT'S ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, which the wiki's pass
+   in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that it lies over, and which
+   the hit map (tagpu_wikistate.c) puts before every other control. */
 static void theatre(C* c, R body)
 {
     const WG* g = &c->l->g;
     const WIKIENTRY* e = entry(c);
     const double gap = U(c, g->gap), row_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h);
-    const double cg = U(c, g->ctl_gap), pair = U(c, g->ctl_pair);
-    const int about = c->st->about != 0, drawer = c->st->drawer && !about, wink = light(c, c->l->part[P_WINDOW]);
+    const double cg = U(c, g->ctl_gap), t0 = lu(body.w * g->col[0] / 100);
+    const int about = c->st->about != 0, wink = light(c, c->l->part[P_WINDOW]);
     const int lk = locked(c, c->st->entry) || c->st->sim_locked;
-    const R sbox = rect(body.x, body.y, body.w, body.h - gap - row_h - gap - cap_h);
+    const R sbox = rect(body.x + t0 + gap, body.y, fmax(0, body.w - t0 - gap), body.h - gap - row_h - gap - cap_h);
     const double ry = sbox.y + sbox.h + gap;
-    double tabs = 0, fixed, x = body.x, tw;
-    char key[HUD_KEYLEN], num[16];
-    int i;
+    double fixed, x = sbox.x, tw;
 
+    panel(c, WIKI_SCROLL_TREE, rect(body.x, body.y, t0, body.h), tree_rows, "scroll:tree");
     stage_in(c, sbox);
 
     /* the row: what its fixed items take, then the title's share */
-    for (i = 0; i < e->ndemo; i++) {
-        snprintf(num, sizeof num, "%d", i + 1);
-        tabs += button_w(c, num) + (i ? pair : 0);
-    }
-    fixed = button_w(c, S_ENTRIES) + tabs + (lk ? badge_w(c) : 0) + controls(c, 0, 0, 1, 0) + cg * (3 + lk);
-    tw = fmax(0, body.w - fixed);
-    c->fr->row_cut = fixed > body.w;
-    x += button(c, x, ry, "drawer", S_ENTRIES, -1, drawer, 0) + cg;
-    for (i = 0; i < e->ndemo; i++) {
-        snprintf(key, sizeof key, "demo:%d", i);
-        snprintf(num, sizeof num, "%d", i + 1);
-        x += button(c, x, ry, key, num, -1, i == c->st->demo, 0) + (i + 1 < e->ndemo ? pair : 0);
-    }
-    x += cg;
+    fixed = (lk ? badge_w(c) : 0) + controls(c, 0, 0, 1, 0) + cg * (1 + lk);
+    tw = fmax(0, sbox.w - fixed);
+    c->fr->row_cut = fixed > sbox.w;
     if (lk) x += badge(c, x, ry + half(row_h - U(c, g->badge_h))) + cg;
     if (has_demo(c)) {
         /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height */
@@ -970,16 +986,14 @@ static void theatre(C* c, R body)
     x += tw + cg;
     controls(c, x, ry, 1, 1);
 
-    caption(c, body.x, ry + row_h + gap, body.w);
+    caption(c, sbox.x, ry + row_h + gap, sbox.w);
 
     c->top = 1;
     if (about) {
         const double wa = lu(sbox.w * g->theatre_about / 100);
         about_panel(c, rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
                             sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])));
-    } else if (drawer)
-        panel(c, WIKI_SCROLL_TREE, rect(sbox.x + U(c, g->bz[3]), sbox.y + U(c, g->bz[0]), lu(sbox.w * g->col[0] / 100),
-                                        sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])), tree_rows, "scroll:tree");
+    }
     c->top = 0;
 }
 
@@ -1092,7 +1106,7 @@ static int find_part(const HUDLAY* k, const char* name);
 
 /* one state of the check built: 0, with the state named in `err`, when the build refuses or drops
    an op, a run, a text, a hit or a group (HUDOPS.overflow), or, in the theatre, when its stage is
-   shorter than theatre.stage_min or its row's fixed part is wider than the body */
+   shorter than theatre.stage_min or its row's fixed part is wider than the stage's bezel */
 static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* st,
                        HUDOPS* scratch, WIKIFRAME* fr, char* err, size_t errn)
 {
@@ -1112,7 +1126,7 @@ static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, 
     }
     if (theatre_ && fr->row_cut) {
         if (err && errn)
-            snprintf(err, errn, "wiki layout: the theatre's row of %s, %d demos, is wider than the body at %.0fx%.0f",
+            snprintf(err, errn, "wiki layout: the theatre's row of %s, %d demos, is wider than the stage's bezel at %.0fx%.0f",
                      d->entry[st->entry].id, d->entry[st->entry].ndemo, st->W, st->H);
         return 0;
     }
@@ -1120,8 +1134,8 @@ static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, 
 }
 
 /* THE THEATRE'S OWN STATES of game entry `e`, from the open page `base`: About open with the text
-   scrolled to its limit, the drawer open with the tree scrolled to its limit (the build holds a
-   scroll to its panel's), and Try it yourself */
+   scrolled to its limit, the tree scrolled to its limit (the build holds a scroll to its panel's),
+   Try it yourself, and locked with either label of Try it, the widest row a theatre can have */
 static int check_theatre(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* base, int e,
                          HUDOPS* scratch, char* err, size_t errn)
 {
@@ -1137,53 +1151,14 @@ static int check_theatre(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f
     st.scroll[WIKI_SCROLL_TEXT] = 1e9f;
     if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
     st.about = 0;
-    st.drawer = 1;
     st.scroll[WIKI_SCROLL_TREE] = 1e9f;
     if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-    st.drawer = 0;
     st.try_it = 1;
-    return check_build(l, d, f, &st, scratch, &fr, err, errn);
-}
-
-/* THE TABS' BOUND: a game entry has at most WIKI_THEATRE_TABS demos, which both readers hold to
-   (tagpu_wikidata.h), so the theatre's row is widest with that many tabs, the badge and either
-   label of Try it. Entry 0 made a game entry of WIKI_THEATRE_TABS demos and locked is built so,
-   from the open page `base`, whatever entries the data holds. */
-static int check_tabs(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* base,
-                      HUDOPS* scratch, char* err, size_t errn)
-{
-    WIKIDEMO demo[WIKI_THEATRE_TABS];
-    WIKIDATA syn = *d;
-    WIKIENTRY* en;
-    WIKIPAGE st = *base;
-    WIKIFRAME fr;
-    int i, ok = 1;
-    if (d->nentry < 1) return 1;
-    if (!(en = (WIKIENTRY*)malloc((size_t)d->nentry * sizeof *en))) {
-        if (err && errn) snprintf(err, errn, "wikilay: out of memory");
-        return 0;
-    }
-    memcpy(en, d->entry, (size_t)d->nentry * sizeof *en);
-    for (i = 0; i < WIKI_THEATRE_TABS; i++)
-        if (d->entry[0].ndemo > 0) demo[i] = d->entry[0].demo[i % d->entry[0].ndemo];
-        else {
-            memset(&demo[i], 0, sizeof demo[i]);
-            demo[i].id = "";
-        }
-    en[0].frame = WIKI_FRAME_GAME;
-    en[0].ndemo = WIKI_THEATRE_TABS;
-    en[0].demo = demo;
-    syn.entry = en;
-    st.entry = 0;
-    st.demo = WIKI_THEATRE_TABS - 1;
-    st.caption[0] = 0;
+    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
     st.sim_locked = 1;
-    for (i = 0; i < 2 && ok; i++) {
-        st.try_it = i;
-        ok = check_build(l, &syn, f, &st, scratch, &fr, err, errn);
-    }
-    free(en);
-    return ok;
+    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    st.try_it = 0;
+    return check_build(l, d, f, &st, scratch, &fr, err, errn);
 }
 
 /* THE WORST CASTINGS: every cast bound, its display name 31 em dashes (U+2014, Windows-1252 0x97,
@@ -1275,7 +1250,6 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
             }
             if (en->frame == WIKI_FRAME_GAME && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
         }
-        if (!check_tabs(l, d, f, &st, scratch, err, errn)) return 0;
     }
     return 1;
 }

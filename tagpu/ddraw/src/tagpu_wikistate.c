@@ -643,7 +643,6 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     st->mod = w->mod;
     st->config = w->config <= 2 ? w->config : 0;
     st->about = w->about != 0;
-    st->drawer = w->drawer != 0;
     st->iface = w->iface == 1;
     st->casting = casting_of(w->cast_side);
     memcpy(st->held, w->held, sizeof st->held);
@@ -898,7 +897,7 @@ static int hit_add(int16_t x0, int16_t y0, int16_t x1, int16_t y1, const char* k
     return 1;
 }
 
-/* the page's controls of its top layer (`top` 1: About, the drawer) or of its base layer, last first */
+/* the page's controls of its top layer (`top` 1: About) or of its base layer, last first */
 static void page_hits(int top, int* cut)
 {
     int i;
@@ -920,7 +919,7 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     if (!drew || !s_have) return;
     s_stageCursor = cursor;
     /* THE HIT ORDER, topmost first, because what is drawn over a thing takes its click: the page's
-       top layer (About and the drawer lie over the stage); Leave's question while it is open, its
+       top layer (About lies over the stage); Leave's question while it is open, its
        frame round it counting as No; the stage HUD's controls, its top layer then its base, each
        box cut to the stage's canvas; then the page's base layer, under all of them. Within each,
        the build paints in order, so the last control painted is on top. */

@@ -74,7 +74,6 @@ typedef struct {
                                    1, as tagpu_wikitext_words takes it                          */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
     int      about;             /* the theatre's About panel is open (a frame:game entry's page) */
-    int      drawer;            /* the theatre's Entries drawer is open; About wins when both are */
 } WIKIPAGE;
 
 /* A text style's face (art/hud/layout.json `styles`, by index): tagpu_hudart.c's HUDFACE. */
@@ -173,9 +172,8 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    3840 x 1080, every scroll at 0 unless named: the window closed with its button held, open with
    its close button held, and every entry's every demo playing at 1x and ended at 2x with Try it
    yourself held -- a game entry's in its theatre, which adds About open with the text scrolled to
-   its limit, the drawer open with the tree scrolled to its limit, and Try it yourself -- and entry
-   0 made a locked game entry of WIKI_THEATRE_TABS demos, with either label of Try it, the widest
-   row a theatre can have. A theatre is refused when its stage is shorter than theatre.stage_min or
+   its limit, the tree scrolled to its limit, and Try it yourself, locked with either label of Try
+   it, the widest row a theatre can have. A theatre is refused when its stage is shorter than theatre.stage_min or
    its row's fixed part is wider than the body (WIKIFRAME.row_cut). Each
    state is filled at interface type 1, whose words are the longer, with each entry's
    own names, with each of the `ncasting` castings given, and with the two worst castings there
