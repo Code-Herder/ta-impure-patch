@@ -431,10 +431,10 @@ lies. At the game thread's applied level
   this test named units with no icon. Stock draws such a listed unit dimmed in the grey, as `tagpu_gdi.on`
   shows at 1×, and the native pass does not: a difference at the fog's edge at any level.
 
-*Why it is safe by construction*: every value comes from the unit's own record, its carriers' and
-the main block, read on the game thread that owns them inside the engine's own call; the row is
+*Why it is safe by construction*: every value comes from the unit's own record, its carriers', the
+other listed units', the main block and the fog source this thread packs, read on the game thread that owns them inside the engine's own call; the row is
 bounded by the table's count and every carrier by the unit array. HotUnits is the cull and is
-untouched (one id per slot, `0x485596`). The pick follows the game thread's applied level and the
+untouched (`0x485596`). The pick follows the game thread's applied level and the
 picture the frame's level; the two are equal at rest and differ only while a zoom tween moves —
 a property, not a timing argument: nothing is read across threads. **The icons it answers by are
 those the picture drew**: the render thread draws them only while the unit pass and the marker
@@ -527,6 +527,9 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   give or a console `weight`/`limit` can add hold no type, so they change no picture.
 - **Side pictures are read at the first in-play fill of the process**: the side names then are
   the set's for the process.
+- **A unit the rule does not hide** goes to the engine's test whatever the gather decides: a foreign
+  model listed through a visible box corner with its anchor out of sight draws nothing, and can still
+  be hit, its key beating a drawn icon under the pointer. A nanoframe too.
 - **Overlapping icons** answer by nearness, which need not be the icon drawn on top. An opaque icon
   over a model the rule does not hide has no circle, so two of those are settled by the model's box
   and the engine's key.

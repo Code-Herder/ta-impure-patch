@@ -1183,7 +1183,7 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   `MaxUnits` (`main+0x37EE6`, `0x485568..0x48557D`), the unit array's own count, stored at
   `0x485596` — one entry short of the slot count `10 · MaxUnits + 1`, which slot 0 never needs, and a rect widened to the whole map lists every
   unit in it. The next allocation is the minimap's radar list `main+0x14363`, `100 · MaxUnits`
-  bytes of 10-byte entries (`0x485588..0x4855AA`), also one entry per slot ([ui](ui.html), *The
+  bytes of 10-byte entries (`0x485588..0x4855AA`), `10 · MaxUnits` entries like the hot list ([ui](ui.html), *The
   minimap, located*). A hit test that answers differently — the strategic icons' circle at
   `0x48CE15`, which walks this list once a pick for the nearest icon — changes what `0x48CD80`
   returns, not how many ids the list holds.

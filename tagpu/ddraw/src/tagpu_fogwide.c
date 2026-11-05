@@ -411,8 +411,9 @@ static void fogw_heartbeat(void)
 
 /* THE GAME THREAD'S HAND-OFF. The packet's publisher calls this from the same
    DrawGameScreen the tick above ran in, on this thread, and COPIES the words
-   into the frame packet. There is no other reader: the render thread takes the
-   copy out of its packet and this pointer never leaves the game thread. */
+   into the frame packet; the icon pick (tagpu_zoom.c, icon_refused) reads them
+   on this thread too. The render thread takes the copy out of its packet and
+   this pointer never leaves the game thread. */
 int tagpu_fogwide_source(TAGPU_FOGSRC* out)
 {
     if (!s_init || !s_pubValid || !s_bits) return 0;
