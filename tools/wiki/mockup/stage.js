@@ -262,7 +262,7 @@ const WikiStage = (() => {
     };
     // the game's left sidebar, before the map: the cursor and the overlays are drawn over it
     const F = v.frame ? o.frame || {} : null;
-    const emblems = F ? drawFrame(g, v, F, o, { X: FX, Z: FZ, s, U, C, label, shade, mark, eye: E }) : null;
+    const emblems = F ? drawFrame(g, v, F, o, { X: FX, Z: FZ, s, U, C, W, H, label, shade, mark, eye: E }) : null;
     if (!F && v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade, dz: 0 }); }
     /* THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none of it lands on them --
        the map's width and the rows between the bars, or a players frame's viewport */
@@ -520,7 +520,8 @@ const WikiStage = (() => {
   }
 
   /* THE FRAME'S PARTS under the world, in the game's paint order (research/notes/ingame-wiki-replay-plan.md): the
-     screen's black, palette index 0, the engine's clear; the column from frame row 0 (drawSide, dz -32); the top bar at
+     screen's black, palette index 0, the engine's clear, over the whole canvas, so the room the fit leaves round a
+     frame is a letterbox; the column from frame row 0 (drawSide, dz -32); the top bar at
      frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32, the composed picture's part 0 and 1 drawn
      whole and nearest (bar.js), or two whitebox strips without one; then Impure's emblems in the top bar's right end,
      the wiki emblem in the rewind button's slot, `right[1]` (a replay has no rewind), or in a live frame left of the
@@ -529,14 +530,14 @@ const WikiStage = (() => {
      content rect C, label, shade and mark. Returns the emblems' boxes in canvas pixels, the wiki's then the sprocket's
      (the frame's emblems, wikilaycheck.py pairs them with the game's), or null without a `button` place. */
   function drawFrame(g, v, F, o, k) {
-    const { X, Z, s, C, mark } = k, sbox = (x, z, w, h) => {
+    const { X, Z, s, C, W, H, mark } = k, sbox = (x, z, w, h) => {
       const x0 = snap(X(x)), y0 = snap(Z(z));
       return { x: x0, y: y0, w: snap(X(x + w)) - x0, h: snap(Z(z + h)) - y0 };
     };
     const solid = (b, col) => { g.fillStyle = col; g.fillRect(b.x, b.y, b.w, b.h); };
     const bw = C.w - SIDE_W, Hg = C.h;
     mark('r0');
-    solid(sbox(-SIDE_W, -FRAME_BAR, C.w, Hg), F.black || '#000');
+    solid({ x: 0, y: 0, w: W, h: H }, F.black || '#000');
     mark('side');
     if (v.side) drawSide(g, v, o.side || {}, { ...k, dz: -FRAME_BAR });
     const bars = [sbox(0, -FRAME_BAR, bw, FRAME_BAR), sbox(0, Hg - 2 * FRAME_BAR, bw, FRAME_BAR)];

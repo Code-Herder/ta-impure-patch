@@ -62,8 +62,7 @@ TOL_CURSOR_PX = 1e-6
 # fold -- category rows clicked, by their path in the tree; speed -- 1x or 2x pressed; held -- a
 # control held down; tick -- the demo paused and stepped to that tick, so its caption and keys
 # show; scroll -- each panel's scroll, in pixels, or "max" or "half" of its limit; try -- Try it
-# yourself pressed; about, drawer -- the theatre's About or its Entries drawer opened (#c-about,
-# #c-drawer clicked); question -- a game entry's replay paused at the first tick its Leave question
+# yourself pressed; about -- the theatre's About opened (#c-about clicked); question -- a game entry's replay paused at the first tick its Leave question
 # is open
 CASES = [
     ("1080-stock-quickbuild", (1920, 1080), "mod=stock&entry=quickbuild", {}),
@@ -88,15 +87,15 @@ CASES = [
     ("1024-stock-quickbuild-try", (1024, 768), "mod=stock&entry=quickbuild", {"try": True}),
     # Interface Type 0: the button words of the titles, the paragraphs and the caption are the left-click ones
     ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
-    # the theatre, the page of a game entry, Watching: its row of numbered tabs, About over the
-    # stage's right with the entry's text, the Entries drawer with the tree, and on its stage the
+    # the theatre, the page of a game entry, Watching: its demos under it in the tree, About over the
+    # stage's right with the entry's text, its demos hidden with their category folded, and on its stage the
     # game frame with its HUD, the viewer's cursor and Leave's question (the stage HUD, paired
     # apart: STAGEHUD below)
     ("1024-stock-watching", (1024, 768), "mod=stock&entry=watching", {"tick": 60}),
     ("1080-esc-watching-about-scrolled", (1920, 1080), "mod=escalation&entry=watching&demo=4",
      {"about": True, "scroll": {"text": "max"}}),
-    ("720-tazero-watching-drawer", (1280, 720), "mod=tazero&entry=watching&demo=7",
-     {"drawer": True, "scroll": {"tree": "half"}}),
+    ("720-tazero-watching", (1280, 720), "mod=tazero&entry=watching&demo=7", {}),
+    ("720-tazero-watching-folded", (1280, 720), "mod=tazero&entry=watching&demo=7", {"fold": ["t.1"]}),
     ("4k-stock-watching-try-held", (3840, 2160), "mod=stock&entry=watching&demo=2", {"held": "c-try", "speed": 2}),
     ("3440-mayhem-watching-question", (3440, 1440), "mod=mayhem&entry=watching&demo=7", {"question": True}),
     # a live entry, Rewind a skirmish: the live HUD on the stage and the wiki's emblem at the live place (right[0]);
@@ -147,7 +146,6 @@ COLLECT = r"""async () => {
     else while (sim && sim.tick < A.tick && !sim.done) sim.step();
   }
   if (A.about) $('#c-about').click();
-  if (A.drawer) $('#c-drawer').click();
   if (A.held) $('#' + A.held).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   await raf(); await raf();
   const SCR = { tree: '#tree', demos: '#demos', text: '#text' };
@@ -167,8 +165,8 @@ COLLECT = r"""async () => {
     return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)]; };
   // the box an element is clipped to: its scroller's client box, or the strip that hides its overflow
   const clipOf = e => { const s = e.closest('.scr'); if (s) return client(s); const k = e.closest('#caption, #keys, .wt, #t-title'); return k ? B(k) : null; };
-  // the theatre's About and drawer are the page's top layer (HOPF_TOP), every element inside them
-  const top = e => !!e.closest('#about, #drawer');
+  // the theatre's About is the page's top layer (HOPF_TOP), every element inside it
+  const top = e => !!e.closest('#about');
   const els = [];
   const shown = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]');
   for (const e of document.querySelectorAll('#frame [data-part]')) {
@@ -187,7 +185,7 @@ COLLECT = r"""async () => {
   for (const e of document.querySelectorAll('[data-entry]')) hot(e, 'entry:' + nodes.findIndex(n => n.entry === e.dataset.entry));
   for (const e of document.querySelectorAll('[data-demo]')) hot(e, 'demo:' + e.dataset.demo);
   for (const [id, key] of [['c-play', 'play'], ['c-replay', 'replay'], ['c-x1', 'x1'], ['c-x2', 'x2'], ['c-try', 'try'],
-    ['c-about', 'about'], ['c-drawer', 'drawer']])
+    ['c-about', 'about']])
     if (!$('#' + id).disabled) hot($('#' + id), key);
   hot($('#stage'), 'stage');
   // the discs: a 1 px border round a fill
@@ -281,7 +279,7 @@ COLLECT = r"""async () => {
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes,
     iface: S.iface, casting: (WikiPage.context() || {}).casting || null,
-    theatre: S.theatre, about: S.about && !!$('#win.theatre'), drawer: S.drawer && !!$('#win.theatre') };
+    theatre: S.theatre, about: S.about && !!$('#win.theatre') };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
 
@@ -628,7 +626,7 @@ def main():
                     glyphs |= {c["text"] for c, d in pairs if any(ch in fallback for ch in c["text"])}
                 else:
                     worst = max((max(abs(a - b) for a, b in zip(c["r"], d["r"])) for c, d in pairs), default=0)
-                # the layer: the theatre's About and drawer are the top layer (HOPF_TOP), and nothing else is
+                # the layer: the theatre's About is the top layer (HOPF_TOP), and nothing else is
                 layer = [(c, d) for c, d in pairs if bool(c.get("top")) != bool(d.get("top"))]
                 if layer:
                     extra += f", the layer disagrees {len(layer)}"

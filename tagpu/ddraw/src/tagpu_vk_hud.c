@@ -1213,7 +1213,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* THE WIKI'S LAYER: seven builds in paint order (tagpu_wikistate.h WIKILISTS) -- the page's
            base layer, the stage under its 3D image, the stage over it, a frame:game stage's HUD
            (its base layer, then its top layer) in the HUD's own art and unit, the frame's TOP
-           range, and the page's top layer (About, the drawer). A wiki kit batch's texture is its
+           range, and the page's top layer (About). A wiki kit batch's texture is its
            kit index, which the pass holds after the HUD's parts; the stage HUD's are the HUD's.
            Then the partition (tagpu_huddraw_partition): every list's attachment batches in list
            order, then every list's group batches, so [s_wb0, s_wb1) is one run of the

@@ -1009,7 +1009,8 @@ void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int
     fbox(f, f->cw - r - fr->btn_side - WIKI_SIDE_W, fr->btn_top - WIKIFRAME_BAR, fr->btn_side, fr->btn_side, b);
 }
 
-/* the parts under the world: the screen's black, the column from frame row 0 (dz -32), the top
+/* the parts under the world: the screen's black over the whole canvas, so the room the fit leaves
+   round a frame is a letterbox, the column from frame row 0 (dz -32), the top
    bar at frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32 -- the composed
    picture's part 0 and 1 drawn whole and nearest (HOP_BAR), or two whitebox strips without one --
    then Impure's emblems in the top bar's right end at layout.json's `button` place: the wiki
@@ -1022,8 +1023,7 @@ static void frame_parts(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, c
     double b[4];
     int part;
     mark(c, WIKISTAGE_IN_R0, 0);
-    fbox(f, -WIKI_SIDE_W, -WIKIFRAME_BAR, f->cw, Hg, b);
-    rect(c, b[0], b[1], b[2], b[3], HEX(FRAME_BLACK));
+    rect(c, 0, 0, c->W, c->H, HEX(FRAME_BLACK));
     mark(c, WIKISTAGE_IN_SIDE, 0);
     if (v->has_side) side(c, v, art, f->ox, f->oz, -WIKIFRAME_BAR, f->s, top);
     for (part = 0; part < 2; part++) {

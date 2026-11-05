@@ -22,10 +22,10 @@ const SIDEBARS = ['mod', 'fixture', 'tall', 'off'];
 /* side: the side asked for by name, matched without case against the sidebar layout's sides (sideIndex), kept as asked
    so a pack that loads after the page still finds it; null or no match is the layout's first side. iface: the
    Interface Type the demos play, 1 right-click (the interface they are authored in) or 0 left-click. theatre: the
-   theatre layout forced on whichever entry is open, for viewing it before an entry declares "frame": "game"; about and
-   drawer: the theatre's About panel and its Entries drawer, never both open */
+   theatre layout forced on whichever entry is open, for viewing it before an entry declares "frame": "game"; about: the
+   theatre's About panel */
 const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', side: null, iface: 1, skin: 'kit', sidebar: 'mod', rewind: true,
-  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set(), theatre: false, about: false, drawer: false };
+  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set(), theatre: false, about: false };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
@@ -37,7 +37,7 @@ const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', 
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
   if (SIDEBARS.includes(q.get('sidebar'))) S.sidebar = q.get('sidebar');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
-  S.theatre = q.has('theatre'); S.about = q.has('about'); S.drawer = q.has('drawer') && !S.about;
+  S.theatre = q.has('theatre'); S.about = q.has('about');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod });
@@ -45,7 +45,7 @@ function syncURL() {
   for (const [k, v] of Object.entries({ iface: S.iface, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind })) q.set(k, v);
   if (S.theatre) q.set('theatre', '');
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', '');
-    if (theatre()) for (const k of ['about', 'drawer']) if (S[k]) q.set(k, ''); }
+    if (theatre() && S.about) q.set('about', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
@@ -237,8 +237,15 @@ function renderTree() {
     const p = `${path}.${i}`;
     if (n.entry) {
       const e = ENT[n.entry], title = e && !e.error ? fill(e, e.title) || n.entry : n.entry;
-      return `<li><div class="row leaf${S.entry === n.entry ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
-        + `<span class="dot" data-part="i_dot"><i class="gl">•</i></span><span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div></li>`;
+      const game = !!e && (e.frame === 'game' || (S.theatre && S.entry === n.entry)), open = S.entry === n.entry && game;
+      // a theatre's entry has no demos column: it heads its own demos, the selected row being the demo
+      const mark = !game ? '<span class="dot" data-part="i_dot"><i class="gl">•</i></span>'
+        : `<span class="tw" data-part="${open ? 'i_open' : 'i_shut'}"><i class="gl">${open ? '▾' : '▸'}</i></span>`;
+      const ds = open && Array.isArray(e.demos) ? e.demos : [];
+      return `<li><div class="row leaf${S.entry === n.entry && !open ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
+        + `${mark}<span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div>`
+        + (ds.length ? '<ul>' + ds.map((d, k) => `<li><div class="row${k === S.demo ? ' sel' : ''}" data-part="row" data-demo="${k}"><span>${esc(fill(e, d.title) || d.id)}</span></div></li>`).join('') + '</ul>' : '')
+        + '</li>';
     }
     const shut = S.fold.has(p);
     return `<li><div class="row cat" data-part="row" data-fold="${p}"><span class="tw" data-part="${shut ? 'i_shut' : 'i_open'}"><i class="gl">${shut ? '▸' : '▾'}</i></span><span>${esc(n.title)}</span></div>`
@@ -255,7 +262,6 @@ function renderEntry() {
   $('#demos').innerHTML = ds.length
     ? ds.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(fill(e, d.title) || d.id)}</span></li>`).join('')
     : `<li class="none">${e ? 'No demos' : ''}</li>`;
-  $('#tabs').innerHTML = ds.map((d, i) => `<button data-part="button" data-demo="${i}"${i === S.demo ? ' class="on"' : ''}>${i + 1}</button>`).join('');
   $('#t-title').textContent = ds[S.demo] ? fill(e, ds[S.demo].title) || ds[S.demo].id : '';
   $('#text').innerHTML = err ? `<p class="err">${esc(err)}</p>` : e ? (e.text || []).map(p => `<p>${esc(fill(e, p))}</p>`).join('') : '';
 }
@@ -263,24 +269,22 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
 
 /* ---- the theatre: the page of an entry with "frame": "game" (research/notes/ingame-wiki-replay-plan.md, decisions 6
    and 24). Its parts are the normal page's nodes RE-PARENTED, never copied, so every control and every text stays one
-   element: the stage's bezel heads the body, the controls join the row (#t-row) with the drawer's control and the
-   demos' tabs, the title, subtitle, badge and text go into About (#about), and the tree's panel into the drawer
-   (#drawer). The row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every
-   node back in the normal page's order. ---- */
+   element: the tree's panel keeps the body's left, renderTree putting the entry's demos under its row, the stage's bezel
+   follows it, the controls join the row (#t-row), and the title, subtitle, badge and text go into About (#about). The
+   row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every node back in the
+   normal page's order. ---- */
 function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
 /* a text entry (sim.js checkText): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
 const isText = e => !!e && !e.frame && !(Array.isArray(e.demos) && e.demos.length);
 function arrange() {
   const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
   if (on) {
-    wb.prepend(sbox);
+    $('#p-tree').after(sbox);
     sbox.after(row);
     row.after($('#caption'));
     row.append($('#ctl'));
-    $('#drawer').append($('#p-tree'));
     $('#about').append($('#e-title'), $('#e-sub'), $('#badge'), $('#p-text'));
   } else if (win.classList.contains('theatre')) {
-    wb.prepend($('#p-tree'));
     $('.srow').append(sbox);
     $('#entry').append($('#e-title'), $('#e-sub'), $('#badge'), $('.srow'), $('#caption'), $('#keys'), $('#ctl'), $('#p-text'));
     wb.append(row);
@@ -288,18 +292,9 @@ function arrange() {
   win.classList.toggle('theatre', on);
   $('#entry').classList.toggle('text', isText(entry()));
   $('#about').hidden = !(on && S.about);
-  $('#drawer').hidden = !(on && S.drawer);
   sizeStage();
 }
-/* About and the drawer: opening one closes the other */
-function panel(k) {
-  buttonSound();
-  const open = !S[k];
-  S.about = S.drawer = false; S[k] = open;
-  arrange(); controls(); syncURL();
-}
-$('#c-about').onclick = () => panel('about');
-$('#c-drawer').onclick = () => panel('drawer');
+$('#c-about').onclick = () => { buttonSound(); S.about = !S.about; arrange(); controls(); syncURL(); };
 
 /* ---- the window ---- */
 function setOpen(o) {
@@ -311,8 +306,8 @@ function pick(id, k) {
   S.entry = id; S.demo = k; S.try = S.try && !!id; S.playing = true;
   start(); render();
 }
-// the window opens with About and the drawer closed
-$('#b-wiki').onclick = () => { if (!S.open) { S.about = S.drawer = false; arrange(); controls(); } setOpen(!S.open); };
+// the window opens with About closed
+$('#b-wiki').onclick = () => { if (!S.open) { S.about = false; arrange(); controls(); } setOpen(!S.open); };
 $('#wx').onclick = () => setOpen(false);
 for (const ev of ['mousedown', 'mouseup', 'click', 'dblclick', 'wheel', 'contextmenu'])
   $('#capture').addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
@@ -320,15 +315,18 @@ $('#win').addEventListener('contextmenu', e => e.preventDefault());
 $('#tree').onclick = e => {
   const f = e.target.closest('[data-fold]');
   if (f) { buttonSound(); S.fold.has(f.dataset.fold) ? S.fold.delete(f.dataset.fold) : S.fold.add(f.dataset.fold); renderTree(); return; }
-  // an entry picked, from the drawer too, closes About and the drawer
+  // a demo under its entry, in the theatre
+  const d = e.target.closest('[data-demo]');
+  if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); return; }
+  // an entry picked closes About
   const l = e.target.closest('[data-entry]');
   if (!l) return;
-  buttonSound(); S.about = S.drawer = false;
+  buttonSound(); S.about = false;
   if (l.dataset.entry !== S.entry) { S.try = false; pick(l.dataset.entry, 0); }
   else { arrange(); controls(); syncURL(); }
 };
-// a demo's row on the normal page, or its tab in the theatre
-$('#demos').onclick = $('#tabs').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
+// a demo's row on the normal page
+$('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
    Try it yourself creates the same scene with no inputs and hands the stage to the player. A frame:game entry's demo is
@@ -416,7 +414,7 @@ function controls() {
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
-  $('#c-about').classList.toggle('on', S.about); $('#c-drawer').classList.toggle('on', S.drawer);
+  $('#c-about').classList.toggle('on', S.about);
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
@@ -655,7 +653,7 @@ function drawReplay() {
    question's rects while it is open -- Yes, No, its body, then the frame round it, which counts as No -- then against
    the stage HUD's controls, topmost first, each box on the device pixels it is drawn on (hud.js hint's rule), and
    anything else on the stage is taken and does nothing: the viewer is not seat 0, so the world and the column take no
-   click. About and the drawer lie over the stage and take their own clicks first. ---- */
+   click. About lies over the stage and takes its own clicks first. ---- */
 const frameTry = () => !!rep && repTry && S.try && !held();
 const canvasPoint = e => { const r = stage.getBoundingClientRect(); return { x: (e.clientX - r.left) * stage.width / r.width, y: (e.clientY - r.top) * stage.height / r.height }; };
 const inBox = (b, q) => q.x >= b.x && q.x < b.x + b.w && q.y >= b.y && q.y < b.y + b.h;
@@ -918,7 +916,7 @@ window.addEventListener('pointerup', () => { for (const b of document.querySelec
    of each role: ---- */
 const ROLE = {
   window_title: ['#win .wt'], entry_title: ['#e-title'],
-  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li', '#t-title'], demo_num: ['#demos li .n'],
+  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li', '#tree [data-demo]', '#t-title'], demo_num: ['#demos li .n'],
   subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
   control: ['#ctl button', '#t-row button'], badge: ['#badge', '#t-badge'], keycap: ['.kc'], keys: ['#keys'],
 };

@@ -52,7 +52,7 @@
           <div id="e-sub"></div>
           <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
-            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="stagehud" class="hud" hidden></div><canvas id="stagetop"></canvas><div id="drawer" hidden></div><div id="about" data-part="panel" hidden></div></div>
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="stagehud" class="hud" hidden></div><canvas id="stagetop"></canvas><div id="about" data-part="panel" hidden></div></div>
           </div>
           <div id="caption"></div>
           <div id="keys"></div>
@@ -66,8 +66,6 @@
           <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
         </section>
         <div id="t-row">
-          <button id="c-drawer" data-part="button">Entries</button>
-          <span id="tabs"></span>
           <div id="t-badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div id="t-title"></div>
         </div>
@@ -85,10 +83,10 @@ it names none of them), <code>iface=1|0</code> (the Interface Type: 1 right-clic
 <code>gfx=game</code>, its pictures from the gitignored <code>gfx/side/&lt;mod&gt;/</code>, the fixture of <code>art/wiki/side/</code> where the mod has
 none; a fixture by name; or no sidebar. With the mod's own layout the demos play that side's units, its casting, and
 under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>theatre</code> (the theatre layout, which an entry with <code>"frame": "game"</code> takes, forced on
-whichever entry is open: the stage across the window over a row of the demos' numbered tabs; an entry with
+whichever entry is open: the tree, its entry's demos under it, beside the stage; an entry with
 <code>"frame": "game"</code> also plays its demos as replays on the whole game frame, with the replay HUD on it, and may be opened by
-<code>entry=</code> before the tree lists it), <code>about</code> and <code>drawer</code> (the
-theatre's About panel or its Entries drawer open, About when both are given), <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+<code>entry=</code> before the tree lists it), <code>about</code> (the
+theatre's About panel open), <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
 resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
 <script src="sim.js"></script>
 <script src="replay.js"></script>

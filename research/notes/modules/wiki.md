@@ -16,8 +16,8 @@ device's resolution on the Vulkan lane in every level, a replay's included. Whil
 open the engine takes no input, and a single-player level is paused. Try it yourself hands the
 stage to the player: the demo's scene simulated on the game thread, driven by the pointer, the
 buttons and the keys the window takes anyway. An entry with `"frame": "game"` (Watching, under
-Replays) is laid out as the theatre instead -- the stage across the window over a row of numbered
-demo tabs, with About and the Entries drawer over it -- and its stage is a whole game frame: the
+Replays) is laid out as the theatre instead -- the tree always beside the stage, the entry's demos under
+its row, with About over the stage -- and its stage is a whole game frame: the
 running mod's two bars in its own art, the watcher's column, the map, and a replay HUD of the
 stage's own whose controls the demos press on a replay of the wiki's simulation, or the player in
 Try it yourself. A live game entry (Rewind a skirmish) shows the player's own screen instead -- seat

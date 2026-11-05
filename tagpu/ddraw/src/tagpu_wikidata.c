@@ -1660,8 +1660,6 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
             strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked);
     }
     else if (!screen(&r, e, tj_get(root, "screen"))) {}
-    else if (e->frame == WIKI_FRAME_GAME && count(tj_get(root, "demos")) > WIKI_THEATRE_TABS)
-        refuse(&r, "is a game entry with more demos than the theatre's tabs", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
     else if (!strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked)) {}
     else if (!defs(&r, e, tj_get(root, "units"))) {}

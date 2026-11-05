@@ -183,20 +183,21 @@ Sweep**; in Camera, **Mega map and strategic icons**, a text entry
   the text taking the stage's room; the demos column says No demos (`wiki.js` `#entry.text`,
   `tagpu_wikilay.c` `entry_col`). No `stage`, `play`, `replay`, `x1`, `x2` or `try` hit is drawn,
   so the frame record's stage rect stays zero and nothing looks up a stage for it.
-- **An entry with `"frame": "game"` takes the theatre layout instead**: the stage's bezel across the
-  window's body; under it one row -- Entries (the tree, as a drawer over the stage's left,
-  `columns[0]` wide), the demos as numbered tabs keyed `demo:i` (at most `WIKI_THEATRE_TABS`, 9,
-  which both readers hold, so the row's fixed part fits at 1024 × 768 by construction), the row's
-  badge when locked, the demo's title clipped to what is left, then play, replay, 1×, 2×, Try it
-  and About (the entry's title, subtitle, badge and scrolling text, in a panel over the stage's
-  right, `theatre.about` % of the body); then the caption across the body. About and the drawer are
-  never both open: opening one closes the other, and picking an entry closes both. No keys strip and
-  no demos column. `art/wiki/layout.json` `theatre` holds `about` (38) and `stage_min` (240 units,
-  the stage's least height, which the load-time check refuses below); in the DLL
-  `tagpu_wikilay.c` builds it (`WIKIPAGE.about`/`drawer`, every op of both panels `HOPF_TOP` and
-  built last, so the hit map holds them first), and `tagpu_wikilay_check` builds every game entry's
-  theatre with About open and scrolled to its limit, the drawer open at its limit, Try it held,
-  and a made-up locked entry of 9 tabs with either Try it label.
+- **An entry with `"frame": "game"` takes the theatre layout instead**: the tree stays in its
+  column, `columns[0]` wide and the body's whole height, always on screen, and is the only way to
+  pick an entry or a demo. Such an entry's row in the tree, on every page, carries the open or shut
+  mark instead of the dot; open, it heads its demos, keyed `demo:i`, one indent deeper and without
+  their numbers, and the selected row is the demo. Beside the tree, the layout's gap between, the
+  stage's bezel takes what is left; under it one row -- the row's badge when locked, the demo's
+  title clipped to what is left, then play, replay, 1×, 2×, Try it and About (the entry's title,
+  subtitle, badge and scrolling text, in a panel over the stage's right, `theatre.about` % of the
+  bezel's width); then the caption, both as wide as the bezel. Picking an entry closes About. No
+  keys strip and no demos column. `art/wiki/layout.json` `theatre` holds `about` (38) and
+  `stage_min` (240 units, the stage's least height, which the load-time check refuses below); in the
+  DLL `tagpu_wikilay.c` builds it (`WIKIPAGE.about`, every op of the panel `HOPF_TOP` and built
+  last, so the hit map holds them first), and `tagpu_wikilay_check` builds every game entry's
+  theatre with About open and scrolled to its limit, the tree at its limit, Try it held, and locked
+  with either label of Try it, the widest row there is, which it refuses wider than the bezel.
 - **Columns** take fixed shares of the window and scale with it; long names wrap.
 - **A mod that turns the feature off**: a red circle with "Turned off in this mod" on the entry's
   page, and the same mark on its row in the tree. Its demos still play.
@@ -443,8 +444,8 @@ A strip above the stage, outside the game frame:
 | Interface | the Interface Type: right-click (1, the default) or left-click (0) | `iface=1` / `iface=0` |
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
-| Theatre | the theatre layout, which every entry with `"frame": "game"` takes (Watching; [the replay plan](ingame-wiki-replay-plan.md), decision 6), forced on whichever entry is open: the stage across the window's body, one row of the Entries control, the demos' numbered tabs, the demo's title, the controls and About, then the caption. A page entry forced so keeps its own stage | `theatre` |
-| About, drawer | the theatre's About panel (the entry's title, subtitle, badge and text, over the stage's right `theatre.about` %) or its Entries drawer (the tree, over the stage's left), never both: About when both are given | `about` / `drawer` |
+| Theatre | the theatre layout, which every entry with `"frame": "game"` takes (Watching; [the replay plan](ingame-wiki-replay-plan.md), decision 6), forced on whichever entry is open: the tree with the entry's demos under it beside the stage, under the stage one row of the demo's title, the controls and About, then the caption. A page entry forced so keeps its own stage | `theatre` |
+| About | the theatre's About panel (the entry's title, subtitle, badge and text, over the stage's right `theatre.about` %) | `about` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
 | Skin | the kit, or the flat whitebox | `skin=kit` / `skin=whitebox` |
 | Sidebar | the detected mod's pack (the fixture where it has none), the fixture, the 768-row fixture, or none | `sidebar=mod` / `fixture` / `tall` / `off` |
@@ -1727,7 +1728,8 @@ draws it.
   rows) game pixels -- the column at x 0..127, the top bar on rows 0..31 and the bottom bar on the
   last 32 right of the column, the map at the viewport's top left (the camera at 0, 0, zoom 1),
   fitted from the column's left edge and the top bar's top. The data rule above keeps it 4:3 or
-  wider, so the replay HUD fits.
+  wider, so the replay HUD fits. The whole canvas is the screen's black first, so the room the fit
+  leaves round a frame on the theatre's stage is a letterbox.
 - **A players entry's screen** (`frame.js` `size(M, sideH, screen)`, `tagpu_wikiframe_size`): the
   frame of its `screen` (sw × sh cells) instead, Wg = 128 + 16 sw and Hg = max(16 sh + 64, the
   column's rows), and **the viewport** 16 sw × (Hg − 64) world units, never deeper than the map (its
@@ -1902,7 +1904,7 @@ draws it.
   and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 744 bytes with
   it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
   each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
-  fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about`, `drawer` and
+  fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about` and
   `leave_held` and the replay's serial `rep_serial` in the head, a count the game thread
   increments whenever it makes or frees the replay. The reader takes `frame` only from an area of the whole size
   (`tagpu_pk_wiki_frame`). In Try it on a live frame it also answers, once a fill, whether the
@@ -1920,7 +1922,7 @@ draws it.
   of the record's `bar`: on a live frame the economy moves those about once a tick), bumping a
   generation `tagpu_vk_hud.c` sends whole as `HUD_TEX_BAR` (`HOP_BAR` ops); splits the frame's TOP
   range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
-  (About, the drawer), the question, the stage HUD cut to the canvas, the page. Each hit carries
+  (About), the question, the stage HUD cut to the canvas, the page. Each hit carries
   its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
   `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 072 bytes), with the stage HUD's playhead run
   as drawn, the end it stood for, on a live strip the span it stood for (`hud_first`, `hud_G`:
@@ -2104,8 +2106,8 @@ draws it.
   rect and its scissor, the minimap's box and dots, `HOP_TRI`, the rings and brackets) and the
   overlays on every other entry's watch and past frames, and `tests/huddrawtest.py` (native,
   ASan+UBSan) `HOP_TRI`'s instance and refusals and the chart slots kept apart.
-- **`python3 tools/wiki/wikilaycheck.py`**: five theatre cases on Watching (1024 × 768 at tick 60,
-  1920 × 1080 with About scrolled, 1280 × 720 with the drawer, 4K with Try it held at 2×, 3440 ×
+- **`python3 tools/wiki/wikilaycheck.py`**: six theatre cases on Watching (1024 × 768 at tick 60,
+  1920 × 1080 with About scrolled, 1280 × 720 alone and with Replays folded, 4K with Try it held at 2×, 3440 ×
   1440 paused on Leave's question) and six on Rewind (idle, the strip open, the glide back from
   Back to now, the past, Play from here armed, a fork played on) and six on Take over (the button
   down while the picker is sought, the picker open, the lanes under Escalation at 2560 × 1440, a
@@ -2298,7 +2300,7 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   of a small game on the theatre's whole game frame ([below](#the-game-frame-on-the-stage-the-replay-entries)).
   Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`) refuse one that breaks
   these rules:
-    - **at most 9 demos** (`WIKI_THEATRE_TABS`) and no `pace`;
+    - **no `pace`**;
     - **every scene carries `seats`**: 1 to 4 (`WIKI_SEATS`) objects `{name, metal, energy}`, the
       seat its index, the name 1 to 31 bytes with no `{` (HUDSEAT's name field), metal and energy
       the starting storage, integers 200 to 10 000 as the skirmish settings allow; every unit's

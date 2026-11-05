@@ -21,8 +21,8 @@ void tagpu_wikistate_present(const struct TAGPU_FRAME* f);
 /* A FRAME'S WIKI, in paint order (tagpu_vk_hud.c draws them so): the page's base layer, the
    stage's ops under its 3D image, the image, those over it, a frame:game stage's HUD -- its base
    layer, then its top layer, in the replay HUD's own art -- then the frame's TOP range (Leave's
-   question, the viewer's cursor), and last the page's top layer: About and the drawer, the only
-   HOPF_TOP ops of the page (tagpu_wikilay.c theatre), which lie over the stage and all of it. The
+   question, the viewer's cursor), and last the page's top layer: About, the only HOPF_TOP ops of
+   the page (tagpu_wikilay.c theatre), which lie over the stage and all of it. The
    stage lies inside the page's bezel where no later op of the page's base layer reaches. */
 typedef struct {
     HUDOPLIST     page, stage, over, top;   /* the wiki's kit: page, stage under, stage over, TOP */

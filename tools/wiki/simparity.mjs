@@ -959,10 +959,6 @@ function gameRefusalCases(game, page) {
   g('frame "page"', 'refused', e => { e.frame = 'page'; });
   g('frame null', 'refused', e => { e.frame = null; });
   g('a pace', 'refused', e => { e.pace = { build: 2 }; });
-  // one numbered tab a demo in the theatre's row: at most THEATRE_TABS (tagpu_wikidata.h WIKI_THEATRE_TABS)
-  const tabs = n => e => { for (let k = 1; k < n; k++) e.demos.push({ ...clone(game.demos[k % game.demos.length]), id: `tab${k}` }); };
-  g(`${WikiSim.THEATRE_TABS} demos`, 'accepted', tabs(WikiSim.THEATRE_TABS));
-  g(`${WikiSim.THEATRE_TABS + 1} demos`, 'refused', tabs(WikiSim.THEATRE_TABS + 1));
   /* the game frame's 4:3 bound (tagpu_wikidata_frame_fits): the narrowest map that makes a 4:3 frame accepted and one
      cell narrower refused, at rows under the deepest column's (the map grown beside it decides) and at rows past them
      (the scene's own rows do); every scene's map resized together, as sceneOf asks */
