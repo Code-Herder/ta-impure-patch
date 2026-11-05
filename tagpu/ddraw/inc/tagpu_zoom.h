@@ -186,8 +186,9 @@ float tagpu_zoom_lever(void);
 /* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
 void  tagpu_zoom_presented(void);
 
-/* RENDER THREAD: the session goes to GDI, so no frame will end a cut or read a
-   view again: nothing may stay transformed or refused. */
+/* RENDER THREAD: the session goes to GDI, so no frame will end a cut, read a view
+   or post a record again: this ends the cut, gives the engine its terrain back and
+   posts the record that hands it its own rect, rate and level. */
 void  tagpu_zoom_render_gone(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
@@ -406,7 +407,8 @@ void  tagpu_zoom_follow_stop(unsigned E);
 int   tagpu_zoom_follow_state(unsigned E);
 
 /* GAME THREAD, for the packet the in-play draw publishes: the epoch the apply wrote the camera
-   for and its level x 65536, both 0 when none. */
+   for and its level x 65536, both 0 when none; and the Follow whose reach cap is
+   in force, 0 when none ("the reach ladder"). */
 void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16, unsigned* last);
 
 /* GAME THREAD: what the apply has done so far, for the packet's

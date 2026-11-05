@@ -86,7 +86,7 @@ struct TAGPU_ORDART_FRAME;
 int  tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
                          float alpha, float wx, float wz);
 /* One strategic icon (tagpu_icon.c), centred on (ax, ay): `edge_w` x
-   `edge_h` SCREEN px at every zoom, its corner on the device grid. `r` is its
+   `edge_h` SCREEN px at every zoom, its corner on a whole game pixel. `r` is its
    art's rect in tagpu_icontype_art's atlas with `shape` 0, or NULL with
    `shape` a generated shape, TAGPU_ICLS_* + 1, decided per fragment
    (inc/tagpu_icon_rule.h). Filled in palette index `team`, white when `sel`,

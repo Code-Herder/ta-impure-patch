@@ -243,7 +243,8 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 The in-game panel is `PANEL_H` 438 px tall for thirteen rows: `ROW_Y0 34 + ROW_PITCH 28 × 12 = 370`,
 `ROW_H` 20, so the last row (Mega map zoom in) ends at 390, the floor rule `DIV_BOT` is at 398 and the
 Resource profile caption sits under it at 406. At 640×480 the panel hangs from engine row 32 and
-ends at 470. *Mega map zoom in* is this panel's alone: the front-end screen's two columns are full
+ends at 470, over the bottom bar's rows 448..469 at x 320..623, whose presses it takes while it is
+open. *Mega map zoom in* is this panel's alone: the front-end screen's two columns are full
 (`vis_shown`), so a player sets it in game or in `impure.cfg`. One define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
 are all sized from it — and the panel is **composed at runtime** from the player's install rather
 than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's

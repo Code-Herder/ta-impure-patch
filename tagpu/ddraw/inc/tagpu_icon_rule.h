@@ -189,11 +189,11 @@ static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int size_
      CONS       circle   |p| <= 0.92, with a plus
      COMBAT     circle
      UNKNOWN    circle, hollow
-   INK, the outline, is a texel inside whose neighbour w device px away on
+   INK, the outline, is a texel inside whose neighbour w game px away on
    either axis is outside, w = max(1, round(edge / 12)); the PLUS is ink, two
-   arms to 0.45 at least one device px and 1/7 wide; a HOLLOW shape keeps a
+   arms to 0.45 at least one game px and 1/7 wide; a HOLLOW shape keeps a
    RING, the texels whose distance to the silhouette's edge is at most
-   max(0.45 * its inradius, 1 device px), and its centre is outside. The ring
+   max(0.45 * its inradius, 1 game px), and its centre is outside. The ring
    follows the shape's own inradius, not the ink's width: a band of a fixed
    number of w filled an 8-px circle and was wider than the triangle's
    incircle at every size, so the hollow classes looked like their solid twins
@@ -202,9 +202,9 @@ static __inline int tagpu_icon_eval(const TAGPU_ICON_VIEW* v, float z, int size_
    asserts each hollow class differs from its solid twin at every size from
    the smallest icon up.
 
-   THE SHAPE IS DECIDED PER FRAGMENT from the quad's own (+-1, +-1) and its
-   uv per device px, so it needs no atlas and no re-raster when the size or the
-   supersampling changes. tagpu_icon_shape() below and TAGPU_GLSL_ICON_FN, the
+   THE SHAPE IS DECIDED PER GAME PIXEL from the quad's own (+-1, +-1) and its
+   edge, so it needs no atlas and no re-raster when the size or the supersampling
+   changes, and is the same at every supersampling. tagpu_icon_shape() below and TAGPU_GLSL_ICON_FN, the
    marker pass's fragment stage (tagpu_mark.c), are the same function, line
    for line; the host test checks this one. */
 enum { TAGPU_ICON_SIL_CIRCLE, TAGPU_ICON_SIL_SQUARE, TAGPU_ICON_SIL_DIAMOND, TAGPU_ICON_SIL_TRIANGLE };
@@ -254,7 +254,7 @@ static __inline int tagpu_icon_cls_hollow(int cls)
 }
 
 /* The generated shape of class `cls` at p = (px, py) in [-1, 1]^2, y down;
-   (fwx, fwy) = uv per device px. 0 outside, 1 fill, 2 ink. */
+   (fwx, fwy) = uv per game px. 0 outside, 1 fill, 2 ink. */
 static __inline int tagpu_icon_shape(int cls, float px, float py, float fwx, float fwy)
 {
     const int sil = tagpu_icon_cls_sil(cls);

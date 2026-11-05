@@ -973,7 +973,7 @@ typedef struct TAGPU_PACKET {
                                    follow lever")                             */
     uint32_t follow_last;       /* the last Follow or Jump the apply took the
                                    reach for, in force or not ("the reach
-                                   ladder"); 0 = none since the level began   */
+                                   ladder"); 0 = no cap in force               */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,

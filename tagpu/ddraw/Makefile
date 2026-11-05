@@ -91,7 +91,7 @@ endif
 # memory, which is what Wine reports as PagefileUsage -- the `vk: VA`
 # committed-peak. At ld's default 512 the agreement is a lottery that any
 # change to the code before a section can flip: `.rsrc` (13.8 MiB, the art)
-# moved from 0x438000 to 0x43AC00 between two builds a few KB apart and the
+# moved by 11 KB between two builds a few KB apart and the
 # process's committed peak rose 13.7 MB before Vulkan was even up (MEASURED
 # 2026-11-03, Town & Country and Seven Islands, every run). Page alignment makes
 # every section mappable whatever precedes it, for at most a page of padding a

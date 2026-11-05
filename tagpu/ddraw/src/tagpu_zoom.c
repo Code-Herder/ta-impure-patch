@@ -32,6 +32,7 @@
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_terrown.h"
 #include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
@@ -910,6 +911,11 @@ void tagpu_zoom_render_gone(void)
 {
     cut_end();
     s_live = 0;
+    /* the apply goes on running on the last record (render_gdi.c posts none), so
+       without this the scroll step, the minimap box and the pick stay at the last
+       level, and the engine's terrain stays skipped */
+    tagpu_terrown_set_skip(0);
+    tagpu_zoom_frame_end();
 }
 
 void tagpu_zoom_presented(void)
@@ -2363,7 +2369,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         s_gFolLast = s_fol.epoch;
     } else if (c && c->follow_free == s_gFolLast) {
         s_gFolCap = 0.0f;
-    s_gFolLast = 0;
+        s_gFolLast = 0;
     }
     if (s_gFolCap > 0.0f && s_gFolCap < s_gReach) s_gReach = s_gFolCap;
     /* the icons answer the pick only from a record of THIS level's epoch: a
@@ -3263,7 +3269,8 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    one before it) -- except a leaving of `megazoom=tadr`, whose eye term is
    `(a - c)` times the whole distance it leaves from (up to half a viewport times
    1/floor), so its new view is not inside the old one and only a cut past its
-   deadline can be held here ("the mega map's cut") -- and for any displacement the game thread has not applied
+   deadline can be held here ("the mega map's cut") -- and for any displacement
+   the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
    of drawing past it. While a frame is held, a click is still mapped by the

@@ -367,12 +367,13 @@ static const char* FS =
        selected, in the set's own SelectedColor, and its FillColor marker
        takes the team colour, or white.
        Any other shape is generated here, from the quad's own (+-1, +-1) and
-       fwidth -- taken before any branch on the shape, in control flow every
-       fragment of the draw shares -- so it needs no atlas and no re-raster
-       when the size or the supersampling changes: taIconShape is
-       tagpu_icon_shape() of inc/tagpu_icon_rule.h, which the host test checks. */
+       its edge in game pixels (the colour slot), so it needs no atlas and no
+       re-raster when the size or the supersampling changes. It is decided once
+       per GAME pixel, at that pixel's centre, so every supersampled fragment of
+       one agrees and a line of ink is never averaged with the fill: the shape
+       is the same at every ss. taIconShape is tagpu_icon_shape() of
+       inc/tagpu_icon_rule.h, which the host test checks. */
     "  } else if (uText == 2) {\n"
-    "    vec2 fw = fwidth(vUV);\n"
     "    int t = int(vWorld.x + 0.5), q = int(vWorld.y + 0.5);\n"
     "    int sh = q >> 8;\n"
     "    bool sel = (t & 256) != 0;\n"
@@ -382,7 +383,9 @@ static const char* FS =
     "      if (pi == uIconSel) { if (!sel) discard; pi = uIconSelCol; }\n"
     "      else if (pi == uIconFill) pi = sel ? uIconWhite : (t & 255);\n"
     "    } else {\n"
-    "      int m = taIconShape(sh - 1, vUV, fw);\n"
+    "      float g = 2.0 / floor(vCol + 0.5);\n"
+    "      vec2 p = (floor((vUV + 1.0) / g) + 0.5) * g - 1.0;\n"
+    "      int m = taIconShape(sh - 1, p, vec2(g));\n"
     "      if (m == 0) discard;\n"
     "      pi = m == 2 ? uIconInk : (sel ? uIconWhite : (t & 255));\n"
     "    }\n"
@@ -698,8 +701,9 @@ int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
     return 1;
 }
 
-/* The corner of a quad whose texels are whole game pixels, by pre-image. Half a
-   game pixel is a device pixel at ss 2, and from there the presented image
+/* The corner of a quad laid out in whole game pixels, by pre-image: art whose
+   texel is k game pixels, and a generated shape decided once per game pixel. Half
+   a game pixel is a device pixel at ss 2, and from there the presented image
    averages each 1-px line of ink with the fill beside it: the same icon reads
    black at one camera position and washed at the next. */
 static void snap_game_px(float* x, float* y)
@@ -718,7 +722,7 @@ static void snap_game_px(float* x, float* y)
 int tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int shape,
                          int edge_w, int edge_h, int team, int sel, int alpha)
 {
-    float x0, y0, x1, y1, u0, v0, u1, v1, tw, sa;
+    float x0, y0, x1, y1, u0, v0, u1, v1, tw, sa, ec;
     const int i = s_nicon;
     if ((unsigned)s_nicon + QUADV > s_iconCap) { s_iconover++; return 0; }
     x0 = ax - (float)((double)edge_w * 0.5 * s_px);
@@ -733,14 +737,16 @@ int tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int
     } else {
         u0 = v0 = -1.0f; u1 = v1 = 1.0f;
     }
+    /* the colour slot: the edge a generated shape's cells are counted from */
+    ec = r ? 0.0f : (float)edge_w;
     tw = (float)((team & 255) | (sel ? 256 : 0));
     sa = (float)((alpha & 255) | ((shape & 15) << 8));
-    put_at(s_icon, i + 0, x0, y0, u0, v0, tw, sa, 0.0f);
-    put_at(s_icon, i + 1, x1, y0, u1, v0, tw, sa, 0.0f);
-    put_at(s_icon, i + 2, x0, y1, u0, v1, tw, sa, 0.0f);
-    put_at(s_icon, i + 3, x1, y0, u1, v0, tw, sa, 0.0f);
-    put_at(s_icon, i + 4, x1, y1, u1, v1, tw, sa, 0.0f);
-    put_at(s_icon, i + 5, x0, y1, u0, v1, tw, sa, 0.0f);
+    put_at(s_icon, i + 0, x0, y0, u0, v0, tw, sa, ec);
+    put_at(s_icon, i + 1, x1, y0, u1, v0, tw, sa, ec);
+    put_at(s_icon, i + 2, x0, y1, u0, v1, tw, sa, ec);
+    put_at(s_icon, i + 3, x1, y0, u1, v0, tw, sa, ec);
+    put_at(s_icon, i + 4, x1, y1, u1, v1, tw, sa, ec);
+    put_at(s_icon, i + 5, x0, y1, u0, v1, tw, sa, ec);
     s_nicon += QUADV;
     return 1;
 }

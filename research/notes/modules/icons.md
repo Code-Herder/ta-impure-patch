@@ -148,18 +148,19 @@ A grammar, not art: the domain by silhouette, a builder by a mark.
 | COMBAT | the circle |
 | UNKNOWN | the circle, hollow |
 
-**Ink**, the outline, is a texel inside whose neighbour `w` device px away on either axis is
-outside, `w = max(1, round(edge/12))`; the **plus** is ink, two arms to 0.45, at least one device
+**Ink**, the outline, is a texel inside whose neighbour `w` game px away on either axis is
+outside, `w = max(1, round(edge/12))`; the **plus** is ink, two arms to 0.45, at least one game
 px and 1/7 wide; a **hollow** shape keeps a ring, the texels whose exact distance to the
-silhouette's edge is at most `max(0.45 × its inradius, 1 device px)` — the circle's radius 0.92,
+silhouette's edge is at most `max(0.45 × its inradius, 1 game px)` — the circle's radius 0.92,
 the triangle's incircle 0.5652 — and its centre is outside. Tied to the inradius, the hole is
 55 % of the incircle wherever the 1-px floor does not bind; the circle's opens from 4 px, the
 triangle's from 5. The fill is the owner's team colour, **white when selected** — `+0x110` bit 4
 under the engine's SelBoxes gate (the packet's `ui_gates` bit 2), the selection rect's own test —
 and the ink the GUI's black.
 
-**Decided per fragment** from the quad's own `(±1, ±1)` and its `fwidth`, so a shape needs no atlas
-and no re-raster when the size or the supersampling changes. `tagpu_icon_shape()` and the marker
+**Decided once per game pixel**, at its centre, from the quad's own `(±1, ±1)` and its edge (the
+vertex's colour slot), so a shape needs no atlas and no re-raster when the size or the supersampling
+changes, and is the same picture at every supersampling: no line of ink is averaged with the fill. `tagpu_icon_shape()` and the marker
 pass's `taIconShape` (`TAGPU_GLSL_ICON_FN`) are the same function line for line; the host test
 checks the C one (symmetry, ink on every border texel, the plus only on builders, a hollow centre
 open and a solid one closed, the nine classes pairwise different from 7 to 128 px, and the 16-px
@@ -353,14 +354,14 @@ under the orders, the bars, the digits and every UI layer, not fogged (the gathe
 unit it judged visible, or a radar contact), not depth-tested, blended at the icon's alpha.
 
 `tagpu_mark_emit_icon` puts one quad of `edge` screen px on the unit's anchor, its corner on a whole
-game pixel (`snap_game_px`, so at supersampling each 1-px line of ink covers whole presented pixels
-and is not averaged with the fill), into a bucket of one quad a packet unit. **The bucket is grown before
+game pixel (`snap_game_px`, so art and generated shapes, both laid out in whole game pixels, cover
+whole presented pixels), into a bucket of one quad a packet unit. **The bucket is grown before
 any icon is decided** (`tagpu_mark_icon_room`, asked by the native pass in the same condition as
 `tagpu_mark_draws`): a frame on which it would not grow decides no icon and hides no model, and a
 frame queues at most one icon a unit, so an icon of a frame that hid a model always has its quad. The fill colour, the
 selection, the alpha and the shape **ride the vertex's world slot as two integers under 2¹²** —
 `team + 256 · selected` and `alpha + 256 · shape` — so the interpolated value rounds back to the
-integer at every fragment. The marker FS's `uText == 2` is the icon branch (text is `uText == 1`):
+integer at every fragment; a generated shape's edge rides the colour slot. The marker FS's `uText == 2` is the icon branch (text is `uText == 1`):
 shape 0 samples the icon atlas (the key discarded, the selected marker discarded unless selected
 and then drawn as `uIconSelCol`, the fill marker taking the team colour or white), any other shape
 is `taIconShape`. Its five uniforms `uIconFill`, `uIconSel`, `uIconWhite`, `uIconInk` and

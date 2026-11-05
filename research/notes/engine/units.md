@@ -182,6 +182,9 @@ outside the apply frame.
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
 
+Its static initialiser pushes the process-exit destructor `0x488A00` at `0x4889D5` and registers it
+through `0x4E4AC0` *[INFERRED: the CRT's atexit]*, so that destructor runs only as the process leaves.
+
 **What it is.** A sorted array of 8-byte entries `{name, mask}` between `*(u8**)0x51E6B4` (begin)
 and `*(u8**)0x51E6B8` (end), the two dwords after `0x51E6B0`, the object `0x488FB0` takes as
 `this`. `name` is a refcounted string object whose one dword is the text (`0x488C50` hands
