@@ -352,8 +352,9 @@ index`. **Place** — the marker pass's second draw, right after the selection r
 under the orders, the bars, the digits and every UI layer, not fogged (the gather placed each over a
 unit it judged visible, or a radar contact), not depth-tested, blended at the icon's alpha.
 
-`tagpu_mark_emit_icon` puts one quad of `edge` screen px on the unit's anchor, its corner on the
-device grid (`snap_device`), into a bucket of one quad a packet unit. **The bucket is grown before
+`tagpu_mark_emit_icon` puts one quad of `edge` screen px on the unit's anchor, its corner on a whole
+game pixel (`snap_game_px`, so at supersampling each 1-px line of ink covers whole presented pixels
+and is not averaged with the fill), into a bucket of one quad a packet unit. **The bucket is grown before
 any icon is decided** (`tagpu_mark_icon_room`, asked by the native pass in the same condition as
 `tagpu_mark_draws`): a frame on which it would not grow decides no icon and hides no model, and a
 frame queues at most one icon a unit, so an icon of a frame that hid a model always has its quad. The fill colour, the

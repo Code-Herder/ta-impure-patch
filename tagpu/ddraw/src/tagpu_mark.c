@@ -698,10 +698,22 @@ int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
     return 1;
 }
 
+/* The corner of a quad whose texels are whole game pixels, by pre-image. Half a
+   game pixel is a device pixel at ss 2, and from there the presented image
+   averages each 1-px line of ink with the fill beside it: the same icon reads
+   black at one camera position and washed at the next. */
+static void snap_game_px(float* x, float* y)
+{
+    double gx = ((double)*x - s_zcx) * s_zoom + s_zcx;
+    double gy = ((double)*y - s_zcy) * s_zoom + s_zcy;
+    *x = (float)((floor(gx + 0.5) - s_zcx) / s_zoom + s_zcx);
+    *y = (float)((floor(gy + 0.5) - s_zcy) / s_zoom + s_zcy);
+}
+
 /* One strategic icon. CONSTANT SCREEN SIZE, as the order art: `edge` game
    px after the zoom whatever the zoom, centred on the unit's anchor, its
-   corner put on the device grid by pre-image (`snap_device`) so art lands
-   texel-whole. The fill colour, the selection, the opacity and the shape ride
+   corner on a whole game pixel (`snap_game_px`), so ink stays ink at every
+   supersampling. The fill colour, the selection, the opacity and the shape ride
    the world slot as two small integers (FS's icon branch says why there). */
 int tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int shape,
                          int edge_w, int edge_h, int team, int sel, int alpha)
@@ -711,7 +723,7 @@ int tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int
     if ((unsigned)s_nicon + QUADV > s_iconCap) { s_iconover++; return 0; }
     x0 = ax - (float)((double)edge_w * 0.5 * s_px);
     y0 = ay - (float)((double)edge_h * 0.5 * s_px);
-    snap_device(&x0, &y0);
+    snap_game_px(&x0, &y0);
     x1 = x0 + (float)((double)edge_w * s_px);
     y1 = y0 + (float)((double)edge_h * s_px);
     if (r) {
