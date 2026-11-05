@@ -2060,8 +2060,8 @@ draws it.
   rect and its scissor, the minimap's box and dots, `HOP_TRI`, the rings and brackets) and the
   overlays on every other entry's watch and past frames, and `tests/huddrawtest.py` (native,
   ASan+UBSan) `HOP_TRI`'s instance and refusals and the chart slots kept apart.
-- **`python3 tools/wiki/wikilaycheck.py`**: five theatre cases on Watching (1024 × 768 at tick 60,
-  1920 × 1080 with About scrolled, 1280 × 720 with the tree scrolled, 4K with Try it held at 2×, 3440 ×
+- **`python3 tools/wiki/wikilaycheck.py`**: six theatre cases on Watching (1024 × 768 at tick 60,
+  1920 × 1080 with About scrolled, 1280 × 720 alone and with Replays folded, 4K with Try it held at 2×, 3440 ×
   1440 paused on Leave's question) and six on Rewind (idle, the strip open, the glide back from
   Back to now, the past, Play from here armed, a fork played on) and six on Take over (the button
   down while the picker is sought, the picker open, the lanes under Escalation at 2560 × 1440, a

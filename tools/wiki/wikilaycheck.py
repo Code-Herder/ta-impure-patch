@@ -84,14 +84,14 @@ CASES = [
     # Interface Type 0: the button words of the titles, the paragraphs and the caption are the left-click ones
     ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
     # the theatre, the page of a game entry, Watching: its demos under it in the tree, About over the
-    # stage's right with the entry's text, the tree scrolled, and on its stage the
+    # stage's right with the entry's text, its demos hidden with their category folded, and on its stage the
     # game frame with its HUD, the viewer's cursor and Leave's question (the stage HUD, paired
     # apart: STAGEHUD below)
     ("1024-stock-watching", (1024, 768), "mod=stock&entry=watching", {"tick": 60}),
     ("1080-esc-watching-about-scrolled", (1920, 1080), "mod=escalation&entry=watching&demo=4",
      {"about": True, "scroll": {"text": "max"}}),
-    ("720-tazero-watching-scrolled", (1280, 720), "mod=tazero&entry=watching&demo=6",
-     {"scroll": {"tree": "half"}}),
+    ("720-tazero-watching", (1280, 720), "mod=tazero&entry=watching&demo=7", {}),
+    ("720-tazero-watching-folded", (1280, 720), "mod=tazero&entry=watching&demo=7", {"fold": ["t.1"]}),
     ("4k-stock-watching-try-held", (3840, 2160), "mod=stock&entry=watching&demo=2", {"held": "c-try", "speed": 2}),
     ("3440-mayhem-watching-question", (3440, 1440), "mod=mayhem&entry=watching&demo=7", {"question": True}),
     # a live entry, Rewind a skirmish: the live HUD on the stage and the wiki's emblem at the live place (right[0]);

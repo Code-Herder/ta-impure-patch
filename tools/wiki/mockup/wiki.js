@@ -236,9 +236,10 @@ function renderTree() {
   const walk = (ns, path) => '<ul>' + (ns || []).map((n, i) => {
     const p = `${path}.${i}`;
     if (n.entry) {
-      const e = ENT[n.entry], title = e && !e.error ? fill(e, e.title) || n.entry : n.entry, open = S.entry === n.entry && theatreOf(e);
+      const e = ENT[n.entry], title = e && !e.error ? fill(e, e.title) || n.entry : n.entry;
+      const game = !!e && (e.frame === 'game' || (S.theatre && S.entry === n.entry)), open = S.entry === n.entry && game;
       // a theatre's entry has no demos column: it heads its own demos, the selected row being the demo
-      const mark = !theatreOf(e) ? '<span class="dot" data-part="i_dot"><i class="gl">•</i></span>'
+      const mark = !game ? '<span class="dot" data-part="i_dot"><i class="gl">•</i></span>'
         : `<span class="tw" data-part="${open ? 'i_open' : 'i_shut'}"><i class="gl">${open ? '▾' : '▸'}</i></span>`;
       const ds = open && Array.isArray(e.demos) ? e.demos : [];
       return `<li><div class="row leaf${S.entry === n.entry && !open ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
@@ -272,8 +273,7 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
    follows it, the controls join the row (#t-row), and the title, subtitle, badge and text go into About (#about). The
    row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every node back in the
    normal page's order. ---- */
-const theatreOf = e => !!e && (e.frame === 'game' || S.theatre);
-function theatre() { return theatreOf(entry()); }
+function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
 function arrange() {
   const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
   if (on) {

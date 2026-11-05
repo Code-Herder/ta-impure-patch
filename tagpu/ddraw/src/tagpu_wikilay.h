@@ -119,7 +119,7 @@ typedef struct {
     HUDRECT stage;
     HUDRECT window;
     int     caption_cut;        /* the strip shows only the caption's first lines */
-    int     row_cut;            /* the theatre's row overflows the body */
+    int     row_cut;            /* the theatre's row overflows the stage's bezel */
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;
@@ -173,8 +173,8 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    its close button held, and every entry's every demo playing at 1x and ended at 2x with Try it
    yourself held -- a game entry's in its theatre, which adds About open with the text scrolled to
    its limit, the tree scrolled to its limit, and Try it yourself, locked with either label of Try
-   it, the widest row a theatre can have. A theatre is refused when its stage is shorter than theatre.stage_min or
-   its row's fixed part is wider than the body (WIKIFRAME.row_cut). Each
+   it, the widest row a theatre can have. A theatre is refused when its stage is shorter than
+   theatre.stage_min or its row's fixed part is wider than the stage's bezel (WIKIFRAME.row_cut). Each
    state is filled at interface type 1, whose words are the longer, with each entry's
    own names, with each of the `ncasting` castings given, and with the two worst castings there
    can be (every display name of 31 characters, the engine's cut: 31 of three bytes, the
