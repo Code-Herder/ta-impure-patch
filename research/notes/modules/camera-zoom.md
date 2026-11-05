@@ -299,7 +299,8 @@ floor's `fit` is computed from, taken from the packet's copies of the floor's ow
 target eye less the eye the gesture lands at as of that notch — this frame's eye (the packet's plus
 what is posted and not yet acknowledged), the carry, what the tween being cut still owes, and the
 terms of the frame's earlier notches (`mega_centre_shift`) — and it is paid through `R` like a
-notch's term, so the cut below posts it with the level and `anchor_step` clamps it per axis. With no packet in play or no range to take the centre from, the
+notch's term, so the cut below posts it with the level and `anchor_step` clamps it per axis. With
+no packet in play or no range to take the centre from, the
 level still falls, about the view centre. A map whose scroll extent is narrower than the viewport
 at 1× is the one case the first frames' clamp can cut: while the packet still carries the engine's
 range (`cam_centre` 0, a draw whose ground is not ours) its `[0, extent − W]` holds the eye at 0, and an
@@ -322,18 +323,41 @@ level (`rec.zoom`, the target rather than the level drawn) and its reach rung to
 game thread takes in one apply. `predict` keeps drawing the last frame's level and eye, through
 the reach bound, and counting `paused=`, against packets that still describe them, until a packet
 acknowledges the whole step and the ladder no longer raises the level; that frame draws the new
-view. A click stays right throughout, since the game thread's eye and level change on the same
-apply and the first packet after it is the frame that shows them. The release also fires 250 ms
-after the notch (`CUT_HOLD_US`), or at once on a view the ladder no longer allows; that deadline is
-not a safety argument, since the ladder and the bound hold on every frame after it, and it only
-keeps a stalled game thread from freezing the picture, at the cost of the in-between view. The log
-line's `landed` is the notch to the frame of the cut.
+view. The release also fires 250 ms after the notch (`CUT_HOLD_US`), or at once on a view the
+ladder no longer allows or with no drawn view to hold; that deadline is not a safety argument,
+since the ladder and the bound hold on every frame after it, and it only keeps a stalled game
+thread from freezing the picture, at the cost of the in-between view. The log line's `landed` is
+the notch to the frame of the cut.
+
+**A spin is one gesture.** A wheel sends many notches, so what follows a cut matters as much as the
+cut. The same-way notches behind it, with no pause over 200 ms (`SPIN_GAP_US`, the gesture's feel
+and nothing else), are dropped, so a spin out of the mega map lands on the kept level and not past
+it. A mega notch with nothing to do is dropped too, so it starts no tween. A batch that does reach
+the wheel during a hold joins the cut, posted whole, and does not extend the deadline; a tween
+started there would run from the held view, the level the cut is leaving. Reversing in mid-spin is
+a new gesture, and its first notch cuts.
+
+**A click during a hold.** A button's point is mapped through the level drawn (`view`, `s_zoom`) and
+the engine then adds its own eye, so between the apply and the release frame the pair is the old
+level and the new eye, and on engaging from 1× the point is not transformed at all.
+`tagpu_zoom_drop_mouse` therefore drops a press taken while the hold stands, with its release; the
+render-options UI's points are exempt. **Residual, input only:** a press passed on just before the
+notch's frame and handled by the engine after the apply is mapped through that pair, a window about
+the hold's length (32–41 ms) that only a click in the same instant as the notch can hit. Hover is
+mapped through the same pair for those frames, which orders nothing.
+
+**Not covered:** a replay's Follow has no cut. `tagpu_persp.c` lerps the recorded level and camera
+between its samples and the pinned lever has no hold, so a recorded cut plays back as a lerp over a
+sample interval and can wait at the ladder for a frame or two.
 
 MEASURED 2026-11-04 (Two Continents, floor 0.056, a battle of 401 units, 1024×768 on a private
-display, 60 fps video, three gestures of each kind with the game paused and two with it running):
-each of the six cuts changes exactly one video frame; the log's `landed` reads 32.4–41.0 ms; the
-plain wheel's notches in the same run read 263–265 ms and change frames throughout; the heartbeat
-reads `out=0 held=0/0px back=0 nopieces=0`.
+display, 60 fps video; three-notch spins and single notches, Ctrl-held forward spins reversed into
+back spins, paused and running): each of the ten cuts changes exactly one video frame; the log's
+`landed`, counted from the notch's own stamp, reads 33.0–59.2 ms; a press injected one event behind
+a leaving notch was dropped; the plain wheel's notches in the same run read 251–253 ms; the
+heartbeat reads `out=0 held=0/0px back=0 nopieces=0`. On a 3840×2160 Escalation game before the spin
+handling, a reversal with a second notch inside the hold read 250–265 ms, which is what a spin
+looks like without it.
 
 **Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
 mouse-world pin each set the level through `wheel_rest`, which disengages, so a later notch forward

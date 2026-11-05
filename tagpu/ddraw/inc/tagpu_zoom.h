@@ -161,7 +161,7 @@ void  tagpu_zoom_init(void);
    is the lever's, raised to the lowest level a packet that can still arrive
    carries tables for (tagpu_zoom.c, "the reach ladder"), or the last frame's
    where the reach bound would otherwise draw the view against the gesture
-   (tagpu_zoom.c, predict). */
+   or the mega map's cut holds it (tagpu_zoom.c, predict). */
 float tagpu_zoom_read_lever(const struct TAGPU_PACKET* pk);
 
 /* RENDER THREAD: this frame's floor, as tagpu_zoom_read_lever took it from the
@@ -179,14 +179,15 @@ float tagpu_zoom_floor(void);
 float tagpu_zoom_rung(float z, float floor);
 
 /* The level tagpu_zoom_read_lever() settled on this frame (the file's or the
-   wheel's, or the last frame's where the reach bound held it), whether or not a
+   wheel's, or the last frame's where the reach bound or a cut held it), whether or not a
    zoomed world is on screen. */
 float tagpu_zoom_lever(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
    camera range in force and then until its gather slab lies inside the
-   packet's tables' reach (the reach bound, tagpu_zoom.c). Exact once the
+   packet's tables' reach (the reach bound, tagpu_zoom.c); the last frame's
+   during the mega map's cut, by the same bound. Exact once the
    packet catches up (the next
    in-play draw applies the same deltas), so a wheel notch is drawn on the
    frame it happens and does not wobble. Returns 0 — and leaves the outputs

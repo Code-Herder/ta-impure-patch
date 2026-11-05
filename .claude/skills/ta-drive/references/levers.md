@@ -213,9 +213,9 @@ Driving the camera at a zoom other than 1:
   1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
   area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
 - **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
-  Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back jumps the target
-  to the floor about the view centre (and follows the floor if it moves while engaged); any notch forward while engaged returns to the level it
-  left, centred on the point under the pointer. Inject it with `keys <i> down:ctrl pmove:X,Y
+  Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back cuts to the floor
+  with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
+  left, centred on the point under the pointer. A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. Inject it with `keys <i> down:ctrl pmove:X,Y
   wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
   control launch always has Ctrl+wheel as the mega map.
 - **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
@@ -314,8 +314,8 @@ packet carried outside that reach, so without their pieces and not drawn; `held=
 frames whose drawn eye the reach bound held back and the largest hold, never more than the
 displacement the gesture has posted and the game thread not yet applied, less the lead the reach
 carries (a quarter of the view a side) — near 0 when the game thread keeps up, more when it lags;
-`paused=` is the frames drawn at the previous frame's level so the view would not move against
-the gesture; **`back=` must read 0** — frames that moved against it anyway. `out=` and
+`paused=` is the frames drawn at the previous frame's level, so the view would not move against
+the gesture or while a mega map cut waits for its packet; **`back=` must read 0** — frames that moved against it anyway. `out=` and
 `nopieces=` count only frames the Vulkan lane presented, so the lane's
 bring-up and a swapchain rebuild add nothing to them.
 
