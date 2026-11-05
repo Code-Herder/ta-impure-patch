@@ -546,7 +546,7 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
     (void)bytes;
     memset(&start, 0, sizeof start);
     start.code = 0x08;
-    start.version = RECMP_VERSION;
+    start.version = RECMP_START_VERSION;
     start.bytes = sizeof start;
     start.origin = origin;
     unsigned ready = SUCCEEDED(CoCreateGuid(&match));

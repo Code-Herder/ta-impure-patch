@@ -95,7 +95,7 @@ int tagpu_recmp_start_read(const void* message, unsigned bytes, DWORD from, GUID
     GUID zero = { 0 };
     if (!message || !match || !from || bytes != sizeof start) return 0;
     memcpy(&start, message, sizeof start);
-    if (start.code != 0x08 || start.version != RECMP_VERSION ||
+    if (start.code != 0x08 || start.version != RECMP_START_VERSION ||
         start.bytes != sizeof start || start.origin != from ||
         !memcmp(&start.match, &zero, sizeof zero)) return 0;
     *match = start.match;

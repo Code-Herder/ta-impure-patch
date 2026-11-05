@@ -9,6 +9,11 @@
    pointer or primary-session interface crosses into a contribution worker. */
 #define RECMP_PACKET_MAX 4096u
 #define RECMP_VERSION 2u
+/* The match's start message alone carries this: a peer's refusal there means no contributions
+   for the whole game, where a peer older than format 28 would otherwise take the match and
+   refuse its first flagged camera sample (REC_POV_CUT) in play. RECMP_VERSION stays: the
+   envelopes and the keys it stamps are stored in recordings, which keep opening. */
+#define RECMP_START_VERSION 3u
 #define RECMP_ACTORS 10u
 enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
        RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7, RECMP_UNITS = 8,

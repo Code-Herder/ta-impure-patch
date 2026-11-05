@@ -111,7 +111,7 @@ void tagpu_recmp_net_abort(RecMpNet* net)
 
 static void start_test(void)
 {
-    RecMpStart start = { .code=8,.version=RECMP_VERSION,.bytes=sizeof start,.origin=55,
+    RecMpStart start = { .code=8,.version=RECMP_START_VERSION,.bytes=sizeof start,.origin=55,
                         .match={.Data1=1} };
     GUID match = {.Data1=9};
     unsigned char* pages = VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
@@ -129,7 +129,7 @@ static void start_test(void)
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
     start.code=8; start.version++; memcpy(at,&start,sizeof start);
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
-    start.version=RECMP_VERSION; start.bytes--; memcpy(at,&start,sizeof start);
+    start.version=RECMP_START_VERSION; start.bytes--; memcpy(at,&start,sizeof start);
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
     start.bytes=sizeof start; start.match.Data1=0; memcpy(at,&start,sizeof start);
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match) && match.Data1 == 1);
