@@ -29,8 +29,8 @@
            = 255                       otherwise
      hide  = d' > 1 and R * z < 0.45 * E                     (BAR's 0.9 * S/2)
 
-   R is the type's model radius in world px and E the edge the icon is drawn
-   at. THE SWITCH IS BAR'S: d' takes the size BAR's rule gives, before the
+   R is the type's model radius in world px (0 for a hollow shape,
+   tagpu_icon_cover_r) and E the edge the icon is drawn at. THE SWITCH IS BAR'S: d' takes the size BAR's rule gives, before the
    drawn edge's 7-px floor (tagpu_icon_gen_edge), so a frame or a scale small
    enough for the floor to bind does not move the level the icons take over
    at; only the cover test, which asks whether the icon as drawn hides the

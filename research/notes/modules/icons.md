@@ -1,8 +1,8 @@
 # Strategic icons
 
 Zoomed out, a unit is drawn as a flat team-coloured icon of constant screen size, by BAR's rule;
-where its model is smaller than the icon, the model is not drawn at all, and the icon answers the
-pick. A mod that ships an icon set for TADR's megamap has its types drawn with that set's
+where its model is smaller than the icon, or at once under a hollow shape, the model is not drawn
+at all, and the icon answers the pick. A mod that ships an icon set for TADR's megamap has its types drawn with that set's
 pictures, read from the player's install.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -402,7 +402,8 @@ lies. At the game thread's applied level
 - `-1`, the guarded engine test as before: the latest command record drew no icons, no table, a
   unit `tagpu_native_owns_unit` refuses, a row past the table, a nanoframe (`+0x104 > 0`), no
   health (`+0x108 ≤ 0`), or a model the rule does not hide.
-- **Hidden**: hit when the unit's own circle holds the pointer and no other icon answers nearer:
+- **Hidden**: hit when the picture draws it, its circle holds the pointer and no other icon answers
+  nearer:
   `(px − ax)² + (py − ay)² ≤ (0.45 · E / z)²`, with `ax = ((x − (eyeX << 16))
   >> 16) + 0x80` and `ay = ((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` — `0x48C6A0`'s
   own anchor without its corner offsets, in 64 bits. `0x48C6A0` is never called for such a unit, so
@@ -412,9 +413,23 @@ lies. At the game thread's applied level
 - **The nearest icon answers.** The engine asks about one unit at a time and keeps, among its hits,
   the smallest key of the `+0x92` record (`0x48CE1E..0x48CE75`), which knows nothing of the pointer
   [DISASSEMBLED]. So a hit walks HotUnits (`main+0x1435F`, count `+0x14367`, each id below the slot
-  count, model id 0 and units `tagpu_native_owns_unit` refuses skipped) with the same circle, and
-  answers "not hit" when another icon's circle holds the pointer at a smaller distance, or an equal
-  one on a lower record. Exactly one icon answers for every point where circles overlap.
+  count, model id 0 and units `tagpu_native_owns_unit` refuses skipped) with the same circle, keeps
+  the smallest distance, an equal one on the lower record, and only that unit is a hit: exactly one
+  hidden-model icon answers where their circles overlap. **One walk a pick**: the engine's loop
+  `0x48CDF1..0x48CE8E` has no exit and `0x48C6A0` no other caller, so the first listed id with a
+  model starts a pass and clears the winner, and the cost is one list walk however many units are
+  under the pointer [DISASSEMBLED]. A count at or above the slot count is refused: the list holds
+  `10 · MaxUnits` entries against `10 · MaxUnits + 1` slots.
+- **What the picture refuses is not a hit.** HotUnits lists a foreign unit when any of four box
+  points is in sight (`0x465AC0` from `0x48BC56`), while the gather asks only the anchor's tile, so
+  it holds units with no icon or only a radar dot. The circle answers "not hit" for them, by the
+  gather's own gates asked of the fog source the game thread packs (`tagpu_fogwide_source`): a
+  foreign unit with no source or cloaked (`+0x10E` bit 2), any unit on unexplored ground, a foreign
+  unit out of sight. That source can be one packet ahead of the frame the player saw, which costs at
+  most one click at a fog edge. MEASURED 2026-11-05 (retail, floor 0.165 at 4K, a Peewee ringed by 50
+  enemy solars at 200 to 298 px): 26 icons drawn and 26 named, none without an icon; the build before
+  this test named units with no icon. Stock draws such a listed unit dimmed in the grey, as `tagpu_gdi.on`
+  shows at 1×, and the native pass does not: a difference at the fog's edge at any level.
 
 *Why it is safe by construction*: every value comes from the unit's own record, its carriers' and
 the main block, read on the game thread that owns them inside the engine's own call; the row is
@@ -512,8 +527,9 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   give or a console `weight`/`limit` can add hold no type, so they change no picture.
 - **Side pictures are read at the first in-play fill of the process**: the side names then are
   the set's for the process.
-- **Overlapping icons** answer by nearness, which need not be the icon drawn on top where two
-  overlap.
+- **Overlapping icons** answer by nearness, which need not be the icon drawn on top. An opaque icon
+  over a model the rule does not hide has no circle, so two of those are settled by the model's box
+  and the engine's key.
 - **An icon whose unit the HotUnits cull does not list** is not pickable, so the strip of an icon
   hanging over the view's edge from a unit outside the addressable rect answers nothing.
 - **A unit the native pass does not own** keeps the engine's sprite and gets no icon.

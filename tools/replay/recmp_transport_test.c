@@ -129,6 +129,8 @@ static void start_test(void)
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
     start.code=8; start.version++; memcpy(at,&start,sizeof start);
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
+    start.version=RECMP_VERSION; memcpy(at,&start,sizeof start);
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
     start.version=RECMP_START_VERSION; start.bytes--; memcpy(at,&start,sizeof start);
     CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
     start.bytes=sizeof start; start.match.Data1=0; memcpy(at,&start,sizeof start);

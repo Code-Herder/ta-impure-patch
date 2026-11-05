@@ -315,9 +315,9 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    sample of each clear) and plays to its end from both views; no skirmish test group reaches
    `mp_pov_capture`, so the replay gate names it `UNCOVERED` (owner's call for this landing). A
    busy ring, a lost release (X button events on a private display, MEASURED 2026-11-05) and the
-   gesture on Windows (Mayhem and retail, a smoke over SSH) were run; a physical mouse is the owner's
-   check. A peer on a build older than format 28 is refused at the recording's start
-   (`RECMP_START_VERSION`, owner, 2026-11-05): no recording for that match, the game plays on, and a
+   gesture on Windows (Mayhem, ProTA and retail, a smoke over SSH) and a physical mouse (the owner's hand-over) were
+   run. A peer on a build older than format 28 is refused at the recording's start
+   (`RECMP_START_VERSION`, owner, 2026-11-05): no complete recording for that match, the game plays on, and a
    plain-wheel back notch right after leaving stays a smooth zoom (owner, 2026-11-05).
 3. **Strategic icons, BAR's rule.** *Landed; the in-game checks run* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
    frame, every class at the floor, the fade band's alphas, command on icons, radar dots, the 4K

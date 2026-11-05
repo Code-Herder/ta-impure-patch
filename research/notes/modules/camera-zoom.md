@@ -923,8 +923,9 @@ could wrap (the last: model M, R R)`. No run has read that count yet.
 
 **A unit drawn as a strategic icon is answered by its icon, before all of that** (`icon_hit`;
 [strategic icons](icons.html), *The pick*). At the game thread's applied level and with the class
-table the packet's publisher built on this thread, a unit whose model the icon rule hides is hit
-when the point lies within `0.45 × edge / z` world px of the anchor `0x48C6A0` projects —
+table the packet's publisher built on this thread, a unit whose model the icon rule hides, and
+which the picture draws, is hit when it is the nearest such icon whose circle holds the point, the
+circle being `0.45 × edge / z` world px about the anchor `0x48C6A0` projects —
 `((x − (eyeX << 16)) >> 16) + 0x80`, `((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` —
 computed in 64 bits, without the corner offsets and without calling `0x48C6A0`, so its int16
 narrowing is never met for such a unit. A unit carried — through any chain of carriers the native

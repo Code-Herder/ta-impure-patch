@@ -2,7 +2,7 @@
 
    Past BAR's distance a unit is drawn as a flat icon of constant screen size
    (inc/tagpu_icon_rule.h); past the point its model is smaller than the icon,
-   the model is not drawn at all. This file decides both per unit from the
+   or at once under a hollow shape, the model is not drawn at all. This file decides both per unit from the
    frame's packet -- the unit table, the type table the publisher built
    (TAGPU_PK_UTYPE) and the screen size -- and the three settings, queues the
    icons the unit gather places, and hands them to the marker pass in BAR's

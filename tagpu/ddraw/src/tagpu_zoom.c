@@ -37,6 +37,7 @@
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
 #include "tagpu_icon_rule.h"  /* the icons' rule: whether a unit's model is hidden */
 #include "tagpu_native.h"     /* tagpu_native_owns_unit: who draws a unit, for the pick */
+#include "tagpu_fogwide.h"     /* the fog source this thread packs, for the pick */
 #include "tagpu_icon.h"       /* tagpu_icon_cmd_take: whether a frame drew icons, for the record */
 #include "tagpu_packet_pub.h" /* tagpu_packet_pub_level_gen: what the level caches key on */
 
@@ -1969,6 +1970,7 @@ float tagpu_zoom_game_floor(void)
    once a second. */
 #define VA_HITTEST       0x0048C6A0u   /* stdcall(unit, point), ret 8           */
 #define VA_MODELBOX      0x004CB650u   /* stdcall(model, min*, max*, flag), ret 0x10 */
+#define OFF_WATCHED      0x2A42        /* u8 the watched player's id            */
 #define OFF_MODELPTRS    0x14377       /* Model3DONode* [UNITINFOCount]         */
 #define OFF_UDEFCOUNT    0x1438F       /* u32 UNITINFOCount                     */
 #define U_X              0x6A          /* 16.16 world x                         */
@@ -1977,6 +1979,8 @@ float tagpu_zoom_game_floor(void)
 #define U_MODELID        0xA6          /* u16 index into MODEL_PTRS, and the
                                           type's UnitDef row                     */
 #define U_CARRIER        0x86          /* UnitStruct* that carries it, 0 = none */
+#define U_OWNER          0xFF          /* u8 player id                          */
+#define U_CLOAKF         0x10E         /* u8, bit 2 = actively cloaked          */
 #define U_NANO           0x104         /* float, the build fraction remaining   */
 #define U_HEALTH         0x108         /* s16                                   */
 #define OFF_UNITBEG      0x14357       /* UnitStruct* the unit array starts at  */
@@ -2092,25 +2096,33 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    cargo list +0x8A/+0x8E holds it, the engine keeping the two together]. The
    pick follows the game thread's applied level and the picture the frame's
    level; the two are equal at rest and differ only while a zoom tween moves --
-   a property, not a timing argument: no memory is read across threads.
-   THE ICONS ARE THOSE THE PICTURE DREW. The render thread draws them only
-   while the unit pass and the marker pass both draw (tagpu_native.c's call of
-   tagpu_icon_frame), and the command record that ends each render frame
-   carries that frame's answer (`icons`, a level like `zoom`; 0 from a frame
-   that left before the native pass). The apply copies the latest record at
-   the top of each in-play draw, and GetUnitAtMouse runs on this thread from
-   the in-game handlers (0x499278, 0x491D18), so a click is answered with the
-   answer of the frame whose record the last apply took: the frame the player
-   saw, or the one before it at a switch -- the same one-record lag the level
-   has -- and never an icon no frame drew. Only a record of this level's epoch
-   counts, and the level end clears the answer, so a record posted before the
-   render thread saw the level end cannot answer for the next level. No such
-   record yet is the engine's test. */
+   a property, not a timing argument: no memory is read across threads. */
+/* WHAT THE PICTURE REFUSES IS NOT THERE TO PICK. HotUnits lists a foreign unit
+   when any of four box points is in sight (0x465AC0, from 0x48BC56), where the
+   gather asks only the anchor's tile, so the list holds units with no icon, or
+   only a radar dot, which is never pickable. These are the gather's own gates
+   (tagpu_native.c): a foreign unit with no source or cloaked, any unit on
+   unexplored ground, a foreign unit out of sight. The source is the one this
+   thread packs for the packet, so it can be one packet ahead of the frame the
+   player saw, which costs at most one click at a fog edge. */
+static int icon_refused(const char* ta, const char* unit)
+{
+    const int foreign = *(const unsigned char*)(unit + U_OWNER) != *(const unsigned char*)(ta + OFF_WATCHED);
+    const short wx = (short)(*(const int*)(unit + U_X) >> 16);
+    const short wz = (short)(*(const int*)(unit + U_ALT) >> 16);
+    const short wy = (short)(*(const int*)(unit + U_Z) >> 16);
+    TAGPU_FOGSRC f;
+    int fog;
+    if (!tagpu_fogwide_source(&f)) return foreign;
+    if (foreign && (*(const unsigned char*)(unit + U_CLOAKF) & 4)) return 1;
+    fog = tagpu_fog_at(&f, wx, wy - wz / 2);
+    return (fog & 1) || (foreign && (fog & 2));
+}
+
 static int icon_circle(const char* ta, const TAGPU_PK_UTYPE* tab, unsigned n,
-                       const TAGPU_ICON_VIEW* vp, float z, const char* unit, const int* point,
+                       const TAGPU_ICON_VIEW* v, float z, const char* unit, const int* point,
                        long long* dist2)
 {
-    TAGPU_ICON_VIEW v = *vp;
     const char* carrier;
     int edge = 0, h, hop;
     long long ax, ay, dx, dy;
@@ -2128,10 +2140,10 @@ static int icon_circle(const char* ta, const TAGPU_PK_UTYPE* tab, unsigned n,
         /* a carrier the engine draws hides nothing, and the picture's
            suppression stops there too */
         if (!tagpu_native_owns_unit(carrier)) break;
-        if (icon_hides(tab, n, carrier, &v, z, &ce) == 1) return 0;
+        if (icon_hides(tab, n, carrier, v, z, &ce) == 1) return 0;
         carrier = *(const char* const*)(carrier + U_CARRIER);
     }
-    h = icon_hides(tab, n, unit, &v, z, &edge);
+    h = icon_hides(tab, n, unit, v, z, &edge);
     if (h <= 0) return -1;
     ax = (((long long)*(const int*)(unit + U_X) - ((long long)*(const int*)(ta + OFF_EYEX) << 16)) >> 16) + 0x80;
     ay = (((long long)*(const int*)(unit + U_Z) - ((long long)*(const int*)(ta + OFF_EYEY) << 16)) >> 16)
@@ -2140,29 +2152,64 @@ static int icon_circle(const char* ta, const TAGPU_PK_UTYPE* tab, unsigned n,
     dy = (long long)point[1] - ay;
     r = 0.45 * (double)edge / (double)z;
     *dist2 = dx * dx + dy * dy;
-    return (double)*dist2 <= r * r;
+    return (double)*dist2 <= r * r && !icon_refused(ta, unit);
 }
 
-/* THE NEAREST ICON ANSWERS. The engine keeps, among its hits, the smallest of
-   a key from each unit's +0x92 record (0x48CE1E..0x48CE75), which says nothing
-   about the pointer, so where two icons overlap the pointer on one's centre
-   could name the other. So a hit stands only when no other icon under the
-   pointer has a nearer centre, an equal distance going to the lower record:
-   exactly one icon answers, whatever order the engine asks in. The walk is the
-   engine's own list, HotUnits (main+0x1435F, count +0x14367), past the same
-   zero model id it skips (0x48CE05), each id bounded by the slot count; it
-   runs only for a unit already hit, on the thread that owns these records. */
+/* THE ICON THE PICK ANSWERS FOR. The engine keeps, among its hits, the smallest
+   of a key from each unit's +0x92 record (0x48CE1E..0x48CE75), which says
+   nothing about the pointer, so where two icons overlap the pointer on one's
+   centre could name the other. So among the hidden-model icons under the
+   pointer only one is a hit: the nearest centre, an equal distance going to
+   the lower record.
+
+   ONE WALK A PICK. The winner is found at the pick's first hit and kept for
+   the rest of its pass. The engine's loop (0x48CDF1..0x48CE8E) has no exit: it
+   walks HotUnits (main+0x1435F, count +0x14367) from index 0 and calls this
+   for every id past the zero model id it skips (0x48CE05), and 0x48C6A0 has no
+   other caller, so the first such id starts a pass and clears the winner. That
+   list is 10 * MaxUnits entries and the slot count one more, so a count at the
+   slot count is not the list's and the hit stands alone. */
+static const char* s_pickWinner;       /* game thread only */
+
+static const char* first_listed(const unsigned short* hot, unsigned count, const char* beg, unsigned slots)
+{
+    unsigned i;
+    for (i = 0; i < count; i++) {
+        const unsigned id = hot[i];
+        if (id < slots && *(const unsigned short*)(beg + (size_t)id * UNIT_STRIDE + U_MODELID))
+            return beg + (size_t)id * UNIT_STRIDE;
+    }
+    return NULL;
+}
+
+/* THE ICONS ARE THOSE THE PICTURE DREW. The render thread draws them only
+   while the unit pass and the marker pass both draw (tagpu_native.c's call of
+   tagpu_icon_frame), and the command record that ends each render frame
+   carries that frame's answer (`icons`, a level like `zoom`; 0 from a frame
+   that left before the native pass). The apply copies the latest record at
+   the top of each in-play draw, and GetUnitAtMouse runs on this thread from
+   the in-game handlers (0x499278, 0x491D18), so a click is answered with the
+   answer of the frame whose record the last apply took: the frame the player
+   saw, or the one before it at a switch -- the same one-record lag the level
+   has -- and never an icon no frame drew. Only a record of this level's epoch
+   counts, and the level end clears the answer, so a record posted before the
+   render thread saw the level end cannot answer for the next level. No such
+   record yet is the engine's test. */
 static int icon_hit(const char* ta, const char* unit, const int* point)
 {
-    unsigned n, i, count, slots;
+    unsigned n, i;
     const TAGPU_PK_UTYPE* tab = tagpu_icontype_table(&n);
     const float z = game_level();
-    const unsigned short* hot;
-    const char* beg;
+    const unsigned short* hot = *(const unsigned short* const*)(ta + OFF_HOTUNITS);
+    const unsigned count = *(const unsigned*)(ta + OFF_HOTCOUNT);
+    const char* beg = *(const char* const*)(ta + OFF_UNITBEG);
+    const unsigned slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
+    const int listed = model_ptr_ok(hot) && model_ptr_ok(beg) && count < slots;
     TAGPU_ICON_VIEW v;
     int scale, dist, fade, hit;
-    long long mine = 0;
+    long long nearest = 0;
 
+    if (listed && unit == first_listed(hot, count, beg, slots)) s_pickWinner = NULL;
     /* a unit the native pass does not draw keeps the engine's sprite and no
        icon -- the gather's own first test, asked here on this thread as the
        packet's fill asks it */
@@ -2170,23 +2217,24 @@ static int icon_hit(const char* ta, const char* unit, const int* point)
     tagpu_settings_icons(&scale, &dist, &fade);
     tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH),
                     scale, dist, fade);
-    hit = icon_circle(ta, tab, n, &v, z, unit, point, &mine);
-    if (hit != 1) return hit;
-    hot = *(const unsigned short* const*)(ta + OFF_HOTUNITS);
-    count = *(const unsigned*)(ta + OFF_HOTCOUNT);
-    beg = *(const char* const*)(ta + OFF_UNITBEG);
-    slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
-    if (!model_ptr_ok(hot) || !model_ptr_ok(beg) || count > slots) return 1;
-    for (i = 0; i < count; i++) {
-        const unsigned id = hot[i];
-        const char* other = beg + (size_t)id * UNIT_STRIDE;
-        long long theirs = 0;
-        if (id >= slots || other == unit || !*(const unsigned short*)(other + U_MODELID)) continue;
-        if (!tagpu_native_owns_unit(other)) continue;
-        if (icon_circle(ta, tab, n, &v, z, other, point, &theirs) == 1 &&
-            (theirs < mine || (theirs == mine && other < unit))) return 0;
+    hit = icon_circle(ta, tab, n, &v, z, unit, point, &nearest);
+    if (hit != 1 || !listed) return hit;
+    if (!s_pickWinner) {
+        s_pickWinner = unit;
+        for (i = 0; i < count; i++) {
+            const unsigned id = hot[i];
+            const char* other = beg + (size_t)id * UNIT_STRIDE;
+            long long theirs = 0;
+            if (id >= slots || other == unit || !*(const unsigned short*)(other + U_MODELID)) continue;
+            if (!tagpu_native_owns_unit(other)) continue;
+            if (icon_circle(ta, tab, n, &v, z, other, point, &theirs) == 1 &&
+                (theirs < nearest || (theirs == nearest && other < s_pickWinner))) {
+                s_pickWinner = other;
+                nearest = theirs;
+            }
+        }
     }
-    return 1;
+    return unit == s_pickWinner;
 }
 
 unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m)
