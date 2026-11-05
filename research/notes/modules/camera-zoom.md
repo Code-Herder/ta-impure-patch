@@ -274,7 +274,7 @@ answer. A poll that tears is a poll that hands the engine back the frame.
 the lowest level the wheel can reach, §2.3 *The floor follows the map*; while engaged the target
 follows the floor when it moves), the view centre moves onto the map's centre, and the target it
 left is kept (`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
-kept target, holding the world point under the pointer. A mega notch with
+kept target, holding the world point under the pointer (or centring it, below). A mega notch with
 nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
 TADR's does — engaging at the floor would keep the floor as the level to return to, and the next
 notch forward would pan without zooming; a zoom notch
@@ -307,10 +307,14 @@ at 1× is the one case the first frames' clamp can cut: while the packet still c
 range (`cam_centre` 0, a draw whose ground is not ours) its `[0, extent − W]` holds the eye at 0, and an
 axis the clamp cuts drops what it owes (§2.3e).
 
-**Leaving is the zoom-in anchor.** Any notch in holds the point under the pointer by moving the
-target centre `(a − c)(iz_prev − iz_new)`, and leaving is such a notch from the floor to the kept
-level, through the same owed displacement `R`, so the point stays under the pointer at any frame
-rate, away from the clamp. A map edge's range can cut the step per axis, as for any notch.
+**Leaving is the zoom-in anchor by default.** Any notch in holds the point under the pointer by
+moving the target centre `(a − c)(iz_prev − iz_new)`, and leaving is such a notch from the floor to
+the kept level, through the same owed displacement `R`, so the point stays under the pointer at any
+frame rate, away from the clamp. A map edge's range can cut the step per axis, as for any notch.
+`megazoom=tadr` (the *Mega map zoom in* row, stage *TADR default*) moves the target centre onto the
+point instead, `(a − c) · iz_prev`, so its new view is not inside the old one; the step is up to half
+a viewport times `1/floor`. The notch's slot carries the setting (`NOTCH.tadr`), as it does the
+binding, so the render thread never reads the store.
 
 **Entering and leaving are a cut: the frame before is the old view and the next is the new one, with
 nothing drawn between** (`s_cutHold`). The wheel's 250 ms tween is for the zoom; these two skip it.
@@ -386,7 +390,8 @@ right before a notch never found the ring busy at the apply under injection, so 
 exercised only by that forcing, and the path that clears a lost release needs real buttons and was
 not run. Leaving at five pointer positions from the floor to 1×: the world point under the pointer
 differs by 0 px at four, and by 148 px on x at the fifth, where the eye stands at the range's end
-(10272). Follow of the recording: 22 cuts, 22 flagged samples, each one frame; a control build
+(10272). Under `megazoom=tadr`, set by clicking the row in a running game, that point is exactly the
+view's centre at three pointers away from the range's end. Follow of the recording: 22 cuts, 22 flagged samples, each one frame; a control build
 without the flag's test and the Follow's rung blended cuts over 3 to 5 changed frames (`f44`: 4 over
 9 frames, `f606`: 3 over 6).
 

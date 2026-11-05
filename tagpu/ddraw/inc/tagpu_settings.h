@@ -53,6 +53,7 @@ typedef enum {
     TS_VSYNC,       /* 1 | 0: present on the display's vertical blank          */
     TS_REPLAYHUD,   /* 100 | 75 | 125 | 150: the replay HUD's own scale, percent */
     TS_WHEEL,       /* 0 zoom | 1 megamap: what the plain wheel does; Ctrl does the other */
+    TS_MEGAZOOM,    /* 0 mouse | 1 tadr: leaving the mega map holds the point under the pointer, or centres it */
     TS_ICONSCALE,   /* 100 | 75 | 125 | 150 | 200: the strategic icons' size, percent of BAR's */
     TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
     TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */

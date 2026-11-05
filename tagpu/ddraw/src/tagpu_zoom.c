@@ -143,6 +143,7 @@ typedef struct {
     LONG us;                       /* qpc_us() when it was taken               */
     LONG mega;                     /* 1: bound to the mega map, 0: to the zoom */
     LONG held;                     /* a world button was down when it was taken */
+    LONG tadr;                     /* leaving by this notch centres its point (`megazoom=`) */
 } NOTCH;
 static NOTCH         s_nq[NOTCHQ];
 static volatile LONG s_nqHead;                  /* written by the message thread only */
@@ -460,7 +461,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
         const NOTCH* e = &s_nq[(ULONG)t % NOTCHQ];
         double izPrev = 1.0 / (double)s_wheelTgt;
         double iz;
-        int    whole = 0, way = e->delta > 0 ? 1 : -1;
+        int    centre = 0, whole = 0, way = e->delta > 0 ? 1 : -1;
         float  z;
         if (way == s_spinDir && (LONG)((DWORD)e->us - (DWORD)s_spinUs) < SPIN_GAP_US) {
             s_spinUs = e->us;
@@ -472,7 +473,8 @@ static float wheel_level(const TAGPU_PACKET* pk)
            map is on screen from wherever it was engaged, and the target it
            left is kept. While it is engaged ANY notch forward leaves it --
            TADR's gesture -- back to the kept target, holding the world point
-           under the pointer as any notch in does.
+           under the pointer as any notch in does, or under `megazoom=tadr`
+           moving the view centre onto it.
            A mega notch that has nothing to do (back while engaged, forward
            while not) is not a notch at all: it starts no tween and restarts
            none. A zoom notch back while engaged is already at the floor and
@@ -481,6 +483,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
             if (!cut_may_start(e)) continue;
             iz = 1.0 / (double)s_megaBack;
             s_megaOn = 0;
+            centre = e->tadr != 0;
             cut = 1;
             s_spinDir = way;
             s_spinUs = e->us;
@@ -516,13 +519,15 @@ static float wheel_level(const TAGPU_PACKET* pk)
         s_wheelTgt = z;
         iz = 1.0 / (double)z;
         /* a notch IN holds the point it was aimed at, clamped into this
-           frame's viewport (above), and leaving the mega map is one */
-        if (iz < izPrev && vW > 0 && vH > 0) {
+           frame's viewport (above), and leaving the mega map is one; TADR's
+           leaving moves the view centre ONTO that point instead: (a - c) * izPrev
+           is its world offset from the centre at the level being left */
+        if ((centre || iz < izPrev) && vW > 0 && vH > 0) {
             int   qx = (int)(short)(e->xy & 0xFFFF);
             int   qy = (int)(short)((e->xy >> 16) & 0xFFFF);
             float ax = (float)clampi(qx, vL, vL + vW - 1);
             float ay = (float)clampi(qy, vT, vT + vH - 1);
-            float k  = (float)(izPrev - iz);
+            float k  = (float)(centre ? izPrev : izPrev - iz);
             s_shiftX += (ax - cx) * k;
             s_shiftY += (ay - cy) * k;
         }
@@ -1038,6 +1043,10 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
         e->us    = (LONG)qpc_us();
         e->mega  = wheel_is_mega(wparam);
         e->held  = world_button_held();
+        {
+            int centred = 0;
+            e->tadr = tagpu_settings_get(TS_MEGAZOOM, &centred) && centred == 1;
+        }
         InterlockedExchange(&s_nqHead, h + 1);  /* publish: the slot is complete */
     }
     return 1;
@@ -3228,7 +3237,10 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    The clamp is the identity for every gesture that only zooms in (each notch's
    eye term is at most `(vw/2)` times its drop in distance, and the eye and the
    distance are lerped along the same ease, so the view stays a subset of the
-   one before it), and for any displacement the game thread has not applied
+   one before it) -- except a leaving of `megazoom=tadr`, whose eye term is
+   `(a - c)` times the whole distance it leaves from (up to half a viewport times
+   1/floor), so its new view is not inside the old one and only a cut past its
+   deadline can be held here ("the mega map's cut") -- and for any displacement the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
    of drawing past it. While a frame is held, a click is still mapped by the

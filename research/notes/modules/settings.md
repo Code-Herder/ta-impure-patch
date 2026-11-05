@@ -240,19 +240,20 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is `PANEL_H` 410 px tall for twelve rows: `ROW_Y0 34 + ROW_PITCH 28 × 11 = 342`,
-`ROW_H` 20, so the last row (Mega map wheel) ends at 362, the floor rule `DIV_BOT` is at 370 and the
-Resource profile caption sits under it at 378. At 640×480 the panel hangs from engine row 32 and
-ends at 442. One define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
+The in-game panel is `PANEL_H` 438 px tall for thirteen rows: `ROW_Y0 34 + ROW_PITCH 28 × 12 = 370`,
+`ROW_H` 20, so the last row (Mega map zoom in) ends at 390, the floor rule `DIV_BOT` is at 398 and the
+Resource profile caption sits under it at 406. At 640×480 the panel hangs from engine row 32 and
+ends at 470. *Mega map zoom in* is this panel's alone: the front-end screen's two columns are full
+(`vis_shown`), so a player sets it in game or in `impure.cfg`. One define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
 are all sized from it — and the panel is **composed at runtime** from the player's install rather
 than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
 copy of this layout, not its source.
 
 **The strategic icons' three keys have no row on either panel** — `iconscale`, `icondist`,
 `iconfade` in `impure.cfg` ([renderers](../renderers.html) §2.10b, [strategic icons](icons.html)).
-The front-end screen's two columns are full, and three more rows would grow the in-game panel by
-84 px, to 494, which from engine row 32 runs 46 px past a 640×480 screen. Rows wait for a panel
-layout that fits 640×480; until then the keys are set in the file and read live.
+The front-end screen's two columns are full, and the in-game panel has no room left: one more row
+would end at 498 from engine row 32, 18 px past a 640×480 screen. Rows wait for a panel layout that
+fits 640×480; until then the keys are set in the file and read live.
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`

@@ -16,8 +16,9 @@ renderer: it is a jump to the whole-map level, TADR's gesture on our camera.
   level it left. Entering and leaving are instant (owner, 2026-11-04, after playing it beside
   Escalation's own, whose jump is instant).
 - **Wheel forward while engaged** leaves it: a cut back to the remembered level, holding the world
-  point under the pointer as the zoom does (owner, 2026-11-04; TADR's setting is `WheelMoveMegaMap`,
-  with the player's own zoom kept).
+  point under the pointer as the zoom does, or centring that point under `megazoom=tadr`, the
+  *TADR default* stage of the *Mega map zoom in* row (owner, 2026-11-04; TADR's setting is
+  `WheelMoveMegaMap`, with the player's own zoom kept).
 - **Legacy controls** (`impure.cfg`, off by default) swap the two: plain wheel is the mega map,
   Ctrl+wheel is the zoom — TADR's binding, for players who learned it.
 - **Full command** at every level: selection, band box and orders work through the same
