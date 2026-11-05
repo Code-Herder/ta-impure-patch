@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=fd471733..a5a57e20 findings=13 acted=13 rejected=0 date=2026-11-04; two read-only rounds on the toggle, the cap's end, the icon cells and the GDI hand-back; earlier rounds on c683dfe0 and 738423d2 notes, and rounds on the cut and the held-button rule through fd471733
