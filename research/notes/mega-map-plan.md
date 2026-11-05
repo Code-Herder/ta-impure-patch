@@ -241,7 +241,7 @@ is per-frame working copies, not information, so the landing is split to remove 
 ## Landings
 
 1a. **Fog from its source bits**, whole map, one shared texture, expanded in the shader.
-   *Built 2026-11-03 on this worktree; the in-game checks V1a-1..6 are open.* Offline: the build's
+   *Landed; in-game checks V1a-1..6 run.* Offline: the build's
    checks, `tools/replay/fog_expand_test.py`, `tools/wiki/scenecheck.mjs` (the stage's fog source
    expands to the mockup's grid byte for byte), and the lab's extracted GLSL ES compiled by
    glslang. Two things the spec did not foresee: the completion order cannot matter on a whole-map
@@ -251,8 +251,7 @@ is per-frame working copies, not information, so the landing is split to remove 
    DLL's GLSL, so both now bind an R32UI source (`tools/tascene` declares `usampler2D`'s
    precision). There is no off switch for the fog: a frame without a source fails closed, drawing
    no unit but the watched player's own and no wreck.
-1b. **Terrain from per-level data.** *Built 2026-11-03 on its worktree; the in-game checks V1b-1..3
-   are open.* No record is stored per cell: the draw is `cols × rows` instances of the unit quad, and
+1b. **Terrain from per-level data.** *Landed; in-game checks V1b-1..3 run.* No record is stored per cell: the draw is `cols × rows` instances of the unit quad, and
    the vertex stage derives each cell from `gl_InstanceIndex`, the level's tile map (R16_UINT) and
    the neighbourhood keys (R32_UINT), both uploaded once a level as waits, behind a
    TRANSFER → VERTEX_SHADER barrier on the frame that draws ([terrain & depth](terrain-depth.html)
@@ -266,8 +265,7 @@ is per-frame working copies, not information, so the landing is split to remove 
    every restore drop and blanked the terrain while two retires were pending, so the image keeps
    what it holds; and the browser lab and the wiki mockup extract the DLL's terrain shader, so both
    draw from an R16UI tile-map texture too.
-1c. **The floor follows the map.** *Built 2026-11-03 on this worktree; the in-game checks are
-   open* (spec v2 §4.6: the floor line and the rect at 1024×768 and 4K on Seven Islands, click and
+1c. **The floor follows the map.** *Landed; the in-game checks run* (spec v2 §4.6: the floor line and the rect at 1024×768 and 4K on Seven Islands, click and
    band-box selection and a move order at the floor, a hover at the screen's edge with the hit
    guard's count, the anchor and model counts at 1× and at the floor, the `vk: VA` line, the
    small-map regression, a format-26 recording, and the replay gate). A runtime floor
@@ -280,7 +278,7 @@ is per-frame working copies, not information, so the landing is split to remove 
    numbers above are arithmetic, and no `zoom: hit guard` count or `reachheld=` has been seen.
    Review at `high` (sync between the threads, a new byte patch, the recording format).
 M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 the terrain and M2
-   the features. *Built 2026-11-03 on its worktree; the in-game checks are open.* The spec is
+   the features. *Landed; the in-game checks run.* The spec is
    `.data/mega-map/mipmaps-spec.md` in the main checkout. Each terrain atlas, base and restored, has
    a separate 5-level RGBA8 chain image, one 16-texel cell per tile on the atlas's own grid; the
    features cut every GAF frame into 32 × 32 tiles from its own origin and give each a cell of two
@@ -315,11 +313,13 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    point under the pointer, or centres it under `megazoom=tadr` (owner, 2026-11-04). A two-player
    recording carries the flag on exactly one sample per cut (MEASURED 2026-11-05: 4 cuts, the next
    sample of each clear) and plays to its end from both views; no skirmish test group reaches
-   `mp_pov_capture`, so the replay gate names it `UNCOVERED` (owner's call for this landing). *Not
-   run:* a hardware button, a genuinely busy mouse ring, and Windows. A peer on a build older than
-   format 28 refuses the first flagged sample.
-3. **Strategic icons, BAR's rule.** *Built 2026-11-03 on its worktree; the in-game checks are
-   open* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
+   `mp_pov_capture`, so the replay gate names it `UNCOVERED` (owner's call for this landing). A
+   busy ring, a lost release (X button events on a private display, MEASURED 2026-11-05) and the
+   gesture on Windows (Mayhem and retail, a smoke over SSH) were run; a physical mouse is the owner's
+   check. A peer on a build older than format 28 is refused at the recording's start
+   (`RECMP_START_VERSION`, owner, 2026-11-05): no recording for that match, the game plays on, and a
+   plain-wheel back notch right after leaving stays a smooth zoom (owner, 2026-11-05).
+3. **Strategic icons, BAR's rule.** *Landed; the in-game checks run* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
    frame, every class at the floor, the fade band's alphas, command on icons, radar dots, the 4K
    numbers, the cost, the keys). The module: [strategic icons](modules/icons.html). A class per
    type, built on the game thread at the level's first in-play fill and carried in the packet;
@@ -336,7 +336,7 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    640×480, so rows wait for a panel layout that fits. The class table's and the
    art's game-thread code sits in `tagpu_packet_pub.c`, an existing publisher, so
    `thread-split.allow` gains no line.
-4. **Mod icon sets.** *Built 2026-11-03 on its worktree; the in-game checks V4-1..V4-5 are open*
+4. **Mod icon sets.** *Landed; the in-game checks V4-1..V4-5 run, with every picture of every set in game on 2026-11-05*
    (`.data/mega-map/landing3-4-spec.md`: Mayhem's set at the floor in team colours and selected,
    ProTA's categories and its UNKNOWN, Escalation's set from a full install and the compat setups'
    Escalation with no set, TA Zero's `ZIcon` and retail with none, the pick on set pictures). The
@@ -351,8 +351,7 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    else the set's UNKNOWN, else its generated shape; a radar contact draws the set's NONE. Both
    threads size a set picture through one function, so the pick's circle is the picture's. The
    game-thread code sits in `tagpu_packet_pub.c`, so `thread-split.allow` gains no line.
-5. **Documentation** rides with each landing; the last one adds an in-game wiki entry. *Built
-   2026-11-03 on its worktree; the wiki gate and the in-game look are open.* The entry is **Mega
+5. **Documentation** rides with each landing; the last one adds an in-game wiki entry. *Landed.* The entry is **Mega
    map and strategic icons**, under Quality of Life → Camera, a text entry: its title, subtitle and
    seven paragraphs on the gesture, the legacy wheel, the icons and their shapes, radar dots, mod
    sets and the three `impure.cfg` keys, with no stage, because the wiki's stage has no camera

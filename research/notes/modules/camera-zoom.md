@@ -387,9 +387,11 @@ display, 60 fps video, stock TA, injected input; the click cases with temporary 
 removed). Live: each of 22 cuts changes exactly one video frame. A press behind a leaving notch was
 dropped, a press on the side panel behind an engaging one was not, and a Ctrl+wheel back with `ddown`
 held did not cut. Forcing the gate to defer five draws of each of 6 cuts left each one frame. Clicks
-right before a notch never found the ring busy at the apply under injection, so a busy ring was
-exercised only by that forcing, and the path that clears a lost release needs real buttons and was
-not run. Leaving at five pointer positions from the floor to 1×: the world point under the pointer
+right before a notch never found the ring busy at the apply under injection, so forcing was the only
+way there. MEASURED 2026-11-05 (X button events on a private display, a throwaway logging build): the
+ring deferred the cut's gate 120 times without a crash, a notch with a button held made no zoom line,
+and a release lost outside the window was cleared once, after which the notch cut. A physical mouse
+is the owner's check. Leaving at five pointer positions from the floor to 1×: the world point under the pointer
 differs by 0 px at four, and by 148 px on x at the fifth, where the eye stands at the range's end
 (10272). Under `megazoom=tadr`, set by clicking the row in a running game, that point is exactly the
 view's centre at three pointers away from the range's end. Follow of the recording: 22 cuts, 22 flagged samples, each one frame; a control build

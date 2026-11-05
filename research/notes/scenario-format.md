@@ -685,6 +685,11 @@ checked.
 path into the engine with its own validation story, and `scenario apply /tmp/one.json`
 already covers it through the safe one.
 
+**Known crash: a type whose script is null.** Placing ProTA 4.8's `MAKEANTICOR` kills the game in
+`COBEngine_QueryScript` at `0x4B0BC1` (`mov eax,[ecx+8]` with `ecx` 0), MEASURED 2026-11-05 one type
+at a time on two builds; the other ProTA types tried placed cleanly. The applier does not refuse such
+a type [INFERRED: it has no script to start, like the mod's other `MAKE*` build-menu entries].
+
 ---
 
 ## Phases and DoD

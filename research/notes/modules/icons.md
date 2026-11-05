@@ -54,7 +54,7 @@ BAR's camera tilt is ignored [INFERRED: a top-down approximation the distance se
     alpha = 0                          d' < 1 − b
           = 64 + 191 (d' − (1−b)) / b  b > 0 and d' < 1          the engine's fade ramp
           = 255                        otherwise
-    hide  = d' > 1 and R · z < 0.45 · E
+    hide  = d' > 1 and R · z < 0.45 · E      R = 0 for a hollow generated shape
 
 `size_c` is BAR's `icontypes.lua` size of the nearest BAR unit: COMMANDER 1.8375 (armcom), FACTORY
 1.5225 (armlab), BUILDING 1.05 (armsolar), AIRCONS 1.26 (armca), AIRCOMBAT and AIR 0.861 (armfig),
@@ -325,7 +325,13 @@ GUI's black; with no `radlogo` there are no radar dots and the shapes still draw
 ## What an icon hides
 
 A unit whose model is **hidden** gets no NU at all — no model, no shadow, no selection rect (BAR
-draws no footprint for an icon) — and the marker pass skips its health bar and group digit. The
+draws no footprint for an icon) — and the marker pass skips its health bar and group digit.
+**A hollow generated shape hides any model** from the level it is opaque, whatever the model's size
+(`tagpu_icon_cover_r`: R is 0 for AIR and UNKNOWN with no set picture): its hole would show the model
+and read as its solid twin. A set's picture and a solid shape keep the model's radius. **An opaque
+icon drops the bar and the digit too**, also where a large model still shows around it: they would
+cover the icon, the only reading at that level. A fading icon keeps them, so they disappear when the
+ramp ends. The
 **cargo of a hidden unit** — a unit in a transport, a nanoframe on a factory's pad — is part of its
 carrier's picture: neither a model nor an icon, and nor is the cargo of that cargo. The render
 thread marks the cargo lists (`cargo_first` / `cargo_next`, every hop a packet index the publisher
@@ -334,8 +340,7 @@ to 64 rounds (`TAGPU_ICON_CARGO_HOPS`), each list followed at most 64 members, t
 guard. Only a unit the native pass draws (`TAGPU_PK_U_NATIVE`) is ever an icon, hidden or
 suppressed, and only such a unit passes the suppression on: a unit the engine draws keeps its
 sprite, its bar and its digit, and hides no cargo. Cargo of a carrier whose model shows is decided
-by its own rule. A unit with an icon whose model is not hidden draws both, the icon over it, while
-the alpha ramps.
+by its own rule. A unit with an icon whose model is not hidden draws both, the icon over it.
 
 **When icons are decided at all.** Only while the unit pass draws the units and the marker pass
 draws the icons (`tagpu_mark_draws`: armed and not passive) — a model is never hidden under an
@@ -397,12 +402,19 @@ lies. At the game thread's applied level
 - `-1`, the guarded engine test as before: the latest command record drew no icons, no table, a
   unit `tagpu_native_owns_unit` refuses, a row past the table, a nanoframe (`+0x104 > 0`), no
   health (`+0x108 ≤ 0`), or a model the rule does not hide.
-- **Hidden**: hit when `(px − ax)² + (py − ay)² ≤ (0.45 · E / z)²`, with `ax = ((x − (eyeX << 16))
+- **Hidden**: hit when the unit's own circle holds the pointer and no other icon answers nearer:
+  `(px − ax)² + (py − ay)² ≤ (0.45 · E / z)²`, with `ax = ((x − (eyeX << 16))
   >> 16) + 0x80` and `ay = ((z − (eyeY << 16)) >> 16) − ((alt >> 16) >> 1) + 0x20` — `0x48C6A0`'s
   own anchor without its corner offsets, in 64 bits. `0x48C6A0` is never called for such a unit, so
   its int16 narrowing cannot wrap. `E` is the edge `tagpu_icon_type` gives the picture: the
   class's drawn edge, or `k ×` the longer side of the type's set picture in the art this thread
   published, the type's `icon` bounded by the art's picture count.
+- **The nearest icon answers.** The engine asks about one unit at a time and keeps, among its hits,
+  the smallest key of the `+0x92` record (`0x48CE1E..0x48CE75`), which knows nothing of the pointer
+  [DISASSEMBLED]. So a hit walks HotUnits (`main+0x1435F`, count `+0x14367`, each id below the slot
+  count, model id 0 and units `tagpu_native_owns_unit` refuses skipped) with the same circle, and
+  answers "not hit" when another icon's circle holds the pointer at a smaller distance, or an equal
+  one on a lower record. Exactly one icon answers for every point where circles overlap.
 
 *Why it is safe by construction*: every value comes from the unit's own record, its carriers' and
 the main block, read on the game thread that owns them inside the engine's own call; the row is
@@ -500,8 +512,8 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   give or a console `weight`/`limit` can add hold no type, so they change no picture.
 - **Side pictures are read at the first in-play fill of the process**: the side names then are
   the set's for the process.
-- **Overlapping icons**: the engine's own tie-break picks among hits (the smallest key over def
-  `+0x176`/`+0x17A`/`+0x17E`, `0x48CE1E..0x48CE75`), which need not be the icon drawn on top.
+- **Overlapping icons** answer by nearness, which need not be the icon drawn on top where two
+  overlap.
 - **An icon whose unit the HotUnits cull does not list** is not pickable, so the strip of an icon
   hanging over the view's edge from a unit outside the addressable rect answers nothing.
 - **A unit the native pass does not own** keeps the engine's sprite and gets no icon.
@@ -511,5 +523,7 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   draw past `TAGPU_MK_MAXDRAW` — drop the whole marker layer of that frame, which is a failed frame — the
   orders, bars and cursor are missing too — logged once a site, not a state the icons can prevent
   from the gather.
+- **A click where an icon overlaps a model the rule does not hide**: that model answers through the
+  engine's own test and tie-break, so the icon need not win.
 - Nuke projectiles get no icon, so a set's NUKEICON is loaded and never drawn; a building out of radar leaves no ghost icon (BAR keeps one);
   BAR's "real icon once identified" for a radar contact has no TA counterpart.

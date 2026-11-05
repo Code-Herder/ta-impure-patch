@@ -401,6 +401,25 @@ static void test_type(void)
     }
 }
 
+/* A hollow generated shape is drawn alone whatever the model's size, so its
+   hole can never show a model; a set's picture and a solid shape keep the
+   model's radius. */
+static void test_cover(void)
+{
+    static const unsigned RADII[] = { 0, 1, 40, 100000 };
+    const TAGPU_ICONRECT pic = { 0 };
+    int c;
+    size_t i;
+    for (c = 0; c < TAGPU_ICLS_N; c++) {
+        const int hollow = c == TAGPU_ICLS_AIR || c == TAGPU_ICLS_UNKNOWN;
+        for (i = 0; i < sizeof RADII / sizeof RADII[0]; i++) {
+            const unsigned r = RADII[i];
+            CHECK(tagpu_icon_cover_r(NULL, c, r) == (hollow ? 0u : r), "class %d radius %u, shape", c, r);
+            CHECK(tagpu_icon_cover_r(&pic, c, r) == r, "class %d radius %u, picture", c, r);
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     const int dump = argc > 1 && !strcmp(argv[1], "dump");
@@ -410,6 +429,7 @@ int main(int argc, char** argv)
     test_one_sets();
     test_floor();
     test_type();
+    test_cover();
     test_shapes(dump);
     printf("icontest: %d check(s), %d failed\n", s_checks, s_fail);
     return s_fail ? 1 : 0;
