@@ -183,6 +183,9 @@ float tagpu_zoom_rung(float z, float floor);
    zoomed world is on screen. */
 float tagpu_zoom_lever(void);
 
+/* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
+void  tagpu_zoom_presented(void);
+
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
    camera range in force and then until its gather slab lies inside the
@@ -406,6 +409,9 @@ void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
    acknowledgement fields — the last record's cmd_seq, the cumulative delta
    applied, the level in force, the epoch, and whether the centre range is in
    force (the render thread computes the same range from it). */
+void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
+                         unsigned* epoch, unsigned* centre);
+
 /* GAME THREAD: the record this draw's tagpu_zoom_apply and tagpu_vpwide_apply take
    (tagpu_zoom.c, "a mouse record is handled through one view"). */
 const struct TAGPU_CMD* tagpu_zoom_cut_gate(const struct TAGPU_CMD* c);
@@ -414,8 +420,6 @@ const struct TAGPU_CMD* tagpu_zoom_cut_gate(const struct TAGPU_CMD* c);
    across it. */
 int   tagpu_zoom_cut_latched(void);
 void  tagpu_zoom_cut_clear(void);
-void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
-                         unsigned* epoch, unsigned* centre);
 
 /* ---- the input path ---------------------------------------------------- */
 

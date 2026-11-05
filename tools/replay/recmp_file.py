@@ -578,7 +578,7 @@ class History:
                 raise ValueError("perspective sample span")
             player, every, flags, zero, view_w, view_h, zoom = struct.unpack_from("<BBBBHHI", body)
             held = self.source_pov.get(origin, [])
-            if (player != RECMP_POV_PLAYER or not 1 <= every <= 30 or flags & ~3 or zero or
+            if (player != RECMP_POV_PLAYER or not 1 <= every <= 30 or flags & ~7 or zero or
                     not self.zoom_min <= zoom <= 524288 or not 1 <= view_w <= 16384 or not 1 <= view_h <= 16384 or
                     not after(held[-1] if held else None)):
                 raise ValueError("perspective sample fields/provenance")

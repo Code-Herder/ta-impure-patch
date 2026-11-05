@@ -23,6 +23,7 @@
 #include "fps_limiter.h"
 #include "dd.h"
 #include "render_vk.h"
+#include "tagpu_zoom.h"
 #include "render_gdi.h"
 #include "debug.h"
 #include "config.h"
@@ -167,6 +168,7 @@ DWORD WINAPI vk_render_main(void)
             came_up = 1;
             /* the world's fog witnesses count what reached the screen */
             tagpu_native_presented(fc);
+            tagpu_zoom_presented();
         }
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A

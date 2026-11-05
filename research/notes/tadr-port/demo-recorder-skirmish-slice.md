@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 27 and its readers take formats 26 and 27 (*The file*, below).
+The recorder writes recording format 28 and its readers take formats 26, 27 and 28 (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -156,7 +156,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 27; a reader takes the closed list `rec_format_supported` names, 26 and 27 — every block is format 26's, and 27 lowers the camera sample's zoom minimum from 16384 (0.25) to 1024 (1/64), so a replay carries the whole-map view the zoom floor now allows. `tarec.py` refuses any other with `format N, this tool reads 26, 27`:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 28; a reader takes the closed list `rec_format_supported` names, 26, 27 and 28 — every block is format 26's, 28 adds `REC_POV_CUT` to a camera sample's flags, and 27 lowers the camera sample's zoom minimum from 16384 (0.25) to 1024 (1/64), so a replay carries the whole-map view the zoom floor now allows. `tarec.py` refuses any other with `format N, this tool reads 26, 27`:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the start's wall clock (`RT_WALLCLOCK`: a FILETIME in UTC, then the local time's offset

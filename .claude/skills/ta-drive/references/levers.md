@@ -215,7 +215,7 @@ Driving the camera at a zoom other than 1:
 - **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
   Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back cuts to the floor
   with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
-  left, centred on the point under the pointer. A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
+  left, holding the point under the pointer. A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
   wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
   control launch always has Ctrl+wheel as the mega map.
 - **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll

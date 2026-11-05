@@ -142,6 +142,7 @@ typedef struct {
     LONG xy;                       /* where it was aimed: x, y as two shorts   */
     LONG us;                       /* qpc_us() when it was taken               */
     LONG mega;                     /* 1: bound to the mega map, 0: to the zoom */
+    LONG held;                     /* a world button was down when it was taken */
 } NOTCH;
 static NOTCH         s_nq[NOTCHQ];
 static volatile LONG s_nqHead;                  /* written by the message thread only */
@@ -192,17 +193,20 @@ static float         s_landMs = -1.0f;          /* the last tween's length, for 
      waits at the game thread until the ring is empty (tagpu_zoom_cut_gate), and
      IdleTick pops one record each time it runs, so the wait ends;
    - a press arrives between the apply and the frame that shows it: from before
-     the cut's record is posted until the frame after the one that draws the
-     new view, `s_cutOwed` stands and the door drops a press on the world with
-     its release. The next frame is the proof: this thread runs one frame at a
-     time, so the frame that drew the new view has been handed to present. The
-     flag falls after `s_zoom` is written, so a press that reads it down reads
-     the new level;
+     the cut's record is posted until a frame of the new view has gone to present
+     (tagpu_zoom_presented; a frame that did not present does not count),
+     `s_cutOwed` stands and the door drops a press on the world with its release.
+     The flag falls after `s_zoom` is written, so a press that reads it down reads
+     the new level. What is left is the display's own latency, a frame handed to
+     present and not yet scanned out, which no ordering here can see;
    - a button is already down on the world when the cut would start, whose
      release acts on the world (the left button's release decides the click or
-     the box): a mega notch with a world button held is dropped. Both sides
-     write their own flag and then read the other's through a full fence
-     (cut_may_start, tagpu_zoom_drop_mouse), so at least one sees the other.
+     the box): a mega notch with a world button held is dropped. The notch says
+     so itself, stamped in message order on this same thread, so a button let go
+     and not yet dispatched still counts. A press after the notch is the two-flag
+     case: each side writes its own flag and then reads the other's through a
+     full fence (cut_may_start, tagpu_zoom_drop_mouse), so at least one sees the
+     other.
    While `s_cutOwed` stands, what still reads the door (hover, a move) is mapped
    through the game thread's own level, which changes with its eye.
 
@@ -214,7 +218,8 @@ static int           s_megaOn;
 static float         s_megaBack = 1.0f;
 static int           s_cutHold;
 static volatile LONG s_cutOwed;                 /* written here, read at the door on the game thread */
-static int           s_cutShown;                /* the frame drawing the new view has begun */
+static int           s_cutDrawn;                /* this frame draws the new view, acknowledged */
+static int           s_cutShown;                /* ...and a frame of it has gone to present */
 static unsigned      s_cutSeq;                  /* the cmd_seq the cut was posted in; 0 not yet */
 static unsigned      s_cutGen;                  /* the cuts so far: a record names the latest */
 static DWORD         s_cutUs;                   /* the latest cut's notch, on the counter */
@@ -278,36 +283,51 @@ static LONG wheel_discard(void)
 static void cut_end(void)
 {
     s_cutHold = 0;
+    s_cutDrawn = 0;
     s_cutShown = 0;
     s_cutSeq = 0;
     InterlockedExchange(&s_cutOwed, 0);
 }
 
-/* A button is held on the world. A bit whose release never came (one let go
-   outside the window) is not a button down: the flag would refuse every cut
-   after it, so it stands only while Windows says some button is down. */
+/* Some press on the world has passed the door without its release. */
 static int world_button_held(void)
 {
-    int i, any = 0;
-    for (i = 0; i < 4; i++) any |= s_worldHeld[i] != 0;
-    if (!any) return 0;
-    if (tagpu_shield_on() || (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) |
-                                 GetAsyncKeyState(VK_MBUTTON) | GetAsyncKeyState(VK_XBUTTON1) |
-                                 GetAsyncKeyState(VK_XBUTTON2)) & 0x8000)
-        return 1;
-    for (i = 0; i < 4; i++) InterlockedExchange(&s_worldHeld[i], 0);
+    int i;
+    for (i = 0; i < 4; i++) if (s_worldHeld[i]) return 1;
     return 0;
 }
 
 /* Render thread, before a cut starts: this side of "a mouse record is handled
-   through one view"; the door's is in tagpu_zoom_drop_mouse. */
-static int cut_may_start(void)
+   through one view". The notch's own `held` is the message order's answer for
+   what came before it; the bits, read after raising the flag, are the answer for
+   a press after it, whose door raises its bit and then reads the flag. */
+static int cut_may_start(const NOTCH* e)
 {
     LONG was = s_cutOwed;
     InterlockedExchange(&s_cutOwed, 1);
-    if (!world_button_held()) return 1;
+    if (!e->held && !world_button_held()) return 1;
     InterlockedExchange(&s_cutOwed, was);
     return 0;
+}
+
+/* GAME THREAD, once a draw: a release lost outside the window must not refuse
+   every cut after it. Windows updates the async state as it queues the message
+   [INFERRED], so all buttons up at one apply puts every release in the queue, and
+   the pump runs before the next apply: a bit that outlives that was never going to
+   be cleared. Clearing here and not at the notch keeps the decision in message
+   order. The shield's releases always arrive and its async state is not these. */
+static void world_held_stale(void)
+{
+    static int upBefore;
+    int i, up;
+
+    if (!world_button_held() || tagpu_shield_on()) { upBefore = 0; return; }
+    up = !((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) |
+            GetAsyncKeyState(VK_MBUTTON) | GetAsyncKeyState(VK_XBUTTON1) |
+            GetAsyncKeyState(VK_XBUTTON2)) & 0x8000);
+    if (up && upBefore)
+        for (i = 0; i < 4; i++) InterlockedExchange(&s_worldHeld[i], 0);
+    upBefore = up;
 }
 
 /* The packet has applied the cut's record and all of its eye step. */
@@ -330,7 +350,9 @@ static void wheel_rest(float z)
     s_wheelPend = 0;
     s_megaOn = 0;
     s_spinDir = 0;
-    cut_end();
+    /* the hold, not the door: the cut's record may still be on its way to the
+       game thread, and the end of read_lever shuts the door on its ack */
+    s_cutHold = 0;
 }
 
 /* Render thread: the wheel at rest at level z, the ring emptied. Returns the
@@ -438,7 +460,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
         const NOTCH* e = &s_nq[(ULONG)t % NOTCHQ];
         double izPrev = 1.0 / (double)s_wheelTgt;
         double iz;
-        int    centre = 0, whole = 0, way = e->delta > 0 ? 1 : -1;
+        int    whole = 0, way = e->delta > 0 ? 1 : -1;
         float  z;
         if (way == s_spinDir && (LONG)((DWORD)e->us - (DWORD)s_spinUs) < SPIN_GAP_US) {
             s_spinUs = e->us;
@@ -449,17 +471,16 @@ static float wheel_level(const TAGPU_PACKET* pk)
            floor and the view centre moves onto the map's centre, so the whole
            map is on screen from wherever it was engaged, and the target it
            left is kept. While it is engaged ANY notch forward leaves it --
-           TADR's gesture -- back to the kept target, centred on the world
-           point under the pointer.
+           TADR's gesture -- back to the kept target, holding the world point
+           under the pointer as any notch in does.
            A mega notch that has nothing to do (back while engaged, forward
            while not) is not a notch at all: it starts no tween and restarts
            none. A zoom notch back while engaged is already at the floor and
            leaves it engaged. */
         if (s_megaOn && e->delta > 0) {
-            if (!cut_may_start()) continue;
+            if (!cut_may_start(e)) continue;
             iz = 1.0 / (double)s_megaBack;
             s_megaOn = 0;
-            centre = 1;
             cut = 1;
             s_spinDir = way;
             s_spinUs = e->us;
@@ -468,7 +489,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
                would keep the floor as the level to return to, and the next
                notch forward would pan onto the pointer without zooming */
             if (e->delta < 0 && !s_megaOn && s_wheelTgt > s_floor) {
-                if (!cut_may_start()) continue;
+                if (!cut_may_start(e)) continue;
                 s_megaBack = s_wheelTgt;
                 s_megaOn = 1;
                 iz = 1.0 / (double)s_floor;
@@ -495,15 +516,13 @@ static float wheel_level(const TAGPU_PACKET* pk)
         s_wheelTgt = z;
         iz = 1.0 / (double)z;
         /* a notch IN holds the point it was aimed at, clamped into this
-           frame's viewport (above); leaving the mega map moves the view centre
-           ONTO that point instead: (a - c) * izPrev is its world offset from
-           the centre at the level being left */
-        if ((centre || iz < izPrev) && vW > 0 && vH > 0) {
+           frame's viewport (above), and leaving the mega map is one */
+        if (iz < izPrev && vW > 0 && vH > 0) {
             int   qx = (int)(short)(e->xy & 0xFFFF);
             int   qy = (int)(short)((e->xy >> 16) & 0xFFFF);
             float ax = (float)clampi(qx, vL, vL + vW - 1);
             float ay = (float)clampi(qy, vT, vT + vH - 1);
-            float k  = (float)(centre ? izPrev : izPrev - iz);
+            float k  = (float)(izPrev - iz);
             s_shiftX += (ax - cx) * k;
             s_shiftY += (ay - cy) * k;
         }
@@ -549,6 +568,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
                 s_cutUs = back > 0 ? now - (DWORD)back : now;
                 s_cutGen++;
                 s_cutSeq = 0;
+                s_cutDrawn = 0;
                 s_cutShown = 0;
             }
             s_cutHold = 1;
@@ -673,7 +693,17 @@ static int      s_reachHeldMax;
    holds the level higher for longer. A new epoch does NOT empty the ring: the
    game thread applies a record's reach whatever its epoch (the epoch gates
    only the eye delta), so a request of the old level still decides the reach
-   of a packet of the new one. Render thread only. */
+   of a packet of the new one.
+
+   A FOLLOW'S PACKETS ARE THEIR OWN REQUEST. Its level and camera are written on
+   the game thread, so that thread takes the reach too: the lower of the record's
+   rung and the rung of the level it writes (tagpu_zoom_apply). A packet of a
+   Follow therefore always covers its own level, and a recorded cut draws whole
+   on the packet that brings it, with nothing asked first. A rung above the level
+   is dropped from the ring on such a frame, because it can no longer raise a
+   packet's reach: the game thread keeps the Follow's rung as a cap after the
+   Follow ends, until a record asks that low, which the frames drawn at that level
+   post. So a Follow's end pops nothing. Render thread only. */
 #define REACH_INFLIGHT 8
 static struct { unsigned seq; float rung; } s_inflight[REACH_INFLIGHT];
 static int      s_nInflight;
@@ -695,7 +725,8 @@ float tagpu_zoom_rung(float z, float floor)
 }
 
 /* The level this frame may be drawn at, at least: the floor, the packet's
-   reach level and every rung still in flight. */
+   reach level and every rung still in flight ("A Follow's packets are their own
+   request"). */
 static float reach_ladder(const TAGPU_PACKET* pk, float z, int following)
 {
     float zmin = s_floor > s_reach ? s_floor : s_reach;
@@ -704,9 +735,9 @@ static float reach_ladder(const TAGPU_PACKET* pk, float z, int following)
     for (i = 0; i < s_nInflight; i++) {
         if (pk && (int)(s_inflight[i].seq - pk->cmd_ack_seq) <= 0) continue;
         s_inflight[n++] = s_inflight[i];
-        /* a Follow's packet carries the tables for its own level, whatever was
-           asked (tagpu_zoom_apply), so its cut waits at no rung */
-        if (!following && s_inflight[i].rung > zmin) zmin = s_inflight[i].rung;
+        /* a rung above a Follow's level leaves the ring ("the reach ladder") */
+        if (following && s_inflight[i].rung > z) { n--; continue; }
+        if (s_inflight[i].rung > zmin) zmin = s_inflight[i].rung;
     }
     s_nInflight = n;
     s_zmin = zmin;
@@ -779,6 +810,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
                  "installed, so a zoomed world would name the point under the "
                  "SCREEN position. Arm tagpu_zoom.on (or tagpu_vpwide.on).");
         wheel_reset(1.0f);
+        cut_end();
         s_zoom = 1.0f;
         s_asked = 1.0f;
         anchor_step(0, pk);
@@ -856,9 +888,14 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        release keeps the door shut: its eye may not have been applied. */
     if (s_cutOwed && !s_cutHold && pk) {
         if (s_cutShown) cut_end();
-        else if (cut_acked(pk)) s_cutShown = 1;
+        else if (cut_acked(pk)) s_cutDrawn = 1;
     }
     return z;
+}
+
+void tagpu_zoom_presented(void)
+{
+    if (s_cutDrawn) s_cutShown = 1;
 }
 
 float tagpu_zoom_lever(void)
@@ -1000,6 +1037,7 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
         e->xy    = (LONG)(((unsigned)(unsigned short)y << 16) | (unsigned)(unsigned short)x);
         e->us    = (LONG)qpc_us();
         e->mega  = wheel_is_mega(wparam);
+        e->held  = world_button_held();
         InterlockedExchange(&s_nqHead, h + 1);  /* publish: the slot is complete */
     }
     return 1;
@@ -2155,6 +2193,7 @@ float tagpu_zoom_reach_level(void)
    camera last said so (tagpu_zoom_cut_latched) */
 static unsigned s_gCutGen;
 static int      s_gCutLatch;
+static float    s_gFolCap;                 /* a Follow's rung; 0 none ("the reach ladder") */
 
 /* ---- the apply: the game thread's half of every command ---------------------
 
@@ -2277,6 +2316,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        posts live = 0, which is 1.0 here: the engine's own rect and rate come
        back at the next draw. */
     s_applyLive = 1;
+    world_held_stale();
     floor_compute(ta);
     {
         unsigned gen = tagpu_packet_pub_level_gen();
@@ -2293,13 +2333,10 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* the tables' reach: the record's rung, never below the floor, and the
        floor (the widest) with no record -- the safe default */
     s_gReach = c ? c->reach_zoom : s_gFloor;
-    /* A FOLLOW'S PACKET CARRIES THE TABLES FOR ITS OWN LEVEL: the camera and the
-       level it writes arrive in one packet, so a recorded cut draws whole, and
-       the render thread need not ask for a rung first (reach_ladder). */
-    if (s_fol.epoch) {
-        float fr = tagpu_zoom_rung((float)s_fol.level / 65536.0f, s_gFloor);
-        if (fr < s_gReach) s_gReach = fr;
-    }
+    /* A FOLLOW'S PACKETS ARE THEIR OWN REQUEST ("the reach ladder") */
+    if (s_fol.epoch) s_gFolCap = tagpu_zoom_rung((float)s_fol.level / 65536.0f, s_gFloor);
+    else if (c && c->reach_zoom <= s_gFolCap) s_gFolCap = 0.0f;
+    if (s_gFolCap > 0.0f && s_gFolCap < s_gReach) s_gReach = s_gFolCap;
     /* the icons answer the pick only from a record of THIS level's epoch: a
        record the render thread posted before it saw the level end is the old
        level's frame, and the level end cleared the answer, so no click is
@@ -2475,6 +2512,7 @@ void tagpu_zoom_level_end(char* ta)
     s_epoch++;
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
     s_gCutLatch = 0;
+    s_gFolCap = 0.0f;
     s_placeOn = 0;                        /* a placement is the old level's */
     s_applyLive = 0;
     if (s_fol.epoch) follow_end(TAGPU_FOLLOW_LEVEL);
@@ -2849,11 +2887,11 @@ int tagpu_zoom_drop_mouse(UINT msg, LPARAM lparam)
        handled through one view"); the panels are mapped 1:1 and are not touched.
        Not view(), which answers 0 at level 1, a level a cut starts from. */
     {
-        int world = s_live && !options_gui_owns_input() &&
+        int world = !options_gui_owns_input() &&
                     in_viewport(x, y, (int)s_vpL, (int)s_vpT, (int)s_vw, (int)s_vh);
         if (world) {
             InterlockedExchange(&s_worldHeld[slot], 1);
-            if (s_cutOwed) {
+            if (s_live && s_cutOwed) {
                 InterlockedExchange(&s_worldHeld[slot], 0);
                 s_dropped[slot] = 1;
                 return 1;
@@ -3190,11 +3228,7 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    The clamp is the identity for every gesture that only zooms in (each notch's
    eye term is at most `(vw/2)` times its drop in distance, and the eye and the
    distance are lerped along the same ease, so the view stays a subset of the
-   one before it) -- except LEAVING THE MEGA MAP, whose eye term is
-   `(a - c)` times the whole distance it leaves from rather than its drop (up
-   to half a viewport times 1/floor), so its new view is not inside the old
-   one and only a cut past its deadline can be held here ("the mega map's cut")
-   -- and for any displacement the game thread has not applied
+   one before it), and for any displacement the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
    of drawing past it. While a frame is held, a click is still mapped by the
