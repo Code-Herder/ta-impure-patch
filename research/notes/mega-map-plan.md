@@ -309,7 +309,12 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    16-byte mapped buffer a slot, new mapped memory where the spec had none.
 2. **The mega map binding.** A modifier bit in the notch slot; Ctrl+wheel back engages, wheel
    forward leaves at the pointer at the remembered level; legacy controls as an `impure.cfg` key
-   and a menu row. Replay Follow and the file lever keep their priority.
+   and a menu row. Replay Follow and the file lever keep their priority. Entering and leaving are
+   one-frame cuts (owner, 2026-11-04, [camera and zoom](modules/camera-zoom.html) §2.3m), with no
+   click handled across the jump and a flag in the recording so a Follow cuts too; leaving holds the
+   point under the pointer, or centres it under `megazoom=tadr` (owner, 2026-11-04). *Not run:* a
+   hardware button, a genuinely busy mouse ring, a multiplayer recording with a flagged sample, and
+   Windows. A peer on a build older than format 28 refuses the first flagged sample.
 3. **Strategic icons, BAR's rule.** *Built 2026-11-03 on its worktree; the in-game checks are
    open* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
    frame, every class at the floor, the fade band's alphas, command on icons, radar dots, the 4K
@@ -324,8 +329,8 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    the drawn edge, the smallest at which the nine classes are pairwise different, with the switch
    kept on BAR's unfloored size. Three closed-list `impure.cfg` keys — `iconscale`, `icondist`
    and the fade band `iconfade` (default 33, so 1× stays stock up to a 2560-px-tall frame) — and
-   **no menu rows**: the front-end screen has no free slot and three rows would run the in-game
-   panel 46 px past 640×480, so rows wait for a panel layout that fits. The class table's and the
+   **no menu rows**: the front-end screen has no free slot and the in-game panel has no room left at
+   640×480, so rows wait for a panel layout that fits. The class table's and the
    art's game-thread code sits in `tagpu_packet_pub.c`, an existing publisher, so
    `thread-split.allow` gains no line.
 4. **Mod icon sets.** *Built 2026-11-03 on its worktree; the in-game checks V4-1..V4-5 are open*
