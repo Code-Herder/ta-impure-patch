@@ -312,9 +312,12 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    and a menu row. Replay Follow and the file lever keep their priority. Entering and leaving are
    one-frame cuts (owner, 2026-11-04, [camera and zoom](modules/camera-zoom.html) §2.3m), with no
    click handled across the jump and a flag in the recording so a Follow cuts too; leaving holds the
-   point under the pointer, or centres it under `megazoom=tadr` (owner, 2026-11-04). *Not run:* a
-   hardware button, a genuinely busy mouse ring, a multiplayer recording with a flagged sample, and
-   Windows. A peer on a build older than format 28 refuses the first flagged sample.
+   point under the pointer, or centres it under `megazoom=tadr` (owner, 2026-11-04). A two-player
+   recording carries the flag on exactly one sample per cut (MEASURED 2026-11-05: 4 cuts, the next
+   sample of each clear) and plays to its end from both views; no skirmish test group reaches
+   `mp_pov_capture`, so the replay gate names it `UNCOVERED` (owner's call for this landing). *Not
+   run:* a hardware button, a genuinely busy mouse ring, and Windows. A peer on a build older than
+   format 28 refuses the first flagged sample.
 3. **Strategic icons, BAR's rule.** *Built 2026-11-03 on its worktree; the in-game checks are
    open* (the spec's V3-1..V3-8, `.data/mega-map/landing3-4-spec.md`: 1× identical to the stock
    frame, every class at the floor, the fade band's alphas, command on icons, radar dots, the 4K

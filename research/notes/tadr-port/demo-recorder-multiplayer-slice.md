@@ -6,6 +6,16 @@ Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](dem
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
+**Open: a round trip in a playing from view 1 is not always exact; the cause is not found.** MEASURED 2026-11-05 on one
+two-human, two-AI mode-3 recording (format 27, `recmp_create_begin_test.py`, zoom and native on), played by
+`recmp_play_test.py --perspective 1` with round trips at every tenth tick of 100..760 in three playings: 22 of 67 fail
+`compare-dumps --seek`, each on `+0x110` bit 16 of some units (the altitude fix-up is due), on 100 to 200 cells of record 1's
+sight counters off by one, or on both. The build before the mega map's last landing and the build after it print identical
+lines at identical ticks, and that landing changes no reader or seek code. A second recording, format 28, gives 21 of 67.
+Within a playing the sight differences come in pairs of opposite sign, one round trip apart: A 14, B 13, then A 13, B 14
+[INFERRED: the seek writes the wrong count and the playing carries it to the next seek]. View 0 ran three round trips, all
+equal, and was not swept. A multiplayer round trip that is equal at one T says nothing about the next T.
+
 ## Two-peer baseline
 
 MEASURED 2026-10-04 on the reference setup, retail content, two native-DirectPlay Wine peers on *Two Continents*, current local `main` build `446337c6`, private display. Both games carried `tagpu_recorder.on`. The host and joiner reached the same live battle with one commander per peer. `main+0x2A44` was `5` on both (network bit set). Neither wrote an `.imprec` file, consistent with the `MODE_SKIRMISH` start and continuation gates in `tagpu_rec_capture`. This is a baseline, not a test of an enabled multiplayer recorder.
