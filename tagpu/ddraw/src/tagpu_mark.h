@@ -88,7 +88,7 @@ int  tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
 /* One strategic icon (tagpu_icon.c), centred on (ax, ay): `edge_w` x
    `edge_h` SCREEN px at every zoom, its corner on a whole game pixel. `r` is its
    art's rect in tagpu_icontype_art's atlas with `shape` 0, or NULL with
-   `shape` a generated shape, TAGPU_ICLS_* + 1, decided per fragment
+   `shape` a generated shape, TAGPU_ICLS_* + 1, decided per game pixel
    (inc/tagpu_icon_rule.h). Filled in palette index `team`, white when `sel`,
    at opacity `alpha` 0..255; never fogged -- every icon is of a unit the
    gather already judged visible, or a radar contact. 0 = the bucket is full. */

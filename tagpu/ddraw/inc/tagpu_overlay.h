@@ -7,6 +7,9 @@
    into the fork -- no separate DLL, no runtime LoadLibrary. */
 void tagpu_overlay_draw(const TAGPU_FRAME* f);
 
+/* RENDER THREAD: the session goes to GDI: every draw the overlay took goes back. */
+void tagpu_overlay_gone(void);
+
 /* NOTHING HERE CAPTURES WHAT THE RENDERER DREW. What reads the offscreen
    game-res target is `tagpu_vk_shot_record` / `_finish` (tagpu_vk_shot.c),
    driven by the A/B capture (`tagpu_vk.c`), and that is an oracle rather than

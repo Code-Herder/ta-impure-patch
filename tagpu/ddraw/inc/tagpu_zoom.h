@@ -186,9 +186,9 @@ float tagpu_zoom_lever(void);
 /* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
 void  tagpu_zoom_presented(void);
 
-/* RENDER THREAD: the session goes to GDI, so no frame will end a cut, read a view
-   or post a record again: this ends the cut, gives the engine its terrain back and
-   posts the record that hands it its own rect, rate and level. */
+/* RENDER THREAD (tagpu_overlay_gone): the session goes to GDI, so no frame will end
+   a cut, read a view or post a record again: this ends the cut and posts the record
+   that hands the engine its own rect, rate and level. */
 void  tagpu_zoom_render_gone(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor

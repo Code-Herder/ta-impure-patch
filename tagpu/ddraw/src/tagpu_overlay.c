@@ -66,6 +66,26 @@ static void say_ready(void)
    reaches and this file does not; it is fed by the packet that file has just
    filled and gated in milliseconds rather than in render frames. */
 
+/* RENDER THREAD: the session goes to GDI, which never enters tagpu_overlay_draw,
+   so no flush below will run again. Every draw this overlay took from the engine
+   goes back now, each through its own setter, terrain before the shadow gate its
+   setter names. */
+void tagpu_overlay_gone(void)
+{
+    tagpu_fxown_set_skip(0);
+    tagpu_fxown_set_skip_sfx(0);
+    tagpu_fxown_set_want(0, 0, 0);
+    tagpu_featown_set_skip(0);
+    tagpu_markown_set_bars(0);
+    tagpu_markown_set_selbox(0);
+    tagpu_markown_set_cursor(0);
+    tagpu_markown_set_orders(0);
+    tagpu_markown_set_digits(0);
+    tagpu_terrown_set_skip(0);
+    tagpu_owndraw_set_structshadow(0, 0);
+    tagpu_zoom_render_gone();
+}
+
 void tagpu_overlay_draw(const TAGPU_FRAME* f)
 {
     if (!f || f->abi!=TAGPU_ABI) return;

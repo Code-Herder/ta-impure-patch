@@ -32,7 +32,6 @@
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
-#include "tagpu_terrown.h"
 #include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
@@ -913,8 +912,7 @@ void tagpu_zoom_render_gone(void)
     s_live = 0;
     /* the apply goes on running on the last record (render_gdi.c posts none), so
        without this the scroll step, the minimap box and the pick stay at the last
-       level, and the engine's terrain stays skipped */
-    tagpu_terrown_set_skip(0);
+       level */
     tagpu_zoom_frame_end();
 }
 

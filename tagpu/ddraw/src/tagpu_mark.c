@@ -371,7 +371,9 @@ static const char* FS =
        re-raster when the size or the supersampling changes. It is decided once
        per GAME pixel, at that pixel's centre, so every supersampled fragment of
        one agrees and a line of ink is never averaged with the fill: the shape
-       is the same at every ss. taIconShape is tagpu_icon_shape() of
+       is the same at every ss. The centre is (2c + 1 - e) / e, the host test's
+       own, so mirrored cells are exact negatives and the shape stays symmetric.
+       taIconShape is tagpu_icon_shape() of
        inc/tagpu_icon_rule.h, which the host test checks. */
     "  } else if (uText == 2) {\n"
     "    int t = int(vWorld.x + 0.5), q = int(vWorld.y + 0.5);\n"
@@ -383,9 +385,9 @@ static const char* FS =
     "      if (pi == uIconSel) { if (!sel) discard; pi = uIconSelCol; }\n"
     "      else if (pi == uIconFill) pi = sel ? uIconWhite : (t & 255);\n"
     "    } else {\n"
-    "      float g = 2.0 / floor(vCol + 0.5);\n"
-    "      vec2 p = (floor((vUV + 1.0) / g) + 0.5) * g - 1.0;\n"
-    "      int m = taIconShape(sh - 1, p, vec2(g));\n"
+    "      float e = floor(vCol + 0.5);\n"
+    "      vec2 p = (2.0 * floor((vUV + 1.0) * 0.5 * e) + 1.0 - e) / e;\n"
+    "      int m = taIconShape(sh - 1, p, vec2(2.0 / e));\n"
     "      if (m == 0) discard;\n"
     "      pi = m == 2 ? uIconInk : (sel ? uIconWhite : (t & 255));\n"
     "    }\n"

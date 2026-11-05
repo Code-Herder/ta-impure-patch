@@ -971,8 +971,8 @@ typedef struct TAGPU_PACKET {
                                    render thread pins the wheel to it while
                                    the epoch is in force (tagpu_zoom.c, "the
                                    follow lever")                             */
-    uint32_t follow_last;       /* the last Follow or Jump the apply took the
-                                   reach for, in force or not ("the reach
+    uint32_t follow_last;       /* the Follow or Jump whose reach cap is in
+                                   force, ended or not ("the reach
                                    ladder"); 0 = no cap in force               */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
