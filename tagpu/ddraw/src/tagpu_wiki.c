@@ -2462,7 +2462,7 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             (int)g_ddraw.render.viewport.x, (int)g_ddraw.render.viewport.y,
             (int)g_ddraw.render.viewport.width, (int)g_ddraw.render.viewport.height);
     /* the page: the selection by the data's ids, the folds, the scrolls asked and as drawn */
-    fprintf(f, "\"entry\":");
+    fprintf(f, "\"entry_n\":%d,\"entry\":", s_entry);
     jstr(f, e ? e->id : "", 64);
     fprintf(f, ",\"demo\":");
     jstr(f, e && s_demo >= 0 && s_demo < e->ndemo ? e->demo[s_demo].id : "", 64);

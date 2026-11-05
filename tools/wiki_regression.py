@@ -726,6 +726,12 @@ def wait_dump(c, pred, what, seconds=20):
         time.sleep(0.3)
 
 
+def page_drawn(d):
+    """Whether the dump's hit map is the selected entry's page: a pick moves the rows under the entry, so a control read
+    from the frame before it is somewhere else on the page after it"""
+    return d["drawn_open"] and d["drawn_entry"] == d["entry_n"]
+
+
 def press(c, d, key):
     """A click on the drawn frame's control `key`; returns the time just before it."""
     t0 = time.monotonic()
@@ -1490,7 +1496,7 @@ def try_it(c, shot=None):
     for entry, node, demo, grab_at in TRY_DEMOS:
         if d["entry"] != entry:
             press(c, d, f"entry:{node}")
-            d = wait_dump(c, lambda d: d["entry"] == entry and "demo:1" in keys_of(d, "demo:"), f"(t1) entry:{node} did not select {entry}")
+            d = wait_dump(c, lambda d: d["entry"] == entry and page_drawn(d) and "demo:1" in keys_of(d, "demo:"), f"(t1) entry:{node} did not select {entry}")
         if d["demo"] != demo:
             k = [x["id"] for x in json.loads((TREE / f"art/wiki/entries/{entry}.json").read_text())["demos"]].index(demo)
             press(c, d, f"demo:{k}")
@@ -2037,7 +2043,7 @@ def watch_open(c):
     d = wait_dump(c, lambda d: d["drawn_open"], "(v1) the page was not drawn")
     if d["entry"] != WATCH:
         c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{WATCH_NODE}")))
-    return wait_dump(c, lambda d: d["entry"] == WATCH and d["drawn_entry"] >= 0 and d.get("drawn_frame")
+    return wait_dump(c, lambda d: d["entry"] == WATCH and page_drawn(d) and d.get("drawn_frame")
                      and any(h.get("src") == HIT_HUD for h in d["hits"]),
                      "(v1) entry:7 did not draw Watching's game frame with its stage HUD", seconds=60)
 
@@ -2407,7 +2413,7 @@ def rewind_open(c):
     d = wait_dump(c, lambda d: d["drawn_open"], "(r1) the page was not drawn")
     if d["entry"] != REWIND:
         c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{tree_node(REWIND)}")))
-    return wait_dump(c, lambda d: d["entry"] == REWIND and d.get("drawn_frame") and d.get("frame_fit")
+    return wait_dump(c, lambda d: d["entry"] == REWIND and page_drawn(d) and d.get("drawn_frame") and d.get("frame_fit")
                      and d["frame"]["live"] and any(h.get("src") == HIT_HUD for h in d["hits"]),
                      "(r1) the tree did not draw Rewind's live game frame with its stage HUD", seconds=60)
 
@@ -2844,7 +2850,7 @@ def takeover_open(c):
     d = wait_dump(c, lambda d: d["drawn_open"], "(t1) the page was not drawn")
     if d["entry"] != TAKEOVER:
         c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{tree_node(TAKEOVER)}")))
-    return wait_dump(c, lambda d: d["entry"] == TAKEOVER and d.get("drawn_frame") and d.get("frame_fit")
+    return wait_dump(c, lambda d: d["entry"] == TAKEOVER and page_drawn(d) and d.get("drawn_frame") and d.get("frame_fit")
                      and d["frame"]["tk"] and any(h.get("src") == HIT_HUD for h in d["hits"]),
                      "(t1) the tree did not draw Take over's game frame with its stage HUD", seconds=60)
 
@@ -3280,7 +3286,7 @@ def pl_pick(c, d, entry, what):
     key = f"entry:{tree_node(entry)}"
     if d["entry"] != entry:
         c.keys("dclick:%d,%d" % c.centre(c.hit(d, key)))
-    return wait_dump(c, lambda d: d["entry"] == entry and d.get("drawn_frame") and d.get("frame_fit")
+    return wait_dump(c, lambda d: d["entry"] == entry and page_drawn(d) and d.get("drawn_frame") and d.get("frame_fit")
                      and any(h.get("src") == HIT_HUD for h in d["hits"]) and (entry != PLAYERS or d["frame"].get("pl")),
                      f"{what} the tree did not draw {entry}'s game frame with its stage HUD", seconds=60)
 
@@ -4295,7 +4301,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     d = c.dump()
     if d["entry"] != entry:
         press(c, d, f"entry:{node}")
-        d = wait_dump(c, lambda d: d["entry"] == entry and f"demo:{k}" in keys_of(d, "demo:"), f"(b4) entry:{node}")
+        d = wait_dump(c, lambda d: d["entry"] == entry and page_drawn(d) and f"demo:{k}" in keys_of(d, "demo:"), f"(b4) entry:{node}")
     t0 = press(c, d, f"demo:{k}")
     d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0) and d["tick"] >= 0, f"(b4) demo:{k} did not start")
     time.sleep(3.0)
