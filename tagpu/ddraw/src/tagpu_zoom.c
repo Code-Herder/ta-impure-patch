@@ -1965,7 +1965,7 @@ float tagpu_zoom_game_floor(void)
    never hit (BAR gives cargo no icon of its own); every other unit -- a
    model, a nanoframe, a dead one, a type the class table does not cover, one
    the native pass does not draw -- goes to the guarded engine test as before. HotUnits is the cull and is
-   untouched (one id per slot, `0x485596`): an icon changes what a hit test
+   untouched (`0x485596`): an icon changes what a hit test
    answers, not which units are asked. Counted: `zoom: icon pick`, at most
    once a second. */
 #define VA_HITTEST       0x0048C6A0u   /* stdcall(unit, point), ret 8           */
@@ -2080,8 +2080,8 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
 
 /* The pick of a unit drawn as an icon: 1 hit, 0 not hit, -1 not an icon (ask
    the engine). The invariant is above `VA_HITTEST`. Every value comes from the
-   unit's own record, its carriers' and the main block, read on the game
-   thread that owns them inside the engine's own call (`0x48CE15` in
+   unit's own record, its carriers', the other listed units', the main block
+   and the fog source this thread packs, read on the game thread that owns them inside the engine's own call (`0x48CE15` in
    `0x48CD80`); the row is bounded by the table's count and every carrier by
    the unit array -- a stride-aligned record below the engine's slot count.
    THE PICK FOLLOWS THE PICTURE'S CARGO RULE (TAGPU_ICON_CARGO_HOPS,
