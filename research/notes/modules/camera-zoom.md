@@ -299,9 +299,7 @@ floor's `fit` is computed from, taken from the packet's copies of the floor's ow
 target eye less the eye the gesture lands at as of that notch — this frame's eye (the packet's plus
 what is posted and not yet acknowledged), the carry, what the tween being cut still owes, and the
 terms of the frame's earlier notches (`mega_centre_shift`) — and it is paid through `R` like a
-notch's term, so the eye tweens with the level and `anchor_step` clamps it per axis. Like leaving,
-its step is not inside the old view (up to about half the map), so under a lagging game thread the
-reach bound can hold it (`held=`). With no packet in play or no range to take the centre from, the
+notch's term, so the cut below posts it with the level and `anchor_step` clamps it per axis. With no packet in play or no range to take the centre from, the
 level still falls, about the view centre. A map whose scroll extent is narrower than the viewport
 at 1× is the one case the first frames' clamp can cut: while the packet still carries the engine's
 range (`cam_centre` 0, a draw whose ground is not ours) its `[0, extent − W]` holds the eye at 0, and an
@@ -310,11 +308,32 @@ axis the clamp cuts drops what it owes (§2.3e).
 **Leaving is the zoom-in anchor with a different factor.** A notch in holds the point under the
 pointer by moving the target centre `(a − c)(iz_prev − iz_new)`; leaving moves it
 `(a − c) · iz_prev` — the pointer's world offset from the centre at the level being left — through
-the same owed displacement `R`, so the eye lands where the model says at any frame rate and a notch
-inside the tween carries it whole. Unlike a notch in, leaving does not keep the new view inside the
-old one — its step is up to half a viewport times `1/floor`, two viewports from 0.25× and more
-from a lower floor — so under a lagging game thread the
-reach bound can hold it (`held=`), as it holds any long step; the bound is what makes that safe.
+the same owed displacement `R`, so the eye lands where the model says at any frame rate. Unlike a
+notch in, leaving does not keep the new view inside the old one — its step is up to half a viewport
+times `1/floor`, two viewports from 0.25× and more from a lower floor.
+
+**Entering and leaving are a cut: the frame before is the old view and the next is the new one, with
+nothing drawn between** (`s_cutHold`). The wheel's 250 ms tween is for the zoom; these two skip it.
+A cut could not simply draw its target at once, because the game thread answers a frame or two
+later: the ladder would hold the level at a rung and the reach bound would clamp the eye short of
+a step this long, an in-between view for those frames. So the notch's frame sets the target and
+posts the whole of `R` (`g = 1`), and that frame's command record carries the eye step, the new
+level (`rec.zoom`, the target rather than the level drawn) and its reach rung together, which the
+game thread takes in one apply. `predict` keeps drawing the last frame's level and eye, through
+the reach bound, and counting `paused=`, against packets that still describe them, until a packet
+acknowledges the whole step and the ladder no longer raises the level; that frame draws the new
+view. A click stays right throughout, since the game thread's eye and level change on the same
+apply and the first packet after it is the frame that shows them. The release also fires 250 ms
+after the notch (`CUT_HOLD_US`), or at once on a view the ladder no longer allows; that deadline is
+not a safety argument, since the ladder and the bound hold on every frame after it, and it only
+keeps a stalled game thread from freezing the picture, at the cost of the in-between view. The log
+line's `landed` is the notch to the frame of the cut.
+
+MEASURED 2026-11-04 (Two Continents, floor 0.056, a battle of 401 units, 1024×768 on a private
+display, 60 fps video, three gestures of each kind with the game paused and two with it running):
+each of the six cuts changes exactly one video frame; the log's `landed` reads 32.4–41.0 ms; the
+plain wheel's notches in the same run read 263–265 ms and change frames throughout; the heartbeat
+reads `out=0 held=0/0px back=0 nopieces=0`.
 
 **Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
 mouse-world pin each set the level through `wheel_rest`, which disengages, so a later notch forward

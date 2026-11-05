@@ -11,10 +11,11 @@ renderer: it is a jump to the whole-map level, TADR's gesture on our camera.
 
 - **Wheel** zooms as today, but no longer stops at 0.25×: the floor is the level at which the
   current map fits the world viewport.
-- **Ctrl+wheel back** engages the mega map: a tween to the whole-map level with the view centre
-  moving onto the map's centre, so the whole map is on screen from wherever it was engaged,
-  remembering the level it left.
-- **Wheel forward while engaged** leaves it: a tween back to the remembered level, centred on the
+- **Ctrl+wheel back** engages the mega map: a cut to the whole-map level with the view centre on
+  the map's centre, so the whole map is on screen from wherever it was engaged, remembering the
+  level it left. Entering and leaving are instant, as TADR's are (owner, 2026-11-04, after playing
+  it beside Escalation's own).
+- **Wheel forward while engaged** leaves it: a cut back to the remembered level, centred on the
   world point under the pointer (TADR's `WheelMoveMegaMap`, with the player's own zoom kept).
 - **Legacy controls** (`impure.cfg`, off by default) swap the two: plain wheel is the mega map,
   Ctrl+wheel is the zoom — TADR's binding, for players who learned it.

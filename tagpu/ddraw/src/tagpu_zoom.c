@@ -83,7 +83,8 @@ static int  clampi(int v, int lo, int hi);
    with CamTimeExponent 4, an ease-out). A notch during a tween starts a new
    one from the drawn level toward the previous target times its factor. The
    length is the same at every frame rate; at 60 Hz a quarter of a notch lands
-   on the first frame and four fifths of it by 83 ms.
+   on the first frame and four fifths of it by 83 ms. Entering and leaving the
+   mega map take no tween: they are a cut ("the mega map's cut", below).
 
    THE VIEW CENTRE TWEENS WITH THE SAME g, AND EACH NOTCH IN AIMS IT FROM ITS
    OWN POINT. Recoil (and the lab, tascene-view.html) keeps a target pose —
@@ -163,9 +164,30 @@ static float         s_landMs = -1.0f;          /* the last tween's length, for 
    target is the floor because a mega notch put it there, and `s_megaBack` is
    the target it left. Anything else that sets the level -- the file, a
    Follow, the mouse-world pin -- goes through wheel_rest and disengages it, so
-   a stale "engaged" can never send a later notch to an old level. */
+   a stale "engaged" can never send a later notch to an old level.
+
+   THE MEGA MAP'S CUT. Entering and leaving replace the view in one frame, as
+   TADR's do, and it is one frame because nothing in between is ever drawn. The
+   new view's tables, eye and level all come from one command record: a cut
+   posts its whole eye step and its level there, with the reach request the
+   level needs (tagpu_zoom_frame_end), and the game thread takes the record in
+   one apply. So `s_cutHold` keeps drawing the view of the last frame, at its
+   level and eye, against packets that still describe it, until a packet
+   acknowledges the whole step and the ladder no longer raises the level
+   (predict); that frame draws the new view. Drawn any earlier, the reach bound
+   would clamp the eye short and the ladder would hold the level at a rung, an
+   in-between view for as many frames as the game thread takes. The game
+   thread's clicks stay right throughout: its eye and level change together, on
+   the apply, and the frame that shows them is the first packet after it.
+   THE RELEASE'S DEADLINE IS NOT A SAFETY ARGUMENT. The ladder and the reach
+   bound still hold on the frame after it, whatever the game thread has done:
+   CUT_HOLD_US only stops a game thread that has stalled from freezing the
+   picture, and the view it releases is the bound's in-between one. */
 static int           s_megaOn;
 static float         s_megaBack = 1.0f;
+static int           s_cutHold;
+static DWORD         s_cutUs;                   /* the counter time the cut was asked */
+#define CUT_HOLD_US  250000
 
 /* The performance counter in microseconds, modulo 2^32: both threads convert
    the same counter the same way, so a signed 32-bit difference of two stamps
@@ -223,6 +245,7 @@ static void wheel_rest(float z)
     s_gPosted = 1.0;
     s_wheelPend = 0;
     s_megaOn = 0;
+    s_cutHold = 0;
 }
 
 /* Render thread: the wheel at rest at level z, the ring emptied. Returns the
@@ -282,8 +305,8 @@ static void tween_start(DWORD at)
 }
 
 /* THE FLOOR MOVED (a level load, a resize, a map's extent). Engaged means the
-   target is the floor, so the target moves with it, along a tween as the mega
-   notch's does; otherwise a target the new floor leaves below it rests at the
+   target is the floor, so the target moves with it, along a tween: it is not
+   the player's gesture, and no cut was asked for; otherwise a target the new floor leaves below it rests at the
    floor. Render thread, from read_lever before the wheel is read. */
 static void floor_moved(void)
 {
@@ -313,7 +336,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
     DWORD now;
     int   vL = (int)s_vpL, vT = (int)s_vpT, vW = (int)s_vw, vH = (int)s_vh;
     float cx, cy;
-    int   n = 0;
+    int   n = 0, cut = 0;
 
     if (pk && pk->vp[2] > 0 && pk->vp[3] > 0) {
         vL = pk->vp[0]; vT = pk->vp[1]; vW = pk->vp[2]; vH = pk->vp[3];
@@ -344,6 +367,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
             iz = 1.0 / (double)s_megaBack;
             s_megaOn = 0;
             centre = 1;
+            cut = 1;
         } else if (e->mega) {
             /* engaging needs a level to leave: at the floor already it
                would keep the floor as the level to return to, and the next
@@ -353,6 +377,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
                 s_megaOn = 1;
                 iz = 1.0 / (double)s_floor;
                 whole = 1;
+                cut = 1;
             } else {
                 iz = izPrev;
             }
@@ -414,8 +439,17 @@ static float wheel_level(const TAGPU_PACKET* pk)
            the range): R may still owe the displacement of the tween it cut,
            and it is paid out along this one rather than in one frame. */
         tween_start(back > 0 ? now - (DWORD)back : now);
+        /* the target at once, and with it g = 1 below: anchor_step posts the
+           whole of R in this frame's record, so the cut's eye and level reach
+           the game thread together */
+        if (cut) {
+            s_wheelCur = s_wheelTgt;
+            s_tweening = 0;
+            s_cutHold = 1;
+            s_cutUs = now;
+        }
         s_wheelPend += d;
-    } else if (s_wheelPend && !s_tweening) {
+    } else if (s_wheelPend && !s_tweening && !s_cutHold) {
         /* ONE line per gesture, when it lands, not one per frame that carried
            notches. zlog is a file write and this runs on the render thread, so
            a sustained spin would otherwise write a line every frame for as
@@ -2433,7 +2467,9 @@ void tagpu_zoom_frame_end(void)
        overlay frame, so a frame that drew nothing zoomed hands the engine its
        own rect and rate back at the next in-play draw. */
     memset(&rec, 0, sizeof rec);
-    rec.zoom        = s_zoom;
+    /* a cut's level goes with its eye step, while this thread still draws the
+       old view ("the mega map's cut") */
+    rec.zoom        = s_cutHold ? s_wheelCur : s_zoom;
     rec.live        = s_live ? 1u : 0u;
     rec.epoch       = s_epochSeen;
     rec.cum_dx      = s_cumX;
@@ -2922,8 +2958,8 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
    it lands at is this frame's (the packet's plus what is posted and not yet
    acknowledged, as anchor_step steps from), plus the carry, what the tween
    this batch cuts still owes, and the terms this frame's earlier notches have
-   already added. Paid through R like any notch's term, so it tweens with the
-   level and anchor_step clamps it into the range per axis. 0 with no packet
+   already added. Paid through R like any notch's term, so the cut posts it with
+   the level and anchor_step clamps it into the range per axis. 0 with no packet
    or no range: the level still falls, about the view centre. Render thread,
    from wheel_level. */
 static int mega_centre_shift(const TAGPU_PACKET* pk, float* dx, float* dy)
@@ -2976,7 +3012,8 @@ static int reach_fit(int* e, int dL, int dR, int lo, int hi)
    one before it) -- except LEAVING THE MEGA MAP, whose eye term is
    `(a - c)` times the whole distance it leaves from rather than its drop (up
    to half a viewport times 1/floor), so its new view is not inside the old
-   one and a lagging game thread can hold it like any long step -- and for any displacement the game thread has not applied
+   one and only a cut past its deadline can be held here ("the mega map's cut")
+   -- and for any displacement the game thread has not applied
    that is within the lead; what it holds back is a larger one, and the drawn
    eye waits at the edge of the reach for as many frames as that takes, instead
    of drawing past it. While a frame is held, a click is still mapped by the
@@ -3053,7 +3090,7 @@ static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
 {
     int ux, uy, ex, ey, loX, hiX, loY, hiY, fit;
     s_havePred = 0;
-    if (!pk) { s_haveDrawn = 0; return z; }
+    if (!pk) { s_haveDrawn = 0; s_cutHold = 0; return z; }
     /* A NEW EPOCH — the level ended on the game thread, which reset what it
        had applied to zero: the sum posted from here on starts from zero too,
        and whatever was owed to the old level (a notch in its last frames, a
@@ -3067,14 +3104,34 @@ static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
         s_residX = s_residY = 0.0f;
         s_remX = s_remY = 0.0f;
         s_haveDrawn = 0;
+        s_cutHold = 0;
     }
-    if (!pk->in_game) { s_haveDrawn = 0; return z; }
+    if (!pk->in_game) { s_haveDrawn = 0; s_cutHold = 0; return z; }
     s_ackX = pk->cmd_ack_dx; s_ackY = pk->cmd_ack_dy;
     ux = s_cumX - s_ackX; uy = s_cumY - s_ackY;
     ex = pk->eye[0] + ux; ey = pk->eye[1] + uy;
     if (range_pk(pk, &loX, &hiX, &loY, &hiY))
         clamp_pair(&ex, &ey, loX, hiX, loY, hiY);
     ux = ex; uy = ey;
+    /* THE MEGA MAP'S CUT (above s_megaOn): the last frame's view until the
+       packet can draw the new one whole. The hold only ever draws a level at
+       or above the ladder's, and through the bound below; a view it cannot
+       draw that way is not held. */
+    if (s_cutHold) {
+        LONG el = (LONG)(qpc_us() - s_cutUs);
+        if ((z == s_asked && s_cumX == s_ackX && s_cumY == s_ackY) ||
+            el >= CUT_HOLD_US || !s_haveDrawn || s_drawnZ < s_zmin) {
+            s_cutHold = 0;
+            s_landMs = el > 0 ? (float)el / 1000.0f : 0.0f;
+        } else {
+            ex = s_drawnX; ey = s_drawnY; z = s_drawnZ;
+            reach_bound(pk, z, &ex, &ey, &fit);
+            s_reachPaused++;
+            s_predX = ex; s_predY = ey; s_havePred = 1;
+            s_drawnX = ex; s_drawnY = ey;
+            return z;
+        }
+    }
     /* LAST, so nothing moves the eye after the bound is established */
     reach_bound(pk, z, &ex, &ey, &fit);
     if (mayHold && fit && s_haveDrawn &&
