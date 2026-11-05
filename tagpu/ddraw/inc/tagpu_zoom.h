@@ -186,6 +186,10 @@ float tagpu_zoom_lever(void);
 /* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
 void  tagpu_zoom_presented(void);
 
+/* RENDER THREAD: the session goes to GDI, so no frame will end a cut or read a
+   view again: nothing may stay transformed or refused. */
+void  tagpu_zoom_render_gone(void);
+
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
    camera range in force and then until its gather slab lies inside the
@@ -403,7 +407,7 @@ int   tagpu_zoom_follow_state(unsigned E);
 
 /* GAME THREAD, for the packet the in-play draw publishes: the epoch the apply wrote the camera
    for and its level x 65536, both 0 when none. */
-void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
+void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16, unsigned* last);
 
 /* GAME THREAD: what the apply has done so far, for the packet's
    acknowledgement fields — the last record's cmd_seq, the cumulative delta

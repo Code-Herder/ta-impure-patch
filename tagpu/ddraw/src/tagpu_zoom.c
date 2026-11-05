@@ -316,7 +316,9 @@ static int cut_may_start(const NOTCH* e)
    [INFERRED], so all buttons up at one apply puts every release in the queue, and
    the pump runs before the next apply: a bit that outlives that was never going to
    be cleared. Clearing here and not at the notch keeps the decision in message
-   order. The shield's releases always arrive and its async state is not these. */
+   order. Under the shield the async state is not these buttons, so nothing clears
+   here: a press that passed the door before the shield armed keeps its bit until
+   that slot's next release, which only a test launch can reach. */
 static void world_held_stale(void)
 {
     static int upBefore;
@@ -489,8 +491,9 @@ static float wheel_level(const TAGPU_PACKET* pk)
             s_spinUs = e->us;
         } else if (e->mega) {
             /* engaging needs a level to leave: at the floor already it
-               would keep the floor as the level to return to, and the next
-               notch forward would pan onto the pointer without zooming */
+               would keep the floor as the level to return to, so the eye would
+               move to the map's centre and the next notch forward would bring no
+               level back */
             if (e->delta < 0 && !s_megaOn && s_wheelTgt > s_floor) {
                 if (!cut_may_start(e)) continue;
                 s_megaBack = s_wheelTgt;
@@ -646,6 +649,7 @@ static float wheel_level(const TAGPU_PACKET* pk)
    ending a Follow moves nothing on the screen. Render thread only. */
 static unsigned s_followBroken;            /* the epoch a notch ended            */
 static unsigned s_followSeen;              /* the latest epoch drawn at its level */
+static unsigned s_followFree;              /* this frame's follow_free ("the reach ladder") */
 
 #define FOLLOW_Q16_MIN REC_POV_ZOOM_MIN
 #define FOLLOW_Q16_MAX ((unsigned)(ZOOM_MAX * 65536.0f))
@@ -707,8 +711,11 @@ static int      s_reachHeldMax;
    on the packet that brings it, with nothing asked first. A rung above the level
    is dropped from the ring on such a frame, because it can no longer raise a
    packet's reach: the game thread keeps the Follow's rung as a cap after the
-   Follow ends, until a record asks that low, which the frames drawn at that level
-   post. So a Follow's end pops nothing. Render thread only. */
+   Follow ends, until a record comes from a frame that holds a packet past that
+   Follow and is not following (follow_free). Its ring holds its own rung and every
+   rung after it, and the rungs dropped are older, so a Follow's end pops nothing.
+   What makes each frame SAFE is simpler: zmin always includes this packet's own
+   reach, and a frame draws from one packet. Render thread only. */
 #define REACH_INFLIGHT 8
 static struct { unsigned seq; float rung; } s_inflight[REACH_INFLIGHT];
 static int      s_nInflight;
@@ -883,6 +890,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        both */
     s_asked = z;
     z = reach_ladder(pk, z, following);
+    s_followFree = (pk && !following) ? pk->follow_last : 0u;
     z = predict(pk, z, 1);
     /* seen only when the frame is drawn AT the follow level: the reach ladder
        or the reach bound may draw it at another (reach_ladder, predict) */
@@ -896,6 +904,12 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
         else if (cut_acked(pk)) s_cutDrawn = 1;
     }
     return z;
+}
+
+void tagpu_zoom_render_gone(void)
+{
+    cut_end();
+    s_live = 0;
 }
 
 void tagpu_zoom_presented(void)
@@ -2203,6 +2217,7 @@ float tagpu_zoom_reach_level(void)
 static unsigned s_gCutGen;
 static int      s_gCutLatch;
 static float    s_gFolCap;                 /* a Follow's rung; 0 none ("the reach ladder") */
+static unsigned s_gFolLast;                /* the Follow whose rung it is */
 
 /* ---- the apply: the game thread's half of every command ---------------------
 
@@ -2343,8 +2358,13 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        floor (the widest) with no record -- the safe default */
     s_gReach = c ? c->reach_zoom : s_gFloor;
     /* A FOLLOW'S PACKETS ARE THEIR OWN REQUEST ("the reach ladder") */
-    if (s_fol.epoch) s_gFolCap = tagpu_zoom_rung((float)s_fol.level / 65536.0f, s_gFloor);
-    else if (c && c->reach_zoom <= s_gFolCap) s_gFolCap = 0.0f;
+    if (s_fol.epoch) {
+        s_gFolCap = tagpu_zoom_rung((float)s_fol.level / 65536.0f, s_gFloor);
+        s_gFolLast = s_fol.epoch;
+    } else if (c && c->follow_free == s_gFolLast) {
+        s_gFolCap = 0.0f;
+    s_gFolLast = 0;
+    }
     if (s_gFolCap > 0.0f && s_gFolCap < s_gReach) s_gReach = s_gFolCap;
     /* the icons answer the pick only from a record of THIS level's epoch: a
        record the render thread posted before it saw the level end is the old
@@ -2522,6 +2542,7 @@ void tagpu_zoom_level_end(char* ta)
     s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
     s_gCutLatch = 0;
     s_gFolCap = 0.0f;
+    s_gFolLast = 0;
     s_placeOn = 0;                        /* a placement is the old level's */
     s_applyLive = 0;
     if (s_fol.epoch) follow_end(TAGPU_FOLLOW_LEVEL);
@@ -2637,11 +2658,12 @@ int tagpu_zoom_follow_state(unsigned E)
 
 /* Published only once the apply has written for the epoch, so a packet that
    names it carries the eye it wrote (or the hold's, which wins). */
-void tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16)
+void tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16, unsigned* last)
 {
     int on = s_fol.epoch && s_fol.wrote;
     *epoch = on ? s_fol.epoch : 0u;
     *levelQ16 = on ? s_fol.level : 0u;
+    *last = s_gFolLast;
 }
 
 void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
@@ -2682,6 +2704,8 @@ void tagpu_zoom_frame_end(void)
     rec.drop_follow = (s_cumX != s_ackX || s_cumY != s_ackY) ? 1u : 0u;
     rec.follow_broken = s_followBroken;
     rec.follow_seen   = s_followSeen;
+    rec.follow_free   = s_followFree;
+    s_followFree      = 0;
     /* whether this frame drew the icons: 0 on every path that left before
        the native pass decided them, as on a frame that decided none */
     rec.icons       = tagpu_icon_cmd_take() ? 1u : 0u;
@@ -2743,9 +2767,8 @@ static int in_viewport(int x, int y, int L, int T, int W, int H)
    engine state here, at the one shared s -> u door, so hardware messages,
    injected clicks and the mouse->world repair all make the same decision.
 
-   The executable mapping and TA_MAINPP live for the process. `view()` has
-   already proved that an in-game world was published; ta_ok still guards the
-   level pointer before the byte read. */
+   The executable mapping and TA_MAINPP live for the process, and ta_ok guards
+   the level pointer before the byte read, so this answers in the shell as well. */
 static int options_gui_owns_input(void)
 {
     const char* ta = *(const char* const*)TA_MAINPP;

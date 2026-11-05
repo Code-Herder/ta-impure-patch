@@ -276,8 +276,8 @@ follows the floor when it moves), the view centre moves onto the map's centre, a
 left is kept (`s_megaBack`). While it is engaged, **any notch forward leaves it** — TADR's gesture — back to the
 kept target, holding the world point under the pointer (or centring it, below). A mega notch with
 nothing to do (back while engaged or already at the floor, forward while not) moves nothing, as
-TADR's does — engaging at the floor would keep the floor as the level to return to, and the next
-notch forward would pan without zooming; a zoom notch
+TADR's does — engaging at the floor would keep the floor as the level to return to, so the eye would
+move to the map's centre and the next notch forward would bring no level back; a zoom notch
 back while engaged is already at the floor and leaves it engaged. The design: [mega map plan](../mega-map-plan.html); the strategic
 icons the zoomed-out levels show, and their pick: [strategic icons](icons.html).
 
@@ -377,8 +377,9 @@ earlier sample until the tick the sample is due and then shows it. The level and
 reads changed in one apply. The picture is one frame because a Follow's packet carries the tables
 for its own level: the apply takes the lower of the record's rung and the Follow level's rung into
 `s_gReach`, the eye and the level are in that packet, and a Follow's frame drops the rungs in flight
-above its level. The game thread keeps that rung as a cap after the Follow ends, until a record asks
-that low, so those rungs cannot raise a later packet's reach and a Follow's end pops nothing. A recording of format 26 or 27 has no such samples and blends as it
+above its level. The game thread keeps that rung as a cap after the Follow ends, until a record from
+a frame that holds a packet past that Follow and is not following (`follow_free`), so those rungs
+cannot raise a later packet's reach and a Follow's end pops nothing. A recording of format 26 or 27 has no such samples and blends as it
 always did.
 
 MEASURED 2026-11-04 (Two Continents, floor 1/18, a battle of 401 units, 1024×768 on a private
@@ -403,7 +404,8 @@ can never send the camera back to a level from before them.
 on a build whose floor was a fixed 0.25 and whose engage left the eye where it was; the floor that
 follows the map puts Two Continents' at about 0.056 there [arithmetic], so the engaged level now
 reads that, and the engaged eye is the map's centre, `(10720/2 − 448, 12672/2 − 352)` =
-`(4912, 5984)` [arithmetic, not yet read off the game] — the rows below are that build's):
+`(4912, 5984)` [arithmetic, not yet read off the game], and leaving centred the point, now
+`megazoom=tadr` — the rows below are that build's):
 
 | gesture | level | eye |
 |---|---|---|

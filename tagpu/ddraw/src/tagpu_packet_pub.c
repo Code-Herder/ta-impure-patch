@@ -3349,7 +3349,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
                        &p->cam_centre);
     /* the replay's Follow the same apply wrote the eye for, read below */
-    tagpu_zoom_follow_pub(&p->follow_epoch, &p->follow_level);
+    tagpu_zoom_follow_pub(&p->follow_epoch, &p->follow_level, &p->follow_last);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);

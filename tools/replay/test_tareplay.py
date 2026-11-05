@@ -2466,6 +2466,31 @@ def block_player(first_id=2, last_id=3):
     return tlv(tarec.RK_PLAYER, struct.pack("<HH", 0, 0) + bytes(img))
 
 
+class RecmpFilePerspective(unittest.TestCase):
+    """The multiplayer reader's camera sample takes the flags tarec does, and no others."""
+
+    def put(self, flags):
+        import recmp_file
+        history = object.__new__(recmp_file.History)
+        stream = b"s" * 8
+        history.source_maps = {1: {"stream": stream}}
+        history.maps = {1: {}}
+        history.source_pov = {}
+        history.pov = {}
+        history.zoom_min = 1
+        body = pov(player=recmp_file.RECMP_POV_PLAYER, flags=flags)
+        history._perspective(1, 3, 1, 13, stream, body, 3, False, 0)
+        return history.pov[1][-1]["pov"]
+
+    def test_a_cut_sample_reads(self):
+        flags = tarec.REC_POV_WORLD | tarec.REC_POV_CUT
+        self.assertEqual(self.put(flags)[2], flags)
+
+    def test_an_unknown_flag_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "fields/provenance"):
+            self.put(8)
+
+
 class Perspective(unittest.TestCase):
     """tarec's perspective records and `pov --check`, on files built from the format alone."""
 

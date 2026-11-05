@@ -971,6 +971,9 @@ typedef struct TAGPU_PACKET {
                                    render thread pins the wheel to it while
                                    the epoch is in force (tagpu_zoom.c, "the
                                    follow lever")                             */
+    uint32_t follow_last;       /* the last Follow or Jump the apply took the
+                                   reach for, in force or not ("the reach
+                                   ladder"); 0 = none since the level began   */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -1272,6 +1275,9 @@ typedef struct TAGPU_CMD {
                                    wheel, and the apply stops writing         */
     uint32_t follow_seen;       /* the latest follow epoch the render thread
                                    drew at its level: a Jump ends there       */
+    uint32_t follow_free;       /* this frame is not following, and its packet's
+                                   follow_last is this: the Follow's reach cap
+                                   ends ("the reach ladder"); 0 when following */
     uint32_t icons;             /* this frame drew the strategic icons
                                    (tagpu_icon_on): the game thread answers a
                                    pick by an icon only while it is 1, a level */

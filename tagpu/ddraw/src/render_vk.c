@@ -229,6 +229,7 @@ DWORD WINAPI vk_render_main(void)
            nothing while the player hunts for a device that works -- leaves
            them with no picture at all, which is worse. */
         TRACE("     Vulkan backend did not come up - switched to GDI renderer\n");
+        tagpu_zoom_render_gone();
         g_ddraw.show_driver_warning = TRUE;
         g_ddraw.renderer = gdi_render_main;
         gdi_render_main();
