@@ -83,8 +83,8 @@ NROLES = len(ROLES)
 
 Unreadable = tarec.Unreadable
 
-REC_FORMAT = 27
-REC_FORMATS = (26, REC_FORMAT)              # the block walk is the same for both
+REC_FORMAT = 28
+REC_FORMATS = (26, 27, REC_FORMAT)              # the block walk is the same for both
 RBF_STORED, RBF_SECTIONS, RBF_FRAME_RESET, RBF_REFRESH, RBF_CHAINED = 1, 2, 4, 8, 16
 RUN_WINDOW_LOG, CHAIN_MAX = 20, 9          # REC_RUN_WINDOW_LOG, REC_CHAIN_MAX
 RT_CODEC, RT_PHYSICS, RT_AIR, RT_TYPES = 29, 30, 31, 47

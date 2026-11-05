@@ -37,7 +37,7 @@ int persp_sample(unsigned count, const RecPov pov[2], const unsigned tick[2], un
     a = &pov[0];
     ta = tick[0];
     *out = *a;
-    if (ta <= t && tb - ta <= 2 * (int64_t)b->every) {
+    if (ta <= t && tb - ta <= 2 * (int64_t)b->every && !(b->flags & REC_POV_CUT)) {
         int64_t num = t - ta, den = tb - ta;
         out->view_w = (uint16_t)lerp(a->view_w, b->view_w, num, den);
         out->view_h = (uint16_t)lerp(a->view_h, b->view_h, num, den);

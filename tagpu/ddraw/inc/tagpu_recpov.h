@@ -30,7 +30,8 @@
 
 _Static_assert(REC_SEL_MAX >= TAGPU_LIM_UNITS, "a selection holds a whole block");
 
-enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2 };    /* main+0x2CC6 bit 1 / bit 0               */
+enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2,      /* main+0x2CC6 bit 1 / bit 0               */
+       REC_POV_CUT = 4 };                           /* the camera cut to here: format 28; never blended into */
 enum { REC_SEL_BEGIN = 1, REC_SEL_END = 2 };
 enum { REC_CLICK_LEFT = 0, REC_CLICK_RIGHT = 1 };
 
@@ -91,7 +92,7 @@ static __inline uint32_t rec_pov_zoom_min(uint32_t format)
 static __inline int rec_pov_ok(const RecPov* p, uint32_t zmin)
 {
     return p->every >= 1 && p->every <= REC_POV_EVERY_MAX &&
-           !(p->flags & ~(unsigned)(REC_POV_WORLD | REC_POV_MINIMAP)) && !p->zero &&
+           !(p->flags & ~(unsigned)(REC_POV_WORLD | REC_POV_MINIMAP | REC_POV_CUT)) && !p->zero &&
            p->zoom >= zmin && p->zoom <= REC_POV_ZOOM_MAX &&
            p->view_w >= 1 && p->view_w <= REC_POV_VIEW_MAX &&
            p->view_h >= 1 && p->view_h <= REC_POV_VIEW_MAX;

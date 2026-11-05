@@ -94,7 +94,8 @@
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
 here, and REC_FORMAT says which; this tool reads REC_FORMATS, the closed list tagpu_recfmt.h's
-rec_format_supported takes (26 and 27 differ only in the camera's smallest zoom, pov_zoom_min).
+rec_format_supported takes (26 and 27 differ only in the camera's smallest zoom, pov_zoom_min; 28 adds
+REC_POV_CUT to a sample's flags).
 A recording is REC_MAGIC, then
 blocks; a block is a 32-byte header and its payload, one zstd frame unless the block is stored (the
 header, end and timelines blocks always are), each checked by a CRC-32 -- but for a sectioned stream
@@ -154,8 +155,8 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 27                           # the camera's zoom down to 1/64; the contest order's keys and the carry links at their place; the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
-REC_FORMATS = (26, REC_FORMAT)            # what a reader takes (rec_format_supported)
+REC_FORMAT = 28                           # REC_POV_CUT in a sample's flags: the mega map's cut
+REC_FORMATS = (26, 27, REC_FORMAT)            # what a reader takes (rec_format_supported)
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -219,7 +220,7 @@ REC_CLICK = struct.Struct("<BBBBBBHiii")   # player, button, order, cursor, regi
 REC_SEL = struct.Struct("<BBHHH")          # player, flags, total, first, count: 8 bytes
 REC_SEL_ENTRY = struct.Struct("<HI")       # slot, birth: 6 bytes
 REC_POV_EVERY_MAX = 30
-REC_POV_WORLD, REC_POV_MINIMAP = 1, 2
+REC_POV_WORLD, REC_POV_MINIMAP, REC_POV_CUT = 1, 2, 4
 REC_POV_ZOOM_MIN, REC_POV_ZOOM_MAX = 1024, 524288
 REC_POV_ZOOM_MIN_26 = 16384                       # format 26's minimum, 0.25
 REC_POV_VIEW_MAX = 16384
@@ -549,7 +550,7 @@ def pov_fields(b, fmt):
     f = REC_POV.unpack(b)
     player, every, flags, zero, view_w, view_h, zoom = f[:7]
     if player >= REC_PLAYERS or not 1 <= every <= REC_POV_EVERY_MAX or \
-            flags & ~(REC_POV_WORLD | REC_POV_MINIMAP) or zero or \
+            flags & ~(REC_POV_WORLD | REC_POV_MINIMAP | REC_POV_CUT) or zero or \
             not pov_zoom_min(fmt) <= zoom <= REC_POV_ZOOM_MAX or \
             not 1 <= view_w <= REC_POV_VIEW_MAX or not 1 <= view_h <= REC_POV_VIEW_MAX:
         raise Unreadable(f"a malformed sample {f}")
@@ -607,7 +608,7 @@ def persp_sample(samples, n):
         return PERSP_EARLIER, b
     ta, ab = samples[0]
     a = REC_POV.unpack(ab)
-    if not (ta <= t and tb - ta <= 2 * b[1]):
+    if not (ta <= t and tb - ta <= 2 * b[1]) or b[2] & REC_POV_CUT:
         return PERSP_EARLIER, a
     num, den = t - ta, tb - ta
     out = list(a)
@@ -2708,6 +2709,7 @@ def cmd_pov(path, check):
             f = pov_fields(b, h.get("format"))
             where = "".join(n for bit, n in ((REC_POV_WORLD, " world"), (REC_POV_MINIMAP, " minimap"))
                             if f[2] & bit) or " outside"
+            where += " cut" if f[2] & REC_POV_CUT else ""
             print(f"GameTime {w.tick} player {f[0]}: camera ({f[7]}, {f[8]}), view {f[4]}x{f[5]}, "
                   f"zoom {f[6]}/65536, cursor ({f[9]}, {f[10]}, {f[11]}){where}, every {f[1]}")
             was = last.get(f[0])

@@ -69,13 +69,13 @@ session unless a note is cited), **MEASURED** (with the numbers), **[INFERRED]**
 #define REC_CLICK_SHOW   15       /* ticks a click ring lasts                                   */
 #define REC_SEL_MAX      1500     /* entries a selection may hold: >= TAGPU_LIM_UNITS of every
                                      build (static assert), the bound of one seat's block       */
-enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2 };
+enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2, REC_POV_CUT = 4 };
 enum { REC_SEL_BEGIN = 1, REC_SEL_END = 2 };
 #pragma pack(push, 1)
 typedef struct RecPov {           /* 32 bytes */
     uint8_t  player;              /* seat row; 0xFF in a contribution, whose origin names it */
     uint8_t  every;               /* the sampler's spacing: the playback's delay             */
-    uint8_t  flags;               /* REC_POV_*: main+0x2CC6 bit 1 / bit 0                     */
+    uint8_t  flags;               /* REC_POV_*: main+0x2CC6 bit 1 / bit 0; the mega map's cut */
     uint8_t  zero;
     uint16_t view_w, view_h;      /* main+0x37E37 / +0x37E3B                                  */
     uint32_t zoom;                /* applied level x 65536, rec_pov_zoom_min(format)..524288  */
@@ -107,7 +107,7 @@ snapshot refuses `RK_POV` and `RK_CLICK`, and every kind keeps one length everyw
 
 Validation, the same in the C readers, the history and both Python mirrors:
 - **Exact lengths:** 32, 20, 36 for `RK_POV_AT`, and `8 + 6*count`.
-- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read. `RECMP_VERSION` stays 2 by the owner's decision, so a peer on an older build accepts the handshake and then refuses (`mp_refuse`) the first camera sample below 0.25, and its recording stops consuming there; only games mixing builds are affected, and the newest build's recording is whole.
+- **`RecPov`:** `every` in 1..30, `flags` within the three bits (`REC_POV_CUT` from format 28), `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read. `RECMP_VERSION` stays 2 by the owner's decision, so a peer on an older build accepts the handshake and then refuses (`mp_refuse`) the first camera sample below 0.25, and its recording stops consuming there; only games mixing builds are affected, and the newest build's recording is whole.
 - **`RecClick`:** `button` 1 or less, `region` 3 or less, `itype` 1 or less.
 - **`RecSel`:** `total` at most the seat's block (`units_each`) and REC_SEL_MAX, `first + count <= total`, slots strictly ascending and inside the seat's block, and a transaction contiguous on its stream that publishes only at END.
 - **Coordinates are data:** never an index, bounded at use by the projection's clip.
@@ -185,7 +185,8 @@ multiplayer the composed application tick):
 - **Interpolation:** if instead `a.tick <= t < b.tick` and `b.tick - a.tick <= 2*every`,
   interpolate every field as `a + trunc((b-a)*(t-a.tick)/(b.tick-a.tick))` in 64-bit, truncating
   toward zero, and mirror that in Python. Interpolate the cursor only when both samples have
-  `REC_POV_WORLD`. Otherwise use `a`.
+  `REC_POV_WORLD`. Otherwise use `a`, and so also when `b` carries `REC_POV_CUT`: a mega map cut is not
+  blended into ([camera-zoom](../modules/camera-zoom.html) §2.3m).
 - **Why two samples suffice:** samples are at least `every` apart, so `a.tick <= t` whenever
   `b.tick > t`. In multiplayer, application ticks can bunch, so the rule falls back to `a`.
 

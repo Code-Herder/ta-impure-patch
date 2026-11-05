@@ -1252,6 +1252,7 @@ typedef struct TAGPU_CMD {
                                    world px, since the epoch began — the game
                                    thread applies `cum - applied` and clamps   */
     float    zoom;              /* the zoom level in force this frame          */
+    uint32_t cut_gen;           /* the mega map's cuts so far (tagpu_zoom_cut_gate) */
     float    reach_zoom;        /* the lowest level this view may draw before
                                    its next record is applied, as a rung of the
                                    reach ladder (tagpu_zoom_rung): the game

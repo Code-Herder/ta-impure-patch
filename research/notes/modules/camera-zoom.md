@@ -90,7 +90,8 @@ engine. The packet carries it (`zoom_floor`), and the render thread takes it onc
 top of `tagpu_zoom_read_lever` (`tagpu_zoom_floor()`, validated into `[1/64, 0.25]`, 0.25 for a
 packet without one), before any pass runs: the wheel clamps at it, the mega notch engages at it
 (§2.3m), the reach ladder and the native gather size their slabs with it. When it moves (a level
-load, a resize, a map's extent) an engaged mega map's target moves with it along a tween, and a
+load, a resize, a map's extent) an engaged mega map's target moves with it along a tween (at once
+during a cut's hold), and a
 wheel target it leaves below it rests at it (`floor_moved`). **The other two levers**:
 `tagpu_zoom.txt` parses a level in `[1/64, 8]` and is drawn no lower than the floor; a Follow's
 recorded level below this viewer's floor is drawn at the floor and is still the Follow's level for
@@ -334,30 +335,55 @@ cut. The same-way notches behind it, with no pause over 200 ms (`SPIN_GAP_US`, t
 and nothing else), are dropped, so a spin out of the mega map lands on the kept level and not past
 it. A mega notch with nothing to do is dropped too, so it starts no tween. A batch that does reach
 the wheel during a hold joins the cut, posted whole, and does not extend the deadline; a tween
-started there would run from the held view, the level the cut is leaving. Reversing in mid-spin is
-a new gesture, and its first notch cuts.
+started there would run from the held view, the level the cut is leaving. A reversal is a new
+gesture: a mega notch cuts and a plain notch zooms, joining the cut if it lands in the hold, so a
+plain forward spin out of the mega map followed by a plain notch back is the plain wheel's tween.
 
-**A click during a hold.** A button's point is mapped through the level drawn (`view`, `s_zoom`) and
-the engine then adds its own eye, so between the apply and the release frame the pair is the old
-level and the new eye, and on engaging from 1× the point is not transformed at all.
-`tagpu_zoom_drop_mouse` therefore drops a press taken while the hold stands, with its release; the
-render-options UI's points are exempt. **Residual, input only:** a press passed on just before the
-notch's frame and handled by the engine after the apply is mapped through that pair, a window about
-the hold's length (32–41 ms) that only a click in the same instant as the notch can hit. Hover is
-mapped through the same pair for those frames, which orders nothing.
+**A mouse record is handled through one view.** A button's point is mapped at the door through a
+level, and the engine adds its own eye when it handles the record, and the left button's release
+decides the click or the box from the world points at the press and the release
+([input](../engine/input.html)). The door, the ring's pop and the apply all run on the game thread:
+the main loop dispatches every queued message, IdleTick pops and handles one record, and the frame's
+apply follows ([sim](../engine/sim.html)). So a record can meet another pair than it was mapped with
+in three ways, each closed by an ordering and none by a time:
 
-**Not covered:** a replay's Follow has no cut. `tagpu_persp.c` lerps the recorded level and camera
-between its samples and the pinned lever has no hold, so a recorded cut plays back as a lerp over a
-sample interval and can wait at the ladder for a frame or two.
+- **It is still in the ring when the cut applies.** The record naming a new cut (`cut_gen`) waits at
+  `tagpu_zoom_cut_gate` until the ring is empty; the draw takes the last record again, whose fields
+  are absolute, so the cut's `cmd_seq` stays unacknowledged. IdleTick pops one record each time it
+  runs, so the wait ends, and the message-box loop that runs the pump without that pop runs no apply.
+- **A press arrives between the apply and the picture.** `s_cutOwed` stands from before the cut's
+  record is posted until the frame after the one that draws the new view (this thread draws one
+  frame at a time, so that frame has been handed to present), and the door drops a press on the world
+  with its release. The flag falls after `s_zoom` is written, and a deadline release leaves it up
+  until the step is acknowledged. A press on a panel, the minimap or a GUI screen is mapped 1:1 and
+  passes. A frame that publishes no view clears `s_live`, which opens the door.
+- **A button is already down on the world.** A mega notch with a world button held is dropped, and the
+  map stays where it is: `cut_may_start` raises `s_cutOwed` and reads `s_worldHeld`, and the door
+  raises `s_worldHeld` and reads `s_cutOwed`, each through a full fence, so at least one sees the
+  other. A held bit stands only while Windows reports some button down (or the shield, whose releases
+  always arrive, is on), so one lost outside the window cannot refuse every cut after it.
+
+While `s_cutOwed` stands, what still reads the door — hover, a move — is mapped through the game
+thread's own level (`s_gLevel`), which changes with its eye.
+
+**A recorded cut is a cut.** The apply that takes a cut latches it, and the next recorded camera
+sample carries `REC_POV_CUT` (format 28), which `persp_sample` never blends into: a Follow holds the
+earlier sample until the tick the sample is due and then shows it. The level and eye the sample
+reads changed in one apply. The picture is one frame because a Follow's packet carries the tables
+for its own level: the apply takes the lower of the record's rung and the Follow level's rung into
+`s_gReach`, the eye and the level are in that packet, and `reach_ladder` does not hold a Follow's
+frame at a rung still in flight. A recording of format 26 or 27 has no such samples and blends as it
+always did.
 
 MEASURED 2026-11-04 (Two Continents, floor 0.056, a battle of 401 units, 1024×768 on a private
-display, 60 fps video; three-notch spins and single notches, Ctrl-held forward spins reversed into
-back spins, paused and running): each of the ten cuts changes exactly one video frame; the log's
-`landed`, counted from the notch's own stamp, reads 33.0–59.2 ms; a press injected one event behind
-a leaving notch was dropped; the plain wheel's notches in the same run read 251–253 ms; the
-heartbeat reads `out=0 held=0/0px back=0 nopieces=0`. On a 3840×2160 Escalation game before the spin
-handling, a reversal with a second notch inside the hold read 250–265 ms, which is what a spin
-looks like without it.
+display, 60 fps video, stock TA; the click cases with temporary log lines since removed). Live: each
+of 14 cuts changes exactly one video frame, the log's `landed`, from the notch's own stamp, reads
+28.9–68.5 ms; a press behind a leaving notch was dropped, a press on the side panel behind an engaging
+one was not, and a Ctrl+wheel back with `ddown` held did not cut. Forcing the gate to defer five
+draws of each of 6 cuts left each one frame. Three clicks right before a notch never found the ring
+busy at the apply under injection, so a busy ring itself was exercised only by that forcing. Follow
+of the recording: each of 14 cuts is one frame; a control build without the flag's test and the
+Follow's rung blended cuts over 3 to 5 changed frames (`f44`: 4 over 9 frames, `f606`: 3 over 6).
 
 **Nothing else can leave a stale "engaged".** The file lever, a replay's Follow and the
 mouse-world pin each set the level through `wheel_rest`, which disengages, so a later notch forward

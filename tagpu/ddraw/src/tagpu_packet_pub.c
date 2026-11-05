@@ -3844,8 +3844,9 @@ static int __cdecl before_draw(void* entry_esp)
         {
             int terr = tagpu_terrown_request();
             if (ta) {
-                tagpu_zoom_apply(ta, c, terr);
-                tagpu_vpwide_apply(ta, c, terr);
+                const TAGPU_CMD* view = tagpu_zoom_cut_gate(c);
+                tagpu_zoom_apply(ta, view, terr);
+                tagpu_vpwide_apply(ta, view, terr);
             }
             tagpu_terrown_latch(terr || tagpu_vpwide_wide());
             /* LAST, after every write of the eye and of LosType this draw

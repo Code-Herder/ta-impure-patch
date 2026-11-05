@@ -2548,6 +2548,11 @@ class Perspective(unittest.TestCase):
         self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))
         how, f = tarec.persp_sample([(1, pov()), (8, pov(cam=(130, 170)))], 9)
         self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))   # 7 apart > 2 * every
+        cut = [(1, pov()), (4, pov(cam=(130, 170), flags=tarec.REC_POV_WORLD | tarec.REC_POV_CUT))]
+        how, f = tarec.persp_sample(cut, 5)                  # t = 2: a cut is not blended into
+        self.assertEqual((how, f[7]), (tarec.PERSP_EARLIER, 100))
+        how, f = tarec.persp_sample(cut, 7)                  # t = 4: and is there at its tick
+        self.assertEqual((how, f[7]), (tarec.PERSP_LATEST, 130))
         f = tarec.REC_POV.unpack(pov(cam=(1000, 800)))
         zmin = tarec.REC_POV_ZOOM_MIN
         self.assertEqual(tarec.persp_follow(f, 640, 480, zmin), (680, 560, 65536))

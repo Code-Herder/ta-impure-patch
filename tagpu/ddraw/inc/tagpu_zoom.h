@@ -406,6 +406,14 @@ void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
    acknowledgement fields — the last record's cmd_seq, the cumulative delta
    applied, the level in force, the epoch, and whether the centre range is in
    force (the render thread computes the same range from it). */
+/* GAME THREAD: the record this draw's tagpu_zoom_apply and tagpu_vpwide_apply take
+   (tagpu_zoom.c, "a mouse record is handled through one view"). */
+const struct TAGPU_CMD* tagpu_zoom_cut_gate(const struct TAGPU_CMD* c);
+/* GAME THREAD: a mega map cut was applied since the last clear. The recorded camera
+   says so on the sample that first shows it (REC_POV_CUT), so a Follow does not blend
+   across it. */
+int   tagpu_zoom_cut_latched(void);
+void  tagpu_zoom_cut_clear(void);
 void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
                          unsigned* epoch, unsigned* centre);
 
@@ -422,7 +430,9 @@ void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
    zoom < 1 the view shows more world than the 1x viewport has room to name, so
    `u` for a pointer in that outer ring falls outside it. There the transform
    returns the pointer UNCHANGED and reports the ring, and the button event is
-   dropped — see to_engine() in tagpu_zoom.c for why identity beats clamping.
+   dropped — see to_engine() in tagpu_zoom.c for why identity beats clamping. A
+   press on the world is dropped as well during the mega map's cut (tagpu_zoom.c,
+   "a mouse record is handled through one view").
 
    The ring is the same boundary the captured marker layers stop at
    (ui-markers.md 6.1): at zoom < 1 everything outside the 1x viewport is

@@ -3875,7 +3875,8 @@ static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p
     memset(p, 0, sizeof *p);
     p->player = (uint8_t)player;
     p->every = (uint8_t)every;
-    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0));
+    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0) |
+                         (tagpu_zoom_cut_latched() ? REC_POV_CUT : 0));
     p->view_w = (uint16_t)w;
     p->view_h = (uint16_t)h;
     p->zoom = (uint32_t)(level * 65536.0f + 0.5f);
@@ -3956,6 +3957,7 @@ static int cap_pov(Rec* r, const Level* L, int tick)
         pov_sample(L->ta, p, REC_POV_EVERY, &pov) &&
         (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
         if (!ring_put(r, RK_POV, &pov, sizeof pov, NULL, 0)) return 0;
+        if (pov.flags & REC_POV_CUT) tagpu_zoom_cut_clear();
         r->pov[p] = pov;
         r->pov_tick[p] = (unsigned)tick;
         r->pov_in[p] = 1;
@@ -4041,6 +4043,7 @@ static int mp_pov_capture(const Level* L, unsigned tick)
             int due = tagpu_recmp_pov_due(s_mp_pov, origin, &pov, tick, tagpu_recmp_room(s_mp_channel));
             if (due < 0 || (due && !mp_pov_send(origin, RECMP_POV, tick, &pov, sizeof pov)))
                 return 0;
+            if (due && (pov.flags & REC_POV_CUT)) tagpu_zoom_cut_clear();
         }
         n = sel_walk(L, seat, s_mp_roster.each, birth, s_mp_sel_now);
         if (n < 0) {

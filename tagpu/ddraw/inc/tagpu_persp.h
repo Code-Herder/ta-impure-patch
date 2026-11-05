@@ -17,7 +17,8 @@ enum {
     PERSP_LATEST,       /* the latest, taken at least its `every` before the displayed tick  */
     PERSP_BETWEEN,      /* interpolated between the two held samples                         */
     PERSP_EARLIER       /* the earlier one (or the only one): the latest is too new and the
-                           two are too far apart, or too new, to interpolate between          */
+                           two are too far apart, or too new, to interpolate between, or the
+                           latest is a cut (REC_POV_CUT)                                      */
 };
 
 /* THE PERSPECTIVE CLOCK for the displayed GameTime `n`, over a seat's `count` held samples

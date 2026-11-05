@@ -32,7 +32,7 @@ def sample(rng, zmin):
     minimum zoom is `zmin`, with coordinates anywhere in int32 now and then."""
     wide = rng.random() < 0.1
     coord = (lambda: rng.randint(*I32)) if wide else (lambda: rng.randint(-4096, 20000))
-    return (rng.randint(1, tarec.REC_POV_EVERY_MAX), rng.randint(0, 3),
+    return (rng.randint(1, tarec.REC_POV_EVERY_MAX), rng.randint(0, 7),
             rng.choice((640, 800, 1024, 1280, 1920, 3840, rng.randint(1, tarec.REC_POV_VIEW_MAX))),
             rng.choice((480, 600, 768, 720, 1080, 2160, rng.randint(1, tarec.REC_POV_VIEW_MAX))),
             rng.randint(zmin, tarec.REC_POV_ZOOM_MAX),
