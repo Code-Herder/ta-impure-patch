@@ -468,7 +468,8 @@ const HUD = (() => {
     for (let t = 0; t <= st.T; t += step) if (Math.abs(Lp + pw * t / st.T - xph) >= A.space)
       h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
     const Ln = C.line, body = G.map(g => {
-      const pts = g.v.map((v, s) => `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+      // a flat run's inner samples left out: the same line, whose joins the browser's antialiasing would otherwise mark
+      const pts = g.v.map((v, s) => s > 0 && s + 1 < g.v.length && g.v[s - 1] === v && g.v[s + 1] === v ? '' : `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ');
       let l = (dark(g.col) ? `<polyline points="${pts}" fill="none" stroke="${Ln.halo}" stroke-width="${Ln.width + 1}" stroke-opacity="${Ln.halo_opacity}" stroke-linejoin="round"/>` : '')
         + `<polyline points="${pts}" fill="none" stroke="${g.col}" stroke-width="${Ln.width}" stroke-linejoin="round"/>`;
       const s = g.death != null ? Math.round((g.death - S.t0) / DT) : -1;
