@@ -40,6 +40,11 @@
 #include "tagpu_recreader.h"
 #include "tagpu_recfile.h"     /* recfile_newer_first: the prune's order, the list's */
 #include "tagpu_replays.h"
+#include "tagpu_modsui.h"
+#include "tagpu_modload.h"
+#include "tagpu_hudart.h"
+#include "tagpu_hudstate.h"
+#include "tagpu_wikistate.h"
 #include "tagpu_profiles.h"
 #include "tagpu_replay.h"
 #include "tagpu_gaf.h"        /* TAGPU_GAF_EXACT: the badges are drawn as drawn */
@@ -226,6 +231,11 @@ static const Mod s_mods[MOD_N] = {
 #define BTN_W            96
 #define BTN_H            20
 #define REPLAYS_Y        393
+#define MODS_NAME        "MODS"
+#define MODS_Y           416            /* under REPLAYS: the plate holds both                   */
+#define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, 0, 0): the box of
+                                           0x4266F8 and 0x426742 (DISASSEMBLED)                    */
+#define DIALOG_W         500
 #define SHIFT_FROM       409
 #define SHIFT_BY         24
 #define PLATE_X          263
@@ -775,7 +785,7 @@ static void mainmenu_visit(char* gi)
     s_appended = 0;
     if (!ctrls) return;
     n = rec_count(ctrls);
-    if (n < 1 || n > GUI_RECORDS - 2) return;
+    if (n < 1 || n > GUI_RECORDS - 3) return;
     s_mod = identify(ctrls, n, version, sizeof version);
     if (!version[0]) {
         const char* v = (const char*)VA_VERSION_TEXT;
@@ -838,7 +848,18 @@ static void mainmenu_visit(char* gi)
     r[G_QUICKKEY] = 'R';                /* no main menu of the six setups uses R */
     r[G_ACTIVE] = 1;
     *(unsigned short*)(r + G_GRAYED) &= (unsigned short)~1u;
-    *(short*)(ctrls + P_COUNT) = (short)(n + 1);
+    /* MODS under it, a copy of the record just made. BOUND: n + 2 <= 199, by the test above. */
+    {
+        char* d = ctrls + (size_t)(n + 2) * STRIDE;
+        memcpy(d, r, STRIDE);
+        memset(d + G_NAME, 0, 16);
+        memcpy(d + G_NAME, MODS_NAME, sizeof MODS_NAME - 1);
+        *(short*)(d + G_YPOS) = MODS_Y;
+        memset(d + G_TEXT, 0, 128);
+        memcpy(d + G_TEXT, MODS_NAME, sizeof MODS_NAME - 1);
+        d[G_QUICKKEY] = 'O';            /* no main menu of the six setups uses O */
+    }
+    *(short*)(ctrls + P_COUNT) = (short)(n + 2);
     s_appended = 1;
 
     if (!s_logged) {
@@ -995,6 +1016,35 @@ static int __cdecl s2_before(void* esp)
 
 static void replays_open(char* gi);
 
+/* MODS on the main menu. The screen stands only on the wiki's layer, so anything that keeps that layer from drawing, and an exe
+   the pack cannot run a mod on, takes the engine's own box. The art may still be loading: then the screen opens and draws
+   with its first frame after. */
+static void mods_click(char* gi)
+{
+    typedef void (__stdcall *dialog_fn)(void* gi, const char* text, int width, int a, int b);
+    char folder[64] = "", text[320];
+    const char* running = tagpu_modload_id();
+    const WIKIART* art = tagpu_wikiart_get();
+    if (!running) {
+        const Mod* m = &s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod];
+        _snprintf(folder, sizeof folder, "%s", m->title);
+        folder[sizeof folder - 1] = 0;
+    }
+    if (!tagpu_modload_exe_known()) {
+        ((dialog_fn)VA_DIALOG)(gi, "Mods are not available because this copy of the game's exe is not one Impure knows.",
+                               DIALOG_W, 0, 0);
+        return;
+    }
+    if (!tagpu_hudstate_on() || tagpu_wikistate_refused() || (tagpu_wikiart_done() && (!art || !art->mods))) {
+        _snprintf(text, sizeof text, "The Mods screen needs the Vulkan renderer. You are playing %s. To change mod, "
+                  "edit mod= in impure.cfg and start the game again.", running ? running : folder);
+        text[sizeof text - 1] = 0;
+        ((dialog_fn)VA_DIALOG)(gi, text, DIALOG_W, 0, 0);
+        return;
+    }
+    tagpu_modsui_open(running ? "" : folder);
+}
+
 /* MAINMENU's OnCommand while REPLAYS is on it: REPLAYS is ours, everything else -- the -1 call
    that frees the sparkle table included -- is the engine's. */
 static void __stdcall mm_oncommand(void* gi)
@@ -1005,6 +1055,13 @@ static void __stdcall mm_oncommand(void* gi)
         name_is(ctrls + (size_t)idx * STRIDE, "REPLAYS")) {
         ((sound_fn)VA_SOUND)("BigButton", 0);
         replays_open((char*)gi);
+        ((gi_fn)VA_ACTDONE)(gi);
+        return;
+    }
+    if (ctrls && idx >= 1 && idx <= rec_count(ctrls) &&
+        name_is(ctrls + (size_t)idx * STRIDE, MODS_NAME)) {
+        ((sound_fn)VA_SOUND)("BigButton", 0);
+        mods_click((char*)gi);
         ((gi_fn)VA_ACTDONE)(gi);
         return;
     }

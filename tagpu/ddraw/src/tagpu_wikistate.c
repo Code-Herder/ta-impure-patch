@@ -17,6 +17,8 @@
 #include "tagpu_wikiside.h"
 #include "tagpu_wikibar.h"
 #include "tagpu_wikiframe.h"
+#include "tagpu_modslay.h"
+#include "tagpu_modsui.h"
 
 /* the frame record's fork block is the packet's (tagpu_wikiframe.h, THE FORKS THE STAGE HUD LISTS) */
 typedef char wikistate_forks_are_the_packets[WIKIFRAME_FORKS == TAGPU_PK_HUD_FORKS && WIKIFRAME_FORK_WATCHED == TAGPU_PK_FORK_WATCHED &&
@@ -97,6 +99,7 @@ static unsigned         s_costFrames;
 
 static const WIKIART* s_art;
 static UIFACES     s_faces;
+static int         s_mods;     /* this frame's page is the Mods screen's */
 static WIKISTAGEART  s_sart;
 static int           s_toastFace;
 
@@ -657,6 +660,59 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     }
 }
 
+/* THE MODS SCREEN, in the shell: the same layer, its page built from tagpu_modsui's. The world's packet has no part in it, and
+   every list but the page stays empty. Its answers go where the wiki's do (s_fr), so the hit map is built as the wiki's. */
+static void mods_present(const TAGPU_FRAME* f)
+{
+    static MODSPAGE s_mp;
+    static MODSFRAME s_mf;
+    static unsigned s_mpSeen;
+    const WIKIART* art;
+    char err[160];
+    int vw = f->vp_w, vh = f->vp_h, i;
+    const int r = tagpu_modsui_page(&s_mp, &s_mpSeen);
+    if (r < 0) return;
+    if (!(art = tagpu_wikiart_get()) || !art->mods) {
+        tagpu_hudart_start();
+        return;
+    }
+    if (art != s_art && !art_bind(art)) {
+        InterlockedExchange(&s_refused, 1);
+        tagpu_logf("wiki: the kit has no `toast` style for the stage - the wiki is not drawn this session");
+        return;
+    }
+    if (vw > 0 && vh > 0) { s_ox = f->vp_x; s_oy = f->win_height - f->vp_y - vh; }
+    else { vw = f->win_width; vh = f->win_height; s_ox = s_oy = 0; }
+    if (vw <= 0 || vh <= 0 || s_oy < 0) return;
+    s_mp.W = (float)vw;
+    s_mp.H = (float)vh;
+    if (!tagpu_modslay_build(art->mods, &s_faces, &s_mp, &s_ops, &s_mf, err, sizeof err)) {
+        InterlockedExchange(&s_refused, 1);
+        tagpu_logf("mods: the screen's layout refused (%s) - the wiki layer is not drawn this session", err);
+        return;
+    }
+    if (s_ops.overflow && !s_saidOver) {
+        s_saidOver = 1;
+        tagpu_logf("mods: the screen's ops overflowed and some were dropped (said once)");
+    }
+    memset(&s_fr, 0, sizeof s_fr);
+    for (i = 0; i < MODS_NSCROLL; i++) {
+        s_fr.scroll[i] = s_mf.scroll[i];
+        s_fr.scroll_max[i] = s_mf.scroll_max[i];
+        s_fr.track[i] = s_mf.track[i];
+        s_fr.thumb_y[i] = s_mf.thumb_y[i];
+        s_fr.thumb_h[i] = s_mf.thumb_h[i];
+    }
+    memset(&s_page, 0, sizeof s_page);
+    s_px = (float)vh / 720.0f;
+    s_frame = f->frame_counter;
+    s_open = 1;
+    s_ptr = 1;
+    s_tryPtr = 0;
+    s_have = 1;
+    s_mods = 1;
+}
+
 void tagpu_wikistate_present(const TAGPU_FRAME* f)
 {
     const struct TAGPU_PACKET* pk = f->packet;
@@ -674,7 +730,13 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_have = s_haveStage = s_viewOk = s_viewSide = s_split = s_nover = s_curList = 0;
     s_frameOn = s_hudOn = s_ntop = 0;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
-    if (s_refused || !pk || !pk->in_game || !(w = tagpu_pk_wiki(pk))) return;
+    s_mods = 0;
+    if (s_refused) return;
+    if (!pk || !pk->in_game) {
+        mods_present(f);
+        return;
+    }
+    if (!(w = tagpu_pk_wiki(pk))) return;
     /* THE ART LOADS ON ITS OWN THREAD (tagpu_hudart.c), started by whichever half asks first; the
        wiki draws from the first frame after it is published */
     if (!(art = tagpu_wikiart_get())) {
@@ -1010,6 +1072,7 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     /* the replay this map's HUD, run, end and lanes are of: the serial of the packet they were
        drawn from */
     s_map.rep_serial = s_repSerial;
+    if (s_mods) tagpu_modsui_drawn(&s_map);
     s_drew = 1;
 }
 

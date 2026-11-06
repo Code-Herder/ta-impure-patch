@@ -99,6 +99,27 @@ int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const cha
     return hit;
 }
 
+int tagpu_modcat_about(const char* catalog, size_t n, const char* id, MODABOUT* out)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m;
+    int hit = 0;
+    if (!d) return 0;
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m && !hit; m = m->next) {
+        if (strcmp(tj_str(tj_get(m, "id"), ""), id)) continue;
+        snprintf(out->name, sizeof out->name, "%s", tj_str(tj_get(m, "name"), id));
+        snprintf(out->author, sizeof out->author, "%s", tj_str(tj_get(m, "author"), ""));
+        snprintf(out->version, sizeof out->version, "%s", tj_str(tj_get(m, "version"), ""));
+        snprintf(out->summary, sizeof out->summary, "%s", tj_str(tj_get(m, "summary"), ""));
+        out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
+        hit = 1;
+    }
+    tagpu_json_free(d);
+    return hit;
+}
+
 static char* copy_text(const char* t)
 {
     size_t n = strlen(t) + 1;

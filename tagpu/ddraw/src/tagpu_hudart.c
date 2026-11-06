@@ -14,6 +14,7 @@
 #include "tagpu_hudtext.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "tagpu_hudart.h"
+#include "tagpu_modslay.h"
 
 static volatile LONG s_started;
 static volatile LONG s_ready;           /* 1: s_art is complete; 2: the load failed */
@@ -227,6 +228,21 @@ static void wiki_load(void)
         tagpu_logf("wiki: NOT loaded - %s", err);
         InterlockedExchange(&s_wready, 2);
         return;
+    }
+    {
+        size_t nm = 0;
+        const char* mt = (const char*)tagpu_pak_file(wpak, nwpak, "mods/layout.json", &nm);
+        char merr[160] = "";
+        HUDOPS* ms = (HUDOPS*)malloc(sizeof *ms);
+        MODSLAY* ml = !ms ? NULL : mt ? tagpu_modslay_load(mt, nm, s_wiki.draw.lay, merr, sizeof merr) : NULL;
+        for (i = 0; ml && i < tagpu_hudlay_nparts(s_wiki.draw.lay); i++) {
+            const HUDPART* k = tagpu_hudlay_part(s_wiki.draw.lay, i);
+            tagpu_modslay_light(ml, i, ui_face_light(s_wiki.draw.img[i].rgba, s_wiki.draw.img[i].w,
+                                                     s_wiki.draw.img[i].h, k->kind == HK_NINE ? k->slice : NULL, 1));
+        }
+        if (ml && tagpu_modslay_check(ml, &faces, ms, merr, sizeof merr)) s_wiki.mods = ml;
+        else tagpu_logf("mods: the screen's layout did not load - %s", merr[0] ? merr : "the archive lacks it");
+        free(ms);
     }
     tagpu_logf("wiki: loaded %d entries and %d kit parts (%.2f Mpx) in %lu ms", s_wiki.data->nentry,
                tagpu_hudlay_nparts(s_wiki.draw.lay), mpx, (unsigned long)(GetTickCount() - t0));

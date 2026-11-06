@@ -61,6 +61,8 @@ typedef struct {
     HUDART          draw;
     WIKIDATA*       data;
     struct WIKILAY* lay;
+    struct MODSLAY* mods;   /* the Mods screen's layout over the same kit; NULL when it did not load, which leaves the
+                               wiki drawn and sends the MODS button to its box */
 } WIKIART;
 
 /* The loaded wiki, or NULL while it loads and for good when it failed. Any thread. */

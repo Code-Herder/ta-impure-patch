@@ -96,7 +96,7 @@ bar, checkboxes, sliders) already look like each mod's own; a style only has to 
 |---|---|---|
 | The Replays screen's ground | 640×480 | painted with recesses where the engine draws the list, the buttons and the minimap |
 | The title font | A–Z and 0–9 | a GAF font shaped like `hattfont12.gaf`: one frame per character code, the baseline in the frame's hotspot |
-| The main menu's REPLAYS plate | about 115×35 | the empty button recess, pasted into the slot below the centre |
+| The main menu's plate for REPLAYS and MODS | about 115×58 | the empty button recess, pasted into the slot below the centre |
 | The glyphs | sprites | list badges, the fork markers and timeline glyph for S4's selector, and the rewind button's four states |
 
 **The glyphs as drawn on 2026-10-01**, the dock's icons and markers among them: 5,645 pixels in all — 6.6 KB as an

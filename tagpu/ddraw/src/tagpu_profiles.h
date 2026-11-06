@@ -17,6 +17,8 @@ void tagpu_profiles_menu_tick(void);
 void tagpu_profiles_begin_match(void);
 const TagpuResourcePolicy* tagpu_profiles_policy(void);
 int tagpu_profiles_mod(void);
+/* The file name of the mod selected: names[] below, and what a catalog id is. */
+const char* tagpu_profiles_name(void);
 int tagpu_profiles_radius(void);
 int tagpu_profiles_quick(void);
 void tagpu_profiles_set_radius(int value);
@@ -26,6 +28,15 @@ void tagpu_profiles_status(char* out, unsigned cap);
    put back, by the menu's Undo and Restore, -1 removing the key. */
 int tagpu_profiles_choice(int which);
 void tagpu_profiles_restore_choice(int which, int value);
+/* Any mod's file, for the Mods screen at the main menu, where a write inside a click holds up no game.
+   The player's value of a choice, or -1; hide.<archive>'s, 1 hidden, 0 mounted, -1 no key, without case. */
+int tagpu_profiles_choice_of(const char* id, int which);
+int tagpu_profiles_hide_of(const char* id, const char* archive);
+/* Sets a key of that file, -1 removing it: 1, or 0 with the reason in the log. A choice of the mod running takes
+   effect at once. */
+int tagpu_profiles_set_choice_of(const char* id, int which, int value);
+int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
+
 /* The file's write: the render thread each frame, and the exit once no other thread is inside. A
    click only records its value (tagpu_menu_present). */
 void tagpu_profiles_flush(void);

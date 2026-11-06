@@ -36,6 +36,14 @@ const char* tagpu_modload_id(void);
    no mod, never. */
 int tagpu_modload_loose_closed(const char* path);
 
+/* For the Mods screen. The name of the archive no mod runs without. Whether this folder's exe is one the pack knows: mods
+   run on it. The first call is the game thread's and loads the pack when no mod did. */
+const char* tagpu_modload_essential_archive(void);
+int tagpu_modload_exe_known(void);
+/* Whether the file is an original archive of the game, by its hash: 1, 0, -1 unreadable. Off the game thread, and only after
+   tagpu_modload_exe_known has returned, which orders the pack before it. */
+int tagpu_modload_archive_is_original(const char* path);
+
 /* 1 when this process is the game: an exe named TotalA.exe, or one holding the engine's sites in its file. Any other exe that
    loads a ddraw.dll from this folder is a tool, and mods\ is none of its business. Reads the exe unless the name answers. */
 int tagpu_modload_is_game(void);
