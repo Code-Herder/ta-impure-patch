@@ -967,6 +967,16 @@ class Landing(unittest.TestCase):
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 3;\n}\n")
         self.assertEqual(tareplay.landing_check("main"), 1)       # gated since the note
 
+    def test_check_asks_for_the_game_when_only_the_multiplayer_recorder_changed(self):
+        path = self.root / tareplay.DD / "src" / "tagpu_recmp_x.c"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("int f(void)\n{\n    return 1;\n}\n")
+        sh(self.root, "git", "add", "-A")
+        sh(self.root, "git", "commit", "-qm", "recmp")
+        with patch.object(tareplay, "fixtures", return_value={}), \
+             patch.object(tareplay, "sim_paths", return_value=set()):
+            self.assertEqual(tareplay.landing_check("main"), 1)
+
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
 
@@ -1172,6 +1182,105 @@ class FormatBlocks(unittest.TestCase):
             run.feed(c[1][:len(c[1]) // 2], len(data[1]), False)
         with self.assertRaisesRegex(tarec.Unreadable, "did not start"):
             run.feed(c[1], len(data[1]), False)          # the run ended at the refusal
+
+
+class MultiplayerGroup(unittest.TestCase):
+    """The two-player game in the landing tier, its tools standing in: what selects it, and that
+    a failed step fails by name instead of reading as a function nobody reached."""
+
+    REACHED = {("src/tagpu_recorder.c", "mp_start_send"), ("src/tagpu_recmp.c", "not_graded")}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name)
+        self.dll = self.out / "ddraw-cover.dll"
+        self.covers = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake_step(self, game=0, play=0, covers=2):
+        def step(argv, log_path):
+            argv = [str(a) for a in argv]
+            log_path.write_text("first line\nthe last line\n")
+            d = Path(argv[argv.index("--out") + 1])
+            d.mkdir(parents=True)
+            if "recmp_create_begin_test.py" in argv[0]:
+                (d / "native.imprec").write_text("r")
+                (d / "tested-ddraw.dll").write_text("d")
+                for k in range(covers):
+                    (d / f"cover-{k}.bin").write_text("c")
+                self.assertIn("--chat", argv)
+                self.assertIn("--select", argv)
+                return game
+            self.assertEqual(argv[argv.index("--cover") + 1], "play")
+            self.assertIn("--to-end", argv)
+            (d / "native.imprec").write_text("r")
+            (d / "cover-play.bin").write_text("c")
+            return play
+        return step
+
+    def group(self, step, check=(0, "0 corrections"), keep=False, read=None):
+        def reached(mapping, covers):
+            self.covers = list(covers)
+            return self.REACHED
+        with patch.object(tareplay, "mp_step", step), \
+             patch.object(tareplay, "tarec_run", return_value=check), \
+             patch.object(tareplay, "covered_sources", return_value={"src/tagpu_recorder.c"}), \
+             patch.object(tareplay.tafeat, "read_map", side_effect=read, return_value={}), \
+             patch.object(tareplay.tafeat, "reached", reached):
+            return tareplay.multiplayer_group("raised", self.dll, self.out, keep)
+
+    def test_what_selects_it(self):
+        want = tareplay.wants_multiplayer
+        self.assertTrue(want([tareplay.DD + "src/tagpu_recorder.c"]))
+        self.assertTrue(want([tareplay.DD + "src/tagpu_recmp_units.c"]))
+        self.assertTrue(want([tareplay.DD + "inc/tagpu_recmp.h"]))
+        self.assertTrue(want(["tools/replay/tarec.py"]))
+        self.assertFalse(want([tareplay.DD + "src/tagpu_zoom.c"]))
+        self.assertFalse(want(["README.md"]))
+
+    def test_a_passing_group_reports_the_graded_functions_and_drops_the_big_files(self):
+        reach, problems = self.group(self.fake_step())
+        self.assertEqual(problems, [])
+        self.assertEqual(reach, {("src/tagpu_recorder.c", "mp_start_send")})
+        self.assertEqual(sorted(c.name for c in self.covers),
+                         ["cover-0.bin", "cover-1.bin", "cover-play.bin"])
+        game = self.out / "multiplayer-raised" / "game"
+        self.assertFalse((game / "native.imprec").exists())
+        self.assertFalse((game / "tested-ddraw.dll").exists())
+        self.assertTrue((game / "cover-0.bin").exists())
+
+    def test_keep_keeps_the_recording(self):
+        _, problems = self.group(self.fake_step(), keep=True)
+        self.assertEqual(problems, [])
+        self.assertTrue((self.out / "multiplayer-raised" / "game" / "native.imprec").exists())
+
+    def test_a_failed_game_is_a_failure_by_name_and_reaches_nothing(self):
+        reach, problems = self.group(self.fake_step(game=1))
+        self.assertEqual(reach, set())
+        self.assertEqual(len(problems), 1)
+        self.assertIn("MULTIPLAYER raised: the game failed: the last line", problems[0])
+
+    def test_a_failed_playing_is_a_failure(self):
+        reach, problems = self.group(self.fake_step(play=1))
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER raised: the playing failed", problems[0])
+
+    def test_a_failed_tarec_check_is_a_failure(self):
+        reach, problems = self.group(self.fake_step(), check=(1, "a correction\n3 corrections"))
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER raised: tarec check: 3 corrections", problems[0])
+
+    def test_a_missing_coverage_file_is_a_failure(self):
+        reach, problems = self.group(self.fake_step(covers=1))
+        self.assertEqual(reach, set())
+        self.assertIn("2 coverage files", problems[0])
+
+    def test_an_unreadable_map_is_a_failure(self):
+        reach, problems = self.group(self.fake_step(), read=OSError("no map"))
+        self.assertEqual(reach, set())
+        self.assertIn("the coverage: no map", problems[0])
 
 
 class CodecCheck(unittest.TestCase):

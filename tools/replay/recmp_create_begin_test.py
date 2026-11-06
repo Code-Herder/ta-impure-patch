@@ -10,9 +10,16 @@ This verifies capture and persisted causality, not multiplayer engine playback.
 keeps the game running to GameTime T before the host leaves, since the cursor visits one cell
 per tick from the map's last cell.
 
+The coverage of each peer, `cover-<instance>.bin` beside the rest of --out, is written by the game's
+exit (tagpu_cover_flush), so it holds the level's end and the recording's. A coverage DLL's game
+that exits without writing it fails.
+
 --chat has the two humans talk once the roots are in, through the game's own TALK box: a public
 line from each and a private line each way (CHAT, below), so the recording carries every
 communication audience a two-human game has.
+
+--select has each human select all their units and click once, so the recording carries a
+selection and a click from each.
 """
 import argparse
 import fcntl
@@ -130,7 +137,10 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
         ("join", "1:private to the host"), ("host", "public from the host"))
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False):
+COVER_LINE = "cover: replays\\cover-native-birth.bin:"
+
+
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -222,7 +232,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False):
 
             def contributed():
                 texts = [talog.run_text(instances / n / "gamedir") for n in owned]
-                if any("recmp: contribution refused" in t or "recmp: private session open failed" in t for t in texts):
+                # the channel's own end, not "private session open failed": a lost listener-port
+                # race logs that too and opens again (tagpu_recmp.c, MP_OPEN_RACES)
+                if any("recmp: contribution refused" in t for t in texts):
                     raise RuntimeError("native contributions failed")
                 return all(t.count("recmp: local owned roots") == 14 and
                            t.count("recmp: remote owned roots") == 14 for t in texts)
@@ -242,9 +254,8 @@ def run(output, dll, port, reproduce=False, until=0, chat=False):
                 game = instances / name / "gamedir"
                 cursor = talog.Cursor(game)
                 (game / "tagpu_replay.trigger").write_text("cover native-birth\n")
-                wait_for(lambda: "cover: replays\\cover-native-birth.bin:" in cursor.text(),
+                wait_for(lambda: COVER_LINE in cursor.text(),
                          "native coverage not published", 30)
-                shutil.copyfile(game / "replays/cover-native-birth.bin", output / (name+"-cover.bin"))
             if len(local) != 28 or local != remote:
                 raise RuntimeError("source/recipient root bytes or identity differ")
             (output / "first-roots.json").write_text(json.dumps(
@@ -260,6 +271,10 @@ def run(output, dll, port, reproduce=False, until=0, chat=False):
                     command(sys.executable, cli, "keys", name, "return")
                     command(sys.executable, cli, "ui", name, "wait", "--gui", "ARMMAIN2", "--timeout", "20")
                 print(f"said {len(CHAT)} lines", flush=True)
+            if select:
+                for name in owned:
+                    command(sys.executable, cli, "keys", name, "ctrl+a", "pclick:512,384")
+                print("each human selected and clicked", flush=True)
 
             def gametime():
                 out = command(sys.executable, cli, "peek", host, tareplay.GAMETIME, "--json", timeout=60)
@@ -281,6 +296,16 @@ def run(output, dll, port, reproduce=False, until=0, chat=False):
                 command("bash", TREE / "tools/mp_leave.sh", join)
             for name in owned:
                 command(sys.executable, cli, "ui", name, "wait", "--gui", "MAINMENU", "--timeout", "30")
+            for name in owned:
+                game = instances / name / "gamedir"
+                written = lambda: talog.run_text(game).count(COVER_LINE)
+                before = written()
+                # the click can end the process before tacli hears back, so the verdict is the
+                # exit's own line, written after the file is closed (cover_dump_locked)
+                subprocess.run([sys.executable, str(cli), "ui", name, "click", "EXIT", "--timeout", "5"],
+                               stdout=log, stderr=subprocess.STDOUT, check=False, timeout=30)
+                wait_for(lambda: written() > before, "the exit wrote no coverage", 30)
+                shutil.copyfile(game / "replays/cover-native-birth.bin", output / f"cover-{name}.bin")
             audit(recording, output)
         finally:
             for name in owned:
@@ -307,12 +332,14 @@ def main():
                         help="install the reproducing trees and shrubs on both peers")
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
+    parser.add_argument("--select", action="store_true", help="the humans select and click")
     args = parser.parse_args()
+    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
-        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat)
+        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
         return 1

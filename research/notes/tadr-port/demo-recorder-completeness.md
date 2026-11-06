@@ -922,6 +922,17 @@ cannot see an address recorded as a value; the scan looks for one instead.
   of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none
   of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
   changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
+  The landing tier's reach includes **the two-player game**, on each build, whenever the recorder
+  or its multiplayer half changed: two humans and two AIs with chat, a selection and a click from
+  each human, `tarec check` on its recording, and the recording played to its end
+  (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`).
+  A failure of the game, the check or the playing fails the landing as `MULTIPLAYER <build>: …`,
+  and never reads as a function nobody reached. It proves the code ran and its checks held, not
+  that the game replays exactly: it arms no round trip. Refusals and failure clean-up stay
+  unreached (`mp_refuse`, `mp_relinquish`, `ring_free`, `sk_back`), so they still go to the owner
+  or get a test that causes the failure, one by one. The `tagpu_recmp*` files are not instrumented
+  (the Makefile's `COVERED`): a change to them plays the game, and reach is not asked of their
+  functions.
   A line that only a test program compiles is no game's to reach: a block under `#ifdef` of a
   macro in `tafeat.py`'s `TEST_ONLY` — `RECF_TEST_COPY`, the record frames' `copy`, which only
   the codec's self-test calls and only its command lines define — is in no DLL, and the landing
@@ -946,7 +957,7 @@ peer's dump. Not in S3c.
 
 | Tier | Runs | When |
 |---|---|---|
-| Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function; a changed line no declaration covers or a changed function no fixture reached fails by name | every landing that changes a gated file (the landing command's Step 4b) |
+| Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function, and the two-player game on both coverage builds when the recorder or its multiplayer half changed; a changed line no declaration covers, a changed function neither reached, or a failed two-player game fails by name | every landing that changes a gated file (the landing command's Step 4b) |
 | Broad | every fixture with three round trips, `limits-tier1` with 20, and a ten-minute four-AI game for the cost and size (reported), on the coverage build; UNCOVERED over the tier | a command, `tareplay.py broad`, not a schedule: on demand after a run of simulation landings, and as the release tier, `broad --release DLL` on the release DLL without reach, before every `v*` tag beside the compatibility suite |
 
 Both tiers are built ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate));
@@ -1038,6 +1049,7 @@ region with whether its fixtures reach it.
 | 2026-10-01 | **The declared tables have one writer on a puppet host** (O13, closed with S3c-1): the recording writes every table it carries at every capture point and every frame visit after a step, so a host's own write between two tick boundaries is overwritten at the next. |
 | 2026-10-01 | **A seek makes the viewed seat's temporary sight records again** (O9 reversed for the seek, before S3c-3 landed): from the recorded deaths before T through the engine's add `0x482910`, then the engine's expiry, so a round trip and a fresh seek compare the viewed record's sight counters and contact bits strictly and `compare-dumps` folds nothing. The cap of 20 (a refusal counted and logged) and the engine's once-a-frame expiry are accepted residuals. A recorded LosType change still drops them on a playing. Rejected: naming O9 in the fresh seek's check too, which would mask contact bits 8–10 whenever the viewed seat lost a unit under true LOS in the 62 steps before T. |
 | 2026-10-01 | **A landing no fixture can reach goes to the owner each time** (OQ7): a changed function in a region no skirmish fixture reaches — network-only code, error paths, the saved game — fails `UNCOVERED`, and landing it is the owner's call for that landing. Rejected: a standing exemption list. |
+| 2026-11-06 | **The landing tier plays a two-player game on every recorder change**, so multiplayer code stops going to the owner just because the skirmish games never run it. No selection by "multiplayer-only" functions, which would need a list; no round trips in its first version. Failure code stays under OQ7: a test that causes the failure when that is cheap, otherwise the owner's call. |
 | 2026-10-01 | **The replay gate's wording is adopted as written** (OQ9): the CLAUDE.md bullet and the landing command's Step 4b, as built with S3c-3. |
 | 2026-10-02 | **A takeover starts every order node from the constructor's state** (S4's D1, the s2-orders decision 8): `+5`, `+6`, `+0xA`, `+0x4E` and `+0x52` as the node's constructor leaves them, except the measured adoption of in-progress builds (BuildingBuild and MobileBuild at state 3 when their target is set). Every handler starts from that state, so it is the one safe by construction; keeping the recorded `+5` would resume handlers mid-state with `+0x52` NULL, and the destructor's event-2 dispatch for `+6` bit 1 is a named crash path. Orders restart: a patrol leg, an attack's acquisition, a reclaim. |
 | 2026-10-02 | **The takeover checks' expected differences** (S4's D2, a loosening approved by the owner): the order-node fields of D1; the player records outside the fork's seats (the viewer seat and the records the seat fill deactivated); the controllers, `RK_VIEWER` and PlayerInfo `+0x94` where the takeover changed a seat's role; and the contact bits only where the viewed seats agree (the existing `compare --puppet` rule). Any other difference is a bug. |

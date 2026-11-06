@@ -12,7 +12,8 @@ puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
     tools/replay/tareplay.py takeover FIXTURE [--player P] [--at T]   L, K and F alone
 
 `landing` runs the fixtures the changed SIM_FEATURE regions name (every fixture when the
-recorder's own files change) on the coverage build, checks that they reached every changed
+recorder's own files change) on the coverage build, plays the two-player game on both coverage
+builds when the recorder or its multiplayer half changed, checks that they reached every changed
 function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
 such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
 what the tier never exercised.
@@ -3887,6 +3888,20 @@ def build_dll(stock, cover):
     return d / name, make
 
 
+def chosen_dll(name, args, stock, cover):
+    """The DLL `name` runs: the one the command gave, else the build's, present and current."""
+    dll, make = build_dll(stock, cover)
+    given = args.stock_dll if stock else args.dll
+    if given:
+        dll = Path(given)
+    dll = dll.resolve()
+    if not dll.exists():
+        raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
+    if dll.stat().st_mtime < sources_mtime():
+        raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
+    return dll
+
+
 # The order a free worker takes queued lanes in: the long ones first -- X, U and K start the
 # longest chains a fixture has, and none can start before its fixture's L ends -- then L, then
 # the short ones, which fill the run's end. It orders the games only; a lane's own steps and
@@ -3936,15 +3951,7 @@ class Run:
             stock = fix.get("dll") == "stock"
             # a cost game measures the build a player runs, never the instrumented one
             cover = bool(getattr(args, "cover", False)) and not fix.get("cost")
-            dll, make = build_dll(stock, cover)
-            given = args.stock_dll if stock else args.dll
-            if given:
-                dll = Path(given)
-            dll = dll.resolve()
-            if not dll.exists():
-                raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
-            if dll.stat().st_mtime < sources_mtime():
-                raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
+            dll = chosen_dll(name, args, stock, cover)
             Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301),
                            fix.get("last_min"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
@@ -4278,6 +4285,12 @@ def journal(run):
             steps.append({"id": "checks", "pool": "offline", "order": 10 ** 6,
                           "after": list(fx["want"])})
         items.append((name, steps))
+    for build in getattr(run, "multiplayer", ()):
+        items.append((mp_item(build), [{"id": "game", "pool": "game", "order": 10 ** 5},
+                                       {"id": "play", "pool": "game", "order": 10 ** 5,
+                                        "after": ["game"]},
+                                       {"id": "checks", "pool": "offline", "order": 10 ** 6,
+                                        "after": ["play"]}]))
     names = list(run.fx)
     title = (f"tareplay {run.kind} " + (" ".join(names) if len(names) <= 3 else
                                         f"({len(names)} fixtures)") + f" -j {run.j}")
@@ -4400,6 +4413,10 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
                 "tools/replay-globals-gen.py", "tools/replay-layout-gen.py", "tools/replay-lanes-gen.py",
                 "tools/replay-hold-gen.py",
                 "tools/replay-layout-check.sh", "tools/tacli"}
+# the multiplayer recorder: its units have their own test programs, and only the two-player game
+# runs them in the DLL; a coverage build does not instrument them (the Makefile's COVERED), so the
+# game answers for them, and reach is not asked of their functions
+RECMP_PATH = re.compile(re.escape(DD) + r"(src|inc)/tagpu_recmp\w*\.[ch]")
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
 
@@ -4451,6 +4468,18 @@ def fixture_users(scenario):
     return out
 
 
+def recorder_wide(path):
+    """A change every test group answers for: the recorder's own files and the harness."""
+    return path in RECORDER_OWN or path.startswith("tools/replay/") or \
+        path == "scenarios/replay-end.json"
+
+
+def wants_multiplayer(paths):
+    """Whether the landing plays the two-player game (multiplayer_group): a change to the recorder
+    or to its multiplayer half, which no test group runs."""
+    return any(recorder_wide(p) or RECMP_PATH.fullmatch(p) for p in paths)
+
+
 def gated(paths, base):
     """(fixtures, sim files to read by region, recorder files to read by function, sim files a
     changed header reaches (every feature of each), why): what the changed paths make the landing
@@ -4474,7 +4503,7 @@ def gated(paths, base):
             changed = {k for k in set(old) | set(new) if old.get(k) != new.get(k)} & set(new)
             fx |= changed
             why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
-        elif p in RECORDER_OWN or p.startswith("tools/replay/") or p == "scenarios/replay-end.json":
+        elif recorder_wide(p):
             fx |= every
             # only the DLL's instrumented sources: a coverage build compiles no test program, so
             # no fixture could reach one of its functions (the test programs run in their
@@ -4565,6 +4594,86 @@ def landing_plan(base):
     return fx, funcs, regions, problems, why, bool(fx or by_region or by_function or whole)
 
 
+# One DirectPlay port per game; the games run one after the other inside the gate's run lock.
+MP_GAMES = {"raised": 47818, "stock": 47819}
+
+
+def mp_item(build):
+    return f"multiplayer-{build}"
+
+
+def mp_step(argv, log_path):
+    """One tool of the group to its end, its output in `log_path`. A stopped run interrupts it, so
+    its own clean-up stops its games. Its exit code; every wait in those tools has its own bound."""
+    with open(log_path, "w") as log:
+        p = subprocess.Popen([sys.executable, *map(str, argv)], stdout=log,
+                             stderr=subprocess.STDOUT, cwd=TREE)
+        told = False
+        while p.poll() is None:
+            if STOP.is_set() and not told:
+                p.send_signal(signal.SIGINT)
+                told = True
+            time.sleep(1)
+    return p.returncode
+
+
+def multiplayer_group(build, dll, out, keep):
+    """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
+    and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
+    it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
+    ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
+    is never read as "not reached"."""
+    item = mp_item(build)
+    d = out / item
+    d.mkdir(parents=True)
+    srcs = covered_sources()
+
+    def failed(step, why, log=None):
+        J.finish(item, step, "fail", why[:160])
+        return set(), [f"MULTIPLAYER {build}: {why}" + (f" (see {log})" if log else "")]
+
+    def tail(log):
+        lines = [ln for ln in log.read_text(errors="replace").splitlines() if ln.strip()]
+        return lines[-1] if lines else "no output"
+
+    say(f"{item}: the game, on port {MP_GAMES[build]}")
+    J.start(item, "game")
+    log = d / "game.log"
+    game = d / "game"
+    rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
+                  "--port", MP_GAMES[build], "--chat", "--select"], log)
+    if rc:
+        return failed("game", f"the game failed: {tail(log)}", log)
+    J.finish(item, "game", "pass")
+    rec = game / "native.imprec"
+    say(f"{item}: the playing")
+    J.start(item, "play")
+    log = d / "play.log"
+    rc = mp_step([HERE / "recmp_play_test.py", rec, "--out", d / "play", "--dll", dll, "--to-end",
+                  "--cover", "play"], log)
+    if rc:
+        return failed("play", f"the playing failed: {tail(log)}", log)
+    J.finish(item, "play", "pass")
+    J.start(item, "checks")
+    rc, text = tarec_run("check", rec)
+    if rc:
+        return failed("checks", f"tarec check: {last(text)}")
+    covers = sorted(game.glob("cover-*.bin")) + sorted((d / "play").glob("cover-*.bin"))
+    if len(covers) != 3:
+        return failed("checks", f"{len(covers)} coverage files of the host, joiner and playing")
+    try:
+        reach = {k for k in tafeat.reached(tafeat.read_map(dll.with_suffix(".map")), covers)
+                 if k[0] in srcs}
+    except (OSError, ValueError) as e:
+        return failed("checks", f"the coverage: {e}")
+    J.finish(item, "checks", "pass")
+    if not keep:
+        for f in (game / "tested-ddraw.dll", game / "tested-ddraw.map", rec,
+                  d / "play" / rec.name):
+            f.unlink(missing_ok=True)
+    return reach, []
+
+
 def cmd_landing(args):
     base = args.base
     if args.check:
@@ -4582,22 +4691,26 @@ def cmd_landing(args):
     fx, funcs, regions, problems, why, gated_any = landing_plan(base)
     for w_ in why:
         say(w_)
-    if not gated_any:
+    multiplayer = wants_multiplayer(git("diff", "--name-only", f"{base}...HEAD").split())
+    if not (gated_any or multiplayer):
         print("tareplay landing: nothing gated changed")
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
         f"functions; {len(regions)} file-scope regions")
     status = 0
     run = None
-    if fx:
+    if fx or multiplayer:
         args.cover = True
         out = out_dir(args)
         try:
+            mp_dlls = {b: chosen_dll(mp_item(b), args, b == "stock", True)
+                       for b in MP_GAMES} if multiplayer else {}
             run = Run(sorted(fx), args, out)
         except CouldNotRun as e:
             print(f"tareplay: {e}", file=sys.stderr)
             return 2
         run.j = args.j
+        run.multiplayer = list(mp_dlls)
         run_threads(run)
         status = report(run)
         if STOP.is_set():
@@ -4609,13 +4722,23 @@ def cmd_landing(args):
     got = {b: set().union(set(), *(v for n, v in per.items()
                                    if (run.fx[n]["fix"].get("dll") == "stock") == (b == "stock")))
            for b in ("raised", "stock")}
+    # after the test groups, alone on the machine under the gate's run lock
+    for b, d in (mp_dlls.items() if run else ()):
+        if STOP.is_set():
+            return status or 2
+        reach, trouble = multiplayer_group(b, d, run.out, args.keep)
+        got[b] |= reach
+        problems += trouble
+    if STOP.is_set():
+        return status or 2
 
     def reached(keys, bs):
         return all(any(k in got[b] for k in keys) for b in bs)
     for (src, fn), (feat, bs) in sorted(funcs.items()):
         if not reached([(src, fn)], bs):
             problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
-                            f"fixtures {' '.join(sorted(fx)) or 'none'})")
+                            f"fixtures {' '.join(sorted(fx)) or 'none'}"
+                            f"{'; and the two-player game' if multiplayer else ''})")
     for feat, (fns, bs) in sorted(regions.items()):
         if not reached(fns, bs):
             problems.append(f"UNCOVERED {feat}: a changed file-scope line, and no function of its "
@@ -4633,6 +4756,7 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
+                f"multiplayer={','.join(MP_GAMES) if multiplayer else '-'} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
                 f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
@@ -4646,14 +4770,14 @@ def landing_check(base):
     file; 1 otherwise, saying why."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, _ = gated(paths, base)
-    if not (fx or by_region or by_function or whole):
+    if not (fx or by_region or by_function or whole or wants_multiplayer(paths)):
         print("tareplay landing --check: nothing gated changed")
         return 0
     for c in git("rev-list", f"{base}..HEAD").split():
         note = git("notes", "show", c, check=False)
         if any(ln.startswith(NOTE) and " result=pass " in ln for ln in note.splitlines()):
             later = [p for p in git("diff", "--name-only", c, "HEAD").split() if p]
-            hit = [p for p in later if any(gated([p], c)[:4])]
+            hit = [p for p in later if any(gated([p], c)[:4]) or wants_multiplayer([p])]
             if hit:
                 print(f"tareplay landing --check: the note on {c[:8]} predates gated changes: "
                       f"{' '.join(sorted(hit))}")
