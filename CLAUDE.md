@@ -82,9 +82,10 @@ wrappers and what the build check cannot prove:
   test — the terms and what each test plays: `demo-recorder-completeness.md` *Terms*.
   `tools/replay/tareplay.py landing` runs the test groups that the changed features name in their
   `SIM_FEATURE` declarations — recorded, played on puppets, restored in place by the round trip and
-  sought from a fresh process, on the coverage build — checks that they reached every changed
+  sought from a fresh process, on the coverage build — plays a two-player game on both coverage
+  builds when the recorder changed, checks that they reached every changed
   function, and records a `replay-roundtrip:` note. A changed line no declaration covers, or a
-  changed function no test group reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+  changed function nothing reached, fails by name; landing it anyway is the owner's decision. The broad tier,
   `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
   compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
   landings.

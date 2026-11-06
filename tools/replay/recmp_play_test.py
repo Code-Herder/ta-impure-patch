@@ -2,7 +2,7 @@
 """Play a saved multiplayer (mode 3) recording on a puppet host and dump it.
 
     tools/replay/recmp_play_test.py RECORDING --out DIR [--dll PATH] [--at T ...] [--to-end] [--perspective N]
-                                    [--content FILE ...] [--roundtrip T ...] [--seek A:T ...]
+                                    [--content FILE ...] [--roundtrip T ...] [--seek A:T ...] [--cover NAME]
     tools/replay/recmp_play_test.py RECORDING --out DIR --fresh T [--dll PATH] [--content FILE ...]
     tools/replay/recmp_play_test.py RECORDING --out DIR --takeover T:P [--from A] [--dll PATH] [--content FILE ...]
 
@@ -78,6 +78,8 @@ def main():
                     help="with --takeover: play to this GameTime, then take the playback over")
     ap.add_argument("--timeline", type=int, default=None)
     ap.add_argument("--hide-chat", action="store_true", help="`chat hide` once the playing starts")
+    ap.add_argument("--cover", metavar="NAME", default=None,
+                    help="on a coverage DLL, keep what the playing ran as cover-NAME.bin in --out")
     a = ap.parse_args()
     tareplay.runlock.hold(TREE, "recmp_play_test " + " ".join(sys.argv[1:]))
     a.out.mkdir(parents=True, exist_ok=True)
@@ -188,6 +190,8 @@ def main():
         if rc:
             raise tareplay.CouldNotRun(f"replay play: {last(o)}")
         held_start(w, log)
+        if a.cover:
+            tareplay.cover_ask(w, log, a.cover)
         if a.hide_chat:
             n = len(log.lines)
             w.trigger("chat hide")
@@ -231,7 +235,7 @@ def main():
         # the level's teardown logs the playing's counts (counts_log)
         w.quit()
         w.collect(a.out)
-        ok = ended
+        ok = ended and (not a.cover or (a.out / f"cover-{a.cover}.bin").exists())
     except Done:
         pass
     except tareplay.CouldNotRun as e:
