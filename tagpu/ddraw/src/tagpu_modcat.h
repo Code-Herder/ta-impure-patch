@@ -49,9 +49,12 @@ typedef struct {
 } MODINSTALL;
 
 /* What it takes to install mod `id`. 1 with `out` filled, for tagpu_modcat_install_free; 0 with the reason in `err`
-   when no entry names it or the entry is not one to act on: an id that is not a plain name, no package, a hash that
+   when no entry names it or the entry is not one to act on: an id that is not a plain name, no version, no package, a hash that
    is not 64 hex digits, a size past 2 GB, or a file whose path tagpu_modtar would refuse. */
 int  tagpu_modcat_install(const char* catalog, size_t n, const char* id, MODINSTALL* out, char* err, size_t errn);
 void tagpu_modcat_install_free(MODINSTALL* m);
+
+/* `fn` with each entry's id that is a plain name; 0 when the catalog does not parse. */
+int  tagpu_modcat_each_id(const char* catalog, size_t n, void (*fn)(void* ctx, const char* id), void* ctx);
 
 #endif

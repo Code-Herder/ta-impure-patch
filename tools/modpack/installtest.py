@@ -91,10 +91,13 @@ END = b"\0" * 1024
 def run_tar(tar: bytes, declared, seed=1):
     (TMP / "t.tar").write_bytes(tar)
     (TMP / "t.tsv").write_text("".join(f"{p}\t{len(d)}\t{sha(d)}\n" for p, d in declared))
-    r = subprocess.run([str(NATIVE), str(TMP / "t.tar"), str(TMP / "t.tsv"), str(seed)], capture_output=True, text=True)
-    if r.returncode not in (0, 1):
-        return "crash", r.stderr[-400:]
-    return ("ok", "") if r.returncode == 0 else ("refused", r.stdout.strip())
+    r = subprocess.run([str(NATIVE), str(TMP / "t.tar"), str(TMP / "t.tsv"), str(seed)], capture_output=True, text=True, errors="replace")
+    # the sanitizers exit 1 as well: a refusal is the exit and the word together
+    if r.returncode == 0 and r.stdout.strip() == "ok":
+        return "ok", ""
+    if r.returncode == 1 and r.stdout.startswith("refused: "):
+        return "refused", r.stdout.strip()
+    return "crash", (r.stdout + r.stderr)[-400:]
 
 
 def part_tar():
@@ -128,6 +131,10 @@ def part_tar():
         ("a stream name", member("dir/a.txt:x", a) + rest, "not safe"),
         ("a trailing dot", member("dir/a.txt.", a) + rest, "not safe"),
         ("an empty component", member("dir//a.txt", a) + rest, "not safe"),
+        ("a device name", member("NUL", a) + rest, "not safe"),
+        ("a device name with an extension", member("dir/com1.txt", a) + rest, "not safe"),
+        ("a device name by the console's", member("conout$", a) + rest, "not safe"),
+        ("a name outside ASCII", member("dir/a\xe9.txt", a) + rest, "not safe"),
         ("an undeclared file", member("other.txt", a) + rest, "does not declare"),
         ("a file given twice", member("dir/a.txt", a) + member("dir/a.txt", a) + rest, "twice"),
         ("another size", member("dir/a.txt", a + b"!") + rest, "another size"),
@@ -307,7 +314,7 @@ def part_install(w, srv, only):
         got.pop("installed.txt", None)
         got_hpi, want_hpi = got.pop(f"{SMALL}.originals.hpi", None), want.pop(f"{SMALL}.originals.hpi", None)
         report(got == want and got_hpi and want_hpi, f"good: the files are the ones modpack.py install makes ({len(got)})")
-        rc, _ = w.run("sweep")
+        rc, _ = w.run("sweep", "cat.json")
         report(rc == 0 and (w.mods / SMALL / f"{SMALL}.hpi").is_file() and not new.exists(), "good: a start swaps it in")
         rc, out = w.run("installed", SMALL)
         report(out.strip() == entry["version"], f"good: the installed version reads {out.strip()}")
@@ -373,15 +380,19 @@ def part_install(w, srv, only):
 
     if case("killed"):
         for stop, label in ((f"download:{len(real) // 2}", "during the download"), ("unpack:2", "during the unpack"), ("recipe:5", "during the recipe"),
-                            ("marker:0", "before the marker")):
+                            ("marker:0", "before the marker"), ("retired:0", "with a waiting update's marker just deleted")):
             w.clean()
             live = plant_live(w, SMALL)
+            if stop.startswith("retired"):
+                (w.mods / f"{SMALL}.new").mkdir()
+                (w.mods / f"{SMALL}.new/waiting.txt").write_text("a finished update")
+                (w.mods / f"{SMALL}.new/installed.txt").write_text("0.95")
             serve()
             rc, out = install(stop=stop)
             left = sorted(p.name for p in w.mods.iterdir())
             report(rc != 0 and "ready" not in out and tree_hashes(w.mods / SMALL) == live, f"killed {label}: the live folder is intact, {left} left")
             report(not (w.mods / f"{SMALL}.new/installed.txt").exists(), f"killed {label}: no marker")
-            rc, _ = w.run("sweep")
+            rc, _ = w.run("sweep", "cat.json")
             report(sorted(p.name for p in w.mods.iterdir()) == [SMALL] and tree_hashes(w.mods / SMALL) == live, f"killed {label}: the next start deletes what it left")
 
     if case("update"):
@@ -396,9 +407,9 @@ def part_install(w, srv, only):
         report(rc == 0 and tree_hashes(w.mods / SMALL) == live, "update: it waits, and the live folder is the old version until the start")
         rc, out = w.run("installed", SMALL)
         report(out.strip() == "1.0", "update: until then the old version is what is installed")
-        w.run("sweep")
+        w.run("sweep", "cat.json")
         rc, out = w.run("installed", SMALL)
-        report(out.strip() == entry["version"] and not (w.mods / "sub").exists() and not (w.mods / SMALL / "old.hpi").exists(), f"update: at the start it is the new one, {out.strip()}, none of the old left")
+        report(out.strip() == entry["version"] and not (w.mods / SMALL / "sub").exists() and not (w.mods / SMALL / "old.hpi").exists(), f"update: at the start it is the new one, {out.strip()}, none of the old left")
         report(prof.read_bytes() == before, "update: the profile is untouched")
         serve()
         (w.mods / f"{SMALL}.new").mkdir()
@@ -406,6 +417,15 @@ def part_install(w, srv, only):
         (w.mods / f"{SMALL}.new/stale.txt").write_text("stale")
         rc, out = install()
         report(rc == 0 and not (w.mods / f"{SMALL}.new/stale.txt").exists(), "update: a second install replaces a waiting one")
+        # the waiting update's marker cannot be deleted: nothing of it may go, or the sweep would take what is left for a whole version
+        waiting = tree_hashes(w.mods / f"{SMALL}.new")
+        holder = w.popen("hold", f"mods\\{SMALL}.new\\installed.txt")
+        held = holder.stdout.readline().strip()
+        rc, out = install()
+        holder.kill()
+        holder.wait()
+        report(held == "held" and rc == 1 and "stays as it is" in out and tree_hashes(w.mods / f"{SMALL}.new") == waiting,
+               f"update: with its marker held open, a waiting update is kept whole: {out.strip().splitlines()[-1]}")
         prof.unlink()
 
     if case("swap"):
@@ -417,11 +437,12 @@ def part_install(w, srv, only):
                     (w.mods / name / "tag").write_text(tag)
             if fresh and marker:
                 (w.mods / f"{SMALL}.new/installed.txt").write_text("2")
-            w.run("sweep")
+            w.run("sweep", "cat.json")
             names = sorted(p.name for p in w.mods.iterdir())
             tag = (w.mods / SMALL / "tag").read_text() if (w.mods / SMALL / "tag").exists() else None
             return names, tag
         for label, kw, want in (("live and a finished new", dict(live="L", fresh="N"), "N"),
+                                ("live, an old and a finished new", dict(live="L", old="O", fresh="N"), "N"),
                                 ("the live moved aside, the new not yet in place", dict(old="O", fresh="N"), "N"),
                                 ("the new in place, the old not yet deleted", dict(live="N", old="O"), "N"),
                                 ("the live moved aside, no new", dict(old="O"), "O"),
@@ -429,6 +450,15 @@ def part_install(w, srv, only):
                                 ("live and an unfinished new", dict(live="L", fresh="N", marker=False), "L")):
             names, tag = state(**kw)
             report(names == [SMALL] and tag == want, f"swap: {label}: the live folder holds {tag}, {names}")
+        # names this module did not make are the player's
+        w.clean()
+        for d in ("Foo.new", "Foo.old", "bar"):
+            (w.mods / d).mkdir()
+        (w.mods / "bar.part").write_text("x")
+        (w.mods / f"{SMALL}.part").write_text("x")
+        w.run("sweep", "cat.json")
+        names = sorted(p.name for p in w.mods.iterdir())
+        report(names == sorted(["Foo.new", "Foo.old", "bar", "bar.part"]), f"swap: names outside the catalog are left alone, and its own .part goes: {names}")
 
     if case("lock"):
         w.clean()
@@ -439,14 +469,14 @@ def part_install(w, srv, only):
         while time.time() < deadline and not (w.mods / f"{SMALL}.part").exists():
             time.sleep(0.05)
         report((w.mods / f"{SMALL}.part").exists(), "lock: a second copy starts while one is downloading")
-        rc, out = w.run("sweep")
+        rc, out = w.run("sweep", "cat.json")
         report("another copy" in out and (w.mods / f"{SMALL}.new").is_dir() and (w.mods / f"{SMALL}.part").exists(), f"lock: its sweep leaves the install alone: {out.strip()[:80]}")
         rc, out = install()
         report(rc == 1 and "another copy" in out, f"lock: its own install is refused: {out.strip()}")
         srv.release.set()
         out, _ = p.communicate(timeout=120)
         report(p.returncode == 0 and "ready" in out, "lock: the first install still finishes")
-        rc, out = w.run("sweep")
+        rc, out = w.run("sweep", "cat.json")
         report((w.mods / SMALL).is_dir() and not list(w.mods.glob("install.lock")), "lock: released, and a start swaps it")
         srv.release.clear()
 
@@ -467,6 +497,33 @@ def part_install(w, srv, only):
             path.unlink()
         finally:
             keep.rename(path)
+
+    if case("attach"):
+        # the real DLL's attach: only the game acts, and only on its own folder, whatever the current directory
+        w.clean()
+        (w.mods / f"{SMALL}.part").write_text("the current directory's")
+        other = w.game / "attachtest"
+        shutil.rmtree(other, ignore_errors=True)
+        (other / "mods" / f"{SMALL}.new").mkdir(parents=True)
+        (other / "mods" / f"{SMALL}.part").write_text("x")
+        shutil.copy2(DDRAW / "ddraw.dll", other / "ddraw.dll")
+        for name in ("tool.exe", "TotalA.exe"):
+            shutil.copy2(EXE, other / name)
+        def at(name):
+            # Wine's own ddraw comes first unless told otherwise, and then none of this has run: the log below says it did
+            shutil.rmtree(other / "log", ignore_errors=True)
+            p = subprocess.Popen(["wine", str(other / name), "load-dll"], cwd=w.game, env={**w.env, "WINEDLLOVERRIDES": "ddraw=n,b"}, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            try:
+                return p.communicate(timeout=120)[0].strip()
+            except subprocess.TimeoutExpired:
+                p.kill()
+                return "timed out"
+        said = at("tool.exe")
+        report((other / "log").is_dir() and (other / "mods" / f"{SMALL}.new").is_dir() and (other / "mods" / f"{SMALL}.part").exists(), f"attach: an exe that is not the game leaves its folder alone ({said})")
+        said = at("TotalA.exe")
+        report((other / "log").is_dir() and not (other / "mods" / f"{SMALL}.new").exists() and not (other / "mods" / f"{SMALL}.part").exists(), f"attach: the game settles its own folder ({said})")
+        report((w.mods / f"{SMALL}.part").exists(), "attach: and never the current directory's")
+        shutil.rmtree(other)
 
     if case("every"):
         for m in catalog["mods"]:
@@ -510,10 +567,12 @@ def part_ufo(w):
     a = hpipack.Archive(w.game / "out.ufo")
     report(len(a.files) == len(rel), "writer: the python reader finds every file")
     (w.game / "same").write_bytes(b"1")
-    (w.game / "same2").mkdir(exist_ok=True)
-    (w.game / "same2/f").write_bytes(b"2")
+    (w.game / "SAME").mkdir(exist_ok=True)
+    (w.game / "SAME/f").write_bytes(b"2")
     rc, _ = w.run("ufo", "bad.ufo", "same", "same")
     report(rc == 1, "writer: refuses a file given twice")
+    rc, _ = w.run("ufo", "bad.ufo", "same", "SAME/f")
+    report(rc == 1, "writer: refuses a path that is both a file and a folder")
     deep = "/".join(["d"] * 20) + "/f"
     (w.game / deep).parent.mkdir(parents=True)
     (w.game / deep).write_bytes(b"f")
@@ -521,13 +580,13 @@ def part_ufo(w):
     report(rc == 1, "writer: refuses a tree past its depth")
     shutil.rmtree(w.game / "d")
     shutil.rmtree(d)
-    shutil.rmtree(w.game / "same2")
+    shutil.rmtree(w.game / "SAME")
     (w.game / "same").unlink()
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--only", default="", help="the cases whose name holds this: tar, writer, good, refused, package, killed, update, swap, lock, archives, every")
+    ap.add_argument("--only", default="", help="the cases whose name holds this: tar, writer, good, refused, package, killed, update, swap, lock, archives, attach, every")
     ap.add_argument("--keep", action="store_true", help="keep the instance")
     a = ap.parse_args()
     TMP.mkdir(parents=True, exist_ok=True)

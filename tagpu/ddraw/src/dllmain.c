@@ -132,7 +132,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         cfg_load();
 
         /* tagpu: what the last run's mod install left, settled before anything looks in mods\ (tagpu_modinst.h). */
-        tagpu_modinst_sweep();
+        tagpu_modinst_sweep_at_start();
 
         /* tagpu: a mod chosen by mod= (tagpu_modload.h): its image in place before Impure's first patch */
         tagpu_modload_begin();

@@ -11,6 +11,27 @@ static int refuse(MODTAR* t, const char* what, const char* name)
     return 0;
 }
 
+static int same_fold(const char* a, size_t n, const char* name)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        char c = a[i] >= 'a' && a[i] <= 'z' ? (char)(a[i] - 32) : a[i];
+        if (c != name[i] || !name[i]) return 0;
+    }
+    return !name[n];
+}
+
+/* Windows opens these as devices whatever the folder before them and whatever follows the first dot. */
+static int device_name(const char* part, size_t n)
+{
+    static const char* const names[] = { "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" };
+    size_t stem = 0, i;
+    while (stem < n && part[stem] != '.') stem++;
+    for (i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (same_fold(part, stem, names[i])) return 1;
+    return stem == 4 && part[3] >= '0' && part[3] <= '9' && (same_fold(part, 3, "COM") || same_fold(part, 3, "LPT"));
+}
+
 int modtar_path_safe(const char* path)
 {
     const char* part = path;
@@ -21,10 +42,10 @@ int modtar_path_safe(const char* path)
         if (!c || c == '/') {
             size_t n = (size_t)(p - part);
             if (!n || (n == 1 && part[0] == '.') || (n == 2 && part[0] == '.' && part[1] == '.')) return 0;
-            if (part[n - 1] == '.' || part[n - 1] == ' ') return 0;
+            if (part[n - 1] == '.' || part[n - 1] == ' ' || device_name(part, n)) return 0;
             if (!c) return 1;
             part = p + 1;
-        } else if (c < 0x20 || c == 0x7F || c == '\\' || c == ':') {
+        } else if (c < 0x20 || c >= 0x7F || c == '\\' || c == ':') {
             return 0;
         }
     }

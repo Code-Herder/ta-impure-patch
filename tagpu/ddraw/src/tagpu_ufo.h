@@ -33,7 +33,7 @@ typedef struct
     unsigned     size;
 } TAGPU_UFO_FILE;
 
-/* Write `n` files as a HAPI archive at `path`, the bytes hpipack.build(tree, 0, 1) gives for the same files. A folder given in
+/* Write `n` files as a HAPI archive at `path`, the bytes hpipack.build(tree, 0, 1) gives for the same files (case folded in ASCII alone, where hpipack folds Latin-1 too). A folder given in
    two cases is one folder, under the first spelling in sorted order. 1 on success, 0 on failure: an empty component, a
    path that is both a file and a folder, one given twice, or a tree past TAGPU_UFO_DEPTH levels. Also the mod installer's
    writer (tagpu_modinst.c), for a mod's originals. Any thread. */

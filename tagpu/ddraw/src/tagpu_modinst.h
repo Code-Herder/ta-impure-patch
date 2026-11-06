@@ -24,15 +24,19 @@ typedef enum {
 
 typedef struct {
     MODINST_PHASE phase;
-    unsigned      done, total;  /* the current phase's bytes, for a progress bar */
+    unsigned      done, total;  /* the current phase's progress: its bytes, or the recipe's files; total 0 until it is known */
     char          why[200];     /* MODINST_FAILED's reason, for the player */
 } MODINST_STATUS;
 
-/* At process attach, before anything is mounted: finish what the last run left in mods\. A folder
-   with its marker replaces the live one, one without it and any .part are deleted, and a swap a crash
-   interrupted is completed or undone, so the live folder is always the old version or the new. Does
-   nothing while another process holds the install lock. */
-void tagpu_modinst_sweep(void);
+/* At process attach, before anything is mounted: finish what the last run left in the exe's mods\\ folder, for the catalog's
+   ids alone. A folder with its marker replaces the live one, one without it and a .part are deleted, and a swap a crash
+   interrupted is completed or undone, so the live folder is always the old version or the new. Does nothing without
+   anything to settle, in an exe that is not the game, or while another process holds the install lock. */
+void tagpu_modinst_sweep(const char* catalog, size_t n);
+void tagpu_modinst_sweep_at_start(void);        /* with the DLL's own catalog */
+
+/* 1 while another process holds the install lock. */
+int  tagpu_modinst_locked(void);
 
 /* Starts installing mod `id` from `catalog`. `base` is where a relative package URL resolves when it
    is not NULL, and otherwise the catalog's base_url. 1 when the thread is running; 0 with the reason in
@@ -45,8 +49,8 @@ void tagpu_modinst_status(MODINST_STATUS* out);
 /* The version the folder mods\<id>\ holds into `out`, from its marker; 0 when it has none. */
 int  tagpu_modinst_installed(const char* id, char* out, int cap);
 
-/* After a sweep, the harness's way in until the Mods screen calls tagpu_modinst_start: the file
-   tagpu_modinst.on naming "<id> <base url>" installs that mod once, from the DLL's own catalog. */
+/* The harness's way in until the Mods screen calls tagpu_modinst_start: in the game, the file tagpu_modinst.on naming
+   "<id> <base url>" installs that mod at every start while it exists, from the DLL's own catalog. */
 void tagpu_modinst_lever(void);
 
 #endif

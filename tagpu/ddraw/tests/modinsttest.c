@@ -3,7 +3,9 @@
    crash or a killed game would, with nothing flushed and no handler run.
 
      modinsttest install CATALOG ID BASE      one install to its end: prints its result, exit 0 when ready
-     modinsttest sweep                        what a start does before it mounts anything
+     modinsttest sweep CATALOG                what a start does before it mounts anything
+     modinsttest hold PATH                    holds a file open with no sharing until it is killed
+     modinsttest load-dll                     loads ddraw.dll from beside this exe, as a tool would: what its attach touches
      modinsttest installed ID                 the version the live folder's marker names
      modinsttest ufo OUT PATH...              an archive of files named as they are on the disk, for the writer's byte test */
 #include <windows.h>
@@ -73,9 +75,25 @@ int main(int argc, char** argv)
         printf("ready\n");
         return 0;
     }
-    if (argc >= 2 && !strcmp(argv[1], "sweep")) {
-        tagpu_modinst_sweep();
+    if (argc >= 3 && !strcmp(argv[1], "sweep")) {
+        size_t n = 0;
+        char* cat = read_file(argv[2], &n);
+        if (!cat) { printf("no catalog at %s\n", argv[2]); return 2; }
+        tagpu_modinst_sweep(cat, n);
         return 0;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "hold")) {
+        HANDLE f = CreateFileA(argv[2], GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        printf(f == INVALID_HANDLE_VALUE ? "failed\n" : "held\n");
+        fflush(stdout);
+        Sleep(INFINITE);
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "load-dll")) {
+        HMODULE m = LoadLibraryA("ddraw.dll");
+        printf(m ? "loaded\n" : "not loaded\n");
+        fflush(stdout);
+        ExitProcess(0);
     }
     if (argc >= 3 && !strcmp(argv[1], "installed")) {
         char v[64];

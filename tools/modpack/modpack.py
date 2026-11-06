@@ -1103,7 +1103,7 @@ def cmd_verify(a):
             arc = hpipack().Archive(ha) if renamed else None
             for k in renamed:
                 got[k] = (hashlib.md5(undo_rename(k, arc.read(k))).hexdigest(), got[k][1])
-            recipe = (Path(d) / f"{s['id']}.originals.tsv").read_text().splitlines()
+            recipe = (Path(d) / f"{s['id']}.originals.tsv").read_text(encoding="latin-1").split("\n")[:-1]
             carried = [hashlib.md5((Path(d) / n).read_bytes()).hexdigest() for n in names]
         hit = [n for n, h in zip(names, carried) if h in hashes]
         report(not hit, f"{s['id']}: no file of the package is an original file ({len(names)} files)" + (f"; first {hit[0]}" if hit else ""))
@@ -1242,6 +1242,8 @@ def cmd_packages(a):
         def member_sha(arc, member):
             a = opened.get(arc) or opened.setdefault(arc, hpipack().Archive(plan.retail[plan.retail_name(arc.lower())]))
             return hashlib.sha256(a.read(member.lower())).hexdigest()
+        if any(not r[0].isascii() for r in st["recipe"]) or any(not n.isascii() for n in plan.kept):
+            die(f"{s['id']}: a package path outside ASCII, which the installer refuses")
         pkg[f"{s['id']}.originals.tsv"] = "".join(f"{path}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\t{member_sha(arc, member)}\n"
                                                   for path, md5, arc, member in st["recipe"]).encode("latin-1")
         for name, p in plan.kept.items():
@@ -1279,7 +1281,7 @@ def cmd_install(a):
                 t.extractall(dest, filter="data")
         archives, tree = {}, {}
         names = {p.name.lower(): p for p in source.iterdir() if p.is_file()}
-        for line in (dest / f"{a.id}.originals.tsv").read_text().splitlines():
+        for line in (dest / f"{a.id}.originals.tsv").read_text(encoding="latin-1").split("\n")[:-1]:
             path, md5, size, arc, member, _sha = line.split("\t")
             h = archives.get(arc.lower()) or hpipack().Archive(names[arc.lower()])
             archives[arc.lower()] = h

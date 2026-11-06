@@ -10,7 +10,7 @@
    nothing else: no links, no directories, no extended headers and no name in the prefix field, so a
    truncated header, a checksum that does not add up or a size that is not octal is a refusal, not a guess.
 
-   Pure C99 and the C library: tests/modinsttest.py compiles it natively under the sanitizers. */
+   Pure C99 and the C library: tools/modpack/installtest.py compiles it natively under the sanitizers, with tests/modtartest.c. */
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_modpak.h"
@@ -46,8 +46,8 @@ typedef struct {
 } MODTAR;
 
 /* 1 when a path can only name a file under the folder it is joined to: relative, '/' its only
-   separator, no empty, "." or ".." component, no colon, no control character, and no component
-   ending in a dot or a space, which Windows would drop. */
+   separator, printable ASCII, no empty, "." or ".." component, no colon, no component ending in a
+   dot or a space, which Windows would drop, and none that Windows opens as a device (NUL, COM1.txt). */
 int  modtar_path_safe(const char* path);
 
 void modtar_init(MODTAR* t, const MODTAR_SINK* sink, const MODTAR_FILE* files, int nfiles, unsigned char* seen);

@@ -12,6 +12,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_refuse.h"
+#include "tagpu_modinst.h"
 #include "zstd.h"
 
 #define PACK_MAX (1u << 20)            /* patches.bin, decompressed: far more than it holds */
@@ -80,6 +81,9 @@ static int is_the_game(const MODIMG* img)
            calls(img, VA_OPEN_CALL, VA_FOPEN) && calls(img, VA_FIND_CALL, VA_FINDFIRST);
 }
 
+static int s_keep_choice;
+static uint8_t* read_file_w(const wchar_t* path, size_t* n);
+
 static void refuse(const char* fmt, ...)
 {
     va_list ap;
@@ -90,7 +94,38 @@ static void refuse(const char* fmt, ...)
     tagpu_logf("modload: REFUSED %s: %s", s_id, s_refusal);
 }
 
+/* A folder another copy of the game is moving is no verdict on the player's choice, so that box keeps mod=. */
+static void not_installed(const char* path)
+{
+    if (tagpu_modinst_locked()) {
+        s_keep_choice = 1;
+        refuse("another copy of the game is installing a mod: start this one when it has finished");
+    } else {
+        refuse("it is not installed: %s is missing", path);
+    }
+}
+
 const char* tagpu_modload_id(void) { return s_id[0] ? s_id : NULL; }
+
+int tagpu_modload_is_game(void)
+{
+    wchar_t path[MAX_PATH];
+    const wchar_t* base;
+    uint8_t* exe;
+    size_t n = 0;
+    MODIMG img;
+    int sites;
+
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH)) return 0;
+    base = wcsrchr(path, L'\\');
+    if (!lstrcmpiW(base ? base + 1 : path, L"TotalA.exe")) return 1;
+    if (!(exe = read_file_w(path, &n))) return 0;
+    memset(&img, 0, sizeof img);
+    sites = tagpu_modimg_from_exe(&img, exe, n) && is_the_game(&img);
+    tagpu_modimg_free(&img);
+    free(exe);
+    return sites;
+}
 
 const unsigned char* tagpu_modload_reference_file(size_t* n)
 {
@@ -247,9 +282,9 @@ void tagpu_modload_begin(void)
         }
     }
     snprintf(path, sizeof path, "mods\\%s\\%s.hpi", id, id);
-    if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
+    if (!exists(path)) { not_installed(path); goto done; }
     snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", id, id);
-    if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
+    if (!exists(path)) { not_installed(path); goto done; }
     /* The mounter's duplicate test resolves a name into 0x100 bytes (0x4BE0D1) and the handle keeps its path in 0x104
        (0x4BDDC1), read back by the prune's open at 0x4BE1B5. This, the longest name it gets, stays inside the smaller. */
     if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
@@ -594,9 +629,10 @@ void* tagpu_modload_entry_target;
 static void box_and_exit(void)
 {
     static char text[sizeof s_refusal + 200];
-    tagpu_settings_set_mod("");
+    if (!s_keep_choice) tagpu_settings_set_mod("");
     tagpu_settings_flush();
-    snprintf(text, sizeof text, "The mod \"%s\" cannot start:\n\n%s.\n\nThe next start runs without it.", s_id, s_refusal);
+    snprintf(text, sizeof text, "The mod \"%s\" cannot start:\n\n%s.\n\n%s", s_id, s_refusal,
+             s_keep_choice ? "It is still your choice for the next start." : "The next start runs without it.");
     tagpu_refuse(text);
 }
 

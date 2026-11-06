@@ -1,6 +1,6 @@
 # Mods: a mod run from its package
 
-`mod=<id>` in `impure.cfg` runs catalog mod `<id>` on the player's own exe from `mods\\<id>\\`, and the
+`mod=<id>` in `impure.cfg` runs catalog mod `<id>` on the player's own exe from `mods\<id>\`, and the
 result is the mod's drop-in folder: the same unit types, feature and weapon tables and build menus, and a
 network game with a drop-in player whose handshake agrees on every unit's scripts, GUIs and downloads. With no `mod=` none of this does anything. The design and its reasons are in
 [the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html).
@@ -45,13 +45,13 @@ of stock and every known exe, which no two exes share. An exe with any other byt
 
 The module acts only in the game: an exe that is not named `TotalA.exe` and lacks the engine's three sites in its file leaves
 `mod=` alone, which is what any tool loading a `ddraw.dll` from this folder gets. Otherwise each refusal goes through `tagpu_refuse`: the box,
-`log\\startup-failure.txt`, exit. `mod=` is cleared and the store flushed first, so a player who kills the box
+`log\startup-failure.txt`, exit. `mod=` is cleared and the store flushed first, so a player who kills the box
 still gets the folder's own game next time.
 
 At the entry point, before any game code:
 - a name that is not a mod's, or one the catalog does not have;
 - an exe no key knows, or a `dplayx.dll` holding `[Settings]` that no key knows;
-- `mods\\<id>\\<id>.hpi` or `<id>.originals.hpi` missing, or a folder so deep the package's path passes the smaller of the
+- `mods\<id>\<id>.hpi` or `<id>.originals.hpi` missing, or a folder so deep the package's path passes the smaller of the
   mounter's two buffers (0x100 at `0x4BE0D1`, 0x104 at `0x4BDDC1`);
 - the hash, which no known exe reaches: it guards against a pack that disagrees with itself;
 - a build with no pack, no memory for the image, or a write that fails.
@@ -68,7 +68,7 @@ At the first mount, on the game thread:
 (`0x4BE162`), so being first is what puts them ahead of everything the engine's own patterns add. After that a name is mounted only if it is
 `impure-patch.ufo` or an original archive by SHA-256, and not in the mod's `hide`. A refused name returns 0,
 which is what the engine sees for one already mounted, so it does not count toward `*.HPI`'s ten.
-Archive hashes are cached in `mods\\archives.cache` by name, size and date. The candidates in a retail folder
+Archive hashes are cached in `mods\archives.cache` by name, size and date. The candidates in a retail folder
 total about 900 MB, hashed once on the game thread, and `*.HPI`'s ten-a-call means some of it falls at a later
 `InitTAHPIAry` call: a menu click or Start. A full table or a long name costs a hash on every start, and a file that
 cannot be read stores nothing.
@@ -77,20 +77,20 @@ cannot be read stores nothing.
 read or a listing whose first path component is a game-data folder finds nothing; everything else goes to
 the CRT, so saves still work. A game-data folder is one of modpack's `GAME_DIRS` or a name the image gives one
 (`FOLDER_NAMES`: `ZUnits`, `guiM`, `weaponE`, `zi`), with a `-<language>` suffix ignored. The log names each refused
-file or listing that exists, once, up to 32. The wiki's reader (`tagpu_vfs_close_loose`) has the same rule. A `palettes\\`
+file or listing that exists, once, up to 32. The wiki's reader (`tagpu_vfs_close_loose`) has the same rule. A `palettes\`
 folder without the mod's `PALETTE.ALP` makes the engine rebuild that table and write it at each start
 (`0x42E165`, `0x42E1BF`); the rebuilt table is not measured against the file.
 
 **A file's place.** Every path has one answer, and the package reproduces it. But a name inside a file can depend on where
 the file lies in the mount, and one archive cannot keep the drop-in folder's order. Two readers take the first file listed
 that holds a name: a feature section (LoadFeature, over the recursive walk) and a texture's sequence (the bank filled in
-listing order from `textures\\*.GAF`, searched from index 0). Mods do hold a name twice with different values: MEASURED
+listing order from `textures\*.GAF`, searched from index 0). Mods do hold a name twice with different values: MEASURED
 2026-11-06, the first holder changes for 1 section in Mayhem, 2 in ProTA, 22 in TA Zero, 33 in Twilight and 0 in Escalation,
 and for one texture, Twilight's `wheel`, which 22 models name. `modpack.py packages` (`settle_places`) keeps the drop-in's winner
 without shipping a byte of the original game:
 - a copy that comes first in the package is **renamed where it stands**, `[name~]` in a TDF and `name~` in a GAF's entry, since
   nothing asks for the new name. Those files are the mod's own. Names renamed: Escalation 0, Mayhem 0, ProTA 1, TA Zero 22, Twilight 34;
-- a winner that is an original file behind another original **goes in the recipe**, ahead of retail: `features\\urban\\cars.tdf`
+- a winner that is an original file behind another original **goes in the recipe**, ahead of retail: `features\urban\cars.tdf`
   in Mayhem and ProTA, whose archives list `cars2.tdf` the other way round from the mods' own.
 
 Weapons, where a later section with one ID overwrites, and build-menu cells come out the same whichever file wins, so they
@@ -100,8 +100,8 @@ to prove the file otherwise equals the drop-in's.
 **The replays** name a managed mod as they name its drop-in folder, through `mod_by_archive`: the first archive's
 `<id>.hpi`. Twilight has no archive pattern and is retail by name on both routes, told apart by its version text.
 
-**Plain paths.** The strategic icons read their folder relative to `mods\\<id>\\` under a mod
-(`iconset_load`), so `Icon\\` comes from the package. The options file the image names (`0x5098A3`) is copied
+**Plain paths.** The strategic icons read their folder relative to `mods\<id>\` under a mod
+(`iconset_load`), so `Icon\` comes from the package. The options file the image names (`0x5098A3`) is copied
 beside the exe when none is there, and never overwritten.
 
 ## Download and install
@@ -110,11 +110,11 @@ beside the exe when none is there, and never overwritten.
 engine memory and no render state, so it is in no list of `thread-split.allow`. Its progress is three atomics
 (`tagpu_modinst_status`), and it holds a reference to the DLL until its last instruction.
 
-1. **The download** goes to `mods\\<id>.part` through WinHTTP, loaded when a download runs so that nothing about a normal
+1. **The download** goes to `mods\<id>.part` through WinHTTP, loaded when a download runs so that nothing about a normal
    start changes. Bytes past the catalog's size are never written. The address is the package's `url`, resolved against the
    catalog's `base_url`, which the catalog does not have until there is a place to name; until then a download reports that.
 2. **The check**: the file's size and SHA-256 against the catalog, by `modsha`, before anything reads it as a package.
-3. **The unpack** into `mods\\<id>.new\\`, zstd with its window bounded to 128 MiB and then `tagpu_modtar.c`, whose list of
+3. **The unpack** into `mods\<id>.new\`, zstd with its window bounded to 128 MiB and then `tagpu_modtar.c`, whose list of
    acceptable files is the catalog's. A member must have a safe path, be declared, come once and be a regular file of the
    declared size and hash; the archive must reach its own end, with every declared file seen.
 4. **The recipe** (`<id>.originals.tsv`) copies the original files out of the folder's own archives through `tagpu_hpi`, each
@@ -124,24 +124,30 @@ engine memory and no render state, so it is in no list of `thread-split.allow`. 
    declare a file of that name. After the swap it is how `tagpu_modinst_installed` knows the version.
 
 **The swap**, `tagpu_modinst_sweep`, runs at process attach before `tagpu_modload_begin`, so before anything looks in
-`mods\\`, and with `mod=` or without. It deletes every `.part` and any `.new` without its marker, then moves the live folder to `<id>.old`,
+`mods\`, and with `mod=` or without. It acts in the exe's own folder, never the current directory, only in the game
+(`tagpu_modload_is_game`), and only on a catalog id's `.part`, `.new` and `.old`: any other name in `mods\` is the player's. It deletes the
+`.part` and a `.new` without its marker, then moves the live folder to `<id>.old`,
 the new one into its place and deletes the old. A crash between any two steps leaves folders with one answer: a finished new
-wins, `.old` beside a live folder is deleted, and `.old` alone goes back. A rename refused because another process has the
-folder open leaves it all for another start. A running game's files therefore never change, and the player's profile
-(`profiles\\<id>.ini`) is outside all of this.
+wins, `.old` beside a live folder is deleted, and `.old` alone goes back. A marker always goes before the rest of its folder,
+and one that cannot be deleted keeps the whole folder, because a folder with a marker is a whole version to the sweep.
+The player's profile (`profiles\<id>.ini`) is outside all of this. On Windows a rename is refused while a file inside is open, which
+leaves it all for another start; that has not run, and Wine may rename a folder another copy has open.
 
-**The lock**: `mods\\install.lock`, opened with no sharing and deleted on close. The system releases it with the process however
-that ends, so a start can tell another copy's running install from what a dead one left, and the sweep then leaves `mods\\` alone.
+**The lock**: `mods\install.lock`, opened with no sharing and deleted on close. The system releases it with the process however
+that ends, so a start can tell another copy's running install from what a dead one left, and the sweep then leaves `mods\` alone.
+A start that finds its mod missing while the lock is held says so and keeps `mod=`.
 
-**The way in**, until the Mods screen: a file `tagpu_modinst.on` holding `<id> <base url>` installs that mod at start-up.
+**The way in**, until the Mods screen: in the game, a file `tagpu_modinst.on` holding `<id> <base url>` installs that mod at each start
+while it exists.
 
 ## How it is tested
 
 `tools/modpack/installtest.py` needs no game: the tar reader natively under the sanitizers, and the module itself under Wine with its
 real WinHTTP, against a local server. `tests/modinsttest.exe` is built with a hook that ends the process at a chosen step, as a
-crash would. It checks every bad download, each file that can be wrong inside a package whose outer hash is right, a death at
-each step, an update, each state a crash leaves in a swap, a second copy during an install, a missing or foreign archive, and that
-all five mods install to what `modpack.py install` builds. `managed-fetched-prota` in the suite takes one mod all the way in the
+crash would. It checks every bad download, each file that can be wrong inside a package whose outer hash is right, a death during the
+download, the unpack and the recipe, before the marker and just after a waiting marker's deletion, an update, a marker held open, the swap's
+states, a second copy during an install, a missing or foreign archive, the real DLL's attach in a tool, in the game and from another
+current directory, and that all five mods install to what `modpack.py install` builds. `managed-fetched-prota` in the suite takes one mod all the way in the
 real DLL: downloaded at one start, swapped in at the next, played and compared with its drop-in row.
 
 
@@ -174,6 +180,6 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - The originals list is one install's hashes. A folder from another edition whose `totala1.hpi` matches, and whose other
   archives do not, loses those archives with only a log line.
 - The mount and the loose step are not yet part of any recording's identity; the fingerprint is a later landing.
-- The shell's own orders are not compared: the map list (`Maps\\*.ota`, `0x434CE5`) and the unit types at the menu, whose IDs
+- The shell's own orders are not compared: the map list (`Maps\*.ota`, `0x434CE5`) and the unit types at the menu, whose IDs
   only mean something in a level. The level's are compared.
 - A game exe of another patch level, named `TotalA.exe`, gets the box; one renamed gets the log line and its own game.

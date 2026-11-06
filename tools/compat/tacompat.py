@@ -842,7 +842,10 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
                             stdin=subprocess.DEVNULL, start_new_session=True)
     said = ""
     try:
-        for _ in range(600):
+        # The installer ends in a log line on its own, its network calls being bounded, so the game's end and the suite's
+        # outer bound on a run are all this waits on.
+        deadline = time.time() + HANG_S
+        while proc.poll() is None and time.time() < deadline:
             time.sleep(0.5)
             log = gamedir / "log" / "tagpu.log"
             text = log.read_text(errors="replace") if log.exists() else ""

@@ -159,7 +159,7 @@ Each decision is listed with what it was chosen over.
 
 - **WinHTTP on a background thread that touches only files.** The Mods screen reads its progress
   from a few atomic counters. WinHTTP is loaded when a download runs, so the DLL gains no import.
-- **Nothing unpacks from an unverified file.** The download goes to `mods\\<id>.part` and is checked
+- **Nothing unpacks from an unverified file.** The download goes to `mods\<id>.part` and is checked
   against the catalog's size and SHA-256 (the module's own `modsha`, already in the DLL, rather than BCrypt)
   before anything is unpacked.
 - **The tar reader is bounded to the package's declared file list.** It refuses absolute paths,
@@ -167,7 +167,7 @@ Each decision is listed with what it was chosen over.
 - **The recipe runs after the unpack**, from the player's original archives into
   `<id>.originals.hpi`, each file checked by SHA-256. A folder without an original archive it names cannot install
   that mod, and the reason says which archive is missing.
-- **Unpacking goes into `mods\\<id>.new\\`**, which gets a done marker, `installed.txt` holding the version, when complete. It
+- **Unpacking goes into `mods\<id>.new\`**, which gets a done marker, `installed.txt` holding the version, when complete. It
   is swapped in at start-up, before any archive is mounted. A `.new` without the marker is deleted. The live
   folder is always either the old version or the new one, and a lock file that dies with its process keeps a second copy of the
   game out of a running install.

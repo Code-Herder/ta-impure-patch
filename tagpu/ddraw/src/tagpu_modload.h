@@ -35,4 +35,8 @@ const char* tagpu_modload_id(void);
    no mod, never. */
 int tagpu_modload_loose_closed(const char* path);
 
+/* 1 when this process is the game: an exe named TotalA.exe, or one holding the engine's sites in its file. Any other exe that
+   loads a ddraw.dll from this folder is a tool, and mods\\ is none of its business. Reads the exe unless the name answers. */
+int tagpu_modload_is_game(void);
+
 #endif

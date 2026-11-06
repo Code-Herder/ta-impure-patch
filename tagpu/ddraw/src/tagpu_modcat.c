@@ -177,22 +177,24 @@ int tagpu_modcat_install(const char* catalog, size_t n, const char* id, MODINSTA
     if (!m) { bad(err, errn, id, "no entry names it"); goto done; }
 
     pk = tj_get(m, "packages");
-    out->npackages = count_of(pk);
     out->id = copy_text(id);
     out->version = copy_text(tj_str(tj_get(m, "version"), ""));
     out->base_url = copy_text(tj_str(tj_get(tagpu_json_root(d), "base_url"), ""));
-    out->packages = (MODPKG*)calloc(out->npackages ? (size_t)out->npackages : 1, sizeof(MODPKG));
+    /* each count set only with its array: the free walks them */
+    out->packages = (MODPKG*)calloc((size_t)count_of(pk) + 1, sizeof(MODPKG));
     if (!out->id || !out->version || !out->base_url || !out->packages) { bad(err, errn, id, "out of memory"); goto done; }
+    out->npackages = count_of(pk);
     if (!out->npackages) { bad(err, errn, id, "it has no package"); goto done; }
+    if (!out->version[0]) { bad(err, errn, id, "it has no version"); goto done; }
 
     for (i = 0, pk = pk->first; pk; pk = pk->next, i++) {
         MODPKG* p = &out->packages[i];
         const TJV* f = tj_get(pk, "files");
         int k;
-        p->nfiles = count_of(f);
         p->url = copy_text(tj_str(tj_get(pk, "url"), ""));
-        p->files = (MODTAR_FILE*)calloc(p->nfiles ? (size_t)p->nfiles : 1, sizeof(MODTAR_FILE));
+        p->files = (MODTAR_FILE*)calloc((size_t)count_of(f) + 1, sizeof(MODTAR_FILE));
         if (!p->url || !p->files) { bad(err, errn, id, "out of memory"); goto done; }
+        p->nfiles = count_of(f);
         if (!p->url[0] || !tagpu_modcat_hash(tj_str(tj_get(pk, "sha256"), ""), p->sha256) || !size_of(tj_get(pk, "size"), &p->size) || !p->nfiles) {
             bad(err, errn, id, "a package without its url, hash, size or files");
             goto done;
@@ -212,4 +214,19 @@ done:
     tagpu_json_free(d);
     if (!ok) tagpu_modcat_install_free(out);
     return ok;
+}
+
+int tagpu_modcat_each_id(const char* catalog, size_t n, void (*fn)(void* ctx, const char* id), void* ctx)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m;
+    if (!d) return 0;
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next) {
+        const char* id = tj_str(tj_get(m, "id"), "");
+        if (plain_id(id)) fn(ctx, id);
+    }
+    tagpu_json_free(d);
+    return 1;
 }
