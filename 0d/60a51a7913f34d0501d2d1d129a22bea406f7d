@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..0d60a51a findings=10 acted=10 rejected=0 date=2026-11-05
+HIGH a click wrote and flushed a file on the lockstep thread, in a match too: moved to the render thread with retry and count-cleared dirty. MEDIUM the move dropped keys whose write failed. MEDIUM Restore pinned the default as a choice. MEDIUM README and roadmap described the old layout. LOW fixture lists, write bound, file_has_rules substring and .migrated clash, test gaps, comments and both-forbidden log, modcat in no sources.
