@@ -8,8 +8,8 @@ Three parts, offline and with no game:
    any byte is refused, and mutated tars never crash it and never get a changed payload accepted.
 2. **The archive writer**: its bytes against hpipack.build for the same tree, and the file lists it must refuse.
 3. **The install**, the real module with its real WinHTTP and file handling, under Wine in a stock tacli instance. A good
-   package installs, every bad download is refused with the live folder intact, a process that dies at any step leaves
-   the live folder intact and a next start deletes what it left, an update swaps at that start and keeps the profile, each
+   package installs, every bad download is refused with the live folder intact, a process that dies at any of the named
+   steps leaves the live folder intact and a next start deletes what it left, an update swaps at that start and keeps the profile, each
    state a crash can leave in the swap resolves, a second copy of the game leaves a running install alone, and every catalog
    mod installs to the same files `modpack.py install` builds.
 
@@ -134,6 +134,7 @@ def part_tar():
         ("a device name", member("NUL", a) + rest, "not safe"),
         ("a device name with an extension", member("dir/com1.txt", a) + rest, "not safe"),
         ("a device name by the console's", member("conout$", a) + rest, "not safe"),
+        ("a device name with a space before its extension", member("com1 .log", a) + rest, "not safe"),
         ("a name outside ASCII", member("dir/a\xe9.txt", a) + rest, "not safe"),
         ("an undeclared file", member("other.txt", a) + rest, "does not declare"),
         ("a file given twice", member("dir/a.txt", a) + member("dir/a.txt", a) + rest, "twice"),
@@ -341,12 +342,19 @@ def part_install(w, srv, only):
                                     ("a hash that is not one", lambda p: p.update(sha256="abc"), "url, hash"),
                                     ("a size past 2 GB", lambda p: p.update(size=3e9), "url, hash"),
                                     ("no files", lambda p: p.update(files=[]), "url, hash"),
-                                    ("a file posing as the marker", lambda p: p["files"][0].update(path="Installed.txt"), "declares a file named")):
+                                    ("a file posing as the marker", lambda p: p["files"][0].update(path="Installed.txt"), "declares a file named"),
+                                    ("a file posing as the marker's temporary", lambda p: p["files"][0].update(path="INSTALLED.txt.tmp"), "declares a file named")):
             cat = json.loads(json.dumps(catalog))
             change(next(m for m in cat["mods"] if m["id"] == SMALL)["packages"][0])
             catpath.write_text(json.dumps(cat))
             rc, out = w.run("install", "cat.json", SMALL, srv.base)
             report(rc == 1 and want in out and not list(w.mods.glob("*.new")), f"refused catalog with {label}: {out.strip()}")
+        catpath.write_text(json.dumps(catalog))
+        cat = json.loads(json.dumps(catalog))
+        next(m for m in cat["mods"] if m["id"] == SMALL)["version"] = ""
+        catpath.write_text(json.dumps(cat))
+        rc, out = w.run("install", "cat.json", SMALL, srv.base)
+        report(rc == 1 and "no version" in out, f"refused catalog with no version: {out.strip()}")
         catpath.write_text(json.dumps(catalog))
         rc, out = w.run("install", "cat.json", "nosuch", srv.base)
         report(rc == 1 and "no entry" in out, f"refused unknown mod: {out.strip()}")
@@ -417,6 +425,12 @@ def part_install(w, srv, only):
         (w.mods / f"{SMALL}.new/stale.txt").write_text("stale")
         rc, out = install()
         report(rc == 0 and not (w.mods / f"{SMALL}.new/stale.txt").exists(), "update: a second install replaces a waiting one")
+        # a download that fails has not touched the update waiting
+        waiting = tree_hashes(w.mods / f"{SMALL}.new")
+        serve("404")
+        rc, out = install()
+        report(rc == 1 and tree_hashes(w.mods / f"{SMALL}.new") == waiting, "update: a download that fails leaves the waiting update as it was")
+        serve()
         # the waiting update's marker cannot be deleted: nothing of it may go, or the sweep would take what is left for a whole version
         waiting = tree_hashes(w.mods / f"{SMALL}.new")
         holder = w.popen("hold", f"mods\\{SMALL}.new\\installed.txt")
@@ -436,7 +450,7 @@ def part_install(w, srv, only):
                     (w.mods / name).mkdir()
                     (w.mods / name / "tag").write_text(tag)
             if fresh and marker:
-                (w.mods / f"{SMALL}.new/installed.txt").write_text("2")
+                (w.mods / f"{SMALL}.new" / ("installed.txt.tmp" if marker == "tmp" else "installed.txt")).write_text("2")
             w.run("sweep", "cat.json")
             names = sorted(p.name for p in w.mods.iterdir())
             tag = (w.mods / SMALL / "tag").read_text() if (w.mods / SMALL / "tag").exists() else None
@@ -447,7 +461,8 @@ def part_install(w, srv, only):
                                 ("the new in place, the old not yet deleted", dict(live="N", old="O"), "N"),
                                 ("the live moved aside, no new", dict(old="O"), "O"),
                                 ("the live moved aside, an unfinished new", dict(old="O", fresh="N", marker=False), "O"),
-                                ("live and an unfinished new", dict(live="L", fresh="N", marker=False), "L")):
+                                ("live and an unfinished new", dict(live="L", fresh="N", marker=False), "L"),
+                                ("live and a new with only the marker's temporary", dict(live="L", fresh="N", marker="tmp"), "L")):
             names, tag = state(**kw)
             report(names == [SMALL] and tag == want, f"swap: {label}: the live folder holds {tag}, {names}")
         # names this module did not make are the player's
@@ -470,12 +485,16 @@ def part_install(w, srv, only):
             time.sleep(0.05)
         report((w.mods / f"{SMALL}.part").exists(), "lock: a second copy starts while one is downloading")
         rc, out = w.run("sweep", "cat.json")
-        report("another copy" in out and (w.mods / f"{SMALL}.new").is_dir() and (w.mods / f"{SMALL}.part").exists(), f"lock: its sweep leaves the install alone: {out.strip()[:80]}")
+        report("another copy" in out and (w.mods / f"{SMALL}.part").exists(), f"lock: its sweep leaves the install alone: {out.strip()[:80]}")
         rc, out = install()
         report(rc == 1 and "another copy" in out, f"lock: its own install is refused: {out.strip()}")
+        rc, out = w.run("locked")
+        report(out.strip() == "1", "lock: a start can see it held")
         srv.release.set()
         out, _ = p.communicate(timeout=120)
         report(p.returncode == 0 and "ready" in out, "lock: the first install still finishes")
+        rc, out = w.run("locked")
+        report(out.strip() == "0", "lock: and free after it")
         rc, out = w.run("sweep", "cat.json")
         report((w.mods / SMALL).is_dir() and not list(w.mods.glob("install.lock")), "lock: released, and a start swaps it")
         srv.release.clear()
@@ -519,7 +538,7 @@ def part_install(w, srv, only):
                 p.kill()
                 return "timed out"
         said = at("tool.exe")
-        report((other / "log").is_dir() and (other / "mods" / f"{SMALL}.new").is_dir() and (other / "mods" / f"{SMALL}.part").exists(), f"attach: an exe that is not the game leaves its folder alone ({said})")
+        report(said == "loaded" and (other / "log").is_dir() and (other / "mods" / f"{SMALL}.new").is_dir() and (other / "mods" / f"{SMALL}.part").exists(), f"attach: an exe that is not the game leaves its folder alone ({said})")
         said = at("TotalA.exe")
         report((other / "log").is_dir() and not (other / "mods" / f"{SMALL}.new").exists() and not (other / "mods" / f"{SMALL}.part").exists(), f"attach: the game settles its own folder ({said})")
         report((w.mods / f"{SMALL}.part").exists(), "attach: and never the current directory's")
@@ -590,7 +609,7 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the instance")
     a = ap.parse_args()
     TMP.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["make", "-C", str(DDRAW), f"-j{os.cpu_count()}", "tests/modinsttest.exe"], check=True, capture_output=True)
+    subprocess.run(["make", "-C", str(DDRAW), f"-j{os.cpu_count()}", "tests/modinsttest.exe", "ddraw.dll"], check=True, capture_output=True)
     if not a.only or a.only == "tar":
         part_tar()
     if a.only != "tar":

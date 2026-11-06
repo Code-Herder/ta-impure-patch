@@ -28,7 +28,7 @@ typedef struct {
     char          why[200];     /* MODINST_FAILED's reason, for the player */
 } MODINST_STATUS;
 
-/* At process attach, before anything is mounted: finish what the last run left in the exe's mods\\ folder, for the catalog's
+/* At process attach, before anything is mounted: finish what the last run left in the exe's mods\ folder, for the catalog's
    ids alone. A folder with its marker replaces the live one, one without it and a .part are deleted, and a swap a crash
    interrupted is completed or undone, so the live folder is always the old version or the new. Does nothing without
    anything to settle, in an exe that is not the game, or while another process holds the install lock. */

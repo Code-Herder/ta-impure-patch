@@ -576,6 +576,11 @@ before the exe's entry point and therefore before this — an archive the DLL wr
 is on disk in time by the loader's rules, not by luck. Measured: written at attach, globbed
 and read in the same launch.
 
+**The current directory** [DISASSEMBLED 2026-11-06]: `InitTAHPIAry` first calls `0x49F540` (`0x41D4DB`), which takes the exe's own path
+(`GetModuleFileNameA`), cuts the file name (`0x4BB120`) and sets it with `SetCurrentDirectoryA` (slot `0x4FC0A0`), so every mount pass runs in
+the exe's folder whatever the process started in. It is the engine's only caller of that import; the other uses (`0x49F7BE`, a jump thunk, and `0x4E7AFF`,
+`0x4E7D3B`) are outside this function and not traced.
+
 **What actually opens one is `OpenHAPIFile 0x4BDD70`** — and the name is the engine's own, not
 ours: the allocation tag it passes is the string `"OPENHAPIFILE structure"` at `0x50A5A8`.
 `stdcall`, `ret 8`. It calls `0x4E4990(name, "rb")` (`0x505F10`) and returns 0 outright if that

@@ -4,6 +4,7 @@
 
      modinsttest install CATALOG ID BASE      one install to its end: prints its result, exit 0 when ready
      modinsttest sweep CATALOG                what a start does before it mounts anything
+     modinsttest locked                       whether another process holds the install lock
      modinsttest hold PATH                    holds a file open with no sharing until it is killed
      modinsttest load-dll                     loads ddraw.dll from beside this exe, as a tool would: what its attach touches
      modinsttest installed ID                 the version the live folder's marker names
@@ -82,6 +83,10 @@ int main(int argc, char** argv)
         tagpu_modinst_sweep(cat, n);
         return 0;
     }
+    if (argc >= 2 && !strcmp(argv[1], "locked")) {
+        printf("%d\n", tagpu_modinst_locked());
+        return 0;
+    }
     if (argc >= 3 && !strcmp(argv[1], "hold")) {
         HANDLE f = CreateFileA(argv[2], GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         printf(f == INVALID_HANDLE_VALUE ? "failed\n" : "held\n");
@@ -113,6 +118,6 @@ int main(int argc, char** argv)
         }
         return tagpu_ufo_write(argv[2], f, nf) ? 0 : 1;
     }
-    printf("usage: modinsttest install|sweep|installed|ufo\n");
+    printf("usage: modinsttest install|sweep|installed|locked|hold|load-dll|ufo\n");
     return 2;
 }

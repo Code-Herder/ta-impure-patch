@@ -18,7 +18,8 @@
      nothing is listed, and displacements into their DLLs need no table.
 
    ANYTHING THAT DOES NOT FIT refuses at the entry point, outside the loader lock and before any game
-   code runs: a box naming the reason, mod= cleared so the next start is the folder's own, and exit. */
+   code runs: a box naming the reason, mod= cleared so the next start is the folder's own, and exit. The one
+   exception keeps mod=: a mod missing while another copy of the game holds the install lock. */
 
 void tagpu_modload_begin(void);
 void tagpu_modload_end(void);
@@ -36,7 +37,7 @@ const char* tagpu_modload_id(void);
 int tagpu_modload_loose_closed(const char* path);
 
 /* 1 when this process is the game: an exe named TotalA.exe, or one holding the engine's sites in its file. Any other exe that
-   loads a ddraw.dll from this folder is a tool, and mods\\ is none of its business. Reads the exe unless the name answers. */
+   loads a ddraw.dll from this folder is a tool, and mods\ is none of its business. Reads the exe unless the name answers. */
 int tagpu_modload_is_game(void);
 
 #endif

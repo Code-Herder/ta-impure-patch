@@ -1191,6 +1191,19 @@ def cmd_verify(a):
     return 1 if bad else 0
 
 
+def installer_takes(path: str) -> bool:
+    """modtar_path_safe in tagpu_modtar.c: what a package that the installer can take may name."""
+    if not path or any(ord(c) < 0x20 or ord(c) >= 0x7F or c in "\\:" for c in path):
+        return False
+    for part in path.split("/"):
+        if not part or part in (".", "..") or part[-1] in ". ":
+            return False
+        stem = part.split(".")[0].rstrip(" ").upper()
+        if stem in ("CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$") or re.fullmatch(r"(COM|LPT)[0-9]", stem):
+            return False
+    return True
+
+
 def write_tar(files: dict, out: Path):
     """{name: bytes} in a tar, by name, their headers fixed, zstd compressed: the same inputs give the same package."""
     buf = io.BytesIO()
@@ -1242,8 +1255,9 @@ def cmd_packages(a):
         def member_sha(arc, member):
             a = opened.get(arc) or opened.setdefault(arc, hpipack().Archive(plan.retail[plan.retail_name(arc.lower())]))
             return hashlib.sha256(a.read(member.lower())).hexdigest()
-        if any(not r[0].isascii() for r in st["recipe"]) or any(not n.isascii() for n in plan.kept):
-            die(f"{s['id']}: a package path outside ASCII, which the installer refuses")
+        unsafe = [p for p in [r[0] for r in st["recipe"]] + [r[2] for r in st["recipe"]] + list(plan.kept) if not installer_takes(p)]
+        if unsafe:
+            die(f"{s['id']}: paths tagpu_modtar's modtar_path_safe refuses: {unsafe[:5]}")
         pkg[f"{s['id']}.originals.tsv"] = "".join(f"{path}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\t{member_sha(arc, member)}\n"
                                                   for path, md5, arc, member in st["recipe"]).encode("latin-1")
         for name, p in plan.kept.items():

@@ -83,6 +83,7 @@ static int is_the_game(const MODIMG* img)
 
 static int s_keep_choice;
 static uint8_t* read_file_w(const wchar_t* path, size_t* n);
+static int exists(const char* path);
 
 static void refuse(const char* fmt, ...)
 {
@@ -97,7 +98,9 @@ static void refuse(const char* fmt, ...)
 /* A folder another copy of the game is moving is no verdict on the player's choice, so that box keeps mod=. */
 static void not_installed(const char* path)
 {
-    if (tagpu_modinst_locked()) {
+    int locked = tagpu_modinst_locked();
+    if (locked || exists(path)) {
+        /* the second test: a swap that finished between the first test and the lock's release */
         s_keep_choice = 1;
         refuse("another copy of the game is installing a mod: start this one when it has finished");
     } else {

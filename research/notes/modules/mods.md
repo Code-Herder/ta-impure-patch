@@ -46,7 +46,7 @@ of stock and every known exe, which no two exes share. An exe with any other byt
 The module acts only in the game: an exe that is not named `TotalA.exe` and lacks the engine's three sites in its file leaves
 `mod=` alone, which is what any tool loading a `ddraw.dll` from this folder gets. Otherwise each refusal goes through `tagpu_refuse`: the box,
 `log\startup-failure.txt`, exit. `mod=` is cleared and the store flushed first, so a player who kills the box
-still gets the folder's own game next time.
+still gets the folder's own game next time, except when the mod is missing while another copy of the game holds the install lock.
 
 At the entry point, before any game code:
 - a name that is not a mod's, or one the catalog does not have;
@@ -129,7 +129,8 @@ engine memory and no render state, so it is in no list of `thread-split.allow`. 
 `.part` and a `.new` without its marker, then moves the live folder to `<id>.old`,
 the new one into its place and deletes the old. A crash between any two steps leaves folders with one answer: a finished new
 wins, `.old` beside a live folder is deleted, and `.old` alone goes back. A marker always goes before the rest of its folder,
-and one that cannot be deleted keeps the whole folder, because a folder with a marker is a whole version to the sweep.
+and one that cannot be deleted keeps the whole folder, because a folder with a marker is a whole version to the sweep. A waiting
+update goes only once the next package's download has passed its hash.
 The player's profile (`profiles\<id>.ini`) is outside all of this. On Windows a rename is refused while a file inside is open, which
 leaves it all for another start; that has not run, and Wine may rename a folder another copy has open.
 
@@ -172,6 +173,11 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 
 - Wine only so far, the install included, and only over plain HTTP: no download has run through TLS on any system, and the
   catalog names no server yet.
+- The refusal that keeps `mod=` when another copy is mid-install has its lock test run (`modinsttest locked`) but not its box, in a game.
+- A catalog id dropped by a later catalog is never settled, so a lone `<id>.old` from a crash stays where it is.
+- In a folder whose name is outside the ANSI code page, `game_root` finds no `mods\`: the sweep does nothing and an install is refused.
+- A launcher that starts the game from another current directory reads `impure.cfg` and tests `mods\` there, while the sweep acts in the exe's
+  folder and the engine moves to it at its first mount pass (`0x49F540`, engine map).
 - One install at a time, with no way to stop one but ending the game. `Update all` is the Mods screen's to queue.
 - A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not

@@ -45,7 +45,7 @@ typedef struct {
     char       root[MAX_PATH];  /* game_root's, on the thread that started it */
     char       base[512];
     HANDLE     lock;
-    int        keep_new;        /* a finished folder this install could not retire: not this install's to delete */
+    int        owns_new;        /* whether mods\<id>.new is this install's to delete on failure */
 } JOB;
 
 static void set_phase(MODINST_PHASE p, unsigned total)
@@ -58,7 +58,7 @@ static void set_phase(MODINST_PHASE p, unsigned total)
 static int path_of(char* out, size_t cap, const char* fmt, ...);
 
 /* The folder of the exe, never the current directory: the engine's own code calls SetCurrentDirectoryA, and a process started
-   from elsewhere must not act on a mods\\ that happens to lie there. The test build runs from outside the folder it tests. */
+   from elsewhere must not act on a mods\ that happens to lie there. The test build runs from outside the folder it tests. */
 static int game_root(char* out, size_t cap)
 {
 #ifdef MODINST_TEST
@@ -131,7 +131,10 @@ static int retire_marker(const char* dir)
     if (!path_of(marker, sizeof marker, "%s\\" MARKER, dir)) return 0;
     SetFileAttributesA(marker, FILE_ATTRIBUTE_NORMAL);
     DeleteFileA(marker);
-    return GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES;
+    /* Only "no such file" says it is gone. A delete another handle holds pending reads as access denied, and a power loss
+       brings that marker back over whatever was deleted next. */
+    if (GetFileAttributesA(marker) != INVALID_FILE_ATTRIBUTES) return 0;
+    return GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
 }
 
 /* Held for as long as this process may write in mods\. The system drops it with the process, however that ends, and it is why
@@ -198,7 +201,7 @@ typedef struct {
     int         n;
 } TO_SETTLE;
 
-/* Only what this module would have made: a catalog id's .part, .new and .old. Any other name in mods\\ is the player's. */
+/* Only what this module would have made: a catalog id's .part, .new and .old. Any other name in mods\ is the player's. */
 static void note_id(void* ctx, const char* id)
 {
     TO_SETTLE* t = (TO_SETTLE*)ctx;
@@ -739,14 +742,6 @@ static int install(JOB* j)
         !path_of(dest, sizeof dest, "%s\\%s.new", mods, id) || !path_of(hpi, sizeof hpi, "%s\\%s.originals.hpi", dest, id)) {
         return fail("this folder's path is too long");
     }
-    /* A finished update waiting for its start goes first: this one replaces it. */
-    if (!retire_marker(dest)) {
-        j->keep_new = 1;
-        return fail("mods\\%s.new is in use, so the update waiting there stays as it is", id);
-    }
-    STEP("retired", 0);
-    if (!remove_tree(dest) || !CreateDirectoryA(dest, NULL)) return fail("could not make mods\\%s.new (error %lu)", id, GetLastError());
-
     for (i = 0; i < j->m.npackages; i++) {
         const MODPKG* p = &j->m.packages[i];
         int fits;
@@ -759,6 +754,14 @@ static int install(JOB* j)
         if (!download(url, part, p->size)) return 0;
         set_phase(MODINST_CHECKING, p->size);
         if (!hash_file(part, p->size, p->sha256)) return 0;
+        if (!i) {
+            /* Only now does a finished update waiting for its start go: a download that fails leaves it to be used. This
+               install owns the folder from here on, and until here its failure must not touch it. */
+            if (!retire_marker(dest)) return fail("mods\\%s.new is in use, so the update waiting there stays as it is", id);
+            j->owns_new = 1;
+            STEP("retired", 0);
+            if (!remove_tree(dest) || !CreateDirectoryA(dest, NULL)) return fail("could not make mods\\%s.new (error %lu)", id, GetLastError());
+        }
         set_phase(MODINST_UNPACKING, p->size);
         if (!unpack(part, dest, p)) return 0;
         DeleteFileA(part);
@@ -781,7 +784,7 @@ static DWORD WINAPI worker(void* arg)
     tagpu_logf("modinst: %s: %s", j->m.id, ok ? "installed; it takes effect at the next start" : s_why);
     if (!ok) {
         if (path_of(part, sizeof part, "%s\\mods\\%s.part", j->root, j->m.id)) DeleteFileA(part);
-        if (!j->keep_new && path_of(dest, sizeof dest, "%s\\mods\\%s.new", j->root, j->m.id) && retire_marker(dest)) remove_tree(dest);
+        if (j->owns_new && path_of(dest, sizeof dest, "%s\\mods\\%s.new", j->root, j->m.id) && retire_marker(dest)) remove_tree(dest);
     }
     CloseHandle(j->lock);
     tagpu_modcat_install_free(&j->m);
@@ -792,6 +795,16 @@ static DWORD WINAPI worker(void* arg)
     GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)worker, &self);
     FreeLibraryAndExitThread(self, 0);
     return 0;
+}
+
+static int same_ascii(const char* a, const char* b)
+{
+    for (; *a && *b; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b + 32) : *b;
+        if (x != y) return 0;
+    }
+    return *a == *b;
 }
 
 int tagpu_modinst_start(const char* catalog, size_t n, const char* id, const char* base, char* why, size_t nwhy)
@@ -809,11 +822,13 @@ int tagpu_modinst_start(const char* catalog, size_t n, const char* id, const cha
     j->lock = INVALID_HANDLE_VALUE;
     if (!tagpu_modcat_install(catalog, n, id, &j->m, err, sizeof err)) { snprintf(why, nwhy, "%s", err); free(j); j = NULL; goto refused; }
     {
-        /* The marker is what says a folder is complete, so a package can never carry it: half a folder would pass for whole. */
+        /* The marker is what says a folder is complete, so a package can never carry it or its temporary name: half a folder
+           would pass for whole. Folded in ASCII, as the file system folds these names whatever the locale. */
         int i, k;
         for (i = 0; i < j->m.npackages; i++) {
             for (k = 0; k < j->m.packages[i].nfiles; k++) {
-                if (!lstrcmpiA(j->m.packages[i].files[k].path, MARKER)) {
+                const char* path = j->m.packages[i].files[k].path;
+                if (same_ascii(path, MARKER) || same_ascii(path, MARKER ".tmp")) {
                     snprintf(why, nwhy, "a package of %s declares a file named " MARKER, id);
                     goto refused;
                 }

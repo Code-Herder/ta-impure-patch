@@ -27,6 +27,7 @@ static int device_name(const char* part, size_t n)
     static const char* const names[] = { "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" };
     size_t stem = 0, i;
     while (stem < n && part[stem] != '.') stem++;
+    while (stem && part[stem - 1] == ' ') stem--;       /* the name's parser drops these too */
     for (i = 0; i < sizeof names / sizeof names[0]; i++)
         if (same_fold(part, stem, names[i])) return 1;
     return stem == 4 && part[3] >= '0' && part[3] <= '9' && (same_fold(part, 3, "COM") || same_fold(part, 3, "LPT"));

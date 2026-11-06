@@ -222,6 +222,14 @@ class Places(unittest.TestCase):
         self.assertEqual(m.gaf_entries(struct.pack("<IIII", 0x00010100, 1, 0, 9999)), [])
 
 
+class InstallerPaths(unittest.TestCase):
+    def test_the_rule(self):
+        for good in ("a.txt", "dir/a.txt", "COM10", "conx", "Icon/AIR.PCX"):
+            self.assertTrue(m.installer_takes(good), good)
+        for bad in ("", "../a", "/a", "a//b", "a\\b", "c:/a", "NUL", "com1.txt", "lpt0", "conin$", "aux/x", "nul .txt", "a.", "a ", "a\xe9"):
+            self.assertFalse(m.installer_takes(bad), bad)
+
+
 class CPack(unittest.TestCase):
     """tagpu_modpak.c reads what pack_patches writes, refuses a cut or lengthened pack, and its SHA-256 is SHA-256."""
     MAIN = (b'#include <stdio.h>\n#include <stdlib.h>\n#include "tagpu_modpak.h"\n'
