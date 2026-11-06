@@ -4006,12 +4006,12 @@ blank frames remain; cold or invalidated devices still require initialization.
 ## The mod manager (planned 2026-11-01)
 
 A Mods screen that downloads, updates and switches total-conversion mods and small mutators on the
-player's own exe. Status: **landings 1-4 of 9 built**, the shared UI kit, the per-mod options, the packing tool with
-its catalog, and a mod run from its package by `mod=` in `impure.cfg`. The exit condition: each v1
+player's own exe. Status: **landings 1-5 of 9 built**, the shared UI kit, the per-mod options, the packing tool with
+its catalog, a mod run from its package by `mod=` in `impure.cfg`, and its download and install. The exit condition: each v1
 mod chosen from the screen, installed from a package and restarted into, plays as its drop-in
-folder does (the compatibility suite's managed column). **Not covered by landings 1-4:** everything the
-player sees: a package is installed by hand and `mod=` written by hand. Download, the
-screen, Confirm's relaunch, mutators, the multiplayer fingerprint and 4 GB. Managed start-up has run on Wine only. The plan: [the mod manager](mod-manager-plan.html).
+folder does (the compatibility suite's managed column). **Not covered by landings 1-5:** everything the
+player sees: an install is started by a test lever and `mod=` written by hand. The
+screen, Confirm's relaunch, mutators, the multiplayer fingerprint and 4 GB; the catalog names no download server yet. All of it has run on Wine only. The plan: [the mod manager](mod-manager-plan.html).
 
 ## Resource input: snapping, Quick Build and mod profiles
 

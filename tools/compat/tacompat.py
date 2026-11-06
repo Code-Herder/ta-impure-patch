@@ -38,6 +38,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import http.server
 import ntpath
 import os
 import queue
@@ -228,6 +229,11 @@ def managed_setups(setups) -> list:
                         "add": base["add"], "managed": m["id"], "matrix": True,
                         "registry_roots": sorted({*dropin.get("registry_roots", []), *base.get("registry_roots", [])}),
                         "goal": base["goal"], **keep})
+    # one mod all the way through the installer in the DLL under test: fetched, swapped in at a start, played, compared
+    m = next(x for x in mods if x["id"] == "prota")
+    out.append({**next(x for x in out if x["name"] == f"managed-{m['id']}"), "name": f"managed-fetched-{m['id']}",
+                "about": f"{m['name']} downloaded by the DLL from a local server, swapped in at the next start, chosen by mod=",
+                "fetched": True})
     # what must not start: the box, and the next start the folder's own
     for broken, mod, add, why in (("unknown-mod", "nosuch", [], "does not know that mod"),
                                   ("not-installed", "mayhem", [], "it is not installed"),
@@ -807,6 +813,53 @@ def inst_name(setup_name: str, suffix="") -> str:
 UNIT_FOLDERS = ("units", "unitsE", "ZUnits")
 
 
+def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
+    """One start of the game with the install lever on, against a local server that answers with the package
+    modpack.py built. It ends when the log says the install is over; what it installed waits in mods\\<id>.new for the
+    row's own start to swap in."""
+    package = CACHE / "modpack" / mod / f"{mod}.tar.zst"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            data = package.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    lever = gamedir / "tagpu_modinst.on"
+    lever.write_text(f"{mod} http://127.0.0.1:{server.server_address[1]}")
+    xv = start_xvfb()
+    env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{xv.tacompat_display}", WINEDEBUG=WINEDEBUG,
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", ALSA_CONFIG_PATH=str(ASOUND_NULL))
+    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    said = ""
+    try:
+        for _ in range(600):
+            time.sleep(0.5)
+            log = gamedir / "log" / "tagpu.log"
+            text = log.read_text(errors="replace") if log.exists() else ""
+            found = re.search(rf"modinst: {mod}: (.*)", text)
+            if found:
+                said = found.group(1)
+                break
+    finally:
+        subprocess.run(["wineserver", "-k"], env=env, capture_output=True, timeout=30)
+        proc.wait(timeout=30)
+        xv.terminate()
+        server.shutdown()
+        lever.unlink()
+    if "installed" not in said or not (gamedir / "mods" / f"{mod}.new" / "installed.txt").is_file():
+        die(f"the DLL did not install {mod}: {said or 'its log says nothing of it'}")
+
+
 def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     """A fresh tacli instance holding the setup's folder.
 
@@ -861,7 +914,9 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
         (gamedir / leftover).unlink(missing_ok=True)
     if setup.get("managed"):
         broken = setup.get("managed_break")
-        if broken not in ("unknown-mod", "not-installed"):
+        if setup.get("fetched"):
+            fetch_by_the_dll(setup["managed"], gamedir, prefix)
+        elif broken not in ("unknown-mod", "not-installed"):
             subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "modpack/modpack.py"), "install",
                             setup["managed"], str(gamedir), "--link"], check=True, capture_output=True)
         if broken == "damaged-package":
@@ -1089,6 +1144,10 @@ def compare_managed(results):
         elif s.get("equals"):
             d = by.get(s["equals"])
             wrong = differs_from_dropin(s, o, d) if d else [f"{s['equals']} did not run, so nothing was compared"]
+            if s.get("fetched"):
+                mods = s["_inst"]["gamedir"] / "mods"
+                if (mods / f"{s['managed']}.new").exists() or not (mods / s["managed"] / "installed.txt").is_file():
+                    wrong.append("the start did not swap the downloaded package in")
             content = o.get("content") or {}
             join = ((o.get("mp") or {}).get("crcs") or {}).get("join") or {}
             print(f"  {s['name']}: against {s['equals']}: {len(content.get('names') or [])} types by key and by ID, "

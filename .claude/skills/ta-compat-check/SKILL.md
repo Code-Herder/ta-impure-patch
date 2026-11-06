@@ -176,6 +176,8 @@ multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 `managed_setups` in `tacompat.py` derives them from `mods/*.json`, so a new mod has them without a line in
 `setups.json`. They need the packages: `tools/modpack/modpack.py packages` (`~/.local/share/ta-compat/modpack/`).
 
+- `managed-fetched-prota`: as `managed-<id>`, with the package downloaded by the DLL under test from a server in the suite and
+  swapped in at the row's own start. The installer's bad cases are `tools/modpack/installtest.py`, which needs no game.
 - `managed-<id>`: the mod installed into a clean stock folder and chosen by `mod=`. It runs beside its
   drop-in row, which is added if you name only this one, and its network game's other player is that drop-in folder. It
   fails if the types, FBI keys, a level's tables, or the two peers' `CRC_all` differ, or if no value was there to compare

@@ -10,6 +10,8 @@ network game with a drop-in player whose handshake agrees on every unit's script
 ## The files
 
 - `tagpu_modload.c/.h`: the start-up sequence, the mount and the loose step.
+- `tagpu_modinst.c/.h`: the download, the unpack, the recipe and the swap at start-up.
+- `tagpu_modtar.c/.h`: the package's tar reader. Pure C.
 - `tagpu_modpak.c/.h`: pure C, the pack `mods/patches.bin`, `file_key`, the image in memory and its
   hash. `tools/modpack/modpakcheck.c` runs it on the host, and `modpack.py verify` compares it with the
   Python that wrote the pack, on every known exe.
@@ -102,7 +104,46 @@ to prove the file otherwise equals the drop-in's.
 (`iconset_load`), so `Icon\\` comes from the package. The options file the image names (`0x5098A3`) is copied
 beside the exe when none is there, and never overwritten.
 
+## Download and install
+
+`tagpu_modinst.c` installs a catalog mod beside the live folder, on one background thread that touches only files: no
+engine memory and no render state, so it is in no list of `thread-split.allow`. Its progress is three atomics
+(`tagpu_modinst_status`), and it holds a reference to the DLL until its last instruction.
+
+1. **The download** goes to `mods\\<id>.part` through WinHTTP, loaded when a download runs so that nothing about a normal
+   start changes. Bytes past the catalog's size are never written. The address is the package's `url`, resolved against the
+   catalog's `base_url`, which the catalog does not have until there is a place to name; until then a download reports that.
+2. **The check**: the file's size and SHA-256 against the catalog, by `modsha`, before anything reads it as a package.
+3. **The unpack** into `mods\\<id>.new\\`, zstd with its window bounded to 128 MiB and then `tagpu_modtar.c`, whose list of
+   acceptable files is the catalog's. A member must have a safe path, be declared, come once and be a regular file of the
+   declared size and hash; the archive must reach its own end, with every declared file seen.
+4. **The recipe** (`<id>.originals.tsv`) copies the original files out of the folder's own archives through `tagpu_hpi`, each
+   checked by SHA-256, into `<id>.originals.hpi`, written by `tagpu_ufo.c`. An archive that is missing is named; one that holds
+   other bytes is "not the game's", so a modded folder's replaced `rev31.gp3` stops the install with a reason.
+5. **The marker**, `installed.txt`, written last and after every file is flushed, holds the version. A package cannot
+   declare a file of that name. After the swap it is how `tagpu_modinst_installed` knows the version.
+
+**The swap**, `tagpu_modinst_sweep`, runs at process attach before `tagpu_modload_begin`, so before anything looks in
+`mods\\`, and with `mod=` or without. It deletes every `.part` and any `.new` without its marker, then moves the live folder to `<id>.old`,
+the new one into its place and deletes the old. A crash between any two steps leaves folders with one answer: a finished new
+wins, `.old` beside a live folder is deleted, and `.old` alone goes back. A rename refused because another process has the
+folder open leaves it all for another start. A running game's files therefore never change, and the player's profile
+(`profiles\\<id>.ini`) is outside all of this.
+
+**The lock**: `mods\\install.lock`, opened with no sharing and deleted on close. The system releases it with the process however
+that ends, so a start can tell another copy's running install from what a dead one left, and the sweep then leaves `mods\\` alone.
+
+**The way in**, until the Mods screen: a file `tagpu_modinst.on` holding `<id> <base url>` installs that mod at start-up.
+
 ## How it is tested
+
+`tools/modpack/installtest.py` needs no game: the tar reader natively under the sanitizers, and the module itself under Wine with its
+real WinHTTP, against a local server. `tests/modinsttest.exe` is built with a hook that ends the process at a chosen step, as a
+crash would. It checks every bad download, each file that can be wrong inside a package whose outer hash is right, a death at
+each step, an update, each state a crash leaves in a swap, a second copy during an install, a missing or foreign archive, and that
+all five mods install to what `modpack.py install` builds. `managed-fetched-prota` in the suite takes one mod all the way in the
+real DLL: downloaded at one start, swapped in at the next, played and compared with its drop-in row.
+
 
 `modpack.py verify` proves offline that the managed mount answers every path as the drop-in folder does, and reads every
 feature section, weapon ID and build-menu cell the same. `tools/compat/tacompat.py wine` then has three kinds of managed
@@ -123,7 +164,10 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 
 ## Gaps
 
-- Wine only so far.
+- Wine only so far, the install included, and only over plain HTTP: no download has run through TLS on any system, and the
+  catalog names no server yet.
+- One install at a time, with no way to stop one but ending the game. `Update all` is the Mods screen's to queue.
+- A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not
   been run.
 - Managed Escalation needs the large-address bit to load a game. Its rows set it by hand until the 4 GB landing.

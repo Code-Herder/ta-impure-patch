@@ -330,6 +330,17 @@ def part_install(w, srv, only):
         catpath.write_text(json.dumps(catalog2))
         rc, out = w.run("install", "cat.json", SMALL, "")
         report(rc == 1 and "does not yet name" in out, f"refused no address: {out.strip().splitlines()[-1]}")
+        for label, change, want in (("a file path out of the folder", lambda p: p["files"][0].update(path="../evil"), "safe path"),
+                                    ("a hash that is not one", lambda p: p.update(sha256="abc"), "url, hash"),
+                                    ("a size past 2 GB", lambda p: p.update(size=3e9), "url, hash"),
+                                    ("no files", lambda p: p.update(files=[]), "url, hash"),
+                                    ("a file posing as the marker", lambda p: p["files"][0].update(path="Installed.txt"), "declares a file named")):
+            cat = json.loads(json.dumps(catalog))
+            change(next(m for m in cat["mods"] if m["id"] == SMALL)["packages"][0])
+            catpath.write_text(json.dumps(cat))
+            rc, out = w.run("install", "cat.json", SMALL, srv.base)
+            report(rc == 1 and want in out and not list(w.mods.glob("*.new")), f"refused catalog with {label}: {out.strip()}")
+        catpath.write_text(json.dumps(catalog))
         rc, out = w.run("install", "cat.json", "nosuch", srv.base)
         report(rc == 1 and "no entry" in out, f"refused unknown mod: {out.strip()}")
         catpath.write_text(json.dumps(catalog))

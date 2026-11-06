@@ -145,29 +145,33 @@ Each decision is listed with what it was chosen over.
   carries byte-identical copies of original files under its own folders or at another path
   (`guim/armbuild.gui` is `guis/armbuild.gui`), or an older original version of a path: 356 in
   Escalation, 329 in Mayhem, 426 in ProTA, 83 in TA Zero, 393 in Twilight. `<id>.originals.tsv` names
-  each one's path, MD5, size and where it is in the player's own archives, and the install copies them
+  each one's path, MD5, size, where it is in the player's own archives and SHA-256, and the install copies them
   into `mods\<id>\<id>.originals.hpi`, mounted right after `<id>.hpi`. We chose this over keeping a
   hidden original archive mounted, because those files are at other paths and the mod's first-wins
   order differs from the original's.
 - **`hide` is measured, not declared.** It is every original archive the drop-in folder lost: replaced
   by a file of the same name, or no longer named by a mount pattern because the exe table renames the
   first one (`rev31.gp3` in all five, plus the seven more Twilight replaces with empty files or its own).
-- **The catalog's URLs are relative** (`<id>/<id>-<version>.tar.zst`) until there is a CDN to name.
+- **The catalog's URLs are relative** (`<id>/<id>-<version>.tar.zst`), and resolve against a top-level `base_url`, absent until
+  there is a CDN to name; a download then reports that the catalog names no place to fetch from.
 
 ### Download and install
 
 - **WinHTTP on a background thread that touches only files.** The Mods screen reads its progress
-  from a few atomic counters.
-- **Nothing unpacks from an unverified file.** The download goes to `mods\<id>.part` and is checked
-  against the catalog's size and sha256 (BCrypt) before anything is unpacked.
+  from a few atomic counters. WinHTTP is loaded when a download runs, so the DLL gains no import.
+- **Nothing unpacks from an unverified file.** The download goes to `mods\\<id>.part` and is checked
+  against the catalog's size and SHA-256 (the module's own `modsha`, already in the DLL, rather than BCrypt)
+  before anything is unpacked.
 - **The tar reader is bounded to the package's declared file list.** It refuses absolute paths,
-  `..`, undeclared files and truncation.
+  `..`, undeclared files and truncation, and takes regular files only.
 - **The recipe runs after the unpack**, from the player's original archives into
-  `<id>.originals.hpi`. A folder without an original archive it names cannot install that mod, and the
-  pane says which archive is missing.
-- **Unpacking goes into `mods\<id>.new\`**, which gets a done marker when complete. It is swapped in
-  at start-up, before any archive is mounted. A `.new` without the marker is deleted. The live
-  folder is always either the old version or the new one.
+  `<id>.originals.hpi`, each file checked by SHA-256. A folder without an original archive it names cannot install
+  that mod, and the reason says which archive is missing.
+- **Unpacking goes into `mods\\<id>.new\\`**, which gets a done marker, `installed.txt` holding the version, when complete. It
+  is swapped in at start-up, before any archive is mounted. A `.new` without the marker is deleted. The live
+  folder is always either the old version or the new one, and a lock file that dies with its process keeps a second copy of the
+  game out of a running install.
+- **A failed install says why, in words for the player**, and the Mods screen shows that text.
 
 ### Updates
 

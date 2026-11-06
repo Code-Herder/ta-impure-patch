@@ -169,7 +169,8 @@ void tagpu_modinst_sweep(void)
     if (!GetFullPathNameA("mods", sizeof mods, mods, NULL) || !is_dir(mods)) return;
     lock = take_lock(mods);
     if (lock == INVALID_HANDLE_VALUE) {
-        tagpu_log("modinst: another copy of the game is installing a mod, so this start leaves mods\\ alone");
+        if (GetLastError() == ERROR_SHARING_VIOLATION) tagpu_log("modinst: another copy of the game is installing a mod, so this start leaves mods\\ alone");
+        else tagpu_logf("modinst: mods\\ cannot be written (error %lu), so this start leaves it alone", GetLastError());
         return;
     }
     if (path_of(spec, sizeof spec, "%s\\*", mods) && (f = FindFirstFileA(spec, &fd)) != INVALID_HANDLE_VALUE) {
@@ -746,13 +747,29 @@ int tagpu_modinst_start(const char* catalog, size_t n, const char* id, const cha
     if (!(j = (JOB*)calloc(1, sizeof *j))) { snprintf(why, nwhy, "out of memory"); goto refused; }
     j->lock = INVALID_HANDLE_VALUE;
     if (!tagpu_modcat_install(catalog, n, id, &j->m, err, sizeof err)) { snprintf(why, nwhy, "%s", err); free(j); j = NULL; goto refused; }
+    {
+        /* The marker is what says a folder is complete, so a package can never carry it: half a folder would pass for whole. */
+        int i, k;
+        for (i = 0; i < j->m.npackages; i++) {
+            for (k = 0; k < j->m.packages[i].nfiles; k++) {
+                if (!lstrcmpiA(j->m.packages[i].files[k].path, MARKER)) {
+                    snprintf(why, nwhy, "a package of %s declares a file named " MARKER, id);
+                    goto refused;
+                }
+            }
+        }
+    }
     if (base && strlen(base) >= sizeof j->base) { snprintf(why, nwhy, "the download address is too long"); goto refused; }
     if (base) strcpy(j->base, base);
     len = GetFullPathNameA(".", sizeof j->root, j->root, NULL);
     if (!len || len >= sizeof j->root || !path_of(mods, sizeof mods, "%s\\mods", j->root)) { snprintf(why, nwhy, "this folder's path is too long"); goto refused; }
     CreateDirectoryA(mods, NULL);
     j->lock = take_lock(mods);
-    if (j->lock == INVALID_HANDLE_VALUE) { snprintf(why, nwhy, "another copy of the game is installing a mod"); goto refused; }
+    if (j->lock == INVALID_HANDLE_VALUE) {
+        if (GetLastError() == ERROR_SHARING_VIOLATION) snprintf(why, nwhy, "another copy of the game is installing a mod");
+        else snprintf(why, nwhy, "mods\\ cannot be written (error %lu)", GetLastError());
+        goto refused;
+    }
     if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR)worker, &self)) { snprintf(why, nwhy, "could not hold this DLL (error %lu)", GetLastError()); goto refused; }
     s_why[0] = 0;
     set_phase(MODINST_DOWNLOADING, 0);

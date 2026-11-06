@@ -164,7 +164,7 @@ class Rules(unittest.TestCase):
         (Path(cls.dir.name) / "main.c").write_bytes(cls.MAIN)
         cls.exe = Path(cls.dir.name) / "rules"
         m.subprocess.run(["gcc", "-std=c99", "-I", str(src), "-I", str(m.ROOT / "tagpu/ddraw/inc"), "-o", str(cls.exe),
-                          str(Path(cls.dir.name) / "main.c"), str(src / "tagpu_modcat.c"), str(src / "tagpu_json.c")], check=True)
+                          str(Path(cls.dir.name) / "main.c"), str(src / "tagpu_modcat.c"), str(src / "tagpu_json.c"), str(src / "tagpu_modtar.c"), str(src / "tagpu_modpak.c")], check=True)
 
     @classmethod
     def tearDownClass(cls):
