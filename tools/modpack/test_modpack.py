@@ -74,12 +74,12 @@ class Loader(unittest.TestCase):
         t = m.loader_table(b"junk" + self.INI)
         self.assertEqual(t[0x50DDFD], ord("A"))
         self.assertEqual(t[0x509EB8], ord("A"))
-        self.assertEqual(t[0x50DDFF], 0)
+        self.assertEqual(t[0x50DDFD + 2], 0)
         self.assertEqual(t[0x49E9C0], 11)
         self.assertEqual(t[0x49E9C9], 3)
         self.assertEqual(bytes(t[0x40EAD6 + i] for i in range(4)), struct.pack("<I", 66650))
         self.assertNotIn(0x43E786, t)           # CursorReclaim=No
-        self.assertEqual(t[0x40144C], 0x74)     # .text: file offset + 0xC00
+        self.assertEqual(t[m.file_offset_to_va(0x84C)], 0x74)     # .text: file offset + 0xC00
         self.assertEqual(t[0x4FCC7F], 0xD4)     # .rdata: + 0x1200
         self.assertEqual(t[0x401064], 1)        # the proxy byte
 
@@ -109,16 +109,16 @@ class Package(unittest.TestCase):
 
 class Pack(unittest.TestCase):
     def test_one_entry_per_xor(self):
-        x, y = {0x401000: 5}, {0x402000: 6, 0x402001: 7}
+        x, y = {100: 5}, {200: 6, 201: 7}
         known = [(0, "a exe", b"k" * 32, dict(x)), (1, "a loader", b"l" * 32, None), (0, "b exe", b"m" * 32, dict(y))]
         pack = m.read_patches(m.pack_patches([("amod", b"h" * 32, x)], known))
         self.assertEqual(len(pack["xors"]), 2, "a mod and its exe share one XOR")
         self.assertEqual(pack["mods"], [("amod", b"h" * 32, 0)])
         self.assertEqual(pack["known"], [(0, b"k" * 32, 0), (1, b"l" * 32, -1), (0, b"m" * 32, 1)])
-        self.assertEqual(pack["xors"][1], [(0x402000, bytes([6, 7]))])
+        self.assertEqual(pack["xors"][1], [(200, bytes([6, 7]))])
 
     def test_truncated(self):
-        blob = m.pack_patches([("amod", b"h" * 32, {0x401000: 5})], [])
+        blob = m.pack_patches([("amod", b"h" * 32, {100: 5})], [])
         with self.assertRaises(SystemExit):
             m.read_patches(blob + b"x")
 
@@ -126,8 +126,8 @@ class Pack(unittest.TestCase):
         class Stock:
             data = bytes(range(16))
             def off(self, va):
-                return va - 0x401000
-        self.assertEqual(m.xor_of(Stock(), {0x401002: 2, 0x401003: 7}), {0x401003: 7 ^ 3})
+                return va
+        self.assertEqual(m.xor_of(Stock(), {2: 2, 3: 7}), {3: 7 ^ 3})
 
 
 class Cased(unittest.TestCase):

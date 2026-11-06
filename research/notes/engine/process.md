@@ -1075,3 +1075,19 @@ wrote 32).
   `IMAGEHLP.DLL`, `psapi.dll`). None of it is hooked, so none of it is covered by the test
   mode's guarantee ([tacli design](../tacli-design.html) §"The registry: a file in the test
   folder").
+
+## The sites a Patch Loader's named keys write — mapped by us [DISASSEMBLED 2026-11-05]
+
+The fixed sites of a loader list's `[Settings]` keys, from its `patches_apply_presets`, with what
+each holds in the stock exe. `modpack.py loaderdump` measured every byte of three lists landing in
+the process ([the Patch Loader](../deep-patch-loader.html)); the sites not listed here have entries of
+their own on this page and on the units and UI pages.
+
+| VA | key | what it holds in stock |
+|---|---|---|
+| `0x50DDFD` | `RegistryPath` | `Cavedog Entertainment`, the tail of `Software\Cavedog Entertainment`; `0x509EB8` is the second copy |
+| `0x49E9C0` | `MultiplayerVersionMajor` | the immediate of `mov byte [edx+1], 3` |
+| `0x49E9C9` | `MultiplayerVersionMinor` | the immediate of `mov byte [eax+2], 1` |
+| `0x43E786` | `CursorReclaim` | the low two bytes of the displacement of `je 0x43F098` at `0x43E784`; zeroed, the branch falls through |
+| `0x496776`, `0x496779` | `EnableF10Debug` | two bytes of a byte table of `0x22..0x27` values [INFERRED: a key's dispatch index] |
+| `0x4FCC7F` | `IncreaseATMToFillResources` | the top byte of the float `-1000.0` (`0xC47A0000`) |
