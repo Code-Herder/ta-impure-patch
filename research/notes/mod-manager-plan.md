@@ -140,8 +140,8 @@ Each decision is listed with what it was chosen over.
   - drops mod DLLs and keeps the plain files Impure reads itself (`Icon/`, `ZIcon/`).
 - **A recipe rebuilds what cannot be hosted.** MEASURED by `modpack.py packages`: every mod's archive
   carries byte-identical copies of original files under its own folders or at another path
-  (`guim/armbuild.gui` is `guis/armbuild.gui`), or an older original version of a path: 337 in
-  Escalation, 337 in Mayhem, 532 in ProTA, 82 in TA Zero, 521 in Twilight. `<id>.originals.tsv` names
+  (`guim/armbuild.gui` is `guis/armbuild.gui`), or an older original version of a path: 356 in
+  Escalation, 329 in Mayhem, 426 in ProTA, 83 in TA Zero, 393 in Twilight. `<id>.originals.tsv` names
   each one's path, MD5, size and where it is in the player's own archives, and the install copies them
   into `mods\<id>\<id>.originals.hpi`, mounted right after `<id>.hpi`. We chose this over keeping a
   hidden original archive mounted, because those files are at other paths and the mod's first-wins
