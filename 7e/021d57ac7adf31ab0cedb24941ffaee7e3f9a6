@@ -1,2 +1,0 @@
-landing-review: model=claude-opus-5-5 effort=high range=da16150c..7e021d57 findings=22 acted=20 rejected=0 date=2026-11-06
-first review 14 findings (2 medium), delta re-review 8. Two left to the owner and stated in the note: a map pack's non-map files count; a real stock peer was not run. Root files dropped from the walk rather than patched.
