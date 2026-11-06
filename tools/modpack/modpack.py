@@ -52,6 +52,7 @@ mods/patches.bin, little-endian, zstd compressed (read by tagpu_modpak.c):
     run:      u32 va | u16 len | bytes
 """
 import argparse
+import fcntl
 import fnmatch
 import hashlib
 import io
@@ -1097,8 +1098,11 @@ def cmd_install(a):
     dest = gamedir / "mods" / a.id
     if a.link:
         built = OUT / a.id / "installed"
-        if not built.is_dir() or built.stat().st_mtime < tar.stat().st_mtime:
-            build(built, tavfs().find_install(None))
+        # the suite prepares several folders at once: one builds, under the lock, and each folder links a finished result
+        with open(OUT / a.id / "install.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not built.is_dir() or built.stat().st_mtime < tar.stat().st_mtime:
+                build(built, tavfs().find_install(None))
         shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True)
         for p in built.iterdir():

@@ -177,11 +177,14 @@ multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 `setups.json`. They need the packages: `tools/modpack/modpack.py packages` (`~/.local/share/ta-compat/modpack/`).
 
 - `managed-<id>`: the mod installed into a clean stock folder and chosen by `mod=`. It runs beside its
-  drop-in row and fails if a unit type or a `CRC_all` differs, or if the log names no refused loose file. Name both
-  rows when you ask for one, or the comparison has nothing to read.
+  drop-in row, which is added if you name only this one, and its network game's other player is that drop-in folder. It
+  fails if the types, FBI keys, a level's tables, or the two peers' `CRC_all` differ, or if no value was there to compare
+  (`CRC_all` is 0 until a lobby's handshake fills it), or if the log names no refused loose unit file.
 - `matrix-<id>-on-<base>`: the mod in a folder another mod's drop-in install left. Ask with the name `matrix`,
   usually `--battle 0 --mp 0`: 20 rows in about 3 minutes. Not in the default list.
 - `managed-refuses-<why>`: the box must name the reason and `mod=` must be gone from `impure.cfg`.
+
+`tacompat.py windows` leaves all of them out: its path has no install.
 
 A mod with `memory: 4gb` (Escalation) has the exe's large-address bit set by hand until the 4 GB landing:
 without it the game runs out of memory loading.

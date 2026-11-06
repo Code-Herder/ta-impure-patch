@@ -199,11 +199,14 @@ What follows from those rules:
   `hide`. Precedence is then one rule for every file type. `modpack.py verify` simulates this and the
   drop-in folder over every path by the engine's rules (`tools/wiki/tavfs.py`), over what the retail
   archives really hold, and they agree in bytes and in each file's case: 8293 paths in Escalation, 7539 in
-  Mayhem, 6064 in ProTA, 8551 in TA Zero, 8740 in Twilight. An enumeration's
-  order is not simulated; landing 4's managed column compares its result in the game.
+  Mayhem, 6064 in ProTA, 8551 in TA Zero, 8740 in Twilight.
+- **Where a file's place decides, the package keeps the drop-in's answer.** A feature section comes from the first TDF
+  enumerated, and one archive cannot keep the folder's order, so the sections that would change go in a TDF the managed
+  enumeration reaches first ([the module](modules/mods.html), *A file's place*). `modpack.py verify` checks them, the weapon
+  IDs and the build-menu cells; the managed column compares the result in the game.
 - **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
   It is closed by folder: a read whose first path component is one of the folders modpack treats as
-  game data (`GAME_DIRS`) finds no loose file, so saved games and everything else stay open. Retail's
+  game data (`GAME_DIRS`) or a name the image gives one finds no loose file, so saved games and everything else stay open. Retail's
   own loose files in those folders are four examples (`camps\\EXAMPLE.TDF`, its brief, its picture),
   and no run named one. The log names each loose file refused. The drop-in route and "no mod" keep
   the loose step.
@@ -298,7 +301,7 @@ What follows from those rules:
 | 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
 | 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives one XOR per mod + the known files, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each known exe's XOR gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
 | 3 | Per-mod options (built) | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
-| 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
+| 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (unit types and keys at the menu; type IDs, weapon and feature tables in a level; every type's CRC with a drop-in peer in one network game; menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
@@ -325,7 +328,9 @@ Landings 2 and 3 are independent of each other.
 - A jump on the entry point by another DLL, written after Impure's, keeps the entry stage from running.
   The first DirectDraw call refuses that case, and no setup in the suite produces it, so that refusal
   has not been run.
-- Managed start-up has run on Wine only. The Windows half of the suite runs before a release.
+- Managed start-up has run on Wine only, and the suite's Windows path has no install: it leaves the managed rows out.
+- The originals are one install's hashes. Another edition with a different `totala1.hpi` gets the box; one that shares it and
+  differs elsewhere loses those archives with only a log line. More editions' hashes need the owner.
 
 **Later, outside v1:**
 - the website, with a signed catalog and its coexistence with the DLL-packed one;

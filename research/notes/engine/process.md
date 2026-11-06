@@ -597,8 +597,9 @@ the copy is `0x4E4760`, `0x4BDE72..0x4BDE98`), and compares the two inline
   `+0x618`, a `HANDLE**`, and its i32 count at `+0x61C`.
 - **The mounter `0x4BE0B0(name, flag)`** (stdcall, `ret 8`, entered by `sub esp, 0x104`, the six bytes
     [mods](../modules/mods.html) detours; no mod's table touches them):
-  - It resolves the name with `GetFullPathNameA` (`0x4BE0D7`) and skips one already mounted,
-    compared case-insensitively (`0x4BE0FB`).
+  - It resolves the name with `GetFullPathNameA` (`0x4BE0D7`), into 0x100 bytes (`push 0x100` at
+    `0x4BE0D1`), and skips one already mounted, compared case-insensitively (`0x4BE0FB`). A return of 0, for
+    that or a file that does not open, does not count toward `*.HPI`'s ten (`0x41D5D5`).
   - Otherwise it opens the archive (`0x4BE11B`), reallocates the list to `count + 1` entries on
     every mount (`0x4BE140..0x4BE159`) and appends it.
 - **The prune `0x4BE180`** re-opens each entry whose `FILE*` is NULL, and removes one that fails,
@@ -741,7 +742,9 @@ model `objects3d\<object>.3DO` through `0x42A2C0`.
 **The folder names a mod renames in place** (`.data`, every reference passes them as a path or
 pattern [INFERRED: none writes them]): `units` `0x503920`, `textures` `0x503720`, `logos`
 `0x504734`, `logos.GAF` `0x503704`, `objects3d` `0x5036E4`, `scripts` `0x503740`, `anims`
-`0x502E30`, `features` `0x502C7C`. Escalation renames `units` to `unitsE`; TA Zero `units`,
+`0x502E30`, `features` `0x502C7C`, the weapons `0x50392C` and their pattern `0x503934`, `ai` `0x504B10`
+(MEASURED 2026-11-06 by listing every string each mod's table changes: `weaponE`, `WeaponM`, `weaponP`, `ZWeapon`, and
+`aE` and `zi`; no v1 mod renames `features`). Escalation renames `units` to `unitsE`; TA Zero `units`,
 `textures`, `logos` and `logos.GAF` to `ZUnits`, `Textures`, `logoz`, `logoz.GAF` (MEASURED on
 the compatibility fixtures' executables). The `language` value `0x51FB50` (above, the path
 builder) is set once by WinMain's init.
