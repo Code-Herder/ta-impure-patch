@@ -461,8 +461,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -513,8 +512,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -697,8 +695,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -737,8 +734,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    },
    "steps": [
@@ -789,8 +785,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    },
    "steps": [
@@ -841,8 +836,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    },
    "steps": [
@@ -909,8 +903,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -965,8 +958,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -1018,8 +1010,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },
@@ -1178,8 +1169,7 @@
     ],
     "files": [
      "resource-test.ufo",
-     "profiles/retail.ini",
-     "profiles/retail@76332e31.ini"
+     "tagpu_rules.on"
     ]
    }
   },

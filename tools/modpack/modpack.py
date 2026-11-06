@@ -73,6 +73,7 @@ OUT = CACHE / "modpack"
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 VERSION = 1
+RADIUS_MAX = 8                                  # MODRULES_RADIUS_MAX, tagpu_modcat.h
 
 
 def main_checkout() -> Path:
@@ -977,6 +978,30 @@ def _exe_mapped(proc: Path, folder: Path) -> bool:
         return False
 
 
+def check_options(n: str, o) -> list:
+    """A mod's play options, by the rules tagpu_modcat.c reads them under."""
+    errs = []
+    if not isinstance(o, dict):
+        return [f"{n}: a mod has no options"]
+    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool))):
+        p = o.get(name)
+        if not isinstance(p, dict) or not isinstance(p.get("allowed"), bool):
+            errs.append(f"{n}: option {name} does not say whether it is allowed")
+            continue
+        if not p["allowed"] and not p.get("reason"):
+            errs.append(f"{n}: option {name} is off with no reason")
+        if not default_ok(p.get("default")):
+            errs.append(f"{n}: option {name} has no default")
+    p = o.get("resource_snapping")
+    if isinstance(p, dict):
+        d, top = p.get("default"), p.get("max")
+        if not isinstance(top, int) or isinstance(top, bool) or not 0 <= top <= RADIUS_MAX:
+            errs.append(f"{n}: option resource_snapping's max is outside 0..{RADIUS_MAX}")
+        elif isinstance(d, int) and not 0 <= d <= top:
+            errs.append(f"{n}: option resource_snapping's default is outside 0..its max")
+    return errs
+
+
 def check_catalog(j) -> list:
     """Every way the catalog can be wrong, by name. Standard library only: the DLL's build runs it."""
     errs = []
@@ -1021,6 +1046,7 @@ def check_catalog(j) -> list:
                             errs.append(f"{n}: package file {path!r} has no sha256 or size")
         kind = e.get("kind")
         if kind == "mod":
+            errs += check_options(n, e.get("options"))
             if not isinstance(e.get("exe"), str) or not e["exe"]:
                 errs.append(f"{n}: a mod names no exe table")
             if not isinstance(e.get("hide"), list):

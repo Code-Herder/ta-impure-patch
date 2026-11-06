@@ -37,89 +37,69 @@ policies without relying on TADR to run.
 
 ## Mod rules and personal preferences
 
-Impure supplies a `profiles/` folder with a general profile for each supported mod, plus an
-unidentified-mod fallback. A mod may also have optional version-specific profiles. At startup,
-create supplied files that are absent and preserve existing files, including edited files.
-Optional version profiles are created only when supplied; discovering a new version does not
-require generating an override.
+A mod's rules are in its catalog entry, `options` in `mods/<id>.json`: whether it allows each option,
+its default, and the reason when it does not. The stock game and an unidentified mod are built into
+`tagpu_profiles.c`. A folder identified as a catalog mod reads the same entry, so a known mod with
+an unfamiliar version retains its mod's rules, and an unidentified mod the off fallback.
 
-Apply a general mod profile first. An exact matching version profile overrides only the values
-it explicitly supplies; omitted values inherit the general profile. With no matching version
-profile, use the general profile. A known mod with an unfamiliar version therefore retains its
-mod policy. An unidentified mod retains the off fallback.
+The player's changes are in `profiles/<mod>.ini`. Mex and geo share one player-controlled radius, from
+zero to the mod's maximum. A missing key means the mod's default. Zero turns manual snapping off.
+A mod's maximum limits the effective radius without overwriting the saved value. A mod that denies
+snapping locks the player control off, and a value edited into the file by hand has no effect
+and is refused with a log line.
 
-Version matching uses the verified identifier exposed by the running mod, with no version
-ranges initially. A reported identifier may describe less than a complete package release:
-Escalation GOLD 10.2.0's executable stores `10.2` in its version field, while the checked Mayhem
-and ProTA loader settings supply `11.3.0` and `4.8`. An exact match to `10.2` does not establish
-which patch release of that series is installed. Document the identifier used for each mod;
-show the detected mod, version and selected profile in settings.
+Quick Build has its own permission and personal on/off toggle, covering both mexes and geothermal
+plants. Denying one resource feature does not automatically deny the other. A mod that denies
+Quick Build locks its player toggle off, and the file keeps the toggle while it does.
 
-Personal settings stay in `impure.cfg`. Mex and geo share one player-controlled radius, from
-zero to the active profile's maximum. Initialize a missing preference from the profile default.
-Zero turns manual snapping off. Remember that preference per
-mod, shared across versions of the mod. A profile restriction limits the effective radius
-without overwriting the saved preference. A profile that denies snapping locks the player
-control off; enabling it requires an edit to the mod profile.
-
-Quick Build has its own inherited profile permission and personal on/off toggle, covering both
-mexes and geothermal plants. Denying one resource feature does not automatically deny the other.
-A profile that denies Quick Build locks its player toggle off; editing the profile can permit it.
-Remember the personal toggle per mod, shared across versions, and preserve it while a profile
-denies the feature.
-
-Quick Build searches using the profile's default radius, capped by its maximum. It has no separate
+Quick Build searches using the mod's default radius, capped by its maximum. It has no separate
 personal radius slider initially. A personal manual-snapping radius of zero therefore leaves
 Quick Build available when its own permission and toggle allow it. Holding Alt temporarily
-bypasses both features. Profile permissions, defaults and limits share the reload rules below.
+bypasses both features.
 
-### Profile files
+### The player's file
 
-General filenames are `retail.ini`, `mayhem.ini`, `prota.ini`, `twilight.ini`, `escalation.ini`,
-`tazero.ini` and `unknown.ini`. An optional override is `<mod>@<version-bytes-as-lowercase-hex>.ini`:
-Stock's `v3.1` is `profiles/retail@76332e31.ini`. The settings label shows the detected identity and
-selected file. Encoding prevents an engine-supplied identifier from becoming a path component.
+`profiles/<mod>.ini`, with the names `retail`, `mayhem`, `prota`, `twilight`, `escalation`, `tazero` and
+`unknown`. A file holds only what the player changed:
 
 ```ini
-manual_snapping=1
-quick_build=1
-default_radius=3
-max_radius=3
-quick_build_default=1
+resource_radius=2
+quick_build=0
 ```
 
-Boolean values accept `0`/`1` or `off`/`on`; radii accept integers 0–8. Comments start with `#` or
-`;`. Unknown keys, duplicate keys, embedded NULs, files over 4096 bytes and a resolved default
-radius greater than the maximum are rejected. Overrides inherit missing keys. General files also
-inherit omitted keys from the embedded defaults. The reader denies concurrent writers while
-reading each file, then publishes the complete validated policy on the game thread.
+Booleans accept `0`/`1` or `off`/`on`; the radius accepts integers 0-8. Comments start with `#` or `;`.
+Duplicate keys, a value out of range, embedded NULs and files over 4096 bytes are rejected, and the
+previous values remain. A key this build does not read stays in the file. A menu's write
+goes to a new file moved over the old one.
+
+`tagpu_rules.on` beside the exe replaces a mod's rules, for a test, with the keys `manual_snapping`,
+`quick_build`, `default_radius`, `max_radius` and `quick_build_default`.
+
+The old layout moves once, at attach. A rule file (one naming a rule key, or any `<mod>@<hex>.ini`) is
+renamed `.migrated`, and its rules are dropped for the catalog's. `resource_radius.<mod>` and
+`quick_build.<mod>` move from `impure.cfg` to the player's file, and a value equal to the mod's default is
+dropped, because the old menu wrote the default on first sight.
 
 Identity shares the replay browser's config/archive table and Twilight's menu label. The stock
 policy additionally requires the stock config and archive formats. A custom package retaining
 both stock identifiers cannot be distinguished from stock by this detector. The reported version
 is the engine's printable version field (at most seven characters), or Twilight's label; a
-loader's full package release is not necessarily present there. Exact overrides match that
-reported identifier, not an assumed installer version.
+loader's full package release is not necessarily present there.
 
 ## Automatic reload
 
-Detect profile file changes automatically and apply validated changes in out-of-game menus. A
-change made during a match takes effect after returning to the main menu. Pausing or opening
-in-game options does not release the match's fixed policy.
+Detect changes to the player's file and the test lever automatically and apply validated changes in
+out-of-game menus. A change made during a match takes effect after returning to the main menu.
+Pausing or opening in-game options does not release the match's fixed policy.
 
-Reload the complete selected general/version chain into a candidate policy, resolve inheritance,
-and validate it before replacing the active policy. Publish a complete policy with a defined
-ordering; readers must never observe mixed old/new fields. On failure, keep the current valid
-rules, preserve the edited files and show an actionable error. Retrying a subsequent file change
-uses the same validation path.
+Read the rules and the choices into a candidate and validate it before replacing the active policy.
+Publish a complete policy with a defined ordering; readers must never observe mixed old/new
+fields. On failure, keep the current valid rules, preserve the edited files and show an
+actionable error. Retrying a subsequent file change uses the same validation path.
 
-Startup needs a valid initial policy from the embedded mod defaults. File creation and loading
-must report failures without overwriting an existing unreadable or malformed profile. The menu
-must make a rejected file and the rules actually in effect distinguishable.
-
-Future mod installation can request the same menu-boundary reload. Downloading and activating
-mods is future work: profile reload alone does not establish that the engine can replace loaded
-archives, definitions and scripts in the same process.
+Startup needs a valid initial policy from the catalog. Loading must report failures without
+overwriting an existing unreadable or malformed file. The menu must make a rejected file and the
+rules actually in effect distinguishable.
 
 ## Manual placement behavior
 

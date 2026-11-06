@@ -33,7 +33,20 @@
       "hide": [
         "rev31.gp3"
       ],
-      "memory": "4gb"
+      "memory": "4gb",
+      "options": {
+        "resource_snapping": {
+          "allowed": false,
+          "reason": "Escalation does not allow it",
+          "default": 0,
+          "max": 0
+        },
+        "quick_build": {
+          "allowed": false,
+          "reason": "Escalation does not allow it",
+          "default": false
+        }
+      }
     },
     {
       "id": "mayhem",
@@ -136,7 +149,18 @@
       "exe": "mayhem",
       "hide": [
         "rev31.gp3"
-      ]
+      ],
+      "options": {
+        "resource_snapping": {
+          "allowed": true,
+          "default": 3,
+          "max": 3
+        },
+        "quick_build": {
+          "allowed": true,
+          "default": true
+        }
+      }
     },
     {
       "id": "prota",
@@ -329,7 +353,18 @@
       "exe": "prota",
       "hide": [
         "rev31.gp3"
-      ]
+      ],
+      "options": {
+        "resource_snapping": {
+          "allowed": true,
+          "default": 3,
+          "max": 3
+        },
+        "quick_build": {
+          "allowed": true,
+          "default": true
+        }
+      }
     },
     {
       "id": "tazero",
@@ -432,7 +467,20 @@
       "exe": "tazero",
       "hide": [
         "rev31.gp3"
-      ]
+      ],
+      "options": {
+        "resource_snapping": {
+          "allowed": false,
+          "reason": "TA Zero does not allow it",
+          "default": 0,
+          "max": 0
+        },
+        "quick_build": {
+          "allowed": false,
+          "reason": "TA Zero does not allow it",
+          "default": false
+        }
+      }
     },
     {
       "id": "twilight",
@@ -542,7 +590,18 @@
         "ccdata.ccx",
         "corplas.ufo",
         "rev31.gp3"
-      ]
+      ],
+      "options": {
+        "resource_snapping": {
+          "allowed": true,
+          "default": 3,
+          "max": 3
+        },
+        "quick_build": {
+          "allowed": true,
+          "default": true
+        }
+      }
     }
   ]
 }

@@ -5,7 +5,7 @@
 
 The schema check refuses what the catalog must not ship (a missing sha256, base or permission, an unsafe path, a
 mutator with an exe), the committed catalog passes it, a Patch Loader's list is read as patches.c reads it, the pack holds
-one entry per XOR and is read to its exact end, and the package's tar holds its files with fixed headers.
+one entry per XOR and is read to its exact end, tagpu_modcat.c reads each mod's options as the schema does, and the package's tar holds its files with fixed headers.
 """
 import copy
 import json
@@ -22,7 +22,8 @@ import modpack as m
 GOOD = {"version": 1, "mods": [
     {"id": "amod", "kind": "mod", "name": "A", "author": "B", "version": "1", "summary": "S", "homepage": "https://example.invalid/", "permission": "P",
      "packages": [{"url": "amod/a.tar.zst", "sha256": "a" * 64, "size": 5, "files": [{"path": "amod.hpi", "sha256": "b" * 64, "size": 4}]}],
-     "exe": "amod", "hide": []},
+     "exe": "amod", "hide": [],
+     "options": {"resource_snapping": {"allowed": True, "default": 3, "max": 3}, "quick_build": {"allowed": True, "default": True}}},
     {"id": "amut", "kind": "mutator", "name": "A", "author": "B", "version": "1", "summary": "S", "homepage": "https://example.invalid/", "permission": "P",
      "packages": [{"url": "amut/a.tar.zst", "sha256": "c" * 64, "size": 5, "files": [{"path": "amut.hpi", "sha256": "d" * 64, "size": 4}]}],
      "base": "amod", "base_hashes": {}, "files": []}]}
@@ -59,6 +60,11 @@ class Schema(unittest.TestCase):
             "kind": lambda j: j["mods"][0].update(kind="other"),
             "no mod of the catalog ": lambda j: j["mods"][1].update(base="amut"),
             "id none": lambda j: j["mods"][0].update(id="none"),
+            "has no options": lambda j: j["mods"][0].pop("options"),
+            "off with no reason": lambda j: j["mods"][0]["options"]["quick_build"].update(allowed=False),
+            "outside 0..its max": lambda j: j["mods"][0]["options"]["resource_snapping"].update(default=4),
+            "outside 0..8": lambda j: j["mods"][0]["options"]["resource_snapping"].update(max=9),
+            "whether it is allowed": lambda j: j["mods"][0]["options"]["quick_build"].pop("allowed"),
         }
         for want, edit in cases.items():
             errs = self.broken(edit)
@@ -136,6 +142,52 @@ class Cased(unittest.TestCase):
         m.insert_cased(tree, "Maps/A Plethora.ufo", b"1")
         m.insert_cased(tree, "maps/b.ufo", b"2")
         self.assertEqual(tree, {"Maps": {"A Plethora.ufo": b"1", "b.ufo": b"2"}})
+
+
+class Rules(unittest.TestCase):
+    """tagpu_modcat.c, compiled natively, reads each mod's options as the schema does."""
+    MAIN = (b'#include <stdio.h>\n#include <stdlib.h>\n#include "tagpu_modcat.h"\n'
+            b'int main(int c, char** v) { static char b[1 << 22], e[200]; FILE* f = fopen(v[1], "rb");\n'
+            b'  size_t n = fread(b, 1, sizeof b, f); MODRULES r; int got = tagpu_modcat_rules(b, n, v[2], &r, e, sizeof e);\n'
+            b'  if (got == 1) printf("%d %d %d %d %d %s|%s\\n", r.manual, r.radius, r.maximum, r.quick, r.quick_default, r.manual_reason, r.quick_reason);\n'
+            b'  else printf("%d %s\\n", got, e); return 0; }\n')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        src = m.ROOT / "tagpu/ddraw/src"
+        (Path(cls.dir.name) / "main.c").write_bytes(cls.MAIN)
+        cls.exe = Path(cls.dir.name) / "rules"
+        m.subprocess.run(["gcc", "-std=c99", "-I", str(src), "-I", str(m.ROOT / "tagpu/ddraw/inc"), "-o", str(cls.exe),
+                          str(Path(cls.dir.name) / "main.c"), str(src / "tagpu_modcat.c"), str(src / "tagpu_json.c")], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    def run_on(self, j, mid):
+        p = Path(self.dir.name) / "cat.json"
+        p.write_text(json.dumps(j))
+        return m.subprocess.run([str(self.exe), str(p), mid], capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_committed(self):
+        j = json.loads((m.MODS / "catalog.json").read_text())
+        for e in j["mods"]:
+            o = e["options"]
+            snap, quick = o["resource_snapping"], o["quick_build"]
+            want = (f'{int(snap["allowed"])} {snap["default"]} {snap["max"]} {int(quick["allowed"])} {int(quick["default"])} '
+                    f'{snap.get("reason", "")}|{quick.get("reason", "")}')
+            self.assertEqual(self.run_on(j, e["id"]), want)
+
+    def test_refusals(self):
+        self.assertEqual(self.run_on(GOOD, "other"), "0")
+        for edit in (lambda o: o["resource_snapping"].update(default=4),
+                     lambda o: o["resource_snapping"].update(max=9),
+                     lambda o: o["quick_build"].update(allowed=False),
+                     lambda o: o.pop("quick_build")):
+            j = copy.deepcopy(GOOD)
+            edit(j["mods"][0]["options"])
+            self.assertTrue(self.run_on(j, "amod").startswith("-1 catalog: amod:"), self.run_on(j, "amod"))
 
 
 class Runs(unittest.TestCase):

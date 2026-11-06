@@ -1,7 +1,26 @@
 {
-  "id": "escalation", "kind": "mod", "name": "Escalation", "author": "The Escalation team", "version": "10.2.0",
+  "id": "escalation",
+  "kind": "mod",
+  "name": "Escalation",
+  "author": "The Escalation team",
+  "version": "10.2.0",
   "summary": "A large total conversion that extends both sides with many new units and tech levels.",
   "homepage": "https://taesc.tauniverse.com/",
   "permission": "the owner reports the authors' permission, 2026-10-31",
-  "setup": "escalation", "exe": "file", "memory": "4gb"
+  "setup": "escalation",
+  "exe": "file",
+  "memory": "4gb",
+  "options": {
+    "resource_snapping": {
+      "allowed": false,
+      "reason": "Escalation does not allow it",
+      "default": 0,
+      "max": 0
+    },
+    "quick_build": {
+      "allowed": false,
+      "reason": "Escalation does not allow it",
+      "default": false
+    }
+  }
 }

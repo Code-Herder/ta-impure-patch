@@ -57,8 +57,7 @@ typedef enum {
     TS_ICONSCALE,   /* 100 | 75 | 125 | 150 | 200: the strategic icons' size, percent of BAR's */
     TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
     TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */
-    TS_RESOURCE_BASE, /* per-mod radius, Quick Build pairs; versions share a preference */
-    TS_NKEYS = TS_RESOURCE_BASE + MOD_N * 2
+    TS_NKEYS
 } TagpuSetting;
 
 enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };
@@ -165,6 +164,10 @@ int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
    under tagpu_defaults.off. GAME THREAD, as the spacing: the load at attach, before the render
    thread exists; `put` with `wait` 0 never waits and answers 0 when the lock was busy, for a
    later try; the render thread writes the change at its next flush. */
+/* A key this build does not own, as the file spelled it: 1 with its value, 0 when the file has none.
+   The other drops it, so the next write leaves it out. For a move into another file, at attach. */
+int  tagpu_settings_extra(const char* key, char* value, int cap);
+void tagpu_settings_extra_drop(const char* key);
 int  tagpu_settings_reclaim_kind(void);
 int  tagpu_settings_put_reclaim_kind(int kind, int wait);
 

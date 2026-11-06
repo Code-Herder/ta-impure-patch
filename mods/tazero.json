@@ -1,7 +1,25 @@
 {
-  "id": "tazero", "kind": "mod", "name": "TA Zero", "author": "The TA Zero team", "version": "Alpha 5",
+  "id": "tazero",
+  "kind": "mod",
+  "name": "TA Zero",
+  "author": "The TA Zero team",
+  "version": "Alpha 5",
   "summary": "A rebuild of the game's balance and art, played as TA Forever installs it.",
   "homepage": "https://www.taforever.com/",
   "permission": "the owner reports the authors' permission, 2026-10-31",
-  "setup": "tazero-alpha5", "exe": "file"
+  "setup": "tazero-alpha5",
+  "exe": "file",
+  "options": {
+    "resource_snapping": {
+      "allowed": false,
+      "reason": "TA Zero does not allow it",
+      "default": 0,
+      "max": 0
+    },
+    "quick_build": {
+      "allowed": false,
+      "reason": "TA Zero does not allow it",
+      "default": false
+    }
+  }
 }

@@ -2809,7 +2809,7 @@ static void vis_undo(void)
     commit_all_rows(0);
     if (tagpu_profiles_mod() == s_resourceModOpen)
         for (i = 0; i < 2; i++)
-            tagpu_settings_set(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, s_resourceOpen[i]);
+            tagpu_profiles_restore_choice(i, s_resourceOpen[i]);
     for (i = 0; i < VD_COUNT; i++) {
         if (!s_vtouched[i] || vrow_held(i)) continue;
         apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
@@ -3359,10 +3359,7 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
             s_resourceModOpen = tagpu_profiles_mod();
-            for (int i = 0; i < 2; i++) {
-                s_resourceOpen[i] = -1;
-                tagpu_settings_get(TS_RESOURCE_BASE + s_resourceModOpen * 2 + i, &s_resourceOpen[i]);
-            }
+            for (int i = 0; i < TAGPU_CHOICES; i++) s_resourceOpen[i] = tagpu_profiles_choice(i);
             InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
             memset(s_vtouched, 0, sizeof s_vtouched);
             if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;

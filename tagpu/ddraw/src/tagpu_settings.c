@@ -52,11 +52,6 @@ typedef struct {
 static const Opt O_STYLE[]   = { {"classic++", TS_STYLE_PP}, {"classic", TS_STYLE_CLASSIC},
                                  {"custom", TS_STYLE_CUSTOM} };
 static const Opt O_BOOL[]    = { {"1", 1}, {"0", 0}, {"on", 1}, {"off", 0} };
-static const Opt O_RESOURCE_RADIUS[] = {
-    {"auto", -1}, {"0", 0}, {"1", 1}, {"2", 2}, {"3", 3},
-    {"4", 4}, {"5", 5}, {"6", 6}, {"7", 7}, {"8", 8}
-};
-static const Opt O_RESOURCE_QUICK[] = { {"auto", -1}, {"1", 1}, {"0", 0}, {"on", 1}, {"off", 0} };
 /* `soft` and 1 are READ as hard: the soft map has no producer on this lane, so
    honouring them would draw nothing (tagpu_classicpp.c's `shadow_defaults`). */
 static const Opt O_SHADOWS[] = { {"hard", 2}, {"off", 0}, {"2", 2}, {"0", 0},
@@ -139,20 +134,6 @@ static const Key s_key[TS_NKEYS] = {
     { "iconscale", O_ICONSCALE, N(O_ICONSCALE), 100 },
     { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },
     { "iconfade",  O_ICONFADE,  N(O_ICONFADE),  33 },
-    { "resource_radius.unknown", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.unknown", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.retail", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.retail", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.escalation", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.escalation", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.mayhem", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.mayhem", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.prota", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.prota", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.tazero", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.tazero", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
-    { "resource_radius.twilight", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
-    { "quick_build.twilight", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -441,6 +422,51 @@ static void flush(int final)
     } else {
         s_retryAt = GetTickCount() + RETRY_MS;
         if (!s_retryAt) s_retryAt = 1;
+    }
+    LeaveCriticalSection(&s_io);
+}
+
+static char* extra_find(const char* key)
+{
+    size_t n = strlen(key);
+    char* p = s_extra;
+    while (*p) {
+        char* e = strchr(p, '\n');
+        if (!_strnicmp(p, key, n) && p[n] == '=') return p;
+        if (!e) break;
+        p = e + 1;
+    }
+    return NULL;
+}
+
+int tagpu_settings_extra(const char* key, char* value, int cap)
+{
+    char* p;
+    int found = 0;
+    if (!s_attached || cap < 1) return 0;
+    EnterCriticalSection(&s_io);
+    if ((p = extra_find(key))) {
+        const char* v = p + strlen(key) + 1;
+        int n = 0;
+        while (v[n] && v[n] != '\r' && v[n] != '\n' && n < cap - 1) { value[n] = v[n]; n++; }
+        value[n] = 0;
+        found = 1;
+    }
+    LeaveCriticalSection(&s_io);
+    return found;
+}
+
+void tagpu_settings_extra_drop(const char* key)
+{
+    char* p;
+    if (!s_attached) return;
+    EnterCriticalSection(&s_io);
+    if ((p = extra_find(key))) {
+        char* e = strchr(p, '\n');
+        char* after = e ? e + 1 : p + strlen(p);
+        memmove(p, after, strlen(after) + 1);
+        s_extraLen = (int)strlen(s_extra);
+        InterlockedIncrement(&s_dirty);
     }
     LeaveCriticalSection(&s_io);
 }

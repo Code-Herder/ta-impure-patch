@@ -1,7 +1,23 @@
 {
-  "id": "prota", "kind": "mod", "name": "ProTA", "author": "The ProTA team", "version": "4.8",
+  "id": "prota",
+  "kind": "mod",
+  "name": "ProTA",
+  "author": "The ProTA team",
+  "version": "4.8",
   "summary": "Rebalanced multiplayer Total Annihilation, with new units and engine fixes.",
   "homepage": "https://prota.tauniverse.com/",
   "permission": "the owner reports the authors' permission, 2026-10-31",
-  "setup": "prota-4.8", "exe": "loader"
+  "setup": "prota-4.8",
+  "exe": "loader",
+  "options": {
+    "resource_snapping": {
+      "allowed": true,
+      "default": 3,
+      "max": 3
+    },
+    "quick_build": {
+      "allowed": true,
+      "default": true
+    }
+  }
 }

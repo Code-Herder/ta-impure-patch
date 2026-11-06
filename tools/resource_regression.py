@@ -593,12 +593,11 @@ def policy(c, mode, gamedir):
     if mode == "locked":
         assert controls["RESOURCE"]["grayed"] == 1 and controls["RESOURCE"]["stage"] == 0, "mod profile did not lock manual snapping off"
     else:
-        assert controls["RESOURCE"]["grayed"] == 0 and controls["RESOURCE"]["stage"] <= 1, "version override did not inherit and clamp manual snapping"
-    # Neither editing general rules nor removing an override may change the
+        assert controls["RESOURCE"]["grayed"] == 0 and controls["RESOURCE"]["stage"] <= 1, "the test's rules did not apply and clamp manual snapping"
+    # Editing the test's rules may not change the
     # policy once this match has started, including while its options are open.
-    (gamedir / "profiles/retail.ini").write_text("manual_snapping=1\nquick_build=1\n"
-                                              "default_radius=3\nmax_radius=3\nquick_build_default=1\n")
-    (gamedir / "profiles/retail@76332e31.ini").unlink(missing_ok=True)
+    (gamedir / "tagpu_rules.on").write_text("manual_snapping=1\nquick_build=1\n"
+                                            "default_radius=3\nmax_radius=3\nquick_build_default=1\n")
     c.values("*0x511DE8+0x38a47")
     controls = {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
     assert controls["QUICKBUILD"]["grayed"] == 1, "profile edit changed an in-progress match"
@@ -608,7 +607,7 @@ def policy(c, mode, gamedir):
     c.resource_click(560, 375)
     c.once(any(o["action"] != 41 for o in c.orders("ARMCK")), "locked contextual click did nothing")
     assert not any(o["type"] == 78 for o in c.orders("ARMCK")), "locked Quick Build issued a mex order"
-    print(f"resource-policy-{mode}: locks, inheritance/clamping and match freeze passed")
+    print(f"resource-policy-{mode}: locks, clamping and match freeze passed")
 
 
 def geo_upgrade(c):
@@ -755,26 +754,101 @@ def viewer(c, kind="ARMACK"):
     print(f"resource viewer: paused native {kind} selection updated the displayed unit type")
 
 
+def migrated(c, gamedir):
+    """A folder of the old layout moves once: the same choices, nothing per-mod left in impure.cfg, the
+    rule files aside. Then a forbidden hand edit is refused with a log line and a bad one rejected."""
+    cfg, profiles, rules = gamedir / "impure.cfg", gamedir / "profiles", gamedir / "tagpu_rules.on"
+    keep = {p: p.read_bytes() for p in [cfg, rules, *profiles.glob("*")] if p.is_file()}
+    old_rules = "manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=3\nquick_build_default=1\n"
+
+    def controls():
+        return {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
+
+    def menu():
+        c.call("launch", "--defaults", "--keep-dll")
+        c.until(lambda: c.call("ui", "--json")["gui"] == "MAINMENU.GUI", "frontend did not reach menu")
+        for button in ("SINGLE", "Options", "VISUALS"):
+            c.call("ui", "click", button)
+
+    def logged(text):
+        logs = sorted((gamedir / "log").glob("tagpu*.log"), key=lambda p: p.stat().st_mtime)
+        return bool(logs) and text in logs[-1].read_text(errors="replace")
+
+    def per_mod_keys():
+        return re.findall(r"(?m)^(?:resource_radius|quick_build)\.\w+", cfg.read_text())
+
+    try:
+        c.call("stop")
+        for p in profiles.glob("*"):
+            p.unlink()
+        rules.unlink(missing_ok=True)
+        text = re.sub(r"(?m)^(?:resource_radius|quick_build)\.\w+=[^\n]*\n?", "", (keep.get(cfg) or b"").decode())
+        cfg.write_text(text + "\nresource_radius.retail=1\nquick_build.retail=0\nresource_radius.mayhem=2\n"
+                       "quick_build.escalation=1\nresource_radius.prota=3\nquick_build.tazero=auto\n")
+        (profiles / "retail.ini").write_text(old_rules)
+        (profiles / "retail@76332e31.ini").write_text("max_radius=8\n")
+        (profiles / "unknown.ini").write_text(old_rules.replace("=1", "=0").replace("=3", "=0"))
+        menu()
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 1, "the migrated radius did not apply")
+        assert controls()["QUICKBUILD"]["stage"] == 0, "the migrated Quick Build did not apply"
+        c.until(lambda: not per_mod_keys(), "a per-mod key stayed in impure.cfg")
+        moved = {n: (profiles / n).read_text() for n in ("retail.ini", "mayhem.ini", "escalation.ini")}
+        assert "resource_radius=1" in moved["retail.ini"] and "quick_build=0" in moved["retail.ini"], moved["retail.ini"]
+        assert "max_radius" not in moved["retail.ini"], "the rules stayed in the player's file"
+        assert "resource_radius=2" in moved["mayhem.ini"], moved["mayhem.ini"]
+        assert "quick_build=1" in moved["escalation.ini"], moved["escalation.ini"]
+        assert not (profiles / "prota.ini").exists(), "a value at the mod's default was kept"
+        assert not (profiles / "tazero.ini").exists(), "auto was kept"
+        for n in ("retail.ini", "retail@76332e31.ini", "unknown.ini"):
+            assert (profiles / f"{n}.migrated").exists(), f"{n} was not moved aside"
+        # once: the second launch changes nothing, and the moved-aside files stay
+        c.call("stop")
+        before = {p.name: p.read_bytes() for p in profiles.glob("*")}
+        menu()
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 1, "the radius did not survive a restart")
+        assert before == {p.name: p.read_bytes() for p in profiles.glob("*")}, "the second launch moved something"
+        # a forbidden value edited in by hand has no effect and is named in the log
+        rules.write_text("manual_snapping=0\nquick_build=0\ndefault_radius=0\nmax_radius=0\nquick_build_default=0\n")
+        (profiles / "retail.ini").write_text("quick_build=1\n")
+        c.until(lambda: logged("profiles: refused quick_build in profiles/retail.ini"), "the forbidden edit was not refused")
+        c.until(lambda: controls()["QUICKBUILD"]["grayed"] == 1, "the forbidden option did not lock")
+        assert controls()["QUICKBUILD"]["stage"] == 0, "a forbidden option took effect"
+        (profiles / "retail.ini").write_text("quick_build=7\n")
+        c.until(lambda: logged("profiles: rejected profiles/retail.ini:1"), "a bad value was not rejected")
+        print("resource-migration: the move, its once, a refused and a rejected edit passed")
+    finally:
+        c.call("stop")
+        for p in profiles.glob("*"):
+            p.unlink()
+        rules.unlink(missing_ok=True)
+        for p, data in keep.items():
+            p.write_bytes(data)
+        if cfg not in keep:
+            cfg.unlink(missing_ok=True)
+
+
 def frontend(name, gamedir):
     """Pre-match native Visuals Undo must preserve the raw preference under a cap."""
     c = Check.__new__(Check)
     c.name = name
-    cfg, profile = gamedir / "impure.cfg", gamedir / "profiles/retail.ini"
-    old_cfg = cfg.read_bytes() if cfg.exists() else None
-    old_profile = profile.read_bytes()
+    migrated(c, gamedir)
+    choices, rules = gamedir / "profiles/retail.ini", gamedir / "tagpu_rules.on"
+    old_choices = choices.read_bytes() if choices.exists() else None
+    old_rules = rules.read_bytes() if rules.exists() else None
     packet_off = gamedir / "tagpu_packet.off"
     old_packet_off = packet_off.read_bytes() if packet_off.exists() else None
     def controls():
         return {g["name"]: g for g in c.call("ui", "--json")["gadgets"]}
     def stored():
-        text = cfg.read_text()
-        m = re.search(r"(?m)^resource_radius\.retail=(\w+)", text)
+        text = choices.read_text() if choices.exists() else ""
+        m = re.search(r"(?m)^resource_radius=(\w+)", text)
         return m.group(1) if m else None
     try:
         c.call("stop")
-        text = (old_cfg or b"").decode()
-        text = re.sub(r"(?m)^resource_radius\.retail=[^\n]*\n?", "", text)
-        cfg.write_text(text + "\nresource_radius.retail=8\n")
+        capped = "manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=3\nquick_build_default=1\n"
+        rules.write_text(capped)
+        choices.parent.mkdir(exist_ok=True)
+        choices.write_text("resource_radius=8\n")
         packet_off.touch()
         c.call("launch", "--defaults", "--keep-dll")
         c.until(lambda: c.call("ui", "--json")["gui"] == "MAINMENU.GUI", "frontend did not reach menu")
@@ -785,26 +859,26 @@ def frontend(name, gamedir):
         c.call("ui", "click", "UNDO")
         c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "untouched Undo lost effective cap")
         assert stored() == "8", "untouched Undo overwrote the raw preference"
-        profile.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
+        rules.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
         c.until(lambda: controls()["RESOURCE"]["stage"] == 8, "untouched Undo destroyed the preference above the cap")
-        profile.write_bytes(old_profile)
+        rules.write_text(capped)
         c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "original cap did not reload")
         c.call("ui", "click", "RESOURCE")
         c.until(lambda: stored() == "0", "resource click did not commit")
         c.call("ui", "click", "UNDO")
         c.until(lambda: stored() == "8", "Undo did not restore the raw preference")
-        profile.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
+        rules.write_text("manual_snapping=1\nquick_build=1\ndefault_radius=3\nmax_radius=8\nquick_build_default=1\n")
         c.until(lambda: controls()["RESOURCE"]["stage"] == 8, "raising the cap did not recover the preference")
         print("resource-frontend: untouched/touched Undo and cap reload without packets passed")
     finally:
         try:
             c.call("stop")
         finally:
-            profile.write_bytes(old_profile)
-            if old_cfg is None:
-                cfg.unlink(missing_ok=True)
-            else:
-                cfg.write_bytes(old_cfg)
+            for path, old in ((choices, old_choices), (rules, old_rules)):
+                if old is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(old)
             if old_packet_off is None:
                 packet_off.unlink(missing_ok=True)
             else:
