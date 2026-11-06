@@ -380,7 +380,7 @@ static int __stdcall mount_filtered(const char* name, int flag)
                 lstrcpynA(seen[nseen++], base, sizeof seen[0]);
                 tagpu_logf("modload: not mounted %s: %s", base, why);
             }
-            return 0;   /* as for one already mounted: *.HPI's ten-a-call count does not move (0x41D5D5) */
+            return 0;   /* as for one already mounted: *.HPI's ten-a-call count does not move (0x41D5D9) */
         }
     }
     return s_mountReal(name, flag);

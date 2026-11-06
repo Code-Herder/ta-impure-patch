@@ -595,7 +595,8 @@ the copy is `0x4E4760`, `0x4BDE72..0x4BDE98`), and compares the two inline
 **The mount list** [DISASSEMBLED 2026-10-02, for the recorder's `RT_ARCHIVE`]:
 - **Where it is.** The graphics globals `*(0x51FBD0)` (`0x4B6220` returns it) hold the list at
   `+0x618`, a `HANDLE**`, and its i32 count at `+0x61C`.
-- **The mounter `0x4BE0B0(name, flag)`** (stdcall, `ret 8`):
+- **The mounter `0x4BE0B0(name, flag)`** (stdcall, `ret 8`, entered by `sub esp, 0x104`, the six bytes
+    [mods](../modules/mods.html) detours; no mod's table touches them):
   - It resolves the name with `GetFullPathNameA` (`0x4BE0D7`) and skips one already mounted,
     compared case-insensitively (`0x4BE0FB`).
   - Otherwise it opens the archive (`0x4BE11B`), reallocates the list to `count + 1` entries on
@@ -647,8 +648,9 @@ names). Established by the landing's scouts' disassembly, with the points marked
 landing; MEASURED by the native load's equality with an independent Python resolution on retail
 (`tools/wiki/assetcheck.py`).
 
-**Opening a path, `0x4BB2E0(path, mode)`.** The loose file first (`0x4E4990`, the CRT open,
-relative to the current directory), then the first archive of the mount list whose directory
+**Opening a path, `0x4BB2E0(path, mode)`.** The loose file first (`call 0x4E4990` at `0x4BB32D`, cdecl
+`(path, mode)`, the CRT open, relative to the current directory: its only loose attempt, DISASSEMBLED
+2026-11-05), then the first archive of the mount list whose directory
 holds the path as a file (an entry whose flag byte `+8` has bit 0, the directory bit, clear: `test
 byte [edi+8],1` at `0x4BB378`). The archive lookup `0x4BB4E0` splits the path at `\` (`push 0x5C`
 before the `strchr` call at `0x4BB4EA`) and scans each
@@ -662,7 +664,8 @@ tries `"<dir>-<language>\<name>"` (`0x503378`) first and keeps it if `0x4BB5B0` 
 appended. `0x435430`, the map builder, does the same (`0x4354E3`).
 
 **Enumerations list each path once, from the first source that has it.**
-- `0x4BC4B0`/`0x4BC640` walk the loose files (`_findfirst`/`_findnext`) and then the archives in
+- `0x4BC4B0`/`0x4BC640` walk the loose files (`_findfirst`/`_findnext`; the first is `call 0x4E7DD0` at
+  `0x4BC5D3`, cdecl `(spec, data)`, -1 for none, DISASSEMBLED 2026-11-05) and then the archives in
   mount order, each directory's entries **forwards** (in `0x4BC640`, `0x4BC6FF..0x4BC754`: the
   index `+0x209` is incremented and compared with the directory's count, `jl` back at `0x4BC754`), skipping an entry that fails the wildcard
   match `0x4BC370` (`*` and `?`, both sides upper-cased by `0x4E71C0`) or whose flag byte has

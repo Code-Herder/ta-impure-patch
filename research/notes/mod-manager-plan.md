@@ -50,23 +50,25 @@ Each decision is listed with what it was chosen over.
   belong to TADR's route and are dropped from the delta.
 - **A mod's exe patch is a table derived once by us** (a diff against stock 3.1). For Mayhem and
   ProTA it is their Patch Loader table.
-- **A known exe gives the stock image, and the process is restored from it.** A folder's Patch
-  Loader and a mod's `win32.dll` write `rel32` displacements into their own DLLs (`0x47BFA3`,
-  `0x4B55FC`, the three thunks: [the Patch Loader](deep-patch-loader.html)). Those bytes depend on where the
-  DLL loaded, so no fixed table can take them back. The sequence runs at the exe's entry point, after
-  every DllMain, so they have all finished:
-  1. identify the exe on disk and any loader beside it by `file_key`;
-  2. take the stock image: the exe's own sections, with its XOR applied when it is a known modded exe;
-  3. write every section byte of the process back from it, the import table and its slots masked;
-  4. apply the mod's XOR;
-  5. hash the process against stock+mod.
+- **A known exe gives the stock image, and whatever other DLLs write is taken back at the entry point.**
+  A folder's Patch Loader and a mod's `win32.dll` write `rel32` displacements into their own DLLs
+  (`0x47BFA3`, `0x4B55FC`, the three thunks: [the Patch Loader](deep-patch-loader.html)). Those bytes
+  depend on where the DLL loaded, so no fixed table can take them back, and Impure patches the same
+  image during its own attach, so the order is what makes a process with a mod equal to its drop-in
+  folder ([the module](modules/mods.html)):
+  1. **At attach, before Impure's first patch** (`tagpu_modload_begin`): identify the exe on disk and
+     any loader beside it by `file_key`, build stock + the mod's XOR from the file, hash it, and write
+     the image the mod's kind sees here: the target for a mod that ships an exe, stock for one that
+     ships a Patch Loader.
+  2. **Last in attach** (`tagpu_modload_end`): a loader mod's bytes, Impure's mount and loose detours,
+     then a snapshot of every section with the import slots in it, then a jump on the exe's entry point.
+  3. **At the entry point, after every DllMain:** every byte that differs from the snapshot goes back,
+     so nothing has to be listed: loader writes, thunks and hooks on import slots all go the same way.
+     **MEASURED 2026-11-05:** a Mayhem folder's Patch Loader had written 704 B by then.
 
-  The mask cannot see a DLL's hook in an import slot, so this landing rebinds or refuses those. Whatever
-  `tdraw.dll` writes before the entry point is unmeasured (`loaderdump` stubs it): this landing dumps a
-  process with the real one first.
-
-  A mismatch refuses before any game code runs. We chose this over testing every mod's table
-  against every modded exe for byte clashes.
+  A mismatch refuses at the entry point, before any game code runs: a box naming the reason, `mod=`
+  cleared so the next start is the folder's own, and exit. We chose this over testing every mod's
+  table against every modded exe for byte clashes.
 - **An unknown exe makes the MODS button open an engine message box**, in the same style as the
   DirectX version box (the box at `0x4266A9`, gated on the check `0x4B5070` called at `0x4266A0`;
   Impure suppresses that box at `0x4266A7`). The box says mods are not available because this exe is not one Impure knows.
@@ -88,8 +90,8 @@ Each decision is listed with what it was chosen over.
      leaves `impure.cfg` only once its value is in the file, so the move keeps no record of its own
      (`impure-migration.txt` is the store's). The file will hold the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
 
-  `impure.cfg` keeps only global settings. Profile names will come from the catalog (landing 4;
-  today they are the fixed seven). A `file.` key naming a file the current version no longer has is ignored with a
+  `impure.cfg` keeps only global settings. Profile names are the fixed seven, which every v1 mod's
+  id is one of; a mod beyond v1 needs them from the catalog, with its row in the replays' mod table. A `file.` key naming a file the current version no longer has is ignored with a
   log line, not rejected. We rejected keeping the player's per-mod choices split between
   `impure.cfg` and `profiles\`, and keeping mod rules hardcoded in the DLL.
 - **Play options are per mod; visuals are not.** Building, placement, snapping, reclaim and orders
@@ -200,13 +202,19 @@ What follows from those rules:
   Mayhem, 6064 in ProTA, 8551 in TA Zero, 8740 in Twilight. An enumeration's
   order is not simulated; landing 4's managed column compares its result in the game.
 - **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
-  The exception is a short list of paths that stock TA really does open loose (saved games, for
-  instance), which must be measured. The drop-in route and "no mod" keep the loose step.
+  It is closed by folder: a read whose first path component is one of the folders modpack treats as
+  game data (`GAME_DIRS`) finds no loose file, so saved games and everything else stay open. Retail's
+  own loose files in those folders are four examples (`camps\\EXAMPLE.TDF`, its brief, its picture),
+  and no run named one. The log names each loose file refused. The drop-in route and "no mod" keep
+  the loose step.
 - **Files read by plain path** rather than through `0x4BB2E0` are listed in each package's
   `listing.txt`. The v1 packages keep the strategic icon sets Impure reads (`Icon/`, `ZIcon/`) and drop
   the rest: changelogs and readmes, cnc-ddraw's `ddraw.ini` and `Shaders/`, `wgmus.ini`, Twilight's
-  `aqrit.cfg`, `ChatMacro.ini` and `Settings.ini`, and each mod's options file (`mayhem.ini`,
-  `ProTA.ini`, `TAESC.ini`, `TAZero.ini`, `TA.ini`).
+  `aqrit.cfg`, `ChatMacro.ini` and `Settings.ini`.
+- **Each mod's options file is kept** (`mayhem.ini`, `ProTA.ini`, `TAESC.ini`, `TAZero.ini`, `TA.ini`).
+  The engine reads its `[Preferences]` beside the exe (`0x49F5F9`) and the strategic icons read their
+  folder from it. It is copied there at start-up when the folder has none, and is the player's from
+  then on.
 
 ### Drop-in folders
 
@@ -290,9 +298,9 @@ What follows from those rules:
 | 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
 | 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives one XOR per mod + the known files, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each known exe's XOR gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
 | 3 | Per-mod options (built) | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
-| 4 | Managed start-up | `mod=`; identify → restore → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
+| 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
-| 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
+| 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
@@ -309,14 +317,15 @@ Landings 2 and 3 are independent of each other.
 - The new art parts for the screen, needed for landing 6.
 
 **Needs research or a measurement:**
-- Which paths does stock TA really open through the loose-file step? This must be measured before
-  landing 4 closes it.
-- Each mod's options file is dropped (`mayhem.ini` and the others, *Archives and loose files*). Its
-  name is in the exe table, so the engine reads `<game folder>\<name>` and finds none. Does a mod
-  need its shipped values? Landing 4's managed column answers it.
 - What channel carries the fingerprint in the battle room? No Impure message exists there today, so
   this needs research before landing 8.
-- Which v1 setups are safe with LAA on? Landing 9's row answers it.
+- Which v1 setups are safe with LAA on? Landing 9's row answers it. Managed Escalation already needs it
+  to load a game: its 550 unit types run out of address space without it (MEASURED 2026-11-05, the
+  engine's out-of-memory box), so its compatibility rows set the bit by hand until landing 9.
+- A jump on the entry point by another DLL, written after Impure's, keeps the entry stage from running.
+  The first DirectDraw call refuses that case, and no setup in the suite produces it, so that refusal
+  has not been run.
+- Managed start-up has run on Wine only. The Windows half of the suite runs before a release.
 
 **Later, outside v1:**
 - the website, with a signed catalog and its coexistence with the DLL-packed one;

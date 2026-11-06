@@ -171,6 +171,21 @@ requires the rendered roster to change, and runs the same window/code watcher du
 It checks UI health and crash/refusal logs, then removes its own remote instance. Windows
 multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 
+## The managed rows
+
+`managed_setups` in `tacompat.py` derives them from `mods/*.json`, so a new mod has them without a line in
+`setups.json`. They need the packages: `tools/modpack/modpack.py packages` (`~/.local/share/ta-compat/modpack/`).
+
+- `managed-<id>`: the mod installed into a clean stock folder and chosen by `mod=`. It runs beside its
+  drop-in row and fails if a unit type or a `CRC_all` differs, or if the log names no refused loose file. Name both
+  rows when you ask for one, or the comparison has nothing to read.
+- `matrix-<id>-on-<base>`: the mod in a folder another mod's drop-in install left. Ask with the name `matrix`,
+  usually `--battle 0 --mp 0`: 20 rows in about 3 minutes. Not in the default list.
+- `managed-refuses-<why>`: the box must name the reason and `mod=` must be gone from `impure.cfg`.
+
+A mod with `memory: 4gb` (Escalation) has the exe's large-address bit set by hand until the 4 GB landing:
+without it the game runs out of memory loading.
+
 ## Adding a setup
 
 A player's report names files: identify each by image size and md5 against the fixtures and

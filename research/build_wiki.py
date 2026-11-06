@@ -88,6 +88,7 @@ PAGES = [
     ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
 
     ("modules/hook-map",                  "Hook map & fields we write", "Modules"),
+    ("modules/mods",                      "Mods: a mod run from its package", "Modules"),
     ("modules/camera-zoom",               "Camera & zoom", "Modules"),
     ("modules/markers",                   "World-space markers", "Modules"),
     ("modules/engine-ui",                 "The engine's UI", "Modules"),
