@@ -22,7 +22,7 @@ void tagpu_modsui_open(const char* folder);
 /* Any thread. */
 int  tagpu_modsui_is_open(void);
 /* Game thread, each flip: the installs' progress. */
-void tagpu_modsui_tick(void);
+void tagpu_modsui_tick(int in_game);
 
 /* The window's messages and the injected path, the game thread: 1 taken, 0 the engine's. */
 int  tagpu_modsui_message(UINT msg, WPARAM wp, LPARAM lp);

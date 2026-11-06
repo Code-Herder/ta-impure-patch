@@ -3763,7 +3763,7 @@ static int __cdecl before_flip(void* entry_esp)
        or a live render consumer. A game flip freezes it until the next menu. */
     if (isGame) tagpu_profiles_begin_match();
     tagpu_profiles_menu_tick();
-    tagpu_modsui_tick();
+    tagpu_modsui_tick(isGame);
     /* FIRST, before the census or the publisher read a single base: retire every
        surface another thread's MEM_Free left for us (surf_drain_freeq) */
     surf_drain_freeq();

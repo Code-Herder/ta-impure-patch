@@ -318,7 +318,11 @@ static void build_pane(void)
     s_paneStale = 0;
     s_page.title[0] = s_page.meta[0] = s_page.summary[0] = s_page.note[0] = 0;
     s_page.nopt = s_page.nsw = 0;
-    if (s_page.selected < 0) return;
+    if (s_page.selected < 0) {
+        /* Confirm stands on every tab, so its refusal can have no row to stand under */
+        lstrcpynA(s_page.note, s_note, sizeof s_page.note);
+        return;
+    }
     if (m == FOLDER) {
         lstrcpynA(s_page.title, "This folder", sizeof s_page.title);
         lstrcpynA(s_page.meta, s_folder, sizeof s_page.meta);
@@ -529,7 +533,7 @@ static void dump(void)
 
 static void close_screen(const char* how);
 
-void tagpu_modsui_tick(void)
+void tagpu_modsui_tick(int in_game)
 {
     MODINST_STATUS st;
     static DWORD s_asked;
@@ -541,7 +545,8 @@ void tagpu_modsui_tick(void)
             DeleteFileA(DUMP_ASK);
         }
     }
-    /* THE QUEUE GOES ON WITH THE SCREEN SHUT: Update all then Back leaves it running */
+    /* THE QUEUE GOES ON WITH THE SCREEN SHUT, in the shell: Update all then Back leaves it running. A start reads files and parses the
+       catalog on this thread, so in a match the finished job is only collected and the next waits for the menu. */
     if (s_active != NONE) {
         tagpu_modinst_status(&st);
         if (st.phase == MODINST_READY || st.phase == MODINST_FAILED) {
@@ -554,12 +559,15 @@ void tagpu_modsui_tick(void)
             }
             s_active = NONE;
             s_paneStale = 1;
-            start_next();
             if (tagpu_modsui_is_open()) publish();
         } else if (st.phase != s_status.phase || st.done != s_status.done) {
             s_status = st;
             if (tagpu_modsui_is_open()) publish();
         }
+    }
+    if (!in_game && s_active == NONE && s_nqueue > 0) {
+        start_next();
+        if (tagpu_modsui_is_open()) publish();
     }
     if (!tagpu_modsui_is_open()) return;
     /* THE LAYER CAN REFUSE AFTER THE OPEN: its pass is built at its first use and the art may still have been loading, and with the
@@ -627,10 +635,10 @@ static void close_screen(const char* how)
 
 static void confirm(void)
 {
-    char id[32];
+    char id[32], was[32] = "";
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
     /* THE PROFILE FIRST: a choice it could not save refuses the restart with impure.cfg as it was */
-    tagpu_profiles_flush();
+    tagpu_profiles_flush_now();
     if (!tagpu_profiles_saved()) {
         lstrcpynA(s_note, "Your options could not be saved, so the game stays as it is.", sizeof s_note);
         tagpu_logf("modsui: %s", s_note);
@@ -639,12 +647,13 @@ static void confirm(void)
         return;
     }
     cfg_save();
+    tagpu_settings_mod(was, sizeof was);
     tagpu_settings_set_mod(id);
     tagpu_settings_flush();
-    /* A RESTART MUST NOT COME UP ON THE OLD MOD WITH NO WORD SAID: it goes only once the file holds the choice. Refused, the running
-       mod goes back in the store, whose retry would otherwise write the refused one once the file frees. */
+    /* A RESTART MUST NOT COME UP ON THE OLD MOD WITH NO WORD SAID: it goes only once the file holds the choice. Refused, what the store
+       held goes back, since its retry would otherwise write the refused one once the file frees. */
     if (!tagpu_settings_saved()) {
-        tagpu_settings_set_mod(s_running >= 0 ? s_mod[s_running].id : "");
+        tagpu_settings_set_mod(was);
         lstrcpynA(s_note, "Your choice could not be saved in impure.cfg, so the game stays as it is.", sizeof s_note);
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;

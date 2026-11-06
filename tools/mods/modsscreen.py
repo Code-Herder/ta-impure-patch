@@ -270,9 +270,10 @@ def flow(display):
     report(s["running"] == "ProTA" and s["chosen"] == "ProTA", "the screen says so")
     # the mod running now: its choice takes effect at once, through the profile module's own store
     g.click(f"row:{row_of(s, 'ProTA')}")
-    s = g.settled(lambda s: s["opts"])
+    # the scan's end changes the page's shape, and a click across a change of shape is dropped by design
+    s = g.settled(lambda s: s["opts"] and s["scan_done"] and s["sw"])
     was = s["opts"][0]["value"]
-    g.click("opt:0:+" if was == 0 else "opt:0:-")
+    g.click("opt:0:+" if was == "0" else "opt:0:-")
     s = g.settled(lambda s: s["opts"][0]["value"] != was, 5)
     report(s["opts"][0]["value"] != was, f"the running mod's option changes at once: {was} to {s['opts'][0]['value']}")
     g.click("reset:0")

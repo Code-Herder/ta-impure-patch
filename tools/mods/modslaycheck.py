@@ -308,7 +308,9 @@ def main():
     cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
                                            "launchOptions": {"ignoreDefaultArgs": ["--hide-scrollbars"]}}}))
     pw = ["playwright-cli", f"-s=modslaycheck{os.getpid()}", f"--config={cfg}"]
-    run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
+    # headless needs no display, and Chrome would still connect to one it inherits and wait there if that server has stopped answering
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+    run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp, env=env)
     bad, glyphs = 0, set()
     run("open", "about:blank")
     try:

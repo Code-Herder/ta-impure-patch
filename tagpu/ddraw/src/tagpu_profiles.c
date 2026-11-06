@@ -406,6 +406,7 @@ static void flush(int final)
 }
 
 void tagpu_profiles_flush(void) { flush(0); }
+void tagpu_profiles_flush_now(void) { s_retryAt = 0; flush(0); }
 int  tagpu_profiles_saved(void) { return InterlockedCompareExchange(&s_dirty, 0, 0) == 0; }
 void tagpu_profiles_final(void) { flush(1); }
 
@@ -540,8 +541,14 @@ int tagpu_profiles_hide_of(const char* id, const char* archive)
     char path[64], data[PROFILE_CAP + 1], error[sizeof s_error] = "", *line, *next;
     size_t nk = sizeof HIDE_KEY - 1, na = strlen(archive);
     int found = -1;
+    int got;
     path_of_id(id, path, sizeof path);
-    if (read_small(path, data, error, sizeof error) <= 0) return -1;
+    /* AN ORDERING: a writer replaces this file by a rename, which fails while a reader has it open, and a read during the rename finds
+       no file. The writers hold s_io. */
+    if (s_attached) EnterCriticalSection(&s_io);
+    got = read_small(path, data, error, sizeof error);
+    if (s_attached) LeaveCriticalSection(&s_io);
+    if (got <= 0) return -1;
     for (line = data; line; line = next) {
         char* key;
         next = strchr(line, '\n');
@@ -562,6 +569,7 @@ static int write_key_of(const char* id, const char* key, int value)
 {
     char path[64], why[sizeof s_error] = "";
     int ok;
+    if (tagpu_settings_ignored()) return 0;     /* a control launch does not touch what it does not own */
     path_of_id(id, path, sizeof path);
     CreateDirectoryA("profiles", NULL);
     EnterCriticalSection(&s_io);

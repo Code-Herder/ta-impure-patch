@@ -37,9 +37,11 @@ int tagpu_profiles_hide_of(const char* id, const char* archive);
 int tagpu_profiles_set_choice_of(const char* id, int which, int value);
 int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
 
-/* The file's write: the render thread each frame, and the exit once no other thread is inside. A
+/* The file's write: the render thread each frame, the Mods screen's Confirm, and the exit once no other thread is inside. A
    click only records its value (tagpu_menu_present). */
 void tagpu_profiles_flush(void);
+/* The same past the wait after a failed write, which stops a retry every frame: a player's click may try at once. */
+void tagpu_profiles_flush_now(void);
 /* 1 when nothing waits to be written: the flush above held. */
 int  tagpu_profiles_saved(void);
 void tagpu_profiles_final(void);

@@ -151,7 +151,7 @@ and the plate grown to hold both: `art/ui/*/plate.png` is 115 x 58. Twilight has
 MEASURED on each v1 mod's main menu and on retail, all but Twilight at (272,416), Twilight at (317,416).
 
 **Drawn on the wiki's layer, in the shell.** `tagpu_wikistate_present` takes a frame with no level in it to `mods_present`, which
-builds the page with `tagpu_modslay_build` over the wiki's kit and art, and everything after that is the wiki's: its ops, its pass (`tagpu_vk_hud.c`, built at its first use, the art loaded already at the menu), its
+builds the page with `tagpu_modslay_build` over the wiki's kit and art, and everything after that is the wiki's: its ops, its pass (`tagpu_vk_hud.c`, built at its first use, its art's load started in the shell), its
 hit map (`tagpu_wikistate_drawn`) and its cursor. The page is drawn over a full-screen backdrop, in wiki units.
 
 **What crosses.** The page goes to the render thread and the hit map comes back, each copied under one lock held over a memcpy, in `tagpu_modsui.c`.
@@ -229,7 +229,7 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - In a folder whose name is outside the ANSI code page, `game_root` finds no `mods\`: the sweep does nothing and an install is refused.
 - A launcher that starts the game from another current directory reads `impure.cfg` and tests `mods\` there, while the sweep acts in the exe's
   folder and the engine moves to it at its first mount pass (`0x49F540`, engine map).
-- One install at a time, with no way to stop one but ending the game. A queue runs on with the screen shut, at the menu, and is lost at an exit with no word.
+- One install at a time, with no way to stop one but ending the game. A queue runs on with the screen shut, starting its next install only in the shell, and is lost at an exit with no word.
 - The `(void*)-1` test covers the HUD's pass and the staging buffers. The other passes' `vkMapMemory` still trust the success, and a process can vanish with no ErrorLog on llvmpipe around the restorer's self-test, on a build without the screen too.
 - A hide key can take what a level needs. MEASURED on ProTA alone: with its 28 other archives hidden it still reaches its menu, so the screen stays there to undo them; no level was played so. Hide keys change the content between network peers, for the fingerprint landing to compare.
 - The screen has run on Wine on llvmpipe only, windowed: a private display offers no GPU here, so no GPU's driver has drawn it. Steam loses track of a game Confirm restarts, as the plan accepts.
