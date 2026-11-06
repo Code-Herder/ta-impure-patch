@@ -462,6 +462,13 @@ that map's size.
 | `presentcap.on=N` | **test only, a tacli test launch**: at most N presents a second (10..60); `frame cap: a test launch's N fps present cap (tagpu_presentcap.on)` |
 | `ghostq.off` | **test only**: the ghost-commander queue holds and notes nothing, so a create refused during the load waits for the round robin as on stock; the dirty create's position still applies, which is how that half is measured alone. Logs `enginefix: ghost commander: TEST LEVER …` |
 
+### The Mods screen
+
+- `tagpu_modsui.dump`: touching it writes `tagpu_modsui.json`, the screen's state with the hit map of the frame last drawn in client pixels (`open`, `holds`, `drawn`, `tab`, `rows`, `opts`, `sw`, `hits`, `note`, `running`, `chosen`).
+- `tagpu_modbase.on`: its contents are the download server's address, until the catalog names one.
+- `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
+- `tools/mods/modsscreen.py [--only flow|real|boxes|menus] [--display :N]` plays the screen on a private display and holds the run lock.
+
 ## The heartbeats: what must read zero
 
 | line | every | must read 0 | notes |

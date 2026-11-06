@@ -31,7 +31,7 @@ band's `xs`. A repeating band is resampled on its own, wrapped, so its copies st
 repeating 9-slice's end slices are made to land on whole texels. Any other part is copied as filed: resampling
 blurs it, for 3 % of its size at most. The output depends on art/hud-full/, the layout and the mockup only, so a run
 on unchanged inputs rewrites art/hud/ byte for byte."""
-import json, shutil, sys, tempfile
+import json, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from PIL import Image
 

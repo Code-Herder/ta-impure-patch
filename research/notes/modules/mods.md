@@ -3,7 +3,8 @@
 `mod=<id>` in `impure.cfg` runs catalog mod `<id>` on the player's own exe from `mods\<id>\`, and the
 result is the mod's drop-in folder: the same unit types, feature and weapon tables and build menus, and a
 network game with a drop-in player whose handshake agrees on every unit's scripts, GUIs and downloads. With no `mod=` none of this does anything. The design and its reasons are in
-[the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html).
+[the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html). The player reaches all of it from the
+main menu's MODS button: *The screen*, below.
 
 *A module note: it states the module as it is now.*
 
@@ -16,6 +17,8 @@ network game with a drop-in player whose handshake agrees on every unit's script
   hash. `tools/modpack/modpakcheck.c` runs it on the host, and `modpack.py verify` compares it with the
   Python that wrote the pack, on every known exe.
 - `tagpu_modcat.c`: the catalog's `hide` list and option rules.
+- `tagpu_modsui.c/.h`: the screen's state and input, on the game thread. Names no engine memory.
+- `tagpu_modslay.c/.h`: the screen's window, a pure function of the page. Pure C.
 - `tools/modpack/modpack.py install ID GAMEDIR`: a package installed by hand, its recipe run from that
   folder's archives into `<id>.originals.hpi`.
 
@@ -141,7 +144,55 @@ A start that finds its mod missing while the lock is held says so and keeps `mod
 **The way in**, until the Mods screen: in the game, a file `tagpu_modinst.on` holding `<id> <base url>` installs that mod at each start
 while it exists.
 
-## How it is tested
+## The screen
+
+The MODS button lies under REPLAYS on each menu, a second record appended where REPLAYS' is (`tagpu_replays.c` `mainmenu_visit`), with quick key `O`
+and the plate grown to hold both: `art/ui/*/plate.png` is 115 x 58. Twilight has no plate. No mod's menu needed another move for it:
+MEASURED on each v1 mod's main menu and on retail, all but Twilight at (272,416), Twilight at (317,416).
+
+**Drawn on the wiki's layer, in the shell.** `tagpu_wikistate_present` takes a frame with no level in it to `mods_present`, which
+builds the page with `tagpu_modslay_build` over the wiki's kit and art, and everything after that is the wiki's: its ops, its pass (`tagpu_vk_hud.c`, already up at the menu), its
+hit map (`tagpu_wikistate_drawn`) and its cursor. The page is drawn over a full-screen backdrop, in wiki units.
+
+**What crosses.** The page goes to the render thread and the hit map comes back, each copied under one lock held over a memcpy, in `tagpu_modsui.c`.
+No packet carries it: a shell packet holds a header and no area (`fill_shell`), and `tagpu_cmd_take` runs only at an in-play draw, so neither
+way is open at the menu. A click reads the map of the frame last drawn, so it lands on what the player saw. An index out of a hit key
+is bounded against the page it is about before it is used.
+
+**Modal, by the wiki's capture.** `tagpu_wiki_capture` holds the engine's pointer where it was and reads its key polls up, and the window's messages
+and the injected path stop at `tagpu_modsui_*` (`tagpu_wiki_message`, `tagpu_wiki_mouse`, `tagpu_wiki_key`). A press taken owes its release, and only that
+release is taken: the one of the key that opened the screen is the engine's. Alt's chords stay the system's. Controls act on the release. Moves call
+`mouse_note_client`, since no move reaches cnc-ddraw's store under the capture and the drawn cursor follows that point.
+
+**The tabs.** Manage is `This folder` first, then what is installed, each with a radio. Explore is the catalog less that, each with Install. Updates is what is
+installed at another version than the catalog's, each with Update, and Update all queues them. The worker is `tagpu_modinst`, one install at a time; a finished one is
+`ready` for this session and waits in `mods\\<id>.new` for the next start. A failure's reason stands in the pane.
+
+**The pane.** Play options come from `tagpu_modcat_rules`, or the running policy for this folder, and the player's values from `profiles\\<id>.ini`: a changed one shows the marker and
+a reset, which takes its key out; a forbidden one is grey with the mod's reason and has no hit. For a mod running now a choice takes effect at once. The archive switches are `hide.<archive>=on|off`
+in the same file, read at the mount over the mod's `hide` list. They list the folder's `*.ccx`, `*.ufo` and `*.hpi` that hash as originals, since nothing else mounts under a mod, hashed once on their own thread;
+`totala1.hpi`, which every mod needs, is locked, and the mount ignores a key for it. A `.gp3` is not listed: a mod renames that pattern, so no switch could mount it. A switch takes effect at the next start.
+
+**Confirm's restart.** Confirm shows only with something to do: another mod chosen, a switch of the running mod changed, or its update ready. It writes `mod=` (nothing for this folder), flushes the store and goes on only when
+`tagpu_settings_saved` says the file holds it; otherwise a note says so and the game stays. `tagpu_rguard_restart_self` starts the same exe with the same command line, naming this process in
+`TAGPU_MODS_RESTART`, and `tagpu_rguard_attach` waits for it, since `WinMain` refuses to start beside the semaphore the old process holds. **The old process is terminated, not exited.** `ExitProcess` kills the render thread
+wherever it stands and then runs the detaches, the graphics driver's among them, and MEASURED on Wine on llvmpipe a process that did so stayed in its detach for minutes, holding that semaphore; no GPU's driver has been measured. The engine's own exit
+releases the device first, which a click cannot reach. Terminating runs no detach, so the window's place is saved ahead of it with `cfg_save`, and the player's files before that. The new process is not a relaunch
+after a crash, so it may still make one.
+
+**When it cannot draw.** The pass is built at its first use and can refuse then: on llvmpipe with the restorer on, the 2 GB address space has no 12 MB run within seconds of the menu, and `vkMapMemory` returns success and `(void*)-1` (MEASURED: largest free run 63 MB at the first frame, 10 MB six seconds on). The pass tests that pointer and refuses, the open screen closes itself, and the next click gets the box; `tagpu_hudrefuse.on` makes the build refuse on demand for the test.
+
+**The boxes.** Before opening the button asks whether the exe is one the pack knows (`tagpu_modload_exe_known`), and then whether the layer can draw: the Vulkan renderer, the wiki's art loaded with the screen's layout in it. Either failing gets the engine's OK box, `0x4ABD90`
+([the UI map](../engine/ui.html)), and the menu goes on after it. The art still loading is no failure: the screen opens and draws with its first frame after.
+
+**The art.** `art/mods/layout.json` lies beside the wiki's, packed in `WIKIPAK` as `mods/layout.json`. Thirteen parts are not painted: `tools/mods/genparts.py` derives the check, radio, progress, tab and badge parts from the kit, and appends them to `art/wiki/kit/`. `fit.py --set wiki`
+runs it after fitting. A painted part of the same name replaces one with no code change.
+
+
+`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 51 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
+longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, on llvmpipe with the restorer off and only llvmpipe's driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
+restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
+and `menus` photographs each mod's menu and the screen over it, for the eye.
 
 `tools/modpack/installtest.py` needs no game: the tar reader natively under the sanitizers, and the module itself under Wine with its
 real WinHTTP, against a local server. `tests/modinsttest.exe` is built with a hook that ends the process at a chosen step, as a
@@ -178,7 +229,11 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - In a folder whose name is outside the ANSI code page, `game_root` finds no `mods\`: the sweep does nothing and an install is refused.
 - A launcher that starts the game from another current directory reads `impure.cfg` and tests `mods\` there, while the sweep acts in the exe's
   folder and the engine moves to it at its first mount pass (`0x49F540`, engine map).
-- One install at a time, with no way to stop one but ending the game. `Update all` is the Mods screen's to queue.
+- One install at a time, with no way to stop one but ending the game.
+- The screen has run on Wine on llvmpipe only, windowed: a private display offers no GPU here, so no GPU's driver has drawn it. Steam loses track of a game Confirm restarts, as the plan accepts.
+- The thirteen generated parts stand until the owner paints them.
+- `file.<path>` switches are not built. A v1 mod's content is one archive, so the key has nothing to name before mutators: landing 7 has them.
+- The screen says nothing about a mod another copy of the game is installing beyond what the worker's refusal says.
 - A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not
   been run.

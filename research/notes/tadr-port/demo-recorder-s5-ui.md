@@ -193,7 +193,7 @@ main menu):
 
 | Mod | What changes when REPLAYS is added |
 |---|---|
-| retail, Escalation | REPLAYS at (272,393), 96×20, on our plate at (263,386) |
+| retail, Escalation | REPLAYS at (272,393), 96×20, on our plate at (263,386), with MODS at (272,416) on the same plate |
 | ProTA 4.8 | its badge, painted into its backdrop at (283,392)–(356,438), moves up to (283,338), just above REPLAYS, and our plate takes the slot; its version label moves up 54 px with it |
 | Total Mayhem 11.3.0 | its version label, drawn at run time centred on x 320 at y 418–425, moves to y 371, just above the plate |
 | TA Zero | none: its `ZGui/mainmenu.gui` comments the Credits gadget out with `/* */` and the engine honours the comment, so the slot is empty |

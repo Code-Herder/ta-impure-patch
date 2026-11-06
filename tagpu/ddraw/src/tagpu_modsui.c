@@ -17,6 +17,9 @@
 #include "tagpu_shield.h"
 #include "tagpu_restore_guard.h"
 #include "tagpu_wiki.h"
+#include "tagpu_wikistate.h"
+#include "tagpu_hudstate.h"
+#include "tagpu_hudart.h"
 
 #define MAX_MOD      (MODS_MAXROW - 1)    /* the first row of Manage is the folder */
 #define FOLDER       (-1)                 /* a row's mod: this folder's own */
@@ -506,6 +509,8 @@ static void dump(void)
     MoveFileExA(DUMP_OUT ".tmp", DUMP_OUT, MOVEFILE_REPLACE_EXISTING);
 }
 
+static void close_screen(const char* how);
+
 void tagpu_modsui_tick(void)
 {
     MODINST_STATUS st;
@@ -519,6 +524,13 @@ void tagpu_modsui_tick(void)
         }
     }
     if (!tagpu_modsui_is_open()) return;
+    /* THE LAYER CAN REFUSE AFTER THE OPEN: its pass is built at its first use and the art may still have been loading, and with the
+       input captured a screen nobody can see would hold the menu. It closes; the next click on MODS gets the box. */
+    if (!tagpu_hudstate_on() || tagpu_wikistate_refused() ||
+        (tagpu_wikiart_done() && (!tagpu_wikiart_get() || !tagpu_wikiart_get()->mods))) {
+        close_screen("the layer cannot draw this session");
+        return;
+    }
     if (s_active != NONE) {
         tagpu_modinst_status(&st);
         if (st.phase == MODINST_READY || st.phase == MODINST_FAILED) {
@@ -620,8 +632,8 @@ static void confirm(void)
     }
     /* TERMINATED, NOT EXITED, AND WHAT MATTERS IS ALREADY ON DISK. ExitProcess kills the render thread wherever it stands and then
        runs the detaches, the graphics driver's among them, and one left waiting on a lock the killed thread held never returns
-       (MEASURED: Wine, NVIDIA, a game on the screen for 20 s: it stayed in its detach for minutes, and held the semaphore the new
-       process waits on). The engine's own exit releases the device first, and nothing here can reach that from a click.
+       (MEASURED: Wine on llvmpipe, a game on the screen for 20 s: it stayed in its detach for minutes, and held the semaphore the new
+       process waits on; no GPU's driver has been measured). The engine's own exit releases the device first, and nothing here can reach that from a click.
        Terminating runs no detach, so the kernel ends it whatever any thread holds; nothing is left to save at the main menu. */
     TerminateProcess(GetCurrentProcess(), 0);
 }

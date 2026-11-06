@@ -449,6 +449,9 @@ under zoom and `wheel.off`: `references/levers.md` §"Camera, viewport and fog".
 
 ## Things that will bite you
 
+- **A private display offers llvmpipe only, and `--defaults` on it runs out of address space.** The restorer's self-test and atlas leave no
+  12 MB run in the 2 GB within seconds of the menu, `vkMapMemory` then answers success with `(void*)-1`, and passes that do not test the pointer fault.
+  The process can also vanish with no ErrorLog around the self-test's end, about 7 s in. `tacli arm <i> classicpp.off`, and `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json` in the launch's environment, which keeps the loader from mapping about 240 MB of drivers the display cannot use, keep a `--defaults` run steady.
 - **`mark.on=noselbox` takes the selection rects off the window.** The marker pass draws them;
   the token stops it, and the engine's own boxes (at the unzoomed position) then land in
   `tacli shot` only. A selected unit with no rect on screen is this lever, not a bug.

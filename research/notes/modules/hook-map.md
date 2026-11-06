@@ -228,6 +228,9 @@ Written only while a catalog mod runs ([mods](mods.html)); with no `mod=` none o
 | `0x4E6FA0` | the exe's entry point (the running module's `AddressOfEntryPoint`): reaches the entry stage once, which then restores these five bytes | `mod=` | jmp, 5 B, gone before any game code |
 | every raw section byte, the pack's mask aside | at attach, the mod's image or stock; last in attach, a loader mod's runs by value; at the entry point, whatever differs from the snapshot, import slots included | `mod=` | byte writes, `mods/patches.bin`'s XORs |
 
+The Mods screen writes no engine site. Its button is one more record in the main menu's own gadget block, written with REPLAYS' at the same observer on `GUI_Load` (`0x4AACAE`, `tagpu_replays.c` `mainmenu_visit`), and its OnCommand slot is REPLAYS' too (`0x42644C`).
+Under `mod=` the mount's filter also reads `hide.<archive>` from the player's profile.
+
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
 
 Not detours and not redirects: bytes rewritten once in `DllMain` through `VirtualProtect`, each

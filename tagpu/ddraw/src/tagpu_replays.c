@@ -1038,7 +1038,7 @@ static void mods_click(char* gi)
         return;
     }
     if (!tagpu_hudstate_on() || tagpu_wikistate_refused() || (tagpu_wikiart_done() && (!art || !art->mods))) {
-        _snprintf(text, sizeof text, "The Mods screen needs the Vulkan renderer. You are playing %s. To change mod, "
+        _snprintf(text, sizeof text, "The Mods screen could not start: it draws with the Vulkan renderer. You are playing %s. To change mod, "
                   "edit mod= in impure.cfg and start the game again.", running ? running : folder);
         text[sizeof text - 1] = 0;
         rlog("mods: %s", text);

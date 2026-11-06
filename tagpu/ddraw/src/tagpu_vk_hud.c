@@ -794,6 +794,12 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     if (vkAllocateMemory(d->dev, &mai, NULL, &s_imem) != VK_SUCCESS) return 0;
     if (vkBindBufferMemory(d->dev, s_ibuf, s_imem, 0) != VK_SUCCESS) return 0;
     if (vkMapMemory(d->dev, s_imem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
+    /* A SUCCESS IS NOT A POINTER. MEASURED on Wine 9 on llvmpipe, whose 3D code and allocations take most of the process's 2 GB:
+       with no free run of this size left, the call returned VK_SUCCESS and (void*)-1, and the first instance written faulted. */
+    if (!p || p == (void*)-1) {
+        plog(d, "hud: the instances could not be mapped: the address space has no %u bytes in a row", (unsigned)(IBYTES * d->slots));
+        return 0;
+    }
     s_imap = (unsigned char*)p;
 
     s_nsent = s_sent = 0;
@@ -1163,7 +1169,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     wart = tagpu_wikiart_get();
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d, art, wart)) {
+        /* tagpu_hudrefuse.on: the build fails as it does with no address space left, which no test can arrange on demand */
+        if (GetFileAttributesA("tagpu_hudrefuse.on") != INVALID_FILE_ATTRIBUTES || !build(d, art, wart)) {
             tagpu_vk_hud_down(d);
             s_state = ST_REFUSED;
             tagpu_hudstate_refuse("its pass could not be built");

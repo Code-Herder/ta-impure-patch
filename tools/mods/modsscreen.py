@@ -29,6 +29,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 import runlock  # noqa: E402
 
 TACLI = [sys.executable, str(ROOT / "tools/tacli")]
+# The Vulkan loader maps every driver it finds, about 240 MB of a 32-bit process's 2 GB, and a private display offers only llvmpipe. With
+# them all loaded the screen's pass left a mod's menu with no address space and the process died in llvmpipe (MEASURED: 60 MB free, and
+# gone at the open, twice of twice, under ProTA; 227 MB left with only this one loaded).
+os.environ.setdefault("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/lvp_icd.json")
 CACHE = Path(os.environ.get("TACOMPAT_CACHE", Path.home() / ".local/share/ta-compat")) / "modpack"
 OUT = ROOT / "tmp" / "modsscreen"
 NAME = "mods-screen"
@@ -60,7 +64,9 @@ class Game:
         self.dir = Path(json.loads((INSTANCES / NAME / "instance.json").read_text())["gamedir"])
 
     def launch(self):
-        # --defaults: the store is read and written, as a player's is
+        # --defaults: the store is read and written, as a player's is. The restorer stays off: on llvmpipe, the only device a private
+        # display offers, its self-test and atlas take what the address space has left
+        (self.dir / "tagpu_classicpp.off").write_text("")
         tacli("launch", NAME, "--res", "1280x720", "--defaults", timeout=180)
         self.menu()
 
@@ -312,7 +318,7 @@ def boxes(display):
 
     g = Game(display)
     (g.dir / "tagpu_gdi.on").write_text("")
-    refused(g, "box-gdi", "needs the Vulkan renderer")
+    refused(g, "box-gdi", "draws with the Vulkan renderer")
 
     g = Game(display)
     exe = next(p for p in g.dir.iterdir() if p.name.lower() == "totala.exe")
@@ -321,6 +327,22 @@ def boxes(display):
     exe.unlink()
     exe.write_bytes(d)
     refused(g, "box-exe", "not one Impure knows")
+
+    # the layer refuses after the open: its pass is built at its first use
+    g = Game(display)
+    (g.dir / "tagpu_hudrefuse.on").write_text("")
+    g.launch()
+    tacli("ui", NAME, "click", "MODS")
+    time.sleep(3)
+    s = g.state()
+    report(not s["open"] and not s["holds"], "the pass refused after the open: the screen closed itself and holds nothing")
+    tacli("ui", NAME, "click", "MODS")
+    time.sleep(1)
+    gui = json.loads(tacli("ui", NAME, "--json").stdout).get("gui", "")
+    report(gui.upper().startswith("MSGBOX"), "the next click gets the box")
+    tacli("ui", NAME, "click", "OK")
+    report(g.menu(10), "OK goes back to the menu")
+    tacli("stop", NAME, check=False)
 
 
 def real(display):
@@ -359,14 +381,21 @@ def real(display):
     s = g.settled(lambda s: s["tab"] == 0, 5)
     press(s, "row:0")
     xdo("mousemove", 100, 100)
-    time.sleep(0.4)
-    g.shot("real-pointer")
     from PIL import Image
-    im = Image.open(OUT / "real-pointer.png").convert("RGB")
-    def has_cursor(box):
+    def has_cursor(im, box):
         # the backdrop and the window part are grey and near-black; the cursor sprite is saturated blue
         return any(b > r + 40 for r, g_, b in im.crop(box).getdata())
-    report(has_cursor((95, 95, 125, 130)) and not has_cursor((635, 847, 665, 882)), "the drawn cursor follows the real pointer")
+    def cursor_moved():
+        g.shot("real-pointer")
+        im = Image.open(OUT / "real-pointer.png").convert("RGB")
+        return has_cursor(im, (95, 95, 125, 130)) and not has_cursor(im, (635, 847, 665, 882))
+    # a frame reaches the display when it does: the verdict is on the picture, the deadline only says it never came
+    end = time.time() + 15
+    moved = cursor_moved()
+    while not moved and time.time() < end:
+        time.sleep(0.5)
+        moved = cursor_moved()
+    report(moved, "the drawn cursor follows the real pointer")
     xdo("key", "a")
     s = g.settled(lambda s: s["open"], 2)
     report(s["open"] == 1 and s["holds"] == 1, "a key does nothing to it")
