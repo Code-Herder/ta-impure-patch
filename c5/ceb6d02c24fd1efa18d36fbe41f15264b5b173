@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..c5ceb6d02c24fd1efa18d36fbe41f15264b5b173 findings=1H/8M/10L then 0H/0M/3L on the re-review acted=all but one LOW, named as open in engine-ui.md (a panel debt a repaint could not pay waits for the next repaint) reviewer=ta-reviewer
+compat: tacompat wine full run on 66ca5c91 (99936cc9): 33 meet the goal, 1 known gap, 0 UNEXPECTED of 34; pass-refused and pass-refused-gdi rerun on the final 3252338f (log strings, comments and a harness wait differ): both meet the goal. Windows suite not run.
