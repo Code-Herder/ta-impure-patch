@@ -31,6 +31,8 @@ void modinst_test_step(const char* step, unsigned n);
 #define LOCK           "install.lock"
 #define IO_CHUNK       (256u * 1024u)
 #define WINDOW_LOG_MAX 27               /* 128 MiB: modpack's packages use 4 to 8; a larger frame is refused before it allocates */
+#define CATALOG_LEVER  "tagpu_modcatalog.on"
+#define CATALOG_LEVER_MAX (16u << 20)
 #define RECIPE_MAX     (16u << 20)      /* the recipe's text */
 #define ORIGINALS_MAX  (128u << 20)     /* the recipe's files together, held in memory for the archive writer */
 #define MAX_ARCHIVES   64
@@ -766,9 +768,12 @@ static int install(JOB* j)
         if (!unpack(part, dest, p)) return 0;
         DeleteFileA(part);
     }
-    set_phase(MODINST_RECIPE, 0);
-    if (!run_recipe(j->root, dest, id)) return 0;
-    if (!flush_file(hpi)) return fail("could not finish %s.originals.hpi (error %lu)", id, GetLastError());
+    /* a mutator carries its own files and nothing of the game's, so it has nothing to rebuild */
+    if (!j->m.is_mutator) {
+        set_phase(MODINST_RECIPE, 0);
+        if (!run_recipe(j->root, dest, id)) return 0;
+        if (!flush_file(hpi)) return fail("could not finish %s.originals.hpi (error %lu)", id, GetLastError());
+    }
     STEP("marker", 0);
     if (!write_marker(dest, j->m.version)) return fail("could not finish mods\\%s.new (error %lu)", id, GetLastError());
     return 1;
@@ -896,12 +901,35 @@ int tagpu_modinst_installed(const char* id, char* out, int cap)
 }
 
 #ifndef MODINST_TEST
+/* The first call is DllMain's, on the only thread there is (tagpu_modinst_sweep_at_start), so every later one reads what it set. */
+const char* tagpu_modinst_catalog(size_t* n)
+{
+    static const char* s_text;
+    static size_t s_n;
+    if (!s_text) {
+        char root[MAX_PATH], path[MAX_PATH];
+        char* text = NULL;
+        uint32_t got = 0;
+        size_t npak = 0;
+        const unsigned char* pak;
+        if (game_root(root, sizeof root) && path_of(path, sizeof path, "%s\\" CATALOG_LEVER, root) && is_file(path) &&
+            read_all(path, &text, &got, CATALOG_LEVER_MAX)) {
+            s_text = text;
+            s_n = got;
+            tagpu_logf("modinst: the catalog comes from %s", CATALOG_LEVER);
+        } else if ((pak = tagpu_pak_resource("MODPAK", &npak)) != NULL) {
+            s_text = (const char*)tagpu_pak_file(pak, npak, "catalog.json", &s_n);
+        }
+    }
+    *n = s_text ? s_n : 0;
+    return s_text;
+}
+
 void tagpu_modinst_sweep_at_start(void)
 {
-    size_t npak = 0, ncat = 0;
-    const unsigned char* pak = tagpu_pak_resource("MODPAK", &npak);
-    const unsigned char* cat = pak ? tagpu_pak_file(pak, npak, "catalog.json", &ncat) : NULL;
-    if (cat) tagpu_modinst_sweep((const char*)cat, ncat);
+    size_t ncat = 0;
+    const char* cat = tagpu_modinst_catalog(&ncat);
+    if (cat) tagpu_modinst_sweep(cat, ncat);
 }
 
 void tagpu_modinst_lever(void)
@@ -909,8 +937,8 @@ void tagpu_modinst_lever(void)
     char root[MAX_PATH], path[MAX_PATH], text[600], id[64], base[512], why[200];
     HANDLE f;
     DWORD got = 0;
-    size_t npak = 0, ncat = 0;
-    const unsigned char* pak, *cat;
+    size_t ncat = 0;
+    const char* cat;
 
     if (!game_root(root, sizeof root) || !path_of(path, sizeof path, "%s\\tagpu_modinst.on", root)) return;
     f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -920,9 +948,8 @@ void tagpu_modinst_lever(void)
     text[got] = 0;
     if (!may_act_here()) return;
     if (sscanf(text, "%63s %511s", id, base) != 2) { tagpu_log("modinst: tagpu_modinst.on does not read <id> <base url>"); return; }
-    pak = tagpu_pak_resource("MODPAK", &npak);
-    cat = pak ? tagpu_pak_file(pak, npak, "catalog.json", &ncat) : NULL;
+    cat = tagpu_modinst_catalog(&ncat);
     if (!cat) { tagpu_log("modinst: this DLL holds no catalog"); return; }
-    if (!tagpu_modinst_start((const char*)cat, ncat, id, base, why, sizeof why)) tagpu_logf("modinst: %s: %s", id, why);
+    if (!tagpu_modinst_start(cat, ncat, id, base, why, sizeof why)) tagpu_logf("modinst: %s: %s", id, why);
 }
 #endif

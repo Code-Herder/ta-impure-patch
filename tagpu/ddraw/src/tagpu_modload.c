@@ -14,6 +14,8 @@
 #include "tagpu_refuse.h"
 #include "tagpu_modinst.h"
 #include "tagpu_profiles.h"
+#include "tagpu_modfit.h"
+#include "tagpu_hpi.h"
 #include "zstd.h"
 
 #define PACK_MAX (1u << 20)            /* patches.bin, decompressed: far more than it holds */
@@ -22,6 +24,8 @@
 #define ARCHIVE_CACHE "mods\\archives.cache"
 #define ARCHIVES_MAX 64
 #define ESSENTIAL_ARCHIVE "totala1.hpi"
+#define MUTATORS_MAX 16
+#define FOLDER_BASE "none"              /* the base of a mutator for the folder's own game: a profile's name, and a catalog's word */
 
 /* The engine's sites, DISASSEMBLED 2026-11-05; modpack.py's MOUNT_SITES keeps every table off them. */
 #define VA_MOUNTER   0x4BE0B0u          /* stdcall (name, flag), ret 8; only InitTAHPIAry 0x41D4C0 calls it */
@@ -172,7 +176,7 @@ static int load_pack(void)
     size_t npak = 0, n = 0, got;
     const unsigned char* pak = tagpu_pak_resource("MODPAK", &npak);
     const unsigned char* z = pak ? tagpu_pak_file(pak, npak, "patches.bin", &n) : NULL;
-    s_catalog = pak ? tagpu_pak_file(pak, npak, "catalog.json", &s_ncatalog) : NULL;
+    s_catalog = (const unsigned char*)tagpu_modinst_catalog(&s_ncatalog);
     if (!z || !s_catalog || !(s_blob = malloc(PACK_MAX))) return 0;
     got = ZSTD_decompress(s_blob, PACK_MAX, z, n);
     return !ZSTD_isError(got) && tagpu_modpak_read(s_blob, got, &s_pak);
@@ -225,6 +229,29 @@ static int put_runs(const MODXOR* x, const MODIMG* img)
     return 1;
 }
 
+static void note_catalog_id(void* ctx, const char* id);
+
+typedef struct { char id[64][32]; int n; } IDS;
+static int s_folderMutators;
+
+/* whether the player has switched on any mutator of the folder's own game: only then does a launch without mod= detour the mounter */
+static int folder_wants_mutators(void)
+{
+    IDS ids;
+    size_t n = 0;
+    const char* cat = tagpu_modinst_catalog(&n);
+    int i, want = 0;
+    ids.n = 0;
+    if (!cat) return 0;
+    tagpu_modcat_each_id(cat, n, note_catalog_id, &ids);
+    for (i = 0; i < ids.n && !want; i++) {
+        MODABOUT a;
+        want = tagpu_modcat_about(cat, n, ids.id[i], &a) && a.is_mutator && !strcmp(a.base, FOLDER_BASE) &&
+               tagpu_profiles_mutator_of(FOLDER_BASE, ids.id[i]) == 1;
+    }
+    return want;
+}
+
 void tagpu_modload_begin(void)
 {
     char id[sizeof s_id], path[MAX_PATH], full[MAX_PATH];
@@ -236,7 +263,10 @@ void tagpu_modload_begin(void)
     const MODKNOWN* known = NULL;
     int stock, i, changed;
 
-    if (!tagpu_settings_mod(id, sizeof id)) return;
+    if (!tagpu_settings_mod(id, sizeof id)) {
+        s_folderMutators = folder_wants_mutators();
+        return;
+    }
     /* Any exe that loads a ddraw.dll from this folder loads this one. A file with another name and none of the engine's sites
        is a tool, and the player's mod= is none of its business; TotalA.exe without them is a game no key knows, and refuses. */
     if (!GetModuleFileNameW(NULL, exe_path, MAX_PATH) || !(exe = read_file_w(exe_path, &nexe))) {
@@ -466,12 +496,258 @@ static int is_original_archive(const char* name)
     return a->original;
 }
 
+/* ---- mutators -------------------------------------------------------------------------------------
+
+   THE ENGINE'S DIRECTORY, DISASSEMBLED 2026-11-06 (engine/process.md). OpenHAPIFile 0x4BDD70 reads the archive's header and directory into one
+   block and turns every offset into a pointer (0x4BDF85, 0x4BE010): handle +8 the block, block +8 its size in the file's header, block +0x10
+   the root. A directory is { int count; ENTRY* first }, an entry 9 bytes { char* name; void* child; byte flag }, bit 0 a directory. Lookup
+   0x4BB4E0 and the listing 0x4BC640 walk count entries, and nothing keeps a pointer to an entry across the mount; the prune 0x4BE180 reopens
+   only the FILE*. So taking an entry out of its directory, on the game thread between a mount's return and the next engine call, is the whole
+   of hiding a file. A VALUE IN THE BLOCK IS DATA: each pointer is held inside the block before it is read. */
+#define VA_GFX_PP      0x0051FBD0u      /* the graphics globals: 0x4B6220 returns this; the list and its count below */
+#define GFX_ARC_LIST   0x618
+#define GFX_ARC_COUNT  0x61C
+#define HND_BLOCK      0x08
+#define HND_PATH       0x14
+#define BLOCK_SIZE     0x08
+#define BLOCK_ROOT     0x10
+#define DIR_ENTRY      9
+
+typedef struct { char archive[48]; char path[MODCAT_PATH]; } GONE;
+#define GONE_MAX 1024
+
+/* Written in the first mount call, on the game thread in WinMain, before any thread that reads them exists: a wiki load starts from the shell.
+   Nothing writes them afterwards. */
+static GONE  s_gone[GONE_MAX];
+static int   s_ngone;
+static char  s_mutators[200];           /* what mounted: "name version, name version" */
+static int   s_nmounted;
+static MODMUTATOR s_applied[MUTATORS_MAX];
+
+static void note_catalog_id(void* ctx, const char* id)
+{
+    IDS* ids = (IDS*)ctx;
+    if (ids->n < (int)(sizeof ids->id / sizeof ids->id[0]) && strlen(id) < sizeof ids->id[0]) lstrcpynA(ids->id[ids->n++], id, sizeof ids->id[0]);
+}
+
+static int within(const char* block, uint32_t size, const char* p, uint32_t n)
+{
+    return p >= block && (uint32_t)(p - block) <= size && n <= size - (uint32_t)(p - block);
+}
+
+/* The file `path` out of the engine's directory of a mounted archive: how many entries went. Two of one name both go, as the lookup would
+   otherwise find the first once the later had gone. */
+static int forget_in_engine(char* handle, const char* path)
+{
+    char* block = *(char**)(handle + HND_BLOCK);
+    const uint32_t size = *(const uint32_t*)(block + BLOCK_SIZE);
+    char* dir = *(char**)(block + BLOCK_ROOT);
+    int gone = 0;
+    for (;;) {
+        const char* end = strchr(path, '\\');
+        const size_t len = end ? (size_t)(end - path) : strlen(path);
+        char key[TAGPU_HPI_NAMEMAX];
+        char* entries, *next = NULL;
+        int count, i;
+        if (len >= sizeof key) return gone;
+        memcpy(key, path, len);
+        key[len] = 0;
+        if (!within(block, size, dir, 8)) return gone;
+        count = *(int*)dir;
+        entries = *(char**)(dir + 4);
+        if (count < 0 || (uint32_t)count > size / DIR_ENTRY || !within(block, size, entries, (uint32_t)count * DIR_ENTRY)) return gone;
+        for (i = count - 1; i >= 0; i--) {
+            char* e = entries + (size_t)i * DIR_ENTRY;
+            const char* name = *(char**)e;
+            const uint8_t is_dir = (uint8_t)e[8] & 1;
+            if (!within(block, size, name, 1) || strnlen(name, size - (uint32_t)(name - block)) == size - (uint32_t)(name - block)) continue;
+            if (tagpu_hpi_stricmp(key, name, TAGPU_HPI_NAMEMAX)) continue;
+            if (end) {
+                if (is_dir && !next) next = *(char**)(e + 4);
+            } else if (!is_dir) {
+                memmove(e, e + DIR_ENTRY, (size_t)(count - 1 - i) * DIR_ENTRY);
+                *(int*)dir = --count;
+                gone++;
+            }
+        }
+        if (!end || !next) return gone;
+        dir = next;
+        path = end + 1;
+    }
+}
+
+/* the archive the engine appended last, when it is the one mounted just now: the list is append-only (0x4BE162) */
+static char* last_mounted(const char* path)
+{
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    char* const* list;
+    int n;
+    char* h;
+    size_t a, b;
+    const char* have;
+    if (!gfx || !(list = *(char* const* const*)(gfx + GFX_ARC_LIST)) || (n = *(const int*)(gfx + GFX_ARC_COUNT)) <= 0) return NULL;
+    h = list[n - 1];
+    have = h + HND_PATH;
+    a = strlen(have);
+    b = strlen(path);
+    return a >= b && !lstrcmpiA(have + a - b, path) ? h : NULL;
+}
+
+static void note_gone(const char* archive, const char* path)
+{
+    if (s_ngone >= GONE_MAX) return;
+    lstrcpynA(s_gone[s_ngone].archive, archive, sizeof s_gone[0].archive);
+    lstrcpynA(s_gone[s_ngone].path, path, sizeof s_gone[0].path);
+    s_ngone++;
+}
+
+static int file_off(void* base, const char* path)
+{
+    return tagpu_profiles_file_of((const char*)base, path) == 0;
+}
+
+/* a file.<path> key no mutator of this base now holds: ignored, and said */
+static void note_file_key(void* ctx, const char* path)
+{
+    const char* base = (const char*)ctx;
+    int i, k;
+    size_t n = 0;
+    const char* cat = tagpu_modinst_catalog(&n);
+    IDS ids;
+    ids.n = 0;
+    if (cat) tagpu_modcat_each_id(cat, n, note_catalog_id, &ids);
+    for (i = 0; i < ids.n; i++) {
+        MODMUTATOR m;
+        int hit = 0;
+        if (!tagpu_modcat_mutator(cat, n, ids.id[i], &m)) continue;
+        if (!strcmp(m.base, base)) {
+            for (k = 0; k < m.nfiles && !hit; k++) hit = tagpu_modcat_same_path(m.files[k].path, path);
+            for (k = 0; k < m.nhides && !hit; k++) hit = tagpu_modcat_same_path(m.hides[k], path);
+        }
+        tagpu_modcat_mutator_free(&m);
+        if (hit) return;
+    }
+    tagpu_logf("modload: file.%s names no file of a mutator of %s; ignored", path, base);
+}
+
+/* The archives the mount would take for this base, for the fit: the same rule as mount_filtered's, the originals alone under a mod. */
+static int mount_names(const char* base, char (*names)[MODFIT_NAME], int max)
+{
+    int n = tagpu_modfit_folder(names, max), i, kept = 0;
+    if (!strcmp(base, FOLDER_BASE)) return n;
+    for (i = 0; i < n; i++)
+        if (is_original_archive(names[i]) > 0) {
+            if (kept != i) memcpy(names[kept], names[i], MODFIT_NAME);
+            kept++;
+        }
+    return kept;
+}
+
+/* Ahead of everything the base mounts, in the catalog's order. A switched-on mutator that does not fit stays off for this start: the
+   file-by-file check runs again here because a base can have been updated at this very start (tagpu_modinst_sweep), and the screen only says what
+   this will do. */
+static void mount_mutators(const char* base)
+{
+    static char names[MODFIT_ARCS][MODFIT_NAME];
+    size_t ncat = 0;
+    const char* cat = tagpu_modinst_catalog(&ncat);
+    IDS ids;
+    MODFIT* fit = NULL;
+    int i, k, nnames = 0;
+    ids.n = 0;
+    if (!cat) return;
+    tagpu_modcat_each_id(cat, ncat, note_catalog_id, &ids);
+    for (i = 0; i < ids.n; i++) {
+        MODMUTATOR m;
+        MODABOUT about;
+        char path[MAX_PATH], archive[48], version[32], stale[8][MODCAT_PATH];
+        const char* why = NULL;
+        int total;
+        if (!tagpu_modcat_mutator(cat, ncat, ids.id[i], &m)) continue;
+        if (strcmp(m.base, base) || tagpu_profiles_mutator_of(base, m.id) != 1) { tagpu_modcat_mutator_free(&m); continue; }
+        if (!tagpu_modinst_installed(m.id, version, sizeof version)) {
+            tagpu_logf("modload: mutator %s is switched on and not installed", m.id);
+            tagpu_modcat_mutator_free(&m);
+            continue;
+        }
+        if (!fit) {
+            nnames = mount_names(base, names, MODFIT_ARCS);
+            fit = tagpu_modfit_open(base, (const char (*)[MODFIT_NAME])names, nnames);
+        }
+        total = fit ? tagpu_modcat_stale(&m, tagpu_modfit_hash, fit, stale, 8) : 1;
+        if (!fit) lstrcpynA(stale[0], "?", sizeof stale[0]);
+        why = tagpu_modcat_stale_live(stale, total, 8, file_off, (void*)base);
+        if (why) {
+            tagpu_logf("modload: not mounted mutator %s: %s differs from the file it was built on", m.id, why);
+            tagpu_modcat_mutator_free(&m);
+            continue;
+        }
+        for (k = 0; k < s_nmounted && !why; k++) {
+            if ((why = tagpu_modcat_clash(&m, &s_applied[k], file_off, (void*)base)) != NULL)
+                tagpu_logf("modload: not mounted mutator %s: %s is %s's too", m.id, why, s_applied[k].id);
+        }
+        if (why) { tagpu_modcat_mutator_free(&m); continue; }
+
+        snprintf(path, sizeof path, "mods\%s\%s.hpi", m.id, m.id);
+        snprintf(archive, sizeof archive, "%s.hpi", m.id);
+        if (s_nmounted >= MUTATORS_MAX || !s_mountReal(path, 1)) {
+            tagpu_logf("modload: mutator %s does not open", m.id);
+            tagpu_modcat_mutator_free(&m);
+            continue;
+        }
+        {
+            char* h = last_mounted(path);
+            for (k = 0; k < m.nfiles; k++)
+                if (file_off((void*)base, m.files[k].path)) {
+                    tagpu_logf("modload: %s: %s is switched off, %d entries", m.id, m.files[k].path, h ? forget_in_engine(h, m.files[k].path) : 0);
+                    note_gone(archive, m.files[k].path);
+                }
+        }
+        if (tagpu_modcat_about(cat, ncat, m.id, &about)) {
+            size_t at = strlen(s_mutators);
+            snprintf(s_mutators + at, sizeof s_mutators - at, "%s%s %s", at ? ", " : "", about.name, version);
+        }
+        tagpu_logf("modload: mounted mutator %s %s: %d files, %d hides", m.id, version, m.nfiles, m.nhides);
+        s_applied[s_nmounted++] = m;    /* the table keeps its arrays */
+    }
+    if (fit) tagpu_modfit_close(fit);
+    tagpu_profiles_each_file(base, note_file_key, (void*)base);
+}
+
+/* What the mounted mutators hide from the base's own archives, right after each has mounted; a later source answers the path. */
+static void apply_hides(const char* path, const char* archive)
+{
+    char* h = last_mounted(path);
+    int i, k;
+    if (!h) return;
+    for (i = 0; i < s_nmounted; i++)
+        for (k = 0; k < s_applied[i].nhides; k++) {
+            const char* p = s_applied[i].hides[k];
+            if (file_off(s_id, p)) continue;
+            tagpu_logf("modload: %s hides %s from %s: %d entries", s_applied[i].id, p, archive, forget_in_engine(h, p));
+            note_gone(archive, p);
+        }
+}
+
+const char* tagpu_modload_mutators(void)
+{
+    return s_mutators;
+}
+
+void tagpu_modload_each_gone(void (*fn)(void* ctx, const char* archive, const char* path), void* ctx)
+{
+    int i;
+    for (i = 0; i < s_ngone; i++) fn(ctx, s_gone[i].archive, s_gone[i].path);
+}
+
 static int __stdcall mount_filtered(const char* name, int flag)
 {
     const char* base = name, *p;
     if (!s_ours) {
-        char path[MAX_PATH];
+        char path[MAX_PATH], arch[48];
         s_ours = 1;
+        mount_mutators(s_id[0] ? s_id : FOLDER_BASE);
+        if (!s_id[0]) return s_mountReal(name, flag);
         /* The list is append-only (0x4BE162), so this call, the first, is what puts them ahead of everything. Flag 1 is what
            the mods' own first pattern passes. A package that does not open would leave the mod's exe on retail's data. */
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", s_id, s_id);
@@ -479,17 +755,22 @@ static int __stdcall mount_filtered(const char* name, int flag)
             refuse("%s does not open: install the mod again", path);
             box_and_exit();
         }
+        snprintf(arch, sizeof arch, "%s.hpi", s_id);
+        apply_hides(path, arch);
         snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", s_id, s_id);
         if (!s_mountReal(path, 1)) {
             refuse("%s does not open: install the mod again", path);
             box_and_exit();
         }
+        snprintf(arch, sizeof arch, "%s.originals.hpi", s_id);
+        apply_hides(path, arch);
         tagpu_logf("modload: mounted mods\\%s\\%s.hpi and its originals", s_id, s_id);
         if (!exists(ESSENTIAL_ARCHIVE)) {
             refuse("this folder has no %s, so this copy of the game cannot run mods", ESSENTIAL_ARCHIVE);
             box_and_exit();
         }
     }
+    if (!s_id[0]) return s_mountReal(name, flag);
     for (p = name; *p; p++) if (*p == '\\' || *p == '/' || *p == ':') base = p + 1;
     if (lstrcmpiA(base, IMPURE_UFO)) {
         static char seen[ARCHIVES_MAX][64];
@@ -720,7 +1001,12 @@ void tagpu_modload_end(void)
     unsigned char jump[5] = { 0xE9 };
     unsigned rel;
     int s;
-    if (!s_id[0]) return;
+    if (!s_id[0]) {
+        /* a launch with no mod takes the detour only for mutators the player switched on; a patched exe keeps its own game */
+        if (s_folderMutators && tagpu_modload_is_game() && !install_mount())
+            tagpu_log("modload: this exe's archive code is not what Impure expects, so no mutator of the folder's game mounts");
+        return;
+    }
     if (!s_refusal[0]) {
         if (s_loader && !put_runs(s_xor, &s_target)) refuse("the mod's patch could not be written (%lu)", GetLastError());
         if (!s_refusal[0] && !install_mount()) refuse("the engine's archive code is not what Impure expects");

@@ -15,6 +15,7 @@
                                            largest is under 1 MB */
 #define EF_DIR      0x01u
 #define EF_SHADOW   0x02u
+#define EF_GONE     0x04u
 
 typedef struct {
     uint32_t name;          /* the name's offset in the decrypted directory copy                 */
@@ -271,7 +272,7 @@ int tagpu_hpi_lookup(const TAGPU_HPI* a, int dir, const char* name, size_t len)
     key[len] = 0;
     for (i = n - 1; i >= 0; i--) {
         const int c = tagpu_hpi_child(a, dir, i);
-        if (!tagpu_hpi_stricmp(key, tagpu_hpi_name(a, c), TAGPU_HPI_NAMEMAX)) return c;
+        if (!(a->ent[c].flag & EF_GONE) && !tagpu_hpi_stricmp(key, tagpu_hpi_name(a, c), TAGPU_HPI_NAMEMAX)) return c;
     }
     return -1;
 }
@@ -289,6 +290,16 @@ int tagpu_hpi_find(const TAGPU_HPI* a, const char* path)
         if (!tagpu_hpi_is_dir(a, at)) return -1;
         p = end + 1;
     }
+}
+
+int tagpu_hpi_forget(TAGPU_HPI* a, const char* path)
+{
+    int e, any = 0;
+    while ((e = tagpu_hpi_find(a, path)) > 0 && !tagpu_hpi_is_dir(a, e)) {     /* of two of one name, the lookup finds the later */
+        a->ent[e].flag |= EF_GONE | EF_SHADOW;
+        any = 1;
+    }
+    return any;
 }
 
 /* ---- the data ----------------------------------------------------------------------------- */

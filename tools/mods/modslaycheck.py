@@ -61,7 +61,8 @@ CASES = (
        ("manage", (1920, 1080), {"held": "act:2"}), ("manage", (1920, 1080), {"held": "row:3"}), ("manage", (1920, 1080), {"held": "opt:0:-"}),
        ("manage", (1920, 1080), {"held": "opt:2:t"}), ("manage", (2560, 1440), {"held": "reset:0"}), ("manage", (2560, 1440), {"held": "swreset:3"}),
        ("manage", (2560, 1440), {"held": "sw:4"}), ("manage", (3840, 2160), {"held": "back"}), ("explore", (1920, 1080), {"held": "act:0"}),
-       ("updates", (1920, 1080), {"held": "updateall"})]
+       ("updates", (1920, 1080), {"held": "updateall"}),
+       ("mutators", (1920, 1080), {}), ("mutators", (1920, 1080), {"held": "act:5"}), ("mutators", (2560, 1440), {"held": "sw:1"})]
 )
 # the panels, in the order of MODSPAGE.scroll
 SCROLLS = {"list": "#list", "detail": "#detail"}

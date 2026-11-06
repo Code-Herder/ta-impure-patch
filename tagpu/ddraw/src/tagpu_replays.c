@@ -191,7 +191,7 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 /* The generation of index.dat's `I` fields: bump it whenever this table's names or archive
    patterns change, or the rule that derives the `I` fields from a recording does (mod_of,
    info_read). A line of another generation is read again from its recording. */
-#define INFO_GEN 1
+#define INFO_GEN 2
 
 typedef struct {
     const char* name;
@@ -1079,7 +1079,7 @@ static void __stdcall mm_oncommand(void* gi)
    favourite flag, the last time a recording was played, its bookmarks and Watch's refusal. One
    line per recording, keyed by its file name and its root key:
      name size key started format start last end fav played map nseats seat... marks
-       I<gen> version modprint has_modprint archives mod result,commander,defeat...
+       I<gen> version modprint has_modprint archives mod mutators result,commander,defeat...
        L code modprint buildkey a b                                         (tab-separated)
    THE KEY (ent_refresh). `key` is recr_root_key's, the root header block's crc_body and crc_head
    as sixteen hex digits, which the file keeps for its whole life while every playing's end grows
@@ -1125,6 +1125,7 @@ typedef struct {
     char     version[VERSION_MAX + 1];
     unsigned modprint, has_modprint, archives;
     char     mod[MOD_NAME_MAX];             /* an s_mods name                                 */
+    char     mutators[120];                 /* what it was recorded with, name and version    */
     unsigned char result[REC_PLAYERS];      /* RecResult, in the seats' order, as name[]      */
     unsigned cmdr[REC_PLAYERS], defeat[REC_PLAYERS];
     unsigned lock, lock_print, lock_build, lock_a, lock_b;     /* THE LOCK; lock 0: none   */
@@ -1233,20 +1234,22 @@ static int info_parse(char** f, int n, Ent* e)
     gen = strtoul(f[0] + 1, &end, 10);
     if (*end) return 0;
     if (gen != INFO_GEN) return 6 + (int)e->nseats;
+    if (n < 7 + (int)e->nseats) return 0;
     lstrcpynA(e->version, f[1], sizeof e->version);
     e->modprint = strtoul(f[2], NULL, 16);
     e->has_modprint = strtoul(f[3], NULL, 10) ? 1 : 0;
     e->archives = strtoul(f[4], NULL, 10);
     lstrcpynA(e->mod, f[5], sizeof e->mod);
+    lstrcpynA(e->mutators, f[6], sizeof e->mutators);
     for (i = 0; i < (int)e->nseats; i++) {
         unsigned r = 0, c = 0, d = 0;
-        sscanf(f[6 + i], "%u,%u,%u", &r, &c, &d);
+        sscanf(f[7 + i], "%u,%u,%u", &r, &c, &d);
         e->result[i] = (unsigned char)(r <= REC_RESULT_LOST ? r : REC_RESULT_UNKNOWN);
         e->cmdr[i] = c;
         e->defeat[i] = d;
     }
     e->info = 1;
-    return 6 + (int)e->nseats;
+    return 7 + (int)e->nseats;
 }
 
 /* the `L` fields from f[0] (`L` itself) on, `n` of them */
@@ -1546,11 +1549,13 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
     at = gput(b, cap, at, "\t");
     for (i = 0; i < e->nmarks; i++) at = gput(b, cap, at, i ? ",%u" : "%u", e->marks[i]);
     if (e->info) {
-        char v[sizeof e->version];
+        char v[sizeof e->version], mu[sizeof e->mutators];
         lstrcpynA(v, e->version, sizeof v);
         sanitize(v);
-        at = gput(b, cap, at, "\tI%u\t%s\t%08X\t%u\t%u\t%s", INFO_GEN, v, e->modprint,
-                  e->has_modprint, e->archives, e->mod);
+        lstrcpynA(mu, e->mutators, sizeof mu);
+        sanitize(mu);
+        at = gput(b, cap, at, "\tI%u\t%s\t%08X\t%u\t%u\t%s\t%s", INFO_GEN, v, e->modprint,
+                  e->has_modprint, e->archives, e->mod, mu);
         for (i = 0; i < e->nseats; i++)
             at = gput(b, cap, at, "\t%u,%u,%u", e->result[i], e->cmdr[i], e->defeat[i]);
     }
@@ -1894,7 +1899,7 @@ static void info_read(Ent* e)
     char path[MAX_PATH], why[160];
     unsigned i, k = 0;
     e->info = 1;
-    e->version[0] = e->mod[0] = 0;
+    e->version[0] = e->mod[0] = e->mutators[0] = 0;
     e->modprint = e->has_modprint = e->archives = 0;
     memset(e->result, REC_RESULT_UNKNOWN, sizeof e->result);
     memset(e->cmdr, 0, sizeof e->cmdr);
@@ -1912,6 +1917,7 @@ static void info_read(Ent* e)
     e->has_modprint = s_info.has_modprint ? 1 : 0;
     e->archives = s_info.archives;
     lstrcpynA(e->mod, mod_of(&s_info), sizeof e->mod);
+    lstrcpynA(e->mutators, s_info.mutators, sizeof e->mutators);
     /* the header names its seats in record order (RT_PLAYER), the order of name[]: the k-th
        record present is the k-th seat. BOUND: k below the seats the summary read. */
     for (i = 0; i < REC_PLAYERS && k < e->nseats; i++) {
@@ -2574,10 +2580,16 @@ static void mod_lines(char* gi, const Ent* e)
     const char* title = "";
     const char* hint = lock_text(e);
     int named = e && e->info && e->mod[0];
-    if (!hint)
-        hint = named && e->has_modprint && e->modprint != s_runPrint
-               ? "The installed archives differ." : "";
-    set_label(gi, "MODHINT", "%s", hint);
+    const char* mine = tagpu_modload_mutators();
+    /* the words stop at the label's bound: the versions come first, as what a player compares */
+    if (!hint && named && e->has_modprint && e->modprint != s_runPrint && strcmp(e->mutators, mine))
+        set_label(gi, "MODHINT", "Recorded with %s. You have %s.", e->mutators[0] ? e->mutators : "no mutators", mine[0] ? mine : "none");
+    else {
+        if (!hint)
+            hint = named && e->has_modprint && e->modprint != s_runPrint
+                   ? "The installed archives differ." : "";
+        set_label(gi, "MODHINT", "%s", hint);
+    }
     if (!named) {
         set_label(gi, "MODLINE", "");
         return;

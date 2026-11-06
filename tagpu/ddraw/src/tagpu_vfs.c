@@ -262,6 +262,15 @@ static int source_kind(const TAGPU_VFS* v, const char* rel, uint32_t* size)
     return v->closed && v->closed(rel) ? 0 : loose_kind(v, rel, size);
 }
 
+void tagpu_vfs_forget(void* vv, const char* archive, const char* path)
+{
+    TAGPU_VFS* v = (TAGPU_VFS*)vv;
+    int i;
+    for (i = 0; v && i < v->narc; i++)
+        if (v->arc[i].hpi && !tagpu_hpi_stricmp(tagpu_vfs_arc_name(v, i), archive, TAGPU_VFS_PATHMAX))
+            tagpu_hpi_forget(v->arc[i].hpi, path);
+}
+
 void tagpu_vfs_close_loose(TAGPU_VFS* v, int (*closed)(const char* path))
 {
     if (v) v->closed = closed;

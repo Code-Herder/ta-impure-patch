@@ -18,12 +18,14 @@
 #include "tagpu_restore_guard.h"
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
+#include "tagpu_modfit.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
 
 #define MAX_MOD      (MODS_MAXROW - 1)    /* the first row of Manage is the folder */
 #define FOLDER       (-1)                 /* a row's mod: this folder's own */
 #define NONE         (-2)
+#define STALE_MAX    8
 #define BASE_LEVER   "tagpu_modbase.on"
 #define WHEEL_UNITS  24.0f
 #define PAGE_UNITS   120.0f
@@ -36,6 +38,13 @@ typedef struct {
     char     installed[32];     /* what mods\<id>\ holds, "" nothing */
     uint8_t  ready;             /* an install finished this session: at the next start it is the live folder */
     char     failed[200];       /* its last install's reason */
+    int        has_mut;         /* a mutator whose entry reads: `mut` below */
+    MODMUTATOR mut;
+    int        base;            /* a mutator's base: FOLDER, a mod's index, NONE no such mod */
+    uint8_t    on;              /* mutator.<id> */
+    uint8_t*   off;             /* file.<path> has it off: its files, then its hides */
+    int        nstale;          /* -1 until the fit has answered */
+    char       stale[STALE_MAX][MODCAT_PATH];
 } ENTRY;
 
 /* ---- what crosses --------------------------------------------------------------------------- */
@@ -113,6 +122,135 @@ static void scan_start(void)
 
 static void take_map(void);
 
+/* ---- the fit -------------------------------------------------------------------------------------
+
+   THE FILES OF A BASE ARE READ AND HASHED OFF THE GAME THREAD. The thread starts only once the scan has ended, so s_arc holds still, and works on what it
+   has by value: the entries' parsed `mut`, which load_mods sets once, and `want`, taken when it starts. It answers in s_fitOut, which the game thread
+   reads once s_fitState says done. The answer is what the screen says; the mount checks again at the next start (mount_mutators). */
+static volatile LONG s_fitState;        /* 0 idle, 1 running, 2 an answer waits */
+static int           s_fitDirty;
+static struct { uint8_t want; int nstale; char stale[STALE_MAX][MODCAT_PATH]; } s_fitOut[MAX_MOD];
+
+static DWORD WINAPI fit_thread(void* arg)
+{
+    static char folder[MODFIT_ARCS][MODFIT_NAME], ours[MODFIT_ARCS][MODFIT_NAME];
+    const int nfolder = tagpu_modfit_folder(folder, MODFIT_ARCS);
+    int m, i;
+    (void)arg;
+    for (i = 0; i < s_narc && i < MODFIT_ARCS; i++) lstrcpynA(ours[i], s_arc[i], MODFIT_NAME);
+    for (m = 0; m < MAX_MOD; m++) {
+        const ENTRY* e = &s_mod[m];
+        MODFIT* f;
+        if (!s_fitOut[m].want) continue;
+        f = !strcmp(e->mut.base, "none") ? tagpu_modfit_open(e->mut.base, (const char (*)[MODFIT_NAME])folder, nfolder)
+                                         : tagpu_modfit_open(e->mut.base, (const char (*)[MODFIT_NAME])ours, i);
+        s_fitOut[m].nstale = f ? tagpu_modcat_stale(&e->mut, tagpu_modfit_hash, f, s_fitOut[m].stale, STALE_MAX) : 0;
+        tagpu_modfit_close(f);
+    }
+    InterlockedExchange(&s_fitState, 2);
+    return 0;
+}
+
+static void fit_start(void)
+{
+    HANDLE t;
+    int m, any = 0;
+    s_fitDirty = 0;
+    for (m = 0; m < s_nmod; m++) {
+        const ENTRY* e = &s_mod[m];
+        /* a base not installed has no file to compare; it is not listed either */
+        const int ask = e->has_mut && (e->base == FOLDER || (e->base >= 0 && s_mod[e->base].installed[0]));
+        s_fitOut[m].want = (uint8_t)ask;
+        s_fitOut[m].nstale = 0;
+        any |= ask;
+    }
+    if (!any) {
+        for (m = 0; m < s_nmod; m++) s_mod[m].nstale = 0;
+        return;
+    }
+    InterlockedExchange(&s_fitState, 1);
+    t = CreateThread(NULL, 0, fit_thread, NULL, 0, NULL);
+    if (t) CloseHandle(t);
+    else InterlockedExchange(&s_fitState, 2);    /* no verdict to give: the mount still checks */
+}
+
+static void fit_take(void)
+{
+    int m;
+    for (m = 0; m < s_nmod; m++) {
+        s_mod[m].nstale = s_fitOut[m].nstale;
+        memcpy(s_mod[m].stale, s_fitOut[m].stale, sizeof s_mod[m].stale);
+    }
+    InterlockedExchange(&s_fitState, 0);
+    s_paneStale = 1;
+}
+
+/* ---- what the player has switched --------------------------------------------------------------- */
+
+static const char* base_id_of(const ENTRY* e)
+{
+    return e->mut.base;
+}
+
+static void load_switches(void)
+{
+    int m, i;
+    for (m = 0; m < s_nmod; m++) {
+        ENTRY* e = &s_mod[m];
+        if (!e->has_mut) continue;
+        e->on = tagpu_profiles_mutator_of(base_id_of(e), e->id) == 1;
+        for (i = 0; i < e->mut.nfiles; i++) e->off[i] = tagpu_profiles_file_of(base_id_of(e), e->mut.files[i].path) == 0;
+        for (i = 0; i < e->mut.nhides; i++) e->off[e->mut.nfiles + i] = tagpu_profiles_file_of(base_id_of(e), e->mut.hides[i]) == 0;
+    }
+}
+
+/* MODCAT_OFF over the entries: a key names a path of one base, so any mutator of that base that holds the path says. ctx: the base's index. */
+static int path_off(void* ctx, const char* path)
+{
+    const int base = (int)(intptr_t)ctx;
+    int m, i;
+    for (m = 0; m < s_nmod; m++) {
+        const ENTRY* e = &s_mod[m];
+        if (!e->has_mut || e->base != base) continue;
+        for (i = 0; i < e->mut.nfiles; i++) if (tagpu_modcat_same_path(e->mut.files[i].path, path)) return e->off[i];
+        for (i = 0; i < e->mut.nhides; i++) if (tagpu_modcat_same_path(e->mut.hides[i], path)) return e->off[e->mut.nfiles + i];
+    }
+    return 0;
+}
+
+static const char* stale_path(int m)
+{
+    ENTRY* e = &s_mod[m];
+    return e->nstale > 0 ? tagpu_modcat_stale_live(e->stale, e->nstale, STALE_MAX, path_off, (void*)(intptr_t)e->base) : NULL;
+}
+
+enum { FIT_UNKNOWN, FIT_OK, FIT_STALE, FIT_CLASH };
+
+static const char* mod_name(int m);
+
+/* What a mutator is now, as the mount will find it: an earlier switched-on one that fits keeps its files, a later one gives way, and
+   one not on gives way to any. `why`, a sentence for the pane. */
+static int verdict(int m, char* why, size_t cap)
+{
+    const ENTRY* e = &s_mod[m];
+    const char* p;
+    int k;
+    if (e->nstale < 0) return FIT_UNKNOWN;
+    if ((p = stale_path(m)) != NULL) {
+        snprintf(why, cap, "Needs an update for %s: %s differs from the file it was built on.", mod_name(e->base), p);
+        return FIT_STALE;
+    }
+    for (k = 0; k < s_nmod; k++) {
+        const ENTRY* o = &s_mod[k];
+        if (k == m || !o->has_mut || o->base != e->base || !o->on || !o->installed[0] || (e->on && k > m) || stale_path(k)) continue;
+        if ((p = tagpu_modcat_clash(&e->mut, &o->mut, path_off, (void*)(intptr_t)e->base)) != NULL) {
+            snprintf(why, cap, "%s is also %s's. Only one of them can be on.", p, o->about.name);
+            return FIT_CLASH;
+        }
+    }
+    return FIT_OK;
+}
+
 /* ---- the page -------------------------------------------------------------------------------- */
 
 static void text(char* out, size_t cap, const char* fmt, const char* a, const char* b)
@@ -124,6 +262,11 @@ static const char* mod_name(int m)
 {
     if (m == FOLDER) return "This folder";
     return m >= 0 && m < s_nmod ? s_mod[m].about.name : "";
+}
+
+static int is_mutator(int m)
+{
+    return m >= 0 && m < s_nmod && s_mod[m].about.is_mutator;
 }
 
 static int has_update(const ENTRY* e)
@@ -174,10 +317,46 @@ static MODSROW* add_row(int mod, const char* name, const char* detail)
     return r;
 }
 
+/* a running install's bar and word over a row's detail */
+static void row_progress(MODSROW* r, int m)
+{
+    if (r && is_active_install(m)) {
+        int p;
+        const char* w = install_words(&p);
+        r->act = MODS_ACT_BUSY;
+        r->progress = (int16_t)p;
+        lstrcpynA(r->detail, w, sizeof r->detail);
+    }
+}
+
+/* A mutator on Manage: its check, unless it cannot go on. One already on keeps its check, or a player could not turn it off. */
+static void mutator_row(int m)
+{
+    const ENTRY* e = &s_mod[m];
+    char detail[sizeof s_page.row[0].detail], why[200];
+    MODSROW* r;
+    int v;
+    if (!e->has_mut || !(e->installed[0] || e->ready)) return;
+    v = verdict(m, why, sizeof why);
+    if (v == FIT_UNKNOWN) lstrcpynA(detail, "Checking its files", sizeof detail);
+    else text(detail, sizeof detail, "Mutator, version %s", e->ready ? e->about.version : e->installed, "");
+    if (!(r = add_row(m, e->about.name, detail))) return;
+    r->act = e->on ? MODS_ACT_CHECK_ON : v == FIT_OK ? MODS_ACT_CHECK : MODS_ACT_NONE;
+    if (v == FIT_STALE) row_badge(r, MODS_BADGE_GREY, "Stale");
+    else if (v == FIT_CLASH) row_badge(r, MODS_BADGE_CONFLICT, "Conflict");
+    row_progress(r, m);
+}
+
+static void mutator_rows_of(int base)
+{
+    int m;
+    for (m = 0; m < s_nmod; m++) if (s_mod[m].has_mut && s_mod[m].base == base) mutator_row(m);
+}
+
 static void build_rows(void)
 {
     int m;
-    char detail[sizeof s_page.row[0].detail];
+    char detail[sizeof s_page.row[0].detail], why[200];
     s_page.nrow = 0;
     s_page.empty[0] = 0;
     if (s_tab == MODS_TAB_MANAGE) {
@@ -185,12 +364,14 @@ static void build_rows(void)
         if (r) {
             r->act = s_chosen == FOLDER ? MODS_ACT_RADIO_ON : MODS_ACT_RADIO;
             if (s_running == FOLDER) row_badge(r, MODS_BADGE_ACTIVE, "Active");
+            if (s_chosen == FOLDER) mutator_rows_of(FOLDER);
         }
     }
     for (m = 0; m < s_nmod; m++) {
         const ENTRY* e = &s_mod[m];
         const int have = e->installed[0] || e->ready;
         MODSROW* r = NULL;
+        if (e->about.is_mutator) continue;
         if (s_tab == MODS_TAB_MANAGE && have) {
             text(detail, sizeof detail, "Version %s", e->ready ? e->about.version : e->installed, "");
             if ((r = add_row(m, e->about.name, detail)) != NULL) {
@@ -198,6 +379,9 @@ static void build_rows(void)
                 if (s_running == m) row_badge(r, MODS_BADGE_ACTIVE, "Active");
                 else if (has_update(e)) row_badge(r, MODS_BADGE_UPDATE, "Update");
             }
+            row_progress(r, m);
+            if (r && s_chosen == m) mutator_rows_of(m);
+            continue;
         } else if (s_tab == MODS_TAB_EXPLORE && !have) {
             text(detail, sizeof detail, "Version %s", e->about.version, "");
             if ((r = add_row(m, e->about.name, detail)) != NULL) r->act = MODS_ACT_INSTALL;
@@ -208,13 +392,28 @@ static void build_rows(void)
                 row_badge(r, MODS_BADGE_UPDATE, "Update");
             }
         }
-        if (r && is_active_install(m)) {
-            int p;
-            const char* w = install_words(&p);
-            r->act = MODS_ACT_BUSY;
-            r->progress = (int16_t)p;
-            lstrcpynA(r->detail, w, sizeof r->detail);
+        row_progress(r, m);
+    }
+    /* A mutator lists only under its base: on Explore, for the base chosen; on Updates, whichever base it has. */
+    for (m = 0; m < s_nmod; m++) {
+        const ENTRY* e = &s_mod[m];
+        const int have = e->installed[0] || e->ready;
+        MODSROW* r = NULL;
+        if (!e->has_mut) continue;
+        if (s_tab == MODS_TAB_EXPLORE && !have && e->base == s_chosen) {
+            text(detail, sizeof detail, "For %s", mod_name(e->base), "");
+            if ((r = add_row(m, e->about.name, detail)) != NULL) r->act = MODS_ACT_INSTALL;
+        } else if (s_tab == MODS_TAB_UPDATES && has_update(e)) {
+            text(detail, sizeof detail, "%s, now %s", e->installed, e->about.version);
+            if ((r = add_row(m, e->about.name, detail)) != NULL) {
+                r->act = MODS_ACT_UPDATE;
+                row_badge(r, MODS_BADGE_UPDATE, "Update");
+            }
+        } else if (s_tab == MODS_TAB_UPDATES && have && verdict(m, why, sizeof why) == FIT_STALE) {
+            text(detail, sizeof detail, "Needs an update for %s", mod_name(e->base), "");
+            if ((r = add_row(m, e->about.name, detail)) != NULL) row_badge(r, MODS_BADGE_GREY, "Stale");
         }
+        row_progress(r, m);
     }
     if (!s_page.nrow) {
         if (s_tab == MODS_TAB_EXPLORE) lstrcpynA(s_page.empty, "Every mod Impure knows is installed.", sizeof s_page.empty);
@@ -244,6 +443,7 @@ static void add_opt(const char* label, int kind, int on, const char* value, int 
 static int rules_of(int mod, MODRULES* r, const char** id)
 {
     memset(r, 0, sizeof *r);
+    if (is_mutator(mod)) return 0;
     if (mod == FOLDER) {
         const TagpuResourcePolicy* p;
         if (s_running != FOLDER) return 0;
@@ -292,6 +492,21 @@ static void build_switches(int mod)
 {
     int i;
     s_page.nsw = 0;
+    lstrcpynA(s_page.sw_head, "Game archives", sizeof s_page.sw_head);
+    if (mod >= 0 && s_mod[mod].has_mut) {
+        const ENTRY* e = &s_mod[mod];
+        const int all = e->mut.nfiles + e->mut.nhides;
+        lstrcpynA(s_page.sw_head, "Files", sizeof s_page.sw_head);
+        for (i = 0; i < all && s_page.nsw < MODS_MAXSW; i++) {
+            MODSSWITCH* w = &s_page.sw[s_page.nsw++];
+            memset(w, 0, sizeof *w);
+            if (i < e->mut.nfiles) lstrcpynA(w->name, e->mut.files[i].path, sizeof w->name);
+            else snprintf(w->name, sizeof w->name, "Hides %s", e->mut.hides[i - e->mut.nfiles]);
+            w->on = (uint8_t)!e->off[i];
+            w->changed = e->off[i];
+        }
+        return;
+    }
     if (mod < 0 || !s_scanDone) return;
     for (i = 0; i < s_narc && s_page.nsw < MODS_MAXSW; i++) {
         MODSSWITCH* w = &s_page.sw[s_page.nsw++];
@@ -335,6 +550,13 @@ static void build_pane(void)
         if (e->failed[0]) lstrcpynA(s_page.note, e->failed, sizeof s_page.note);
         else if (e->ready) lstrcpynA(s_page.note, "Installed. It takes effect when the game next starts.", sizeof s_page.note);
     }
+    if (m >= 0 && s_mod[m].has_mut && !s_page.note[0]) {
+        const ENTRY* e = &s_mod[m];
+        char why[200];
+        const int all = e->mut.nfiles + e->mut.nhides;
+        if (verdict(m, why, sizeof why) >= FIT_STALE) lstrcpynA(s_page.note, why, sizeof s_page.note);
+        else if (all > MODS_MAXSW) snprintf(s_page.note, sizeof s_page.note, "Lists the first %d of its %d files.", MODS_MAXSW, all);
+    }
     if (s_note[0]) lstrcpynA(s_page.note, s_note, sizeof s_page.note);
     build_options(m);
     if (m >= 0 && (s_mod[m].installed[0] || s_mod[m].ready)) build_switches(m);
@@ -369,7 +591,9 @@ static void note_shape(void)
 static void publish(void)
 {
     int updates = 0, i;
-    for (i = 0; i < s_nmod; i++) if (has_update(&s_mod[i])) updates++;
+    char why[200];
+    for (i = 0; i < s_nmod; i++)
+        if (has_update(&s_mod[i]) || (s_mod[i].has_mut && (s_mod[i].installed[0] || s_mod[i].ready) && verdict(i, why, sizeof why) == FIT_STALE)) updates++;
     s_page.tab = s_tab;
     s_page.updates = updates;
     build_rows();
@@ -390,7 +614,7 @@ static void add_id(void* ctx, const char* id)
 {
     MODABOUT a;
     (void)ctx;
-    if (s_nmod >= MAX_MOD || !tagpu_modcat_about(s_catalog, s_ncatalog, id, &a) || a.is_mutator) return;
+    if (s_nmod >= MAX_MOD || !tagpu_modcat_about(s_catalog, s_ncatalog, id, &a)) return;
     memset(&s_mod[s_nmod], 0, sizeof s_mod[0]);
     lstrcpynA(s_mod[s_nmod].id, id, sizeof s_mod[0].id);
     s_mod[s_nmod].about = a;
@@ -408,10 +632,18 @@ static void load_mods(void)
 {
     int i;
     if (!s_catalog) {
-        size_t np = 0;
-        const unsigned char* pak = tagpu_pak_resource("MODPAK", &np);
-        s_catalog = pak ? (const char*)tagpu_pak_file(pak, np, "catalog.json", &s_ncatalog) : NULL;
+        s_catalog = tagpu_modinst_catalog(&s_ncatalog);
         if (s_catalog) tagpu_modcat_each_id(s_catalog, s_ncatalog, add_id, NULL);
+        for (i = 0; i < s_nmod; i++) {
+            ENTRY* e = &s_mod[i];
+            if (!e->about.is_mutator) continue;
+            e->nstale = -1;
+            e->has_mut = tagpu_modcat_mutator(s_catalog, s_ncatalog, e->id, &e->mut);
+            if (e->has_mut) e->off = (uint8_t*)calloc((size_t)e->mut.nfiles + (size_t)e->mut.nhides + 1, 1);
+            if (e->has_mut && !e->off) { tagpu_modcat_mutator_free(&e->mut); e->has_mut = 0; }
+            if (!e->has_mut) tagpu_logf("modsui: the catalog's mutator %s cannot be used", e->id);
+            else e->base = !strcmp(e->mut.base, "none") ? FOLDER : index_of(e->mut.base);
+        }
     }
     for (i = 0; i < s_nmod; i++)
         if (!tagpu_modinst_installed(s_mod[i].id, s_mod[i].installed, sizeof s_mod[i].installed))
@@ -491,8 +723,8 @@ static void dump(void)
     jstr(f, mod_name(s_running));
     fputs(",\"confirm\":", f);
     jstr(f, s_page.confirm);
-    fprintf(f, ",\"update_all\":%d,\"scan_done\":%ld,\"scroll\":[%.2f,%.2f],\"scroll_max\":[%.2f,%.2f],\"rows\":[",
-            s_page.update_all, (long)s_scanDone, s_hit.scroll[0], s_hit.scroll[1], s_hit.scroll_max[0], s_hit.scroll_max[1]);
+    fprintf(f, ",\"mutators\":\"%s\",\"update_all\":%d,\"scan_done\":%ld,\"scroll\":[%.2f,%.2f],\"scroll_max\":[%.2f,%.2f],\"rows\":[",
+            tagpu_modload_mutators(), s_page.update_all, (long)s_scanDone, s_hit.scroll[0], s_hit.scroll[1], s_hit.scroll_max[0], s_hit.scroll_max[1]);
     for (i = 0; i < s_page.nrow; i++) {
         const MODSROW* r = &s_page.row[i];
         fputs(i ? ",{\"name\":" : "{\"name\":", f);
@@ -559,6 +791,7 @@ void tagpu_modsui_tick(int in_game)
             }
             s_active = NONE;
             s_paneStale = 1;
+            s_fitDirty = 1;
             if (tagpu_modsui_is_open()) publish();
         } else if (st.phase != s_status.phase || st.done != s_status.done) {
             s_status = st;
@@ -576,6 +809,14 @@ void tagpu_modsui_tick(int in_game)
         (tagpu_wikiart_done() && (!tagpu_wikiart_get() || !tagpu_wikiart_get()->mods))) {
         close_screen("the layer cannot draw this session");
         return;
+    }
+    if (s_fitState == 2) {
+        fit_take();
+        publish();
+    }
+    if (s_fitDirty && s_fitState == 0 && s_scanDone == 1) {
+        fit_start();
+        if (s_fitState == 0) { s_paneStale = 1; publish(); }
     }
     if (s_scanDone == 1) {
         static int s_saw;
@@ -600,6 +841,8 @@ void tagpu_modsui_open(const char* folder)
     char mod[64] = "";
     if (tagpu_modsui_is_open()) return;
     load_mods();
+    load_switches();
+    s_fitDirty = 1;
     lstrcpynA(s_folder, folder, sizeof s_folder);
     s_running = index_of(tagpu_modload_id());
     if (s_running == NONE) s_running = FOLDER;
@@ -757,6 +1000,14 @@ static void switch_set(int i, int reset)
     const MODSSWITCH* w;
     if (m < 0 || i < 0 || i >= s_page.nsw || s_page.sw[i].locked) return;
     w = &s_page.sw[i];
+    if (s_mod[m].has_mut) {
+        ENTRY* e = &s_mod[m];
+        const char* path = i < e->mut.nfiles ? e->mut.files[i].path : e->mut.hides[i - e->mut.nfiles];
+        /* a file is on with no key: only off is written, and a reset is the same as on */
+        if (tagpu_profiles_set_file_of(base_id_of(e), path, reset || !w->on ? -1 : 0) && e->base == s_running) s_hideChanged = 1;
+        load_switches();
+        return;
+    }
     if (tagpu_profiles_set_hide_of(s_mod[m].id, w->name, reset ? -1 : w->on ? 1 : 0) && m == s_running)
         s_hideChanged = 1;
 }
@@ -778,8 +1029,13 @@ static void act(const char* key)
         if (i >= 0 && i < s_page.nrow) {
             const int m = s_rowMod[i];
             select_mod(m);
-            if (s_tab == MODS_TAB_MANAGE) s_chosen = m;
-            else queue_install(m);
+            if (s_tab != MODS_TAB_MANAGE) queue_install(m);
+            else if (is_mutator(m)) {
+                ENTRY* e = &s_mod[m];
+                /* off is no key, like every mutator a player never touched */
+                if (e->has_mut && tagpu_profiles_set_mutator_of(base_id_of(e), e->id, e->on ? -1 : 1) && e->base == s_running) s_hideChanged = 1;
+                load_switches();
+            } else s_chosen = m;
         }
     } else if (sscanf(key, "opt:%d:%c", &i, &what) == 2) {
         option_key(i, what);

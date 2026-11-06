@@ -12,6 +12,10 @@
    Design: research/notes/modules/mods.md, *Download and install*. */
 #include <stddef.h>
 
+/* The catalog every module reads: the one packed in this DLL. A file tagpu_modcatalog.on in the game's folder stands in for it,
+   for the tests: mutators ship only once a real one exists, and the patch pack, the only source of exe patches, stays the DLL's. */
+const char* tagpu_modinst_catalog(size_t* n);
+
 typedef enum {
     MODINST_IDLE,
     MODINST_DOWNLOADING,

@@ -36,6 +36,14 @@ int tagpu_profiles_hide_of(const char* id, const char* archive);
    effect at once. */
 int tagpu_profiles_set_choice_of(const char* id, int which, int value);
 int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
+/* A base mod's file holds its mutators' switches too ("none" the folder's own game): mutator.<id> and file.<path>, each
+   1 on, 0 off, -1 no key, without case. A mutator is off and a file on with no key. */
+int tagpu_profiles_mutator_of(const char* base, const char* mutator);
+int tagpu_profiles_file_of(const char* base, const char* path);
+int tagpu_profiles_set_mutator_of(const char* base, const char* mutator, int value);
+int tagpu_profiles_set_file_of(const char* base, const char* path, int value);
+/* `fn` with the path of each file.<path> key in that file. */
+void tagpu_profiles_each_file(const char* base, void (*fn)(void* ctx, const char* path), void* ctx);
 
 /* The file's write: the render thread each frame, the Mods screen's Confirm, and the exit once no other thread is inside. A
    click only records its value (tagpu_menu_present). */

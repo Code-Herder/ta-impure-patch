@@ -195,6 +195,118 @@ class Rules(unittest.TestCase):
             self.assertTrue(self.run_on(j, "amod").startswith("-1 catalog: amod:"), self.run_on(j, "amod"))
 
 
+class Mutators(unittest.TestCase):
+    """tagpu_modcat.c's verdicts, native: a stale base by the file, the switches, and two mutators of one file."""
+    MAIN = rb"""#include <stdio.h>
+#include <string.h>
+#include "tagpu_modcat.h"
+static const char* OFF;
+static int off(void* c, const char* p) { (void)c; return OFF && tagpu_modcat_same_path(OFF, p); }
+/* the base: objects3d\a.3do hashes to 11.., objects3d\gone.3do has gone */
+static int base(void* c, const char* p, uint8_t o[32]) { (void)c;
+    if (tagpu_modcat_same_path(p, "objects3d/gone.3do")) return 0;
+    memset(o, tagpu_modcat_same_path(p, "objects3d/a.3do") ? 0x11 : 0x22, 32); return 1; }
+int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb"); size_t n = fread(b, 1, sizeof b, f);
+    MODMUTATOR x, y; char s[2][MODCAT_PATH]; int t; const char* live;
+    if (!tagpu_modcat_mutator(b, n, v[2], &x)) { puts("unreadable"); return 0; }
+    OFF = c > 4 ? v[4] : NULL;
+    t = tagpu_modcat_stale(&x, base, NULL, s, 2);
+    live = tagpu_modcat_stale_live(s, t, 2, off, NULL);
+    printf("files %d hides %d stale %d live %s", x.nfiles, x.nhides, t, live ? live : "-");
+    if (c > 3 && v[3][0] && tagpu_modcat_mutator(b, n, v[3], &y)) { live = tagpu_modcat_clash(&x, &y, off, NULL); printf(" clash %s", live ? live : "-"); tagpu_modcat_mutator_free(&y); }
+    puts(""); tagpu_modcat_mutator_free(&x); return 0; }
+"""
+    H11, H99 = "11" * 32, "99" * 32
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        src = m.ROOT / "tagpu/ddraw/src"
+        (Path(cls.dir.name) / "main.c").write_bytes(cls.MAIN)
+        cls.exe = Path(cls.dir.name) / "mutators"
+        m.subprocess.run(["gcc", "-std=c99", "-I", str(src), "-I", str(m.ROOT / "tagpu/ddraw/inc"), "-o", str(cls.exe),
+                          str(Path(cls.dir.name) / "main.c"), str(src / "tagpu_modcat.c"), str(src / "tagpu_json.c"), str(src / "tagpu_modtar.c"), str(src / "tagpu_modpak.c")],
+                         check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    def run_on(self, entries, *a):
+        j = copy.deepcopy(GOOD)
+        for k, (files, hashes, hides) in entries.items():
+            e = copy.deepcopy(j["mods"][1])
+            e.update(id=k, files=files, base_hashes=hashes, hides=hides)
+            j["mods"].append(e)
+        self.assertEqual(m.check_catalog(j), [])
+        p = Path(self.dir.name) / "cat.json"
+        p.write_text(json.dumps(j))
+        return m.subprocess.run([str(self.exe), str(p), *a], capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_fits(self):
+        got = self.run_on({"x": (["objects3d/a.3do", "objects3d/new.3do"], {"objects3d/a.3do": self.H11}, ["anims/z.gaf"])}, "x")
+        self.assertEqual(got, "files 2 hides 1 stale 0 live -")
+
+    def test_a_changed_base_file_is_named(self):
+        got = self.run_on({"x": (["objects3d/a.3do"], {"objects3d/a.3do": self.H99}, [])}, "x")
+        self.assertEqual(got, "files 1 hides 0 stale 1 live objects3d\\a.3do")
+
+    def test_a_base_file_that_has_gone_is_named(self):
+        got = self.run_on({"x": (["objects3d/gone.3do"], {"objects3d/gone.3do": self.H11}, [])}, "x")
+        self.assertEqual(got, "files 1 hides 0 stale 1 live objects3d\\gone.3do")
+
+    def test_a_new_file_needs_no_check(self):
+        self.assertEqual(self.run_on({"x": (["objects3d/new.3do"], {}, [])}, "x"), "files 1 hides 0 stale 0 live -")
+
+    def test_a_file_switched_off_is_out_of_the_verdict(self):
+        got = self.run_on({"x": (["objects3d/a.3do"], {"objects3d/a.3do": self.H99}, [])}, "x", "", "OBJECTS3D\\A.3DO")
+        self.assertEqual(got, "files 1 hides 0 stale 1 live -")
+
+    def test_past_the_list_is_never_clean(self):
+        files = [f"objects3d/f{i}.3do" for i in range(3)]
+        got = self.run_on({"x": (files, {f: self.H99 for f in files}, [])}, "x", "", "objects3d/f0.3do")
+        self.assertEqual(got, "files 3 hides 0 stale 3 live objects3d\\f1.3do")
+        self.assertIn("stale 3 live objects3d", self.run_on({"x": (files, {f: self.H99 for f in files}, [])}, "x"))
+
+    def test_two_of_one_file_clash_and_the_file_is_named(self):
+        e = {"x": (["objects3d/a.3do"], {}, []), "y": (["OBJECTS3D/A.3do", "b"], {}, [])}
+        self.assertTrue(self.run_on(e, "x", "y").endswith("clash objects3d\\a.3do"))
+
+    def test_a_hide_of_the_other_ones_file_clashes(self):
+        e = {"x": (["b"], {}, ["objects3d/a.3do"]), "y": (["objects3d/a.3do"], {}, [])}
+        self.assertTrue(self.run_on(e, "x", "y").endswith("clash objects3d\\a.3do"))
+        self.assertTrue(self.run_on(e, "y", "x").endswith("clash objects3d\\a.3do"))
+
+    def test_different_files_do_not_clash_nor_two_hides(self):
+        e = {"x": (["a"], {}, ["z"]), "y": (["b"], {}, ["z"])}
+        self.assertTrue(self.run_on(e, "x", "y").endswith("clash -"))
+
+    def test_a_file_switched_off_no_longer_clashes(self):
+        e = {"x": (["objects3d/a.3do"], {}, []), "y": (["objects3d/a.3do"], {}, [])}
+        self.assertTrue(self.run_on(e, "x", "y", "objects3d/a.3do").endswith("clash -"))
+
+    def test_the_schema_refuses(self):
+        for what, entry in {
+            "unsafe": (["../a"], {}, []),
+            "does not carry": (["a"], {"b": self.H11}, []),
+            "malformed": (["a"], {"a": "x"}, []),
+        }.items():
+            j = copy.deepcopy(GOOD)
+            j["mods"][1].update(files=entry[0], base_hashes=entry[1], hides=entry[2])
+            self.assertTrue(any(what in e for e in m.check_catalog(j)), what)
+        j = copy.deepcopy(GOOD)
+        j["mods"][1].update(base="none", hides=["a"])
+        self.assertTrue(any("no mod has none" in e for e in m.check_catalog(j)))
+
+    def test_a_path_a_key_cannot_hold_is_refused_by_the_reader_too(self):
+        j = copy.deepcopy(GOOD)
+        j["mods"][1].update(files=["a=b"])
+        p = Path(self.dir.name) / "cat.json"
+        p.write_text(json.dumps(j))
+        got = m.subprocess.run([str(self.exe), str(p), "amut"], capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(got, "unreadable")
+
+
 class Places(unittest.TestCase):
     """What a file's place decides: the TDF grammar, and that a rename undoes to the same bytes."""
 

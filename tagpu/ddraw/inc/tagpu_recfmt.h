@@ -1136,10 +1136,12 @@ enum RecTag {
                           leaves clear is exact at every iteration; a held byte is exact at every
                           refresh and keeps, between two, a value the stream wrote for the same
                           unit or list since the last (tagpu_reclossy.c, THE INVARIANTS)        */
-    RT_TYPES           /* u32 n, u8 the ground speed's slope table (11 bytes, the executable's at
+    RT_TYPES,          /* u32 n, u8 the ground speed's slope table (11 bytes, the executable's at
                           0x505200), u8 0, then n RecTypeRow, types strictly ascending and below
                           RT_UNITDEFS' count: the unit types the unit frame's per-type rules
                           predict; a type without a row has those rules off                      */
+    RT_MUTATORS        /* the mutators the game ran, "name version, name version" in mount order; none at all:
+                          no record (tagpu_modload_mutators, research/notes/modules/mods.md)   */
 };
 /* The end block's tags are RT_END_REASON..RT_CODEC_MISMATCH; a header's are the others. */
 _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,

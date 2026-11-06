@@ -35,6 +35,10 @@ const char* tagpu_modload_id(void);
 /* Whether a managed mod closes this path's loose step: the folders the engine reads game data from. Under
    no mod, never. */
 int tagpu_modload_loose_closed(const char* path);
+/* The mutators this start mounted, "name version, name version", "" none: settled by the first mount, at WinMain's start-up. */
+const char* tagpu_modload_mutators(void);
+/* `fn` with each file a mutator took out of a mounted archive of that file name: what the engine's directory no longer holds. Settled likewise. */
+void tagpu_modload_each_gone(void (*fn)(void* ctx, const char* archive, const char* path), void* ctx);
 
 /* For the Mods screen. The name of the archive no mod runs without. Whether this folder's exe is one the pack knows: mods
    run on it. The first call is the game thread's and loads the pack when no mod did. */

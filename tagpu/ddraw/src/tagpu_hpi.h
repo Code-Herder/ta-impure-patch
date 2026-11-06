@@ -78,6 +78,9 @@ int tagpu_hpi_find(const TAGPU_HPI* a, const char* path);
    (tagpu_vfs.c); it lives here because it is a fact about one entry. */
 int  tagpu_hpi_shadowed(const TAGPU_HPI* a, int e);
 void tagpu_hpi_shadow(TAGPU_HPI* a, int e);
+/* Takes a file out of this reader's view, as a mutator's hide takes it out of the engine's directory: no lookup finds it and no
+   listing shows it. 1 when there was one. */
+int  tagpu_hpi_forget(TAGPU_HPI* a, const char* path);
 
 /* `n` bytes of file `e` from its byte `off`, decompressed, into `dst`; 0 with the reason in `why`
    when the range is past the file, `n` is past TAGPU_HPI_READMAX, or any chunk the range

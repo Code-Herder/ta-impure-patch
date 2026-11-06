@@ -78,6 +78,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_modload.h"
 #include "tagpu_regstore.h"
 #include "tagpu_recmp.h"
 #include "tagpu_recmp_channel.h"
@@ -2202,6 +2203,7 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         d[0] = archives_each(archive_entry, t, &d[1]);
         tlv(t, RT_MODPRINT, d, 8);
     }
+    if (tagpu_modload_mutators()[0]) tlv(t, RT_MUTATORS, tagpu_modload_mutators(), (unsigned)strlen(tagpu_modload_mutators()));
 }
 
 /* The TNT's minimap picture as an RB_MINIMAP's payload into `b`: its size, or 0 when the map has

@@ -36,7 +36,7 @@ enum { MODS_SCROLL_LIST, MODS_SCROLL_DETAIL, MODS_NSCROLL };
 /* A row's badge. */
 enum { MODS_BADGE_NONE, MODS_BADGE_ACTIVE, MODS_BADGE_UPDATE, MODS_BADGE_GREY, MODS_BADGE_CONFLICT };
 /* A row's control at its right. */
-enum { MODS_ACT_NONE, MODS_ACT_RADIO, MODS_ACT_RADIO_ON, MODS_ACT_INSTALL, MODS_ACT_UPDATE, MODS_ACT_BUSY };
+enum { MODS_ACT_NONE, MODS_ACT_RADIO, MODS_ACT_RADIO_ON, MODS_ACT_INSTALL, MODS_ACT_UPDATE, MODS_ACT_BUSY, MODS_ACT_CHECK, MODS_ACT_CHECK_ON };
 /* An option's control. */
 enum { MODS_OPT_SWITCH, MODS_OPT_STEPPER };
 
@@ -60,8 +60,8 @@ typedef struct {
 } MODSOPT;
 
 typedef struct {
-    char    name[32];           /* an archive's file name */
-    uint8_t on;                 /* mounted */
+    char    name[96];           /* an archive's file name, or a mutator's path */
+    uint8_t on;                 /* mounted; a mutator's file: in play */
     uint8_t changed;
     uint8_t locked;             /* the base archive every mod needs */
 } MODSSWITCH;
@@ -81,6 +81,7 @@ typedef struct {
     char       note[200];       /* under the summary: a refusal, an install's failure, what Confirm will do */
     int        nopt;
     MODSOPT    opt[MODS_MAXOPT];
+    char       sw_head[24];     /* the switches' heading */
     int        nsw;
     MODSSWITCH sw[MODS_MAXSW];
     float      scroll[MODS_NSCROLL];

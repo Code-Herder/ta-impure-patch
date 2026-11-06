@@ -114,6 +114,7 @@ int tagpu_modcat_about(const char* catalog, size_t n, const char* id, MODABOUT* 
         snprintf(out->version, sizeof out->version, "%s", tj_str(tj_get(m, "version"), ""));
         snprintf(out->summary, sizeof out->summary, "%s", tj_str(tj_get(m, "summary"), ""));
         out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
+        snprintf(out->base, sizeof out->base, "%s", tj_str(tj_get(m, "base"), ""));
         hit = 1;
     }
     tagpu_json_free(d);
@@ -200,6 +201,7 @@ int tagpu_modcat_install(const char* catalog, size_t n, const char* id, MODINSTA
     pk = tj_get(m, "packages");
     out->id = copy_text(id);
     out->version = copy_text(tj_str(tj_get(m, "version"), ""));
+    out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
     out->base_url = copy_text(tj_str(tj_get(tagpu_json_root(d), "base_url"), ""));
     /* each count set only with its array: the free walks them */
     out->packages = (MODPKG*)calloc((size_t)count_of(pk) + 1, sizeof(MODPKG));
@@ -250,4 +252,122 @@ int tagpu_modcat_each_id(const char* catalog, size_t n, void (*fn)(void* ctx, co
     }
     tagpu_json_free(d);
     return 1;
+}
+
+/* ---- a mutator ---------------------------------------------------------------------------------- */
+
+/* The catalog's spelling into the engine's. 0 for one a mount cannot act on or a profile's `file.<path>=` key cannot hold. */
+static int engine_path(const char* in, char out[MODCAT_PATH])
+{
+    size_t i, n = strlen(in);
+    if (!n || n >= MODCAT_PATH || !modtar_path_safe(in)) return 0;
+    for (i = 0; i <= n; i++) {
+        const char c = in[i];
+        if (c == '=' || (c && (unsigned char)c < 0x20)) return 0;
+        out[i] = c == '/' ? '\\' : c;
+    }
+    return 1;
+}
+
+void tagpu_modcat_mutator_free(MODMUTATOR* m)
+{
+    free(m->files);
+    free(m->hides);
+    memset(m, 0, sizeof *m);
+}
+
+int tagpu_modcat_mutator(const char* catalog, size_t n, const char* id, MODMUTATOR* out)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m, *f, *h, *bh;
+    int ok = 0, i;
+    memset(out, 0, sizeof *out);
+    if (!d) return 0;
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next)
+        if (!strcmp(tj_str(tj_get(m, "id"), ""), id)) break;
+    if (!m || strcmp(tj_str(tj_get(m, "kind"), ""), "mutator") || !plain_id(id) || strlen(id) >= sizeof out->id) goto done;
+    snprintf(out->id, sizeof out->id, "%s", id);
+    snprintf(out->base, sizeof out->base, "%s", tj_str(tj_get(m, "base"), ""));
+    if (!out->base[0]) goto done;
+    f = tj_get(m, "files");
+    h = tj_get(m, "hides");
+    bh = tj_get(m, "base_hashes");
+    out->files = (MODMUTFILE*)calloc((size_t)count_of(f) + 1, sizeof *out->files);
+    out->hides = (char (*)[MODCAT_PATH])calloc((size_t)count_of(h) + 1, MODCAT_PATH);
+    if (!out->files || !out->hides) goto done;
+    for (i = 0, f = tj_is(f, TJ_ARR) ? f->first : NULL; f; f = f->next, i++) {
+        const char* path = tj_str(f, "");
+        const TJV* hash = tj_get(bh, path);
+        if (!engine_path(path, out->files[i].path)) goto done;
+        if (hash) {
+            if (!tagpu_modcat_hash(tj_str(hash, ""), out->files[i].sha)) goto done;
+            out->files[i].replaces = 1;
+        }
+        out->nfiles = i + 1;
+    }
+    for (i = 0, h = tj_is(h, TJ_ARR) ? h->first : NULL; h; h = h->next, i++) {
+        if (!engine_path(tj_str(h, ""), out->hides[i])) goto done;
+        out->nhides = i + 1;
+    }
+    ok = 1;
+done:
+    tagpu_json_free(d);
+    if (!ok) tagpu_modcat_mutator_free(out);
+    return ok;
+}
+
+int tagpu_modcat_same_path(const char* a, const char* b)
+{
+    for (;; a++, b++) {
+        char x = *a, y = *b;
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x == '/') x = '\\';
+        if (y == '/') y = '\\';
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+}
+
+int tagpu_modcat_stale(const MODMUTATOR* m, MODCAT_HASH hash, void* ctx, char (*out)[MODCAT_PATH], int max)
+{
+    int i, total = 0;
+    for (i = 0; i < m->nfiles; i++) {
+        uint8_t have[32];
+        if (!m->files[i].replaces) continue;
+        if (hash(ctx, m->files[i].path, have) && !memcmp(have, m->files[i].sha, 32)) continue;
+        if (total < max) memcpy(out[total], m->files[i].path, MODCAT_PATH);
+        total++;
+    }
+    return total;
+}
+
+const char* tagpu_modcat_stale_live(char (*list)[MODCAT_PATH], int total, int max, MODCAT_OFF off, void* ctx)
+{
+    int i;
+    for (i = 0; i < total && i < max; i++)
+        if (!off || !off(ctx, list[i])) return list[i];
+    return total > max ? list[0] : NULL;
+}
+
+const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b, MODCAT_OFF off, void* ctx)
+{
+    int i, k;
+    for (i = 0; i < a->nfiles; i++) {
+        const char* p = a->files[i].path;
+        if (off && off(ctx, p)) continue;
+        for (k = 0; k < b->nfiles; k++)
+            if (tagpu_modcat_same_path(p, b->files[k].path)) return p;
+        for (k = 0; k < b->nhides; k++)
+            if (tagpu_modcat_same_path(p, b->hides[k]) && !(off && off(ctx, b->hides[k]))) return p;
+    }
+    for (i = 0; i < a->nhides; i++) {
+        const char* p = a->hides[i];
+        if (off && off(ctx, p)) continue;
+        for (k = 0; k < b->nfiles; k++)
+            if (tagpu_modcat_same_path(p, b->files[k].path)) return p;
+    }
+    return NULL;
 }

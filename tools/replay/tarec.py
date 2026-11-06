@@ -281,6 +281,7 @@ RT_MP_END = 43
 RT_CODEC_DECLINED, RT_CODEC_MISMATCH = 44, 45   # the writer's stream blocks written as records
 RT_HOLD = 46                # what a skirmish stream holds between refreshes, and how often
 RT_TYPES = 47               # the unit frame's per-type constants
+RT_MUTATORS = 48            # the mutators this game ran, name and version, in the mount's order
 REC_HOLD_BYTES = 8 + 32 + REC_UNIT_IMAGE + REC_ORDER_IMAGE
 REC_REFRESH_TICKS, REC_REFRESH_MIN = 300, 30
 RECL_CELLS, RECL_SPRAYS = 1, 2
@@ -435,6 +436,7 @@ def header(payload):
         elif tag == RT_ARCHIVE:
             size, mtime = struct.unpack_from("<IQ", b)
             h.setdefault("archives", []).append((b[12:].decode("latin-1"), size, mtime))
+        elif tag == RT_MUTATORS: h["mutators"] = b.decode("latin-1")
         elif tag == RT_MODPRINT:
             h["modprint"] = u32
             if len(b) >= 8:

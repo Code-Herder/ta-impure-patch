@@ -425,6 +425,7 @@ typedef struct RecInfo {
     unsigned      modprint;                 /* RT_MODPRINT: compare with tagpu_rec_mod_print()  */
     int           has_modprint;
     unsigned      archives;                 /* the archives mounted, RT_MODPRINT's count         */
+    char          mutators[200];            /* RT_MUTATORS, "" a recording made with none          */
     unsigned      narchives;                /* RT_ARCHIVE entries (at most REC_ARCHIVES)          */
     struct { char name[RECR_TEXT]; unsigned size; unsigned long long mtime; } archive[REC_ARCHIVES];
     int           ended;                    /* an end block was read                             */

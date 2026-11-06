@@ -4610,6 +4610,7 @@ static TAGPU_VFS* asset_vfs(const WIKI3DIN* in)
     TAGPU_VFS* v = tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])in->arc, in->narc, in->names.language);
 #ifdef _WIN32
     tagpu_vfs_close_loose(v, tagpu_modload_loose_closed);
+    tagpu_modload_each_gone(tagpu_vfs_forget, v);
 #endif
     return v;
 }

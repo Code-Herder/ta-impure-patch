@@ -1333,6 +1333,87 @@ def sha_of(p: Path) -> str:
     return h.hexdigest()
 
 
+MUTATORS = MODS / "mutators"            # one <id>.json per mutator, written by `modpack.py mutator`; none until a real one exists
+
+
+def base_sources(base: str) -> list:
+    """The archives a base mod answers from, in the mount's order, as the running game finds them: its own two, then the retail
+    archives its catalog entry does not hide. "none" is the retail folder's mount alone."""
+    v = tavfs()
+    retail = {p.name: p for p in v.find_install(None).iterdir() if p.is_file()}
+    hide = set()
+    out = []
+    if base != "none":
+        src = next((s for s in mod_sources() if s["id"] == base), None)
+        if not src:
+            die(f"base {base} is no mod of the catalog")
+        plan = Plan(src, Pe(stock_exe()))
+        hide = {h.lower() for h in plan.hide}
+        built = OUT / base / "installed"
+        if not (built / f"{base}.originals.hpi").is_file():
+            die(f"{base}: no installed copy at {built}: modpack.py install {base} <dir> --link")
+        out += [built / f"{base}.hpi", built / f"{base}.originals.hpi"]
+    for n in mount_order(list(retail), "rev31.gp3"):
+        if n.lower() not in hide:
+            out.append(retail[n])
+    return out
+
+
+def base_answer(sources: list, path: str, opened: dict):
+    """The bytes the first source holding `path` gives, or None."""
+    for p in sources:
+        a = opened.get(p) or opened.setdefault(p, hpipack().Archive(p))
+        try:
+            return a.read(path.lower())
+        except KeyError:
+            continue
+    return None
+
+
+def cmd_mutator(a):
+    """A mutator from a folder of game files: its package, one archive, and its entry in mods/mutators/. Every file the base holds at
+    that path gets the hash of the base's file, which the game compares at each start. A file of the original game is refused by content."""
+    src = Path(a.folder)
+    hashes = manifest()
+    files = {p.relative_to(src).as_posix(): p.read_bytes() for p in sorted(src.rglob("*")) if p.is_file()}
+    if not files and not a.hide:
+        die("a mutator with no files and no hides changes nothing")
+    if a.base == "none" and a.hide:
+        die("hides name a base mod's files, and no mod has none")
+    for k, data in files.items():
+        if hashlib.md5(data).hexdigest() in hashes:
+            die(f"{k} is a file of the original game")
+    sources = base_sources(a.base)
+    opened, base_hashes = {}, {}
+    for k in files:
+        got = base_answer(sources, k, opened)
+        if got is not None:
+            base_hashes[k] = hashlib.sha256(got).hexdigest()
+    tree = {}
+    for k, data in files.items():
+        insert_cased(tree, k, data)
+    d = OUT / a.id
+    d.mkdir(parents=True, exist_ok=True)
+    arc = f"{a.id}.hpi"
+    (d / arc).write_bytes(hpipack().build(tree, 0, 2))
+    tar = d / f"{a.id}.tar.zst"
+    with tempfile.TemporaryDirectory(dir=OUT) as t:
+        raw = Path(t) / "p.tar"
+        with tarfile.open(raw, "w") as w:
+            w.add(d / arc, arcname=arc)
+        subprocess.run(["zstd", "-qf", "-19", str(raw), "-o", str(tar)], check=True)
+    version = a.version
+    e = {"id": a.id, "kind": "mutator", "name": a.name, "author": a.author, "version": version, "summary": a.summary,
+         "homepage": a.homepage, "permission": a.permission,
+         "packages": [{"url": f"{a.id}/{a.id}-{version.replace(' ', '-')}.tar.zst", "sha256": sha_of(tar), "size": tar.stat().st_size,
+                       "files": [{"path": arc, "sha256": sha_of(d / arc), "size": (d / arc).stat().st_size}]}],
+         "base": a.base, "base_hashes": base_hashes, "files": list(files), "hides": a.hide}
+    out = Path(a.out) if a.out else MUTATORS / f"{a.id}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(e, indent=2) + "\n")
+    print(f"{a.id}: {len(files)} files, {len(base_hashes)} replace {a.base}'s, {len(a.hide)} hides; {tar}")
+
+
 def cmd_catalog(_):
     stock = Pe(stock_exe())
     mask = masked_set(stock)
@@ -1358,6 +1439,7 @@ def cmd_catalog(_):
                 e[k] = s[k]
         entries.append(e)
         mods_bin.append((s["id"], img, xor_of(stock, tab), 1 if s["exe"] == "loader" else 0))
+    entries += [json.loads(p.read_text()) for p in sorted(MUTATORS.glob("*.json"))]
     (MODS / "catalog.json").write_text(json.dumps({"version": VERSION, "mods": entries}, indent=2) + "\n")
     known = known_files(stock)
     known_exes = [Pe(p.read_bytes()) for p in {Path(src) for st in tacompat().SETUPS for dest, src in tacompat().overlay(st) if dest.lower() == "totala.exe"}]
@@ -1561,6 +1643,19 @@ def check_catalog(j) -> list:
                 errs.append(f"{n}: a mutator has no base_hashes")
             if not isinstance(e.get("files"), list):
                 errs.append(f"{n}: a mutator has no files")
+            else:
+                for path in list(e["files"]) + list(e.get("hides", [])):
+                    if not isinstance(path, str) or not path or len(path) >= 96 or "=" in path or path.startswith(("/", "\\")) \
+                            or ".." in re.split(r"[\\/]", path) or ":" in path:
+                        errs.append(f"{n}: path {path!r} is unsafe")
+                if isinstance(e.get("base_hashes"), dict):
+                    for path, h in e["base_hashes"].items():
+                        if path not in e["files"]:
+                            errs.append(f"{n}: base_hashes names {path!r}, which it does not carry")
+                        if not HEX64.match(str(h)):
+                            errs.append(f"{n}: base_hashes of {path!r} is malformed")
+            if e.get("hides") and e.get("base") == "none":
+                errs.append(f"{n}: hides name a base mod's files, and no mod has none")
             if "exe" in e:
                 errs.append(f"{n}: a mutator carries no exe patch")
         else:
@@ -1591,13 +1686,25 @@ def main():
     sub.add_parser("loaderdump").add_argument("setup")
     sub.add_parser("packages").add_argument("ids", nargs="*")
     sub.add_parser("catalog")
+    mu = sub.add_parser("mutator")
+    mu.add_argument("folder")
+    mu.add_argument("--id", required=True)
+    mu.add_argument("--base", required=True)
+    mu.add_argument("--name", required=True)
+    mu.add_argument("--version", required=True)
+    mu.add_argument("--author", required=True)
+    mu.add_argument("--summary", required=True)
+    mu.add_argument("--homepage", required=True)
+    mu.add_argument("--permission", required=True)
+    mu.add_argument("--hide", action="append", default=[])
+    mu.add_argument("--out")
     sub.add_parser("verify").add_argument("ids", nargs="*")
     i = sub.add_parser("install")
     i.add_argument("id")
     i.add_argument("gamedir")
     i.add_argument("--link", action="store_true")
     a = p.parse_args()
-    return {"check": cmd_check, "tables": cmd_tables, "loaderdump": cmd_loaderdump, "packages": cmd_packages, "catalog": cmd_catalog, "verify": cmd_verify, "install": cmd_install}[a.cmd](a)
+    return {"check": cmd_check, "tables": cmd_tables, "loaderdump": cmd_loaderdump, "packages": cmd_packages, "catalog": cmd_catalog, "mutator": cmd_mutator, "verify": cmd_verify, "install": cmd_install}[a.cmd](a)
 
 
 if __name__ == "__main__":

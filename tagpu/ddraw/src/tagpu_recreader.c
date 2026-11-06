@@ -3074,6 +3074,8 @@ static int info_header(RecInfo* o, const unsigned char* b, size_t len)
             o->modprint = u32(p);
             o->archives = u32(p + 4);
             o->has_modprint = 1;
+        } else if (tag == RT_MUTATORS) {
+            text(o->mutators, sizeof o->mutators, p, n);
         } else if (tag == RT_ARCHIVE && n >= 12 && o->narchives < REC_ARCHIVES) {
             o->archive[o->narchives].size = u32(p);
             memcpy(&o->archive[o->narchives].mtime, p + 4, 8);

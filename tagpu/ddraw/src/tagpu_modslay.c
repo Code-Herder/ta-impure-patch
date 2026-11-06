@@ -37,7 +37,6 @@ static const char* const ROLE[R_N] = { "window_title", "tab", "name", "detail", 
 #define S_UPDATE    "Update"
 #define S_RESET     "Reset"
 #define S_OPTIONS   "Play options"
-#define S_ARCHIVES  "Game archives"
 static const char* const TAB_LABEL[MODS_NTAB] = { "Manage", "Explore", "Updates" };
 #define BACK_RGB    0x0B0C0Au       /* the backdrop: opaque, the engine's menu is under it */
 #define MARK_RGB    0xE2A030u       /* the marker of a value the player changed            */
@@ -95,7 +94,7 @@ static void page_bound(MODSPAGE* s)
         MODSROW* r = &s->row[i];
         TERM(r->name); TERM(r->detail); TERM(r->badge_text);
         if (r->badge > MODS_BADGE_CONFLICT) r->badge = MODS_BADGE_NONE;
-        if (r->act > MODS_ACT_BUSY) r->act = MODS_ACT_NONE;
+        if (r->act > MODS_ACT_CHECK_ON) r->act = MODS_ACT_NONE;
         r->progress = (int16_t)clampi(r->progress, -1, 1000);
     }
     for (i = 0; i < s->nopt; i++) {
@@ -104,7 +103,7 @@ static void page_bound(MODSPAGE* s)
         if (o->kind > MODS_OPT_STEPPER) o->kind = MODS_OPT_SWITCH;
     }
     for (i = 0; i < s->nsw; i++) TERM(s->sw[i].name);
-    TERM(s->empty); TERM(s->title); TERM(s->meta); TERM(s->summary); TERM(s->note); TERM(s->held); TERM(s->confirm);
+    TERM(s->sw_head); TERM(s->empty); TERM(s->title); TERM(s->meta); TERM(s->summary); TERM(s->note); TERM(s->held); TERM(s->confirm);
 }
 
 static double U(const C* c, double n) { return ui_len(&c->u, n); }
@@ -172,7 +171,7 @@ static double act_h(const C* c, const MODSROW* r)
 {
     const MG* g = &c->l->g;
     switch (r->act) {
-    case MODS_ACT_RADIO: case MODS_ACT_RADIO_ON: return U(c, g->radio);
+    case MODS_ACT_RADIO: case MODS_ACT_RADIO_ON: case MODS_ACT_CHECK: case MODS_ACT_CHECK_ON: return U(c, g->radio);
     case MODS_ACT_INSTALL: case MODS_ACT_UPDATE: return U(c, g->act.h);
     case MODS_ACT_BUSY: return r->progress >= 0 ? U(c, g->prog_h) : 0;
     default: return 0;
@@ -193,6 +192,13 @@ static void action(C* c, const MODSROW* r, int i, double x1, double top, double 
         const double d = U(c, g->radio);
         const UIR b = ui_rect(x1 - d, y, d, d);
         art(c, part(c, r->act == MODS_ACT_RADIO_ON || held(c, key) ? P_RADIO_ON : P_RADIO_OFF), b, clip);
+        ui_hot(&c->u, b, clip, key);
+        break;
+    }
+    case MODS_ACT_CHECK: case MODS_ACT_CHECK_ON: {
+        const double d = U(c, g->radio);
+        const UIR b = ui_rect(x1 - d, y, d, d);
+        art(c, part(c, r->act == MODS_ACT_CHECK_ON || held(c, key) ? P_CHECK_ON : P_CHECK_OFF), b, clip);
         ui_hot(&c->u, b, clip, key);
         break;
     }
@@ -427,7 +433,7 @@ static double detail_rows(UI* u, const UIPANEL* p, double w, int emit, void* use
     if (st->note[0]) y += block(c, R_NOTE, g->line, st->note, p->cx, p->cy + y, w, ink, &p->view, emit) + para;
     if (st->nopt) y += header(c, p, S_OPTIONS, y, w, emit);
     for (i = 0; i < st->nopt; i++) y += opt_row(c, p, i, y, w, emit);
-    if (st->nsw) y += header(c, p, S_ARCHIVES, y, w, emit);
+    if (st->nsw) y += header(c, p, st->sw_head, y, w, emit);
     for (i = 0; i < st->nsw; i++) y += sw_row(c, p, i, y, w, emit);
     return y;
 }
@@ -569,12 +575,13 @@ static void fullest(MODSPAGE* s, float W, float H, int broken, int locked)
     s->nopt = MODS_MAXOPT;
     s->nsw = MODS_MAXSW;
     s->update_all = 1;
+    WORST(s->sw_head, broken);
     WORST(s->title, broken); WORST(s->meta, broken); WORST(s->summary, broken); WORST(s->note, broken); WORST(s->confirm, broken);
     for (i = 0; i < MODS_MAXROW; i++) {
         MODSROW* r = &s->row[i];
         WORST(r->name, broken); WORST(r->detail, broken); WORST(r->badge_text, broken);
         r->badge = (uint8_t)(1 + i % MODS_BADGE_CONFLICT);
-        r->act = (uint8_t)(1 + i % MODS_ACT_BUSY);
+        r->act = (uint8_t)(1 + i % MODS_ACT_CHECK_ON);
         r->progress = 500;
     }
     for (i = 0; i < MODS_MAXOPT; i++) {

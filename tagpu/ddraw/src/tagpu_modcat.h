@@ -32,6 +32,7 @@ int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const cha
 typedef struct {
     char name[48], author[48], version[32], summary[400];
     int  is_mutator;
+    char base[32];              /* a mutator's base mod, "none" for the folder's own game */
 } MODABOUT;
 
 /* Mod `id`'s entry for the screen. 1 with `out` filled, 0 when no entry names it. */
@@ -55,6 +56,7 @@ typedef struct {
     char*   base_url;           /* the catalog's own, "" until there is a place to name */
     MODPKG* packages;
     int     npackages;
+    int     is_mutator;         /* its package is one archive: no recipe runs */
 } MODINSTALL;
 
 /* What it takes to install mod `id`. 1 with `out` filled, for tagpu_modcat_install_free; 0 with the reason in `err`
@@ -65,5 +67,48 @@ void tagpu_modcat_install_free(MODINSTALL* m);
 
 /* `fn` with each entry's id that is a plain name; 0 when the catalog does not parse. */
 int  tagpu_modcat_each_id(const char* catalog, size_t n, void (*fn)(void* ctx, const char* id), void* ctx);
+
+/* ---- a mutator ----------------------------------------------------------------------------------
+
+   Game files layered over one base mod, ahead of everything it mounts. Every path here has '\\' for its
+   separators, as the engine's own lookup splits at (0x4BB4E0); the catalog spells them with '/'. */
+#define MODCAT_PATH 96
+
+typedef struct {
+    char    path[MODCAT_PATH];
+    int     replaces;           /* the base holds this path, and `sha` is that file's when packed */
+    uint8_t sha[32];
+} MODMUTFILE;
+
+typedef struct {
+    char        id[32], base[32];
+    MODMUTFILE* files;
+    int         nfiles;
+    char      (*hides)[MODCAT_PATH];    /* the base's files it takes away */
+    int         nhides;
+} MODMUTATOR;
+
+/* Mutator `id`, for tagpu_modcat_mutator_free. 1 with `out` filled, 0 when no entry names it, it is no mutator, or a
+   path or hash in it is one nothing here could act on: too long, unsafe, or with a character a profile's key cannot hold. */
+int  tagpu_modcat_mutator(const char* catalog, size_t n, const char* id, MODMUTATOR* out);
+void tagpu_modcat_mutator_free(MODMUTATOR* m);
+
+/* The same path as the engine's lookup takes it: without case, '/' and '\\' alike. */
+int  tagpu_modcat_same_path(const char* a, const char* b);
+
+/* What the player has switched off: 1 for a path the switch `file.<path>` has off. NULL: nothing is off. */
+typedef int (*MODCAT_OFF)(void* ctx, const char* path);
+/* The file the base answers for a path: 1 with its SHA-256, 0 when it holds none. */
+typedef int (*MODCAT_HASH)(void* ctx, const char* path, uint8_t out[32]);
+
+/* Every file `m` replaces that the base no longer holds as it was packed against, whatever the switches say, so a verdict
+   survives a switch: into `out`, up to `max`; returns how many there are. New files and hides are not checked. */
+int  tagpu_modcat_stale(const MODMUTATOR* m, MODCAT_HASH hash, void* ctx, char (*out)[MODCAT_PATH], int max);
+/* The first of that list a switch has not taken out of play, or NULL: with `total` past `max` a file past the list may be the
+   one in play, so the answer is never NULL there. */
+const char* tagpu_modcat_stale_live(char (*list)[MODCAT_PATH], int total, int max, MODCAT_OFF off, void* ctx);
+/* The first path two mutators of one base cannot both have, or NULL: a file both carry, or one's file the other hides. A path
+   a switch has off is in neither. */
+const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b, MODCAT_OFF off, void* ctx);
 
 #endif
