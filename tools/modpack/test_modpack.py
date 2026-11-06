@@ -288,6 +288,7 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
     def test_the_schema_refuses(self):
         for what, entry in {
             "unsafe": (["../a"], {}, []),
+            "is unsafe": (["a\\b"], {}, []),
             "does not carry": (["a"], {"b": self.H11}, []),
             "malformed": (["a"], {"a": "x"}, []),
         }.items():

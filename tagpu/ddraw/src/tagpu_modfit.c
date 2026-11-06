@@ -15,8 +15,8 @@
 typedef struct { TAGPU_HPI* hpi; HANDLE file; } ARC;
 
 struct MODFIT {
-    ARC arc[MODFIT_ARCS + 2];
-    int n;
+    ARC* arc;
+    int  n, cap;
 };
 
 static int arc_read(void* ctx, uint32_t off, void* dst, uint32_t n)
@@ -34,7 +34,15 @@ static void add(MODFIT* f, const char* path)
     char why[160];
     TAGPU_HPISRC src;
     LARGE_INTEGER size;
-    ARC* a = &f->arc[f->n];
+    ARC* a;
+    if (f->n == f->cap) {
+        const int cap = f->cap ? f->cap * 2 : 64;
+        ARC* grown = (ARC*)realloc(f->arc, (size_t)cap * sizeof *grown);
+        if (!grown) return;
+        f->arc = grown;
+        f->cap = cap;
+    }
+    a = &f->arc[f->n];
     a->file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (a->file == INVALID_HANDLE_VALUE) return;
     if (!GetFileSizeEx(a->file, &size) || size.QuadPart > 0x7FFFFFFF) { CloseHandle(a->file); return; }
@@ -45,13 +53,14 @@ static void add(MODFIT* f, const char* path)
     f->n++;
 }
 
-MODFIT* tagpu_modfit_open(const char* base, const char (*names)[MODFIT_NAME], int n)
+MODFIT* tagpu_modfit_open(const char* base, int (*original)(const char* name))
 {
+    static const char* const PATTERN[] = { "rev31.gp3", "*.ccx", "*.ufo", "*.hpi" };
     MODFIT* f = (MODFIT*)calloc(1, sizeof *f);
     const int folder = !strcmp(base, "none");
     size_t ncat = 0;
     const char* cat = tagpu_modinst_catalog(&ncat);
-    int i;
+    unsigned k;
     if (!f) return NULL;
     if (!folder) {
         char path[MAX_PATH];
@@ -60,13 +69,20 @@ MODFIT* tagpu_modfit_open(const char* base, const char (*names)[MODFIT_NAME], in
         snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", base, base);
         add(f, path);
     }
-    for (i = 0; i < n && i < MODFIT_ARCS; i++) {
-        if (!folder) {
-            /* mount_filtered's rule: the player's key over the mod's list, and the archive every mod needs stays */
-            const int key = lstrcmpiA(names[i], tagpu_modload_essential_archive()) ? tagpu_profiles_hide_of(base, names[i]) : 0;
-            if (key > 0 || (key < 0 && cat && tagpu_modcat_hidden(cat, ncat, base, names[i]))) continue;
-        }
-        add(f, names[i]);
+    for (k = 0; k < sizeof PATTERN / sizeof *PATTERN; k++) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(PATTERN[k], &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!folder) {
+                /* mount_filtered's rule: the player's key over the mod's list, and the archive every mod needs stays */
+                const int key = lstrcmpiA(fd.cFileName, tagpu_modload_essential_archive()) ? tagpu_profiles_hide_of(base, fd.cFileName) : 0;
+                if (key > 0 || (key < 0 && cat && tagpu_modcat_hidden(cat, ncat, base, fd.cFileName))) continue;
+                if (!original(fd.cFileName)) continue;
+            }
+            add(f, fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
     }
     return f;
 }
@@ -79,6 +95,7 @@ void tagpu_modfit_close(MODFIT* f)
         tagpu_hpi_close(f->arc[i].hpi);
         CloseHandle(f->arc[i].file);
     }
+    free(f->arc);
     free(f);
 }
 
@@ -108,21 +125,4 @@ int tagpu_modfit_hash(void* ctx, const char* path, uint8_t out[32])
         return 1;
     }
     return 0;
-}
-
-int tagpu_modfit_folder(char (*names)[MODFIT_NAME], int max)
-{
-    static const char* const PATTERN[] = { "rev31.gp3", "*.ccx", "*.ufo", "*.hpi" };
-    unsigned k;
-    int n = 0;
-    for (k = 0; k < sizeof PATTERN / sizeof *PATTERN; k++) {
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(PATTERN[k], &fd);
-        if (h == INVALID_HANDLE_VALUE) continue;
-        do {
-            if (n < max && strlen(fd.cFileName) < MODFIT_NAME) lstrcpynA(names[n++], fd.cFileName, MODFIT_NAME);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
-    }
-    return n;
 }

@@ -901,7 +901,7 @@ int tagpu_modinst_installed(const char* id, char* out, int cap)
 }
 
 #ifndef MODINST_TEST
-/* The first call is DllMain's, on the only thread there is (tagpu_modinst_sweep_at_start), so every later one reads what it set. */
+/* The first call is DllMain's, on the only thread there is (from tagpu_profiles_attach in cfg_load), so every later one reads what it set. */
 const char* tagpu_modinst_catalog(size_t* n)
 {
     static const char* s_text;

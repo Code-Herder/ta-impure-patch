@@ -18,7 +18,7 @@
 
    tagpu_rules.on replaces the rules of the first two layers, for a test: read_rules' keys.
    It is read as often as the player's file, so a test can change the rules at the main menu. */
-#define PROFILE_CAP 4096
+#define PROFILE_CAP 16384
 #define RADIUS_MAX MODRULES_RADIUS_MAX
 #define RULES_LEVER "tagpu_rules.on"
 #define MIGRATED ".migrated"

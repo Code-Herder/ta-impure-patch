@@ -34,7 +34,7 @@ isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launc
    in the user's unlock dialog (memory: `ta-input-injection-safety`). xdotool is fine for
    *reading* window geometry and for capture. **Never run `xrandr` against the live display**,
    never move the human's pointer, never activate windows to "test" something.
-3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`, and Wine with no audio driver, which also silences a mod's exe reading its own options file). Pass
+3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`, and Wine's sound on a null device, which also silences a mod's exe reading its own options file). Pass
    `--sound` only when asked, or to measure sound or a movie on a null sink (`references/measuring.md`).
 4. **Clean up**: `tacli stop <name>` when done, `tacli rm <name>` when the instance has no
    further use. Every running game is a GPU client.

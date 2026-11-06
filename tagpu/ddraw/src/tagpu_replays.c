@@ -1279,7 +1279,7 @@ static int hex16(const char* t, unsigned* hi, unsigned* lo)
    and the start after the size, else of version 1's. `line` is NUL-terminated and is cut up. */
 static int ent_parse(char* line, Ent* e, int keyed)
 {
-    char* f[13 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    char* f[13 + REC_PLAYERS + 7 + REC_PLAYERS + 6];
     unsigned hi = 0, lo = 0;
     int n = 0, i, k;
     char* p = line;
@@ -2591,7 +2591,8 @@ static void mod_lines(char* gi, const Ent* e)
     if (!hint) hint = differ ? "The installed archives differ." : "";
     set_label(gi, "MODHINT", "%s", hint);
     /* the versions want the window's width, and only the footer has it */
-    if (differ && strcmp(e->mutators, mine))
+    /* a recording's copy is cut to its array, and the same list must read as the same */
+    if (differ && strncmp(e->mutators, mine, sizeof e->mutators - 1))
         set_label(gi, "FOOTER", "Recorded with %s. You have %s.", e->mutators[0] ? e->mutators : "no mutators", mine[0] ? mine : "none");
     else
         footer_disk(gi);

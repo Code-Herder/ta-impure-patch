@@ -1641,8 +1641,7 @@ def check_catalog(j) -> list:
                 errs.append(f"{n}: a mutator has no files")
             else:
                 for path in list(e["files"]) + list(e.get("hides", [])):
-                    if not isinstance(path, str) or not path or len(path) >= 96 or "=" in path or path.startswith(("/", "\\")) \
-                            or ".." in re.split(r"[\\/]", path) or ":" in path:
+                    if not isinstance(path, str) or len(path) >= 96 or "=" in path or not installer_takes(path):
                         errs.append(f"{n}: path {path!r} is unsafe")
                 if isinstance(e.get("base_hashes"), dict):
                     for path, h in e["base_hashes"].items():

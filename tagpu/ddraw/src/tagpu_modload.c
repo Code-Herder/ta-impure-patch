@@ -242,7 +242,8 @@ static int folder_wants_mutators(void)
     const char* cat = tagpu_modinst_catalog(&n);
     int i, want = 0;
     ids.n = 0;
-    if (!cat) return 0;
+    /* a control launch touches nothing it does not own, as with mod= */
+    if (!cat || tagpu_settings_ignored()) return 0;
     tagpu_modcat_each_id(cat, n, note_catalog_id, &ids);
     for (i = 0; i < ids.n && !want; i++) {
         MODABOUT a;
@@ -501,14 +502,11 @@ static int is_original_archive(const char* name)
    THE ENGINE'S DIRECTORY, DISASSEMBLED 2026-11-06 (engine/process.md). OpenHAPIFile 0x4BDD70 reads the archive's header and directory into one
    block and turns every offset into a pointer (0x4BDF85, 0x4BE010): handle +8 the block, block +8 its size in the file's header, block +0x10
    the root. A directory is { int count; ENTRY* first }, an entry 9 bytes { char* name; void* child; byte flag }, bit 0 a directory. Lookup
-   0x4BB4E0 and the listing 0x4BC640 walk count entries, and nothing keeps a pointer to an entry across the mount; the prune 0x4BE180 reopens
-   only the FILE*. So taking an entry out of its directory, on the game thread between a mount's return and the next engine call, is the whole
+   0x4BB4E0 and the listing 0x4BC640 walk count entries, and nothing keeps a pointer to an entry across the mount. The prune 0x4BE180 frees and
+   drops an archive whose FILE* is NULL and will not reopen, and a later mount would read that one afresh: every archive edited here mounts with flag 1,
+   which keeps its FILE* open, so the prune passes it at 0x4BE1A3. So taking an entry out of its directory, on the game thread between a mount's return and the next engine call, is the whole
    of hiding a file. A VALUE IN THE BLOCK IS DATA: each pointer is held inside the block before it is read. */
-#define VA_GFX_PP      0x0051FBD0u      /* the graphics globals: 0x4B6220 returns this; the list and its count below */
-#define GFX_ARC_LIST   0x618
-#define GFX_ARC_COUNT  0x61C
 #define HND_BLOCK      0x08
-#define HND_PATH       0x14
 #define BLOCK_SIZE     0x08
 #define BLOCK_ROOT     0x10
 #define DIR_ENTRY      9
@@ -576,23 +574,6 @@ static int forget_in_engine(char* handle, const char* path)
     }
 }
 
-/* the archive the engine appended last, when it is the one mounted just now: the list is append-only (0x4BE162) */
-static char* last_mounted(const char* path)
-{
-    const char* gfx = *(const char* const*)VA_GFX_PP;
-    char* const* list;
-    int n;
-    char* h;
-    size_t a, b;
-    const char* have;
-    if (!gfx || !(list = *(char* const* const*)(gfx + GFX_ARC_LIST)) || (n = *(const int*)(gfx + GFX_ARC_COUNT)) <= 0) return NULL;
-    h = list[n - 1];
-    have = h + HND_PATH;
-    a = strlen(have);
-    b = strlen(path);
-    return a >= b && !lstrcmpiA(have + a - b, path) ? h : NULL;
-}
-
 static void note_gone(const char* archive, const char* path)
 {
     if (s_ngone >= GONE_MAX) return;
@@ -630,17 +611,9 @@ static void note_file_key(void* ctx, const char* path)
     tagpu_logf("modload: file.%s names no file of a mutator of %s; ignored", path, base);
 }
 
-/* The archives the mount would take for this base, for the fit: the same rule as mount_filtered's, the originals alone under a mod. */
-static int mount_names(const char* base, char (*names)[MODFIT_NAME], int max)
+static int mounts_as_original(const char* name)
 {
-    int n = tagpu_modfit_folder(names, max), i, kept = 0;
-    if (!strcmp(base, FOLDER_BASE)) return n;
-    for (i = 0; i < n; i++)
-        if (is_original_archive(names[i]) > 0) {
-            if (kept != i) memcpy(names[kept], names[i], MODFIT_NAME);
-            kept++;
-        }
-    return kept;
+    return is_original_archive(name) > 0;
 }
 
 /* Ahead of everything the base mounts, in the catalog's order. A switched-on mutator that does not fit stays off for this start: the
@@ -648,21 +621,20 @@ static int mount_names(const char* base, char (*names)[MODFIT_NAME], int max)
    this will do. */
 static void mount_mutators(const char* base)
 {
-    static char names[MODFIT_ARCS][MODFIT_NAME];
     size_t ncat = 0;
     const char* cat = tagpu_modinst_catalog(&ncat);
     IDS ids;
     MODFIT* fit = NULL;
-    int i, k, nnames = 0;
+    int i, k;
     ids.n = 0;
     if (!cat) return;
     tagpu_modcat_each_id(cat, ncat, note_catalog_id, &ids);
     for (i = 0; i < ids.n; i++) {
         MODMUTATOR m;
         MODABOUT about;
-        char path[MAX_PATH], archive[48], version[32], stale[8][MODCAT_PATH];
+        char path[MAX_PATH], full[MAX_PATH], archive[48], version[32], stale[8][MODCAT_PATH];
         const char* why = NULL;
-        int total;
+        int total, handle;
         if (!tagpu_modcat_mutator(cat, ncat, ids.id[i], &m)) continue;
         if (strcmp(m.base, base) || tagpu_profiles_mutator_of(base, m.id) != 1) { tagpu_modcat_mutator_free(&m); continue; }
         if (!tagpu_modinst_installed(m.id, version, sizeof version)) {
@@ -670,10 +642,7 @@ static void mount_mutators(const char* base)
             tagpu_modcat_mutator_free(&m);
             continue;
         }
-        if (!fit) {
-            nnames = mount_names(base, names, MODFIT_ARCS);
-            fit = tagpu_modfit_open(base, (const char (*)[MODFIT_NAME])names, nnames);
-        }
+        if (!fit) fit = tagpu_modfit_open(base, mounts_as_original);
         total = fit ? tagpu_modcat_stale(&m, tagpu_modfit_hash, fit, stale, 8) : 1;
         if (!fit) lstrcpynA(stale[0], "?", sizeof stale[0]);
         why = tagpu_modcat_stale_live(stale, total, 8, file_off, (void*)base);
@@ -690,19 +659,22 @@ static void mount_mutators(const char* base)
 
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", m.id, m.id);
         snprintf(archive, sizeof archive, "%s.hpi", m.id);
-        if (s_nmounted >= MUTATORS_MAX || !s_mountReal(path, 1)) {
+        /* the mounter's two path buffers, as tagpu_modload_begin's check of the mod's own */
+        if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
+            tagpu_logf("modload: mutator %s: the game's folder is too deep for its files", m.id);
+            tagpu_modcat_mutator_free(&m);
+            continue;
+        }
+        if (s_nmounted >= MUTATORS_MAX || !(handle = s_mountReal(path, 1))) {
             tagpu_logf("modload: mutator %s does not open", m.id);
             tagpu_modcat_mutator_free(&m);
             continue;
         }
-        {
-            char* h = last_mounted(path);
-            for (k = 0; k < m.nfiles; k++)
-                if (file_off((void*)base, m.files[k].path)) {
-                    tagpu_logf("modload: %s: %s is switched off, %d entries", m.id, m.files[k].path, h ? forget_in_engine(h, m.files[k].path) : 0);
-                    note_gone(archive, m.files[k].path);
-                }
-        }
+        for (k = 0; k < m.nfiles; k++)
+            if (file_off((void*)base, m.files[k].path)) {
+                tagpu_logf("modload: %s: %s is switched off, %d entries", m.id, m.files[k].path, forget_in_engine((char*)(intptr_t)handle, m.files[k].path));
+                note_gone(archive, m.files[k].path);
+            }
         if (tagpu_modcat_about(cat, ncat, m.id, &about)) {
             size_t at = strlen(s_mutators);
             snprintf(s_mutators + at, sizeof s_mutators - at, "%s%s %s", at ? ", " : "", about.name, version);
@@ -715,16 +687,14 @@ static void mount_mutators(const char* base)
 }
 
 /* What the mounted mutators hide from the base's own archives, right after each has mounted; a later source answers the path. */
-static void apply_hides(const char* path, const char* archive)
+static void apply_hides(int handle, const char* archive)
 {
-    char* h = last_mounted(path);
     int i, k;
-    if (!h) return;
     for (i = 0; i < s_nmounted; i++)
         for (k = 0; k < s_applied[i].nhides; k++) {
             const char* p = s_applied[i].hides[k];
             if (file_off(s_id, p)) continue;
-            tagpu_logf("modload: %s hides %s from %s: %d entries", s_applied[i].id, p, archive, forget_in_engine(h, p));
+            tagpu_logf("modload: %s hides %s from %s: %d entries", s_applied[i].id, p, archive, forget_in_engine((char*)(intptr_t)handle, p));
             note_gone(archive, p);
         }
 }
@@ -745,25 +715,26 @@ static int __stdcall mount_filtered(const char* name, int flag)
     const char* base = name, *p;
     if (!s_ours) {
         char path[MAX_PATH], arch[48];
+        int handle;
         s_ours = 1;
         mount_mutators(s_id[0] ? s_id : FOLDER_BASE);
         if (!s_id[0]) return s_mountReal(name, flag);
         /* The list is append-only (0x4BE162), so this call, the first, is what puts them ahead of everything. Flag 1 is what
            the mods' own first pattern passes. A package that does not open would leave the mod's exe on retail's data. */
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", s_id, s_id);
-        if (!s_mountReal(path, 1)) {
+        if (!(handle = s_mountReal(path, 1))) {
             refuse("%s does not open: install the mod again", path);
             box_and_exit();
         }
         snprintf(arch, sizeof arch, "%s.hpi", s_id);
-        apply_hides(path, arch);
+        apply_hides(handle, arch);
         snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", s_id, s_id);
-        if (!s_mountReal(path, 1)) {
+        if (!(handle = s_mountReal(path, 1))) {
             refuse("%s does not open: install the mod again", path);
             box_and_exit();
         }
         snprintf(arch, sizeof arch, "%s.originals.hpi", s_id);
-        apply_hides(path, arch);
+        apply_hides(handle, arch);
         tagpu_logf("modload: mounted mods\\%s\\%s.hpi and its originals", s_id, s_id);
         if (!exists(ESSENTIAL_ARCHIVE)) {
             refuse("this folder has no %s, so this copy of the game cannot run mods", ESSENTIAL_ARCHIVE);
@@ -950,9 +921,10 @@ static int install_mount(void)
     rel = (VA_MOUNTER + sizeof MOUNTER_STOLEN) - ((unsigned)(uintptr_t)stub + sizeof MOUNTER_STOLEN + 5);
     memcpy(stub + sizeof MOUNTER_STOLEN + 1, &rel, 4);
     s_mountReal = (int (__stdcall*)(const char*, int))stub;
-    return tagpu_detour_land(VA_MOUNTER, (const unsigned char*)mount_filtered, sizeof MOUNTER_STOLEN) &&
-           redirect_call(VA_OPEN_CALL, VA_FOPEN, open_filtered) &&
-           redirect_call(VA_FIND_CALL, VA_FINDFIRST, find_filtered);
+    /* the mounter last: with no mod a failure must leave no mutator mounting, and the two redirects pass everything through there */
+    return redirect_call(VA_OPEN_CALL, VA_FOPEN, open_filtered) &&
+           redirect_call(VA_FIND_CALL, VA_FINDFIRST, find_filtered) &&
+           tagpu_detour_land(VA_MOUNTER, (const unsigned char*)mount_filtered, sizeof MOUNTER_STOLEN);
 }
 
 /* ---- the entry point --------------------------------------------------------------------------- */

@@ -423,10 +423,11 @@ class Instance:
         overrides = ["ddraw=n,b"]
         if meta.get("dplay"):
             overrides.append(DPLAY_OVERRIDES)
-        # A SILENT INSTANCE HAS NO AUDIO DRIVER. totala.ini's NoDirectSound reaches only an exe that reads
-        # totala.ini, and a mod's exe names its own options file, whose Sound Mode plays through the
-        # owner's speakers (MEASURED 2026-11-06: ProTA at its menu, on a private display). The environment also
-        # reaches the process the Mods screen's Confirm restarts, which no launch here writes a file for.
+        # A SILENT INSTANCE'S SOUND GOES NOWHERE: Wine off PulseAudio, and ALSA on the null plugin, a working device
+        # that plays nothing, as tacompat's games have (asound-null.conf says why a device must exist). totala.ini's
+        # NoDirectSound reaches only an exe that reads totala.ini, and a mod's exe names its own options file, whose
+        # Sound Mode plays through the speakers (MEASURED 2026-11-06: ProTA at its menu, on a private display).
+        # The environment also reaches the process the Mods screen's Confirm restarts.
         if not meta.get("sound"):
             overrides.append("winepulse.drv=d")
             e["ALSA_CONFIG_PATH"] = str(Path(__file__).resolve().parent / "compat" / "asound-null.conf")

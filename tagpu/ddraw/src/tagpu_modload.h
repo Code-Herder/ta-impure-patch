@@ -1,7 +1,8 @@
 #ifndef TAGPU_MODLOAD_H
 #define TAGPU_MODLOAD_H
 /* tagpu_modload -- a mod chosen by `mod=` in impure.cfg, run on the player's own exe from mods\<id>\
-   (research/notes/mod-manager-plan.md). With no mod= none of this does anything.
+   (research/notes/mod-manager-plan.md). With no mod= none of this does anything, unless the player has switched on a mutator of the
+   folder's own game: then only those mount.
 
    THE ORDER IS THE LOAD ORDER, AND THE RESULT IS THE DROP-IN FOLDER'S. A mod whose exe differs on disk
    has its bytes in place when Impure patches, and a Patch Loader writes its list after Impure's

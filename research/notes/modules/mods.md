@@ -2,7 +2,7 @@
 
 `mod=<id>` in `impure.cfg` runs catalog mod `<id>` on the player's own exe from `mods\<id>\`, and the
 result is the mod's drop-in folder: the same unit types, feature and weapon tables and build menus, and a
-network game with a drop-in player whose handshake agrees on every unit's scripts, GUIs and downloads. With no `mod=` none of this does anything. The design and its reasons are in
+network game with a drop-in player whose handshake agrees on every unit's scripts, GUIs and downloads. With no `mod=` none of this does anything unless a mutator of the folder's own game is on (*Mutators*). The design and its reasons are in
 [the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html). The player reaches all of it from the
 main menu's MODS button: *The screen*, below.
 
@@ -122,7 +122,7 @@ holds one of its paths. The hash check runs at every start because a base can be
 leaves the base's two archives right after each mounts, by editing the engine's directory ([the engine map](../engine/process.html), *The directory in memory*). Each pointer read there is held inside the block first. A hide reaches `<base>.hpi` and `<base>.originals.hpi` only, so the folder's
 original archives answer the path next. `tagpu_modload_each_gone` tells the wiki's reader the same removals, through `tagpu_hpi_forget`.
 
-With no `mod=`, `tagpu_modload_end` takes the mounter's detour only when a mutator of `none` is on. Nothing else is filtered and the loose step stays open: that launch's other detours pass everything through. An exe whose mounter is not the expected bytes keeps its own game, with a log line.
+With no `mod=`, `tagpu_modload_end` takes the mounter's detour only when a mutator of `none` is on, and never on a control launch. Nothing else is filtered and the loose step stays open: that launch's other detours pass everything through. An exe whose mounter is not the expected bytes keeps its own game, with a log line.
 
 **The fit on the screen.** Each opening, and after each install, `fit_thread` reads the base's files once the archive scan has ended, and hands back up to eight stale paths per mutator. A switch needs no second read: `tagpu_modcat_stale_live` takes the first of those still in play, and past the list the verdict stays stale.
 Manage lists a mutator under its base's row, only for the base chosen, with a check. A stale one reads Stale with no check and its pane names the file; one holding a path of an earlier mutator that is on reads Conflict and names both. One already on keeps its check, so a player can always turn it off. Explore lists the chosen base's mutators; Updates lists one with a newer
@@ -260,7 +260,7 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - No real mutator exists, so everything about them has run on test mutators the harness builds.
 - The fingerprint does not see a `file.` key, as it does not see a `hide.` key: the multiplayer landing has to include both.
 - A loose file in the folder answers before a mutator under `none`, and the fit does not read loose files.
-- Manage holds `MODS_MAXROW` rows: past that a mutator is not listed, and the catalog is far from it.
+- The screen holds `MAX_MOD`, 15 catalog entries with the mods: past that a mutator is on no tab, though the mount honours its key. The catalog has five.
 - The fit on the screen reads a base as it is now, so one whose update waits in `mods\\<id>.new` is judged on the old files until the next start; the mount checks the new ones.
 - The screen says nothing about a mod another copy of the game is installing beyond what the worker's refusal says.
 - A download starts again from nothing after any interruption: there is no resume.
