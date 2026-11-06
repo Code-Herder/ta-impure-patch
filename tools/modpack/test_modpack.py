@@ -4,8 +4,8 @@
     python3 tools/modpack/test_modpack.py
 
 The schema check refuses what the catalog must not ship (a missing sha256, base or permission, an unsafe path, a
-mutator with an exe), the committed catalog passes it, a Patch Loader's list is read as patches.c reads it, and the
-package's tar holds its files with fixed headers.
+mutator with an exe), the committed catalog passes it, a Patch Loader's list is read as patches.c reads it, the pack holds
+one entry per XOR and is read to its exact end, and the package's tar holds its files with fixed headers.
 """
 import copy
 import json
@@ -57,6 +57,8 @@ class Schema(unittest.TestCase):
             "declares no files": lambda j: j["mods"][0]["packages"][0].update(files=[]),
             "twice": lambda j: j["mods"][1].update(id="amod"),
             "kind": lambda j: j["mods"][0].update(kind="other"),
+            "no mod of the catalog ": lambda j: j["mods"][1].update(base="amut"),
+            "id none": lambda j: j["mods"][0].update(id="none"),
         }
         for want, edit in cases.items():
             errs = self.broken(edit)
@@ -103,6 +105,37 @@ class Package(unittest.TestCase):
             with tarfile.open(d + "/p.tar") as t:
                 self.assertEqual(t.getnames(), ["Icon/i.pcx", "b.hpi"])
                 self.assertTrue(all(x.mtime == 0 for x in t.getmembers()))
+
+
+class Pack(unittest.TestCase):
+    def test_one_entry_per_xor(self):
+        x, y = {0x401000: 5}, {0x402000: 6, 0x402001: 7}
+        known = [(0, "a exe", b"k" * 32, dict(x)), (1, "a loader", b"l" * 32, None), (0, "b exe", b"m" * 32, dict(y))]
+        pack = m.read_patches(m.pack_patches([("amod", b"h" * 32, x)], known))
+        self.assertEqual(len(pack["xors"]), 2, "a mod and its exe share one XOR")
+        self.assertEqual(pack["mods"], [("amod", b"h" * 32, 0)])
+        self.assertEqual(pack["known"], [(0, b"k" * 32, 0), (1, b"l" * 32, -1), (0, b"m" * 32, 1)])
+        self.assertEqual(pack["xors"][1], [(0x402000, bytes([6, 7]))])
+
+    def test_truncated(self):
+        blob = m.pack_patches([("amod", b"h" * 32, {0x401000: 5})], [])
+        with self.assertRaises(SystemExit):
+            m.read_patches(blob + b"x")
+
+    def test_xor_drops_what_stays(self):
+        class Stock:
+            data = bytes(range(16))
+            def off(self, va):
+                return va - 0x401000
+        self.assertEqual(m.xor_of(Stock(), {0x401002: 2, 0x401003: 7}), {0x401003: 7 ^ 3})
+
+
+class Cased(unittest.TestCase):
+    def test_insert_keeps_the_name_in_one_folder(self):
+        tree = {}
+        m.insert_cased(tree, "Maps/A Plethora.ufo", b"1")
+        m.insert_cased(tree, "maps/b.ufo", b"2")
+        self.assertEqual(tree, {"Maps": {"A Plethora.ufo": b"1", "b.ufo": b"2"}})
 
 
 class Runs(unittest.TestCase):

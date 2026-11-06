@@ -17,12 +17,17 @@ imports (TAESC, EPLAYX, ZDRAW...) belong to TADR's route. A mod with a stock exe
 Loader built with its list inside dplayx.dll as an INI (`[Settings]` keys and `[<file offset>] patch=<hex>` sections,
 vendor/Total-Annihilation-Patch-Loader/patches.c), so its table is that list applied.
 
-REVERTS. A known exe (or a known loader beside a stock exe) has an XOR run list that takes its image back to stock 3.1.
-XOR rather than the stock bytes, so the DLL carries no run of the original exe.
+ONE XOR, BOTH WAYS. A table is stored as its XOR with the stock image, the bytes it leaves as they are dropped. On stock it
+gives the mod's image, and on that mod's exe it gives stock, so the pack holds neither image and no pair of its entries
+gives one. Only a byte the mod sets to zero reads as the stock byte; `verify` counts them.
+
+KNOWN FILES. The pack lists the modded exes and Patch Loaders Impure knows by file_key. A known modded exe names the XOR
+that takes it to stock. A loader names none: the image is restored from the exe on disk, because what a loader writes is
+partly rel32 displacements into its own DLLs, which no table can hold (research/notes/mod-manager-plan.md).
 
 PACKAGES. Each is one tar.zst holding <id>.hpi, its recipe <id>.originals.tsv and any plain files the DLL itself reads
-(Icon/, a mod's strategic icons). The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py): as
-the drop-in folder (retail files overlaid by the mod's, the mod's first mount pattern, loose files first) and as the
+(Icon/, a mod's strategic icons). The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py), over the
+retail archives as they really are: as the drop-in folder (retail files overlaid by the mod's, the mod's first mount pattern, loose files first) and as the
 managed mount (the package first, then the retail archives the drop-in folder did not lose). The package's archive holds
 exactly the paths where a mod file wins in the drop-in folder and its bytes are neither what the managed mount already
 answers from retail nor an original file.
@@ -38,10 +43,11 @@ Packages, listings and anything else derived from a mod's files go to the fixtur
 repository: third-party bytes must never be one `git add -A` away from a commit.
 
 mods/patches.bin, little-endian, zstd compressed (read by the DLL through MODPAK):
-    "MPAT" | u32 version | u32 nmods | u32 nreverts
-    mod:    u8 idlen | id | 32 B sha256 of the patched image (image_hash) | u32 nruns | runs
-    revert: u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | u32 nruns | runs
-    run:    u32 va | u16 len | bytes (a revert's are the XOR with the stock image)
+    "MPAT" | u32 version | u32 nxors | u32 nmods | u32 nknown
+    xor:   u32 nruns | runs
+    mod:   u8 idlen | id | 32 B sha256 of the patched image (image_hash) | u32 xor
+    known: u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | i32 xor taking it to stock, -1 for a loader
+    run:   u32 va | u16 len | bytes
 """
 import argparse
 import fnmatch
@@ -185,6 +191,26 @@ def runs_of(pairs: dict) -> list:
     return runs
 
 
+def xor_of(stock: Pe, table: dict) -> dict:
+    """A table as its XOR with stock, the bytes it leaves as they are dropped."""
+    out = {}
+    for va, b in table.items():
+        x = b ^ stock.data[stock.off(va)]
+        if x:
+            out[va] = x
+    return out
+
+
+def image_xor(img, va: int, b: bytes):
+    for i, x in enumerate(b):
+        for v, buf in img:
+            if v <= va + i < v + len(buf):
+                buf[va + i - v] ^= x
+                break
+        else:
+            die(f"0x{va + i:X} is in no section of the image")
+
+
 def delta(stock: Pe, mod: Pe, mask: set) -> dict:
     """{va: the mod's byte} wherever the mod's exe differs from stock outside the mask."""
     if [s[1:] for s in stock.sections] != [s[1:] for s in mod.sections]:
@@ -295,6 +321,12 @@ def tavfs():
     return t
 
 
+def hpipack():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hpipack as h
+    return h
+
+
 def stock_exe() -> bytes:
     return (main_checkout() / "pristine/TotalA.exe.pristine").read_bytes()
 
@@ -357,8 +389,9 @@ def file_key(data: bytes, is_exe: bool) -> bytes:
     return hashlib.sha256(data).digest()
 
 
-def known_reverts(stock: Pe):
-    """[(kind, name, key, {va: xor})]: every known modded exe of a setup and every known loader, back to stock."""
+def known_files(stock: Pe):
+    """[(kind, name, key, {va: xor} or None)]: every known modded exe of a setup, with the XOR to stock, and every known
+    loader, which needs none: the image comes back from the exe on disk."""
     t = tacompat()
     seen, out = set(), []
     for s in t.SETUPS:
@@ -371,9 +404,7 @@ def known_reverts(stock: Pe):
                     continue
                 seen.add(k)
                 exe = Pe(d)
-                m = masked_set(stock, exe)
-                tab = delta(stock, exe, m)
-                out.append((0, f"{s['name']} exe", k, {va: b ^ stock.data[stock.off(va)] for va, b in tab.items()}))
+                out.append((0, f"{s['name']} exe", k, xor_of(stock, delta(stock, exe, masked_set(stock, exe)))))
             elif low == "dplayx.dll":
                 d = p.read_bytes()
                 if b"[Settings]" not in d:
@@ -382,24 +413,81 @@ def known_reverts(stock: Pe):
                 if k in seen:
                     continue
                 seen.add(k)
-                tab = loader_table(d)
-                out.append((1, f"{s['name']} loader", k, {va: b ^ stock.data[stock.off(va)] for va, b in tab.items()}))
+                out.append((1, f"{s['name']} loader", k, None))
     return out
+
+
+def pack_patches(mods: list, known: list) -> bytes:
+    """mods/patches.bin before compression, from [(id, image hash, {va: xor})] and known_files. Equal XORs are one entry,
+    so a mod and its exe share theirs: the pack holds no table beside the same table's revert."""
+    xors, index = [], {}
+
+    def xor_id(x: dict) -> int:
+        key = tuple(sorted(x.items()))
+        if key not in index:
+            index[key] = len(xors)
+            xors.append(x)
+        return index[key]
+
+    mod_rows = [(mid, h, xor_id(x)) for mid, h, x in mods]
+    known_rows = [(kind, key, -1 if x is None else xor_id(x)) for kind, _, key, x in known]
+    blob = bytearray(b"MPAT" + struct.pack("<IIII", VERSION, len(xors), len(mod_rows), len(known_rows)))
+    for x in xors:
+        runs = runs_of(x)
+        blob += struct.pack("<I", len(runs))
+        for va, b in runs:
+            blob += struct.pack("<IH", va, len(b)) + b
+    for mid, h, i in mod_rows:
+        blob += bytes([len(mid)]) + mid.encode() + h + struct.pack("<I", i)
+    for kind, key, i in known_rows:
+        blob += bytes([kind]) + key + struct.pack("<i", i)
+    return bytes(blob)
+
+
+def read_patches(blob: bytes) -> dict:
+    """The format above, read to its exact end, as the DLL must."""
+    if blob[:4] != b"MPAT":
+        die("patches.bin: no magic")
+    version, nx, nm, nk = struct.unpack_from("<IIII", blob, 4)
+    if version != VERSION:
+        die(f"patches.bin: version {version}")
+    at = 20
+    xors = []
+    for _ in range(nx):
+        n = struct.unpack_from("<I", blob, at)[0]
+        at += 4
+        runs = []
+        for _ in range(n):
+            va, ln = struct.unpack_from("<IH", blob, at)
+            runs.append((va, blob[at + 6:at + 6 + ln]))
+            at += 6 + ln
+        xors.append(runs)
+    mods = []
+    for _ in range(nm):
+        ln = blob[at]
+        mid, h = blob[at + 1:at + 1 + ln].decode(), blob[at + 1 + ln:at + 33 + ln]
+        mods.append((mid, h, struct.unpack_from("<I", blob, at + 33 + ln)[0]))
+        at += 37 + ln
+    known = []
+    for _ in range(nk):
+        known.append((blob[at], blob[at + 1:at + 33], struct.unpack_from("<i", blob, at + 33)[0]))
+        at += 37
+    if at != len(blob):
+        die(f"patches.bin: {len(blob) - at} B past the last entry")
+    return {"xors": xors, "mods": mods, "known": known}
 
 
 # ---------------------------------------------------------------------------- the mount, simulated
 
-def manifest():
-    """The original game's files: ({hash}, {(archive lower, path lower): md5}) from _local/original-manifest.tsv."""
-    hashes, members = set(), {}
+def manifest() -> set:
+    """The hash of every file of the original game, _local/original-manifest.tsv. One row per hash, so it says WHETHER some
+    bytes are original and never what an archive holds: retail_tables reads that from the archives."""
+    hashes = set()
     for line in (main_checkout() / "_local/original-manifest.tsv").read_text().splitlines():
-        md5, size, path = line.split("\t", 2)
+        md5, size, _ = line.split("\t", 2)
         if int(size):
             hashes.add(md5)
-        if ":" in path:
-            arc, member = path.split(":", 1)
-            members[(arc.lower(), member.lower().replace("\\", "/"))] = md5
-    return hashes, members
+    return hashes
 
 
 def member_sizes() -> dict:
@@ -412,12 +500,38 @@ def member_sizes() -> dict:
 
 
 def member_table(path: Path) -> dict:
-    """{lower path: md5} of an archive; a file too short to be one has none."""
-    v = tavfs()
-    if not v._has_trailer(path):
+    """{lower path: (md5, name as stored)} of an archive; a file too short to be one has none."""
+    if not tavfs()._has_trailer(path):
         return {}
-    a = v.ta3do.HpiArchive(path)
-    return {k: hashlib.md5(a.read(k)).hexdigest() for k in a.files}
+    a = hpipack().Archive(path)
+    return {k: (hashlib.md5(a.read(k)).hexdigest(), a.files[k][3]) for k in a.files}
+
+
+def retail_tables(names: dict) -> dict:
+    """{archive lower: member_table} of the retail folder's archives, {name: path}. Read once and kept beside the packages,
+    by name, size and date: every archive decodes in Python, which takes minutes."""
+    cache = OUT / "retail-members.json"
+    old = json.loads(cache.read_text()) if cache.is_file() else {}
+    out, new = {}, {}
+    for name, p in sorted(names.items()):
+        if p.suffix.lower() not in (".gp3", ".ccx", ".ufo", ".hpi"):
+            continue
+        st = p.stat()
+        stamp = [st.st_size, st.st_mtime_ns]
+        row = old.get(name.lower())
+        if not row or row["stamp"] != stamp:
+            row = {"stamp": stamp, "members": member_table(p)}
+        new[name.lower()] = row
+        out[name.lower()] = {k: tuple(v) for k, v in row["members"].items()}
+    if new != old:
+        OUT.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(new))
+    return out
+
+
+def leaf(stored: str) -> str:
+    """The name an enumeration reads (0x4BCA30): its case is the player's to see, as a map's name in the list."""
+    return stored.rsplit("/", 1)[-1]
 
 
 def mount_order(names, first):
@@ -447,7 +561,7 @@ def first_pattern(img, pe: Pe) -> str:
 class Plan:
     """One mod's drop-in folder and managed mount, simulated."""
 
-    def __init__(self, src: dict, stock: Pe, members: dict):
+    def __init__(self, src: dict, stock: Pe):
         v = tavfs()
         self.src = src
         self.files = setup_files(src["setup"])
@@ -471,8 +585,7 @@ class Plan:
         self.retail_mount = [n for n in mount_order(list(self.retail), "rev31.gp3")]
         self.hide = sorted(n for n in self.retail_mount if n.lower() not in kept)
         self.managed_retail = [n for n in self.retail_mount if n.lower() in kept]
-        self.members = members
-        self.loose = {}                         # the mod's loose game data: lower path -> file
+        self.loose = {}                         # the mod's loose game data: lower path -> (name as installed, file)
         self.plain = []                         # (name, why dropped)
         self.kept = {}                          # the plain files the package carries: name -> file
         for low, (name, p) in sorted(self.files.items()):
@@ -482,20 +595,24 @@ class Plan:
             elif "/" not in low.replace("\\", "/") and ext in ("gp3", "ccx", "ufo", "hpi"):
                 pass                            # an archive of the mount
             elif "/" in low.replace("\\", "/") and low.split("/")[0] in GAME_DIRS:
-                self.loose[low.replace("\\", "/")] = p
+                self.loose[low.replace("\\", "/")] = (name.replace("\\", "/"), p)
             elif low.replace("\\", "/").split("/")[0] in PLAIN_KEPT:
                 self.kept[name.replace("\\", "/")] = p
             else:
                 self.plain.append((name, "read by plain path or not at all"))
 
+    def retail_name(self, low: str) -> str:
+        return next(n for n in self.retail if n.lower() == low)
+
     def dropin_winners(self, tables) -> dict:
-        """{path: (md5, source)} as the drop-in folder answers: loose first, then the first archive in mount order."""
+        """{lower path: (md5, source, name as stored)} as the drop-in folder answers: loose first, then the first archive
+        in mount order."""
         out = {}
-        for k, p in self.loose.items():
-            out[k] = (hashlib.md5(p.read_bytes()).hexdigest(), "loose")
+        for k, (name, p) in self.loose.items():
+            out[k] = (hashlib.md5(p.read_bytes()).hexdigest(), "loose", name)
         for name, p, mine in self.mount:
-            for k, md5 in tables(name, p, mine).items():
-                out.setdefault(k, (md5, name))
+            for k, (md5, stored) in tables(name, p, mine).items():
+                out.setdefault(k, (md5, name, stored))
         return out
 
 
@@ -508,52 +625,43 @@ GAME_DIRS = {"anims", "bitmaps", "camera", "camps", "cdplayer", "download", "fea
 PLAIN_KEPT = {"icon", "zicon"}
 
 
-def retail_table(members):
-    def lookup(name):
-        low = name.lower()
-        return {m: md5 for (a, m), md5 in members.items() if a == low}
-    return lookup
-
-
-def plan_package(src, stock, hashes, members):
+def plan_package(src, stock, hashes):
     """The package's members, by the module's rule: the paths where a mod file wins in the drop-in folder, unless retail
-    already answers them with the same bytes under the managed mount. Returns (plan, wanted, dropin, stats)."""
-    plan = Plan(src, stock, members)
-    look = retail_table(members)
+    already answers them with the same bytes and name under the managed mount. Returns (plan, wanted, dropin, stats)."""
+    plan = Plan(src, stock)
+    retail = retail_tables(plan.retail)
     cache = {}
 
     def tables(name, p, mine):
-        if name in cache:
-            return cache[name]
-        cache[name] = member_table(p) if mine else look(name)
-        return cache[name]
+        if mine and name not in cache:
+            cache[name] = member_table(p)
+        return cache[name] if mine else retail.get(name.lower(), {})
 
     dropin = plan.dropin_winners(tables)
     managed_retail = {}
     for name in plan.managed_retail:
-        for k, md5 in look(name).items():
-            managed_retail.setdefault(k, md5)
+        for k, row in retail[name.lower()].items():
+            managed_retail.setdefault(k, row)
+    # where the install finds each original file: the first archive in the retail mount order, the rest after it, and
+    # a retail archive only, because a recipe can copy from nothing else
     by_md5 = {}
-    for (arc, member), md5 in members.items():
-        # the first archive in the retail mount order, so a recipe prefers the one every install has
-        if md5 not in by_md5 or order_of(plan, arc) < order_of(plan, by_md5[md5][0]):
-            by_md5[md5] = (arc, member)
+    mounted = [n.lower() for n in plan.retail_mount]
+    for arc in mounted + sorted(set(retail) - set(mounted)):
+        for k, (md5, stored) in retail[arc].items():
+            by_md5.setdefault(md5, (plan.retail_name(arc), stored))
     wanted, stripped, recipe, loose_original = {}, 0, [], []
-    for k, (md5, where) in sorted(dropin.items()):
-        if managed_retail.get(k) == md5:
+    for k, (md5, where, stored) in sorted(dropin.items()):
+        row = managed_retail.get(k)
+        if row and row[0] == md5 and leaf(row[1]) == leaf(stored):
             stripped += 1
         elif md5 not in hashes:
-            wanted[k] = where
+            wanted[k] = (where, stored)
         elif md5 in by_md5:
-            recipe.append((k, md5, *by_md5[md5]))   # the original game's bytes, not at this path under the managed mount
+            recipe.append((stored, md5, *by_md5[md5]))   # the original game's bytes, not at this path under the managed mount
         else:
             loose_original.append(k)                # an original file with no archive to copy it from
-    return plan, wanted, dropin, {"stripped": stripped, "recipe": recipe, "loose_original": loose_original, "managed_retail": managed_retail}
-
-
-def order_of(plan, arc: str) -> int:
-    names = [n.lower() for n in plan.retail_mount]
-    return names.index(arc) if arc in names else len(names)
+    return plan, wanted, dropin, {"stripped": stripped, "recipe": recipe, "loose_original": loose_original,
+                                  "managed_retail": managed_retail, "retail": retail}
 
 
 # ---------------------------------------------------------------------------- the commands
@@ -564,8 +672,8 @@ def cmd_tables(_):
         tab, _ = mod_table(s, stock)
         runs = runs_of(tab)
         print(f"{s['id']:10} exe={s['exe']:6} {len(tab):5} bytes in {len(runs):4} runs; first pattern {first_pattern(apply(stock, tab), stock)}")
-    for kind, name, key, xor in known_reverts(stock):
-        print(f"revert {'exe   ' if kind == 0 else 'loader'} {name:32} {key.hex()[:12]} {len(xor):5} bytes in {len(runs_of(xor)):4} runs")
+    for kind, name, key, xor in known_files(stock):
+        print(f"known {'exe   ' if kind == 0 else 'loader'} {name:32} {key.hex()[:12]}" + ("" if xor is None else f" {len(xor):5} bytes in {len(runs_of(xor)):4} runs"))
 
 
 def cmd_verify(a):
@@ -587,45 +695,45 @@ def cmd_verify(a):
         if s["exe"] == "file":
             report(image_hash(img, m) == image_hash(image(exe), m), f"{s['id']}: the table on stock gives the mod's exe, imports aside")
         report(all(va not in mask for va in tab), f"{s['id']}: the table writes no import structure ({len(tab)} B)")
-    for kind, name, key, xor in known_reverts(stock):
-        src = None
-        if kind == 0:
-            for st in tacompat().SETUPS:
-                for dest, p in tacompat().overlay(st):
-                    if dest.lower() == "totala.exe" and file_key(Path(p).read_bytes(), True) == key:
-                        src = Pe(Path(p).read_bytes())
-                        break
-                if src:
-                    break
-            img = image(src)
-            m = masked_set(stock, src)
-        else:
-            img = image(stock)
-            m = mask
-            # the loader's writes on stock, and the XOR taking them back
-            for st in tacompat().SETUPS:
-                for dest, p in tacompat().overlay(st):
-                    if dest.lower() == "dplayx.dll" and file_key(Path(p).read_bytes(), False) == key:
-                        for va, b in runs_of(loader_table(Path(p).read_bytes())):
-                            image_put(img, va, b)
-                        src = True
-                        break
-                if src:
-                    break
-        for va, b in runs_of(xor):
+    # the committed pack, read as the DLL reads it: each XOR gives its mod from stock and stock from its known exe
+    pack = read_patches(subprocess.run(["zstd", "-dqc", str(MODS / "patches.bin")], capture_output=True, check=True).stdout)
+    for mid, h, i in pack["mods"]:
+        img = image(stock)
+        for va, b in pack["xors"][i]:
+            image_xor(img, va, b)
+        report(image_hash(img, mask) == h, f"{mid}: its XOR on stock gives the image hash the pack names")
+    exes = {file_key(Path(p).read_bytes(), True): Path(p).read_bytes() for st in tacompat().SETUPS for dest, p in tacompat().overlay(st) if dest.lower() == "totala.exe"}
+    for kind, key, i in pack["known"]:
+        if kind:
+            report(i == -1, f"loader {key.hex()[:12]}: named with no table")
+            continue
+        src = Pe(exes[key])
+        img = image(src)
+        m = masked_set(stock, src)
+        for va, b in pack["xors"][i]:
+            image_xor(img, va, b)
+        report(image_hash(img, m) == image_hash(image(stock), m), f"exe {key.hex()[:12]}: its XOR gives stock 3.1")
+    # what the pack reads as stock on its own: the bytes a mod sets to zero, and nothing else
+    worst, total = 0, 0
+    for runs in pack["xors"]:
+        for va, b in runs:
+            at = 0
             for i, x in enumerate(b):
-                for v, buf in img:
-                    if v <= va + i < v + len(buf):
-                        buf[va + i - v] ^= x
-        report(image_hash(img, m) == image_hash(image(stock), m), f"revert {name}: gives stock 3.1")
+                if stock.data[stock.off(va + i)] == x:
+                    total += 1
+                    at += 1
+                    worst = max(worst, at)
+                else:
+                    at = 0
+    print(f"note: {total} B of the pack's XORs read as the stock byte (a mod sets them to zero); longest run {worst} B")
     # the packages against the original manifest, and the managed mount against the drop-in folder
-    hashes, members = manifest()
+    hashes = manifest()
     for s in mod_sources(a.ids or None):
         tar = OUT / s["id"] / f"{s['id']}.tar.zst"
         if not tar.is_file():
             report(False, f"{s['id']}: no package at {tar}: modpack.py packages")
             continue
-        plan, wanted, dropin, st = plan_package(s, stock, hashes, members)
+        plan, wanted, dropin, st = plan_package(s, stock, hashes)
         with tempfile.TemporaryDirectory(dir=OUT) as d:
             subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
             with tarfile.open(d + "/p.tar") as t:
@@ -637,24 +745,26 @@ def cmd_verify(a):
             carried = [hashlib.md5((Path(d) / n).read_bytes()).hexdigest() for n in names]
         hit = [n for n, h in zip(names, carried) if h in hashes]
         report(not hit, f"{s['id']}: no file of the package is an original file ({len(names)} files)" + (f"; first {hit[0]}" if hit else ""))
-        hits = [k for k, md5 in got.items() if md5 in hashes]
+        hits = [k for k, (md5, _) in got.items() if md5 in hashes]
         report(not hits, f"{s['id']}: no member of its archive is an original file ({len(got)} members)" + (f"; first {hits[0]}" if hits else ""))
         # the recipe, as the install runs it: every member named is the player's own, with the bytes it says
         assembled, bad_recipe = {}, []
         for line in recipe:
-            k, md5, size, arc, member = line.split("\t")
-            if members.get((arc, member)) != md5:
-                bad_recipe.append(k)
-            assembled[k] = md5
+            path, md5, size, arc, member = line.split("\t")
+            if st["retail"].get(arc.lower(), {}).get(member.lower(), (None,))[0] != md5:
+                bad_recipe.append(path)
+            assembled[path.lower()] = (md5, path)
         report(not bad_recipe, f"{s['id']}: the recipe's {len(recipe)} files are in the retail archives it names"
                + (f"; first {bad_recipe[0]}" if bad_recipe else ""))
         managed = dict(st["managed_retail"])
         managed.update(assembled)
         managed.update(got)
-        wrong = [k for k, (md5, _) in dropin.items() if managed.get(k) != md5]
+        wrong = [k for k, (md5, _, stored) in dropin.items() if k not in managed or managed[k][0] != md5]
+        cased = [k for k, (md5, _, stored) in dropin.items() if k in managed and leaf(managed[k][1]) != leaf(stored)]
         extra = [k for k in managed if k not in dropin]
         report(not wrong and not extra, f"{s['id']}: the managed mount answers {len(dropin)} paths as the drop-in folder does"
                + (f"; differ {len(wrong)}, first {wrong[0]}" if wrong else "") + (f"; only managed {len(extra)}, first {extra[0]}" if extra else ""))
+        report(not cased, f"{s['id']}: every file name keeps its case" + (f"; differ {len(cased)}, first {cased[0]}" if cased else ""))
     print("verify: " + ("all passed" if not bad else f"{bad} FAILED"))
     return 1 if bad else 0
 
@@ -673,31 +783,39 @@ def write_tar(files: dict, out: Path):
     tmp.unlink()
 
 
+def insert_cased(tree: dict, stored: str, data: bytes):
+    """A file under its stored name, in the folders already there whatever their case: the engine reads an archive's folder
+    as one sorted list without case, so "Maps" beside "maps" would hide one of them."""
+    parts = stored.split("/")
+    d = tree
+    for part in parts[:-1]:
+        name = next((n for n in d if n.lower() == part.lower()), part)
+        d = d.setdefault(name, {})
+    d[parts[-1]] = data
+
+
 def cmd_packages(a):
-    v = tavfs()
-    sys.path.insert(0, str(ROOT / "tools"))
-    import hpipack
     stock = Pe(stock_exe())
-    hashes, members = manifest()
+    hashes = manifest()
     for s in mod_sources(a.ids or None):
         t0 = time.time()
-        plan, wanted, dropin, st = plan_package(s, stock, hashes, members)
+        plan, wanted, dropin, st = plan_package(s, stock, hashes)
         tree, opened, cost = {}, {}, 0
         src_by_name = {n: p for n, p, _ in plan.mount}
-        for k, where in sorted(wanted.items()):
+        for k, (where, stored) in sorted(wanted.items()):
             if where == "loose":
-                data = plan.loose[k].read_bytes()
+                data = plan.loose[k][1].read_bytes()
             else:
-                arc = opened.get(where) or v.ta3do.HpiArchive(src_by_name[where])
+                arc = opened.get(where) or hpipack().Archive(src_by_name[where])
                 opened[where] = arc
                 data = arc.read(k)
-            hpipack.insert(tree, k, data)
+            insert_cased(tree, stored, data)
             cost += len(data)
         d = OUT / s["id"]
         d.mkdir(parents=True, exist_ok=True)
-        pkg = {f"{s['id']}.hpi": hpipack.build(tree, 0, 2)}
+        pkg = {f"{s['id']}.hpi": hpipack().build(tree, 0, 2)}
         sizes = member_sizes()
-        pkg[f"{s['id']}.originals.tsv"] = "".join(f"{k}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\n" for k, md5, arc, member in st["recipe"]).encode()
+        pkg[f"{s['id']}.originals.tsv"] = "".join(f"{path}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\n" for path, md5, arc, member in st["recipe"]).encode()
         for name, p in plan.kept.items():
             pkg[name] = p.read_bytes()
         tar = d / f"{s['id']}.tar.zst"
@@ -723,11 +841,10 @@ def cmd_catalog(_):
     stock = Pe(stock_exe())
     mask = masked_set(stock)
     entries, mods_bin = [], []
-    _, members = manifest()
     for s in mod_sources():
         tab, _ = mod_table(s, stock)
         img = apply(stock, tab)
-        plan = Plan(s, stock, members)
+        plan = Plan(s, stock)
         tar = OUT / s["id"] / f"{s['id']}.tar.zst"
         if not tar.is_file():
             die(f"{s['id']}: no package: modpack.py packages")
@@ -744,24 +861,13 @@ def cmd_catalog(_):
             if k in s:
                 e[k] = s[k]
         entries.append(e)
-        mods_bin.append((s["id"], image_hash(img, mask), runs_of(tab)))
+        mods_bin.append((s["id"], image_hash(img, mask), xor_of(stock, tab)))
     (MODS / "catalog.json").write_text(json.dumps({"version": VERSION, "mods": entries}, indent=2) + "\n")
-    blob = bytearray(b"MPAT" + struct.pack("<I", VERSION))
-    rev = known_reverts(stock)
-    blob += struct.pack("<II", len(mods_bin), len(rev))
-    def put_runs(runs):
-        blob.extend(struct.pack("<I", len(runs)))
-        for va, b in runs:
-            blob.extend(struct.pack("<IH", va, len(b)) + b)
-    for mid, h, runs in mods_bin:
-        blob.extend(bytes([len(mid)]) + mid.encode() + h)
-        put_runs(runs)
-    for kind, _, key, xor in rev:
-        blob.extend(bytes([kind]) + key)
-        put_runs(runs_of(xor))
-    p = subprocess.run(["zstd", "-q", "-19", "--no-check", "-c"], input=bytes(blob), capture_output=True, check=True)
+    known = known_files(stock)
+    blob = pack_patches(mods_bin, known)
+    p = subprocess.run(["zstd", "-q", "-19", "--no-check", "-c"], input=blob, capture_output=True, check=True)
     (MODS / "patches.bin").write_bytes(p.stdout)
-    print(f"catalog: {len(entries)} mods; patches.bin {len(blob)} B -> {len(p.stdout)} B, {len(rev)} reverts")
+    print(f"catalog: {len(entries)} mods; patches.bin {len(blob)} B -> {len(p.stdout)} B, {len(read_patches(blob)['xors'])} XORs, {len(known)} known files")
 
 
 STUB_C = "__declspec(dllexport) long __stdcall DirectDrawCreate(void* a, void* b, void* c) { return 1; }\n"
@@ -782,9 +888,11 @@ STUB_PLAY_C = "".join(f"void __stdcall {n}(void) {{}}\n" for n in ("DirectPlayCr
 
 
 def cmd_loaderdump(a):
-    """Measure what a setup's dplayx.dll writes: its folder with the exe's entry point spinning (EB FE) and stubs for
-    ddraw.dll, tdraw.dll and tplayx.dll, so only the loader's DllMain writes the image; then the image read out of the
-    process and compared with the list's table. Headless: no DISPLAY, so no window can reach the desktop."""
+    """Measure what a setup's dplayx.dll writes: its folder with stubs for ddraw.dll, tdraw.dll and tplayx.dll, so only the
+    loader's and win32.dll's DllMains write the image, and the exe's entry point setting a sentinel byte and spinning. Every
+    static import's DllMain has returned before the entry point runs, so the image read after the sentinel holds all they
+    wrote while loading; a process that never sets it is a failure, never a short dump. Headless: no DISPLAY, so no window
+    can reach the desktop."""
     stock = Pe(stock_exe())
     mask = masked_set(stock)
     files = setup_files(a.setup)
@@ -809,7 +917,10 @@ def cmd_loaderdump(a):
         subprocess.run([gcc, "-shared", "-s", "-Wl,--enable-stdcall-fixup", "-o", str(d / "tplayx.dll"), str(d / "play.c"), str(d / "play.def")], check=True)
         exe = bytearray(stock.data)
         entry = 0x4E6FA0
-        exe[stock.off(entry):stock.off(entry) + 2] = b"\xEB\xFE"
+        data = next(sec for sec in stock.sections if sec[0] == ".data")
+        sentinel = data[1] + data[3] - 1        # .data's last raw byte
+        spin = b"\xC6\x05" + struct.pack("<I", sentinel) + b"\xA5\xEB\xFE"       # mov byte [sentinel], 0xA5; jmp $
+        exe[stock.off(entry):stock.off(entry) + len(spin)] = spin
         (d / "TotalA.exe").write_bytes(exe)
         env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
         # a prefix of its own: the instances' registries share one inode, and nothing here should write to it
@@ -820,14 +931,16 @@ def cmd_loaderdump(a):
         proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=d, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         pid, dump = None, None
         try:
-            for _ in range(60):
+            for _ in range(120):
                 time.sleep(0.5)
-                pid = next((int(x.name) for x in Path("/proc").iterdir() if x.name.isdigit() and _exe_mapped(x, d)), None)
+                pid = pid or next((int(x.name) for x in Path("/proc").iterdir() if x.name.isdigit() and _exe_mapped(x, d)), None)
                 if pid:
-                    time.sleep(2)
-                    break
-            if not pid:
-                die("the game's process did not appear; a loader's error box needs a display, so run it there once")
+                    with open(f"/proc/{pid}/mem", "rb") as m:
+                        m.seek(sentinel)
+                        if m.read(1) == b"\xA5":
+                            break
+            else:
+                die("the entry point never ran; a loader's error box needs a display, so run it there once" if pid else "the game's process did not appear")
             dump = []
             with open(f"/proc/{pid}/mem", "rb") as m:
                 for _, v, _, n in stock.sections:
@@ -845,7 +958,7 @@ def cmd_loaderdump(a):
     for (name, v, r, n), (_, mem) in zip(stock.sections, dump):
         ref = stock.data[r:r + n]
         for i in range(n):
-            if ref[i] != mem[i] and v + i not in mask and v + i not in (entry, entry + 1):
+            if ref[i] != mem[i] and v + i not in mask and not entry <= v + i < entry + len(spin) and v + i != sentinel:
                 got[v + i] = mem[i]
     missing = sorted(va for va, b in table.items() if got.get(va, stock.data[stock.off(va)]) != b)
     extra = {va: b for va, b in got.items() if table.get(va) != b}
@@ -872,7 +985,7 @@ def check_catalog(j) -> list:
     seen, mods = set(), j.get("mods")
     if not isinstance(mods, list):
         return errs + ["no mods list"]
-    ids = {e.get("id") for e in mods if isinstance(e, dict)}
+    ids = {e.get("id") for e in mods if isinstance(e, dict) and e.get("kind") == "mod"}
     for i, e in enumerate(mods):
         n = e.get("id", f"#{i}")
         for k in ("id", "kind", "name", "author", "version", "summary", "homepage", "permission"):
@@ -880,6 +993,8 @@ def check_catalog(j) -> list:
                 errs.append(f"{n}: {k} is missing")
         if not ID_RE.match(str(e.get("id", ""))):
             errs.append(f"{n}: id is not a lower-case name")
+        if e.get("id") == "none":
+            errs.append(f"{n}: id none is the base of a mutator for no mod")
         if n in seen:
             errs.append(f"{n}: id appears twice")
         seen.add(n)

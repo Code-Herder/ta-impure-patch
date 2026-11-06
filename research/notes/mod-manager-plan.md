@@ -50,13 +50,20 @@ Each decision is listed with what it was chosen over.
   belong to TADR's route and are dropped from the delta.
 - **A mod's exe patch is a table derived once by us** (a diff against stock 3.1). For Mayhem and
   ProTA it is their Patch Loader table.
-- **Known modded base exes are reverted first.** Each known modded exe has an XOR revert patch
-  (covering the exe plus its folder's loader). The sequence runs at the exe's entry point, after
-  every DllMain, so a folder's Patch Loader has finished:
-  1. revert the base;
-  2. hash the code against stock 3.1 (the import table and its slots masked);
-  3. apply the mod's table;
-  4. hash against stock+mod.
+- **A known exe gives the stock image, and the process is restored from it.** A folder's Patch
+  Loader and a mod's `win32.dll` write `rel32` displacements into their own DLLs (`0x47BFA3`,
+  `0x4B55FC`, the three thunks: [the Patch Loader](deep-patch-loader.html)). Those bytes depend on where the
+  DLL loaded, so no fixed table can take them back. The sequence runs at the exe's entry point, after
+  every DllMain, so they have all finished:
+  1. identify the exe on disk and any loader beside it by `file_key`;
+  2. take the stock image: the exe's own sections, with its XOR applied when it is a known modded exe;
+  3. write every section byte of the process back from it, the import table and its slots masked;
+  4. apply the mod's XOR;
+  5. hash the process against stock+mod.
+
+  The mask cannot see a DLL's hook in an import slot, so this landing rebinds or refuses those. Whatever
+  `tdraw.dll` writes before the entry point is unmeasured (`loaderdump` stubs it): this landing dumps a
+  process with the real one first.
 
   A mismatch refuses before any game code runs. We chose this over testing every mod's table
   against every modded exe for byte clashes.
@@ -113,8 +120,11 @@ Each decision is listed with what it was chosen over.
     by default), plus the play options;
   - mutators: `base`, `base_hashes` and `files`;
   - `permission`: where the author's permission to host is recorded. No entry ships without one.
-- **A binary patch pack goes beside the catalog**, zstd-compressed. It holds the mod exe tables
-  with the stock+mod hash each one must produce, and the XOR reverts keyed by the modded exe's hash.
+- **A binary patch pack goes beside the catalog**, zstd-compressed. It holds one XOR with the stock
+  image per mod, with the stock+mod hash it must produce, and the files Impure knows by hash: a known
+  modded exe names the XOR that takes it to stock, and a known loader names none. On stock an XOR gives
+  the mod's image and on its exe it gives stock, so the pack holds neither image. A byte a mod sets to
+  zero reads as the stock byte: 824 B across the pack, 15 B at the longest (`modpack.py verify` counts them).
 - **Both are built by `tools/modpack/` and packed into the DLL** as a `MODPAK` RCDATA, like `HUDPAK`
   and `WIKIPAK` in `res.rc`. The JSON reader `tagpu_json.c` reads them.
 - **Exe patches only ever ship inside the DLL.** In v1, updates arrive with a new Impure release.
@@ -184,8 +194,9 @@ What follows from those rules:
 - **Impure builds the mount list:** mutators first, then the base mod's `<id>.hpi` and
   `<id>.originals.hpi`, then the TA folder's original archives in the engine's order, less the mod's
   `hide`. Precedence is then one rule for every file type. `modpack.py verify` simulates this and the
-  drop-in folder over every path by the engine's rules (`tools/wiki/tavfs.py`) and they agree: 8222
-  paths in Escalation, 7407 in Mayhem, 6018 in ProTA, 8393 in TA Zero, 8642 in Twilight. An enumeration's
+  drop-in folder over every path by the engine's rules (`tools/wiki/tavfs.py`), over what the retail
+  archives really hold, and they agree in bytes and in each file's case: 8293 paths in Escalation, 7539 in
+  Mayhem, 6064 in ProTA, 8551 in TA Zero, 8740 in Twilight. An enumeration's
   order is not simulated; landing 4's managed column compares its result in the game.
 - **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
   The exception is a short list of paths that stock TA really does open loose (saved games, for
@@ -205,8 +216,8 @@ What follows from those rules:
   content. The owner accepted this as a new class of published data. Each archive is hashed once and
   cached by name, size and date. We rejected recognising archives by name, because mods reuse and
   replace archive names.
-- **A folder's Patch Loader follows the exe rule above:** a known pair is reverted, an unknown one
-  gets the box.
+- **A folder's Patch Loader follows the exe rule above:** beside a known exe, a known loader's writes
+  go when the process is restored, and an unknown one gets the box.
 
 ### Multiplayer
 
@@ -276,9 +287,9 @@ What follows from those rules:
 | # | landing | what it does | verified by (run it) |
 |---|---|---|---|
 | 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
-| 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives exe tables + XOR reverts, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each revert gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
+| 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives one XOR per mod + the known files, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each known exe's XOR gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
 | 3 | Per-mod options | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
-| 4 | Managed start-up | `mod=`; identify → revert → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
+| 4 | Managed start-up | `mod=`; identify → restore → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
@@ -316,10 +327,11 @@ Landings 2 and 3 are independent of each other.
 ## Facts gathered for the plan
 
 - **Exe tables, as derived.** Escalation 2993 B in 253 runs, Mayhem 1549 B in 85, ProTA 886 B in 66,
-  TA Zero 1385 B in 144, Twilight 34 B in 16. Seven reverts: the four modded exes and the three loaders.
+  TA Zero 1385 B in 144, Twilight 34 B in 16. Seven known files: the four modded exes and the three loaders.
 - **What a Patch Loader writes, MEASURED** by `modpack.py loaderdump` (a process with the exe's entry
   point spinning, read through `/proc`): see [the Patch Loader](deep-patch-loader.html). A table is its
-  list and the proxy byte; the DirectDraw call sites and the `win32.dll` thunks stay out of it.
+  list and the proxy byte; the DirectDraw call sites and the `win32.dll` thunks stay out of it, and
+  restoring the process takes them back.
 - **Package sizes:** Escalation 247.7 MB, TA Zero 89.6 MB, Twilight 76.0 MB, Mayhem 18.4 MB, ProTA 6.3 MB.
 
 - **Where the mods come from.** TA Forever's API (`https://api.taforever.com/data/featuredMod`,

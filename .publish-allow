@@ -42,7 +42,8 @@ art/wiki/kit/*
 # The same parts at the resolution they were cut at, which tools/hudart/fit.py fits into art/wiki/kit/
 art/wiki-full/*
 
-# The exe patch pack: each mod's byte table and the XOR reverts of the exes and loaders Impure knows,
-# derived by tools/modpack/modpack.py and embedded in the DLL. No run of the original exe: a table
-# holds a mod's bytes, a revert their XOR with the original's (research/notes/mod-manager-plan.md)
+# The exe patch pack: one XOR with the original exe per mod and the hashes of the exes and loaders
+# Impure knows, derived by tools/modpack/modpack.py and embedded in the DLL. Neither image is in it:
+# only a byte a mod sets to zero reads as the original's, 15 B at the longest
+# (research/notes/mod-manager-plan.md)
 mods/patches.bin

@@ -107,9 +107,12 @@ through `/proc/<pid>/mem`. MEASURED 2026-11-05 on Wine, outside the import struc
 | Community Patch Loader 1.3.0.0 | 99 B | 0 | 8 B |
 
 The 8 B are the two `patch_call` displacements at `0x47BFA3` and `0x4B55FC`, into `tdraw.dll`'s
-`DirectDrawCreate`. The other 18 B of the two mod builds are their three `win32.dll` thunks at
-`0x4E4708`, `0x4E71A0` and `0x4EADF2`, which the source in this repository's vendor copy does not
-have: `E8 <rel32> 90` over each `call [slot]` (`FF 15`, 6 B each; DISASSEMBLED `0x4E4708`).
+`DirectDrawCreate`. The other 18 B of the two mod builds are three thunks at `0x4E4708`, `0x4E71A0` and `0x4EADF2`:
+`E8 <rel32> 90` over each `call [slot]` (`FF 15 00 C1 4F 00`, ExitProcess; DISASSEMBLED). They are not
+the loader's. Neither mod's `dplayx.dll` holds those VAs, each mod's `win32.dll` holds each of them
+three times, and retail's holds none, so the mods' `win32.dll` writes them [INFERRED: the VAs measured,
+the writing code not disassembled]. Both kinds of site are displacements into a DLL, so their bytes depend
+on where it loaded. `tdraw.dll` is a stub in these dumps: what the real one writes is not measured here.
 
 ## Conflict detection
 
