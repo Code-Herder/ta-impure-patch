@@ -383,3 +383,9 @@ clean:
 	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe tests/icontest.exe tests/iconsettest.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)
+
+# THE MOD INSTALLER ON ITS OWN (tools/modpack/installtest.py runs it under Wine): the module with its real WinHTTP and file
+# handling, built with the step hook that lets a test die at a chosen point.
+MODINST_SRCS := src/tagpu_modinst.c src/tagpu_modtar.c src/tagpu_modcat.c src/tagpu_modpak.c src/tagpu_ufo.c src/tagpu_hpi.c src/tagpu_json.c src/lodepng.c src/zstd.c
+tests/modinsttest.exe: tests/modinsttest.c $(MODINST_SRCS)
+	$(CC) -Iinc -Isrc -DMODINST_TEST -O2 -static -o $@ tests/modinsttest.c $(MODINST_SRCS)

@@ -26,8 +26,6 @@
 
 #define HDR        20u          /* the header, before which nothing is stored */
 #define CHUNK   65536u          /* the engine's decompressed chunk size       */
-#define MAXFILES   16
-#define MAXDIRS     8
 
 /* Read raw by 0x4BDD70 after seeking to the end, so it is appended AFTER the
    body and is not part of anything the header measures. */
@@ -103,7 +101,7 @@ static unsigned lz77_store(const unsigned char* in, unsigned n, unsigned char* o
         i += 8;
     }
     rest = n - i;
-    out[k++] = (unsigned char)(0xFF << rest);   /* `rest` literals, then a set bit */
+    out[k++] = rest ? (unsigned char)(0xFF << rest) : 1;  /* `rest` literals, then a set bit */
     memcpy(out + k, in + i, rest);
     k += rest;
     out[k++] = 0;                               /* the back-reference: offset 0, */
@@ -160,135 +158,131 @@ static int pack_file(Buf* out, const unsigned char* data, unsigned size)
 
 /* ---- the directory ------------------------------------------------------ */
 
-/* The engine does not care about entry order; hpipack sorts case-insensitively
-   so that the same inputs give the same bytes, and so does this. */
-static int namecmp(const char* a, const char* b)
+/* The engine does not care about entry order; hpipack sorts case-insensitively so that the same inputs give the same bytes, and
+   so does this. A separator sorts below every other byte: a name's folder ends before a longer name begins. */
+static int foldc(int c)
 {
+    if (c == '/' || c == '\\') return 1;
+    return c >= 'A' && c <= 'Z' ? c + 32 : (unsigned char)c;
+}
+
+typedef struct {
+    const char* path;
+    const void* data;
+    unsigned    size;
+    unsigned    frec;       /* the file record's offset in the directory */
+} Ent;
+
+static int entcmp(const void* pa, const void* pb)
+{
+    const char* a = ((const Ent*)pa)->path;
+    const char* b = ((const Ent*)pb)->path;
     for (; *a && *b; a++, b++) {
-        int ca = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a;
-        int cb = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        int ca = foldc(*a), cb = foldc(*b);
         if (ca != cb) return ca - cb;
     }
     return (unsigned char)*a - (unsigned char)*b;
 }
 
-/* Split "impure/render.gui" into "impure" and "render.gui". 0 unless there is
-   exactly one separator with something on both sides. */
-static int split(const char* path, char* dir, unsigned dcap, const char** base)
+static unsigned component_len(const char* p)
 {
-    const char* slash = 0;
-    const char* p;
-    unsigned n;
+    unsigned n = 0;
+    while (p[n] && p[n] != '/' && p[n] != '\\') n++;
+    return n;
+}
 
-    if (!path || !*path) return 0;
-    for (p = path; *p; p++) {
-        if (*p == '/' || *p == '\\') {
-            if (slash) return 0;                /* two levels: refused, not guessed */
-            slash = p;
-        }
-    }
-    if (!slash || slash == path || !slash[1]) return 0;
-    n = (unsigned)(slash - path);
-    if (n + 1 > dcap) return 0;
-    memcpy(dir, path, n);
-    dir[n] = 0;
-    *base = slash + 1;
+/* whether two entries share the folder or file whose name starts at `off` in both */
+static int same_component(const Ent* a, const Ent* b, unsigned off)
+{
+    unsigned n = component_len(a->path + off), i;
+    if (n != component_len(b->path + off)) return 0;
+    for (i = 0; i < n; i++)
+        if (foldc(a->path[off + i]) != foldc(b->path[off + i])) return 0;
     return 1;
+}
+
+/* The directory holding entries [0, n), all alike up to `off`: its record, its list, then each child in turn, as
+   hpipack's write_dir lays them out. The record's offset, or 0 when the paths are refused, the root being at HDR. */
+static unsigned write_dir(Buf* dir, Ent* e, int n, unsigned off, int depth)
+{
+    unsigned rec, list, count = 0, at;
+    int i, next;
+
+    if (depth > TAGPU_UFO_DEPTH) return 0;
+    for (i = 0; i < n; i = next) {
+        for (next = i + 1; next < n && same_component(&e[i], &e[next], off); next++) {}
+        count++;
+    }
+    rec = bzero(dir, 8);
+    list = bzero(dir, 9u * count);
+    poke32(dir, rec, count);
+    poke32(dir, rec + 4, list + HDR);
+    for (i = 0, at = 0; i < n; i = next, at++) {
+        const char* name = e[i].path + off;
+        unsigned len = component_len(name), ename = list + 9u * at, nameoff, data;
+        static const char nul = 0;
+        int is_dir = name[len] != 0;
+
+        if (!len) return 0;
+        for (next = i + 1; next < n && same_component(&e[i], &e[next], off); next++) {
+            if (!is_dir) return 0;                      /* a file given twice, or also a folder */
+            if (!e[next].path[off + len]) return 0;
+        }
+        nameoff = bput(dir, name, len);
+        bput(dir, &nul, 1);
+        if (is_dir) {
+            data = write_dir(dir, e + i, next - i, off + len + 1, depth + 1);
+            if (!data) return 0;
+            data -= HDR;
+        } else {
+            e[i].frec = data = bzero(dir, 9);
+            poke32(dir, data + 4, e[i].size);
+            if (!dir->bad) dir->p[data + 8] = 1;        /* compression: method 1 */
+        }
+        poke32(dir, ename, nameoff + HDR);
+        poke32(dir, ename + 4, data + HDR);
+        if (!dir->bad) dir->p[ename + 8] = is_dir ? 1 : 0;
+    }
+    return rec + HDR;
 }
 
 int tagpu_ufo_write(const char* path, const TAGPU_UFO_FILE* files, int n)
 {
-    char  dirs[MAXDIRS][32];
-    int   order[MAXFILES];                      /* file indices, grouped by dir */
-    char  fdir[MAXFILES][32];
-    const char* fbase[MAXFILES];
-    unsigned frec[MAXFILES];                    /* each file record's offset    */
-    int   ndirs = 0, i, j, k;
+    Ent*  ents;
     Buf   dir = { 0 }, body = { 0 };
-    unsigned root_ent, dir_size, total;
+    unsigned dir_size, total;
     unsigned char header[HDR];
     HANDLE h;
     DWORD  wrote = 0;
-    int    ok;
+    int    ok, i;
     char   m[160];
 
-    if (n <= 0 || n > MAXFILES) return 0;
-
-    /* 1. split every path, and collect the distinct directories */
+    if (n < 0) return 0;
+    ents = (Ent*)calloc(n ? (size_t)n : 1, sizeof(Ent));
+    if (!ents) { ulog("ufo: out of memory"); return 0; }
     for (i = 0; i < n; i++) {
-        if (!split(files[i].path, fdir[i], sizeof fdir[i], &fbase[i])) {
-            _snprintf(m, sizeof m, "ufo: refusing %s - paths must be dir/file",
-                      files[i].path ? files[i].path : "(null)");
-            m[sizeof m - 1] = 0;
-            ulog(m);
-            return 0;
-        }
-        for (j = 0; j < ndirs; j++) if (!namecmp(dirs[j], fdir[i])) break;
-        if (j == ndirs) {
-            if (ndirs == MAXDIRS) return 0;
-            lstrcpynA(dirs[ndirs++], fdir[i], sizeof dirs[0]);
-        }
+        ents[i].path = files[i].path;
+        ents[i].data = files[i].data;
+        ents[i].size = files[i].size;
+    }
+    qsort(ents, (size_t)n, sizeof(Ent), entcmp);
+
+    if (!write_dir(&dir, ents, n, 0, 0)) {
+        _snprintf(m, sizeof m, "ufo: refusing the file list of %s: a path is empty, given twice, both a file and a folder, or too deep", path);
+        m[sizeof m - 1] = 0;
+        ulog(m);
+        free(dir.p);
+        free(ents);
+        return 0;
     }
 
-    /* 2. sort the directories, and the files inside each */
-    for (i = 1; i < ndirs; i++) {
-        char t[32];
-        lstrcpynA(t, dirs[i], sizeof t);
-        for (j = i; j > 0 && namecmp(dirs[j - 1], t) > 0; j--)
-            lstrcpynA(dirs[j], dirs[j - 1], sizeof dirs[0]);
-        lstrcpynA(dirs[j], t, sizeof dirs[0]);
-    }
-
-    /* 3. the root record, then one subdirectory per `dirs` entry */
-    bzero(&dir, 8);                             /* the root record, at offset 0 */
-    root_ent = bzero(&dir, 9u * (unsigned)ndirs);
-
-    for (k = 0; k < ndirs; k++) {
-        unsigned dname, sub_rec, sub_ent, e;
-        int count = 0;
-
-        for (i = 0; i < n; i++)
-            if (!namecmp(fdir[i], dirs[k])) order[count++] = i;
-        for (i = 1; i < count; i++) {           /* insertion sort by base name  */
-            int t = order[i];
-            for (j = i; j > 0 && namecmp(fbase[order[j - 1]], fbase[t]) > 0; j--)
-                order[j] = order[j - 1];
-            order[j] = t;
-        }
-
-        dname   = bput(&dir, dirs[k], (unsigned)lstrlenA(dirs[k]) + 1);
-        sub_rec = bzero(&dir, 8);
-        sub_ent = bzero(&dir, 9u * (unsigned)count);
-
-        for (i = 0; i < count; i++) {
-            int f = order[i];
-            unsigned fname = bput(&dir, fbase[f], (unsigned)lstrlenA(fbase[f]) + 1);
-            frec[f] = bzero(&dir, 9);
-            poke32(&dir, frec[f] + 4, files[f].size);
-            if (!dir.bad) dir.p[frec[f] + 8] = 1;        /* compression: method 1 */
-            e = sub_ent + 9u * (unsigned)i;
-            poke32(&dir, e,     fname + HDR);
-            poke32(&dir, e + 4, frec[f] + HDR);
-            if (!dir.bad) dir.p[e + 8] = 0;              /* a file, not a subdir  */
-        }
-
-        poke32(&dir, sub_rec,     (unsigned)count);
-        poke32(&dir, sub_rec + 4, sub_ent + HDR);
-
-        e = root_ent + 9u * (unsigned)k;
-        poke32(&dir, e,     dname + HDR);
-        poke32(&dir, e + 4, sub_rec + HDR);
-        if (!dir.bad) dir.p[e + 8] = 1;                  /* a subdirectory        */
-    }
-    poke32(&dir, 0, (unsigned)ndirs);
-    poke32(&dir, 4, root_ent + HDR);
-
-    /* 4. the payloads, and the offset each file record could not know yet */
+    /* the payloads, and the offset each file record could not know yet */
     dir_size = HDR + dir.n;
     for (i = 0; i < n && !dir.bad && !body.bad; i++) {
-        poke32(&dir, frec[i], dir_size + body.n);
-        pack_file(&body, (const unsigned char*)files[i].data, files[i].size);
+        poke32(&dir, ents[i].frec, dir_size + body.n);
+        pack_file(&body, (const unsigned char*)ents[i].data, ents[i].size);
     }
+    free(ents);
 
     if (dir.bad || body.bad) { free(dir.p); free(body.p); ulog("ufo: out of memory"); return 0; }
 
@@ -319,8 +313,7 @@ int tagpu_ufo_write(const char* path, const TAGPU_UFO_FILE* files, int n)
     free(body.p);
 
     if (!ok) { ulog("ufo: write failed"); return 0; }
-    _snprintf(m, sizeof m, "ufo: wrote %s - %d file%s in %d dir%s, %u bytes",
-              path, n, n == 1 ? "" : "s", ndirs, ndirs == 1 ? "" : "s", total);
+    _snprintf(m, sizeof m, "ufo: wrote %s - %d file%s, %u bytes", path, n, n == 1 ? "" : "s", total);
     m[sizeof m - 1] = 0;
     ulog(m);
     return 1;

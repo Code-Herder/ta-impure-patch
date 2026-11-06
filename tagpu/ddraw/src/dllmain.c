@@ -25,6 +25,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_settings.h"
 #include "tagpu_profiles.h"
+#include "tagpu_modinst.h"
 #include "tagpu_modload.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
@@ -129,6 +130,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 #endif
 
         cfg_load();
+
+        /* tagpu: what the last run's mod install left, settled before anything looks in mods\ (tagpu_modinst.h). */
+        tagpu_modinst_sweep();
 
         /* tagpu: a mod chosen by mod= (tagpu_modload.h): its image in place before Impure's first patch */
         tagpu_modload_begin();
@@ -469,6 +473,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             indeo_enable();
         timeBeginPeriod(1);
         hook_init();
+        tagpu_modinst_lever();
         /* tagpu: last, so its snapshot holds all of Impure's attach (tagpu_modload.h) */
         tagpu_modload_end();
 

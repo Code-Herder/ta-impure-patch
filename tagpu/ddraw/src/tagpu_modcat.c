@@ -1,5 +1,6 @@
 /* tagpu_modcat.c -- Contract: tagpu_modcat.h. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tagpu_modcat.h"
 #include "tagpu_json.h"
@@ -96,4 +97,119 @@ int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const cha
     }
     tagpu_json_free(d);
     return hit;
+}
+
+static char* copy_text(const char* t)
+{
+    size_t n = strlen(t) + 1;
+    char* c = (char*)malloc(n);
+    if (c) memcpy(c, t, n);
+    return c;
+}
+
+int tagpu_modcat_hash(const char* t, uint8_t out[32])
+{
+    int i;
+    if (strlen(t) != 64) return 0;
+    for (i = 0; i < 64; i++) {
+        char c = t[i];
+        int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+        if (v < 0) return 0;
+        if (i & 1) out[i / 2] |= (uint8_t)v;
+        else out[i / 2] = (uint8_t)(v << 4);
+    }
+    return 1;
+}
+
+static int plain_id(const char* id)
+{
+    if (!*id) return 0;
+    for (; *id; id++)
+        if (!((*id >= 'a' && *id <= 'z') || (*id >= '0' && *id <= '9') || *id == '-' || *id == '_')) return 0;
+    return 1;
+}
+
+/* a size that fits every 32-bit count the install keeps: 0 when it is not a whole number in range */
+static int size_of(const TJV* v, uint32_t* out)
+{
+    double d = tj_num(v, -1);
+    if (d < 0 || d > 2147483647.0 || d != (double)(uint32_t)d) return 0;
+    *out = (uint32_t)d;
+    return 1;
+}
+
+static int count_of(const TJV* arr)
+{
+    int n = 0;
+    const TJV* v;
+    for (v = tj_is(arr, TJ_ARR) ? arr->first : NULL; v; v = v->next) n++;
+    return n;
+}
+
+void tagpu_modcat_install_free(MODINSTALL* m)
+{
+    int i, k;
+    for (i = 0; i < m->npackages; i++) {
+        for (k = 0; k < m->packages[i].nfiles; k++) free((void*)m->packages[i].files[k].path);
+        free(m->packages[i].files);
+        free(m->packages[i].url);
+    }
+    free(m->packages);
+    free(m->id);
+    free(m->version);
+    free(m->base_url);
+    memset(m, 0, sizeof *m);
+}
+
+int tagpu_modcat_install(const char* catalog, size_t n, const char* id, MODINSTALL* out, char* err, size_t errn)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m, *pk;
+    int i, ok = 0;
+
+    memset(out, 0, sizeof *out);
+    if (!d) { if (err && errn) snprintf(err, errn, "catalog: %s", e); return 0; }
+    if (!plain_id(id)) { bad(err, errn, id, "not a plain name"); goto done; }
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next)
+        if (!strcmp(tj_str(tj_get(m, "id"), ""), id)) break;
+    if (!m) { bad(err, errn, id, "no entry names it"); goto done; }
+
+    pk = tj_get(m, "packages");
+    out->npackages = count_of(pk);
+    out->id = copy_text(id);
+    out->version = copy_text(tj_str(tj_get(m, "version"), ""));
+    out->base_url = copy_text(tj_str(tj_get(tagpu_json_root(d), "base_url"), ""));
+    out->packages = (MODPKG*)calloc(out->npackages ? (size_t)out->npackages : 1, sizeof(MODPKG));
+    if (!out->id || !out->version || !out->base_url || !out->packages) { bad(err, errn, id, "out of memory"); goto done; }
+    if (!out->npackages) { bad(err, errn, id, "it has no package"); goto done; }
+
+    for (i = 0, pk = pk->first; pk; pk = pk->next, i++) {
+        MODPKG* p = &out->packages[i];
+        const TJV* f = tj_get(pk, "files");
+        int k;
+        p->nfiles = count_of(f);
+        p->url = copy_text(tj_str(tj_get(pk, "url"), ""));
+        p->files = (MODTAR_FILE*)calloc(p->nfiles ? (size_t)p->nfiles : 1, sizeof(MODTAR_FILE));
+        if (!p->url || !p->files) { bad(err, errn, id, "out of memory"); goto done; }
+        if (!p->url[0] || !tagpu_modcat_hash(tj_str(tj_get(pk, "sha256"), ""), p->sha256) || !size_of(tj_get(pk, "size"), &p->size) || !p->nfiles) {
+            bad(err, errn, id, "a package without its url, hash, size or files");
+            goto done;
+        }
+        for (k = 0, f = f->first; f; f = f->next, k++) {
+            MODTAR_FILE* t = &p->files[k];
+            const char* path = tj_str(tj_get(f, "path"), "");
+            if (!modtar_path_safe(path) || !tagpu_modcat_hash(tj_str(tj_get(f, "sha256"), ""), t->sha256) || !size_of(tj_get(f, "size"), &t->size)) {
+                bad(err, errn, id, "a package file without a safe path, its hash or its size");
+                goto done;
+            }
+            if (!(t->path = copy_text(path))) { bad(err, errn, id, "out of memory"); goto done; }
+        }
+    }
+    ok = 1;
+done:
+    tagpu_json_free(d);
+    if (!ok) tagpu_modcat_install_free(out);
+    return ok;
 }

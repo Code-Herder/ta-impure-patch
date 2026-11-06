@@ -24,18 +24,19 @@
    and the engine silently ignores. Header key 0 is fine — `rev31.gp3` ships
    with it — so nothing here is obfuscated. */
 
+#define TAGPU_UFO_DEPTH 16
+
 typedef struct
 {
-    const char*  path;       /* archive-relative, EXACTLY one directory deep:
-                                "impure/render.gui". See the refusal below. */
+    const char*  path;       /* archive-relative, '/' or '\\' between folders */
     const void*  data;
     unsigned     size;
 } TAGPU_UFO_FILE;
 
-/* Write `n` files as a HAPI archive at `path`. 1 on success, 0 on failure
-   (including a path that is not `dir/file`, which is refused rather than
-   guessed at — one level is what the asset set needs, and renderers.md §2.10
-   says to hand the job to CI rather than grow this if it ever needs more). */
+/* Write `n` files as a HAPI archive at `path`, the bytes hpipack.build(tree, 0, 1) gives for the same files. A folder given in
+   two cases is one folder, under the first spelling in sorted order. 1 on success, 0 on failure: an empty component, a
+   path that is both a file and a folder, one given twice, or a tree past TAGPU_UFO_DEPTH levels. Also the mod installer's
+   writer (tagpu_modinst.c), for a mod's originals. Any thread. */
 int tagpu_ufo_write(const char* path, const TAGPU_UFO_FILE* files, int n);
 
 #endif

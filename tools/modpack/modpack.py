@@ -747,7 +747,7 @@ def st_recipe(lines) -> list:
     """originals.tsv's lines as the recipe's rows."""
     rows = []
     for line in lines:
-        path, md5, _size, arc, member = line.split("\t")
+        path, md5, _size, arc, member, _sha = line.split("\t")
         rows.append((path, md5, arc, member))
     return rows
 
@@ -1112,7 +1112,7 @@ def cmd_verify(a):
         # the recipe, as the install runs it: every member named is the player's own, with the bytes it says
         assembled, bad_recipe = {}, []
         for line in recipe:
-            path, md5, size, arc, member = line.split("\t")
+            path, md5, size, arc, member, _sha = line.split("\t")
             if st["retail"].get(arc.lower(), {}).get(member.lower(), (None,))[0] != md5:
                 bad_recipe.append(path)
             assembled[path.lower()] = (md5, path)
@@ -1238,7 +1238,12 @@ def cmd_packages(a):
         d.mkdir(parents=True, exist_ok=True)
         pkg = {f"{s['id']}.hpi": hpipack().build(tree, 0, 2)}
         sizes = member_sizes()
-        pkg[f"{s['id']}.originals.tsv"] = "".join(f"{path}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\n" for path, md5, arc, member in st["recipe"]).encode()
+        opened = {}
+        def member_sha(arc, member):
+            a = opened.get(arc) or opened.setdefault(arc, hpipack().Archive(plan.retail[plan.retail_name(arc.lower())]))
+            return hashlib.sha256(a.read(member.lower())).hexdigest()
+        pkg[f"{s['id']}.originals.tsv"] = "".join(f"{path}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\t{member_sha(arc, member)}\n"
+                                                  for path, md5, arc, member in st["recipe"]).encode("latin-1")
         for name, p in plan.kept.items():
             pkg[name] = p.read_bytes()
         tar = d / f"{s['id']}.tar.zst"
@@ -1275,7 +1280,7 @@ def cmd_install(a):
         archives, tree = {}, {}
         names = {p.name.lower(): p for p in source.iterdir() if p.is_file()}
         for line in (dest / f"{a.id}.originals.tsv").read_text().splitlines():
-            path, md5, size, arc, member = line.split("\t")
+            path, md5, size, arc, member, _sha = line.split("\t")
             h = archives.get(arc.lower()) or hpipack().Archive(names[arc.lower()])
             archives[arc.lower()] = h
             data = h.read(member)
