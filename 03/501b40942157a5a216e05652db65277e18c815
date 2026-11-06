@@ -1,0 +1,6 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..03501b40 findings=30 acted=29 rejected=1 date=2026-11-06
+Two rounds. First (high, 9af193f8): 16 findings; second (default effort, on the fixes): 14.
+Highs: CRC_all compared zero with zero, because the lobby alone fills it; the FBI key comparison never ran; a first-holder change in feature sections and one texture. Fixed: values that exist, a network game with a drop-in peer, and packages that keep each first holder by renaming, or by recipe placement, so no original text ships.
+Also fixed: renamed folders left open, a corrupt package running anyway, another edition failing silently, tools clearing mod=, replays' mod name, parser and harness gaps.
+Rejected: tadr_started read from the host's file only; the drop-in row bounds it in the same run.
+Owner's decision to flag: the new thread-split.allow line for tagpu_modload.c, class publisher, scope presentation.
