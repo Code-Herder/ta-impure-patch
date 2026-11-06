@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dd.h"
+#include "config.h"
+#include "mouse.h"
 #include "tagpu_modsui.h"
 #include "tagpu_modcat.h"
 #include "tagpu_modinst.h"
@@ -55,12 +57,14 @@ static int      s_rowMod[MODS_MAXROW];
 static int      s_hideChanged;                  /* the running mod's archives differ from what it mounted */
 static char     s_held[MODS_KEY];
 static unsigned s_owed;
-static int      s_escOwed, s_drag, s_dragY0;
+static uint8_t  s_keyOwed[256];
+static int      s_drag, s_dragY0;
 static float    s_dragS0;
 static int      s_active = NONE;                /* the mod the worker has */
 static int      s_queue[MAX_MOD], s_nqueue;
 static MODINST_STATUS s_status;
 static char     s_note[200];
+static int      s_paneStale;
 
 /* the archives of this folder a mod can mount: written by the scan's thread, read after s_scanDone */
 #define SCAN_MAX MODS_MAXSW
@@ -300,13 +304,15 @@ static void build_switches(int mod)
 static void build_pane(void)
 {
     const int m = s_sel[s_tab];
+    int i;
     s_page.selected = -1;
+    for (i = 0; i < s_page.nrow; i++) if (s_rowMod[i] == m) s_page.selected = i;
+    /* THE PANE READS THE PLAYER'S FILE AND PARSES THE CATALOG ONCE AN ARCHIVE, on the game thread, and an install's progress
+       publishes many times a second: only what can change it rebuilds it. */
+    if (!s_paneStale) return;
+    s_paneStale = 0;
     s_page.title[0] = s_page.meta[0] = s_page.summary[0] = s_page.note[0] = 0;
     s_page.nopt = s_page.nsw = 0;
-    {
-        int i;
-        for (i = 0; i < s_page.nrow; i++) if (s_rowMod[i] == m) s_page.selected = i;
-    }
     if (s_page.selected < 0) return;
     if (m == FOLDER) {
         lstrcpynA(s_page.title, "This folder", sizeof s_page.title);
@@ -524,6 +530,7 @@ void tagpu_modsui_tick(void)
                 tagpu_logf("modsui: %s failed: %s", s_mod[s_active].id, st.why);
             }
             s_active = NONE;
+            s_paneStale = 1;
             start_next();
             publish();
         } else if (st.phase != s_status.phase || st.done != s_status.done) {
@@ -533,7 +540,7 @@ void tagpu_modsui_tick(void)
     }
     if (s_scanDone == 1) {
         static int s_saw;
-        if (!s_saw) { s_saw = 1; publish(); }
+        if (!s_saw) { s_saw = 1; s_paneStale = 1; publish(); }
     }
 }
 
@@ -564,8 +571,9 @@ void tagpu_modsui_open(const char* folder)
     s_sel[MODS_TAB_EXPLORE] = s_sel[MODS_TAB_UPDATES] = NONE;
     s_held[0] = s_note[0] = 0;
     s_owed = 0;
-    s_escOwed = 0;
+    memset(s_keyOwed, 0, sizeof s_keyOwed);
     s_drag = -1;
+    s_paneStale = 1;
     memset(&s_page, 0, sizeof s_page);
     memset(&s_hit, 0, sizeof s_hit);
     EnterCriticalSection(&s_lock);
@@ -589,17 +597,33 @@ static void confirm(void)
 {
     char id[32];
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
+    cfg_save();
     tagpu_settings_set_mod(id);
     tagpu_settings_flush();
+    /* A RESTART MUST NOT COME UP ON THE OLD MOD WITH NO WORD SAID: it goes only once the file holds the choice */
+    if (!tagpu_settings_saved()) {
+        lstrcpynA(s_note, "Your choice could not be saved in impure.cfg, so the game stays as it is.", sizeof s_note);
+        tagpu_logf("modsui: %s", s_note);
+        s_paneStale = 1;
+        publish();
+        return;
+    }
+    tagpu_profiles_flush();
     tagpu_logf("modsui: restarting with mod=%s", id);
     if (!tagpu_rguard_restart_self()) {
         snprintf(s_note, sizeof s_note, "The game could not restart itself (error %lu). Your choice is saved, so start it again.",
                  (unsigned long)GetLastError());
         tagpu_logf("modsui: %s", s_note);
+        s_paneStale = 1;
         publish();
         return;
     }
-    ExitProcess(0);
+    /* TERMINATED, NOT EXITED, AND WHAT MATTERS IS ALREADY ON DISK. ExitProcess kills the render thread wherever it stands and then
+       runs the detaches, the graphics driver's among them, and one left waiting on a lock the killed thread held never returns
+       (MEASURED: Wine, NVIDIA, a game on the screen for 20 s: it stayed in its detach for minutes, and held the semaphore the new
+       process waits on). The engine's own exit releases the device first, and nothing here can reach that from a click.
+       Terminating runs no detach, so the kernel ends it whatever any thread holds; nothing is left to save at the main menu. */
+    TerminateProcess(GetCurrentProcess(), 0);
 }
 
 /* ---- the hit map --------------------------------------------------------------------------------- */
@@ -691,6 +715,7 @@ static void act(const char* key)
 {
     int i = -1;
     char what = 0;
+    s_paneStale = 1;
     if (!strncmp(key, "tab:", 4)) {
         i = atoi(key + 4);
         if (i >= 0 && i < MODS_NTAB) { s_tab = i; s_note[0] = 0; s_page.scroll[MODS_SCROLL_LIST] = 0; s_page.scroll[MODS_SCROLL_DETAIL] = 0; }
@@ -718,8 +743,8 @@ static void act(const char* key)
         for (m = 0; m < s_nmod; m++) if (has_update(&s_mod[m])) queue_install(m);
     } else if (!strcmp(key, "confirm")) {
         if (s_page.confirm[0]) confirm();
-    } else if (!strcmp(key, "back")) {
-        close_screen("Back");
+    } else if (!strcmp(key, "back") || !strcmp(key, "close")) {
+        close_screen(key);
         return;
     }
     publish();
@@ -727,10 +752,19 @@ static void act(const char* key)
 
 /* ---- the input ------------------------------------------------------------------------------------ */
 
+/* The drawn cursor follows mouse_last_client, and no move reaches cnc-ddraw's store while the capture holds. */
+static void note_client(int cx, int cy)
+{
+    if (cx < 0) return;
+    if (mouse_client_inside(cx, cy)) mouse_note_client(cx, cy);
+    else mouse_forget_client();
+}
+
 static int press(unsigned bit, int cx, int cy)
 {
     char key[TAGPU_WIKI_KEY];
     int i;
+    note_client(cx, cy);
     s_owed |= bit;
     if (bit != 1u) return 1;
     take_map();
@@ -778,7 +812,7 @@ static int release(unsigned bit, int cx, int cy)
 
 static void pointer(int cx, int cy)
 {
-    (void)cx;
+    note_client(cx, cy);
     if (s_drag >= 0 && s_drag < MODS_NSCROLL && s_hit.bar[s_drag].per_px > 0) {
         scroll_to(s_drag, s_dragS0 + (float)(cy - s_dragY0) * s_hit.bar[s_drag].per_px);
         publish();
@@ -799,33 +833,32 @@ static void wheel(int cx, float notches)
     publish();
 }
 
+/* A PRESS TAKEN OWES ITS RELEASE, AND ONLY THAT ONE IS TAKEN: the release of the key that opened the screen, MODS' quick key,
+   is the engine's. Esc closes on its release, so its press, repeats and character all arrive while the screen still takes them. */
 int tagpu_modsui_key(unsigned vk, int up)
 {
-    /* a key whose release the engine is owed goes on; the screen has no other key of its own */
-    if (vk != VK_ESCAPE) return !up;
-    if (!up) { s_escOwed = 1; return 1; }
-    if (s_escOwed) {
-        s_escOwed = 0;
-        close_screen("Esc");
+    const unsigned k = vk & 0xFF;
+    if (!up) {
+        s_keyOwed[k] = 1;
         return 1;
     }
-    return 0;
+    if (!s_keyOwed[k]) return 0;
+    s_keyOwed[k] = 0;
+    if (vk == VK_ESCAPE) close_screen("Esc");
+    return 1;
 }
 
 int tagpu_modsui_message(UINT msg, WPARAM wp, LPARAM lp)
 {
     const int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
     switch (msg) {
+    /* Alt's chords stay the system's, so Alt+F4 still ends the game with the screen open */
     case WM_KEYDOWN:
-    case WM_SYSKEYDOWN:
         return tagpu_modsui_key((unsigned)wp, 0);
     case WM_KEYUP:
-    case WM_SYSKEYUP:
         return tagpu_modsui_key((unsigned)wp, 1);
     case WM_CHAR:
     case WM_DEADCHAR:
-    case WM_SYSCHAR:
-    case WM_SYSDEADCHAR:
         return 1;
     case WM_MOUSEMOVE:
         pointer(cx, cy);

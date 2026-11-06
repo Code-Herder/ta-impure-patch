@@ -500,6 +500,7 @@ void tagpu_settings_extra_drop(const char* key)
 }
 
 void tagpu_settings_flush(void) { flush(0); }
+int tagpu_settings_saved(void) { return !s_ignored && !s_unreadable && !s_dirty; }
 void tagpu_settings_final(void) { flush(1); }
 void tagpu_settings_detaching(void) { InterlockedExchange(&s_detaching, 1); }
 

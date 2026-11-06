@@ -28,6 +28,9 @@ header output { color: var(--fg); }
 #win .wt { position: absolute; left: calc(var(--w-wt-0) * var(--u)); right: calc(var(--w-wt-1) * var(--u)); top: calc(var(--w-wt-2) * var(--u));
   height: calc(var(--w-wt-3) * var(--u)); display: flex; align-items: center; padding-left: calc(var(--w-title-pad) * var(--u)); overflow: hidden;
   white-space: nowrap; --ink: initial; --shade: initial; }
+/* the close button in the window part's bay */
+#wx { position: absolute; right: calc(var(--w-wx-0) * var(--u)); top: calc(var(--w-wx-1) * var(--u)); width: calc(var(--w-wx-2) * var(--u));
+  height: calc(var(--w-wx-3) * var(--u)); padding: 0; border: 0; background: none; }
 /* the body: the tabs, the two columns taking what is left, the footer */
 #win .wb { position: absolute; left: calc(var(--w-wb-3) * var(--u)); right: calc(var(--w-wb-1) * var(--u)); top: calc(var(--w-wb-0) * var(--u));
   bottom: calc(var(--w-wb-2) * var(--u)); display: flex; flex-direction: column; gap: calc(var(--w-gap) * var(--u)); }

@@ -96,6 +96,8 @@ COLLECT = r"""async () => {
     const r = B(e), k = clipOf(e);
     if (k && !overlapY(r, k)) continue;
     els.push({ kind: 'part', part: e._pk.split('|')[1], r, alpha: alpha(e) });
+    // uikit.js paints a box's glyph over the middle 60 % of it, as ui_glyph does
+    if (e.dataset.glyph) els.push({ kind: 'part', part: e.dataset.glyph, r: [r[0] + r[2] * .2, r[1] + r[3] * .2, r[2] * .6, r[3] * .6], alpha: alpha(e) });
   }
   const hot = (e, key, box) => { let r = box || B(e); const k = clipOf(e); if (k && e.closest('.scr') !== e) r = inter(r, k);
     if (r[2] > 0 && r[3] > 0) els.push({ kind: 'hot', key, r }); };

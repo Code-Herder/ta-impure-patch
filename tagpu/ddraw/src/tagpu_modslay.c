@@ -15,9 +15,9 @@
 #include "tagpu_json.h"
 
 /* the kit's parts the rules draw, by name; the load refuses a kit without one */
-enum { P_WINDOW, P_PANEL, P_ROW, P_ROW_SEL, P_BUTTON, P_BUTTON_DOWN, P_TAB, P_TAB_SEL, P_TAB_DOWN, P_CHECK_OFF, P_CHECK_ON,
+enum { P_WINDOW, P_CLOSE, P_CLOSE_DOWN, P_ICON_CLOSE, P_PANEL, P_ROW, P_ROW_SEL, P_BUTTON, P_BUTTON_DOWN, P_TAB, P_TAB_SEL, P_TAB_DOWN, P_CHECK_OFF, P_CHECK_ON,
        P_RADIO_OFF, P_RADIO_ON, P_TRACK, P_FILL, P_BADGE_ACTIVE, P_BADGE_UPDATE, P_BADGE_GREY, P_BADGE_CONFLICT, P_N };
-static const char* const PART[P_N] = { "window", "panel", "row", "row_selected", "button", "button_down", "tab", "tab_selected",
+static const char* const PART[P_N] = { "window", "close", "close_down", "i_close", "panel", "row", "row_selected", "button", "button_down", "tab", "tab_selected",
     "tab_down", "check_off", "check_on", "radio_off", "radio_on", "progress_track", "progress_fill", "badge_active",
     "badge_update", "badge_grey", "badge_conflict" };
 
@@ -46,7 +46,7 @@ static const char* const TAB_LABEL[MODS_NTAB] = { "Manage", "Explore", "Updates"
 /* layout.json's numbers, in units unless named */
 typedef struct {
     double share, line;             /* the window's share (percent), the text's line height */
-    double wt[4], wb[4], gap;       /* wt l r t h, wb t r b l */
+    double wt[4], wx[4], wb[4], gap;       /* wt l r t h, wx r t w h, wb t r b l */
     UIPANELG pnl;
     double title_pad;
     UIBUTTONG tab, foot, act, step, rst;
@@ -491,6 +491,13 @@ static void window_(C* c)
     ui_art(&c->u, part(c, P_WINDOW), win, NULL);
     /* the title in its groove: its own ink, the style's whatever the window's face */
     line_at(c, R_WINDOW_TITLE, S_TITLE, wt.x + U(c, g->title_pad), wt.y + ui_half(wt.h - t.L), 0, &wt);
+    {
+        /* the close button in the window part's bay */
+        const UIR wx = ui_rect(win.x + win.w - U(c, g->wx[0]) - U(c, g->wx[2]), win.y + U(c, g->wx[1]), U(c, g->wx[2]), U(c, g->wx[3]));
+        ui_art(&c->u, part(c, !strcmp(c->st.held, "close") ? P_CLOSE_DOWN : P_CLOSE), wx, NULL);
+        ui_hot(&c->u, wx, NULL, "close");
+        ui_glyph(&c->u, part(c, P_ICON_CLOSE), wx);
+    }
     tabs(c, body.x, body.y);
     panel(c, MODS_SCROLL_LIST, ui_rect(body.x, cy, t0, ch), list_rows, "scroll:list");
     panel(c, MODS_SCROLL_DETAIL, ui_rect(body.x + t0 + gap, cy, t1, ch), detail_rows, "scroll:detail");
@@ -641,6 +648,7 @@ static int read_layout(MODSLAY* l, const TJV* L, char* err, size_t errn)
     g->tab.line = g->foot.line = g->act.line = g->step.line = g->rst.line = g->line;
     for (i = 0; i < 4; i++) {
         g->wt[i] = ui_num(&x, "wt", NULL, i);
+        g->wx[i] = ui_num(&x, "wx", NULL, i);
         g->wb[i] = ui_num(&x, "wb", NULL, i);
         g->pnl.pn[i] = ui_num(&x, "pn", NULL, i);
     }

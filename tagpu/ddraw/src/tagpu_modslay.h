@@ -17,7 +17,7 @@
      opt:<i>:-  opt:<i>:+  option i's stepper; opt:<i>:t its switch
      reset:<i>             option i's reset, shown while it is not at its default and not locked
      sw:<i>                archive switch i; swreset:<i> its reset
-     back confirm updateall
+     close back confirm updateall
      scroll:list scroll:detail   a scrollbar's track, as the wiki's */
 #include <stddef.h>
 #include <stdint.h>

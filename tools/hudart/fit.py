@@ -215,7 +215,9 @@ def main_wiki():
 
 def main():
     if sys.argv[1:] == ['--set', 'wiki']:
-        return main_wiki()
+        main_wiki()
+        # the Mods screen's parts are generated from the fitted kit, and art/wiki-full/ does not have them
+        return subprocess.run([sys.executable, str(laycheck.ROOT / 'tools/mods/genparts.py')], check=True)
     if sys.argv[1:] not in ([], ['--set', 'hud']):
         sys.exit(__doc__)
     K = json.load(open(FULL / 'kit.json'))

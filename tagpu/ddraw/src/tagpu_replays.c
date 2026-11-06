@@ -233,8 +233,9 @@ static const Mod s_mods[MOD_N] = {
 #define REPLAYS_Y        393
 #define MODS_NAME        "MODS"
 #define MODS_Y           416            /* under REPLAYS: the plate holds both                   */
-#define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, 0, 0): the box of
-                                           0x4266F8 and 0x426742 (DISASSEMBLED)                    */
+#define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, 1, 1), MSGBOX.GUI: every
+                                           caller of the OK box passes 1, 1 and 500 (DISASSEMBLED); with
+                                           0, 0 its OK button is inactive (MEASURED)              */
 #define DIALOG_W         500
 #define SHIFT_FROM       409
 #define SHIFT_BY         24
@@ -1031,15 +1032,17 @@ static void mods_click(char* gi)
         folder[sizeof folder - 1] = 0;
     }
     if (!tagpu_modload_exe_known()) {
-        ((dialog_fn)VA_DIALOG)(gi, "Mods are not available because this copy of the game's exe is not one Impure knows.",
-                               DIALOG_W, 0, 0);
+        static const char NOT_KNOWN[] = "Mods are not available because this copy of the game's exe is not one Impure knows.";
+        rlog("mods: %s", NOT_KNOWN);
+        ((dialog_fn)VA_DIALOG)(gi, NOT_KNOWN, DIALOG_W, 1, 1);
         return;
     }
     if (!tagpu_hudstate_on() || tagpu_wikistate_refused() || (tagpu_wikiart_done() && (!art || !art->mods))) {
         _snprintf(text, sizeof text, "The Mods screen needs the Vulkan renderer. You are playing %s. To change mod, "
                   "edit mod= in impure.cfg and start the game again.", running ? running : folder);
         text[sizeof text - 1] = 0;
-        ((dialog_fn)VA_DIALOG)(gi, text, DIALOG_W, 0, 0);
+        rlog("mods: %s", text);
+        ((dialog_fn)VA_DIALOG)(gi, text, DIALOG_W, 1, 1);
         return;
     }
     tagpu_modsui_open(running ? "" : folder);

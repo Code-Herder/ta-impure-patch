@@ -180,6 +180,7 @@ function foot(p) {
 function render() {
   const p = P();
   p.held = S.held;
+  $('#wx').classList.toggle('on', p.held === 'close');
   $('#tabs').innerHTML = tabs(p);
   const list = $('#list');
   list.classList.toggle('none', !p.row.length);
