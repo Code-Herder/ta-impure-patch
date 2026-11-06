@@ -2575,7 +2575,7 @@ refuse:
        submit names these objects" a fact rather than a hope. The memory is still given back, which
        is what this path existed to do; it is given back where that is legal. */
     plog(d, "terr: slot %u would not take this frame's resources - the pass stops "
-            "drawing and the lane comes down and back", (unsigned)slot);
+            "drawing and owes a teardown", (unsigned)slot);
     refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;

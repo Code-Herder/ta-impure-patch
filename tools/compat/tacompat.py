@@ -1572,6 +1572,16 @@ def refuse_once(gamedir: Path) -> "str | None":
     refuse_lever_write(gamedir, "once")
     if not log_says(gamedir, GUI_LANE_BACK, 90):
         return f"the lever refused the UI pass and the log never said {GUI_LANE_BACK!r}"
+    # The heartbeats count the overlay's frames, which run with the lane down too, so the lane's
+    # own line after the retry's is what says it is up, and only then do they say it presented.
+    end = time.monotonic() + 90
+    while True:
+        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+        if "vk: up in " in text[text.rfind(GUI_LANE_BACK):]:
+            break
+        if time.monotonic() > end:
+            return "the lane was retried and the log never said it came up"
+        time.sleep(0.5)
     if not presents_after(gamedir):
         return f"no frame presented for {STALL_S} s after the lane came back"
     return None

@@ -2668,7 +2668,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                path below, which reads `mmEngW * mmEngH * 3` bytes out of the very
                pointer the guard refused -- a NULL read of 15 876 texels, or a
                `grow` sized from a rejected dimension that fails and refuses the
-               pass for the session. A refusal that still consumes its input is
+               pass. A refusal that still consumes its input is
                not a refusal. */
             shOn = 0; compose = 0; needMM = 0; shRefused = 1;
             if (!s_saidSharp) { s_saidSharp = 1;

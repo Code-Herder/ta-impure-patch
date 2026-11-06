@@ -1531,7 +1531,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    falls back to the base atlas's view -- so a device
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
    pass. That is why it does not join the `goto refuse` family, whose label
-   stops the pass for the session.
+   stops the pass.
 
    WHAT HOLDS THAT PROMISE is stated where it is enforced: `prepare` clears
    `h.restored` whenever the twin is not painted, and the binding below names
@@ -3368,7 +3368,7 @@ refuse:
        later frame, behind the vkDeviceWaitIdle that makes "no submit names
        these objects" a fact rather than a hope. */
     plog(d, "unit: slot %u would not take this frame's resources - the pass "
-            "stops drawing and the lane comes down and back", (unsigned)slot);
+            "stops drawing and owes a teardown", (unsigned)slot);
     refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
@@ -3394,7 +3394,7 @@ static void atlas_owed(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     if (!tagpu_posedraw_atlas_hand(&h) || !h.pal || h.atlasDim != s_atDim) return;
     if (base_upload(d, cb, &s_slot[slot], &h) < 0) {
         plog(d, "unit: the owed atlas upload failed on the device - the pass stops "
-                "drawing and the lane comes down and back");
+                "drawing and owes a teardown");
         refuse_job(d);
         s_state = ST_REFUSED;
         s_downOwed = 1;

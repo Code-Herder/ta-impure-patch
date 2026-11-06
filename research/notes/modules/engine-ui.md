@@ -376,3 +376,7 @@ in the panel's place. Measured on the `pass-refused` row, which opens the panel 
 and deselects after it: 31.0 % of the strip wrong without it. `lost` leaves asset and
 snapshot surfaces out: those re-seed with their bytes, and the `copy-unseeded` count of an ordinary
 game (about 4 300 in a battle on retail) is untouched, since those sources were never seeded.
+**Open:** `panel_emit` keeps its debt when the repaint put no op on the panel surface, and nothing
+then asks for another repaint, since asking on every flip is the loop `lost` exists to prevent. The
+next repaint pays it. Retail's redraw paints that surface (MEASURED, `panel_emit`'s comment); a mod's
+panel is untested.
