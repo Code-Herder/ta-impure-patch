@@ -56,6 +56,7 @@
 #include "tagpu_log.h"
 #include "tagpu_profiles.h"
 #include "tagpu_modsui.h"
+#include "tagpu_modgate.h"
 #include "tagpu_menu.h"
 
 #define TA_MAINPP     0x00511DE8u
@@ -3764,6 +3765,7 @@ static int __cdecl before_flip(void* entry_esp)
     if (isGame) tagpu_profiles_begin_match();
     tagpu_profiles_menu_tick();
     tagpu_modsui_tick(isGame);
+    if (!isGame) tagpu_modgate_tick();
     /* FIRST, before the census or the publisher read a single base: retire every
        surface another thread's MEM_Free left for us (surf_drain_freeq) */
     surf_drain_freeq();

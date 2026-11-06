@@ -510,6 +510,45 @@ static void walk_arc(WALK* w, int k, const char* dir)
     }
 }
 
+void tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx)
+{
+    const char (*top)[TAGPU_VFS_PATHMAX] = NULL;
+    char (*tops)[TAGPU_VFS_PATHMAX] = NULL;
+    int ntop = 0, cap = 0, k, i, t;
+    if (!v) return;
+    for (k = 0; k < v->narc; k++) {
+        TAGPU_HPI* a = v->arc[k].hpi;
+        const int n = a ? tagpu_hpi_children(a, 0) : 0;
+        for (i = 0; i < n; i++) {
+            const int e = tagpu_hpi_child(a, 0, i);
+            const char* name = tagpu_hpi_name(a, e);
+            if (!tagpu_hpi_is_dir(a, e)) {
+                TAGPU_VFILE f;
+                if (snprintf(f.path, sizeof f.path, "%s", name) >= (int)sizeof f.path || shadowed(v, k, e, f.path)) continue;
+                f.src = k;
+                f.entry = e;
+                f.size = tagpu_hpi_size(a, e);
+                if (!each(ctx, &f)) goto done;
+                continue;
+            }
+            for (t = 0; t < ntop && tagpu_hpi_stricmp(tops[t], name, TAGPU_VFS_PATHMAX); t++) {}
+            if (t < ntop || strlen(name) >= TAGPU_VFS_PATHMAX) continue;
+            if (ntop == cap) {
+                const int grown = cap ? cap * 2 : 64;
+                char (*more)[TAGPU_VFS_PATHMAX] = (char (*)[TAGPU_VFS_PATHMAX])realloc(tops, (size_t)grown * TAGPU_VFS_PATHMAX);
+                if (!more) goto done;
+                tops = more;
+                cap = grown;
+            }
+            strcpy(tops[ntop++], name);
+        }
+    }
+    top = (const char (*)[TAGPU_VFS_PATHMAX])tops;
+    for (t = 0; t < ntop; t++) tagpu_vfs_enum(v, top[t], "*", 1, each, ctx);
+done:
+    free(tops);
+}
+
 void tagpu_vfs_enum(TAGPU_VFS* v, const char* dir, const char* pattern, int recursive, TAGPU_VFSEACH each, void* ctx)
 {
     WALK w;

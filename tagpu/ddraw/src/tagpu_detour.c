@@ -40,6 +40,20 @@ unsigned char* tagpu_detour_set_flag(unsigned char* p, volatile unsigned char* f
     return p;
 }
 
+int tagpu_detour_redirect_ok(unsigned int va, unsigned int from)
+{
+    const unsigned char* p = (const unsigned char*)(uintptr_t)va;
+    unsigned was;
+    memcpy(&was, p + 1, 4);
+    return p[0] == 0xE8 && was == from - (va + 5);
+}
+
+int tagpu_detour_redirect(unsigned int va, unsigned int from, void* to)
+{
+    const unsigned rel = (unsigned)(uintptr_t)to - (va + 5);
+    return tagpu_detour_redirect_ok(va, from) && tagpu_detour_write(va + 1, (const unsigned char*)&rel, 4);
+}
+
 int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
 {
     DWORD old;

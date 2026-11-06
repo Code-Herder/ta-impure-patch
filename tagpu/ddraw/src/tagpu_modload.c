@@ -807,6 +807,68 @@ int tagpu_modload_exe_known(void)
     return known;
 }
 
+/* The bytes beside an exe that a Patch Loader's table is written from, and its key. 1 with one. */
+static int read_loader_key(const wchar_t* exe_path, uint8_t key[32])
+{
+    wchar_t dir[MAX_PATH], *slash;
+    uint8_t* dll;
+    size_t n = 0;
+    int is_loader = 0;
+    lstrcpynW(dir, exe_path, MAX_PATH);
+    if ((slash = wcsrchr(dir, L'\\'))) slash[1] = 0;
+    if (lstrlenW(dir) + 12 >= MAX_PATH) return 0;
+    lstrcatW(dir, L"dplayx.dll");
+    if ((dll = read_file_w(dir, &n))) {
+        is_loader = contains(dll, n, "[Settings]");
+        if (is_loader) tagpu_modpak_file_key(dll, n, 0, key);
+        free(dll);
+    }
+    return is_loader;
+}
+
+void tagpu_modload_exe_identity(uint8_t out[32], char* id, size_t nid)
+{
+    wchar_t path[MAX_PATH];
+    uint8_t key[32], lkey[32];
+    uint8_t* exe;
+    size_t n = 0;
+    int loader;
+    MODSHA sha;
+    id[0] = 0;
+    memset(key, 0, sizeof key);
+    if (!s_blob) tagpu_modload_exe_known();
+    if (s_id[0] && s_blob) {
+        const MODPATCH* mod = tagpu_modpak_mod(&s_pak, s_id);
+        if (mod) {
+            memcpy(out, mod->hash, 32);
+            lstrcpynA(id, s_id, (int)nid);
+            return;
+        }
+    }
+    if (GetModuleFileNameW(NULL, path, MAX_PATH) && (exe = read_file_w(path, &n))) {
+        tagpu_modpak_file_key(exe, n, 1, key);
+        free(exe);
+    }
+    loader = read_loader_key(path, lkey);
+    if (s_blob) {
+        /* a drop-in folder of a catalog mod: its exe, or stock with its loader, names the same XOR as the mod, so it plays the same image */
+        const int stock = !memcmp(key, s_pak.stock_key, 32);
+        const MODKNOWN* k = stock ? (loader ? tagpu_modpak_known(&s_pak, 1, lkey) : NULL) : (loader ? NULL : tagpu_modpak_known(&s_pak, 0, key));
+        uint32_t i;
+        for (i = 0; k && k->xor_ >= 0 && i < s_pak.nmods; i++)
+            if (s_pak.mods[i].xor_ == (uint32_t)k->xor_) {
+                memcpy(out, s_pak.mods[i].hash, 32);
+                lstrcpynA(id, s_pak.mods[i].id, (int)nid);
+                return;
+            }
+    }
+    /* anything else matches only a folder with these same files */
+    modsha_init(&sha);
+    modsha_add(&sha, key, sizeof key);
+    if (loader) modsha_add(&sha, lkey, sizeof lkey);
+    modsha_end(&sha, out);
+}
+
 int tagpu_modload_archive_is_original(const char* path)
 {
     static unsigned char buf[1 << 16];
@@ -907,15 +969,6 @@ static long __cdecl find_filtered(const char* spec, void* data)
 }
 
 /* a call's rel32 moved to `to`, after checking it reaches `from` */
-static int redirect_call(unsigned va, unsigned from, void* to)
-{
-    const unsigned char* p = (const unsigned char*)(uintptr_t)va;
-    unsigned rel = (unsigned)(uintptr_t)to - (va + 5), was;
-    memcpy(&was, p + 1, 4);
-    if (p[0] != 0xE8 || was != from - (va + 5)) return 0;
-    return tagpu_detour_write(va + 1, (const unsigned char*)&rel, 4);
-}
-
 static int install_mount(void)
 {
     unsigned char* stub;
@@ -927,8 +980,8 @@ static int install_mount(void)
     memcpy(stub + sizeof MOUNTER_STOLEN + 1, &rel, 4);
     s_mountReal = (int (__stdcall*)(const char*, int))stub;
     /* the mounter last: with no mod a failure must leave no mutator mounting, and the two redirects pass everything through there */
-    return redirect_call(VA_OPEN_CALL, VA_FOPEN, open_filtered) &&
-           redirect_call(VA_FIND_CALL, VA_FINDFIRST, find_filtered) &&
+    return tagpu_detour_redirect(VA_OPEN_CALL, VA_FOPEN, open_filtered) &&
+           tagpu_detour_redirect(VA_FIND_CALL, VA_FINDFIRST, find_filtered) &&
            tagpu_detour_land(VA_MOUNTER, (const unsigned char*)mount_filtered, sizeof MOUNTER_STOLEN);
 }
 

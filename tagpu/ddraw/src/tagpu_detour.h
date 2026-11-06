@@ -27,6 +27,9 @@ unsigned char* tagpu_detour_set_flag(unsigned char* p, volatile unsigned char* f
                                      unsigned char v);
 /* copy `n` bytes over `va` with the page temporarily writable */
 int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n);
+/* A `call from` at `va`, stock's, and the same call sent to `to`. */
+int tagpu_detour_redirect_ok(unsigned int va, unsigned int from);
+int tagpu_detour_redirect(unsigned int va, unsigned int from, void* to);
 /* land the 5-byte jmp to `stub` on `va` and NOP the rest of the `nst` stolen
    bytes. For a module that builds its own stub shape (tagpu_reclaim.c: it
    needs the stolen tail's address as a trampoline) and wants to build every

@@ -81,6 +81,10 @@ unsigned char* tagpu_vfs_load(TAGPU_VFS* v, const TAGPU_VFILE* f, uint32_t max, 
 typedef int (*TAGPU_VFSEACH)(void* ctx, const TAGPU_VFILE* f);
 void tagpu_vfs_enum(TAGPU_VFS* v, const char* dir, const char* pattern, int recursive, TAGPU_VFSEACH each, void* ctx);
 
+/* Every file the game can open that a game's data holds: each file at an archive's root, and all under each folder at an archive's root, loose ones
+   there included. So a folder no archive has, log\\ or mods\\ say, and the files beside the exe are never listed. */
+void tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx);
+
 /* 0x4BC370's match of `name` against `pattern`. */
 int tagpu_vfs_match(const char* name, const char* pattern);
 

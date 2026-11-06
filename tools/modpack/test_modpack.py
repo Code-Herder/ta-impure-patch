@@ -308,6 +308,52 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
         self.assertEqual(got, "unreadable")
 
 
+class ModPrint(unittest.TestCase):
+    """tagpu_modprint.c, native: which files a fingerprint counts, and a peer's bytes read as data."""
+
+    SRC = r"""
+#include <stdio.h>
+#include <string.h>
+#include "tagpu_modprint.h"
+static int is_unit(void* c, const char* n, size_t len) { (void)c; return (len == 6 && !strncmp(n, "ARMCOM", 6)) || (len == 4 && !strncmp(n, "UNIT", 4)) || (len == 5 && !strncmp(n, "UNIT2", 5)); }
+int main(void) {
+    static const char* const P[] = { "units\\ARMCOM.FBI", "objects3d\\armcom.3do", "scripts\\x.cob", "gamedata\\x.tdf", "noextension", "x.unknown",
+        "anims\\fx.gaf", "bitmaps\\a.PCX", "x\\a.bmp", "sounds\\a.Wav", "fonts\\a.fnt", "MAPS\\a.tnt", "maps\\a.ota", "mapsnot\\a.tnt", "Camps\\example.tdf",
+        "guis\\MAINMENU.GUI", "guis\\ARMCOM1.GUI", "guis\\armcom.gui", "guis\\UNIT22.gui", "guis\\LOUNGE2.GUI", "a.gaf.txt" };
+    unsigned char tail[MODPRINT_TAIL];
+    MODPRINT in, out;
+    unsigned i;
+    for (i = 0; i < sizeof P / sizeof *P; i++) printf("%d", tagpu_modprint_counts(P[i], is_unit, NULL));
+    memset(&in, 0, sizeof in);
+    in.exe[0] = 7; in.content[15] = 9;
+    strcpy(in.label, "ProTA 4.8");
+    tagpu_modprint_tail_put(&in, tail);
+    printf(" %d", tagpu_modprint_tail_read(tail, sizeof tail, &out));
+    printf(" %d%d%s", out.exe[0], out.content[15], out.label);
+    printf(" %d", tagpu_modprint_tail_read(tail, sizeof tail - 1, &out));
+    memset(tail + 8 + 2 * MODPRINT_HASH, 0xFF, MODPRINT_LABEL);
+    tagpu_modprint_tail_read(tail, sizeof tail, &out);
+    printf(" %d%d", (int)strlen(out.label), out.label[0] == '?');
+    tail[4] = 2;
+    printf(" %d", tagpu_modprint_tail_read(tail, sizeof tail, &out));
+    tail[4] = 1; tail[0] = 'X';
+    printf(" %d\n", tagpu_modprint_tail_read(tail, sizeof tail, &out));
+    return 0;
+}
+"""
+
+    def test_the_rules(self):
+        src = m.ROOT / "tagpu/ddraw/src"
+        with tempfile.TemporaryDirectory() as d:
+            c, exe = Path(d) / "t.c", Path(d) / "t"
+            c.write_text(self.SRC)
+            m.subprocess.run(["gcc", "-std=c99", "-DMODPRINT_TEST", "-I", str(src), "-o", str(exe), str(c), str(src / "tagpu_modprint.c")], check=True)
+            out = m.subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split()
+        #                 counted by path, in P's order
+        self.assertEqual(out[0], "111111" "00000" "001" "0" "0" "1" "0" "1" "0" "1")
+        self.assertEqual(out[1:], ["1", "79ProTA", "4.8", "0", f"{119}1", "0", "0"])
+
+
 class HpiForget(unittest.TestCase):
     """tagpu_hpi.c, native, takes a file out of its view as a hide takes it out of the engine's directory: every entry of that name, the rest kept."""
     MAIN = rb"""#include <stdio.h>

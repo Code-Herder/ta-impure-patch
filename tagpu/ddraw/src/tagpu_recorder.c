@@ -78,6 +78,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_modgate.h"
+#include "tagpu_modprint.h"
 #include "tagpu_modload.h"
 #include "tagpu_regstore.h"
 #include "tagpu_recmp.h"
@@ -598,6 +600,11 @@ static void __cdecl mp_start_receive(void* frame)
     mp_match_log("receive", from, &match);
 }
 
+/* The native player data: the engine's 21 bytes, the key, then Impure's tail. Stock takes exactly 21 at 0x454315, so a stock host refuses this. A
+   host of this build takes 21, or the key with any tail up to the bound, so a later build's longer tail stays welcome. */
+#define MP_DATA_BASE     (RECMP_PRIMARY_BYTES + sizeof(RecMpPublic))
+#define MP_DATA_TAIL_MAX 1024
+
 /* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
    initial data. Preserve that prefix (including its password/version) and add
    only a public key. The primary SDK binds the data to the actual native owner;
@@ -608,25 +615,48 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
                                            DWORD bytes, DWORD flags)
 {
     const RecMpKey* key;
-    unsigned char extended[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    const MODPRINT* print;
+    unsigned char extended[MP_DATA_BASE + MODPRINT_TAIL];
     RecMpPublic public;
-    if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
+    /* The test's lever: this player's data as stock sends it (tools/mods/modmp.py). */
+    if (GetFileAttributesA("tagpu_modprint_stock.on") != INVALID_FILE_ATTRIBUTES ||
+        !data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
         tagpu_logf("recmp: primary identity unavailable: no faithful contributions");
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
     memcpy(extended, data, RECMP_PRIMARY_BYTES);
     tagpu_recmp_public(key, &public);
     memcpy(extended + RECMP_PRIMARY_BYTES, &public, sizeof public);
-    return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, sizeof extended, flags);
+    /* The print follows the key, so a peer reads both from one record, and a process's print never changes, so this one send serves the session.
+       Waited for here: a player who would differ can never appear in the room without it. */
+    if ((print = tagpu_modprint_wait())) {
+        tagpu_modprint_tail_put(print, extended + MP_DATA_BASE);
+        bytes = sizeof extended;
+    } else {
+        bytes = MP_DATA_BASE;
+    }
+    return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, bytes, flags);
 }
 
 static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
 {
-    unsigned char data[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    unsigned char data[MP_DATA_BASE + MP_DATA_TAIL_MAX];
     DWORD bytes = sizeof data;
     return IDirectPlay2_GetPlayerData(dp, origin, data, &bytes, DPGET_REMOTE) == DP_OK &&
-           bytes == sizeof data &&
+           bytes >= MP_DATA_BASE &&
            tagpu_recmp_public_read(data + RECMP_PRIMARY_BYTES, sizeof *public, public);
+}
+
+/* GAME THREAD. A seat's fingerprint, off the record DirectPlay keeps for its native ID. 0 when it carries none: a player with no Impure, or an older one. */
+int tagpu_rec_player_print(unsigned native, MODPRINT* out)
+{
+    const char* ta = ta_main();
+    unsigned char data[MP_DATA_BASE + MP_DATA_TAIL_MAX];
+    DWORD bytes = sizeof data;
+    IDirectPlay2A* dp = NULL;
+    if (ta) memcpy(&dp, ta + 0x4D9, sizeof dp);
+    return dp && IDirectPlay2_GetPlayerData(dp, native, data, &bytes, DPGET_REMOTE) == DP_OK &&
+           bytes > MP_DATA_BASE && bytes <= sizeof data && tagpu_modprint_tail_read(data + MP_DATA_BASE, bytes - MP_DATA_BASE, out);
 }
 
 /* DISASSEMBLED: only the in-match GUI callback calls 0x463E50 at 0x493FAF.
@@ -931,8 +961,11 @@ static void mp_init(void)
     memcpy(p, data_size, 4); p += 4;
     *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
     *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
-    value = RECMP_PRIMARY_BYTES + sizeof(RecMpPublic); memcpy(p, &value, 4); p += 4;
-    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
+    value = MP_DATA_BASE; memcpy(p, &value, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x82; tagpu_detour_rel(p, 0x45431B); p += 4;  /* jb: under the key is the original rejection */
+    *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
+    value = MP_DATA_BASE + MP_DATA_TAIL_MAX; memcpy(p, &value, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x86; tagpu_detour_rel(p, 0x45435B); p += 4;  /* jbe: the key and a bounded tail */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
     p=chat;
     *p++=0x9C; *p++=0x60;
@@ -977,8 +1010,9 @@ static void mp_init(void)
         VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
     }
     s_mp_sites = 1;
+    tagpu_modgate_install();
     tagpu_logf("recmp: ARMED %u-byte fresh start and %u-byte native player identity",
-               (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
+               (unsigned)sizeof(RecMpStart), (unsigned)(MP_DATA_BASE + MODPRINT_TAIL));
     tagpu_logf("recmp: ARMED %u-byte identified in-match text; native audience and display case",
                (unsigned)sizeof(RecMpChatWire));
     tagpu_logf("recmp: ARMED owned primary receive frames and serialized dispatch");
@@ -1294,7 +1328,7 @@ static void mp_capture(const Level* L, unsigned tick)
                 roster.actor[roster.count++] = (RecMpSeat){native, i, first-1, last-1};
             }
             tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
-                       native, i, ctl, RECMP_PRIMARY_BYTES + (unsigned)sizeof public);
+                       native, i, ctl, (unsigned)MP_DATA_BASE);
         }
         if (!tagpu_recmp_roster_valid(&roster)) {
             tagpu_logf("recmp: primary seat/unit blocks disagree with %u slots, each %u: no contributions",

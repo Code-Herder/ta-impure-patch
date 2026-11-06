@@ -468,6 +468,7 @@ that map's size.
 - `tagpu_modbase.on`: its contents are the download server's address, until the catalog names one.
 - `tagpu_modcatalog.on`: its contents replace the catalog packed in the DLL, read once at attach; the patch pack stays the DLL's. For test mutators.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
+- `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print.
 - `tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators] [--display :N] [--software]` plays the screen on a private display and holds the run lock.
 
 ## The heartbeats: what must read zero

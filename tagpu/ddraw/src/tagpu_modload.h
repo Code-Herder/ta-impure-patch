@@ -1,5 +1,7 @@
 #ifndef TAGPU_MODLOAD_H
 #define TAGPU_MODLOAD_H
+#include <stddef.h>
+#include <stdint.h>
 /* tagpu_modload -- a mod chosen by `mod=` in impure.cfg, run on the player's own exe from mods\<id>\
    (research/notes/mod-manager-plan.md). With no mod= none of this does anything, unless the player has switched on a mutator of the
    folder's own game: then only those mount.
@@ -30,6 +32,10 @@ void tagpu_modload_check(void);
 /* The exe file as the mod's drop-in folder would hold it, for what compares the image with its file (the limit table, the
    takeover's check): a mod's table in it for an exe mod, stock for a loader mod. NULL with no mod. Lives for the process. */
 const unsigned char* tagpu_modload_reference_file(size_t* n);
+
+/* GAME THREAD. What the exe's half of the fingerprint names: the image a catalog mod's table makes when this is that mod, managed or its drop-in
+   folder, with its id in `id`, and otherwise a hash of the exe and any Patch Loader beside it, with `id` empty. */
+void tagpu_modload_exe_identity(uint8_t out[32], char* id, size_t nid);
 
 /* The running mod's id, NULL with none. Written once at attach. */
 const char* tagpu_modload_id(void);

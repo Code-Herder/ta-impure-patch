@@ -249,6 +249,8 @@ What follows from those rules:
   That lets drop-in and managed players of the same mod match, and a cosmetic mutator mixes.
 - **A mismatch between Impure players blocks Start**, with a line naming who differs and how.
 - **A player without Impure sends no fingerprint and passes as today.**
+- **Maps do not count.** Stock already refuses a player without the map, and players' map packs differ, so counting them would stop most games ([the module](modules/mods.html), *The fingerprint*).
+- **The carrier is `CreatePlayer`'s player data,** after the recorder's key. It is bound to the player by DirectPlay and needs no new message. A new packet code is no option: stock's reliable splitter takes each length from its table, so an unknown code in a batch loses the rest. **A player of a newer build cannot join an older host,** whose exact size test refuses the longer data.
 
 ### The screen
 
@@ -312,7 +314,7 @@ What follows from those rules:
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
-| 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
+| 8 | Multiplayer fingerprint (built) | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 
 Landings 2 and 3 are independent of each other.
@@ -327,8 +329,6 @@ Landings 2 and 3 are independent of each other.
 - The art of the screen's thirteen new parts. `tools/mods/genparts.py` derives plain ones from the kit, and a painted part of the same name replaces one with no code change.
 
 **Needs research or a measurement:**
-- What channel carries the fingerprint in the battle room? No Impure message exists there today, so
-  this needs research before landing 8.
 - Which v1 setups are safe with LAA on? Landing 9's row answers it. Managed Escalation already needs it
   to load a game: its 550 unit types run out of address space without it (MEASURED 2026-11-05, the
   engine's out-of-memory box), so its compatibility rows set the bit by hand until landing 9.

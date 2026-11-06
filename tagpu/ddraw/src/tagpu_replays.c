@@ -41,6 +41,7 @@
 #include "tagpu_recfile.h"     /* recfile_newer_first: the prune's order, the list's */
 #include "tagpu_replays.h"
 #include "tagpu_modsui.h"
+#include "tagpu_modprint.h"
 #include "tagpu_modload.h"
 #include "tagpu_hudart.h"
 #include "tagpu_hudstate.h"
@@ -1069,6 +1070,8 @@ static void __stdcall mm_oncommand(void* gi)
         ((gi_fn)VA_ACTDONE)(gi);
         return;
     }
+    /* the fingerprint's walk starts as the player heads for the battle room, so joining it waits for as little as can be */
+    if (ctrls && idx >= 1 && idx <= rec_count(ctrls) && name_is(ctrls + (size_t)idx * STRIDE, "MULTI")) tagpu_modprint_start();
     ((oncmd_fn)VA_MM_ONCMD)(gi);
 }
 
@@ -1875,7 +1878,7 @@ static void running_version(char* out, unsigned cap)
    the count, and a call can prune one archive (0x4BE180) and mount another, which leaves the
    count unchanged: it may then stop early, with the fingerprint not yet a level's.
    BOUND: MOUNT_CALLS_MAX calls, 640 archives of the bounded kind. */
-static void mount_all(void)
+void tagpu_replays_mount_all(void)
 {
     const char* gfx = *(const char* const*)VA_GFX_PP;
     int i, before;
@@ -2712,7 +2715,7 @@ static void replays_open(char* gi)
     }
 
     badges_build();
-    mount_all();
+    tagpu_replays_mount_all();
     lstrcpynA(s_runMod, running_mod(), sizeof s_runMod);
     running_version(s_runVersion, sizeof s_runVersion);
     s_runPrint = tagpu_rec_mod_print();

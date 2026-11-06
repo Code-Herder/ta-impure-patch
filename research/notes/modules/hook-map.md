@@ -229,6 +229,16 @@ Written while a catalog mod runs ([mods](mods.html)). With no `mod=`, the mounte
 | a mounted archive's directory, in the block at handle `+0x08` | a mutator's switched-off files and its hides leave their directories, on the game thread between the mount's return and the next engine call; each pointer held inside the block first | a mutator on | memmove and the directory's `count`, no detour |
 | every raw section byte, the pack's mask aside | at attach, the mod's image or stock; last in attach, a loader mod's runs by value; at the entry point, whatever differs from the snapshot, import slots included | `mod=` | byte writes, `mods/patches.bin`'s XORs |
 
+### Mods: the battle room (`tagpu_modgate.c`, `tagpu_recorder.c`)
+
+Armed with the recorder's network sites, on every launch; all three redirects or none. A launch with no peers never runs them.
+
+| VA | What it is | Module (arm file) | Mechanism |
+|---|---|---|---|
+| `0x44A167` | `call 0x456760`, the everyone-ready test, one of the two that set START's grayed state | `tagpu_modgate.c` | rel32 redirect |
+| `0x44AC46` | the other `call 0x456760` | `tagpu_modgate.c` | rel32 redirect |
+| `0x44871D` | `call 0x49FD60(message, "START")`: the click on START | `tagpu_modgate.c` | rel32 redirect |
+
 The Mods screen writes no engine site. Its button is one more record in the main menu's own gadget block, written with REPLAYS' at the same observer on `GUI_Load` (`0x4AACAE`, `tagpu_replays.c` `mainmenu_visit`), and its OnCommand slot is REPLAYS' too (`0x42644C`).
 Under `mod=` the mount's filter also reads `hide.<archive>` from the player's profile.
 

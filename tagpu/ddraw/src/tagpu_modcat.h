@@ -88,6 +88,16 @@ typedef struct {
     int         nhides;
 } MODMUTATOR;
 
+/* A file a mod's package holds different bytes of from its drop-in folder, and the game finds the same in: settle_places renames a section so the engine's
+   order reaches the drop-in's winners. The fingerprint counts `here` as `dropin`, so one mod has one print however it is installed. */
+typedef struct {
+    char    path[MODCAT_PATH];
+    uint8_t here[32], dropin[32];
+} MODSAMEAS;
+
+/* Mod `id`'s, malloc'd, with the count in `count`. NULL with none, or if any of them is one nothing here could act on. */
+MODSAMEAS* tagpu_modcat_same_as(const char* catalog, size_t n, const char* id, int* count);
+
 /* Mutator `id`, for tagpu_modcat_mutator_free. 1 with `out` filled, 0 when no entry names it, it is no mutator, or a
    path or hash in it is one nothing here could act on: too long, unsafe, or with a character a profile's key cannot hold. */
 int  tagpu_modcat_mutator(const char* catalog, size_t n, const char* id, MODMUTATOR* out);

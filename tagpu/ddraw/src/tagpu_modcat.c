@@ -318,6 +318,33 @@ done:
     return ok;
 }
 
+MODSAMEAS* tagpu_modcat_same_as(const char* catalog, size_t n, const char* id, int* count)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m, *s;
+    MODSAMEAS* out = NULL;
+    int i;
+    *count = 0;
+    if (!d) return NULL;
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next)
+        if (!strcmp(tj_str(tj_get(m, "id"), ""), id)) break;
+    s = m ? tj_get(m, "same_as") : NULL;
+    if (s && count_of(s) && (out = (MODSAMEAS*)calloc((size_t)count_of(s), sizeof *out))) {
+        for (i = 0, s = s->first; s; s = s->next, i++)
+            if (!engine_path(tj_str(tj_get(s, "path"), ""), out[i].path) || !tagpu_modcat_hash(tj_str(tj_get(s, "here"), ""), out[i].here) ||
+                !tagpu_modcat_hash(tj_str(tj_get(s, "dropin"), ""), out[i].dropin)) {
+                free(out);
+                out = NULL;
+                break;
+            }
+        if (out) *count = i;
+    }
+    tagpu_json_free(d);
+    return out;
+}
+
 int tagpu_modcat_same_path(const char* a, const char* b)
 {
     for (;; a++, b++) {

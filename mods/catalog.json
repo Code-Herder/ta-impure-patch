@@ -369,6 +369,13 @@
       "hide": [
         "rev31.gp3"
       ],
+      "same_as": [
+        {
+          "path": "features/corpses/arm_corpses.tdf",
+          "here": "0e99d5a4856db355821bafa92431f5c829ec5cec04a78f8c4f83f8f1b34e09bb",
+          "dropin": "a3413a24d498dd3f2dbe9c622113c98099da07e8c613d8009edc36e2b66c5c3c"
+        }
+      ],
       "options": {
         "resource_snapping": {
           "allowed": true,
@@ -487,6 +494,23 @@
       "exe": "tazero",
       "hide": [
         "rev31.gp3"
+      ],
+      "same_as": [
+        {
+          "path": "features/!donotuse!/donotuse_watermetal1.tdf",
+          "here": "143ab4e06506ce8077d0af408000c9abb791873dae22ffb9ca63e44b362d2b6b",
+          "dropin": "82a4fd8726e616b7136e4a0e8f9f1267b4785d09c9c84cdbb5821b44cbf81faa"
+        },
+        {
+          "path": "features/corpses/corpsefix.tdf",
+          "here": "88922c96268847cee65c26ca816d469a30d258a58b6e2487e32b5b3f4611230f",
+          "dropin": "443cd931053cfd77e0743c166f6bd4b8b0b31d7a735b85346bcde82608d92c60"
+        },
+        {
+          "path": "features/green/greenmetalfix.tdf",
+          "here": "085140ddf3297d279b316e4b2ef62e2ea140f86cfce669f1c79f06de7608a249",
+          "dropin": "7a2c2bd70bbc88eb00f091d89d64a92c267cbf70b32c8934ebfe14c6a0a4526f"
+        }
       ],
       "options": {
         "resource_snapping": {
@@ -615,6 +639,68 @@
         "ccdata.ccx",
         "corplas.ufo",
         "rev31.gp3"
+      ],
+      "same_as": [
+        {
+          "path": "features/!donotuse!/donotuse_barrenscapestatues.tdf",
+          "here": "119b7a6d5643c2076fb01fd1e8cc18c5faf3fa149d090a242a6796c0fa954855",
+          "dropin": "dcbf3c77276a5830db0e2faf9fd5071f845f78ffe9186699b337b6ca52e900cd"
+        },
+        {
+          "path": "features/!donotuse!/donotuse_cemgate.tdf",
+          "here": "a36ac2bb5be201df9b21de673bf47cfffd5a55ea1b6bc7cff1f891925bafae65",
+          "dropin": "e7612ca6f7321c7e303e92ef397e10392b81dc89c8414ff5cb716ca5d53551f8"
+        },
+        {
+          "path": "features/!donotuse!/donotuse_watermetal1.tdf",
+          "here": "143ab4e06506ce8077d0af408000c9abb791873dae22ffb9ca63e44b362d2b6b",
+          "dropin": "82a4fd8726e616b7136e4a0e8f9f1267b4785d09c9c84cdbb5821b44cbf81faa"
+        },
+        {
+          "path": "features/corpses/arm_corpses.tdf",
+          "here": "027fc07081e66d5c3098c8429e90607458167b5fd42053e7abf65afd02c49556",
+          "dropin": "8b100448ec457f6f70de32a4e55ca861949d65390d80c83ecc4d2cb37a9d4c69"
+        },
+        {
+          "path": "features/corpses/arm_heaps.tdf",
+          "here": "d3e33884913bcef9c88044fa3f39f37e86521d912b911ee1eea70e1ddb6a6b6b",
+          "dropin": "df943b6ae75f52b5d93d2b2ccf1398cd9baa8c3f29a86a268e7c451fc2632351"
+        },
+        {
+          "path": "features/corpses/corpsefix.tdf",
+          "here": "7fcf24d78bec9edf8d6ba031cfb4ad6c35691128258fa011b2bd05840722b382",
+          "dropin": "443cd931053cfd77e0743c166f6bd4b8b0b31d7a735b85346bcde82608d92c60"
+        },
+        {
+          "path": "features/geistworlds/222logos.tdf",
+          "here": "fb4adb4d1eede77b79e09e18feefb69f503883f95b8e98e1da60b6588c9f99b0",
+          "dropin": "c595149d35ab081213d6dc19be4090df855caeac18b6052c3856cbb1d1b92e51"
+        },
+        {
+          "path": "features/green/greenmetalfix.tdf",
+          "here": "d226cb29d783f8ee18598fc6ef81429cf75109188e1122d13dcfacdc77096aea",
+          "dropin": "7a2c2bd70bbc88eb00f091d89d64a92c267cbf70b32c8934ebfe14c6a0a4526f"
+        },
+        {
+          "path": "features/spires/dunespires.tdf",
+          "here": "39148c3f58dd7df8109788a0fdf33a7fa05f0d6d3436fdd770d4c1790dae6a42",
+          "dropin": "a01752a7818048293073d511236d56865d11dca27b0c5263a918416026da841a"
+        },
+        {
+          "path": "features/structures/armwalls.tdf",
+          "here": "5b43216182b63ed0bc809e52015e1755a0db16f50c440f686f67f89923b1cf3f",
+          "dropin": "97cd46538ec7a44fd2d23ff203f37ab1c285ca51d3cf8b444d45adfa6347df69"
+        },
+        {
+          "path": "features/structures/corewalls.tdf",
+          "here": "cbb41fba1a4dad22e248f2d7bf3b73c0e55f49d0fe92f82b346ae434579f03c9",
+          "dropin": "948a954b10a3f751f8a1ef4a265519f2f9aaac55a03c4b539bbf3716a7920631"
+        },
+        {
+          "path": "features/structures/eiffel.tdf",
+          "here": "32e4ea9793400143846e4f574319c79b278ddac45ccbbe9dce12a03ccaf6c196",
+          "dropin": "8cb155f8c89acc00f3ee5740cef9e2f21f2eedd5b19026ab2357d9a747f41083"
+        }
       ],
       "options": {
         "resource_snapping": {

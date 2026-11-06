@@ -2197,8 +2197,8 @@ def lobby_to_selgame(inst, nick):
     lobby_field(inst, "NICKNAME", nick)
 
 
-def wine_lobby(host, join, port):
-    """tools/mp_lobby.sh's walk, host then joiner, into one live game on the battle's map."""
+def lobby_to_ready(host, join, port):
+    """tools/mp_lobby.sh's walk, host then joiner, as far as both being ready in one battle room on the battle's map."""
     lobby_to_selgame(host, "HOST")
     lobby_ui(host, "click", "STARTNEW", timeout=30)
     lobby_field(host, "GAMENAME", "COMPAT")
@@ -2235,6 +2235,11 @@ def wine_lobby(host, join, port):
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
     lobby_ui(host, "click", "READY0", timeout=20)
+
+
+def wine_lobby(host, join, port):
+    """The battle room's walk, then Start, into one live game."""
+    lobby_to_ready(host, join, port)
     # THE ORACLE FOR START IS THE GAME COMING ALIVE, NOT THE CLICK'S ANSWER. The click that
     # starts the game takes away the gadget layer it was read from, so a click that worked can
     # still answer "no active gui" -- or, one patient retry later, name the in-game panel

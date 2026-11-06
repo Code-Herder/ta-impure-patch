@@ -22,8 +22,9 @@ gives the mod's image, and on that mod's exe it gives stock, so the pack holds n
 gives one. Only a byte the mod sets to zero reads as the stock byte; `verify` counts them.
 
 KNOWN FILES. The pack lists the modded exes and Patch Loaders Impure knows by file_key. A known modded exe names the XOR
-that takes it to stock. A loader names none: the image is restored from the exe on disk, because what a loader writes is
-partly rel32 displacements into its own DLLs, which no table can hold (research/notes/mod-manager-plan.md).
+that takes it to stock. A loader's image is restored from the exe on disk, because what a loader writes is partly rel32
+displacements into its own DLLs, which no table can hold (research/notes/mod-manager-plan.md); it names its catalog mod's XOR,
+or none, only so the fingerprint can tell which mod a drop-in folder is.
 
 PACKAGES. Each is one tar.zst holding <id>.hpi, its recipe <id>.originals.tsv and the plain files read by plain path that a
 mod needs: Icon/, its strategic icons, and the options file the image names, whose [Preferences] the engine reads. The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py), over the
@@ -46,7 +47,7 @@ mods/patches.bin, little-endian, zstd compressed (read by tagpu_modpak.c):
     "MPAT" | u32 version | u32 nxors | u32 nmods | u32 nknown | u32 nmask | u32 noriginals | 32 B file_key of stock 3.1
     xor:      u32 nruns | runs
     mod:      u8 idlen | id | 32 B image hash | u32 xor | u8 1 when a loader writes it after Impure's attach
-    known:    u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | i32 xor taking it to stock, -1 for a loader
+    known:    u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | i32 xor taking it to stock; a loader's is its catalog mod's, -1 with none
     mask:     u32 va | u32 len, sorted: the import structures of stock and every known exe, which no hash covers
     original: 32 B SHA-256 of an original archive of the game
     run:      u32 va | u16 len | bytes
@@ -1054,7 +1055,8 @@ def cmd_verify(a):
     stock_hash = image_hash(image(stock), pmask)
     for kind, key, i in pack["known"]:
         if kind:
-            report(i == -1, f"loader {key.hex()[:12]}: named with no table")
+            # a catalog mod's loader names that mod's XOR, for the fingerprint alone; any other names none
+            report(i == -1 or any(i == x for _, _, x, _ in pack["mods"]), f"loader {key.hex()[:12]}: names no table, or a catalog mod's")
             continue
         src = Pe(exes[key].read_bytes())
         img = image(src)
@@ -1187,6 +1189,16 @@ def cmd_verify(a):
             flipped = [c for w in (0, 1) for c in one_r[w] if one_r[w][c] != two_r[w].get(c)]
             report(not flipped, f"{s['id']}: {top} resolves as in the drop-in folder, {len(one_r[0])} entries, whichever file wins"
                    + (f"; differ {len(flipped)}, first {flipped[:3]}" if flipped else ""))
+    catalog = {e["id"]: e for e in json.loads((MODS / "catalog.json").read_text())["mods"]}
+    for s in mod_sources():
+        if a.ids and s["id"] not in a.ids or not (OUT / s["id"] / "installed").is_dir():
+            continue
+        plan = Plan(s, stock)
+        one = print_table([p for _, p, _ in plan.mount if tavfs()._has_trailer(p)], plan.loose, [])
+        two = print_table(base_sources(s["id"]), {}, catalog[s["id"]].get("same_as", []))
+        wrong = sorted(k for k in set(one) | set(two) if one.get(k) != two.get(k))
+        report(not wrong, f"{s['id']}: the fingerprint counts {len(one)} files, and managed and drop-in agree"
+               + (f"; differ {len(wrong)}, first {wrong[:3]}" if wrong else ""))
     print("verify: " + ("all passed" if not bad else f"{bad} FAILED"))
     return 1 if bad else 0
 
@@ -1410,6 +1422,79 @@ def cmd_mutator(a):
     print(f"{a.id}: {len(files)} files, {len(base_hashes)} replace {a.base}'s, {len(a.hide)} hides; {tar}")
 
 
+# What the fingerprint leaves out (tagpu_modprint.c, tagpu_modprint_counts); a .gui is decided by print_counted's unit names.
+PRINT_COSMETIC = (".gaf", ".pcx", ".bmp", ".wav", ".fnt")
+
+
+def print_counted(path: str, units: set) -> bool:
+    """tagpu_modprint_counts, for a lower-case path with '/' separators."""
+    if path.startswith(("maps/", "camps/")):
+        return False
+    base = path.rsplit("/", 1)[-1]
+    stem, dot, ext = base.rpartition(".")
+    if not dot:
+        return True
+    if "." + ext in PRINT_COSMETIC:
+        return False
+    if ext == "gui":
+        cut = stem
+        while cut and cut[-1].isdigit():
+            cut = cut[:-1]
+            if cut and cut in units:
+                return True
+        return False
+    return True
+
+
+def dropin_answer(plan, path: str, opened: dict):
+    """The bytes a mod's drop-in folder answers `path` with: its own loose file, then its mount."""
+    loose = plan.loose.get(path)
+    if loose:
+        return loose[1].read_bytes()
+    return base_answer([p for _, p, _ in plan.mount if tavfs()._has_trailer(p)], path, opened)
+
+
+def same_as_of(plan, package: Path) -> list:
+    """Each file of the package that the fingerprint counts and whose bytes are not the drop-in folder's: settle_places's renames."""
+    arc, opened, out = hpipack().Archive(package), {}, []
+    for path in sorted(arc.files):
+        if "." + path.rpartition(".")[2] in PRINT_COSMETIC or path.startswith(("maps/", "camps/")):
+            continue
+        here = arc.read(path)
+        there = dropin_answer(plan, path, opened)
+        if there is None:
+            die(f"{plan.src['id']}: the package holds {path}, which its drop-in folder does not")
+        if here != there:
+            out.append({"path": path, "here": hashlib.sha256(here).hexdigest(), "dropin": hashlib.sha256(there).hexdigest()})
+    return out
+
+
+def print_table(sources: list, loose: dict, same_as: list) -> dict:
+    """{path: sha256} of what a fingerprint counts over these sources in order, as the game would find each."""
+    arcs = []
+    for p in sources:
+        try:
+            arcs.append(tavfs().ta3do.HpiArchive(p))
+        except (tavfs().ta3do.HpiError, struct.error, IndexError):
+            continue
+    first = {}
+    for a in arcs:
+        for f in a.files:
+            first.setdefault(f, a)
+    tops = {f.split("/")[0] for f in first if "/" in f}
+    held = {k: p for k, (_, p) in loose.items() if k.split("/")[0] in tops}
+    names = set(first) | set(held)
+    units = {n.rsplit("/", 1)[-1][:-4] for n in names if n.endswith(".fbi")}
+    same = {e["path"]: e for e in same_as}
+    out = {}
+    for n in names:
+        if not print_counted(n, units):
+            continue
+        h = hashlib.sha256(held[n].read_bytes() if n in held else first[n].read(n)).hexdigest()
+        out[n] = same[n]["dropin"] if n in same and same[n]["here"] == h else h
+    return out
+
+
 def cmd_catalog(_):
     stock = Pe(stock_exe())
     mask = masked_set(stock)
@@ -1425,11 +1510,14 @@ def cmd_catalog(_):
             subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
             with tarfile.open(d + "/p.tar") as t:
                 t.extractall(d, filter="data")
+                same_as = same_as_of(plan, Path(d) / f"{s['id']}.hpi")
                 declared = [{"path": n, "sha256": sha_of(Path(d) / n), "size": (Path(d) / n).stat().st_size} for n in t.getnames()]
         e = {k: s[k] for k in ("id", "kind", "name", "author", "version", "summary", "homepage", "permission")}
         e.update({"packages": [{"url": f"{s['id']}/{s['id']}-{s['version'].replace(' ', '-')}.tar.zst", "sha256": sha_of(tar), "size": tar.stat().st_size,
                                 "files": declared}],
                   "exe": s["id"], "hide": plan.hide})
+        if same_as:
+            e["same_as"] = same_as
         for k in ("memory", "options"):
             if k in s:
                 e[k] = s[k]
@@ -1442,6 +1530,13 @@ def cmd_catalog(_):
     mask = known_mask(stock, known_exes)
     pmask = {va + i for va, n in mask for i in range(n)}
     mods_bin = [(mid, image_hash(img, pmask), x, loader) for mid, img, x, loader in mods_bin]
+    # a loader names its mod's XOR, by which a drop-in folder's fingerprint finds the image a managed player of that mod hashes as
+    loader_xor = {}
+    for mid, _h, x, loader in mods_bin:
+        if loader:
+            src = next(s for s in mod_sources() if s["id"] == mid)
+            loader_xor[file_key(setup_files(src["setup"])["dplayx.dll"][1].read_bytes(), False)] = x
+    known = [(kind, name, key, loader_xor.get(key) if kind == 1 else x) for kind, name, key, x in known]
     retail_dir = tavfs().find_install(None)
     originals = sorted(bytes.fromhex(sha_of(p)) for p in retail_dir.iterdir() if p.is_file() and p.suffix.lower() in (".gp3", ".ccx", ".ufo", ".hpi") and tavfs()._has_trailer(p))
     blob = pack_patches(file_key(stock.data, True), mods_bin, known, mask, originals)
@@ -1625,6 +1720,9 @@ def check_catalog(j) -> list:
                             errs.append(f"{n}: package file {path!r} has no sha256 or size")
         kind = e.get("kind")
         if kind == "mod":
+            for f in e.get("same_as", []):
+                if len(f.get("path", "")) >= 96 or not installer_takes(f.get("path", "")) or not HEX64.match(str(f.get("here", ""))) or not HEX64.match(str(f.get("dropin", ""))):
+                    errs.append(f"{n}: a same_as entry nothing could act on: {f}")
             errs += check_options(n, e.get("options"))
             if not isinstance(e.get("exe"), str) or not e["exe"]:
                 errs.append(f"{n}: a mod names no exe table")

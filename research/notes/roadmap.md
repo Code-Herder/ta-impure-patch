@@ -4006,10 +4006,10 @@ blank frames remain; cold or invalidated devices still require initialization.
 ## The mod manager (planned 2026-11-01)
 
 A Mods screen that downloads, updates and switches total-conversion mods and small mutators on the
-player's own exe. Status: **landings 1-7 of 9 built**, the shared UI kit, the per-mod options, the packing tool with
-its catalog, a mod run from its package, its download and install, the screen with Confirm's restart, and mutators. The exit condition: each v1
+player's own exe. Status: **landings 1-8 of 9 built**, the shared UI kit, the per-mod options, the packing tool with
+its catalog, a mod run from its package, its download and install, the screen with Confirm's restart, mutators, and the multiplayer fingerprint. The exit condition: each v1
 mod chosen from the screen, installed from a package and restarted into, plays as its drop-in
-folder does (the compatibility suite's managed column). **Not covered by landings 1-7:** the multiplayer fingerprint and 4 GB, and no real mutator exists to ship; the catalog names no download server yet, and thirteen of the screen's parts are generated rather than painted. All of it has run on Wine only. The plan: [the mod manager](mod-manager-plan.html).
+folder does (the compatibility suite's managed column). **Not covered by landings 1-8:** 4 GB, and no real mutator exists to ship; the catalog names no download server yet, and thirteen of the screen's parts are generated rather than painted. All of it has run on Wine only. The plan: [the mod manager](mod-manager-plan.html).
 
 ## Resource input: snapping, Quick Build and mod profiles
 

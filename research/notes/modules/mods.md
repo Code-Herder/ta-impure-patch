@@ -18,6 +18,8 @@ main menu's MODS button: *The screen*, below.
   Python that wrote the pack, on every known exe.
 - `tagpu_modcat.c`: the catalog's `hide` list and option rules, and a mutator's entry and its verdicts: stale by the file, clash by the path. Pure C.
 - `tagpu_modfit.c/.h`: what a base holds at a path, by reading its archives: files only, on any one thread.
+- `tagpu_modprint.c/.h`: the fingerprint: the walk on its own thread, what counts, the data a peer reads. Names no engine memory.
+- `tagpu_modgate.c/.h`: the battle room's Start against the fingerprints, and the line that says why.
 - `tagpu_modsui.c/.h`: the screen's state and input, on the game thread. Names no engine memory.
 - `tagpu_modslay.c/.h`: the screen's window, a pure function of the page. Pure C.
 - `tools/modpack/modpack.py install ID GAMEDIR`: a package installed by hand, its recipe run from that
@@ -130,6 +132,28 @@ version, and one a base update broke as "Needs an update for X", which the tab's
 
 **The replays.** `RT_MUTATORS` holds what the start mounted, `name version, name version`, and no record means none. The browser's index line keeps it (`INFO_GEN` 2). Where the fingerprint differs, the hint says "The installed archives differ.", and where the lists differ too the footer, the only line with the width, names them: "Recorded with X 1.0. You have none."; a selection that needs neither puts the disk line back.
 
+## The fingerprint
+
+Two Impure players with different game files do not start together. Stock would: its per-unit handshake disables the types that differ on both sides with no message, and starts ([networking](../networking-lobbies.html)). The fingerprint is two 16-byte hashes and a label, compared in the battle room.
+
+**The content's hash** walks every file the game can open, once each, from the source it opens from: `tagpu_vfs`, the same reader the wiki uses, over the engine's mount list after the mount's removals. So a mutator, a hide and a `file.` key all reach it with nothing here knowing them. Each file hashes as its lower-cased path and its bytes, in path order.
+
+**One mod has one print however it is installed.** The managed mount answers every path as the drop-in folder does, with one exception by design: a package can rename a section so the engine's order finds the drop-in's winner, and that file's bytes differ. The catalog's `same_as` names each such file with both hashes, and the walk counts one as the other only when the bytes are exactly the package's, so a mutator on that path still differs. `modpack.py catalog` derives the list and `modpack.py verify` compares the two sets of counted files for every mod.
+
+- **Left out:** `.gaf`, `.pcx`, `.bmp`, `.wav`, `.fnt`; a `.gui` no unit names, where a unit's menu page is `<unit><n>.gui`; all of `maps\`, since stock compares the map itself (`0x4373A0` against PlayerInfo `+0xA9`, `0x4481BE`) and players' map packs differ; and all of `camps\`, since a network game runs no campaign [INFERRED]. MEASURED: a retail folder holds loose examples there that a managed mod's closed loose step does not see, so counting them stops a managed player and a drop-in player of one mod. An unknown type counts.
+- **Loose files** count only under a folder some archive has at its root, so `log\`, `mods\` and what sits beside the exe never do. A managed mod's closed loose step is honoured.
+
+**The exe's hash** is the image hash of the mod's table, `MODPATCH.hash`, when the player runs a catalog mod. A drop-in folder finds its mod through the pack: its exe, or stock with a known Patch Loader, names the same XOR as the mod. Anything else hashes the exe's `file_key` and any Patch Loader's, which matches only a folder with those same files.
+
+**When.** Mounts settle only when `InitTAHPIAry` stops mounting, so `tagpu_modprint_start` calls it to that point first, on the game thread, when the main menu's MULTI is pressed; the walk then runs on its own thread. `mp_create_player` waits for it, which is an ordering: no player reaches a room without its print, and a lobby launch that skipped the menu starts the walk there. MEASURED 2026-11-06 on the reference setup, Wine: ProTA, 3530 files of 6074, 242 MB, 2.5 s. A process's print never changes, as a restart is the only thing that changes its mounts.
+
+**The carrier** is the data DirectPlay already binds to each player: `CreatePlayer`'s 21 bytes, the recorder's 280-byte key, and the print's 160-byte tail ([network](../engine/network.html)). The tail begins `IMFP` and a version. A value in it is data: `tagpu_modprint_tail_read` takes it apart with a bounded length, and the label comes back terminated and printable.
+
+**The gate.** Both calls of the everyone-ready test `0x456760` also ask `everyone_agrees`, and so does the click on START at `0x44871D`, since a stale grayed state is all that stands in front of it. Each asks DirectPlay's record of each remote seat, so a player who leaves stops counting at once. A seat with no tail is compared with nobody: an older Impure. Each flip in `LOUNGE2.GUI`, each player gets three chat lines per differing seat, once per seat and print: who, then *There* and *Here* when the labels differ.
+
+- **A player who sends none.** A joiner sending stock's 21 bytes, or an older Impure's 301, is taken by a current one and compared with nobody. A stock host refuses an Impure joiner, since it takes exactly 21 bytes: that has been so since the key.
+- **A player of this build cannot join a host older than it.** The older host's stub takes 21 or exactly 301 bytes, and MEASURED on Wine the joiner lands back on Select Game with no message: the refusal is the older build's, so nothing in the new one can explain it. A current host's stub takes the key with up to 1024 bytes of tail, so a later, longer print will not repeat this.
+
 ## Download and install
 
 `tagpu_modinst.c` installs a catalog mod beside the live folder, on one background thread that touches only files: no
@@ -213,7 +237,7 @@ runs it after fitting. A painted part of the same name replaces one with no code
 
 
 `tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 54 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
-longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
+longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
 restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
 `menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on and with its file switched off.
 
@@ -258,7 +282,10 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - The screen has run on Wine only, windowed, on an NVIDIA device and on llvmpipe. Steam loses track of a game Confirm restarts, as the plan accepts.
 - The thirteen generated parts stand until the owner paints them.
 - No real mutator exists, so everything about them has run on test mutators the harness builds.
-- The fingerprint does not see a `file.` key, as it does not see a `hide.` key: the multiplayer landing has to include both.
+- The fingerprint counts an archive on a drive other than the game's, which is what stock mounts from a CD: a player with a retail CD in the drive differs from one without. Not run.
+- Chat lines need a `ScreenChat` setting above zero (`0x463CA0` returns otherwise), so with it at zero Start stays off with nothing said.
+- A file that fails to read hashes as its name alone, so that player differs from one whose copy reads, with the same message as any difference.
+- The fingerprint is compared on Wine alone so far. No real stock peer was run: the test's joiner sends stock's 21 bytes through Impure (`tagpu_modprint_stock.on`), and an older Impure build stands for one with the key and no print.
 - A loose file in the folder answers before a mutator under `none`, and the fit does not read loose files.
 - The screen holds `MAX_MOD`, 15 catalog entries with the mods: past that a mutator is on no tab, though the mount honours its key. The catalog has five.
 - The fit on the screen reads a base as it is now, so one whose update waits in `mods\\<id>.new` is judged on the old files until the next start; the mount checks the new ones.
@@ -269,7 +296,7 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - Managed Escalation needs the large-address bit to load a game. Its rows set it by hand until the 4 GB landing.
 - The originals list is one install's hashes. A folder from another edition whose `totala1.hpi` matches, and whose other
   archives do not, loses those archives with only a log line.
-- The mount and the loose step are not yet part of any recording's identity; the fingerprint is a later landing.
+- The mount and the loose step are not part of any recording's identity, and neither is the fingerprint.
 - The shell's own orders are not compared: the map list (`Maps\*.ota`, `0x434CE5`) and the unit types at the menu, whose IDs
   only mean something in a level. The level's are compared.
 - A game exe of another patch level, named `TotalA.exe`, gets the box; one renamed gets the log line and its own game.
