@@ -1,0 +1,6 @@
+/* uikit.css -- a kit's parts, for every mockup of an Impure window: each painted on a canvas (canvas.skin) behind its box's
+   content, the box's own fill and lines dropped; a kit's glyph icon replaces the whitebox's text glyph, which then takes
+   no room. A mockup's frame is #frame, with the class `kit` while a kit is its skin. */
+canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+#frame.kit [data-part] { isolation: isolate; background: none; border-color: transparent; }
+#frame.kit .gl { display: none; }

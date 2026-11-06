@@ -504,7 +504,7 @@ def main():
     exe, pak = tmp / "wikilaycheck", tmp / "wikipak.bin"
     cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
                          str(ROOT / "tools/wiki/wikilaycheck.c"), *(str(SRC / f) for f in (
-                             "tagpu_wikilay.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
+                             "tagpu_wikilay.c", "tagpu_uikit.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
                              "tagpu_pak.c", "lodepng.c", "tagpu_wikiframe.c", "tagpu_wikistage.c", "tagpu_wikisim.c", "tagpu_placegeo.c",
                              "tagpu_sweepgeo.c", "tagpu_wikicob.c", "tagpu_cobvm.c", "tagpu_cob_safe.c", "tagpu_wikireplay.c")), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)

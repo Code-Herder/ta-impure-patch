@@ -96,7 +96,7 @@ static unsigned         s_costFrames;
    which is immutable (tagpu_hudart.h) ---- */
 
 static const WIKIART* s_art;
-static WIKIFACES     s_faces;
+static UIFACES     s_faces;
 static WIKISTAGEART  s_sart;
 static int           s_toastFace;
 

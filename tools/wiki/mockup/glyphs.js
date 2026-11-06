@@ -9,7 +9,7 @@
 const WikiGlyphs = (() => {
   const FILL = '#cdc8a0', EDGE = '#000';      // the fill and the edge of i_close
   const LINE = 0.7;                           // the edge's width, units
-  /* each glyph's box in units: an icon is drawn as large as fits the box it is given (wiki.js drawIcon), so the box's
+  /* each glyph's box in units: an icon is drawn as large as fits the box it is given (uikit.js drawIcon), so the box's
      margins are the room a glyph keeps round it -- a control's glyph is drawn at 0.6 of its button, a mark fills its
      7-unit mark box */
   const BOX = { i_play: [10, 10], i_pause: [10, 10], i_replay: [10, 10], i_open: [7, 7], i_shut: [7, 7], i_dot: [7, 7] };

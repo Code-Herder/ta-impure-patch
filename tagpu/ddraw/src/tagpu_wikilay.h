@@ -27,8 +27,8 @@
    from the screen's top left -- the mockup's unit, and the HUD's at a scale of 100. */
 #include <stddef.h>
 #include <stdint.h>
-#include "stb_truetype.h"
 #include "tagpu_hudlay.h"
+#include "tagpu_uikit.h"
 #include "tagpu_wikidata.h"
 
 #define WIKI_MAXHOT    160      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
@@ -76,34 +76,6 @@ typedef struct {
     int      about;             /* the theatre's About panel is open (a frame:game entry's page) */
 } WIKIPAGE;
 
-/* A text style's face (art/hud/layout.json `styles`, by index): tagpu_hudart.c's HUDFACE. */
-typedef struct {
-    const stbtt_fontinfo* info;     /* NULL: the style's text measures nothing                  */
-    float                 ascent;   /* em, descent positive, as the browser lays a line out by  */
-    float                 descent;
-} WIKIFACE;
-
-/* The faces, by style index, and two answers the browser gives otherwise than the faces do. Both
-   are NULL in the game, which sets every text in its own faces at its own size; the check gives
-   the browser's, so the layout's rules are compared on what the mockup sets, and the two gaps are
-   named (research/notes/ingame-wiki.md, "Gaps"):
-     missing  the advance of a code point no face has, which the mockup sets in the browser's
-              fallback face and the DLL does not carry; NULL measures it as its face's .notdef, as
-              the game draws it. The check fails on any text that needs it: the control glyphs and
-              the tree's marks, which no face has, are kit icons.
-     size     the size a face is set at for a font size, both in pixels. Chrome sets a face at a
-              size of whole sixty-fourths of a pixel near the CSS one, by a rule not identified
-              (MEASURED 2026-10-25: 9.0667 px is set at 579/64, 9.07 at 580/64, 10.6667 at
-              682/64, 12.75 at 816/64), so at a font size that is no whole number of
-              sixty-fourths its lines are up to 0.2 % narrower than the faces'; NULL sets it at
-              the size. */
-typedef struct {
-    WIKIFACE face[24];
-    double (*missing)(void* ctx, int style, double size, uint32_t cp);   /* units at `size` units */
-    double (*size)(void* ctx, int style, double px);
-    void*    ctx;
-} WIKIFACES;
-
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
    scrollbar as drawn (the track, h 0 when the panel shows none, and the thumb's top and length on
    it, so a press is read against the thumb the player saw), the stage's rect inside its bezel (the
@@ -143,15 +115,7 @@ const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l);
    frame's; else in the rewind button's slot (`right[1]`), a replay's. */
 void tagpu_wikilay_button(const WIKILAY* l, int rewind, double* side, double* top, double* right, double* config);
 
-/* THE FACE LIGHTNESS RULE (wiki.js faceLight): a part's face is light when its middle, inside its
-   slices, scaled to 8 x 8 and its opaque pixels (alpha above 128) averaged at 0.3 R + 0.59 G +
-   0.11 B, is above a grey of 120; text on a light face is drawn in dark ink with no shadow. Here
-   each of the 64 cells is the box average of the source pixels it covers, the canvas's scaling
-   approximated. `rgba` is w x h x 4 bytes, premultiplied by its alpha when `premultiplied`.
-   Pure. */
-int           tagpu_wikilay_face_light(const unsigned char* rgba, int w, int h, const float slice[4],
-                                       int premultiplied);
-/* Set part `part`'s lightness (tagpu_wikilay_face_light of its decoded image), once, before the
+/* Set part `part`'s lightness (ui_face_light of its decoded image), once, before the
    layout is published. A part never set is dark. */
 void          tagpu_wikilay_light(WIKILAY* l, int part, int light);
 
@@ -163,7 +127,7 @@ const char*   tagpu_wikilay_mod_name(int mod);
    demo it does not have reads as none. Returns 0 with the reason in `err` only for a missing
    argument or no memory for the build's text buffers (about 51 KB); `out->overflow` is set when an
    op, a text or a hit did not fit and was dropped. */
-int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
+int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f,
                                   const WIKIPAGE* st, HUDOPS* out, WIKIFRAME* fr, char* err, size_t errn);
 
 /* The kit and the data checked at the load: 1 when the kit holds every icon the window and the
@@ -189,7 +153,7 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    (tagpu_wikistate.c says so once). `scratch` takes the ops of the states tried. A load-time
    call: any thread, before the layout is published; the game's passes no casting, its side
    loading later, and tools/wiki/wikilaycheck.c passes every pack's. */
-int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
+int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const UIFACES* f,
                                   const WIKICASTING* castings, int ncasting, HUDOPS* scratch,
                                   char* err, size_t errn);
 

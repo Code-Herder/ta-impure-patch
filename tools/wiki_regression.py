@@ -4041,7 +4041,7 @@ def stage_of(entry, demo):
 # demo whose build trip TA Zero cannot reach, which locks at its first build (tick 20) and plays on elsewhere
 SIDE_STATE = ("quickbuild", 1, 10)
 SIDE_LOCK = ("buildshapes", 3, 0, 20)         # (entry, its tree node, the demo's index, its first build's tick)
-LOCK_RGB = (0xD0, 0x18, 0x18)                 # the badge's disc (tagpu_wikilay.c LOCK_RGB, wiki.css .lock)
+LOCK_RGB = (0xD0, 0x18, 0x18)                 # the badge's disc (tagpu_uikit.h UI_LOCK_RGB, wiki.css .lock)
 SIDE_PACKS = TREE / "tools/wiki/mockup/gfx/side"
 
 

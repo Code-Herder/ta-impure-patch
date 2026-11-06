@@ -78,7 +78,7 @@ static const HUDGLOBALS* s_g;
 
 /* each style's face and its metrics, as tagpu_hudart.c face_open reads them: OS/2's typo
    metrics when the face sets USE_TYPO_METRICS, hhea's otherwise */
-static void faces(WIKIFACES* f, const char* dir)
+static void faces(UIFACES* f, const char* dir)
 {
     int i;
     for (i = 0; i < s_g->nstyle && i < 24; i++) {
@@ -169,7 +169,7 @@ static int mod_of(const char* s)
 /* --check: tagpu_wikilay_check with every casting of each pack's side.json, in the game's faces */
 static int check_packs(const WIKILAY* l, const WIKIDATA* d, const char* huddir, int npack, char** pack, HUDOPS* o)
 {
-    WIKIFACES f;
+    UIFACES f;
     WIKICASTING* all = NULL;
     char err[256];
     int n = 0, k;
@@ -410,7 +410,7 @@ int main(int argc, char** argv)
     HUDLAY* hud;
     WIKILAY* l;
     WIKIDATA* d;
-    WIKIFACES f;
+    UIFACES f;
     WIKIPAGE* st = (WIKIPAGE*)calloc(1, sizeof(WIKIPAGE));
     WIKIFRAME fr;
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
@@ -448,7 +448,7 @@ int main(int argc, char** argv)
         int lt_ = 0;
         snprintf(path, sizeof path, "%s/kit/parts/%s.png", argv[2], k->name);
         if (!lodepng_decode32_file(&img, &w, &h, path))
-            lt_ = tagpu_wikilay_face_light(img, (int)w, (int)h, k->kind == HK_NINE ? k->slice : NULL, 0);
+            lt_ = ui_face_light(img, (int)w, (int)h, k->kind == HK_NINE ? k->slice : NULL, 0);
         free(img);
         tagpu_wikilay_light(l, i, lt_);
         if (!check) printf("%s\"%s\":%d", i ? "," : "", k->name, lt_);
@@ -527,7 +527,7 @@ int main(int argc, char** argv)
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
         if (p->kind == HOP_TEXT) {
             const HUDRUN* r = &o->run[p->run];
-            const WIKIFACE* fc = &f.face[p->style];
+            const UIFACE* fc = &f.face[p->style];
             printf(",\"style\":\"%s\",\"size\":%.4f,\"ink\":%d,\"rgb\":\"%06x\",\"alpha\":%.0f", s_g->style[p->style].name, p->size,
                    (p->flags & HOPF_INK) != 0, r->rgb, (double)255 * (p->grp ? o->grp[p->grp - 1] : 1));
             printf(",\"base\":%.4f", tagpu_hudlay_baseline((float)(p->r.y * px), (float)(p->r.h * px), (float)(p->size * px),

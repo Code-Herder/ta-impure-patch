@@ -182,7 +182,7 @@ static void wiki_load(void)
     double mpx = 0;
     WIKILAY* wl = NULL;
     HUDOPS* scratch = NULL;
-    WIKIFACES faces;
+    UIFACES faces;
     PARTS at;
     int i;
     err[0] = 0;
@@ -201,10 +201,10 @@ static void wiki_load(void)
         return;
     }
     /* THE FACE LIGHTNESS, once, from the parts as decoded (premultiplied), before the store that
-       publishes the layout: the ink of every text on a part follows it (wiki.js faceLight) */
+       publishes the layout: the ink of every text on a part follows it (uikit.js faceLight) */
     for (i = 0; i < tagpu_hudlay_nparts(s_wiki.draw.lay); i++) {
         const HUDPART* k = tagpu_hudlay_part(s_wiki.draw.lay, i);
-        tagpu_wikilay_light(wl, i, tagpu_wikilay_face_light(s_wiki.draw.img[i].rgba, s_wiki.draw.img[i].w,
+        tagpu_wikilay_light(wl, i, ui_face_light(s_wiki.draw.img[i].rgba, s_wiki.draw.img[i].w,
                                                             s_wiki.draw.img[i].h, k->kind == HK_NINE ? k->slice : NULL, 1));
     }
     s_wiki.lay = wl;
