@@ -180,7 +180,7 @@ static int load_pack(void)
     if (!z || !s_catalog || !(s_blob = malloc(PACK_MAX))) return 0;
     got = ZSTD_decompress(s_blob, PACK_MAX, z, n);
     if (!ZSTD_isError(got) && tagpu_modpak_read(s_blob, got, &s_pak)) return 1;
-    /* every later use asks s_blob whether the pack is there */
+    /* tagpu_modpak_read leaves s_pak zeroed, so a later use finds no mod in it, and the others ask s_blob */
     free(s_blob);
     s_blob = NULL;
     return 0;

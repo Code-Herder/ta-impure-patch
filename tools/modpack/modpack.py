@@ -1480,9 +1480,10 @@ def print_table(sources: list, loose: dict, same_as: list) -> dict:
     first = {}
     for a in arcs:
         for f in a.files:
-            first.setdefault(f, a)
-    tops = {f.split("/")[0] for f in first if "/" in f}
-    held = {k: p for k, (_, p) in loose.items() if k.split("/")[0] in tops or ("/" not in k and k in first)}
+            if "/" in f:
+                first.setdefault(f, a)
+    tops = {f.split("/")[0] for f in first}
+    held = {k: p for k, (_, p) in loose.items() if k.split("/")[0] in tops}
     names = set(first) | set(held)
     units = {n.rsplit("/", 1)[-1][:-4] for n in names if n.endswith(".fbi")}
     same = {e["path"]: e for e in same_as}

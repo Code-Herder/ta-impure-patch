@@ -136,12 +136,13 @@ version, and one a base update broke as "Needs an update for X", which the tab's
 
 Two Impure players with different game files do not start together. Stock would: its per-unit handshake disables the types that differ on both sides with no message, and starts ([networking](../networking-lobbies.html)). The fingerprint is two 16-byte hashes and a label, compared in the battle room.
 
-**The content's hash** walks every file of the mounted archives, and the loose files beside them, once each, from the source each opens from: `tagpu_vfs`, the same reader the wiki uses, over the engine's mount list after the mount's removals. So a mutator, a hide and a `file.` key all reach it with nothing here knowing them. Each file hashes as its lower-cased path and its bytes, in path order.
+**The content's hash** walks the files under every folder the mounted archives have, each path once, loose or from the archive it opens from: `tagpu_vfs`, the same reader the wiki uses, over the engine's mount list after the mount's removals. So a mutator, a hide and a `file.` key all reach it with nothing here knowing them. Each file hashes as its lower-cased path and its bytes, in path order.
 
 **One mod has one print however it is installed.** The managed mount answers every path as the drop-in folder does, with one exception by design: a package can rename a section so the engine's order finds the drop-in's winner, and that file's bytes differ. The catalog's `same_as` names each such file with both hashes, and the walk counts one as the other only when the bytes are exactly the package's, so a mutator on that path still differs. `modpack.py catalog` derives the list and `modpack.py verify` compares the two sets of counted files for every mod.
 
 - **Left out:** `.gaf`, `.pcx`, `.bmp`, `.wav`, `.fnt`; a `.gui` no unit names, where a unit's menu page is `<unit><n>.gui`; all of `maps\`, since stock compares the map itself (`0x4373A0` against PlayerInfo `+0xA9`, `0x4481BE`) and players' map packs differ; and all of `camps\`, since a network game runs no campaign [INFERRED]. MEASURED: a retail folder holds loose examples there that a managed mod's closed loose step does not see, so counting them stops a managed player and a drop-in player of one mod. An unknown type counts.
 - **Loose files** count only under a folder some archive has at its root, so `log\`, `mods\` and what sits beside the exe never do. A managed mod's closed loose step is honoured.
+- **A file at an archive's own root** does not count: MEASURED over retail and every fixture there are two, `Copyright.txt` and `GAME NOTES.txt`, and the first would stop anyone without `Example.ufo`.
 
 **The exe's hash** is the image hash of the mod's table, `MODPATCH.hash`, when the player runs a catalog mod. A drop-in folder finds its mod through the pack: its exe, or stock with a known Patch Loader, names the same XOR as the mod. Anything else hashes the exe's `file_key` and any Patch Loader's, which matches only a folder with those same files.
 
@@ -282,9 +283,10 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - The screen has run on Wine only, windowed, on an NVIDIA device and on llvmpipe. Steam loses track of a game Confirm restarts, as the plan accepts.
 - The thirteen generated parts stand until the owner paints them.
 - No real mutator exists, so everything about them has run on test mutators the harness builds.
-- **A map pack with more than maps counts.** Only `maps\` is left out, so a `.ufo` that also ships its own features, sections, textures or models stops Start against anyone without it, even when nobody plays that map. Retail's own map archives hold only maps. No community pack has been measured. Whether their additions should count is the owner's decision: features are simulation data, so leaving them out is not obviously right.
+- **A map pack with more than maps counts.** Only `maps\` is left out, so a `.ufo` that also ships its own features, sections, textures or models stops Start against anyone without it, even when nobody plays that map. Retail's own map archives hold nothing else that counts. No community pack has been measured. Whether their additions should count is the owner's decision: features are simulation data, so leaving them out is not obviously right.
 - Other retail editions have not been compared. `install\` and `installres\` count, as an unknown type does, so an edition that differs there stops Start.
-- The stop test can end early when one call prunes an archive and mounts another, leaving the count unchanged (`tagpu_replays.c`), and the print then misses what a later call adds.
+- The stop test can end early when one call prunes an archive and mounts another, leaving the count unchanged (`tagpu_replays.c`), and the print then misses what a later call adds. It also stops at 64 calls, 640 `.hpi`, and the walk at 4096 archives, past which only the count changes the print.
+- A loose file in a folder no archive has is not counted, though the game can open it.
 - `tagpu_modprint_stock.on` passes the gate for whoever creates it: the fingerprint keeps honest players from a game that would go wrong, and is no defence against a cheat.
 - The fingerprint counts an archive on a drive other than the game's, which is what stock mounts from a CD: a player with a retail CD in the drive differs from one without. Not run.
 - Chat lines need a `ScreenChat` setting above zero (`0x463CA0` returns otherwise), so with it at zero Start stays off with nothing said.

@@ -111,10 +111,13 @@ static int note_file(void* ctx, const TAGPU_VFILE* f)
     return 1;
 }
 
+/* Equal paths come from one archive holding a name twice, and qsort is not stable: the later entry first, the one 0x4BB4E0 finds. */
 static int by_key(void* ctx, const void* a, const void* b)
 {
     const WALKED* w = (const WALKED*)ctx;
-    return strcmp(w->key[*(const int*)a], w->key[*(const int*)b]);
+    const int x = *(const int*)a, y = *(const int*)b;
+    const int c = strcmp(w->key[x], w->key[y]);
+    return c ? c : w->f[y].entry - w->f[x].entry;
 }
 
 static int unit_order(const void* a, const void* b)
@@ -182,20 +185,39 @@ static void hash_file(TAGPU_VFS* v, const TAGPU_VFILE* f, unsigned char* buf, MO
     }
 }
 
-/* An archive the engine mounted and this reader refuses: its name and size stand for it, and the log says so. */
+/* An archive the engine mounted and this reader refuses: its name and size stand for it, sorted and without case as the files are, and the log says so. */
+typedef struct { char name[TAGPU_VFS_PATHMAX]; DWORD size; } REFUSED;
+
+static int refused_order(const void* a, const void* b)
+{
+    return strcmp(((const REFUSED*)a)->name, ((const REFUSED*)b)->name);
+}
+
 static void hash_refused(const TAGPU_VFS* v, MODSHA* all)
 {
-    int i;
-    for (i = 0; i < tagpu_vfs_narc(v); i++) {
+    const int narc = tagpu_vfs_narc(v);
+    REFUSED* r = (REFUSED*)malloc(((size_t)narc + 1) * sizeof *r);
+    int i, n = 0;
+    size_t k;
+    if (!r) return;
+    for (i = 0; i < narc; i++) {
         const char* why = tagpu_vfs_arc_refused(v, i);
+        const char* name = tagpu_vfs_arc_name(v, i);
         WIN32_FILE_ATTRIBUTE_DATA info;
         if (!why) continue;
-        tagpu_logf("modprint: %s is counted by its size alone: %s", tagpu_vfs_arc_name(v, i), why);
+        tagpu_logf("modprint: %s counts by its name and size alone: %s", name, why);
         memset(&info, 0, sizeof info);
         GetFileAttributesExA(s_arcs[i], GetFileExInfoStandard, &info);
-        modsha_add(all, tagpu_vfs_arc_name(v, i), strlen(tagpu_vfs_arc_name(v, i)) + 1);
-        modsha_add(all, &info.nFileSizeLow, sizeof info.nFileSizeLow);
+        memset(&r[n], 0, sizeof r[n]);
+        for (k = 0; name[k] && k < sizeof r[n].name - 1; k++) r[n].name[k] = (char)tolower((unsigned char)name[k]);
+        r[n++].size = info.nFileSizeLow;
     }
+    qsort(r, (size_t)n, sizeof *r, refused_order);
+    for (i = 0; i < n; i++) {
+        modsha_add(all, r[i].name, strlen(r[i].name) + 1);
+        modsha_add(all, &r[i].size, sizeof r[i].size);
+    }
+    free(r);
 }
 
 /* Each top folder's own digest goes to the log, so two players told they differ can compare logs and find the folder. */
@@ -239,7 +261,7 @@ static DWORD WINAPI walk_thread(void* arg)
         qsort(order, (size_t)w.n, sizeof *order, by_key_only);
         modsha_init(&all);
         modsha_init(&topsha);
-        /* past the list's bound, what was cut still changes the answer, and the log says the answer is partial */
+        /* past the list's bound the count alone still changes the answer, and the log says the answer is partial */
         if (s_ntotal != s_narcs) {
             tagpu_logf("modprint: %d archives mounted, %d read", s_ntotal, s_narcs);
             modsha_add(&all, &s_ntotal, sizeof s_ntotal);
@@ -248,11 +270,10 @@ static DWORD WINAPI walk_thread(void* arg)
         for (i = 0; i < w.n; i++) {
             const TAGPU_VFILE* f = &w.f[order[i]];
             const char* key = w.key[order[i]];
-            const char* slash = strchr(key, '\\');
-            const size_t ntopname = slash ? (size_t)(slash - key) : 0;
+            const size_t ntopname = (size_t)(strchr(key, '\\') - key);      /* every path listed is under a top folder */
             uint8_t one[32];
             MODSHA sha;
-            if (i && !strcmp(key, w.key[order[i - 1]])) continue;       /* a loose root file named by two archives */
+            if (i && !strcmp(key, w.key[order[i - 1]])) continue;       /* by_key's later entry stands */
             if (!units.name || !tagpu_modprint_counts(f->path, is_unit_of, &units)) continue;
             if (strlen(top) != ntopname || strncmp(top, key, ntopname)) {
                 top_done(top, ntop, &topsha);
