@@ -129,7 +129,7 @@ GetPlayerData for the primary ID, not from a private packet. The game thread als
 | `0x44A162..0x44A19F` | Grayed unless the seat is the host (`bx`), `0x456760` answers and `0x46E000` on `main+0x2A30` answers: `GUIGADGET_SetGrayed 0x4A1250(gui, "START", grayed)`. |
 | `0x44AC33..0x44AC5F`, `0x44ADC0..0x44ADC6` | The same in `LOUNGE2.GUI`'s branch of the screen's update: only with PlayerInfo `+0x97` bit 0, the host, and a non-host skips to `0x44AE00`. |
 | `0x44871D`, `0x49FD60` | `0x49FD60(message, name)`, `stdcall`, compares the gadget a message names. `0x448722` falls to `0x448A62` on 0, the next compare, and otherwise runs START's action with no test of its own, so the grayed state is all that stands in front of it. |
-| `0x4481B8..0x4481C9` | The ready button's own map test: `0x4373A0` on `main+0x391E9` against PlayerInfo `+0xA9`. Stock's check of the map, which is why the fingerprint leaves `maps\` out. |
+| `0x4481B8..0x4481C9`, `0x4481BE` | The ready button's own map test: the call `0x4373A0` at `0x4481BE`, on `main+0x391E9`, against PlayerInfo `+0xA9`. Stock's check of the map, which is why the fingerprint leaves `maps\` out. |
 | `0x505DB4`, `0x505EA0`, `0x505E38`, `0x505EC4` | `"START"`, `"LOUNGE2.GUI"`, `"OUTPUT"`, `"SYNCHING"`. |
 
 `0x463CA0(text, 8, 0, 10)` puts a line in the room's Messages box, as it does for chat ([ui](ui.html)); a source row of 10 plays no sound (`0x463DED`), and it keeps 0x40 bytes (`0x463D10`).
