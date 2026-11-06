@@ -1,0 +1,6 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..f264cec3 findings=27 acted=25 rejected=2 date=2026-11-06
+Two rounds. First (high, 4fb7a144): 15 findings; second (default effort, on the fixes, 59b2ba67): 12, no high.
+High: a marker surviving a partial delete made the next start replace the live folder with a gutted one. Fixed: a marker goes first or nothing does, counted as gone only on 'no such file'; written to a temporary name and renamed.
+Medium: the sanitizers' exit 1 read as a refusal, so the mutation test could not report a crash; the sweep acted by name pattern on the current directory's mods in any process, now the game only, the exe's folder, catalog names only; device names passed the path check; the lock test had never run; the attach test could pass on a crash.
+Rejected: LoadLibrary searching the game folder for winhttp.dll (that folder is as trusted as ddraw.dll itself); no bound on the test's readline. Named as gaps rather than fixed: a non-ANSI folder, and a catalog id dropped by a later catalog.
+Runs on Wine only, and only over plain HTTP.
