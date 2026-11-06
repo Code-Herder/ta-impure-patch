@@ -671,8 +671,8 @@ static void confirm(void)
     }
     /* TERMINATED, NOT EXITED, AND WHAT MATTERS IS ALREADY ON DISK. ExitProcess kills the render thread wherever it stands and then
        runs the detaches, the graphics driver's among them, and one left waiting on a lock the killed thread held never returns
-       (MEASURED: Wine on llvmpipe, a game on the screen for 20 s: it stayed in its detach for minutes, and held the semaphore the new
-       process waits on; no GPU's driver has been measured). The engine's own exit releases the device first, and nothing here can reach that from a click.
+       (MEASURED: Wine, NVIDIA, a game on the screen for 20 s: it stayed in its detach for minutes, and held the semaphore the new
+       process waits on). The engine's own exit releases the device first, and nothing here can reach that from a click.
        Terminating runs no detach, so the kernel ends it whatever any thread holds; nothing is left to save at the main menu. */
     TerminateProcess(GetCurrentProcess(), 0);
 }

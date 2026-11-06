@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """modsscreen.py -- the Mods screen played in the game, on Wine: the real DLL, the real button, device clicks.
 
-    python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus] [--display :N]
+    python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus] [--display :N] [--software]
 
 `flow` opens the screen from the main menu button and clicks through it: the tabs, a stepper, a switch, the reset, a locked
 option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen
@@ -29,10 +29,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import runlock  # noqa: E402
 
 TACLI = [sys.executable, str(ROOT / "tools/tacli")]
-# The Vulkan loader maps every driver it finds, about 240 MB of a 32-bit process's 2 GB, and a private display offers only llvmpipe. With
-# them all loaded the screen's pass left a mod's menu with no address space and the process died in llvmpipe (MEASURED: 60 MB free, and
-# gone at the open, twice of twice, under ProTA; 227 MB left with only this one loaded).
-os.environ.setdefault("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/lvp_icd.json")
+SOFTWARE = False     # --software
 CACHE = Path(os.environ.get("TACOMPAT_CACHE", Path.home() / ".local/share/ta-compat")) / "modpack"
 OUT = ROOT / "tmp" / "modsscreen"
 NAME = "mods-screen"
@@ -64,9 +61,9 @@ class Game:
         self.dir = Path(json.loads((INSTANCES / NAME / "instance.json").read_text())["gamedir"])
 
     def launch(self):
-        # --defaults: the store is read and written, as a player's is. The restorer stays off: on llvmpipe, the only device a private
-        # display offers, its self-test and atlas take what the address space has left
-        (self.dir / "tagpu_classicpp.off").write_text("")
+        # --defaults: the store is read and written, as a player's is
+        if SOFTWARE:
+            (self.dir / "tagpu_classicpp.off").write_text("")
         tacli("launch", NAME, "--res", "1280x720", "--defaults", timeout=180)
         self.menu()
 
@@ -453,8 +450,15 @@ def menus(display):
 def main():
     a = argparse.ArgumentParser()
     a.add_argument("--only", choices=["flow", "menus", "boxes", "real"])
+    # With no GPU to use: on llvmpipe a mod's menu has too little of the 2 GB left for the screen's pass (MEASURED: 60 MB free and the
+    # process gone at the open, twice of twice, under ProTA; 227 MB with only this driver loaded and the restorer off)
+    a.add_argument("--software", action="store_true", help="llvmpipe alone, the restorer off")
     a.add_argument("--display")
     args = a.parse_args()
+    if args.software:
+        global SOFTWARE
+        SOFTWARE = True
+        os.environ["VK_DRIVER_FILES"] = "/usr/share/vulkan/icd.d/lvp_icd.json"
     xv = None
     display = args.display
     if not display:

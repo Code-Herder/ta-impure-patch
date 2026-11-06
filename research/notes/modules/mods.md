@@ -176,11 +176,11 @@ in the same file, read at the mount over the mod's `hide` list. They list the fo
 **Confirm's restart.** Confirm shows only with something to do: another mod chosen, a switch of the running mod changed, or its update ready. It writes `mod=` (nothing for this folder), flushes the store and goes on only when
 `tagpu_settings_saved` says the file holds it; otherwise a note says so and the game stays. `tagpu_rguard_restart_self` starts the same exe with the same command line, naming this process in
 `TAGPU_MODS_RESTART`, and `tagpu_rguard_attach` waits for it, since `WinMain` refuses to start beside the semaphore the old process holds. **The old process is terminated, not exited.** `ExitProcess` kills the render thread
-wherever it stands and then runs the detaches, the graphics driver's among them, and MEASURED on Wine on llvmpipe a process that did so stayed in its detach for minutes, holding that semaphore; no GPU's driver has been measured. The engine's own exit
+wherever it stands and then runs the detaches, the graphics driver's among them, and MEASURED on Wine with an NVIDIA device a process that did so stayed in its detach for minutes, holding that semaphore. The engine's own exit
 releases the device first, which a click cannot reach. Terminating runs no detach, so the window's place is saved ahead of it with `cfg_save`, and the player's files before that. The new process is not a relaunch
 after a crash, so it may still make one.
 
-**When it cannot draw.** The pass is built at its first use and can refuse then: on llvmpipe with the restorer on, the 2 GB address space has no 12 MB run within seconds of the menu, and `vkMapMemory` returns success and `(void*)-1` (MEASURED: largest free run 63 MB at the first frame, 10 MB six seconds on). The pass tests that pointer and refuses, the open screen closes itself, and the next click gets the box; `tagpu_hudrefuse.on` makes the build refuse on demand for the test.
+**When it cannot draw.** The pass is built at its first use and can refuse then: on llvmpipe, whose device memory is mapped into the process, with the restorer on, the 2 GB address space has no 12 MB run within seconds of the menu, and `vkMapMemory` returns success and `(void*)-1` (MEASURED: largest free run 63 MB at the first frame, 10 MB six seconds on). The pass tests that pointer and refuses, the open screen closes itself, and the next click gets the box; `tagpu_hudrefuse.on` makes the build refuse on demand for the test.
 
 **The boxes.** Before opening the button asks whether the exe is one the pack knows (`tagpu_modload_exe_known`), and then whether the layer can draw: the Vulkan renderer, the wiki's art loaded with the screen's layout in it. Either failing gets the engine's OK box, `0x4ABD90`
 ([the UI map](../engine/ui.html)), and the menu goes on after it. The art still loading is no failure: the screen opens and draws with its first frame after.
@@ -190,7 +190,7 @@ runs it after fitting. A painted part of the same name replaces one with no code
 
 
 `tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 51 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
-longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, on llvmpipe with the restorer off and only llvmpipe's driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
+longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
 restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
 and `menus` photographs each mod's menu and the screen over it, for the eye.
 
@@ -232,7 +232,7 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - One install at a time, with no way to stop one but ending the game. A queue runs on with the screen shut, starting its next install only in the shell, and is lost at an exit with no word.
 - The `(void*)-1` test covers the HUD's pass and the staging buffers. The other passes' `vkMapMemory` still trust the success, and a process can vanish with no ErrorLog on llvmpipe around the restorer's self-test, on a build without the screen too.
 - A hide key can take what a level needs. MEASURED on ProTA alone: with its 28 other archives hidden it still reaches its menu, so the screen stays there to undo them; no level was played so. Hide keys change the content between network peers, for the fingerprint landing to compare.
-- The screen has run on Wine on llvmpipe only, windowed: a private display offers no GPU here, so no GPU's driver has drawn it. Steam loses track of a game Confirm restarts, as the plan accepts.
+- The screen has run on Wine only, windowed, on an NVIDIA device and on llvmpipe. Steam loses track of a game Confirm restarts, as the plan accepts.
 - The thirteen generated parts stand until the owner paints them.
 - `file.<path>` switches are not built. A v1 mod's content is one archive, so the key has nothing to name before mutators: landing 7 has them.
 - The screen says nothing about a mod another copy of the game is installing beyond what the worker's refusal says.
