@@ -234,6 +234,7 @@ def managed_setups(setups) -> list:
                                   ("unknown-exe", "mayhem", [], "this exe is not one Impure knows"),
                                   ("damaged-package", "mayhem", [], "does not open"),
                                   ("other-edition", "mayhem", [], "totala1.hpi is not one Impure knows"),
+                                  ("no-base-archive", "mayhem", [], "has no totala1.hpi"),
                                   ("unknown-loader", "prota", by["mayhem-11.3.0"]["add"],
                                    "the Patch Loader in this folder is not one Impure knows")):
         out.append({"name": f"managed-refuses-{broken}", "about": f"mod={mod} where it must refuse: {why}", "add": add,
@@ -396,7 +397,8 @@ def pick_setups(names) -> list:
         return [s for s in SETUPS if not s.get("matrix")]
     by = {s["name"]: s for s in SETUPS}
     if "matrix" in names:
-        return [s for s in SETUPS if s.get("matrix")] + [by[n] for n in names if n != "matrix"]
+        return [s for s in SETUPS if s.get("matrix")] + pick_setups([n for n in names if n != "matrix"]) if len(names) > 1 \
+            else [s for s in SETUPS if s.get("matrix")]
     missing = [n for n in names if n not in by]
     if missing:
         die(f"no setup {', '.join(missing)} (tacompat.py list)")
@@ -866,10 +868,11 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
             hpi = gamedir / "mods" / setup["managed"] / f"{setup['managed']}.hpi"
             hpi.unlink()
             hpi.write_bytes(b"not an archive")
-        if broken == "other-edition":
+        if broken in ("other-edition", "no-base-archive"):
             arc = next(p for p in gamedir.iterdir() if p.name.lower() == "totala1.hpi")
             arc.unlink()
-            arc.write_bytes(b"an archive of another edition")
+            if broken == "other-edition":
+                arc.write_bytes(b"an archive of another edition")
         # a file one byte from a known one, beside a real install: only its key can tell
         if broken in ("unknown-exe", "unknown-loader"):
             want = "totala.exe" if broken == "unknown-exe" else "dplayx.dll"
@@ -1029,11 +1032,11 @@ def differs_from_dropin(s, o, d) -> list:
         out.append(f"unit types: only there {sorted(set(b.get('names') or []) - set(a.get('names') or []))[:6]}, "
                    f"only here {sorted(set(a.get('names') or []) - set(b.get('names') or []))[:6]}")
     ka, kb = a.get("keys") or {}, b.get("keys") or {}
-    if not any(int(v or "0", 16) for v in ka.values()):
-        out.append("no unit type has a key: nothing was compared")
-    wrong = [t for t in ka if t in kb and ka[t] != kb[t]]
+    if not any(int(v or "0", 16) for v in ka.values()) or not kb:
+        out.append("a side has no unit type with a key: nothing was compared")
+    wrong = [t for t in set(ka) | set(kb) if ka.get(t) != kb.get(t)]
     if wrong:
-        out.append(f"the FBI's key differs on {wrong[:6]}")
+        out.append(f"the FBI's key differs on {sorted(wrong)[:6]}")
     la, lb = o.get("level") or {}, d.get("level") or {}
     for what in ("types", "weapons", "feature_defs"):
         if not la.get(what):
@@ -1047,14 +1050,15 @@ def differs_from_dropin(s, o, d) -> list:
         at = next((i for i, (x, y) in enumerate(zip(fa, fb)) if x != y), min(len(fa), len(fb)))
         out.append(f"feature {at} of {len(fa)}/{len(fb)}: here {fa[at:at + 3]}, there {fb[at:at + 3]}")
     mp = o.get("mp")
-    if mp is not None:
+    if mp is None:
+        out.append("no network game: the CRCs were not compared (they exist only after a lobby's handshake)")
+    else:
         host, join = mp.get("crcs", {}).get("host") or {}, mp.get("crcs", {}).get("join") or {}
-        filled = [t for t, v in join.items() if int(v or "0", 16)]
-        if not filled:
+        if not any(int(v or "0", 16) for v in join.values()):
             out.append("the drop-in peer's handshake values are all zero: nothing was compared")
-        wrong = [t for t in filled if host.get(t) != join[t]]
+        wrong = [t for t in set(host) | set(join) if host.get(t) != join.get(t)]
         if wrong:
-            out.append(f"CRC_all differs from a drop-in peer in the same game on {wrong[:6]}")
+            out.append(f"CRC_all differs from a drop-in peer in the same game on {sorted(wrong)[:6]}")
     log = (o.get("_files") or {}).get("tagpu.log", "")
     if not re.search(r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS), log, re.I):
         out.append("the log names no loose unit file as refused: the decoy never reached the closed step")
@@ -1093,8 +1097,6 @@ def compare_managed(results):
         if wrong:
             o["verdict"] = "UNEXPECTED"
             o.setdefault("differs", []).extend(wrong)
-        if o.get("content"):
-            o["content"].pop("keys", None)
     for r in results:
         if r.get("content"):
             r["content"].pop("keys", None)
@@ -2892,7 +2894,11 @@ def cmd_windows(args):
     dll = snapshot_dll(source)
     cfg = windows_cfg(args)
     # a managed row is installed by Wine's prepare and compared in Wine's run: this path would run it as a bare stock folder
-    setups = [s for s in pick_setups(args.setups) if not s.get("managed")]
+    by_name = {s["name"]: s for s in SETUPS}
+    asked = [n for n in args.setups or [] if not by_name.get(n, {}).get("managed")]
+    if args.setups and not asked:
+        die("nothing to run: the Windows path has no install, so it leaves the managed rows out")
+    setups = [s for s in pick_setups(asked) if not s.get("managed")]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")

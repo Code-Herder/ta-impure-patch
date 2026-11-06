@@ -582,10 +582,9 @@ DOWNLOAD_FOLDER, WEAPON_FOLDER = 0x503730, 0x50392C
 
 
 def place_read_folders(img) -> tuple:
-    """The folders whose files the engine reads by enumeration, where a file's place can decide: features, which no v1 image
-    renames (0x502C7C), the weapons and the build menus."""
-    return (image_string(img, 0x502C7C).lower() + "/", image_string(img, WEAPON_FOLDER).lower() + "/",
-            image_string(img, DOWNLOAD_FOLDER).lower() + "/")
+    """The folders whose files the engine reads by enumeration, where a file's place can decide: features (0x502C7C), the
+    weapons, the build menus and the textures (0x503720)."""
+    return tuple(image_string(img, va).lower() + "/" for va in (0x502C7C, WEAPON_FOLDER, DOWNLOAD_FOLDER, 0x503720))
 
 
 def image_string(img, va) -> str:
@@ -679,43 +678,47 @@ GAME_DIRS = {"unittextures", "anims", "bitmaps", "camera", "camps", "cdplayer", 
 PLAIN_KEPT = {"icon", "zicon"}
 
 
-# Under the first TDF enumerated that holds it, a feature section is the only thing a file's PLACE in the mount decides
-# (LoadFeature 0x4224B0; engine/process.md): every other path has one answer, which the managed mount reproduces. One archive
-# cannot keep the drop-in folder's order in general, so the sections that would change go in a TDF of their own that the
-# managed enumeration reaches first: the package is mounted first, this name sorts first in its folder, and the walk takes
-# a folder's entries in order, recursing at once (0x4BCC1F..0x4BCC5B).
-WINNERS_TDF = "features/!!section-winners.tdf"
+# Every path has one answer, which the managed mount reproduces, but a name INSIDE a file can depend on the file's PLACE in the
+# mount, and one archive cannot keep the drop-in folder's order. Two readers take the first file listed that holds a name: a
+# feature section (LoadFeature 0x4224B0, over 0x4BCB50's recursive walk), and a texture's sequence (the bank filled in listing
+# order from textures\\*.GAF at 0x42A4AD and 0x42A504, searched from index 0 at 0x42A1A8). settle_places keeps the drop-in's
+# winner without shipping a byte of the original game: a copy that comes first in the package is renamed where it stands, since
+# nothing asks for the new name, and a winner that is an original file behind another original goes in the recipe.
+RENAMED = "~"
+
+
+def tdf_spans(data: bytes) -> list:
+    """[(lower name, start of "[", position after the name's "]", end of the section)] of a TDF's top level, by the grammar
+    of tavfs.tdf_sections, the engine's: the text ends at its first NUL, comments are blanks, a stray top-level "}" ends it."""
+    end = data.find(b"\0")
+    t = bytearray(data if end < 0 else data[:end])
+    tavfs()._strip_comments(t)
+    s, n, i, out = bytes(t), len(t), 0, []
+    while i < n:
+        c = s[i]
+        if c == 0x7D:
+            break
+        if c != 0x5B:
+            i += 1
+            continue
+        close = s.find(b"]", i)
+        brace = s.find(b"{", close) if close >= 0 else -1
+        if brace < 0:
+            break
+        depth, j = 0, brace
+        while j < n:
+            depth += (s[j] == 0x7B) - (s[j] == 0x7D)
+            if not depth:
+                break
+            j += 1
+        out.append((s[i + 1:close].strip().decode("latin-1").lower(), i, close, min(j + 1, n)))
+        i = j + 1
+    return out
 
 
 def tdf_sections(data: bytes) -> list:
-    """[(lower name, the section's own bytes)] of a TDF's top level, in file order."""
-    out, i, n = [], 0, len(data)
-    while i < n:
-        c = data[i:i + 1]
-        if data[i:i + 2] == b"//":
-            i = data.find(b"\n", i)
-            i = n if i < 0 else i
-        elif c == b"[":
-            close, brace = data.find(b"]", i), data.find(b"{", i)
-            if close < 0 or brace < 0:
-                break
-            depth, j = 0, brace
-            while j < n:
-                if data[j:j + 2] == b"//":
-                    j = data.find(b"\n", j)
-                    j = n if j < 0 else j
-                    continue
-                if data[j:j + 1] == b"{":
-                    depth += 1
-                elif data[j:j + 1] == b"}":
-                    depth -= 1
-                    if not depth:
-                        break
-                j += 1
-            out.append((data[i + 1:close].strip().decode("latin-1").lower(), data[i:j + 1]))
-            i = j
-        i += 1
-    return out
+    """[(lower name, the section's own bytes)] in file order."""
+    return [(name, data[a:z]) for name, a, _, z in tdf_spans(data)]
 
 
 def first_section(walk) -> dict:
@@ -727,9 +730,115 @@ def first_section(walk) -> dict:
     return out
 
 
+def section_value(raw: bytes):
+    """A section as the engine reads it, for comparing two copies."""
+    try:
+        sections = tavfs().tdf_sections(raw)
+    except tavfs().TdfError:
+        return raw
+    return [section_value_of(x) for x in sections]
+
+
+def section_value_of(sec):
+    return (sec["keys"], [section_value_of(x) for x in sec["sub"]])
+
+
+def st_recipe(lines) -> list:
+    """originals.tsv's lines as the recipe's rows."""
+    rows = []
+    for line in lines:
+        path, md5, _size, arc, member = line.split("\t")
+        rows.append((path, md5, arc, member))
+    return rows
+
+
 def same_section(a: bytes, b: bytes) -> bool:
-    """The same to the TDF reader: case and white space aside."""
-    return b"".join(a.lower().split()) == b"".join(b.lower().split())
+    return section_value(a) == section_value(b)
+
+
+def gaf_entries(data: bytes) -> list:
+    """[(lower sequence name, offset of its 32-byte name)] of a GAF, file order. A GAF that does not fit reads as none."""
+    if len(data) < 12 or struct.unpack_from("<I", data, 0)[0] != 0x00010100:
+        return []
+    count = struct.unpack_from("<I", data, 4)[0]
+    if 12 + count * 4 > len(data):
+        return []
+    out = []
+    for i in range(count):
+        at = struct.unpack_from("<I", data, 12 + i * 4)[0] + 8
+        if at + 32 > len(data):
+            return []
+        raw = data[at:at + 32]
+        out.append((raw.split(b"\0")[0].decode("latin-1").lower(), at))
+    return out
+
+
+_gaf_names = {}
+
+
+def gaf_names(key, data_of) -> list:
+    """A file's sequence names; retail's are read once across the mods of a run."""
+    if key not in _gaf_names:
+        _gaf_names[key] = [n for n, _ in gaf_entries(data_of())]
+    return _gaf_names[key]
+
+
+def texture_bank(walk, img) -> list:
+    """The GAFs a level's texture bank searches, over (path, bytes) in listing order: the folder's own files, less the logos
+    file, which is a bank of its own; with none in the listing, the count's -1 leaves out the last file (0x42A440)."""
+    top = image_string(img, 0x503720).lower() + "/"
+    logos = top + image_string(img, 0x503704).lower()
+    files = [(k, d) for k, d in walk if "/" not in k[len(top):]]
+    kept = [(k, d) for k, d in files if k != logos]
+    return kept if len(kept) < len(files) else kept[:-1]
+
+
+def rename_tdf(data: bytes, names: set) -> bytes:
+    out, at = [], 0
+    for name, _, close, _ in tdf_spans(data):
+        if name in names:
+            out += [data[at:close], RENAMED.encode()]
+            at = close
+    return b"".join(out) + data[at:]
+
+
+def rename_gaf(data: bytes, names: set) -> bytes:
+    d = bytearray(data)
+    for name, at in gaf_entries(data):
+        if name in names:
+            raw = d[at:at + 32].split(b"\0")[0] + RENAMED.encode()
+            if len(raw) >= 32:
+                die(f"sequence {name} has no room for its new name")
+            d[at:at + len(raw) + 1] = raw + b"\0"
+    return bytes(d)
+
+
+def undo_rename(path: str, data: bytes) -> bytes:
+    """A renamed file as the drop-in folder holds it, for verify."""
+    if path.endswith(".tdf"):
+        return re.sub(rb"\[([^\]\r\n]*)" + RENAMED.encode() + rb"\]", rb"[\1]", data)
+    d = bytearray(data)
+    for name, at in gaf_entries(data):
+        if name.endswith(RENAMED):
+            raw = d[at:at + 32].split(b"\0")[0][:-1]
+            d[at:at + len(raw) + 2] = raw + b"\0\0"
+    return bytes(d)
+
+
+def tree_set(tree: dict, low: str, data: bytes):
+    parts = low.split("/")
+    d = tree
+    for part in parts[:-1]:
+        d = d[next(n for n in d if n.lower() == part)]
+    d[next(n for n in d if n.lower() == parts[-1])] = data
+
+
+def tree_get(tree: dict, low: str) -> bytes:
+    parts = low.split("/")
+    d = tree
+    for part in parts:
+        d = d[next(n for n in d if n.lower() == part)]
+    return d
 
 
 def archive_walk(path: Path, prefix: str, suffix: str):
@@ -786,14 +895,68 @@ def originals_tree(recipe, plan) -> dict:
     return tree
 
 
-def winners_tdf(plan, package: dict, originals: dict):
-    """The sections whose first TDF changes under the managed mount, as the drop-in folder has them; b"" with none."""
-    dropin = first_section(enumerated(dropin_sources(plan), "features/", ".tdf"))
-    managed = first_section(enumerated(managed_sources(plan, package, originals), "features/", ".tdf"))
-    if set(dropin) != set(managed):
-        die(f"{plan.src['id']}: the mounts define different feature sections: {sorted(set(dropin) ^ set(managed))[:5]}")
-    moved = [raw for name, (_, raw) in dropin.items() if not same_section(raw, managed[name][1])]
-    return b"\r\n".join(moved) + b"\r\n" if moved else b"", len(moved)
+def settle_places(plan, tree: dict, st: dict) -> tuple:
+    """Rename and place until the managed mount's first holder of every feature section and texture sequence is the drop-in's.
+    Returns ({lower path: names renamed}, [paths placed in the recipe]); `tree` and st["recipe"] are updated."""
+    features, _, _, textures = place_read_folders(plan.img)
+    winners = first_section(enumerated(dropin_sources(plan), features, ".tdf"))
+    sequences = {}
+    for k, d in texture_bank(enumerated(dropin_sources(plan), textures, ".gaf"), plan.img):
+        for name in gaf_names(("dropin", plan.src["id"], k), lambda d=d: d):
+            sequences.setdefault(name, k)
+    renamed, placed = {}, []
+    retail_row = {}
+    for name in plan.managed_retail:
+        for k, (md5, stored) in st["retail"][name.lower()].items():
+            retail_row.setdefault(k, (stored, md5, plan.retail_name(name.lower()), stored))
+    for _ in range(16):
+        originals = originals_tree(st["recipe"], plan)
+        package = {k for k, _d in tree_walk(tree)}
+        in_recipe = {r[0].lower() for r in st["recipe"]}
+        rename, place = {}, set()
+
+        def before_winner(path, name, winner):
+            if path in package:
+                rename.setdefault(path, set()).add(name)
+            elif winner in package or winner in in_recipe or winner not in retail_row:
+                die(f"{plan.src['id']}: {name}: {path} comes before {winner}, and neither can move")
+            else:
+                place.add(winner)
+        seen = set()
+        for path, data in enumerated(managed_sources(plan, tree, originals), features, ".tdf"):
+            for name, raw in tdf_sections(data):
+                if name in seen or name.endswith(RENAMED):
+                    continue
+                if name not in winners:
+                    die(f"{plan.src['id']}: the managed mount alone defines feature {name}, in {path}")
+                if same_section(raw, winners[name][1]):
+                    seen.add(name)
+                else:
+                    before_winner(path, name, winners[name][0])
+        missing = set(winners) - seen - {n for names in rename.values() for n in names}
+        if missing and not rename and not place:
+            die(f"{plan.src['id']}: feature sections the managed mount lacks: {sorted(missing)[:5]}")
+        seen = set()
+        for path, data in texture_bank(enumerated(managed_sources(plan, tree, originals), textures, ".gaf"), plan.img):
+            key = (path, plan.src["id"]) if path in package else ("retail", path)
+            for name in gaf_names(key, lambda d=data: d):
+                if name in seen or name.endswith(RENAMED) or name not in sequences:
+                    continue
+                if sequences[name] == path:
+                    seen.add(name)
+                else:
+                    before_winner(path, name, sequences[name])
+        if not rename and not place:
+            return renamed, placed
+        for path, names in rename.items():
+            data = tree_get(tree, path)
+            tree_set(tree, path, rename_gaf(data, names) if path.endswith(".gaf") else rename_tdf(data, names))
+            _gaf_names.pop((path, plan.src["id"]), None)
+            renamed.setdefault(path, set()).update(names)
+        for path in place:
+            st["recipe"].append(retail_row[path])
+            placed.append(path)
+    die(f"{plan.src['id']}: the places did not settle")
 
 
 def plan_package(src, stock, hashes):
@@ -935,6 +1098,11 @@ def cmd_verify(a):
                 names = t.getnames()
             ha = Path(d) / f"{s['id']}.hpi"
             got = member_table(ha)
+            listed = (OUT / s["id"] / "listing.txt").read_text().splitlines()
+            renamed = [ln.split("\t")[1] for ln in listed if ln.startswith("renamed\t")]
+            arc = hpipack().Archive(ha) if renamed else None
+            for k in renamed:
+                got[k] = (hashlib.md5(undo_rename(k, arc.read(k))).hexdigest(), got[k][1])
             recipe = (Path(d) / f"{s['id']}.originals.tsv").read_text().splitlines()
             carried = [hashlib.md5((Path(d) / n).read_bytes()).hexdigest() for n in names]
         hit = [n for n, h in zip(names, carried) if h in hashes]
@@ -955,11 +1123,11 @@ def cmd_verify(a):
         managed.update(got)
         wrong = [k for k, (md5, _, stored) in dropin.items() if k not in managed or managed[k][0] != md5]
         cased = [k for k, (md5, _, stored) in dropin.items() if k in managed and leaf(managed[k][1]) != leaf(stored)]
-        extra = [k for k in managed if k not in dropin and k != WINNERS_TDF]
+        extra = [k for k in managed if k not in dropin]
         report(not wrong and not extra, f"{s['id']}: the managed mount answers {len(dropin)} paths as the drop-in folder does"
                + (f"; differ {len(wrong)}, first {wrong[0]}" if wrong else "") + (f"; only managed {len(extra)}, first {extra[0]}" if extra else ""))
         report(not cased, f"{s['id']}: every file name keeps its case" + (f"; differ {len(cased)}, first {cased[0]}" if cased else ""))
-        # what a file's place decides: the feature sections, by the module's reader, and whether anything else reads by place
+        # what a file's place decides, by the engine's reader: the feature sections, the texture sequences
         with tempfile.TemporaryDirectory(dir=OUT) as d:
             subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
             with tarfile.open(d + "/p.tar") as t:
@@ -968,13 +1136,34 @@ def cmd_verify(a):
             for top in place_read_folders(plan.img):
                 for k, data in archive_walk(Path(d) / f"{s['id']}.hpi", top, ""):
                     insert_cased(package, k, data)
-        originals = originals_tree(st["recipe"], plan)
-        parse = lambda raw: tavfs().tascene.parse_tdf(raw.decode("latin-1"))
-        one, two = (first_section(enumerated(f(), "features/", ".tdf"))
-                    for f in (lambda: dropin_sources(plan), lambda: managed_sources(plan, package, originals)))
-        moved = [k for k in one if k not in two or parse(one[k][1]) != parse(two[k][1])]
+        originals = originals_tree(st_recipe(recipe), plan)
+        features, weapons, download, textures = place_read_folders(plan.img)
+        def engine_first(sources):
+            out = {}
+            for k, data in enumerated(sources, features, ".tdf"):
+                try:
+                    secs = tavfs().tdf_sections(data)
+                except tavfs().TdfError:
+                    continue
+                for sec in secs:
+                    out.setdefault(sec["_name"].lower(), sec)
+            return {n: section_value_of(v) for n, v in out.items() if not n.endswith(RENAMED)}
+        one, two = engine_first(dropin_sources(plan)), engine_first(managed_sources(plan, package, originals))
+        moved = [k for k in one if one[k] != two.get(k)]
         report(not moved and set(one) == set(two), f"{s['id']}: {len(one)} feature sections read as in the drop-in folder"
-               + (f"; differ {len(moved)}, first {moved[0]}" if moved else ""))
+               + (f"; differ {len(moved)}, first {moved[:4]}" if moved else ""))
+        def first_gaf(sources):
+            out = {}
+            for k, data in texture_bank(enumerated(sources, textures, ".gaf"), plan.img):
+                for name, _ in gaf_entries(data):
+                    if not name.endswith(RENAMED):
+                        out.setdefault(name, k)
+            return out
+        one, two = first_gaf(dropin_sources(plan)), first_gaf(managed_sources(plan, package, originals))
+        moved = [k for k in one if one[k] != two.get(k)]
+        report(not moved and set(one) == set(two), f"{s['id']}: {len(one)} texture sequences come from the drop-in folder's file"
+               + (f"; differ {len(moved)}, first {moved[:4]}" if moved else ""))
+        parse = lambda raw: tavfs().tascene.parse_tdf(raw.decode("latin-1"))
         # weapons by name, and a build menu's cell by what it names: what would change if an enumeration's order decided it
         def resolved(source, top, key):
             first, last = {}, {}
@@ -992,7 +1181,6 @@ def cmd_verify(a):
         def weapon_slot(_name, body):
             b = {x.lower(): str(y) for x, y in body.items()} if isinstance(body, dict) else {}
             return b.get("id")
-        _, weapons, download = place_read_folders(plan.img)
         for top, key in ((weapons, weapon_slot), (download, menu_cell)):
             one_r = resolved(dropin_sources(plan), top, key)
             two_r = resolved(managed_sources(plan, package, originals), top, key)
@@ -1045,9 +1233,7 @@ def cmd_packages(a):
                 data = arc.read(k)
             insert_cased(tree, stored, data)
             cost += len(data)
-        winners, moved = winners_tdf(plan, tree, originals_tree(st["recipe"], plan))
-        if winners:
-            insert_cased(tree, WINNERS_TDF, winners)
+        renamed, placed = settle_places(plan, tree, st)
         d = OUT / s["id"]
         d.mkdir(parents=True, exist_ok=True)
         pkg = {f"{s['id']}.hpi": hpipack().build(tree, 0, 2)}
@@ -1061,8 +1247,11 @@ def cmd_packages(a):
                  f"first mount pattern: {plan.first}"]
         lines += [f"dropped {n}: {why}" for n, why in plan.plain]
         lines += [f"original with no archive to copy it from: {k}" for k in st["loose_original"]]
+        lines += [f"renamed\t{k}\t{' '.join(sorted(v))}" for k, v in sorted(renamed.items())]
+        lines += [f"placed\t{k}" for k in sorted(placed)]
         (d / "listing.txt").write_text("\n".join(lines) + "\n")
-        print(f"{s['id']:10} {moved} feature sections keep their first TDF by {WINNERS_TDF}")
+        print(f"{s['id']:10} keeps the drop-in's first holder: {sum(map(len, renamed.values()))} names renamed in {len(renamed)} files, "
+              f"{len(placed)} originals placed in the recipe")
         print(f"{s['id']:10} {len(wanted):6} members {cost / 1e6:8.1f} MB -> {tar.stat().st_size / 1e6:7.1f} MB in {time.time() - t0:5.1f} s; "
               f"{st['stripped']} from retail, {len(st['recipe'])} by recipe, {len(st['loose_original'])} unsourced, {len(plan.plain)} dropped; hide {plan.hide}")
 
@@ -1102,7 +1291,10 @@ def cmd_install(a):
         with open(OUT / a.id / "install.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if not built.is_dir() or built.stat().st_mtime < tar.stat().st_mtime:
-                build(built, tavfs().find_install(None))
+                fresh = OUT / a.id / "installed.new"
+                build(fresh, tavfs().find_install(None))        # a build that dies leaves no half result to link
+                shutil.rmtree(built, ignore_errors=True)
+                fresh.rename(built)
         shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True)
         for p in built.iterdir():

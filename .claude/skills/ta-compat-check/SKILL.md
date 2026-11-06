@@ -179,7 +179,8 @@ multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 - `managed-<id>`: the mod installed into a clean stock folder and chosen by `mod=`. It runs beside its
   drop-in row, which is added if you name only this one, and its network game's other player is that drop-in folder. It
   fails if the types, FBI keys, a level's tables, or the two peers' `CRC_all` differ, or if no value was there to compare
-  (`CRC_all` is 0 until a lobby's handshake fills it), or if the log names no refused loose unit file.
+  (`CRC_all` is 0 until a lobby's handshake fills it), or if the log names no refused loose unit file. It needs the fight and the
+  network game, so `--battle 0` or `--mp 0` fails it.
 - `matrix-<id>-on-<base>`: the mod in a folder another mod's drop-in install left. Ask with the name `matrix`,
   usually `--battle 0 --mp 0`: 20 rows in about 3 minutes. Not in the default list.
 - `managed-refuses-<why>`: the box must name the reason and `mod=` must be gone from `impure.cfg`.

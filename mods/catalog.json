@@ -65,8 +65,8 @@
       "packages": [
         {
           "url": "mayhem/mayhem-11.3.0.tar.zst",
-          "sha256": "9bf7134e85511b9fad5c194b9f227ce5d8289d041975ebd08d5cb236f0f1aee6",
-          "size": 18390896,
+          "sha256": "b1878244031a2f9135ee056aa04ba79a68878c8c612e30ba6b5a6130469e792c",
+          "size": 18388543,
           "files": [
             {
               "path": "Icon/AIRCONS.PCX",
@@ -140,8 +140,8 @@
             },
             {
               "path": "mayhem.hpi",
-              "sha256": "ffb772d548acbbb480e1878aa465dfa8a64746460146869aa67877dab021f886",
-              "size": 18870079
+              "sha256": "b0eb43dbed7c6e061941b3ceeea07cb2e3cfe67be1b0a48c1b89cf83e41ef1f9",
+              "size": 18869827
             },
             {
               "path": "mayhem.ini",
@@ -150,8 +150,8 @@
             },
             {
               "path": "mayhem.originals.tsv",
-              "sha256": "ee3054e6603f01adac64b1e45c3279e881ca27c812fbdc78c90cdc809db4df23",
-              "size": 29343
+              "sha256": "ab15029947c656933dac34bf298042199e03da16c53e1b82fee4d6fa1fe7d974",
+              "size": 29440
             }
           ]
         }
@@ -184,8 +184,8 @@
       "packages": [
         {
           "url": "prota/prota-4.8.tar.zst",
-          "sha256": "8e43bb89e70f0ed4dc21a85bfa4b0d9c197dfcf9e0bbb5ed722891de6afad24b",
-          "size": 6333628,
+          "sha256": "3a8ecba66b9ecd534eb92a9692d51ebeb6ddecd32352934b4e6120ba076ddc1f",
+          "size": 6333426,
           "files": [
             {
               "path": "Icon/AIR.PCX",
@@ -354,13 +354,13 @@
             },
             {
               "path": "prota.hpi",
-              "sha256": "ad758cffb1c6a1f0439d10c039c42e19ce7524e038cfcc7765584f9fdf2ad505",
-              "size": 7393396
+              "sha256": "919ef3cd05217b870a80b59f7ff2fad041e1a05003b7e4ab32e6c896c1e3ee62",
+              "size": 7393017
             },
             {
               "path": "prota.originals.tsv",
-              "sha256": "f3841f2dbe38f34cd6020aac7c3ac9a3b9d3e94a9426089c9d0b4407284936cd",
-              "size": 38268
+              "sha256": "1d9b0e2799bd5b407508df453737920d693585ce4edb1d596bf905e243f6b950",
+              "size": 38365
             }
           ]
         }
@@ -393,8 +393,8 @@
       "packages": [
         {
           "url": "tazero/tazero-Alpha-5.tar.zst",
-          "sha256": "848d68a7c28a1fa07a003dff2603303e9a89de73fd3b13e0acbc9efcfdda801f",
-          "size": 89636830,
+          "sha256": "34822e3fec695a92b66ad391623a430702489ca3a5f8e89fc7564c4b9642e813",
+          "size": 89635922,
           "files": [
             {
               "path": "TAZero.ini",
@@ -473,8 +473,8 @@
             },
             {
               "path": "tazero.hpi",
-              "sha256": "61d019acb5a27deab8780e77687039b146f21ad6f448f928ffff1e8926f61a81",
-              "size": 92783321
+              "sha256": "96b0289af0fe3d639480137a87c1319ab28b6e7d21b5d86c185a545101a197e6",
+              "size": 92782485
             },
             {
               "path": "tazero.originals.tsv",
@@ -514,8 +514,8 @@
       "packages": [
         {
           "url": "twilight/twilight-2.0-Beta-98.tar.zst",
-          "sha256": "cb9261d6886a2de1c47d28e6513467af0f4cc16038acd4903c8013b2ef945fe3",
-          "size": 76016891,
+          "sha256": "e8d3761400095cffae49345d61198428ffb1dfaaf511b80c21a4c36c83c1c96e",
+          "size": 76017836,
           "files": [
             {
               "path": "Icon/AIRCONS.PCX",
@@ -594,8 +594,8 @@
             },
             {
               "path": "twilight.hpi",
-              "sha256": "f13ea72b10dd64c434a25a272b59afcfeb14eaf444cddab018f2b2a69cfa882c",
-              "size": 85140446
+              "sha256": "ae2e39ae81d1102dfb46f27591247eec4522a767b7a9b5cd40a341915c5cfee4",
+              "size": 85138989
             },
             {
               "path": "twilight.originals.tsv",

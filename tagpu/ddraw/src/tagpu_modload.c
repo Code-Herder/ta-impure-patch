@@ -27,7 +27,7 @@
 #define VA_FOPEN     0x4E4990u
 #define VA_FIND_CALL 0x4BC5D3u          /* the enumeration 0x4BC4B0's loose listing: call 0x4E7DD0 (_findfirst) */
 #define VA_FINDFIRST 0x4E7DD0u
-#define VA_MOUNT_PATH_MAX 0x100u        /* GetFullPathNameA's limit in the mounter, 0x4BE0D1 */
+#define VA_MOUNT_PATH_MAX 0x100u        /* the smaller of the mounter's two path buffers */
 #define VA_OPTIONS_NAME 0x5098A3u       /* engine/process.md: 12 characters and a NUL */
 
 static const unsigned char MOUNTER_STOLEN[6] = { 0x81, 0xEC, 0x04, 0x01, 0x00, 0x00 };  /* sub esp, 0x104 */
@@ -198,14 +198,22 @@ void tagpu_modload_begin(void)
     int stock, i, changed;
 
     if (!tagpu_settings_mod(id, sizeof id)) return;
-    /* Any exe importing DirectDraw loads this DLL, the editor retail ships among them: without the engine's own code
-       this is not the game, and the player's mod= is none of its business. */
-    if (!GetModuleFileNameW(NULL, exe_path, MAX_PATH) || !(exe = read_file_w(exe_path, &nexe)) ||
-        !tagpu_modimg_from_exe(&s_target, exe, nexe) || !is_the_game(&s_target)) {
-        tagpu_log("modload: this exe has no engine sites to run a mod on, so mod= is left alone");
-        free(exe);
-        tagpu_modimg_free(&s_target);
+    /* Any exe that loads a ddraw.dll from this folder loads this one. A file with another name and none of the engine's sites
+       is a tool, and the player's mod= is none of its business; TotalA.exe without them is a game no key knows, and refuses. */
+    if (!GetModuleFileNameW(NULL, exe_path, MAX_PATH) || !(exe = read_file_w(exe_path, &nexe))) {
+        lstrcpynA(s_id, id, sizeof s_id);
+        refuse("Total Annihilation's exe could not be read");
         return;
+    }
+    {
+        const wchar_t* base = wcsrchr(exe_path, L'\\');
+        int sites = tagpu_modimg_from_exe(&s_target, exe, nexe) && is_the_game(&s_target);
+        if (!sites && lstrcmpiW(base ? base + 1 : exe_path, L"TotalA.exe")) {
+            tagpu_log("modload: this exe has no engine sites to run a mod on, so mod= is left alone");
+            free(exe);
+            tagpu_modimg_free(&s_target);
+            return;
+        }
     }
     lstrcpynA(s_id, id, sizeof s_id);
     for (i = 0; id[i]; i++)
@@ -242,8 +250,8 @@ void tagpu_modload_begin(void)
     if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
     snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", id, id);
     if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
-    /* The mounter resolves a name into 0x100 bytes (0x4BE0D1), and an entry whose path did not fit is pruned at the next
-       InitTAHPIAry: this, the longest name it gets, has to fit for the package to stay mounted. */
+    /* The mounter's duplicate test resolves a name into 0x100 bytes (0x4BE0D1) and the handle keeps its path in 0x104
+       (0x4BDDC1), read back by the prune's open at 0x4BE1B5. This, the longest name it gets, stays inside the smaller. */
     if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
         refuse("the game's folder is too deep for the mod's files: move it to a shorter path");
         goto done;
@@ -365,7 +373,8 @@ static void save_archive_cache(void)
     if (!ok || !MoveFileExA(tmp, ARCHIVE_CACHE, MOVEFILE_REPLACE_EXISTING)) DeleteFileA(tmp);
 }
 
-/* Whether this file is an original archive of the game, by its bytes: mods reuse and replace the names. */
+/* Whether this file is an original archive of the game, by its bytes: mods reuse and replace the names. -1 when it could not
+   be read, which says nothing of the file and leaves no row. */
 static int is_original_archive(const char* name)
 {
     static uint8_t buf[1u << 20];
@@ -395,14 +404,16 @@ static int is_original_archive(const char* name)
         if (keep) lstrcpynA(a->name, name, sizeof a->name);
     }
     h = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (h == INVALID_HANDLE_VALUE) {
+        if (keep && a == &s_arc[s_narc - 1] && !a->size) s_narc--;
+        return -1;
+    }
     modsha_init(&sha);
     for (;;) {
         if (!ReadFile(h, buf, sizeof buf, &got, NULL)) {
-            /* not a verdict on the file: no row is left to say it next time */
             CloseHandle(h);
             if (keep && a == &s_arc[s_narc - 1]) s_narc--;
-            return 0;
+            return -1;
         }
         if (!got) break;
         modsha_add(&sha, buf, got);
@@ -435,6 +446,10 @@ static int __stdcall mount_filtered(const char* name, int flag)
             box_and_exit();
         }
         tagpu_logf("modload: mounted mods\\%s\\%s.hpi and its originals", s_id, s_id);
+        if (!exists(ESSENTIAL_ARCHIVE)) {
+            refuse("this folder has no %s, so this copy of the game cannot run mods", ESSENTIAL_ARCHIVE);
+            box_and_exit();
+        }
     }
     for (p = name; *p; p++) if (*p == '\\' || *p == '/' || *p == ':') base = p + 1;
     if (lstrcmpiA(base, IMPURE_UFO)) {
@@ -442,12 +457,16 @@ static int __stdcall mount_filtered(const char* name, int flag)
         static int nseen;
         const char* why = NULL;
         if (tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
-        else if (!is_original_archive(name)) why = "it is no original archive of the game";
-        /* Every recipe and every mod needs this one. Without it the game fails later, for a reason no box names: a retail
-           edition whose archives have other hashes than the ones the pack was built from. */
-        if (why && !lstrcmpiA(base, ESSENTIAL_ARCHIVE) && !tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) {
-            refuse("this folder's %s is not one Impure knows, so this copy of the game cannot run mods", base);
-            box_and_exit();
+        else {
+            int original = is_original_archive(name);
+            if (original <= 0) why = original < 0 ? "it could not be read" : "it is no original archive of the game";
+            /* Every mod needs this one. Without it the game fails later, for a reason no box names: a retail edition whose
+               archives have other hashes than the ones the pack was built from. */
+            if (why && !lstrcmpiA(base, ESSENTIAL_ARCHIVE)) {
+                refuse(original < 0 ? "this folder's %s could not be read"
+                                    : "this folder's %s is not one Impure knows, so this copy of the game cannot run mods", base);
+                box_and_exit();
+            }
         }
         if (why) {
             int i;
@@ -492,13 +511,24 @@ int tagpu_modload_loose_closed(const char* path)
     return 0;
 }
 
+/* The log names each once, up to a bound. These filters run on more than one thread and every InitTAHPIAry lists again; a race
+   costs a repeated line. */
 #define NOTED_MAX 32
-static int s_noted;                     /* a bound on the log's lines; these filters run on more than one thread */
+static char s_noted[NOTED_MAX][64];
+static int s_nnoted;
+
+static int note_once(const char* path)
+{
+    int i;
+    for (i = 0; i < s_nnoted; i++) if (!lstrcmpiA(s_noted[i], path)) return 0;
+    if (s_nnoted >= NOTED_MAX) return 0;
+    lstrcpynA(s_noted[s_nnoted++], path, sizeof s_noted[0]);
+    return 1;
+}
 
 static void note_closed(const char* path)
 {
-    if (s_noted < NOTED_MAX && exists(path)) {
-        s_noted++;
+    if (exists(path) && note_once(path)) {
         tagpu_logf("modload: the loose file %s is not read under a mod", path);
     }
 }
@@ -512,18 +542,14 @@ static void* __cdecl open_filtered(const char* path, const char* mode)
     return ((void* (__cdecl*)(const char*, const char*))VA_FOPEN)(path, mode);
 }
 
-/* Whether a listing hid anything, so the log can name it. Only while the log still takes names: a closed folder is
-   usually absent, and the listing is the engine's own cost once over. */
+/* Whether a listing hid anything, so the log can name it: the listing's own cost once over, on a folder usually absent. */
 static void note_listing(const char* spec)
 {
     WIN32_FIND_DATAA fd;
-    HANDLE h;
-    if (s_noted >= NOTED_MAX) return;
-    h = FindFirstFileA(spec, &fd);
+    HANDLE h = FindFirstFileA(spec, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     FindClose(h);
-    s_noted++;
-    tagpu_logf("modload: the loose files %s are not listed under a mod", spec);
+    if (note_once(spec)) tagpu_logf("modload: the loose files %s are not listed under a mod", spec);
 }
 
 static long __cdecl find_filtered(const char* spec, void* data)

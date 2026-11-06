@@ -598,10 +598,11 @@ the copy is `0x4E4760`, `0x4BDE72..0x4BDE98`), and compares the two inline
 - **The mounter `0x4BE0B0(name, flag)`** (stdcall, `ret 8`, entered by `sub esp, 0x104`, the six bytes
     [mods](../modules/mods.html) detours; no mod's table touches them):
   - It resolves the name with `GetFullPathNameA` (`0x4BE0D7`), into 0x100 bytes (`push 0x100` at
-    `0x4BE0D1`), and skips one already mounted, compared case-insensitively (`0x4BE0FB`). A return of 0, for
-    that or a file that does not open, does not count toward `*.HPI`'s ten (`0x41D5D5`).
+    `0x4BE0D1`, the result ignored), and skips one already mounted, compared case-insensitively (`0x4BE0FB`). A return of 0, for
+    that or a file that does not open, does not count toward `*.HPI`'s ten (`0x41D5D5`). The open `0x4BDD70` keeps the
+    path at the handle's `+0x14` in 0x104 bytes (`0x4BDDC1`), and the prune re-opens from it (`0x4BE1B5`).
   - Otherwise it opens the archive (`0x4BE11B`), reallocates the list to `count + 1` entries on
-    every mount (`0x4BE140..0x4BE159`) and appends it.
+    every mount (`0x4BE140..0x4BE159`) and appends it (`0x4BE162`); it has no branch on the flag, which goes to the open.
 - **The prune `0x4BE180`** re-opens each entry whose `FILE*` is NULL, and removes one that fails,
   shifting the rest down without reallocating.
 - **Writers.** `0x4BE270`, an unmount by handle, has no caller and no stored pointer. The list is
@@ -725,7 +726,9 @@ fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), nev
 the bank count to **count − 1** (`0x42A480`), skips `logos.GAF` (`0x503704`, `_stricmp` at
 `0x42A4CD`) and loads every other entry through the builder and `0x4B8C60`. With no `logos.GAF` in
 the folder the last GAF loaded is never searched. `logos.GAF` is a second bank, `textures\logos`
-(`0x504734`) loaded once at init by `0x4318C0` (`0x491486`). MEASURED: 10 bank GAFs on retail.
+(`0x504734`) loaded once at init by `0x4318C0` (`0x491486`). MEASURED: 10 bank GAFs on retail. The bank holds the files in
+listing order (`0x42A4AD`, `0x42A504`) and the binder searches it from index 0 (`0x42A1A8..0x42A1C9`), `0x4B8D40` returning a
+file's first sequence of that name, so of two GAFs holding one name the first listed wins [DISASSEMBLED 2026-11-06].
 
 **The GAF in memory, `0x4B8C60`**: the file rebased in place, nothing decoded. The sequence count
 is the **signed** i16 at `+4`; each sequence's frame entries (`+0x28`, stride 8) have only their

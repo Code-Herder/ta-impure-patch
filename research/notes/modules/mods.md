@@ -41,23 +41,23 @@ of stock and every known exe, which no two exes share. An exe with any other byt
 
 ## What refuses
 
-The module acts only in the game: an exe without the engine's three sites in its file (retail's `TAE.EXE`
-imports DirectDraw too) leaves `mod=` alone. In the game, each refusal goes through `tagpu_refuse`: the box,
+The module acts only in the game: an exe that is not named `TotalA.exe` and lacks the engine's three sites in its file leaves
+`mod=` alone, which is what any tool loading a `ddraw.dll` from this folder gets. Otherwise each refusal goes through `tagpu_refuse`: the box,
 `log\\startup-failure.txt`, exit. `mod=` is cleared and the store flushed first, so a player who kills the box
 still gets the folder's own game next time.
 
 At the entry point, before any game code:
 - a name that is not a mod's, or one the catalog does not have;
 - an exe no key knows, or a `dplayx.dll` holding `[Settings]` that no key knows;
-- `mods\\<id>\\<id>.hpi` or `<id>.originals.hpi` missing, or a folder so deep the package's path passes the
-  mounter's 0x100 bytes (`0x4BE0D1`), which would lose it at the next mount pass;
+- `mods\\<id>\\<id>.hpi` or `<id>.originals.hpi` missing, or a folder so deep the package's path passes the smaller of the
+  mounter's two buffers (0x100 at `0x4BE0D1`, 0x104 at `0x4BDDC1`);
 - the hash, which no known exe reaches: it guards against a pack that disagrees with itself;
 - a build with no pack, no memory for the image, or a write that fails.
 
 At the first mount, on the game thread:
 - a package that does not open;
-- a `totala1.hpi` whose hash is not an original's: another edition of the game. Every other archive that is
-  not original is only left out and named in the log.
+- no `totala1.hpi`, one that cannot be read, or one whose hash is not an original's: another edition of the game. Every other
+  archive that is not original is only left out and named in the log.
 
 ## What the game sees
 
@@ -68,24 +68,32 @@ At the first mount, on the game thread:
 which is what the engine sees for one already mounted, so it does not count toward `*.HPI`'s ten.
 Archive hashes are cached in `mods\\archives.cache` by name, size and date. The candidates in a retail folder
 total about 900 MB, hashed once on the game thread, and `*.HPI`'s ten-a-call means some of it falls at a later
-`InitTAHPIAry` call: a menu click or Start. A full table or a long name costs a hash on every start, and a read
-error stores nothing.
+`InitTAHPIAry` call: a menu click or Start. A full table or a long name costs a hash on every start, and a file that
+cannot be read stores nothing.
 
 **The loose step.** The `fopen` call in `0x4BB2E0` and the `_findfirst` call in `0x4BC4B0` are retargeted. A
 read or a listing whose first path component is a game-data folder finds nothing; everything else goes to
 the CRT, so saves still work. A game-data folder is one of modpack's `GAME_DIRS` or a name the image gives one
 (`FOLDER_NAMES`: `ZUnits`, `guiM`, `weaponE`, `zi`), with a `-<language>` suffix ignored. The log names each refused
-file or listing that exists. The wiki's reader (`tagpu_vfs_close_loose`) has the same rule. A `palettes\\` folder
-without the mod's `PALETTE.ALP` makes the engine rebuild that table at each start, and the result is correct.
+file or listing that exists, once, up to 32. The wiki's reader (`tagpu_vfs_close_loose`) has the same rule. A `palettes\\`
+folder without the mod's `PALETTE.ALP` makes the engine rebuild that table and write it at each start
+(`0x42E165`, `0x42E1BF`); the rebuilt table is not measured against the file.
 
-**A file's place.** Every path has one answer, and the package reproduces it. Where the mount order alone decides,
-one archive cannot keep the drop-in folder's order: LoadFeature takes a section from the first TDF enumerated that
-holds it, and mods define a section twice with different values. MEASURED 2026-11-06: 1 section in Mayhem, 2 in ProTA,
-22 in TA Zero, 33 in Twilight, 0 in Escalation. `modpack.py packages` copies those sections, as the drop-in folder reads
-them, into `features\\!!section-winners.tdf`, which the managed enumeration reaches first: the package mounts first, the
-name sorts first in its folder, and the walk takes a folder's entries in order, recursing at once. Weapons, where a later
-section with one ID overwrites, and build-menu cells come out the same whichever file wins, so nothing is needed for them;
-`modpack.py verify` checks all three over each image's real folders.
+**A file's place.** Every path has one answer, and the package reproduces it. But a name inside a file can depend on where
+the file lies in the mount, and one archive cannot keep the drop-in folder's order. Two readers take the first file listed
+that holds a name: a feature section (LoadFeature, over the recursive walk) and a texture's sequence (the bank filled in
+listing order from `textures\\*.GAF`, searched from index 0). Mods do hold a name twice with different values: MEASURED
+2026-11-06, the first holder changes for 1 section in Mayhem, 2 in ProTA, 22 in TA Zero, 33 in Twilight and 0 in Escalation,
+and for one texture, Twilight's `wheel`, which 22 models name. `modpack.py packages` (`settle_places`) keeps the drop-in's winner
+without shipping a byte of the original game:
+- a copy that comes first in the package is **renamed where it stands**, `[name~]` in a TDF and `name~` in a GAF's entry, since
+  nothing asks for the new name. Those files are the mod's own. Names renamed: Escalation 0, Mayhem 0, ProTA 1, TA Zero 22, Twilight 34;
+- a winner that is an original file behind another original **goes in the recipe**, ahead of retail: `features\\urban\\cars.tdf`
+  in Mayhem and ProTA, whose archives list `cars2.tdf` the other way round from the mods' own.
+
+Weapons, where a later section with one ID overwrites, and build-menu cells come out the same whichever file wins, so they
+need nothing. `modpack.py verify` reads all four by the engine's grammar over each image's real folders, and undoes each rename
+to prove the file otherwise equals the drop-in's.
 
 **The replays** name a managed mod as they name its drop-in folder, through `mod_by_archive`: the first archive's
 `<id>.hpi`. Twilight has no archive pattern and is retail by name on both routes, told apart by its version text.
@@ -100,8 +108,8 @@ beside the exe when none is there, and never overwritten.
 feature section, weapon ID and build-menu cell the same. `tools/compat/tacompat.py wine` then has three kinds of managed
 row (the `ta-compat-check` skill):
 
-- **`managed-<id>`**, in the default list: installed into a clean stock folder, and compared with the drop-in row of the
-  same run. At the menu: every unit type and the FBI's key at `+0x13E`. In a level: each type's ID, the weapon and feature
+- **`managed-<id>`**, in the default list, needing the fight and the network game (with `--battle 0` or `--mp 0` it fails, as
+  nothing was compared): installed into a clean stock folder, and compared with the drop-in row of the same run. At the menu: every unit type and the FBI's key at `+0x13E`. In a level: each type's ID, the weapon and feature
   tables by the recording's fingerprints, and each feature's name, metal, energy and dead chain. In a network game whose other
   player is the drop-in folder: every type's `CRC_all`, which the handshake alone fills, so the row fails if none is
   non-zero. Decoy unit files lie in the folder, which would remove the unit if the loose step were open, and the log must
@@ -122,3 +130,6 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - The originals list is one install's hashes. A folder from another edition whose `totala1.hpi` matches, and whose other
   archives do not, loses those archives with only a log line.
 - The mount and the loose step are not yet part of any recording's identity; the fingerprint is a later landing.
+- The shell's own orders are not compared: the map list (`Maps\\*.ota`, `0x434CE5`) and the unit types at the menu, whose IDs
+  only mean something in a level. The level's are compared.
+- A game exe of another patch level, named `TotalA.exe`, gets the box; one renamed gets the log line and its own game.

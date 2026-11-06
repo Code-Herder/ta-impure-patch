@@ -200,10 +200,11 @@ What follows from those rules:
   drop-in folder over every path by the engine's rules (`tools/wiki/tavfs.py`), over what the retail
   archives really hold, and they agree in bytes and in each file's case: 8293 paths in Escalation, 7539 in
   Mayhem, 6064 in ProTA, 8551 in TA Zero, 8740 in Twilight.
-- **Where a file's place decides, the package keeps the drop-in's answer.** A feature section comes from the first TDF
-  enumerated, and one archive cannot keep the folder's order, so the sections that would change go in a TDF the managed
-  enumeration reaches first ([the module](modules/mods.html), *A file's place*). `modpack.py verify` checks them, the weapon
-  IDs and the build-menu cells; the managed column compares the result in the game.
+- **Where a file's place decides, the package keeps the drop-in's answer.** A feature section and a texture sequence come from
+  the first file listed that holds them, and one archive cannot keep the folder's order. A copy that would come first is renamed
+  where it stands in the mod's file, and an original file that must come first goes in the recipe, so no original text is
+  shipped ([the module](modules/mods.html), *A file's place*). `modpack.py verify` checks them, the weapon IDs and the build-menu
+  cells; the managed column compares the result in the game.
 - **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
   It is closed by folder: a read whose first path component is one of the folders modpack treats as
   game data (`GAME_DIRS`) or a name the image gives one finds no loose file, so saved games and everything else stay open. Retail's

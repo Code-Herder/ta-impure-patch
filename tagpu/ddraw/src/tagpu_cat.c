@@ -335,8 +335,9 @@ static void write_units(const TAGPU_FRAME* f)
     }
 
     fprintf(out, "],\"count\":%u", emitted);
-    {
-        /* the recording's own fingerprints of what a level loaded, position by position: which file won a duplicate ID */
+    if (tagpu_packet_pub_level_open()) {
+        /* The recording's own fingerprints of what a level loaded, position by position: which file won a duplicate ID. Only in
+           play: the loader thread reallocates the feature defs during a load (engine/map.md). */
         unsigned nw, hw, w, h, nf, hf;
         tagpu_rec_weapons_print(&nw, &hw);
         tagpu_rec_features_print(ta, &w, &h, &nf, &hf);

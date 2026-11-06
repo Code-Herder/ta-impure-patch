@@ -195,6 +195,33 @@ class Rules(unittest.TestCase):
             self.assertTrue(self.run_on(j, "amod").startswith("-1 catalog: amod:"), self.run_on(j, "amod"))
 
 
+class Places(unittest.TestCase):
+    """What a file's place decides: the TDF grammar, and that a rename undoes to the same bytes."""
+
+    def test_comments_and_end_of_text_hide_sections(self):
+        text = b"[a]\r\n{\r\nx=1;\r\n}\r\n/*\r\n[hidden]\r\n{\r\n}\r\n*/\r\n[b]\r\n{\r\n[sub]\r\n{\r\n}\r\n}\r\n}\r\n[after]\r\n{\r\n}"
+        self.assertEqual([n for n, _ in m.tdf_sections(text)], ["a", "b"])
+        self.assertEqual([n for n, _ in m.tdf_sections(b"[a]{x=1;}\0[b]{}")], ["a"])
+
+    def test_a_tdf_rename_undoes(self):
+        text = b"[a]\r\n{\r\nx=1;\r\n}\r\n[b]\r\n{\r\ny=[2];\r\n}\r\n"
+        done = m.rename_tdf(text, {"b"})
+        self.assertEqual([n for n, _ in m.tdf_sections(done)], ["a", "b~"])
+        self.assertEqual(m.undo_rename("x.tdf", done), text)
+
+    def test_a_gaf_rename_undoes(self):
+        name = b"wheel".ljust(32, b"\0")
+        gaf = struct.pack("<III", 0x00010100, 1, 0) + struct.pack("<I", 16) + struct.pack("<HHI", 1, 0, 0) + name + b"frames"
+        done = m.rename_gaf(gaf, {"wheel"})
+        self.assertEqual([n for n, _ in m.gaf_entries(done)], ["wheel~"])
+        self.assertEqual(m.undo_rename("x.gaf", done), gaf)
+
+    def test_a_gaf_that_does_not_fit_has_no_names(self):
+        self.assertEqual(m.gaf_entries(b"GAF"), [])
+        self.assertEqual(m.gaf_entries(struct.pack("<III", 0x00010100, 1000, 0)), [])
+        self.assertEqual(m.gaf_entries(struct.pack("<IIII", 0x00010100, 1, 0, 9999)), [])
+
+
 class CPack(unittest.TestCase):
     """tagpu_modpak.c reads what pack_patches writes, refuses a cut or lengthened pack, and its SHA-256 is SHA-256."""
     MAIN = (b'#include <stdio.h>\n#include <stdlib.h>\n#include "tagpu_modpak.h"\n'
