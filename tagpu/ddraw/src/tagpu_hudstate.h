@@ -25,6 +25,7 @@ int  tagpu_hudstate_on(void);
    be built or the device failed it, its layout did not build: `tagpu_hudstate_on` answers 0 from
    now on. Render thread; published with a full barrier. */
 void tagpu_hudstate_refuse(const char* why);
+void tagpu_hudstate_forgive(void);
 
 /* What the HUD shows for the level in play, the fill's own test, while it is on: the live
    rewind's controls while a rewind owns the level or one could open (a live, recorded,

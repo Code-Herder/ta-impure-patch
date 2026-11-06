@@ -78,14 +78,12 @@
 #define tagpu_vk_terr_ab_frame          tagpu_vkw_terr_ab_frame
 #define tagpu_vk_terr_down              tagpu_vkw_terr_down
 #define tagpu_vk_terr_down_owed         tagpu_vkw_terr_down_owed
-#define tagpu_vk_terr_down_paid         tagpu_vkw_terr_down_paid
 #define tagpu_vk_terr_prepare           tagpu_vkw_terr_prepare
 #define tagpu_vk_terr_record            tagpu_vkw_terr_record
 
 #define tagpu_vk_feat_ab_frame          tagpu_vkw_feat_ab_frame
 #define tagpu_vk_feat_down              tagpu_vkw_feat_down
 #define tagpu_vk_feat_down_owed         tagpu_vkw_feat_down_owed
-#define tagpu_vk_feat_down_paid         tagpu_vkw_feat_down_paid
 #define tagpu_vk_feat_prepare           tagpu_vkw_feat_prepare
 #define tagpu_vk_feat_record            tagpu_vkw_feat_record
 
@@ -94,7 +92,6 @@
 #define tagpu_vk_unit_casters           tagpu_vkw_unit_casters
 #define tagpu_vk_unit_down              tagpu_vkw_unit_down
 #define tagpu_vk_unit_down_owed         tagpu_vkw_unit_down_owed
-#define tagpu_vk_unit_down_paid         tagpu_vkw_unit_down_paid
 #define tagpu_vk_unit_fx_count          tagpu_vkw_unit_fx_count
 #define tagpu_vk_unit_fx_ready          tagpu_vkw_unit_fx_ready
 #define tagpu_vk_unit_prepare           tagpu_vkw_unit_prepare

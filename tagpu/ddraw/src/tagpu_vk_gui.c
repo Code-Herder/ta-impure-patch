@@ -214,7 +214,7 @@ typedef struct {
 #define SDSET_CURS   1
 #define SDSET_MM     2
 
-static int              s_state, s_downOwed, s_downPaying;
+static int              s_state, s_downOwed;
 static int              s_drawThis, s_abFrame;
 static int              s_saidColour, s_saidSharp, s_saidRoom;
 /* once per stretch without a restored atlas: the evidence that the indexed
@@ -2461,6 +2461,33 @@ static int tint_table(unsigned char* dst, const unsigned char* shade, const unsi
     return 1;
 }
 
+/* THE LEVER THAT STANDS IN FOR THE DRIVER'S NO. `tagpu_passrefuse.on` refuses this pass its
+   resources: once, consuming the file, or on every frame when the file says `keep`. A file the
+   test can write mid-game, because the question is what a live session does, and filling a shared
+   GPU to get the real refusal would take it from everything else on the machine. Every pass the
+   picture cannot do without takes the same road from here (tagpu_vk.c, the seam). Polled twice a
+   second, on the render thread. */
+static int refuse_lever(const TAGPU_VKPASS* d)
+{
+    static DWORD s_next;
+    static char s_text[16];
+    DWORD now = GetTickCount();
+    int here = s_text[0] != 0;
+    if ((LONG)(now - s_next) >= 0) {
+        FILE* f = fopen("tagpu_passrefuse.on", "rb");
+        size_t n = 0;
+        here = f != NULL;
+        if (f) { n = fread(s_text + 1, 1, sizeof s_text - 2, f); fclose(f); }
+        s_text[0] = here ? '+' : 0;
+        s_text[n + 1] = 0;
+        s_next = now + 500;
+    }
+    if (!here) return 0;
+    plog(d, "gui: tagpu_passrefuse.on refuses this pass its resources");
+    if (!strstr(s_text, "keep")) { DeleteFileA("tagpu_passrefuse.on"); s_text[0] = 0; }
+    return 1;
+}
+
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
    each one stands the whole frame down rather than drawing part of it: a twin
    store is cumulative, so a partially applied frame is not a smaller picture,
@@ -2531,9 +2558,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d)) { tagpu_vk_gui_down(d); s_state = ST_REFUSED; return 0; }
+        if (!build(d)) { tagpu_vk_gui_down(d); s_state = ST_REFUSED; s_downOwed = 1; return 0; }
         s_state = ST_READY;
     }
+    if (refuse_lever(d)) goto refuse;
 
     /* ---- WHAT THIS PASS DOES NOT CARRY, AND WHY IT DOES NOT RETURN HERE.
        These three gate the COMPOSITE and nothing else. The op stream still has
@@ -3985,10 +4013,10 @@ refuse:
     /* NOTHING IS DESTROYED HERE. This is the middle of a frame: `cb` already
        names this pass's objects and is submitted whether it draws or not, and
        every OTHER slot's submit is still executing. The pass stops drawing and
-       OWES a teardown; the seam pays it behind its vkDeviceWaitIdle. */
+       OWES a teardown; the seam brings the lane down, behind vk_down's vkDeviceWaitIdle. */
     if (rpOpen) vkCmdEndRenderPass(cb);
     plog(d, "gui: slot %u would not take this frame's resources - the pass "
-            "stops drawing and the seam tears it down", (unsigned)slot);
+            "stops drawing and the lane comes down and back", (unsigned)slot);
     s_state = ST_REFUSED;
     s_downOwed = 1;
     s_drawThis = 0; s_abFrame = 0;
@@ -4192,9 +4220,6 @@ int tagpu_vk_gui_ab_frame(void)
 void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
 {
     uint32_t i;
-    /* whether this teardown is the one the pass asked for -- the lane's
-       owed-teardown protocol, unchanged from every other pass */
-    int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0;
     memset(s_layDrew, 0, sizeof s_layDrew);
@@ -4204,7 +4229,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     tagpu_gui_mirror_want(0);
 
     if (!d->dev || !vkDestroyPipeline) {
-        s_state = owed ? ST_REFUSED : ST_UNBUILT;
+        s_state = ST_UNBUILT;
         s_ntw = 0;
         /* forgotten like the store's job in `pic_forget`: with no device the
            restorer forgets its job table, and a pointer kept would alias */
@@ -4291,17 +4316,10 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_sampMin) { vkDestroySampler(d->dev, s_sampMin, NULL); s_sampMin = VK_NULL_HANDLE; }
     memset(s_setView, 0, sizeof s_setView);
     memset(s_setView2, 0, sizeof s_setView2);
-    /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
-       cleared lever must be able to come back. The owed teardown is the one
-       exception. */
-    s_state = owed ? ST_REFUSED : ST_UNBUILT;
+    /* ST_UNBUILT, always: this runs behind the device's drain, and a pass refused its
+       resources comes back with the lane that replaces this one (tagpu_vk.c, the seam). */
+    s_state = ST_UNBUILT;
 }
 
 int tagpu_vk_gui_down_owed(void) { return s_downOwed; }
 
-void tagpu_vk_gui_down_paid(const TAGPU_VKPASS* d)
-{
-    s_downPaying = 1;
-    tagpu_vk_gui_down(d);
-    s_downPaying = 0;
-}

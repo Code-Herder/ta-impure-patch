@@ -1483,6 +1483,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     int i;
+    tagpu_hudstate_forgive();
     if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
     for (i = 0; i < TAGPU_VK_SLOTS; i++)
         if (s_stage[i].buf) tagpu_vk_stage_drop(d, &s_stage[i]);

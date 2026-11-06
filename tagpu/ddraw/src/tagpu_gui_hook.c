@@ -145,6 +145,9 @@ typedef struct SURF {
     unsigned changed, explained, unexplained;   /* running totals            */
     int bl, bt, br, bb;               /* worst unexplained box last flip     */
     int seeded;                       /* a PK_SEED was published for it      */
+    int lost;                         /* a reset emptied a twin that held drawn pixels:
+                                         they may not cross, so a copy out of it has
+                                         nothing to carry */
     int reseed;                       /* a snapshot's seed is owed again: set by
                                          `repaint_arm`, cleared by a seed and by
                                          `snap_free`. Apart from `seeded`, which
@@ -2765,6 +2768,7 @@ static void publish_window(unsigned flipSurf)
            first-sight tables two lines below are re-armed for the same
            reason. */
         for (i = 0; i < s_nsurf; i++) {
+            s_surf[i].lost = s_surf[i].seeded && !s_surf[i].isAsset && !s_surf[i].snap;
             s_surf[i].seeded = 0;
             s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0; s_surf[i].assetTokPrev = 0;
         }
@@ -3457,6 +3461,13 @@ static void publish_window(unsigned flipSurf)
                retires an offer. */
             if (src && src->isAsset && !src->seeded) continue;
             pixWhy = !src ? (op->srcGone ? PIX_COPY_FREED : PIX_COPY_UNTWINNED) : PIX_COPY_UNSEEDED;
+            /* THE ORDERS PANEL'S SAVE-UNDER IS THE COPY THAT MATTERS HERE: a reset while the panel
+               is open empties it, nothing draws into it again, and its restore on a deselect has
+               nothing to carry, so the panel would stay on screen over the empty emblem. The
+               emblem is our own op on our own twin (`panel_emit`), so it crosses where the save-under's
+               composed pixels may not, and it lands in the panel's place. Repainting it for a
+               copy that restored something else costs one op and changes no pixel. */
+            if (src && src->lost && s->base == s_frameBase) s_panelPend = 1;
         }
         /* everything else — and a copy from a source we do not twin — is its
            box's bytes as they stand now: never a retired surface's */

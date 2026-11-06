@@ -50,7 +50,6 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
 static int s_downOwed;
-static int s_downPaying;
 /* WHAT THIS PASS HAS ACTUALLY DONE, reported periodically rather than latched
    once: the two upload counts are the evidence that the surface and the palette
    are gated SEPARATELY, which a one-shot line could not show. A fade moves
@@ -266,7 +265,7 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d)) { tagpu_vk_surf_down(d); s_state = ST_REFUSED; return 0; }
+        if (!build(d)) { tagpu_vk_surf_down(d); s_state = ST_REFUSED; s_downOwed = 1; return 0; }
         s_state = ST_READY;
     }
 
@@ -290,7 +289,7 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s = &s_slot[slot];
     if (!slot_size(d, s, sf.w, sf.h)) {
         plog(d, "surf: slot %u would not take a %dx%d surface - the pass stops "
-                "drawing and the seam tears it down", (unsigned)slot, sf.w, sf.h);
+                "drawing and the lane comes down and back", (unsigned)slot, sf.w, sf.h);
         s_state = ST_REFUSED;
         s_downOwed = 1;
         return 0;
@@ -431,16 +430,9 @@ void tagpu_vk_surf_down(const TAGPU_VKPASS* d)
     if (!d || !d->dev) return;
     if (!vkDestroyImageView) return;        /* never resolved: nothing was made */
     for (i = 0; i < TAGPU_VK_SLOTS; i++) slot_free(d, &s_slot[i]);
-    if (s_state != ST_REFUSED) s_state = ST_UNBUILT;
+    s_state = ST_UNBUILT;
     s_downOwed = 0;
-    s_downPaying = 0;
 }
 
 int tagpu_vk_surf_down_owed(void) { return s_downOwed; }
 
-void tagpu_vk_surf_down_paid(const TAGPU_VKPASS* d)
-{
-    if (!s_downOwed || s_downPaying) return;
-    s_downPaying = 1;
-    tagpu_vk_surf_down(d);
-}

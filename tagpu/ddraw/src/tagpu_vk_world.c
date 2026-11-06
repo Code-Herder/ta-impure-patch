@@ -1280,6 +1280,9 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
        next frame that needs it. */
     direct_free(d);
     if (s_dcState != ST_REFUSED) s_dcState = ST_UNBUILT;
+    /* A refused target's latch holds for this device and this swapchain: `prepare` would
+       only ask again every frame. What replaces them may well have the memory. */
+    s_state = ST_UNBUILT;
 }
 
 

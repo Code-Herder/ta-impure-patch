@@ -33,6 +33,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
 #include "tagpu_vk.h"
+#include "tagpu_log.h"
 #include "tagpu_settings.h"
 #include "tagpu_ftime.h"
 #include "tagpu_native.h"
@@ -192,8 +193,8 @@ DWORD WINAPI vk_render_main(void)
         if (tagpu_vk_failed()) {
             if (!came_up) { gave_up = 1; break; }
             if (retries >= VK_RETRY_BUDGET) {
-                TRACE("     Vulkan lane failed %d times after coming up - giving up\n",
-                      retries);
+                tagpu_logf("vk: the lane failed %d times after coming up - the session goes to GDI",
+                           retries);
                 gave_up = 1;
                 break;
             }

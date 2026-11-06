@@ -45,6 +45,13 @@ void tagpu_hudstate_refuse(const char* why)
                    "game no rewind button this session", why);
 }
 
+/* a teardown of the HUD's pass (tagpu_vk_hud_down): the device that refused it, or the swapchain
+   it was sized for, is gone. A cause that is still there refuses again on the next frame. */
+void tagpu_hudstate_forgive(void)
+{
+    InterlockedExchange(&s_refused, 0);
+}
+
 /* THE LIVE HUD FROM THE ARM: a fork armed for the next capture point makes the level a live
    recorded skirmish from the arm on, since only that capture point (recorded, or refused with its
    line) or the level's end clears the arm (tagpu_rec_fork_armed). So the live HUD, and the toast

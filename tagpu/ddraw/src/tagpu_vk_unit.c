@@ -233,7 +233,6 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
 static int s_downOwed;                     /* a teardown the seam still owes us */
-static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored, s_saidNoMirror, s_saidShadow, s_saidOther;
@@ -2471,7 +2470,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     s_fxHold = 1;
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d)) { tagpu_vk_unit_down(d); s_state = ST_REFUSED; return 0; }
+        if (!build(d)) { tagpu_vk_unit_down(d); s_state = ST_REFUSED; s_downOwed = 1; return 0; }
         s_state = ST_READY;
     }
 
@@ -3365,11 +3364,11 @@ refuse:
        which this function has already recorded uploads into, is submitted
        whether this pass draws or not. Destroying any of it from here is a
        use-after-free on the FIRST refusal, not a rare one. So the pass stops
-       drawing at once and OWES a teardown; the seam pays it at the top of a
+       drawing at once and OWES a teardown; the seam brings the lane down at the top of a
        later frame, behind the vkDeviceWaitIdle that makes "no submit names
        these objects" a fact rather than a hope. */
     plog(d, "unit: slot %u would not take this frame's resources - the pass "
-            "stops drawing and the seam tears it down", (unsigned)slot);
+            "stops drawing and the lane comes down and back", (unsigned)slot);
     refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
@@ -3395,7 +3394,7 @@ static void atlas_owed(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     if (!tagpu_posedraw_atlas_hand(&h) || !h.pal || h.atlasDim != s_atDim) return;
     if (base_upload(d, cb, &s_slot[slot], &h) < 0) {
         plog(d, "unit: the owed atlas upload failed on the device - the pass stops "
-                "drawing and the seam tears it down");
+                "drawing and the lane comes down and back");
         refuse_job(d);
         s_state = ST_REFUSED;
         s_downOwed = 1;
@@ -3884,13 +3883,6 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
 {
     uint32_t i;
     int k;
-    /* WHETHER THIS TEARDOWN IS THE ONE THE PASS ASKED FOR. Only the seam's
-       `_down_paid` sets it, and only after its vkDeviceWaitIdle -- so a
-       `vk_down` or a `vk_resize` that happens to run while a debt is
-       outstanding tears the pass down and leaves it coming back ST_UNBUILT
-       rather than latched at ST_REFUSED by the back door. The debt is
-       discharged by every teardown; the VERDICT is not. */
-    int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0; s_ndraw = 0; s_ncast = 0;
     s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
@@ -3898,9 +3890,8 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     s_fxShort = 0; s_fxShortOk = 0; s_fxShortU = s_fxShortP = 0; s_fxShortN = 0;
     s_shadowOn = 0;
 
-    /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. */
     if (!d->dev || !vkDestroyPipeline) {
-        s_state = owed ? ST_REFUSED : ST_UNBUILT;
+        s_state = ST_UNBUILT;
         return;
     }
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
@@ -3958,20 +3949,10 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     if (s_sampCmp) { vkDestroySampler(d->dev, s_sampCmp, NULL); s_sampCmp = VK_NULL_HANDLE; }
     if (s_sampTwin) { vkDestroySampler(d->dev, s_sampTwin, NULL); s_sampTwin = VK_NULL_HANDLE; }
     s_cmpLinear = 0;
-    /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
-       cleared lever must be able to come back. The one exception is the
-       teardown this pass asked for. */
-    s_state = owed ? ST_REFUSED : ST_UNBUILT;
+    /* ST_UNBUILT, always: this runs behind the device's drain, and a pass refused its
+       resources comes back with the lane that replaces this one (tagpu_vk.c, the seam). */
+    s_state = ST_UNBUILT;
 }
 
 int tagpu_vk_unit_down_owed(void) { return s_downOwed; }
 
-/* THE SEAM'S OWN ENTRY POINT, called only after its vkDeviceWaitIdle. It is
-   what makes `_down`'s ST_REFUSED latch apply to the owed teardown and to
-   nothing else. */
-void tagpu_vk_unit_down_paid(const TAGPU_VKPASS* d)
-{
-    s_downPaying = 1;
-    tagpu_vk_unit_down(d);          /* clears s_downOwed itself */
-    s_downPaying = 0;
-}

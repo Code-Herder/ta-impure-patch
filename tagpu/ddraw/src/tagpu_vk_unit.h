@@ -144,10 +144,11 @@ int  tagpu_vk_unit_ab_frame(void);
 void tagpu_vk_unit_down(const TAGPU_VKPASS* d);
 
 /* 1 while the pass has stopped drawing mid-frame because the device would not
-   give it this frame's resources, and is waiting for the seam to tear it down
-   behind a vkDeviceWaitIdle. The contract, and why `_down_paid` is separate
-   from `_down`, is tagpu_vk_scaffold.h's at length. */
+   give it this frame's resources. The picture has a hole without this pass, so
+   the seam brings the whole lane down at the top of the next frame and the retry
+   rebuilds it (render_vk.c's budget, then GDI). The pass destroys nothing itself:
+   only its own slot's fence has been waited on, and the command buffer of the
+   frame in hand already names its objects. */
 int  tagpu_vk_unit_down_owed(void);
-void tagpu_vk_unit_down_paid(const TAGPU_VKPASS* d);
 
 #endif
