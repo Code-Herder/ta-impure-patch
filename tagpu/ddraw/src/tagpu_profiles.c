@@ -333,7 +333,7 @@ static int write_choice(const char* path, const char* key, int value, char* why,
         if (next) *next++ = 0;
         s = line;
         while (*s == ' ' || *s == '\t') s++;
-        if (!strncmp(s, key, klen) && (s[klen] == '=' || s[klen] == ' ' || s[klen] == '\t')) continue;
+        if (!_strnicmp(s, key, klen) && (s[klen] == '=' || s[klen] == ' ' || s[klen] == '\t')) continue;
         n = strlen(line);
         if (!n && !next) break;
         if ((size_t)at + n + 2 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
@@ -406,6 +406,7 @@ static void flush(int final)
 }
 
 void tagpu_profiles_flush(void) { flush(0); }
+int  tagpu_profiles_saved(void) { return InterlockedCompareExchange(&s_dirty, 0, 0) == 0; }
 void tagpu_profiles_final(void) { flush(1); }
 
 /* A hand-edited choice of an option the mod forbids has no effect, and the log says so once. */
@@ -521,7 +522,7 @@ const char* tagpu_profiles_name(void)
 
 static void path_of_id(const char* id, char* path, size_t cap)
 {
-    snprintf(path, cap, "profiles\\%s.ini", id);
+    snprintf(path, cap, "profiles/%s.ini", id);     /* s_path's spelling: the running mod is told by comparing them */
 }
 
 int tagpu_profiles_choice_of(const char* id, int which)

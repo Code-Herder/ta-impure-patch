@@ -59,6 +59,8 @@ static int      s_running;                      /* the mod this process runs */
 static int      s_rowMod[MODS_MAXROW];
 static int      s_hideChanged;                  /* the running mod's archives differ from what it mounted */
 static char     s_held[MODS_KEY];
+static unsigned s_heldGen;                      /* the page's generation at the press of s_held */
+static unsigned s_shapeHash, s_shapeGen = 1;
 static unsigned s_owed;
 static uint8_t  s_keyOwed[256];
 static int      s_drag, s_dragY0;
@@ -346,6 +348,20 @@ static void build_footer(void)
         lstrcpynA(s_page.confirm, "Restart to apply", sizeof s_page.confirm);
 }
 
+/* THE PAGE'S SHAPE: what an index in a hit key means. A key names a row, an option or a switch by its place on the page, so it means
+   what the player saw only while the page has the shape of the frame they saw. Each map carries the generation of the page it was
+   drawn from; a click acts only if the page has that generation at both its press and its release. */
+static void note_shape(void)
+{
+    unsigned h = 2166136261u;
+    int i;
+#define MIX(v) (h = (h ^ (unsigned)(v)) * 16777619u)
+    MIX(s_tab); MIX(s_sel[s_tab]); MIX(s_page.nrow); MIX(s_page.nopt); MIX(s_page.nsw);
+    for (i = 0; i < s_page.nrow; i++) MIX(s_rowMod[i]);
+#undef MIX
+    if (h != s_shapeHash) { s_shapeHash = h; s_shapeGen++; }
+}
+
 static void publish(void)
 {
     int updates = 0, i;
@@ -355,6 +371,8 @@ static void publish(void)
     build_rows();
     build_pane();
     build_footer();
+    note_shape();
+    s_page.gen = s_shapeGen;
     lstrcpynA(s_page.held, s_held, sizeof s_page.held);
     EnterCriticalSection(&s_lock);
     s_pub = s_page;
@@ -460,8 +478,8 @@ static void dump(void)
     if (!f) { tagpu_logf("modsui: the state dump could not open %s", DUMP_OUT ".tmp"); return; }
     if (tagpu_modsui_is_open()) take_map();
     else memset(&s_hit, 0, offsetof(TAGPU_CMD_WIKI, hit));
-    fprintf(f, "{\"open\":%d,\"holds\":%ld,\"drawn\":%d,\"tab\":%d,\"updates\":%d,\"selected\":%d,\"note\":",
-            tagpu_modsui_is_open(), (long)tagpu_wiki_holds_input(), s_hit.drawn, s_page.tab, s_page.updates, s_page.selected);
+    fprintf(f, "{\"open\":%d,\"current\":%d,\"holds\":%ld,\"drawn\":%d,\"tab\":%d,\"updates\":%d,\"selected\":%d,\"note\":",
+            tagpu_modsui_is_open(), !tagpu_modsui_is_open() || s_hit.rep_serial == s_shapeGen, (long)tagpu_wiki_holds_input(), s_hit.drawn, s_page.tab, s_page.updates, s_page.selected);
     jstr(f, s_page.note);
     fputs(",\"chosen\":", f);
     jstr(f, mod_name(s_chosen));
@@ -523,14 +541,7 @@ void tagpu_modsui_tick(void)
             DeleteFileA(DUMP_ASK);
         }
     }
-    if (!tagpu_modsui_is_open()) return;
-    /* THE LAYER CAN REFUSE AFTER THE OPEN: its pass is built at its first use and the art may still have been loading, and with the
-       input captured a screen nobody can see would hold the menu. It closes; the next click on MODS gets the box. */
-    if (!tagpu_hudstate_on() || tagpu_wikistate_refused() ||
-        (tagpu_wikiart_done() && (!tagpu_wikiart_get() || !tagpu_wikiart_get()->mods))) {
-        close_screen("the layer cannot draw this session");
-        return;
-    }
+    /* THE QUEUE GOES ON WITH THE SCREEN SHUT: Update all then Back leaves it running */
     if (s_active != NONE) {
         tagpu_modinst_status(&st);
         if (st.phase == MODINST_READY || st.phase == MODINST_FAILED) {
@@ -544,11 +555,19 @@ void tagpu_modsui_tick(void)
             s_active = NONE;
             s_paneStale = 1;
             start_next();
-            publish();
+            if (tagpu_modsui_is_open()) publish();
         } else if (st.phase != s_status.phase || st.done != s_status.done) {
             s_status = st;
-            publish();
+            if (tagpu_modsui_is_open()) publish();
         }
+    }
+    if (!tagpu_modsui_is_open()) return;
+    /* THE LAYER CAN REFUSE AFTER THE OPEN: its pass is built at its first use and the art may still have been loading, and with the
+       input captured a screen nobody can see would hold the menu. It closes; the next click on MODS gets the box. */
+    if (!tagpu_hudstate_on() || tagpu_wikistate_refused() ||
+        (tagpu_wikiart_done() && (!tagpu_wikiart_get() || !tagpu_wikiart_get()->mods))) {
+        close_screen("the layer cannot draw this session");
+        return;
     }
     if (s_scanDone == 1) {
         static int s_saw;
@@ -593,8 +612,9 @@ void tagpu_modsui_open(const char* folder)
     LeaveCriticalSection(&s_lock);
     scan_start();
     tagpu_wiki_capture(1);
-    InterlockedExchange(&s_open, 1);
+    /* the page first: a frame between the two would draw the last session's */
     publish();
+    InterlockedExchange(&s_open, 1);
     tagpu_logf("modsui: opened: %d mods, running %s, chosen %s", s_nmod, mod_name(s_running), mod_name(s_chosen));
 }
 
@@ -609,18 +629,28 @@ static void confirm(void)
 {
     char id[32];
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
+    /* THE PROFILE FIRST: a choice it could not save refuses the restart with impure.cfg as it was */
+    tagpu_profiles_flush();
+    if (!tagpu_profiles_saved()) {
+        lstrcpynA(s_note, "Your options could not be saved, so the game stays as it is.", sizeof s_note);
+        tagpu_logf("modsui: %s", s_note);
+        s_paneStale = 1;
+        publish();
+        return;
+    }
     cfg_save();
     tagpu_settings_set_mod(id);
     tagpu_settings_flush();
-    /* A RESTART MUST NOT COME UP ON THE OLD MOD WITH NO WORD SAID: it goes only once the file holds the choice */
+    /* A RESTART MUST NOT COME UP ON THE OLD MOD WITH NO WORD SAID: it goes only once the file holds the choice. Refused, the running
+       mod goes back in the store, whose retry would otherwise write the refused one once the file frees. */
     if (!tagpu_settings_saved()) {
+        tagpu_settings_set_mod(s_running >= 0 ? s_mod[s_running].id : "");
         lstrcpynA(s_note, "Your choice could not be saved in impure.cfg, so the game stays as it is.", sizeof s_note);
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;
         publish();
         return;
     }
-    tagpu_profiles_flush();
     tagpu_logf("modsui: restarting with mod=%s", id);
     if (!tagpu_rguard_restart_self()) {
         snprintf(s_note, sizeof s_note, "The game could not restart itself (error %lu). Your choice is saved, so start it again.",
@@ -796,8 +826,10 @@ static int press(unsigned bit, int cx, int cy)
             return 1;
         }
     }
-    if (hit_key(cx, cy, key)) {
+    /* a frame not yet drawn with the page's shape: the player has not seen what is under the pointer */
+    if (s_hit.rep_serial == s_shapeGen && hit_key(cx, cy, key)) {
         lstrcpynA(s_held, key, sizeof s_held);
+        s_heldGen = s_shapeGen;
         publish();
     }
     return 1;
@@ -815,7 +847,8 @@ static int release(unsigned bit, int cx, int cy)
         s_held[0] = 0;
         if (held[0]) {
             take_map();
-            if (cx >= 0 && hit_key(cx, cy, key) && !strcmp(key, held)) act(key);
+            if (cx >= 0 && s_heldGen == s_shapeGen && s_hit.rep_serial == s_shapeGen && hit_key(cx, cy, key) && !strcmp(key, held))
+                act(key);
             else publish();
         }
     }
@@ -864,7 +897,14 @@ int tagpu_modsui_message(UINT msg, WPARAM wp, LPARAM lp)
 {
     const int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
     switch (msg) {
-    /* Alt's chords stay the system's, so Alt+F4 still ends the game with the screen open */
+    /* NO ALT CHORD REACHES THE ENGINE BUT ALT+F4, WHICH wndproc.c GIVES THE SYSTEM. TA's window procedure pushes the letter of a
+       WM_SYSKEYDOWN (0x4B5DC3, 0x4C1D50), and only its GUI dispatch's test of the Alt key stops a quick key firing (0x4AA219,
+       DISASSEMBLED): under the capture that key reads up, so the chord would press a menu button behind the screen. */
+    case WM_SYSKEYDOWN:
+        return wp != VK_F4;
+    case WM_SYSCHAR:
+    case WM_SYSDEADCHAR:
+        return 1;
     case WM_KEYDOWN:
         return tagpu_modsui_key((unsigned)wp, 0);
     case WM_KEYUP:

@@ -40,6 +40,8 @@ int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
 /* The file's write: the render thread each frame, and the exit once no other thread is inside. A
    click only records its value (tagpu_menu_present). */
 void tagpu_profiles_flush(void);
+/* 1 when nothing waits to be written: the flush above held. */
+int  tagpu_profiles_saved(void);
 void tagpu_profiles_final(void);
 
 #endif

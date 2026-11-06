@@ -233,9 +233,9 @@ static const Mod s_mods[MOD_N] = {
 #define REPLAYS_Y        393
 #define MODS_NAME        "MODS"
 #define MODS_Y           416            /* under REPLAYS: the plate holds both                   */
-#define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, 1, 1), MSGBOX.GUI: every
-                                           caller of the OK box passes 1, 1 and 500 (DISASSEMBLED); with
-                                           0, 0 its OK button is inactive (MEASURED)              */
+#define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, a, b), MSGBOX.GUI: most
+                                           callers pass 1, 1 (DISASSEMBLED); with 0, 0 its OK button is
+                                           inactive (MEASURED)                                    */
 #define DIALOG_W         500
 #define SHIFT_FROM       409
 #define SHIFT_BY         24
@@ -1023,7 +1023,8 @@ static void replays_open(char* gi);
 static void mods_click(char* gi)
 {
     typedef void (__stdcall *dialog_fn)(void* gi, const char* text, int width, int a, int b);
-    char folder[64] = "", text[320];
+    /* 256: 0x4ABD90 copies the text unbounded into a buffer of that size on its stack (0x4ABDD3, DISASSEMBLED) */
+    char folder[64] = "", text[256];
     const char* running = tagpu_modload_id();
     const WIKIART* art = tagpu_wikiart_get();
     if (!running) {

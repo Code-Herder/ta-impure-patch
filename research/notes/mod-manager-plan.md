@@ -261,7 +261,7 @@ What follows from those rules:
   `art/mods/layout.json`, a pure `tagpu_modslay.c` and a `modslaycheck`.
 - **The art is the wiki's kit**, plus new parts: checkbox/radio, progress bar, three tabs, and the
   badges for active, update, greyed and conflict.
-- **The screen draws on the wiki's pass, which stands at the menu too;** only the wiki's own record is tied to a level. Its page and hit map cross under
+- **The screen draws on the wiki's pass, built at its first use wherever that falls;** only the wiki's own record is tied to a level. Its page and hit map cross under
   one lock rather than in a packet ([the module](modules/mods.html), *The screen*).
 - **Input is modal on the main menu** and reuses the wiki's paired press/release bookkeeping.
 - **It is Vulkan only.** On GDI, the MODS button opens an engine message box: the screen needs

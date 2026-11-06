@@ -84,6 +84,7 @@ typedef struct {
     int        nsw;
     MODSSWITCH sw[MODS_MAXSW];
     float      scroll[MODS_NSCROLL];
+    unsigned   gen;             /* the page's shape generation, handed back with the frame's hit map */
     char       held[MODS_KEY];  /* the key of the control held down; "" none */
     char       confirm[48];     /* Confirm's label; "" shows it greyed with the word Confirm */
     int        update_all;      /* the Updates tab's button shows */

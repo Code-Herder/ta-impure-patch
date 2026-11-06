@@ -99,7 +99,7 @@ class Game:
         end = time.time() + seconds
         s = self.state()
         while time.time() < end:
-            if want(s):
+            if s["current"] and want(s):
                 return s
             time.sleep(0.1)
             s = self.state()
@@ -107,7 +107,7 @@ class Game:
 
     def click_ending(self, key):
         """A control that ends this process: tacli waits for a batch's end, which a process that has gone never reports."""
-        s = self.state()
+        s = self.settled()
         h = next(h for h in s["hits"] if h["key"] == key)
         p = subprocess.Popen(TACLI + ["click", NAME, "--device", str((h["r"][0] + h["r"][2]) // 2), str((h["r"][1] + h["r"][3]) // 2)],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -268,6 +268,16 @@ def flow(display):
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "ProTA" and s["chosen"] == "ProTA", "the screen says so")
+    # the mod running now: its choice takes effect at once, through the profile module's own store
+    g.click(f"row:{row_of(s, 'ProTA')}")
+    s = g.settled(lambda s: s["opts"])
+    was = s["opts"][0]["value"]
+    g.click("opt:0:+" if was == 0 else "opt:0:-")
+    s = g.settled(lambda s: s["opts"][0]["value"] != was, 5)
+    report(s["opts"][0]["value"] != was, f"the running mod's option changes at once: {was} to {s['opts'][0]['value']}")
+    g.click("reset:0")
+    s = g.settled(lambda s: not s["opts"][0]["changed"], 5)
+    report(not s["opts"][0]["changed"], "and its reset takes it back")
     g.click("close")
     s = g.settled(lambda s: not s["open"])
     report(not s["open"] and s["holds"] == 0, "the close button closes it and gives the input back")
@@ -396,6 +406,11 @@ def real(display):
         time.sleep(0.5)
         moved = cursor_moved()
     report(moved, "the drawn cursor follows the real pointer")
+    # under the capture the engine reads Alt as up, so nothing but the screen stops a chord pressing a menu button behind it
+    xdo("key", "alt+s")
+    xdo("key", "alt+m")
+    time.sleep(1.5)
+    report(g.menu(5), "Alt+S and Alt+M press no menu button behind the screen")
     xdo("key", "a")
     s = g.settled(lambda s: s["open"], 2)
     report(s["open"] == 1 and s["holds"] == 1, "a key does nothing to it")

@@ -100,6 +100,7 @@ static unsigned         s_costFrames;
 static const WIKIART* s_art;
 static UIFACES     s_faces;
 static int         s_mods;     /* this frame's page is the Mods screen's */
+static unsigned    s_modsGen;  /* ...and its generation */
 static WIKISTAGEART  s_sart;
 static int           s_toastFace;
 
@@ -711,6 +712,7 @@ static void mods_present(const TAGPU_FRAME* f)
     s_tryPtr = 0;
     s_have = 1;
     s_mods = 1;
+    s_modsGen = s_mp.gen;
 }
 
 void tagpu_wikistate_present(const TAGPU_FRAME* f)
@@ -1072,7 +1074,10 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     /* the replay this map's HUD, run, end and lanes are of: the serial of the packet they were
        drawn from */
     s_map.rep_serial = s_repSerial;
-    if (s_mods) tagpu_modsui_drawn(&s_map);
+    if (s_mods) {
+        s_map.rep_serial = s_modsGen;   /* for the screen, the generation of the page this map was drawn from */
+        tagpu_modsui_drawn(&s_map);
+    }
     s_drew = 1;
 }
 

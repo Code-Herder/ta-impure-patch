@@ -7,12 +7,12 @@ Writes art/wiki/kit/parts/<name>.png and each part's entry in art/wiki/kit/kit.j
 progress bar's track and fill, the three tabs and the four badges of tagpu_modslay.c. Nothing here is painted: each part
 is resampled and tinted from `button`, `button_down`, `row`, `badge` and `i_dot`, so it carries their bevels and wear, and
 a run on unchanged inputs rewrites the same bytes. A painted part replaces a generated one with no code change: its PNG
-and its entry under the same name,.
+and its entry under the same name.
 
 A new part is appended to kit.json, so every part already there keeps its index.
 
 tools/hudart/fit.py --set wiki rewrites art/wiki/kit/ from art/wiki-full/kit/ and removes every part that folder lacks,
-these among them: run this after it. tagpu_modslay_load refuses a kit without them, by name.
+these among them, and then runs this. tagpu_modslay_load refuses a kit without them, by name.
 """
 import json
 from pathlib import Path
