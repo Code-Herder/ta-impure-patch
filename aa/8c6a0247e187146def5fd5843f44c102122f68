@@ -1,0 +1,1 @@
+landing-review: medium, aa8c6a02 main...HEAD, read-only reviewer. findings: 0 correctness; 4 LOW (comments naming nonexistent functions, stale references, ui_row's NULL clip, plan wording), 1 nit (unused exports). acted: all five, in the next commit. rejected: none. date: 2026-11-05.
