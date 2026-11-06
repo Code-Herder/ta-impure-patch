@@ -203,6 +203,7 @@ PAGES = [
 
     ("compat/overview",           "Overview & load routes",    "Compatibility"),
     ("compat/takeover",           "The takeover (plan)",       "Compatibility"),
+    ("mod-manager-plan",          "The mod manager (plan)",    "Compatibility"),
     ("compat/tadr-collision",     "TADR beside Impure",        "Compatibility"),
     ("compat/setups",             "Setups & outcomes",         "Compatibility"),
     ("compat/identify",           "Identifying a setup",       "Compatibility"),

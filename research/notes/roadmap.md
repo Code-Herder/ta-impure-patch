@@ -4003,6 +4003,15 @@ and [fullscreen-handoff](fullscreen-handoff.html).
 blank frames remain; cold or invalidated devices still require initialization.
 
 
+## The mod manager (planned 2026-11-01)
+
+A Mods screen that downloads, updates and switches total-conversion mods and small mutators on the
+player's own exe. Status: **landing 1 of 9 built**, the shared UI kit. The exit condition: each v1
+mod chosen from the screen, installed from a package and restarted into, plays as its drop-in
+folder does (the compatibility suite's managed column). **Not covered by landing 1:** everything the
+player sees; the catalog, per-mod options, managed start-up, download, the screen, mutators, the
+multiplayer fingerprint and 4 GB. The plan: [the mod manager](mod-manager-plan.html).
+
 ## Resource input: snapping, Quick Build and mod profiles
 
 Manual mex/geo snapping and independent contextual resource building are implemented together

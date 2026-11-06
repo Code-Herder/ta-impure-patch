@@ -6,7 +6,7 @@ The in-game wiki's sidebar and pages, and its stage drawn in 3D by the world pas
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`.
 
-### 2.12c The in-game wiki (`tagpu_wiki.c`, `tagpu_wikistate.c`, `tagpu_wikilay.c`, `tagpu_wikistage.c`, `tagpu_vk_hud.c`; every Vulkan level)
+### 2.12c The in-game wiki (`tagpu_wiki.c`, `tagpu_wikistate.c`, `tagpu_wikilay.c`, `tagpu_uikit.c`, `tagpu_wikistage.c`, `tagpu_vk_hud.c`; every Vulkan level)
 
 The wiki button in the top bar's right-hand row and, when it is pressed, the kit's window over the
 game (90 % of the screen, centred): the title "Wiki" and its close button, the tree, the selected

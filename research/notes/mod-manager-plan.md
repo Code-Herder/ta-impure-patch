@@ -202,10 +202,8 @@ What follows from those rules:
 - **A custom Impure UI, like the in-game wiki:** full colour, scaled to the player's resolution and
   aspect ratio in wiki units (screen height / 720). The owner chose this over an engine `MODS.GUI`
   built the way REPLAYS is.
-- **The wiki's primitives are extracted first.** They are static in `tagpu_wikilay.c` today: text
-  wrap, scroll panels, rows, art parts, solids and the hit map. They move into a shared pure-C kit
-  with no change in behaviour, and the proof is `wikilaycheck` passing unchanged. The mockup side
-  gets shared JS in `tools/uikit/`.
+- **The widgets are the kit's, shared with the wiki:** `tagpu_uikit.c` (text wrap, scroll panels,
+  rows, buttons, badges, art parts, solids and the hit map) and, for the mockup, `tools/uikit/`.
 - **The Mods screen is built mockup-first on that kit:** `tools/mods/mockup/`,
   `art/mods/layout.json`, a pure `tagpu_modslay.c` and a `modslaycheck`.
 - **The art is the wiki's kit**, plus new parts: checkbox/radio, progress bar, three tabs, and the
@@ -248,11 +246,11 @@ What follows from those rules:
   download-record overflow Impure's `fix_download_records` fixes]. The managed column has to show
   Impure's fix covers it.
 
-## Landings
+## The landings
 
 | # | landing | what it does | verified by (run it) |
 |---|---|---|---|
-| 1 | Shared UI kit | Moves the wiki's layout primitives into a shared pure-C kit + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
+| 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
 | 2 | modpack + catalog | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, builds `.tar.zst`, derives exe tables + XOR reverts, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each revert gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
 | 3 | Per-mod options | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
 | 4 | Managed start-up | `mod=`; identify → revert → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, originals by shipped SHA-256 + cache); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
@@ -262,7 +260,7 @@ What follows from those rules:
 | 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 
-Landing 1 needs nothing else and can start first. Landings 2 and 3 are independent of each other.
+Landings 2 and 3 are independent of each other.
 
 ## Not closed
 
