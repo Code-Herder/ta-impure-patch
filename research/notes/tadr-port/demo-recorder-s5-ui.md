@@ -241,7 +241,7 @@ read by `recr_info` (`tagpu_replays.c`):
   a line of another generation is read again; a recording the reader cannot open is asked again
   at the next open. The detail shows it with the
   version under the timelines (`MODLINE`: "Total Annihilation v3.1"). When the recording's
-  fingerprint is not this install's, the next line says "The installed archives differ." That is
+  fingerprint is not this install's, the next line says "The installed archives differ.", and the footer names the mutators when the two lists differ ([the mods module](../modules/mods.html), *Mutators*). That is
   a hint only. The running game's fingerprint is taken once the browser has mounted every
   archive a level mounts: the main menu of a fresh start holds fewer, since `InitTAHPIAry`
   mounts at most ten new `.hpi` per call (the engine map, *The mount list*). MEASURED 2026-10-02

@@ -597,6 +597,8 @@ place `0x4E49B0` finds it in the template `"Copyright 0000 Cavedog Entertainment
 the copy is `0x4E4760`, `0x4BDE72..0x4BDE98`), and compares the two inline
 (`0x4BDEA0..0x4BDED4`) [DISASSEMBLED 2026-10-26; the retail archives carry 1997 to 2000]. `tagpu_ufo.c` writes that trailer for exactly this reason.
 
+**The directory in memory** [DISASSEMBLED 2026-11-06]. The open reads the file's header and directory into one block, `0x4D83B0(0x50A598, size)` with the size from the header's offset 8 (`0x4BDEF4..0x4BDEFE`), keeps it at handle `+0x08` (`0x4BDF06`), and reads the file's start into it (`0x4BDF1E`), so block `+0x08` still holds that size. It decrypts from `+0x14` (`0x4BDF5A..0x4BDF83`), turns block `+0x10` from an offset into the root's pointer (`0x4BDF85..0x4BDF8D`), and then turns every offset below it into a pointer: the root's loop at `0x4BDF96..0x4BDFDB`, each subdirectory by the recursive `0x4BE010`. A directory is `{ i32 count; ENTRY* first }`, and an entry is 9 packed bytes, `{ char* name; void* child; u8 flag }`, flag bit 0 a directory. Lookup `0x4BB4E0` and the listing `0x4BC640` take `count` from the directory at each call, and no reference to an entry outlives a lookup's caller; the prune `0x4BE180` reopens the `FILE*` alone and never rereads the block. So taking an entry out of its directory, by moving the later ones down and lowering `count`, is safe between a mount and the next engine call, and [mods](../modules/mods.html) does that for a mutator's files and hides.
+
 **The mount list** [DISASSEMBLED 2026-10-02, for the recorder's `RT_ARCHIVE`]:
 - **Where it is.** The graphics globals `*(0x51FBD0)` (`0x4B6220` returns it) hold the list at
   `+0x618`, a `HANDLE**`, and its i32 count at `+0x61C`.

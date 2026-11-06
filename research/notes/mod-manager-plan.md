@@ -121,7 +121,7 @@ Each decision is listed with what it was chosen over.
   - `packages`: an ordered list of `{url, sha256, size}`;
   - mods: `exe` (the name of its table in the patch pack) and `hide` (the TA-folder archives hidden
     by default), plus the play options;
-  - mutators: `base`, `base_hashes` and `files`;
+  - mutators: `base`, `base_hashes`, `files` and `hides`;
   - `permission`: where the author's permission to host is recorded. No entry ships without one.
 - **A binary patch pack goes beside the catalog**, zstd-compressed. It holds one XOR with the stock
   image per mod, with the stock+mod hash it must produce, and the files Impure knows by hash: a known
@@ -270,8 +270,8 @@ What follows from those rules:
 - **The MODS button goes under REPLAYS**, through the same main-menu insertion REPLAYS uses
   (`tagpu_replays.c`: S1 `0x4AACAE`, S2 `0x42644C`, S3 `0x429290`, the builder `0x4263B0`). MEASURED on every v1 menu: it needs no moves of its
   own, only the taller plate.
-- **`file.<path>` switches wait for mutators.** A v1 mod's content is one archive with thousands of paths, so before there are mutators the key has no file a
-  player could sensibly turn off. `hide.<archive>` is what this screen switches.
+- **`file.<path>` switches are a mutator's.** A v1 mod's content is one archive with thousands of paths, so the key names only a file or a hide of a mutator of that base: off, that file is out of play.
+  `hide.<archive>` is what the screen switches for a mod. A mutator's hide reaches the base's own two archives, so the original archives answer next.
 
 ### 4 GB (LAA)
 
@@ -311,7 +311,7 @@ What follows from those rules:
 | 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (unit types and keys at the menu; type IDs, weapon and feature tables in a level; every type's CRC with a drop-in peer in one network game; menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
-| 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
+| 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 

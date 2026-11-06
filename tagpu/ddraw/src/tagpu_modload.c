@@ -688,7 +688,7 @@ static void mount_mutators(const char* base)
         }
         if (why) { tagpu_modcat_mutator_free(&m); continue; }
 
-        snprintf(path, sizeof path, "mods\%s\%s.hpi", m.id, m.id);
+        snprintf(path, sizeof path, "mods\\%s\\%s.hpi", m.id, m.id);
         snprintf(archive, sizeof archive, "%s.hpi", m.id);
         if (s_nmounted >= MUTATORS_MAX || !s_mountReal(path, 1)) {
             tagpu_logf("modload: mutator %s does not open", m.id);

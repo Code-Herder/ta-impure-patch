@@ -307,6 +307,35 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
         self.assertEqual(got, "unreadable")
 
 
+class HpiForget(unittest.TestCase):
+    """tagpu_hpi.c, native, takes a file out of its view as a hide takes it out of the engine's directory: every entry of that name, the rest kept."""
+    MAIN = rb"""#include <stdio.h>
+#include <stdlib.h>
+#include "tagpu_hpi.h"
+static int rd(void* c, uint32_t o, void* d, uint32_t n) { return !fseek((FILE*)c, (long)o, SEEK_SET) && fread(d, 1, n, (FILE*)c) == n; }
+int main(int c, char** v) { char why[160]; FILE* f = fopen(v[1], "rb"); TAGPU_HPISRC s; TAGPU_HPI* a; (void)c;
+    fseek(f, 0, SEEK_END); s.ctx = f; s.size = (uint32_t)ftell(f); s.read = rd;
+    a = tagpu_hpi_open(&s, why, sizeof why); if (!a) { puts(why); return 1; }
+    int kept = tagpu_hpi_find(a, "dir\\keep.txt"), e = tagpu_hpi_find(a, "dir\\gone.txt");
+    printf("%d %d", kept >= 0, e >= 0);
+    printf(" %d %d", tagpu_hpi_forget(a, "dir\\gone.txt"), tagpu_hpi_forget(a, "dir\\nothing.txt"));
+    printf(" %d %d %d %d\n", tagpu_hpi_find(a, "dir\\keep.txt") >= 0, tagpu_hpi_find(a, "dir\\gone.txt") >= 0, tagpu_hpi_shadowed(a, e), tagpu_hpi_shadowed(a, kept));
+    tagpu_hpi_close(a); return 0; }
+"""
+
+    def test_forget(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = m.ROOT / "tagpu/ddraw/src"
+            (Path(d) / "main.c").write_bytes(self.MAIN)
+            exe = Path(d) / "forget"
+            m.subprocess.run(["gcc", "-std=c99", "-I", str(src), "-I", str(m.ROOT / "tagpu/ddraw/inc"), "-o", str(exe), str(Path(d) / "main.c"),
+                              str(src / "tagpu_hpi.c"), str(src / "lodepng.c")], check=True)
+            arc = Path(d) / "a.hpi"
+            arc.write_bytes(m.hpipack().build({"dir": {"keep.txt": b"k", "gone.txt": b"g"}}, 0, 2))
+            got = m.subprocess.run([str(exe), str(arc)], capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(got, "1 1 1 0 1 0 1 0")
+
+
 class Places(unittest.TestCase):
     """What a file's place decides: the TDF grammar, and that a rename undoes to the same bytes."""
 

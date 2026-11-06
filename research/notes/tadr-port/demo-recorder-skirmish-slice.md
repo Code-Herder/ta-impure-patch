@@ -2545,6 +2545,7 @@ block an older reader skips, so `REC_FORMAT` stays 4.
     rewrite; printable ASCII, at most 7 characters, absent otherwise.
   - `RT_ARCHIVE`: one per archive the engine mounted, in mount order, by file name (never the
     path, which names the player's folders), size and mtime. No file's contents are read.
+  - `RT_MUTATORS`: the mutators the game ran, name and version, in mount order; no record means none.
   - `RT_MODPRINT`: the FNV-1a of every mounted archive's name and size, and the engine's count of
     them. Two details:
     - Impure's own `impure-patch.ufo` is left out, so an Impure update does not make old

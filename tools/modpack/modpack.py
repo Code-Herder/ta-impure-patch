@@ -1397,11 +1397,7 @@ def cmd_mutator(a):
     arc = f"{a.id}.hpi"
     (d / arc).write_bytes(hpipack().build(tree, 0, 2))
     tar = d / f"{a.id}.tar.zst"
-    with tempfile.TemporaryDirectory(dir=OUT) as t:
-        raw = Path(t) / "p.tar"
-        with tarfile.open(raw, "w") as w:
-            w.add(d / arc, arcname=arc)
-        subprocess.run(["zstd", "-qf", "-19", str(raw), "-o", str(tar)], check=True)
+    write_tar({arc: (d / arc).read_bytes()}, tar)
     version = a.version
     e = {"id": a.id, "kind": "mutator", "name": a.name, "author": a.author, "version": version, "summary": a.summary,
          "homepage": a.homepage, "permission": a.permission,

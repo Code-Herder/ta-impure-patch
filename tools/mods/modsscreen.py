@@ -14,6 +14,7 @@ where the player would aim. It needs the packages tools/modpack/modpack.py packa
 Exit 1 on any failed claim, 2 when it could not run. One game at a time: it holds the machine's run lock.
 """
 import argparse
+import atexit
 import http.server
 import shutil
 import json
@@ -436,6 +437,8 @@ def mutators(display):
 
     g = Game(display)
     mp_args("install", "prota", str(g.dir), "--link")
+    version = next(e["version"] for e in json.loads((ROOT / "mods/catalog.json").read_text())["mods"] if e["id"] == "prota")
+    (g.dir / "mods/prota/installed.txt").write_text(version)    # the marker an install writes
     cfg = g.dir / "impure.cfg"
     cfg.write_bytes((cfg.read_bytes() if cfg.exists() else b"") + b"\r\nmod=prota\r\n")
 
@@ -447,20 +450,21 @@ def mutators(display):
     report(com is not None and cor is not None, "the base holds both commanders' models")
     (work / "armcom.3do").write_bytes(com)
     (work / "corcom.3do").write_bytes(cor)
-    pieces = json.loads(subprocess.run([str(ROOT / "tools/ta3domod"), "dump", str(work / "armcom.3do"), "--json"], capture_output=True, text=True, check=True).stdout)
-    root = pieces["root"]["name"] if isinstance(pieces.get("root"), dict) else pieces.get("root", "base")
     def stretched(src, out, amount):
         out.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([str(ROOT / "tools/ta3domod"), "edit", str(src), "-o", str(out), "--stretch", f"{root}:y:0:{amount}"], check=True, capture_output=True)
+        pieces = json.loads(subprocess.run([str(ROOT / "tools/ta3domod"), "dump", str(src), "--json"], capture_output=True, text=True, check=True).stdout)
+        names = [x["name"] for x in pieces]
+        piece = "torso" if "torso" in names else names[0]
+        subprocess.run([str(ROOT / "tools/ta3domod"), "edit", str(src), "-o", str(out), "--stretch", f"{piece}:y:0:{amount}"], check=True, capture_output=True)
 
     entries = []
-    def build(mid, name, files, hide=(), stale=False):
+    def build(mid, name, files, hide=(), stale=False, base="prota"):
         folder = work / mid
         for rel, (src, amount) in files.items():
             stretched(src, folder / rel, amount)
         folder.mkdir(parents=True, exist_ok=True)
         out = work / f"{mid}.json"
-        mp_args("mutator", str(folder), "--id", mid, "--base", "prota", "--name", name, "--version", "1.0", "--author", "Tests", "--summary", f"{name}: the tests'.",
+        mp_args("mutator", str(folder), "--id", mid, "--base", base, "--name", name, "--version", "1.0", "--author", "Tests", "--summary", f"{name}: the tests'.",
                 "--homepage", "https://example.invalid", "--permission", "the tests'", "--out", str(out), *[x for h in hide for x in ("--hide", h)])
         e = json.loads(out.read_text())
         if stale:
@@ -468,9 +472,13 @@ def mutators(display):
                 e["base_hashes"][k] = "00" * 32
         entries.append(e)
 
-    build("tlook", "Tall commander", {"objects3d/armcom.3do": (work / "armcom.3do", 300)})
-    build("tclash", "Other commander", {"objects3d/armcom.3do": (work / "armcom.3do", 100)})
-    build("tstale", "Stale commander", {"objects3d/corcom.3do": (work / "corcom.3do", 300)}, stale=True)
+    build("tlook", "Tall commander", {"objects3d/armcom.3do": (work / "armcom.3do", 60)})
+    build("tclash", "Other commander", {"objects3d/armcom.3do": (work / "armcom.3do", 20)})
+    build("tstale", "Stale commander", {"objects3d/corcom.3do": (work / "corcom.3do", 60)}, stale=True)
+    build("thide", "Hide commander", {}, hide=["objects3d/armcom.3do"])
+    retail_com = mp.base_answer(mp.base_sources("none"), "objects3d/armcom.3do", {})
+    (work / "retail-armcom.3do").write_bytes(retail_com)
+    build("tnone", "Tall retail commander", {"objects3d/armcom.3do": (work / "retail-armcom.3do", 60)}, base="none")
     catalog = json.loads((ROOT / "mods/catalog.json").read_text())
     catalog["mods"] += entries
     report(mp.check_catalog(catalog) == [], f"the test catalog passes the schema: {mp.check_catalog(catalog)[:3]}")
@@ -522,7 +530,7 @@ def mutators(display):
     while time.time() < end and any(r["name"] in ("Tall commander", "Other commander", "Stale commander") for r in g.settled()["rows"]):
         time.sleep(0.5)
     s = g.settled()
-    report(not [r for r in s["rows"] if "commander" in r["name"]], f"all three installed: {[r['name'] for r in s['rows']]}")
+    report(not [r for r in s["rows"] if r["name"] in ("Tall commander", "Other commander", "Stale commander")], f"all three installed: {[r['name'] for r in s['rows']]}")
     report(sorted(got) == ["tclash", "tlook", "tstale"], f"each came over the network: {got}")
     report(not any("originals" in str(p) for p in (g.dir / "mods").glob("tlook*/*")), "a mutator runs no recipe")
 
@@ -583,7 +591,7 @@ def mutators(display):
     s = g.settled(lambda s: all(r["detail"] != "Checking its files" for r in s["rows"]), 60)
     g.click(f"row:{row_of(s, 'Tall commander')}")
     s = g.settled(lambda s: s["sw"], 15)
-    report(s["sw"][0]["name"].lower().endswith("armcom.3do"), f"its pane lists its files: {s['sws']}")
+    report(s["sw"][0]["name"].lower().endswith("armcom.3do"), f"its pane lists its files: {s['sw']}")
     g.click("sw:0")
     s = g.settled(lambda s: s["sw"] and not s["sw"][0]["on"])
     report(s["sw"][0]["changed"] == 1 and s["confirm"] == "Restart to apply", "a switched-off file asks for the restart")
@@ -600,7 +608,83 @@ def mutators(display):
     prof.write_bytes(prof.read_bytes() + b"file.objects3d\\nothing.3do=off\r\n")
     relaunch()
     report("file.objects3d\\nothing.3do names no file" in g.logs(), "a file. key naming no file is ignored with a line")
+
+    # a hide: the base's own file leaves its directory, and the original archives answer
+    tacli("ui", NAME, "click", "MODS")
+    s = g.settled(lambda s: s["open"] and s["drawn"] and all(r["detail"] != "Checking its files" for r in s["rows"]), 60)
+    # the key is the path's: the switch left off above would take this hide out of play too
+    g.click(f"row:{row_of(s, 'Tall commander')}")
+    s = g.settled(lambda s: s["sw"] and s["sw"][0]["changed"], 15)
+    report(True, "its file still shows off in the pane")
+    g.click("swreset:0")
+    s = g.settled(lambda s: s["sw"] and not s["sw"][0]["changed"], 15)
+    report(s["sw"][0]["on"] == 1, "Reset puts it back on")
+    g.click(f"act:{row_of(s, 'Tall commander')}")
+    s = g.settled(lambda s: next(r for r in s["rows"] if r["name"] == "Tall commander")["act"] == 6)
+    r = next(r for r in s["rows"] if r["name"] == "Other commander")
+    report(r["badge"] == 0 and r["act"] == 6, f"with the other off, the conflict goes: {r}")
+    g.click("tab:1")
+    s = g.settled(lambda s: s["tab"] == 1)
+    g.click(f"act:{row_of(s, 'Hide commander')}")
+    end = time.time() + 60
+    while time.time() < end and "Hide commander" in [r["name"] for r in g.settled()["rows"]]:
+        time.sleep(0.3)
+    g.click("tab:0")
+    s = g.settled(lambda s: s["tab"] == 0 and all(r["detail"] != "Checking its files" for r in s["rows"]), 30)
+    g.click(f"act:{row_of(s, 'Hide commander')}")
+    g.settled(lambda s: next(r for r in s["rows"] if r["name"] == "Hide commander")["act"] == 7)
+    g.click_ending("confirm")
+    g.menu(120)
+    log = g.logs()
+    report("hides objects3d\\armcom.3do from prota.hpi: 1 entries" in log, "the hide takes the base's file from its directory")
+    # the recording made with the other: the hint names both, and the versions
+    tacli("ui", NAME, "click", "REPLAYS")
+    time.sleep(2)
+    tacli("ui", NAME, "select", "RECS", "#0", check=False)
+    time.sleep(1)
+    ui = tacli("ui", NAME, "--all", "--json", check=False).stdout + tacli("ui", NAME, "show", "FOOTER", check=False).stdout
+    g.shot("mut-hint")
+    report("Recorded with Tall commander 1.0" in ui and "You have Hide commander 1.0" in ui, f"the browser names what was recorded with and what is mounted: {re.findall(r'[^\"]*ecorded with[^\"]*', ui)[:1] or ui[:300]}")
     tacli("stop", NAME, check=False)
+    relaunch()
+    skirmish("mut-hide")
+    d_hide = diff("mut-base", "mut-hide")
+    report(d_hide > 0, f"the picture is the original file's: {d_hide} px against the base's")
+
+    # the folder's own game: a launch with no mod takes the detour only for a mutator switched on
+    relaunch()
+    tacli("ui", NAME, "click", "MODS")
+    s = g.settled(lambda s: s["open"] and s["drawn"])
+    g.click("act:0")
+    s = g.settled(lambda s: s["chosen"] == "This folder")
+    g.click_ending("confirm")
+    g.menu(120)
+    log = g.logs()
+    report("mounted mutator" not in log.rsplit("modinst: the catalog comes", 1)[-1], "this folder with no mutator on mounts none")
+    skirmish("mut-none-base")
+    relaunch()
+    tacli("ui", NAME, "click", "MODS")
+    s = g.settled(lambda s: s["open"] and s["drawn"])
+    g.click("tab:1")
+    s = g.settled(lambda s: s["tab"] == 1)
+    report(next(r for r in s["rows"] if r["name"] == "Tall retail commander")["detail"] == "For This folder", "Explore lists the folder's own under it")
+    report("Tall commander" not in [r["name"] for r in s["rows"]], "and not another base's")
+    g.click(f"act:{row_of(s, 'Tall retail commander')}")
+    end = time.time() + 60
+    while time.time() < end and "Tall retail commander" in [r["name"] for r in g.settled()["rows"]]:
+        time.sleep(0.3)
+    g.click("tab:0")
+    s = g.settled(lambda s: s["tab"] == 0 and all(r["detail"] != "Checking its files" for r in s["rows"]), 30)
+    report(row_of(s, "Tall retail commander") == 1, f"Manage lists it under the folder: {[r['name'] for r in s['rows']]}")
+    g.click(f"act:{row_of(s, 'Tall retail commander')}")
+    s = g.settled(lambda s: next(r for r in s["rows"] if r["name"] == "Tall retail commander")["act"] == 7)
+    report(s["confirm"] == "Restart to apply", f"Confirm offers the restart: {s['confirm']!r}")
+    g.click_ending("confirm")
+    g.menu(120)
+    report("modload: mounted mutator tnone 1.0" in g.logs(), "a launch with no mod mounts it")
+    skirmish("mut-none")
+    d_none = diff("mut-none-base", "mut-none")
+    report(d_none > 500, f"the look changes on the folder's own game: {d_none} px")
 
 
 def menus(display):
@@ -650,6 +734,8 @@ def main():
     if not display:
         sys.exit(2)
     runlock.hold(ROOT, "modsscreen")
+    # a failure anywhere leaves no game behind, on a display nobody watches
+    atexit.register(lambda: tacli("stop", NAME, check=False))
     try:
         if args.only in (None, "mutators"):
             mutators(display)

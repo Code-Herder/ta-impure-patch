@@ -222,10 +222,11 @@ Written only while a catalog mod runs ([mods](mods.html)); with no `mod=` none o
 
 | VA | What it is | Module (arm file) | Mechanism |
 |---|---|---|---|
-| `0x4BE0B0` | the archive mounter, `stdcall(name, flag)`, `ret 8`: filters every name, and its first call mounts the package | `mod=` | prologue detour, 6 stolen |
+| `0x4BE0B0` | the archive mounter, `stdcall(name, flag)`, `ret 8`: filters every name, and its first call mounts the switched-on mutators and the package. With no `mod=`, it is taken only when a mutator of the folder's own game is on, and then mounts those and filters nothing | `mod=`, or `mutator.<id>=on` in `profiles\\none.ini` | prologue detour, 6 stolen |
 | `0x4BB32D` | `call 0x4E4990` in the path open `0x4BB2E0`: the loose attempt | `mod=` | rel32 redirect |
 | `0x4BC5D3` | `call 0x4E7DD0` in the enumeration `0x4BC4B0`: the loose listing | `mod=` | rel32 redirect |
 | `0x4E6FA0` | the exe's entry point (the running module's `AddressOfEntryPoint`): reaches the entry stage once, which then restores these five bytes | `mod=` | jmp, 5 B, gone before any game code |
+| a mounted archive's directory, in the block at handle `+0x08` | a mutator's switched-off files and its hides leave their directories, on the game thread between the mount's return and the next engine call; each pointer held inside the block first | a mutator on | memmove and the directory's `count`, no detour |
 | every raw section byte, the pack's mask aside | at attach, the mod's image or stock; last in attach, a loader mod's runs by value; at the entry point, whatever differs from the snapshot, import slots included | `mod=` | byte writes, `mods/patches.bin`'s XORs |
 
 The Mods screen writes no engine site. Its button is one more record in the main menu's own gadget block, written with REPLAYS' at the same observer on `GUI_Load` (`0x4AACAE`, `tagpu_replays.c` `mainmenu_visit`), and its OnCommand slot is REPLAYS' too (`0x42644C`).

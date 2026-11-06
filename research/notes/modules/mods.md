@@ -16,7 +16,8 @@ main menu's MODS button: *The screen*, below.
 - `tagpu_modpak.c/.h`: pure C, the pack `mods/patches.bin`, `file_key`, the image in memory and its
   hash. `tools/modpack/modpakcheck.c` runs it on the host, and `modpack.py verify` compares it with the
   Python that wrote the pack, on every known exe.
-- `tagpu_modcat.c`: the catalog's `hide` list and option rules.
+- `tagpu_modcat.c`: the catalog's `hide` list and option rules, and a mutator's entry and its verdicts: stale by the file, clash by the path. Pure C.
+- `tagpu_modfit.c/.h`: what a base holds at a path, by reading its archives: files only, on any one thread.
 - `tagpu_modsui.c/.h`: the screen's state and input, on the game thread. Names no engine memory.
 - `tagpu_modslay.c/.h`: the screen's window, a pure function of the page. Pure C.
 - `tools/modpack/modpack.py install ID GAMEDIR`: a package installed by hand, its recipe run from that
@@ -107,6 +108,28 @@ to prove the file otherwise equals the drop-in's.
 (`iconset_load`), so `Icon\` comes from the package. The options file the image names (`0x5098A3`) is copied
 beside the exe when none is there, and never overwritten.
 
+## Mutators
+
+A mutator is game files over one base mod: its catalog entry has `base`, a mod's id or `none` for the folder's own game, `files`, `base_hashes` and `hides`. Its package is one archive,
+`mods\\<id>\\<id>.hpi`, and no recipe runs. **No mutator ships until a real one exists**, so the committed catalog has none: `modpack.py mutator FOLDER --id .. --base ..` writes the package and an entry in `mods/mutators/`,
+which `modpack.py catalog` adds. It reads the base as the mount does and records the SHA-256 of each file the base holds at a path the mutator carries, and it refuses a file of the original game by content.
+
+**The switches** are in the base's `profiles\\<base>.ini`: `mutator.<id>=on`, with no key off, and `file.<path>=off`, with no key on. `file.` covers a mutator's files and its hides alike: off, that file is out of play, so the
+base answers the path, or the hide does not happen. The key is the path's, so two mutators of one base holding one path share it, and each pane shows it off. A key naming no file of any mutator of that base is ignored, with a log line. `hide.<archive>` stays what it was, a whole archive.
+
+**The mount.** The first call of the mounter runs `mount_mutators` ahead of everything, in the catalog's order. A mutator mounts only if it is on and installed, no file still in play differs from what it was built on, and no mutator already mounted
+holds one of its paths. The hash check runs at every start because a base can be swapped at that very start, and what the screen shows is only what this will do. A file switched off leaves the mutator's directory right after its mount, and a hide
+leaves the base's two archives right after each mounts, by editing the engine's directory ([the engine map](../engine/process.html), *The directory in memory*). Each pointer read there is held inside the block first. A hide reaches `<base>.hpi` and `<base>.originals.hpi` only, so the folder's
+original archives answer the path next. `tagpu_modload_each_gone` tells the wiki's reader the same removals, through `tagpu_hpi_forget`.
+
+With no `mod=`, `tagpu_modload_end` takes the mounter's detour only when a mutator of `none` is on. Nothing else is filtered and the loose step stays open: that launch's other detours pass everything through. An exe whose mounter is not the expected bytes keeps its own game, with a log line.
+
+**The fit on the screen.** Each opening, and after each install, `fit_thread` reads the base's files once the archive scan has ended, and hands back up to eight stale paths per mutator. A switch needs no second read: `tagpu_modcat_stale_live` takes the first of those still in play, and past the list the verdict stays stale.
+Manage lists a mutator under its base's row, only for the base chosen, with a check. A stale one reads Stale with no check and its pane names the file; one holding a path of an earlier mutator that is on reads Conflict and names both. One already on keeps its check, so a player can always turn it off. Explore lists the chosen base's mutators; Updates lists one with a newer
+version, and one a base update broke as "Needs an update for X", which the tab's count includes. The pane lists its first 40 files and hides, and says so past that.
+
+**The replays.** `RT_MUTATORS` holds what the start mounted, `name version, name version`, and no record means none. The browser's index line keeps it (`INFO_GEN` 2). Where the fingerprint differs, the hint says "The installed archives differ.", and where the lists differ too the footer, the only line with the width, names them: "Recorded with X 1.0. You have none."; a selection that needs neither puts the disk line back.
+
 ## Download and install
 
 `tagpu_modinst.c` installs a catalog mod beside the live folder, on one background thread that touches only files: no
@@ -189,10 +212,10 @@ after a crash, so it may still make one.
 runs it after fitting. A painted part of the same name replaces one with no code change.
 
 
-`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 51 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
+`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 54 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
 longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
 restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
-and `menus` photographs each mod's menu and the screen over it, for the eye.
+`menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on and with its file switched off.
 
 `tools/modpack/installtest.py` needs no game: the tar reader natively under the sanitizers, and the module itself under Wine with its
 real WinHTTP, against a local server. `tests/modinsttest.exe` is built with a hook that ends the process at a chosen step, as a
@@ -234,7 +257,11 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - A hide key can take what a level needs. MEASURED on ProTA alone: with its 28 other archives hidden it still reaches its menu, so the screen stays there to undo them; no level was played so. Hide keys change the content between network peers, for the fingerprint landing to compare.
 - The screen has run on Wine only, windowed, on an NVIDIA device and on llvmpipe. Steam loses track of a game Confirm restarts, as the plan accepts.
 - The thirteen generated parts stand until the owner paints them.
-- `file.<path>` switches are not built. A v1 mod's content is one archive, so the key has nothing to name before mutators: landing 7 has them.
+- No real mutator exists, so everything about them has run on test mutators the harness builds.
+- The fingerprint does not see a `file.` key, as it does not see a `hide.` key: the multiplayer landing has to include both.
+- A loose file in the folder answers before a mutator under `none`, and the fit does not read loose files.
+- Manage holds `MODS_MAXROW` rows: past that a mutator is not listed, and the catalog is far from it.
+- The fit on the screen reads a base as it is now, so one whose update waits in `mods\\<id>.new` is judged on the old files until the next start; the mount checks the new ones.
 - The screen says nothing about a mod another copy of the game is installing beyond what the worker's refusal says.
 - A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not

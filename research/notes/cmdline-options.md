@@ -13,7 +13,8 @@ PCGamingWiki), not yet runtime-confirmed on our stack. **[INFERRED]** = my readi
 ## TL;DR for the launcher
 
 - **Sound off**: `totala.ini` next to the exe, `[Preferences] NoDirectSound=1`
-  (official, per-gamedir — no registry, no wine audio hacks). Switch form `-s`.
+  (official, per-gamedir). Switch form `-s`. A mod's exe that names its own options file reads none of this,
+  so `tacli` also starts a silent instance with Wine's audio drivers off.
 - **Intro movies off**: don't symlink `Data/1.ZRB` and `Data/2.zrb` into the
   instance mirror — the play call is find-file-gated and skips gracefully.
   `tacli create <i> --intro` keeps them, and the intro (`1.zrb`) then plays at every launch.

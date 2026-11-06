@@ -242,7 +242,7 @@ static int verdict(int m, char* why, size_t cap)
     }
     for (k = 0; k < s_nmod; k++) {
         const ENTRY* o = &s_mod[k];
-        if (k == m || !o->has_mut || o->base != e->base || !o->on || !o->installed[0] || (e->on && k > m) || stale_path(k)) continue;
+        if (k == m || !o->has_mut || o->base != e->base || !o->on || !(o->installed[0] || o->ready) || (e->on && k > m) || stale_path(k)) continue;
         if ((p = tagpu_modcat_clash(&e->mut, &o->mut, path_off, (void*)(intptr_t)e->base)) != NULL) {
             snprintf(why, cap, "%s is also %s's. Only one of them can be on.", p, o->about.name);
             return FIT_CLASH;
@@ -550,12 +550,13 @@ static void build_pane(void)
         if (e->failed[0]) lstrcpynA(s_page.note, e->failed, sizeof s_page.note);
         else if (e->ready) lstrcpynA(s_page.note, "Installed. It takes effect when the game next starts.", sizeof s_page.note);
     }
-    if (m >= 0 && s_mod[m].has_mut && !s_page.note[0]) {
+    if (m >= 0 && s_mod[m].has_mut && !s_mod[m].failed[0]) {
         const ENTRY* e = &s_mod[m];
         char why[200];
         const int all = e->mut.nfiles + e->mut.nhides;
+        /* why it cannot go on matters more than that its install is waiting */
         if (verdict(m, why, sizeof why) >= FIT_STALE) lstrcpynA(s_page.note, why, sizeof s_page.note);
-        else if (all > MODS_MAXSW) snprintf(s_page.note, sizeof s_page.note, "Lists the first %d of its %d files.", MODS_MAXSW, all);
+        else if (!s_page.note[0] && all > MODS_MAXSW) snprintf(s_page.note, sizeof s_page.note, "Lists the first %d of its %d files.", MODS_MAXSW, all);
     }
     if (s_note[0]) lstrcpynA(s_page.note, s_note, sizeof s_page.note);
     build_options(m);

@@ -2574,6 +2574,12 @@ static void minimap_show(char* gi, const Ent* e)
 /* The selected recording's mod and version, and under it THE LOCK's reason, or else whether the
    archives this game mounted are the ones it was recorded with: a hint, since a map installed
    since changes them too. */
+static void footer_disk(char* gi)
+{
+    const double mb = (double)s_disk / (1024.0 * 1024.0);
+    set_label(gi, "FOOTER", mb < 10.0 ? "Replays use %.1f MB of disk." : "Replays use %.0f MB of disk.", mb);
+}
+
 static void mod_lines(char* gi, const Ent* e)
 {
     int m;
@@ -2581,15 +2587,14 @@ static void mod_lines(char* gi, const Ent* e)
     const char* hint = lock_text(e);
     int named = e && e->info && e->mod[0];
     const char* mine = tagpu_modload_mutators();
-    /* the words stop at the label's bound: the versions come first, as what a player compares */
-    if (!hint && named && e->has_modprint && e->modprint != s_runPrint && strcmp(e->mutators, mine))
-        set_label(gi, "MODHINT", "Recorded with %s. You have %s.", e->mutators[0] ? e->mutators : "no mutators", mine[0] ? mine : "none");
-    else {
-        if (!hint)
-            hint = named && e->has_modprint && e->modprint != s_runPrint
-                   ? "The installed archives differ." : "";
-        set_label(gi, "MODHINT", "%s", hint);
-    }
+    const int differ = named && e->has_modprint && e->modprint != s_runPrint;
+    if (!hint) hint = differ ? "The installed archives differ." : "";
+    set_label(gi, "MODHINT", "%s", hint);
+    /* the versions want the window's width, and only the footer has it */
+    if (differ && strcmp(e->mutators, mine))
+        set_label(gi, "FOOTER", "Recorded with %s. You have %s.", e->mutators[0] ? e->mutators : "no mutators", mine[0] ? mine : "none");
+    else
+        footer_disk(gi);
     if (!named) {
         set_label(gi, "MODLINE", "");
         return;
@@ -2681,7 +2686,6 @@ static void replays_open(char* gi)
     const Layout* L = s_layout[style_index(mod_style())];
     void* gm;
     char* ctrls;
-    double mb;
 
     if (!L) return;
     gm = ((gui_load_fn)VA_GUI_LOAD)(gi, L->screen, GUI_FLAGS);
@@ -2713,9 +2717,8 @@ static void replays_open(char* gi)
     s_runPrint = tagpu_rec_mod_print();
     s_runBuild = tagpu_replay_build_key();
     scan();
+    footer_disk(gi);    /* before the rows: the selected row's mutators take this line */
     rows_show(gi);
-    mb = (double)s_disk / (1024.0 * 1024.0);
-    set_label(gi, "FOOTER", mb < 10.0 ? "Replays use %.1f MB of disk." : "Replays use %.0f MB of disk.", mb);
     rlog("replays: opened - %d of %d recordings listed (%s), %I64u bytes; the running game %s %s, "
          "archives %08X", s_nrows, s_nfiles, s_all ? "all mods" : "this mod", s_disk, s_runMod,
          s_runVersion, s_runPrint);
