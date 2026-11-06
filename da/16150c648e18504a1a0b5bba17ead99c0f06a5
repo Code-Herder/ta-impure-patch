@@ -1,0 +1,3 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..da16150c findings=19 acted=18 rejected=1 date=2026-11-06
+first review 11 findings, 10 acted; rejected: mod_name(FOLDER) returning an empty string, which it does not (it returns 'This folder', and the harness saw 'For This folder').
+delta re-review of the fixes: 8 findings, 8 acted, none high or medium.
