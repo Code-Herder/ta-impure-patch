@@ -4006,11 +4006,11 @@ blank frames remain; cold or invalidated devices still require initialization.
 ## The mod manager (planned 2026-11-01)
 
 A Mods screen that downloads, updates and switches total-conversion mods and small mutators on the
-player's own exe. Status: **landings 1-2 of 9 built**, the shared UI kit and the packing tool with
+player's own exe. Status: **landings 1-3 of 9 built**, the shared UI kit, the per-mod options and the packing tool with
 its catalog. The exit condition: each v1
 mod chosen from the screen, installed from a package and restarted into, plays as its drop-in
-folder does (the compatibility suite's managed column). **Not covered by landings 1-2:** everything the
-player sees, and nothing reads the catalog yet; per-mod options, managed start-up, download, the
+folder does (the compatibility suite's managed column). **Not covered by landings 1-3:** everything the
+player sees, and only the per-mod options read the catalog; managed start-up, download, the
 screen, mutators, the multiplayer fingerprint and 4 GB. The plan: [the mod manager](mod-manager-plan.html).
 
 ## Resource input: snapping, Quick Build and mod profiles

@@ -1,6 +1,5 @@
 #ifndef TAGPU_SETTINGS_H
 #define TAGPU_SETTINGS_H
-#include "tagpu_mod.h"
 /* tagpu_settings -- the player's settings store, `impure.cfg` beside TotalA.exe.
    Design: renderers.md 2.10b.
 

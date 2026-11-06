@@ -309,8 +309,8 @@ TA metal-map classifier, and its widget does not establish TA's reclaim/build di
 
 ## Implementation and replay ownership
 
-`tagpu_resource.c` chooses sites on the game/input thread. `tagpu_profiles.c` owns file parsing,
-inheritance and effective settings. `tagpu_replays.c` supplies the shared mod identity; the menu
+`tagpu_resource.c` chooses sites on the game/input thread. `tagpu_profiles.c` owns the rules, the
+player's file and effective settings; `tagpu_modcat.c` reads a mod's rules from the catalog. `tagpu_replays.c` supplies the shared mod identity; the menu
 refreshes the profile label and two separate controls. Polling runs on the engine flip’s game
 thread at 500 ms menu intervals, independently of packet publication or a render consumer, and
 stops for the entire match. Returning to the main menu permits it again.
@@ -415,11 +415,11 @@ comparison of a queue before and after a click reads both on the same held tick.
 | `resource-plain`, `resource-uniform`, `resource-mixed` | Background/above-background uniform metal and rich patches; manual geo/Alt, Quick geo cancellation/requeue preserving a preceding Guard | L/P/R/Q |
 | `resource-geo-upgrade` | Stronger private geo variant on metal ground, queued reclaim/build, plain repeat no-op, pair cancellation/requeue, persistent helper Guard | L/P/R/Q |
 | `resource-nearby` | Two adjacent one-cell vents remain distinct; Shift appends both, cancels only the clicked plan, preserves a preceding persistent Guard and requeues | L/P/R/Q |
-| `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
+| `resource-locked`, `resource-inherit` | The test lever's locks and clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
 | `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback; the candidate source: RSNGCK, whose menu is ARMCK's and whose `CANBUILD` holds only RSNMOHO (a download entry with no `MENU`), Quick-Builds ARMMEX on the deposit and never RSNMOHO | Native catalogue preflight + L/P/R/Q |
-| `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it with packets disabled | Frontend preflight + L/P/R/Q mex |
+| `resource-frontend` | A folder of the old layout moves once with the same choices and no per-mod key left in `impure.cfg`; a forbidden hand edit is refused with a log line and a bad value rejected; untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it with packets disabled | Frontend preflight + L/P/R/Q mex |
 
 A queue is read in one consistent piece: each round of `Check.chain` reads the unit's head and
 every node found so far in one peek, which the DLL evaluates in one game-thread call, and the

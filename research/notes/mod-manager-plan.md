@@ -78,14 +78,14 @@ Each decision is listed with what it was chosen over.
   1. **Impure's built-in defaults**, in code.
   2. **The mod's config**, a per-mod source file `mods/<id>.json` merged into the catalog by the
      packing tool. For each option it says whether the mod **allows** it and what its **default**
-     is. It replaces the hardcoded `defaults(mod)` in `tagpu_profiles.c` and the rules half of
-     today's `profiles\<mod>.ini` (`manual_snapping`, `quick_build`, `default_radius`, `max_radius`,
-     `quick_build_default`), the `@<version>` override files included. A drop-in folder identified
+     is. It replaces the hardcoded `defaults(mod)` in `tagpu_profiles.c` and the old rule files'
+     keys (`manual_snapping`, `quick_build`, `default_radius`, `max_radius`, `quick_build_default`) and
+     their `@<version>` overrides. The stock game and an unidentified mod are the built-in layer. A drop-in folder identified
      as a catalog mod reads the same entry.
   3. **The player's changes, in `profiles\<id>.ini`.** A missing key means "the mod's default". The
-     file absorbs `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once by
-     the existing migration machinery (`impure-migration.txt`) with nothing kept for compatibility.
-     It also holds the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
+     file took in `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once at
+     attach; old rule files are renamed `.migrated`. The move leaves nothing behind that it could
+     repeat, so it keeps no record of its own (`impure-migration.txt` is the store's). The file will hold the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
 
   `impure.cfg` keeps only global settings. Profile names come from the catalog, not the fixed
   seven-name list. A `file.` key naming a file the current version no longer has is ignored with a
@@ -288,7 +288,7 @@ What follows from those rules:
 |---|---|---|---|
 | 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
 | 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives one XOR per mod + the known files, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each known exe's XOR gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
-| 3 | Per-mod options | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
+| 3 | Per-mod options (built) | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
 | 4 | Managed start-up | `mod=`; identify → restore → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |

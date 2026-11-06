@@ -779,6 +779,7 @@ def migrated(c, gamedir):
 
     try:
         c.call("stop")
+        profiles.mkdir(exist_ok=True)
         for p in profiles.glob("*"):
             p.unlink()
         rules.unlink(missing_ok=True)
