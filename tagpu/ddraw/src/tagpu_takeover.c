@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include "tagpu_modload.h"
 #include "dllmain.h"
 #include "hook.h"
 #include "utils.h"
@@ -552,6 +553,7 @@ void tagpu_takeover_tadr_init(void)
 static HANDLE s_refFile = INVALID_HANDLE_VALUE, s_refMap;
 static const unsigned char* s_refView;
 static DWORD s_refSize;
+static int s_refBorrowed;           /* the view is tagpu_modload's, not a mapping of the file */
 static const IMAGE_SECTION_HEADER* s_refSec;
 static WORD s_refNsec;
 static DWORD s_refBase;
@@ -562,7 +564,15 @@ int tagpu_takeover_file_open(void)
     const IMAGE_DOS_HEADER* dos;
     const IMAGE_NT_HEADERS32* nt;
     DWORD first;
+    size_t nmanaged = 0;
+    const unsigned char* managed = tagpu_modload_reference_file(&nmanaged);
     if (s_refView) return 1;
+    if (managed) {
+        s_refView = managed;
+        s_refBorrowed = 1;
+        s_refSize = (DWORD)nmanaged;
+        goto parse;
+    }
     if (!GetModuleFileNameW(NULL, path, MAX_PATH)) return 0;
     /* WITHOUT FILE_SHARE_WRITE, the way to_file_ask opens it: nothing may shorten the file under
        the view while it is read. A writer holding the exe means no reference at all, and every
@@ -578,6 +588,7 @@ int tagpu_takeover_file_open(void)
     s_refMap = CreateFileMappingW(s_refFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (s_refMap) s_refView = (const unsigned char*)MapViewOfFile(s_refMap, FILE_MAP_READ, 0, 0, 0);
     if (!s_refView) { tagpu_takeover_file_close(); return 0; }
+parse:
     dos = (const IMAGE_DOS_HEADER*)to_at(s_refView, s_refSize, 0, sizeof *dos);
     if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0) goto no;
     nt = (const IMAGE_NT_HEADERS32*)to_at(s_refView, s_refSize, (DWORD)dos->e_lfanew, sizeof *nt);
@@ -619,7 +630,8 @@ int tagpu_takeover_file_at(unsigned int va, void* out, int n)
 
 void tagpu_takeover_file_close(void)
 {
-    if (s_refView) UnmapViewOfFile(s_refView);
+    if (s_refView && !s_refBorrowed) UnmapViewOfFile(s_refView);
+    s_refBorrowed = 0;
     if (s_refMap) CloseHandle(s_refMap);
     if (s_refFile != INVALID_HANDLE_VALUE) CloseHandle(s_refFile);
     s_refView = NULL;
@@ -1781,7 +1793,13 @@ void tagpu_takeover_verify_image(void)
     to_mods(&sc, game);
     to_imports(&sc, sc.exe, sc.image);
     sc.why = "the exe file could not be read";
-    to_file_ask(path, to_ask_image, &sc);
+    {
+        /* under a managed mod the image is compared with what the file would hold in its drop-in folder */
+        size_t nmanaged = 0;
+        const unsigned char* managed = tagpu_modload_reference_file(&nmanaged);
+        if (managed) to_ask_image(managed, (DWORD)nmanaged, &sc);
+        else to_file_ask(path, to_ask_image, &sc);
+    }
     if (sc.why)
         /* The IMPORT SLOTS were still read, and they do not depend on the file: what makes a slot
            wrong is where it leads. So the code comparison being impossible -- an exe someone else

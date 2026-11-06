@@ -25,6 +25,10 @@ void tagpu_modload_end(void);
 /* First DirectDraw call: refuses if another DLL's jump on the entry point kept this module from running. */
 void tagpu_modload_check(void);
 
+/* The exe file as the mod's drop-in folder would hold it, for what compares the image with its file (the limit table, the
+   takeover's check): a mod's table in it for an exe mod, stock for a loader mod. NULL with no mod. Lives for the process. */
+const unsigned char* tagpu_modload_reference_file(size_t* n);
+
 /* The running mod's id, NULL with none. Written once at attach. */
 const char* tagpu_modload_id(void);
 /* Whether a managed mod closes this path's loose step: the folders the engine reads game data from. Under

@@ -234,6 +234,7 @@ int tagpu_modimg_from_exe(MODIMG* img, const uint8_t* d, size_t n)
         if (raddr > n || rsize > n - raddr || img->nsec == MODPAK_MAXSEC) goto bad;
         img->sec[img->nsec].va = base + vaddr;
         img->sec[img->nsec].len = rsize;
+        img->sec[img->nsec].raw = raddr;
         if (!(img->sec[img->nsec].bytes = malloc(rsize))) goto bad;
         memcpy(img->sec[img->nsec].bytes, d + raddr, rsize);
         img->nsec++;

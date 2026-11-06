@@ -11,6 +11,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_refuse.h"
 #include "zstd.h"
 
 #define PACK_MAX (1u << 20)            /* patches.bin, decompressed: far more than it holds */
@@ -37,6 +38,8 @@ static MODIMG s_target;                 /* stock + the mod's XOR */
 static const MODXOR* s_xor;
 static int s_loader;
 static MODIMG s_snapshot;
+static uint8_t* s_reference;
+static size_t s_nreference;
 static int s_entered;
 static const unsigned char* s_catalog;
 static size_t s_ncatalog;
@@ -52,6 +55,12 @@ static void refuse(const char* fmt, ...)
 }
 
 const char* tagpu_modload_id(void) { return s_id[0] ? s_id : NULL; }
+
+const unsigned char* tagpu_modload_reference_file(size_t* n)
+{
+    *n = s_nreference;
+    return s_reference;
+}
 
 /* ---- the files --------------------------------------------------------------------------------- */
 
@@ -96,9 +105,10 @@ static int load_pack(void)
 
 /* ---- the image --------------------------------------------------------------------------------- */
 
-/* `img`'s bytes over the process's, the ranges of `mask` left as they are; how many changed. Every section
-   is mapped at least as long as its raw bytes, by the PE loader's own rule. */
-static int put_image(const MODIMG* img, const MODRANGE* mask, uint32_t nmask, int* first)
+/* `img`'s bytes over the process's, the ranges of `mask` left as they are; how many changed. `img` is only ever a file
+   file_key recognised, and every section of those has its raw length within its page-rounded VirtualSize (MEASURED
+   2026-11-05, the eight known exes), so each write is inside the section the loader mapped. */
+static int put_image(const MODIMG* img, const MODRANGE* mask, uint32_t nmask)
 {
     int s, changed = 0;
     for (s = 0; s < img->nsec; s++) {
@@ -112,7 +122,6 @@ static int put_image(const MODIMG* img, const MODRANGE* mask, uint32_t nmask, in
             while (m < nmask && va >= mask[m].va + mask[m].len) m++;
             if (m < nmask && va >= mask[m].va) continue;
             if (mem[i] != c->bytes[i]) {
-                if (!changed && first) *first = (int)va;
                 mem[i] = c->bytes[i];
                 changed++;
             }
@@ -150,7 +159,7 @@ void tagpu_modload_begin(void)
     size_t nexe = 0, ndll = 0;
     const MODPATCH* mod;
     const MODKNOWN* known = NULL;
-    int stock, i, changed, first = 0;
+    int stock, i, changed;
 
     if (!tagpu_settings_mod(id, sizeof id)) return;
     lstrcpynA(s_id, id, sizeof s_id);
@@ -206,12 +215,21 @@ void tagpu_modload_begin(void)
 
     if (s_loader) {
         tagpu_modimg_xor(&s_target, s_xor);        /* back to stock, for this one write */
-        changed = put_image(&s_target, s_pak.mask, s_pak.nmask, &first);
+        changed = put_image(&s_target, s_pak.mask, s_pak.nmask);
         tagpu_modimg_xor(&s_target, s_xor);
     } else {
-        changed = put_image(&s_target, s_pak.mask, s_pak.nmask, &first);
+        changed = put_image(&s_target, s_pak.mask, s_pak.nmask);
     }
     if (changed < 0) { refuse("the exe's image could not be written (%lu)", GetLastError()); goto done; }
+    /* the file everything else compares with: this image as if the file held it, so a table's value at a limit site is the
+       mod's own there exactly as in its drop-in folder */
+    if (s_loader) tagpu_modimg_xor(&s_target, s_xor);
+    for (i = 0; i < s_target.nsec; i++)
+        memcpy(exe + s_target.sec[i].raw, s_target.sec[i].bytes, s_target.sec[i].len);
+    if (s_loader) tagpu_modimg_xor(&s_target, s_xor);
+    s_reference = exe;
+    s_nreference = nexe;
+    exe = NULL;
     /* the options file the image names (0x5098A3): the engine and the icons read it beside the exe, and it is the
        player's once there, so it is only ever copied when absent */
     {
@@ -253,7 +271,7 @@ static void hex32(const uint8_t* h, char* out)
    file changed since has another size or date. A row that does not parse is only hashed again. */
 static void load_archive_cache(void)
 {
-    char text[ARCHIVES_MAX * 160];
+    static char text[ARCHIVES_MAX * 160];
     DWORD got = 0;
     char* line, *next;
     HANDLE h = CreateFileA(ARCHIVE_CACHE, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -301,6 +319,8 @@ static int is_original_archive(const char* name)
     WIN32_FILE_ATTRIBUTE_DATA st;
     unsigned long long size, date;
     ARCHIVE* a = NULL;
+    ARCHIVE uncached;
+    int keep = 1;
     MODSHA sha;
     HANDLE h;
     DWORD got;
@@ -316,9 +336,10 @@ static int is_original_archive(const char* name)
             break;
         }
     if (!a) {
-        if (s_narc == ARCHIVES_MAX) return 0;
-        a = &s_arc[s_narc++];
-        lstrcpynA(a->name, name, sizeof a->name);
+        /* a table that is full or a name too long for a row costs a hash on every start, never a wrong answer */
+        keep = s_narc < ARCHIVES_MAX && strlen(name) < sizeof a->name;
+        a = keep ? &s_arc[s_narc++] : &uncached;
+        if (keep) lstrcpynA(a->name, name, sizeof a->name);
     }
     h = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
@@ -329,7 +350,7 @@ static int is_original_archive(const char* name)
     a->size = size;
     a->date = date;
     a->original = tagpu_modpak_is_original(&s_pak, a->sha);
-    save_archive_cache();
+    if (keep) save_archive_cache();
     return a->original;
 }
 
@@ -444,28 +465,29 @@ static int install_mount(void)
 
 void* tagpu_modload_entry_target;
 
+/* the store first: a player who kills the box still gets the folder's own game next time */
 static void box_and_exit(void)
 {
-    char text[sizeof s_refusal + 200];
-    snprintf(text, sizeof text, "The mod \"%s\" cannot start:\n\n%s.\n\nThe next start runs without it.", s_id, s_refusal);
-    MessageBoxA(NULL, text, "Total Annihilation: Impure", MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+    static char text[sizeof s_refusal + 200];
     tagpu_settings_set_mod("");
-    ExitProcess(1);
+    tagpu_settings_flush();
+    snprintf(text, sizeof text, "The mod \"%s\" cannot start:\n\n%s.\n\nThe next start runs without it.", s_id, s_refusal);
+    tagpu_refuse(text);
 }
 
 /* the exe's entry point, reached on its one thread before any of its code */
 void tagpu_modload_entry_stage(void)
 {
-    int first = 0, changed;
+    const MODRANGE jump = { (uint32_t)(uintptr_t)tagpu_modload_entry_target, 5 };
+    int changed;
     s_entered = 1;
     if (s_refusal[0]) box_and_exit();
-    changed = put_image(&s_snapshot, NULL, 0, &first);
-    if (changed < 0) {
+    changed = put_image(&s_snapshot, &jump, 1);     /* the count is of the others' bytes */
+    if (changed < 0 || put_image(&s_snapshot, NULL, 0) < 0) {
         refuse("the exe's image could not be written (%lu)", GetLastError());
         box_and_exit();
     }
-    /* our own jump is 5 of them, and the first */
-    tagpu_logf("modload: at the entry point: %d B other DLLs wrote were put back", changed - 5);
+    tagpu_logf("modload: at the entry point: %d B other DLLs wrote were put back", changed);
     tagpu_modimg_free(&s_snapshot);
     tagpu_modimg_free(&s_target);
 }

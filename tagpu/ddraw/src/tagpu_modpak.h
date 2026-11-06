@@ -48,7 +48,7 @@ int  tagpu_modpak_is_original(const MODPAK* p, const uint8_t sha[32]);
 int  tagpu_modpak_file_key(const uint8_t* data, size_t n, int is_exe, uint8_t out[32]);
 
 /* An image: the exe's sections in VA order, .rsrc left out, each a copy of its raw bytes. */
-typedef struct { uint32_t va, len; uint8_t* bytes; } MODSEC;
+typedef struct { uint32_t va, len, raw; uint8_t* bytes; } MODSEC;     /* raw: its offset in the file */
 typedef struct { MODSEC sec[MODPAK_MAXSEC]; int nsec; } MODIMG;
 
 /* From the file's bytes; 0 when its headers do not fit it. */

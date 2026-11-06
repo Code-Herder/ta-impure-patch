@@ -213,7 +213,8 @@ def managed_setups(setups) -> list:
     out = []
     for m in mods:
         dropin = by[m["setup"]]
-        keep = {k: dropin[k] for k in ("content",) if k in dropin}
+        keep = {k: dropin[k] for k in ("content", "scenarios") if k in dropin}
+        keep["memory"] = m.get("memory")
         out.append({"name": f"managed-{m['id']}", "about": f"{m['name']} installed by hand into a clean stock folder, chosen by mod=",
                     "add": [], "managed": m["id"], "equals": m["setup"],
                     "registry_roots": dropin.get("registry_roots", []),
@@ -226,6 +227,15 @@ def managed_setups(setups) -> list:
                         "add": base["add"], "managed": m["id"], "matrix": True,
                         "registry_roots": sorted({*dropin.get("registry_roots", []), *base.get("registry_roots", [])}),
                         "goal": base["goal"], **keep})
+    # what must not start: the box, and the next start the folder's own
+    for broken, mod, add, why in (("unknown-mod", "nosuch", [], "does not know that mod"),
+                                  ("not-installed", "mayhem", [], "it is not installed"),
+                                  ("unknown-exe", "mayhem", [], "this exe is not one Impure knows"),
+                                  ("unknown-loader", "prota", by["mayhem-11.3.0"]["add"],
+                                   "the Patch Loader in this folder is not one Impure knows")):
+        out.append({"name": f"managed-refuses-{broken}", "about": f"mod={mod} where it must refuse: {why}", "add": add,
+                    "managed": mod, "managed_break": broken, "refusal": why, "no_network_game": "it refuses",
+                    "registry_roots": [], "goal": {"outcome": "impure-refused", "tadr_ran": False}})
     return out
 
 
@@ -833,12 +843,34 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
     if setup.get("managed"):
-        subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "modpack/modpack.py"), "install",
-                        setup["managed"], str(gamedir), "--link"], check=True, capture_output=True)
+        broken = setup.get("managed_break")
+        if broken not in ("unknown-mod", "not-installed"):
+            subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "modpack/modpack.py"), "install",
+                            setup["managed"], str(gamedir), "--link"], check=True, capture_output=True)
+        # a file one byte from a known one, beside a real install: only its key can tell
+        if broken in ("unknown-exe", "unknown-loader"):
+            want = "totala.exe" if broken == "unknown-exe" else "dplayx.dll"
+            f = next(p for p in gamedir.iterdir() if p.name.lower() == want)
+            d = f.read_bytes()
+            f.unlink()
+            if broken == "unknown-exe":
+                d = bytearray(d)
+                d[0x1000] ^= 1      # .text, whichever the instruction: this exe never runs
+                d = bytes(d)
+            f.write_bytes(d + (b"\0" if broken == "unknown-loader" else b""))
+        if setup.get("memory") == "4gb":
+            # by hand what Confirm does for a flagged mod (the plan, landing 9): the exe's large-address bit, which a
+            # known exe's key ignores. Without it a mod this large runs out of memory loading a game.
+            exe = next(p for p in gamedir.iterdir() if p.name.lower() == "totala.exe")
+            d = bytearray(exe.read_bytes())
+            at = struct.unpack_from("<I", d, 0x3C)[0] + 22
+            struct.pack_into("<H", d, at, struct.unpack_from("<H", d, at)[0] | 0x20)
+            exe.unlink()
+            exe.write_bytes(d)
         cfg = gamedir / "impure.cfg"
         cfg.write_bytes((cfg.read_bytes() if cfg.exists() else b"") + f"\r\nmod={setup['managed']}\r\n".encode())
-        # the loose step closed: a loose unit definition makes its unit vanish from the game (engine/units.md, the "came from
-        # an archive" test 0x4BB650), so one here changes the type list compare_managed reads unless it is never opened
+        # the loose step closed: a loose unit definition makes its unit vanish from the game (the mod manager plan, *Archives
+        # and loose files*), so one here changes the type list compare_managed reads unless it is never opened
         decoy = gamedir / "units" / "ARMCOM.fbi"
         decoy.parent.mkdir(exist_ok=True)
         decoy.write_text("[UNITINFO]\n{\nUnitName=ARMCOM;\n}\n")
@@ -949,6 +981,17 @@ def compare_managed(results):
     play. A mod's files coming from a package is otherwise invisible to every other check."""
     by = {r["setup"]: r for r in results}
     for s in SETUPS:
+        if s.get("refusal") and by.get(s["name"]):
+            r, gamedir, wrong = by[s["name"]], s["_inst"]["gamedir"], []
+            said = (gamedir / "log" / "startup-failure.txt")
+            if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
+                wrong.append(f"the box does not say that {s['refusal']}")
+            if re.search(rb"(?m)^mod=", (gamedir / "impure.cfg").read_bytes()):
+                wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
+            print(f"  {s['name']}: " + (f"WRONG: {wrong}" if wrong else "the box said why, and mod= is gone"))
+            if wrong:
+                r["verdict"] = "UNEXPECTED"
+                r.setdefault("differs", []).extend(wrong)
         o, d = by.get(s["name"]), by.get(s.get("equals"))
         if not o or not s.get("equals"):
             continue
@@ -965,6 +1008,8 @@ def compare_managed(results):
         wrong = [t for t in ca if t in cb and ca[t] != cb[t]]
         if wrong:
             differs.append(f"CRC_all differs from {s['equals']} on {wrong[:6]}")
+        if "units\\armcom.fbi" not in (o.get("_files") or {}).get("tagpu.log", "").lower():
+            differs.append("the log names no loose file refused: the decoy never reached the closed step")
         print(f"  {s['name']}: against {s['equals']}: {len(a or [])} unit types, {len(set(ca) & set(cb))} CRCs compared"
               + (f"; DIFFERS: {differs}" if differs else ", the same"))
         o["compared"] = {"against": s["equals"], "types": len(a or []), "crcs": len(set(ca) & set(cb)), "differs": differs}
