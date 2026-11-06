@@ -334,13 +334,15 @@ The owner's decisions:
   `-1` from the stage. The pass stops drawing at once and destroys nothing mid-frame,
   where other slots' submits still name its objects. `tagpu_vk_hud_down` gives them back behind
   the seam's `vkDeviceWaitIdle` on the next `vk_down` or `passes_down`.
-- **A HUD that cannot draw leaves a replay without on-screen controls for the session.** Its art
+- **A HUD that cannot draw leaves a replay without on-screen controls until the lane is next rebuilt.** Its art
   failing to load, its pass failing to build, the device failing an upload, or its layout failing
   to build: each calls `tagpu_hudstate_refuse` on the render thread, an interlocked store
   `tagpu_hudstate_on` reads on the game thread. From then on no record is filled and no click is
   the HUD's (`hud: the HUD cannot draw (…) - a replay has no on-screen controls and a live game
-  no rewind button this session`); the engine's menu still leaves. Not run: none of the four can be brought about
-  without breaking the build.
+  no rewind button this session`); the engine's menu still leaves. `tagpu_vk_hud_down` forgives it,
+  so the next `vk_down` or `vk_resize` tries again, and a cause that remains refuses again. The pass
+  failing to build is the one of the four met for real (a full GPU, 2026-11-06), and
+  `tagpu_hudrefuse.on` stands in for it.
 
 ### The rules in C
 

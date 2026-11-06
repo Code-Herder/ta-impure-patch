@@ -467,6 +467,7 @@ that map's size.
 - `tagpu_modsui.dump`: touching it writes `tagpu_modsui.json`, the screen's state with the hit map of the frame last drawn in client pixels (`open`, `holds`, `drawn`, `tab`, `rows`, `opts`, `sw`, `hits`, `note`, `running`, `chosen`).
 - `tagpu_modbase.on`: its contents are the download server's address, until the catalog names one.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
+- `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the session goes to GDI.
 - `tools/mods/modsscreen.py [--only flow|real|boxes|menus] [--display :N] [--software]` plays the screen on a private display and holds the run lock.
 
 ## The heartbeats: what must read zero

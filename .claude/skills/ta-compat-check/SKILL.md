@@ -25,7 +25,7 @@ an UNEXPECTED does, and so does a suite that could not run (exit 2).
 make -C tagpu/ddraw -j$(nproc)                       # the DLL under test (the default --dll)
 tools/compat/tacompat.py list                        # setups, fixtures, what is missing
 tools/compat/tacompat.py fetch                       # every fixture with a plain URL
-tools/compat/tacompat.py wine                        # every setup at once, battles and network games
+tools/compat/tacompat.py wine                        # every setup that fits the GPU at once, battles and network games
                                                      # (waits for the machine's run lock, tools/runlock.py)
 tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
@@ -53,6 +53,11 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   UNEXPECTED; a deselect that changed under 20 % of the engine's own strip fails as not
   exercised. The captures stay in the instance's `gamedir/hudcheck/`, the numbers in
   `summary.json` under the battle's `hud`. These two are the only checks that look at pixels.
+- **The device's refusals are judged on every peer**, by name: a pass that lost its memory is
+  UNEXPECTED even when every pixel check passes, since a dead HUD leaves the side panel right. A run
+  takes slots by what the GPU has free (`device memory:` in its output, `GameSlots`, 1000 MiB a game,
+  a network game two), so a suite never meets one by itself: one here is the renderer's footprint
+  growing or something else on the GPU. Check `nvidia-smi` for another session's games first.
 - **Verdicts.** `meets goal` (Impure active, none of TADR's code run); `known gap` (matches
   the setup's `today`, the behaviour accepted until the takeover reaches it); `UNEXPECTED`
   (neither). Exit 1 on any UNEXPECTED, with `--strict` on a known gap too; exit 2 when nothing

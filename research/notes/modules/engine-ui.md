@@ -366,3 +366,12 @@ suite's battle stage compares the side panel after a deselect with the engine's 
 Measured: Escalation 22.5 % of the strip wrong on v0.3, 0.12 % with the fix; `copy-freed` 0.
 Mechanism, residuals and numbers: [GUI renderer](../gui-renderer.html) §28. **Not covered:** an
 off-thread free, a same-base re-make and a full window still drop at once.
+
+**A reset while the panel is open.** A reset re-seeds every surface empty, because composed pixels
+do not cross, and nothing draws into a save-under again, so the restore has nothing to carry: it
+crosses as `PK_PIXELS`, is dropped, and the orders panel stays over nothing. `SURF::lost` marks a
+surface whose drawn twin a reset emptied, and a copy out of one onto the frame owes the panel's
+emblem (`panel_emit`), which is our own op and lands in the panel's place. Measured on the
+`pass-refused` row: 31.0 % of the strip wrong without it, 0.0 % with it. `lost` leaves asset and
+snapshot surfaces out: those re-seed with their bytes, and the `copy-unseeded` count of an ordinary
+game (about 4 300 in a battle on retail) is untouched, since those sources were never seeded.
