@@ -19,6 +19,7 @@
 #define OFF_UCOUNT   0x1438F      /* unsigned UNITINFOCount        */
 #define OFF_UDEFS    0x1439B      /* UnitDefStruct*                */
 #define UD_STRIDE    0x249
+#define UD_CRC_ALL   0x142      /* UnitDefStruct.CRC_all, the network handshake's value: engine/network.md */
 #define UD_DISPLAY   0x00         /* char Name[0x20]        "Peewee"        */
 #define UD_NAME      0x20         /* char UnitName[0x20]    "ARMPW"         */
 #define UD_DESC      0x40         /* char UnitDescription[0x40]            */
@@ -323,9 +324,10 @@ static void write_units(const TAGPU_FRAME* f)
         jfield_str(out, "display", rec + UD_DISPLAY, 0x20);
         jfield_str(out, "desc", rec + UD_DESC, 0x40);
         jfield_str(out, "side", rec + UD_SIDE, 8);
-        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s}",
+        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s,\"crc_all\":\"0x%08X\"}",
                 *(short*)(rec + UD_FOOTX), *(short*)(rec + UD_FOOTY),
-                *(void* const*)(rec + UD_CANBUILD) ? "true" : "false");
+                *(void* const*)(rec + UD_CANBUILD) ? "true" : "false",
+                *(const unsigned*)(rec + UD_CRC_ALL));
         emitted++;
     }
 

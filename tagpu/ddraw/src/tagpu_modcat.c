@@ -68,3 +68,32 @@ int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* 
     tagpu_json_free(d);
     return ret;
 }
+
+static int same_name(const char* a, const char* b)
+{
+    for (; *a && *b; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
+int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const char* name)
+{
+    char e[160];
+    TJDOC* d = tagpu_json_parse(catalog, n, e, sizeof e);
+    const TJV* m;
+    int hit = 0;
+    if (!d) return 0;
+    m = tj_get(tagpu_json_root(d), "mods");
+    for (m = tj_is(m, TJ_ARR) ? m->first : NULL; m; m = m->next) {
+        const TJV* h;
+        if (strcmp(tj_str(tj_get(m, "id"), ""), id)) continue;
+        h = tj_get(m, "hide");
+        for (h = tj_is(h, TJ_ARR) ? h->first : NULL; h; h = h->next)
+            if (same_name(tj_str(h, ""), name)) hit = 1;
+        break;
+    }
+    tagpu_json_free(d);
+    return hit;
+}

@@ -25,6 +25,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_settings.h"
 #include "tagpu_profiles.h"
+#include "tagpu_modload.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
@@ -128,6 +129,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 #endif
 
         cfg_load();
+
+        /* tagpu: a mod chosen by mod= (tagpu_modload.h): its image in place before Impure's first patch */
+        tagpu_modload_begin();
 
         /* tagpu: apply our engine byte-patches to the loaded exe before TA runs
            (e.g. skip the DirectX startup warning). Exe on disk stays pristine. */
@@ -465,6 +469,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             indeo_enable();
         timeBeginPeriod(1);
         hook_init();
+        /* tagpu: last, so its snapshot holds all of Impure's attach (tagpu_modload.h) */
+        tagpu_modload_end();
+
         break;
     }
     case DLL_PROCESS_DETACH:
@@ -546,6 +553,7 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
     TRACE("-> %s(lpGUID=%p, lplpDD=%p, pUnkOuter=%p) [%p]\n", __FUNCTION__, lpGUID, lplpDD, pUnkOuter, _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_modload_check();
     tagpu_takeover_verify_image();
 
     HRESULT ret;
@@ -594,6 +602,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
         _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_modload_check();
     tagpu_takeover_verify_image();
 
     HRESULT ret;

@@ -51,6 +51,8 @@ typedef struct {
    memory runs out; an archive that does not open is kept as a refusal. */
 TAGPU_VFS*  tagpu_vfs_open(const char* cwd, const char (*arc)[TAGPU_VFS_PATHMAX], int narc, const char* language);
 void        tagpu_vfs_close(TAGPU_VFS* v);
+/* A managed mod's rule (tagpu_modload.h): no path `closed` answers 1 for is found or listed loose. */
+void        tagpu_vfs_close_loose(TAGPU_VFS* v, int (*closed)(const char* path));
 
 int         tagpu_vfs_narc(const TAGPU_VFS* v);
 const char* tagpu_vfs_arc_name(const TAGPU_VFS* v, int i);      /* its file name, no folder     */

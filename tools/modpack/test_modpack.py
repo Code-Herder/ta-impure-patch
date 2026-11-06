@@ -114,17 +114,22 @@ class Package(unittest.TestCase):
 
 
 class Pack(unittest.TestCase):
+    STOCK = b"s" * 32
+
     def test_one_entry_per_xor(self):
         x, y = {100: 5}, {200: 6, 201: 7}
         known = [(0, "a exe", b"k" * 32, dict(x)), (1, "a loader", b"l" * 32, None), (0, "b exe", b"m" * 32, dict(y))]
-        pack = m.read_patches(m.pack_patches([("amod", b"h" * 32, x)], known))
+        pack = m.read_patches(m.pack_patches(self.STOCK, [("amod", b"h" * 32, x, 1)], known, [(50, 4), (60, 2)], [b"o" * 32]))
         self.assertEqual(len(pack["xors"]), 2, "a mod and its exe share one XOR")
-        self.assertEqual(pack["mods"], [("amod", b"h" * 32, 0)])
+        self.assertEqual(pack["mods"], [("amod", b"h" * 32, 0, 1)])
         self.assertEqual(pack["known"], [(0, b"k" * 32, 0), (1, b"l" * 32, -1), (0, b"m" * 32, 1)])
         self.assertEqual(pack["xors"][1], [(200, bytes([6, 7]))])
+        self.assertEqual(pack["mask"], [(50, 4), (60, 2)])
+        self.assertEqual(pack["originals"], [b"o" * 32])
+        self.assertEqual(pack["stock_key"], self.STOCK)
 
     def test_truncated(self):
-        blob = m.pack_patches([("amod", b"h" * 32, {100: 5})], [])
+        blob = m.pack_patches(self.STOCK, [("amod", b"h" * 32, {100: 5}, 0)], [], [], [])
         with self.assertRaises(SystemExit):
             m.read_patches(blob + b"x")
 
@@ -188,6 +193,46 @@ class Rules(unittest.TestCase):
             j = copy.deepcopy(GOOD)
             edit(j["mods"][0]["options"])
             self.assertTrue(self.run_on(j, "amod").startswith("-1 catalog: amod:"), self.run_on(j, "amod"))
+
+
+class CPack(unittest.TestCase):
+    """tagpu_modpak.c reads what pack_patches writes, refuses a cut or lengthened pack, and its SHA-256 is SHA-256."""
+    MAIN = (b'#include <stdio.h>\n#include <stdlib.h>\n#include "tagpu_modpak.h"\n'
+            b'int main(int c, char** v) { static uint8_t b[1 << 16]; FILE* f = fopen(v[1], "rb"); size_t n = fread(b, 1, sizeof b, f);\n'
+            b'  MODPAK p; uint8_t h[32]; MODSHA s; int i; if (c > 2) { modsha_init(&s); modsha_add(&s, b, n); modsha_end(&s, h);\n'
+            b'  for (i = 0; i < 32; i++) printf("%02x", h[i]); return 0; }\n'
+            b'  if (!tagpu_modpak_read(b, n, &p)) { puts("refused"); return 0; }\n'
+            b'  printf("%u %u %u %u %u %s %d %d %d", p.nxors, p.nmods, p.nknown, p.nmask, p.noriginals, p.mods[0].id, p.mods[0].loader, p.known[1].xor_, tagpu_modpak_is_original(&p, p.originals));\n'
+            b'  return 0; }\n')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        src = m.ROOT / "tagpu/ddraw/src"
+        (Path(cls.dir.name) / "main.c").write_bytes(cls.MAIN)
+        cls.exe = Path(cls.dir.name) / "pak"
+        m.subprocess.run(["gcc", "-std=c99", "-I", str(src), "-o", str(cls.exe), str(Path(cls.dir.name) / "main.c"), str(src / "tagpu_modpak.c")], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    def run_on(self, blob, *more):
+        p = Path(self.dir.name) / "in"
+        p.write_bytes(blob)
+        return m.subprocess.run([str(self.exe), str(p), *more], capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_read(self):
+        known = [(0, "a", b"k" * 32, {100: 5}), (1, "b", b"l" * 32, None)]
+        blob = m.pack_patches(b"s" * 32, [("amod", b"h" * 32, {100: 5}, 1)], known, [(50, 4)], [b"o" * 32])
+        self.assertEqual(self.run_on(blob), "1 1 2 1 1 amod 1 -1 1")
+        self.assertEqual(self.run_on(blob[:-1]), "refused")
+        self.assertEqual(self.run_on(blob + b"x"), "refused")
+        self.assertEqual(self.run_on(blob[:40]), "refused")
+
+    def test_sha(self):
+        for data in (b"abc", b"x" * 55, b"y" * 56, b"z" * 64, b"w" * 1000):
+            self.assertEqual(self.run_on(data, "sha"), m.hashlib.sha256(data).hexdigest())
 
 
 class Runs(unittest.TestCase):

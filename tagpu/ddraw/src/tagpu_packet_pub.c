@@ -82,6 +82,7 @@
 #include <stdio.h>
 #include <stdlib.h>         /* free: the loader's hand-over */
 #include <string.h>
+#include "tagpu_modload.h"
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
 #include "tagpu_engine.h"
@@ -1079,6 +1080,11 @@ static void iconset_load(const char* ta)
         _snprintf(b, sizeof b, "icons: no mod set - %s names no MegaMapConfig of the install's own", ini);
         b[sizeof b - 1] = 0; plog(b);
         return;
+    }
+    /* a managed mod's icon folder is in its package: the ini beside the exe names it relative to the mod */
+    if (tagpu_modload_id()) {
+        strncat(dir, "\\mods\\", sizeof dir - strlen(dir) - 1);
+        strncat(dir, tagpu_modload_id(), sizeof dir - strlen(dir) - 1);
     }
     if (!iconset_join(path, dir, val) || !iconset_read(path, text, sizeof text, &got)) {
         _snprintf(b, sizeof b, "icons: no mod set - %s's MegaMapConfig %s does not read", ini, val);

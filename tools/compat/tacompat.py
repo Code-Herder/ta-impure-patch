@@ -202,6 +202,36 @@ FIX = load_json("fixtures.json")["fixtures"]
 SETUPS = load_json("setups.json")["setups"]
 
 
+def managed_setups(setups) -> list:
+    """THE MANAGED COLUMN. A row per mod (`managed-<id>`): the mod installed by hand into a clean stock folder and chosen by
+    mod=, which must equal its drop-in row in the same run (compare_managed). And the base-exe x mod matrix
+    (`matrix-<id>-on-<base>`, asked for by the name `matrix`): the same mod in a folder another mod's drop-in install left,
+    whose exe and loader the DLL takes back at start-up. A row's expectation comes from the folder it runs in."""
+    mods = [json.loads(p.read_text()) for p in sorted((Path(__file__).resolve().parents[2] / "mods").glob("*.json"))
+            if p.name != "catalog.json"]
+    by = {s["name"]: s for s in setups}
+    out = []
+    for m in mods:
+        dropin = by[m["setup"]]
+        keep = {k: dropin[k] for k in ("content",) if k in dropin}
+        out.append({"name": f"managed-{m['id']}", "about": f"{m['name']} installed by hand into a clean stock folder, chosen by mod=",
+                    "add": [], "managed": m["id"], "equals": m["setup"],
+                    "registry_roots": dropin.get("registry_roots", []),
+                    "goal": {"outcome": "impure-active", "tadr_ran": False}, **keep})
+        for b in mods:
+            if b["id"] == m["id"]:
+                continue
+            base = by[b["setup"]]
+            out.append({"name": f"matrix-{m['id']}-on-{b['id']}", "about": f"{m['name']} chosen by mod= in a folder {b['name']} was installed into",
+                        "add": base["add"], "managed": m["id"], "matrix": True,
+                        "registry_roots": sorted({*dropin.get("registry_roots", []), *base.get("registry_roots", [])}),
+                        "goal": base["goal"], **keep})
+    return out
+
+
+SETUPS += managed_setups(SETUPS)
+
+
 # ------------------------------------------------------------------------- fixtures
 
 def fixture_problems(name) -> list:
@@ -343,8 +373,10 @@ def overlay(setup) -> list:
 
 def pick_setups(names) -> list:
     if not names:
-        return list(SETUPS)
+        return [s for s in SETUPS if not s.get("matrix")]
     by = {s["name"]: s for s in SETUPS}
+    if "matrix" in names:
+        return [s for s in SETUPS if s.get("matrix")] + [by[n] for n in names if n != "matrix"]
     missing = [n for n in names if n not in by]
     if missing:
         die(f"no setup {', '.join(missing)} (tacompat.py list)")
@@ -800,6 +832,16 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     shutil.copy2(dll, ddraw)
     for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
+    if setup.get("managed"):
+        subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "modpack/modpack.py"), "install",
+                        setup["managed"], str(gamedir), "--link"], check=True, capture_output=True)
+        cfg = gamedir / "impure.cfg"
+        cfg.write_bytes((cfg.read_bytes() if cfg.exists() else b"") + f"\r\nmod={setup['managed']}\r\n".encode())
+        # the loose step closed: a loose unit definition makes its unit vanish from the game (engine/units.md, the "came from
+        # an archive" test 0x4BB650), so one here changes the type list compare_managed reads unless it is never opened
+        decoy = gamedir / "units" / "ARMCOM.fbi"
+        decoy.parent.mkdir(exist_ok=True)
+        decoy.write_text("[UNITINFO]\n{\nUnitName=ARMCOM;\n}\n")
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())
@@ -889,7 +931,46 @@ def mod_content(setup, inst) -> "dict | None":
     except (ValueError, KeyError, TypeError):
         return {"want": want, "why": f"tacli units: {(r.stderr or r.stdout).strip()[:200]}"}
     have = {str(row.get("name") if isinstance(row, dict) else row).upper() for row in rows}
-    return {"want": want, "types": len(have), "missing": [u for u in want if u.upper() not in have]}
+    return {"want": want, "types": len(have), "names": sorted(have), "missing": [u for u in want if u.upper() not in have]}
+
+
+def type_crcs(name) -> dict:
+    """{unit type: its CRC_all} of every type the engine loaded, the value the network handshake compares (0x1A UNIT_DATA)."""
+    r = tacli("units", name, "--json", "--limit", "0", timeout=90)
+    try:
+        rows = json.loads(r.stdout)["units"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    return {u["name"].upper(): u["crc_all"] for u in rows if isinstance(u, dict) and "crc_all" in u}
+
+
+def compare_managed(results):
+    """A managed row against its drop-in row of the same run: the same unit types, and the same CRC on each type both had in
+    play. A mod's files coming from a package is otherwise invisible to every other check."""
+    by = {r["setup"]: r for r in results}
+    for s in SETUPS:
+        o, d = by.get(s["name"]), by.get(s.get("equals"))
+        if not o or not s.get("equals"):
+            continue
+        if not d:
+            print(f"  {s['name']}: not compared, {s['equals']} did not run")
+            continue
+        differs = []
+        a, b = (o.get("content") or {}).get("names"), (d.get("content") or {}).get("names")
+        if a != b:
+            gone = sorted(set(b or []) - set(a or []))[:6]
+            new = sorted(set(a or []) - set(b or []))[:6]
+            differs.append(f"unit types differ from {s['equals']}: only there {gone}, only here {new}")
+        ca, cb = o.get("crcs") or {}, d.get("crcs") or {}
+        wrong = [t for t in ca if t in cb and ca[t] != cb[t]]
+        if wrong:
+            differs.append(f"CRC_all differs from {s['equals']} on {wrong[:6]}")
+        print(f"  {s['name']}: against {s['equals']}: {len(a or [])} unit types, {len(set(ca) & set(cb))} CRCs compared"
+              + (f"; DIFFERS: {differs}" if differs else ", the same"))
+        o["compared"] = {"against": s["equals"], "types": len(a or []), "crcs": len(set(ca) & set(cb)), "differs": differs}
+        if differs:
+            o["verdict"] = "UNEXPECTED"
+            o.setdefault("differs", []).extend(differs)
 
 
 def gametime(name) -> "int | None":
@@ -1694,12 +1775,14 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                         break
         content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
+        crcs = {}
         # A harness setup (one with a lever) checks a mechanism at the menu, as it plays no
         # network game (mp_eligible): gui-stress's fresh start every 120 presents, run on
         # through a battle, spends the layer's 32 repaints of a palette generation by design.
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
                                 scenarios(setup)["battle"])
+            crcs = type_crcs(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
         hooks = exe_hooks(proc.pid, gamedir) if proc.poll() is None else None
@@ -1740,7 +1823,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "tdrawlog": read(gamedir / "tdrawlog.txt"),
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
-        "battle": fight, "hooks": hooks, "content": content,
+        "battle": fight, "hooks": hooks, "content": content, "crcs": crcs,
         "seconds": round(time.time() - t0, 1), "watch_end": watch_end,
     }
     logs = other_logs(gamedir / "log", t0)
@@ -2251,6 +2334,7 @@ def cmd_wine(args):
             judged(s, o)
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
+    compare_managed(results)
     rc = report(results, "wine", dll, started, args.strict, source)
     J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-wine"
                        / "summary.txt"))

@@ -24,6 +24,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include "tagpu_log.h"
+#include "tagpu_modload.h"
 #include "tagpu_model3do.h"
 #include "tagpu_wikisound.h"
 #define LOG tagpu_logf
@@ -4603,6 +4604,16 @@ static void bar_json(SB* rep, const SIDE* S, const SBAR* b, const unsigned char*
            (unsigned long)fnv(FNV0, fonts + b->font_off, b->font_len));
 }
 
+/* the game's files as this game finds them, a managed mod's closed loose step included */
+static TAGPU_VFS* asset_vfs(const WIKI3DIN* in)
+{
+    TAGPU_VFS* v = tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])in->arc, in->narc, in->names.language);
+#ifdef _WIN32
+    tagpu_vfs_close_loose(v, tagpu_modload_loose_closed);
+#endif
+    return v;
+}
+
 const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report)
 {
     SIDE S;
@@ -5394,7 +5405,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     if (nunit && (!(un_at = alloc(&L.a, (uint32_t)(nunit * sizeof(WIKI3DUNIT)))) ||
                   !(urec = (UNITREC*)calloc((size_t)nunit, sizeof *urec))))
         nunit = 0;
-    L.vfs = vfs ? vfs : tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])in->arc, in->narc, in->names.language);
+    L.vfs = vfs ? vfs : asset_vfs(in);
     if (L.vfs) {
         for (i = 0, j = 0; nstage && i < d->nentry; i++)
             for (k = 0; k < d->entry[i].nscene; k++, j++) {
@@ -5564,7 +5575,7 @@ static DWORD WINAPI loader(LPVOID p)
     QueryPerformanceCounter(&t0);
     /* THE SIDEBAR FIRST, published before the 3D load starts, refused or not: the wiki starts no
        demo before it has this answer (tagpu_wikiside_get) */
-    vfs = tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])in->arc, in->narc, in->names.language);
+    vfs = asset_vfs(in);
     side = tagpu_wikiside_load(in, vfs, &side_report);
     free(side_report);                      /* the block keeps its own copy */
     QueryPerformanceCounter(&ts);

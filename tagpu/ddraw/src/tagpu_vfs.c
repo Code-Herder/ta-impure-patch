@@ -35,6 +35,7 @@ struct TAGPU_VFS {
     char lang[64];
     int  narc;
     ARC* arc;
+    int (*closed)(const char* path);    /* tagpu_vfs_close_loose: NULL for the engine's plain rule */
 };
 
 static void copy(char* dst, size_t cap, const char* src)
@@ -255,6 +256,17 @@ static void arc_shut(ARC* a)
 
 /* ---- the sources ---------------------------------------------------------------------------- */
 
+/* a loose file as the sources see it: none where a managed mod has closed the step */
+static int source_kind(const TAGPU_VFS* v, const char* rel, uint32_t* size)
+{
+    return v->closed && v->closed(rel) ? 0 : loose_kind(v, rel, size);
+}
+
+void tagpu_vfs_close_loose(TAGPU_VFS* v, int (*closed)(const char* path))
+{
+    if (v) v->closed = closed;
+}
+
 TAGPU_VFS* tagpu_vfs_open(const char* cwd, const char (*arc)[TAGPU_VFS_PATHMAX], int narc, const char* language)
 {
     TAGPU_VFS* v = (TAGPU_VFS*)calloc(1, sizeof *v);
@@ -332,7 +344,7 @@ int tagpu_vfs_find(TAGPU_VFS* v, const char* path, TAGPU_VFILE* out)
     uint32_t size = 0;
     int k;
     if (!v || strlen(path) >= TAGPU_VFS_PATHMAX) return 0;
-    if (loose_kind(v, path, &size) == 1) {
+    if (source_kind(v, path, &size) == 1) {
         out->src = -1;
         out->entry = -1;
         out->size = size;
@@ -421,7 +433,7 @@ static int shadowed(TAGPU_VFS* v, int k, int e, const char* path)
     int j;
     if (tagpu_hpi_shadowed(v->arc[k].hpi, e)) return 1;
     if (arc_file_entry(v, k, path) != e) return 0;
-    if (loose_kind(v, path, NULL) == 1) goto mark;
+    if (source_kind(v, path, NULL) == 1) goto mark;
     for (j = 0; j < k; j++)
         if (arc_file_entry(v, j, path) >= 0) goto mark;
     return 0;
@@ -447,7 +459,7 @@ static int loose_each(void* ctx, const char* name, int is_dir)
         return c->w->go;
     }
     if (c->w->recursive && !tagpu_vfs_match(name, c->w->pattern)) return 1;
-    if (loose_kind(c->w->v, f.path, &size) != 1) return 1;
+    if (source_kind(c->w->v, f.path, &size) != 1) return 1;
     f.src = -1;
     f.entry = -1;
     f.size = size;

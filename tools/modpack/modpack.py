@@ -25,8 +25,8 @@ KNOWN FILES. The pack lists the modded exes and Patch Loaders Impure knows by fi
 that takes it to stock. A loader names none: the image is restored from the exe on disk, because what a loader writes is
 partly rel32 displacements into its own DLLs, which no table can hold (research/notes/mod-manager-plan.md).
 
-PACKAGES. Each is one tar.zst holding <id>.hpi, its recipe <id>.originals.tsv and any plain files the DLL itself reads
-(Icon/, a mod's strategic icons). The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py), over the
+PACKAGES. Each is one tar.zst holding <id>.hpi, its recipe <id>.originals.tsv and the plain files read by plain path that a
+mod needs: Icon/, its strategic icons, and the options file the image names, whose [Preferences] the engine reads. The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py), over the
 retail archives as they really are: as the drop-in folder (retail files overlaid by the mod's, the mod's first mount pattern, loose files first) and as the
 managed mount (the package first, then the retail archives the drop-in folder did not lose). The package's archive holds
 exactly the paths where a mod file wins in the drop-in folder and its bytes are neither what the managed mount already
@@ -42,12 +42,14 @@ plain path, or nobody does, is named in the package's listing.txt.
 Packages, listings and anything else derived from a mod's files go to the fixture cache beside the mods, outside the
 repository: third-party bytes must never be one `git add -A` away from a commit.
 
-mods/patches.bin, little-endian, zstd compressed (read by the DLL through MODPAK):
-    "MPAT" | u32 version | u32 nxors | u32 nmods | u32 nknown
-    xor:   u32 nruns | runs
-    mod:   u8 idlen | id | 32 B sha256 of the patched image (image_hash) | u32 xor
-    known: u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | i32 xor taking it to stock, -1 for a loader
-    run:   u32 va | u16 len | bytes
+mods/patches.bin, little-endian, zstd compressed (read by tagpu_modpak.c):
+    "MPAT" | u32 version | u32 nxors | u32 nmods | u32 nknown | u32 nmask | u32 noriginals | 32 B file_key of stock 3.1
+    xor:      u32 nruns | runs
+    mod:      u8 idlen | id | 32 B image hash | u32 xor | u8 1 when a loader writes it after Impure's attach
+    known:    u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | i32 xor taking it to stock, -1 for a loader
+    mask:     u32 va | u32 len, sorted: the import structures of stock and every known exe, which no hash covers
+    original: 32 B SHA-256 of an original archive of the game
+    run:      u32 va | u16 len | bytes
 """
 import argparse
 import fnmatch
@@ -418,9 +420,22 @@ def known_files(stock: Pe):
     return out
 
 
-def pack_patches(mods: list, known: list) -> bytes:
-    """mods/patches.bin before compression, from [(id, image hash, {va: xor})] and known_files. Equal XORs are one entry,
-    so a mod and its exe share theirs: the pack holds no table beside the same table's revert."""
+def known_mask(stock: Pe, known_exes: list) -> list:
+    """The sorted (va, len) ranges of the import structures of stock and every known exe."""
+    vas = sorted(masked_set(stock, *known_exes))
+    out = []
+    for va in vas:
+        if out and out[-1][0] + out[-1][1] == va:
+            out[-1][1] += 1
+        else:
+            out.append([va, 1])
+    return [tuple(r) for r in out]
+
+
+def pack_patches(stock_key: bytes, mods: list, known: list, mask: list, originals: list) -> bytes:
+    """mods/patches.bin before compression, from [(id, image hash, {va: xor}, loader)], known_files, known_mask and the
+    original archives' SHA-256. Equal XORs are one entry, so a mod and its exe share theirs: the pack holds no table beside
+    the same table's revert."""
     xors, index = [], {}
 
     def xor_id(x: dict) -> int:
@@ -430,29 +445,34 @@ def pack_patches(mods: list, known: list) -> bytes:
             xors.append(x)
         return index[key]
 
-    mod_rows = [(mid, h, xor_id(x)) for mid, h, x in mods]
+    mod_rows = [(mid, h, xor_id(x), loader) for mid, h, x, loader in mods]
     known_rows = [(kind, key, -1 if x is None else xor_id(x)) for kind, _, key, x in known]
-    blob = bytearray(b"MPAT" + struct.pack("<IIII", VERSION, len(xors), len(mod_rows), len(known_rows)))
+    blob = bytearray(b"MPAT" + struct.pack("<IIIIII", VERSION, len(xors), len(mod_rows), len(known_rows), len(mask), len(originals)) + stock_key)
     for x in xors:
         runs = runs_of(x)
         blob += struct.pack("<I", len(runs))
         for va, b in runs:
             blob += struct.pack("<IH", va, len(b)) + b
-    for mid, h, i in mod_rows:
-        blob += bytes([len(mid)]) + mid.encode() + h + struct.pack("<I", i)
+    for mid, h, i, loader in mod_rows:
+        blob += bytes([len(mid)]) + mid.encode() + h + struct.pack("<IB", i, loader)
     for kind, key, i in known_rows:
         blob += bytes([kind]) + key + struct.pack("<i", i)
+    for va, n in mask:
+        blob += struct.pack("<II", va, n)
+    for sha in originals:
+        blob += sha
     return bytes(blob)
 
 
 def read_patches(blob: bytes) -> dict:
-    """The format above, read to its exact end, as the DLL must."""
+    """The format above, read to its exact end, as the DLL does."""
     if blob[:4] != b"MPAT":
         die("patches.bin: no magic")
-    version, nx, nm, nk = struct.unpack_from("<IIII", blob, 4)
+    version, nx, nm, nk, nmask, nor = struct.unpack_from("<IIIIII", blob, 4)
     if version != VERSION:
         die(f"patches.bin: version {version}")
-    at = 20
+    stock_key = blob[28:60]
+    at = 60
     xors = []
     for _ in range(nx):
         n = struct.unpack_from("<I", blob, at)[0]
@@ -467,15 +487,22 @@ def read_patches(blob: bytes) -> dict:
     for _ in range(nm):
         ln = blob[at]
         mid, h = blob[at + 1:at + 1 + ln].decode(), blob[at + 1 + ln:at + 33 + ln]
-        mods.append((mid, h, struct.unpack_from("<I", blob, at + 33 + ln)[0]))
-        at += 37 + ln
+        i, loader = struct.unpack_from("<IB", blob, at + 33 + ln)
+        mods.append((mid, h, i, loader))
+        at += 38 + ln
     known = []
     for _ in range(nk):
         known.append((blob[at], blob[at + 1:at + 33], struct.unpack_from("<i", blob, at + 33)[0]))
         at += 37
+    mask = []
+    for _ in range(nmask):
+        mask.append(struct.unpack_from("<II", blob, at))
+        at += 8
+    originals = [blob[at + 32 * i:at + 32 * (i + 1)] for i in range(nor)]
+    at += 32 * nor
     if at != len(blob):
         die(f"patches.bin: {len(blob) - at} B past the last entry")
-    return {"xors": xors, "mods": mods, "known": known}
+    return {"stock_key": stock_key, "xors": xors, "mods": mods, "known": known, "mask": mask, "originals": originals}
 
 
 # ---------------------------------------------------------------------------- the mount, simulated
@@ -586,6 +613,9 @@ class Plan:
         self.retail_mount = [n for n in mount_order(list(self.retail), "rev31.gp3")]
         self.hide = sorted(n for n in self.retail_mount if n.lower() not in kept)
         self.managed_retail = [n for n in self.retail_mount if n.lower() in kept]
+        # the options file the image names (0x5098A3): its [Preferences] reach the engine (0x49F5F9) as well as TADR's keys
+        ini = next((bytes(buf[0x5098A3 - v:0x5098B0 - v]) for v, buf in self.img if v <= 0x5098A3 < v + len(buf)), b"")
+        options_file = ini.split(b"\0")[0].decode("latin-1").lower()
         self.loose = {}                         # the mod's loose game data: lower path -> (name as installed, file)
         self.plain = []                         # (name, why dropped)
         self.kept = {}                          # the plain files the package carries: name -> file
@@ -597,7 +627,7 @@ class Plan:
                 pass                            # an archive of the mount
             elif "/" in low.replace("\\", "/") and low.split("/")[0] in GAME_DIRS:
                 self.loose[low.replace("\\", "/")] = (name.replace("\\", "/"), p)
-            elif low.replace("\\", "/").split("/")[0] in PLAIN_KEPT:
+            elif low.replace("\\", "/").split("/")[0] in PLAIN_KEPT or low == options_file:
                 self.kept[name.replace("\\", "/")] = p
             else:
                 self.plain.append((name, "read by plain path or not at all"))
@@ -667,6 +697,11 @@ def plan_package(src, stock, hashes):
 
 # ---------------------------------------------------------------------------- the commands
 
+# What tagpu_modload.c detours under a managed mod, each at a stock byte a table must not change: the mounter's prologue and
+# the two rel32s of the loose step, in the path open and the enumeration.
+MOUNT_SITES = ((0x4BE0B0, 6), (0x4BB32D, 5), (0x4BC5D3, 5))
+
+
 def cmd_tables(_):
     stock = Pe(stock_exe())
     for s in mod_sources():
@@ -687,6 +722,7 @@ def cmd_verify(a):
         bad += not ok
         print(("ok   " if ok else "FAIL ") + line)
 
+    sites = {va + i for va, n in MOUNT_SITES for i in range(n)}
     # each table reproduces its mod's exe from stock; a loader's reproduces what its list says, by construction, and
     # `loaderdump` measures it against a process
     for s in mod_sources(a.ids or None):
@@ -695,25 +731,42 @@ def cmd_verify(a):
         img = apply(stock, tab)
         if s["exe"] == "file":
             report(image_hash(img, m) == image_hash(image(exe), m), f"{s['id']}: the table on stock gives the mod's exe, imports aside")
+        hit = sorted(set(tab) & sites)
+        report(not hit, f"{s['id']}: the table leaves the sites Impure's mount and loose step use" + (f"; first 0x{hit[0]:X}" if hit else ""))
         report(all(va not in mask for va in tab), f"{s['id']}: the table writes no import structure ({len(tab)} B)")
-    # the committed pack, read as the DLL reads it: each XOR gives its mod from stock and stock from its known exe
-    pack = read_patches(subprocess.run(["zstd", "-dqc", str(MODS / "patches.bin")], capture_output=True, check=True).stdout)
-    for mid, h, i in pack["mods"]:
+    # the committed pack, read as the DLL reads it: each XOR gives its mod from stock and stock from its known exe, under
+    # the pack's own mask, and tagpu_modpak.c gives the same answers on every known exe
+    pack_bytes = subprocess.run(["zstd", "-dqc", str(MODS / "patches.bin")], capture_output=True, check=True).stdout
+    pack = read_patches(pack_bytes)
+    pmask = {va + i for va, n in pack["mask"] for i in range(n)}
+    report(pack["stock_key"] == file_key(stock.data, True), "the pack names stock 3.1's key")
+    for mid, h, i, _ in pack["mods"]:
         img = image(stock)
         for va, b in pack["xors"][i]:
             image_xor(img, va, b)
-        report(image_hash(img, mask) == h, f"{mid}: its XOR on stock gives the image hash the pack names")
-    exes = {file_key(Path(p).read_bytes(), True): Path(p).read_bytes() for st in tacompat().SETUPS for dest, p in tacompat().overlay(st) if dest.lower() == "totala.exe"}
+        report(image_hash(img, pmask) == h, f"{mid}: its XOR on stock gives the image hash the pack names")
+        touched = sum(va + j in pmask for va, b in pack["xors"][i] for j in range(len(b)))
+        report(not touched, f"{mid}: its XOR writes no known exe's import structure ({touched} B)")
+    exes = {file_key(Path(p).read_bytes(), True): Path(p) for st in tacompat().SETUPS for dest, p in tacompat().overlay(st) if dest.lower() == "totala.exe"}
+    stock_hash = image_hash(image(stock), pmask)
     for kind, key, i in pack["known"]:
         if kind:
             report(i == -1, f"loader {key.hex()[:12]}: named with no table")
             continue
-        src = Pe(exes[key])
+        src = Pe(exes[key].read_bytes())
         img = image(src)
-        m = masked_set(stock, src)
         for va, b in pack["xors"][i]:
             image_xor(img, va, b)
-        report(image_hash(img, m) == image_hash(image(stock), m), f"exe {key.hex()[:12]}: its XOR gives stock 3.1")
+        report(image_hash(img, pmask) == stock_hash, f"exe {key.hex()[:12]}: its XOR gives stock 3.1")
+    with tempfile.TemporaryDirectory() as d:
+        src_dir = ROOT / "tagpu/ddraw/src"
+        subprocess.run(["gcc", "-std=c99", "-O1", "-I", str(src_dir), "-o", d + "/check", str(HERE / "modpakcheck.c"), str(src_dir / "tagpu_modpak.c")], check=True)
+        (Path(d) / "pack").write_bytes(pack_bytes)
+        want = {mid: h.hex() for mid, h, _, _ in pack["mods"]}
+        for path in [main_checkout() / "pristine/TotalA.exe.pristine", *[exes[k] for k, _, _ in ((key, 0, 0) for kind, key, _ in pack["known"] if not kind)]]:
+            out = subprocess.run([d + "/check", d + "/pack", str(path)], capture_output=True, text=True).stdout.splitlines()
+            report(out and out[0] == file_key(path.read_bytes(), True).hex() and {l.split()[0]: l.split()[1] for l in out[1:]} == want,
+                   f"tagpu_modpak.c on {path.parent.name}/{path.name}: its key and every mod's hash")
     # what the pack reads as stock on its own: the bytes a mod sets to zero, and nothing else
     worst, total = 0, 0
     for runs in pack["xors"]:
@@ -830,6 +883,48 @@ def cmd_packages(a):
               f"{st['stripped']} from retail, {len(st['recipe'])} by recipe, {len(st['loose_original'])} unsourced, {len(plan.plain)} dropped; hide {plan.hide}")
 
 
+def cmd_install(a):
+    """A mod installed by hand: its package into <gamedir>/mods/<id>/, and its recipe run into <id>.originals.hpi from that
+    folder's own archives, as the installer will. With --link the result is built once beside the package, from the retail
+    folder, and linked in: the compatibility suite installs each mod into many folders."""
+    gamedir = Path(a.gamedir)
+    tar = OUT / a.id / f"{a.id}.tar.zst"
+    if not tar.is_file():
+        die(f"no package at {tar}")
+
+    def build(dest: Path, source: Path):
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True)
+        with tempfile.TemporaryDirectory(dir=OUT) as d:
+            subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
+            with tarfile.open(d + "/p.tar") as t:
+                t.extractall(dest, filter="data")
+        archives, tree = {}, {}
+        names = {p.name.lower(): p for p in source.iterdir() if p.is_file()}
+        for line in (dest / f"{a.id}.originals.tsv").read_text().splitlines():
+            path, md5, size, arc, member = line.split("\t")
+            h = archives.get(arc.lower()) or hpipack().Archive(names[arc.lower()])
+            archives[arc.lower()] = h
+            data = h.read(member)
+            if hashlib.md5(data).hexdigest() != md5:
+                die(f"{path}: {arc} does not hold the bytes the recipe names")
+            insert_cased(tree, path, data)
+        (dest / f"{a.id}.originals.hpi").write_bytes(hpipack().build(tree, 0, 2))
+
+    dest = gamedir / "mods" / a.id
+    if a.link:
+        built = OUT / a.id / "installed"
+        if not built.is_dir() or built.stat().st_mtime < tar.stat().st_mtime:
+            build(built, tavfs().find_install(None))
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True)
+        for p in built.iterdir():
+            (dest / p.name).symlink_to(p)
+    else:
+        build(dest, gamedir)
+    print(f"{a.id}: installed into {dest}")
+
+
 def sha_of(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -862,13 +957,19 @@ def cmd_catalog(_):
             if k in s:
                 e[k] = s[k]
         entries.append(e)
-        mods_bin.append((s["id"], image_hash(img, mask), xor_of(stock, tab)))
+        mods_bin.append((s["id"], img, xor_of(stock, tab), 1 if s["exe"] == "loader" else 0))
     (MODS / "catalog.json").write_text(json.dumps({"version": VERSION, "mods": entries}, indent=2) + "\n")
     known = known_files(stock)
-    blob = pack_patches(mods_bin, known)
+    known_exes = [Pe(p.read_bytes()) for p in {Path(src) for st in tacompat().SETUPS for dest, src in tacompat().overlay(st) if dest.lower() == "totala.exe"}]
+    mask = known_mask(stock, known_exes)
+    pmask = {va + i for va, n in mask for i in range(n)}
+    mods_bin = [(mid, image_hash(img, pmask), x, loader) for mid, img, x, loader in mods_bin]
+    retail_dir = tavfs().find_install(None)
+    originals = sorted(bytes.fromhex(sha_of(p)) for p in retail_dir.iterdir() if p.is_file() and p.suffix.lower() in (".gp3", ".ccx", ".ufo", ".hpi") and tavfs()._has_trailer(p))
+    blob = pack_patches(file_key(stock.data, True), mods_bin, known, mask, originals)
     p = subprocess.run(["zstd", "-q", "-19", "--no-check", "-c"], input=blob, capture_output=True, check=True)
     (MODS / "patches.bin").write_bytes(p.stdout)
-    print(f"catalog: {len(entries)} mods; patches.bin {len(blob)} B -> {len(p.stdout)} B, {len(read_patches(blob)['xors'])} XORs, {len(known)} known files")
+    print(f"catalog: {len(entries)} mods; patches.bin {len(blob)} B -> {len(p.stdout)} B, {len(read_patches(blob)['xors'])} XORs, {len(known)} known files, {len(originals)} original archives")
 
 
 STUB_C = "__declspec(dllexport) long __stdcall DirectDrawCreate(void* a, void* b, void* c) { return 1; }\n"
@@ -1091,8 +1192,12 @@ def main():
     sub.add_parser("packages").add_argument("ids", nargs="*")
     sub.add_parser("catalog")
     sub.add_parser("verify").add_argument("ids", nargs="*")
+    i = sub.add_parser("install")
+    i.add_argument("id")
+    i.add_argument("gamedir")
+    i.add_argument("--link", action="store_true")
     a = p.parse_args()
-    return {"check": cmd_check, "tables": cmd_tables, "loaderdump": cmd_loaderdump, "packages": cmd_packages, "catalog": cmd_catalog, "verify": cmd_verify}[a.cmd](a)
+    return {"check": cmd_check, "tables": cmd_tables, "loaderdump": cmd_loaderdump, "packages": cmd_packages, "catalog": cmd_catalog, "verify": cmd_verify, "install": cmd_install}[a.cmd](a)
 
 
 if __name__ == "__main__":

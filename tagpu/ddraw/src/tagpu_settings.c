@@ -154,6 +154,7 @@ static volatile LONG s_detaching;       /* process detach: see tagpu_settings_de
    also takes -- so no half-written name is ever serialised. */
 static CRITICAL_SECTION s_io;
 static char s_gpu[GPU_LEN];
+static char s_mod[33];                 /* mod=, "" for the folder's own setup */
 static char s_restoreOff[GPU_LEN];     /* tagpu_restore_guard.h's record      */
 static char s_restoreOffDisk[GPU_LEN]; /* ...as the file on disk has it        */
 static char s_monName[MON_MAX][MON_LEN];
@@ -341,6 +342,11 @@ static int serialise(char* b, int cap)
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
+    if (s_mod[0]) {
+        k = _snprintf(b + at, cap - at, "mod=%s\r\n", s_mod);
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
     if (s_extraLen) {
         if (s_extraLen >= cap - at) return -1;
         memcpy(b + at, s_extra, s_extraLen);
@@ -424,6 +430,28 @@ static void flush(int final)
         if (!s_retryAt) s_retryAt = 1;
     }
     LeaveCriticalSection(&s_io);
+}
+
+int tagpu_settings_mod(char* out, int cap)
+{
+    int found = 0;
+    if (!s_attached || s_ignored || cap < 1) return 0;
+    EnterCriticalSection(&s_io);
+    if (s_mod[0]) {
+        lstrcpynA(out, s_mod, cap);
+        found = 1;
+    }
+    LeaveCriticalSection(&s_io);
+    return found;
+}
+
+void tagpu_settings_set_mod(const char* id)
+{
+    if (!s_attached || s_ignored) return;
+    EnterCriticalSection(&s_io);
+    lstrcpynA(s_mod, id, sizeof s_mod);
+    LeaveCriticalSection(&s_io);
+    InterlockedIncrement(&s_dirty);
 }
 
 static char* extra_find(const char* key)
@@ -550,6 +578,7 @@ static void parse_line(char* line)
         return;
     }
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
+    if (!lstrcmpiA(k, "mod")) { lstrcpynA(s_mod, v, sizeof s_mod); return; }
     if (!lstrcmpiA(k, "placespacing")) { parse_spacing(v); return; }
     if (!lstrcmpiA(k, "reclaimkind")) {
         for (i = 0; i < 3 && lstrcmpiA(v, s_rkindName[i]); i++) {}

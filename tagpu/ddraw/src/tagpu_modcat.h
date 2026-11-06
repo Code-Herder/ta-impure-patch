@@ -24,4 +24,7 @@ typedef struct {
    MODRULES_RADIUS_MAX, a default above its maximum, or an option off with no reason given. */
 int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* out, char* err, size_t errn);
 
+/* 1 when mod `id`'s `hide` list names the archive `name`, without case. */
+int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const char* name);
+
 #endif
