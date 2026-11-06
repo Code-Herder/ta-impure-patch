@@ -40,6 +40,7 @@ void tagpu_vkw_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
                            uint32_t w, uint32_t h);
 void tagpu_vkw_terr_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_terr_down_owed(void);
+void tagpu_vkw_terr_down_refused(const TAGPU_VKPASS* d);
 
 void tagpu_vkw_chain_down(const TAGPU_VKPASS* d);
 
@@ -48,6 +49,7 @@ void tagpu_vkw_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
                            uint32_t w, uint32_t h);
 void tagpu_vkw_feat_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_feat_down_owed(void);
+void tagpu_vkw_feat_down_refused(const TAGPU_VKPASS* d);
 
 int  tagpu_vkw_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 int  tagpu_vkw_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
@@ -57,5 +59,6 @@ void tagpu_vkw_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb, uin
                                   uint32_t w, uint32_t h);
 void tagpu_vkw_unit_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_unit_down_owed(void);
+void tagpu_vkw_unit_down_refused(const TAGPU_VKPASS* d);
 
 #endif

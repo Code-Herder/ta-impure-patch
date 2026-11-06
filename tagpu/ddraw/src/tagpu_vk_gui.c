@@ -2473,7 +2473,7 @@ static int refuse_lever(const TAGPU_VKPASS* d)
     static char s_text[16];
     DWORD now = GetTickCount();
     int here = s_text[0] != 0;
-    if ((LONG)(now - s_next) >= 0) {
+    if (!s_next || (LONG)(now - s_next) >= 0) {
         FILE* f = fopen("tagpu_passrefuse.on", "rb");
         size_t n = 0;
         here = f != NULL;
@@ -2506,7 +2506,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        The file's own rule at the top: "a handed-over count never sizes an
        allocation". A raw negative one, cast to VkDeviceSize by the vertex and
        uniform `grow`s, asks for a buffer the size of the address space and
-       refuses the pass for the session. */
+       refuses the pass and costs the lane a rebuild. */
     int nsd = 0;
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;

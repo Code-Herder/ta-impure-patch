@@ -152,10 +152,11 @@ in the output says what it found. Where nothing reports it (`nvidia-smi`, amdgpu
 bound it. A game launched by hand during a run is not counted; the refusal it causes is named above.
 
 **The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
-`refuse_in_battle`, which writes `tagpu_passrefuse.on` before the side-panel step, since a setup with a
-lever plays no battle. Once: the lane has to come back and the side panel has to pass. `keep`: the
-session has to reach GDI, and GDI's screen has to show the engine's side panel, compared with a shot
-taken before the lever because the overlay that takes one goes with the lane.
+`refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup
+with a lever plays no battle. `once`: the panel is opened, the lane is refused and has to come back and
+present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
+the side panel has to pass. `keep`: the session has to reach GDI, and GDI's screen has to come to show
+the engine's side panel within 60 s. Wine only, since the Windows path plays no battle to drive them.
 
 **Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line
 counts every box that crossed as engine pixels — which the layer drops — by cause, and a

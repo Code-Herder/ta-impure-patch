@@ -2451,18 +2451,22 @@ static int vk_present(void)
        gives back this process's device memory, and the retry rebuilds every pass on the
        new device. render_vk.c bounds the retries and then hands the session to GDI, whose
        picture is whole. So every frame after this is one of two complete pictures.
-       The drain is vk_down's own, and no command names anything yet: `cb` is reset below. */
+       The drain is vk_down's own, and no command names anything yet: `cb` is reset below.
+       ASKED, because a lost device can answer a signalled fence with success and show itself
+       first as a refused allocation: the wait vk_down's caller makes tells a lost device from a
+       full one, and a lost one blames the restorer rather than rebuilding it to lose it again. */
     if (tagpu_vk_gui_down_owed() || tagpu_vk_terr_down_owed() || tagpu_vk_unit_down_owed() ||
-        tagpu_vk_feat_down_owed() || tagpu_vk_surf_down_owed() ||
-        tagpu_vkw_terr_down_owed() || tagpu_vkw_unit_down_owed() || tagpu_vkw_feat_down_owed()) {
+        tagpu_vk_feat_down_owed()) {
         vklog("a pass the picture cannot do without was refused its resources - "
               "the lane comes down and back");
-        s_lostLike = LL_NONE;
+        s_lostLike = LL_ASK;
         return -2;
     }
 
     /* THE TEARDOWN A PASS OWES, PAID WHERE IT IS LEGAL TO PAY IT. These are the passes the
-       picture can do without: each stays off until a new device or swapchain.
+       game's picture can do without: `surf` has no consumer, the wiki's copies cost a help
+       page its stage, and the rest are effects and markers. Each stays off until the device
+       or the swapchain it was refused on is replaced (`surf` until the process ends).
        A pass that cannot get its per-slot resources mid-frame stops drawing and
        raises this flag INSTEAD of destroying anything, because at the moment it
        finds out, the fence wait above has proved one slot idle and nothing
@@ -2479,7 +2483,9 @@ static int vk_present(void)
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_world_down_owed() || tagpu_vkw_world_down_owed()) {
+        tagpu_vk_surf_down_owed() || tagpu_vk_world_down_owed() ||
+        tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
+        tagpu_vkw_world_down_owed()) {
         r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
         if (r != VK_SUCCESS) {
             s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
@@ -2495,7 +2501,11 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
+        if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
+        if (tagpu_vkw_terr_down_owed())    tagpu_vkw_terr_down_refused(&s_pass);
+        if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_refused(&s_pass);
+        if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_refused(&s_pass);
         if (tagpu_vkw_world_down_owed())   tagpu_vkw_world_down_paid(&s_pass);
     }
 
@@ -3128,6 +3138,7 @@ static int vk_present(void)
    a resize is a window drag, not a frame.) */
 static void passes_down(void)
 {
+    tagpu_vk_mark_down(&s_pass);
     tagpu_vk_fps_down(&s_pass);
     tagpu_vk_hud_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);

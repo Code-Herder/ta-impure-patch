@@ -646,7 +646,7 @@ private virtual display, `--defaults` (Classic++, so every restore job runs), Ga
 - **A band that fails.** With a file probe, the next banded upload failed on its second band: the
   features' whole page after a refused move, 279 rows. The shipped log shows the refusal on that
   frame — `stage: a banded upload failed on the device at row 256 of 279`, then `feat: slot 1
-  would not take this frame's resources - the pass stops drawing and the lane comes down and back`.
+  would not take this frame's resources`.
   `refuse_job` logs nothing; the diagnostic build's own line showed the pass's job given back in the
   refusing `prepare`, and nothing faulted. What follows the refusal: [the Vulkan
   backend](vulkan-backend.md), *A pass refused its memory*.

@@ -194,7 +194,7 @@ DWORD WINAPI vk_render_main(void)
             if (!came_up) { gave_up = 1; break; }
             if (retries >= VK_RETRY_BUDGET) {
                 tagpu_logf("vk: the lane failed %d times after coming up - the session goes to GDI",
-                           retries);
+                           retries + 1);
                 gave_up = 1;
                 break;
             }

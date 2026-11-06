@@ -471,7 +471,9 @@ def lever_file(lever) -> tuple:
 DEVICE_REFUSED = re.compile(
     r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
     r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
-    r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*)$", re.M)
+    r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*"
+    # the one line every refusal of a pass the picture needs passes through, logged or not, and the end of the road
+    r"|vk: a pass the picture cannot do without.*|vk: .*the session goes to GDI.*)$", re.M)
 
 
 GUI_LANE_BACK = "the lane failed after it had come up - bringing it up again"
@@ -1346,7 +1348,7 @@ def hud_strip_diff(a: Path, b: Path) -> "float | None":
         return None
 
 
-def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
+def hud_deselect(name, display, gamedir: Path, where: Path, while_open=None) -> dict:
     """Select the commander (ctrl+c), deselect it, and compare the side panel on screen with
     the engine's surface. `opened` is how much the deselect changed the engine's own strip --
     the proof the step exercised anything -- and `stale` the share of the strip where the
@@ -1363,7 +1365,9 @@ def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     the ground deselects and a left click orders a move; under the right-click layout it is
     the other way round (MEASURED 2026-09-27: Escalation's instance deselects on the right
     click, retail's gives a move order). So the right click goes first, and when the engine's
-    strip has not changed, a left click on other ground."""
+    strip has not changed, a left click on other ground.
+
+    `while_open`, when given, runs with the panel open, between the selection and the deselect."""
     where.mkdir(parents=True, exist_ok=True)
 
     def shot(path, step):
@@ -1393,6 +1397,10 @@ def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     try:
         tacli("keys", name, "ctrl+c", timeout=150)   # past tacli's own 90 s input bound
         sel = capture("selected")
+        if while_open:
+            why = while_open()
+            if why:
+                raise Unsettled(why)
         for click in (["--right", name, "700", "600"], [name, "900", "400"]):
             tacli("click", *click, timeout=150)
             desel = capture("deselected")
@@ -1548,33 +1556,52 @@ def log_says(gamedir: Path, text: str, seconds: float) -> bool:
     return False
 
 
-def refuse_in_battle(name, display, gamedir: Path, text: str) -> "tuple[dict | None, str | None]":
-    """The UI pass refused its resources in a live battle, as a full GPU does it (tagpu_vk.c, the
-    seam). Once: the lane comes back, and the caller's side-panel step judges the picture it comes
-    back with. `keep`: every retry is refused too and the session goes to GDI, whose picture is
-    judged here, against the engine's strip from before the lever, because the overlay that takes
-    `tacli shot` and writes the heartbeats goes with the lane. Returns (the side panel's result when
-    this judged it, why the step failed)."""
-    keep = "keep" in text
+def refuse_lever_write(gamedir: Path, text: str):
+    """The lever, whole or not at all: the render thread polls this file, and an empty read of a
+    half-written `keep` is the once lever."""
+    tmp = gamedir / "tagpu_passrefuse.tmp"
+    tmp.write_text(text)
+    tmp.replace(gamedir / "tagpu_passrefuse.on")
+
+
+def refuse_once(gamedir: Path) -> "str | None":
+    """The UI pass refused once, with the orders panel open, so a reset empties its save-under
+    (tagpu_gui_hook.c, `lost`). The deselect comes only once the rebuilt lane has presented, which
+    is what makes this the reset-before-the-restore order and not a race with it. Why it failed, or
+    None."""
+    refuse_lever_write(gamedir, "once")
+    if not log_says(gamedir, GUI_LANE_BACK, 90):
+        return f"the lever refused the UI pass and the log never said {GUI_LANE_BACK!r}"
+    if not presents_after(gamedir):
+        return f"no frame presented for {STALL_S} s after the lane came back"
+    return None
+
+
+def refuse_to_gdi(name, display, gamedir: Path) -> "tuple[dict | None, str | None]":
+    """The UI pass refused every time, in a live battle: the retries are spent and the session goes
+    to GDI. The screen is compared with the engine's surface until they agree or the bound ends:
+    GDI's first frames are not its picture, and the heartbeats that time the Vulkan comparison end
+    with the lane. Returns (the side panel's result, why the step failed)."""
     where = gamedir / "hudcheck"
     where.mkdir(parents=True, exist_ok=True)
-    engine = where / "before-engine.png"
-    if keep:
+    engine, screen = where / "gdi-engine.png", where / "gdi-screen.png"
+    refuse_lever_write(gamedir, "keep")
+    if not log_says(gamedir, GUI_LANE_GDI, 90):
+        return None, f"the lever refused the UI pass every time and the log never said {GUI_LANE_GDI!r}"
+    end, stale = time.monotonic() + 60, None
+    while time.monotonic() < end:
         r = tacli("shot", name, "-o", str(engine), "--timeout", str(ACK_S), timeout=ACK_S + 30)
         if r.returncode or not engine.exists():
-            return None, f"the engine's surface before the lever: {(r.stderr or r.stdout).strip()[:200]}"
-    (gamedir / "tagpu_passrefuse.on").write_text(text)
-    if not log_says(gamedir, GUI_LANE_GDI if keep else GUI_LANE_BACK, 90):
-        return None, f"the lever refused the UI pass and the log never said {GUI_LANE_GDI if keep else GUI_LANE_BACK!r}"
-    if not keep:
-        return None, None
-    time.sleep(5)       # GDI's first frames: nothing is judged on the picture until this is over
-    screen = where / "gdi-screen.png"
-    r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(screen)],
-                       capture_output=True, timeout=ACK_S)
-    if r.returncode or not screen.exists():
-        return None, f"the screen on GDI: {r.stderr.decode(errors='replace')[:200]}"
-    return {"opened": 1.0, "stale": hud_strip_diff(screen, engine), "where": str(where)}, None
+            return None, f"the engine's surface on GDI: {(r.stderr or r.stdout).strip()[:200]}"
+        r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(screen)],
+                           capture_output=True, timeout=ACK_S)
+        if r.returncode or not screen.exists():
+            return None, f"the screen on GDI: {r.stderr.decode(errors='replace')[:200]}"
+        stale = hud_strip_diff(screen, engine)
+        if stale is not None and stale <= HUD_STALE:
+            break
+        time.sleep(1)
+    return {"opened": 1.0, "stale": stale, "where": str(where)}, None
 
 
 def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None) -> dict:
@@ -1594,14 +1621,14 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 "why": "the skirmish started without a commander each: " + cmd["why"]}
     # Before the scenario: the start is the one moment the commander is sure to exist and the
     # view to hold nothing else a right click could land on.
-    if refuse is not None:
-        hud, why = refuse_in_battle(name, display, gamedir, refuse)
+    if refuse == "keep":
+        hud, why = refuse_to_gdi(name, display, gamedir)
         if why:
             return {"ok": False, "hud": None, "why": why}
-        if hud is not None:
-            return {"ok": proc.poll() is None, "hud": hud,
-                    "why": "the session went to GDI" if proc.poll() is None else "the game exited on GDI"}
-    hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck")
+        return {"ok": proc.poll() is None, "hud": hud,
+                "why": "the session went to GDI" if proc.poll() is None else "the game exited on GDI"}
+    hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck",
+                       (lambda: refuse_once(gamedir)) if refuse == "once" else None)
     r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}", "hud": hud}
@@ -2669,17 +2696,16 @@ def cmd_wine(args):
                 m = f.result()
             except BaseException as e:
                 m = {"ok": False, "why": f"{type(e).__name__}: {e}", "evidence": []}
+            refused = [x for k, v in m.get("_files", {}).items()
+                       if k.startswith("mp-") and k.endswith("-tagpu.log") for x in device_refused(v)]
+            if refused and m["ok"]:
+                m["ok"], m["why"] = False, (f"the device refused a peer's renderer its memory "
+                                            f"({len(refused)}x), first: {refused[0][:120]}")
             J.finish(name, "mp", "done" if m["ok"] else
                      "unrun" if m["why"].startswith("could not run") else "fail", m.get("why"))
             o["_files"].update(m.pop("_files", {}))
             o["_temps"].update(m.pop("_temps", {}))
             o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
-            refused = [x for k, v in o["_files"].items()
-                       if k.startswith("mp-") and k.endswith("-tagpu.log") for x in device_refused(v)]
-            if refused and m["ok"]:
-                m["ok"], m["why"] = False, (f"the device refused a peer's renderer its memory "
-                                            f"({len(refused)}x), first: {refused[0][:120]}")
-                J.finish(name, "mp", "fail", m["why"])
             o["mp"] = m
             verdict(o, s, "wine")
             judged(s, o)
@@ -3115,7 +3141,8 @@ def cmd_windows(args):
     asked = [n for n in args.setups or [] if not by_name.get(n, {}).get("managed")]
     if args.setups and not asked:
         die("nothing to run: the Windows path has no install, so it leaves the managed rows out")
-    setups = [s for s in pick_setups(asked) if not s.get("managed")]
+    # nor the rows that drive a lever through a Wine battle: this path plays no battle to drive
+    setups = [s for s in pick_setups(asked) if not s.get("managed") and "refuse_in_battle" not in s]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")

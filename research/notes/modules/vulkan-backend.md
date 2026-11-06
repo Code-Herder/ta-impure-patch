@@ -699,14 +699,17 @@ every frame, so a refusal is settled once. How depends on what the picture loses
 
 | the pass | what its refusal does | when it comes back |
 |---|---|---|
-| `gui`, `terr`, `unit`, `feat`, `surf`, the wiki's `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3, for the session) then hands the session to GDI, whose picture is whole |
-| `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down` or `vk_resize` |
-| `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the next `vk_down` or `vk_resize` |
-| the HUD and the wiki | `tagpu_hudstate_refuse` | the next `vk_down` or `vk_resize` (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
+| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread, never earned back) then hands the session to GDI, whose picture is whole |
+| `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down`, or a swapchain rebuild that changes the extent, image count or format |
+| `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the same |
+| the HUD and the wiki | `tagpu_hudstate_refuse` | the same (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
+| the wiki stage's `terr`, `unit`, `feat`, `world` | the seam drains the device and that copy stays off: the page has no 3D image, and the game is not touched | the same |
+| `surf` | the seam drains the device and it stays off: nothing samples it | never in that process |
 
 So every frame is a whole picture on one of two renderers, minus at most the passes in the lower
 rows. A `build` of a pass in the first row that fails is the same refusal: a driver that cannot make
-the pipeline has no picture to offer. The restorer's own refusals are not refusals of this kind: an
+the pipeline has no picture to offer. The seam asks the device whether it is lost before the teardown
+(`LL_ASK`), so a device the restorer lost is blamed on the restorer and not rebuilt into losing it again. The restorer's own refusals are not refusals of this kind: an
 atlas that does not fit falls back to tiny or per tile, and a twin that is not there draws the base
 atlas.
 

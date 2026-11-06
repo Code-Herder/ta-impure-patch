@@ -28,7 +28,7 @@
 
 /* ---- the game thread ---------------------------------------------------------------------- */
 
-static volatile LONG s_refused;         /* the render thread: the HUD cannot draw this session  */
+static volatile LONG s_refused;         /* the render thread: the HUD cannot draw on this lane  */
 
 int tagpu_hudstate_on(void)
 {
@@ -42,7 +42,7 @@ void tagpu_hudstate_refuse(const char* why)
 {
     if (InterlockedExchange(&s_refused, 1) == 0)
         tagpu_logf("hud: the HUD cannot draw (%s) - a replay has no on-screen controls and a live "
-                   "game no rewind button this session", why);
+                   "game no rewind button until the lane is next rebuilt", why);
 }
 
 /* a teardown of the HUD's pass (tagpu_vk_hud_down): the device that refused it, or the swapchain

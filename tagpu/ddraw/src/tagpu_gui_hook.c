@@ -326,6 +326,8 @@ static void copy_record(struct SURF* s, const int* dst, const int* src, int x, i
                                               /* the copy leaf's body, same reason */
 static int      s_chromePend = 0;             /* a reset owes the chrome a re-emit */
 static int      s_panelPend = 0;              /* ... and owes the panel blit too   */
+static int      s_repaintPend = 0;            /* the engine's redraw is owed (`repaint_arm`); game thread only */
+static int      s_repaintCounted = 0;         /* this pending episode's refusal is counted */
 static int      s_hudPend = 0;                /* ... and owes the resource block   */
 static unsigned s_hudPokes = 0, s_hudRefused = 0;
 static int      s_hudPoked = 0;               /* poked for THIS debt, not ever   */
@@ -549,6 +551,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
+                s_surf[i].lost = 0;            /* and what it held is not this surface's */
                 s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0; s_surf[i].assetTokPrev = 0;
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
@@ -2768,7 +2771,8 @@ static void publish_window(unsigned flipSurf)
            first-sight tables two lines below are re-armed for the same
            reason. */
         for (i = 0; i < s_nsurf; i++) {
-            s_surf[i].lost = s_surf[i].seeded && !s_surf[i].isAsset && !s_surf[i].snap;
+            /* OR-ED: after one reset `seeded` is 0, and a second must not forget the first's loss */
+            s_surf[i].lost |= s_surf[i].seeded && !s_surf[i].isAsset && !s_surf[i].snap;
             s_surf[i].seeded = 0;
             s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0; s_surf[i].assetTokPrev = 0;
         }
@@ -3466,8 +3470,15 @@ static void publish_window(unsigned flipSurf)
                nothing to carry, so the panel would stay on screen over the empty emblem. The
                emblem is our own op on our own twin (`panel_emit`), so it crosses where the save-under's
                composed pixels may not, and it lands in the panel's place. Repainting it for a
-               copy that restored something else costs one op and changes no pixel. */
-            if (src && src->lost && s->base == s_frameBase) s_panelPend = 1;
+               copy that restored something else costs one op and changes no pixel.
+               `panel_emit` runs only at the end of a repaint, so this asks for the repaint too.
+               ONCE PER LOSS: clearing `lost` is what bounds it, since a source copied on every
+               flip would otherwise ask for a repaint on every flip. */
+            if (src && src->lost && s->base == s_frameBase) {
+                src->lost = 0;
+                s_panelPend = 1;
+                s_repaintPend = 1; s_repaintCounted = 0;
+            }
         }
         /* everything else — and a copy from a source we do not twin — is its
            box's bytes as they stand now: never a retired surface's */
@@ -4288,10 +4299,8 @@ typedef char gui_top_spelling_agrees[(OFF_GUIINFO + GI_ACTIVE == OFF_GUI_TOP) ? 
 typedef void (__stdcall *gui_stage_fn)(void* gi, int flags);
 
 static int      s_repaint = 1;        /* off with the `norepaint` token            */
-static int      s_repaintPend = 0;    /* game thread only, from here down         */
 static int      s_repainting = 0;
 static unsigned s_repaints = 0, s_repaintSkips = 0, s_repaintOps = 0;
-static int      s_repaintCounted = 0;  /* this pending episode's refusal is counted */
 static int      s_drawShadow = 0;     /* our own last-seen value of g_gui_draw    */
 static unsigned s_resetShadow = 0;    /* ... and of g_guiq.resets                */
 static unsigned s_colarmShadow = 0;   /* ... and of g_guiq.colarm                */

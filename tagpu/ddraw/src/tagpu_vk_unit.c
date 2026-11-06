@@ -3954,5 +3954,16 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     s_state = ST_UNBUILT;
 }
 
+#ifdef TAGPU_SCENE_WIKI
+/* THE WIKI STAGE'S REFUSAL COSTS ITS OWN IMAGE. `wiki_image` is whole-or-nothing, so a page with
+   no stage still shows the rest, and the game's picture is not this copy's to take down. The seam
+   drains the device and calls this; a `vk_down` or `vk_resize` lets the pass try again. */
+void tagpu_vk_unit_down_refused(const TAGPU_VKPASS* d)
+{
+    tagpu_vk_unit_down(d);
+    s_state = ST_REFUSED;
+}
+#endif
+
 int tagpu_vk_unit_down_owed(void) { return s_downOwed; }
 

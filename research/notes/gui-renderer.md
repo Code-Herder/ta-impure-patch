@@ -5036,7 +5036,9 @@ drew. It was dropped before this change too, only counted as a freed source; it 
 **Not covered.** Off-thread frees still drop at once; none of a recorded surface has been seen.
 A fresh start (`PK_RESET`) while a panel is open loses its save-under's twin, and nothing draws
 into a save-under again, so that panel's restore is still lost — counted as `copy-unseeded`,
-which the suite does not judge.
+which the suite does not judge. Over the side panel the restore's copy owes the emblem, which puts
+the right picture there ([The engine's UI](modules/engine-ui.md) §2.104); elsewhere, the covered
+region keeps what it showed until the engine next draws there.
 The minimap copy and the shell's unseeded sources are unchanged. The side-panel check compares
 one strip at 1280 × 1024 after one deselect, not every panel a mod can open.
 
