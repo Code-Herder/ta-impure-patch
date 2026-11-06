@@ -7,14 +7,15 @@
 
    WHAT IS PAIRED (research/notes/ingame-wiki-3d-stage-plan.md, section 9, "The scene, checked op-for-op"):
    - each stage's GROUND, from the mockup's pack (tools/wiki/gfx.py, which resolves the stage descriptions against
-     the install): the terrain cells classicTerrain().gather makes at the stage's camera (zoom 1, the eye at the
-     map's corner, the whole map) -- column, row and tile, exactly -- and the feature quads gatherFeatures makes
+     the install): the terrain cells classicTerrain().gather hands the GPU at the stage's camera (zoom 1, the eye at
+     the map's corner, the whole map) -- the grid and the tile map it uploads, each cell drawn as tagpu_terr.c's
+     vertex stage derives it: column, row and tile, exactly -- and the feature quads gatherFeatures makes
      there -- each corner, the depth key, the mode and the anchor, within 1/64 of a unit -- in their order, both
      buckets. The gathers run as gfx.js runs them, through a recording stand-in for the WebGL context, so the code
      paired is the mockup's own and not a copy of it;
    - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of sim.js's view against
-     tagpu_wikiscene_fog of tagpu_wikisim.c's view as the record carries it (tagpu_wikistage_copy) -- the grid's
-     size, its origin and every byte;
+     tagpu_wikiscene_fog's source of tagpu_wikisim.c's view as the record carries it (tagpu_wikistage_copy),
+     expanded by tagpu_fog_entry as the stage's passes expand it -- the grid's size, its origin and every byte;
    - every demo's MODEL RECORDS at the same ticks: scene.js build of sim.js's view against tagpu_wikiscene_models of
      the record's view, the types the pack resolved handed to both -- each record's type, owner, ghost bit, shadow
      kind, slot, anchor, yaw, depth key and alpha within 1/64, and its nanoframe staging (on or off, the threshold,
@@ -36,9 +37,9 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const PACK = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const TOL = 1 / 64;
-const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
+const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 
 class CannotRun extends Error {}
 function run(cmd, args, opts = {}) {
@@ -49,13 +50,13 @@ function run(cmd, args, opts = {}) {
 }
 
 /* A WebGL2 context that records: every method is a no-op returning a handle, the status queries say yes, and
-   bufferData keeps what it was given -- which is how the terrain gather hands over its instances. */
+   texImage2D keeps what it was given -- which is how the terrain gather hands over its tile map. */
 function fakeGL() {
-  const got = { buffers: [] };
+  const got = { textures: [] };
   const gl = new Proxy({}, {
     get(_, k) {
       if (k === 'got') return got;
-      if (k === 'bufferData') return (t, data) => got.buffers.push(data);
+      if (k === 'texImage2D') return (t, lvl, internal, w, h, b, fmt, type, data) => got.textures.push({ w, h, data });
       if (k === 'getShaderParameter' || k === 'getProgramParameter') return () => true;
       if (typeof k === 'string' && /^[A-Z_0-9]+$/.test(k)) return 0;
       return () => ({});
@@ -74,13 +75,22 @@ function mockupGround(dir, pack) {
   const pal = new Uint8Array(1024);
   const terr = TR.classicTerrain(gl, '', '', pack.map.atlas, atlas, pal);
   const tiles = u16(fs.readFileSync(path.join(dir, pack.map.tilemap.file)));
-  gl.got.buffers.length = 0;
+  gl.got.textures.length = 0;
   const g = terr.gather(tiles, pack.map.tilemap, [0, 0], [GW, GH], 0, 0);
-  const inst = gl.got.buffers.at(-1) || new Int16Array(0);
+  /* THE CELLS THE VERTEX STAGE DRAWS, from what the gather handed the GPU: instance i is grid cell
+     (i % cols, i / cols), map cell tile0 plus that; with the mirror off a cell past the area draws nothing, and so
+     does a tile past the atlas (tagpu_terr.c, the VS). The tile is read out of the texture the gather uploaded. */
+  const tm = gl.got.textures.at(-1);
   const cells = [];
-  for (let i = 0; i < g.n; i++) {
-    const col = inst[i * 4], row = inst[i * 4 + 1], tile = inst[i * 4 + 2] + inst[i * 4 + 3] * pack.map.atlas.cols;
-    cells.push([col, row, tile]);
+  if (tm && g.grid.mirror === 0) {
+    const { cols, tile0: [tx0, ty0], area: [aw, ah], atlasN } = g.grid;
+    for (let i = 0; i < g.n; i++) {
+      const col = i % cols, row = (i / cols) | 0, mx = tx0 + col, my = ty0 + row;
+      if (mx < 0 || mx >= aw || my < 0 || my >= ah || mx >= tm.w || my >= tm.h) continue;
+      const tile = tm.data[my * tm.w + mx];
+      if (tile >= atlasN) continue;
+      cells.push([col, row, tile]);
+    }
   }
   let shadow = [], body = [];
   const feats = [];
@@ -125,21 +135,23 @@ const near = (a, b) => Math.abs(a - b) <= TOL;
 const F = Math.fround;   // the C side prints a float in 9 digits, which reads back as that float
 
 /* one frame's model records: the C side's row [type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc, alpha,
-   nanoT, nanoC0..2, wire] against scene.js's record; null when they pair */
+   nanoT, nanoC0..2, wire, wreck] against scene.js's record, the units and the wrecks the opaque window's; null when
+   they pair */
 function pairModels(c, js) {
-  const want = [...js.units, ...js.ghosts];
-  if (c.nu !== js.units.length) return `${c.nu} unit records in C, ${js.units.length} in the mockup`;
+  const want = [...js.units, ...js.wrecks, ...js.ghosts], nu = js.units.length + js.wrecks.length;
+  if (c.nu !== nu) return `${c.nu} unit and wreck records in C, ${nu} in the mockup`;
   if (c.m.length !== want.length) return `${c.m.length} records in C, ${want.length} in the mockup`;
   for (let i = 0; i < want.length; i++) {
     const r = c.m[i], m = want[i], n = m.nano;
     const kind = !m.shadow ? 0 : m.slant ? 2 : 1;
     const same = r[0] === m.type && r[1] === m.owner && r[2] === +m.ghost && r[3] === kind && r[4] === +!!n &&
       r[5] === m.slot && near(r[6], m.pos[0]) && near(r[7], m.pos[1]) && near(r[8], m.yaw[0]) && near(r[9], m.yaw[1]) &&
-      near(r[10], m.enc) && near(r[11], m.alpha) &&
+      near(r[10], m.enc) && near(r[11], m.alpha) && r[17] === +!!m.feature &&
       (!n || (r[12] === n.t && [n.c[0], n.c[1], n.c[2], n.wire].every((x, k) => F(r[13 + k]) === F(x))));
     if (!same) return `record ${i}: C ${show(r)}, mockup ${show({ ...m, files: undefined })}`;
     nmodels++;
     if (n) nnano++;
+    if (m.feature) nwreck++;
   }
   return null;
 }
@@ -147,7 +159,7 @@ const show = v => JSON.stringify(v, (k, x) => typeof x === 'number' ? +x.toFixed
 
 const t0 = Date.now();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scenecheck-'));
-let code = 0, nmodels = 0, nnano = 0;
+let code = 0, nmodels = 0, nnano = 0, nwreck = 0;
 try {
   if (!fs.existsSync(path.join(PACK, 'index.json'))) throw new CannotRun(`no pack at ${PACK}: run tools/wiki/gfx.py`);
   const index = JSON.parse(fs.readFileSync(path.join(PACK, 'index.json'), 'utf8'));
@@ -159,7 +171,9 @@ try {
     const dir = path.join(PACK, id), pack = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
     packs[id] = pack;
     const meshes = Object.entries((pack.units || {}).meshes || {});
-    types += `${id} ${meshes.length}\n` + meshes.map(([t, m]) => `${t} ${+!!m.mobile} ${+!!m.slant} ${+!!m.shadow}\n`).join('');
+    const wr = pack.features3d || [];
+    types += `${id} ${meshes.length} ${wr.length}\n` + meshes.map(([t, m]) => `${t} ${+!!m.mobile} ${+!!m.slant} ${+!!m.shadow}\n`).join('')
+      + wr.map(f => `${f.key} ${f.cell[0]} ${f.cell[1]} ${f.footprint[0]} ${f.footprint[1]}\n`).join('');
     if (!pack.ground.ok) { console.log(`scenecheck: ${id}: the pack's ground fell back (${pack.ground.miss}) - not paired`); continue; }
     grounds[id] = mockupGround(dir, pack);
     text += groundText(id, dir, pack, grounds[id].feats);
@@ -215,7 +229,8 @@ try {
   for (const id of [...new Set(tree.tree.flatMap(leaves))]) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const demo of entry.demos) {
-      const sim = WikiSim.play(entry, demo);
+      // a game entry's demo plays its game, the simulation its stage shows (replay.js plays it on demand)
+      const sim = entry.frame === 'game' ? WikiSim.game(entry, demo) : WikiSim.play(entry, demo);
       for (;;) {
         if (sim.tick % 30 === 0 || sim.done) {
           const key = `${id}/${demo.id}/${sim.tick}`, c = cfog.get(key), v = sim.view();
@@ -251,7 +266,7 @@ try {
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`scenecheck: DIFFER (${s} s)`);
   else console.log(`scenecheck: all equal -- ${nground} grounds (${ncell} cells exactly, ${nquad} feature quads within 1/64), ` +
-                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte, ${nmodels} model records (${nnano} nanoframes) (${s} s)`);
+                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte, ${nmodels} model records (${nnano} nanoframes, ${nwreck} wrecks) (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`scenecheck: cannot run: ${x.message}`);

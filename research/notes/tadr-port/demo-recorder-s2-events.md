@@ -397,7 +397,7 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
   | Offset | Field |
   |---|---|
   | +0 | 0x0D |
-  | +1 | start (3 dwords): the build's, except `0x49D9C0`'s, which is the shooter's centre `+0x6A`; the recorder records that sender's build start in its place ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)) |
+  | +1 | start (3 dwords): the build's, except `0x49D9C0`'s, which is the shooter's centre `+0x6A`; the recorder records that sender's build start in its place ([engine map](../engine/recorder.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)) |
   | +0xD | target point (3 dwords) |
   | +0x19 | weapon ID, low byte |
   | +0x1A | bit 0 = intercepting weapon |
@@ -584,7 +584,7 @@ is the handler's, or a pad -- SelfRepair's repairing pad (`0x402525..0x40252E`),
 landing pad (the order's `+0x16`) -- whose own slice can come later in the tick and which can be
 another player's; the query's COB is noted in the slice set so that slice is marked. A playing
 makes the same query there with the engine's arguments
-([engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+([engine map](../engine/cob.md#the-owners-cob-queries-disassembled-2026-10-12)).
 
 ### 1.8d A yard's change — `RK_EV_YARD` (format 20)
 

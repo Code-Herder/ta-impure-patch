@@ -88,6 +88,23 @@ static const Opt O_EDGE[]    = { {"mirror", 1}, {"black", 0}, {"1", 1}, {"0", 0}
    HUD unit is the screen height / 720 times this, whatever the game's HUD scale. */
 static const Opt O_REPLAYHUD[] = { {"100", 100}, {"75", 75}, {"125", 125}, {"150", 150} };
 
+/* What the plain wheel does over the world; Ctrl+wheel does the other.
+   `megamap` is TADR's binding, for players who learned it (mega-map-plan.md). */
+static const Opt O_WHEEL[]   = { {"zoom", 0}, {"megamap", 1}, {"0", 0}, {"1", 1} };
+
+/* Where leaving the mega map lands: `mouse` holds the point under the pointer as
+   the zoom does, `tadr` puts that point at the view's centre (mega-map-plan.md). */
+static const Opt O_MEGAZOOM[] = { {"mouse", 0}, {"tadr", 1} };
+
+/* THE STRATEGIC ICONS (inc/tagpu_icon_rule.h), percents of BAR's own: the icon size (its
+   UnitIconScaleUI 1.05), the distance they take over at (its 3000 elmos; 200 = icons only from
+   twice as far) and the fade band (0 = BAR's hard switch, 67 = Recoil's own 1000/3000). 33 keeps
+   1x the stock frame on every display up to 4K native; 67 fades icons in at 1x there. Read live
+   by both threads, so no value needs a restart. */
+static const Opt O_ICONSCALE[] = { {"100", 100}, {"75", 75}, {"125", 125}, {"150", 150}, {"200", 200} };
+static const Opt O_ICONDIST[]  = { {"100", 100}, {"50", 50}, {"75", 75}, {"150", 150}, {"200", 200} };
+static const Opt O_ICONFADE[]  = { {"33", 33}, {"0", 0}, {"67", 67} };
+
 #define N(a) (int)(sizeof a / sizeof a[0])
 
 /* TS_MONITOR and TS_RESOLUTION have no option list: the monitor is stored by
@@ -117,6 +134,11 @@ static const Key s_key[TS_NKEYS] = {
        (renderers.md 2.10b). */
     { "vsync",     O_BOOL,    N(O_BOOL),    1 },
     { "replayhud", O_REPLAYHUD, N(O_REPLAYHUD), 100 },
+    { "wheel",     O_WHEEL,   N(O_WHEEL),   0 },
+    { "megazoom",  O_MEGAZOOM, N(O_MEGAZOOM), 0 },
+    { "iconscale", O_ICONSCALE, N(O_ICONSCALE), 100 },
+    { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },
+    { "iconfade",  O_ICONFADE,  N(O_ICONFADE),  33 },
     { "resource_radius.unknown", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
     { "quick_build.unknown", O_RESOURCE_QUICK, N(O_RESOURCE_QUICK), -1 },
     { "resource_radius.retail", O_RESOURCE_RADIUS, N(O_RESOURCE_RADIUS), -1 },
@@ -946,6 +968,13 @@ int tagpu_settings_ss(void)
     int v;
     if (exists("tagpu_ss.off")) return 1;
     return tagpu_settings_get(TS_SS, &v) ? v : 2;
+}
+
+void tagpu_settings_icons(int* scale, int* dist, int* fade)
+{
+    if (!tagpu_settings_get(TS_ICONSCALE, scale)) *scale = 100;
+    if (!tagpu_settings_get(TS_ICONDIST, dist)) *dist = 100;
+    if (!tagpu_settings_get(TS_ICONFADE, fade)) *fade = 33;
 }
 
 int tagpu_settings_fps(void)

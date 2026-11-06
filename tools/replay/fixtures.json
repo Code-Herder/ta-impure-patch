@@ -144,7 +144,8 @@
              [450, "keys", ["up:lbutton"]], [540, "keys", ["down:shift", "pclick:512,384", "up:shift"]],
              [630, "keys", ["prclick:700,500", "pclick:850,150"]],
              [780, "keys", ["down:right"]], [840, "keys", ["up:right"]],
-             [960, "keys", ["pmove:512,384", "wheel:1"]]],
+             [960, "keys", ["pmove:512,384", "wheel:1"]],
+             [1080, "keys", ["down:ctrl", "wheel:-1", "up:ctrl"]], [1260, "keys", ["wheel:1"]]],
    "first": 721,
    "end": 1500,
    "watch": true

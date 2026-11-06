@@ -6,6 +6,16 @@ Started 2026-10-04. This is the **multiplayer slice** in the [recorder plan](dem
 
 The slice's product scope is a recording file sufficient on its own for playback, with contributions from every Impure peer: each player's effective perspective and authoritative state, communication, then playback and takeover. The [product contract](demo-recorder.md#multiplayer-contributions) requires contributions even from a peer that opts out of saving its own recording. A live multiplayer game has no rewind timeline.
 
+**Open: a round trip in a playing from view 1 is not always exact; the cause is not found.** MEASURED 2026-11-05 on one
+two-human, two-AI mode-3 recording (format 27, `recmp_create_begin_test.py`, zoom and native on), played by
+`recmp_play_test.py --perspective 1` with round trips at every tenth tick of 100..760 in three playings: 22 of 67 fail
+`compare-dumps --seek`, each on `+0x110` bit 16 of some units (the altitude fix-up is due), on 100 to 200 cells of record 1's
+sight counters off by one, or on both. The build before the mega map's last landing and the build after it print identical
+lines at identical ticks, and that landing changes no reader or seek code. A second recording, format 28, gives 21 of 67.
+Within a playing the sight differences come in pairs of opposite sign, one round trip apart: A 14, B 13, then A 13, B 14
+[INFERRED: the seek writes the wrong count and the playing carries it to the next seek]. View 0 ran three round trips, all
+equal, and was not swept. A multiplayer round trip that is equal at one T says nothing about the next T.
+
 ## Two-peer baseline
 
 MEASURED 2026-10-04 on the reference setup, retail content, two native-DirectPlay Wine peers on *Two Continents*, current local `main` build `446337c6`, private display. Both games carried `tagpu_recorder.on`. The host and joiner reached the same live battle with one commander per peer. `main+0x2A44` was `5` on both (network bit set). Neither wrote an `.imprec` file, consistent with the `MODE_SKIRMISH` start and continuation gates in `tagpu_rec_capture`. This is a baseline, not a test of an enabled multiplayer recorder.
@@ -116,7 +126,7 @@ A separate producer/writer-thread control copies and validates 15,000 alternatin
 
 ### Contribution file container
 
-The recorder writes format 26 and the readers take format 26 alone; a multiplayer header carries
+The recorder writes format 28 and the readers take formats 26, 27 and 28, which differ only in the camera sample's zoom minimum and its `REC_POV_CUT` flag ([perspective streams](demo-recorder-perspective-streams.md)); the start message carries `RECMP_START_VERSION` (3), raised for format 28, because the envelopes and public keys stored in recording files keep `RECMP_VERSION` (2) and `recmp_file.py` reads it. A peer on an older build refuses the start: it logs `recmp: start metadata refused: no contributions`, the host's binding fails (`transmit queue full: binding never completed`, or `stopped before binding completed` in a short game) and its recording ends `INCOMPLETE`, so the match has no complete recording while the game plays on. MEASURED 2026-11-05 with this build against the build before the raise, in each role: both games passed tick 2,000 after the refusal, and two peers on one build bound 2/2 with nothing lost. A multiplayer header carries
 no `RT_HOLD`, so its stream holds nothing, and a reader refuses one that does. Without `RT_HOLD`
 the orders frame writes scheme 1, each list against the same list's last image node by node:
 scheme 2's nodes matched by action and issue time cost size on an exact stream. `RT_MULTIPLAYER` carries the copied 112-byte roster in a mode-3 header; both writer and readers refuse a network mode without that roster or a roster in another mode. `RB_CONTRIBUTIONS` carries consecutive 16-byte application metadata plus exact source packets, with no ring padding. Its block timestamps are zero: packet metadata retains application/source clocks, and these blocks are not world seek snapshots. After game hand-over, proof-tail records use phase 3, zero application ordinal and zero application tick. They enter the persisted source ledgers without entering the world copy or extending application cuts.
@@ -147,7 +157,7 @@ File history owns separate source and application map caches. A proof-only roste
 
 ### Owner unit records and movers
 
-`tagpu_recmp_units.c` caches the exact 328-byte normalized unit/mover image. A copied source-to-recorder roster bijection maps normalized owner/resource-player IDs at `+0x96`/`+0xEC` and attacker/owner rows at `+0xF4`/`+0xFF`. The frozen origin must own the global slot block, and both owner fields must agree with its source row before mapping. Nullable player IDs are bounded to 0..11 and row bytes to 0..10; zero and dummy ten retain their meanings. Slot zero and its engine-only owner byte 255 are refused. Every other byte is retained. The [engine map](../exe-reverse-engineering.md#player-row-coordinates-across-multiplayer-peers-disassembled-2026-10-04) records the array/create/resource/damage/death writers and their callers, including helpers read but not used.
+`tagpu_recmp_units.c` caches the exact 328-byte normalized unit/mover image. A copied source-to-recorder roster bijection maps normalized owner/resource-player IDs at `+0x96`/`+0xEC` and attacker/owner rows at `+0xF4`/`+0xFF`. The frozen origin must own the global slot block, and both owner fields must agree with its source row before mapping. Nullable player IDs are bounded to 0..11 and row bytes to 0..10; zero and dummy ten retain their meanings. Slot zero and its engine-only owner byte 255 are refused. Every other byte is retained. The [engine map](../engine/network.md#player-row-coordinates-across-multiplayer-peers-disassembled-2026-10-04) records the array/create/resource/damage/death writers and their callers, including helpers read but not used.
 
 Wire kind 8 is a bounded batch: a u32 count followed by up to 201 variable-length entries. Each packed 20-byte prefix carries slot, live/full flags, exact birth and an eleven-byte changed-word mask. Full live entries include all 82 image words; a delta requires a complete live baseline of the same birth and cannot change the type without a full image. Absence is an explicit full entry with no image words. Unknown slots stay unknown until a validated entry names them. Source stream/tick/sequence and application tick accompany each published slot. Birth's high bit is refused. Raw source images remain delta baselines; queries return mapped copies.
 
@@ -169,7 +179,7 @@ The controlled 3,108-byte file, with 18 application records (eight remote consum
 
 The same file retrieves all 88 bytes of a recorded nonempty local secondary list, including after seek. An empty remote list at source tick 8/sequence 4/application tick 100 remains the last complete list when a 46-node replacement begins at application tick 101. Only the proof tail supplies its final node and a changed player image; source validation reconstructs 46 nodes and the changed image while playback/seek still return the previous complete list and player image. Tick 99 and an unreported slot/list remain unknown. All five file lifecycles and the 23 header controls pass. Forty-three additional body mutations rebuild both outer checksums and source-prefix seals; the raw framing/cut ledger accepts each, but C open/summary/info and Python reject malformed source rosters, player/unit fields and masks, live/birth/owner/block/duplicate-slot violations, order ownership/bounds/continuations and a seal over an incomplete transaction. No tolerance or exclusion changes.
 
-The earlier format-5 container checkpoint passed the actual TA `secondary-orders` regression through live recording, puppet playback, in-place restore and fresh-process seek: complete tick-1080 recording, image/event comparisons and three exact round trips at 481/511/541. The mapping checkpoint's later run ends complete at tick 1080 with 1080 iterations; world/radar/event/count comparisons and round trips at 361/421/451 pass, poisoning 26 tables with zero residue and equal before/after dumps. Its images inventory gate fails at two bytes of `main+0x531`, the active GUI heap pointer. Disassembly and full pointer measurements are in the [engine map](../exe-reverse-engineering.md#the-active-gui-pointer-and-the-images-inventory-disassembled-measured-2026-10-04). Those four bytes are the `leave` row `guitop` (the owner's decision, 2026-10-06); `secondary-orders --cover` then passes all 25 checks, the images gate included. The semantic reader also opens, summarizes and inspects that real skirmish file. The harness's 39 logic tests pass after refreshing the coverage map for the new reader functions. These are skirmish reader/regression results, not native multiplayer replay coverage. Engine application, complete unit/effect/Impure authority and game-produced network record/play/seek remain open.
+The earlier format-5 container checkpoint passed the actual TA `secondary-orders` regression through live recording, puppet playback, in-place restore and fresh-process seek: complete tick-1080 recording, image/event comparisons and three exact round trips at 481/511/541. The mapping checkpoint's later run ends complete at tick 1080 with 1080 iterations; world/radar/event/count comparisons and round trips at 361/421/451 pass, poisoning 26 tables with zero residue and equal before/after dumps. Its images inventory gate fails at two bytes of `main+0x531`, the active GUI heap pointer. Disassembly and full pointer measurements are in the [engine map](../engine/sim.md#the-active-gui-pointer-and-the-images-inventory-disassembled-measured-2026-10-04). Those four bytes are the `leave` row `guitop` (the owner's decision, 2026-10-06); `secondary-orders --cover` then passes all 25 checks, the images gate included. The semantic reader also opens, summarizes and inspects that real skirmish file. The harness's 39 logic tests pass after refreshing the coverage map for the new reader functions. These are skirmish reader/regression results, not native multiplayer replay coverage. Engine application, complete unit/effect/Impure authority and game-produced network record/play/seek remain open.
 
 ### Owner-only named script starts
 
@@ -2241,7 +2251,7 @@ local human/hosted AI now contributes its own source-row bit from every engine
 mapped-map u16, packed in the original linear cell order. Native origin identity
 keys the bitmap; player-row permutations move neither its cells nor its bytes.
 A validated source roster still binds the origin and stream before any chunk.
-The [engine map](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)
+The [engine map](../engine/recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)
 records the allocation, bit writer and Mapping handler disassembly.
 
 `RECMP_EXPLORED` (kind 11) uses a packed 16-byte prefix: u32 first/total byte
@@ -2569,7 +2579,7 @@ return until a subsequent receive at that depth overwrites or resizes it.
 Nested receives use a different depth slot. This introduces no earlier native
 alias invalidation than retail's shared buffer, which any receive can reuse.
 
-The [engine map](../exe-reverse-engineering.md#owned-primary-receive-frames)
+The [engine map](../engine/ui.md#owned-primary-receive-frames)
 records the native receive contracts, queued-copy exception, system size
 negotiation, two stock statistics calls, direct caller/reference sweeps and
 the case that builds an outgoing reply in the shared buffer. Input ownership

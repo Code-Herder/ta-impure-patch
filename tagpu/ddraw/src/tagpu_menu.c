@@ -74,6 +74,10 @@
 #include "tagpu_art.h"
 #include "tagpu_replays.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_hudstate.h"
+#include "tagpu_hudart.h"
+#include "tagpu_wiki.h"
+#include "tagpu_wikistate.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -187,14 +191,15 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 /* 0x46A308: `mov edx,ds:0x511de8`, immediately after DrawGameScreen's own GUI
    draw (0x46A303 calls 0x4AB170) and before the flip. That is where the
    trigger goes: over the finished bar, through the engine's own blitter, so
-   it lands in the back buffer every flip presents -- rather than in a layer
-   of our own that the engine's surface and `tacli shot` would both miss. */
+   it lands in the back buffer every flip presents. On the Vulkan lane the
+   wiki's layer draws it instead while the wiki is drawn (draw_trigger), and
+   then the engine's surface and `tacli shot` do not show it. */
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
 /* The runtime ground and its frame header share these dimensions. */
-#define PANEL_H   382
+#define PANEL_H   438
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
@@ -209,16 +214,17 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
-/* Nine, and every one of them live. There is no mouse-wheel zoom row:
-   tagpu_zoom_init() installs byte patches once at attach, so the row would
-   light green and change no pixel until the next launch. The
+/* Every row is live. There is no row that switches the mouse-wheel zoom
+   itself: tagpu_zoom_init() installs byte patches once at attach, so such a
+   row would light green and change no pixel until the next launch. The mega
+   map wheel row is live: tagpu_zoom.c reads the store at every notch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
    thread and tagpu_vk_fps.c builds its pipeline on first use. Vsync does too:
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_COUNT };
+       R_WHEEL, R_MEGAZOOM, R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -247,6 +253,12 @@ static const Row s_row[R_COUNT] = {
     { "EDGE",    "Map edge",          "Black|Mirror",             2 },
     { "RESOURCE", "Resource snapping", "Off|1|2|3|4|5|6|7|8",      9 },
     { "QUICKBUILD", "Quick mex/geo",    "Off|On",                   2 },
+    /* which wheel engages the mega map; the other one zooms (tagpu_zoom.c,
+       wheel_is_mega). The second stage is TADR's binding. */
+    { "MEGAWHEEL", "Mega map wheel",    "Ctrl+wheel|Wheel",         2 },
+    /* where leaving it lands (tagpu_zoom.c, NOTCH.tadr). The in-game panel's
+       alone: the front-end screen has no slot left (vis_shown). */
+    { "MEGAZOOM", "Mega map zoom in",   "Zoom to mouse|TADR default", 2 },
 };
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
@@ -351,6 +363,7 @@ static int    s_fresh;                  /* the next open is the PLAYER'S open  *
 static int    s_fileWas;                /* the trigger file, sampled on edges  */
 static int    s_pressed;                /* the sprocket is held down           */
 static int    s_drawTrigger;            /* the post-GUI observer is installed  */
+static int    s_barCog;                 /* tagpu_menu_bar_cog: game thread     */
 static unsigned char s_trigPix[TS_COUNT][TRIG * TRIG];
 static unsigned char s_trigFrame[TS_COUNT][0x18];
 
@@ -379,7 +392,7 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   342           /* under the last row: 278 + 8 */
+#define DIV_BOT   398           /* under the last row: 370 + 20 + 8 */
 #define PAD         2
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
@@ -959,7 +972,7 @@ static int build_gui(char* b, int cap, int rows)
             s_row[i].text, s_row[i].stages);
     }
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", rows * 2 + 3);
-    at = common(b, cap, at, 5, 0, "PROFILE", LBL_X, 350, TITLE_W, 24, 1, 15, 0);
+    at = common(b, cap, at, 5, 0, "PROFILE", LBL_X, DIV_BOT + 8, TITLE_W, 24, 1, 15, 0);
     at = gput(b, cap, at, "\ttext=Resource profile;\r\n\t}\r\n");
     return at;
 }
@@ -1000,6 +1013,11 @@ static void read_state(void)
     s_stage[R_EDGE]    = tagpu_opt_on(EDGE_ON) ? 1 : 0;
     s_stage[R_RESOURCE] = tagpu_profiles_radius();
     s_stage[R_QUICK] = tagpu_profiles_quick();
+    /* the store's value, else the compiled default: Ctrl+wheel */
+    if (!tagpu_settings_get(TS_WHEEL, &s_stage[R_WHEEL]) ||
+        s_stage[R_WHEEL] < 0 || s_stage[R_WHEEL] > 1) s_stage[R_WHEEL] = 0;
+    if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
+        s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -1060,7 +1078,8 @@ static int row_greyed(int row)
        present mode to pick there, but the frame limiter's backstop paces it
        (fps_limiter.c). */
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
-        row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK) return 0;
+        row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
+        row == R_WHEEL || row == R_MEGAZOOM) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1383,6 +1402,8 @@ static void commit_one(int row)
     case R_EDGE:    tagpu_settings_set(TS_EDGE, s_stage[R_EDGE]); break;
     case R_RESOURCE: tagpu_profiles_set_radius(s_stage[R_RESOURCE]); break;
     case R_QUICK: tagpu_profiles_set_quick(s_stage[R_QUICK]); break;
+    case R_WHEEL:   tagpu_settings_set(TS_WHEEL, s_stage[R_WHEEL]); break;
+    case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     default:        break;
     }
 }
@@ -1570,12 +1591,31 @@ int tagpu_menu_click(int gx, int gy, int down)
    0x4C5E70). No GUI screen owns the top bar (every in-game panel is the side
    panel at (0,128) 128x352) and a gadget is drawn into its panel's own w*h
    surface at panel-relative coordinates, so a gadget at x=980 has nowhere to
-   be drawn. That is why this is ours and not a gadget. */
+   be drawn. That is why this is ours and not a gadget.
+
+   ON THE VULKAN LANE THE WIKI'S LAYER DRAWS IT INSTEAD, as the emblem its wiki button and the
+   rewind button share (tagpu_wikilay.c, wiki_button), and the engine's sprocket is not blitted.
+   The blit is skipped only while the last published packet carried a wiki record
+   (tagpu_wiki_shown), the HUD's pass stands, the wiki has not refused and its art is loaded, and
+   every record filled after a skipping draw carries the skip (TAGPU_PK_WIKI.config, set by this
+   frame's fill after this draw on this thread). Every state that keeps the wiki's layer off the
+   screen for good -- a refusal, a publisher that fills nothing, records that do not fit the
+   packet -- fails one of those tests, so the engine draws the sprocket again from the next draw.
+   WHAT IS NOT PAIRED: these pixels reach the screen through the GUI's op ring and the skip
+   through the frame packet, which publishes only fresh frames, so at a change -- a press, the
+   panel opening, a refusal -- the screen can show the engine's sprocket and the emblem, or
+   neither, for one frame. The press stays here: the hit-test above is on this rect, whoever
+   draws it. */
 static void draw_trigger(void)
 {
     int x, y, st, cx, cy;
 
+    s_barCog = 0;
     if (!s_drawTrigger) return;
+    if (tagpu_wiki_shown() && tagpu_hudstate_on() && !tagpu_wikistate_refused() && tagpu_wikiart_get()) {
+        s_barCog = s_pressed || s_gm ? 2 : 1;
+        return;
+    }
     trigger_rect(&x, &y);
     cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
@@ -1583,6 +1623,11 @@ static void draw_trigger(void)
        : (cx >= x && cx < x + TRIG && cy >= y && cy < y + TRIG) ? TS_OVER
        : TS_NORMAL;
     ((gaf_blit_fn)VA_GAFBLIT)(NULL, s_trigFrame[st], x, y);
+}
+
+int tagpu_menu_bar_cog(void)
+{
+    return s_barCog;
 }
 
 static int __cdecl before_postgui(void* entry_esp)
@@ -1944,15 +1989,32 @@ static const short VC0_SLD[2] = { 244, 336 };
    panel cannot grow, the screen ends at 480. The WINDOW column has a slot
    between its two sliders: Screen Size ends at 260 and Gamma's caption is at
    320, and the row takes 276..312. The RENDERER column closes up over the gap
-   (`vis_slot`). */
+   (`vis_pos`). */
 #define VSYNC_Y   276
+/* THE MEGA MAP WHEEL ROW is a control setting, and the RENDERER column is
+   full, so it takes the WINDOW column's last slot: under the GPU row (caption
+   364, control 380..400), one 44-px pitch down, its control at 420..440 and
+   its recess to 442 -- clear of the Resource profile caption at 452. */
+#define WHEEL_Y   404
 
-/* A RENDERER row's slot in its column, or -1 for the one the WINDOW column
-   carries */
-static int vis_slot(int row)
+/* Where a row of s_row sits on the front-end screen: the caption's top-left.
+   The RENDERER column takes every row but the two the WINDOW column carries,
+   one slot each, top down, closing up over the gaps they leave. */
+static int vis_shown(int row)
 {
-    if (row == R_VSYNC) return -1;
-    return row < R_VSYNC ? row : row - 1;
+    return row != R_MEGAZOOM;
+}
+
+static void vis_pos(int row, int* x, int* y)
+{
+    int slot = row - (row > R_VSYNC) - (row > R_WHEEL);
+    if (row == R_VSYNC || row == R_WHEEL) {
+        *x = VC0_X;
+        *y = row == R_VSYNC ? VSYNC_Y : WHEEL_Y;
+        return;
+    }
+    *x = VC1_X;
+    *y = VROW_Y0 + VPITCH * slot;
 }
 
 /* ONE GROUND, NOT FIFTEEN RECESSES. A small recess frame behind each control,
@@ -2002,15 +2064,12 @@ static void draw_visbg(unsigned char* f, int w, int h)
     for (i = 0; i < 2; i++)
         recess(&s, VC0_X - VP_X - VPAD, VC0_SLD[i] - VP_Y - VPAD,
                VSLD_W + 2 * VPAD, VSLD_H + 2 * VPAD);
-    for (i = 0; i < s_nrows; i++) {     /* the RENDERER rows: one per row */
-        int slot = vis_slot(i);
-        if (slot < 0)
-            recess(&s, VC0_X - VP_X - VPAD, VSYNC_Y + VCTL_DY - VP_Y - VPAD,
-                   VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
-        else
-            recess(&s, VC1_X - VP_X - VPAD,
-                   VROW_Y0 + VCTL_DY + VPITCH * slot - VP_Y - VPAD,
-                   VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+    for (i = 0; i < s_nrows; i++) {     /* the rows of s_row: one recess each */
+        int x, y;
+        if (!vis_shown(i)) continue;
+        vis_pos(i, &x, &y);
+        recess(&s, x - VP_X - VPAD, y + VCTL_DY - VP_Y - VPAD,
+               VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
     }
 }
 
@@ -2266,7 +2325,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        1 + VIS_STOCK_N + 3 + (rows + VD_COUNT) * 2);
+        1 + VIS_STOCK_N + 3 + (rows - (rows > R_MEGAZOOM) + VD_COUNT) * 2);
 
     /* THE GROUND FIRST, so every caption and control is drawn on top of it --
        gadgets are drawn in array order, and ours are appended to STARTOPT's,
@@ -2317,11 +2376,11 @@ static int build_visuals_gui(char* b, int cap, int rows)
         }
     }
 
-    /* ---- the RENDERER rows: one slot each, top down, Vsync aside ---------- */
+    /* ---- the rows of s_row: the RENDERER column, Vsync and the wheel aside -- */
     for (i = 0; i < rows; i++) {
-        int slot = vis_slot(i);
-        int x = slot < 0 ? VC0_X : VC1_X;
-        int y = slot < 0 ? VSYNC_Y : VROW_Y0 + VPITCH * slot;
+        int x, y;
+        if (!vis_shown(i)) continue;
+        vis_pos(i, &x, &y);
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
         at = common(b, cap, at, 5, 0, "TEXT", x, y, VCOL_W, VLBL_H, 18, 15, 104);
         at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
@@ -2793,6 +2852,8 @@ static void vis_restore(void)
     s_stage[R_EDGE]    = 1;
     s_stage[R_RESOURCE] = tagpu_profiles_policy()->radius;
     s_stage[R_QUICK] = tagpu_profiles_policy()->quick_default;
+    s_stage[R_WHEEL]   = 0;
+    s_stage[R_MEGAZOOM] = 0;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows(1);
     /* UI scale back to OFF, the store's default: HUD scale is off the play

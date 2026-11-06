@@ -403,11 +403,15 @@ does not know it.
 This is a cap per *player*, not per game: four players at 500 hold 2000 units between
 them, and the index blocks confirm it — with the cap at 500 a fresh skirmish hands out
 idx 1 to player 0, **501** to player 1 and **1001** to player 2 [MEASURED live
-2026-09-10, `tacli roster`]. `scenarios/ball10.json` holds 500 a player;
-`scenarios/limits-tier1.json` holds 1500.
+2026-09-10, `tacli roster`]. `scenarios/ball10.json` asks for 500 a player;
+`scenarios/limits-tier1.json` asks for 1499.
 
-The count the cap is compared against is *live units*, so `clear_existing: false`
-leaves each player's commander occupying one of the cap.
+The count the cap is compared against includes each player's commander even when
+`clear_existing` kills it: the kill and the creates are one visit of the applier, and the
+dying commander still holds its place for the whole of it. A scenario that asks for exactly
+the cap gets one fewer, its last create refused [MEASURED 2026-10-30: `limits-tier1` at 1500 a
+player, units 1499, 2999, 4499 and 5999 refused, `applied=5996 cleared=4`]. With
+`clear_existing: false` the living commander occupies one of the cap in the same way.
 
 **The `maxunits` keys.** A saved game's `[Summary]` (`0x432610`, writing
 `MaxUnitNumberPerPlayer`) and a map's `.ota` `[GlobalHeader]` (`0x435DA0`, default
@@ -680,6 +684,11 @@ checked.
 **Deliberately not added**: an inline `tacli spawn t1 ARMPW 1200,900`. It would be a second
 path into the engine with its own validation story, and `scenario apply /tmp/one.json`
 already covers it through the safe one.
+
+**Known crash: a type whose script is null.** Placing ProTA 4.8's `MAKEANTICOR` kills the game in
+`COBEngine_QueryScript` at `0x4B0BC1` (`mov eax,[ecx+8]` with `ecx` 0), MEASURED 2026-11-05 one type
+at a time on two builds; the other ProTA types tried placed cleanly. The applier does not refuse such
+a type [INFERRED: it has no script to start, like the mod's other `MAKE*` build-menu entries].
 
 ---
 

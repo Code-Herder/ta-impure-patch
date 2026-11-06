@@ -350,7 +350,13 @@ class Instance:
         self.unusable = None
         self.seeded_now = None      # the store `_create` just seeded (seed_regstore's record)
         try:
-            meta = json.loads(self.meta_path.read_text()) if self.meta_path.exists() else {}
+            # read, never tested first: an instance another tacli removes between the two
+            # would read as unusable. save_meta replaces the file whole and `rm` removes it,
+            # so the read finds a whole file or none, and none is an instance not there.
+            try:
+                meta = json.loads(self.meta_path.read_text())
+            except FileNotFoundError:
+                meta = {}
             if not isinstance(meta, dict):
                 raise ValueError("not a JSON object")
         except (OSError, ValueError) as e:
@@ -377,10 +383,19 @@ class Instance:
     def exists(self) -> bool:
         return self.meta_path.exists()
 
+    def meta_or_none(self) -> "dict | None":
+        """The metadata, read once: None for an instance removed by another tacli
+        (save_meta replaces the file whole and `rm` removes it, so there is no half)."""
+        try:
+            return json.loads(self.meta_path.read_text())
+        except FileNotFoundError:
+            return None
+
     def meta(self) -> dict:
-        if not self.exists:
+        meta = self.meta_or_none()
+        if meta is None:
             die(f"no such instance {self.name!r} (tacli ls)")
-        return json.loads(self.meta_path.read_text())
+        return meta
 
     def save_meta(self, meta: dict):
         """Replace instance.json whole: written under a name of this process's own, then
@@ -423,8 +438,9 @@ class Instance:
         return self.pid() is not None
 
     # -- window -----------------------------------------------------------
-    def window(self):
-        """(window_id, x, y, w, h) of the game's client window, or None.
+    def window(self, pid=None):
+        """(window_id, x, y, w, h) of the game's client window, or None. `pid` is the
+        instance's game when the caller has already listed the processes.
 
         Two X windows share the title; the client is the one whose size matches the
         game resolution. Other apps (browser/Discord) can carry the name as a
@@ -438,10 +454,14 @@ class Instance:
         """
         if self.remote:
             return None             # its window is on another machine's desktop
-        display = self.meta().get("display") or default_display()
-        pid = self.pid()
+        meta = self.meta_or_none()
+        if meta is None:
+            return None             # removed by another tacli: no window of an instance's
+        display = meta.get("display") or default_display()
+        if pid is None:
+            pid = self.pid()
         patterns = []
-        recorded = self.meta().get("window_title")
+        recorded = meta.get("window_title")
         if recorded and recorded != BASE_TITLE:
             patterns.append("^" + ere_quote(recorded) + "$")
         patterns.append("^" + ere_quote(BASE_TITLE) + "$")
@@ -475,7 +495,7 @@ class Instance:
         # leftover can be a perfect 1024x768, and weights of size 2, pid 1 would
         # move the leftover. Among our own windows size breaks the tie; with no
         # readable pid anywhere, size alone decides.
-        gw, gh = self.meta().get("res", list(DEFAULT_RES))
+        gw, gh = meta.get("res", list(DEFAULT_RES))
         ranked = []
         for wid in ids:
             env = {**os.environ, "DISPLAY": display}
@@ -1430,7 +1450,10 @@ def place_window(inst: "Instance", display: str):
             continue
         if other.remote or other.name == inst.name or prefix_key(other.prefix) not in live:
             continue
-        if (other.meta().get("display") or default_display()) != display:
+        om = other.meta_or_none()
+        if om is None:
+            continue    # removed by another tacli since the scan
+        if (om.get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
         ow = other.window()
         if ow:
@@ -1542,12 +1565,13 @@ def _create(inst: Instance, args) -> dict:
     # ever been created walks the grid off the screen after a dozen of them, and
     # stopped instances are the normal state of this directory.
     taken = set()
+    live = totala_by_prefix()       # one process listing, not a pgrep an instance (cmd_ls)
     for meta_path in INSTANCES.glob("*/instance.json"):
         other = Instance(meta_path.parent.name, lenient=True)
         if other.unusable:
             warn(other.unusable)
             continue
-        if other.remote or other.name == args.name or not other.running():
+        if other.remote or other.name == args.name or prefix_key(other.prefix) not in live:
             continue
         try:
             taken.add(json.loads(meta_path.read_text()).get("slot"))
@@ -2142,21 +2166,27 @@ def cmd_launch(args):
 
 def cmd_ls(args):
     rows = []
+    # one process listing for every instance, as the window layout takes it: a pgrep each took
+    # 22.4 s over 634 instances (MEASURED 2026-10-30), and the wiki gate lists once a capture
+    live = totala_by_prefix()
     for meta_path in sorted(INSTANCES.glob("*/instance.json")):
         inst = Instance(meta_path.parent.name, lenient=True)
         if inst.unusable:
             warn(inst.unusable)
             continue
-        meta = json.loads(meta_path.read_text())
+        try:
+            meta = json.loads(meta_path.read_text())
+        except FileNotFoundError:
+            continue            # removed by another tacli since the scan: no longer an instance
         if inst.remote:
             # not asked: `ls` opens no link to another machine
             meta.update(pid=None, running=None, window=None)
             rows.append(meta)
             continue
-        pid = inst.pid()
+        pid = live.get(prefix_key(inst.prefix))
         meta["pid"] = pid
         meta["running"] = pid is not None
-        meta["window"] = inst.window() if pid else None
+        meta["window"] = inst.window(pid) if pid else None
         meta["shield"] = shield_state(inst)   # the trigger file is the truth
         rows.append(meta)
     if args.json:

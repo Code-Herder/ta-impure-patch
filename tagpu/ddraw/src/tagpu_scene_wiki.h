@@ -1,8 +1,9 @@
 #ifndef TAGPU_SCENE_WIKI_H
 #define TAGPU_SCENE_WIKI_H
 /* tagpu_scene_wiki.h -- the entry points of the wiki's instances of the world passes
-   (tagpu_scene.h), for the seam that calls them (tagpu_vk.c): the world target's, the terrain's,
-   the features' and the units' -- the passes the stage's ground and its models are drawn with.
+   (tagpu_scene.h), for the seam that calls them (tagpu_vk.c): the world target's, the fog
+   image's, the terrain's, the mip chains' reducer's, the features' and the units' -- the passes
+   the stage's ground and its models are drawn with.
 
    WRITTEN OUT BY HAND, AND CHECKED. The instances' own prototypes are their game headers' under
    the names tagpu_scene.h maps them to, which a file can only see by compiling with
@@ -14,6 +15,7 @@
    parameter or the return. A name here the mapping does not make is a link error. Either way a
    drift does not build. */
 #include "tagpu_vk_pass.h"
+#include "tagpu_fogsrc.h"
 
 int  tagpu_vkw_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              uint32_t* tw, uint32_t* th);
@@ -27,12 +29,20 @@ void tagpu_vkw_world_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_world_down_owed(void);
 void tagpu_vkw_world_down_paid(const TAGPU_VKPASS* d);
 
+int  tagpu_vkw_fog_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, int slot,
+                           const TAGPU_FOGSRC* f);
+VkImageView tagpu_vkw_fog_view(int slot, unsigned* gen);
+void tagpu_vkw_fog_size(int slot, int* w, int* h);
+void tagpu_vkw_fog_down(const TAGPU_VKPASS* d);
+
 int  tagpu_vkw_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 void tagpu_vkw_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                            uint32_t w, uint32_t h);
 void tagpu_vkw_terr_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_terr_down_owed(void);
 void tagpu_vkw_terr_down_paid(const TAGPU_VKPASS* d);
+
+void tagpu_vkw_chain_down(const TAGPU_VKPASS* d);
 
 int  tagpu_vkw_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 void tagpu_vkw_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,

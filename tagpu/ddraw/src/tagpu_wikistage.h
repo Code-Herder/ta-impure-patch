@@ -36,6 +36,7 @@
 #define WIKISTAGE_CAPTION WIKI_CAPTION_MAX      /* every loaded caption's fill fits           */
 #define WIKISTAGE_LABEL   WIKI_ID_MAX           /* 23 bytes and the terminator                */
 #define WIKISTAGE_FEATS   WIKI_FEATS_MAX        /* a scene never has more                     */
+#define WIKISTAGE_FOG     ((WIKI_SIGHT_GRID + 7) / 8)   /* the pass's fog bits, a block each   */
 
 /* what the copy could not carry, one bit for each bound */
 #define WIKISTAGE_TRUNC_MAP     0x001u          /* the map is wider or taller: its top left    */
@@ -58,6 +59,9 @@ typedef struct {
     uint8_t fx, fz;                     /* footprint, cells                                */
     uint8_t owner;                      /* 255: none of the eight players                  */
     uint8_t selected;
+    uint8_t osel;                       /* a replay's overlay: its owner seat's selection,
+                                           drawn in that seat's colour (tagpu_wikiframe_view);
+                                           the copy leaves it 0                            */
     int16_t tx, tz;                     /* its centre truncated toward zero from the
                                            simulation's double, as the minimap's dot takes it
                                            (tagpu_wikiside.h): the float above may round
@@ -89,12 +93,13 @@ typedef struct {
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
 
-/* A FEATURE STANDING (tagpu_wikisim.h WIKIVFEAT): its anchor cell and footprint, and whether it
-   holds metal, which draws it as a rock on the whitebox, else a tree */
+/* A FEATURE STANDING (tagpu_wikisim.h WIKIVFEAT): its anchor cell and footprint, and its look on
+   the whitebox: a wreck when its row names a model, else a rock when it holds metal, else a tree */
+enum { WIKISTAGE_TREE, WIKISTAGE_ROCK, WIKISTAGE_WRECK };
 typedef struct {
     int16_t ox, oz;
     uint8_t fx, fz;
-    uint8_t rock;
+    uint8_t look;                       /* WIKISTAGE_TREE .. WIKISTAGE_WRECK */
 } WIKISTAGEFEAT;
 
 /* THE RECLAIM SWEEP while reclaim is armed (tagpu_wikisim.h WIKIVSWEEP): the kind, the ring and
@@ -122,6 +127,12 @@ typedef struct {
     int32_t x, y, z;
     uint8_t col;
 } WIKISTAGEPART;
+
+/* A REPLAY'S OVERLAY ITEMS (tagpu_wikiframe_view): a seat's cursor at its world point; a click at
+   its world point with its age, 0..14 ticks; a minimap dot of the pass's (Sight) */
+typedef struct { float x, z; uint8_t seat, pad[3]; } WIKISTAGECUR;
+typedef struct { float x, z; uint8_t seat, age, pad[2]; } WIKISTAGECLICK;
+typedef struct { int16_t tx, tz; uint8_t owner, pad; } WIKISTAGEDOT;
 
 /* WHICH LAYOUT THE SIMULATION RUNS ON, as the view names it: a value, so the record stays a
    record of values (tagpu_wikipk.h). The render thread resolves it to a layout it holds itself
@@ -198,6 +209,28 @@ typedef struct {
                                                                look's image leaves out     */
     uint8_t        rmode;               /* reclaim is armed: `sweep` holds                 */
     WIKISTAGESWEEP sweep;
+    uint8_t        frame;               /* the whole game frame (tagpu_wikiframe_view): the
+                                           copy leaves it 0                                 */
+    /* WHAT A REPLAY ADDS TO A FRAME VIEW (tagpu_wikiframe_view; the copy leaves it 0). THE EYE of
+       a players entry's frame (`screen` 1): the viewport's top left in world units and its size,
+       the frame's own (tagpu_wikiframe_size), which the column and the bars frame. THE OVERLAYS:
+       each seat's cursor and each click shown, a click's age in ticks. Under a players replay's
+       Sight, THE MINIMAP's pass (`mini` 1): its grid, mini_gw x mini_gh blocks, block i lit when
+       bit i & 7 of byte i >> 3 of `mini_lit` is, and its dots, each a unit's point truncated
+       toward zero as the minimap's dot takes it (tagpu_wikiside_dot) and its owner. DATA on the
+       render thread: tagpu_wikistage_eye holds the eye and the viewport inside the map, and the
+       stage and the column take a seat or owner below their colour tables, an age below the
+       ring's 15 and a block inside the grid the map's size gives. */
+    uint8_t        screen;
+    int16_t        vp_w, vp_h;
+    int32_t        eye_x, eye_z;
+    uint8_t        ncur, nclick;
+    WIKISTAGECUR   cur[WIKI_SEATS];
+    WIKISTAGECLICK click[WIKI_CLICKS];
+    uint8_t        mini, mini_gw, mini_gh;
+    int16_t        ndot;
+    WIKISTAGEDOT   dot[WIKISTAGE_UNITS];
+    uint8_t        mini_lit[WIKISTAGE_FOG];
 } WIKISTAGEVIEW;
 
 /* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
@@ -207,6 +240,12 @@ typedef struct {
    (tagpu_wikisim_init), kept as the view's while its sidebar is on. Returns the
    WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
 uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src);
+
+/* THE COLUMN alone, the copy's: `v`'s sidebar (none when `v` is NULL or has none) into `out`, its
+   states to their array and the unit under the cursor found by id among `out`'s units, which may
+   be another simulation's than `v`'s -- a live replay's past view takes the live view's column
+   (tagpu_wikiframe_view, WIKIFRAME_PAST). */
+void tagpu_wikistage_side(WIKISTAGEVIEW* out, const WIKIVIEW* v, int layout_src);
 
 /* THE POSES, after the copy: each copied unit's posed model from the simulation `s` the view was
    taken of (tagpu_wikisim_model), into `out`'s pose pool in unit order. A unit whose model does not
@@ -227,7 +266,7 @@ uint32_t tagpu_wikistage_pose(WIKISTAGEVIEW* out, const WIKISIM* s);
    and the HUD pass draws at most HUD_MAXGRP */
 #define WIKI_MAXGRP  WIKI_SIDE_GADGETS
 
-/* THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3): every op belongs to
+/* THE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3): every op belongs to
    one, stage.js's `o.layer` names, and the frame draws either R0 then R1 -- the whitebox, every op
    in order -- or R0, the stage's 3D image, then R2, the ops tagpu_wikistage_keep keeps. */
 #define WIKISTAGE_IN_R0     0             /* under the image: the stage's background, a message      */
@@ -236,6 +275,7 @@ uint32_t tagpu_wikistage_pose(WIKISTAGEVIEW* out, const WIKISIM* s);
 #define WIKISTAGE_IN_LABEL  3             /* a queued site's name: the whitebox's alone              */
 #define WIKISTAGE_IN_OVER   4             /* the overlays: lines, squares, selection, the cursor...  */
 #define WIKISTAGE_IN_SIDE   5             /* the left sidebar, left of the map: under the image      */
+#define WIKISTAGE_IN_TOP    6             /* the frame's: drawn after the stage HUD, over everything  */
 
 typedef struct {
     int     n, nrun, ntext;
@@ -281,6 +321,9 @@ typedef struct {
     int16_t          style;             /* layout.json's `toast` style: the stage's text   */
     WIKISTAGEMEASURE measure;           /* never NULL                                      */
     void*            measure_ctx;
+    int16_t          emblem[2];         /* the kit's wiki_emblem and config_emblem, drawn
+                                           whole in the frame's top bar; -1 absent: a
+                                           whitebox button                                 */
     int16_t          cursor[WIKI_CURSOR_N]; /* the kit's icon of each shape (WIKI_CURSOR_*):
                                            cursor_arrow, cursor_move, cursor_build and, for
                                            reclaim, cursor_arrow; -1 absent: the icons a
@@ -325,38 +368,96 @@ void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, dou
 /* THE FIT, stage.js `fit` over `content`: a map of `w` x `h` cells, and with the sidebar
    (`side_h` its rows, 0 for none) the 128-unit column left of it, in a canvas `stage_w` x
    `stage_h` device pixels at `u` pixels a unit, letterboxed with a pad of 6 units. The content
-   rect is x in [x0, x0 + cw), z in [0, ch), world units: the map's, or with the column x0 = -128,
-   cw = 128 + the map's width and ch the taller of the map and the column; the map stays at the
-   top. `s` is device pixels a world unit and (`ox`, `oz`) the world origin -- the map's corner --
-   from the canvas's top left, for the map and the column alike. ONE FUNCTION ON BOTH THREADS:
-   the render thread draws the stage with it and the game thread turns a click on the stage into
-   a world point with it, from the same frame's canvas, so the two cannot disagree. */
-typedef struct { double s, ox, oz, x0, cw, ch; } WIKISTAGEFIT;
-void tagpu_wikistage_fit(int w, int h, int side_h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
+   rect is x in [x0, x0 + cw), z in [z0, z0 + ch), world units: the map's, or with the column
+   x0 = -128, cw = 128 + the map's width and ch the taller of the map and the column, the map at
+   the top (z0 = 0). With `frame` it is the whole game frame (tagpu_wikiframe.h), Wg x Hg from
+   the column's left edge and the top bar's top: x0 = -128, z0 = -32, cw = Wg, ch = Hg, the column
+   drawn whatever `side_h`; a players frame's (`vp_w` x `vp_h`, its viewport: tagpu_wikistage_eye)
+   is its screen's, cw = 128 + vp_w and ch = vp_h + 64, the viewport where the map stands in any
+   other (0, 0: none). `s` is device pixels a world unit and (`ox`, `oz`) the frame's origin --
+   the map's corner, a players frame's viewport's -- from the canvas's top left, for the map, the
+   column and the frame alike.
+   ONE FUNCTION ON BOTH THREADS: the render thread draws the stage with it and the game thread
+   turns a click on the stage into a world point with it, from the same frame's canvas, so the two
+   cannot disagree. */
+typedef struct { double s, ox, oz, x0, z0, cw, ch; } WIKISTAGEFIT;
+void tagpu_wikistage_fit(int w, int h, int side_h, int frame, int vp_w, int vp_h, double stage_w, double stage_h, double u,
+                         WIKISTAGEFIT* out);
 
-/* THE IMAGE'S RECT (stage.js `draw`, the image's rect): where the stage's 3D target is composited, the
-   map's rect of the fit (`side_h` as tagpu_wikistage_fit takes it) on the canvas of `stage`, each
-   edge snapped to the device pixel as stage.js snaps it -- [*x0, *x1) x [*y0, *y1) in device
-   pixels from the screen's top left. The composite and every op of the frame come from this one
-   fit, so the image and the overlays cannot disagree by more than the snap's half pixel. */
-void tagpu_wikistage_image(int w, int h, int side_h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1);
+/* THE FIT OF A VIEW: tagpu_wikistage_fit with the view's map, column, frame and viewport
+   (tagpu_wikistage_eye), so every caller fits a view the way the build does. */
+void tagpu_wikistage_fit_view(const WIKISTAGEVIEW* v, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
+
+/* THE EYE OF A VIEW, DATA on the render thread: a players frame's eye and viewport (`screen` 1)
+   held to the map -- the viewport one to WIKISTAGE_MAP cells, the eye in [0, map - viewport] --
+   and every other view's 0, so no transform reads a value the map does not bound. In place. */
+void tagpu_wikistage_eye(WIKISTAGEVIEW* v);
+
+/* THE IMAGE'S RECT (stage.js `draw`, the image's rect): where the stage's 3D target of view `v` is
+   composited, the map's rect of the view's fit (tagpu_wikistage_fit_view) on the canvas of
+   `stage` -- a players frame's map at its eye -- each edge snapped to the device pixel as
+   stage.js snaps it: r = [x0, y0, x1, y1), device pixels from the screen's top left. `clip` (NULL:
+   not asked) is the composite's scissor, the same rect: a frame view's viewport, which the
+   stage's world ops clip to (THE VIEWPORT CLIP), inside the canvas; any other view's canvas.
+   The composite and every op of the frame come from this one fit, so the image and the overlays
+   cannot disagree by more than the snap's half pixel. */
+void tagpu_wikistage_image(const WIKISTAGEVIEW* v, HUDRECT stage, double u, int* r, int* clip);
 
 /* WHERE AN OP IS DRAWN THIS FRAME: 1 under the image, 2 over it, 0 not at all. `image` 0 is the
    whitebox (R0 and R1: every op, in order, under -- there is no image to be over); with `image` 1,
    R0 and the sidebar, which lies left of the map's rect, are under, and so is the whitebox ground
    when the image carries none (`ground` 0), and a box is
    over when its type did not resolve (bit t of `resolved`, WIKI_MAX_DEFS bits), every other overlay
-   is over and a queued site's label is never drawn. stage.js `draw`'s `shows`, in C. */
+   is over and a queued site's label is never drawn. stage.js `draw`'s `shows`, in C. The frame's
+   TOP range is drawn over the stage HUD whatever the image: the caller draws it last (2). */
 int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved);
+
+/* WHAT A FRAME VIEW DRAWS BESIDE THE VIEW (stage.js draw's `o.frame`), all presentation: the
+   cursor, Leave's question, the bars' picture and the emblems' place. */
+typedef struct {
+    double  cursor_x, cursor_y;         /* the cursor drawn in canvas device pixels: the viewer's
+                                           glide, or a live frame's simulation's own; NaN none
+                                           (Try it: the player's own pointer)               */
+    int32_t cursor_age;                 /* the ticks since its shape began, its animation's  */
+    uint8_t cursor_shape;               /* WIKI_CURSOR_*: the viewer's is the arrow          */
+    uint8_t question;                   /* Leave's question is drawn (tagpu_wikiframe_dialog) */
+    uint8_t held;                       /* its answer held down: 0 none, 1 Yes, 2 No        */
+    int16_t bar_w;                      /* the bars' picture is composed (HOP_BAR, HUD_TEX_BAR),
+                                           this wide; 0: the whitebox strips               */
+    int16_t btn_side, btn_top;          /* art/wiki/layout.json `button`, game pixels: the
+                                           emblem's square and its top; btn_side 0: none    */
+    int16_t btn_right, btn_config;      /* the wiki emblem's right inset -- `right[1]`, the
+                                           rewind button's slot, in a replay's frame, which
+                                           has no rewind; `right[0]` left of it in a live
+                                           frame's (tagpu_wikilay_button) -- and the
+                                           sprocket's (`config`)                            */
+    /* the replay's overlays' colours (stage.js `F.colour`, `F.edge`): `seat_rgb` 1 takes seat k's
+       from `seat` (tagpu_wikiframe_seat_colour) and the arrows' edges from `edge`, the GUI's
+       black (palette entry gui[0]); 0 takes the stage's stand-ins, the owners' colours and black */
+    uint8_t  seat_rgb;
+    uint32_t seat[WIKI_SEATS];          /* 0xRRGGBB                                         */
+    uint32_t edge;                      /* 0xRRGGBB                                         */
+} WIKISTAGEFRAME;
+
+/* Emblem `part` (0 the wiki's, 1 the sprocket) of a frame fitted as `f`, at `fr`'s button place,
+   as the frame draws it: b = x, y, w, h in canvas device pixels, each edge snapped. */
+void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int part, double* b);
 
 /* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`:
    with the sidebar, its column (WIKISTAGE_IN_SIDE) after the background and before the map.
-   A view with no map draws the stage's ground and `msg` (NULL for none). WIKI_MAXOP BOUNDS IT: an
-   op past the budget is dropped and counted in out->dropped; the build that first drops is
-   logged through art->log, once while out->logged stays set; and a frame that dropped any is
-   edged in red, in a slot the budget keeps for it, so the loss shows. `cursor` 0 leaves the cursor
-   out (stage.js's o.cursor false); out->cursor names the op that draws it. Returns out->n. */
+   A view with no map draws the stage's ground and `msg` (NULL for none). A frame view (v->frame)
+   is the whole game frame (tagpu_wikiframe.h): its black, the column from the top bar's top, the
+   two bars (HOP_BAR, or whitebox strips) and Impure's emblems, all WIKISTAGE_IN_SIDE; the world
+   from the ground through the overlays clipped to the viewport, as the game draws its world under
+   the HUD's surface; no cursor of the view's and no readouts (the viewer is not seat 0); then,
+   WIKISTAGE_IN_TOP, Leave's question and the viewer's cursor as `frame` gives them (NULL: neither,
+   and the whitebox bars). WIKI_MAXOP BOUNDS IT: an op past the budget is dropped and counted in
+   out->dropped; the build that first drops is logged through art->log, once while out->logged
+   stays set; and a frame that dropped any is edged in red, in a slot the budget keeps for it, so
+   the loss shows. `cursor` 0 leaves the view's cursor out (stage.js's o.cursor false);
+   out->cursor names the op that draws a cursor, the view's or the frame's viewer's. Returns
+   out->n. */
 int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
-                          const WIKISTAGEART* art, WIKISTAGEOPS* out);
+                          const WIKISTAGEFRAME* frame, const WIKISTAGEART* art, WIKISTAGEOPS* out);
 
 #endif

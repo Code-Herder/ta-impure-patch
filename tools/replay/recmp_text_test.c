@@ -153,7 +153,7 @@ static void history(unsigned original)
     RecMpRoster r=roster(0), source=roster(1);
     RecMpRecordHeader file={ .version=1, .count=10, .recorder=11, .match={1} };
     for (unsigned i=0;i<10;i++) file.actor[i]=(RecMpRecordActor){r.actor[i].origin,i==0};
-    RecMpHistory* c=tagpu_recmp_history_begin(&file,&r,2,2); CHECK(c);
+    RecMpHistory* c=tagpu_recmp_history_begin(&file,&r,2,2,REC_FORMAT); CHECK(c);
     FILE* dump=fopen(original ? "text-history.bin" : "text-history-missing.bin","wb"); CHECK(dump);
     CHECK(fwrite(&file,sizeof file,1,dump)==1 && fwrite(&r,sizeof r,1,dump)==1);
     for (unsigned i=0;i<10;i++) {

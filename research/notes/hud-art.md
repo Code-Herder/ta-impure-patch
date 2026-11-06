@@ -33,7 +33,15 @@ this page gives a reason or a number, `pixel-forge.md` gives the step.
   and `win_one`;
 - every 9-slice plate, strip and button, each with its pressed version where it has one.
 
-The 28 icons, the marker badge, the playhead and the timeline fill come from the earlier method
+**The top bar's three buttons are emblems**, not buttons on a plate: the wiki's book, the
+rewind arrow (turning counter-clockwise) and the Impure Config cog, raised khaki steel with a dark
+rim, each with a pressed take, painted together on one sheet so they match (pixel-forge
+`topbar-icons`, Nano Banana Pro at 4K; the sheet, its prompts and the cutter that boxes all six in
+one common square are under `.data/hud-art/work/topbar/`). Each part is the whole button, drawn
+`whole` over the 28-bar-pixel square: `rewind_emblem` in `art/hud/`, `wiki_emblem` and
+`config_emblem` in `art/wiki/kit/`.
+
+The 27 icons, the marker badge, the playhead and the timeline fill come from the earlier method
 and were not repainted (*Gaps*). That method painted with Codex in a "distressed gunmetal" look
 and tried several looks for the whole HUD. Its record, prompts included, is in this page's git
 history (`git log -- research/notes/hud-art.md`).
@@ -764,7 +772,7 @@ as it was before the fit: `fit.py` resamples down only.
 ## Gaps
 
 - **The icons, the marker badge, the playhead and the timeline fill were not repainted.** These
-  31 parts were cut from Codex paintings of the earlier method, by `iconcut.py`, `cut.py` and
+  30 parts were cut from Codex paintings of the earlier method, by `iconcut.py`, `cut.py` and
   `tile.py`: the icons in khaki stencil, the rest in that method's gunmetal and green. They were
   not repainted in worn painted steel.
 - **`rail_forks` keeps a 94-unit period.** It was banded before `seamband.py` learned to compact a

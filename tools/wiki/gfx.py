@@ -79,7 +79,10 @@ binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.
            picture a button (`pics[i]` belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the
            tint over a greyed button, greyed_table), the minimap dots, and the minimap's colours:
            `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per stage,
-           `minimap/<entry>.<scene>.bin`, shrunk with that install's own PALETTE.ALP
+           `minimap/<entry>.<scene>.bin`, shrunk with that install's own PALETTE.ALP; and the resource bars
+           (tools/wiki/mockup/bar.js): `bar`, per layout side null or its PANELTOP and PANELBOT frames, its fifteen
+           sidedata rects, `ecol`, `mcol` and its font, `fnt/<font>.bin`; `logos`, the badge frames; `gui`, the GUI
+           colour table (0x4AC7D0's 256 entries)
   report   every element's source, and every refusal, by name
 and with `--stages`, `gfx/side/<m>/stage/`: the stage packs above, laid out as in gfx/ (`<entry>.<scene>/scene.json`,
 `palette/`, `shaders/`, `index.json`), resolved from the mod's install and holding, beside each entry's own unit
@@ -121,7 +124,10 @@ VA = {"units": 0x503920, "objects3d": 0x5036E4, "scripts": 0x503740, "textures":
       "palettes": 0x5031BC, "palette": 0x5033A4,
       # the left sidebar's (MEASURED from the pristine exe; exe-reverse-engineering.md, *The left sidebar*)
       "gui": 0x502820, "gamedata": 0x503360, "unitpics": 0x505FE4, "download": 0x503730,
-      "commongui": 0x50925C, "guipal": 0x5031C8}
+      "commongui": 0x50925C, "guipal": 0x5031C8,
+      # the resource bar's: the folder and extension 0x431A60 loads a side's `font` with (0x431BCF..0x431BF1), and
+      # the badge sequence 0x4318C0 looks up in logos.GAF (0x431906) -- DISASSEMBLED
+      "fonts": 0x50338C, "fnt_ext": 0x503394, "logos_seq": 0x504728}
 # the folders --folders may override: the ones a mod's loader renames in memory, after the exe file was read
 FOLDERS = ("gui", "unitpics", "gamedata", "download")
 
@@ -329,7 +335,9 @@ def tile_atlas(tiles):
 
 
 def resolve_ground(eng, desc, report):
-    """The description's tiles and features, every one checked; raises Miss naming the first failure."""
+    """The description's tiles and features, every one checked; raises Miss naming the first failure. Returns
+    (tiles, the 2D features the ground draws, the 3D ones): a section with an `object=` (a wreck, a heap) is a 3D
+    feature, drawn through the unit pass as a model record (write_units), not on the ground."""
     maps = {}
     for i, src in enumerate(desc["sources"]):
         hit = eng.vfs.open(src["map"])
@@ -359,15 +367,26 @@ def resolve_ground(eng, desc, report):
     n = len(tiles)
     if any(not (isinstance(v, int) and 0 <= v < n) for v in desc["tilemap"]):
         raise Miss("the tile map names a tile the tile set does not have")
-    feats = []
+    feats, models3d = [], []
     for f in desc["features"]:
         hit = eng.feature(f["name"])
         if hit is None:
             raise Miss(f"feature {f['name']}: no section in any {eng.dirs['features']}\\*.tdf")
         body, tdf, where = hit
         rec = {"name": f["name"].lower(), "cell": f["cell"], "body": body, "tdf": tdf, "from": where}
-        if (body.get("object") or "").strip():
-            raise Miss(f"feature {f['name']}: a 3D feature ({body['object']}), which the stage's ground does not take")
+        # a section that names an `object` at all is a 3D feature, as the game's reader takes it
+        # (tagpu_wikiasset.c: tagpu_tdf_get), an empty one a model that does not resolve; its footprint
+        # reads 0 when absent, as LoadFeature's does there
+        if "object" in body:
+            obj = (body.get("object") or "").strip()
+            if not obj:
+                raise Miss(f"feature {f['name']}: its object= names no model")
+            fx = atoi(body.get("footprintx")) & 0xFFFF
+            fz = atoi(body.get("footprintz")) & 0xFFFF
+            models3d.append({"name": rec["name"], "object": obj.lower(), "cell": list(f["cell"]), "footprint": [fx, fz]})
+            report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
+                           "object": obj})
+            continue
         filename = (body.get("filename") or "").strip()
         got = eng.gaf(eng.dirs["anims"], filename) if filename else None
         if got is None:
@@ -384,7 +403,7 @@ def resolve_ground(eng, desc, report):
         feats.append(rec)
         report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
                        "gaf": gpath, "gafFrom": gwhere})
-    return tiles, feats
+    return tiles, feats, models3d
 
 
 def write_ground(out, desc, tiles, feats):
@@ -685,6 +704,11 @@ def unit_meshes(eng, models, owners):
                         continue
                     pts = [(px + piece.vertices[ix][0], py + piece.vertices[ix][1], pz + piece.vertices[ix][2])
                            for ix in prim.indices]
+                    # A FACE THAT PAINTS NOTHING: no texture, and a colour index outside 2..254, which the game's
+                    # bake skips in the body and the wire as the engine's rasteriser does (tagpu_render3do.c
+                    # `face_colour`, tagpu_posebake.c); the slant still casts it. A texture name no bank holds
+                    # is bound to FLAT_MISS, a colour, and paints.
+                    paints = bool(prim.texture) or 1 < prim.color < 255
                     if first:
                         # the structure shadow's casters (0x45A610): every face, cast while its piece is visible
                         # and cached
@@ -692,6 +716,9 @@ def unit_meshes(eng, models, owners):
                             for c in (pts[0], pts[j], pts[j + 1]):
                                 out["slant"].extend(c)
                                 out["slantPiece"].append(k)
+                    if not paints:
+                        continue
+                    if first:
                         # the nanoframe's wire (0x458FA0): every face as a closed outline
                         for e in range(len(pts)):
                             out["wire"].extend(pts[e]); out["wire"].extend(pts[(e + 1) % len(pts)])
@@ -765,8 +792,9 @@ def stage_types(entry, casting=None):
     side's type for that cast in `casting` (a side pack's list), each name once. A bound demo's units carry the
     casting's type names (sim.js bindEntry) and an unbound cast keeps the entry's own type, so the pack holds a model
     for either."""
-    names = list(entry["units"])
-    casts = [u.get("cast") for u in entry["units"].values()]
+    units = entry.get("units") or {}             # a text entry has none
+    names = list(units)
+    casts = [u.get("cast") for u in units.values()]
     for side in casting or []:
         for c in casts:
             k = side["casts"].get(c)
@@ -813,10 +841,52 @@ def sound_table(eng):
     return eng._sound
 
 
+# the shipped DLL's weapon array, tagpu/ddraw/inc/tagpu_limits.h TAGPU_LIM_WEAPONS with the raised limits
+WEAPON_SLOTS = 4096
+
+
+def weapon_table(eng):
+    """The weapon table as the weapon load 0x42E310 fills it, cached on `eng`: every section of every `weapons\\*.tdf`
+    in the listing's order (0x42E371) goes to the slot its `ID` names (0x42E440, read at 0x42E463 as the engine reads
+    a TDF number, `atoi`; absent -1), a later section of the same ID overwriting an earlier one: per slot
+    0..WEAPON_SLOTS - 1 None or {"name": the section's name (0x42E490), "soundhit": its value or None}. An ID outside
+    the slots fills none [INFERRED]. The folder is the literal the load lists: the executable's folder names the
+    wiki reads (VA) hold no copy of it. A file the engine's parser refuses holds no section."""
+    if getattr(eng, "_weapons", None) is None:
+        slots = [None] * WEAPON_SLOTS
+        for path, where in eng.vfs.enumerate("weapons", "*.tdf", False):
+            try:
+                secs = tavfs.tdf_sections(eng.vfs.read_from(path, where))
+            except tavfs.TdfError:
+                continue
+            for sec in secs:
+                k = atoi(sec["keys"]["id"]) if "id" in sec["keys"] else -1
+                if 0 <= k < WEAPON_SLOTS:
+                    slots[k] = {"name": sec["_name"], "soundhit": sec["keys"].get("soundhit")}
+        eng._weapons = slots
+    return eng._weapons
+
+
+def death_wav(eng, fbi):
+    """THE DEATH SOUND's WAV name of a unit whose FBI's fields are `fbi`, or None: the destructor explodes a finished
+    unit with its ExplodeAs weapon (def+0x220) through 0x49B000 and 0x499EB0, which on dry ground plays the weapon's
+    soundhit (+0xF6, read at 0x499FE9). The FBI's `explodeas`, read into 0x80 bytes, names the first slot whose name
+    equals it without case (0x49E5B0, _stricmp 0x4F8A70); an empty or unknown name takes slot 0, the loader's
+    fallback (0x42CEAD..0x42CEB7) -- DISASSEMBLED. The slot's `soundhit` is the WAV, sounds\\<value>.WAV (0x42EF2A);
+    no key, or an empty slot, no sound [INFERRED: what an empty slot 0 holds at +0xF6]."""
+    slots = weapon_table(eng)
+    name = (fbi.get("explodeas") or "")[:127]
+    k = next((i for i, w in enumerate(slots) if name and w and w["name"].lower() == name.lower()), 0)
+    hit = slots[k]["soundhit"] if slots[k] else None
+    return hit or None
+
+
 def unit_sound(eng, fbi):
-    """{"cat", "count"} for a unit whose FBI's fields are `fbi` (`fbi_fields`): its category as def+0x20E holds it,
-    none (-1) outside the table, and the category's variant count per kind (all 0 for none)."""
+    """{"cat", "count", "death"} for a unit whose FBI's fields are `fbi` (`fbi_fields`): its category as def+0x20E
+    holds it, none (-1) outside the table, the category's variant count per kind (all 0 for none), and its death's
+    WAV name (`death_wav`), None for none."""
     table = sound_table(eng)
+    death = death_wav(eng, fbi)
     v = fbi.get("soundcategory")
     if v is None:
         cat = 0
@@ -826,8 +896,8 @@ def unit_sound(eng, fbi):
         if cat is None:
             cat = atoi(v)
     if not 0 <= cat < len(table):
-        return {"cat": -1, "count": [0] * SND_KINDS}
-    return {"cat": cat, "count": [len(w) for w in table[cat]["wav"]]}
+        return {"cat": -1, "count": [0] * SND_KINDS, "death": death}
+    return {"cat": cat, "count": [len(w) for w in table[cat]["wav"]], "death": death}
 
 
 def wav_pcm(blob):
@@ -863,7 +933,8 @@ def wav_pcm(blob):
 
 def write_sounds(eng, out_root, types):
     """`<out_root>/sounds.json` and the WAVs it names, `sounds/<n>.wav`: each mesh type's `sound` (`types`, the first
-    entry's of a name), which the mockup's sim reads as its sound source (sound.js); for each category they use its
+    entry's of a name), which the mockup's sim reads as its sound source (sound.js), with its `death` the file of its
+    death's WAV, null for none or one missing or refused; for each category they use its
     name and, per kind the wiki says, the variants' files in variant order, null for one missing or refused; the
     file of each button sound's allsound name, as 0x42F7E0 binds the names (each section's `sound`, the first
     section of a name winning, at most 255: 0x429470); and what was refused. A WAV opens as `sounds\\<wav>.WAV` by
@@ -904,12 +975,33 @@ def write_sounds(eng, out_root, types):
                              "kinds": {str(k): [wav(w) for w in table[c]["wav"][k]] for k in SND_WIKI_KINDS}}
                     for c in sorted(cats) if 0 <= c < len(table)},
            "named": {nm: wav(allsound.get(nm.lower())) for nm in SND_NAMES}}
+    # the deaths' files after the categories' and the button sounds', which keep their numbers
+    doc["types"] = {t: {**v, "death": wav(v.get("death"))} for t, v in types.items()}
     doc["refused"] = refused
     (out_root / "sounds.json").write_text(json.dumps(doc, indent=1) + "\n")
     return doc
 
 
-def write_units(out, eng, entry, report, types):
+def resolve_feature_model(eng, obj, report):
+    """resolve_unit's tuple for a 3D feature's model `obj` (its section's `object=`): no script, no FBI; a feature casts
+    no shadow of its own and is shaded on the neutral row (tagpu_native.c, the husk gather: owner 0, lit 0, shadow 0)."""
+    mhit = eng.open(eng.dirs["objects3d"], obj, "3DO")
+    if mhit is None:
+        raise Miss(f"{obj}: no {eng.dirs['objects3d']}\\{obj}.3DO")
+    try:
+        root = ta3do.parse_3do(mhit[0])
+    except (struct.error, ValueError, IndexError, RecursionError) as e:
+        raise Miss(f"{obj}: {mhit[1]} does not parse: {e}")
+    facts = {"shadow": False, "slant": False, "mobile": False, "feature": True}
+    report.append({"element": "feature model", "name": obj, "model": mhit[1], "modelFrom": mhit[2], "facts": facts})
+    return obj.lower(), root, set(), set(), facts
+
+
+# a 3D feature's mesh key beside the units' type names, which are a unit file's name and so never begin so
+FEAT_KEY = "feature:"
+
+
+def write_units(out, eng, entry, report, types, models3d=()):
     models, refused = {}, {}
     for name in types:
         try:
@@ -917,6 +1009,12 @@ def write_units(out, eng, entry, report, types):
         except Miss as e:
             refused[name] = str(e)
             report.append({"element": "unit", "name": name, "refused": str(e)})
+    for obj in sorted({m["object"] for m in models3d}):
+        try:
+            models[FEAT_KEY + obj] = resolve_feature_model(eng, obj, report)
+        except Miss as e:
+            refused[FEAT_KEY + obj] = str(e)
+            report.append({"element": "feature model", "name": obj, "refused": str(e)})
     owners = entry_owners(entry)
     (out / "units").mkdir(parents=True, exist_ok=True)
     if not models:
@@ -926,10 +1024,10 @@ def write_units(out, eng, entry, report, types):
     meshes = {}
     for name, p in plan.items():
         label, root, hidden, uncached, facts = models[name]
-        key = name.lower()
+        key = name.lower().replace(FEAT_KEY, "feature_")
         rec = {"label": label, "files": {}, **facts, "faces": p["faces"], "flatMiss": p["flatMiss"]}
-        fbi = eng.open(eng.dirs["units"], name, "FBI")
-        rec["sound"] = unit_sound(eng, fbi_fields(fbi[0].decode("latin-1", "replace")))
+        fbi = None if facts.get("feature") else eng.open(eng.dirs["units"], name, "FBI")
+        rec["sound"] = unit_sound(eng, fbi_fields(fbi[0].decode("latin-1", "replace"))) if fbi else None
         for owner, verts in p["owners"].items():
             f = f"units/{key}.{owner}.bin"
             (out / f).write_bytes(struct.pack(f"<{len(verts)}f", *verts))
@@ -945,7 +1043,7 @@ def write_units(out, eng, entry, report, types):
         rec["slantFile"], rec["slantVerts"] = f"units/{key}.slant.bin", len(p["slant"]) // 3
         rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
         # the script and its posed order, for the COB host the mockup's server runs (tools/wiki/serve.py)
-        shit = eng.open(eng.dirs["scripts"], name, "COB")
+        shit = None if facts.get("feature") else eng.open(eng.dirs["scripts"], name, "COB")
         order = list(range(len(p["walk"])))
         if shit:
             (out / f"units/{key}.cob").write_bytes(shit[0])
@@ -982,6 +1080,13 @@ SIDE_SCREENS, SIDE_GADGETS, SIDE_PAGES, SIDE_TYPES = 48, 64, 7, 64
 SHEET_W = 1024
 MINIMAP_SPAN = 126         # 0x466780: the minimap picture's long side
 GUI_UNEXPLORED, GUI_BOX = 0x00, 0x0E     # GUI colour table indices: fog 0x466C20, camera box 0x466B70
+# The resource bar's fifteen rects: the sub-sections of [SIDE%d] that 0x431A60 reads into RaceSideData +0x42..+0x122
+# (DISASSEMBLED, 0x431C82..0x4324B9). TOTALUNITS and TOTALTIME are read and never drawn.
+BAR_RECTS = ("logo", "energybar", "energynum", "energymax", "energy0", "metalbar", "metalnum", "metalmax", "metal0",
+             "totalunits", "totaltime", "energyproduced", "energyconsumed", "metalproduced", "metalconsumed")
+BAR_COORD = (-1024, 4096)  # a rect coordinate's bound, side.js read's too: past the widest frame either way
+FNT_MAX = 32               # a font's rows and a glyph's width at most, side.js read's too
+BAR_LOGOS = 32             # the badge frames a pack carries at most, side.js read's too
 # GUI_ButtonDraw 0x4A5F40 and the stage pass's id-1 case 0x4A8B4B read these attribs bits
 ATTR_LAST_GREY, ATTR_CHECKBOX, ATTR_SCROLL, ATTR_ONOFF = 0x100, 0x80, 0x1800, 0x4000
 
@@ -1311,6 +1416,13 @@ def unit_record(path, where, k, language):
             "fx": fx, "fz": fz, "g": [[i % fx, i // fx] for i, c in enumerate(yard) if c == YARD_G],
             "extractsmetal": strtod(k.get("extractsmetal")), "energymake": strtod(k.get("energymake")),
             "energyuse": strtod(k.get("energyuse")), "weapon1": bool((k.get("weapon1") or "").strip()),
+            # the economy's figures: build costs, metal made a second, the storages (def +0x1E6 metal and +0x1E2 energy,
+            # which the economy pass re-sums at 0x4017A1..0x4017C5, DISASSEMBLED; the others' offsets are not mapped)
+            "buildcostmetal": strtod(k.get("buildcostmetal")), "buildcostenergy": strtod(k.get("buildcostenergy")),
+            "metalmake": strtod(k.get("metalmake")), "metalstorage": strtod(k.get("metalstorage")),
+            "energystorage": strtod(k.get("energystorage")),
+            # the wreck's feature section, as spelled
+            "corpse": (k.get("corpse") or "").strip(),
             "fort": (k.get("tedclass") or "").strip().upper() == "FORT",
             "buildtime": strtod(k.get("buildtime")), "builddistance": strtod(k.get("builddistance")),
             # canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936; the Q4 scout answer)
@@ -1319,7 +1431,24 @@ def unit_record(path, where, k, language):
             "canreclamate": atoi(k.get("canreclamate")) & 1,
             # activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE)
             "activatewhenbuilt": atoi(k.get("activatewhenbuilt")) & 1,
+            # SightDistance, RadarDistance and SonarDistance: the def's words +0x202, +0x204 and +0x206, the number's
+            # low 16 bits (0x42C3B3), which every reader takes signed (movsx at 0x48230D, 0x467565..0x467576)
+            "sightdistance": word(k.get("sightdistance")), "radardistance": word(k.get("radardistance")),
+            "sonardistance": word(k.get("sonardistance")),
+            # the model: Objectname, read into 0x20 bytes, and a missing one the UnitName (0x42BF40, 0x42C0D1)
+            "object": (k["objectname"] if "objectname" in k else name).strip()[:31],
             "title": display_name(k, language, name)}
+
+
+def i16(v):
+    """An integer's low 16 bits, sign-extended: what a 16-bit field holds of it."""
+    v &= 0xFFFF
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+def word(v):
+    """A TDF number stored in a 16-bit field and read back signed."""
+    return i16(atoi(v))
 
 
 def unit_index(eng, report):
@@ -1348,9 +1477,49 @@ def unit_index(eng, report):
     return out
 
 
+def bar_rects(sec):
+    """A [SIDE%d] section's resource-bar rects, {name: [x1, y1, x2, y2]}: each number C's atoi, as the engine reads a
+    TDF, and the first sub-section of a name winning (0x4C3410). A rect the section lacks is absent."""
+    out = {}
+    for sub in sec["sub"]:
+        n = sub["_name"].lower()
+        if n in BAR_RECTS and n not in out:
+            out[n] = [atoi(sub["keys"].get(c)) for c in ("x1", "y1", "x2", "y2")]
+    return out
+
+
+def fnt_problem(blob):
+    """Why `blob` is not a font the bar's text may be drawn with, or None. The format is the engine's `.fnt`: the rows
+    at byte 0, the row offset (signed) at byte 2, the first code at byte 3, then a u16 offset per code; a glyph is its
+    width, then rows x width bits, MSB-first across row boundaries (DrawTextCustomFont 0x4C14F0). The bounds are
+    those tagpu_packet_pub.c holds the engine's own copy to -- first code 0, so the table has 256 entries -- and every
+    glyph's bits inside the file. side.js read applies the same."""
+    n = len(blob)
+    if n < 4 + 2 * 256:
+        return f"{n} bytes, short of the 256-code table"
+    rows = blob[0]
+    if not 1 <= rows <= FNT_MAX:
+        return f"{rows} rows"
+    if blob[3] != 0:
+        return f"first code {blob[3]}, not 0"
+    for c in range(256):
+        o = struct.unpack_from("<H", blob, 4 + 2 * c)[0]
+        if not o:
+            continue
+        if o >= n:
+            return f"glyph {c} at {o}, past the file"
+        w = blob[o]
+        if not 1 <= w <= FNT_MAX:
+            return f"glyph {c} is {w} wide"
+        if o + 1 + -(-w * rows // 8) > n:
+            return f"glyph {c}'s bits run past the file"
+    return None
+
+
 def read_sides(eng, report):
     """`<gamedata>\\sidedata.tdf`'s [SIDE0], [SIDE1], ... up to the first missing one (0x431A60), the first section
-    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf, commander}]."""
+    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf, commander, and the resource
+    bar's font, energycolor, metalcolor (the raw values) and rects}]."""
     hit = eng.load(eng.dirs["gamedata"], "sidedata", "TDF")
     if hit is None:
         raise SideError(f"no {eng.dirs['gamedata']}\\sidedata.tdf")
@@ -1365,7 +1534,8 @@ def read_sides(eng, report):
             break
         k = sec["keys"]
         sides.append({"name": k.get("name", ""), "prefix": k.get("nameprefix", ""), "intgaf": k.get("intgaf", ""),
-                      "commander": k.get("commander", "").strip()})
+                      "commander": k.get("commander", "").strip(), "font": k.get("font", ""),
+                      "energycolor": k.get("energycolor"), "metalcolor": k.get("metalcolor"), "rects": bar_rects(sec)})
     report.append({"element": "sidedata", "path": hit[1], "where": hit[2], "sides": [s["name"] for s in sides]})
     if not sides:
         raise SideError(f"{hit[1]} has no [SIDE0]")
@@ -1388,14 +1558,15 @@ class SideArt:
             self.banks[name.lower()] = self.eng.gaf(self.eng.dirs["anims"], name)
         return self.banks[name.lower()]
 
-    def seq(self, got, name):
+    def seq(self, got, name, count=None):
         """[(frame key, Pixels, hx, hy)] of sequence `name` in bank `got` (first of the name without case,
-        0x4B8D40), each frame as the blit draws it (Gaf.drawn), or None."""
+        0x4B8D40), each frame as the blit draws it (Gaf.drawn), or None. `count`: its first frames only."""
         if got is None or name.lower() not in got[0].seqs:
             return None
         gaf, path, where = got
         out = []
-        for k in range(len(gaf.seqs[name.lower()][1])):
+        n = len(gaf.seqs[name.lower()][1])
+        for k in range(n if count is None else min(count, n)):
             key = f"{path.lower()}:{where}:{name.upper()}:{k}"
             fr, hx, hy, outside = gaf.drawn(name, k)
             if outside and key not in self.frames:
@@ -1729,8 +1900,12 @@ def fill_downloads(recs, page, entries, name, report):
 # mobile, an extractor, a geothermal plant and a plain building each fail the others' tests, the moho is stronger
 # than the mex, the advbuilder is not the builder), and the last pass makes it a fact whatever the tests: a pick that
 # repeats an earlier cast's is left unbound, with the reason. The DLL's loader (tagpu_wikiasset.c) does the same.
+#
+# The commander is the walk's root itself, so no other cast can take it (the builders and the walker come off menus,
+# the plain casts off the builder's); it is last in CASTS so that every earlier cast keeps its index and every
+# casting's `builds` its meaning.
 
-CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar")
+CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar", "commander")
 CAST_FP_MAX = 16           # a footprint's side on each axis that the casting holds (WIKI_FP_MAX: one G row a u16)
 
 
@@ -1882,8 +2057,11 @@ def side_casting(units, commander, menu):
             why[c] = (f"the first plain land building on the builder's menu {what}" if picks[c] else
                       f"no plain land building on the builder's menu {what}")
     else:
-        for c in CASTS[1:]:
+        for c in CASTS[1:-1]:
             why[c] = "no builder"
+    picks["commander"] = root if is_mobile(U[root]) else None
+    why["commander"] = ("the side's commander" if picks["commander"] else
+                        f"the side's commander {U[root]['name']} is not mobile")
     for i, c in enumerate(CASTS):
         first = next((d for d in CASTS[:i] if picks[c] and picks[d] == picks[c]), None)
         if first:
@@ -1898,17 +2076,274 @@ def side_casting(units, commander, menu):
                    for c in CASTS]
 
 
-def cast_record(u, builds):
+MODEL_PIECES = 256         # a model's pieces at most (tagpu_wikiasset.c MAXPIECE)
+MODEL_NODEV = 4096         # a piece's vertices at most (MAXNODEV)
+MODEL_CAP = 8 << 20        # a 3DO's bytes at most (CAP_3DO)
+
+
+def model_height(blob):
+    """def+0x170 of a type whose model is `blob`, a 3DO: 0x4CB5F0's height over the root's sibling chain -- the most
+    of 0 and, for each piece, its vertices' y and its child chain's height, each plus the piece's y offset, in 16.16
+    with 32-bit wrapping adds (0x4CB5F0..0x4CB641, DISASSEMBLED) -- whose integer part's low byte the type loader
+    leaves at +0x170 (the dword at +0x16E, 0x42D7BF..0x42D7CA). Read from the file's own pieces: a piece's header,
+    0x34 bytes, inside the file and of version 1, its vertex count at most MODEL_NODEV and its vertices inside the
+    file, no piece reached twice and at most MODEL_PIECES of them. (byte, None), or (None, why) for a model outside
+    those bounds. tagpu_wikiasset.c height_chain is the same rule."""
+    seen = set()
+
+    def i32(v):
+        return (v + 2 ** 31) % 2 ** 32 - 2 ** 31
+
+    # a chain from `off`, the root's at 0: a link of 0 ends a chain, so only a link is tested for one
+    def chain(off):
+        m = 0
+        while True:
+            if off in seen:
+                raise ValueError(f"the piece at 0x{off:x} is reached twice")
+            if len(seen) >= MODEL_PIECES:
+                raise ValueError(f"more than {MODEL_PIECES} pieces")
+            seen.add(off)
+            if off + 0x34 > len(blob):
+                raise ValueError(f"a piece at 0x{off:x} lies past the file")
+            version, nvert = struct.unpack_from("<II", blob, off)
+            (oy,), (vo,), (sib, child) = (struct.unpack_from("<i", blob, off + 0x14), struct.unpack_from("<I", blob, off + 0x24),
+                                          struct.unpack_from("<II", blob, off + 0x2C))
+            if version != 1:
+                raise ValueError(f"a piece of version {version}, not 1")
+            if nvert > MODEL_NODEV or vo + 12 * nvert > len(blob):
+                raise ValueError("a piece's vertices pass 4096 or lie past the file")
+            for i in range(nvert):
+                m = max(m, i32(struct.unpack_from("<i", blob, vo + 12 * i + 4)[0] + oy))
+            if child:
+                m = max(m, i32(chain(child) + oy))
+            if not sib:
+                return m
+            off = sib
+
+    if len(blob) > MODEL_CAP:
+        return None, f"a 3DO past {MODEL_CAP} bytes"
+    try:
+        return (chain(0) >> 16) & 0xFF, None
+    except ValueError as e:
+        return None, str(e)
+
+
+def unit_height(eng, u):
+    """A type's model height (model_height) from `<objects3d>\\<Objectname>.3DO`: (byte, where it came from), or (0,
+    why) when there is no model or model_height refuses it, as tagpu_wikiasset.c unit_height reports."""
+    hit = eng.load(eng.dirs["objects3d"], u["object"], "3DO")
+    if hit is None:
+        return 0, f"no {eng.dirs['objects3d']}\\{u['object']}.3DO"
+    h, why = model_height(hit[0])
+    if h is None:
+        return 0, f"{hit[1]}: {why}"
+    return h, f"{hit[1]} ({hit[2]})"
+
+
+SIGHT_REACH = 63           # a point's offset from the unit's block, blocks on each axis (WIKI_SIGHT_REACH)
+SIGHT_IDX = 32             # the radius indices stored at most (WIKI_SIGHT_IDX)
+SIGHT_CELLS = 32768        # the cells of the stored tables together (WIKI_SIGHT_CELLS)
+SIGHT_MIN = 32             # a players entry's type's sightDistance at least (WIKI_SIGHT_MIN)
+SIGHT_LINE = 511           # a line's value as 0x4C48C0 reads it into its 0x200-byte buffer
+SIGHT_CAP = 8 << 20        # the file's bytes at most (tagpu_wikiasset.c CAP_LOS): the largest measured, Twilight's, is 2 718 022
+
+
+def entry_sights():
+    """Every sightDistance a players entry of the wiki's tree gives one of its own types, at least SIGHT_MIN: with the
+    bound casts', the sights whose tables a layout stores (sight_table). The tree's entries are the ones the DLL's
+    archive reads (tagpu_wikidata.c), so the DLL's producer (tagpu_wikiasset.c sight_read) takes the same set."""
+    tree = json.loads((REPO / "art" / "wiki" / "tree.json").read_text())
+
+    def leaves(n):
+        return [n["entry"]] if "entry" in n else [e for c in n.get("children", []) for e in leaves(c)]
+
+    out = set()
+    for eid in dict.fromkeys(e for n in tree["tree"] for e in leaves(n)):
+        f = ENTRIES / f"{eid}.json"
+        entry = json.loads(f.read_text()) if f.exists() else {}
+        if entry.get("players") is not True:
+            continue
+        for d in entry.get("units", {}).values():
+            s = d.get("sightDistance") if isinstance(d, dict) else None
+            if isinstance(s, int) and not isinstance(s, bool) and SIGHT_MIN <= s <= 32767:
+                out.add(s)
+    return out
+
+
+def sight_table(eng, report, sights):
+    """The layout's `sight`: `<gamedata>\\los.tdf` as the engine's loader stores it, reduced to count grids
+    (tagpu_wikidata.h WIKISIGHT states the loader, DISASSEMBLED 0x433130, 0x433380, 0x4336F0), for the radius indices
+    `sights` reach and no other: numtables from [TABLEINFO], and for each idx = min(trunc(s / 32), numtables - 1) of
+    a sight s in `sights` (each at least SIGHT_MIN, so idx is 1 or more) TABLE<idx> as {idx, cells}, its cells
+    [[dc, dr, n], ...] in (dr, dc) order, the tables by idx. numtables, numlines and a line's count are the TDF
+    number's low 16 bits, signed; a line's value is cut at SIGHT_LINE bytes and split on ', ' (strtok), each token C's
+    atoi; each pair (x, y), each a 16-bit word, is stored as the offsets (x, -y), (y, x), (-x, y), (-y, -x); a count
+    of 0 or less, a missing line or a missing section adds nothing. None, with a report line, when the file is
+    missing, passes SIGHT_CAP bytes, does not parse or breaks a bound: numtables below 2, more than SIGHT_IDX indices,
+    and in a stored table a line short of its count's numbers, an offset past SIGHT_REACH or a count of a cell past
+    255, or past SIGHT_CELLS cells over the stored tables. A table no sight reaches is never read. tagpu_wikiasset.c
+    sight_read is the same rule."""
+    hit = eng.load(eng.dirs["gamedata"], "los", "TDF")
+    el = "sight table"
+    if hit is None:
+        report.append({"element": el, "refused": f"no {eng.dirs['gamedata']}\\los.tdf: Sight lights every block"})
+        return None
+    if len(hit[0]) > SIGHT_CAP:
+        report.append({"element": el, "refused": f"{hit[1]}: past {SIGHT_CAP} bytes: Sight lights every block"})
+        return None
+    try:
+        secs = tavfs.tdf_sections(hit[0])
+    except tavfs.TdfError as e:
+        report.append({"element": el, "refused": f"{hit[1]}: the engine's parser refuses it: {e}"})
+        return None
+    sec = lambda n: next((x for x in secs if x["_name"].lower() == n), None)
+
+    def no(why):
+        report.append({"element": el, "refused": f"{hit[1]}: {why}: Sight lights every block"})
+        return None
+
+    info = sec("tableinfo")
+    nt = word(info["keys"].get("numtables")) if info else 0
+    if nt < 2:
+        return no(f"numtables {nt} is below 2")
+    idxs = sorted({min(s // 32, nt - 1) for s in sights if s >= SIGHT_MIN})
+    if len(idxs) > SIGHT_IDX:
+        return no(f"the types reach {len(idxs)} tables, past {SIGHT_IDX}")
+    tables, cells = [], 0
+    for idx in idxs:
+        t = sec(f"table{idx}")
+        keys = t["keys"] if t else {}
+        grid = {}
+        for k in range(1, max(0, word(keys.get("numlines"))) + 1):
+            line = keys.get(f"line{k}")
+            if line is None:
+                continue
+            tok = [x for x in re.split(r"[, ]", line[:SIGHT_LINE]) if x]
+            c = word(tok[0]) if tok else 0
+            if c <= 0:
+                continue
+            if len(tok) < 1 + 2 * c:
+                return no(f"TABLE{idx} line{k} has fewer than its {c} points")
+            for j in range(c):
+                x, y = word(tok[1 + 2 * j]), word(tok[2 + 2 * j])
+                for dc, dr in ((x, -y), (y, x), (-x, y), (-y, -x)):
+                    dc, dr = i16(dc), i16(dr)
+                    if abs(dc) > SIGHT_REACH or abs(dr) > SIGHT_REACH:
+                        return no(f"TABLE{idx} line{k} reaches past {SIGHT_REACH} blocks")
+                    grid[dc, dr] = grid.get((dc, dr), 0) + 1
+        if any(n > 255 for n in grid.values()):
+            return no(f"TABLE{idx} counts a block past 255 times")
+        cells += len(grid)
+        if cells > SIGHT_CELLS:
+            return no(f"the stored tables pass {SIGHT_CELLS} cells")
+        tables.append({"idx": idx, "cells": [[dc, dr, grid[dc, dr]] for dc, dr in sorted(grid, key=lambda p: (p[1], p[0]))]})
+    report.append({"element": el, "path": hit[1], "where": hit[2], "numtables": nt, "indices": idxs, "cells": cells})
+    return {"numtables": nt, "tables": tables}
+
+
+def cast_record(u, builds, corpse, height):
     """A bound cast as the casting carries it: the entry's own keys (art/wiki/entries), the type in the case the
-    layout's build buttons spell it, and `builds` naming casts, not types."""
+    layout's build buttons spell it, `builds` naming casts, not types, `corpse` its wreck (corpse_record) and `height`
+    its model's (unit_height)."""
     return {"type": u["name"].upper(), "title": u["title"], "footprint": [u["fx"], u["fz"]],
             "buildTime": u["buildtime"], "workerTime": u["workertime"], "buildDistance": u["builddistance"],
             "maxVelocity": u["maxvelocity"], "canstop": u["canstop"], "canreclamate": u["canreclamate"],
             "activatewhenbuilt": u["activatewhenbuilt"], "extracts": u["extractsmetal"],
-            "energyMake": u["energymake"], "vent": bool(u["g"]), "g": u["g"], "builds": builds}
+            "energyMake": u["energymake"], "energyUse": u["energyuse"], "buildCostMetal": u["buildcostmetal"],
+            "buildCostEnergy": u["buildcostenergy"], "metalMake": u["metalmake"], "metalStorage": u["metalstorage"],
+            "energyStorage": u["energystorage"], "sightDistance": u["sightdistance"],
+            "radarDistance": u["radardistance"], "sonarDistance": u["sonardistance"], "modelHeight": height,
+            "vent": bool(u["g"]), "g": u["g"], "builds": builds, "corpse": corpse}
 
 
-def side_pack(eng, mod, descs, rows, out, pal, report):
+FEAT_NAME_MAX = 31         # a feature record's name and object, bytes (sim.js checkFeature, WIKIFEATDEF)
+FEAT_FOOT_MAX = 16         # its footprint's side (sim.js FEAT_FOOT, WIKI_FEAT_FOOT)
+FEAT_AMOUNT = 1e7          # its metal and energy bound (sim.js FEAT_AMOUNT, WIKI_FEAT_AMOUNT)
+
+
+def corpse_record(eng, u):
+    """A unit's wreck as a casting carries it: (the feature record or None, the reason for the report). The record is
+    sim.js checkFeature's, from the section the FBI's `corpse` names, found as Engine.feature finds it (the first
+    `features\\**\\*.tdf` holding it): footprintx/z as atoi of 16 bits and height of 8 (FeatureDef +0x94/+0x96 and
+    +0xFA, as tagpu_wikiasset.c's feature_resolve reads them), metal and energy as strtod (+0xF0, +0xEC) [INFERRED:
+    LoadFeature 0x4224B0's reader of those two keys is not mapped], blocking and reclaimable as atoi != 0 (+0xFE bits
+    6 and 7), object, a 3D feature's model, when the section names one. The name and the object are lower-cased and
+    must be printable ASCII of 1..31 bytes, the record's bounds, so that both producers write them alike; a record
+    outside checkFeature's bounds is no corpse. tagpu_wikiasset.c's corpse_read is the same rule."""
+    name = u["corpse"]
+    ascii = lambda v: 1 <= len(v) <= FEAT_NAME_MAX and all(" " <= ch <= "~" for ch in v)
+    if not name:
+        return None, "its FBI names no corpse"
+    if not ascii(name):
+        return None, f"its corpse {name} is not 1..{FEAT_NAME_MAX} printable ASCII bytes"
+    hit = eng.feature(name)
+    if hit is None:
+        return None, f"no {eng.dirs['features']}\\**\\*.tdf holds the section {name}"
+    body, tdf, where = hit
+    fx, fz = atoi(body.get("footprintx")) & 0xFFFF, atoi(body.get("footprintz")) & 0xFFFF
+    if not (1 <= fx <= FEAT_FOOT_MAX and 1 <= fz <= FEAT_FOOT_MAX):
+        return None, f"{name}'s footprint {fx} x {fz} is not within 1..{FEAT_FOOT_MAX} a side"
+    metal, energy = strtod(body.get("metal")), strtod(body.get("energy"))
+    if not (0 <= metal < FEAT_AMOUNT and 0 <= energy < FEAT_AMOUNT):
+        return None, f"{name}'s metal or energy is not within 0..{FEAT_AMOUNT:g}"
+    rec = {"name": name.lower(), "footprint": [fx, fz], "metal": metal, "energy": energy,
+           "height": atoi(body.get("height")) & 0xFF, "blocking": atoi(body.get("blocking")) != 0,
+           "reclaimable": atoi(body.get("reclaimable")) != 0}
+    if "object" in body:
+        if not ascii(body["object"]):
+            return None, f"{name}'s object is not 1..{FEAT_NAME_MAX} printable ASCII bytes"
+        rec["object"] = body["object"].lower()
+    return rec, f"{name.lower()} from {tdf} ({where})"
+
+
+def bar_art(eng, art, s, fonts, report):
+    """Side `s`'s resource bar as the engine loads it once a process (0x491200, DISASSEMBLED;
+    research/notes/ingame-wiki-replay-plan.md, *What R0 found*): frame 0 of PANELTOP and PANELBOT from the side's `intgaf` bank (0x429870, 0x429F2B..0x429FE1),
+    and sidedata's fifteen rects, `energycolor`, `metalcolor` and `font` (0x431A60), the font read from
+    `<fonts>\\<font>.<fnt_ext>` by the engine's path rule (0x431BCF..0x431BF1). Every value is checked here as
+    side.js read checks it; a side that fails any check has no bar (the stage draws the whitebox strips) and a
+    report line says why. The font's bytes go into `fonts` ({source: (pack file, bytes)}), one file per source.
+    Returns {top, bot: (frame key, hx, hy), rects, ecol, mcol, font: pack file} or None."""
+    el = f"bar {s['name']}"
+    got = art.bank(s["intgaf"]) if s["intgaf"] else None
+    rects = s["rects"]
+    lo, hi = BAR_COORD
+    ecol, mcol = atoi(s["energycolor"]), atoi(s["metalcolor"])
+    font = eng.load(eng.dirs["fonts"], s["font"], eng.dirs["fnt_ext"]) if s["font"] else None
+    missing = [r for r in BAR_RECTS if r not in rects]
+    bad = [r for r in BAR_RECTS if r in rects and not (all(lo <= v <= hi for v in rects[r]) and
+                                                      rects[r][0] <= rects[r][2] and rects[r][1] <= rects[r][3])]
+    why = None
+    if got is None or not all(q.lower() in got[0].seqs and got[0].seqs[q.lower()][1] for q in ("PANELTOP", "PANELBOT")):
+        why = f"no PANELTOP and PANELBOT in {eng.dirs['anims']}\\{s['intgaf']}.GAF"
+    elif missing:
+        why = f"[SIDE] has no {', '.join(m.upper() for m in missing)}"
+    elif bad:
+        why = f"{', '.join(b.upper() for b in bad)} not x1 <= x2, y1 <= y2 inside {lo}..{hi}"
+    elif not (0 <= ecol <= 255 and 0 <= mcol <= 255):
+        why = f"energycolor {ecol} or metalcolor {mcol} is not a palette index"
+    elif font is None:
+        why = f"no {eng.dirs['fonts']}\\{s['font']}.{eng.dirs['fnt_ext']}"
+    elif fnt_problem(font[0]):
+        why = f"{font[1]}: {fnt_problem(font[0])}"
+    if why:
+        report.append({"element": el, "refused": why})
+        return None
+    source = f"{font[1].lower()}:{font[2]}"
+    if source not in fonts:
+        stem = re.sub(r"[^a-z0-9_-]", "_", s["font"].lower()) or "font"
+        taken = {f for f, _b in fonts.values()}
+        file, n = f"fnt/{stem}.bin", 1
+        while file in taken:
+            file, n = f"fnt/{stem}-{n}.bin", n + 1
+        fonts[source] = (file, font[0])
+    top, bot = art.seq(got, "PANELTOP", 1)[0], art.seq(got, "PANELBOT", 1)[0]
+    report.append({"element": el, "from": got[1], "where": got[2], "font": font[1], "font_where": font[2]})
+    return {"top": (top[0], top[2], top[3]), "bot": (bot[0], bot[2], bot[3]),
+            "rects": {r: rects[r] for r in BAR_RECTS}, "ecol": ecol, "mcol": mcol, "font": fonts[source][0]}
+
+
+def side_pack(eng, mod, descs, rows, out, pal, report, sights):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
     its casting and the pages of its cast types. `rows` holds each stage's scene rows, which its map grows from beside
@@ -1944,9 +2379,13 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
         menu = lambda t, prefix=s["prefix"]: menu_of(eng, units, downloads, t, prefix, menus)
         picks, why = side_casting(units, s["commander"], menu)
         casts = {}
-        for c in CASTS:
+        for c, row in zip(CASTS, why):
             t = picks[c]
-            casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)]) if t else None
+            casts[c], row["corpse"] = None, None
+            if t:
+                corpse, row["corpse"] = corpse_record(eng, units[t])
+                height, row["model"] = unit_height(eng, units[t])
+                casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)], corpse, height)
         casting.append({"side": s["name"], "commander": s["commander"], "casts": casts, "report": why})
 
     # each side's types: its bound cast types that have a page, read with that side's prefix (the `<prefix>DL` page
@@ -2014,7 +2453,8 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
                                    f"no live button for the {d} {unit}"})
     height = max([SIDE_MIN_H] + [s["y"] + s["h"] for s in screens.values()])
     layout = {"format": 1, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
-              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens}
+              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens,
+              "sight": sight_table(eng, report, sights | {k["sightDistance"] for c in casting for k in c["casts"].values() if k})}
 
     # PANELSIDE of every layout side, and the dots
     side_art = {"panelside": []}
@@ -2032,6 +2472,16 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
                         "key": (rad or high)[0][1].transparent if (rad or high) else 0}
     report.append({"element": "dots", "from": fx and fx[1], "where": fx and fx[2],
                    "radlogo": len(rad) if rad else None, "high": bool(high)})
+
+    # the resource bar of every layout side, and the badge frames, one a colour (0x4318C0)
+    fonts = {}
+    side_art["bar"] = [bar_art(eng, art, s, fonts, report) for s in kept]
+    lg = eng.logos()
+    seq = eng.dirs["logos_seq"]
+    logos = art.seq(lg, seq) if lg and seq.lower() in lg[0].seqs and len(lg[0].seqs[seq.lower()][1]) <= BAR_LOGOS else None
+    report.append({"element": "logos", "from": lg and lg[1], "where": lg and lg[2], "seq": seq,
+                   **({"frames": len(logos)} if logos else {"refused": f"no {seq} of 1..{BAR_LOGOS} frames in "
+                                                            f"{eng.dirs['textures']}\\{eng.dirs['logos']}.GAF: no badge"})})
 
     # the minimap's tables
     hit = eng.load(eng.dirs["palettes"], eng.dirs["guipal"], "PAL")
@@ -2055,7 +2505,7 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
             continue
         sub = []
         try:
-            tiles, _feats = resolve_ground(eng, desc, sub)
+            tiles, _feats, _models3d = resolve_ground(eng, desc, sub)
         except Miss as e:
             report.append({"element": f"minimap {eid}", "refused": str(e)})
             continue
@@ -2099,7 +2549,18 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
     art_out["minimap"] = {"unexplored": gui[GUI_UNEXPLORED] if gui else None, "box": gui[GUI_BOX] if gui else None,
                           "seen": "seen.bin", "bases": bases}
     art_out["greyed"] = "greyed.bin" if greyed else None
+
+    def framed(key, hx, hy):
+        return {"f": rect(key, hx, hy), "key": art.frames[key].transparent}
+    art_out["bar"] = [None if b is None else {"top": framed(*b["top"]), "bot": framed(*b["bot"]), "rects": b["rects"],
+                                              "ecol": b["ecol"], "mcol": b["mcol"], "font": b["font"]}
+                      for b in side_art["bar"]]
+    art_out["logos"] = [framed(k, hx, hy) for k, _f, hx, hy in logos] if logos else None
+    art_out["gui"] = list(gui) if gui else None
     out.mkdir(parents=True, exist_ok=True)
+    for file, blob in fonts.values():
+        (out / file).parent.mkdir(parents=True, exist_ok=True)
+        (out / file).write_bytes(blob)
     (out / "sheet.bin").write_bytes(sheet)
     (out / "pal.bin").write_bytes(bytes(b for c in pal for b in (*c, 255)))
     (out / "seen.bin").write_bytes(seen)
@@ -2121,6 +2582,7 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
     report = []
     ground = {"ok": False, "miss": None}
     mapblock = features = minimap = None
+    models3d = []
     m = entry["scenes"][name]["map"]
     try:
         if desc is None:
@@ -2128,7 +2590,7 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
         if list(desc["cells"]) != [m["w"], GROUND_ROWS] or m["h"] > GROUND_ROWS:
             raise Miss(f"the description's cells {desc['cells']} are not the scene's {m['w']} columns and the ground's "
                        f"{GROUND_ROWS} rows")
-        tiles, feats = resolve_ground(eng, desc, report)
+        tiles, feats, models3d = resolve_ground(eng, desc, report)
         mapblock, features = write_ground(out, desc, tiles, feats)
         ground["ok"] = True
         # the minimap's base of the scene's map with this install's shrink table; a mod's own, of the map grown beside
@@ -2139,10 +2601,19 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
     except Miss as e:
         ground["miss"] = str(e)
         report.append({"element": "ground", "refused": str(e)})
-    units = write_units(out, eng, entry, report, types)
+    units = write_units(out, eng, entry, report, types, models3d)
+    # the 3D features, each by its mesh's key (FEAT_KEY) at its anchor cell: scene.js draws the ones the view has not
+    # reclaimed; with any of their models missing the ground falls back whole
+    missing = sorted({m["object"] for m in models3d if FEAT_KEY + m["object"] not in units["meshes"]})
+    if ground["ok"] and missing:
+        ground = {"ok": False, "miss": f"a 3D feature's model did not resolve: {', '.join(missing)}"}
+        report.append({"element": "ground", "refused": ground["miss"]})
+    features3d = [{"key": FEAT_KEY + m["object"], "name": m["name"], "cell": m["cell"], "footprint": m["footprint"]}
+                  for m in models3d] if ground["ok"] else []
     # cells: the ground's, of which a stage draws its map's top rows (gfx.js Stage)
     scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "scene": name, "cells": [m["w"], GROUND_ROWS],
-             "ground": ground, "map": mapblock, "features": features, "units": units, "minimap": minimap,
+             "ground": ground, "map": mapblock, "features": features, "features3d": features3d, "units": units,
+             "minimap": minimap,
              "palette": palette_block, "shaders": "../shaders/",
              "depth": {"terrain": 0.10, "scale": 512.0, "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0,
                        "rowStep": 4.0, "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
@@ -2168,7 +2639,7 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
     for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
         (out_root / "shaders" / name).write_text(src)
     index, full, types = {}, {}, {}
-    for entry, name in ((e, n) for e in entries for n in e["scenes"]):
+    for entry, name in ((e, n) for e in entries for n in e.get("scenes") or {}):
         sid = f"{entry['id']}.{name}"
         dpath = stage_dir / f"{sid}.json"
         desc = json.loads(dpath.read_text()) if dpath.exists() else None
@@ -2179,7 +2650,8 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
                       "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
         full[sid] = scene["report"]
         for t, m in scene["units"]["meshes"].items():
-            types.setdefault(t, m["sound"])
+            if m["sound"] is not None:          # a 3D feature has no sound
+                types.setdefault(t, m["sound"])
         g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
         print(f"  {sid}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
               + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
@@ -2237,7 +2709,7 @@ def main(argv=None):
     entries = [json.loads(f.read_text()) for f in sorted(ENTRIES.glob("*.json"))]
     descs, rows = {}, {}
     for entry in entries:
-        for name, sc in entry["scenes"].items():
+        for name, sc in (entry.get("scenes") or {}).items():
             sid = f"{entry['id']}.{name}"
             dpath = stage_dir / f"{sid}.json"
             desc = json.loads(dpath.read_text()) if dpath.exists() else None
@@ -2248,7 +2720,7 @@ def main(argv=None):
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, descs, rows, out, palette, report)
+            pack = side_pack(eng, args.mod, descs, rows, out, palette, report, entry_sights())
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1

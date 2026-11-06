@@ -1844,7 +1844,9 @@ def _build_cobvm(out: Path, sources, cc=None, target_flags=()):
     """Compile the core into a shared library at `out`. Returns `out`."""
     cc = cc or os.environ.get("CC") or "cc"
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(out.suffix + ".tmp")
+    # the temporary is this process's own: processes started together each build the same library, and
+    # each one's rename publishes a whole file, so no build reads or renames another's half-written one
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
     cmd = [cc, "-std=c99", "-O2", "-Wall", "-Werror", "-shared", *target_flags,
            "-I", str(sources / "inc"), *[str(sources / s) for s in COB_SOURCES if s.endswith(".c")],
            "-o", str(tmp)]
@@ -1855,6 +1857,7 @@ def _build_cobvm(out: Path, sources, cc=None, target_flags=()):
     except FileNotFoundError:
         raise TacobError(f"the COB VM is C (tagpu_cobvm.c) and needs a C compiler: {cc} was not found")
     except _subprocess.CalledProcessError as e:
+        tmp.unlink(missing_ok=True)
         raise TacobError(f"compiling the COB VM failed:\n{e.stderr}")
     os.replace(tmp, out)
     return out

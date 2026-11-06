@@ -65,7 +65,6 @@ typedef struct {
     float ss;                   /* supersample factor (1 or 2)                */
     int   scafOn;
     float scafP[4];             /* vpL, vpT, vw, vh                           */
-    float fogOrg[2], fogDim[2];
     float sun[3], amb, norm;    /* the units' sun, ambient, 1/unitLevel       */
     int   shNeutral;            /* the engine's neutral SHD row (unshaded)    */
 } TAGPU_PDVIEW;
@@ -363,7 +362,6 @@ typedef struct TAGPU_PDHAND {
        posed unit from a flat up normal rather than from vNrm. */
     int   restored, scafOn, lambert, shadowOn;
     float scafP[4], ss;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float sun[3], amb, norm;
     /* the cast-shadow read-back block, and it is only meaningful while
        `shadowOn` is 1. `shadowOn` is the constant 0 and nothing writes the
@@ -391,8 +389,8 @@ typedef struct TAGPU_PDHAND {
        changed, so the Vulkan pass re-uploads on a change and not per frame.
        The unit atlas's indices are tagpu_render3do.h's mirror, which the
        Vulkan pass expands into its base atlas, and the face-shade multipliers
-       its array; the palette is tagpu_pal's snapshot; the fog grid is what the
-       native pass built this frame.
+       its array; the palette is tagpu_pal's snapshot. The fog is not here:
+       the consuming pass samples the slot's fog image (tagpu_vk_fog.h).
 
        THE CLASSIC++ RESTORED TWIN IS NOT HERE AS TEXELS: it crosses as the
        frame LIST below, which the consuming pass paints into its own twin on
@@ -432,10 +430,6 @@ typedef struct TAGPU_PDHAND {
     const float*         shadeK;
     /* the engine's table and its serial (tagpu_pal_engine) */
     const unsigned char* pal;     unsigned palSerial;
-    /* COPIED, not aliased: the grid points into a frame packet the game thread
-       reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when
-       this frame had none, which a unit with `uFog & 1` makes a refusal. */
-    const unsigned short* fogGrid; int fogGridCols, fogGridRows;
 
     /* the scissor the native pass set around these draws, in game-frame pixels
        from the TOP of the frame -- tagpu_vk_feat.c is where the flip onto
@@ -498,19 +492,12 @@ void tagpu_posedraw_uncarried(void);
    whole count. Neither depends on the effects models -- a unit is recorded
    before any model of its window -- so a count that stands the units down
    is known here from the frame it begins on, or from the next when it first
-   appears after the gather. `_fog_carried`: whether the hand-over will carry
-   the fog grid the native pass holds, with the room for its copy made now;
-   the publish makes the same test on the same grid (`pd_fog_room`), so it
-   cannot answer otherwise. `_shadow_on`: the `shadowOn` the hand-over
+   appears after the gather. `_shadow_on`: the `shadowOn` the hand-over
    publishes. `_mirrors`: the texel mirrors' four fields, read by the same
    two readers the hand-over's are (`tagpu_posedraw_atlas_hand` and
    `tagpu_r3d_shade_k`). */
 int  tagpu_posedraw_other_forecast(void);
-int  tagpu_posedraw_fog_carried(void);
 int  tagpu_posedraw_shadow_on(void);
 void tagpu_posedraw_mirrors(const unsigned char** atlas, int* atlasDim,
                             const unsigned char** pal, const float** shadeK);
-
-/* the widest fog grid the hand-over carries, cells a side */
-#define TAGPU_PD_FOG_MAXDIM 1024
 #endif

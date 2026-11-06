@@ -15,6 +15,7 @@ typedef struct {
 struct RecMpPov {
     RecMpRoster roster;
     unsigned limit;                 /* entries a selection may hold: min(each, REC_SEL_MAX) */
+    uint32_t zmin;                  /* a sample's smallest zoom (rec_pov_zoom_min)          */
     unsigned encoding;
     PovActor actor[RECMP_ACTORS];
     RecSelEntry entry[];            /* per actor: `limit` published, then `limit` staged */
@@ -32,7 +33,7 @@ static RecSelEntry* entries(const RecMpPov* c, unsigned at, unsigned staged)
     return (RecSelEntry*)c->entry+((size_t)at*2+staged)*c->limit;
 }
 
-RecMpPov* tagpu_recmp_pov_begin(const RecMpRoster* roster)
+RecMpPov* tagpu_recmp_pov_begin(const RecMpRoster* roster, uint32_t zmin)
 {
     RecMpPov* c;
     unsigned limit;
@@ -40,7 +41,7 @@ RecMpPov* tagpu_recmp_pov_begin(const RecMpRoster* roster)
     limit=roster->each<REC_SEL_MAX ? roster->each : REC_SEL_MAX;
     c=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,
                 sizeof *c+(size_t)roster->count*2*limit*sizeof(RecSelEntry));
-    if (c) { c->roster=*roster; c->limit=limit; }
+    if (c) { c->roster=*roster; c->limit=limit; c->zmin=zmin; }
     return c;
 }
 
@@ -66,15 +67,15 @@ static int after(unsigned valid, unsigned sequence, unsigned source_tick, unsign
                       !memcmp(&h->stream,stream,sizeof *stream));
 }
 
-static int put_pov(PovActor* a, const RecMpHeader* h, const unsigned char* raw, unsigned bytes,
-                   unsigned tick)
+static int put_pov(PovActor* a, uint32_t zmin, const RecMpHeader* h, const unsigned char* raw,
+                   unsigned bytes, unsigned tick)
 {
     RecMpPovState* s=&a->pov;
     const RecMpPovSample* last=s->count ? &s->sample[s->count-1] : NULL;
     RecMpPovSample next;
     if (bytes!=sizeof next.pov) return 0;
     memcpy(&next.pov,raw,sizeof next.pov);
-    if (next.pov.player!=RECMP_POV_PLAYER || !rec_pov_ok(&next.pov) ||
+    if (next.pov.player!=RECMP_POV_PLAYER || !rec_pov_ok(&next.pov,zmin) ||
         (last && !after(1,last->sequence,last->source_tick,last->applied_tick,&last->stream,h,tick)))
         return 0;
     next.origin=h->origin; next.source_tick=h->tick; next.sequence=h->sequence;
@@ -151,7 +152,7 @@ int tagpu_recmp_pov_put(RecMpPov* c, const RecMpSeatMaps* maps, const RecMpHeade
     /* every check reads this copy, and the copy is what publishes */
     memcpy(raw,body,bytes);
     switch (h->kind) {
-    case RECMP_POV:    return put_pov(&c->actor[at],h,raw,bytes,tick);
+    case RECMP_POV:    return put_pov(&c->actor[at],c->zmin,h,raw,bytes,tick);
     case RECMP_CLICK:  return put_click(&c->actor[at],h,raw,bytes,tick);
     case RECMP_SELECT: return put_select(c,at,h,raw,bytes,tick);
     default:           return 0;

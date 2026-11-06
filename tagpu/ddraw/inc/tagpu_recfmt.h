@@ -37,8 +37,14 @@
 #include "tagpu_replay_globals.h"
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
+#include "tagpu_recrules.h"
 
-/* 26: format 25 with the contest order's keys (RK_EV_TURN), the carry links at their place
+/* 28: format 27 with REC_POV_CUT in a RecPov's flags: the mega map's cut, which a Follow does
+   not blend into. A reader takes 26, 27 and 28; only 28's samples carry the bit.
+   27: format 26 with the camera's zoom down to 1/64 (RecPov's zoom at least REC_POV_ZOOM_MIN,
+   1024): the zoom floor follows the map. Every block is format 26's, so a reader takes both, each
+   sample bounded by its file's own minimum (rec_pov_zoom_min). 26 was format 25 with the contest
+   order's keys (RK_EV_TURN), the carry links at their place
    (RK_EV_LINK) and Teleport's moves at theirs (RK_EV_PLACE). 25 was format 24 with
    RT_WALLCLOCK's start carrying the local time's offset from UTC at that instant beside it. 24
    was format 23 with the unit frame's listing, lane masks and residuals as one binary range
@@ -76,16 +82,17 @@
    carries the masks). 13 was format 12 with the stream written by the lossy filter
    (tagpu_reclossy.c): a skirmish header's RT_HOLD names the bytes the stream holds between
    refreshes, a refresh iteration ends its stream block (RBF_REFRESH), and a test launch may write
-   the exact records beside the stream (RB_EXACT). A reader takes this format alone. The bytes: a
+   the exact records beside the stream (RB_EXACT). A reader takes formats 26, 27 and 28, a closed
+   list (rec_format_supported). The bytes: a
    stream block may be a sectioned container whose unit frame carries the unit deltas, whose pool
    frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
    the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
    below). */
-#define REC_FORMAT        26
+#define REC_FORMAT        28
 
 static __inline int rec_format_supported(unsigned format)
 {
-    return format == REC_FORMAT;
+    return format == 26 || format == 27 || format == REC_FORMAT;
 }
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
@@ -1140,13 +1147,7 @@ _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
 _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46 &&
                RT_TYPES == 47, "the codec's and the filter's tags");
 
-/* RT_HOLD. A refresh iteration is a segment's first or second, one whose GameTime is 1 modulo
-   the interval (the first after it where an iteration skips that GameTime), and every snapshot's
-   (tagpu_reclossy.h, reclossy_is_refresh): on the grid, every refresh is also 1 modulo the
-   radar pass's step of 30 ticks, and the grid is the same in every recording. A file without
-   RT_HOLD, a multiplayer recording, is written on REC_REFRESH_TICKS's grid. */
-#define REC_REFRESH_TICKS 300   /* the interval a recording is written with                     */
-#define REC_REFRESH_MIN   30    /* the least a test launch may ask for (tagpu_rec.refresh)       */
+/* RT_HOLD's flags and bytes; its interval's bounds and the refresh grid are tagpu_recrules.h's */
 #define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held: a playing keeps
                                    the engine's own (tagpu_puppet.c, THE FOOTPRINT WRITERS)      */
 #define RECL_SPRAYS       2u    /* the nano sprays are written as sessions (RK_SPRAY_SESSION)    */

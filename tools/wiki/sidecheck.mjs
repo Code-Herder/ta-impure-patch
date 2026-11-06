@@ -44,9 +44,9 @@ const WikiSide = require('./mockup/side.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
-const SRCS = ['src/tagpu_wikiside.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
+const SRCS = ['src/tagpu_wikiside.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 const COL = WikiSide.COL;
 // WIKISIDE_FROM_*: where a picture came from; the composer tells only a label from the rest
 const FROM = { label: 0, page: 1, commongui: 2, fallback: 3, download: 4, unitpics: 5 };
@@ -96,7 +96,7 @@ function synthetic(name, layout, seed, opts, entries) {
   });
   const bases = {};
   // a base per stage, `<entry>.<scene>`, every scene of an entry being its first one's size
-  entries.flatMap(e => Object.keys(e.scenes).map(n => [`${e.id}.${n}`, e.scenes[n].map])).forEach(([id, map], i) => {
+  entries.flatMap(e => Object.keys(e.scenes || {}).map(n => [`${e.id}.${n}`, e.scenes[n].map])).forEach(([id, map], i) => {
     const m = WikiSide.geometry(map.w * 16, map.h * 16), want = opts.bases[i % opts.bases.length];
     if (want !== 'none') bases[id] = bytes(m.w * m.h - (want === 'short' ? 1 : 0));
   });

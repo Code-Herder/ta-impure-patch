@@ -127,6 +127,87 @@
       "blocking": true,
       "reclaimable": true,
       "from": "features\\green\\trees.tdf [tree5]"
+    },
+    "armpw_dead": {
+      "footprint": [2,2],
+      "metal": 42,
+      "height": 40,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armpw_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armpw_dead]"
+    },
+    "armham_dead": {
+      "footprint": [2,2],
+      "metal": 121,
+      "height": 40,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armham_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armham_dead]"
+    },
+    "armllt_dead": {
+      "footprint": [2,2],
+      "metal": 210,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armllt_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armllt_dead]"
+    },
+    "corak_dead": {
+      "footprint": [2,2],
+      "metal": 45,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "corak_dead",
+      "from": "features\\corpses\\core_corpses.tdf [corak_dead]"
+    },
+    "corck_dead": {
+      "footprint": [2,2],
+      "metal": 104,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "corck_dead",
+      "from": "features\\corpses\\core_corpses.tdf [corck_dead]"
+    },
+    "corthud_dead": {
+      "footprint": [2,2],
+      "metal": 118,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "corthud_dead",
+      "from": "features\\corpses\\core_corpses.tdf [corthud_dead]"
+    },
+    "armpw_heap": {
+      "footprint": [2,2],
+      "metal": 21,
+      "height": 4,
+      "blocking": false,
+      "reclaimable": true,
+      "object": "2x2f",
+      "from": "features\\corpses\\arm_heaps.tdf [armpw_heap]"
+    },
+    "armllt_heap": {
+      "footprint": [2,2],
+      "metal": 105,
+      "height": 4,
+      "blocking": false,
+      "reclaimable": true,
+      "object": "2x2b",
+      "from": "features\\corpses\\arm_heaps.tdf [armllt_heap]"
+    },
+    "corak_heap": {
+      "footprint": [2,2],
+      "metal": 22,
+      "height": 4,
+      "blocking": false,
+      "reclaimable": true,
+      "object": "2x2c",
+      "from": "features\\corpses\\core_heaps.tdf [corak_heap]"
     }
   },
   "scenes": {
@@ -157,6 +238,26 @@
         {"id":"g8","name":"tree2","at":[34,24]},
         {"id":"g9","name":"rock07","at":[31,21]},
         {"id":"g10","name":"rock4","at":[26,21]}
+      ],
+      "selected": ["a","b"],
+      "cursor": [300,260]
+    },
+    "field": {
+      "map": {"w":40,"h":30,"surfaceMetal":0},
+      "units": [{"id":"a","type":"ARMCK","at":[184,168]},{"id":"b","type":"ARMCK","at":[184,216]}],
+      "features": [
+        {"id":"w1","name":"corthud_dead","at":[19,5]},
+        {"id":"w2","name":"corak_dead","at":[22,6]},
+        {"id":"w3","name":"armpw_dead","at":[18,8]},
+        {"id":"w4","name":"armham_dead","at":[24,9]},
+        {"id":"w5","name":"armllt_heap","at":[15,9]},
+        {"id":"w6","name":"armllt_dead","at":[21,11]},
+        {"id":"w7","name":"corck_dead","at":[17,12]},
+        {"id":"w8","name":"armpw_heap","at":[20,14]},
+        {"id":"w9","name":"corak_heap","at":[25,13]},
+        {"id":"t1","name":"tree1","at":[23,9]},
+        {"id":"t2","name":"tree4","at":[19,10]},
+        {"id":"t3","name":"tree2","at":[16,11]}
       ],
       "selected": ["a","b"],
       "cursor": [300,260]
@@ -221,6 +322,7 @@
     {
       "id": "metal",
       "title": "A METAL ring",
+      "on": "field",
       "scene": {"kind":"metal"},
       "inputs": [
         {"at":0,"caption":"Two {builder}s, METAL picked. Press and drag a ring."},
@@ -271,9 +373,9 @@
         {"at":194,"move":[423,168]},
         {"at":196,"move":[424,168]},
         {"at":198,"move":[424,168]},
-        {"at":198,"caption":"The rocks in the ring are marked. The trees among them are not."},
+        {"at":198,"caption":"The wrecks in the ring are marked. The trees among them are not."},
         {"at":248,"up":"lmb"},
-        {"at":248,"caption":"Released: the rocks are shared out, each {builder} taking the nearest."}
+        {"at":248,"caption":"Released: the wrecks are shared out, each {builder} taking the nearest."}
       ],
       "end": 548
     },
@@ -344,6 +446,7 @@
     {
       "id": "shift",
       "title": "Shift queues another ring",
+      "on": "field",
       "scene": {"kind":"metal"},
       "inputs": [
         {"at":0,"caption":"Hold Shift to queue: reclaim stays armed after a ring."},
@@ -437,6 +540,7 @@
     {
       "id": "replace",
       "title": "Without Shift it replaces",
+      "on": "field",
       "scene": {"selected":["a"],"kind":"metal"},
       "inputs": [
         {"at":0,"down":"shift"},
@@ -561,7 +665,7 @@
         {"at":367,"up":"lmb"},
         {
           "at": 367,
-          "caption": "A ring without Shift replaces its orders: the moves are gone, the rocks are its work now."
+          "caption": "A ring without Shift replaces its orders: the moves are gone, the wrecks are its work now."
         }
       ],
       "end": 627

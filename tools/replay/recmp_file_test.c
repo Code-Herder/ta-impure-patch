@@ -181,7 +181,7 @@ static void proof_only_roster(void)
     unsigned bytes;
     memcpy(h.magic,"IMPUREMP",8);
     for (unsigned i=0;i<4;i++) file.actor[i]=(RecMpRecordActor){recorder.actor[i].origin,i<2};
-    history=tagpu_recmp_history_begin(&file,&recorder,2,2); CHECK(history);
+    history=tagpu_recmp_history_begin(&file,&recorder,2,2,REC_FORMAT); CHECK(history);
     h.bytes=sizeof h+sizeof source;
     CHECK(tagpu_recmp_history_record(history,&where,&h,&source,sizeof source));
     h.kind=RECMP_PLAYER; h.sequence=2; bytes=player_body(55,1,body); h.bytes=sizeof h+bytes;

@@ -25,13 +25,15 @@ const WikiStage = (() => {
   const FACE = { style: 'toast', family: 'Oswald', weight: 700 };
   // the kit's cursor icons by the view's cursor shape, each drawn centred on the pointer where the game's did not load
   const CURSOR = { arrow: 'cursor_arrow', move: 'cursor_move', build: 'cursor_build', reclaim: 'cursor_arrow' };
+  // the kit's parts for Impure's emblems in the frame's top bar
+  const EMBLEM = { wiki: 'wiki_emblem', config: 'config_emblem' };
   /* THE RECLAIM SWEEP's colours, as tagpu_sweep.c picks them: a target's bracket in the kind's (METAL palette 224, ENERGY
      208, ALL the GUI's placed green 0x0A), the ring in the placed green, the readout's text in GUI 0x0F, every stroke
-     edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. A scene feature on the whitebox ground: a rock
-     (it holds metal) or a tree. */
+     edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. A scene feature on the whitebox ground: a wreck
+     (its row names a model), a rock (it holds metal) or a tree. */
   const SWEEP = { kind: { metal: '#d3dbff', energy: '#ffff00', all: '#2bd248' }, ring: '#2bd248', text: '#f0f0ea', edge: '#000000',
     plate: '#2e2e2a', bar: '#55554f', lit: '#6e6e66', label: '#e8e8e2', hot: '#ffffff' };
-  const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220' };
+  const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220', wreck: '#687078', wreckEdge: '#33383e' };
   const KIND_NAME = { metal: 'METAL', energy: 'ENERGY', all: 'ALL' };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // a device coordinate rounded to the pixel an edge is drawn on, as the game snaps a part's box (tagpu_hud_snap)
@@ -63,7 +65,7 @@ const WikiStage = (() => {
      button (or the current tab) takes the pressed colour and its name moves one game pixel right and down, as the
      engine moves a pressed button's text (0x4A5F40); a greyed one is drawn whole at opacity 0.45, as one group.
      tagpu_wikistage.c mirrors SIDE_WB. */
-  const SIDE_W = 128, MINIMAP = 128;
+  const SIDE_W = 128, MINIMAP = 128, FRAME_BAR = 32;
   const SIDE_WB = { column: '#2e2e2a', panel: '#3a3a36', well: '#1e1e1c', button: '#55554f', edge: '#8a8a80',
     pressed: '#6e6e66', grey: 0.45, label: '#e8e8e2', box: '#f0cc10' };
   const SIDE = typeof WikiSide !== 'undefined' ? WikiSide : require('./side.js');
@@ -94,10 +96,11 @@ const WikiStage = (() => {
      game's image -- drawn whole into the column's rect snapped to device pixels, then the whitebox's minimap when
      the image has none (no base picture for this entry) and a whitebox button over every gadget whose picture is a
      label, label(i) giving that label's text ('' for the gadget's own name) or null for a picture -- or
-     null for the whitebox. k carries draw()'s X, Z, s, label and the ground's shades. */
+     null for the whitebox. k carries draw()'s X, Z, s, label and the ground's shades, and dz the world z of the
+     column's row 0: 0 on a page's stage, -32 in the frame, whose column starts with the top bar's rows. */
   function drawSide(g, v, side, k) {
-    const { X, Z, s, U, label, shade } = k, sv = v.side, L = side.layout || null, art = side.art || null, H = +sv.h || 0;
-    const CX = x => X(x - SIDE_W);
+    const { X, s, U, label, shade, dz } = k, sv = v.side, L = side.layout || null, art = side.art || null, H = +sv.h || 0;
+    const CX = x => X(x - SIDE_W), Z = y => k.Z(y + dz);
     const box = (x, y, w, h) => ({ x: CX(x), y: Z(y), w: w * s, h: h * s, cx: CX(x + w / 2), cy: Z(y + h / 2) });
     const ring = (b, col) => { g.lineWidth = s; g.strokeStyle = col; g.strokeRect(b.x + s / 2, b.y + s / 2, b.w - s, b.h - s); };
     const solid = (b, col) => { g.fillStyle = col; g.fillRect(b.x, b.y, b.w, b.h); };
@@ -117,17 +120,21 @@ const WikiStage = (() => {
         if (b > a && d > c) { g.fillStyle = col; g.fillRect(a, c, b - a, d - c); }
       };
       for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) cellAt(x, z, shade(z * mw + x));
-      const fog = M.fog || [];
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) { const f = fog[z * mw + x]; if (f) cellAt(x, z, fogColour(f)); }
-      // a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its owner's colour
-      for (const u of v.units || []) {
+      // the fog: the map's, or under a players frame's Sight the pass's (v.mini), grey on each cell of an unlit block
+      const fog = M.fog || [], mini = v.mini || null;
+      const fogAt = (x, z) => mini ? ((x >> 1) < mini.gw && (z >> 1) < mini.gh && mini.lit[(z >> 1) * mini.gw + (x >> 1)] ? 0 : 1) : fog[z * mw + x];
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) { const f = fogAt(x, z); if (f) cellAt(x, z, fogColour(f)); }
+      // a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its owner's colour: every unit's,
+      // or under Sight the pass's dots
+      for (const u of mini ? mini.dots : v.units || []) {
         const p = pt(u); if (!p) continue;
         const [px, py] = SIDE.dotAt(p.x, p.z, m, mw * cell, mh * cell);
         g.fillStyle = TEAM[u.owner | 0] || '#ccc';
         g.beginPath(); g.arc(CX(m.offx + px + .5), Z(m.offy + py + .5), 1.5 * s, 0, 2 * Math.PI); g.fill();
       }
-      // the camera box: the stage shows the whole map, so it is the picture's border
-      ring(box(m.offx, m.offy, m.w, m.h), SIDE_WB.box);
+      // the camera box (SIDE.cameraBox): the picture's border while the stage shows the whole map
+      const cb = SIDE.cameraBox(m, mw * cell, mh * cell, k.eye || null);
+      ring(box(cb[0], cb[1], cb[2] - cb[0] + 1, cb[3] - cb[1] + 1), SIDE_WB.box);
     }
 
     const scr = L && L.screens[sv.screen];
@@ -154,26 +161,32 @@ const WikiStage = (() => {
     });
   }
 
-  /* THE FIT: the stage's content rect c = { x0, w, h } in world units -- the map, and with the game's sidebar the
-     128-unit column left of it (ingame-wiki.md, *The left sidebar on the stage*) -- in a W x H canvas at U pixels a
-     unit, letterboxed with a pad of 6 units: s pixels a world unit and the world origin at (ox, oz), so X(x) = ox + x s
-     holds for the map and the column alike. Without the column (x0 = 0) this is the map's own fit, to the bit.
+  /* THE FIT: the stage's content rect c = { x0, z0, w, h } in world units -- the map, and with the game's sidebar the
+     128-unit column left of it (ingame-wiki.md, *The left sidebar on the stage*), and in the frame the top bar's 32
+     rows above it too (z0 = -32) -- in a W x H canvas at U pixels a unit, letterboxed with a pad of 6 units: s pixels
+     a world unit and the world origin at (ox, oz), so X(x) = ox + x s holds for the map and the column alike. Without
+     the column (x0 = 0) this is the map's own fit, to the bit, and without the frame (z0 = 0) the page's.
      tagpu_wikistage_fit is this, and both of the game's threads call it, so a click on the stage and the picture of it
      cannot disagree. */
   function fit(c, W, H, U) {
     const pad = 6 * U;
     const s = Math.min((W - 2 * pad) / c.w, (H - 2 * pad) / c.h);
-    return { s, ox: (W - c.w * s) / 2 - c.x0 * s, oz: (H - c.h * s) / 2 };
+    return { s, ox: (W - c.w * s) / 2 - c.x0 * s, oz: (H - c.h * s) / 2 - (c.z0 || 0) * s };
   }
   /* The content rect of a view: the map's, or with the column (v.side) the column and the map, as tall as the taller,
-     which is the map: the sim grows a map with the column until it is as tall (decision 9). */
+     which is the map: the sim grows a map with the column until it is as tall (decision 9). A frame view (v.frame,
+     frame.js view) is the whole game screen, Wg x Hg from the column's left edge and the top bar's top (frame.js size),
+     a players frame's the column, its viewport and the bars. */
   function content(v) {
     const M = v.map, cell = +M.cell || 16, mw = (+M.w || 1) * cell, mh = (+M.h || 1) * cell;
+    // a players frame (frame.js view's `eye`) is its screen's: the viewport stands where the map does
+    if (v.frame && v.eye) return { x0: -SIDE_W, z0: -FRAME_BAR, w: SIDE_W + v.eye.w, h: v.eye.h + 2 * FRAME_BAR };
+    if (v.frame) return { x0: -SIDE_W, z0: -FRAME_BAR, w: SIDE_W + mw, h: Math.max(mh + 2 * FRAME_BAR, v.side ? +v.side.h || 0 : 0) };
     return v.side ? { x0: -SIDE_W, w: SIDE_W + mw, h: Math.max(mh, +v.side.h || 0) } : { x0: 0, w: mw, h: mh };
   }
 
   /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, cursors, tick,
-     cursor, image, layer, side }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw,
+     cursor, image, layer, side, frame }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw,
      ph, w, h } with w and h in units (loadIcons); `cursors` the game's (loadCursors), and `tick` the simulation's, which
      its animation runs from; `cursor` false leaves the cursor out (Try it yourself while the player's pointer is off
      the stage: the player's own is the one on screen); `side` = { layout, art } for a view with the sidebar (drawSide).
@@ -194,7 +207,18 @@ const WikiStage = (() => {
      The choice is the caller's, per frame, so no frame shows half of one and half of the other. R2 is R1 with the
      ground and the resolved boxes left out, in R1's order: `o.layer(range, type)` names the range of every call that
      follows -- 'r0', 'side', 'ground', 'box' (with its unit type), 'label' (R1 only) or 'over' -- which is how
-     tools/wiki/stagecheck.mjs pairs R0 and R2 with the DLL's ops as well as R1. */
+     tools/wiki/stagecheck.mjs pairs R0 and R2 with the DLL's ops as well as R1.
+
+     THE FRAME (a view of frame.js view, v.frame): the whole game screen of the map's size, drawn by drawFrame -- its
+     black, the column from the screen's top, the two bars and Impure's emblems -- before the ground, and every range
+     from the ground through the overlays held to the viewport, as the game draws its world under the HUD's surface.
+     `o.frame` = { bar, button, live, top, question, held, cursor, msg }: bar, the bars' picture ({ draw(g, part, size,
+     rect) }, null for the whitebox strips); button, layout.json's `button` (the emblems' place); live, the frame of a
+     live entry, whose wiki emblem stands left of the rewind button; top, the 2D context of the canvas over the stage
+     HUD, the TOP range: Leave's question while `question` (frame.js dialog's rects, `held` the answer held down) and
+     the cursor at `cursor`, { x, y } a canvas point with the shape and age of a live frame's simulation's cursor (the
+     viewer's arrow without), or none. A frame view has no cursor of its own and no readouts: the frame draws the one
+     cursor on the screen in its TOP range. */
   function draw(g, v, o) {
     const W = o.W, H = o.H, U = o.U, im = o.image || null;
     const mark = o.layer || (() => {});
@@ -218,7 +242,15 @@ const WikiStage = (() => {
     }
     const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1, C = content(v);
     const { s, ox, oz } = fit(C, W, H, U);
-    const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s, shade = grounds(M);
+    /* TWO TRANSFORMS: FX, FZ the frame's (the column at -128, the bars), and X, Z the world's, the frame's less the eye
+       of a players frame (frame.js view's `eye`), whose viewport shows the map from the eye. Without an eye they are one
+       function, so every op of a frame without a camera is what it was. */
+    const E = v.frame && v.eye ? v.eye : null;
+    const FX = x => ox + x * s, FZ = z => oz + z * s;
+    const X = E ? x => FX(x - E.x) : FX, Z = E ? z => FZ(z - E.z) : FZ, cp = cell * s, shade = grounds(M);
+    // the cells the viewport meets, [c0, c1) x [r0, r1): the ground, its grid and its fog are drawn there alone
+    const c0 = E ? clamp(Math.floor(E.x / cell), 0, mw) : 0, c1 = E ? clamp(Math.ceil((E.x + E.w) / cell), 0, mw) : mw;
+    const r0 = E ? clamp(Math.floor(E.z / cell), 0, mh) : 0, r1 = E ? clamp(Math.ceil((E.z + E.h) / cell), 0, mh) : mh;
     // a name on its box. One longer than `max`, 1.5 times its box unless given, shrinks until it fits, as the HUD fits
     // its text
     const label = (t, b, col, max = b.w * 1.5) => {
@@ -229,11 +261,20 @@ const WikiStage = (() => {
       text(t, b.cx, b.cy, sz, 'center', col);
     };
     // the game's left sidebar, before the map: the cursor and the overlays are drawn over it
-    if (v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade }); }
+    const F = v.frame ? o.frame || {} : null;
+    const emblems = F ? drawFrame(g, v, F, o, { X: FX, Z: FZ, s, U, C, W, H, label, shade, mark, eye: E }) : null;
+    if (!F && v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade, dz: 0 }); }
+    /* THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none of it lands on them --
+       the map's width and the rows between the bars, or a players frame's viewport */
+    if (F) {
+      const vp = E ? { x0: snap(FX(0)), y0: snap(FZ(0)), x1: snap(FX(E.w)), y1: snap(FZ(E.h)) }
+        : { x0: snap(X(0)), y0: snap(Z(0)), x1: snap(X(mw * cell)), y1: snap(Z(C.h - 2 * FRAME_BAR)) };
+      g.save(); g.beginPath(); g.rect(vp.x0, vp.y0, vp.x1 - vp.x0, vp.y1 - vp.y0); g.clip();
+    }
 
     if (at('ground')) {
       // the ground, in the shades of grounds()
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
         g.fillStyle = shade(z * mw + x);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
@@ -242,11 +283,11 @@ const WikiStage = (() => {
       if (cp >= 5) {
         g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
         const cols = [];
-        for (let x = 0; x <= mw; x++) cols.push(Math.round(X(x * cell)));
-        for (const px of cols) { g.moveTo(px + .5, Z(0)); g.lineTo(px + .5, Z(mh * cell)); }
-        for (let z = 0; z <= mh; z++) {
-          const pz = Math.round(Z(z * cell)) + .5, end = X(mw * cell);
-          let a = X(0);
+        for (let x = c0; x <= c1; x++) cols.push(Math.round(X(x * cell)));
+        for (const px of cols) { g.moveTo(px + .5, Z(r0 * cell)); g.lineTo(px + .5, Z(r1 * cell)); }
+        for (let z = r0; z <= r1; z++) {
+          const pz = Math.round(Z(z * cell)) + .5, end = X(c1 * cell);
+          let a = X(c0 * cell);
           for (const px of cols) { if (px > a) { g.moveTo(a, pz); g.lineTo(px, pz); } a = px + 1; }
           if (end > a) { g.moveTo(a, pz); g.lineTo(end, pz); }
         }
@@ -261,17 +302,17 @@ const WikiStage = (() => {
         g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
         g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
       }
-      // the scene's features still standing, at their footprints: a rock or a tree
+      // the scene's features still standing, at their footprints: a wreck, a rock or a tree
       for (const f of v.feats || []) {
         const x0 = X(f.ox * cell), y0 = Z(f.oz * cell), w = (+f.fx || 1) * cp, h = (+f.fz || 1) * cp, lw = Math.max(1, U);
-        const rock = +f.metal > 0;
-        g.fillStyle = rock ? FEAT_WB.rock : FEAT_WB.tree; g.fillRect(x0, y0, w, h);
-        g.lineWidth = lw; g.strokeStyle = rock ? FEAT_WB.rockEdge : FEAT_WB.treeEdge;
+        const look = f.wreck ? 'wreck' : +f.metal > 0 ? 'rock' : 'tree';
+        g.fillStyle = FEAT_WB[look]; g.fillRect(x0, y0, w, h);
+        g.lineWidth = lw; g.strokeStyle = FEAT_WB[look + 'Edge'];
         g.strokeRect(x0 + lw / 2, y0 + lw / 2, w - lw, h - lw);
       }
-      // fog, in fogColour's
+      // fog, in fogColour's, on the cells the ground is drawn on
       const fog = M.fog || [];
-      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+      for (let z = r0; z < r1; z++) for (let x = c0; x < c1; x++) {
         const f = fog[z * mw + x]; if (!f) continue;
         g.fillStyle = fogColour(f);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
@@ -279,7 +320,8 @@ const WikiStage = (() => {
     }
     // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear), each
     // edge snapped to the device pixel as the game's composite rect is (tagpu_wikistage_image): the composite's
-    // viewport is whole pixels, so the image may sit up to half a pixel from the fit, the same way in both
+    // viewport is whole pixels, so the image may sit up to half a pixel from the fit, the same way in both. A players
+    // frame's map stands at the eye and the viewport clip is the composite's scissor (TAGPU_WORLDTGT's)
     if (im) {
       const x0 = snap(X(0)), y0 = snap(Z(0));
       im.draw(g, { x: x0, y: y0, w: snap(X(mw * cell)) - x0, h: snap(Z(mh * cell)) - y0 });
@@ -371,36 +413,14 @@ const WikiStage = (() => {
       g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
     }
     if (v.reclaim) { mark('over'); drawSweep(g, v, { X, Z, cell, cp, U, text, measure }); }
-    /* THE CURSOR: the game's own when the cursors are loaded (loadCursors), as the game draws the player's
-       (tagpu_gui_surf.c sharp_cursor) -- the frame its animation shows `o.tick - v.cursor.since` ticks after the shape
-       began, at `scale` device pixels an art pixel whatever the map's scale or the HUD's, the frame's hotspot on the
-       pointer's device pixel, the floats as the C side's. Else, for a shape whose frames did not load, its kit icon at
-       screen size centred on the point, in a box snapped as the game snaps a part's, and the icon as large as fits in
-       it, centred (tagpu_hudlay_expand's icon) */
-    const cur = o.cursor !== false && pt(v.cursor), cs = cur && o.cursors && o.cursors.sheet ? o.cursors.seq[v.cursor.shape] : null;
-    const ic = cur && !(cs && cs.n > 0) && o.icons && o.icons[CURSOR[v.cursor.shape] || CURSOR.arrow];
-    let drew = false;
-    if (cs && cs.n > 0) {
-      const F = o.cursors.frames, f = cursorFrame(F.slice(cs.first, cs.first + cs.n), cs.n, cs.loop, (+o.tick || 0) - (+v.cursor.since || 0));
-      if (f >= 0) {
-        const q = F[cs.first + f], k = Math.fround(o.cursors.scale), dx = snap(X(cur.x)), dy = snap(Z(cur.z));
-        const w = Math.trunc(Math.fround(Math.fround(q.w * k) + 0.5)), h = Math.trunc(Math.fround(Math.fround(q.h * k) + 0.5));
-        if (w > 0 && h > 0) {
-          const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
-          g.drawImage(o.cursors.sheet, q.sx, 0, q.w, q.h, dx - Math.trunc(Math.fround(q.hx * k)), dy - Math.trunc(Math.fround(q.hy * k)), w, h);
-          g.imageSmoothingEnabled = sm;
-          drew = true;
-        }
-      }
-    } else if (cur && ic && ic.img) {
-      const w = ic.w * U, h = ic.h * U, a = X(cur.x) - w / 2, b = Z(cur.z) - h / 2;
-      const x0 = snap(a), y0 = snap(b), bw = snap(a + w) - x0, bh = snap(b + h) - y0;
-      const f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
-      const q = g.imageSmoothingQuality; g.imageSmoothingQuality = 'high';
-      g.drawImage(ic.img, x0 + (bw - iw) / 2, y0 + (bh - ih) / 2, iw, ih);
-      g.imageSmoothingQuality = q;
-      drew = true;
+    if (F) {
+      drawOverlays(g, v, F, { X, Z, s, U, box, mark });
+      g.restore();
+      return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, emblems, cursor: drawTop(F, o, W, H, U) };
     }
+    // the cursor, the view's, at its point (cursorAt)
+    const cur = o.cursor !== false && pt(v.cursor);
+    const drew = !!cur && cursorAt(g, o, X(cur.x), Z(cur.z), v.cursor.shape, (+o.tick || 0) - (+v.cursor.since || 0), U);
     // a readout on a dark plate at the stage's bottom, its text centred in the plate's height
     const readout = (t, right) => {
       const sz = Math.round(8.5 * U), h = 12 * U, tw = measure(t, sz);
@@ -420,6 +440,146 @@ const WikiStage = (() => {
       text(t, x0 + 3 * U, y0 + h / 2, sz, 'left', SWEEP.kind[v.reclaim.kind] || SWEEP.text);
     }
     return { s, ox, oz, cell, mw, mh, x0: C.x0, cw: C.w, ch: C.h, cursor: drew };
+  }
+
+  /* THE REPLAY'S OVERLAYS on a frame (frame.js view: `osel`, `oclick`, `ocur`), drawn last in the world, inside the
+     viewport clip and over everything of R2, as the game draws them last with the fog off (tagpu_mark.c, THE REPLAY'S
+     OVERLAYS): first each unit's selection by its owner seat, the stage's own selection brackets in that seat's colour
+     (the game draws the engine's selection rectangle in the seat's colour, MEASURED m0p-facts.md P4; `selected`, the
+     player's own, stays the white brackets above); then the clicks' rings, oldest first, each 16 straight segments
+     one frame pixel wide in the seat's colour with a radius of 4 + 12 (15 - age) / 15 frame pixels; then the cursors'
+     arrows in seat order, each OV_ARROW's five triangles (HOP_TRI) in the seat's colour and then its seven edges one
+     frame pixel wide in the GUI's black. A ring's and an arrow's sizes are the marker pass's screen pixels, here frame
+     pixels scaled by the fit (PD11: a shape in device pixels would grow against the frame as the stage shrinks); each
+     anchors on its world point snapped to the device pixel (ov_anchor's snap_device). `F.colour(k)` is seat k's
+     colour (frame.js seatColour), the stand-ins without it; `F.edge` the GUI's black, the stand-in black without it. */
+  const OV_ARROW = [[0, 0], [0, 15], [4, 11], [7, 17], [9, 16], [6, 10], [11, 10]];
+  const OV_ARROW_TRI = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]], OV_SEG = 16, CLICK_SHOW = 15;
+  function drawOverlays(g, v, F, k) {
+    const { X, Z, s, U, box, mark } = k, col = q => (F.colour ? F.colour(q) : TEAM[q]) || '#ccc';
+    mark('over');
+    for (const u of v.units || []) {
+      if (!u.osel || !pt(u)) continue;
+      const b = box(u), m = 3 * U, x0 = b.x - m, y0 = b.y - m, x1 = b.x + b.w + m, y1 = b.y + b.h + m, a = Math.min(b.w, b.h) * .35 + m;
+      g.strokeStyle = col(u.owner | 0); g.lineWidth = Math.max(1, 1.5 * U); g.beginPath();
+      for (const [x, y, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+        g.moveTo(x + dx * a, y); g.lineTo(x, y); g.lineTo(x, y + dy * a);
+      }
+      g.stroke();
+    }
+    g.lineWidth = s;
+    for (const c of v.oclick || []) {
+      const age = clamp(c.age | 0, 0, CLICK_SHOW - 1), r = (4 + 12 * (CLICK_SHOW - age) / CLICK_SHOW) * s;
+      const cx = snap(X(c.x)), cy = snap(Z(c.z));
+      g.strokeStyle = col(c.seat); g.beginPath();
+      for (let i = 0; i < OV_SEG; i++) {
+        const a0 = 2 * Math.PI * i / OV_SEG, a1 = 2 * Math.PI * (i + 1) / OV_SEG;
+        g.moveTo(cx + r * Math.cos(a0), cy + r * Math.sin(a0)); g.lineTo(cx + r * Math.cos(a1), cy + r * Math.sin(a1));
+      }
+      g.stroke();
+    }
+    for (const c of v.ocur || []) {
+      const ax = snap(X(c.x)), ay = snap(Z(c.z)), P = OV_ARROW.map(([x, y]) => [ax + x * s, ay + y * s]);
+      g.fillStyle = col(c.seat); g.beginPath();
+      for (const [a, b, d] of OV_ARROW_TRI) { g.moveTo(...P[a]); g.lineTo(...P[b]); g.lineTo(...P[d]); g.closePath(); }
+      g.fill();
+      g.strokeStyle = F.edge || '#000'; g.lineWidth = s; g.beginPath();
+      for (let i = 0; i < OV_ARROW.length; i++) { g.moveTo(...P[i]); g.lineTo(...P[(i + 1) % OV_ARROW.length]); }
+      g.stroke();
+    }
+  }
+
+  /* THE CURSOR at canvas point (px, py): the game's own when the cursors are loaded (loadCursors), as the game draws
+     the player's (tagpu_gui_surf.c sharp_cursor) -- the frame its animation shows `elapsed` ticks after the shape
+     began, at `scale` device pixels an art pixel whatever the map's scale or the HUD's, the frame's hotspot on the
+     pointer's device pixel, the floats as the C side's. Else, for a shape whose frames did not load, its kit icon at
+     screen size centred on the point, in a box snapped as the game snaps a part's, and the icon as large as fits in
+     it, centred (tagpu_hudlay_expand's icon). Whether it drew one. */
+  function cursorAt(g, o, px, py, shape, elapsed, U) {
+    const cs = o.cursors && o.cursors.sheet ? o.cursors.seq[shape] : null;
+    if (cs && cs.n > 0) {
+      const F = o.cursors.frames, f = cursorFrame(F.slice(cs.first, cs.first + cs.n), cs.n, cs.loop, elapsed);
+      if (f < 0) return false;
+      const q = F[cs.first + f], k = Math.fround(o.cursors.scale), dx = snap(px), dy = snap(py);
+      const w = Math.trunc(Math.fround(Math.fround(q.w * k) + 0.5)), h = Math.trunc(Math.fround(Math.fround(q.h * k) + 0.5));
+      if (!(w > 0 && h > 0)) return false;
+      const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+      g.drawImage(o.cursors.sheet, q.sx, 0, q.w, q.h, dx - Math.trunc(Math.fround(q.hx * k)), dy - Math.trunc(Math.fround(q.hy * k)), w, h);
+      g.imageSmoothingEnabled = sm;
+      return true;
+    }
+    const ic = o.icons && o.icons[CURSOR[shape] || CURSOR.arrow];
+    if (!ic || !ic.img) return false;
+    const w = ic.w * U, h = ic.h * U, a = px - w / 2, b = py - h / 2;
+    const x0 = snap(a), y0 = snap(b), bw = snap(a + w) - x0, bh = snap(b + h) - y0;
+    const f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
+    const q = g.imageSmoothingQuality; g.imageSmoothingQuality = 'high';
+    g.drawImage(ic.img, x0 + (bw - iw) / 2, y0 + (bh - ih) / 2, iw, ih);
+    g.imageSmoothingQuality = q;
+    return true;
+  }
+
+  /* THE FRAME'S PARTS under the world, in the game's paint order (research/notes/ingame-wiki-replay-plan.md): the
+     screen's black, palette index 0, the engine's clear, over the whole canvas, so the room the fit leaves round a
+     frame is a letterbox; the column from frame row 0 (drawSide, dz -32); the top bar at
+     frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32, the composed picture's part 0 and 1 drawn
+     whole and nearest (bar.js), or two whitebox strips without one; then Impure's emblems in the top bar's right end,
+     the wiki emblem in the rewind button's slot, `right[1]` (a replay has no rewind), or in a live frame left of the
+     rewind button, `right[0]`, as the game's own top bar places it (tagpu_wikilay.c), and the sprocket, up and inert,
+     at layout.json's `button` place. Every part's edges are snapped to device pixels. k carries draw()'s X, Z, s, U, the
+     content rect C, label, shade and mark. Returns the emblems' boxes in canvas pixels, the wiki's then the sprocket's
+     (the frame's emblems, wikilaycheck.py pairs them with the game's), or null without a `button` place. */
+  function drawFrame(g, v, F, o, k) {
+    const { X, Z, s, C, W, H, mark } = k, sbox = (x, z, w, h) => {
+      const x0 = snap(X(x)), y0 = snap(Z(z));
+      return { x: x0, y: y0, w: snap(X(x + w)) - x0, h: snap(Z(z + h)) - y0 };
+    };
+    const solid = (b, col) => { g.fillStyle = col; g.fillRect(b.x, b.y, b.w, b.h); };
+    const bw = C.w - SIDE_W, Hg = C.h;
+    mark('r0');
+    solid({ x: 0, y: 0, w: W, h: H }, F.black || '#000');
+    mark('side');
+    if (v.side) drawSide(g, v, o.side || {}, { ...k, dz: -FRAME_BAR });
+    const bars = [sbox(0, -FRAME_BAR, bw, FRAME_BAR), sbox(0, Hg - 2 * FRAME_BAR, bw, FRAME_BAR)];
+    bars.forEach((b, part) => { if (F.bar) F.bar.draw(g, part, bw, b); else solid(b, SIDE_WB.column); });
+    const B = F.button;
+    if (!B) return null;
+    const at = (r, name) => {
+      const b = sbox(C.w - r - B.side - SIDE_W, B.top - FRAME_BAR, B.side, B.side), ic = o.icons && o.icons[name];
+      if (ic && ic.img) g.drawImage(ic.img, b.x, b.y, b.w, b.h);
+      else { solid(b, SIDE_WB.button); g.lineWidth = s; g.strokeStyle = SIDE_WB.edge; g.strokeRect(b.x + s / 2, b.y + s / 2, b.w - s, b.h - s); }
+      return b;
+    };
+    return [at(B.right[F.live ? 0 : 1], EMBLEM.wiki), at(B.config, EMBLEM.config)];
+  }
+
+  /* THE TOP RANGE, on its own canvas over the stage HUD (o.frame.top): Leave's question while it is open, a whitebox at
+     YESORNO.GUI's own rects (frame.js dialog) -- the panel with an edge, the title centred, Yes and No, the one held
+     down pressed -- and then the cursor at the player's cursor scale: the viewer's arrow, or a live frame's simulation's
+     cursor, its shape `age` ticks into its animation. Whether it drew the cursor. */
+  function drawTop(F, o, W, H, U) {
+    const t = F.top;
+    if (!t) return false;
+    t.setTransform(1, 0, 0, 1, 0, 0); t.clearRect(0, 0, W, H);
+    const D = F.question;
+    if (D) {
+      const e = Math.max(1, Math.round(U));
+      const plate = (b, col) => {
+        t.fillStyle = col; t.fillRect(b.x, b.y, b.w, b.h);
+        t.lineWidth = e; t.strokeStyle = SIDE_WB.edge; t.strokeRect(b.x + e / 2, b.y + e / 2, b.w - e, b.h - e);
+      };
+      const say = (str, b, col) => {
+        t.font = `${FACE.weight} ${Math.max(1, Math.round(b.h * 0.6))}px ${FACE.family}`; t.textAlign = 'center'; t.textBaseline = 'middle';
+        t.fillStyle = col; t.fillText(str, b.x + b.w / 2, b.y + b.h / 2);
+      };
+      plate(D.panel, SIDE_WB.panel);
+      say(F.msg || 'Leave this replay?', D.title, SIDE_WB.label);
+      for (const [key, label] of [['yes', 'Yes'], ['no', 'No']]) {
+        plate(D[key], F.held === key ? SIDE_WB.pressed : SIDE_WB.button);
+        say(label, D[key], SIDE_WB.label);
+      }
+    }
+    return !!F.cursor && cursorAt(t, o, F.cursor.x, F.cursor.y, F.cursor.shape || 'arrow', +F.cursor.age || 0, U);
   }
 
   /* THE RECLAIM SWEEP (tagpu_mark.c gather_sweep, tagpu_gui_surf.c sharp_sweep): every target's corner brackets and the
@@ -516,12 +676,13 @@ const WikiStage = (() => {
      arrow's sharpest corner reaches 1.4 units past its point), so a centred box needs no hotspot of its own */
   const ICON_BOX = { arrow: [30, 44], move: [30, 44], build: [26, 26] };
 
-  /* The kit's cursor icons from `base` (a kit directory: kit.json and parts/), for a page: the object fills in as they
-     load, and draw() leaves the cursor out until its icon is there. */
+  /* The kit's cursor icons and the frame's emblems from `base` (a kit directory: kit.json and parts/), for a page: the
+     object fills in as they load, and draw() leaves the cursor out, and draws an emblem's whitebox, until its part is
+     there. */
   function loadIcons(base) {
     const icons = {};
     fetch(base + 'kit.json').then(r => r.json()).then(j => {
-      for (const name of Object.values(CURSOR)) {
+      for (const name of [...Object.values(CURSOR), ...Object.values(EMBLEM)]) {
         const k = j.parts[name]; if (!k) continue;
         const img = new Image();
         img.onload = () => { icons[name] = { img, pw: img.naturalWidth, ph: img.naturalHeight, w: img.naturalWidth / k.scale, h: img.naturalHeight / k.scale }; };
@@ -570,6 +731,6 @@ const WikiStage = (() => {
     return cursors;
   }
 
-  return { draw, fit, content, cursorShape, cursorFrame, loadIcons, loadCursors, FACE, CURSOR, ICON_BOX, SIDE_WB };
+  return { draw, fit, content, cursorShape, cursorFrame, loadIcons, loadCursors, FACE, CURSOR, EMBLEM, ICON_BOX, SIDE_WB };
 })();
 if (typeof module !== 'undefined') module.exports = WikiStage;

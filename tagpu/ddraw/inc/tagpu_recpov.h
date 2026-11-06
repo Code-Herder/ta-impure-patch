@@ -22,13 +22,16 @@
 #define REC_SEL_MAX      1500     /* entries a selection may hold: the most units one seat's
                                      block can have in every build, so a seat's whole block fits */
 #define REC_POV_EVERY_MAX 30
-#define REC_POV_ZOOM_MIN 16384u   /* the applied level x 65536: TAGPU_ZOOM_MIN 0.25 ...         */
+#define REC_POV_ZOOM_MIN 1024u    /* the applied level x 65536: TAGPU_ZOOM_FLOOR_LO 1/64 ...    */
 #define REC_POV_ZOOM_MAX 524288u  /* ... to TAGPU_ZOOM_MAX 8                                     */
+#define REC_POV_ZOOM_MIN_26 16384u /* format 26's minimum: 0.25, the fixed floor it was written
+                                     under                                                    */
 #define REC_POV_VIEW_MAX 16384u
 
 _Static_assert(REC_SEL_MAX >= TAGPU_LIM_UNITS, "a selection holds a whole block");
 
-enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2 };    /* main+0x2CC6 bit 1 / bit 0               */
+enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2,      /* main+0x2CC6 bit 1 / bit 0               */
+       REC_POV_CUT = 4 };                           /* the camera cut to here: format 28; never blended into */
 enum { REC_SEL_BEGIN = 1, REC_SEL_END = 2 };
 enum { REC_CLICK_LEFT = 0, REC_CLICK_RIGHT = 1 };
 
@@ -77,12 +80,20 @@ _Static_assert(sizeof(RecSel) + REC_SEL_MAX * sizeof(RecSelEntry) <= 0xFFFF,
 #define REC_CLICK_KEYS     0x000Cu  /* MK_SHIFT | MK_CONTROL                                    */
 #define REC_SEL_BYTES(n) (sizeof(RecSel) + (size_t)(n) * sizeof(RecSelEntry))
 
-/* A sample's own fields; its player is the caller's to bound. 1 well-formed. */
-static __inline int rec_pov_ok(const RecPov* p)
+/* The smallest zoom a recording of `format` may carry: format 26's 0.25, every later format's
+   1/64. The caller has already refused a format the build does not read (rec_format_supported). */
+static __inline uint32_t rec_pov_zoom_min(uint32_t format)
+{
+    return format == 26 ? REC_POV_ZOOM_MIN_26 : REC_POV_ZOOM_MIN;
+}
+
+/* A sample's own fields, its zoom at least `zmin` (rec_pov_zoom_min of the file it is read from,
+   REC_POV_ZOOM_MIN for one being written); its player is the caller's to bound. 1 well-formed. */
+static __inline int rec_pov_ok(const RecPov* p, uint32_t zmin)
 {
     return p->every >= 1 && p->every <= REC_POV_EVERY_MAX &&
-           !(p->flags & ~(unsigned)(REC_POV_WORLD | REC_POV_MINIMAP)) && !p->zero &&
-           p->zoom >= REC_POV_ZOOM_MIN && p->zoom <= REC_POV_ZOOM_MAX &&
+           !(p->flags & ~(unsigned)(REC_POV_WORLD | REC_POV_MINIMAP | REC_POV_CUT)) && !p->zero &&
+           p->zoom >= zmin && p->zoom <= REC_POV_ZOOM_MAX &&
            p->view_w >= 1 && p->view_w <= REC_POV_VIEW_MAX &&
            p->view_h >= 1 && p->view_h <= REC_POV_VIEW_MAX;
 }

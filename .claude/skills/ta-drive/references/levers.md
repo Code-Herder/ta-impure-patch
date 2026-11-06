@@ -62,8 +62,8 @@ requirement**: the play defaults and the play defaults plus `tagpu_terrown.off` 
 picture (`build-facing` at 1024x768: 0.03 % exactly-black viewport and 8898 distinct colours
 either way), and with it off `tacli shot` has terrain again. **`tacli arm <i> terrown.off` is the
 arm for a reference-quality capture.** It keeps the **zoomed-out fog**: without `terrown`'s
-fog-overlay detour the packet's publisher ticks `tagpu_fogwide` in the draw's `after`, so a
-zoomed-out frame still has the wide grid (`fog=wide`, `bare=0`).
+fog-overlay detour the packet's publisher ticks `tagpu_fogwide` in the draw's `after`, so every
+frame still has the whole map's fog source (`fog=WxH`).
 
 ## The world passes
 
@@ -87,7 +87,7 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
   dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
   lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
-  fog=wide|engine|none bare=N out=N held=N/Mpx paused=N back=N nopieces=N` — what was handed over to the Vulkan passes, not what
+  fog=WxH out=N held=N/Mpx paused=N back=N reachheld=N floor=F nopieces=N` — what was handed over to the Vulkan passes, not what
   they drew; the fog fields are below. A model that will not bake (over 256
   pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
   `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
@@ -97,8 +97,12 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   engine overlay and still look right. Arming `terr.on` after launch does nothing visible —
   relaunch. Expect `terr: atlas built
   2176x<h> for <n> tiles`, `terr: height grid WxH uploaded` (without it Classic++ terrain draws
-  unlit), and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
-  restored atlas.
+  unlit), `terr: tile map WxH copied for level N (serial S, K cells past the atlas)` once a level,
+  and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
+  restored atlas. Its heartbeat, every 60 frames: `terr: grid=CxR tile0=(x,y) frac=(fx,fy)
+  map=WxH area=WxH cells=N zoomvp=WxH mirror=1|0 junk=K atlas=…`, where `cells` is the whole grid
+  (`C × R`, one instance each, drawn or not) and `junk` the tile map's cells whose tile is past the
+  atlas, counted once at the copy.
 - **`feat.on`** takes the draw only while `native.on` carries `wrecks` (3D wreckage is drawn from
   the same leaf); otherwise it logs `nothing emitted: native.on needs "wrecks"` and `atlas=0`.
   Heartbeat under `log`: `feat: rect=… anchors= flat= tall= … 3dwreck= … outside= trunc= -> body=
@@ -188,14 +192,13 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 
 | lever | when read | what |
 |---|---|---|
-| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
-| `tagpu_zoom.txt` | every frame | a bare float 0.25–8.0; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
+| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the scroll step (`0x41CEAA`), and the camera's centre range. Logs `zoom: scroll step armed at 0x41CEAA -- the scroll poll's step is divided by the level; ScrollSpeed main+0x1434D is never written` and `zoom: ARMED (minimap rect 0x466B70 x2, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
+| `tagpu_zoom.txt` | every frame | a bare float 1/64–8.0 (0.015625–8), drawn no lower than the map's zoom floor; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `mirror.on` / `mirror.off` | live (30 frames) | the map edge: the world reflected past the map, or black. On the play defaults, where the store's `edge=mirror\|black` decides it; under `tagpu_defaults.off` (every tacli control launch) it is **black** unless `mirror.on` is armed. The render thread logs `native: map edge = mirror` or `= black` on every change, the one line to read |
-| `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell, and the native line's `bare=` and `out=` count every such frame |
-| `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M skipped=K differ=N` every 120th tick, **`differ=0`**. It compares only the entries both builders define the same way: `skipped` is the border lines where the engine's literal completion row or column and ours (the straddling one) differ, both left out — 0 for an eye in the engine's own `[0, extent − W]`, non-zero near the map's edge in the centre range (104 of 720 at a corner, 1024x768) |
+| `fogwide_check.on` | live | the oracle: `fogwide check: CxR compared=N of cells=M skipped=K differ=N engine-nonzero=N truelos=0|1 mirror-compared=N mirror-differ=N` every 120th tick. It rebuilds the engine's own window from our packed source and compares it with the engine's grid, **`differ=0`**, and checks the shared expansion (`tagpu_fog_entry`) against that build, **`mirror-differ=0`**. `skipped` is the border lines where the engine's literal completion row or column and ours differ, both left out — 0 for an eye in the engine's own `[0, extent − W]`, non-zero near the map's edge in the centre range |
 
 Driving the camera at a zoom other than 1:
 
@@ -209,6 +212,51 @@ Driving the camera at a zoom other than 1:
   the view centre and `99999 99999` the extent's SE corner (`8768 8864` on Painted Desert at
   1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
   area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
+- **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
+  Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back cuts to the floor
+  with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
+  left, holding the point under the pointer (`megazoom=mouse`) or centring it (`megazoom=tadr`; the in-game panel's *Mega map zoom in* row). A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
+  wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
+  control launch always has Ctrl+wheel as the mega map.
+- **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
+  extent fits the true viewport, bounded so the widened rect's four edges stay int16. The game
+  thread logs it when it changes (a level's first draw, a resize): `zoom: floor 0.0346 (fit 0.0346)
+  on 896x704, extent 20448x20352, map 20480x20480 - bound by fit` (Seven Islands at 1024x768 by
+  the arithmetic; not yet read off a run) — the term is `fit`, `lparam`,
+  `1/64` or `0.25` (a map the screen covers at 0.25x). Read the floor there or off the `native:`
+  line's `floor=`, never assume 0.25. The wheel and the mega notch stop at it; `tagpu_zoom.txt`
+  and a Follow below it draw at it. Edge and arrow scroll move the screen at the 1x rate at
+  every level, the floor included: the scroll poll's step is divided by the level at `0x41CEAA`,
+  and `ScrollSpeed` `main+0x1434D` keeps the player's value.
+- **The unit hit test is guarded at every level**: a unit whose position is more than about 32 000
+  px from the eye (or that high) answers "not hit" to hover and click, and the game thread logs
+  `zoom: hit guard - N unit hit test(s) answered "not hit" so far, …` at most once a second. It
+  reads 0 in ordinary play; a count there is a far or off-map aircraft, not a fault.
+- **Zoomed out, units turn into strategic icons** (no lever; the module is
+  `research/notes/modules/icons.md`). Three `impure.cfg` keys, read live, no menu row:
+  `iconscale` (100, 75, 125, 150, 200: size, percent of BAR's), `icondist` (100, 50, 75, 150, 200:
+  where icons take over, percent of BAR's distance) and `iconfade` (33, 0, 67: the fade band; 0 is
+  a hard switch). Like `wheel=`, the store counts only under `--defaults`; a tacli control launch
+  draws at 100/100/33. With those, 1x shows no icon on any frame up to about 2600 px tall, and at
+  1920x1080 COMBAT starts to fade in below z 0.409 and is opaque below 0.274 (the module's table
+  has every class). Read `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z=
+  alpha(combat)= alpha(dot)= edges=… by-class=… us=` every 300 frames: at 1x `icons=0 hidden=0`;
+  `zS=` is the level the frame spans BAR's distance at (`frame height / 4970`, 0.2173 at 1080);
+  the nine-field lists are in class order UNKNOWN, COMMANDER, FACTORY, BUILDING, AIRCONS,
+  AIRCOMBAT, AIR, CONS, COMBAT. Icons need the unit pass and the marker pass both drawing (`on=0`
+  otherwise). A click on an icon whose model is hidden is answered by the icon's circle on the game
+  thread: `zoom: icon pick - N hit(s), M miss(es) so far`, at most once a second. Radar contacts
+  show as the minimap's dot under the same rule (`dots=`) and are not pickable in the world view.
+- **A mod's TADR icon set replaces the shapes** where the install ships one (no lever; it is read
+  once a process from the files `MegaMapConfig` names in the ini the exe's `0x5098A3` string
+  names — Mayhem, ProTA, TA Zero and Twilight do; retail and the compat setups' Escalation do not). The
+  log says which, once: `icons: mod set <folder> from <ini> (<MegaMapConfig>), default|custom
+  mode, N picture(s) loaded of M, … skipped: …` or `icons: no mod set - …`; the art line then
+  counts `N mod set picture(s)`. Each level with a set logs `icons: mod set by type - E map
+  entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W= CTRL_B= CTRL_F=; <category>=<types>`
+  (a custom set's categories, `absent` for one the game does not have). `set=` on the heartbeat
+  counts the icons drawn as set pictures. A set picture is drawn at `k = round(base/10)` (1 at
+  1080p, 2 at 4K) and switches at its own drawn size, so it is not the class table's edge.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -
@@ -242,7 +290,8 @@ Driving the camera at a zoom other than 1:
   logged — `0 of 0` on a map with no features, whose ground then mirrors. A build that fails
   (`packet: LoadMap: the map's own features NOT taken: …`) leaves the level with no table and the
   edge black; every LoadMap empties the hand-over first, so no earlier load's table stands in.
-  Under GDI nothing is built. Heartbeats: `terr: … mirror=N` (off-map cells drawn), `feat: … |
+  Under GDI nothing is built. Heartbeats: `terr: … mirror=1|0` (the switch the grid is drawn
+  under; the line counts no off-map cells), `feat: … |
   mirror: map=K anchors= body= shadow=` under `log` (`map=-1` while the pass holds no copy), and
   `packet: … mapfeat=K carried=N`, where `carried` stops climbing once the feature pass holds the
   table.
@@ -251,31 +300,23 @@ Driving the camera at a zoom other than 1:
 - **Edge scroll is an equality on the outermost pixel** (`x == 0`, `y == 0`, `x == W−1`,
   `y == H−1`), at every zoom on all four edges.
 
-The wide fog grid (`tagpu_fogwide.c`) builds at every zoom from the screen size; its heartbeat is
-`fogwide: CxR cells=N cap=CxR rebuilds=N in 5.0s = R/s ticks=N build=…/… us (mean/max)` once
-per five seconds of wall time. A video-mode change grows the set, freeing the old block on the
-spot (nothing but the game thread reads it), and logs `fogwide: grid CxR, N KB (N cells) — grown`.
-**`rebuilds=0` is not a fault at LosType 12**
-(`--los 0`): nothing stamps, so nothing rebuilds — read the word at `*0x511DE8+0x14281` before
-chasing it; at 14 a moving scene gives ~30/s.
+The fog source (`tagpu_fogwide.c`) is the whole map's fog, two bits a 32-px cell (never explored;
+out of LOS in true-LOS mode), packed on the game thread and expanded in every pass's shader as the
+engine expands its own grid; its heartbeat is `fogwide: WxH source, N KB, packs=N in 5.0s = R/s
+ticks=N pack=…/… us (mean/max)` once per five seconds of wall time. **`packs=0` is not a fault at
+LosType 12** (`--los 0`) on a fully mapped scene: nothing changes, so nothing repacks — read the
+word at `*0x511DE8+0x14281` before chasing it. Fog has no off switch: a frame with no source (`fog=0x0`) draws no unit but the watched player's own and no wreck.
 
-The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, gpu-status §2.3):
-`fog=` is the grid the last frame actually sampled — `engine` at rest at 1× and above, at every
-resolution (the engine's grid always spans the 1× rect about the eye it was built at), `wide` below 1× or
-once the eye is past that grid's few pixels of slack, `engine` on a bare frame, `none` with no
-grid at all; **`out=` must read 0** — frames whose fog domain was not inside that grid;
-**`nopieces=` must read 0** — units inside a frame's slab that the packet carried outside its fog
-reach, so without their pieces and not drawn (the reach covers every slab the bound fits into a
-grid, so only a bare frame whose unapplied steps outran the lead, or a centred frame, makes one);
-**`bare=` must read 0** outside `fogwide.off` — presented frames that needed the wide grid and had
-none (the grid is built on every in-play draw, whoever owns the fog site); `held=N/Mpx` is the frames whose drawn eye
-the bound held back and the largest hold, never more than the displacement the gesture has posted
-and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a
-side) — near 0 when the game thread keeps up (4 frames over 36 wheel gestures at 1080p on the
-reference setup's GPU), more when it lags;
-`paused=` is the frames drawn at the previous frame's level so the view would not move against
-the gesture; **`back=` must read 0** — frames that moved against it anyway.
-`bare=`, `out=` and `nopieces=` count only frames the Vulkan lane presented, so the lane's
+The native heartbeat's fog fields: `fog=WxH` is the source the last frame handed over (`0x0` with
+none). **`out=` must read 0** — frames whose drawn slab was not inside the packet's tables'
+reach (`reach_lo`/`reach_hi`); **`nopieces=` must read 0** — units inside a frame's slab that the
+packet carried outside that reach, so without their pieces and not drawn; `held=N/Mpx` is the
+frames whose drawn eye the reach bound held back and the largest hold, never more than the
+displacement the gesture has posted and the game thread not yet applied, less the lead the reach
+carries (a quarter of the view a side) — near 0 when the game thread keeps up, more when it lags;
+`paused=` is the frames drawn at the previous frame's level, so the view would not move against
+the gesture or while a mega map cut waits for its packet; **`back=` must read 0** — frames that moved against it anyway. `out=` and
+`nopieces=` count only frames the Vulkan lane presented, so the lane's
 bring-up and a swapchain rebuild add nothing to them.
 
 ## Classic++
@@ -361,9 +402,17 @@ of ours draws, no golden source is captured, and every `tacli` verb except `eye`
 | `devres.on` | the world at the device's resolution: `ss` follows `ceil(k)` (`references/ui-layer.md`) |
 | `fps.on` | the frame-rate readout (the lever over the FPS counter row), drawn from TA's own glyphs; needs the font the packet carries, which `markown` produces — with only `fps.on` armed the packet reads `font=0/0B` and the readout draws nothing |
 | `scaffold.on` | the scene-depth scaffold overlay; a debug instrument that tints every tall feature purple. Not in the arm set |
+| `chaincheck.on` | live, re-read every 120 frames: the mip chains' oracle, in the game's world only (never the wiki's stage). Every 120 frames each pass checks every cell of its chains on the GPU and 16 base cells, every level, against the C reference: `vk: terr: chain check: base cells=16 cpu-differ=N gpu-differ=N/S | rest gpu-differ=N/S job=G painted=P mode=nbhd|tile` (or `| rest none`) and `vk: feat: chain check: base slots=16 cpu-differ=N gpu-differ=N (seen S) | twin gpu-differ=N (seen S), cells=C overflow=K` (or `twin gpu-differ=none`). Every `differ` must read 0; `S` is the cells checked; `cpu-differ=skipped` means the atlas, palette or allocation moved since the copy, `outside` a cell past the hand-over's atlas. The terrain's `rest gpu-differ` reads 0 across a restore job made again on the same request as well (the chain is kept until the new job's first paint, which reduces it whole). Below a texel a target pixel (zoom × ss < 1) the terrain and features draw from these chains |
 | `tagpu_<pass>.ab` | a one-frame capture of the presented frame as `tagpu_<pass>_vk.ppm` — `references/measuring.md` |
 
 Read `tacli log <i> -g '^vk:'` for the window, the device, the swapchain and the census.
+**The mip chains say once per device** if the device will not reduce: `vk: chains off: <reason> -
+the far zoom draws the atlases at level 0` (then every zoom draws level 0 and shimmers below
+`1/ss`). On a map they log `vk: terr: chain base WxH (5 levels) reduced, N cells, atlas serial S`
+once per map and palette move, `vk: terr: chain rest WxH cleared|kept (level 0 stands until the job's first paint)|reduced whole N cells, job G` per
+restore job, `vk: terr: the restored chain does not fit: … - the far zoom draws the base chain
+under Classic++` when D10 refuses it, and `vk: feat: chain cells laid out for atlas generation G
+(repack R) - N entries, C of 8192 cells, overflow=K` per atlas layout; `overflow=` should read 0.
 **An in-process map change brings the whole lane down and back up** (`vk: render thread stopping
 - down`, then a fresh `vk: swapchain`): a second map is a fresh lane, its atlases rebuilt at
 that map's size.
@@ -419,13 +468,15 @@ that map's size.
 |---|---|---|---|
 | `packet: pub= skip= overrun= foreign= … trunc= refill= viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `trunc` (a frame published cut: the slot could not grow to the fill); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); the `world:` segment's units, wrecks and anchors `trunc`; `layerbad`, `subbad` and `lost` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments; `recodd` in the `fog:` segment (a draw that cleared the engine fog grid's is-current bit without building it) | `skip` is the FRESH gate doing its job; `refill` counts fills done again after the slot grew under them, a few at a level's start; the segments' counts are per publish, from the fill that was published; the `world:` pieces `trunc` reads at most the packet's `trunc`; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
 | `fx: proj= … -> lines= sprites= flashq= models= runs= (lost= why= of cap ) atlas=` | 60 | | `models=` the effects models drawn this frame, `runs=` their rasterised runs, `cap` the frame's bound on them; `lost=` models taken back with their records and `why=` the rasteriser's last refusal: 1 a model the packet did not carry, 2 a texel the unit atlas has not painted yet (its allowance: a few frames at a level's start), 3 no room (a frame's runs past 131 072, a face past 65 536 scanlines, or a rasteriser buffer that would not grow). A `lost=` that stays non-zero with the runs well below 131 072 is a fault. The packet's own `fx:` segment carries `models=N/Vv lost=`: the models carried, their vertices, and the models the publisher could not carry. A frame whose models the posed or the unit pass dropped says so once, `posedraw: N effects model(s) could not be carried …`, `unit: … the effects are not drawn, the units are`, or `unit: the slot would not take … the models are left out until every slot takes them`: that frame draws its units and none of its effects, and after the last one the frames that follow take back only their model records until every slot holds them |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back= nopieces=` | 300 | `bare`, `out`, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog=WxH out= held=N/Mpx paused= back= reachheld= floor= nopieces=` | 300 | `out`, `back`, `nopieces` | what was handed over, not what was drawn; `reachheld=` the frames the reach ladder held at a rung, `floor=` this frame's zoom floor; `sel=N/M` is rects handed to the marker pass of selected units on screen; `fog=` is the fog source's size and the rest the reach bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
+| `vk: terr: chain check: …`, `vk: feat: chain check: …` (`chaincheck.on`) | 120 render frames | `cpu-differ`, `gpu-differ`, `rest gpu-differ`, `twin gpu-differ` | the lines are in *The Vulkan lane*; `skipped` and `none` are not failures |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |
 | `surf: golden source WxH on the GAME thread -- captured= unchanged= refused= …` | 300 captures | `refused` | `us avg=` is the game-thread cost (55–58 µs at 1024x768) |
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps= hud=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down; `hud=1` while the replay HUD draws |
-| `mark: bars= cursor= place= placered= placetake= ordart= ordline= text=… atlas= zoom=` (`log`) | 120 | | the live zoom is readable here; `ordart=` counts the order art's quads (route dots and waypoint sprites); `place=` counts the placement sites drawn, `placered=`/`placetake=` those of them red and yellow; the file lever logs nothing |
+| `mark: bars= sel= selover= icons= iconover= cursor= place= placered= placetake= ordart= ordline= text=… atlas= zoom=` (`log`) | 120 | `iconover` | the live zoom is readable here; `icons=` counts the strategic icons' quads, `iconover=` those the bucket refused; `ordart=` counts the order art's quads (route dots and waypoint sprites); `place=` counts the placement sites drawn, `placered=`/`placetake=` those of them red and yellow; the file lever logs nothing |
+| `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges= dotk= by-class= us=` | 300 | `drop` | the strategic icons (§"Camera, viewport and fog"): `set=` icons drawn as a mod set's picture, `hidden=` models not drawn under an icon, `cargo=` units carried by one, `dots=` radar contacts (a dot, or the set's NONE picture), `us=` the frame's decision + the sort and emit, in µs; `on=0` when the unit or the marker pass is not drawing, no type table rode the packet, or the art is not published yet (`icons: art N radar logo frame(s) of M, …` once a process) |
 | `order: arena= recs= drawn= lines= dots= …` (`log`) | 120 | | `arena=-1` = SHIFT not held |
 | `… \| hits: bad= bare 09= 0b= over= young owner= by= slots= tables= out 09= 0b= B= stockB= unk= in 09= 0b= owner=A/R by=S/U/R dead= gate= copy exact= bound= unk= held= fallback= holdfail= retry= delay= q=` (after `wire:`, before `ghost:`; the alert fields first, since the `packet:` line is cut at 2040 bytes from its end) | 300 render frames | `bad`, `bare`, `over`; `young owner` whenever `dmgdelay.on` is armed | `owner=` hits applied/refused as the victim's owner; `by=` a bystander's applied as the same unit / applied undecidable / refused as stale; `slots=` the table's count (10·N + 1); `B=` the carried messages' bytes against `stockB=`; `bound=` copies the `0x2C` made with a real lower bound, `unk=` those without; `held=` creates the hold moved, `fallback=` those it gave a slot freed in the last tick, `holdfail=` those it failed, `retry=` Deathmatch respawns that found no slot and wait for their countdown's next fire, about 180 ticks |
 | `… \| ghost:[ LEVER-OFF] over= bad= offthread= unbound= short= q= deep= replay= now= killed= swept= nokill= untracked= inactive= stale= cleared= levels= pos ground= air= none= off=` (after `hits:`, the line's last section; the alert fields and the lever first) | 300 render frames | `over`, `bad`, `offthread`, `unbound`, `short` | `q=` creates held during the load and `replay=` those replayed before the first tick (a `replayed slot …` line each); `now=` creates made in a catch-up tick (a `created slot … in a catch-up tick` line); `killed=` held creates a refused `0x0C` cancelled, `swept=` copies made before state 6 that a kill refused in the catch-up ticks marked dying; `pos ground=`/`air=` dirty creates placed from their move payload, `none=` left at stock's record, `off=` a payload off the map, `unbound=` a reader that is not B3's (B5 refuses to install without B3 armed), `short=` a position read that would pass its message's end; ` LEVER-OFF` with `ghostq.off` |
@@ -436,7 +487,7 @@ that map's size.
 These appear in older notes and commit messages. No file in the tree reads them; creating one
 changes nothing and logs nothing, which is the failure mode to recognise.
 
-`tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
+`tagpu_fogwide.off`, `tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
 `tagpu_writeback.on`, `tagpu_posedraw.on`, `tagpu_posefix.off`, `tagpu_posewatch.on`,
 `tagpu_poserecon.on`, `tagpu_purevk.on`, `tagpu_selgeom.on`, `tagpu_shade.off`,
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,

@@ -48,6 +48,9 @@ typedef struct {
                                    rewind button                                                */
     int      rewind;            /* this frame draws the live HUD's rewind button: the wiki button
                                    stands left of it, else in its slot                          */
+    int      config;            /* the Config sprocket this frame draws in the top bar: 0 none (the
+                                   engine draws its own), 1 up, 2 down (tagpu_menu.h
+                                   tagpu_menu_bar_cog). Drawn only: its press is tagpu_menu.c's */
     int      open;              /* the window is drawn; closed, only the button is              */
     int      entry;             /* the selected entry, an index of WIKIDATA.entry; -1 none      */
     int      demo;              /* the selected demo of that entry                              */
@@ -70,6 +73,7 @@ typedef struct {
     int      iface;             /* the Interface Type the text names buttons by: 1 exactly when
                                    1, as tagpu_wikitext_words takes it                          */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
+    int      about;             /* the theatre's About panel is open (a frame:game entry's page) */
 } WIKIPAGE;
 
 /* A text style's face (art/hud/layout.json `styles`, by index): tagpu_hudart.c's HUDFACE. */
@@ -103,8 +107,10 @@ typedef struct {
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
    scrollbar as drawn (the track, h 0 when the panel shows none, and the thumb's top and length on
    it, so a press is read against the thumb the player saw), the stage's rect inside its bezel (the
-   stage draws there and a click on it is read there), the window, and whether the caption's lines
-   passed its strip, whose overflow is hidden. A closed window answers zeros. */
+   stage draws there and a click on it is read there), the window, whether the caption's lines
+   passed its strip, whose overflow is hidden, and, in the theatre, whether the row's fixed part
+   (every control, tab and the badge, the demo's title being what is left) is wider than the
+   body. A closed window answers zeros. */
 typedef struct {
     float   scroll[WIKI_NSCROLL];
     float   scroll_max[WIKI_NSCROLL];
@@ -113,6 +119,7 @@ typedef struct {
     HUDRECT stage;
     HUDRECT window;
     int     caption_cut;        /* the strip shows only the caption's first lines */
+    int     row_cut;            /* the theatre's row overflows the stage's bezel */
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;
@@ -128,6 +135,13 @@ WIKILAY*      tagpu_wikilay_load(const char* layout, size_t nlayout, const char*
 void          tagpu_wikilay_free(WIKILAY* l);
 /* The kit, for the draw: HOP_PART ops index its parts. */
 const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l);
+
+/* art/wiki/layout.json's `button`, in the top bar's own pixels: the wiki button's square side, its
+   top, its right inset and the Config sprocket's -- where a frame:game stage draws Impure's emblems
+   in its frame's top bar (WIKISTAGEFRAME). The right inset is the game's own top bar's rule (the
+   page's button, `rewind` below): with `rewind` set, left of the rewind button (`right[0]`), a live
+   frame's; else in the rewind button's slot (`right[1]`), a replay's. */
+void tagpu_wikilay_button(const WIKILAY* l, int rewind, double* side, double* top, double* right, double* config);
 
 /* THE FACE LIGHTNESS RULE (wiki.js faceLight): a part's face is light when its middle, inside its
    slices, scaled to 8 x 8 and its opaque pixels (alpha above 128) averaged at 0.3 R + 0.59 G +
@@ -155,9 +169,13 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
 /* The kit and the data checked at the load: 1 when the kit holds every icon the window and the
    stage draw and the stage's `toast` style, and the page builds whole -- nothing dropped, no
    `overflow` -- in each of these states on each of three screens, 1024 x 768, 1280 x 720 and
-   3840 x 1080, every scroll at 0: the window closed with its button held, open with its close
-   button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
-   held. Each state is filled at interface type 1, whose words are the longer, with each entry's
+   3840 x 1080, every scroll at 0 unless named: the window closed with its button held, open with
+   its close button held, and every entry's every demo playing at 1x and ended at 2x with Try it
+   yourself held -- a game entry's in its theatre, which adds About open with the text scrolled to
+   its limit, the tree scrolled to its limit, and Try it yourself, locked with either label of Try
+   it, the widest row a theatre can have. A theatre is refused when its stage is shorter than
+   theatre.stage_min or its row's fixed part is wider than the stage's bezel (WIKIFRAME.row_cut). Each
+   state is filled at interface type 1, whose words are the longer, with each entry's
    own names, with each of the `ncasting` castings given, and with the two worst castings there
    can be (every display name of 31 characters, the engine's cut: 31 of three bytes, the
    WIKI_TITLE_MAX - 1 bytes, as one unbreakable word, and 16 of them broken by spaces into the

@@ -263,10 +263,12 @@ const HUD = (() => {
     return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;
   }
 
-  // Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the picker
+  /* Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the
+     picker, and is down from its click until the picker closes -- asked for, sought to or open (st.pickDown), as
+     tagpu_hudlay.c `takeover` draws it; a state without pickDown has only the picker's open */
   function takeover(st, tb) {
     const T = L.proposed.forks.takeover, b = { x: tb.x, y: tb.y - T.gap - T.h, w: tb.w, h: T.h };
-    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.picker);
+    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.pickDown ?? st.picker);
   }
 
   /* the player picker, opened by Take over: every player, the one taken over is played by you from the playhead and the
@@ -294,11 +296,11 @@ const HUD = (() => {
 
   /* ---- proposed, live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it opens under
      the bar over the paused game: the transport, the track up to now, the time, Play from here and Back to now. The
-     button is placed in the top bar's own pixels (entry.bar tall), scaled with it; the sprocket is the engine's, drawn by
-     the page's backdrop ---- */
+     button is placed in the top bar's own pixels (entry.bar tall), scaled with it, an emblem with no plate: its part is the
+     whole button. The sprocket is the wiki's layer's (tools/wiki/mockup/), drawn here by the page's backdrop ---- */
   function live(st) {
     const E = L.proposed.live.entry, S = L.proposed.live.strip, k = st.frame.top / E.bar;
-    let h = button({ act: 'rewind', icon: { name: E.icon.name, padf: E.icon.padf } }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
+    let h = button({ act: 'rewind' }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
     if (!st.live.open) return h;
     const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
     let inner = '', cx = S.pad;
@@ -454,7 +456,7 @@ const HUD = (() => {
     const Lp = C.plot.l, Tp = C.plot.t, pw = W - Lp - R, ph = H - Tp - C.plot.b, X = s => Lp + pw * (S.t0 + s * DT) / st.T;
     const now = Math.max(0, Math.min(NS - 1, Math.round((st.t - S.t0) / DT)));
     const max = nice(Math.max(...G.flatMap(g => g.v))), Y = v => Tp + ph * (1 - v / max), fv = v => statFormat(S.measure, v);
-    const dark = c => { const n = parseInt(c.slice(1), 16); return .3 * (n >> 16) + .59 * ((n >> 8) & 255) + .11 * (n & 255) < C.line.dark; };
+    const dark = c => { const [r, g, b] = rgbOf(c); return .3 * r + .59 * g + .11 * b < C.line.dark; };
     const tx = (x, y, s, o) => `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${TS.font}" font-weight="${TS.weight}" letter-spacing="${TS.spacing}em"${TS.upper ? ' style="text-transform:uppercase"' : ''} ${o}>${s}</text>`;
     const A = C.axis, xph = Lp + pw * st.t / st.T;
     let h = `<defs><clipPath id="past"><rect x="0" y="0" width="${xph.toFixed(1)}" height="${H}"/></clipPath></defs>`;
@@ -466,7 +468,8 @@ const HUD = (() => {
     for (let t = 0; t <= st.T; t += step) if (Math.abs(Lp + pw * t / st.T - xph) >= A.space)
       h += tx(Lp + pw * t / st.T, Tp + ph + A.below, clock(t), `font-size="${A.size}" fill="${A.colour}" text-anchor="middle"`);
     const Ln = C.line, body = G.map(g => {
-      const pts = g.v.map((v, s) => `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+      // a flat run's inner samples left out: the same line, whose joins the browser's antialiasing would otherwise mark
+      const pts = g.v.map((v, s) => s > 0 && s + 1 < g.v.length && g.v[s - 1] === v && g.v[s + 1] === v ? '' : `${X(s).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ');
       let l = (dark(g.col) ? `<polyline points="${pts}" fill="none" stroke="${Ln.halo}" stroke-width="${Ln.width + 1}" stroke-opacity="${Ln.halo_opacity}" stroke-linejoin="round"/>` : '')
         + `<polyline points="${pts}" fill="none" stroke="${g.col}" stroke-width="${Ln.width}" stroke-linejoin="round"/>`;
       const s = g.death != null ? Math.round((g.death - S.t0) / DT) : -1;
@@ -487,6 +490,17 @@ const HUD = (() => {
         + (dark(e.g.col) ? `<g data-ring="${bx} ${by} ${bw} ${bh} ${t}" fill="${Lg.swatch_edge}">${'<rect/>'.repeat(4)}</g>` : '')
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)
         + tx(lx + lw, yy + rh * Lg.text_y, fv(e.v), `font-size="${fs}" fill="${Lg.value}" text-anchor="end"`); }).join('');
+  }
+  /* a group's colour as [r, g, b]: the two forms a host gives, `#rrggbb` (the stand-ins) and `rgb(r,g,b)` (the wiki's
+     colours out of a pack's palette, frame.js seatColour). Any other form throws: read as a number it would be NaN,
+     which the bit operations of the luma turn into 0, so every such colour would read as dark and draw the halo and
+     the ring the DLL (tagpu_hudlay.c dark, on the colour's bytes) does not */
+  function rgbOf(c) {
+    let m = /^#([0-9a-f]{6})$/i.exec(c);
+    if (m) { const n = parseInt(m[1], 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+    m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(c);
+    if (m) return [+m[1], +m[2], +m[3]];
+    throw new Error(`hud.js: a chart colour is neither #rrggbb nor rgb(r,g,b): ${c}`);
   }
   const nice = v => { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
 
@@ -647,10 +661,10 @@ const HUD = (() => {
      pixels: Chrome truncates each offset to a sixty-fourth, which leaves a snapped box less than a tenth of a device
      pixel off a whole one, a distance its own pixel snapping takes back out. A pressed face's sink (hud.css) is a
      transform, so its box is placed without it and painted with it. The layer's corner sits on a device pixel. ---- */
-  let layer = null, layerPx = 1;
+  let layer = null, layerPx = 1, layerD = 1;
   const prop = (e, k) => { const v = e.style.getPropertyValue(k); return v === '' ? null : +v; };
   function pin(el) {
-    const d = window.devicePixelRatio || 1, px = layerPx;
+    const d = layerD, px = layerPx;
     const sink = +getComputedStyle(el).getPropertyValue('--press') || 0;
     // (tx, ty): the parent's corner in units; (rx, ry): where it is placed, in device pixels
     const walk = (e, tx, ty, rx, ry) => {
@@ -752,8 +766,13 @@ const HUD = (() => {
       + text(esc(st.toast), { x: Ts.pad, y: 0, w: b.w - 2 * Ts.pad, h: b.h }, Ts.style, { align: 'c' }) + `</div>`;
   }
 
-  // the whole HUD for a state; see index.html for the state's fields
-  function draw(el, st, px) {
+  /* the whole HUD for a state; see index.html for the state's fields. px: device pixels a unit; d: device pixels a CSS
+     pixel, the page's devicePixelRatio by default. The wiki's stage passes its frame's G.k instead: its canvases are
+     drawn at the game resolution's pixels and shown scaled, so the stage HUD's device pixels are those, not the
+     browser's. This file's layer, its pixel scales and its hint are module state, so a page holds one HUD: the replay
+     HUD mockup's, or the wiki's stage HUD. */
+  function draw(el, st, px, d = window.devicePixelRatio || 1) {
+    layerD = d;
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
     hintOn = null;

@@ -21,6 +21,17 @@
    positional (0x4D0640 takes no point; these callers pass 0x4CF570 none), so Sound Mode's 3D and
    off-screen rules do not apply.
 
+   A UNIT'S DEATH is a weapon's soundhit, which the engine plays through 0x47F300 (from 0x499FF2),
+   not through the notice queue: its gates are the named sound's (fxvol [main+0x37F0C], Sound Mode
+   [main+0x37F19] & 7, NoDirectSound 0x51E690, UseWindowsSound 0x51E694 taking 0x47F0C0's
+   PlaySoundA path, 0x47F300..0x47F361), with no priority, no speechfx and no unitchat
+   test, then the viewed player's sight at the point (0x47F3E8..0x47F4A8), which the caller applies
+   (tagpu_wikisim.h WIKI_SND_DEATH) -- DISASSEMBLED. 0x47F300 is positional: under Sound Mode 3D
+   (0x4CFEA0) it passes 0x4CF570 the point, else it plays at -585 when the point is inside the view
+   and at -1585 (0xFFFFF9CF) outside it (0x47F588..0x47F5EC). The stage shows its whole map, so
+   every point is inside its view and the death plays at -585; the 3D mode's placement of the sound
+   by its point is not repeated.
+
    NOT ON THE GAME THREAD: the object and each clip's WIKISOUND_VOICES voices -- one buffer
    (DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME, filled from the published samples) and its duplicates,
    which share its samples -- are made off it, by tagpu_wikisound_make -- on the 3D load's
@@ -66,6 +77,9 @@ int  tagpu_wikisound_muted(void);
    kind table's); a named sound: WIKI_SNDNAME_* `name`. 1 when a Play call succeeded. */
 int  tagpu_wikisound_reply(const WIKI3DSOUND* s, int cat, int kind, int variant, int priority);
 int  tagpu_wikisound_named(const WIKI3DSOUND* s, int name);
+/* Game thread. A unit's death: clip `clip` of `s` (WIKI3DUNIT.death_sound), under the named sound's
+   gates (A UNIT'S DEATH, above). 1 when a Play call succeeded. */
+int  tagpu_wikisound_death(const WIKI3DSOUND* s, int clip);
 
 /* what was played since the last call -- Play calls that succeeded, that failed, and sounds the
    settings, no object or a silent clip left unplayed -- and the slowest DirectSound call the game

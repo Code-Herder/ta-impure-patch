@@ -8,7 +8,8 @@
    What it holds, each the engine's rule as the lab ports it:
    - the GL helpers, the base atlas (every index expanded to its palette colour, alpha 0 at a frame's key) and the
      face-shade multiplier (tagpu_render3do.c `s_shadeK`);
-   - the terrain: tagpu_terr.c's gather, one instance a visible 32-px cell, and its instanced draw;
+   - the terrain: tagpu_terr.c's gather, one instance a 32-px cell of the swept grid drawn from the tile map, and its
+     instanced draw;
    - the features: tagpu_feat.c's sweep rect, projection and depth keys (and the lab's mirror past the map's edge,
      which shares the sweep), and the sprite draw;
    - the units: one instance's yaw, projection, per-face flat shade and intra-model depth, the structure's slant
@@ -138,15 +139,25 @@ function shadeK(pal, shd, rows, neutral) {
 }
 
 // ---- terrain: tagpu's own shaders and the 32-px grid. tagpu_terr.c's
-// vertex shader is INSTANCED: a static unit quad (TAGPU_TERR_QUAD, the
-// engine's vertex order, the shared edge on (1,0)-(0,1)) at location 0, and
-// per instance the cell's grid column and row and its tile's atlas column and
-// row as four unnormalised shorts at location 1 (TAGPU_TERR_ICOMP). The
-// shader rebuilds the position, world point and UVs from those and uOrigin,
-// uTile0, uTexel — exactly, every term an integer far below 2^24.
+// vertex shader is INSTANCED with no instance buffer: a static unit quad
+// (TAGPU_TERR_QUAD, the engine's vertex order, the shared edge on (1,0)-(0,1))
+// at location 0, and one instance per cell of the swept grid, which the
+// shader turns into its map cell (uTile0 + (i % uCols, i / uCols)) and reads
+// that cell's tile out of the tile map, an R16UI texture (uTileMap). A cell
+// past the area (uArea) with the mirror off (uMirror 0), or whose tile is
+// past the atlas (uAtlasN), draws nothing. The shader rebuilds the position,
+// world point and UVs from those and uOrigin, uTexel -- exactly, every term an
+// integer far below 2^24.
 //
 // `atlas` is the pack's map.atlas (w, h, cols, tiles) and `r8` its indices; the
-// base atlas goes to texture unit 16, the program's sampler for it.
+// base atlas goes to texture unit 16, the program's sampler for it, the tile
+// map to unit 7 and the neighbourhood keys -- one zero texel: this lane has no
+// restored atlas, so uNbhd is 0 and the shader never reads it -- to unit 8.
+// THE MIP CHAINS (tagpu_chain.h) are the DLL's alone: the lab draws at uLod 0
+// with uRestChain 0, today's picture, and names both chain samplers on unit
+// 16 -- a sampler2D, as they are. Never on unit 2, 7 or 8: those hold
+// usampler2D textures, and two sampler types on one unit fail WebGL's
+// draw-time validation.
 function classicTerrain(gl, vs, fs, atlas, r8, pal) {
   const prog = program(gl, vs, fs, "terrain");
   const vao = gl.createVertexArray();
@@ -157,67 +168,75 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
                 gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
-  const inst = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-  gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 4, gl.SHORT, false, 8, 0);   // SSCALED, as the game's
-  gl.vertexAttribDivisor(1, 1);
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
-                                "uPal", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel",
+                                "uPal", "uFogSrc", "uFogSize",
+                                "uFog", "uOrigin", "uTile0", "uTexel",
+                                "uCols", "uArea", "uMirror", "uAtlasN", "uNbhd", "uNbCols",
+                                "uTileMap", "uKeys",
                                 "uLambert", "uRestored", "uBase", "uHDim",
-                                "uShadowOn"]);
+                                "uShadowOn", "uLod", "uRestChain", "uChainBase", "uChainRest"]);
   nameShadowUnits(gl, prog);
   tex2D(gl, 16, gl.RGBA8, atlas.w, atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
         baseAtlas(pal, r8, atlas.w, atlas.h, null, 0));
+  const tmTex = tex2D(gl, 7, gl.R16UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_SHORT, new Uint16Array([0]));
+  tex2D(gl, 8, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
   gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
-  let cells = new Int16Array(4 * 4096);
+  let tmFor = null;                     // the tile map array unit 7 holds
   return {
     prog, vao, U,
-    // tagpu_terr.c's gather, line for line: one instance per visible cell.
-    // `tm` is the pack's map.tilemap (w, h) and `tiles` its u16 indices; E and W
-    // the swept world rect, (vpL, vpT) the viewport's game-pixel corner.
-    // `area` [cols, rows] is where the map ends, in 32-px cells (tagpu_fx.h
-    // tagpu_edge_area: the engine's scroll extent, at most the tile map); a
-    // cell past it is skipped. Without one the map is the whole tile map.
+    // tagpu_terr.c's gather: the swept grid, and the tile map it is drawn from.
+    // `tm` is the pack's map.tilemap (w, h) and `tiles` its u16 indices, sent to
+    // unit 7 when they are not the array it holds; E and W the swept world
+    // rect, (vpL, vpT) the viewport's game-pixel corner. `area` [cols, rows] is
+    // where the map ends, in 32-px cells (tagpu_fx.h tagpu_edge_area: the
+    // engine's scroll extent, at most the tile map); a cell past it is not
+    // drawn. Without one the map is the whole tile map. Returns the instance
+    // count and the grid as the GPU was handed it.
     gather(tiles, tm, E, W, vpL, vpT, area) {
-      const stride = tm.w;
       const [areaC, areaR] = area || [tm.w, tm.h];
       const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
       const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
       const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
-      if (cells.length < cols * rows * 4) cells = new Int16Array(cols * rows * 4);
-      let n = 0, skipped = 0, junk = 0;
-      for (let r = 0; r < rows; r++) {
-        const my = ty0 + r;
-        if (my < 0 || my >= areaR) { skipped += cols; continue; }
-        for (let c = 0; c < cols; c++) {
-          const mx = tx0 + c;
-          if (mx < 0 || mx >= areaC) { skipped++; continue; }
-          const idx = tiles[my * stride + mx];
-          if (idx >= atlas.tiles) { junk++; continue; }
-          // the quad still spans exactly TILE_PX texels, and its far edge lands
-          // ON the guard column, which is a copy of the last real one
-          const o = n * 4;
-          cells[o] = c; cells[o + 1] = r;
-          cells[o + 2] = idx % atlas.cols; cells[o + 3] = (idx / atlas.cols) | 0;
-          n++;
-        }
+      if (tmFor !== tiles) {
+        gl.activeTexture(gl.TEXTURE7);
+        gl.bindTexture(gl.TEXTURE_2D, tmTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, tm.w, tm.h, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, tiles);
+        gl.activeTexture(gl.TEXTURE0);
+        tmFor = tiles;
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, inst);
-      gl.bufferData(gl.ARRAY_BUFFER, cells.subarray(0, n * 4), gl.DYNAMIC_DRAW);
       gl.useProgram(prog);
       // grid cell (0,0)'s screen corner, the map cell it is, the atlas texel
       gl.uniform2f(U.uOrigin, vpL - fx, vpT - fy);
-      gl.uniform2f(U.uTile0, tx0, ty0);
+      gl.uniform2i(U.uTile0, tx0, ty0);
       gl.uniform2f(U.uTexel, 1 / atlas.w, 1 / atlas.h);
-      return { n, stats: { cols, rows, tx0, ty0, fx, fy, cells: n, skipped, junk } };
+      gl.uniform1i(U.uCols, cols);
+      gl.uniform2i(U.uArea, areaC, areaR);
+      gl.uniform1i(U.uMirror, 0);
+      gl.uniform1i(U.uAtlasN, atlas.tiles);
+      gl.uniform1i(U.uNbhd, 0); gl.uniform1i(U.uNbCols, 1);
+      gl.uniform1i(U.uTileMap, 7); gl.uniform1i(U.uKeys, 8);
+      // the lab's counts: the cells on the map, and of those the ones whose
+      // tile is past the atlas, which the shader does not draw
+      const c0 = Math.max(tx0, 0), c1 = Math.min(tx0 + cols, areaC);
+      const r0 = Math.max(ty0, 0), r1 = Math.min(ty0 + rows, areaR);
+      let onMap = 0, junk = 0;
+      for (let my = r0; my < r1; my++)
+        for (let mx = c0; mx < c1; mx++) {
+          onMap++;
+          if (tiles[my * tm.w + mx] >= atlas.tiles) junk++;
+        }
+      return { n: cols * rows,
+               grid: { cols, rows, tile0: [tx0, ty0], area: [areaC, areaR], mirror: 0, atlasN: atlas.tiles },
+               stats: { cols, rows, tx0, ty0, fx, fy, cells: onMap - junk,
+                        skipped: cols * rows - onMap, junk } };
     },
     // The draw, unlit: no height grid, so no lambert term. `f` is the frame:
     // GW, GH (the game frame), zoom, zoomC, depth (the pack's), and the fog
-    // grid's uniforms (fog: 0 off, else uFog's bits; fogOrg, fogDim), its RG8
-    // texture on unit 2.
+    // source's uniforms (fog: 0 off, else uFog's bits; fogSize, its cells),
+    // its R32UI texture on unit 2 (tagpu_fogsrc.h). `n` is the gather's
+    // instance count, one a cell of the grid.
     draw(f, n) {
       gl.useProgram(prog);
       gl.uniform2f(U.uGame, f.GW, f.GH);
@@ -226,12 +245,14 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       gl.uniform1f(U.uDepthScale, f.depth.scale);
       gl.uniform1f(U.uEnc, f.depth.terrain);
       gl.uniform1i(U.uPal, 1);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, f.fogOrg[0], f.fogOrg[1]); gl.uniform2f(U.uFogDim, f.fogDim[0], f.fogDim[1]);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, f.fogSize[0], f.fogSize[1]);
       gl.uniform1i(U.uFog, f.fog);
       gl.uniform1i(U.uLambert, 0);
       gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
       gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
+      gl.uniform1i(U.uLod, 0); gl.uniform1i(U.uRestChain, 0);
+      gl.uniform1i(U.uChainBase, 16); gl.uniform1i(U.uChainRest, 16);
       gl.bindVertexArray(vao);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
       gl.bindVertexArray(null);
@@ -419,6 +440,12 @@ function gatherFeatures(p) {
 // The Classic sprite program over `vbo` (SVST floats a vertex), and the
 // feature base atlas on unit 17 from the R8 atlas on unit 5 (which the caller
 // uploads). `feat` is the pack's features (atlas, defs).
+// THE MIP CHAINS (tagpu_vk_feat.c) are the DLL's alone: the lab draws at uLod
+// 0, today's picture, with uRestChain 0; uFChainB/R name unit 17, a sampler2D
+// as they are, and uFTab the fog source's unit 2, a usampler2D as it is -- two
+// sampler types on one unit fail WebGL's draw-time validation. The vertices
+// still carry the colour key where the DLL's carry the entry index (aCM.x),
+// which only the uLod >= 1 branch reads.
 function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   const prog = program(gl, vs, fs, "sprite");
   const vao = gl.createVertexArray();
@@ -431,8 +458,9 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   }
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale",
-                                "uFogGrid", "uFogOrg", "uFogDim", "uFog",
-                                "uRestored", "uBase", "uMapPx", "uClip"]);
+                                "uFogSrc", "uFogSize", "uFog",
+                                "uRestored", "uBase", "uMapPx", "uClip",
+                                "uLod", "uRestChain", "uFTab", "uFChainB", "uFChainR"]);
   const rects = [];
   for (const d of Object.values(feat.defs))
     for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
@@ -458,11 +486,14 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
       gl.uniform1f(U.uZoom, f.zoom);
       gl.uniform2f(U.uZoomC, f.zoomC[0], f.zoomC[1]);
       gl.uniform1f(U.uDepthScale, f.depth.scale);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, f.fogOrg[0], f.fogOrg[1]); gl.uniform2f(U.uFogDim, f.fogDim[0], f.fogDim[1]);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, f.fogSize[0], f.fogSize[1]);
       gl.uniform1i(U.uFog, f.fog);
       gl.uniform1i(U.uRestored, 0);
       gl.uniform1i(U.uBase, 17);
+      gl.uniform1i(U.uLod, 0); gl.uniform1i(U.uRestChain, 0);
+      gl.uniform1i(U.uFTab, 2);
+      gl.uniform1i(U.uFChainB, 17); gl.uniform1i(U.uFChainR, 17);
       // aLam, the anchor's ground lambert, is not in the parity vertex: the
       // generic value stands in, and light=0 bakes exactly 1.0 there
       gl.vertexAttrib1f(4, 1.0);
@@ -642,9 +673,10 @@ function emitUnits(p, L) {
     // view), so there is room for a few dozen; beyond that they share the last
     // key and interleave, which is wrong but visible rather than mysterious.
     const airMax = Math.floor((D.scale - D.unit0) / D.rowStep) - 1;
+    // a 3D feature (a wreck) sits in the features' band, tall0 + rel * rowStep, as the native pass keys a husk
     const enc = agl > 0
       ? D.unit0 + Math.min(nRows + 12 + nAir++, airMax) * D.rowStep
-      : D.unit0 + rel * D.rowStep;
+      : (inst.feature ? D.tall0 : D.unit0) + rel * D.rowStep;
     const wldX = wx, wldZ = wz - (wy >> 1);
     const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
     const first = n;
@@ -799,8 +831,8 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
                                 "uPal", "uShadow", "uAlpha",
                                 "uWaterT", "uWaterMode", "uDigT",
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
-                                "uZoomCF", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uLambert", "uRestored",
+                                "uZoomCF", "uFogSrc", "uFogSize",
+                                "uFog", "uLambert", "uRestored",
                                 "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
                                 "uShadowOn", "uNanoOn", "uNanoT", "uNanoC"]);
   nameShadowUnits(gl, prog);
@@ -828,12 +860,16 @@ function classicUnits(gl, vs, fs, units, r8, pal, shd, rows, neutral) {
       // the water/dig tests are `vVY <= threshold`; -1e9 disables both
       gl.uniform1f(U.uWaterT, -1e9); gl.uniform1i(U.uWaterMode, 0);
       gl.uniform1f(U.uDigT, -1e9);
-      gl.uniform1i(U.uScaf, 2); gl.uniform1i(U.uScafOn, 0);
+      // the scaffold is off here, but its float sampler still needs a unit no
+      // integer sampler names: unit 2 is the fog source's usampler (R32UI),
+      // and two samplers of different types on one unit refuse the draw
+      // (INVALID_OPERATION). Unit 0 holds an R8 texture, as on the lab page.
+      gl.uniform1i(U.uScaf, 0); gl.uniform1i(U.uScafOn, 0);
       gl.uniform4f(U.uScafP, f.vp[0], f.vp[1], f.vp[2], f.vp[3]);
       gl.uniform1f(U.uSS, f.SS); gl.uniform1f(U.uZoomF, f.zoom);
       gl.uniform2f(U.uZoomCF, f.zoomC[0], f.zoomC[1]);
-      gl.uniform1i(U.uFogGrid, 2);
-      gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
+      gl.uniform1i(U.uFogSrc, 2);
+      gl.uniform2i(U.uFogSize, 0, 0);
       gl.uniform1i(U.uFog, 0);
       // light=0: the base, the face-shade multiplier, and a lambert that is
       // exactly 1.0 (ambient 1, no shadow)

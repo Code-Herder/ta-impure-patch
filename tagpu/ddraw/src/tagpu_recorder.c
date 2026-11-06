@@ -546,7 +546,7 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
     (void)bytes;
     memset(&start, 0, sizeof start);
     start.code = 0x08;
-    start.version = RECMP_VERSION;
+    start.version = RECMP_START_VERSION;
     start.bytes = sizeof start;
     start.origin = origin;
     unsigned ready = SUCCEEDED(CoCreateGuid(&match));
@@ -1316,7 +1316,7 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_text = tagpu_recmp_text_begin(&roster);
         s_mp_text_queue = tagpu_recmp_text_queue_begin();
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
-        s_mp_pov = tagpu_recmp_pov_begin(&roster);
+        s_mp_pov = tagpu_recmp_pov_begin(&roster, REC_POV_ZOOM_MIN);
         if (!mp_explored_begin(L,&roster) || !s_mp_players || !s_mp_seats || !s_mp_units || !s_mp_orders ||
             !s_mp_named || !s_mp_roots || !s_mp_roots_queue || !s_mp_text || !s_mp_text_queue ||
             !s_mp_pov) {
@@ -3870,12 +3870,13 @@ static int pov_sample(const char* ta, unsigned player, unsigned every, RecPov* p
     float level;
     if (w < 1 || w > (int)REC_POV_VIEW_MAX || h < 1 || h > (int)REC_POV_VIEW_MAX) return 0;
     tagpu_zoom_applied(&seq, &dx, &dy, &level, &epoch, &centre);
-    if (!(level >= TAGPU_ZOOM_MIN)) level = TAGPU_ZOOM_MIN;
+    if (!(level >= TAGPU_ZOOM_FLOOR_LO)) level = TAGPU_ZOOM_FLOOR_LO;
     if (level > TAGPU_ZOOM_MAX) level = TAGPU_ZOOM_MAX;
     memset(p, 0, sizeof *p);
     p->player = (uint8_t)player;
     p->every = (uint8_t)every;
-    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0));
+    p->flags = (uint8_t)(((region & 2) ? REC_POV_WORLD : 0) | ((region & 1) ? REC_POV_MINIMAP : 0) |
+                         (tagpu_zoom_cut_latched() ? REC_POV_CUT : 0));
     p->view_w = (uint16_t)w;
     p->view_h = (uint16_t)h;
     p->zoom = (uint32_t)(level * 65536.0f + 0.5f);
@@ -3956,6 +3957,7 @@ static int cap_pov(Rec* r, const Level* L, int tick)
         pov_sample(L->ta, p, REC_POV_EVERY, &pov) &&
         (!r->pov_in[p] || memcmp(&pov, &r->pov[p], sizeof pov))) {
         if (!ring_put(r, RK_POV, &pov, sizeof pov, NULL, 0)) return 0;
+        if (pov.flags & REC_POV_CUT) tagpu_zoom_cut_clear();
         r->pov[p] = pov;
         r->pov_tick[p] = (unsigned)tick;
         r->pov_in[p] = 1;
@@ -4041,6 +4043,7 @@ static int mp_pov_capture(const Level* L, unsigned tick)
             int due = tagpu_recmp_pov_due(s_mp_pov, origin, &pov, tick, tagpu_recmp_room(s_mp_channel));
             if (due < 0 || (due && !mp_pov_send(origin, RECMP_POV, tick, &pov, sizeof pov)))
                 return 0;
+            if (due && (pov.flags & REC_POV_CUT)) tagpu_zoom_cut_clear();
         }
         n = sel_walk(L, seat, s_mp_roster.each, birth, s_mp_sel_now);
         if (n < 0) {
@@ -7620,6 +7623,11 @@ int tagpu_rec_fork_arm(RecFork* f)
     tagpu_logf("recorder: timeline %u of %s armed for GameTime %u (parent %u)", s_fork.id,
                s_fork.path, s_fork.fork_at, s_fork.parent);
     return 1;
+}
+
+int tagpu_rec_fork_armed(void)
+{
+    return s_state == ST_IDLE && s_fork.file != NULL;
 }
 
 /* the recording's start at this capture point: the counts kept since the level's last start are

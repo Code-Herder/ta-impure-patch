@@ -142,7 +142,7 @@ faces of `0x45A2EC` are left there.
   both. It would be a simulation fix, and it is not the identity on stock's inputs, since the
   phase leaves the wall clock: it needs the owner's decision and the evidence bar above, a
   difference measured between two peers or proven. The disassembly is in the engine map's
-  [*The unit and player records, byte by byte*](../exe-reverse-engineering.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
+  [*The unit and player records, byte by byte*](../engine/units.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.
@@ -491,7 +491,7 @@ acted on in `18667b4`). What was done, and where it deviates from the plan above
   and byte as stock does. One predicate serves both, `wire_ref_idx` (0 stays 0, `[1, max]` stays
   itself, anything else becomes 0 — `wire_index_ok`'s range). By disassembly of every decoder the
   dirty list and the round robin reach ([the engine
-  map](../exe-reverse-engineering.md#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)):
+  map](../engine/network.md#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)):
   - **A move payload's target**, `0x44E080` (the `0x4FD9E0` class's parse, `0x490A10` → `0x490A4F`):
     a `u16` at `0x44E0D0`, sent as the target's own `+0xA8` or 0 (`0x44DDC0`); stock sends 0 to
     `0x44E0DA` (`xor eax,eax`) and scales any other at `0x44E0DE..0x44E0F9`, then hands it to the

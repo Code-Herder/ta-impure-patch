@@ -66,8 +66,7 @@ static int store_mirror(void)
    holes in it is the more expensive mistake.
 
    `tagpu_terrown` IS A PLAY DEFAULT AND IS NOT ONE OF THEM: it is an
-   OPTIMISATION, kept on by default because it is free and because nothing has
-   yet re-homed the wide fog tick that rides its second detour. The UI layer
+   OPTIMISATION, kept on by default because it is free. The UI layer
    does not need it to find the viewport: `tagpu_gui_hook.c` marks the world
    phase, erases at the top of every in-play publish window and cuts the
    chrome fill round the viewport (gpu-status.md 2.81, the `*own` levers
@@ -79,11 +78,10 @@ static int store_mirror(void)
    WHAT IT STILL COSTS, said plainly: the golden source loses its terrain --
    `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`.
    `tagpu_terrown.off` is the way back for a reference-quality capture, the
-   same shape as `mark.on=passive`, and IT COSTS THE PICTURE NOTHING. What it
-   does still cost is the zoomed-out fog: `tagpu_fogwide`'s
-   tick runs inside this module's fog-overlay detour and only while the skip is
-   set, so with `terrown` off the wide grid stops. Re-homing it is the rest of
-   the `terrown` removal. */
+   same shape as `mark.on=passive`, and IT COSTS THE PICTURE NOTHING: with
+   `terrown` off the fog source is ticked from the packet publisher's `after`
+   instead of this module's fog-overlay detour (tagpu_packet_pub.c
+   `wide_tick`). */
 static const Def s_defs[] = {
     { "tagpu_native.on",    "all wrecks", 0, 0 },          /* every unit natively, 3D husks too   */
     { "tagpu_terr.on",      "", 0, 0 },                     /* terrain and the fog overlay         */

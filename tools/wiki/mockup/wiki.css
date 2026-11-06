@@ -37,12 +37,13 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #clock { font-variant-numeric: tabular-nums; color: #b7b7ae; }
 #paused { visibility: hidden; font-weight: 700; letter-spacing: .08em; padding: 0 calc(5 * var(--u)); border: 1px solid #e2e2da; }
 #frame.paused #paused { visibility: visible; }
-/* the gear at x W-44..W-16 (tagpu_menu.c, trigger_rect); the rewind button 3 left of it, shown only in a live
-   single-player recorded skirmish; the wiki button 3 left of the rewind button, or in its slot when it is absent */
+/* the gear at x W-44..W-16 (tagpu_menu.c, trigger_rect), drawn by the wiki's layer (layout.json button.config); the
+   rewind button 3 left of it, shown only in a live single-player recorded skirmish; the wiki button 3 left of the
+   rewind button, or in its slot when it is absent */
 .tb { position: absolute; top: calc(2 * var(--u)); width: calc(28 * var(--u)); height: calc(28 * var(--u)); padding: 0; box-sizing: border-box;
   background: #94948c; color: #1d1d1b; border: 1px solid #1d1d1b; font: 700 calc(16 * var(--u))/1 'DejaVu Sans', sans-serif; cursor: pointer; }
 .tb:active, .tb.on { background: #5c5c56; color: #e2e2da; }
-#b-gear { right: calc(16 * var(--u)); }
+#b-gear { right: calc(var(--w-button-config) * var(--u)); top: calc(var(--w-button-top) * var(--u)); width: calc(var(--w-button-side) * var(--u)); height: calc(var(--w-button-side) * var(--u)); }
 #b-rewind { right: calc(47 * var(--u)); }
 #b-wiki { right: calc(var(--w-button-right-0) * var(--u)); top: calc(var(--w-button-top) * var(--u)); width: calc(var(--w-button-side) * var(--u)); height: calc(var(--w-button-side) * var(--u)); }
 #frame.norewind #b-rewind { display: none; }
@@ -100,16 +101,22 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 /* the entry: title, subtitle, the lock badge, the stage, caption, keys, controls, and the text scrolling below */
 #entry { display: flex; flex-direction: column; gap: calc(var(--w-entry-gap) * var(--u)); min-width: 0; min-height: 0; padding: calc(var(--w-entry-pad-0) * var(--u)) calc(var(--w-entry-pad-1) * var(--u)) 0; }
 #e-title { margin: 0; line-height: var(--w-entry-title_line); }
-#badge { position: relative; align-self: flex-start; display: flex; align-items: center; gap: calc(var(--w-badge-gap) * var(--u)); height: calc(var(--w-badge-h) * var(--u));
+#badge, #t-badge { position: relative; align-self: flex-start; display: flex; align-items: center; gap: calc(var(--w-badge-gap) * var(--u)); height: calc(var(--w-badge-h) * var(--u));
   box-sizing: border-box; padding: 0 calc(var(--w-badge-pad) * var(--u)); }
-#badge[hidden] { display: none; }
-#badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+#badge[hidden], #t-badge[hidden] { display: none; }
+#badge i, #t-badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
 .srow { flex: 1 1 0; min-height: calc(var(--w-stage-min) * var(--u)); display: flex; }
 #sbox { flex: 1; min-width: 0; position: relative; }
 #stage { position: absolute; left: calc(var(--bz-l) * var(--u)); right: calc(var(--bz-r) * var(--u)); top: calc(var(--bz-t) * var(--u));
   bottom: calc(var(--bz-b) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u)); height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); }
 #stage.try { cursor: none; }
-#ctl button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
+/* the frame's two layers over the stage canvas (wiki.js drawReplay): the stage HUD, which hud.js lays out at the frame's
+   corner, and the canvas of the TOP range (Leave's question, the viewer's cursor), the stage's size and place. Neither
+   takes the pointer: the page tests the stage's presses itself, as the DLL's hit map does */
+#stagehud { right: auto; bottom: auto; pointer-events: none; overflow: hidden; }
+#stagetop { position: absolute; left: calc(var(--bz-l) * var(--u)); top: calc(var(--bz-t) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u));
+  height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); pointer-events: none; }
+#ctl button, #t-row button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
   display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 /* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the
    player's cursor */
@@ -117,13 +124,36 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #keys { flex: none; display: flex; flex-wrap: nowrap; overflow: hidden; gap: calc(var(--w-keys-gap) * var(--u)); align-items: center; height: calc(var(--w-strips-keys) * var(--u)); }
 .kc { position: relative; display: inline-flex; align-items: center; box-sizing: border-box; height: calc(var(--w-keycap-h) * var(--u)); padding: 0 calc(var(--w-keycap-pad) * var(--u)); }
 #ctl { display: flex; gap: calc(var(--w-controls-gap) * var(--u)); align-items: center; }
-#ctl button { min-width: calc(var(--w-controls-min) * var(--u)); }
+#ctl button, #t-row button { min-width: calc(var(--w-controls-min) * var(--u)); }
 #ctl button:disabled { opacity: .45; cursor: default; }
 #ctl .sp { display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
 #c-try { margin-left: calc(var(--w-controls-try) * var(--u)); }
 #p-text { flex: 0 0 calc(var(--w-text-share) * 1%); }
+/* a text entry (no demos): no stage, caption, keys or controls; its text takes their room */
+#entry.text .srow, #entry.text #caption, #entry.text #keys, #entry.text #ctl { display: none; }
+#entry.text #p-text { flex: 1 1 0; }
 #text p { margin: 0 0 calc(var(--w-text-para) * var(--u)); }
 #text .err { color: #c03030; }
+
+/* ---- the theatre: the page of an entry with "frame": "game" (wiki.js arrange). The tree's column, as wide as on the
+   normal page and the body's whole height, holds the entry's demos under its row; the rest is one column of the stage's
+   bezel, then the row, then the caption, the layout's gap between. The row holds the badge, the demo's title in what
+   the rest leaves, and the controls with About. The demos panel and the keys strip are not shown. About lies over the
+   stage's content box (the bezel's insets) at the right, `theatre.about` per cent of #sbox wide ---- */
+#win.theatre .wb { grid-template-columns: calc(var(--w-columns-0) * 1%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) calc(var(--w-controls-h) * var(--u)) calc(var(--w-strips-caption) * var(--u)); }
+#win.theatre #p-tree { grid-row: 1 / -1; }
+#win.theatre #p-demos, #win.theatre #entry, #win:not(.theatre) #t-row, #win:not(.theatre) #c-about { display: none; }
+#t-row { display: flex; align-items: center; gap: calc(var(--w-controls-gap) * var(--u)); min-width: 0; }
+#t-badge { flex: none; align-self: center; }
+#t-title { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+#win.theatre #ctl { flex: none; }
+#about { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); box-sizing: border-box; }
+#about[hidden] { display: none; }
+#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); display: flex; flex-direction: column;
+  gap: calc(var(--w-entry-gap) * var(--u)); padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
+  calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
+#win.theatre #p-text { flex: 1 1 0; }
 
 /* ---- the whitebox: flat greys, 1 CSS pixel lines ---- */
 #frame:not(.kit) #win .wt { background: #a7a7a1; border-bottom: 1px solid #1d1d1b; box-sizing: border-box; }
@@ -133,15 +163,16 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #frame:not(.kit) #p-text { border-top: 1px solid #8a8a86; }
 #frame:not(.kit) #tree .row:hover, #frame:not(.kit) #demos li:hover { background: #c2c2bd; }
 #frame:not(.kit) #tree .row, #frame:not(.kit) #demos li { margin-bottom: 0; }
-#frame:not(.kit) #tree .leaf.sel, #frame:not(.kit) #demos li.sel { background: #9d9d97; }
-#frame:not(.kit) #badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
+#frame:not(.kit) #tree .row.sel, #frame:not(.kit) #demos li.sel { background: #9d9d97; }
+#frame:not(.kit) #badge, #frame:not(.kit) #t-badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
 #frame:not(.kit) #sbox { background: #6e6e68; border: 1px solid #1d1d1b; box-sizing: border-box; }
-#frame:not(.kit) #ctl button { background: #b3b3ad; border: 1px solid #1d1d1b; }
-#frame:not(.kit) #ctl button:hover { background: #a2a29c; }
-#frame:not(.kit) #ctl button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) #ctl button, #frame:not(.kit) #t-row button { background: #b3b3ad; border: 1px solid #1d1d1b; }
+#frame:not(.kit) #ctl button:hover, #frame:not(.kit) #t-row button:hover { background: #a2a29c; }
+#frame:not(.kit) #ctl button.on, #frame:not(.kit) #t-row button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) #about { background: #d3d3ce; border: 1px solid #1d1d1b; }
 #frame:not(.kit) .kc { background: #f2f2ee; border: 1px solid #1d1d1b; border-bottom-width: calc(2.5 * var(--u)); border-radius: calc(2.5 * var(--u)); }
 
 /* ---- a kit: the window's part carries the faces, the title sits in its dark title groove ---- */
 #frame.kit #win { border: 0; background: none; }
 #frame.kit #win .wt { --ink: initial; --shade: initial; }
-#frame.kit #b-wiki { border: 0; }
+#frame.kit #b-wiki, #frame.kit #b-gear { border: 0; }

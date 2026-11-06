@@ -9,14 +9,14 @@
    (tagpu_wikistate_scene) and the published 3D arena (tagpu_wiki3d_get), the stage's ground as the
    game draws a map -- the terrain hand-over (the description's tiles in tagpu_terr.c's atlas
    layout, one cell a 32-px tile), the feature hand-over (the deposits' and vents' frames in an
-   atlas of its own, their quads in tagpu_feat.c's form) and the engine's fog grid -- and the world
+   atlas of its own, their quads in tagpu_feat.c's form) and the fog source -- and the world
    target's geometry: the map at zoom 1, one world unit a game pixel, at the Supersampling
    setting's `ss`, composited into the image's rect (tagpu_wikistage_image), the fit the stage's
    ops are built with. The cells, quads and fog are tagpu_wikiscene.c's, which is paired with the
    mockup.
 
    AND THE UNITS AS THEIR MODELS: tagpu_wikiscene.c's model records (every unit and every ghost
-   whose type the arena resolved), each baked by the wiki's instance of the geometry bake from the
+   whose type the arena resolved, and every 3D feature of a ground in 3D), each baked by the wiki's instance of the geometry bake from the
    arena's model and posed at rest, turned onto its facing, by the wiki's posed program -- the
    posed-draw hand-over the wiki's unit pass draws from, in the game's order (the units, then the
    ghosts' window). The bake, the material layer and the posed program take their `_frame` calls
@@ -25,7 +25,8 @@
    each inside it, and left no word of a file that a reader follows (tagpu_wikiasset.h). Each type's
    piece run is the readers' walk of its model, and every node of it is re-checked against the
    arena's used extent before the run is kept -- a bound on the pointer's value, not a probe -- so
-   a type whose walk does not stay inside is a box.
+   a type whose walk does not stay inside is a box, and a 3D feature whose walk does not falls
+   its stage's ground back whole (`wrecks_build`).
 
    A stage whose ground did not resolve still draws its units: the image then carries no ground
    (`ground` 0), and the whitebox's ground is drawn under it (tagpu_wikistate_image).
@@ -57,9 +58,10 @@
 
 #include "tagpu_wikistage.h"            /* WIKISTAGE_UNITS, WIKISTAGE_SITES */
 
-/* THE 3D FEATURES ONE STAGE CAN HOLD: a feature whose section names a model (a wreck such as
-   `armmex_dead`) is drawn through the unit pass, so each takes a bake entry beside the units. The
-   stage description's reader refuses a description with more. */
+/* THE 3D FEATURE MODELS ONE STAGE CAN HOLD: a feature whose section names a model (a wreck such
+   as `armmex_dead`) is drawn through the unit pass, so each distinct section takes a bake entry
+   beside the units. The stage description's reader refuses a description with more; the
+   placements are bounded by the stage's features (WIKISCENE_WRECKS). */
 #define WIKIWORLD_FEAT3D   64u
 
 /* THE WIKI INSTANCES' TAGPU_PB_FRAMEMAX (tagpu_scene.h): the entries one frame of the stage may ask
@@ -76,11 +78,18 @@
 /* the file a `tagpu_wiki.shot` capture is written to: the wiki's target, before the Gamma curve */
 #define WIKIWORLD_SHOT "tagpu_wiki3d_shot.ppm"
 
+#include "tagpu_fogsrc.h"
+
 struct TAGPU_FRAME;
 
 /* Once a frame, from tagpu_overlay_draw after tagpu_wikistate_present: this frame's hand-overs, or
    none (no stage drawn, the arena not loaded, the ground fallen back, the lever off). */
 void tagpu_wikiworld_frame(const struct TAGPU_FRAME* f);
+
+/* The stage's fog source this frame (inc/tagpu_fogsrc.h), for the seam to prepare the wiki's fog
+   image from (tagpu_vkw_fog_prepare), or NULL when no cell of the view is fogged. This module's,
+   valid until its next frame. */
+const TAGPU_FOGSRC* tagpu_wikiworld_fogsrc(void);
 
 /* what frame `frame`'s image needs, for the seam */
 typedef struct {

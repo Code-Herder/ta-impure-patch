@@ -14,9 +14,10 @@ typedef struct RecMpHistory RecMpHistory;
 /* Engine-free reconstruction from copied file bytes. The source caches validate
    every envelope, including proof tails. Separate application caches publish only
    produced/consumed records, so proof completion cannot replace the recorded world.
-   All storage has fixed bounds and belongs to this one reader/writer. */
+   All storage has fixed bounds and belongs to this one reader/writer. `format` is the file's
+   (REC_FORMAT for one being written): its samples' zoom minimum (rec_pov_zoom_min). */
 RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const RecMpRoster* roster,
-                                            unsigned width, unsigned height);
+                                            unsigned width, unsigned height, unsigned format);
 void tagpu_recmp_history_end(RecMpHistory* history);
 /* Invalid input poisons the history: discard it. No state may be queried afterwards. */
 int tagpu_recmp_history_record(RecMpHistory* history, const RecMpRecord* where,

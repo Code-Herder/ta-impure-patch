@@ -538,7 +538,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             if (ctl<1 || ctl>4 || w->mp.header.actor[i].local!=(ctl==1 || ctl==2)) return 0;
         }
         if (seats!=mask) return 0;
-        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh);
+        w->mp_history=tagpu_recmp_history_begin(&w->mp.header,roster,w->gw,w->gh,REC_FORMAT);
         if (!w->mp_history) return 0;
     }
     /* the writer adds RT_HOLD to every skirmish header below, and the codec codes for it */
@@ -1084,18 +1084,18 @@ static void snapshot(Writer* w)
    `w->tick` may follow it. That snapshot comes after those events, so a reader that starts from
    it takes them from the block before.
    THE REFRESH: the segment's first two iterations and then one in each interval, the GameTimes
-   1 modulo it on consecutive iterations (reclossy_is_refresh), and every snapshot's -- a
-   snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last. The filter writes
-   every difference there, so the stream's world equals the copy, and -- told the snapshot
-   follows -- every spray, its sessions closed; the stream's world is checked equal to the copy
-   before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
+   1 modulo it on consecutive iterations (tagpu_recrules.h, reclossy_is_refresh), and every
+   snapshot's -- a snapshot is taken only at a refresh, SNAPSHOT_TICKS or more after the last.
+   The filter writes every difference there, so the stream's world equals the copy, and -- told
+   the snapshot follows -- every spray, its sessions closed; the stream's world is checked equal
+   to the copy before the block ends: INVARIANT, an ordering, every snapshot follows a refresh
    at which the stream's world was found equal to the copy, so a reader that starts from a
    snapshot holds what a reader of the whole stream holds there. A failed check is a fault of the
    filter, and abandons the file rather than write a stream that does not reach its snapshots. The
    first iteration is a refresh because the bases below are the copy's, and a reader takes its
    own from the stream's first iteration: equal there, they are the same bytes. The second is
    one so that a takeover asked for inside the first interval has a refresh to start from after
-   the segment's first iteration (reclossy_is_refresh).
+   the segment's first iteration (tagpu_recrules.h, reclossy_is_refresh).
    THE BASES are taken at the first call, before any snapshot can be: the wreck pool and the grid
    at the end of the segment's first iteration. INVARIANT: they equal every reader's
    (tagpu_recreader.c, tick_take), by construction -- one Writer is one segment, calloc'd per
@@ -1405,7 +1405,7 @@ static int pov_record(Writer* w, unsigned kind, const unsigned char* b, unsigned
         if (len != sizeof p) return 0;
         memcpy(&p, b, sizeof p);
         s = p.player;
-        if (s >= REC_PLAYERS || !rec_pov_ok(&p) ||
+        if (s >= REC_PLAYERS || !rec_pov_ok(&p, REC_POV_ZOOM_MIN) ||
             (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= w->tick))
             return 0;
         if (w->npov[s] == 2) {

@@ -1093,8 +1093,9 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
     /* V shows the side and colour of the recording's controlled player, or of its first seat when
        the controlled record is not seated. With full visibility V is the viewed record, and the
        interface takes the viewed record's side and colour: MAIN2 is loaded once from its side
-       (0x497B56..0x497BD8), the chrome and both bars read the side every frame
-       (0x467D98..0x467DB3), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
+       (0x497B56..0x497BD8), the chrome reads the side once a level (0x467D98..0x467DB3, caller
+       0x49842A), the resource bar and the bottom bar read it every redraw (0x468FEF..0x468FF4,
+       0x46A8A6..0x46A8D5), and the resource bar draws its colour (0x467C00 at 0x4690AB); the
        side menus %sGEN and %sDL take the controlled record's, which is V too (0x41B2E0). What
        record 10 and its PlayerInfo held goes back after the teardown (tagpu_replay_level_after).
        V is no puppet seat: the puppet table has ten entries, and every gate keys on a unit's
@@ -6472,6 +6473,7 @@ void __cdecl tagpu_replay_capture(void)
 #define DEF_BORDER     0xFFFB       /* a cell def at or above this is no feature (0x4246EC)       */
 #define PL_RECORDS     11           /* the player records a SIM_ID_PLAYER may name                */
 #define PL_DISPLAY     0xF8         /* DisplayTimer, a GameTime deadline (0x464765)               */
+#define DISPLAY_TICKS  30           /* the DisplayTimer's step, DrawGameScreen's add (0x468F83)   */
 #define PASS_TICKS     30           /* the players phase's period (0x46507D..0x465092)            */
 
 /* 0x47CB00(unit): a bucket's unlink, thiscall on the bucket, `ret 4` (DISASSEMBLED
@@ -7704,6 +7706,28 @@ static void eye_put(const Lv* L, unsigned T)
     }
 }
 
+/* The newly viewed record's DisplayTimer lowered to the last deadline of its own 30-tick phase
+   below GameTime `now`, so that the next draw re-reads the resource bar's rates once and leaves the
+   timer where the engine's own steps would have it: see the comment over the call in
+   sight_change. A timer already below `now` is left alone: the draw re-reads it anyway. `back`
+   is 1..30, so the lowered value is below `now` and at least now - 30, and one add of 30 takes it
+   to the first value at or above `now` congruent to the timer. When `now` is below `back` (only
+   in the first game second, under a timer a seek left at a GameTime not a multiple of 30) the
+   phase has no deadline at or above 0 below `now`: the timer goes to 0, still one re-read, and
+   the draw leaves it at 30, the phase of a record initialised at the load (0x464765). Every term
+   is bounded before it is subtracted, so nothing wraps whatever the timer holds. */
+static void bar_rates_due(char* ta, unsigned seat, unsigned now)
+{
+    char* rec = player_rec(ta, seat);
+    unsigned timer, back;
+    if (!now) return;
+    memcpy(&timer, rec + PL_DISPLAY, 4);
+    if (timer < now) return;
+    back = DISPLAY_TICKS - (timer - now) % DISPLAY_TICKS;
+    timer = now >= back ? now - back : 0;
+    memcpy(rec + PL_DISPLAY, &timer, 4);
+}
+
 /* Changing the viewed record leaves the units, their per-seat sight counters, the clock and
    the camera intact. Only death vision depends on which record was viewed during playback.
    Read that history with a separate reader, so a refused read cannot displace the next step's
@@ -7765,6 +7789,26 @@ static void sight_change(char* ta)
         goto refused;
     }
     ta[OFF_VIEWED] = (char)seat;
+    /* The resource bar's rates follow the new record from the next draw. DrawGameScreen
+       re-reads the bar's four rates (0x464AB0, 0x464AC0, 0x464AF0, 0x464B00: the record's
+       +0x90, +0x94, +0x9C, +0xA0) only while the viewed record's DisplayTimer +0xF8 is below
+       GameTime, adding 30 once per draw when it is (0x468F73..0x468FBF, DISASSEMBLED);
+       otherwise the bar keeps the rates of the last record it re-read. A record viewed earlier
+       in this game second, or any record after a seek (sk_deadlines), has its timer at or above
+       GameTime, so without this store a Sight change -- paused above all -- shows the previous
+       record's rates. INVARIANT: after the store the timer is below GameTime and at least
+       GameTime - 30, in the record's own phase (bar_rates_due), so the next draw re-reads exactly
+       once and leaves the timer at the first deadline at or above GameTime that the engine's
+       30-tick steps from the record's earlier value reach. ORDERING: this runs in the frame
+       visit, on the game thread, before the in-play draw call 0x4969CD; that draw forms the
+       viewed record from main+0x2A43 (0x468E4B), so the re-read is of the record now viewed.
+       BOUND: at GameTime 0 there is no value below it, so nothing is written and the first
+       tick's draw re-reads as for any record; seat <= REC_VIEWER was tested above, so the record
+       is one of main's eleven. The store is display state alone: the timer's readers are that
+       draw and the saver 0x4664EB, and replay-layout.tsv drops the field. The engine's own +View
+       0x416B50 writes only main+0x2A43 (0x416BC1); this is the one place a replay's view change
+       departs from it. */
+    bar_rates_due(ta, seat, L.now);
     s_cull_inputs++;
     eye_put(&L, L.now + 1);
     minimap_fog(ta);
@@ -7996,7 +8040,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
    lock, so a request no takeover can serve is refused while the playing -- or a rewind's live
    original -- still runs. A start that is its timeline's first iteration cannot start one: the
    iteration before it is the parent's, or none for the original (recr_append_point). The writer
-   makes every segment's second iteration a refresh (tagpu_reclossy.h, reclossy_is_refresh), so
+   makes every segment's second iteration a refresh (tagpu_recrules.h, reclossy_is_refresh), so
    only a request for a first iteration meets that, and the refusal names the next, which `next`
    (NULL allowed) is then given: the HUD's takeover snaps forward to it
    (tagpu_replay_takeover_plan); the trigger never does. R with `a` filled, or 0 (why). */
@@ -8197,17 +8241,57 @@ static void tk_live(char* ta, unsigned P)
     *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED) = 1;
 }
 
+/* THE TAKEOVER STARTS THE LIVE GAME RUNNING. The pause the level stands in here is the playing's
+   -- the replay HUD's play button and Take over's own click (pick_act, tagpu_replay_pause), the
+   Pause key during the playing, a frame seek -- and the playing has ended, so its pause ends with
+   it, at the frame visit that ran the takeover, before the draw.
+   No step of the takeover needs the pause: R0..R17 and TK0..TK4b run inside this one frame visit;
+   the next frame's pause test 0x496920 passes, its step makes GameTime T, and that step's capture
+   point 0x4954ED starts the timeline tagpu_rec_fork_arm armed.
+   What it keeps: a pause the test pacing took (s_pause_taken), which `resume` ends. No other
+   writer of ours holds the bit to put it back later: the in-game wiki does not open while a
+   takeover is queued (pause_in_flight, tagpu_wiki.c), and Leave and Take over exclude each other
+   (tagpu_hudinput.c, s_leaveWant).
+   THE BOUND beside the write: a network game never reaches here -- a playing's level is single
+   player: the Start's and Watch's refusals, and play never sets main+0x2A44 bit 0 -- so the write
+   is the Pause key's flip 0x4960AA..0x4960BC without its message 0x19 (0x49609F..0x4960E0,
+   DISASSEMBLED), which has no peer to reach.
+   The first unpaused frame runs up to five ticks: the scheduler was not called while paused, so
+   its elapsed (0x495236..0x495255: clock - base, then base = clock) is the whole pause and its
+   due clamps to 5 (0x4953EF..0x4953FE, DISASSEMBLED), as after the Pause key.
+   A MENU OPENED BEFORE THIS VISIT HOLDS THE WORLD ITSELF. The in-game key handler 0x495E90 runs at
+   0x496971, before this visit at the draw call 0x4969CD; its menu case calls the in-game menu's
+   set-up 0x460CC0 (0x4961B7), which sets the pause (0x460E00), and then sets main+0x37EBE bit 0
+   (0x4961C1), as the menu button (0x49477E) and the options opener (0x45D002) do. Clearing the
+   pause here leaves that bit, and the next frame tests it at 0x496918 and jumps at 0x49691E to
+   0x49697B, past the pause test, the scheduler and the step, so the world stays held until the
+   menu's close clears both (0x460A33, 0x460A3F) [DISASSEMBLED]. Options opened directly close
+   through handlers that clear main+0x37EBE bit 0 alone (0x45D2B1 and five others, engine/sim.md
+   *The menus' pause*), so the game runs on at that close where without the takeover it would stay
+   paused: the running live game this run is for.
+   Returns the takeover line's tail, what the run did, so the line is true in every case. */
+static const char* tk_run(char* ta)
+{
+    unsigned short* pause = (unsigned short*)(ta + OFF_PAUSE);
+    if (s_pause_taken) return "; the test's pause holds it until resume";
+    if ((ta[OFF_NETWORK] & 1) || !(*pause & 1)) return "";
+    *pause &= (unsigned short)~1u;
+    return "; the playing's pause ended";
+}
+
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
    false, the elimination's included; the step-down follows the seek's lines, which read the world
    through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
-   and s_opt and s_vinfo stay for the level's end; the arm comes last (tagpu_recorder.c,
-   tagpu_rec_fork_arm). */
-static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
+   and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
+   tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
+   rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
+static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
                    unsigned rebuild, unsigned built, LONGLONG hz)
 {
     const RecHeader* h = recr_header(s_rd);
     char line[700], seats[80], tail[96];
+    const char* run;
     unsigned i, n = 0, id = s_tk.fork.id, parent = s_tk.fork.parent;
     seats[0] = 0;
     for (i = 0; i < h->nseats && n < sizeof seats; i++)
@@ -8240,7 +8324,8 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                    id);
         snprintf(tail, sizeof tail, "; timeline %u is not recorded", id);
     }
-    tagpu_logf("%s%s", line, tail);
+    run = s_rw.state ? "" : tk_run(ta);       /* a rewind's fork: rw_finish's pause */
+    tagpu_logf("%s%s%s", line, tail, run);
     s_tk.on = 0;
 }
 
@@ -8599,7 +8684,7 @@ static int seek_run(char* ta)
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
     if (back) rw_finish(ta, 1);
     else if (tk)
-        tk_end(T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
+        tk_end(ta, T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t2.QuadPart - t1.QuadPart, hz.QuadPart), s_st.obuilt - built0, hz.QuadPart);
     if (tk && !back && s_rw.state) rw_finish(ta, 0);
@@ -10613,12 +10698,19 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out)
        effect */
     out->available = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
                      !(ta[OFF_NETWORK] & 1) && tagpu_rec_rewind_ready();
+    /* the same conditions, with the arm in place of the recording */
+    out->armed = !s_rw.state && s_rw_pause_in && ta && !s_rd && !tagpu_puppet_on() &&
+                 !(ta[OFF_NETWORK] & 1) && tagpu_rec_fork_armed();
     if (s_rw.state >= RW_OPEN) {
         out->first = s_span.first;
         out->last = s_span.last;
     }
     out->G = s_rw.G;
     out->T = s_rw.T;
+    /* the frame visit's own gate (frame_visit): a takeover queued on a level whose first step
+       then failed (s_dead) is never run, so it is not queued */
+    out->tk_queued = tagpu_puppet_on() && s_rd && !s_dead && s_seek.pending &&
+                     s_seek.mode == SK_TAKEOVER;
 }
 
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
@@ -11021,7 +11113,8 @@ static void follow_visit(char* ta)
         s_fl.at.how = persp_sample(W->npov[s_fl.seat], W->pov[s_fl.seat], W->pov_tick[s_fl.seat],
                                    W->tick, &p);
         if (s_fl.at.how && persp_follow(&p, s_fl.at.vw, s_fl.at.vh, &s_fl.at.x, &s_fl.at.y,
-                                        &s_fl.at.level)) {
+                                        &s_fl.at.level,
+                                        rec_pov_zoom_min(recr_segment_format(s_rd)))) {
             if (tagpu_zoom_follow(ta, s_fl.at.x, s_fl.at.y, s_fl.at.level, s_fl.E, s_fl.once))
                 s_cull_inputs++;
             s_fl.handed = 1;

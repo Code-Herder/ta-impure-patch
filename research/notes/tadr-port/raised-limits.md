@@ -65,7 +65,7 @@ carries both unchanged (checked against its source as of `dcff5dd`, 2026-09-20).
 | **A reclaimed feature is paid for and left standing** | In a big battle, reclaiming a building on Town & Country paid its metal but left the building, and it could be reclaimed again, as often as the builder repeated it. A destroyed building did not change either. | The wreck pool is raised from 2048 to 8192 records, and when it is full the feature is swapped at once instead of not at all | L6 |
 | **A building reclaimed by a group is paid for once per builder** | Several builders ordered together onto a Town & Country building were each paid its full metal. Nothing looked wrong: the building went once. | The reclaim's "already being reclaimed" test reads the building's anchor cell, the one the engine marks, instead of the cell the builder aimed at | L6 |
 
-**The defect** ([the engine map, *The wreck pool*](../exe-reverse-engineering.md#the-wreck-pool-and-a-feature-paid-for-and-left-standing)). The engine keeps 2048 wreck records for a
+**The defect** ([the engine map, *The wreck pool*](../engine/map.md#the-wreck-pool-and-a-feature-paid-for-and-left-standing)). The engine keeps 2048 wreck records for a
 level. A 3DO wreck (every unit's corpse, every heap) holds one for as long as it lies there, and a
 GAF feature such as a Town & Country building holds one while it plays its reclaim or collapse
 sequence. `FeatureDie 0x423550` starts that sequence; with no free record it returns having done
@@ -92,7 +92,7 @@ of a battle. In the owner's ten-player game the pool was full on each of the thr
   raise costs no address space. What a full pool refuses that the fix cannot give back is new
   corpses: `0x423C50` creates no 3DO feature without a record, so a unit dies without leaving one.
 
-**The reclaim paid twice** ([the engine map](../exe-reverse-engineering.md#the-reclaim-paid-twice)).
+**The reclaim paid twice** ([the engine map](../engine/map.md#the-reclaim-paid-twice)).
 Found by landing 6's review, and independent of the pool. While a building plays its reclaim
 sequence the engine marks its anchor cell, and a reclaim of a marked building is refused before it
 pays — but the refusal tests the cell the builder aimed at, not the anchor. A group ordered onto a

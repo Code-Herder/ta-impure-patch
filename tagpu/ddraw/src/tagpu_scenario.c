@@ -2139,10 +2139,11 @@ static void write_result(void)
    the engine flips. So the eye is NOT written here: tagpu_zoom_place_eye
    clamps it into the camera's range in force and hands it to the command
    apply at the top of the next in-play draw, which writes the eye and the
-   scroll target before that draw reads the eye or builds its fog grids,
+   scroll target before that draw reads the eye or builds its fog grid,
    recomputes the minimap's view box, sets its dirty bit and invalidates the
-   screen fog grid — paused or not. The first packet with the new eye
-   therefore carries both fog grids built at it. `at` and `center_on` both
+   screen fog grid — paused or not. The engine's grid is therefore rebuilt at
+   the new eye in that draw; our passes read the whole map's fog source,
+   which does not depend on the eye. `at` and `center_on` both
    mean the CENTRE of the window, so the eye is the centre minus half a view,
    using the projection the roster already reports. A `pin` then holds
    exactly the eye handed over. */

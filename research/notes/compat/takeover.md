@@ -84,7 +84,7 @@ setups have TADR to catch.
 **1a. `tdraw.dll` asked for by name.** Impure's `DllMain` runs `hook_init` (`dllmain.c`), which
 points the `LoadLibrary` imports of every module in the game folder at the fork's
 `fake_LoadLibrary*` (`winapi_hooks.c`), the loader's `dplayx.dll` included, before the loader's
-own `DllMain` runs ([§2.6d](../gpu-status.md#26d-keeping-tadr-out-tagpu_takeoverc-on-tagpu_takeoveroff)):
+own `DllMain` runs ([§2.6d](../modules/tadr-exclusion.md#26d-keeping-tadr-out-tagpu_takeoverc-on-tagpu_takeoveroff)):
 the exe imports `DDRAW` first and `DPLAYX` eighth, and on Wine and on Windows (the suite,
 2026-09-26, Total Mayhem and ProTA) Impure's limits were installed before TADR's limit crack
 ran. When a module asks for a DLL in the game folder whose export table carries

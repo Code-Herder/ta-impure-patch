@@ -60,7 +60,6 @@ SUBTITLE = "How the Total Annihilation community adds engine features to a close
 PAGES = [
     ("project-map",                "Project map",                 "Overview"),
     ("roadmap",                    "GPU renderer roadmap",        "Overview"),
-    ("gpu-status",                 "GPU status, hooks & limits",  "Overview"),
     ("field-notes",                "Field notes & gotchas",       "Overview"),
 
     ("frame-composition",          "Frame composition (G3)",      "Renderer"),
@@ -74,7 +73,7 @@ PAGES = [
     ("effects",                    "Effects (fire, explosions, debris)", "Renderer"),
     ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
     ("atlas-packing",              "The GAF sprite atlas",        "Renderer"),
-    ("fog-grid-sizing",            "Sizing the wide fog grid",    "Renderer"),
+    ("fog-grid-sizing",            "Sizing the wide fog grid (retired)", "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
@@ -87,6 +86,40 @@ PAGES = [
     ("frame-packet-exchange",      "Frame packet exchange (design)", "Renderer"),
     ("gpu-posing",                 "GPU posing for 3DOs (G16)",   "Renderer"),
     ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
+
+    ("modules/hook-map",                  "Hook map & fields we write", "Modules"),
+    ("modules/camera-zoom",               "Camera & zoom", "Modules"),
+    ("modules/markers",                   "World-space markers", "Modules"),
+    ("modules/engine-ui",                 "The engine's UI", "Modules"),
+    ("modules/colour",                    "Palette, Gamma & full colour", "Modules"),
+    ("modules/units",                     "Unit renderer", "Modules"),
+    ("modules/build-ghost",               "Build ghost", "Modules"),
+    ("modules/shadows",                   "Classic hard shadow", "Modules"),
+    ("modules/effects",                   "Effects' models", "Modules"),
+    ("modules/map-edge",                  "Mirrored map edge", "Modules"),
+    ("modules/restorer",                  "Restorer", "Modules"),
+    ("modules/vulkan-backend",            "Vulkan backend", "Modules"),
+    ("modules/golden-source",             "Golden source", "Modules"),
+    ("modules/readouts",                  "FPS readout & HUD scale", "Modules"),
+    ("modules/settings",                  "Defaults, settings & options screen", "Modules"),
+    ("modules/reclaim",                   "Deferred reclamation", "Modules"),
+    ("modules/recorder",                  "Recorder, playback & replay HUD", "Modules"),
+    ("modules/engine-patches",            "Raised limits & engine defects", "Modules"),
+    ("modules/tadr-exclusion",            "Keeping TADR out", "Modules"),
+    ("modules/data-keys",                 "Weapon keys & veterancy", "Modules"),
+    ("modules/cob-compat",                "Guarded COB compatibility", "Modules"),
+    ("modules/wiki",                      "In-game wiki", "Modules"),
+    ("modules/placement",                 "Several buildings in one gesture", "Modules"),
+    ("modules/reclaim-sweep",             "Reclaim sweep", "Modules"),
+    ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
+    ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
+    ("modules/log-g16-pose-race",         "Log: pose race (frozen)", "Modules"),
+    ("modules/log-frame-packet",          "Log: frame packet (frozen)", "Modules"),
+    ("modules/log-g19-vulkan-port",       "Log: G19 Vulkan port (frozen)", "Modules"),
+    ("modules/log-vulkan-only-1",         "Log: Vulkan-only 1 (frozen)", "Modules"),
+    ("modules/log-vulkan-only-2",         "Log: Vulkan-only 2 (frozen)", "Modules"),
+    ("modules/log-vulkan-only-3",         "Log: Vulkan-only 3 (frozen)", "Modules"),
+    ("gpu-status",                 "GPU status (retired index)", "Modules"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("capture-workflows",          "Capture workflows & limits", "Tooling"),
@@ -106,7 +139,21 @@ PAGES = [
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
-    ("exe-reverse-engineering",   "Reverse-engineering the exe","Mechanism"),
+    ("exe-reverse-engineering",   "Reverse-engineering the exe","Engine map"),
+    ("engine/address-index",           "Address index", "Engine map"),
+    ("engine/memory",                  "Memory & teardown", "Engine map"),
+    ("engine/process",                 "Process, threads & files", "Engine map"),
+    ("engine/sim",                     "Sim step & clock", "Engine map"),
+    ("engine/units",                   "Units", "Engine map"),
+    ("engine/weapons",                 "Weapons & effects", "Engine map"),
+    ("engine/map",                     "Map, fog & sight", "Engine map"),
+    ("engine/orders",                  "Orders & AI", "Engine map"),
+    ("engine/render",                  "Drawing the frame", "Engine map"),
+    ("engine/ui",                      "The GUI", "Engine map"),
+    ("engine/input",                   "Input & camera", "Engine map"),
+    ("engine/network",                 "Network", "Engine map"),
+    ("engine/cob",                     "COB engine", "Engine map"),
+    ("engine/recorder",                "Recorder boundaries", "Engine map"),
     ("runtime-injection",         "Injection & hooking",       "Mechanism"),
     ("api-wrappers",              "The DirectDraw boundary",   "Mechanism"),
     ("memory-manager-investigation","Memory Manager Investigation","Mechanism"),
@@ -166,15 +213,17 @@ PAGES = [
 # "<folder>/<name>" and renders to site/<folder>/<name>.html, so a relative link between
 # notes is the same path in the repo and on the site. A note added to the folder is listed
 # in its section without being registered in PAGES; register it to choose its label and order.
-FOLDERS = {"tadr-port": "TADR port", "compat": "Compatibility"}
+FOLDERS = {"engine": "Engine map", "modules": "Modules", "tadr-port": "TADR port", "compat": "Compatibility"}
 
-SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "TADR port", "Projects",
+SECTION_ORDER = ["Overview", "Renderer", "Modules", "Tooling", "Mechanism", "Engine map", "TADR port", "Projects",
                  "Compatibility", "Reference", "Survey"]
 SECTION_BLURB = {
     "Overview": "Where the project stands, and the gotchas that cost time",
     "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
+    "Modules": "Each module of the DLL as it is now, one note each, edited in place — and the frozen landing logs",
     "Tooling": "Driving the game from a CLI — instances, input, UI, scenarios",
     "Mechanism": "How the patching actually works",
+    "Engine map": "What we have mapped of TotalA.exe, one page per engine subsystem, and the index of its functions",
     "TADR port": "Bringing TADR's engine features into our stack — the rules, then one plan per feature group",
     "Projects": "The mods and patches, one page each",
     "Compatibility": "Impure beside the mods, TADR and the Patch Loader players already have — the routes, what each setup does, and the suite every release runs",
@@ -759,6 +808,53 @@ FPX_BOOT = """(function () {
 })();"""
 
 
+
+# Pages built from the notes rather than read from a file: slug -> function returning markdown.
+def address_index_md() -> str:
+    """Every engine address the engine map gives an entry: a section whose heading names it, or a
+    table row whose first cell is it. Mentions in prose are grep's, not the index's."""
+    pages = [("exe-reverse-engineering", NOTES / "exe-reverse-engineering.md")] + \
+            [(f"engine/{f.stem}", f) for f in sorted((NOTES / "engine").glob("*.md"))]
+    addr = re.compile(r"\b0x0*(4[0-9A-Fa-f]{5})\b")
+    entries = {}
+    for slug, f in pages:
+        text = f.read_text()
+        body, _ = build_page(text)
+        ids = iter(re.findall(r'<h[1-6] id="([^"]+)"', body))
+        fence, here, name = False, "", ""
+        for line in text.split("\n"):
+            if line.startswith("```"):
+                fence = not fence
+            if fence:
+                continue
+            h = re.match(r"^#{1,6} (.*)", line)
+            if h:
+                here, name = next(ids, ""), re.sub(r"[`*]", "", h.group(1)).replace("|", "/")
+                kind, cell = "", h.group(1)
+            elif line.startswith("|") and here:
+                kind, cell = "row in ", line.split("|")[1]
+            else:
+                continue
+            # a link's target is not a name: `[x](p.html#0x4866d0-...)` keys nothing
+            for a in dict.fromkeys(addr.findall(re.sub(r"\]\([^)]*\)", "]", cell))):
+                entries.setdefault("0x" + a.upper(), []).append(
+                    f"{kind}[{name[:120]}](../{slug}.html#{here})")
+    out = ["# Engine map — address index", "",
+           "Every engine address the engine map gives an entry — a section whose heading names it, or "
+           "a table row whose first cell is it — and where each entry is. **A new fact about a "
+           "function extends its entry**; an address listed here twice is two entries that should "
+           "become one. Built from the notes at every wiki build, so it cannot drift; every other "
+           "mention is found with `grep -rn 0x… research/notes/engine/`.", "",
+           f"{len(entries)} addresses, "
+           f"{sum(1 for v in entries.values() if len(v) > 1)} of them with more than one entry.", "",
+           "| Address | Entries |", "|---|---|"]
+    for a in sorted(entries, key=lambda x: int(x, 16)):
+        out.append(f"| `{a}` | {'<br>'.join(entries[a])} |")
+    return "\n".join(out) + "\n"
+
+
+GENERATED = {"engine/address-index": address_index_md}
+
 def base_of(slug):
     """The relative path from a page back to the site root: '' at the top, '../' per folder."""
     return "../" * slug.count("/")
@@ -885,7 +981,7 @@ def main(bake="auto"):
     static_ver = copy_static()
 
     def has_source(slug):
-        return (NOTES / f"{slug}.md").exists() or (NOTES / f"{slug}.html").exists()
+        return slug in GENERATED or (NOTES / f"{slug}.md").exists() or (NOTES / f"{slug}.html").exists()
 
     present = [(s, l, sec) for s, l, sec in PAGES if has_source(s)]
     known = {s for s, _, _ in PAGES}
@@ -921,13 +1017,13 @@ def main(bake="auto"):
 
     for slug, label, sec in present:
         base = base_of(slug)
-        if not (NOTES / f"{slug}.md").exists():
+        if slug not in GENERATED and not (NOTES / f"{slug}.md").exists():
             title, plain, blurb = emit_html_page(slug, label, sec, NOTES / f"{slug}.html", nav_for(slug, base))
             search_index.append({"u": f"{slug}.html", "t": title, "h": "", "b": plain[:2600]})
             meta[slug] = {"title": title, "label": label, "section": sec,
                           "words": len(plain.split()), "blurb": blurb}
             continue
-        md_text = (NOTES / f"{slug}.md").read_text()
+        md_text = GENERATED[slug]() if slug in GENERATED else (NOTES / f"{slug}.md").read_text()
         body, toc = build_page(md_text)
         flat = flatten_toc(toc)
         title = flat[0][2] if flat and flat[0][0] == 2 else label

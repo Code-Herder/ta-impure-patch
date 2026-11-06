@@ -17,7 +17,7 @@ struct RecMpHistory {
 };
 
 RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const RecMpRoster* roster,
-                                            unsigned width, unsigned height)
+                                            unsigned width, unsigned height, unsigned format)
 {
     RecMpHistory* h;
     if (!tagpu_recmp_file_roster_valid(header,roster)) return NULL;
@@ -39,8 +39,8 @@ RecMpHistory* tagpu_recmp_history_begin(const RecMpRecordHeader* header, const R
     h->applied_explored=tagpu_recmp_explored_begin(roster,width,height);
     h->source_text=tagpu_recmp_text_begin(roster);
     h->applied_text=tagpu_recmp_text_begin(roster);
-    h->source_pov=tagpu_recmp_pov_begin(roster);
-    h->applied_pov=tagpu_recmp_pov_begin(roster);
+    h->source_pov=tagpu_recmp_pov_begin(roster,rec_pov_zoom_min(format));
+    h->applied_pov=tagpu_recmp_pov_begin(roster,rec_pov_zoom_min(format));
     h->source_orders=tagpu_recmp_orders_begin(roster->slots);
     h->applied_orders=tagpu_recmp_orders_begin(roster->slots);
     if (!h->source_player || !h->applied_player || !h->source_seats || !h->applied_seats ||

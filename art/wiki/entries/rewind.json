@@ -1,0 +1,526 @@
+{
+  "format": 2,
+  "id": "rewind",
+  "frame": "game",
+  "live": true,
+  "title": "Rewind a skirmish",
+  "subtitle": "The rewind button holds a skirmish still and shows its past; Play from here plays on from there.",
+  "lockedIn": [],
+  "text": [
+    "A skirmish records itself as it plays. The rewind button in the top bar holds the game still and opens a strip under the bar: back 10 s, forward 10 s, or a time on its track.",
+    "Play from here plays the game on from the past, as a fork: a timeline of its own, which can be rewound and forked again. A fork starts only where the recording keeps a whole world, every 10 s, and the game keeps at most three forks.",
+    "In the game the other players go on as computer players after a fork. Here every timeline stops at 1:30, a fork of your own in Try it yourself too."
+  ],
+  "units": {
+    "ARMCOM": {
+      "cast": "commander",
+      "footprint": [2, 2],
+      "buildTime": 95897,
+      "workerTime": 300,
+      "buildDistance": 60,
+      "maxVelocity": 1.2,
+      "canstop": 1,
+      "canreclamate": 1,
+      "activatewhenbuilt": 1,
+      "energyMake": 25,
+      "energyUse": 0,
+      "buildCostMetal": 29854,
+      "buildCostEnergy": 34125,
+      "metalMake": 1,
+      "metalStorage": 0,
+      "energyStorage": 0,
+      "builds": ["ARMMEX", "ARMSOLAR"],
+      "name": "Commander",
+      "sightDistance": 290,
+      "radarDistance": 400,
+      "sonarDistance": 400,
+      "modelHeight": 39,
+      "from": "ARMCOM.fbi; build list: the casts of its menu the entry has"
+    },
+    "ARMCK": {
+      "cast": "builder",
+      "footprint": [2, 2],
+      "buildTime": 5597,
+      "workerTime": 80,
+      "buildDistance": 40,
+      "maxVelocity": 0.8,
+      "canstop": 1,
+      "canreclamate": 1,
+      "energyMake": 8,
+      "energyUse": 0.1,
+      "buildCostMetal": 120,
+      "buildCostEnergy": 2410,
+      "metalMake": 0.25,
+      "metalStorage": 50,
+      "energyStorage": 50,
+      "builds": ["ARMMEX", "ARMSOLAR"],
+      "name": "Construction KBot",
+      "corpse": "armck_dead",
+      "sightDistance": 235,
+      "modelHeight": 27,
+      "from": "ARMCK.fbi; build list: the casts of its menu the entry has"
+    },
+    "ARMMEX": {
+      "cast": "mex",
+      "footprint": [3, 3],
+      "buildTime": 1800,
+      "activatewhenbuilt": 1,
+      "extracts": 0.001,
+      "energyUse": 3,
+      "buildCostMetal": 50,
+      "buildCostEnergy": 521,
+      "metalMake": 0,
+      "metalStorage": 0,
+      "energyStorage": 0,
+      "name": "Metal Extractor",
+      "corpse": "armmex_dead",
+      "sightDistance": 210,
+      "modelHeight": 28,
+      "from": "ARMMEX.fbi"
+    },
+    "ARMSOLAR": {
+      "cast": "solar",
+      "footprint": [5, 5],
+      "buildTime": 2495,
+      "activatewhenbuilt": 1,
+      "energyUse": -20,
+      "buildCostMetal": 145,
+      "buildCostEnergy": 760,
+      "metalMake": 0,
+      "metalStorage": 0,
+      "energyStorage": 0,
+      "name": "Solar Collector",
+      "corpse": "armsolar_dead",
+      "sightDistance": 210,
+      "modelHeight": 38,
+      "from": "ARMSOLAR.fbi"
+    },
+    "CORCOM": {
+      "cast": "commander",
+      "rival": true,
+      "footprint": [2, 2],
+      "buildTime": 97852,
+      "workerTime": 300,
+      "buildDistance": 60,
+      "maxVelocity": 1.07,
+      "canstop": 1,
+      "canreclamate": 1,
+      "activatewhenbuilt": 1,
+      "energyMake": 25,
+      "energyUse": 1,
+      "buildCostMetal": 23512,
+      "buildCostEnergy": 35838,
+      "metalMake": 1,
+      "metalStorage": 0,
+      "energyStorage": 0,
+      "name": "Commander",
+      "sightDistance": 290,
+      "radarDistance": 400,
+      "sonarDistance": 400,
+      "modelHeight": 38,
+      "from": "CORCOM.fbi"
+    },
+    "CORAK": {
+      "cast": "walker",
+      "rival": true,
+      "footprint": [2, 2],
+      "buildTime": 1523,
+      "maxVelocity": 1.72,
+      "canstop": 1,
+      "energyMake": 0.3,
+      "energyUse": 0.3,
+      "buildCostMetal": 56,
+      "buildCostEnergy": 696,
+      "metalMake": 0,
+      "metalStorage": 0,
+      "energyStorage": 0,
+      "name": "A.K.",
+      "corpse": "corak_dead",
+      "sightDistance": 275,
+      "modelHeight": 26,
+      "from": "CORAK.fbi"
+    }
+  },
+  "features": {
+    "armck_dead": {
+      "footprint": [2, 2],
+      "metal": 96,
+      "height": 40,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armck_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armck_dead]"
+    },
+    "armmex_dead": {
+      "footprint": [3, 3],
+      "metal": 40,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armmex_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armmex_dead]"
+    },
+    "armsolar_dead": {
+      "footprint": [5, 5],
+      "metal": 116,
+      "height": 40,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "armsolar_dead",
+      "from": "features\\corpses\\arm_corpses.tdf [armsolar_dead]"
+    },
+    "corak_dead": {
+      "footprint": [2, 2],
+      "metal": 45,
+      "height": 20,
+      "blocking": true,
+      "reclaimable": true,
+      "object": "corak_dead",
+      "from": "features\\corpses\\core_corpses.tdf [corak_dead]"
+    }
+  },
+  "scenes": {
+    "field": {
+      "map": {"w": 64, "h": 30, "surfaceMetal": 0},
+      "seats": [
+        {"name": "Ada", "metal": 1000, "energy": 1000},
+        {"name": "Bram", "metal": 1000, "energy": 1000}
+      ],
+      "metal": [
+        {"rect": [6, 22, 3, 3], "v": 187}
+      ],
+      "units": [
+        {"id": "c0", "type": "ARMCOM", "at": [200, 300]},
+        {"id": "b0", "type": "ARMCK", "at": [140, 330]},
+        {"id": "c1", "type": "CORCOM", "owner": 1, "at": [520, 120]},
+        {
+          "id": "w1",
+          "type": "CORAK",
+          "owner": 1,
+          "at": [470, 150],
+          "orders": [
+            {"move": [560, 300]},
+            {"move": [430, 330]}
+          ]
+        }
+      ],
+      "selected": ["c0"],
+      "cursor": [300, 240]
+    }
+  },
+  "demos": [
+    {
+      "id": "button",
+      "title": "The rewind button: the strip, the past held still, Back to now",
+      "end": 600,
+      "game": {
+        "end": 2700,
+        "sidebar": true,
+        "inputs": [
+          {"at": 20, "seat": 0, "move": [140, 330]},
+          {"at": 20, "down": "select"},
+          {"at": 20, "up": "select"},
+          {"at": 20, "build": "ARMSOLAR"},
+          {"at": 112, "down": "shift"},
+          {"at": 113, "seat": 0, "move": [200, 376]},
+          {"at": 114, "down": "lmb"},
+          {"at": 116, "up": "lmb"},
+          {"at": 118, "up": "shift"},
+          {"at": 120, "seat": 0, "move": [200, 300]},
+          {"at": 122, "down": "select"},
+          {"at": 124, "up": "select"},
+          {"at": 126, "seat": 0, "move": [200, 376]},
+          {"at": 128, "down": "order"},
+          {"at": 130, "up": "order"},
+          {"at": 144, "seat": 0, "move": [140, 330]},
+          {"at": 144, "down": "select"},
+          {"at": 144, "up": "select"},
+          {"at": 144, "build": "ARMMEX"},
+          {"at": 236, "down": "shift"},
+          {"at": 237, "seat": 0, "move": [120, 376]},
+          {"at": 238, "down": "lmb"},
+          {"at": 240, "up": "lmb"},
+          {"at": 242, "up": "shift"}
+        ]
+      },
+      "inputs": [
+        {"at": 0, "caption": "A skirmish records itself as it plays. The rewind button sits in the top bar, beside the sprocket."},
+        {"at": 300, "hud": "rewind"},
+        {"at": 340, "caption": "It opens the strip under the bar and holds the game still: the track runs from the start to now."},
+        {"at": 450, "hud": "live_now"},
+        {"at": 480, "caption": "Back to now closes it, and the game goes on from where it stopped."}
+      ]
+    },
+    {
+      "id": "steps",
+      "title": "Back in steps, and a seek in the past",
+      "end": 1200,
+      "game": {
+        "end": 2700,
+        "sidebar": true,
+        "inputs": [
+          {"at": 20, "seat": 0, "move": [140, 330]},
+          {"at": 20, "down": "select"},
+          {"at": 20, "up": "select"},
+          {"at": 20, "build": "ARMSOLAR"},
+          {"at": 112, "down": "shift"},
+          {"at": 113, "seat": 0, "move": [200, 376]},
+          {"at": 114, "down": "lmb"},
+          {"at": 116, "up": "lmb"},
+          {"at": 118, "up": "shift"},
+          {"at": 120, "seat": 0, "move": [200, 300]},
+          {"at": 122, "down": "select"},
+          {"at": 124, "up": "select"},
+          {"at": 126, "seat": 0, "move": [200, 376]},
+          {"at": 128, "down": "order"},
+          {"at": 130, "up": "order"},
+          {"at": 144, "seat": 0, "move": [140, 330]},
+          {"at": 144, "down": "select"},
+          {"at": 144, "up": "select"},
+          {"at": 144, "build": "ARMMEX"},
+          {"at": 236, "down": "shift"},
+          {"at": 237, "seat": 0, "move": [120, 376]},
+          {"at": 238, "down": "lmb"},
+          {"at": 240, "up": "lmb"},
+          {"at": 242, "up": "shift"},
+          {"at": 400, "seat": 0, "move": [200, 300]},
+          {"at": 402, "down": "select"},
+          {"at": 404, "up": "select"},
+          {"at": 406, "seat": 0, "move": [400, 250]},
+          {"at": 408, "down": "order"},
+          {"at": 410, "up": "order"}
+        ]
+      },
+      "inputs": [
+        {"at": 0, "caption": "Opened, the strip goes back 10 s a press, or straight to a time on its track."},
+        {"at": 620, "hud": "rewind"},
+        {"at": 680, "hud": "rew"},
+        {"at": 707, "until": "seeked", "max": 120},
+        {"at": 720, "caption": "Back 10 s: the world as it was then, held still."},
+        {"at": 780, "hud": "rew"},
+        {"at": 807, "until": "seeked", "max": 120},
+        {"at": 830, "hud": "fwd"},
+        {"at": 857, "until": "seeked", "max": 120},
+        {"at": 880, "caption": "Forward goes 10 s the other way; within 10 s of now it returns to now."},
+        {"at": 940, "hud": "track", "to": 500, "drag": 200, "over": 40},
+        {"at": 1001, "until": "seeked", "max": 120},
+        {"at": 1020, "caption": "A press on the track, then a drag: the past follows the playhead."},
+        {"at": 1080, "hud": "live_now"},
+        {"at": 1110, "caption": "Back to now returns to the moment the rewind opened, with nothing selected, as in the game."}
+      ]
+    },
+    {
+      "id": "play",
+      "title": "Play from here: the snap back, the second click, the fork",
+      "end": 1700,
+      "game": {
+        "end": 2700,
+        "sidebar": true,
+        "inputs": [
+          {"at": 20, "seat": 0, "move": [140, 330]},
+          {"at": 20, "down": "select"},
+          {"at": 20, "up": "select"},
+          {"at": 20, "build": "ARMSOLAR"},
+          {"at": 112, "down": "shift"},
+          {"at": 113, "seat": 0, "move": [200, 376]},
+          {"at": 114, "down": "lmb"},
+          {"at": 116, "up": "lmb"},
+          {"at": 118, "up": "shift"},
+          {"at": 120, "seat": 0, "move": [200, 300]},
+          {"at": 122, "down": "select"},
+          {"at": 124, "up": "select"},
+          {"at": 126, "seat": 0, "move": [200, 376]},
+          {"at": 128, "down": "order"},
+          {"at": 130, "up": "order"},
+          {"at": 144, "seat": 0, "move": [140, 330]},
+          {"at": 144, "down": "select"},
+          {"at": 144, "up": "select"},
+          {"at": 144, "build": "ARMMEX"},
+          {"at": 236, "down": "shift"},
+          {"at": 237, "seat": 0, "move": [120, 376]},
+          {"at": 238, "down": "lmb"},
+          {"at": 240, "up": "lmb"},
+          {"at": 242, "up": "shift"},
+          {"at": 700, "seat": 0, "move": [200, 300]},
+          {"at": 702, "down": "select"},
+          {"at": 704, "up": "select"},
+          {"at": 706, "seat": 0, "move": [200, 100]},
+          {"at": 708, "down": "order"},
+          {"at": 710, "up": "order"}
+        ]
+      },
+      "forks": [
+        {
+          "id": 1,
+          "from": 601,
+          "parent": 0,
+          "inputs": [
+            {"at": 650, "seat": 0, "move": [140, 330]},
+            {"at": 650, "down": "select"},
+            {"at": 650, "up": "select"},
+            {"at": 650, "build": "ARMSOLAR"},
+            {"at": 742, "seat": 0, "move": [136, 240]},
+            {"at": 744, "down": "lmb"},
+            {"at": 746, "up": "lmb"}
+          ]
+        }
+      ],
+      "inputs": [
+        {"at": 0, "caption": "Play from here plays the game on from the past, as a timeline of its own."},
+        {"at": 1000, "hud": "rewind"},
+        {"at": 1060, "hud": "track", "to": 700},
+        {"at": 1087, "until": "seeked", "max": 120},
+        {"at": 1100, "caption": "The game can start again only where the recording keeps a whole world, every 10 s."},
+        {"at": 1160, "hud": "live_play"},
+        {"at": 1187, "until": "seeked", "max": 120},
+        {"at": 1220, "caption": "The first click snaps back to that point and says so; the second plays."},
+        {"at": 1300, "hud": "live_play"},
+        {"at": 1340, "caption": "The fork plays on with what you do now; what the recording held after it is gone from this timeline."}
+      ]
+    },
+    {
+      "id": "death",
+      "title": "Undo a death: a fork before the commander dies, and it lives",
+      "end": 1700,
+      "game": {
+        "end": 2700,
+        "sidebar": false,
+        "inputs": [
+          {"at": 10, "seat": 0, "move": [200, 300]},
+          {"at": 10, "down": "select"},
+          {"at": 10, "up": "select"},
+          {"at": 10, "build": "ARMSOLAR"},
+          {"at": 10, "seat": 0, "move": [280, 360]},
+          {"at": 10, "down": "lmb"},
+          {"at": 10, "up": "lmb"},
+          {"at": 80, "seat": 0, "move": [140, 330]},
+          {"at": 80, "down": "select"},
+          {"at": 80, "up": "select"},
+          {"at": 80, "build": "ARMMEX"},
+          {"at": 80, "seat": 0, "move": [120, 376]},
+          {"at": 80, "down": "lmb"},
+          {"at": 80, "up": "lmb"},
+          {"at": 610, "seat": 0, "move": [200, 300]},
+          {"at": 612, "down": "select"},
+          {"at": 614, "up": "select"},
+          {"at": 616, "seat": 0, "move": [123, 368]},
+          {"at": 618, "down": "order"},
+          {"at": 620, "up": "order"},
+          {"at": 700, "seat": 0, "move": [330, 270]},
+          {"at": 702, "down": "order"},
+          {"at": 704, "up": "order"},
+          {"at": 860, "kill": "b0"},
+          {"at": 900, "kill": "c0"}
+        ]
+      },
+      "forks": [
+        {
+          "id": 1,
+          "from": 601,
+          "parent": 0,
+          "inputs": [
+            {"at": 641, "seat": 0, "move": [200, 300]},
+            {"at": 643, "down": "select"},
+            {"at": 645, "up": "select"},
+            {"at": 650, "seat": 0, "move": [150, 250]},
+            {"at": 652, "down": "order"},
+            {"at": 654, "up": "order"}
+          ]
+        }
+      ],
+      "inputs": [
+        {"at": 0, "caption": "Rewind undoes what went wrong: here Ada loses her {builder}, then her {commander}."},
+        {"at": 980, "hud": "rewind"},
+        {"at": 1040, "hud": "rew"},
+        {"at": 1067, "until": "seeked", "max": 120},
+        {"at": 1090, "caption": "Back before the deaths, both stand again."},
+        {"at": 1150, "hud": "live_play"},
+        {"at": 1177, "until": "seeked", "max": 120},
+        {"at": 1220, "hud": "live_play"},
+        {"at": 1260, "caption": "In the fork the deaths are not fated: the recorded kills are gone, and the {commander} lives on."}
+      ]
+    },
+    {
+      "id": "chain",
+      "title": "Forks of forks: a rewind inside a fork",
+      "end": 1600,
+      "game": {
+        "end": 2700,
+        "sidebar": true,
+        "inputs": [
+          {"at": 20, "seat": 0, "move": [140, 330]},
+          {"at": 20, "down": "select"},
+          {"at": 20, "up": "select"},
+          {"at": 20, "build": "ARMSOLAR"},
+          {"at": 112, "down": "shift"},
+          {"at": 113, "seat": 0, "move": [200, 376]},
+          {"at": 114, "down": "lmb"},
+          {"at": 116, "up": "lmb"},
+          {"at": 118, "up": "shift"},
+          {"at": 120, "seat": 0, "move": [200, 300]},
+          {"at": 122, "down": "select"},
+          {"at": 124, "up": "select"},
+          {"at": 126, "seat": 0, "move": [200, 376]},
+          {"at": 128, "down": "order"},
+          {"at": 130, "up": "order"},
+          {"at": 144, "seat": 0, "move": [140, 330]},
+          {"at": 144, "down": "select"},
+          {"at": 144, "up": "select"},
+          {"at": 144, "build": "ARMMEX"},
+          {"at": 236, "down": "shift"},
+          {"at": 237, "seat": 0, "move": [120, 376]},
+          {"at": 238, "down": "lmb"},
+          {"at": 240, "up": "lmb"},
+          {"at": 242, "up": "shift"}
+        ]
+      },
+      "forks": [
+        {
+          "id": 1,
+          "from": 301,
+          "parent": 0,
+          "inputs": [
+            {"at": 360, "seat": 0, "move": [140, 330]},
+            {"at": 360, "down": "select"},
+            {"at": 360, "up": "select"},
+            {"at": 360, "build": "ARMSOLAR"},
+            {"at": 452, "seat": 0, "move": [136, 240]},
+            {"at": 454, "down": "lmb"},
+            {"at": 456, "up": "lmb"}
+          ]
+        },
+        {
+          "id": 2,
+          "from": 601,
+          "parent": 1,
+          "inputs": [
+            {"at": 641, "seat": 0, "move": [140, 330]},
+            {"at": 643, "down": "select"},
+            {"at": 645, "up": "select"},
+            {"at": 650, "seat": 0, "move": [400, 330]},
+            {"at": 652, "down": "order"},
+            {"at": 654, "up": "order"}
+          ]
+        }
+      ],
+      "inputs": [
+        {"at": 0, "caption": "A fork is a timeline like any other: rewind inside it, and fork again."},
+        {"at": 400, "hud": "rewind"},
+        {"at": 460, "hud": "track", "to": 380},
+        {"at": 487, "until": "seeked", "max": 120},
+        {"at": 500, "hud": "live_play"},
+        {"at": 527, "until": "seeked", "max": 120},
+        {"at": 560, "hud": "live_play"},
+        {"at": 600, "caption": "The first fork plays on from 0:10."},
+        {"at": 1000, "hud": "rewind"},
+        {"at": 1060, "hud": "track", "to": 700},
+        {"at": 1087, "until": "seeked", "max": 120},
+        {"at": 1100, "caption": "Inside the fork the strip runs along its chain: the recording, then the fork."},
+        {"at": 1160, "hud": "live_play"},
+        {"at": 1187, "until": "seeked", "max": 120},
+        {"at": 1240, "hud": "live_play"},
+        {"at": 1280, "caption": "A fork of a fork: its parent is the first fork, and its world keeps what the first fork did."}
+      ]
+    }
+  ]
+}

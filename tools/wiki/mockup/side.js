@@ -29,6 +29,18 @@ const WikiSide = (() => {
   // a dot's pixel in the picture (0x466DC0): the unit's world point, flat on the stage, scaled by the picture over the
   // extent, each step truncated as the engine's integer arithmetic does
   const dotAt = (x, z, m, W, H) => [Math.trunc(Math.trunc(x) * m.w / W), Math.trunc(Math.trunc(z) * m.h / H)];
+  /* THE CAMERA BOX, 0x466B70 (DISASSEMBLED 2026-11-01, 0x466B70..0x466C12): [left, top, right, bottom], inclusive
+     column pixels, for the picture `m` (geometry) over the extent W x H and the eye { x, z, w, h } (the eye and the
+     viewport in world units, frame.js view's `eye`; null: eye 0 and the viewport the whole extent):
+     left = pw eyeX / W + offx, top = ph eyeZ / H + offy, right = pw w / W + left - 1, bottom = ph h / H + top - 1, every
+     division truncating as the engine's idiv. The engine's view is in cells (main+0x1423B, +0x1423F) times 16; the
+     stage's viewport is its world units [INFERRED: equal for a viewport of whole cells, which a screen's width is].
+     With no eye it is the picture's border. */
+  function cameraBox(m, W, H, eye) {
+    const ex = eye ? eye.x : 0, ez = eye ? eye.z : 0, vw = eye ? eye.w : W, vh = eye ? eye.h : H;
+    const left = Math.trunc(m.w * ex / W) + m.offx, top = Math.trunc(m.h * ez / H) + m.offy;
+    return [left, top, Math.trunc(m.w * vw / W) + left - 1, Math.trunc(m.h * vh / H) + top - 1];
+  }
 
   // the palette entry nearest (squared RGB distance, the first index on a tie) to a colour
   function nearest(pal, r, g, b) {
@@ -76,25 +88,29 @@ const WikiSide = (() => {
     if (base && base.length === m.w * m.h && M) {
       minimap = true;
       const mw = M.w | 0, mh = M.h | 0, cols = Math.trunc(mw / 2), rows = Math.trunc(mh / 2), fog = M.fog || [];
-      const un = art.minimap.unexplored, seen = art.seen;
-      // 0x466C20: each picture pixel takes the fog of its 32-unit cell, read at the cell's first 16-unit cell
+      const un = art.minimap.unexplored, seen = art.seen, mini = view.mini || null;
+      // a 32-unit cell's fog: the map's at the cell's first 16-unit cell, or under a players frame's Sight the pass's
+      // (frame.js view's `mini`), seen where its block is unlit
+      const fogAt = (c, r) => mini ? (c < mini.gw && r < mini.gh && mini.lit[r * mini.gw + c] ? 0 : 1) : fog[2 * r * mw + 2 * c] | 0;
+      // 0x466C20: each picture pixel takes the fog of its 32-unit cell
       for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
-        const c = Math.trunc(x * cols / m.w), r = Math.trunc(y * rows / m.h), f = fog[2 * r * mw + 2 * c] | 0, b = base[y * m.w + x];
+        const f = fogAt(Math.trunc(x * cols / m.w), Math.trunc(y * rows / m.h)), b = base[y * m.w + x];
         const o = (m.offy + y) * COL + m.offx + x;
         idx[o] = f === 2 ? un : f === 1 ? seen[b] : b; a[o] = 1;
       }
       const pic = [m.offx, m.offy, m.offx + m.w, m.offy + m.h], D = art.dots;
       const dot = (u, f) => { const [px, py] = dotAt(u.x, u.z, m, mapW, mapH); blit(f, m.offx + px - f[4], m.offy + py - f[5], D.key, pic); };
       // radlogo's frame is the owner's colour (PlayerInfo+0x96), as the 3D look's team faces take it; an owner past
-      // the frames has no dot
-      for (const u of view.units || []) { const f = D.radlogo[u.owner | 0]; if (f) dot(u, f); }
+      // the frames has no dot. Every unit has one, or under Sight the pass's dots
+      for (const u of mini ? mini.dots : view.units || []) { const f = D.radlogo[u.owner | 0]; if (f) dot(u, f); }
       // the unit under the pointer gets radlogohigh as well (0x466DC0, +0xA8 == main+0x2CBA)
       const hi = sv.under != null && D.high && (view.units || []).find(u => u.id === sv.under);
       if (hi) dot(hi, D.high);
-      // 0x466B70: the camera box. The stage shows the whole map, so the box is the picture's border
-      const bx = art.minimap.box;
-      for (let x = m.offx; x < m.offx + m.w; x++) { idx[m.offy * COL + x] = bx; idx[(m.offy + m.h - 1) * COL + x] = bx; a[m.offy * COL + x] = a[(m.offy + m.h - 1) * COL + x] = 1; }
-      for (let y = m.offy; y < m.offy + m.h; y++) { idx[y * COL + m.offx] = bx; idx[y * COL + m.offx + m.w - 1] = bx; a[y * COL + m.offx] = a[y * COL + m.offx + m.w - 1] = 1; }
+      // 0x466B70: the camera box (cameraBox), inside the picture
+      const bx = art.minimap.box, [l, t, r, bt] = cameraBox(m, mapW, mapH, view.eye || null);
+      const put = (x, y) => { if (x >= pic[0] && x < pic[2] && y >= pic[1] && y < pic[3]) { idx[y * COL + x] = bx; a[y * COL + x] = 1; } };
+      for (let x = l; x <= r; x++) { put(x, t); put(x, bt); }
+      for (let y = t; y <= bt; y++) { put(l, y); put(r, y); }
     }
 
     const scr = layout.screens[sv.screen], sa = art.screens[sv.screen];
@@ -148,8 +164,10 @@ const WikiSide = (() => {
      screen's gadgets, a palette or remap of the wrong size refuses that element, which is reported in `problems`
      and falls back as the spec says (a picture to a labelled button; a missing PANELSIDE or panel to nothing; a
      pack without its sheet or palette has no art at all). The layout is returned as found: the caller checks it
-     with WikiSim.checkLayout and falls back to the fixture. */
-  function read(json, sheet, pal, seen, greyed) {
+     with WikiSim.checkLayout and falls back to the fixture.
+     `fonts` ({pack file: bytes}) carries the resource bars' fonts; without it the bars are not read and every side's
+     is null, which is also what a pack without `art.bar` gives: bar.js draws no bar for a null side. */
+  function read(json, sheet, pal, seen, greyed, fonts) {
     const problems = [], art = { screens: {} };
     if (!json || json.format !== 1) return { layout: null, art: null, minimap: {}, problems: ['side.json: format is not 1'] };
     const A = json.art || {}, sh = A.sheet || {};
@@ -205,22 +223,90 @@ const WikiSide = (() => {
       });
       art.screens[name] = out;
     }
+    readBar(A, sides, okFrame, key, fonts, art, problems);
     return { layout: json.layout || null, art, minimap, problems };
   }
 
+  /* THE RESOURCE BARS' ART (gfx.py bar_art): art.bar, one a layout side, null or { top, bot: {f, key}, rects, ecol,
+     mcol, font: bytes }; art.logos, the badge frames ({f, key}) or null; art.gui, the GUI colour table or null. The
+     bounds are gfx.py's, so a pack it wrote passes: every frame inside the sheet; the fifteen rects present, each
+     x1 <= x2 and y1 <= y2 with every coordinate in BAR_COORD (bar.js clips what lands outside its picture); the
+     colours palette indices; at most BAR_LOGOS badge frames; and the font a .fnt image every glyph of which lies
+     inside its bytes (fntProblem). What fails is dropped to null with a problem line. */
+  const BAR_RECTS = ['logo', 'energybar', 'energynum', 'energymax', 'energy0', 'metalbar', 'metalnum', 'metalmax',
+    'metal0', 'totalunits', 'totaltime', 'energyproduced', 'energyconsumed', 'metalproduced', 'metalconsumed'];
+  const BAR_COORD = [-1024, 4096], FNT_MAX = 32, BAR_LOGOS = 32;
+  /* why `b` is not a font bar.js may draw with, or null: the engine's .fnt -- rows at byte 0, the signed row offset
+     at 2, the first code at 3, a u16 offset per code from 4; a glyph is its width, then rows x width bits. The first
+     code must be 0 (a 256-entry table), as tagpu_packet_pub.c holds the engine's own copy to. */
+  function fntProblem(b) {
+    if (!b || b.length < 4 + 2 * 256) return `${b ? b.length : 0} bytes, short of the 256-code table`;
+    const rows = b[0];
+    if (rows < 1 || rows > FNT_MAX) return `${rows} rows`;
+    if (b[3] !== 0) return `first code ${b[3]}, not 0`;
+    for (let c = 0; c < 256; c++) {
+      const o = b[4 + 2 * c] | b[5 + 2 * c] << 8;
+      if (!o) continue;
+      if (o >= b.length) return `glyph ${c} at ${o}, past the file`;
+      const w = b[o];
+      if (w < 1 || w > FNT_MAX) return `glyph ${c} is ${w} wide`;
+      if (o + 1 + Math.ceil(w * rows / 8) > b.length) return `glyph ${c}'s bits run past the file`;
+    }
+    return null;
+  }
+  function readBar(A, sides, okFrame, key, fonts, art, problems) {
+    const pal = v => Number.isInteger(v) && v >= 0 && v < 256;
+    const framed = p => p && okFrame(p.f) ? { f: p.f, key: key(p.key) } : null;
+    if (A.gui == null) art.gui = null;
+    else if (Array.isArray(A.gui) && A.gui.length === 256 && A.gui.every(pal)) art.gui = Uint8Array.from(A.gui);
+    else { art.gui = null; problems.push('gui: not 256 palette indices; no bar is drawn'); }
+    art.logos = null;
+    if (Array.isArray(A.logos)) {
+      const L = A.logos.map(framed);
+      if (L.length < 1 || L.length > BAR_LOGOS) problems.push(`logos: ${L.length} frames, not 1..${BAR_LOGOS}; no badge`);
+      else if (L.some(f => !f)) problems.push('logos: a frame outside the sheet; no badge');
+      else art.logos = L;
+    } else if (A.logos != null) problems.push('logos: not a list; no badge');
+    const B = Array.isArray(A.bar) && fonts ? A.bar : [];
+    art.bar = sides.map((sd, k) => {
+      const b = B[k];
+      if (b == null) return null;
+      const no = why => { problems.push(`bar of ${sd && sd.name}: ${why}; the whitebox bars`); return null; };
+      const top = framed(b.top), bot = framed(b.bot);
+      if (!top || !bot) return no('PANELTOP or PANELBOT is not inside the sheet');
+      const R = b.rects || {}, rects = {};
+      for (const n of BAR_RECTS) {
+        const r = R[n];
+        if (!(Array.isArray(r) && r.length === 4 && r.every(v => Number.isInteger(v) && v >= BAR_COORD[0] && v <= BAR_COORD[1]) &&
+              r[0] <= r[2] && r[1] <= r[3])) return no(`rect ${n} is not x1 <= x2, y1 <= y2 inside ${BAR_COORD.join('..')}`);
+        rects[n] = r;
+      }
+      if (!pal(b.ecol) || !pal(b.mcol)) return no('ecol or mcol is not a palette index');
+      if (typeof b.font !== 'string' || b.font.includes('..')) return no('no font file');
+      const why = fntProblem(fonts[b.font]);
+      if (why) return no(`${b.font}: ${why}`);
+      return { top, bot, rects, ecol: b.ecol, mcol: b.mcol, font: fonts[b.font] };
+    });
+    if (Array.isArray(A.bar) && fonts && A.bar.length !== sides.length) problems.push(`bar: ${A.bar.length} for ${sides.length} sides`);
+  }
+
   /* A pack from `base` (gfx/side/<mod>/), for a page: { layout, casting, art, minimap, problems, report }, or throws
-     when there is no side.json. A missing sheet or palette leaves the layout without art. The casting is returned as
+     when there is no side.json. The bars' fonts are fetched beside the rest. A missing sheet or palette leaves the
+     layout without art. The casting is returned as
      found, index-aligned with layout.sides: the caller checks it with WikiSim.checkCasting, beside the layout. */
   async function load(base) {
     const r = await fetch(base + 'side.json');
     if (!r.ok) throw new Error(`${base}side.json: ${r.status}`);
     const j = await r.json(), A = j.art || {};
     const bin = f => f ? fetch(base + f).then(q => q.ok ? q.arrayBuffer().then(b => new Uint8Array(b)) : null, () => null) : Promise.resolve(null);
-    const [sheet, pal, seen, greyed] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
-      bin(A.minimap && A.minimap.seen), bin(A.greyed)]);
-    return { ...read(j, sheet, pal, seen, greyed), casting: j.casting, report: j.report || [], mod: j.mod };
+    const fontFiles = [...new Set((Array.isArray(A.bar) ? A.bar : [])
+      .map(b => b && b.font).filter(f => typeof f === 'string' && !f.includes('..')))];
+    const [sheet, pal, seen, greyed, ...fontBytes] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
+      bin(A.minimap && A.minimap.seen), bin(A.greyed), ...fontFiles.map(bin)]);
+    const fonts = Object.fromEntries(fontFiles.map((f, i) => [f, fontBytes[i]]));
+    return { ...read(j, sheet, pal, seen, greyed, fonts), casting: j.casting, report: j.report || [], mod: j.mod };
   }
 
-  return { compose, rgba, read, load, geometry, dotAt, COL };
+  return { compose, rgba, read, load, geometry, dotAt, cameraBox, fntProblem, COL };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSide;

@@ -1,8 +1,11 @@
 /* stagecheck.mjs -- the in-game wiki stage's check: tagpu/ddraw/src/tagpu_wikistage.c's ops against the mockup's
    tools/wiki/mockup/stage.js, call for op.
 
-   usage: node tools/wiki/stagecheck.mjs
+   usage: node tools/wiki/stagecheck.mjs [--shard K/N]
      exit 0 when every frame pairs, 1 when one differs, 2 when the C side cannot be built or run
+     --shard K/N (K from 1) draws only every Nth of the passes (a sidebar at a size, with the kit's cursors or the
+       game's), from the Kth, and plays and measures only the sidebars those passes draw: the N shards together check
+       what one run does. Each shard builds its C side in a temporary folder of its own.
 
    For every demo of every entry, at tick 0, every 30th tick and its last, stage.js draws sim.js's view into a recording
    context, and a native build of tagpu_wikistage.c (tagpu/ddraw/tests/wikistagetest.c, over tagpu_wikisim.c's view
@@ -23,8 +26,8 @@
    size normalised; an undashed strokeRect a ring, the band half the width either side of its edges; a stroked subpath
    one line a straight piece, dashed by the canvas dash rule from its first point, a corner inside a dash carrying the
    piece into it half the width (a right angle's miter), and a closed subpath on at its end joining round its first
-   corner; an arc filled a circle as deep as its radius and stroked a ring; fillText a line of text; drawImage an
-   icon. Each op is read back into the same shapes in the canvas's device pixels, and the two lists are paired one for
+   corner; a filled subpath of three points a triangle; an arc filled a circle as deep as its radius and stroked a
+   ring; fillText a line of text; drawImage an icon. Each op is read back into the same shapes in the canvas's device pixels, and the two lists are paired one for
    one: kinds, colours (rgba in 1/255ths) and strings equal, every coordinate within 1/64 of a pixel. Every op must
    also clip to the canvas.
 
@@ -43,6 +46,34 @@
    be its call's, tagpu_wikistage_keep must put each op where stage.js draws it under each image, and the image's
    rect must be tagpu_wikistage_image's.
 
+   THE FRAME (research/notes/ingame-wiki-replay-plan.md, decisions 6 and 20-24). Every frame of a frame:game entry is
+   drawn a second time as the whole game frame: the view filtered to the watcher's (frame.js view, tagpu_wikiframe_view,
+   the column the idle MAIN2 of the layout's side 0, the replay's overlays at the frame's tick with every switch on --
+   each seat's cursor, its clicks of the last 15 ticks and its selection, the human seat's alone in the past) and drawn
+   in stage.js's frame mode -- its black, the column from the top bar's top, the two bars (the bars' picture as one
+   drawImage of a part of the bar canvas, HOP_BAR, on the odd frames k = tick / 30, the whitebox strips on the even),
+   Impure's emblems (the kit's parts while k % 4 < 2, whitebox buttons otherwise), every range from the ground through
+   the overlays clipped to the viewport (the replay's last: each selection's brackets in its seat's colour, each
+   click's ring of 16 lines, each cursor's arrow as five filled triangles, HOP_TRI, and seven edges), and the TOP range
+   on its own canvas: Leave's question on a third of the frames, its answer held as (k / 3) % 3, and the viewer's cursor on
+   the even frames at a canvas point both sides take from k (wikistagetest.c says which). The recording keeps each
+   call's clip -- save, a rect, clip, restore -- and each op's clip must be the call's, the canvas's where there is none.
+   A live entry's frame is the player's: by k, frame.js view's mode -- the watcher's, the player's, the past's -- with
+   the armed ghost kept on the even frames, the emblem at layout.json's button.right[0], and the cursor the
+   simulation's, its shape the k % 4th of the four and its age 7 k ticks. A takeover entry's frame cycles the same
+   three modes as the human seat (k / 3) % the seats -- the view that seat's (sim.view(h)), its selection the
+   player's in the player's mode -- and is the player's but in the watcher's. The image's scissor
+   (tagpu_wikistage_image's `clip`) must be the clip the image was drawn under: a frame's viewport, the canvas
+   otherwise.
+
+   THE PLAYERS FRAMES (players-spec.md section 7). A players entry's demos play once more on every sidebar but the
+   scripted one, through replay.js and the C replay layer, the viewer's script played: at demo tick 0, every 30th and
+   the last, while no seek is pending, the game's view filtered to the watcher's with what the replay adds -- the
+   camera on the entry's screen (the frame its screen's, the world at the eye, clipped to the viewport, the ground's
+   cells, grid and fog culled to it, the minimap's camera box), Sight (the map's fog and the units drawn the viewed
+   seat's, the minimap's pass), the overlays at the replay's click ring's start -- drawn as a frame whose
+   presentation and sidebar phase follow the game's tick.
+
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
    more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
    (cobhost.mjs), the C side from the same files (tests/wikicobfile.h) -- so the scripted poses and the nano spray's
@@ -51,18 +82,28 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { createRequire } from 'node:module';
 import { cobHost, scripts } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
 const WikiStage = require('./mockup/stage.js');
+const WikiFrame = require('./mockup/frame.js');
+const WikiReplay = require('./mockup/replay.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const TOL = 1 / 64;
+const SHARD_ARG = process.argv.includes('--shard') ? process.argv[process.argv.indexOf('--shard') + 1] : '1/1';
+const [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(SHARD_ARG) || []).slice(1).map(Number);
+if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
+  console.error(`stagecheck: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
+  process.exit(2);
+}
 const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
   'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c',
+  'src/tagpu_hudlay.c'];
 // the stages: device pixels a unit, the canvas's corner and size in device pixels
 const SIZES = [
   { name: '1920x1080', u: 1.5, x0: 759, y0: 146, w: 1045, h: 532 },
@@ -83,11 +124,29 @@ function run(cmd, args, opts = {}) {
     throw new CannotRun(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ` (${r.status})`}\n${r.stderr || ''}`);
   return r.stdout;
 }
+/* the C side's frames, one JSON line each, read from the file its stdout went to: a pass's lines run to more than a
+   string holds, so they are read and paired one at a time */
+function* runLines(cmd, args, file) {
+  const fd = fs.openSync(file, 'w');
+  try { run(cmd, args, { stdio: ['ignore', fd, 'pipe'] }); } finally { fs.closeSync(fd); }
+  const rd = fs.openSync(file, 'r'), buf = Buffer.alloc(1 << 24), dec = new StringDecoder('utf8');
+  let rest = '', n;
+  try {
+    while ((n = fs.readSync(rd, buf, 0, buf.length, null)) > 0) {
+      const parts = (rest + dec.write(buf.subarray(0, n))).split('\n');
+      rest = parts.pop();
+      for (const l of parts) if (l.trim()) yield JSON.parse(l);
+    }
+    rest += dec.end();
+    if (rest.trim()) yield JSON.parse(rest);
+  } finally { fs.closeSync(rd); fs.rmSync(file, { force: true }); }
+}
 
 /* ---- the colours as the canvas parses them, as 0xRRGGBBAA ---- */
 function colour(s) {
   let m;
   if ((m = /^#([0-9a-f]{6})$/i.exec(s))) return (parseInt(m[1], 16) * 256 + 255) >>> 0;
+  if ((m = /^#([0-9a-f]{3})$/i.exec(s))) return colour(`#${[...m[1]].map(c => c + c).join('')}`);
   if ((m = /^rgba?\(([^)]*)\)$/.exec(s))) {
     const v = m[1].split(',').map(Number), a = v.length > 3 ? Math.round(v[3] * 255) : 255;
     return (((Math.round(v[0]) << 24) | (Math.round(v[1]) << 16) | (Math.round(v[2]) << 8) | a) >>> 0);
@@ -96,13 +155,14 @@ function colour(s) {
 }
 
 /* ---- the recording context ---- */
-function recorder(em, asked) {
-  const out = [], tags = [];
-  let path = [], dash = [], tag = null, grp = 0, ga = 1, ngrp = 0;
-  // every shape recorded carries the range the call that made it was drawn in, and its group and that group's opacity
+function recorder(em, asked, W, H) {
+  const out = [], tags = [], saved = [];
+  let path = [], dash = [], tag = null, grp = 0, ga = 1, ngrp = 0, clip = null;
+  // every shape recorded carries the range the call that made it was drawn in, its group and that group's opacity, and
+  // the clip it was drawn under ([x, y, w, h] in canvas pixels; null: the canvas)
   const push = out.push.bind(out);
   // (in place: a dash's stroke is carried round a corner after it is recorded)
-  out.push = sh => { tags.push(tag); sh.grp = grp; sh.ga = ga; return push(sh); };
+  out.push = sh => { tags.push(tag); sh.grp = grp; sh.ga = ga; sh.clip = clip; return push(sh); };
   const g = {
     fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
     imageSmoothingQuality: 'low', imageSmoothingEnabled: true,
@@ -111,6 +171,19 @@ function recorder(em, asked) {
     setTransform(a, b, c, d, e, f) { if (a !== 1 || b || c || d !== 1 || e || f) throw new Error('a transform the check does not read'); },
     setLineDash(d) { dash = d.length % 2 ? [...d, ...d] : [...d]; },
     beginPath() { path = []; },
+    save() { saved.push(clip); },
+    restore() { clip = saved.length ? saved.pop() : null; },
+    clearRect() {},
+    rect(x, y, w, h) { path.push({ rect: [x, y, w, h] }); },
+    clip() {
+      // the clip a path of one rect makes, inside the clip in force and the canvas
+      const rs = path.filter(q => q.rect);
+      if (rs.length !== 1 || rs.length !== path.length) throw new Error('a clip the check does not read');
+      const [x, y, w, h] = rs[0].rect, k = clip || [0, 0, W, H];
+      const x0 = Math.max(x, k[0], 0), y0 = Math.max(y, k[1], 0);
+      const x1 = Math.min(x + w, k[0] + k[2], W), y1 = Math.min(y + h, k[1] + k[3], H);
+      clip = [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)];
+    },
     moveTo(x, y) { path.push({ pts: [[x, y]], closed: false }); },
     lineTo(x, y) { if (!path.length || path.at(-1).arc) path.push({ pts: [], closed: false }); path.at(-1).pts.push([x, y]); },
     closePath() { if (path.length) path.at(-1).closed = true; },
@@ -121,8 +194,12 @@ function recorder(em, asked) {
     },
     fill() {
       for (const p of path) {
-        if (!p.arc) throw new Error('a filled polygon, which the check does not read');
-        if (p.r > 0) out.push({ k: 'circle', cx: p.cx, cy: p.cy, r: p.r, d: p.r, c: colour(g.fillStyle) });
+        if (!p.arc) {
+          // a filled three-point subpath is one triangle (HOP_TRI); a fill closes it whether or not it was closed
+          if (p.pts.length !== 3) throw new Error('a filled polygon of other than three points, which the check does not read');
+          const [[x0, y0], [x1, y1], [x2, y2]] = p.pts;
+          out.push({ k: 'tri', x0, y0, x1, y1, x2, y2, c: colour(g.fillStyle) });
+        } else if (p.r > 0) out.push({ k: 'circle', cx: p.cx, cy: p.cy, r: p.r, d: p.r, c: colour(g.fillStyle) });
       }
     },
     stroke() {
@@ -161,7 +238,7 @@ function recorder(em, asked) {
       // a cell of the cursors' sheet, or the sidebar's composed column, drawn whole, unsmoothed
       const [sx, sy, sw, sh, x, y, w, h] = a;
       if (g.imageSmoothingEnabled) throw new Error('a sprite drawn smoothed');
-      out.push({ k: img.name === 'side' ? 'side' : 'sprite', sx, sy, sw, sh, x, y, w, h });
+      out.push({ k: img.name === 'side' || img.name === 'bar' ? img.name : 'sprite', sx, sy, sw, sh, x, y, w, h });
     },
   };
   const layer = (range, type) => { tag = { range, type }; };
@@ -201,20 +278,25 @@ function recorder(em, asked) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7 }, RING = 4, SPRITE = 128;
-function shapes(fr, sz, face, part, icons, cell) {
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8, TRI: 9 }, RING = 4, SPRITE = 128;
+function shapes(fr, sz, face, part, icons, cell, kit) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
   // each shape's group and the group's opacity, as the recording gives them
   const push = out.push.bind(out);
   for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade, grp] of fr.ops) {
     out.push = sh => { sh.grp = grp; sh.ga = grp ? fr.grp[grp - 1] : 1; return push(sh); };
-    const clip = [X(cx), Y(cy), cw * u, ch * u];
-    if (Math.abs(clip[0]) > TOL || Math.abs(clip[1]) > TOL || Math.abs(clip[2] - fr.w) > TOL || Math.abs(clip[3] - fr.h) > TOL)
-      out.push({ k: 'clip', clip });
-    else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
+    // the op's clip in canvas pixels, null when it is the canvas
+    const k = [X(cx), Y(cy), cw * u, ch * u];
+    const clip = Math.abs(k[0]) > TOL || Math.abs(k[1]) > TOL || Math.abs(k[2] - fr.w) > TOL || Math.abs(k[3] - fr.h) > TOL ? k : null;
+    const push1 = out.push;
+    out.push = sh => { sh.clip = clip; return push1(sh); };
+    if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.DOT && flags === RING) out.push({ k: 'circle', cx: X(x) + w * u / 2, cy: Y(y) + h * u / 2, r: w * u / 2, d: size * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
+    else if (kind === HOP.TRI && !flags)
+      // HOP_TRI: the first point, the second as a line's, the third (shade, size) a point in units
+      out.push({ k: 'tri', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, x2: X(shade), y2: Y(size), c: rgba });
     else if (kind === HOP.TEXT && !flags)
       out.push({ k: 'text', x: X(x), y: Y(y), align: centre, size: size * u, face: face[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });
     else if (kind === HOP.PART && flags === SPRITE)
@@ -223,6 +305,12 @@ function shapes(fr, sz, face, part, icons, cell) {
     else if (kind === HOP.SIDE && !flags)
       // HOP_SIDE: the composed column's top-left size x shade texels into the op's box
       out.push({ k: 'side', sx: 0, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.BAR && !flags)
+      // HOP_BAR: the bars' picture's rows 32 part.., its top-left size x 32 texels into the op's box
+      out.push({ k: 'bar', sx: 0, sy: 32 * pi, sw: size, sh: 32, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.PART && !flags && icons[part[pi]] && kit[part[pi]].kind !== 'icon')
+      // a whole part (the frame's emblems), drawn into the op's box as it is
+      out.push({ k: 'icon', name: part[pi], x: X(x), y: Y(y), w: w * u, h: h * u });
     else if (kind === HOP.PART && !flags && icons[part[pi]]) {
       // tagpu_hudlay_expand's icon: the part as large as fits the op's box, centred in it
       const ic = icons[part[pi]], bw = w * u, bh = h * u, f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
@@ -235,7 +323,9 @@ function shapes(fr, sz, face, part, icons, cell) {
 /* the first field two shapes differ in, or null */
 function differ(a, b) {
   if (!a || !b || a.k !== b.k) return 'kind';
+  if (!a.clip !== !b.clip || (a.clip && a.clip.some((v, i) => Math.abs(v - b.clip[i]) > TOL))) return 'clip';
   for (const f of Object.keys(a)) {
+    if (f === 'clip') continue;
     if (typeof a[f] === 'number' && f !== 'c' && f !== 'align' ? Math.abs(a[f] - b[f]) > TOL : a[f] !== b[f]) return f;
   }
   return null;
@@ -247,7 +337,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stagecheck-'));
 let code = 0;
 try {
   /* ---- the C side, built natively with the sanitizers ---- */
-  const exe = path.join(DDRAW, 'tests/wikistagetest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
+  const exe = path.join(tmp, 'wikistagetest-native');   // this process's own: shards build at once
   run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikistagetest.c', ...SRCS, '-lm'], { cwd: DDRAW });
   const pak = path.join(tmp, 'wiki.bin');
@@ -269,6 +359,15 @@ try {
     const png = fs.readFileSync(path.join(kitDir, 'parts', `${name}.png`)), pw = png.readUInt32BE(16), ph = png.readUInt32BE(20);
     icons[name] = { img: { name }, pw, ph, w: pw / kit[name].scale, h: ph / kit[name].scale };
   }
+  // the frame's emblems: the kit's parts, drawn whole; a frame without them draws whitebox buttons
+  for (const name of Object.values(WikiStage.EMBLEM)) {
+    const png = fs.readFileSync(path.join(kitDir, 'parts', `${name}.png`)), pw = png.readUInt32BE(16), ph = png.readUInt32BE(20);
+    icons[name] = { img: { name }, pw, ph, w: pw / kit[name].scale, h: ph / kit[name].scale };
+  }
+  const plainIcons = Object.fromEntries(Object.entries(icons).filter(([n]) => !Object.values(WikiStage.EMBLEM).includes(n)));
+  const BUTTON = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/layout.json'), 'utf8')).button;
+  const frameArgs = [...['wiki', 'config'].map(k => String(part.indexOf(WikiStage.EMBLEM[k]))),
+    ...[BUTTON.side, BUTTON.top, BUTTON.right[1], BUTTON.config, BUTTON.right[0]].map(String)];
   const SHAPES = ['arrow', 'move', 'build', 'reclaim'];                     // WIKI_CURSOR_*
   const cursorArgs = SHAPES.map(s => String(part.indexOf(WikiStage.CURSOR[s])));
   const sizeArgs = SHAPES.flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
@@ -303,28 +402,62 @@ try {
     { name: 'no sidebar', file: null, sizes: SIZES },
     ...(Object.keys(SCRIPTS).length ? [{ name: 'fixture scripted', file: 'side/fixture.json', sizes: SIZES.slice(0, 1), cob: true }] : []),
   ];
+  // this shard's passes, and the sidebars they draw: only those are played and measured
+  const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
+    sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))))
+    .filter((p, i) => i % SHARDS === SHARD - 1);
+  const DRAWN = SIDEBARS.filter(sb => PASSES.some(p => p.sb === sb));
   const cobFile = path.join(tmp, 'cob.json');
   fs.writeFileSync(cobFile, JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
     [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
-  let nspray = 0, nsprayed = 0;
-  for (const sb of SIDEBARS) {
+  let nspray = 0, nsprayed = 0, nplayers = 0, nmoved = 0, nsight = 0, noverlay = 0;
+  for (const sb of DRAWN) {
     sb.layout = sb.file && JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki', sb.file), 'utf8'));
     sb.frames = [];
     entries.forEach((entry, i) => {
       for (const demo of entry.demos) {
         const ctx = sb.cob ? { side: 0, casting: null, iface: 1, cob: (host ??= cobHost()).forPacks(PACKS) } : undefined;
-        const sim = WikiSim.play(entry, demo, sb.layout, ctx);
+        // a game entry's demo plays its game, the simulation its stage shows (replay.js plays it on demand)
+        const sim = entry.frame === 'game' ? WikiSim.game(entry, demo, sb.layout, ctx) : WikiSim.play(entry, demo, sb.layout, ctx);
         for (;;) {
           if (sim.tick % 30 === 0 || sim.done) {
             const v = sim.view();
             sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v, tick: sim.tick });
+            if (entry.frame === 'game') {
+              const k = Math.floor(sim.tick / 30), mode = entry.live || entry.takeover ? ['watch', 'player', 'past'][k % 3] : 'watch';
+              const ns = (v.game && v.game.seats ? v.game.seats.length : 0) || 1, human = entry.takeover ? Math.floor(k / 3) % ns : 0;
+              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`,
+                v: WikiFrame.view(human ? sim.view(human) : v, sb.layout, 0, mode, k % 2 === 0, human, { tick: sim.tick }), tick: sim.tick,
+                frame: true, live: !!entry.live || (!!entry.takeover && mode !== 'watch') });
+            }
             if (v.parts.length) { nspray += v.parts.length; nsprayed++; }
           }
           if (sim.done) break;
           sim.step();
         }
+        if (entry.players && !sb.cob) playersFrames(sb, ids[i], entry, demo);
       }
     });
+  }
+  /* A PLAYERS ENTRY'S DEMO through the replay layer (the header's THE PLAYERS FRAMES; wikistagetest.c players) */
+  function playersFrames(sb, id, entry, demo) {
+    const R = WikiReplay.play(entry, demo, sb.layout, { side: 0, casting: null, iface: 1, cob: null, snd: null, rival: null });
+    for (;;) {
+      const rv = R.view();
+      if ((R.tick % 30 === 0 || rv.done) && rv.game.target < 0 && R.game) {
+        const gv = R.game.view(), g = R.game.tick;
+        const v = WikiFrame.view(gv, sb.layout, 0, 'watch', false, 0,
+          { tick: g, clickFrom: rv.clickFrom, players: rv.players || null, screen: entry.screen });
+        sb.frames.push({ key: `${id}/${demo.id}/players/frame/${R.tick}`, v, tick: g, frame: true, live: false, players: true });
+        nplayers++;
+        if (v.eye.x || v.eye.z) nmoved++;
+        if (rv.players.sight >= 0) nsight++;
+        if (v.ocur.length || v.oclick.length || v.units.some(u => u.osel)) noverlay++;
+      }
+      if (rv.done) break;
+      R.step();
+    }
+    R.free();
   }
   /* THE SIDEBAR'S STAND-IN ART, wikistagetest.c side_art: the game look's image in frames whose tick / 30 is 1 past a
      multiple of 3 (with its minimap) or 2 past it (without), drawn as wiki.js draws the composed column; gadget i of
@@ -343,11 +476,30 @@ try {
   };
   // the cursor left out of every frame whose tick / 30 is odd, as Try it yourself leaves it while the pointer is off
   // the stage (wikistagetest.c draws the same frames without it)
-  const draw = (v, sz, em, asked, image, tick, cursors, L) => {
-    const r = recorder(em, asked);
+  /* a frame view's presentation (wikistagetest.c frame_of): by k = tick / 30, the bars' picture on the odd frames, the
+     emblems while k % 4 < 2, the question when k % 3 is 0 with its answer held as (k / 3) % 3, the cursor on the even
+     frames; the TOP range on the recording through a context that names its range */
+  const frameOf = (r, v, sz, tick, live) => {
+    const k = Math.floor((+tick || 0) / 30), C = WikiStage.content(v), fit = WikiStage.fit(C, sz.w, sz.h, sz.u);
+    const top = new Proxy(r.g, {
+      get(o, key) { r.layer('top'); const x = o[key]; return typeof x === 'function' ? x.bind(o) : x; },
+      set(o, key, x) { r.layer('top'); o[key] = x; return true; },
+    });
+    return {
+      bar: k % 2 ? { draw: (g, part, size, b) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+        g.drawImage({ name: 'bar' }, 0, 32 * part, size, 32, b.x, b.y, b.w, b.h); g.imageSmoothingEnabled = sm; } } : null,
+      button: BUTTON, top, question: k % 3 === 0 ? WikiFrame.dialog(fit, C.w, C.h) : null, held: ['', 'yes', 'no'][Math.floor(k / 3) % 3],
+      cursor: k % 2 ? null : { x: 0.3 * sz.w + (7 * k) % 50, y: 0.45 * sz.h + (5 * k) % 40, ...(live ? { shape: SHAPES[k % 4], age: 7 * k } : {}) },
+      live: live ? 1 : 0,
+    };
+  };
+  const draw = (v, sz, em, asked, image, tick, cursors, L, live) => {
+    const r = recorder(em, asked, sz.w, sz.h);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
-    r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, cursor: Math.floor((+tick || 0) / 30) % 2 === 0,
-      layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) } });
+    const emblems = !v || !v.frame || Math.floor((+tick || 0) / 30) % 4 < 2;
+    r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons: emblems ? icons : plainIcons, cursors, tick,
+      cursor: Math.floor((+tick || 0) / 30) % 2 === 0, layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) },
+      frame: v && v.frame ? frameOf(r, v, sz, tick, live) : undefined });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -356,9 +508,9 @@ try {
     { name: 'none resolved', ground: true, resolved: () => false },
     { name: 'ground fallen back', ground: false, resolved: () => true },
   ];
-  const RANGES = ['r0', 'ground', 'box', 'label', 'over', 'side'];        // WIKISTAGE_IN_*
+  const RANGES = ['r0', 'ground', 'box', 'label', 'over', 'side', 'top'];        // WIKISTAGE_IN_*
   const under = t => t.range === 'r0' || t.range === 'side' || t.range === 'ground';
-  const kept = (t, im) => t.range === 'r0' || t.range === 'side' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
+  const kept = (t, im) => t.range === 'r0' || t.range === 'side' || t.range === 'over' || t.range === 'top' || (t.range === 'ground' && !im.ground) ||
     (t.range === 'box' && !im.resolved(t.type));
   const pair = (js, c, what) => {
     for (let i = 0; i < Math.max(js.length, c.length); i++) {
@@ -370,7 +522,9 @@ try {
 
   /* ---- the measure: every string a dry run asks for, measured by the C side ---- */
   const asked = new Set();
-  for (const sb of SIDEBARS) for (const sz of sb.sizes) for (const f of sb.frames) draw(f.v, sz, null, asked, null, f.tick, null, sb.layout);
+  // each sidebar and size of the shard's passes once: the game's cursors draw no string the kit's do not
+  const measured = [...new Map(PASSES.map(p => [`${p.sb.name}/${p.k}`, p])).values()];
+  for (const { sb, k } of measured) for (const f of sb.frames) draw(f.v, sb.sizes[k], null, asked, null, f.tick, null, sb.layout, f.live);
   const strings = [...asked].filter(s => s !== '');
   if (strings.some(s => s.includes('\n'))) throw new CannotRun('a measured string holds a line break');
   fs.writeFileSync(path.join(tmp, 'strings.txt'), strings.join('\n') + '\n');
@@ -381,25 +535,30 @@ try {
   /* ---- each sidebar and size, with the kit's cursors and then the game's: the C side's frames, paired with
      stage.js's ---- */
   let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0, nside = 0, nsideim = 0, ngrp = 0, nall = 0;
-  const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
-    sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))));
+  let nframe = 0, nbar = 0, nclip = 0, ntop = 0;
   for (const { sb, sprites, k: si, sz } of PASSES) {
     const cur = sprites ? cursorsAt(si) : null, frames = sb.frames;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
-    const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
-      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17), ...(sb.cob ? [cobFile] : [])]).trim().split('\n').map(l => JSON.parse(l));
-    const cby = new Map(cout.map(f => [`${f.e}/${f.d}/${f.t}`, f]));
+    const byKey = new Map(frames.map(f => [f.key, f])), seen = new Set();
+    let ncout = 0;
     nall += frames.length;
-    if (cout.length !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${cout.length} frames, stage.js ${frames.length}`); }
-    for (const f of frames) {
-      const fr = cby.get(f.key);
-      if (!fr) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: no C frame`); continue; }
+    for (const fr of runLines(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
+      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17), ...frameArgs, ...(sb.cob ? [cobFile] : [])],
+      path.join(tmp, 'ops.jsonl'))) {
+      ncout++;
+      const f = byKey.get(`${fr.e}/${fr.d}/${fr.t}`);
+      if (!f || seen.has(f.key)) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${fr.e}/${fr.d}/${fr.t}: a C frame stage.js did not draw`); continue; }
+      seen.add(f.key);
       if (fr.x0 !== sz.x0 || fr.y0 !== sz.y0 || fr.w !== sz.w || fr.h !== sz.h) {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout), c = shapes(fr, sz, face, part, icons, CELL);
+      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout, f.live), c = shapes(fr, sz, face, part, icons, CELL, kit);
       nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
+      if (f.frame) {
+        nframe++; nbar += c.filter(sh => sh.k === 'bar').length; nclip += c.filter(sh => sh.clip).length;
+        ntop += r1.tags.filter(t => t && t.range === 'top').length;
+      }
       if (f.v && f.v.side) nside++;
       nsideim += c.filter(sh => sh.k === 'side').length;
       ngrp += fr.grp.length;
@@ -420,7 +579,7 @@ try {
       }
       // R0 and the sidebar, the image, R2: R1's ops kept by the rule, the image after R0, the sidebar and the ground
       for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
-        const r = draw(f.v, sz, em, null, im, f.tick, cur, sb.layout), at = r.out.findIndex(sh => sh.k === 'image');
+        const r = draw(f.v, sz, em, null, im, f.tick, cur, sb.layout, f.live), at = r.out.findIndex(sh => sh.k === 'image');
         if (at < 0 || r.out.filter(sh => sh.k === 'image').length !== 1) { bad = `${im.name}: the image is drawn ${at < 0 ? 'never' : 'twice'}`; break; }
         const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
         bad = !r.tags.slice(0, at).every(under) ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);
@@ -430,19 +589,26 @@ try {
           const i = [...codes].findIndex((ch, j) => ch !== fr.keep[k][j]);
           bad = `${im.name}: tagpu_wikistage_keep puts op ${i} ${'-uo'[+fr.keep[k][i]]}, stage.js ${'-uo'[+codes[i]]}`;
         }
-        // the image's rect: the composite's, from the same fit (tagpu_wikistage_image)
+        // the image's rect: the composite's, from the same fit (tagpu_wikistage_image), and its scissor the clip it
+        // was drawn under, the canvas's where there is none
         const ir = r.out[at], cr = [fr.img[0] - sz.x0, fr.img[1] - sz.y0, fr.img[2] - fr.img[0], fr.img[3] - fr.img[1]];
+        const jc = ir.clip || [0, 0, sz.w, sz.h], cc = [fr.imgclip[0] - sz.x0, fr.imgclip[1] - sz.y0,
+          fr.imgclip[2] - fr.imgclip[0], fr.imgclip[3] - fr.imgclip[1]];
         if (!bad && [ir.x, ir.y, ir.w, ir.h].some((v, j) => v !== cr[j]))
           bad = `${im.name}: the image at ${show([ir.x, ir.y, ir.w, ir.h])}, tagpu_wikistage_image ${show(cr)}`;
+        if (!bad && jc.some((v, j) => v !== cc[j]))
+          bad = `${im.name}: the image clipped to ${show(jc)}, tagpu_wikistage_image's scissor ${show(cc)}`;
         if (bad) break;
         nsplit++; nimage += want.length;
       }
       if (bad) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key} ${bad}`); }
     }
+    for (const f of frames) if (!seen.has(f.key)) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: no C frame`); }
+    if (ncout !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${ncout} frames, stage.js ${frames.length}`); }
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SHARDS > 1 ? `shard ${SHARD} of ${SHARDS}, ${PASSES.length} of the passes: ${PASSES.map(p => p.sz.name).join(', ')}` : `${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's`}), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${nplayers} players frames (the eye off (0, 0) in ${nmoved}, Sight in ${nsight}, an overlay in ${noverlay}); ${DRAWN.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

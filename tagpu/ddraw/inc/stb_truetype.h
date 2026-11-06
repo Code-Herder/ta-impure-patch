@@ -2500,6 +2500,12 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
    stbtt_uint16 lookupCount;
    stbtt_uint8 *data;
    stbtt_int32 i, sti;
+   /* Impure: every pair-adjustment LOOKUP adds its value, as OpenType applies
+      each lookup in turn (Chrome sums them; Barlow Condensed kerns ".c" in a
+      second lookup); within one lookup the first subtable that holds the pair
+      decides, and a subtable this reader cannot read ends only its own lookup.
+      Upstream returned the first lookup's value alone. */
+   stbtt_int32 total = 0;
 
    if (!info->gpos) return 0;
 
@@ -2544,7 +2550,7 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint16 pairValueCount = ttUSHORT(pairValueTable);
                   stbtt_uint8 *pairValueArray = pairValueTable + 2;
 
-                  if (coverageIndex >= pairSetCount) return 0;
+                  if (coverageIndex >= pairSetCount) goto next_lookup; // malformed
 
                   needle=glyph2;
                   r=pairValueCount-1;
@@ -2564,11 +2570,12 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                         l = m + 1;
                      else {
                         stbtt_int16 xAdvance = ttSHORT(pairValue + 2);
-                        return xAdvance;
+                        total += xAdvance;
+                        goto next_lookup;
                      }
                   }
                } else
-                  return 0;
+                  goto next_lookup; // unsupported value format
                break;
             }
 
@@ -2586,25 +2593,27 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint8 *class1Records, *class2Records;
                   stbtt_int16 xAdvance;
 
-                  if (glyph1class < 0 || glyph1class >= class1Count) return 0; // malformed
-                  if (glyph2class < 0 || glyph2class >= class2Count) return 0; // malformed
+                  if (glyph1class < 0 || glyph1class >= class1Count) goto next_lookup; // malformed
+                  if (glyph2class < 0 || glyph2class >= class2Count) goto next_lookup; // malformed
 
                   class1Records = table + 16;
                   class2Records = class1Records + 2 * (glyph1class * class2Count);
                   xAdvance = ttSHORT(class2Records + 2 * glyph2class);
-                  return xAdvance;
+                  total += xAdvance;
+                  goto next_lookup;
                } else
-                  return 0;
+                  goto next_lookup; // unsupported value format
                break;
             }
 
             default:
-               return 0; // Unsupported position format
+               goto next_lookup; // unsupported position format
          }
       }
+   next_lookup:;
    }
 
-   return 0;
+   return total;
 }
 
 STBTT_DEF int  stbtt_GetGlyphKernAdvance(const stbtt_fontinfo *info, int g1, int g2)

@@ -185,9 +185,14 @@ typedef struct TAGPU_REPLAY_RWSTATE {
     int      state;          /* TAGPU_REPLAY_RWS_*                                          */
     int      available;      /* idle, and OPEN would be taken: a live, recorded, non-network
                                 skirmish whose recorder is healthy                           */
+    int      armed;          /* idle, and the recorder holds a fork armed for this live,
+                                non-network skirmish's next capture point (a takeover's or a
+                                rewind's fork)                                               */
     unsigned first, last;    /* the live recording's span while one is open                 */
     unsigned G;              /* the GameTime the rewind opened at: now                       */
     unsigned T;              /* the last seek's target; 0 none yet                           */
+    int      tk_queued;      /* a takeover waits for the frame visit, whose run ends the
+                                playing's pause (tk_run)                                     */
 } TAGPU_REPLAY_RWSTATE;
 void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out);
 

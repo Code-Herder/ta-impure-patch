@@ -54,7 +54,8 @@ static int    s_shadeBuilt = 0;
 #define ATLAS_DIM  2048
 #define ATLAS_MAX  2048
 #define ATLAS_PAD  4                      /* tools/tascene UNIT_PAD          */
-#define ATLAS_MIP  2                      /* renderers.md 2.9: covers 0.25   */
+#define ATLAS_MIP  2                      /* renderers.md 2.9: covers down to
+                                             0.25x; below it the atlas aliases */
 static TAGPU_GAFENT  s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
 

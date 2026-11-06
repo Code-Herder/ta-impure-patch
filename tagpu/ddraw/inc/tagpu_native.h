@@ -6,8 +6,8 @@
    them, the owndraw stub wipes instead of restoring. */
 void tagpu_native_frame(const TAGPU_FRAME* f);
 /* Render thread, from render_vk.c, when tagpu_vk_frame presented the frame
-   gathered under `frame_counter`: the fog witnesses (`bare=`, `out=`,
-   `nopieces=`) count that frame. A frame never presented counts nothing. */
+   gathered under `frame_counter`: the reach witnesses (`out=`, `nopieces=`)
+   count that frame. A frame never presented counts nothing. */
 void tagpu_native_presented(unsigned int frame_counter);
 /* Is this unit natively owned right now? GAME THREAD ONLY: it reads the unit record and its UnitDef, and the
    publisher is what calls it per unit per frame — the answer travels to the
@@ -36,9 +36,10 @@ int  tagpu_native_selbox_complete(void);
 struct TAGPU_PK_UNIT;
 int  tagpu_native_unit_pos(const struct TAGPU_PK_UNIT* u, float* x, float* y, float* z);
 
-/* This frame's fog grid, for a pass that has to copy it -- see the
-   implementation for the bound and the lifetime */
-const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells);
+/* This frame's fog source (inc/tagpu_fogsrc.h), or NULL when the frame has
+   none -- see the implementation for the bound and the lifetime */
+#include "tagpu_fogsrc.h"
+const TAGPU_FOGSRC* tagpu_native_fogsrc(void);
 
 /* 1 while this frame's world passes are clipped to the engine's viewport
    rect. The native pass says so at its hand-over (tagpu_native.c, `s_scissorOn`)
@@ -69,12 +70,23 @@ int tagpu_native_scissor_on(void);
    from "a new one" compares the extent it is about to build, as
    tagpu_vk_world.c's `slot_size` does.
 
+   THE SCISSOR is a second rect the composite stays inside, beside the block's
+   own, for a producer whose block holds more than it shows. The game's world
+   sets none -- its block is its viewport; the wiki's stage sets a frame's
+   viewport, which a players frame's map, standing at its eye, is larger than
+   (tagpu_wikiworld.c); a zeroed target has none, so a producer that does not
+   set the field draws exactly as without it.
+
    Render thread only. */
 typedef struct {
     int      gw, gh;      /* the GAME's own resolution -- not the window's     */
     int      ss;          /* samples per game pixel: the target is gw*ss,gh*ss */
     int      devres;      /* the 1x resolve is skipped; read the ss buffer     */
     int      vx, vy, vw, vh;  /* where the block lands, HUD shift applied      */
+    int      clip;        /* 0: no scissor but the block's and the attachment's */
+    int      cx, cy, cw, ch;  /* with `clip`: the composite draws only inside
+                             [cx, cx + cw) x [cy, cy + ch), device pixels on the
+                             attachment; empty (cw or ch <= 0) draws nothing    */
     unsigned frame;
 } TAGPU_WORLDTGT;
 int tagpu_native_worldtgt(TAGPU_WORLDTGT* out);

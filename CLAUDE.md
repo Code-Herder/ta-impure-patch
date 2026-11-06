@@ -183,16 +183,32 @@ firing every frame after any zoom-out from a map edge.
 Once per landing, on the same diff the review reads: if it touched engine code, the documentation
 pass lands with it.
 
-- **The engine map — `research/notes/exe-reverse-engineering.md` — gets every address the work
+- **The engine map — `research/notes/engine/`, one page per subsystem — gets every address the work
   touched *or merely read*,** not only the ones we patched: what it is, its call sites, the
   fields it owns, and how each fact was established (disassembly, or a live measurement with
   the numbers). **Negative results count** — a function with no callers, one loop that
   bounds-tests and one that does not. Update it as fully as the work allows; these addresses
   are the expensive part of this project and get re-derived every time they are not written down.
-- **Then the module docs**: `gpu-status.md`'s hook map and its *fields we write* table,
+  **A function with an entry gets the new facts in that entry, in place** — the wiki's address
+  index lists them; a new section only for an area nobody has mapped. `tools/exemap-check.py`
+  names each new address no page has (`MISSING`) and each duplicate entry (`EXTEND`).
+- **The hook map — `research/notes/modules/hook-map.md` — gets a row for every engine site the
+  work writes** (a detour, a redirect, a byte patch: VA, what it is, module, mechanism) and for
+  every engine field it writes, in its *fields we write* table. `tools/hookmap-check.py` names
+  each written site on the diff's added lines that has no row; a site we stop writing loses its
+  row.
+- **Then the module docs**: the module's note in `research/notes/modules/` (one per module),
   `roadmap.md`'s gate row and entry, and the `ta-*` skill if how you drive or measure the game
   changed — by that skill's own *Maintaining this skill* rules: state the present, replace
   rather than annotate, and keep the landing's story in the note.
+- **A module note is edited in place, never appended to.** It states the module as it is now:
+  change the sections the work changed, and add none named after a landing. What the landing
+  measured, what its review found and how it got there go to the commit message, the
+  `landing-review:` note and the gate's plan note. A module with no note gets a new
+  `modules/<module>.md`. The frozen notes — `modules/log-*.md`, `modules/status-snapshot.md`
+  and the retired `gpu-status.md`, now an index of where its sections went — take no new
+  writes. **Why:** `gpu-status.md` was written per landing and reached 1.8 MB, two thirds of it
+  sections named after landings, which nobody read and every landing had to add to.
 - **Correct what the work proved wrong.** A stale note is worse than no note.
 - **State the gaps the landing did not close** instead of writing as though it closed them.
 - Mark inferred names `[INFERRED]`; check every claim against the source, never from memory.
@@ -241,7 +257,7 @@ cannot carry, the comment must — and here that is a lot, because no name in ou
 - **Warnings** — which thread owns this, what must run first, what deleting it would also delete.
 - **Amplification** — the line that looks removable and is not, and why.
 - **Clarification** — a Win32, Vulkan or engine argument we cannot rename.
-- **A pointer** — `see tagpu_terr.h`, `exe-reverse-engineering.md §…` — instead of a second copy
+- **A pointer** — `see tagpu_terr.h`, `engine/memory.md §…` — instead of a second copy
   of an argument that lives somewhere else and will drift from it.
 
 **Delete on sight:**

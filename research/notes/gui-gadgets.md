@@ -480,6 +480,19 @@ the value live: `FXVOL`'s (`0x45BDE0`) writes `main+0x37F0C` and reprograms the 
 `GAME` (`0x45C070`) writes `main+0x38A4B`. Confirmed live: `ui set FXVOL 48` then
 `ui set FXVOL 7` leaves `main+0x37F0C` reading 48 and then 7. [LIVE]
 
+**`SPEEDS`' `SCREEN` is the scroll speed** [DISASSEMBLED]. Its callback `0x45C170` (installed
+at `0x45EF2E` by the page's set-up `0x45ED50`) stores `max(1, pos·thick/(range−1))` into the
+byte `main+0x1434D` (`ScrollSpeed`, `0x45C20C`) and calls `0x49FA90` (`0x45C212`). Its `thick`
+is **0x41 = 65** (`0x45EEBB..0x45EEC2`) and the knob shows `min(byte, 65)` (`0x45EECE`,
+`0x45EED4`), so the slider writes 1..65 and only the typed command `ScrollSpeed` reaches
+66..255 ([input](engine/input.html), *Fields this module owns*). The byte is snapshotted
+into `0x512F71` by `0x460160` (at `0x4602B6`; called from ARMOPT's handler `0x4609B0` at
+`0x460ABD` and from four shell sites, [INFERRED] as `PREFS` opens) and at `0x45CE48`. `SPEEDS`' `UNDO` (`0x45EBA7`) puts the snapshot
+back at `0x45EC0A`; its `RESTORE` (`0x45EC65`) writes the default 0x20 at `0x45ECC2`, with the
+speed ceiling and the live speed at 10 and the interface defaults; `SPEEDS`' handler `0x45EAD0`
+saves nothing. `PREFS`' `PREV` (labelled OK, `0x45FD45`) saves every setting through `0x430F00`
+at `0x45FD5F`; its `Cancel` (`0x45FD73`) restores the byte from the snapshot at `0x45FECB`.
+
 **A slider bound to a listbox is not a value.** `0x4A3EF0` scans the panel for the
 `id 2` gadget sharing the slider's `assoc`; when it finds one the slider becomes that
 list's scrollbar and `Gadget_PropagateAssoc 0x4A2BE0` recomputes it from `top` — so

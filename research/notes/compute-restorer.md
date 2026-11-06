@@ -298,10 +298,12 @@ the centre-out order.
 
 - **The atlas** is one RGBA8 image, near square, one 34-texel cell per key; `s_maxTex` (the
   device's `maxImageDimension2D`) bounds its side.
-- **The instance record** is eight shorts: the grid cell and the tile's cell in the base atlas with
-  the mirror flags, then the key's cell. The vertex shader takes the restored colour's UV from the
-  key's cell when `uNbhd` is set, and from the tile's otherwise; a key not painted yet has alpha 0
-  and the cell draws dithered (D7).
+- **The per-cell key** reaches the terrain's vertex stage as an `R32_UINT` image on the tile map's
+  grid, uploaded once per build of the keys ([modules/restorer](modules/restorer.html) §2.103); the
+  stage fetches a cell's key where it fetches its tile and turns it into the key's cell, column
+  `key % nbCols` and row `key / nbCols`. It takes the restored colour's UV from the key's cell when
+  `uNbhd` is set, and from the tile's otherwise; a key not painted yet has alpha 0 and the cell
+  draws dithered (D7).
 
 | map | cells | keys | atlas | memory |
 |---|---|---|---|---|
@@ -318,6 +320,11 @@ D5's estimate for Two Continents was 193 MB.
 instance enables only when the loader offers it — or, where the query is not offered, a quarter of
 that heap. The log says which rule answered. On the reference setup: 192 MB against half of the
 10,203 MB the driver says is free, of 12,282 MB.
+
+**The terrain's restored mip chain asks the same rule** before it is made: 29.5 % of the atlas it
+follows, about 57 MiB for Two Continents' 192 MB. A refusal does not change the layout choice — the
+neighbourhood atlas stands and level 0 is untouched — it only leaves the base atlas's chain drawn
+below a texel a target pixel under Classic++ ([modules/restorer](modules/restorer.html) §2.103).
 
 **The per-tile fallback** is landing 1's atlas and frames, on tiny. It is taken when the fit says
 no, when the device refuses the image, when the keys need an image wider than the device allows
@@ -337,7 +344,7 @@ image's last use only if nothing names it after the retire begins: the terrain p
 for its own descriptor sets, but the restorer records its dispatches after every pass's prepare,
 and a job left alive would name the old image on the next frame. So a resize that will retire an
 image the job reads or writes frees the job first (`rjob_release_for`); a new job starts on the new
-image. A frame whose records carry no keys does not size the neighbourhood atlas at all.
+image. A frame whose hand-over carries no keys does not size the neighbourhood atlas at all.
 
 **A new job's destination waits for the image's earlier users.** The job's first barrier on its
 destination (`dst_ready`) has every stage the image has been used in as its first scope — the
@@ -350,8 +357,9 @@ the transition out of `UNDEFINED`, which discards the contents but is still a wr
 image; two jobs over one destination would each clear it and move its layout on their own
 schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tagpu_vk_terr.c`):
 
-- **Each frame**, the keys of the cells in the frame's records — the cells on screen — that are not
-  queued yet go in, and while any key on screen is not painted the job runs at prio 0 with the
+- **Each frame**, the keys of the cells the frame draws — the cells on screen, worked out on the
+  CPU from the hand-over's grid, tile map and keys by the vertex stage's rule (`nb_cell_key`) — that
+  are not queued yet go in, and while any key on screen is not painted the job runs at prio 0 with the
   whole budget.
 - **Otherwise** the rest of the map follows in centre-out order, topped up to one batch (64 keys)
   waiting behind the one in flight, at prio 6 — after every other job — with a cap of 2 ms of GPU
@@ -360,7 +368,10 @@ schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tag
   key is painted exactly when the job has painted more frames than its place in the queue, which
   each key keeps. That holds for a key the trickle queued as much as for one queued on screen, so
   a key scrolled onto the screen puts the job at prio 0 however it was queued, and waits behind at
-  most the keys queued before it: the two trickle batches and the screen's own.
+  most the keys queued before it: the two trickle batches and the screen's own. The terrain's
+  restored mip chain rests on the same fact: its ledger reduces only the keys of the places painted
+  since its last frame ([modules/restorer](modules/restorer.html) §2.103), so a second size class of
+  neighbourhood frame would break both, and the chain oracle's `rest gpu-differ` would name it.
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
   counted across the slice, and is passed over for the rest of it, which the other jobs keep —
   except that its batch in flight runs on at the full budget while another job waits behind it;

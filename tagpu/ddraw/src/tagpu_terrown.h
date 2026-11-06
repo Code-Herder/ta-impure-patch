@@ -45,6 +45,7 @@ void tagpu_terrown_latch(int own);
 /* GAME THREAD, from the packet's publisher. 1 while our fog observer ran in
    THIS in-play draw — i.e. while terrain ownership is on and the site is ours.
    0 means the engine is calling its own fog builder where we cannot see it, and
-   the wide grid's module holds a grid from whenever we last owned it. */
+   the fog source's module holds bits from whenever we last owned it, so the
+   publisher ticks it itself (tagpu_packet_pub.c `wide_tick`). */
 int tagpu_terrown_fog_site_live(void);
 #endif

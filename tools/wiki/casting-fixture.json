@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "note": "Castings for the fixture layout (art/wiki/side/fixture.json), each a pack casting list index-aligned with the layout's one side. identity casts the entries' own types with their authored figures, so a bound entry plays as the authored one. shifted keeps the type names with invented figures: a 3 x 3 builder, other build times and speeds, and a 4 x 4 geothermal plant whose G cells are its four interior cells. unbound is identity with the wall cast unbound. No figure here is read from the game beyond what the entries author.",
+  "note": "Castings for the fixture layout (art/wiki/side/fixture.json), each a pack casting list index-aligned with the layout's one side. identity casts the entries' own types with their authored figures, so a bound entry plays as the authored one. shifted keeps the type names with invented figures: a 3 x 3 builder, other build times and speeds, a 4 x 4 geothermal plant whose G cells are its four interior cells, and invented sight figures, the wall's below the players entry's floor of 32 so that a players game leaves it unbound. unbound is identity with the wall cast unbound. No figure here is read from the game beyond what the entries author: the commander, the economy's figures, the wrecks and the sight figures are those art/wiki/entries/watching.json authors, gfx.py's casting of the retail install (MEASURED 2026-10-31; ARMCOM and CORCOM have no corpse key; the sight figures the casts a players entry binds carry, so that a players game binds them as well), and shifted gives the builder an invented wreck and the builder, the extractor and the solar collector invented economy figures. rivals holds the opponent's casting beside each casting, one CORE record each, which a game entry's rival units bind to: identity the CORCOM and CORAK watching.json authors, shifted invented figures, sight figures and wrecks, unbound the walker unbound.",
   "castings": {
     "identity": [
       {
@@ -9,6 +9,7 @@
         "casts": {
           "builder": {
             "type": "ARMCK",
+            "sightDistance": 235, "radarDistance": 0, "sonarDistance": 0, "modelHeight": 27,
             "title": "Construction KBot",
             "footprint": [2,2],
             "buildTime": 5597,
@@ -17,7 +18,15 @@
             "maxVelocity": 0.8,
             "canstop": 1,
             "canreclamate": 1,
-            "builds": ["mex","geo","tower","wall","solar"]
+            "builds": ["mex","geo","tower","wall","solar"],
+            "energyMake": 8,
+            "energyUse": 0.1,
+            "buildCostMetal": 120,
+            "buildCostEnergy": 2410,
+            "metalMake": 0.25,
+            "metalStorage": 50,
+            "energyStorage": 50,
+            "corpse": {"name":"armck_dead","footprint":[2,2],"metal":96,"energy":0,"height":40,"blocking":true,"reclaimable":true,"object":"armck_dead"}
           },
           "advbuilder": {
             "type": "ARMACK",
@@ -31,7 +40,7 @@
             "canreclamate": 1,
             "builds": ["moho"]
           },
-          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"sightDistance":210,"radarDistance":0,"sonarDistance":0,"modelHeight":28,"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1,"energyUse":3,"buildCostMetal":50,"buildCostEnergy":521,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"armmex_dead","footprint":[3,3],"metal":40,"energy":0,"height":20,"blocking":true,"reclaimable":true,"object":"armmex_dead"}},
           "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":35750,"extracts":0.003,"activatewhenbuilt":1},
           "geo": {
             "type": "ARMGEO",
@@ -45,7 +54,8 @@
           "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1},
           "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":4662,"canstop":1},
           "wall": {"type":"ARMDRAG","title":"Dragon's Teeth","footprint":[2,2],"buildTime":520},
-          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":2495,"activatewhenbuilt":1}
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"sightDistance":210,"radarDistance":0,"sonarDistance":0,"modelHeight":38,"buildTime":2495,"activatewhenbuilt":1,"energyUse":-20,"buildCostMetal":145,"buildCostEnergy":760,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"armsolar_dead","footprint":[5,5],"metal":116,"energy":0,"height":40,"blocking":true,"reclaimable":true,"object":"armsolar_dead"}},
+          "commander": {"type":"ARMCOM","title":"Commander","footprint":[2,2],"sightDistance":290,"radarDistance":400,"sonarDistance":400,"modelHeight":39,"buildTime":95897,"workerTime":300,"buildDistance":60,"maxVelocity":1.2,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":25,"energyUse":0,"buildCostMetal":29854,"buildCostEnergy":34125,"metalMake":1,"metalStorage":0,"energyStorage":0,"builds":["mex","tower","solar"],"corpse":null}
         },
         "report": []
       }
@@ -57,6 +67,7 @@
         "casts": {
           "builder": {
             "type": "ARMCK",
+            "sightDistance": 250, "radarDistance": 0, "sonarDistance": 0, "modelHeight": 24,
             "title": "Construction KBot",
             "footprint": [3,3],
             "buildTime": 6400,
@@ -65,10 +76,19 @@
             "maxVelocity": 1.1,
             "canstop": 1,
             "canreclamate": 1,
-            "builds": ["mex","geo","tower","wall","solar"]
+            "builds": ["mex","geo","tower","wall","solar"],
+            "energyMake": 6,
+            "energyUse": 0.2,
+            "buildCostMetal": 130,
+            "buildCostEnergy": 2500,
+            "metalMake": 0.2,
+            "metalStorage": 40,
+            "energyStorage": 40,
+            "corpse": {"name":"armck_dead","footprint":[3,3],"metal":80,"energy":10,"height":30,"blocking":true,"reclaimable":true,"object":"armck_dead"}
           },
           "advbuilder": {
             "type": "ARMACK",
+            "sightDistance": 260, "radarDistance": 0, "sonarDistance": 0, "modelHeight": 26,
             "title": "Adv. Construction Kbot",
             "footprint": [2,2],
             "buildTime": 15000,
@@ -79,10 +99,11 @@
             "canreclamate": 1,
             "builds": ["moho"]
           },
-          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":2400,"extracts":0.001,"activatewhenbuilt":1},
-          "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":30000,"extracts":0.003,"activatewhenbuilt":1},
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"sightDistance":195,"radarDistance":0,"sonarDistance":0,"modelHeight":12,"buildTime":2400,"extracts":0.001,"activatewhenbuilt":1,"energyUse":4,"buildCostMetal":60,"buildCostEnergy":600},
+          "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"sightDistance":180,"radarDistance":0,"sonarDistance":0,"modelHeight":16,"buildTime":30000,"extracts":0.003,"activatewhenbuilt":1},
           "geo": {
             "type": "ARMGEO",
+            "sightDistance": 180, "radarDistance": 0, "sonarDistance": 0, "modelHeight": 20,
             "title": "Geothermal Powerplant",
             "footprint": [4,4],
             "buildTime": 16000,
@@ -90,10 +111,11 @@
             "vent": true,
             "g": [[1,1],[2,1],[1,2],[2,2]]
           },
-          "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1200,"maxVelocity":2.4,"canstop":1},
-          "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":5200,"canstop":1},
-          "wall": {"type":"ARMDRAG","title":"Dragon's Teeth","footprint":[2,2],"buildTime":400},
-          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":3000,"activatewhenbuilt":1}
+          "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"sightDistance":300,"radarDistance":0,"sonarDistance":0,"modelHeight":22,"buildTime":1200,"maxVelocity":2.4,"canstop":1},
+          "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"sightDistance":360,"radarDistance":0,"sonarDistance":0,"modelHeight":30,"buildTime":5200,"canstop":1},
+          "wall": {"type":"ARMDRAG","title":"Dragon's Teeth","footprint":[2,2],"sightDistance":20,"radarDistance":0,"sonarDistance":0,"modelHeight":8,"buildTime":400},
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"sightDistance":200,"radarDistance":0,"sonarDistance":0,"modelHeight":30,"buildTime":3000,"activatewhenbuilt":1,"energyUse":-25,"buildCostMetal":160,"buildCostEnergy":900},
+          "commander": {"type":"ARMCOM","title":"Commander","footprint":[2,2],"sightDistance":320,"radarDistance":600,"sonarDistance":0,"modelHeight":40,"buildTime":95897,"workerTime":300,"buildDistance":60,"maxVelocity":1.2,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":25,"energyUse":0,"buildCostMetal":29854,"buildCostEnergy":34125,"metalMake":1,"metalStorage":0,"energyStorage":0,"builds":["mex","tower","solar"],"corpse":null}
         },
         "report": []
       }
@@ -105,6 +127,7 @@
         "casts": {
           "builder": {
             "type": "ARMCK",
+            "sightDistance": 235, "radarDistance": 0, "sonarDistance": 0, "modelHeight": 27,
             "title": "Construction KBot",
             "footprint": [2,2],
             "buildTime": 5597,
@@ -113,7 +136,15 @@
             "maxVelocity": 0.8,
             "canstop": 1,
             "canreclamate": 1,
-            "builds": ["mex","geo","tower","solar"]
+            "builds": ["mex","geo","tower","solar"],
+            "energyMake": 8,
+            "energyUse": 0.1,
+            "buildCostMetal": 120,
+            "buildCostEnergy": 2410,
+            "metalMake": 0.25,
+            "metalStorage": 50,
+            "energyStorage": 50,
+            "corpse": {"name":"armck_dead","footprint":[2,2],"metal":96,"energy":0,"height":40,"blocking":true,"reclaimable":true,"object":"armck_dead"}
           },
           "advbuilder": {
             "type": "ARMACK",
@@ -127,7 +158,7 @@
             "canreclamate": 1,
             "builds": ["moho"]
           },
-          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"sightDistance":210,"radarDistance":0,"sonarDistance":0,"modelHeight":28,"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1,"energyUse":3,"buildCostMetal":50,"buildCostEnergy":521,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"armmex_dead","footprint":[3,3],"metal":40,"energy":0,"height":20,"blocking":true,"reclaimable":true,"object":"armmex_dead"}},
           "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":35750,"extracts":0.003,"activatewhenbuilt":1},
           "geo": {
             "type": "ARMGEO",
@@ -141,10 +172,40 @@
           "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1},
           "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":4662,"canstop":1},
           "wall": null,
-          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":2495,"activatewhenbuilt":1}
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"sightDistance":210,"radarDistance":0,"sonarDistance":0,"modelHeight":38,"buildTime":2495,"activatewhenbuilt":1,"energyUse":-20,"buildCostMetal":145,"buildCostEnergy":760,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"armsolar_dead","footprint":[5,5],"metal":116,"energy":0,"height":40,"blocking":true,"reclaimable":true,"object":"armsolar_dead"}},
+          "commander": {"type":"ARMCOM","title":"Commander","footprint":[2,2],"sightDistance":290,"radarDistance":400,"sonarDistance":400,"modelHeight":39,"buildTime":95897,"workerTime":300,"buildDistance":60,"maxVelocity":1.2,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":25,"energyUse":0,"buildCostMetal":29854,"buildCostEnergy":34125,"metalMake":1,"metalStorage":0,"energyStorage":0,"builds":["mex","tower","solar"],"corpse":null}
         },
         "report": [{"cast":"wall","why":"no plain structure with no weapon1 and tedclass FORT on ARMCK's menu"}]
       }
     ]
+  },
+  "rivals": {
+    "identity": {
+      "side": "CORE",
+      "commander": "CORCOM",
+      "casts": {"builder":null,"advbuilder":null,"mex":null,"moho":null,"geo":null,"tower":null,"wall":null,"solar":null,
+        "walker": {"type":"CORAK","title":"A.K.","footprint":[2,2],"sightDistance":275,"radarDistance":0,"sonarDistance":0,"modelHeight":26,"buildTime":1523,"maxVelocity":1.72,"canstop":1,"energyMake":0.3,"energyUse":0.3,"buildCostMetal":56,"buildCostEnergy":696,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"corak_dead","footprint":[2,2],"metal":45,"energy":0,"height":20,"blocking":true,"reclaimable":true,"object":"corak_dead"}},
+        "commander": {"type":"CORCOM","title":"Commander","footprint":[2,2],"sightDistance":290,"radarDistance":400,"sonarDistance":400,"modelHeight":38,"buildTime":97852,"workerTime":300,"buildDistance":60,"maxVelocity":1.07,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":25,"energyUse":1,"buildCostMetal":23512,"buildCostEnergy":35838,"metalMake":1,"metalStorage":0,"energyStorage":0,"builds":["mex","tower","solar"],"corpse":null}
+      },
+      "report": []
+    },
+    "shifted": {
+      "side": "CORE",
+      "commander": "CORCOM",
+      "casts": {"builder":null,"advbuilder":null,"mex":null,"moho":null,"geo":null,"tower":null,"wall":null,"solar":null,
+        "walker": {"type":"CORAK","title":"A.K.","footprint":[3,3],"sightDistance":290,"radarDistance":0,"sonarDistance":0,"modelHeight":23,"buildTime":1800,"maxVelocity":1.3,"canstop":1,"energyMake":0.5,"energyUse":0.5,"buildCostMetal":70,"buildCostEnergy":800,"metalMake":0,"metalStorage":0,"energyStorage":0,"corpse":{"name":"corak_dead","footprint":[3,3],"metal":60,"energy":5,"height":25,"blocking":true,"reclaimable":true,"object":"corak_dead"}},
+        "commander": {"type":"CORCOM","title":"Commander","footprint":[2,2],"sightDistance":310,"radarDistance":600,"sonarDistance":300,"modelHeight":41,"buildTime":90000,"workerTime":250,"buildDistance":50,"maxVelocity":0.9,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":20,"energyUse":2,"buildCostMetal":20000,"buildCostEnergy":30000,"metalMake":1.5,"metalStorage":100,"energyStorage":100,"builds":["mex","tower","solar"],"corpse":{"name":"corcom_dead","footprint":[3,3],"metal":500,"energy":0,"height":30,"blocking":true,"reclaimable":true,"object":"corcom_dead"}}
+      },
+      "report": []
+    },
+    "unbound": {
+      "side": "CORE",
+      "commander": "CORCOM",
+      "casts": {"builder":null,"advbuilder":null,"mex":null,"moho":null,"geo":null,"tower":null,"wall":null,"solar":null,
+        "walker": null,
+        "commander": {"type":"CORCOM","title":"Commander","footprint":[2,2],"sightDistance":290,"radarDistance":400,"sonarDistance":400,"modelHeight":38,"buildTime":97852,"workerTime":300,"buildDistance":60,"maxVelocity":1.07,"canstop":1,"canreclamate":1,"activatewhenbuilt":1,"energyMake":25,"energyUse":1,"buildCostMetal":23512,"buildCostEnergy":35838,"metalMake":1,"metalStorage":0,"energyStorage":0,"builds":["mex","tower","solar"],"corpse":null}
+      },
+      "report": []
+    }
   }
 }

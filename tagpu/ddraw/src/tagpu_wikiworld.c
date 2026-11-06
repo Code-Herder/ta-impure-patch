@@ -12,7 +12,7 @@
    THE HAND-OVER SOURCES ANSWER FROM THE PRODUCER (tagpu_wikiworld.h): the terrain, the features,
    the target; the units' hand-over is the wiki's posed program's own, which this file feeds
    through the instances' entry points. EVERY OTHER ANSWER IS "NOTHING", and each is one the instance already takes from the
-   game's own module on a frame with nothing to give: no fog grid for the posed program, no shadow
+   game's own module on a frame with nothing to give: no shadow
    map and no scaffold (a null view, which the passes replace with their own 1x1 dummy; an
    UNDEFINED shadow format, on which the passes give the dummy their own depth format and keep a
    NEAREST compare sampler they never sample); no effects models; Classic++ off and the restorer
@@ -38,7 +38,9 @@
 #include "tagpu_vk.h"
 #include "tagpu_packet.h"
 #include "tagpu_vk_world.h"
+#include "tagpu_vk_fog.h"
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk_chain.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_posebake.h"
@@ -150,10 +152,19 @@ static int                s_stageRows;      /* the rows of the map s_stage's gro
 static WSCENE             s_scene;
 static WSCENEFEAT         s_sfeat[WIKISCENE_FEATS];
 static const unsigned char* s_sframe[WIKISCENE_FEATS][2][WIKISCENE_SUBS];  /* [feat][shadow][sub]       */
+/* the ground's 3D features, drawn through the unit pass (wrecks_build): each one's cell and
+   footprint, and its arena feature, in the description's order */
+static WSCENEWRECK        s_wreck[WIKISCENE_WRECKS];
+static const WIKI3DFEAT*  s_wfeat[WIKISCENE_WRECKS];
+static int                s_nwreck;
 static unsigned char*     s_tatlas;     /* ATLAS_W x s_tatlasH palette indices                    */
 static int                s_tatlasH;
 static unsigned           s_tatlasSerial;
-static short              s_cells[WIKISCENE_TILES * TAGPU_TERR_ICOMP];
+/* THE STAGE'S TILE MAP, the terrain draw's: every 32-px cell's tile index (the scene's cells,
+   WSCENECELL), `s_tmW` x `s_tmH`, and the serial the Vulkan lane re-uploads it on */
+static unsigned short     s_tmap[WIKISCENE_TILES];
+static int                s_tmW, s_tmH;
+static unsigned           s_tmSerial;
 static TAGPU_GAFENT       s_fents[FATLAS_MAX];
 static TAGPU_GAFATLAS     s_fatlas;
 static float*             s_fv[2];      /* shadows, bodies: 6 vertices a quad, FVST floats each    */
@@ -220,19 +231,18 @@ static int verts(int b, const WSCENEQUAD* q, int n)
         const TAGPU_GAFENT* e;
         const unsigned char* g;
         float* o = s_fv[b] + (size_t)i * 6 * FVST;
-        float x0 = q[i].x0 - nu, x1 = q[i].x1 - nu, y0 = q[i].y0 - nu, y1 = q[i].y1 - nu, c;
+        float x0 = q[i].x0 - nu, x1 = q[i].x1 - nu, y0 = q[i].y0 - nu, y1 = q[i].y1 - nu;
         int k;
         const float cx[6] = { x0, x1, x0, x1, x1, x0 }, cy[6] = { y0, y0, y1, y0, y1, y1 };
         if (q[i].feat < 0 || q[i].feat >= WIKISCENE_FEATS || q[i].sub >= WIKISCENE_SUBS) return 0;
         g = s_sframe[q[i].feat][b == 0][q[i].sub];
         if (!g || !(e = tagpu_gaf_atlas_get(&s_fatlas, g))) return 0;
-        c = (float)e->ck / 255.0f;
         for (k = 0; k < 6; k++) {
             const int right = cx[k] == x1, low = cy[k] == y1;
             float* v = o + k * FVST;
             v[0] = cx[k]; v[1] = cy[k]; v[2] = q[i].enc;
             v[3] = right ? e->u1 : e->u0; v[4] = low ? e->v1 : e->v0;
-            v[5] = c; v[6] = (float)q[i].mode;
+            v[5] = 0.0f; v[6] = (float)q[i].mode;   /* `ent` 0: no chain cells here */
             v[7] = cx[k]; v[8] = cy[k]; v[9] = 1.0f;
         }
     }
@@ -243,33 +253,45 @@ static int verts(int b, const WSCENEQUAD* q, int n)
 static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
 {
     WSCENEGROUND g;
-    int i, rows, h, maxdim = tagpu_vk_max_image_dim();
+    int i, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
     unsigned char* atlas;
     memset(s_sframe, 0, sizeof s_sframe);
+    s_nwreck = 0;
     if (st->nfeat < 0 || st->nfeat > WIKISCENE_FEATS) return "more features than the stage holds";
     if (st->ntile < 1 || st->ntile > 65536) return "no tile set";
     for (i = 0; i < st->nfeat; i++) {
         const WIKI3DFEAT* f = &st->feat[i];
-        WSCENEFEAT* t = &s_sfeat[i];
+        WSCENEFEAT* t = &s_sfeat[n2d];
+        /* A 3D FEATURE (its section names a model) is no part of the ground: the unit pass draws it
+           (tagpu_wikiscene_models), as tools/wiki/gfx.py leaves it out of the pack's ground and
+           lists it in features3d */
+        if (f->model) {
+            WSCENEWRECK* w = &s_wreck[s_nwreck];
+            if (s_nwreck >= WIKISCENE_WRECKS) return "more 3D features than the stage holds";
+            w->cx = (int16_t)f->cx; w->cz = (int16_t)f->cz;
+            w->fx = (int16_t)f->fx; w->fz = (int16_t)f->fz;
+            s_wfeat[s_nwreck++] = f;
+            continue;
+        }
         memset(t, 0, sizeof *t);
         t->cx = (int16_t)f->cx; t->cz = (int16_t)f->cz;
         t->fx = (int16_t)f->fx; t->fz = (int16_t)f->fz;
         t->height = (int16_t)f->height;
         t->flags = f->flags;
-        /* the mockup's pack refuses the ground for one as well (tools/wiki/gfx.py), and the image is
-           the mockup's: no stage description names one */
-        if (f->model) return "a 3D feature, which the mockup's ground does not take either";
-        if (!frames_of(f->seq, s_sframe[i][0], t->body, &t->nbody) ||
-            !frames_of(f->seqshad, s_sframe[i][1], t->shadow, &t->nshadow))
+        if (!frames_of(f->seq, s_sframe[n2d][0], t->body, &t->nbody) ||
+            !frames_of(f->seqshad, s_sframe[n2d][1], t->shadow, &t->nshadow))
             return "a feature's frame is not one the readers take";
+        n2d++;
     }
     g.w = st->w; g.h = map_rows;
     g.ntile = st->ntile;
     g.tilemap = st->tilemap;
-    g.nfeat = st->nfeat;
+    g.nfeat = n2d;
     g.feat = s_sfeat;
     if (!tagpu_wikiscene_ground(&g, &s_scene)) return "the ground is past a bound of the scene";
-    if (s_scene.ncell * TAGPU_TERR_ICOMP > (int)(sizeof s_cells / sizeof s_cells[0])) return "too many cells";
+    /* the scene's cells are every cell of the map's tile grid, row by row (tagpu_wikiscene_ground) */
+    if (s_scene.ncell != (st->w / 2) * (map_rows / 2) || s_scene.ncell > WIKISCENE_TILES)
+        return "the ground's cells are not its tile grid";
 
     /* THE TERRAIN ATLAS, tagpu_terr.c `ensure_atlas`'s layout over the description's tile set */
     rows = (st->ntile + ATLAS_COLS - 1) / ATLAS_COLS;
@@ -294,12 +316,15 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     s_tatlas = atlas;
     s_tatlasH = h;
     s_tatlasSerial++;
+    s_tmW = st->w / 2;
+    s_tmH = map_rows / 2;
     for (i = 0; i < s_scene.ncell; i++) {
-        short* o = s_cells + (size_t)i * TAGPU_TERR_ICOMP;
-        o[0] = s_scene.cell[i].col; o[1] = s_scene.cell[i].row;
-        o[2] = (short)(s_scene.cell[i].tile % ATLAS_COLS); o[3] = (short)(s_scene.cell[i].tile / ATLAS_COLS);
-        o[4] = o[5] = o[6] = o[7] = 0;
+        const WSCENECELL* c = &s_scene.cell[i];
+        if (c->col < 0 || c->col >= s_tmW || c->row < 0 || c->row >= s_tmH)
+            return "a ground cell is outside its tile grid";
+        s_tmap[(size_t)c->row * s_tmW + c->col] = c->tile;
     }
+    s_tmSerial++;
 
     /* THE FEATURE ATLAS: every frame of the ground painted now, on this thread, and the stage's
        quads' vertices built from their entries. The atlas has no allowance (`budget` 0): it holds
@@ -344,13 +369,32 @@ static int             s_terrHave, s_featHave, s_tgtHave;
 static TAGPU_TERRHAND  s_terr;
 static TAGPU_FEATHAND  s_feat;
 static TAGPU_WORLDTGT  s_tgt;
-static WSCENEFOG       s_fog;
-/* the log's numbers */
-static unsigned        s_saidAt, s_nFrames, s_nImage;
-static double          s_msProd, s_msSeam, s_msMax;
+/* THE STAGE'S FOG SOURCE (tagpu_wikiworld_fogsrc): `s_fog` the bits the seam's fog image holds,
+   kept while the next frame's (`s_fogNew`) are the same so the serial moves only when they change,
+   and `s_fogHave` this frame's answer */
+static WSCENEFOG       s_fog, s_fogNew;
+static TAGPU_FOGSRC    s_fogSrc;
+static unsigned        s_fogSerial;
+static int             s_fogHave;
 static uint32_t        s_shotWant, s_shotDone;
 static char            s_shotWhat[96];
-static unsigned        s_nRec, s_nRefused, s_nUnitFrames;
+
+/* THE LOG'S NUMBERS, each over a window of the stage's drawn frames: the periodic line's, 300 frames
+   of the frame counter, and the count's (THE COUNT, below). The producer leaves its frame's part in
+   s_fr*, which tagpu_wikiworld_drawn adds to both windows when that frame is drawn. */
+typedef struct {
+    unsigned frames, image, rec, unitFrames, refused;
+    double   prod, seam, max;
+} WINSTAT;
+static WINSTAT         s_per, s_cnt;
+static unsigned        s_saidAt;
+static unsigned        s_frRec, s_frUnit, s_frRefused;
+static double          s_frProd;
+/* THE STAGE'S WORK, each count only ever growing: the grounds built (ground_build) and the type
+   records built (types_build); the bake's entries baked and dropped are its own
+   (tagpu_posebake_work). A stage that is up does none of it frame to frame. */
+enum { WORK_GROUND, WORK_TYPES, WORK_BAKED, WORK_DROPPED, WORK_N };
+static unsigned        s_nGround, s_nTypes;
 
 /* ---- the units -------------------------------------------------------------------------------- */
 
@@ -444,11 +488,33 @@ static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, cons
     in3d[sizeof in3d - 1] = boxes[sizeof boxes - 1] = 0;
     tagpu_logf("wiki3d: %s: the types in 3D:%s; the boxes:%s", id, in3d[0] ? in3d : " none",
                boxes[0] ? boxes : " none");
+    s_nTypes++;
     s_tA = a;
     s_tEntry = entry;
     s_tLever = s_leverSerial;
     s_tNtype = v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS;
     memcpy(s_tNames, v->type, sizeof s_tNames);
+}
+
+/* THE 3D FEATURES' RUNS, for the ground just built: each model's walk, every node inside the
+   arena, as types_build makes a type's. A model the walk refuses or that leaves the arena refuses
+   the ground whole, as gfx.py falls the mockup's ground back for a model it cannot resolve. */
+static TYPERUN s_wrun[WIKISCENE_WRECKS];
+static const char* wrecks_build(const WIKI3D* a)
+{
+    int i, k;
+    for (i = 0; i < s_nwreck; i++) {
+        TYPERUN* r = &s_wrun[i];
+        r->u = NULL;
+        r->np = tagpu_model_walk(s_wfeat[i]->model, r->node, TAGPU_PBMAXPIECE);
+        for (k = 0; k < r->np; k++)
+            if (!in_arena(a, r->node[k])) break;
+        if (r->np <= 0 || k < r->np) {
+            r->np = 0;
+            return "a 3D feature's model walk is refused or leaves the arena";
+        }
+    }
+    return NULL;
 }
 
 /* the engine's option word as the last packet carried it: bit 2 Shadow, bit 3 TShadow (the
@@ -566,7 +632,8 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     TAGPU_PDUNIT q;
     float rot[12];
     int i, k, npose;
-    if (!u || r->np <= 0) return 0;
+    /* a wreck's run has no unit: no script pose, nothing hidden, never lit (its record says so) */
+    if ((!u && !m->wreck) || r->np <= 0) return 0;
     for (i = 0; i < r->np; i++) {
         memset(&s_pc[i], 0, sizeof s_pc[i]);
         s_pc[i].flags = 1;
@@ -589,7 +656,7 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     rot[0] = m->cs;  rot[2] = m->sn;
     rot[5] = 1.0f;
     rot[8] = -m->sn; rot[10] = m->cs;
-    pose = pose_of(v, m, u, r, &npose);
+    pose = u ? pose_of(v, m, u, r, &npose) : NULL;
     if (pose) pose_compose(u, bg, pose, npose, rot, s_pose, s_shaded, s_pvis);
     else for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
@@ -604,10 +671,10 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
         }
         s_shaded[i] = 1;
         s_pvis[i] = 3;
-        if (u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u)) {
+        if (u && u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u)) {
             memset(o, 0, 12 * sizeof *o);
             s_pvis[i] = 0;
-        } else if (u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u)) {
+        } else if (u && u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u)) {
             s_pvis[i] = 1;
         }
     }
@@ -640,8 +707,8 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     if ((s_gfx & 4u) && m->shadow == WSCENE_SH_SLANT) q.shKind = TAGPU_PDSH_SLANT;
     else if ((s_gfx & 4u) && (s_gfx & 8u) && m->shadow == WSCENE_SH_SIL) q.shKind = TAGPU_PDSH_SIL;
     /* the engine's lit rasteriser for a structure under Shading, and for a ghost -- a preview of
-       one -- under the same option (ghost_one) */
-    q.lit = (s_gfx & 0x20u) && (m->ghost || !u->mobile);
+       one -- under the same option (ghost_one); a wreck on the neutral row, tagpu_native.c's husk */
+    q.lit = !m->wreck && (s_gfx & 0x20u) && (m->ghost || !u->mobile);
     tagpu_posedraw_unit(&q);
     return 1;
 }
@@ -679,7 +746,8 @@ static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, i
     pv.shNeutral = tagpu_r3d_shade_neutral();
     if (nunit) {
         tagpu_posedraw_begin(&pv);
-        for (i = 0; i < nunit; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
+        for (i = 0; i < nunit; i++)
+            refused += !unit_one(&s_rec[i], s_rec[i].wreck ? &s_wrun[s_rec[i].type] : &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
     if (nrec > nunit) {
@@ -687,15 +755,84 @@ static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, i
         for (i = nunit; i < nrec; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
-    s_nRefused += refused != 0;
+    s_frRefused = refused != 0;
     return refused == 0;
 }
 
-static void fog_fields(float* org, float* cols, float* rows)
+static void win_add(WINSTAT* w, int image, double ms)
 {
-    org[0] = s_fog.orgx; org[1] = s_fog.orgz;
-    *cols = (float)s_fog.cols;
-    *rows = (float)s_fog.rows;
+    w->frames++;
+    w->image += image != 0;
+    w->rec += s_frRec;
+    w->unitFrames += s_frUnit;
+    w->refused += s_frRefused;
+    w->prod += s_frProd;
+    w->seam += ms;
+    if (ms > w->max) w->max = ms;
+}
+
+static void work_now(unsigned* k)
+{
+    k[WORK_GROUND] = s_nGround;
+    k[WORK_TYPES] = s_nTypes;
+    tagpu_posebake_work(&k[WORK_BAKED], &k[WORK_DROPPED]);
+}
+
+/* THE COUNT, tagpu_wiki3d.count: the stage's next N drawn frames counted on their own and said in
+   one line, the test harness's measure of the stage in place of the periodic line's 300.
+
+   THE WINDOW OPENS ON THE FIRST DRAWN FRAME AFTER THE ASK THAT IS NOT BUSY: no ground, type record,
+   bake or drop since the drawn frame before it, and no record the bake refused. So what the window
+   says is the stage at rest, whatever an earlier change (a lever, a shot, an entry) left in flight,
+   and a stage that works on every frame never opens one: the ask then goes unanswered, which is the
+   failure. Inside the window the work is counted, not filtered: an up stage does none of it.
+
+   The ask is read on the lever's beat, right after the lever, so a count asked once the lever's line
+   is out counts frames under that lever. Render thread only, as everything here; the milliseconds
+   are said, never the window's condition. */
+#define COUNT_ASK  "tagpu_wiki3d.count"
+#define COUNT_MAX  3000u
+static unsigned s_cntAsk, s_cntN, s_cntFrom;
+static int      s_cntState;                     /* 0 none, 1 asked: waiting for a frame at rest, 2 counting */
+static unsigned s_cntBase[WORK_N], s_workSeen[WORK_N];
+
+static void count_ask(unsigned frame)
+{
+    char buf[32];
+    unsigned n = 0;
+    if (frame != s_leverAt) return;             /* the lever's beat: lever() read it this frame */
+    if (tagpu_opt_read(COUNT_ASK, buf, sizeof buf) <= 0) return;
+    DeleteFileA(COUNT_ASK);
+    if (sscanf(buf, "%u", &n) != 1 || n < 1 || n > COUNT_MAX) {
+        tagpu_logf("wiki3d: count: `%s` is not a frame count from 1 to %u - nothing asked", buf, COUNT_MAX);
+        return;
+    }
+    s_cntAsk++;
+    s_cntN = n;
+    s_cntState = 1;
+    tagpu_logf("wiki3d: count %u asked: %u frame(s) of the stage, from the first at rest", s_cntAsk, n);
+}
+
+static void count_frame(unsigned frame, int image, double ms, int busy, const unsigned* k)
+{
+    if (s_cntState == 1 && !busy) {
+        s_cntState = 2;
+        s_cntFrom = frame;
+        memset(&s_cnt, 0, sizeof s_cnt);
+        memcpy(s_cntBase, k, sizeof s_cntBase);
+    }
+    if (s_cntState != 2) return;
+    win_add(&s_cnt, image, ms);
+    if (s_cnt.frames < s_cntN) return;
+    tagpu_logf("wiki3d: count %u: %u of %u frame(s) drew the image, frames %u..%u; the work: %u ground(s), %u type "
+               "record set(s), %u bake(s), %u drop(s), %u frame(s) with a record the bake refused; %.1f model record(s) "
+               "a frame; render thread: the producer %.3f ms and the passes %.3f ms a frame on average, the passes "
+               "at most %.3f ms", s_cntAsk, s_cnt.image, s_cnt.frames, s_cntFrom, frame,
+               k[WORK_GROUND] - s_cntBase[WORK_GROUND], k[WORK_TYPES] - s_cntBase[WORK_TYPES],
+               k[WORK_BAKED] - s_cntBase[WORK_BAKED], k[WORK_DROPPED] - s_cntBase[WORK_DROPPED], s_cnt.refused,
+               s_cnt.unitFrames ? (double)s_cnt.rec / s_cnt.unitFrames : 0.0,
+               s_cnt.prod / s_cnt.frames, s_cnt.seam / s_cnt.frames, s_cnt.max);
+    s_cntState = 0;
 }
 
 void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
@@ -705,16 +842,18 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     const WIKIART* art;
     HUDRECT stage;
     LARGE_INTEGER t0;
-    float u, org[2];
-    int ox, oy, entry, demo, x0, y0, x1, y1, ss;
+    float u;
+    int ox, oy, entry, demo, r[4], clip[4], ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
     int gw, gh, nrec, nunit, nShadow = 0, nBody = 0;
     const float *shadow = NULL, *body = NULL;
 
-    s_have = s_terrHave = s_featHave = s_tgtHave = 0;
+    s_have = s_terrHave = s_featHave = s_tgtHave = s_fogHave = 0;
+    s_frRec = s_frUnit = s_frRefused = 0;
     QueryPerformanceCounter(&t0);
     lever(f->frame_counter);
+    count_ask(f->frame_counter);
     if (s_leverOff) return;
     if (!tagpu_wikistate_scene(f->frame_counter, &v, &entry, &demo, &shot, &stage, &u, &ox, &oy)) return;
     if (!(a = tagpu_wiki3d_get()) || !(art = tagpu_wikiart_get()) || !art->data) return;
@@ -729,7 +868,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* a device with no image size yet (bring-up, a re-pick) builds nothing and latches nothing:
        the stage is built on the first frame that has one, and again when the map's rows change */
     if (st && (st != s_stage || v->h != s_stageRows) && tagpu_vk_max_image_dim() > 0) {
-        const char* why = ground_build(st, v->h);
+        const char* why;
+        s_nGround++;
+        why = ground_build(st, v->h);
+        if (!why) why = wrecks_build(a);
         s_stage = st;
         s_stageRows = v->h;
         s_groundOk = why == NULL;
@@ -748,7 +890,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         memcmp(s_tNames, v->type, sizeof s_tNames))
         types_build(a, v, entry, art->data->entry[entry].id);
     nrec = tagpu_wikiscene_models(v, s_types, v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS,
-                                  s_rec, &nunit);
+                                  s_ground ? s_wreck : NULL, s_ground ? s_nwreck : 0, s_rec, &nunit);
     if (!s_ground && !nrec) return;
 
     /* ONE ss FOR THE FRAME: the target is sized by it and every pass's hand-over carries it */
@@ -769,37 +911,48 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_wantFeat = s_ground && nShadow + nBody > 0;
     s_wantUnit = nrec > 0;
     s_unitWhole = units_frame(f, v, nrec, nunit, gw, gh, ss) && !s_noUnits;
-    s_nRec += (unsigned)nrec;
-    s_nUnitFrames++;
+    s_frRec = (unsigned)nrec;
+    s_frUnit = 1;
     if (s_ground) {
-        tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fog);
+        tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fogNew);
+        if (s_fogNew.on) {
+            if (!s_fog.on || s_fogNew.w != s_fog.w || s_fogNew.h != s_fog.h ||
+                memcmp(s_fogNew.words, s_fog.words,
+                       (size_t)s_fogNew.stride * (size_t)s_fogNew.h * sizeof s_fog.words[0])) {
+                s_fog = s_fogNew;
+                s_fogSerial++;
+            }
+            s_fogSrc.words = s_fog.words;
+            s_fogSrc.w = s_fog.w; s_fogSrc.h = s_fog.h; s_fogSrc.stride = s_fog.stride;
+            s_fogSrc.serial = s_fogSerial;
+            s_fogHave = tagpu_fog_src_ok(&s_fogSrc);
+        }
         tagpu_gaf_atlas_frame(&s_fatlas);
     }
 
     /* THE TERRAIN, every cell of the map at zoom 1: tagpu_terr.c `terr_publish`'s fields at the
-       stage's camera -- grid cell (0, 0) is the map's, its corner the target's, no restore, no
-       relief, no shadow map, the engine's fog grid when a cell is fogged */
+       stage's camera -- the grid is the whole tile map and grid cell (0, 0) is its first, its
+       corner the target's, the area the map's, no mirror, no keys, no restore, no relief, no
+       shadow map, fog when a cell is fogged (the source, tagpu_wikiworld_fogsrc) */
     if (s_wantTerr && !s_noMap) {
         memset(&s_terr, 0, sizeof s_terr);
-        s_terr.cells = s_cells; s_terr.ncell = s_scene.ncell;
+        s_terr.cols = s_tmW; s_terr.rows = s_tmH;
+        s_terr.areaW = s_tmW; s_terr.areaH = s_tmH;
+        s_terr.atlasN = s_stage ? s_stage->ntile : 0;
+        s_terr.tileMap = s_tmap; s_terr.mapW = s_tmW; s_terr.mapH = s_tmH;
+        s_terr.mapSerial = s_tmSerial;
         s_terr.gw = (float)s_scene.gw; s_terr.gh = (float)s_scene.gh;
         s_terr.zoom = 1.0f;
         s_terr.zoomCx = (float)s_scene.gw * 0.5f; s_terr.zoomCy = (float)s_scene.gh * 0.5f;
         s_terr.depthScale = DEPTH_SCALE;
         s_terr.enc = TERR_ENC;
         s_terr.texelW = 1.0f / (float)ATLAS_W; s_terr.texelH = 1.0f / (float)s_tatlasH;
-        s_terr.fog = s_fog.on;
-        fog_fields(org, &s_terr.fogCols, &s_terr.fogRows);
-        s_terr.fogOrgX = org[0]; s_terr.fogOrgY = org[1];
+        s_terr.fog = s_fogHave;
         s_terr.norm = 1.0f;
         s_terr.mapPxW = (float)((v->w / 2) * 32); s_terr.mapPxH = (float)((v->h / 2) * 32);
         s_terr.atlas = s_tatlas; s_terr.atlasW = ATLAS_W; s_terr.atlasH = s_tatlasH;
         s_terr.atlasSerial = s_tatlasSerial;
         s_terr.pal = tagpu_pal_engine(); s_terr.palSerial = tagpu_pal_engine_serial();
-        if (s_fog.on) {
-            s_terr.fogGrid = s_fog.grid;
-            s_terr.fogGridCols = s_fog.cols; s_terr.fogGridRows = s_fog.rows;
-        }
         s_terr.vpL = 0; s_terr.vpT = 0; s_terr.vw = s_scene.gw; s_terr.vh = s_scene.gh;
         s_terr.scissorOn = 1;
         s_terr.ss = ss;
@@ -815,16 +968,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_feat.zoom = 1.0f;
         s_feat.zoomCx = (float)s_scene.gw * 0.5f; s_feat.zoomCy = (float)s_scene.gh * 0.5f;
         s_feat.depthScale = DEPTH_SCALE;
-        s_feat.fog = s_fog.on;
-        fog_fields(org, &s_feat.fogCols, &s_feat.fogRows);
-        s_feat.fogOrgX = org[0]; s_feat.fogOrgY = org[1];
+        s_feat.fog = s_fogHave;
         s_feat.mapPxW = (float)((v->w / 2) * 32); s_feat.mapPxH = (float)((v->h / 2) * 32);
         s_feat.nudgeW = TAGPU_EDGE_NUDGE_PX;
         tagpu_wikiworld_feat_atlas_hand(&s_feat);
-        if (s_fog.on) {
-            s_feat.fogGrid = s_fog.grid;
-            s_feat.fogGridCols = s_fog.cols; s_feat.fogGridRows = s_fog.rows;
-        }
         s_feat.vpL = 0; s_feat.vpT = 0; s_feat.vw = s_scene.gw; s_feat.vh = s_scene.gh;
         s_feat.scissorOn = 1;
         s_feat.ss = ss;
@@ -832,13 +979,18 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_featHave = s_feat.atlas && s_feat.pal;
     }
     /* THE TARGET: the map at the Supersampling setting's ss, composited into the image's rect --
-       the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment */
-    tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, stage, u, &x0, &y0, &x1, &y1);
+       the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment. A frame
+       clips it to its viewport, the rect the stage's world ops clip to: a players frame's map is
+       larger than its viewport and stands at the eye; any other frame's lies inside it */
+    tagpu_wikistage_image(v, stage, u, r, clip);
     s_tgt.gw = gw; s_tgt.gh = gh;
     s_tgt.ss = ss;
     s_tgt.devres = 0;
-    s_tgt.vx = ox + x0; s_tgt.vy = oy + y0;
-    s_tgt.vw = x1 - x0; s_tgt.vh = y1 - y0;
+    s_tgt.vx = ox + r[0]; s_tgt.vy = oy + r[1];
+    s_tgt.vw = r[2] - r[0]; s_tgt.vh = r[3] - r[1];
+    s_tgt.clip = v->frame;
+    s_tgt.cx = ox + clip[0]; s_tgt.cy = oy + clip[1];
+    s_tgt.cw = clip[2] - clip[0]; s_tgt.ch = clip[3] - clip[1];
     s_tgt.frame = f->frame_counter;
     s_tgtHave = s_tgt.vw > 0 && s_tgt.vh > 0;
 
@@ -849,7 +1001,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     }
     s_frame = f->frame_counter;
     s_have = s_tgtHave;
-    s_msProd += ms_since(t0);
+    s_frProd = ms_since(t0);
 }
 
 int tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w)
@@ -866,22 +1018,26 @@ int tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w)
 
 void tagpu_wikiworld_drawn(unsigned frame, int image, double ms)
 {
+    unsigned k[WORK_N];
+    int busy;
     if (!s_have || s_frame != frame) return;
-    s_nFrames++;
-    s_nImage += image != 0;
-    s_msSeam += ms;
-    if (ms > s_msMax) s_msMax = ms;
+    /* a frame is busy when the stage did work since the last drawn frame -- in this frame's producer,
+       or in one whose frame was not drawn -- or the bake refused one of its records */
+    work_now(k);
+    busy = memcmp(k, s_workSeen, sizeof k) != 0 || s_frRefused;
+    memcpy(s_workSeen, k, sizeof k);
+    win_add(&s_per, image, ms);
+    count_frame(frame, image, ms, busy, k);
     if (frame - s_saidAt >= 300) {
+        const WINSTAT* w = &s_per;
         tagpu_logf("wiki3d: frame %u: %s; %u of %u frame(s) drew the image; %.1f model record(s) a frame, "
                    "%u frame(s) with one the bake refused; render thread: the producer %.3f ms and the "
                    "passes %.3f ms a frame on average, the passes at most %.3f ms",
                    frame, image ? "the image" : "the whitebox (a pass the image needs did not prepare)",
-                   s_nImage, s_nFrames, s_nUnitFrames ? (double)s_nRec / s_nUnitFrames : 0.0, s_nRefused,
-                   s_msProd / s_nFrames, s_msSeam / s_nFrames, s_msMax);
+                   w->image, w->frames, w->unitFrames ? (double)w->rec / w->unitFrames : 0.0, w->refused,
+                   w->prod / w->frames, w->seam / w->frames, w->max);
         s_saidAt = frame;
-        s_nFrames = s_nImage = 0;
-        s_nRec = s_nRefused = s_nUnitFrames = 0;
-        s_msProd = s_msSeam = s_msMax = 0;
+        memset(&s_per, 0, sizeof s_per);
     }
 }
 
@@ -954,14 +1110,11 @@ int tagpu_wikiworld_worldtgt(TAGPU_WORLDTGT* out)
     return 1;
 }
 
-/* the fog grid the posed program would ask for (tagpu_posedraw.c): units take no fog on the stage
-   (the plan's section 7), and the stage draws none */
-const unsigned short* tagpu_wikiworld_foggrid(int* cols, int* rows, int* cells)
+/* the stage's fog source this frame (tagpu_wikiworld.h): units take no fog on the stage (the plan's
+   section 7), the ground and its features do */
+const TAGPU_FOGSRC* tagpu_wikiworld_fogsrc(void)
 {
-    if (cols)  *cols = 0;
-    if (rows)  *rows = 0;
-    if (cells) *cells = 0;
-    return NULL;
+    return (s_have && s_fogHave) ? &s_fogSrc : NULL;
 }
 
 /* the target's scissor is on: the stage's passes clip to the whole map, as the game's do to its
@@ -1032,6 +1185,13 @@ int tagpu_wikiworld_ab_arm(const char* tag)
 
 int tagpu_wikiworld_grow_stress(void)
 {
+    return 0;
+}
+
+/* the mip chains' oracle checks the game's world only */
+int tagpu_wikiworld_chaincheck_armed(unsigned frame)
+{
+    (void)frame;
     return 0;
 }
 

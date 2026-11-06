@@ -21,7 +21,16 @@
        mouse routing test `0x469DF6`, `GetUnitAtMouse 0x48CD80` (whose first
        instruction is `IsPositionInRect(vpRect, mouse)`), the HotUnits cull
        `0x48BAE0`, the projectile and debris visibility tests. These are the
-       readers the widening is FOR, and they need nothing else from us.
+       readers the widening is FOR. On the click path they need one guard
+       more: GetUnitAtMouse's unit hit test `0x48C6A0` narrows each unit's
+       corners less the eye to int16, so its one call `0x48CE15` is
+       redirected to tagpu_zoom_hit_guard, which answers "not hit" for a unit
+       whose narrowing could wrap. Other engine paths narrow a position less
+       the eye to int16 too -- the eye loads at `0x46A5C3` (into `0x467A50`),
+       `0x420B57`, `0x4211E8` and `0x49C0A1`, each followed by the 16.16
+       difference's high word read back as int16 (`movsx WORD`) [DISASSEMBLED]
+       -- and are not guarded: they draw, into frames our renderer replaces,
+       so a wrap there is a wrong pixel nobody sees, never a wrong pick.
 
      ORIGIN: `0x498DA0` alone computes `world = eye + clamp(pos, L, R) - L`, so
        L and T are the origin there, not a bound. Measured: moving L 128->0 and
@@ -71,8 +80,8 @@
    `+0x37E1F`/`+0x37E23` — fields we never write — and W/H are checked against
    that every frame and put back when they disagree.
 
-   MP-safety is the `ScrollSpeed` argument unchanged: the viewport rect is
-   camera state that no other machine ever sees.
+   It is MP-safe: the viewport rect is camera state that no other machine
+   ever sees.
 
    Armed by `tagpu_vpwide.on` at DLL attach, like every other code-patching
    pass. Nothing is written to the rect unless the patches installed AND the
@@ -140,6 +149,14 @@ void tagpu_vpwide_counters(unsigned* applies, unsigned* wh_mismatch);
    nothing was ever widened, so with the module disarmed it is the field
    itself. */
 void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H);
+
+/* The addressable rect at level `z` for the true viewport (tL, tT, tW, tH), as
+   L, T, R, B inclusive: the transform's range plus a pixel of slack. Returns 1
+   when all four edges lie in [-32768, 32767] -- what a button lParam can
+   carry -- and that is both vpwide's refusal and the zoom floor's lparam term
+   (tagpu_vpwide.c, "THE RECT IS THE TRANSFORM'S RANGE"). Pure, any thread. */
+int  tagpu_vpwide_rect_at(int tL, int tT, int tW, int tH, float z,
+                          int* aL, int* aT, int* aR, int* aB);
 
 /* Is the `0x498DA0` mouse->world repair INSTALLED? The zoom transform may not go
    live without it: `fake_GetCursorPos` answers the true pointer, so the engine's

@@ -202,7 +202,7 @@ cargo whose origin sits above or below its parent. See [build state](build-state
   callers of the wrapper `0x48AAC0`, which applies the attach and sends it as a `0x0A`; which one
   was not traced. `0x48B58B` and `0x48B5C5` are not it: they are the `0x2C` round robin
   replicating a remote unit's carrier ([the engine
-  map](exe-reverse-engineering.md#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us)).
+  map](engine/units.md#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us)).
 - `0x47CB00` and `0x47CB40` — called on the no-previous-parent and detach paths — were not
   disassembled. Both are in the cluster that also writes `+0x8E` (`0x47CB26`, `0x47CB47`,
   `0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`), so there is a **second chain

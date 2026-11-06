@@ -43,8 +43,9 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
                  hash; a map no archive has, which the Start refuses), then plays it; the replay
                  HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
                  play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
-                 Sight and Sight again with clock and camera unchanged, Follow, Follow again and
-                 Jump, the Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
+                 Sight and Sight again, twice, with clock and camera unchanged and the resource
+                 bar's rates the viewed record's after each, Follow, Follow again and Jump, the
+                 Cursors switch off and on, dump w<T1>, play to resume, Leave and Yes
                  back to the browser, and a second Watch -- every HUD control clicked in device
                  space where the game drew it (`tacli hud`)
 
@@ -1737,12 +1738,58 @@ def watch_button(w):
     return m.group(1)
 
 
+BAR_MEMO = 0x37E3F                     # DrawGameScreen's resource-bar memo in main (0x468FC6)
+# the memo's four rates and the player record's fields the draw re-reads them from, through the
+# getters 0x464AB0, 0x464AC0, 0x464AF0, 0x464B00 (0x468F8D..0x468FBF)
+BAR_RATES = ((5, 0x90), (9, 0x94), (0x11, 0x9C), (0x15, 0xA0))
+
+
+def player_field(seat, off, size):
+    """A peek spec for player record `seat`'s field: main+0x1B63, 0x14B a record (0x468E4B)."""
+    return f"*0x511DE8+{0x1B63 + 0x14B * seat + off:#x}:{size}"
+
+
+def bar_memo(w):
+    """The four rates the resource-bar memo holds, as dwords, in BAR_RATES' order."""
+    return tuple(peek(w, f"*0x511DE8+{BAR_MEMO + m:#x}:4") for m, _ in BAR_RATES)
+
+
+def bar_rates(w, seat):
+    """The resource bar of record `seat` once a draw has made it: Failed unless a frame drew it
+    within ACK_S or unless the memo's four rates are the record's, bit for bit; returns the
+    record's four rates as dwords. Byte 0 of the memo is the viewed record's +0x146 (0x468E6C)
+    and only a draw of that record's bar writes it (0x468FEC); the previous view's record holds
+    another, so its arrival is the ordering, not a delay. Paused, neither side moves after."""
+    slot = peek(w, player_field(seat, 0x146, 1))
+    end = time.monotonic() + ACK_S
+    while peek(w, f"*0x511DE8+{BAR_MEMO:#x}:1") != slot:
+        if time.monotonic() >= end:
+            raise Failed(f"the HUD's Sight: no frame drew the bar of seat {seat} in {ACK_S} s")
+        nap(0.2)
+    shown = bar_memo(w)
+    want = tuple(peek(w, player_field(seat, r, 4)) for _, r in BAR_RATES)
+    if shown != want:
+        raise Failed(f"the bar shows other rates under Sight on seat {seat}: "
+                     f"{' '.join('%08X' % v for v in shown)} against "
+                     f"{' '.join('%08X' % v for v in want)}")
+    return want
+
+
 def watch_hud(w, log, rec):
     """The replay HUD's row actions and switches, clicked in device space while paused: Sight on
-    the first row and again (the full map), with the clock and the camera unchanged; Follow,
-    Follow again (the free camera) and Jump on the row of the seat the recording's human
-    commanded (the perspective streams carry that seat's camera); the Cursors switch off and on.
-    A row's buttons show while the pointer is over the row, which `tacli hud` hovers first."""
+    the first row and again (the full map), twice, with the clock and the camera unchanged and
+    the resource bar's rates the viewed record's after each (bar_rates; the second visit to a
+    record at the same paused GameTime is the one the engine would not re-read, and after the
+    seek watch_lane makes, neither is the first); Follow, Follow again (the free camera) and Jump
+    on the row of the seat the recording's human commanded (the perspective streams carry that
+    seat's camera); the Cursors switch off and on. A row's buttons show while the pointer is over
+    the row, which `tacli hud` hovers first. Returns two rows: the rows and switches, and the
+    resource bar, which could not run when the seat's four rates equal the full map's -- a bar
+    that kept the other record's rates would then pass. A visit discriminates when the memo held
+    other rates than the viewed record's before its click: with the two records' rates unequal,
+    the second, third and fourth visits always do (the memo held the other record's, checked bit
+    for bit), and the first does when the rates the memo kept from before the seek differ from
+    the seat's."""
     seats = tarec.header_only(rec)["players"]
     if not seats:
         raise CouldNotRun("the HUD's rows: no recorded seats")
@@ -1760,7 +1807,10 @@ def watch_hud(w, log, rec):
         return got.strip()
 
     # the rows are the recording header's seats in order (tagpu_replay_players)
-    for seat in (seats[0]["index"], viewer):
+    s0 = seats[0]["index"]
+    rates, telling = {}, []
+    for k, seat in enumerate((s0, viewer, s0, viewer), 1):
+        held = bar_memo(w)
         n = len(log.lines)
         hud(w, "click", "sight:0")
         got = log.wait(rf"replay: sight is seat {seat} at GameTime {tick};|"
@@ -1769,6 +1819,9 @@ def watch_hud(w, log, rec):
             raise Failed(f"the HUD's Sight: {got.strip() if got else 'no Sight reply'}")
         if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
             raise Failed("the HUD's Sight changed the paused clock or camera")
+        rates[seat] = bar_rates(w, seat)
+        if held != rates[seat]:
+            telling.append(f"{k} (record {seat})")
 
     h = tarec.header_only(rec)
     own = (h.get("options") or {}).get("controlled")
@@ -1783,8 +1836,18 @@ def watch_hud(w, log, rec):
     if w.gametime() != tick:
         raise Failed(f"the HUD's rows: Follow, Jump or a switch moved the paused clock from {tick} "
                      f"to {w.gametime()}")
-    return ("W: the HUD's rows and switches", PASS, f"Sight {seats[0]['index']} and again "
-            f"{viewer}; GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
+    rows = [("W: the HUD's rows and switches", PASS, f"Sight {s0}, {viewer}, {s0}, {viewer}; "
+             f"GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))]
+    bar = "W: the resource bar under Sight"
+    if rates[s0] == rates[viewer]:
+        rows.append((bar, UNRUN, f"seat {s0}'s four rates equal record {viewer}'s "
+                     f"({' '.join('%08X' % v for v in rates[s0])}), so a bar that kept the other "
+                     f"record's rates would pass"))
+    else:
+        rows.append((bar, PASS, f"the viewed record's rates at each of the four visits; those "
+                     f"whose memo held other rates before the click, which discriminate: "
+                     f"{', '.join(telling)}"))
+    return rows
 
 
 def hud_show(w):
@@ -1823,13 +1886,14 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     """V-1B on the HUD's route (owner decision 1-B, snap back): the playback paused 15 ticks past a
     refresh R0, Take over seeks it back to R0 and opens the picker there, with a clickable row for
     exactly the players who still have a unit -- the rule the takeover refuses by -- and the row of
-    the seat the recording's human commanded takes over at R0 itself, with no rounding. The fork
-    plays 300 ticks and the game ends; offline its first iteration is R0 and equals its parent's
-    chain there (compare-fork). First, past the fixture's end scenario (replay-end.json: every
-    unit gone but one AI's), the picker at a refresh RD must dim exactly the seats with no unit,
-    some of them, and the takeover itself must refuse one of those at RD by the same word. The
-    coverage is asked for on the fork's level, so it holds the HUD's takeover. Returns its
-    checks."""
+    the seat the recording's human commanded takes over at R0 itself, with no rounding, and the
+    live game runs from there by itself: no key is pressed until the test's pause at R0 + 300,
+    armed before the click. Then the game ends; offline the fork's first iteration is R0 and
+    equals its parent's chain there (compare-fork). First, past the fixture's end scenario
+    (replay-end.json: every unit gone but one AI's), the picker at a refresh RD must dim exactly
+    the seats with no unit, some of them, and the takeover itself must refuse one of those at RD
+    by the same word. The coverage is asked for on the fork's level, so it holds the HUD's
+    takeover. Returns its checks."""
     res = []
     seg0 = tarec.file_segments(rec)[0][0]
     first = seg0["first"]
@@ -1884,6 +1948,10 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     row = next((k for k, p in enumerate(seats) if p["index"] == own), None)
     if row is None:
         raise CouldNotRun(f"the picker: the controlled seat {own} has no row")
+    # the takeover ends the playing's pause and the live game runs to the test's pause at
+    # R0 + 300, armed before the click: the picker holds the playback paused at R0 - 1, and
+    # armed after it the running game could pass R0 + 300 first
+    hold_at(w, log, R0 + 300)
     n = len(log.lines)
     hud(w, "click", f"takeas:{row}")
     got = log.wait(rf"replay: {re.escape(stem)}: taken over at GameTime {R0} as player {own}\b.*"
@@ -1891,20 +1959,29 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
                    rf"|replay: {re.escape(stem)}: takeover (at \d+ )?refused:", ACK_S, n)
     if not got or ": taken over at GameTime" not in got:
         raise Failed(f"the picker's takeover: {got.strip() if got else f'no line in {ACK_S} s'}")
+    if not got.rstrip().endswith("; the playing's pause ended"):
+        raise Failed(f"the takeover left the game held: {got.strip()}")
     tl = int(re.search(r"timeline (\d+) \(parent 0\)", got).group(1))
     lines_in_order(log, n, [rf"a takeover as player {own} at GameTime {R0} waits"], "the picker's takeover")
     if any("takes over at" in ln for ln in log.lines[n:]):
         raise Failed("the picker's takeover was rounded: it asked for a GameTime that is not R0")
     res.append(("W: the picker takes over at R0", PASS, got[got.index("replay:"):].strip()))
 
-    # 300 ticks of the fork, held there; the HUD's pause is the Pause key's bit, which the key
-    # clears, and `pause at` holds the level at the end
-    hold_at(w, log, R0 + 300)
-    if peek(w, PAUSE_WORD) & 1:
-        rc, o = tacli("keys", w.name, "pause", timeout=INPUT_TIMEOUT)
-        if rc:
-            raise CouldNotRun(f"tacli keys pause: {last(o)}")
-    wait_paused(w, log, R0 + 300)
+    # 300 ticks of the fork with no input: a level the takeover left paused stands at R0 - 1 for
+    # good, so the read after a stall is a fact, not a race
+    try:
+        wait_paused(w, log, R0 + 300)
+    except CouldNotRun:
+        if peek(w, PAUSE_WORD) & 1 and w.gametime() == R0 - 1:
+            raise Failed(f"the takeover left the live game paused at R0 - 1 = {R0 - 1}")
+        raise
+    lines_in_order(log, n, [rf"replay: {re.escape(stem)}: taken over at GameTime {R0} ",
+                            rf"recorder: recording timeline {tl} of .* from GameTime {R0} "
+                            rf"\(parent 0\)",
+                            rf"pause: paused at GameTime {R0 + 300}\s*$"],
+                   "the live game after the takeover")
+    res.append(("W: the live game runs from the takeover", PASS,
+                f"from R0 {R0} to {R0 + 300} with no input; recording from {R0}"))
     if cover:
         cover_ask(w, log, "W")
     n = len(log.lines)
@@ -2167,7 +2244,7 @@ def watch_lane(w, fx, rec, out, T):
     # the seek begins the playing the dump waits on: an end line before its answer is the
     # playing it replaced
     sought = after_line(log.lines, got, n)
-    res.append(watch_hud(w, log, rec))
+    res += watch_hud(w, log, rec)
     arm_dump(w, log, f"w{T}", T)
     hud(w, "click", "play")
     wait_dumps(log, [f"w{T}"], running=True, playing=sought)

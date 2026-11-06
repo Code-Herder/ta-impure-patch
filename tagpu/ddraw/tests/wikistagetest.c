@@ -6,7 +6,8 @@
    face FILE with `spacing` em of letter-spacing (upper-cased when UPPER is 1) at a size of one,
    one line out each: the advance a size multiplies, which stage.js's recorded measureText gives.
 
-   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD RECLAIM AW AH MW MH BW BH RW RH SPRITES LAYOUT X Y W H U [COB]`
+   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD RECLAIM AW AH MW MH BW BH RW RH SPRITES LAYOUT X Y W H U
+    WIKI CONFIG SIDE TOP RIGHT CFG [COB]`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
    sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none) and with COB the units'
    scripts that file names (tests/wikicobfile.h), as sim.js plays with serve.py's host -- the nano
@@ -24,8 +25,32 @@
    w, h, clip x, y, w, h, rgba, size, style, centre, text, rgb, shade, grp], ...]}, every position
    in units as the op holds it.
 
+   A FRAME:GAME ENTRY'S FRAME is drawn a second time as the whole game frame, its demo named
+   "<demo>/frame": the copy filtered to the watcher's view (tagpu_wikiframe_view, the column the
+   idle MAIN2 of the layout's side 0) and built with a WIKISTAGEFRAME that, by k = tick / 30, draws
+   the bars' picture when k is odd and the whitebox strips when it is even, the emblems the kit's
+   parts WIKI and CONFIG when k % 4 < 2 and whitebox buttons otherwise, at layout.json's `button`
+   SIDE, TOP, RIGHT (its right[1]) and CFG, Leave's question when k % 3 is 0 with its answer held
+   as (k / 3) % 3 (none, Yes, No), and the viewer's cursor when k is even at the canvas point
+   (0.3 W + (7 k) % 50, 0.45 H + (5 k) % 40): stagecheck.mjs draws the same. A live entry's frame
+   is the player's: the view filtered in mode k % 3 (WIKIFRAME_WATCH, _PLAYER, _PAST) with the
+   ghost kept when k is even, the emblem at layout.json's right[0] (the argument after CFG), and
+   the cursor the simulation's, shape k % 4 and age 7 k. A takeover entry's frame cycles the same
+   three modes, as the human seat (k / 3) % the seats -- the view that seat's (tagpu_wikisim_view_as),
+   its selection the player's in the player's mode -- and is the player's but in the watcher's.
+   Every frame view carries the replay's overlays at its tick (tagpu_wikiframe_view's `ov`, the
+   game view it was copied from, the click ring from 0).
+   A PLAYERS ENTRY'S DEMOS are played once more, without the units' scripts, through the replay
+   layer (tagpu_wikireplay, the viewer's script played), its demo named "<demo>/players": at demo
+   tick 0, every 30th and the last, when no seek is pending, the game's view copied and filtered
+   to the watcher's with what the replay adds -- the camera on the entry's screen, Sight, the
+   overlays at the click ring's start -- and drawn as a frame whose presentation, and the sidebar
+   art's phase, follow the game's tick; the line's "t" is the demo tick.
+   Each frame's line also carries "imgclip", the image's scissor (tagpu_wikistage_image).
+
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +59,7 @@
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
 #include "tagpu_wikistage.h"
+#include "tagpu_wikiframe.h"
 #include "wikicobfile.h"
 
 static char* slurp(const char* path, size_t* n)
@@ -96,15 +122,15 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
     double x0, y0, w, h;
     int i;
     tagpu_wikistage_canvas(r, u, &x0, &y0, &w, &h);
-    printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,"
-           "\"dropped\":%d,\"trunc\":%u,\"cur\":%d,", e, d, t, x0, y0, w, h, o->dropped, (unsigned)v->trunc,
+    printf("{\"e\":\"%s\",\"d\":\"%s%s\",\"t\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,"
+           "\"dropped\":%d,\"trunc\":%u,\"cur\":%d,", e, d, v->frame ? "/frame" : "", t, x0, y0, w, h, o->dropped, (unsigned)v->trunc,
            o->cursor);
     /* each op's range and, for a box, its type's name (WIKISTAGE_IN_*); then where it is drawn
        (tagpu_wikistage_keep) under three images -- every type resolved with the ground in the image,
        none resolved, and the ground fallen back -- one digit an op; and the image's rect */
     {
         static const uint32_t all[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu }, none[2] = { 0, 0 };
-        int x0i, y0i, x1i, y1i, k;
+        int k;
         fputs("\"rng\":[", stdout);
         for (i = 0; i < o->n; i++) {
             printf("%s[%d,", i ? "," : "", o->range[i]);
@@ -121,8 +147,9 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
             for (i = 0; i < o->n; i++) putchar('0' + tagpu_wikistage_keep(o, i, 1, k != 2, k == 1 ? none : all));
             putchar('"');
         }
-        tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, r, u, &x0i, &y0i, &x1i, &y1i);
-        printf("],\"img\":[%d,%d,%d,%d],\"grp\":[", x0i, y0i, x1i, y1i);
+        int ir[4], ic[4];
+        tagpu_wikistage_image(v, r, u, ir, ic);
+        printf("],\"img\":[%d,%d,%d,%d],\"imgclip\":[%d,%d,%d,%d],\"grp\":[", ir[0], ir[1], ir[2], ir[3], ic[0], ic[1], ic[2], ic[3]);
         for (i = 0; i < o->ngrp; i++) printf("%s%.9g", i ? "," : "", o->grp[i]);
         fputs("],", stdout);
     }
@@ -204,11 +231,85 @@ static WIKISIDE* side_art(const WIKILAYOUT* lay)
     return sd;
 }
 
+/* the frame's presentation for frame k (the header's rule), on a canvas W x H device pixels */
+static void frame_of(int k, int live, double W, double H, const int16_t* btn, WIKISTAGEART* art, const int16_t* emblem,
+                     const WIKISTAGEVIEW* v, WIKISTAGEFRAME* fr)
+{
+    int Wg, Hg;
+    tagpu_wikiframe_view_size(v, &Wg, &Hg);
+    memset(fr, 0, sizeof *fr);
+    fr->bar_w = (int16_t)(k % 2 ? Wg - WIKIFRAME_SIDE_W : 0);
+    fr->btn_side = btn[0];
+    fr->btn_top = btn[1];
+    fr->btn_right = btn[live ? 4 : 2];
+    fr->btn_config = btn[3];
+    art->emblem[0] = k % 4 < 2 ? emblem[0] : -1;
+    art->emblem[1] = k % 4 < 2 ? emblem[1] : -1;
+    fr->question = (uint8_t)(k % 3 == 0);
+    fr->held = (uint8_t)((k / 3) % 3);
+    fr->cursor_x = k % 2 ? NAN : 0.3 * W + (7 * k) % 50;
+    fr->cursor_y = k % 2 ? NAN : 0.45 * H + (5 * k) % 40;
+    fr->cursor_shape = (uint8_t)(live ? k % WIKI_CURSOR_N : WIKI_CURSOR_ARROW);
+    fr->cursor_age = live ? 7 * k : 0;
+}
+
+/* THE SIDEBAR'S ART for a frame at game tick t (the header's phases) */
+static void side_phase(WIKISTAGEART* art, WIKISIDE* sd, int t)
+{
+    const int phase = (t / 30) % 3;
+    art->side_layout = sd ? &sd->layout : NULL;
+    art->side = sd && phase ? sd : NULL;
+    art->side_minimap = phase == 1;
+}
+
+/* A PLAYERS ENTRY'S DEMO through the replay layer (the header): its frames, "<demo>/players" */
+static int players(const WIKIENTRY* e, const WIKIDEMO* d, WIKISIDE* sd, HUDRECT r, double u, const int16_t* btn,
+                   const int16_t* emblem, WIKISTAGEART* art, WIKISTAGEVIEW* vf, WIKISTAGEOPS* o)
+{
+    const WIKISIMCTX ctx = { 0, NULL, 1, NULL, NULL, NULL };
+    char err[256], name[96];
+    WIKIREPLAY rep;
+    WIKIREPLAYVIEW rv;
+    snprintf(name, sizeof name, "%s/players", d->id);
+    if (!tagpu_wikireplay_init(&rep, e, d, WIKI_PLAY_DEMO, sd ? &sd->layout : NULL, &ctx, err, sizeof err)) {
+        fprintf(stderr, "wikistagetest: %s/%s: the replay refused it: %s\n", e->id, d->id, err);
+        return 0;
+    }
+    for (;;) {
+        tagpu_wikireplay_view(&rep, &rv);
+        if ((rep.tick % 30 == 0 || rv.done) && rv.target < 0 && rep.game) {
+            const WIKIVIEW* gv = tagpu_wikisim_view(rep.game);
+            const int g = rep.game->tick;
+            double cx, cy, cw, ch;
+            WIKISTAGEFRAME fr;
+            WIKIFRAMEOV ov;
+            tagpu_wikistage_copy(vf, gv, e, WIKISTAGE_LAYOUT_MOD);
+            vf->tick = g;
+            ov.tick = g;
+            ov.click_from = rv.click_from;
+            ov.players = rv.players ? &rv : NULL;
+            ov.screen_w = e->screen_w;
+            ov.screen_h = e->screen_h;
+            ov.gv = gv;
+            tagpu_wikiframe_view(vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, WIKIFRAME_WATCH, 0, 0, &ov);
+            side_phase(art, sd, g);
+            tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
+            frame_of(g / 30, 0, cw, ch, btn, art, emblem, vf, &fr);
+            tagpu_wikistage_build(vf, NULL, r, u, 1, &fr, art, o);
+            frame(o, vf, e->id, name, rep.tick, r, u);
+        }
+        if (rv.done) break;
+        tagpu_wikireplay_step(&rep);
+    }
+    tagpu_wikireplay_free(&rep);
+    return 1;
+}
+
 static int ops(char** a, const char* cob)
 {
-    static WIKISTAGEVIEW v;
+    static WIKISTAGEVIEW v, vf;
     static WIKISTAGEOPS o;
-    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC, NULL };
+    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC, NULL, NULL };
     char err[256];
     size_t n;
     char* pak = slurp(a[0], &n);
@@ -218,6 +319,7 @@ static int ops(char** a, const char* cob)
     FACE f;
     HUDRECT r;
     double u;
+    int16_t emblem[2], btn[5];
     int i, j, k;
     if (!pak) { fprintf(stderr, "wikistagetest: cannot read %s\n", a[0]); return 2; }
     if (cob && !cob_load(cob)) return 2;
@@ -246,29 +348,54 @@ static int ops(char** a, const char* cob)
     }
     r.x = (float)atof(a[19]); r.y = (float)atof(a[20]); r.w = (float)atof(a[21]); r.h = (float)atof(a[22]);
     u = atof(a[23]);
+    emblem[0] = (int16_t)atoi(a[24]);
+    emblem[1] = (int16_t)atoi(a[25]);
+    for (k = 0; k < 5; k++) btn[k] = (int16_t)atoi(a[26 + k]);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, sd ? &sd->layout : NULL, cob ? &ctx : NULL, err, sizeof err)) {
+            /* a game entry's demo plays its game, the simulation its stage shows (tagpu_wikireplay.h) */
+            const int play = e->frame == WIKI_FRAME_GAME ? WIKI_PLAY_GAME : WIKI_PLAY_DEMO;
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], play, sd ? &sd->layout : NULL, cob ? &ctx : NULL, err, sizeof err)) {
                 fprintf(stderr, "wikistagetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
-                    const int phase = (s.tick / 30) % 3;
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, WIKISTAGE_LAYOUT_MOD);
                     v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
-                    art.side_layout = sd ? &sd->layout : NULL;
-                    art.side = sd && phase ? sd : NULL;
-                    art.side_minimap = phase == 1;
-                    tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, &art, &o);
+                    side_phase(&art, sd, s.tick);
+                    art.emblem[0] = art.emblem[1] = -1;
+                    tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, NULL, &art, &o);
                     frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
+                    if (e->frame == WIKI_FRAME_GAME) {
+                        double cx, cy, cw, ch;
+                        WIKISTAGEFRAME fr;
+                        const int kf = s.tick / 30, mode = e->live || e->takeover ? kf % 3 : WIKIFRAME_WATCH;
+                        const WIKIVIEW* g0 = tagpu_wikisim_view(&s);
+                        const int ns = g0->game && g0->nseat > 0 ? g0->nseat : 1, human = e->takeover ? (kf / 3) % ns : 0;
+                        WIKIFRAMEOV ov;
+                        vf = v;
+                        if (human) {
+                            tagpu_wikistage_copy(&vf, tagpu_wikisim_view_as(&s, human), e, WIKISTAGE_LAYOUT_MOD);
+                            vf.tick = s.tick;
+                        }
+                        memset(&ov, 0, sizeof ov);
+                        ov.tick = s.tick;
+                        ov.gv = human ? tagpu_wikisim_view_as(&s, human) : tagpu_wikisim_view(&s);
+                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, mode, kf % 2 == 0, human, &ov);
+                        tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
+                        frame_of(kf, e->live || (e->takeover && mode != WIKIFRAME_WATCH), cw, ch, btn, &art, emblem, &vf, &fr);
+                        tagpu_wikistage_build(&vf, NULL, r, u, 1, &fr, &art, &o);
+                        frame(&o, &vf, e->id, e->demo[j].id, s.tick, r, u);
+                    }
                 }
                 if (s.done) break;
                 tagpu_wikisim_step(&s);
             }
             tagpu_wikisim_free(&s);
+            if (e->players && !cob && !players(e, &e->demo[j], sd, r, u, btn, emblem, &art, &vf, &o)) return 2;
         }
     tagpu_wikidata_free(d);
     free(sd);
@@ -296,8 +423,9 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if ((argc == 26 || argc == 27) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 27 ? argv[26] : NULL);
+    if ((argc == 33 || argc == 34) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 34 ? argv[33] : NULL);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
-                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U [COB]\n");
+                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD RECLAIM AW AH MW MH BW BH RW RH SPRITES"
+                    " LAYOUT X Y W H U WIKI CONFIG SIDE TOP RIGHT CFG [COB]\n");
     return 2;
 }

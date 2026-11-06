@@ -35,13 +35,33 @@ and a builder at work sprays the engine's nano particles from the piece its scri
 units and the sidebar say what the engine would say -- select, ok, arrived, build, the button
 sounds -- through a DirectSound object of the wiki's own, at the player's volume
 ([the COB plan](ingame-wiki-cob-plan.html), L3a, L3b, L4a and L5 built; [below](#the-units-scripts),
-[*The units' sounds*](#the-units-sounds)).
+[*The units' sounds*](#the-units-sounds)). **A game entry** (`"frame": "game"`) shows a small game
+instead of a demo: its page is the theatre layout, its stage the whole game frame -- the running
+mod's top and bottom bars in its own art, the left sidebar as a watcher sees it, the map with both
+seats' units, and the replay HUD at 100 % -- and its demos press the replay HUD's controls on a
+replay of a game the wiki's own simulation plays, with scripted kills, wrecks, the death sound and
+the engine's economy; Try it yourself hands those controls to the player. The first, **Watching a
+game**, is built in both the mockup and the game. The second, **Rewind a skirmish**, is a *live*
+game entry: its demos play a live skirmish with the top bar's rewind button and the strip, the
+past re-simulated beside the held live game and Play from here forking it by the recorder's own
+rules; it is built in both the mockup and the game, Try it yourself taking the world of the live
+frame as well as its HUD. The third, **Take over a replay**, is a *takeover* game entry: a replay
+with the replay HUD's Take over -- the picker, the Forks bay and its lanes, Save as a replay,
+Delete, the fourth fork's eviction -- whose takeover turns the replay into Rewind's live game as
+the seat taken, any seat, each seat having its own cursor in both simulations; it is built in both
+the mockup and the game. The fourth, **Players and the camera**, is a *players* game entry: a
+replay on a screen smaller than its map, with the replay HUD's players column -- Jump and Follow
+moving the camera to a seat's recorded view, Sight showing one seat's fog, sight and radar
+contacts, the overlays' switches and the stats window -- and every recorded seat's cursor, clicks
+and selection drawn over every replay view; it plays in both the mockup and the game
+([below](#the-game-frame-on-the-stage-the-replay-entries);
+[the replay entries' plan](ingame-wiki-replay-plan.html)).
 
 | What | Where |
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
-| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `text.js`, `stage.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
+| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `text.js`, `stage.js`; for a game entry also `replay.js`, `frame.js`, `bar.js` and `tools/hudart/mockup/hud.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
 | The stage's fallback cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
@@ -52,7 +72,9 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`) |
 | The layout check, C against the mockup | `python3 tools/wiki/wikilaycheck.py`, with `tools/wiki/wikilaycheck.c` |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
-| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
+| A game entry's replay, frame and bars | the replay layer `replay.js` / `tagpu/ddraw/src/tagpu_wikireplay.c`, a live entry's rewind, a takeover entry's Take over and a players entry's camera, Sight, switches and samples included, its fork rules the recorder's own `tagpu/ddraw/inc/tagpu_recrules.h`; the frame (the frame's views, the frame record, the stage HUD's state, the cursor, Leave's question, Try it's presses) `frame.js` / `tagpu_wikiframe.c`; the two bars in the mod's art `bar.js` / `tagpu_wikibar.c` ([below](#the-game-frame-on-the-stage-the-replay-entries)) |
+| Their checks, C against the mockup | `node tools/wiki/barcheck.mjs` (with `tagpu/ddraw/tests/wikibartest.c`), `node tools/wiki/framecheck.mjs` (with `tagpu/ddraw/tests/wikiframetest.c`); `simparity.mjs`'s game and replay passes; `node tools/wiki/castcheck.mjs` (the castings' sight figures and sight tables); `wikilaycheck.py`'s theatre cases; `python3 tagpu/ddraw/tests/huddrawtest.py` (`HOP_TRI` and the chart slots); in the game `wiki_regression.py <instance> watch`, `rewind`, `takeover` and `players` and `mods`' steps w6, w7 and w8 |
+| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine] [--shard K/N]`, with `tagpu/ddraw/tests/wikitest.c`; `--shard` plays every Nth context from the Kth, the cases on shard 1 alone; `--hash` prints each demo's final state hash from `sim.js` |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
@@ -61,12 +83,14 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); `sim.js` (the layout's check, the router, the buttons and the build trip); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
 | The sidebar in the DLL | `tagpu_wikiasset.c` (`tagpu_wikiside_load`, the reading) over `tagpu_guifile.c` (the .GUI files by position); `tagpu_wikiside.c` (the composer); the router and the buttons in `tagpu_wikisim.c`, the column's ops in `tagpu_wikistage.c` |
 | Each side's casting, by the cast rule | `tools/wiki/gfx.py` (`side_casting`, into each pack's `side.json` by `tools/wiki/sidepacks.py`, which checks the stock identity); in the DLL `tagpu_wikiasset.c` (`tagpu_wikiside_load`) |
+| The castings' sight figures and the sight tables, checked | `node tools/wiki/castcheck.mjs` (the game frame's *The checks*: a players entry's) |
 | The fixture's castings | `tools/wiki/casting-fixture.json`: `identity` (the entries' own types and figures), `shifted` (invented figures, a 3 × 3 builder and a 4 × 4 geothermal plant with four interior G cells), `unbound` (`identity` without the wall) |
 | The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
 | Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
+| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks and every game lane (each single-player mode on its own instance `wikigate-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
 | The nano spray | the particles in both simulations (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
 | The sound | the events in both simulations (`tagpu_wikisim.c` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
@@ -74,8 +98,12 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
-Two entries, both under Quality of Life → Building: **Quick Build: Resource Extractors** and
-**Build Lines, Grids and Rings** (the Shift-drag placement family, landed on `main` at `90c67078`).
+Eight entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
+**Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
+Sweep**; in Camera, **Mega map and strategic icons**, a text entry
+([below](#a-text-entry-mega-map-and-strategic-icons)). Under **Replays**, a top-level category after it, the four replay entries in this order:
+**Watching a game**, **Take over a replay**, **Rewind a skirmish** and **Players and the camera**
+([the replay entries' plan](ingame-wiki-replay-plan.html)).
 
 ## The decisions
 
@@ -151,6 +179,25 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
 - **Try it yourself takes over the stage from the selected demo's scene**: the same map, units
   and fog, with the script stopped and the controls handed to the player. Back to demo returns.
 - **The entry's text** scrolls below the controls.
+- **An entry with no demos is a text entry** and lays out as its title, subtitle, badge and text,
+  the text taking the stage's room; the demos column says No demos (`wiki.js` `#entry.text`,
+  `tagpu_wikilay.c` `entry_col`). No `stage`, `play`, `replay`, `x1`, `x2` or `try` hit is drawn,
+  so the frame record's stage rect stays zero and nothing looks up a stage for it.
+- **An entry with `"frame": "game"` takes the theatre layout instead**: the tree stays in its
+  column, `columns[0]` wide and the body's whole height, always on screen, and is the only way to
+  pick an entry or a demo. Such an entry's row in the tree, on every page, carries the open or shut
+  mark instead of the dot; open, it heads its demos, keyed `demo:i`, one indent deeper and without
+  their numbers, and the selected row is the demo. Beside the tree, the layout's gap between, the
+  stage's bezel takes what is left; under it one row -- the row's badge when locked, the demo's
+  title clipped to what is left, then play, replay, 1×, 2×, Try it and About (the entry's title,
+  subtitle, badge and scrolling text, in a panel over the stage's right, `theatre.about` % of the
+  bezel's width); then the caption, both as wide as the bezel. Picking an entry closes About. No
+  keys strip and no demos column. `art/wiki/layout.json` `theatre` holds `about` (38) and
+  `stage_min` (240 units, the stage's least height, which the load-time check refuses below); in the
+  DLL `tagpu_wikilay.c` builds it (`WIKIPAGE.about`, every op of the panel `HOPF_TOP` and built
+  last, so the hit map holds them first), and `tagpu_wikilay_check` builds every game entry's
+  theatre with About open and scrolled to its limit, the tree at its limit, Try it held, and locked
+  with either label of Try it, the widest row there is, which it refuses wider than the bezel.
 - **Columns** take fixed shares of the window and scale with it; long names wrap.
 - **A mod that turns the feature off**: a red circle with "Turned off in this mod" on the entry's
   page, and the same mark on its row in the tree. Its demos still play.
@@ -397,6 +444,8 @@ A strip above the stage, outside the game frame:
 | Interface | the Interface Type: right-click (1, the default) or left-click (0) | `iface=1` / `iface=0` |
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
+| Theatre | the theatre layout, which every entry with `"frame": "game"` takes (Watching; [the replay plan](ingame-wiki-replay-plan.md), decision 6), forced on whichever entry is open: the tree with the entry's demos under it beside the stage, under the stage one row of the demo's title, the controls and About, then the caption. A page entry forced so keeps its own stage | `theatre` |
+| About | the theatre's About panel (the entry's title, subtitle, badge and text, over the stage's right `theatre.about` %) | `about` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
 | Skin | the kit, or the flat whitebox | `skin=kit` / `skin=whitebox` |
 | Sidebar | the detected mod's pack (the fixture where it has none), the fixture, the 768-row fixture, or none | `sidebar=mod` / `fixture` / `tall` / `off` |
@@ -619,7 +668,7 @@ Its build buttons, PREV and NEXT, the ORDERS and BUILD tabs and STOP work as the
 Every other order button is drawn greyed. The owner's decisions are 1 to 12
 [above](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The engine facts are the engine map's [*The
 left sidebar: its pages, its buttons and who takes a
-press*](exe-reverse-engineering.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-press-disassembled-measured-2026-10-27).
+press*](engine/ui.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-press-disassembled-measured-2026-10-27).
 
 ### Which layout, and when a demo shows it
 
@@ -860,8 +909,10 @@ side had its own types.
   a demo would start on, every hash equal to `simparity.mjs --hash --layout` on the layout the
   check wrote (2026-10-27). `tagpu_wiki.check` now plays them for every side of that layout, with
   the side's casting on the mod's layout, at both Interface Types, and logs
-  `<entry>/<demo>/<side>/<iface> <hash>`, which `simparity.mjs --hash --side S --iface I` prints;
-  (d1) and (b2) compare every key, with `--pack` the side pack of the game's layout when it is the
+  `<entry>/<demo>/<side>/<iface> <hash>`, which `simparity.mjs --hash --side S --iface I` prints,
+  then `end`; the lane reads that output from a file, never a pipe, and refuses one without its
+  `end` (`simparity_hash`: under the gate's load a pipe once gave the players lane 365 of its 3795
+  records with exit 0). (d1) and (b2) compare every key, with `--pack` the side pack of the game's layout when it is the
   mod's, and fail on a context played on one side only, a different hash or a demo refused on one
   side only. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
 - **Try it in the game** (`wiki_regression.py try`) arms each demo's builds through the stage's
@@ -952,6 +1003,7 @@ engine's order.
 | tower | the first plain structure on the builder's menu with a Weapon1 |
 | wall | the first plain structure on the builder's menu with no Weapon1 and TEDClass `FORT` (without case) |
 | solar | the first plain structure on the builder's menu with EnergyMake − EnergyUse > 0 (a solar collector's energy is a negative EnergyUse: retail ARMSOLAR's is −20) |
+| commander | the walk's root itself: the side's sidedata `commander`, when its FBI exists, it is mobile and its footprint is 1 to 16 cells a side. It is the tenth cast, after solar (`WIKI_CAST_COMMANDER` 9), so every earlier cast keeps its index and every casting's `builds` bits their meaning; no other cast can take it, since the others come off menus and the walk excludes its root |
 
 - **Every cast's unit is distinct**: one unit in two casts would bind two of an entry's defs to one
   type, which the binder refuses for every demo of the entry. Tower, wall and solar are drawn from
@@ -960,6 +1012,18 @@ engine's order.
   exclude one another, and a last pass in the casts' order unbinds a pick that still repeats an
   earlier cast's, with the reason, so the casts are distinct whatever the tests. No pick of the six
   setups changed (`assetcheck.py`'s synthetic install has the collision).
+- **Every cast carries the economy's figures** as well as the world's: the FBI's BuildCostMetal,
+  BuildCostEnergy, EnergyUse (signed), MetalMake, MetalStorage and EnergyStorage, each finite. Only
+  a game reads them, so only a game holds them to the economy's bounds -- each at least 0 but
+  EnergyUse, whose magnitude is below 10^7 -- and **leaves a cast outside them unbound**, stopping
+  under the badge as for any unbound cast (`tagpu_wikidata_cast_economy`, `sim.js` `econFits`);
+  a page entry plays the same cast whatever its economy, so a mod's builder, extractor or solar
+  with such a figure still plays Quick Build and the other page entries (`simcheck.mjs` plays every
+  page demo and Watching with every cast's economy outside the bounds; `simparity.mjs` plays
+  that game in both simulations). And **its corpse**: the feature section
+  its FBI's `corpse` names, found as the 3D loader finds a feature and read into the features
+  table's record, or none when the FBI names none, the section is missing or the record breaks a
+  feature's bounds. A game binds a cast's corpse as its type's wreck (*A game*, below).
 - A cast the rule cannot fill, or whose type's footprint is not 1 to 16 cells a side
   (`WIKI_FP_MAX`, the width of a G row's mask), is **unbound**, and the loader's report says why.
 - **What pins it: the stock identity.** On the stock game it gives ARM exactly the types and
@@ -968,7 +1032,7 @@ engine's order.
 
 **The picks** (MEASURED offline 2026-10-28, `gfx.py --side-only` over the six compatibility
 setups; the C loader's are the same, `assetcheck.py --side`). No cast is unbound in any of the 13
-sides, and no strength is tied anywhere.
+sides, and no strength is tied anywhere. The commander, sidedata's own, is left out of the table.
 
 | setup / side | builder | advbuilder | mex | moho | geo | walker | tower | wall | solar |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1160,8 +1224,33 @@ unless said).
   hashes equal `simparity.mjs --hash --scripts`.
 - **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
   `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
-  `--wine`, `sidecheck`, `stagecheck` and `scenecheck`: 522 s, all passing. `assetcheck.py --side`
-  and `wikilaycheck.py` are run on their own.
+  `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and `wikilaycheck.py --check-only`, one after
+  another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
+- **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
+  game lanes leave, two to a lane, at one and a half a check and at least four (`--offline-jobs`;
+  13 at `-j 6` on 32 threads: 20 took the load to 59 and starved the lanes' mockup page),
+  `stagecheck` first as four shards (`stagecheck.mjs --shard K/4`: every fourth of its 16 passes,
+  each shard playing and measuring only the sidebars its passes draw); each `simparity` run as 24 shards
+  (`simparity.mjs --shard K/24`: contexts K and K + 24 of its 48, one played without the units'
+  scripts and one with them, so the shards cost alike; the rule, refusal, data and malformed cases
+  on shard 1, each shard's C side built in a temporary folder of its own) and each `simcheck` run
+  as four (`simcheck.mjs --shard K/4`: every fourth context, the rule cases on shard 1), and,
+  on `-j` workers (6 by default), each of `sp`, `page`, `demos`, `try`, `asset`, `stage3d`,
+  `units`, `cursor`, `watch` and `rewind` with `--launch` on its own instance `wikigate-<mode>`, made afresh on its
+  own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
+  command as a serial run, a process of the script, its log `DIR/<mode>.log` or
+  `DIR/mods-<setup>.log`. Every lane's prefix has registry hives of its own (`tacli create
+  --private-registry`; the mods lanes' `prepare_wine` already makes them so), and the two `--wine`
+  checks run in the prefix of an instance `wikigate-wine` made the same way, because Wine rewrites
+  a hive in place and the template's is one inode with every clone's: lanes at once on the shared
+  one could tear it. All of them are made before the first lane starts. The gate owns its lanes'
+  processes and never exits while one runs: on any way out, Ctrl-C and SIGTERM included, it
+  starts no more and ends each live one (SIGINT, which runs its clean-up, then SIGKILL after
+  120 s), so the run lock it holds is never released under a lane still playing. No check in it is decided by the
+  wall clock: the frames are counted at rest (`tagpu_wiki3d.count`), the demo's pace is judged on
+  its own clock, its pauses land on their ticks (`tagpu_wiki.pause`), and a stage's cost is its
+  work, its milliseconds only said. MEASURED 2026-10-30 at `-j 6` on the reference setup: the whole
+  gate, 36 lanes, in 347 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
 
 ## The first entry: Quick Build: Resource Extractors
 
@@ -1252,10 +1341,10 @@ sweep's brackets, ring, readout and popup, the kind's tag at the cursor and the 
 |---|---|---|
 | 1 | E and a click | one ARMCK: reclaim armed, a click on the lone rock orders it and puts reclaim away, as stock's click does; the rock is reclaimed and gone |
 | 2 | Pick the kind | E steps METAL → ENERGY → ALL, the popup's lit bar and the cursor's tag following; a click on the popup's METAL row picks it |
-| 3 | A METAL ring | two ARMCK, METAL: the ring over the rock field brackets the rocks and leaves the three trees; the release shares the rocks out, nearest first |
+| 3 | A METAL ring | two ARMCK, METAL, on the `field` scene: the ring over a battle's wrecks brackets them and leaves the three trees among them; the release shares the wrecks out, nearest first |
 | 4 | An ENERGY ring | over the grove: only the trees are bracketed, the two rocks stay |
-| 5 | Shift queues another ring | two rings with Shift held: the second ring's targets go after the first's, reclaim stays armed, and letting go of Shift puts it away |
-| 6 | Without Shift it replaces | ARMCK has a route of three moves queued; a ring without Shift replaces them with the rocks |
+| 5 | Shift queues another ring | on `field`, two rings with Shift held: the second ring's targets go after the first's, reclaim stays armed, and letting go of Shift puts it away |
+| 6 | Without Shift it replaces | on `field`, ARMCK has a route of three moves queued; a ring without Shift replaces them with the wrecks |
 | 7 | Cancel | the cancel action mid-drag ends the ring and keeps reclaim armed; a ring over plain ground orders nothing and stays armed; a cancel outside a drag puts reclaim away |
 
 **Mods that lock it off:** none.
@@ -1279,9 +1368,826 @@ greenworld's own, every figure as `features\green\rocks.tdf` and `trees.tdf` sta
 | rock08 | 1 × 1 | 25 | | 10 |
 | tree1 .. tree5 | 1 × 1 | | 250 | 40 |
 
-All block units and are reclaimable. A rock takes ARMCK `2 ⌈⌊15 + metal/2⌋ / 2⌉` ticks once it
+The `field` scene's wrecks are 3D features (each section names its model, `object=`), every figure
+as `features\corpses\arm_corpses.tdf`, `core_corpses.tdf`, `arm_heaps.tdf` and `core_heaps.tdf`
+state it, all 2 × 2:
+
+| Feature | Model | Metal | Height | Blocks |
+|---|---|---|---|---|
+| armpw_dead | armpw_dead | 42 | 40 | yes |
+| armham_dead | armham_dead | 121 | 40 | yes |
+| armllt_dead | armllt_dead | 210 | 20 | yes |
+| corak_dead | corak_dead | 45 | 20 | yes |
+| corck_dead | corck_dead | 104 | 20 | yes |
+| corthud_dead | corthud_dead | 118 | 20 | yes |
+| armpw_heap | 2x2f | 21 | 4 | no |
+| armllt_heap | 2x2b | 105 | 4 | no |
+| corak_heap | 2x2c | 22 | 4 | no |
+
+The rocks and trees all block units; every feature is reclaimable. A rock takes ARMCK `2 ⌈⌊15 + metal/2⌋ / 2⌉` ticks once it
 touches it (52 for rock4, 66 for rock2), a tree 140: the countdown is not scaled by WorkerTime
 (`exe-reverse-engineering.md`, the Reclaim handler `0x404AD0`).
+
+## A text entry: Mega map and strategic icons
+
+The entry describes the mega map and the strategic icons ([mega map plan](mega-map-plan.html),
+[camera zoom](modules/camera-zoom.html) §2.3m, [strategic icons](modules/icons.html)) in seven
+paragraphs and has no demos: the stage cannot show either.
+
+**The stage has no camera level.** Every frame of it is at zoom 1, the eye moves only in a players
+entry (*The frame*, below), the 2D ops' world transform has no level term, and the 3D stage
+renders the whole map at zoom 1 and composites it at the stage's fit. No wheel reaches either
+simulation: the wiki's `wheel()` scrolls the panel under the pointer, and `sim.js` has no wheel
+input.
+
+**The icon rule shows no icon on any map the wiki holds.** `inc/tagpu_icon_rule.h` gives
+`d' ≈ (gh/z)/(4970·mult)`: a class turns into an icon only once the frame spans about 4970·mult
+world px top to bottom, about 3 980 px for COMBAT (mult 0.80) and 8 090 px for COMMANDER (1.628) at
+the default `icondist`, whatever the screen's resolution or UI scale. A wiki map's ground is at most
+48 rows (768 px, `WIKI_GROUND_ROWS`), so its floor is 0.25, and a game frame is 480 to 768 game px
+tall, so at the floor it spans at most about 1 900 to 3 100 world px. MEASURED 2026-11-03, the
+header compiled with gcc on the reference setup, defaults (scale 100, dist 100, fade 33), R = 20 px, alpha
+0..255:
+
+| frame, level | COMMANDER | FACTORY | BUILDING | AIRCONS | AIRCOMBAT/AIR | CONS | COMBAT | hidden |
+|---|---|---|---|---|---|---|---|---|
+| wiki 1152×768, z 0.25 | 0 | 0 | 0 | 0 | 109 | 0 | 109 | none |
+| wiki 1152×544, z 0.25 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | none |
+| wiki 1152×768, z 0.25, `icondist=50` | 109 | 217 | 255 | 255 | 255 | 255 | 255 | none |
+| game 1920×1080, z 0.25 | 0 | 0 | 183 | 99 | 240 | 183 | 255 | none |
+| game 1920×1080, z 0.05 | 255 | 255 | 255 | 255 | 255 | 255 | 255 | all |
+| game 3840×2160, z 0.25 | 255 | 255 | 255 | 255 | 255 | 255 | 255 | all |
+
+So the game's rule shows at most a faint COMBAT/AIR icon over its model on a wiki map, and hides no
+model; a demo cannot show what the rules would not do. The bound is the map's world size and the
+frame's game size, not the frame kind: maps of 250 to 500 cells would be needed.
+
+**What a stage would need (a gap, not built).** A page entry with a `screen` and a scene `camera`;
+a wheel input (`{ "at", "wheel", "mega" }`) in both simulations; the zoom's rule (the notch factor,
+the per-notch target, the anchor terms, the ease, the floor, the centre range) shared between
+`tagpu_zoom.c` and both simulations as a pure header, with simparity hashing the camera; every
+stage op through the level; the minimap's camera box at 1/z; Try it's wheel over the stage; and the
+3D stage at a level. That shows the wheel gesture on a small map; it still shows no icon.
+
+## The game frame on the stage: the replay entries
+
+An entry with `"frame": "game"` teaches the replay system: the stage shows a whole game screen, and
+its demos press the replay HUD's controls on a replay of a small game. Design, decisions and the
+landings: [the replay entries' plan](ingame-wiki-replay-plan.html). Its data rules are in
+[*The data format*](#the-data-format), its game in [*A game*](#a-game-seats-kills-wrecks-and-the-economy).
+
+**Watching a game** (`art/wiki/entries/watching.json`, under Replays) is the first. One game,
+a minute long (`end` 1800), on a 64 × 30 field (`art/wiki/stage/watching.field.json`, the
+green recipe, one 3 × 3 deposit): seat 0, Ada, with a commander and a construction kbot, builds a
+solar collector and an extractor; seat 1, Bram, has a commander and a walker sent on two moves, killed at
+game ticks 1200 (the walker) and 1500 (the commander), so the replay's markers are Bram's
+commander's death and his defeat, both at 1500. Seven demos press its controls: play and pause,
+the speeds, back and forward 10 s, the track pressed then dragged, the markers (a seek to the
+death and to before it), a bookmark added and removed, and Leave's question answered No.
+
+**Rewind a skirmish** (`art/wiki/entries/rewind.json`, under Replays after Watching) is a **live**
+entry (`"live": true`): Watching's field, units and seats, every demo's game 2700 ticks long and
+played with the sidebar, but for *Undo a death*. The viewer is seat 0, the player, and the demos
+press the live HUD -- the top bar's rewind button and the strip it opens under the bar -- on a
+live skirmish. Five demos: the button (the strip opened, the game held still, Back to now); back
+in steps and a seek in the past; Play from here (the snap back to 0:20, the second click, the
+fork); undo a death (the builder and the commander killed at 860 and 900 in the original, and a
+fork from 601 where both live); and forks of forks (a fork from 301, then a rewind inside it and
+a fork of it from 601).
+
+**Take over a replay** (`art/wiki/entries/takeover.json`, under Replays between Watching and
+Rewind) is a **takeover** entry (`"takeover": true`): Rewind's field (`art/wiki/stage/takeover.field.json`,
+the same ground), units and seats, every game 2700 ticks long with the sidebar false, and both
+seats acting in the recording through their own cursors -- Ada (seat 0) has her commander build a
+solar collector and her builder an extractor, then sends the commander out; Bram (seat 1) moves his
+commander twice and sends his walker, after its scene orders, towards Ada's solar -- with Ada's
+builder and commander killed at 1500. The viewer watches it with the replay HUD and presses
+its Take over set. Four demos: Take over (the snap back to R 301, the picker, Bram's row taking the
+game over while Ada's recorded inputs play on); the Forks bay and its lanes (one kept fork, F1,
+switched to and left with Back to main recording); Save as a replay and Delete (two kept forks, F2
+saved, F1 deleted, F2 deleted while watched); and the fourth fork (three kept forks, Take over at
+1100 snapping to 901 with the warning that it replaces F2, Ada's row taking over).
+
+**Players and the camera** (`art/wiki/entries/players.json`, under Replays after Rewind) is a
+**players** entry (`"players": true`): a replay on a field of 96 × 48 cells
+(`art/wiki/stage/players.field.json`, the green recipe, one 3 × 3 deposit) watched through a
+screen of 64 × 30 cells, so the camera has somewhere to go. Three seats: Ada (seat 0, ARM, team 0)
+with a commander c0 and a construction kbot b0, Bram (seat 1, CORE, team 1) with a commander c1 and
+a walker w1, Cleo (seat 2, ARM, team 0) with a commander c2 and a solar collector s2; each seat's
+camera is recorded data. Every demo's game is 1800 ticks with the sidebar false: Ada's b0 builds a
+solar at 10 and c0 goes east at 300, her camera gliding after it; Cleo's c2 builds a solar at 100
+and queues an extractor on the deposit and a second solar; Bram's cursor appears at 120, w1 goes
+west at 200 with his camera gliding from 220, and c1 sets out at 900, its camera with it; w1 is
+killed at 1100 by Ada and s2 at 1500 by Bram. Five demos press its players column: **Jump** (Bram's
+row, then Ada's), **Follow** (Bram's row, then again for Free cam), **Sight** (a seek to 930, Sight
+on Bram through w1's death and a radar contact, then the full map again), **the overlays**
+(Cursors, Clicks and Selections each switched off, then Cursors on) and **the stats window**
+(opened, army, kills, split by teams, closed).
+
+### The replay and its seek
+
+`replay.js` and its port `tagpu_wikireplay.c` hold the viewer's clock and the HUD's state and own
+the game simulations; the simulation knows nothing of the HUD.
+
+- **Two clocks.** The game script plays on game ticks in a game simulation; the viewer's script
+  plays on demo ticks, one a step, and moves the game only through the controls: paused, a speed
+  (½× to 8×, starting at 1×), a seek. The controls act as the game's replay HUD does: play, speed,
+  back and forward 10 s, the track and its drag, a bookmark (a press within 3 s of one removes
+  it), Leave and its question (Leave holds the game while it asks; No restores the pause it had).
+- **The walker.** Before the replay shows, a second game simulation plays the script to its end,
+  `WIKI_REPLAY_WALK` ticks a step, and marks each commander death and each defeat from the seats'
+  counters: the markers cover the whole game, ahead of the playhead, as the game's do.
+- **A seek re-simulates** (decision 11): forward, the game plays on; back, it is freed (the pointer
+  cleared first) and made again from tick 0. A step runs at most
+  max(`WIKI_REPLAY_SEEK`, `WIKI_REPLAY_WALK`, 8) game ticks whatever the script or the presses, so
+  a step's cost has a ceiling by construction. A seek's end marks every sound it re-simulated as
+  heard (`quiet`), so none plays at once.
+- **Paced by cost** (`tagpu_wiki.c` `replay_steps`, `wiki.js` likewise): each page fill runs whole
+  steps while the sum of their `tagpu_wikireplay_cost` stays within `WIKI_REPLAY_FILL`, always at
+  least one; the rest stay owed. The cost is never fewer than the ticks the step runs: the ticks the
+  state says, or the most a step runs when the viewer's trip acts on the step's clock tick, since
+  that press may start a seek the step plays. The replay is deterministic in demo ticks, so pacing
+  changes how many a fill runs, never what any does. A fill runs at most max(`WIKI_REPLAY_FILL`,
+  the most one step runs) game ticks, 64; its time is that many ticks at the dearest tick's cost,
+  which is the scene's to keep low: one A* search that expands the whole grid, a unit sent to a point
+  no node stands it on, costs about 160 ordinary ticks (MEASURED 2026-11-01, the i686 build under
+  Wine: 153..192 us against 0.9 us). **SEEK, WALK and FILL are 64**, set from the
+  tick's measured cost: Escalation's ticks are the dearest (its commanders' scripts scan every unit
+  id to `MAX_ID` every 2.5 to 5 s), and 64 holds its worst fill at 1.75 ms natively while a seek to
+  the end of Watching (1800 game ticks) takes 29 steps, about a second at 1×, and one to
+  `WIKI_GAME_END_MAX` 85 steps, under three seconds (`tagpu_wikireplay.h`; the plan's *The
+  measured costs*).
+- **The held view.** While a seek runs the stage keeps the last world drawn and the HUD shows the
+  playhead at the target; the view is copied (and filtered to the frame's view, *The frame*
+  below) only while no seek runs.
+- **Try it yourself** hands the HUD's controls to the player (`WIKI_PLAY_TRY`): their presses on
+  the stage's HUD act at once, and Leave, then Yes ends the replay `left`, with the caption that in
+  the game this goes back to the Replays browser (`WIKIFRAME_LEFT`) and Try it offered again
+  (decision 23).
+- **The replay's hash** (`tagpu_wikireplay_hash`) covers the clocks, the transport, the viewer's
+  cursor, the bookmarks, the toast, the question, the walk and its markers and the game's
+  `tagpu_wikisim_hash`, then, only in a live replay, the live block (below), so a replay's hash
+  takes no byte more; `simparity.mjs` compares it and both views demo tick by demo tick, and its
+  press trace replays Try it's presses, ending on Leave then Yes.
+
+### A live entry: the rewind on a live skirmish
+
+A live entry's demos and Try it play the replay layer's **live mode** (`replay.js`,
+`tagpu_wikireplay.c`, LIVE in its header): the game's own live rewind, state for state, its waits
+removed. The states are `tagpu_replay.c`'s IDLE, OPEN and PAST (its FLUSH and ENDING are
+instantaneous here); every verb, clamp, the arm and the toasts are `tagpu_hudinput.c`'s. Nothing of
+it runs for a replay entry.
+
+- **The live game L** (`game`), in refuse mode, is the original timeline played live: one game tick a
+  demo step while the rewind is idle, up to the game's end, which every timeline holds at. There is no
+  walker. **Open** (the rewind button) holds L still at G, its tick; the span is 1 to G − 1, and an
+  open whose span is empty is refused ("Rewind refused"). A close from Open changes nothing, as the
+  game's close without a seek rebuilds nothing.
+- **The past** is a second simulation **P** (`past`), re-simulated from tick 0 along the selected
+  timeline's chain -- its ancestors' segments, then its own: at each chain member's first tick R its
+  fork operation, and between two ticks the entries that member logged for the next one, each
+  through the call that applied it live, so P's world is the timeline's **by construction**. A seek
+  to T shows the world of T − 1 (`rew` and `fwd` 300 ticks, the track clamped to the span); back of
+  P's tick P is freed and made again, forward it plays on, at most `WIKI_REPLAY_SEEK` ticks a step.
+  L is never stepped or written while the past is shown.
+- **Play from here** plans at the tick after the world shown, with the recorder's own code from
+  `tagpu/ddraw/inc/tagpu_recrules.h`: the chain member holding it; R the last tick of that member's
+  segment up to it that the recorder's writer flags a refresh (`reclossy_is_refresh`,
+  `REC_REFRESH_TICKS` 300: on the original 1, 2, 301, 601, …), refused at the member's own first
+  ("Cannot play from m:ss"); the fork it would evict by `rec_fork_evict` (at most `REC_FORK_LIMIT`,
+  3, live forks; never the original or the selected one; the least recently used, a timeline's last
+  use being the demo tick it was made on; the earliest on a tie; refused when the set cannot be
+  bounded). At a refresh with nothing to evict it forks at once; else the first click snaps the past
+  back to R and arms ("Click again to play from m:ss", with ", replacing F<n>" when it evicts), and
+  the second forks.
+- **The fork**: P's `tagpu_wikisim_fork(R, part, mode)` -- in a scripted demo the part of the next
+  id, whose `from` and `parent` must be the plan's or the replay fails; in Try it no part, in stall
+  mode, the economy's stall mode's first caller -- which drops the recorded future, applies the
+  release and installs the part as the new script; then L is freed, P
+  takes its place, and the new timeline is selected ("Playing from m:ss").
+- **The timelines** are at most `RECR_TIMELINES` (64) rows -- id, parent, R, last, live, last use,
+  mode, part, log -- in creation order, ids never reused, the plan refusing the one past them. An
+  evicted timeline is marked deleted, and its part and log are freed once no live timeline's chain
+  reads it (`sweep`).
+- **Back to now** (and a close in the past, the same rebuild in the game): P freed, then **the
+  release** on L, logged on the selected timeline at G + 1 like an input, so every re-simulation
+  applies it again at the same point. The release (`tagpu_wikisim_release`, `sim.release`) is what
+  the game's rebuild leaves of seat 0's input: held keys, buttons, a drag, a gesture and a gadget
+  capture let go without acting [INFERRED: the hardware's, which no recording carries]; nothing
+  selected and nothing armed, the column routed to MAIN2 (MEASURED, the plan's *What the game's live
+  rewind leaves*); the spacing and the sweep's kind kept; and every generated trip input not yet fed
+  dropped, so a release costs the game at most the one order in hand. The fork calls the same
+  release. The live data rule (*The data format*) keeps each build's and each reclaim's select on
+  the order's own tick, which a release between two ticks cannot split, and refuses a pick, whose
+  popup a release closes.
+- **Try it's world input after a fork** (`tagpu_wikireplay_input`, `R.input`) is **logged first**
+  and then applied, so every fork can be made again exactly: only after a fork; every kind while the
+  rewind is idle, a move alone while it is open, none in the past; and only while the logs can hold
+  it (`WIKI_REPLAY_LOG`, 65 536 entries over every kept log, `WIKI_REPLAY_LOG_KEEP` of them held back
+  for the ups and the release). Leaving idle lets go of every key the world holds into L, logged.
+  Both pages feed it the same way (`wiki.js` `liveWorld`, `liveFlush`; `tagpu_wiki.c` `live_world`,
+  `live_flush`): a point is on the world when the topmost control under it is the stage itself and
+  it falls, through the drawn frame's fit, on the column or the map (`tagpu_wikiframe_on_world`);
+  a move is held as the pointer's last world point and sent once, before each replay step and
+  before each press; a press on the world replaces the held move with its own point, sends it, then
+  its down; keys and buttons go after the held move. The DLL sends an up to a live Try-it replay
+  whatever frame is drawn (`try_up_on`), so no key it took down stays held in it.
+- **One cursor**: in a scripted live demo, while the viewer's trip or its glide back runs and the
+  rewind is idle, L may feed the human seat (seat 0, or the seat a takeover took) no input; a step
+  that does sets `clash` and ends the replay.
+- **The top bar's memo**, one a replay, as DrawGameScreen's at `main+0x37E3F`
+  ([render.md](engine/render.html), *The memo's layout*): each step eases the stored values toward
+  the shown world's human seat (a step of an eighth, at least 1, held to the storage), and once, when its
+  DisplayTimer is below the tick shown, raises it by 30 and samples the four rates. A seek's end, Back
+  to now and a fork set the DisplayTimer to the tick shown, as the game's do, so in Open and the past
+  the rates are the ones sampled before the open. Floats are f32 in both twins.
+- **The live block of the hash**: the rewind's state, G, the tick shown, the arm, the track's last
+  seek, `clash`, the logs' count, the selected timeline and every timeline's fields, the toast's
+  evicted fork, the glide back, `full`, the memo's floats as their bits and the DisplayTimer, and
+  last P's `tagpu_wikisim_hash` or 0, 0.
+
+### A takeover entry: Take over a replay
+
+A takeover entry's demos and Try it play a replay with the replay HUD's Take over (`replay.js`,
+`tagpu_wikireplay.c`, TAKE OVER in its header): the game's own Take over state for state, its
+waits removed -- `tagpu_hudinput.c`'s `pick_act`, `pick_fill`, `lane_act` and `lane_fill`, the
+switch and the deletion of `tagpu_replay.c`, the toasts' strings. Nothing of it runs for another
+entry: Watching's Try it draws the Take over button and the Forks bay and presses neither
+(the owner's answer QD).
+
+- **Watch mode** plays the selected timeline's chain: the original, or a fork the file holds --
+  the demo's `kept`, or one a deletion left -- from its R, each member's fork operation applied as
+  the game reaches its R (`chain_step`), to the chain's last. The kept forks are rows of the file
+  from the start: live, `used` 0, in refuse mode; one whose seat has no unit at its R − 1 fails the
+  replay. The walker walks the selected chain; the track fills to the R of the chain's member whose
+  parent is the original, else to the end, and the time's second clock is the chain's last.
+- **The picker**: Take over pauses the playback and asks. The plan is Play from here's (the
+  recorder's refresh grid and `rec_fork_evict`, *A live entry*, above) at the playhead plus one, at
+  most the chain's last, once more one tick on when that is a segment's first ("Cannot take over at
+  m:ss" when neither plans); the playback is sought back to R − 1 and the picker opens there, a row a seat, a seat with no unit dimmed and taking nothing, and at the
+  fork limit the warning naming the fork it would replace. It closes when the playback runs or the
+  playhead leaves R − 1, when Take over is pressed again, when rew, fwd, play or the track are, and
+  when the selected timeline changes; a deletion plans it again at R, keeping it with the new
+  eviction or closing it.
+- **The Forks bay** toggles the lanes while the file holds a fork. **A lane** switches the selected
+  timeline: **re-chained** when the chain members the game has crossed (R at most its tick) are the
+  same on both chains -- the world at that tick was made by the same fork operations and the
+  game's script is the last such member's, so it is the new chain's world by construction and the
+  game is kept -- else **sought**, the game made again and played along the new chain to the
+  playhead clamped to it. The timeline left is stamped as used. Either way the walker starts again
+  on the new chain, its markers blank until it has walked, **in the background**: a step runs the
+  game's part first and gives the walker what is left of `WIKI_REPLAY_WALK`, so a step still runs
+  at most max(`WIKI_REPLAY_SEEK`, `WIKI_REPLAY_WALK`, 8) game ticks, plus one fork operation per
+  chain member crossed. **Back to main recording** switches to the original.
+- **Save as a replay** writes a fork once ("F<id> saved as a replay of its own"; a second is
+  "Cannot save F<id>", as the game's export refuses to overwrite). **Delete** arms ("Click again to
+  delete F<id>") and deletes at the second press ("F<id> deleted"); the watched fork is left first
+  for the nearest live timeline up its chain, and the bay closes with the last fork. A lane, Back
+  to main recording or the lanes closing clear the arm.
+- **The takeover**: a row of the open picker takes that seat, h, over. The part of the next fork's
+  id (its `from`, `parent` and `seat` must be the plan's, or the replay fails; Try it's none, in
+  stall mode) is forked at R as seat h (`tagpu_wikisim_fork`, *A game*, below), the walker is freed,
+  the evicted fork deleted and the new fork selected, and the replay goes into **live mode**:
+  Rewind's live game (*A live entry*, above) with seat h the human wherever Rewind reads seat 0 --
+  its inputs, logs, releases, cursor and top bar ("Taking over NAME at m:ss"). The top bar's memo
+  is carried from watch mode's zeros and eases toward seat h's values; the DisplayTimer is set to
+  R − 1, so the step that plays R samples seat h's rates.
+- **Try it** presses the same controls on the stage's HUD; before the takeover only the HUD acts,
+  and after it the live HUD and the world take seat h's input (`tagpu_wikireplay_input`).
+- **The hash** gains, a takeover replay's only, the mode, the human seat, the picker and its plan,
+  the rows' serial, the lanes, the armed fork, the background walk, the warning, the saved forks,
+  every timeline with its seat, and the walker's tick, so no other replay's hash takes a byte more.
+  The cursor's `watched` is presentation and is not hashed.
+
+### A players entry: Players and the camera
+
+A players entry's demos and Try it play a replay with the replay HUD's players column
+(`replay.js`, `tagpu_wikireplay.c`, PLAYERS in its header): the viewer's state of the game's
+`tagpu_hudinput.c` row actions and `tagpu_replay.c`'s Follow, Sight and overlays, zero and unhashed
+in every other replay. The Players set acts only in a players replay: `tagpu_wikireplay_press`
+takes it nowhere else and the loader refuses it in any other entry's script, as Watching's Try it
+keeps Take over inert.
+
+- **The camera** (the owner's answer OQ-A): the replay starts on eye (0, 0), the map's top-left
+  corner, with no Follow, as the game's replay does (MEASURED M0-P3: held at the playing's first
+  step the eye read (0, 0) and stayed there to GameTime 300 with no input). **Jump** puts it once on
+  the seat's recorded camera, **Follow** keeps it there (pressed again, Free cam; another seat's
+  Follow replaces it), and nothing else moves it: the stage has no edge or key scroll and its
+  minimap is not clickable. A seat's camera is the scene's `camera` and its `{camera, over}` glides,
+  interpolated as the recorder's `persp_sample` interpolates its samples (`tagpu_wikidata_seat_cam`,
+  `sim.js` `seatCam`); Jump and Follow on a seat with none toast "Camera was not recorded". A seek
+  leaves the camera alone and a Follow goes on from the new tick.
+- **Each step's tail**, after the game's part, paused or not, at the shown tick (the held world's
+  while a seek is pending): first the camera (Jump before Follow); then, with no seek pending, a
+  seek's end -- every record's DisplayTimer set to the tick and the click ring's start
+  `click_from` with it -- and a Sight request, each making the pass; then the top bar.
+- **Sight** is a request, applied by the next tail with no seek pending, as the game's frame visit
+  runs `sight_change` only then. A change applies **the bar timer's phase rule** of the game's
+  Sight (`tagpu_replay.c` `bar_rates_due`, copied as `rates_due`): the newly viewed record's
+  DisplayTimer, when at or above the tick, is lowered to the last deadline of its own 30-tick phase
+  below the tick (0 when the phase has none), so the tail re-reads that record's rates once and
+  leaves its timer in its phase. Each tail eases the top bar's memo toward the viewed seat's
+  stored values (all 0 under the full map) and, while the viewed record's DisplayTimer is below the
+  tick, raises it by 30 and re-reads the four rates; under Sight the bar is the seat's numbers in
+  its side's art, `top_side` (decisions 13 and 15).
+- **The pass** (the minimap's fog and contacts): made at a Sight change and at a seek's end by the
+  tail, and by the game's part on every played tick that reaches the viewed record's 30-tick
+  deadline (`WIKI_REPLAY_PASS`), at that tick's world, as the engine's players phase checks
+  `+0xF0` every tick and runs the radar pass and fog composite when it is due: the viewed seat's lit
+  grid as one fog bit a block, and the ids of the units its contacts mark (*A game*, below:
+  `sightLit` and `sightContacts`); empty under the full map. The deadline is the next multiple of
+  30 above the last pass's tick, 30 before any: the engine's `+0xF0` is always the next multiple of
+  30 above GameTime (`0x497C10` sets 30, each due tick adds 30), a seek sets the viewed record's to
+  that (`sk_deadlines`) and a Sight change leaves it, so it is derived from the pass's tick rather
+  than kept (`pass_due`, `passDue`). At 2× to 8×, a step's 2 to 8 ticks, the pass is still made at
+  every multiple of 30 though no shown tick lands on one. The phase is that of a record made at
+  GameTime 0 with its pass at the multiples of 30, as M0-P measured one [INFERRED: a record's phase
+  follows its init's GameTime].
+- **The switches** Cursors, Clicks, Selections and Chat, all on at a replay's start; the team rows'
+  folds; the stats window's state (closed, measure units, split by player at every start, as the
+  game opens each replay); `click_from`. The teams chip splits by team only while the teams are
+  told apart (two teams or more, one of two seats or more, the HUD's `headed`): otherwise the HUD
+  draws it disabled, with no hot box, so the game takes no press on it, and the replay's press does
+  nothing either (`teams_headed`, `HEADED`).
+- **The samples**: the walker takes every seat's seven measures -- metal and energy income, the
+  excess, units, the army value, kills and losses -- at its first tick and every 30 GameTime after,
+  at most `WIKI_STAT_PTS` (181) a seat, the period the game's walker's `30 · max(1, ceil(span /
+  (30 · 511)))`, 30 for every wiki game; f32 as the game's (`tagpu_wikireplay_stat`, `R.stat`).
+- **The hash** gains, a players replay's only, the camera, Follow and the Jump asked, Sight and the
+  Sight asked, the switches, the folds, the stats window, `click_from`, the shown tick and the seek's
+  end due, the memo as f32 bits and the five DisplayTimers, the pass (its tick, its blocks, its fog
+  bytes and its contacts' ids), the samples' count, base and period, and every sample's f32 bits.
+  `click_from` is set at every replay's seek end, a live replay's included, but hashed only here.
+
+### The frame
+
+`frame.js` and its port `tagpu_wikiframe.c`; `stage.js`'s and `tagpu_wikistage.c`'s frame mode
+draws it.
+
+- **A game screen of the map's own size**: Wg = 128 + 16 w and Hg = max(16 h + 64, the column's
+  rows) game pixels -- the column at x 0..127, the top bar on rows 0..31 and the bottom bar on the
+  last 32 right of the column, the map at the viewport's top left (the camera at 0, 0, zoom 1),
+  fitted from the column's left edge and the top bar's top. The data rule above keeps it 4:3 or
+  wider, so the replay HUD fits. The whole canvas is the screen's black first, so the room the fit
+  leaves round a frame on the theatre's stage is a letterbox.
+- **A players entry's screen** (`frame.js` `size(M, sideH, screen)`, `tagpu_wikiframe_size`): the
+  frame of its `screen` (sw × sh cells) instead, Wg = 128 + 16 sw and Hg = max(16 sh + 64, the
+  column's rows), and **the viewport** 16 sw × (Hg − 64) world units, never deeper than the map (its
+  data rule). **The eye** is the replay's camera less half the viewport, clamped into
+  [0, map − viewport] as the engine's eye clamp `0x41C3C0` clamps it, the extent the map's
+  ([input.md](engine/input.html)). The world is drawn through the eye, the ground culled to the
+  cells the viewport meets and every world op scissored to the viewport; the 3D image is the whole
+  map placed at the eye, and its composite is scissored to the viewport too
+  (`tagpu_wikistage_image`'s clip, which `tagpu_wikiworld.c` hands to the world target,
+  `TAGPU_WORLDTGT.clip`). The minimap's camera box is `0x466B70`'s rule from the eye and the
+  viewport (`tagpu_wikiside_camera_box`, `side.js` `cameraBox`), the picture's border at eye 0 with
+  the whole map in view, as on every other entry. Without a screen the eye is (0, 0) and the
+  viewport the map, so every other entry's frame is the same by construction. The frame is
+  always at zoom 1.
+- **The overlays** (the owner's answer OQ-B), in every replay view: `watch` carries every recorded
+  seat's cursor (from its first move, while it is over the map), its clicks of age n + 1 − t from 0
+  to 14 at or after `click_from` (t the click's tick, n the tick shown, the game's 15-tick show),
+  and its owner's selection (`osel`, a unit selected by its own seat); `past` (Rewind's, and Take
+  over's after its takeover) the human seat's alone, the arrow and the rectangle the game's past
+  draws round the recorded commander (MEASURED 2026-11-01, M0-P4: Cursors removed the arrow alone,
+  Selections the rectangle alone). Each kind is switched by the replay's Cursors, Clicks and
+  Selections, which act only on a players entry, so they are all on everywhere else. They are drawn
+  last in the world, inside the viewport's clip: the selections as the stage's brackets in the
+  owner seat's colour (the game draws the engine's selection rectangle in that colour), the click
+  rings oldest first, 16 segments one frame pixel wide with a radius of 4 + 12 (15 − age) / 15 frame
+  pixels, then the cursors' arrows in seat order, the game's `OV_ARROW` as five filled triangles
+  (`HOP_TRI`) in the seat's colour and its seven edges in the side's GUI black
+  (`tagpu_mark.c`'s shapes, in frame pixels scaled by the fit). A seat's colour is its logo frame's
+  middle pixel (`seatColour`).
+- **Sight** (a players replay's `watch` view, seat s, the tick n shown): the map's fog is the
+  seat's lit grid (*A game*, below) at n, each 16-unit cell its 32-unit block's -- clear where the
+  count is not 0, grey where it is, no black (the skirmish's True LOS); the units drawn are seat s's
+  and any other one with a footprint corner (x ± 8 fx, z ± 8 fz) on a lit block, a stand-in for
+  `0x465AC0`'s four model-box points [INFERRED: a unit may show a block earlier or later than in the
+  game at a sight's edge]. A radar contact is not drawn on the map, as the game draws none (MEASURED
+  2026-11-01, M0-P5, Vulkan and GDI alike). The minimap carries the last pass's fog bits and
+  **dots**: seat s's units and every unit the pass's contacts name that is still live, at its place
+  now, in its owner's colour -- the dots move every tick while the bits keep the pass's, as
+  `0x466DC0` rebuilds the dots every tick and the radar pass runs on the record's deadline. A seat
+  sees only its own units' sight: an ally shares no sight, drawing or radar (MEASURED 2026-11-01,
+  M0-P6: allied seats 0 and 2, no lit block of either's grid round the other's commander, which was
+  not drawn and carried no contact bit).
+- **The frame's view** of the game shown (`tagpu_wikiframe_view`, `frame.js` `view`), by mode:
+    - `watch`, a replay entry's, **the watcher's**: no fog (the full-map reveal a replay's watcher
+      gets), and none of seat 0's cursor, ghost, sites, lines, drag, sweep, held keys or selection --
+      the viewer is not seat 0; the column is the controlled seat's side's MAIN2 with nothing
+      selected, whatever the game script's sidebar says, its gadgets in the states a fresh simulation
+      gives them (`tagpu_wikiframe_idle_side`, pinned against `sim.js` by `framecheck.mjs`).
+    - `player`, a live entry's while the rewind is idle or open: **the player's own screen**, the live
+      simulation's view as it made it -- seat 0's fog, column, selection, sites, lines and sweep --
+      since the game's open keeps them all (MEASURED, the plan's *What the game's live rewind
+      leaves*); the armed building's ghost only while the simulation's cursor is the one drawn.
+    - `past`, while the past is shown: the past simulation's world and **its fog**, seat 0's at the
+      tick shown, under **the live simulation's column**, which the game keeps from the open
+      (`tagpu_wikistage_side` copies it into the past view), with no unit under the cursor; nothing
+      selected and nothing armed, so no ghost, sites, cursor, lines, drag, sweep or keys (MEASURED,
+      the same).
+  A takeover entry's frame is `watch` until its takeover and then `player` or `past` as seat h,
+  the seat taken: the copy is of seat h's view (`tagpu_wikisim_view_as`), and the selection drawn
+  is seat h's alone, since a unit's selected flag is set only by its owner's seat and the view
+  carries every seat's.
+- **The two bars in the mod's own art** (`bar.js`, its port `tagpu_wikibar.c`), composed by the
+  engine's rules in palette indices then through the mod's palette ([ui.md](engine/ui.html), *The
+  resource bar tiles in a loop*): PANELTOP at x 129 and PANELBOT tiles after it, the `32xlogos`
+  badge (its colour held below the frame count, which the engine does not bound), the inclusive
+  fills and 3-column ticks, the ten strings in the side's font with the engine's K and `%.1f` rules
+  and its whole-string clip, and the bottom bar's PANELBOT tiles; column 0 from PANELSIDE's column
+  128. In a replay the viewed record is the viewer's, so every number is 0 (decision 13), but under
+  a players replay's Sight, where it is the seat's: the replay's memo, its stored values eased
+  toward the seat's, its rates the last re-read (*A players entry*, above); in a live
+  frame the numbers are the replay's memo and the shown human seat's storages and stored values
+  (*A live entry*, above), and the bars are composed again when one changes. **The two sides**
+  (decision 15 as the game draws a takeover of the other side, MEASURED 2026-11-01): the top bar --
+  PANELTOP, the PANELBOT tiles after it, the rects, the colours, the font and the badge's place --
+  is in the art of the record's `top_side`, and the bottom bar and PANELSIDE's column are the
+  load's side's; the badge's frame is the human seat's colour. `top_side` is the human seat's side
+  in a takeover's live game and the viewed seat's under a players replay's Sight
+  (`tagpu_wikiframe_seat_side`: seat 0 the load's side, any other seat the first layout side other
+  than the load's, the one that casts the rival units) and the load's side in every other record:
+  under Sight on Bram the top bar is CORE's while the column stays ARM's, as the game draws it
+  (MEASURED 2026-11-01, M0-P2: CORE's badge, labels and bars, 0 of 45 056 column pixels changed). The art is the side
+  pack's (`gfx.py`: `art.bar` per layout side, `art.logos`, `art.gui`), and in the DLL the sidebar
+  loader's (`tagpu_wikiside_load`: frame 0 of PANELTOP and PANELBOT, `[SIDEn]`'s fifteen rects,
+  `energycolor`, `metalcolor` and font, `<fonts>\<font>.<fnt_ext>`, the badge frames, the GUI
+  colour table; the names `fonts`, `FNT` and `32xlogos` read out of the running process,
+  `tagpu_replays.c`), each value bounded as `gfx.py` and `side.js` bound it; a side that fails one
+  has no bar, with a report line. Impure's wiki and config emblems are drawn over the top bar as in
+  the game: the wiki's in the rewind button's slot (`layout.json` `button.right[1]`) on a replay's
+  frame, which has no rewind, and left of it (`right[0]`) on a live frame, whose rewind button is the
+  stage HUD's (`tagpu_wikilay_button`, the game's own top bar's rule).
+- **The stage HUD**: the replay HUD built by `tagpu_hudlay_build` from a `HUDSTATE` the frame
+  record makes (`tagpu_wikiframe_hudstate`): a screen of the frame's size at 100 % (the HUD unit
+  the frame's height / 720), the column and both bars as the engine frame, every switch on and
+  nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks, the
+  stats window closed, the record's held control and toast. **A players record** sets its players
+  column as `tagpu_hudstate.c` sets the game's from the packet: Sight and Follow drawn pressed on
+  their seats, the switches from its bits (Stats from the window's state), the folded team rows,
+  the teams from each seat's `team` in seat order (the game joins mutual alliances in that order,
+  and a team's seats are mutually allied), whether each seat's camera was recorded, and the stats
+  window at the layout's place (the stage has no drag) with its measure, its split and its groups --
+  a seat each, or a team each when the split is by teams and the layout is headed, summed in f32 --
+  built by `tagpu_hudlay_stat_groups`, the one function the game's stats window now calls too, its
+  JS twin in `frame.js`. The open window's chart is drawn in **the stage HUD's own chart slot**,
+  slot 1 (`tagpu_huddraw_chart(1, …)`, `HUD_TEX_CHART_WIKI`), never the replay HUD's slot 0, so a
+  frame drawing both stats windows draws each from its own image. A row's Jump, Sight and Follow
+  are drawn only on the row under the pointer, as the game's are. A live record makes **the live HUD** instead, as `tagpu_hudstate.c`
+  `present_live` does: the rewind button, and while the rewind is not idle the strip, its track on
+  the span from the first tick to G and its playhead at the tick shown, Play from here drawn down
+  while armed, never playing; the five live toasts in the game's words. **A takeover's watching**
+  sets the Take over set as `tagpu_hudstate.c` sets the game's from the packet: the track from
+  tick 0 on the end's axis, its fill to `fill_to`, the time's second clock the chain's last; the
+  forks in seconds named by their seats, the watched one, the armed Delete and, while the picker is
+  open, the one it would replace; the picker while open, with the fork limit's warning; the Take
+  over button down while the picker is asked, sought or open; the lanes as open as the record says.
+  A seat is out, its row dimmed and its picker row refused, while it has no unit, the game's rule.
+  Its six toasts are the game's strings. **Leave's question** at
+  YESORNO's own rectangles, centred on the frame [INFERRED: the placement; the rects MEASURED from
+  the retail file].
+- **The viewer's cursor** is the game's arrow at the player's cursor scale, gliding in control
+  space to each control's drawn box centre (the track at its tick along the playhead's run) on the
+  viewer's clock (`tagpu_wikiframe_point`, `_glide`). **On a live frame there is one cursor**: the
+  simulation's own, its shape and animation at its world point, while the rewind is idle and no trip
+  runs; a trip starts from it (`@game`), and a press that leaves the rewind idle glides back to it,
+  resolved among the HUD's controls as drawn at that press (`tagpu_wikiframe_pressed`). **The
+  Take over set's indexed keys** -- a picker row `takeas:<seat>`, a lane's `lane:<k>`,
+  `export:<k>` and `delete:<k>`, k its place in the record's fork list -- resolve among the record's
+  forks; a return glide from a picker row is resolved on the HUD with the picker open (with
+  placeholder forks enough to draw the limit's warning when the takeover's picker drew it), and a
+  trip to or from Back to main recording on the lanes as drawn at its press, open with the fork it
+  watched (`watched`): watching a lane is what draws that control and widens the lane. **The Players
+  set's indexed keys** -- a row's `jump:<seat>`, `sight:<seat>` and `follow:<seat>`, a team
+  header's `fold:<team>`, a chip's `chip:<name>` -- resolve as drawn: a row's buttons on the HUD
+  laid out with the pointer on that row's centre (`tagpu_wikiframe_row_point`), since the HUD draws
+  the hover strip only there and each button lies inside its row; a trip to or from the stats
+  window's close on the HUD with the window open. In Try it
+  the player's pointer is the one cursor (decision 27); once a fork is played and the past is not
+  shown, the simulation's follows it over the world and is the one drawn there, its shape and
+  animation at the pointer, the armed building's ghost with it. Whether the pointer is on the world
+  is decided once, on the game thread (`TAGPU_PK_WIKI.try_world`, *Across the threads*), for both
+  the ghost and the cursor. That answer comes through an earlier frame's map while the cursor is
+  placed on this frame's canvas, so the render thread also drops the ghost in any frame that does
+  not draw the simulation's cursor (`frame_hud`): no frame shows the ghost without the cursor, or
+  both cursors.
+- **The frame record** (`WIKIFRAMEREC`, 4600 bytes): what the stage HUD and the bars need, by value
+  -- on, playing, the question, the seats (name, colour, lost, out, the units and eight economy
+  figures each), the side and the badge's colour, the speed, Try it, the playhead and end, the
+  markers then the bookmarks, the held control, the toast and the viewer's cursor's trip; and,
+  zero but on a live frame, `live`, the rewind's state, the arm, `simcur` (the cursor drawn is the
+  simulation's), the first tick, G, the tick shown, the span's last, the arm's R, the top bar's ten
+  numbers (f32) and the human seat's cursor (its world point, shape and age); and, zero but in a
+  takeover entry's record, `tk`, the picker (closed, asked or sought, open), the lanes open, the
+  human seat (−1 while watching), the fork limit, whether the takeover's picker drew the warning,
+  the watched chain's last and `fill_to`, the picker's R and the fork it evicts, up to three forks
+  by (R, id) with their seat and their watched, chain and armed flags, and `top_side`; and, zero but
+  in a players entry's record, `pl`, Sight's and Follow's seats, the switches, the folded team rows,
+  the stats window's state (open, split, measure), each seat's team, whether each seat's camera was
+  recorded, the samples' count, period and base, and `series`, every seat's samples of the window's
+  measure as f32 (2 896 of the record's bytes), the measure the game's `TAGPU_PK_HUDSTAT` carries.
+  The cursor's trip carries `watched`, the timeline watched at its press. The render thread bounds
+  each of them (`tagpu_wikiframe_bound`: a fork with an id outside 1..`RECR_TIMELINES` − 1 dropped,
+  a seat outside the record's seats named "Unknown seat", `top_side` kept below the layout's sides
+  only in a takeover's live game and under a players record's Sight; Sight and Follow held to the
+  record's seats, the measure to the seven, the samples to `WIKI_STAT_PTS`, each sample through the
+  stats window's finite test; a record that is not `tk`, or not `pl`, with that whole block 0).
+
+### Across the threads
+
+- **The game thread** (`tagpu_wiki.c` `page_fill`) plays a frame:game entry's demo as a replay in
+  the page demo's place, steps it as above, copies the held view, fills the record after the fill's
+  last step (`tagpu_wikiframe_record`: the game's view points into the simulation's arrays, which
+  the next step may free; the record holds values only), drains the sound past the view's `quiet`,
+  and carries the record in `TAGPU_PK_WIKI` after the stage (`frame`; the area 172 744 bytes with
+  it, the view `WIKISTAGEVIEW` 167 816 of them with a replay's overlays -- the eye and viewport,
+  each unit's `osel`, the cursors, the clicks with their ages -- and Sight's minimap dots and pass
+  fog bits, the record 4 600, the head 328, sizeof on the DLL's compiler), with the theatre's `about` and
+  `leave_held` and the replay's serial `rep_serial` in the head, a count the game thread
+  increments whenever it makes or frees the replay. The reader takes `frame` only from an area of the whole size
+  (`tagpu_pk_wiki_frame`). In Try it on a live frame it also answers, once a fill, whether the
+  pointer lies on the frame's world (`try_world`: the record's `simcur` and `stage_world` on the
+  pointer through the hit map it last read) -- the one answer both the view's ghost and the drawn
+  cursor follow; the byte sits in padding, so the area did not grow.
+- **The render thread** (`tagpu_wikistate.c`) copies the record and bounds its copy before anything
+  reads it (`tagpu_wikiframe_bound`: every count, flag, tick, side, colour, float and string); lays
+  the stage HUD out twice on **its own** `HUDSTATE` and `HUDOPS` (statics of this file, never the
+  replay HUD's, which are in use when the wiki is open over a replay, and whose hits enter the
+  wiki's map only, so the stage can never drive the real replay) -- once for the boxes, once with
+  the hint at the viewer's point or the player's pointer, and, with `try_world`, the simulation's
+  cursor at the pointer, its shape and age from the record; composes the bars only when what they are
+  composed of changes (the published side art, the side, the colour, the frame's size, a number
+  of the record's `bar`: on a live frame the economy moves those about once a tick), bumping a
+  generation `tagpu_vk_hud.c` sends whole as `HUD_TEX_BAR` (`HOP_BAR` ops); splits the frame's TOP
+  range (the question, the cursor) out; and builds the hit map topmost first: the page's top layer
+  (About), the question, the stage HUD cut to the canvas, the page. Each hit carries
+  its source (`WIKIHIT_PAGE`, `_HUD`, `_DIALOG`), since `play` is both the page's and the HUD's;
+  `TAGPU_CMD_WIKIHITS` is 160 + 128 + 4 (the record 10 072 bytes), with the stage HUD's playhead run
+  as drawn, the end it stood for, on a live strip the span it stood for (`hud_first`, `hud_G`:
+  first to max(G, first), the record's; 0, 0 on any other frame), on a takeover's watching frame
+  with the lanes open **the lanes it drew** (`nlane`, `lane_id[3]`: the fork each lane showed, in
+  their `lane:<k>` order, from `tagpu_wikiframe_lanes` of the bounded record the stage HUD was
+  built from, as `tagpu_hudstate.c` fills the game's `lane_id`; 0 on any other frame), on a game
+  frame **the image's rect and clip** (`img[4]`, `clip[4]`: the rect the world target is composited
+  into and the viewport it is scissored to, client pixels, from `tagpu_wikistage_image` of the view
+  and stage drawn; values read by the state dump alone), and the
+  `rep_serial` of the packet that frame was drawn from -- all written in one
+  `tagpu_wikistate_drawn` from the one packet drawn.
+- **The HUD pass** (`tagpu_vk_hud.c`) draws the wiki's layer as seven lists in paint order
+  (`WIKILISTS`), one partition of the instance range (`tagpu_huddraw_partition`: main batches
+  first), and the bar texture. **Two chart slots** (`HUD_CHART_SLOTS`): `HUDOPLIST.chart_slot`
+  picks the image a list's `HOP_CHART` reads, 0 the replay HUD's `HUD_TEX_CHART`, 1 the wiki stage
+  HUD's `HUD_TEX_CHART_WIKI`; each slot has its own RGBA32F image (157 KB), bands and generation,
+  is sent whole when its generation moves, and hides its own instances while the device holds an
+  older generation, so a slot waiting for room leaves the other drawing. `HOP_TRI`, the overlays'
+  filled triangle (three points, every field data; the HUD shader's `HUDM_TRI` covers a pixel by
+  the box filter across each edge), draws nothing for a point that is not finite or a triangle with
+  no area. **The world target's scissor** (`TAGPU_WORLDTGT.clip`, `cx..ch`) is intersected with
+  the block's own in `tagpu_vk_world_record`, never widening it, in 64 bits; the game's world zeroes
+  it, and the wiki's stage sets a game frame's viewport (only a players frame's map is larger than
+  it; every other frame's lies inside) and none on a page demo.
+- **The stats window's chart** reaches the render thread through the packet alone: the game thread
+  writes every seat's samples of the window's measure into the record's `series`; the render thread
+  bounds its copy, lays the stage HUD out from it and prepares chart slot 1 from that HUD. Try it's
+  Players controls are HUD hits through the existing press machine and command record. Nothing new
+  crosses the threads: values only, no lock, handshake or lifetime of their own.
+- **Try it's presses** go through the press machine (`tagpu_wikiframe_press_*`, the game's HUD
+  rules): a button acts at its release on the same control, the track seeks at the press, while
+  held and at the release, a right press is taken and does nothing, and with the question open its
+  Yes and No act at their release and a press outside it is No. A press, a drag and a release act
+  only while the hit map is the running replay's -- a game frame of this entry drawn from a packet
+  of this replay (`frame_current`: the map's `rep_serial` equals the game thread's) -- and a
+  release on any other map lets the held control go without acting, so a click on the frame of a
+  replay already replaced (another demo's Try it started under it) is never scaled by that
+  replay's end. The track's tick (`track_tick`) is the pointer on the run the render thread last
+  drew, clamped to the run, then rounded on the span that frame drew it for: a replay's 0 to
+  `hud_end`, as the game's HUD maps a click (`tagpu_hudinput.c` `seek_at`), or, when the running
+  replay is live, `hud_first` to max(`hud_G`, `hud_first`), as `live_seek_at` maps one.
+  **The ordering**: the run, the span and `rep_serial` are written together by the render thread
+  and reach the game thread whole, by value, in the command record `tagpu_wiki_take` copies, which
+  is the only way in -- no lock or handshake of its own; every caller first asks `frame_current`.
+  **The bound**: the run and the span are the render thread's data and only turn a pixel into a
+  tick -- `tagpu_wiki_take` zeroes a span with `hud_first` below 0, `hud_G` below `hud_first` or
+  above `WIKI_GAME_END_MAX` -- and `tagpu_wikireplay_press` clamps the tick to the game again,
+  a live one to the rewind's own span (from `WIKI_REPLAY_FIRST` + 1 to its last), whose G may be a
+  later open's than the frame drawn; so a run a frame old within the same replay costs a seek to a
+  slightly different tick, never one outside the demo.
+- **A lane's control** takes the fork its lane showed (`tagpu_wiki.c` `drawn_lanes`). **The
+  ordering**: the lanes are written with the run and `rep_serial` in the one
+  `tagpu_wikistate_drawn`, all from the bounded record of the one packet drawn, and reach the game
+  thread whole, by value, in the command record `tagpu_wiki_take` copies; every caller first asks
+  `frame_current`, so they are the drawn frame's lanes of the replay running now. No new lock,
+  handshake or lifetime. **The bound**: `tagpu_wiki_take` holds `nlane` to the three forks and each
+  id to 1..`RECR_TIMELINES` − 1 (−1 past `nlane`), and `drawn_lanes` keeps an id only while it names
+  a live fork of the running takeover replay, so a list a frame old -- a deletion since -- costs a
+  lane's press that does nothing, never a press on a fork that is gone. **That rests on ids never
+  being reused within a replay**: a fork's id is its row's index, handed out in order by `ntl++`
+  (`tagpu_wikireplay.c` `part_of` with `fork_at` and `take_over`, and the kept forks at init), no
+  row is taken back, and a deleted or evicted row keeps `live` 0 for good; a new replay moves
+  `rep_serial` (`sim_free`, `start`), which `frame_current` refuses. So a stale id names its own
+  dead row, never the fork that took its place in the bay; reusing rows would break this guard.
+  And the press machine lets
+  a lane's control act at its release only when the lanes then drawn name the same fork at the same
+  place (`tagpu_hudinput.c` `held_lane`, the game's rule), so a list that changed between the press
+  and the release never sends it to the fork that moved into that place. The replay ignores an id
+  that is not a live fork once more (`lane_act`).
+- **Try it's world on a live frame** (`tagpu_wiki.c`): a move or a press in Try it goes first to
+  `stage_world`, which hands a game frame to `live_world` -- the topmost hit under the point must
+  be the page's `stage`, so no stage HUD control, no part of Leave's question and nothing of the
+  page lies over it, the point fitted through that hit and
+  the frame's unit with `tagpu_wikistage_fit` (the function both threads fit a frame with), and on
+  the column or the map. Only while the frame drawn is the running live replay's in Try it
+  (`live_try`: `frame_current`); a watching frame takes none -- Watching's, and a takeover entry's
+  while it is watching, before its takeover -- its viewer playing no seat. The
+  point goes through `try_send`: a move is held (`s_liveMove`) and `live_flush` sends it before
+  each replay step (`replay_steps`) and before each press (`try_press`, `replay_press`), and every
+  input reaches the replay through `tagpu_wikireplay_input`, never the simulation directly; a press
+  that misses the world falls through to the frame's controls. After a HUD press that leaves the
+  rewind not idle the page holds no key or button down, the open or Back to now's release having
+  let go of every one L held (as `wiki.js` `pressOut`), and a fork's time is logged (`wiki: the rewind forked F<id> at <R> in <ms> ms`,
+  or for a takeover `wiki: the takeover forked F<id> at <R> as seat <h> in <ms> ms`). On a takeover
+  entry the world is the human seat's: a watching frame, before the takeover, takes no world input
+  (its viewer plays no seat), and after it the live frame's world, the ghost and `try_world`
+  follow seat h.
+
+### The checks
+
+- **`node tools/wiki/barcheck.mjs`**: `tagpu_wikibar.c` equal to `bar.js` byte for byte over every
+  side of two synthetic packs and the six compatibility packs at widths 640 to 2176, colours 0, 4,
+  the last and one past, and eleven number sets (the K, ties, levels, NaN and infinity), refusals
+  alike; `bar.js` against a capture of the game's frame (`--js`), and `--compose`, the picture the
+  game lane's steps w6, w7 and w8 compare (all numbers 0, or with NUM a live frame record's `bar`,
+  each taken as its f32, and with TOP the top bar in that layout side's art, a takeover's
+  `top_side`); and the two sides: on every pack with two sides with bars, every side's bars with
+  the top bar in each other side's art, its top bar equal to that side's own and its bottom bar to
+  the load's.
+- **`node tools/wiki/framecheck.mjs`**: `frame.js` and `tagpu_wikiframe.c` equal over every
+  Watching demo in `simparity.mjs`'s 24 script-free contexts (the record, the HUD state through
+  `tools/hudart/hudstatejson.c`, the cursor's point), the glide, press and seat-colour tables, the
+  bound and partition self-test, and `idleSide` pinned against a fresh simulation on every screen
+  of every layout.
+- **`simparity.mjs`**: the game pass, the stall case and the game refusal cases; the replay pass
+  (both hashes, both views and the orders per demo tick), the press trace and the constants;
+  `--hash` for game entries, `--frame` for the frame record -- of the world shown, a live
+  replay's past simulation while the past is shown, with `pending` when a seek is under way. **`simcheck.mjs`** plays every replay
+  and checks its end, the walk and its markers, the seek against a fresh game, `starved` and
+  `bad_kill`. **`stagecheck.mjs`** pairs the frame mode's ops (bars, emblems, clip, TOP), a live
+  entry's frames in each view mode with the live emblem and the simulation's cursor shapes
+  included.
+- **A live entry's checks.** `simparity.mjs` adds the fork pass (each distinct game forked at every
+  refresh R up to 1201, with an empty part and a synthetic one, both economy modes, then played on;
+  the release alone; a fork of a fork; the run-time refusals), the column pass (DZ's arithmetic: a
+  trip to every build and a click on every gadget with the sidebar forced on), the live replays'
+  hashes demo tick by demo tick, LIVE_TRACE (a Try-it trace of every live press and of world input
+  in the forks, to an eviction), the release sweep's ends through `wikitest sweep`, and refusal
+  cases for `live`, the two control sets and every fork-part rule. `simcheck.mjs` plays each live
+  demo in live mode in every context and checks its claims -- each seek shows the selected chain
+  played straight to its tick, each fork starts on the world of its armed R − 1 with seat 0
+  holding nothing, each Back to now lets go and L goes on as its chain played straight with the
+  release, L held still while the rewind is not idle, no `clash` -- then each demo's own; and the
+  release sweep (the plan's *Rewind, as built*). `framecheck.mjs` adds a live Try-it trace through
+  every live verb and toast and the live press pairs.
+- **A takeover entry's checks.** `simparity.mjs` adds the seat pass (a two-seat game on Watching's
+  field played to 1600 with each seat viewed, forks at every refresh up to 1201 taking either seat
+  with an empty and a synthetic part in both modes, a seat holding the left button across the fork,
+  one seat's release), the seat rule's refusal cases and the seated fork's, with every existing
+  entry's hash line unmoved; the takeover fixture (`tools/wiki/takeover-fixture.mjs`) and Take over's own
+  demos through both twins, demo tick by demo tick; two Try-it press traces on the last demo, to a
+  takeover at the limit; and the refusal cases of `takeover`, `kept`, a part's `seat` and the Take
+  over controls, accepted or refused alike by `sim.js` and the loader. `simcheck.mjs` checks every
+  takeover demo on the kept, switch, snap, takeover and walker claims, then, from the takeover, on
+  Rewind's live claims as the seat taken, and TAKEOVER_CLAIMS each demo's own: the picker's R, its
+  rows and the warning; the toasts; the timelines after each switch, deletion and takeover; the
+  top bar after a takeover (the taken seat's memo, eased from 0, against a fresh fork of the parent
+  chain stepped beside it); the taken seat's recorded future gone and the other seat's played on;
+  the markers each chain's walk gives. `framecheck.mjs` plays the takeover fixture and a takeover
+  Try it (the bay, a lane, Save, Delete, Take over and a row), the self-test's hostile takeover
+  records and the press machine's lane rules, and holds every scripted key resolving.
+  `stagecheck.mjs` cycles a takeover entry's frames through the three view modes as seat
+  (k / 3) mod the seats.
+- **A players entry's checks.** `castcheck.mjs` holds the castings' sight figures and the layouts'
+  sight tables to the game: the fixture's stock table to the scout's statistics of the file and to
+  M0-P1's lit sets and counts, every stored stock table to the file's symmetry, `sightLit` of each
+  measured type alone on a flat map to its lit set on the sheared row and to nothing within h / 2
+  of the north edge, the four measured model heights, and each pack's stored indices to exactly the
+  ones its types reach. `simparity.mjs` adds the players fixture (`tools/wiki/players-fixture.mjs`)
+  and a players scratch entry (Bram's camera not recorded) in the game and replay passes, each players
+  game tick's sight per seat (lit digest, count, contacts) in both twins, PLAYERS_TRACE (Try it's
+  Follow and Sight twice, a Sight asked during a seek, each switch, the chips, the folds, the door's
+  refusals, Leave and Yes), the death vision's bound by a script and by a fork part (Watching's game with 24 more of Bram's
+  units killed 20 at 50, 2 at 60, 1 at 111 and 1 at 112: both twins keep the 20 and the one at 112),
+  the sight table's bounds both ways and the players refusal cases. `simcheck.mjs`'s PLAYERS_CLAIMS
+  check each demo on the replay's players state and the game's world, in every context and both
+  Interface Types: the eye each clock, the camera toast with Bram's camera removed, each player's
+  units in the viewport while the camera is theirs; Sight's span, the seek setting every
+  DisplayTimer, Bram's rates at each re-read and the memo easing from 0, w1's death lighting its
+  213 blocks through d + 60 and only Bram's live units from d + 61; each switch flipping its overlay
+  alone, Bram's click ringed at ages 1..14; the stats window's state and 61 samples, each equal to
+  the game played straight to its tick; no lit block reaching 256. **The two claims bound by the
+  figures** (the owner's answer OQ-F) are checked only where the casting's figures make them
+  observable, read from the figures themselves, never from a list of mods: "some unit of Ada's or
+  Cleo's is outside Bram's sight on a clock under it" (observable in all six packs), and "a pass
+  after the death vision marks c0 a contact on no lit block", skipped in TA Twilight (ARM and CORE)
+  and TA Zero (GOK, ARM and CORE), whose commanders see 600 to 650 on a field 1 536 wide or carry
+  radar equal to sight; a skip prints SKIP under its demo's line with the context and the figures
+  (each type's radar, sonar and sight) and the replays' tally lists it. Observability is decided
+  without the code under test: the first from `sightLit` alone, which `castcheck.mjs` holds to
+  M0-P1, the second from c0 on no lit block and closer than max(radar, sonar) to one of Bram's
+  live, finished, activated radar or sonar units at a pass deadline the demo shows under Sight,
+  in the game played straight, never from `sightContacts`. So a regression that loses the contact
+  fails the claim instead of skipping it, and where the claim is skipped `sightContacts` making c0
+  a contact fails too. The sight demo also plays at 2×, 4× and 8× from an odd tick with Sight on
+  Bram, and at 4× and 8× the pass must be made at every multiple of 30 with his lit grid of that
+  tick. `framecheck.mjs` holds the
+  players record, HUD state, view and draw in both frames (the eye, Sight's fog, units and dots,
+  the overlays), `stagecheck.mjs` the players frames' ops (the culled ground, the clip, the image
+  rect and its scissor, the minimap's box and dots, `HOP_TRI`, the rings and brackets) and the
+  overlays on every other entry's watch and past frames, and `tests/huddrawtest.py` (native,
+  ASan+UBSan) `HOP_TRI`'s instance and refusals and the chart slots kept apart.
+- **`python3 tools/wiki/wikilaycheck.py`**: six theatre cases on Watching (1024 × 768 at tick 60,
+  1920 × 1080 with About scrolled, 1280 × 720 alone and with Replays folded, 4K with Try it held at 2×, 3440 ×
+  1440 paused on Leave's question) and six on Rewind (idle, the strip open, the glide back from
+  Back to now, the past, Play from here armed, a fork played on) and six on Take over (the button
+  down while the picker is sought, the picker open, the lanes under Escalation at 2560 × 1440, a
+  Delete armed at 1024 × 768, the limit's warning under TA Zero at 4K, a takeover's live game),
+  each with the stage HUD laid out from the mockup's own frame
+  record as the game does and paired with the mockup's: the frame's size, the canvas, every shown
+  control, the emblems and the question in device pixels, the cursor within 10⁻⁶ px.
+- **In the game**, `tools/wiki_regression.py <instance> watch`: (v1) the theatre's and the stage
+  HUD's controls in the hit map; (v2) the frame record and the replay hash at each press of every
+  demo against `simparity.mjs --hash --frame`; (v3) with `--shots`, the column and both bars equal
+  to the mockup's pixel for pixel at four demos, Leave's question measured beside the mockup's
+  where the record has it open; (v4) Try it's presses end to end through device clicks; (v5) the
+  costs from a fresh open, the replay paused once the walk is over so the seek alone moves it. `mods`' step **w6** holds each setup's two bars to
+  `barcheck.mjs --compose`'s picture on its pack, and **w7** the same of Rewind's first demo early
+  on, a live frame whose bars show the record's numbers.
+- **In the game**, `tools/wiki_regression.py <instance> rewind`, every tick read from
+  `art/wiki/entries/rewind.json` or from `simparity.mjs`'s records of it: (r1) the tree's Rewind
+  drawn as a live game frame, the live HUD's rewind button hit within a pixel of frame pixels
+  Wg − 75 .. Wg − 48, rows 2..29, and no replay control; (r2) demos `steps` and `chain` paused at
+  the first, middle and last tick of each rewind state with no seek running, the record (its live
+  block, bar and cursor f32 for f32) and the replay's hash equal `replay.js`'s; (r3) with
+  `--shots`, the open strip, the armed second click, the fork's first ticks and the bar's numbers
+  grabbed beside the mockup's, the column and both bars pixel-equal; (r4) Try it through device
+  clicks -- the strip, rew, a track drag on the drawn span, Play from here twice forking F1, then
+  the world: a builder selected, a building armed on its column and placed where its ghost is
+  green, standing; Back to now from the open strip keeping the selection and the armed building,
+  from the past releasing both, logged on F1; GameTime and the engine's key ring unmoved; (r5) the
+  longest seek, the page's cost on the game thread and the render thread's stage HUD and bars cost
+  ([the plan](ingame-wiki-replay-plan.html), *The measured costs*). The wiki's state dump
+  (`tagpu_wiki.json`) carries what it reads: the frame record's live fields, `try_world`,
+  `hud_span`, and under `replay.live` (`live_json`) the rewind, the arm, the timelines, the past
+  simulation and the world shown -- its tick, armed type, units with their selection and build,
+  sites, economy mode, held keys and column.
+- **In the game**, `tools/wiki_regression.py <instance> takeover`, every tick read from
+  `art/wiki/entries/takeover.json` or from `simparity.mjs`'s records of it: (t1) demo `lanes`'s
+  watching frame, the replay HUD's Take over button and Forks bay hit at the game's geometry (the
+  button as wide as the transport plate and its layout height above it, the bay between the plate
+  and the track, level with it) and none of the live HUD's controls; (t2) demos `lanes` and `evict`
+  paused at ticks spread over each state they reach with no seek running -- watching, the lanes
+  open, the picker open, live after the takeover -- the record (its Take over block among its
+  fields) and the replay's hash equal `replay.js`'s; (t3) with `--shots`, `evict`'s open picker at
+  the limit, `lanes` with F1 watched and `takeover` after Bram is taken grabbed beside the mockup's,
+  the column and both bars pixel-equal, the last one's top bar in the taken seat's side's art, and
+  its bars put beside a capture of the game's own takeover of the other side for the eye; (t4) Try
+  it on `evict`'s data through device clicks -- the bay's three lanes, a lane and Back to main
+  recording, Save twice (the second refused), Take over at the limit with its warning, Bram's row,
+  then the world as Bram: a click on Ada's commander selecting nothing, one on his own selecting
+  it, a click on the ground ordering it there; a Delete armed and made, the watched fork deleted
+  through its parent; GameTime and the key ring unmoved; (t5) the longest seek, sought switch and
+  snap, the page's cost on the game thread, the takeover's time and the render thread's stage HUD
+  cost ([the plan](ingame-wiki-replay-plan.html), *The measured costs*). `mods`' step **w8** holds
+  Take over's first demo after Bram is taken: its top bar in his side's art (`bar.js` given the
+  record's `top_side`), its bottom bar the load's, the numbers his. The dump adds the frame record's
+  Take over block and the cursor's `watched`, `replay.tk` (the view's takeover block in
+  `replay.js`'s names), `replay.live`'s human seat and each timeline's seat, the live world as the
+  human seat sees it, and `hud_lanes`.
+- **In the game**, `tools/wiki_regression.py <instance> players`, every tick read from
+  `art/wiki/entries/players.json` or from `simparity.mjs`'s records of it: (p1) the tree's Players
+  drawn as a watching frame with a camera -- the frame the entry's screen gives, its world rect the
+  viewport, the image's clip equal to it and the image the whole map at the eye (the dump's
+  `frame_img` and `frame_clip`), the replay HUD's controls, the Players set's switches and every
+  seat's row inside the frame; (p2) every demo paused at each trip's press, each tick a press acts
+  and the first, middle and last tick of each players state: the record, its players block and
+  every sample f32 for f32, the frame's view (the eye, the cursors, the clicks, the units drawn with
+  their overlay selection, the fog, the minimap's pass) and the replay's hash equal `replay.js`'s;
+  (p3) with `--shots`, the states the records name held and grabbed beside the mockup's -- Jump,
+  Follow and Free cam, Sight on Bram through w1's death vision and Ada's commander as a radar dot,
+  every overlay on and each switch, each act of the stats window -- the column and both bars
+  pixel-equal, the top bar in the viewed seat's side's art under Sight, the radar dot's frame also
+  set beside M0-P2's top bar and M0-P5's minimap for the eye; the open stats window's drop shadow
+  lies over the column's right edge, so it is left out with the window and measured with it; (p4) on
+  Watching's Try it every Players control and Take over held and let go with nothing changed, then
+  Try it on `jump`'s data through device clicks: Jump on Bram's and Ada's rows, Follow and Follow
+  again, paused Sight on Bram, Ada and Bram (the bar's rates each viewed seat's at once), the full
+  map, each switch, stats, a chip, the team split, close; GameTime and the key ring unmoved; (p5)
+  reopened, Try it on `sight`'s data sought to its end with Sight on and the stats window open: the
+  seek, the page's cost on the game thread and the render thread's stage HUD cost. The page lane's
+  fold counts the Players row. The dump adds a players record's block (Sight, Follow, the switches,
+  the folds, the stats window, the samples), the players view (`view_json`) and `frame_img` /
+  `frame_clip`; `simparity.mjs --frame` prints the same view beside each players record.
 
 ## The data format
 
@@ -1319,7 +2225,8 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   `order` and `cancel`, which the simulation turns into a button by the Interface Type (*Casts,
   tokens and actions in the data*, above). A `z` or `x` down steps again while the key is held, as
   an auto-repeat does.
-- **A unit's `cast`** is one of the nine casts, required, and no two units of an entry share one.
+- **A unit's `cast`** is one of the ten casts, required, and no two units of an entry share one --
+  in a game entry, no two of one side: the rival's types and the player's are two sets.
   `"vent": true` makes every footprint cell a G cell; an optional `"g": [[dx, dz], …]` lists the
   G cells when they are fewer (no entry needs it). A unit with G cells and a footprint past 16
   cells a side is refused.
@@ -1381,6 +2288,187 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   rule; without the sidebar it sets the kind at once. **`{ "down": "e" }`** presses E. `"facing": [x, z]` is
   any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
   faces `(0, 1)` whatever it gives.
+- **A text entry** is a page entry whose `demos` is absent or an empty list: its page is its title,
+  subtitle, badge and text and no stage ([*The page*](#the-page)). It carries no `frame`, `scenes`,
+  `units`, `features` or `pace`, since the asset loader and the pack builders read every entry's
+  scenes and units; a `demos` present and not a list refuses any entry. Both readers refuse with the
+  same words (`sim.js` `checkText`, `tagpu_wikidata_entry`): `has demos that are not a list`,
+  `is a text entry with a frame`, `… with scenes`, `… with units`, `… with features`,
+  `… with a pace`. The DLL's loader reads only a text entry's strings, so its `scenes`, `demo`, defs
+  and features stay empty, and `nscene == 0` is the bound the stage-side readers test.
+- **A game entry**, `"frame": "game"` (any other value refuses the entry), is played as a replay
+  of a small game on the theatre's whole game frame ([below](#the-game-frame-on-the-stage-the-replay-entries)).
+  Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`) refuse one that breaks
+  these rules:
+    - **no `pace`**;
+    - **every scene carries `seats`**: 1 to 4 (`WIKI_SEATS`) objects `{name, metal, energy}`, the
+      seat its index, the name 1 to 31 bytes with no `{` (HUDSEAT's name field), metal and energy
+      the starting storage, integers 200 to 10 000 as the skirmish settings allow; every unit's
+      `owner` (0 when absent) is one of them. A page entry's scenes and every demo's scene carry no
+      `seats`;
+    - **a unit may carry `rival`** (it is the opponent's: cast by the opponent's casting, the first
+      layout side of the running mod other than the player's, `WIKISIMCTX.rival`) and **`corpse`**
+      (a row of the entry's `features`, its wreck) only in a game entry; any entry's unit may carry
+      the economy's figures (`buildCostMetal`, `buildCostEnergy`, `metalMake`, `metalStorage`,
+      `energyStorage`, each finite and at least 0, and `energyUse` below 10^7 in magnitude);
+    - **each demo carries `game`**, the recording's game script: `{ "end": n, "inputs": [...],
+      "sidebar": bool }`, `end` an integer 1 to 5400 (`WIKI_GAME_END_MAX`, three minutes), and no
+      demo-level `sidebar`; a page entry's demo carries no `game`. The game script's inputs are
+      the existing kinds on **game time**, with no caption and no wait (nothing may hold game
+      time), an optional `"seat"`, the seat whose cursor the input moves (0 when absent), and
+      **`{ "at": t, "kill": "<id>" }`**, alone on its input but for an optional **`"by"`** (the
+      killer, a seat of the scene: the stats' kills),
+      naming a unit of the merged scene by its explicit id, each at most once, at most 64 kills
+      (`WIKI_GAME_KILLS`), at or before `end`;
+    - **a demo's own `inputs` are the viewer's**, on **demo time**: captions, `{ "until":
+      "seeked", "max": m }` (the clock held until a seek has ended, at most m ticks, alone on its
+      tick), and `{ "hud": "<control>" }`, a press of the replay HUD's `play`, `speed`, `rew`,
+      `fwd`, `bookmark`, `leave`, `leave:no` or `track` (a live entry's, the live HUD's: below)
+      -- the track with `"to"` (a game tick, 0 to
+      the game's end) and optionally `"drag"` and `"over"` together, a drag to that tick over that
+      many ticks (a takeover entry's also the Take over set: below). `leave:yes` is the player's,
+      never a demo's. Each press is the viewer's cursor's
+      trip to the control, pressed at `HUD_DOWN` and released at `HUD_UP` (the popup pick's trip
+      without its glide back), and no press or wait stands inside another press's trip;
+    - **in the merged scene** no feature's id (`f<k + 1>` when it has none) is a unit's explicit id,
+      since a unit's wreck takes its id, and the features and the kills together are at most
+      `WIKI_FEATS_MAX`, the table a wreck joins;
+    - **the first scene makes a frame the replay HUD fits**, 3 Wg ≥ 4 Hg (960 units): Wg is
+      128 + 16 w and Hg is taken at its largest, the map grown beside the deepest column there can
+      be (`WIKI_SIDE_ROWS`) and both bars, so the bound holds beside every layout's column
+      (`tagpu_wikidata_frame_fits`, `sim.js` `frameFits`; at 48 rows or fewer it needs 62 cells).
+      Watching's scene is 64 × 30;
+    - **the seat rule** (`tagpu_wikidata.c` `seat_ok`, `sim.js` `checkGame`): a game input's,
+      a fork part's and a kept fork's `seat` is an integer, one of the scene's seats, and **a seat
+      other than 0 only in a game whose `sidebar` is false**: the column -- its router, gadgets,
+      capture and trips -- is seat 0's, and an absent sidebar may be on (an over-approximation;
+      `tagpu_wikisim_init` refuses a column beside another seat's input as well). "…seat N: the
+      column is seat 0's, so a game whose sidebar is not false gives no other seat an input". Each
+      seat's mouse buttons are held to the press-and-release rule on their own (`resolve`,
+      `tagpu_wikidata_buttons`: a press of a button the seat holds, or a release of one it does not,
+      refuses with the tick and the seat).
+- **A live entry**, `"live": true` on a game entry, plays its demos as a live skirmish with the
+  rewind ([above](#a-live-entry-the-rewind-on-a-live-skirmish)); `false` or none is a replay entry.
+  `live` on any other entry, or as anything but a boolean, refuses the entry. A live demo's
+  `game.inputs` are the original timeline's, seat 0's recorded play and the kills, fed live while
+  the rewind is idle. Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`)
+  refuse a live entry that breaks these rules:
+    - **the controls**: a live entry's viewer presses the live HUD's `rewind`, `rew`, `fwd`, `track`,
+      `live_play` or `live_now` (`LIVE_CONTROLS`, `tagpu_wikidata_hud_presses`), a replay entry's
+      the replay HUD's eight; a control of the other set is refused ("…no control a live demo
+      presses", "…a replay demo presses"). The enum, `sim.js` `HUD_CONTROLS` and `WIKI_HUD_*` in
+      one order: 0 `play`, 1 `speed`, 2 `rew`, 3 `fwd`, 4 `track`, 5 `bookmark`, 6 `leave`, 7
+      `leave:no`, **8 `rewind`, 9 `live_play`, 10 `live_now`**, then the Take over set (below), 11 to
+      17, then the Players set (below), 18 to 27; `WIKI_NHUD` is 28, and the player's alone in Try
+      it follow it: `leave:yes` 28 and a team row's `fold` 29. `rew`, `fwd` and `track` are shared and act as the live HUD's on a
+      live entry; `track`'s `to` is a game tick, which the replay clamps to the rewind's span.
+    - **a demo's `forks`**, a live or a takeover entry's demo's only: a list of at most 8 parts
+      (`WIKI_DEMO_FORKS`), each `{ "id", "from", "parent", "inputs" }` with an optional `"seat"`
+      (the seat its fork is played as, 0 when absent, by the seat rule), the game inputs the
+      viewer's fork of that id goes on with. `id` an integer 1 to `RECR_TIMELINES` − 1 (63, the
+      recorder's own bound, `tagpu/ddraw/inc/tagpu_recrules.h`), no two parts of one id; `from` an
+      integer 2 to `game.end` (no fork starts at the original's first tick); `parent` 0 to `id` − 1
+      (a parent is made before its child: ids only grow); `inputs` game inputs as the game script's
+      (no caption or wait, any seat by the seat rule, a kill `{at, kill}` alone naming a unit of the merged scene,
+      once in the part, at most 64), each at `from` to `game.end`; and the scene's features with
+      every kill of the game script and of every part within `WIKI_FEATS_MAX`. At run time a fork
+      the viewer makes with no part of its id, or whose R, parent or seat is not its part's `from`,
+      `parent` or `seat`, fails the replay, and so does a part the fork refuses (`tagpu_wikisim_fork`): one
+      whose merged script presses a button a seat holds or lets go of one it does not -- the taken
+      seat starting from nothing held, every other seat from what it holds at R − 1 -- or breaks the
+      trip's rule.
+    - **the live data rule**: each build naming a type and each reclaim, in a live entry's game
+      script and in every part of a live or a takeover entry, has on its own tick and before it --
+      by tick, then file order, and within one input its move, then its press, then its release --
+      the click of its own seat that selects its builder or reclaimer: a move, then `select`
+      pressed, then `select` released; and no input is a `pick`
+      (`tagpu_wikidata.c` `live_orders`, `sim.js` `checkLiveOrders`). The refusal names the demo,
+      the fork part and the tick. **Why**: the release can come between any two ticks, empties the
+      selection an order is given from and disarms reclaim; it runs only between two ticks, so it
+      cannot fall between a click and an order on one tick. A pick cannot share its reclaim's tick:
+      the popup it clicks opens only when the reclaim's trip clicks RECLAIM, and the trips' rule
+      keeps every other input out of that trip, so a release could always close the popup first.
+      Whether the click lands on a builder or a reclaimer is the world's, which `simcheck.mjs`'s
+      release sweep plays out.
+- **A takeover entry**, `"takeover": true` on a game entry, plays its demos as a replay with the
+  replay HUD's Take over ([above](#a-takeover-entry-take-over-a-replay)); `takeover` on any other
+  entry, as anything but a boolean, or beside `"live": true` or `"players": true` refuses the entry
+  ("…is a replay, a live game, a takeover's replay or a players' replay, never two"). Both readers
+  refuse a takeover entry that breaks these rules:
+    - **every demo's game has `"sidebar": false`** (the owner's answer QA: the column is seat 0's,
+      and a takeover may take any seat), so a taken seat never meets a column that is not its own;
+    - **the controls**: a takeover entry's viewer presses the replay HUD's, the live HUD's and the
+      **Take over set**: 11 `takeover` (Take over), 12 `takeas` (a picker row, with `"seat"`, an
+      integer, one of the scene's seats), 13 `lanes` (the Forks bay), 14 `lane`, 15 `main` (Back to
+      main recording), 16 `export` (a lane's Save as a replay) and 17 `delete` (its Delete), `lane`,
+      `export` and `delete` with `"fork"`, an integer 1 to `RECR_TIMELINES` − 1, and the others with
+      no key but `at` and `hud` (`tagpu_wikidata_hud_takeover`, `sim.js` `TAKEOVER_CONTROLS`). A
+      press of one on any other entry is refused. Which ones act depends on the mode at run time:
+      the replay HUD's while watching, the live HUD's after the takeover;
+    - **a demo's `kept`**, a takeover entry's demo's only: the forks the recording's file holds
+      when the demo starts, as they were played, a list of at most `REC_FORK_LIMIT` (3), each
+      exactly `{ "id", "from", "parent", "seat", "end", "inputs" }`: `id` k + 1 at index k;
+      `parent` 0 to `id` − 1; `from` after the parent's first tick (the original's 1, a kept
+      parent's `from`) and at most its `end` (the original's the game's), and a refresh of the
+      parent's segment walked from that first (`tagpu_wikidata_refresh_at`, `reclossy_is_refresh`),
+      since a fork starts only there; `seat` by the seat rule; `end` from `from` to the game's end;
+      `inputs` game inputs at `from` to `end`; the scene's features with every kill of the game
+      script, of every part and of every kept fork within `WIKI_FEATS_MAX`. The kept forks are the
+      first rows after the original, so the fork the viewer makes next takes the part whose id is
+      one past them. At run time a kept fork whose seat has no unit at its R − 1 fails the replay.
+- **A players entry**, `"players": true` on a game entry, plays its demos as a replay with the
+  replay HUD's players column and a camera ([above](#a-players-entry-players-and-the-camera));
+  `players` on any other entry, or as anything but a boolean, refuses the entry, and so does it
+  beside `live` or `takeover`. Both readers (`sim.js` `checkGame`, `checkViewer` and
+  `checkCameras`, `tagpu_wikidata.c`) refuse a players entry that breaks these rules:
+    - **`"screen": [sw, sh]`**, required on a players entry and refused on any other: the game
+      screen its recordings were made on, two even integers 2 to 128 (whole 32-unit tiles), at most
+      the map's size, with the map's rows at least the viewport's beside the deepest column, and the
+      4:3 bound taken on the screen instead of the map (`tagpu_wikidata_screen_fits`: Wg = 128 +
+      16 sw, Hg = max(16 sh + 64, the deepest column's rows)). **The map's `w` and `h` are even**:
+      the sight grid is (w / 2) × (h / 2) blocks, halved truncating, so an odd map would leave its
+      last column or row with no block;
+    - **every demo's game has `"sidebar": false`**: every seat acts;
+    - **a seat's `"camera": [x, z]`** (its view's centre at the first tick, integer world units,
+      the view inside the map at the screen) and **`"team"`** (0 to 3, absent its own index; the
+      seats of a team are allied to each other), both a players entry's only; a seat with no camera
+      is one whose camera was not recorded;
+    - **a camera input `{ "at": t, "seat": k, "camera": [x, z], "over": n }`**, a players entry's
+      only, alone on its input but for `seat`: seat k's view glides from where it is at t to (x, z),
+      reaching it at t + n (`over` 0 to `WIKI_GAME_END_MAX`, absent 0), each axis
+      `a + trunc((b − a)(u − t) / n)` at tick u. Refused on a seat with no camera, with the view
+      outside the map, after `end`, or before the end of the seat's previous glide. Neither
+      simulation reads a camera input, and it counts for no input seat;
+    - **THE VIEW RULE**: for every seat with a camera, at every tick from its first move to `end`,
+      its cursor -- the point of its last move -- lies in its camera's view at that tick
+      ("…seat N's cursor at tick T is outside its camera's view"). Every tick, not every move,
+      because a camera may glide under a resting pointer, and the game records a cursor on the world
+      only on its player's screen;
+    - **the deaths**: at most 20 kills of one seat's units within any 62 consecutive ticks
+      (`WIKI_PLAYERS_DEATHS`, `WIKI_PLAYERS_DEATH_SPAN`; "…seat N loses more than 20 units within 62
+      ticks from tick T"), so the engine's cap of 20 live temporary sight records never binds an
+      authored script (*A game*, below; [map.md](engine/map.html), *The temporary sight records*);
+    - **the sight floor**: every type the entry defines has `sightDistance` 32 or more, since the
+      engine reads before its table at radius index 0 ([map.md](engine/map.html), *The sight table
+      and the stamp*). In a game over a layout's table (`tagpu_wikidata_sight_ok`, `sim.js`
+      `sightFits`), a cast a casting binds below 32 or at a radius index the table does not store is
+      left unbound, and an entry's own type at an index the table does not store refuses the game;
+      with no table nothing is refused and Sight lights every block;
+    - **the controls**: a players entry's viewer presses the replay HUD's eight and the **Players
+      set**: 18 `jump`, 19 `sight`, 20 `follow` (each with `"seat"`, one of the scene's), 21
+      `cursors`, 22 `clicks`, 23 `selections`, 24 `chat`, 25 `stats`, 26 `close`, and 27 `chip` (with
+      `"chip"`: `player`, `team`, or one of `art/hud/layout.json`'s window measures `metal`,
+      `energy`, `units`, `army`, `kills`, `losses`, `excess`) (`tagpu_wikidata_hud_players`, `sim.js`
+      `PLAYERS_CONTROLS`). A press of the set on any other entry is refused ("…a players' replay's
+      control").
+- **A type's sight figures**: an entry's unit may carry **`sightDistance`**, **`radarDistance`**
+  and **`sonarDistance`** (the FBI's, def `+0x202`, `+0x204`, `+0x206`, each a signed word,
+  −32768 to 32767) and **`modelHeight`** (def `+0x170`, 0 to 255: the integer part of the model's
+  height, `0x4CB5F0`), each absent 0; the castings carry all four for every cast (`gfx.py`
+  `side_casting` and `model_height`, `tagpu_wikiasset.c` `fbi_word` and `height_chain`,
+  `tools/wiki/casting-fixture.json`), and only a players game reads them. The other replay entries'
+  types and the fixture's identity and unbound castings carry the stock figures too, so a players
+  game on them binds every cast (without them every identity cast fell below the floor).
 - **The ground's grid**: the map's size and every fog rectangle are whole tiles, even numbers of
   cells, because the stage's ground is drawn in the map's 32-unit tiles and its fog in the engine's
   32-unit blocks. A scene has no broad metal rectangle (one that touches both opposite edges of the
@@ -1501,6 +2589,25 @@ layout breaking any of them is refused whole and no index read out of it address
   index-aligned with `sides`: per side its `commander` and `casts`, each cast's type, title,
   footprint, figures, `canstop`, `vent` and `g`, and `builds` naming casts, or `null` when unbound,
   and the rule's `report` (why each pick); and `art.panelside`, a list a side.
+- **`sight`**, `{ "numtables": N, "tables": [ { "idx": i, "cells": [[dc, dr, n], …] }, … ] }`: the
+  mod's `gamedata\los.tdf` as the engine's loader stores it, reduced to **count grids** -- for each
+  stored radius index, every (column, row) offset of the table's four images of its lines, with the
+  number of ray points on it ([map.md](engine/map.html), *The sight table and the stamp*). On the
+  stage's flat ground every point passes the height test (MEASURED M0-P1), so a count grid loses
+  nothing. **Only the indices the setup's types reach are stored** (the owner's answer OQ-E,
+  2026-11-02), sparse by index: min(trunc(sight / 32), numtables − 1) for every cast the layout's
+  castings bind and every type a players entry of the tree defines, each at least 32 (`gfx.py`
+  `sight_table` and `entry_sights`, `tagpu_wikiasset.c` `sight_read`; `los.tdf` read up to 8 MB,
+  `CAP_LOS`). The bounds, which a producer holds or keeps no table: `numtables` 2 to 32767 (the
+  engine's signed word; 1 would give every unit index 0), at most 32 stored indices
+  (`WIKI_SIGHT_IDX`), strictly increasing within 1 .. numtables − 1, every offset within 63 blocks,
+  each count 1 to 255, at most 32 768 cells in all (`WIKI_SIGHT_CELLS`), cells in order by row then
+  column, each once. MEASURED 2026-11-02 over the six setups (castcheck): stock 9 tables, indices 3,
+  6, 7, 8, 560 cells (the fixtures carry it, `sidepacks.py`); Mayhem 64, 3 6 7 8 9 11, 1 200; ProTA
+  90, 3 6 7 8 9 11, 1 200; Twilight 94, 3 6 7 12 15 18 20 21 26 31 38, 15 212; Escalation 90, 4 6 7
+  10 12 14, 1 800; TA Zero 63, 2 3 12 14 15 17 18, 3 900. Every setup keeps its table. A layout with
+  no table (`numtables` 0: the file missing or breaking a bound, with a report line) lights every
+  block under Sight.
 - **The bounds**: at most 48 screens and 64 gadgets a screen. A name, with its terminator, fits 32
   bytes in UTF-8. A layout that names a screen that is not in `screens` is refused. `note` and any
   key not named here are ignored.
@@ -1526,7 +2633,8 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
 (the DLL's compiler and flags, run under Wine).
 
 - **The context.** `WikiSim.play(entry, demo, layout, ctx)` and `create`, and
-  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface, cob, snd}`: the
+  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, rival, iface, cob, snd}`
+  (`rival`, the opponent's casting, read by a game entry's rival types only: *A game*, below): the
   layout's side the player plays, that side's casting or none (the entry's own types), the
   Interface Type, where the units' scripts come from or none (`ctx.cob`, a `WIKICOBSRC` in C,
   read during init only; *The units' scripts*, below), and where their sounds come from or none
@@ -1914,8 +3022,199 @@ addresses and the gaps).
   the hash and `simcheck.mjs`'s rule *the player's clicks say select, SelectMultipleUnits,
   notoktobuild and oktobuild, one reply a second*.
 
+### A game: seats, kills, wrecks and the economy
+
+A game entry's demo is played by a **game simulation**: `WikiSim.game(entry, demo, layout, ctx,
+mode)` in `sim.js`, `tagpu_wikisim_init(…, WIKI_PLAY_GAME or WIKI_PLAY_GAME_STALL, …)` in C, on the
+demo's game script and its `end`. A page entry plays only as a page demo and a game entry only as
+a game, so no page demo reaches a line of what follows and no page demo's hash moved when it was
+built. Every rule here is the engine's, DISASSEMBLED and written into the engine map in the entry
+of the function it imitates; the code cites each address where it applies it.
+
+- **The seats** are the scene's `seats`; a unit's `owner` is its seat. Seat 0 is the recording's
+  player; a seat's units bind to the player's casting, and a unit marked `rival` to the opponent's
+  (`WIKISIMCTX.rival`, the first layout side of the running mod other than the player's; with one
+  side, the rival keeps the entry's own type). Each seat counts, as the engine's player record
+  does, its units alive, a nanoframe included (`+0x144`), the commanders it lost (`+0x106`), `out`
+  once that count goes from above 0 to 0, and `cmd_lost` once its commander died, which takes the
+  seat's base storage out of its storages (`+0x149` bit 0). The replay's markers are read from
+  these counters, never from the script.
+- **Each input seat has its own cursor** (decision 16): a game simulation holds an input state for
+  each of its input seats -- a takeover entry's every seat of its scene, any other game's the seats
+  its script and fork parts name, a page simulation one -- with the cursor, held keys and buttons,
+  where each button went down, the drag, the armed building, the placement gesture, the spacing
+  and the reclaim sweep. Every input rule reads **the acting seat**'s (`tagpu_wikisim.h`, THE
+  ORDERING: `act` is 0 between calls; an input, a fed script input, a view and the step's per-seat
+  tail act as their seat and put it back, and nothing the input rules call re-enters input or the
+  view). A seat's selection is its own units' selection flags, and a deselect touches only the
+  acting seat's units. The column is seat 0's (the seat rule, *The data format*). The view
+  (`tagpu_wikisim_view_as`, `sim.view(seat)`) gives a seat's cursor, ghost, sites, drag, lines,
+  sweep, keys, spacing and cursor shape, and every seat's raw selection flags.
+- **The fork takes a seat** (`tagpu_wikisim_fork(s, R, seat, part, n, mode)`, `sim.fork(R, part,
+  mode, seat)`): between two ticks at R − 1, the inputs not yet fed are split -- the taken seat's
+  and every kill dropped, every other seat's carried -- and the new script is the carried inputs
+  and the part's, merged by tick, the carried first on a tie; the held-button rule is checked per
+  seat over it (the taken seat from nothing held, every other seat from what it holds at R − 1)
+  before anything is written; the taken seat alone is released (`tagpu_wikisim_release(s, seat)`;
+  seat 0's release also drops the trips not yet fed and routes the column to MAIN2), and becomes the
+  viewed seat, whose units' notices play. With seat 0 and a script of seat 0 alone nothing is
+  carried, and the fork is the part alone.
+- **A kill**, `{at, kill, by}`, runs between two ticks, before its tick's inputs' work. The victim's
+  seat counts a loss whatever killed it (`+0xFE`, ungated at `0x4868C1`), and `by`, a seat of the
+  game other than the victim's, counts a kill when the victim was finished (`+0xFC`, the
+  destructor's gate: a killer, `+0x104` 0 and another player; [memory.md](engine/memory.html)); no
+  `by` counts the loss alone. A finished unit
+  leaves its wreck and makes its death sound; an unfinished one neither (the engine stores corpse
+  type 0 for it and skips the explosion: [memory.md](engine/memory.html), the destructor). A
+  commander counts as its seat's loss. A builder whose **running** build is the unfinished structure
+  killed loses that order and says cant, as MobileBuild answers the target's death with
+  "Construction terminated" and result 8; its queued builds of the site stay [INFERRED]. **The
+  invariant, an ordering**: between two ticks the only references to a unit are the unit list and
+  the sidebar's shown unit (work and jobs are made anew each tick, orders, the spray and the sounds
+  name units by id), and a kill runs between ticks, so removing it from both leaves nothing that
+  reads it; its script goes with it, and a script's handle is never given again. A kill naming no
+  unit sets `bad_kill`, which `simcheck.mjs` fails.
+- **The wreck** is the type's `corpse` feature, placed by the destructor's rules
+  (`0x486360`/`0x423C50`, [map.md](engine/map.html), its row): at a mobile unit's footprint cell by the
+  engine's own rounding, at a structure's site; none when that cell is off the map or the wreck's
+  footprint passes the map's far edge (equal accepted); every feature with a cell under it is
+  destroyed whole, so no two features overlap, and units under it are not read. It takes the
+  unit's id. With a casting, a bound type's wreck is its cast's corpse (*The cast rule*, above).
+  The stage draws it by the reclaim entry's wreck path; no explosion art.
+- **The death sound**: one event, at once, for a unit of any seat (`WIKI_SND_DEATH`, past the
+  kinds, the type's index as its name and the cell under its centre as its variant), made whether
+  or not the type has a WAV. The player plays the type's death WAV -- its ExplodeAs weapon's
+  `soundhit`, found as the FBI loader finds ExplodeAs (`tagpu_wikiasset.c` `death_load`, `gfx.py`
+  `death_wav`, `assetcheck.py` comparing the two) -- when the viewed seat's fog at that cell is not
+  black, with no owner test: the engine's `0x47F300` gate ([units.md](engine/units.html), *The death
+  explosion*). The type is the event's index into the simulation's own entry, bound to its
+  casting (`tagpu_wiki.c` `death_play`, `sound.js` `death`, `sim.js` `types`), and the cell is the
+  view's one fog, the viewed seat's. It plays through the wiki's mixer under the named sound's
+  settings and with no priority, speechfx or unitchat test, as `0x47F300` tests none, at the
+  engine's −585 for a point inside the view: the stage shows its whole map. Sound Mode 3D's
+  placement of the sound by its point is not repeated. `simcheck.mjs` checks that each kill of a
+  finished unit resolves to its type's death WAV, and the game's `wiki sound:` line counts the
+  demo's deaths, those in the black and those played.
+- **The economy** is the engine's, per unit and per seat ([weapons.md](engine/weapons.html), *The
+  ledger*): each unit's ledger (energy and metal produced, requested, granted and debt); a build
+  credited this tick asks the **builder's** ledger for its increment's share of the built type's
+  build costs and makes no progress, and sprays nothing, when refused; and the pass `0x401360` on
+  ticks 1, 30, 60, … for every seat in seat order after the units' work: a structure that is
+  active requests its EnergyUse or produces its negation, an extractor whose energy was granted
+  produces ExtractsMetal × its SetSpeed, a mobile unit active or moving requests or produces its EnergyUse,
+  a finished unit produces its EnergyMake and MetalMake and adds its storages; then the seat's
+  sums, the debts paid first and then the grants, the excess over the storage wasted, and the
+  settle in the engine's order of operations. **Where it departs** [INFERRED]: activation is a
+  finished unit whose FBI says ActivateWhenBuilt, and moving is the step this tick; a seat's units
+  are summed in creation order where the engine walks its slots, which it reuses, so only the
+  sums' rounding can differ; MakesMetal, wind, tide, cloak, the AI's scaling, the transfers and the reclaim payouts are not modelled (no
+  cast takes such a unit, no seat is an AI). **Two modes** (the plan's decision 18): `refuse`
+  (`WIKI_PLAY_GAME`), an authored script, stops `starved` at the first pass that cannot pay a
+  grant, which `simcheck.mjs` fails, so no authored demo's timing is ever the economy's; `stall`
+  (`WIKI_PLAY_GAME_STALL`), for a seat the player plays, carries the unpaid grant as the unit's
+  debt as the engine's builds stall at zero. Both are held equal by `simparity.mjs`'s game pass and
+  stall case; `stall` is the mode of a fork Try it makes, by Play from here or by a takeover, and
+  every authored timeline -- the original, a kept fork, a demo's fork part -- is `refuse`.
+- **The deaths** (for the replay's death vision): each kill records `{tick, owner, type, x, z}`, the
+  unit at the kill, never removed (a seek back makes them again with the simulation), at most
+  `WIKI_FEATS_MAX` -- and **only while the engine's temporary sight record add would keep it**: a
+  kill of a seat that already has 20 deaths live (tick + 60 at or past the tick before) is not
+  recorded, whatever the script or a fork part kills, as the add refuses a 21st live record
+  ([map.md](engine/map.html), *The temporary sight records*: one list for the game, the viewed
+  player's deaths alone, so the bound is the seat's in effect).
+- **The clicks**: a ring of the 64 most recent `{tick, seat, x, z}`, at the seat's map cursor,
+  recorded before the action runs for each of the engine's click actions -- the left click's
+  (`0x4993C5..0x4993D0` on the press, `0x499435..0x499441` on a short release: here a placement at
+  a press, the sweep's press, a release's click, a placement off the map) and every right press on
+  the map (`0x499100`) [INFERRED: a right press over the column is the GUI's and records none; no
+  players game has a column]. Each input seat's **`moved`** turns on at its first move, from which
+  the game records its cursor. Neither is hashed: they decide nothing, and `simparity.mjs`
+  compares the views, which carry them.
+- **A seat's lit grid** (`tagpu_wikisim_sight_lit`, `sim.js` `sightLit`): the engine's line of
+  sight on the stage, one byte a 32-unit block on the (w / 2) × (h / 2) grid. Every live unit of the
+  seat alone -- a nanoframe from its make; an ally shares no sight -- stamps as the engine's emitter
+  does: the stage's ground and sea level are both 0, so the emit raises the altitude to 1 and the
+  height is h = min(255, modelHeight + 1), the column `floor(x) >> 5` and the row
+  `(floor(z) − (h >> 1)) >> 5`, arithmetic shifts; a column or row off the grid stamps nothing at all,
+  so a unit within h / 2 of the north edge lights nothing, as in the game; else its own block +1 and
+  every offset of its radius index's count grid on the grid + its count. Then each death of the seat
+  with the tick shown at most its tick + 60, at its place with its type's figures (the expiry's
+  boundary, a step being one tick). The counters wrap at 256 as the engine's do; `simcheck.mjs`
+  holds every players demo under it (the entry's stamps bound a block by 22). The rule and its
+  measurement: [map.md](engine/map.html), *The sight table and the stamp*.
+- **A seat's contacts** (`tagpu_wikisim_contacts`, `sim.js` `sightContacts`), the radar pass's bit
+  8 or 9 on another seat's unit: on a lit block, or with d² < max(radar, sonar)² of a live, finished
+  unit of the seat whose type `activates` and has a radar or a sonar, d² = (dx·dx >> 32) +
+  (dz·dz >> 32) on the 16.16 positions in 64 bits -- the engine's two tests at altitude 0, where the
+  sea level is, so both hold at once ([recorder.md](engine/recorder.html), `0x467440`'s row). The
+  wiki has no on/off, so a finished ActivateWhenBuilt unit counts and no other; jamming and stealth
+  are not modelled (no wiki cast has either).
+- **The army value** (`tagpu_wikisim_army`, `gameNow`'s `army`), the stats window's measure: the
+  sum, in f32, of `buildCostMetal` over the seat's finished units of a mobile type that is not the
+  commander cast -- the game's `tagpu_replay_army_values` (a type with BMcode 1 that is not a
+  commander, at its metal cost). `gameNow`'s seats also carry each seat's bar, incomes, waste,
+  kills and losses.
+- **The hash's item 12**, a game simulation's only: the seats (units, lost, out, `cmd_lost`, the
+  ten economy figures, kills and losses), the mode, `starved`, `bad_kill`, the kills made, then
+  every unit's ledger. Nothing at all in any other simulation, so no page demo's hash changed.
+  **Item 13**, a game's with more than one input seat only: the input seats' count and the viewed
+  seat, then each seat 1..`nin` − 1's ghost, sites, cursor, keys, armed type, spacing and drag,
+  and its reclaim armed, kind and ring. A game of one input seat views seat 0 and hashes as before.
+  **Item 14**, a game's only and last: the deaths, their count then each one.
+- **What the bars and the players column read**: each seat's stored, storage, income and spending
+  (`WIKIFRAMESEAT`); the viewed record at full map is the viewer's, whose numbers are all 0, so the
+  stage's top bar reads 0 as the game's does (the plan's decision 13), and under a players replay's
+  Sight it is the viewed seat's, through the replay's memo (*A players entry*, above).
+
 ## Gaps
 
+- **The replay entries are landed.** Watching, Rewind a skirmish, Take over a replay and
+  Players and the camera play in both the mockup and the game ([the plan](ingame-wiki-replay-plan.html),
+  *Players, as built*); what they leave open is the plan's *Open* and the roadmap row's *Not covered yet*.
+- **What Rewind does not yet hold.** The game lane, `rewind`, plays it on the base game
+  only; under the five mods of the compatibility suite the `mods` lane holds its live bars (w7)
+  and nothing else of the entry. Not measured in the game, so [INFERRED] where the wiki copies it: the open and the past with the
+  pointer on the strip, and the keys and buttons held through a fork or Back to now. The arrow and
+  the selection rectangle the game draws round the recorded commander in the past are drawn as
+  the past's overlays (MEASURED 2026-11-01, M0-P4).
+- **What Players and the camera does not yet hold.** The game lane, `players`, plays it on the
+  base game only, and the `mods` lane has no step of it. **Health bars are drawn in no entry**, this one included (the owner's answer:
+  a gap of every entry, not of Players). **The radar-only claim is skipped** in TA Twilight and
+  TA Zero, whose figures make it unobservable on the entry's field (OQ-F; the hidden-units claim
+  holds in all six setups). **The bar's rates after a paused seek, a paused takeover and Back to
+  now** stay at their last re-read until the next one, as the replay does not re-read them there;
+  left for a later landing (the owner's answer). **Left out on purpose or [INFERRED]**: the
+  replay's playback delay, Follow's engine ends (the camera is the recorded seat's, never pushed
+  by the viewer), a drag of the camera or the stats window, chat (its switch has nothing to show),
+  altitude in the sight stamp (the stage's ground is flat, so h is the model height alone),
+  jamming and stealth, the radar dots' blink, the AI groups' digit under Sight
+  ([render.md](engine/render.html)), and the footprint corners standing in for `0x465AC0`'s
+  model-box points [INFERRED]. Two engine defect candidates the wiki keeps out by its data rules
+  rather than reproduces: radius index 0 reads before the table, and the byte counters wrap
+  past about 37 stacked units ([map.md](engine/map.html), *The sight table and the stamp*); a
+  unit within h / 2 of the north edge lights nothing, as in the game.
+- **What Take over does not yet hold.** The game lane, `takeover`, plays it on the base game only;
+  under the five mods the `mods` lane holds the taken seat's two bars (w8) and nothing else of the
+  entry. **A taken seat has no column of its own** (the owner's answer QA): a takeover entry has no
+  sidebar, and a seat other than 0 has inputs only in a game whose sidebar is false, so in Try it a
+  player who takes over orders on the map and cannot arm a building. **The top bar's ease after a
+  takeover** is [INFERRED]: the wiki carries the memo from watching's zeros and eases from 0, while
+  the game's per-frame values after its takeover are not resolved (the plan's *Take over, as
+  built*). **Left out on purpose**: the computer players the game seats after a takeover (here the
+  other seats play on as recorded, decision 8), the viewed seat's contact bits the game's takeover
+  changes, a watch-again step after the eviction (QC), and the refusals no wiki state reaches (the
+  file worker's queue and tickets, `Cannot watch F<n>`, `Cannot delete F<n>`, `Take over refused`,
+  `Cannot go back to m:ss`). Watching's Try it keeps its Take over button and Forks bay inert (QD).
+- **Leave's question and the watcher's column are not held to a real Watch.** The question's
+  rects are YESORNO's own, its place on the frame [INFERRED]; the column at full map is the side
+  the level loaded with nothing selected, [INFERRED] from the code -- no capture of a real Watch's
+  panel or question exists yet. The bottom bar is the bare strip: a hovered unit's readout on it
+  is not drawn (decision 24).
+- **Escalation's ticks are dearer.** Its commanders' scripts scan every unit id up to `MAX_ID`
+  (`WIKICOB_UNITS`, 1024) every 2.5 to 5 s, so about one tick in 55 costs 0.7 to 1.4 ms natively.
+  The pacing bounds a fill by its ticks' cost; answering `MAX_ID` with the highest id the
+  simulation has spawned would cut the scan, and is an open question for the owner (the plan's
+  *The measured costs*).
 - **No wiki on GDI** (the owner's decision, 2026-10-25): the button and the window are drawn by the
   Vulkan HUD pass only, as the rewind button is, so on GDI the wiki cannot open.
 - **The demo restarts at every open.** The plan frees the simulation at a close and makes it at an
@@ -2055,12 +3354,21 @@ addresses and the gaps).
   `engineShade`): the model turned by the record's yaw after the loader's half turn, a posed unit
   composed by `pose.js`, back faces culled for the bodies and the shadows, a structure and
   every ghost on the engine's lit rows from its vertex normals (`gfx.py` `vertex_normals`), any
-  other unit on the neutral row, a textured quad mapped and shaded over its own frame, and the
-  nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
+  other unit on the neutral row, a textured quad mapped and shaded over its own frame, an
+  untextured face with no flat colour (an index outside 2..254) neither drawn nor outlined but
+  still casting its slant, as the game's bake skips it (`tagpu_render3do.c` `face_colour`; the
+  wrecks carry dozens of such faces), and the nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
   with the game's own: see the 3D stage's plan, landing 6h, for what it measured, and the COB
   plan's *L3b's gate* for the image with the poses.
-- **A stage whose description names a 3D feature (a wreck) is drawn as the whitebox**, in the
-  game and in `gfx=game` alike: no stage names one.
+- **A 3D feature (a wreck, a heap: its section names a model) is drawn through the unit pass**,
+  in the game and in `gfx=game` alike: `gfx.py` packs its model as a mesh beside the units and
+  lists the stage's `features3d`, and `scene.js` `wrecks` and `tagpu_wikiscene_models` make a
+  record for each one the view has not reclaimed, between the units and the ghosts -- at its
+  footprint's centre, unturned, owner 0, on the neutral row, with no shadow, in the features'
+  depth band `3 + 4·row`, as `SpawnFeatureOnMap 0x423C50` places a map's and the native husk
+  gather draws it. A model that does not resolve falls the stage's ground back whole. The
+  whitebox draws one as its footprint in the wreck's grey. Reclaim's `field` stage is the one that
+  names them ([the reclaim entry's plan](ingame-wiki-reclaim-plan.html), L4).
 
 ## Open issues in the placement code
 

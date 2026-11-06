@@ -236,7 +236,13 @@ switch, and for the last one at the level's end (`used_stamp`, `s_used`, oldest 
 rows). The order is the mockup's "watched least recently". `recr_append_point` takes each
 timeline's last use as the later of the file's and the stamp's, both for the eviction and for the
 rows the fork writes, so the takeover's plan (the HUD's "replaces F<n>", the trigger's dry run)
-and the real eviction (`tk_open`) come from one function and one table. The watched timeline
+and the real eviction (`tk_open`) come from one function and one table. The choice itself is
+`rec_fork_evict` in `inc/tagpu_recrules.h`, a pure header that also holds the refresh grid,
+`REC_FORK_LIMIT` and `RECR_TIMELINES`. The in-game wiki's Rewind entry includes it
+(`tagpu_wikireplay.h`, `tagpu_wikidata.h`) and plans its forks with these functions themselves
+(`tagpu_wikireplay.c` `plan`), so its forks follow these rules; its loader bounds a fork part's
+id by `RECR_TIMELINES`, and `tests/wikitest.c` runs the header against the mockup's twins
+(`replay.js`). The watched timeline
 stays excluded from eviction. **The touch list:** the level's end sends one touch
 (`recfile_touch`) with every stamp, the last timeline first and then the others in the order they
 were left; the worker sets each live one's last use to the later of the file's and the row's,

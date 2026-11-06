@@ -16,7 +16,12 @@
    of each code point the HUD faces lack, by style. Each text op carries its baseline as the draw
    places it (tagpu_hudlay_baseline at the screen's pixels a unit). tools/wiki/wikilaycheck.py
    compiles this with tagpu_wikilay.c, tagpu_hudlay.c, tagpu_hudtext.c, tagpu_wikidata.c,
-   tagpu_json.c, tagpu_pak.c and lodepng.c, and compares its output with the mockup's boxes. */
+   tagpu_json.c, tagpu_pak.c and lodepng.c, and compares its output with the mockup's boxes.
+
+   A game entry's theatre adds the stage HUD (`stagehud` below): the state's `stagehud` carries the
+   mockup's frame record, its map and its column, and the output's `stagehud` the frame, the HUD's
+   controls, the cursor, the emblems and Leave's question as the game draws them from that record,
+   in page device pixels, which wikilaycheck.py pairs with the mockup's own. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +32,10 @@
 #include "tagpu_mod.h"
 #include "tagpu_pak.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikiasset.h"
+#include "tagpu_wikiframe.h"
 #include "tagpu_wikilay.h"
+#include "tagpu_wikistage.h"
 #include "lodepng.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
@@ -93,6 +101,16 @@ static void faces(WIKIFACES* f, const char* dir)
         f->face[i].ascent = (float)asc / (float)upem;
         f->face[i].descent = (float)-desc / (float)upem;
     }
+}
+
+/* the stage HUD's text in the game's faces, as tagpu_hudart.c measures it for the HUD's layout: a
+   box sized to its text -- a watched lane's Back to main recording -- is the text's advance and its
+   padding, as the game draws it */
+static double hud_measure(void* ctx, int style, double size, const char* s)
+{
+    (void)ctx;
+    if (style < 0 || style >= s_g->nstyle || style >= 24 || !s_info[style].data) return 0;
+    return tagpu_hudtext_width(&s_info[style], (float)size, s_g->style[style].spacing, s_g->style[style].upper, s, strlen(s));
 }
 
 /* the browser's advance of a code point the faces lack, from the state's `fallback` */
@@ -181,6 +199,206 @@ static int check_packs(const WIKILAY* l, const WIKIDATA* d, const char* huddir, 
     return 0;
 }
 
+/* ---- THE STAGE HUD of a game entry's theatre ---- */
+
+static double snap(double v) { return floor(v + 0.5 + 1.0 / 64); }
+
+static void key_copy(char* d, size_t n, const char* s) { snprintf(d, n, "%s", s ? s : ""); }
+
+/* frame.js record()'s object, the mockup's WikiPage.frame(), into a WIKIFRAMEREC */
+static void rec_json(const TJV* R, WIKIFRAMEREC* f)
+{
+    const TJV *v, *e;
+    int k = 0;
+    memset(f, 0, sizeof *f);
+    f->on = (uint8_t)tj_num(tj_get(R, "on"), 0);
+    f->playing = (uint8_t)tj_num(tj_get(R, "playing"), 0);
+    f->question = (uint8_t)tj_num(tj_get(R, "question"), 0);
+    f->side = (int8_t)tj_num(tj_get(R, "side"), -1);
+    f->colour = (uint8_t)tj_num(tj_get(R, "colour"), 0);
+    f->speed = (uint8_t)tj_num(tj_get(R, "speed"), 10);
+    f->try_it = (uint8_t)tj_num(tj_get(R, "try_it"), 0);
+    f->playhead = (int32_t)tj_num(tj_get(R, "playhead"), 0);
+    f->end = (int32_t)tj_num(tj_get(R, "end"), 1);
+    v = tj_get(R, "seat");
+    for (e = v ? v->first : NULL; e && k < WIKI_SEATS; e = e->next, k++) {
+        WIKIFRAMESEAT* z = &f->seat[k];
+        key_copy(z->name, sizeof z->name, tj_str(tj_get(e, "name"), ""));
+        z->colour = (uint8_t)tj_num(tj_get(e, "colour"), k);
+        z->lost = (uint8_t)tj_num(tj_get(e, "lost"), 0);
+        z->out = (uint8_t)tj_num(tj_get(e, "out"), 0);
+#define F_(n_) z->n_ = (float)tj_num(tj_get(e, #n_), 0)
+        F_(units); F_(m); F_(mmax); F_(mi); F_(mo); F_(e); F_(emax); F_(ei); F_(eo);
+#undef F_
+    }
+    f->nseat = (uint8_t)k;
+    v = tj_get(R, "mark");
+    for (k = 0, e = v ? v->first : NULL; e && k < WIKIFRAME_MARKS; e = e->next, k++) {
+        f->mark[k].t = (int32_t)tj_num(tj_get(e, "t"), 0);
+        f->mark[k].kind = (int8_t)tj_num(tj_get(e, "kind"), 0);
+        f->mark[k].seat = (int8_t)tj_num(tj_get(e, "seat"), -1);
+    }
+    f->nmark = (uint16_t)k;
+    key_copy(f->held, sizeof f->held, tj_str(tj_get(R, "held"), ""));
+    key_copy(f->toast, sizeof f->toast, tj_str(tj_get(R, "toast"), ""));
+    v = tj_get(R, "cur");
+    f->cur.on = (uint8_t)tj_num(tj_get(v, "on"), 0);
+    key_copy(f->cur.from, sizeof f->cur.from, tj_str(tj_get(v, "from"), ""));
+    key_copy(f->cur.to, sizeof f->cur.to, tj_str(tj_get(v, "to"), ""));
+    f->cur.from_v = (int32_t)tj_num(tj_get(v, "from_v"), -1);
+    f->cur.to_v = (int32_t)tj_num(tj_get(v, "to_v"), -1);
+    f->cur.watched = (int32_t)tj_num(tj_get(v, "watched"), 0);
+    f->cur.i = (uint8_t)tj_num(tj_get(v, "i"), 0);
+    f->cur.n = (uint8_t)tj_num(tj_get(v, "n"), 0);
+    f->live = (uint8_t)tj_num(tj_get(R, "live"), 0);
+    f->rw = (uint8_t)tj_num(tj_get(R, "rw"), 0);
+    f->arm = (uint8_t)tj_num(tj_get(R, "arm"), 0);
+    f->first = (int32_t)tj_num(tj_get(R, "first"), 0);
+    f->G = (int32_t)tj_num(tj_get(R, "G"), 0);
+    f->now = (int32_t)tj_num(tj_get(R, "now"), 0);
+    f->last = (int32_t)tj_num(tj_get(R, "last"), 0);
+    f->arm_R = (int32_t)tj_num(tj_get(R, "armR"), 0);
+    v = tj_get(R, "bar");
+#define F_(n_) f->bar.n_ = (float)tj_num(tj_get(v, #n_), 0)
+    F_(e); F_(m); F_(ei); F_(eo); F_(mi); F_(mo); F_(emax); F_(mmax); F_(raw_e); F_(raw_m);
+#undef F_
+    f->simcur = (uint8_t)tj_num(tj_get(R, "simcur"), 0);
+    v = tj_get(R, "sim");
+    f->sim.x = (float)tj_num(tj_get(v, "x"), 0);
+    f->sim.z = (float)tj_num(tj_get(v, "z"), 0);
+    f->sim.shape = (uint8_t)tj_num(tj_get(v, "shape"), 0);
+    f->sim.age = (int32_t)tj_num(tj_get(v, "age"), 0);
+    /* the Take over block: none in a record without it */
+    f->tk = (uint8_t)tj_num(tj_get(R, "tk"), 0);
+    f->pick = (uint8_t)tj_num(tj_get(R, "pick"), 0);
+    f->lanes = (uint8_t)tj_num(tj_get(R, "lanes"), 0);
+    f->human = (int8_t)tj_num(tj_get(R, "human"), 0);
+    f->fork_max = (uint8_t)tj_num(tj_get(R, "fork_max"), 0);
+    f->tk_full = (uint8_t)tj_num(tj_get(R, "tk_full"), 0);
+    f->top_side = (int8_t)tj_num(tj_get(R, "top_side"), f->side);
+    f->chain_last = (int32_t)tj_num(tj_get(R, "chain_last"), 0);
+    f->fill_to = (int32_t)tj_num(tj_get(R, "fill_to"), 0);
+    f->pick_R = (int32_t)tj_num(tj_get(R, "pickR"), 0);
+    f->pick_evict = (int32_t)tj_num(tj_get(R, "pickEvict"), 0);
+    v = tj_get(R, "fork");
+    for (k = 0, e = v ? v->first : NULL; e && k < WIKIFRAME_FORKS; e = e->next, k++) {
+        WIKIFRAMEFORK* q = &f->fork[k];
+        q->id = (int32_t)tj_num(tj_get(e, "id"), 0);
+        q->from = (int32_t)tj_num(tj_get(e, "from"), 0);
+        q->end = (int32_t)tj_num(tj_get(e, "end"), 0);
+        q->parent = (int32_t)tj_num(tj_get(e, "parent"), 0);
+        q->seat = (uint8_t)tj_num(tj_get(e, "seat"), 0);
+        q->flags = (uint8_t)tj_num(tj_get(e, "flags"), 0);
+    }
+    f->nfork = (uint8_t)k;
+}
+
+static void box_out(const char* name, double x, double y, double w, double h)
+{
+    printf("\"%s\":[%.4f,%.4f,%.4f,%.4f]", name, x, y, w, h);
+}
+
+/* The stage HUD as the game lays it out over the theatre's stage `stage` (units, at `px` device
+   pixels a unit) from the mockup's own record H.rec, of a map H.map beside a column H.side_h rows
+   tall: the frame (tagpu_wikistage_fit, as the stage draws it), the HUD's state from the record
+   (tagpu_wikiframe_hudstate, after the render thread's bound), its controls (tagpu_hudlay_build),
+   the cursor (tagpu_wikiframe_point among the controls of tagpu_wikiframe_pressed's HUD, or the
+   simulation's at tagpu_wikiframe_game_point outside Try it), the emblems at art/wiki/layout.json's
+   `button` place -- right[0] for a live frame, right[1] for a replay's -- and Leave's question, every one in page device pixels; a box as x0 y0 x1 y1, each edge
+   snapped as the HUD's draw snaps it (tagpu_hud_snap, tagpu_hud_edge); and the bars' sides and badge as
+   tagpu_wikistate.c bar_bind composes them from the bounded record: [side, top_side, colour]. */
+static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, size_t nl, const HUDLAY* hud)
+{
+    static HUDSTATE st, pst;
+    static HUDOPS ops, pops;
+    char err[256];
+    WIKIFRAMEREC rec, pr;
+    WIKISTAGEFIT fit;
+    WIKIFRAMEDLG dlg;
+    WIKISTAGEFRAME sf;
+    TJDOC* ld;
+    const TJV* B;
+    double X0, Y0, cw, ch, fx, fy, b[4], x, y, rx, ry, nx, ny, gx, gy;
+    float hpx;
+    int Wg, Hg, i, w, h, side_h, n = 0;
+    if (!H || !tj_is(H, TJ_OBJ)) return;
+    rec_json(tj_get(H, "rec"), &rec);
+    tagpu_wikiframe_bound(&rec, WIKI_SIDE_SIDES, WIKI_LOGOS);
+    w = (int)tj_num(tj_at(tj_get(H, "map"), 0), 1);
+    h = (int)tj_num(tj_at(tj_get(H, "map"), 1), 1);
+    side_h = (int)tj_num(tj_get(H, "side_h"), 0);
+    tagpu_wikistage_canvas(stage, px, &X0, &Y0, &cw, &ch);
+    tagpu_wikistage_fit(w, h, side_h, 1, 0, 0, cw, ch, px, &fit);
+    {
+        WIKIFRAMESIZE sz;
+        tagpu_wikiframe_size(w, h, side_h, 0, 0, &sz);
+        Wg = sz.Wg;
+        Hg = sz.Hg;
+    }
+    fx = snap(fit.ox + fit.x0 * fit.s);
+    fy = snap(fit.oz + fit.z0 * fit.s);
+    hpx = (float)(Hg * fit.s / WIKIFRAME_HUD_H);
+    tagpu_wikiframe_hudstate(&rec, Wg, Hg, hpx, NULL, tagpu_hudlay_globals(hud), &st);
+    if (!tagpu_hudlay_build(hud, &st, &ops, err, sizeof err)) { fprintf(stderr, "wikilaycheck: the stage HUD: %s\n", err); exit(1); }
+    printf(",\n\"stagehud\":{\"Wg\":%d,\"Hg\":%d,\"hpx\":%.9g,\"bar\":[%d,%d,%d],", Wg, Hg, hpx, rec.side, rec.top_side, rec.colour);
+    box_out("canvas", X0, Y0, cw, ch);
+    printf(",\"corner\":[%.4f,%.4f],\"hot\":[", X0 + fx, Y0 + fy);
+    for (i = 0; i < ops.n; i++) {
+        const HUDOP* p = &ops.op[i];
+        if (p->kind != HOP_HOT) continue;
+        printf("%s[", n++ ? "," : "");
+        json_str(ops.text + p->run, (int)strlen(ops.text + p->run));
+        printf(",%.4f,%.4f,%.4f,%.4f]", X0 + fx + tagpu_hud_snap(p->r.x * hpx), Y0 + fy + tagpu_hud_snap(p->r.y * hpx),
+               X0 + fx + tagpu_hud_edge(p->r.x, p->r.w, hpx), Y0 + fy + tagpu_hud_edge(p->r.y, p->r.h, hpx));
+    }
+    putchar(']');
+    tagpu_wikiframe_dialog(&fit, Wg, Hg, &dlg);
+    rx = (fit.ox + w * WIKI_CELL / 2.0 * fit.s - fx) / hpx;
+    ry = (fit.oz + h * WIKI_CELL / 2.0 * fit.s - fy) / hpx;
+    nx = (dlg.no.x + dlg.no.w / 2.0 - fx) / hpx;
+    ny = (dlg.no.y + dlg.no.h / 2.0 - fy) / hpx;
+    tagpu_wikiframe_game_point(&rec, &fit, fx, fy, hpx, &gx, &gy);
+    if (rec.cur.on) {
+        const HUDOPS* among = &ops;
+        if (tagpu_wikiframe_pressed(&rec, &pr)) {
+            tagpu_wikiframe_hudstate(&pr, Wg, Hg, hpx, NULL, tagpu_hudlay_globals(hud), &pst);
+            if (!tagpu_hudlay_build(hud, &pst, &pops, err, sizeof err)) {
+                fprintf(stderr, "wikilaycheck: the pressed stage HUD: %s\n", err);
+                exit(1);
+            }
+            among = &pops;
+        }
+        tagpu_wikiframe_point(&rec, among, among, hpx, tagpu_hudlay_globals(hud)->track_ends, rx, ry, nx, ny, gx, gy, &x, &y);
+        printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + x * hpx, Y0 + fy + y * hpx);
+    } else if (rec.simcur && !rec.try_it && gx == gx && gy == gy)
+        printf(",\"cursor\":[%.9f,%.9f]", X0 + fx + gx * hpx, Y0 + fy + gy * hpx);
+    if (rec.question) {
+        const WIKIFRAMEBOX* q[4] = { &dlg.panel, &dlg.title, &dlg.yes, &dlg.no };
+        static const char* names[4] = { "panel", "title", "yes", "no" };
+        fputs(",\"dialog\":{", stdout);
+        for (i = 0; i < 4; i++) {
+            if (i) putchar(',');
+            box_out(names[i], X0 + q[i]->x, Y0 + q[i]->y, q[i]->w, q[i]->h);
+        }
+        putchar('}');
+    }
+    /* the emblems at the wiki layout's button place, as the theatre's stage draws them */
+    ld = tagpu_json_parse(lt, nl, err, sizeof err);
+    B = ld ? tj_get(tagpu_json_root(ld), "button") : NULL;
+    memset(&sf, 0, sizeof sf);
+    sf.btn_side = (int16_t)tj_num(tj_get(B, "side"), 0);
+    sf.btn_top = (int16_t)tj_num(tj_get(B, "top"), 0);
+    sf.btn_right = (int16_t)tj_num(tj_at(tj_get(B, "right"), rec.live ? 0 : 1), 0);
+    sf.btn_config = (int16_t)tj_num(tj_get(B, "config"), 0);
+    tagpu_json_free(ld);
+    fputs(",\"emblems\":[", stdout);
+    for (i = 0; i < 2 && sf.btn_side > 0; i++) {
+        tagpu_wikistage_emblem(&fit, &sf, i, b);
+        printf("%s[%.4f,%.4f,%.4f,%.4f]", i ? "," : "", X0 + b[0], Y0 + b[1], b[2], b[3]);
+    }
+    fputs("]}", stdout);
+}
+
 int main(int argc, char** argv)
 {
     char path[1024], err[256];
@@ -242,6 +460,7 @@ int main(int argc, char** argv)
     S = tagpu_json_root(sd);
     memset(&f, 0, sizeof f);
     faces(&f, argv[1]);
+    tagpu_hudlay_measure(hud, hud_measure, NULL);
     s_fallback = tj_get(S, "fallback");
     s_sizes = tj_get(S, "sizes");
     f.missing = missing;
@@ -250,6 +469,7 @@ int main(int argc, char** argv)
     st->H = (float)tj_num(tj_get(S, "H"), 0);
     st->bar = (float)tj_num(tj_get(S, "bar"), 32);
     st->rewind = tj_is(tj_get(S, "rewind"), TJ_TRUE);
+    st->config = (int)tj_num(tj_get(S, "config"), 0);
     st->open = tj_is(tj_get(S, "open"), TJ_TRUE);
     st->entry = (int)tj_num(tj_get(S, "entry"), -1);
     st->demo = (int)tj_num(tj_get(S, "demo"), 0);
@@ -281,12 +501,18 @@ int main(int argc, char** argv)
     for (e = v ? v->first : NULL; e; e = e->next)
         for (j = 0; j < WIKI_NKEYS; j++)
             if (!strcmp(tagpu_wikidata_key_name(j), tj_str(e, ""))) st->keys |= 1u << j;
+    st->about = tj_is(tj_get(S, "about"), TJ_TRUE);
+    /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
+       is checked on the tree's entries whether or not one declares "frame": "game"; the same
+       entry is made a game entry here */
+    if (tj_is(tj_get(S, "theatre"), TJ_TRUE) && st->entry >= 0 && st->entry < d->nentry) d->entry[st->entry].frame = WIKI_FRAME_GAME;
 
     if (!tagpu_wikilay_build(l, d, &f, st, o, &fr, err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     px = st->H / 720.0;
-    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f]},\"ops\":[\n",
+    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f],"
+           "\"row_cut\":%d},\"ops\":[\n",
            o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll_max[0], fr.scroll_max[1], fr.scroll_max[2],
-           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h);
+           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
         static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
@@ -309,8 +535,11 @@ int main(int argc, char** argv)
             printf(",\"text\":"); json_str(o->text + r->off, r->len);
         }
         if (p->kind == HOP_HOT) { printf(",\"key\":"); json_str(o->text + p->run, (int)strlen(o->text + p->run)); }
+        if (p->flags & HOPF_TOP) printf(",\"top\":1");
         putchar('}');
     }
-    printf("\n]}\n");
+    putchar(']');
+    stagehud(tj_get(S, "stagehud"), fr.stage, px, lt, nl, hud);
+    printf("}\n");
     return 0;
 }

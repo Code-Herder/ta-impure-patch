@@ -9,12 +9,13 @@
      the game copies this page, so a change to the wiki is made here first. -->
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="wiki.css">
+<link rel="stylesheet" href="../../hudart/mockup/hud.css">
 </head>
 <body>
 <header id="controls">
   <h1>In-game wiki mockup</h1>
   <label>Screen <select id="res"><option>1920x1080</option><option>2560x1440</option><option>3840x2160</option><option>3440x1440</option>
-    <option>1280x1024</option><option>1024x768</option><option value="fit">fit the browser</option></select></label>
+    <option>1280x1024</option><option>1280x720</option><option>1024x768</option><option value="fit">fit the browser</option></select></label>
   <label>Window <input type="range" id="size" min="50" max="100" step="1"><output id="sizev"></output></label>
   <label>Game <select id="mode"><option value="sp">single player (pauses)</option><option value="mp">multiplayer (keeps running)</option></select></label>
   <label>Detected mod <select id="mod"><option value="stock">Stock</option><option value="mayhem">Total Mayhem</option><option value="prota">ProTA</option>
@@ -35,23 +36,23 @@
       <div class="rd"><b>Energy</b><span id="e-v"></span><i id="e-f"><s></s></i><em id="e-r"></em></div>
       <div id="clock"></div>
       <div id="paused">PAUSED</div>
-      <button id="b-wiki" class="tb" title="Wiki" data-part="wikibtn" data-glyph="i_wiki"><i class="gl">?</i></button>
+      <button id="b-wiki" class="tb" title="Wiki" data-part="wiki_emblem"><i class="gl">?</i></button>
       <button id="b-rewind" class="tb" title="Rewind">&#10226;</button>
-      <button id="b-gear" class="tb" title="Impure settings">&#9881;&#xFE0E;</button>
+      <button id="b-gear" class="tb" title="Impure settings" data-part="config_emblem"><i class="gl">&#9881;&#xFE0E;</i></button>
     </div>
     <div id="capture"></div>
     <div id="win" hidden data-part="window">
       <div class="wt">Wiki</div>
       <button id="wx" title="Close (Esc)" data-part="close" data-glyph="i_close i_x"><i class="gl">&#10005;</i></button>
       <div class="wb">
-        <div class="pnl" data-part="panel"><nav id="tree" class="scr"></nav></div>
-        <div class="pnl" data-part="panel"><ol id="demos" class="scr"></ol></div>
+        <div class="pnl" id="p-tree" data-part="panel"><nav id="tree" class="scr"></nav></div>
+        <div class="pnl" id="p-demos" data-part="panel"><ol id="demos" class="scr"></ol></div>
         <section id="entry">
           <h2 id="e-title"></h2>
           <div id="e-sub"></div>
           <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
-            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas></div>
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="stagehud" class="hud" hidden></div><canvas id="stagetop"></canvas><div id="about" data-part="panel" hidden></div></div>
           </div>
           <div id="caption"></div>
           <div id="keys"></div>
@@ -60,9 +61,14 @@
             <button id="c-replay" title="Replay" data-part="button" data-glyph="i_replay"><i class="gl">&#10226;</i></button>
             <span class="sp"><button id="c-x1" data-part="button">1&times;</button><button id="c-x2" data-part="button">2&times;</button></span>
             <button id="c-try" data-part="button"></button>
+            <button id="c-about" data-part="button">About</button>
           </div>
           <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
         </section>
+        <div id="t-row">
+          <div id="t-badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
+          <div id="t-title"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -76,9 +82,14 @@ it names none of them), <code>iface=1|0</code> (the Interface Type: 1 right-clic
 <code>sidebar=mod|fixture|tall|off</code> (the game's left sidebar on the stage: the detected mod's layout and, under
 <code>gfx=game</code>, its pictures from the gitignored <code>gfx/side/&lt;mod&gt;/</code>, the fixture of <code>art/wiki/side/</code> where the mod has
 none; a fixture by name; or no sidebar. With the mod's own layout the demos play that side's units, its casting, and
-under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>theatre</code> (the theatre layout, which an entry with <code>"frame": "game"</code> takes, forced on
+whichever entry is open: the tree, its entry's demos under it, beside the stage; an entry with
+<code>"frame": "game"</code> also plays its demos as replays on the whole game frame, with the replay HUD on it, and may be opened by
+<code>entry=</code> before the tree lists it), <code>about</code> (the
+theatre's About panel open), <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
 resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
 <script src="sim.js"></script>
+<script src="replay.js"></script>
 <script src="pose.js"></script>
 <script src="cob.js"></script>
 <script src="text.js"></script>
@@ -86,7 +97,10 @@ resolves from the local install into the gitignored <code>gfx/</code>), <code>ss
 <script src="scene.js"></script>
 <script src="gfx.js"></script>
 <script src="side.js"></script>
+<script src="bar.js"></script>
+<script src="frame.js"></script>
 <script src="stage.js"></script>
+<script src="../../hudart/mockup/hud.js"></script>
 <script src="sound.js"></script>
 <script src="wiki.js"></script>
 </body>

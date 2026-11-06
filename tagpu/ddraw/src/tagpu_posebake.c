@@ -129,6 +129,7 @@ static int          s_mirrorWant;             /* the Vulkan lane asked for them 
    serial and a ref handed to the wrong accessor cannot match. It starts at 1:
    0 is "never baked", which is what a zeroed entry reads. */
 static unsigned     s_serial = 1;
+static unsigned     s_nDrop;                  /* entries dropped, both tables: tagpu_posebake_work */
 static int          s_nmat;                   /* slots ever used: the high-water mark */
 /* THE BAKE'S OWN FRAME, advanced by every tagpu_posebake_frame, so "stamped
    this frame" means "asked for since the last latch" however the render
@@ -465,6 +466,7 @@ static void mat_drop(int i)
     memset(m, 0, sizeof *m);
     s_matFree[s_nmatFree++] = (unsigned short)i;
     s_matLive--;
+    s_nDrop++;
 }
 
 /* A material stream is only meaningful against the geometry it was walked
@@ -485,6 +487,7 @@ static void geom_drop(TAGPU_PBGEOM* g)
     memset(g, 0, sizeof *g);
     s_geomFree[s_ngeomFree++] = (unsigned short)k;
     s_geomLive--;
+    s_nDrop++;
 }
 
 /* THE SLOT A NEW ENTRY TAKES (tagpu_posebake.h says why). At the keep, the
@@ -822,6 +825,12 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         blog(b);
     }
     return m;
+}
+
+void tagpu_posebake_work(unsigned* baked, unsigned* dropped)
+{
+    *baked = s_serial - 1;
+    *dropped = s_nDrop;
 }
 
 /* ---- the four invalidations --------------------------------------------- */

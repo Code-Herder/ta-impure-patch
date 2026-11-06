@@ -155,6 +155,7 @@
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"   /* this lane restores the twin itself */
 #include "tagpu_vk_stage.h"     /* the bounded upload of the base atlas */
+#include "tagpu_vk_fog.h"       /* the slot's fog image, binding 43 */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -187,13 +188,11 @@
 #define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 56 */
 #define MAT_STRIDE  (TAGPU_PB_MATST * 4)   /* 52 */
 
-/* the fog grid is RG8 and the widest the wide-fog builder produces is well
-   inside this; a bound here is what keeps a handed-over number from sizing an
-   allocation (the scaffold's rule). Every grid the hand-over carries passes
-   it, so a frame `frame_down`'s forecast lets draw is never stood down by
-   its grid's size. */
-#define FOG_MAXDIM 1024
-typedef char unit_fog_holds_carried[(FOG_MAXDIM >= TAGPU_PD_FOG_MAXDIM) ? 1 : -1];
+/* THIS FRAME'S uFogSize: the source the slot's fog image holds
+   (tagpu_vk_fog_size), set by `upload_draw` before any fragment block is
+   filled, so every block of the frame carries the size of the image its set
+   names. Render thread only. */
+static int s_fogW, s_fogH;
 
 /* per-type vertex buffers: one per bake entry the bake can hold, so this
    table is never the binding limit on a frame the bake could serve, and
@@ -405,31 +404,27 @@ typedef struct {
 
     TAGPU_VKSTAGE   stage;                 /* the base atlas's, when one is due */
 
-    VkImage         pal, fogGrid, shk;
-    VkDeviceMemory  palMem, fogGridMem, shkMem;
-    VkImageView     palView, fogGridView, shkView;
+    VkImage         pal, shk;
+    VkDeviceMemory  palMem, shkMem;
+    VkImageView     palView, shkView;
     VkBuffer        smallStage;
     VkDeviceMemory  smallMem;
     unsigned char*  smallMap;
-    int             fogW, fogH;
 
     VkDescriptorSet dsMain, dsCast;
     int             built;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
-/* ONE STAGING BUFFER CARRIES THE THREE SMALL UPLOADS: the palette (256 x 1
-   RGBA8), the face-shade multiplier (32 x 1 R32F), then the fog grid (cols x
-   rows RG8, a different size whenever the view walks far enough for the grid
-   to be re-laid). One allocation, three copy regions at three offsets -- and
-   the buffer is rebuilt with the fog image, by the same call, so the two can
-   never disagree about the size. Every offset is a multiple of 4 and of its
-   image's texel block size, which is what vkCmdCopyBufferToImage requires of
-   a bufferOffset. */
+/* ONE STAGING BUFFER CARRIES THE TWO SMALL UPLOADS: the palette (256 x 1
+   RGBA8) and the face-shade multiplier (32 x 1 R32F), two copy regions at two
+   offsets, made with the slot's fixed half. Both offsets are a multiple of 4
+   and of their image's texel block size, which is what vkCmdCopyBufferToImage
+   requires of a bufferOffset. The fog image is the slot's in tagpu_vk_fog.c,
+   shared with every world pass. */
 #define SMALL_PALOFF 0                           /* 256 x 1  RGBA8            */
 #define SMALL_SHKOFF (256 * 4)                   /* 32 x 1   R32F             */
 #define SMALL_FIXED  (256 * 4 + 32 * 4)
-#define SMALL_FOGOFF SMALL_FIXED                 /* cols x rows RG8           */
 
 /* this frame's draw list, filled by `upload` and read by `cast` and `record` */
 typedef struct {
@@ -822,15 +817,12 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
 {
     slot_free_sized(d, s);
     kill_image(d, &s->pal, &s->palMem, &s->palView);
-    kill_image(d, &s->fogGrid, &s->fogGridMem, &s->fogGridView);
     kill_image(d, &s->shk, &s->shkMem, &s->shkView);
     kill_buffer(d, &s->smallStage, &s->smallMem, &s->smallMap);
-    s->fogW = s->fogH = 0;
     s->built = 0;
 }
 
-/* the two fixed-size images; slot_fog makes the third and the staging
-   buffer that feeds all three */
+/* the two fixed-size images and the staging buffer that feeds both */
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
     if (s->built) return 1;
@@ -844,30 +836,11 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->shk, &s->shkMem, &s->shkView))
         return 0;
-    s->built = 1;
-    return 1;
-}
-
-/* the fog grid image and the one staging buffer, together: a grid whose
-   dimensions moved rebuilds both, so the buffer and the image it feeds cannot
-   disagree about the size */
-static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
-{
-    VkDeviceSize need;
-    if (s->fogGrid && s->fogW == w && s->fogH == h && s->smallStage) return 1;
-    kill_image(d, &s->fogGrid, &s->fogGridMem, &s->fogGridView);
-    kill_buffer(d, &s->smallStage, &s->smallMem, &s->smallMap);
-    s->fogW = s->fogH = 0;
-    if (!mk_image(d, w, h, 1, VK_FORMAT_R8G8_UNORM,
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                  VK_IMAGE_ASPECT_COLOR_BIT, &s->fogGrid, &s->fogGridMem, &s->fogGridView))
-        return 0;
-    need = (VkDeviceSize)SMALL_FIXED + (VkDeviceSize)w * h * 2;
-    if (!mk_buffer(d, need, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s->smallStage, &s->smallMem, &s->smallMap))
         return 0;
-    s->fogW = w; s->fogH = h;
+    s->built = 1;
     return 1;
 }
 
@@ -926,7 +899,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     /* NEAREST AND CLAMP_TO_EDGE for every texture this shader looks up by an
        exact texel -- the base atlas, the palette, the face-shade multipliers,
-       the scaffold and the fog grid. The base atlas is the engine's own
+       the scaffold and the fog source. The base atlas is the engine's own
        texels in colour, and a filtered fetch would blend a texel with its
        neighbour and with the key's alpha 0.
        THE RESTORED TWIN IS THE EXCEPTION AND GETS ITS OWN SAMPLER BELOW: it
@@ -2134,6 +2107,16 @@ static void vs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
     b->i[44] = base[2];                                /* uVisBase     int @176*/
 }
 
+/* THE BODY BLOCK'S PER-DRAW FIELDS, as word indices into UBLK: the shadow
+   and nanoframe-wire draws reuse the body block with some of these moved
+   (draw_unit_blocks), so the indices are named once here and every writer
+   uses the names -- a field added or removed above them moves all three
+   writers together. They must match fs_body's GLSL block. */
+enum {
+    FB_FOG = 14, FB_SHADOW = 15, FB_ALPHA = 16, FB_WATERT = 17,
+    FB_WATERMODE = 18, FB_DIGT = 19, FB_NANOON = 20, FB_NANOT = 21
+};
+
 /* The fragment stage's BODY block. */
 static void fs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r)
 {
@@ -2145,16 +2128,15 @@ static void fs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r)
     b->f[8]  = h->ss;                                  /* uSS       float @32  */
     b->f[9]  = h->zoom;                                /* uZoomF    float @36  */
     b->f[10] = h->zoomCx; b->f[11] = h->zoomCy;        /* uZoomCF    vec2 @40  */
-    b->f[12] = h->fogOrgX; b->f[13] = h->fogOrgY;      /* uFogOrg    vec2 @48  */
-    b->f[14] = h->fogCols; b->f[15] = h->fogRows;      /* uFogDim    vec2 @56  */
-    b->i[16] = r->fog;                                 /* uFog        int @64  */
-    b->i[17] = 0;                                      /* uShadow     int @68  */
-    b->f[18] = r->alpha;                               /* uAlpha    float @72  */
-    b->f[19] = r->waterT;                              /* uWaterT   float @76  */
-    b->i[20] = r->waterMode;                           /* uWaterMode  int @80  */
-    b->f[21] = r->digT;                                /* uDigT     float @84  */
-    b->i[22] = r->nanoOn;                              /* uNanoOn     int @88  */
-    b->f[23] = r->nanoT;                               /* uNanoT    float @92  */
+    b->i[12] = s_fogW; b->i[13] = s_fogH;              /* uFogSize  ivec2 @48  */
+    b->i[FB_FOG]       = r->fog;                       /* uFog        int @56  */
+    b->i[FB_SHADOW]    = 0;                            /* uShadow     int @60  */
+    b->f[FB_ALPHA]     = r->alpha;                     /* uAlpha    float @64  */
+    b->f[FB_WATERT]    = r->waterT;                    /* uWaterT   float @68  */
+    b->i[FB_WATERMODE] = r->waterMode;                 /* uWaterMode  int @72  */
+    b->f[FB_DIGT]      = r->digT;                      /* uDigT     float @76  */
+    b->i[FB_NANOON]    = r->nanoOn;                    /* uNanoOn     int @80  */
+    b->f[FB_NANOT]     = r->nanoT;                     /* uNanoT    float @84  */
     b->f[24] = r->nanoC[0]; b->f[25] = r->nanoC[1];
     b->f[26] = r->nanoC[2];                            /* uNanoC     vec3 @96  */
     b->i[27] = h->lambert;                             /* uLambert    int @108 */
@@ -2291,12 +2273,12 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        the completed branch and the digger's inline branch only. Getting this
        wrong erases the Kbot lab's shadow below the waterline, so it is pinned
        here rather than passed in. */
-    b.i[17] = 1;                                       /* uShadow              */
-    b.f[18] = 0.5f;                                    /* uAlpha               */
-    b.i[22] = 0;                                       /* uNanoOn              */
+    b.i[FB_SHADOW] = 1;
+    b.f[FB_ALPHA]  = 0.5f;
+    b.i[FB_NANOON] = 0;
     if (r->shKind == TAGPU_PDSH_SLANT) {
-        b.f[19] = -1e9f;                               /* uWaterT              */
-        b.f[21] = -1e9f;                               /* uDigT                */
+        b.f[FB_WATERT] = -1e9f;
+        b.f[FB_DIGT]   = -1e9f;
     }
     memcpy(ub + fglOff2, b.f, FGL_SZ);
 
@@ -2304,19 +2286,19 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        The body block with four fields moved: uShadow 0, uNanoOn 0 (the outline
        is not re-classified by the recolour it traces), uWaterMode 0 and
        uAlpha 1. The waterline and digger thresholds stay the unit's own. */
-    b.i[17] = 0;                                       /* uShadow              */
-    b.f[18] = 1.0f;                                    /* uAlpha               */
-    b.f[19] = r->waterT;                               /* uWaterT              */
-    b.i[20] = 0;                                       /* uWaterMode           */
-    b.f[21] = r->digT;                                 /* uDigT                */
-    b.i[22] = 0;                                       /* uNanoOn              */
+    b.i[FB_SHADOW]    = 0;
+    b.f[FB_ALPHA]     = 1.0f;
+    b.f[FB_WATERT]    = r->waterT;
+    b.i[FB_WATERMODE] = 0;
+    b.f[FB_DIGT]      = r->digT;
+    b.i[FB_NANOON]    = 0;
     memcpy(ub + fglOff3, b.f, FGL_SZ);
 }
 
 /* THE STAND-DOWNS A FRAME'S OWN SETTINGS DECIDE, the first that holds, in
    the order `upload_draw` reports them: a frame that samples the shadow map
    on a device that will not filter it, posed units the hand-over does not
-   carry, a record that samples the fog overlay with no grid carried, and the
+   carry, a record that samples the fog overlay with no fog source, and the
    scaffold overlay asked for. One test for its two callers -- `upload_draw`
    on the hand-over, `tagpu_vk_unit_fx_ready` on the effects gather's
    forecast of the same four facts -- so what the models are gathered on and
@@ -2334,12 +2316,12 @@ static int mirrors_there(const unsigned char* atlas, int atlasDim,
 }
 /* Last, because `upload_draw` meets the mirrors after the pose and the
    models' checks and says which one is missing there. */
-static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogGrid, int scafOn,
+static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogHeld, int scafOn,
                       int mirrors)
 {
     if (shadowOn && s_state == ST_READY && !s_cmpLinear) return FD_CMP;
     if (otherDraws > 0) return FD_OTHER;
-    if (fogWant && !fogGrid) return FD_FOG;
+    if (fogWant && !fogHeld) return FD_FOG;
     if (scafOn) return FD_SCAF;
     if (!mirrors) return FD_MIRROR;
     return FD_DRAW;
@@ -2439,7 +2421,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     VkDeviceSize ustride, fxStride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3,
                  fxFglOff, poseBytes;
     VkDeviceSize poseBase, ubase, stageOff, stageNeed;
-    int fogW = 1, fogH = 1, i, fd, anyUpload = 0, fogWanted = 0;
+    int fogW = 0, fogH = 0, i, fd, anyUpload = 0, fogWanted = 0;
     unsigned fxDrawn = 0, k;
     /* the records that are effects models and the rest, whether this frame
        drops the models (`dropFx`), and the runs it then copies (`nrun`) */
@@ -2537,7 +2519,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        function. Each reason's argument and its line follow; the mirrors'
        is below, after the pose. */
     for (i = 0; i < h.nunit; i++) if (h.units[i].fog & 1) { fogWanted = 1; break; }
-    fd = frame_down(h.shadowOn, h.otherDraws, fogWanted, h.fogGrid != NULL, h.scafOn,
+    /* the source the slot's fog image holds this frame: the seam prepared it
+       before this call (tagpu_vk_fog.h) */
+    tagpu_vk_fog_size((int)slot, &fogW, &fogH);
+    fd = frame_down(h.shadowOn, h.otherDraws, fogWanted, fogW > 0 && fogH > 0, h.scafOn,
                     mirrors_there(h.atlas, h.atlasDim, h.pal, h.shadeK));
 
     /* A COMPARE SAMPLER THAT IS NOT LINEAR, AND THE DECISION IS TAKEN HERE.
@@ -2583,13 +2568,13 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     }
     s_saidOther = 0;
 
-    /* A RECORD THAT SAMPLES THE FOG OVERLAY ON A FRAME WITH NO GRID is a
+    /* A RECORD THAT SAMPLES THE FOG OVERLAY ON A FRAME WITH NO SOURCE is a
        refusal rather than a frame drawn without fog. */
     if (fd == FD_FOG) {
         if (!s_saidFog) {
             s_saidFog = 1;
             plog(d, "unit: a unit this frame samples the fog overlay and the "
-                    "hand-over carries no grid - nothing drawn while that is true");
+                    "slot's fog image holds no source - nothing drawn while that is true");
         }
         goto standdown;
     }
@@ -2836,22 +2821,15 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                                  rather than returning, so without it its log
                                  line would fire EVERY frame */
 
-    /* THE FOG GRID, and the bound re-checked in this file's own terms. */
-    if (h.fogGrid) {
-        if (h.fogGridCols < 1 || h.fogGridRows < 1 ||
-            h.fogGridCols > FOG_MAXDIM || h.fogGridRows > FOG_MAXDIM) {
-            plog(d, "unit: a %dx%d fog grid is outside what this pass carries - "
-                    "nothing drawn", h.fogGridCols, h.fogGridRows);
-            goto standdown;
-        }
-        fogW = h.fogGridCols; fogH = h.fogGridRows;
-    }
+    /* THE FOG IMAGE THE MAIN SET NAMES (`bind_main`): with none -- the device
+       refused it -- the set would have a hole, so the frame stands down */
+    if (!tagpu_vk_fog_view((int)slot, NULL)) goto standdown;
+    s_fogW = fogW; s_fogH = fogH;
 
     /* ---- the slot is ours: the seam waited on fence[slot] at the top of this
        frame, so the submit that last used these buffers, these images and these
        descriptor sets has completed. ---- */
     if (!slot_build(d, s)) goto refuse;
-    if (!slot_fog(d, s, fogW, fogH)) goto refuse;
     if (!atlas_build(d, h.atlasDim)) goto refuse;
 
     /* SEVEN BLOCKS A UNIT, at device-accepted offsets: four vertex-stage (the
@@ -3282,25 +3260,13 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                     vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
     }
 
-    /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
+    /* THE TWO SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
        are therefore no contents to preserve and no layout to carry. */
     memcpy(s->smallMap + SMALL_PALOFF, h.pal, 256 * 4);
     memcpy(s->smallMap + SMALL_SHKOFF, h.shadeK, 32 * sizeof(float));
-    /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order. With no grid this frame
-       the image is one zero cell, which the shader never reads -- taFog is
-       called only on the `uFog & 1` branch, and a frame that wanted one and had
-       none was refused above. */
-    if (h.fogGrid) memcpy(s->smallMap + SMALL_FOGOFF, h.fogGrid,
-                          (size_t)fogW * fogH * 2);
-    else           memset(s->smallMap + SMALL_FOGOFF, 0, 2);
 
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -3309,7 +3275,6 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 0, 256, 1);
-    copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fogGrid, 0, fogW, fogH);
     copy_rect(cb, s->smallStage, SMALL_SHKOFF, s->shk, 0, 32, 1);
     img_barrier(cb, s->shk, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -3317,11 +3282,6 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -3550,7 +3510,7 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
         n++;
     }
 
-    /* 40 uPal, 41 uAtlasRGB, 42 uScaf, 43 uFogGrid, 44 uShadowCmp,
+    /* 40 uPal, 41 uAtlasRGB, 42 uScaf, 43 uFogSrc, 44 uShadowCmp,
        45 uShadowRaw, 46 uBase, 47 uShadeK -- the order
        inc/spirv/tagpu_native.spv.h prints for tagpu_native::FS.
        BINDING 41 IS uAtlasRGB AND IT NAMES THE RESTORED TWIN'S OWN IMAGE.
@@ -3585,7 +3545,10 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
        question is answered. Until then it is a valid descriptor nothing
        reads. */
     ii[2].sampler = s_samp; ii[2].imageView = scaf;
-    ii[3].sampler = s_samp; ii[3].imageView = s->fogGridView;
+    /* the slot's fog image (tagpu_vk_fog.h), live: `upload` stood the frame
+       down without one, and this is the slot's own prepare, after the seam's
+       tagpu_vk_fog_prepare for the same slot */
+    ii[3].sampler = s_samp; ii[3].imageView = tagpu_vk_fog_view((int)slot, NULL);
     ii[4].sampler = s_sampCmp; ii[4].imageView = shadow;
     ii[5].sampler = s_samp;    ii[5].imageView = shadow;
     /* the base with the NEAREST sampler: one engine texel per fetch, and the

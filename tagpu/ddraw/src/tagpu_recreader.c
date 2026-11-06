@@ -1115,14 +1115,15 @@ static int list_record(RecReader* r, const unsigned char* b, unsigned len)
     return 1;
 }
 
-/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces. */
-static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick)
+/* A sample, `tick` its GameTime, as the seat's latest: later than the one it replaces, its zoom
+   at least `zmin`, its file's minimum. */
+static int pov_take(RecWorld* w, const unsigned char* b, unsigned tick, uint32_t zmin)
 {
     RecPov p;
     unsigned s;
     memcpy(&p, b, sizeof p);
     s = p.player;
-    if (s >= REC_PLAYERS || !rec_pov_ok(&p) || tick > w->tick ||
+    if (s >= REC_PLAYERS || !rec_pov_ok(&p, zmin) || tick > w->tick ||
         (w->npov[s] && w->pov_tick[s][w->npov[s] - 1] >= tick))
         return 0;
     if (w->npov[s] == 2) {
@@ -1147,9 +1148,11 @@ static int pov_record(RecReader* r, unsigned kind, const unsigned char* b, unsig
     if (h->has_mp || r->fbracket || r->ndeaths) return 0;
     switch (kind) {
     case RK_POV:
-        return !r->snap && len == sizeof(RecPov) && pov_take(w, b, w->tick);
+        return !r->snap && len == sizeof(RecPov) &&
+               pov_take(w, b, w->tick, rec_pov_zoom_min(h->format));
     case RK_POV_AT:
-        return r->snap && len == REC_POV_AT_BYTES && pov_take(w, b + 4, u32(b));
+        return r->snap && len == REC_POV_AT_BYTES &&
+               pov_take(w, b + 4, u32(b), rec_pov_zoom_min(h->format));
     case RK_CLICK: {
         RecClick c;
         if (r->snap || len != sizeof c) return 0;
@@ -1856,7 +1859,8 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
             s->i0 = nix;
             tagpu_recmp_history_end(mp); mp=NULL;
-            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h))) {
+            if (s->h->has_mp && !(mp=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h,
+                                                                s->h->format))) {
                 snprintf(why, cap, "invalid contribution roster or no memory for history"); goto done;
             }
             after_end = 0;
@@ -2270,11 +2274,11 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimeline
         return 0;
     }
     a->next_id = r->max_id + 1;
-    a->evict = UINT32_MAX;
     {
-        unsigned live = 0;
-        uint64_t oldest = UINT64_MAX, now = recfile_now();
-        unsigned selected = recr_selected(r)->id;
+        /* keep < RECR_TIMELINES (refused above), so every kept segment has a row */
+        RecForkRow rows[RECR_TIMELINES];
+        uint32_t evict;
+        uint64_t now = recfile_now();
         for (i = 0; i < keep; i++) {
             const RecTimeline* t = &r->seg[i].t;
             RecTimelineState* row = &a->states[a->nstates++];
@@ -2288,19 +2292,13 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimeline
                 }
             *row = (RecTimelineState){t->id, (uint8_t)t->state, {0}, (uint32_t)lu,
                                      (uint32_t)(lu >> 32)};
-            if (t->id && t->state == REC_TL_LIVE) {
-                live++;
-                if (t->id != selected && (a->evict == UINT32_MAX || lu < oldest)) {
-                    oldest = lu;
-                    a->evict = t->id;
-                }
-            }
+            rows[i] = (RecForkRow){t->id, (uint8_t)(t->state == REC_TL_LIVE), lu};
         }
-        if (live < REC_FORK_LIMIT) a->evict = UINT32_MAX;
-        else if (a->evict == UINT32_MAX || live > REC_FORK_LIMIT) {
+        if (!rec_fork_evict(rows, keep, recr_selected(r)->id, REC_FORK_LIMIT, &evict)) {
             snprintf(why, cap, "the live fork set cannot be bounded to %u", REC_FORK_LIMIT);
             return 0;
         }
+        a->evict = evict;
         for (i = 0; i < a->nstates; i++)
             if (a->states[i].id == a->evict) a->states[i].state = REC_TL_DELETED;
         /* The new ID exceeds the previous high watermark, so its row carries that watermark
@@ -2402,7 +2400,8 @@ static int mp_read(RecReader* r, RecMpRead* m, uint64_t* ordinal,
         r->w.tick<m->tick || (ordinal &&
         *ordinal!=tagpu_recmp_history_ledger(m->history)->records)) {
         mp_read_free(m);
-        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h);
+        m->history=tagpu_recmp_history_begin(&s->h->mp,&s->h->mp_seats,s->h->grid_w,s->h->grid_h,
+                                             s->h->format);
         if (!m->history) { snprintf(why,cap,"no memory for multiplayer authority"); return -1; }
         m->epoch=r->scan_epoch; m->segment=segment; m->tick=0;
         m->index=s->i0; m->done=0;
@@ -3041,6 +3040,8 @@ done:
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 
 int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
+
+unsigned recr_segment_format(const RecReader* r) { return seg_header(r)->format; }
 
 int recr_segment_cells(const RecReader* r) { return r->in_seg && recr_holds_cells(seg_header(r)); }
 

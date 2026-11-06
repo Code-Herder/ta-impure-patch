@@ -2,7 +2,7 @@
 
 ## Status
 
-The recorder writes recording format 26 and its readers take format 26 alone (*The file*, below).
+The recorder writes recording format 28 and its readers take formats 26, 27 and 28 (*The file*, below).
 Enabled native multiplayer recording carries an observed world, a contribution container and cut
 footer, plus replica creation roots. Native engine playback remains unfinished; the container
 and its verification are in the [multiplayer slice](demo-recorder-multiplayer-slice.md#contribution-file-container).
@@ -89,7 +89,7 @@ which then rebuilds the air pool and jumps to the tick. GameTime has just been i
 between two iterations, on the thread that owns it. A skirmish calls the step with 0 (`0x49693C`),
 so the network pump inside it (`0x4954C8`) does not run: only a network game pumps there. It
 names engine memory only to read it, each read bounded by the engine's own count
-([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)).
+([the engine map](../engine/recorder.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)).
 What it writes is its own: its shadows, the ring and the harness's dump.
 
 It images only what may have changed, and puts only the changes into the ring:
@@ -156,7 +156,7 @@ THE CHAIN*):
   else the bytes stored. The header, the end and the timelines blocks are always stored, so a
   header reads without zstd.
 
-`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 25; a reader takes that format alone:
+`inc/tagpu_recfmt.h` is the format, `REC_FORMAT` 28; a reader takes the closed list `rec_format_supported` names, 26, 27 and 28 — every block is format 26's, 28 adds `REC_POV_CUT` to a camera sample's flags, and 27 lowers the camera sample's zoom minimum from 16384 (0.25) to 1024 (1/64), so a replay carries the whole-map view the zoom floor now allows. `tarec.py` refuses any other with `format N, this tool reads 26, 27`:
 
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the start's wall clock (`RT_WALLCLOCK`: a FILETIME in UTC, then the local time's offset
@@ -268,7 +268,7 @@ the claim and move stamps, the countdowns, the resource ledger's requested and g
 points while built and the HP percentages every 30 ticks, a ground unit's speed against the
 slope, and for aircraft the air
 step's velocity, speed, smoothed acceleration and bank — and the engine facts behind each are in the engine map's
-[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+[*The demo recorder's unit frame*](../engine/units.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
 They are integer arithmetic only (the ledger's float sum included, `reccodec_f32_add`), so the writer thread's x87 precision does not matter and the
 Python reader (`tools/replay/reccodec.py`, an independent implementation in numpy and numba)
 agrees with the C one byte for byte. The capture writes the constants the rules need into the
@@ -301,7 +301,7 @@ are exactly its changed slots below the extent, ascending, and at most one `RK_P
 carries whenever the count or the extent changes. The frame's one parameter is the header's `RT_PROJECTILES`; its constants
 — the dword order, the four sections and their anchors, the stamp, the guided rule and the sine
 table — are the format's. The engine facts are the engine map's
-[*The demo recorder's pool frame*](../exe-reverse-engineering.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
+[*The demo recorder's pool frame*](../engine/weapons.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
 
 **The record frames** (`inc/tagpu_recframe.h`, and one file each, `src/tagpu_recframe_cells.c`,
 `_orders.c`, `_events.c` and `_state.c`, whose opening comments hold THE BYTES, THE STATE and THE
@@ -352,7 +352,7 @@ the records since the reset, of that grid and of the unit copy alone. A frame ne
 cannot carry back byte for byte (a pad that is not zero, a length not its kind's, a value past its
 bounds) or a failed allocation latches inside it, and its section's write then declines the block
 after its iterations. The engine facts the codings rest on are the engine map's
-[*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10);
+[*The demo recorder's record frames*](../engine/recorder.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10);
 each is a predictor's, so a wrong one costs size, never data.
 
 **Reset points.** The frames' state crosses block boundaries only inside a run of sectioned
@@ -522,7 +522,7 @@ that starts while the previous file is still being finished takes a new pair.
 A recording that has ended is complete once its writer has closed the file, and **the process's
 exit waits for that**: the in-game menu's exit to Windows runs the teardown and then posts
 `WM_DESTROY`, and the game leaves a moment later through the CRT's `ExitProcess`
-([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
+([the engine map](../engine/recorder.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
 which would kill a writer still writing its last block. The fork hooks `ExitProcess` in the IATs of
 the exe and of the DLLs in its folder, and its own exits, which that hook does not reach, call the
 same wait, `tagpu_rec_exit`, before theirs: closing the window, `tagpu_refuse` (a saved game it
@@ -744,7 +744,7 @@ puppet host and verifies it against the recording.
     while recording; and **interceptions**. The event's start (`+1..+0xC`) is the one the build
     used: `0x49D9C0` sends the shooter's centre there instead, so for its shots the recorder takes
     the build's start from the send's frame and leaves the packet sent as it is
-    ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)).
+    ([engine map](../engine/recorder.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)).
   - **Script starts** through the three broadcasters `0x456190`, `0x456200` and `0x456290`.
   - **Build done**, `0x41B8D0`, which clears the model's composite frame `[+0x9E]+0x10` (the
     cached 1x bake), so a finished unit bakes again as a finished one.
@@ -844,7 +844,7 @@ none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the bat
 ### S2b — watching
 
 Built as planned, but for what *As built* marks. The engine facts are
-[the engine map](../exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)'s,
+[the engine map](../engine/recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)'s,
 the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module writes
 [GPU status](../gpu-status.md) §2.6f.
 
@@ -1098,7 +1098,7 @@ Three landings, as S2 was two, each a finished unit verified by running it:
 
 A recording carries the feature grid and the wreck pool, every call that changed them, and the
 simulation RNG's draws those calls made; playback makes each change through the function that made
-it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)'s.
+it. The engine facts are [the engine map](../engine/map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)'s.
 
 **What the engine keeps.**
 
@@ -1288,7 +1288,7 @@ A recording carries the main block's and `.data`'s simulation fields, the projec
 and the explored map at every iteration, and a puppet level can be moved to any GameTime of the
 recording, forward or backward, in the running playback or from a fresh process
 (`tacli replay seek`). The engine facts are
-[the engine map](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
+[the engine map](../engine/recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
 The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
 
 **What it records.**
@@ -1803,7 +1803,7 @@ answers of that day (its *Decisions taken*). Three landings, each verified by ru
 **Why the round trip runs on a puppet host, not on the live skirmish** (the owner's answer to OQ1).
 The recording machine cannot rebuild the state it is in. The recorder captures iteration k at the
 capture point inside step k, after GameTime's increment and before the unit tick (the engine map's
-[*tick boundaries*](../exe-reverse-engineering.md#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)),
+[*tick boundaries*](../engine/sim.md#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)),
 so at the frame visit after step k it holds iteration k while the world holds step k's result: a
 rebuild there restores iteration k and step k runs a second time, live. That second run meets what
 no recording carries — each seat's AI object and acquisition record (a simulation-RNG draw at
@@ -2038,7 +2038,7 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 What the harness compares beyond the recorded state: what the engine *did* on each machine,
 counted where effects leave the simulation, and every byte of the two images the positive list
 leaves out. The engine facts are the engine map's
-[*counts and the step's phases*](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01);
+[*counts and the step's phases*](../engine/sim.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01);
 the checks as asserted, the completeness note's
 [*replay test harness*](demo-recorder-completeness.md#the-replay-test-harness).
 
@@ -2059,7 +2059,7 @@ counted) and the names (`RK_COUNT_NAME`).
   functions. They chain after the puppet gates, so on a puppet they count only what the gates let
   through. The broadcast starts, the start sites, `QueryNanoPiece`, the order dispatch and the
   footprint writers count too, for S3c-3's UNCOVERED; nothing compares them.
-- **Sinks**: 21 count-only observers (the [hook map](../gpu-status.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-every-game-by-default)):
+- **Sinks**: 21 count-only observers (the [hook map](../modules/recorder.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-every-game-by-default)):
   the explosion add, the COB thread allocation keyed by the script's name (read only through the
   engine's own bound on the index), the four sound entries, the projectile init, the three shot
   paths, the impact `0x499EB0` and ten particle emitters. The plan's sink on the particle pool's
@@ -2263,7 +2263,7 @@ temporary sight records, which S3c-2's reruns found missing, are part of this la
 2026-10-01* below). When a live unit of the viewed seat dies under true LOS, the destructor makes a
 temporary sight record for 60 ticks through `0x482910`, and its stamp in the viewed record's sight
 counters lets the radar pass's sight loop (`0x46780E`) give contact bit 8 to enemy units over it
-(the engine map's [*temporary sight records*](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
+(the engine map's [*temporary sight records*](../engine/recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
 R4 drops every record and R5's refill leaves none, so the seek makes again the ones a playing
 holds at T, from the deaths the recording carries — each `RK_EV_DEATH` already holds the victim's
 image as the destructor found it, so no format change was needed.
@@ -2363,7 +2363,7 @@ each time (OQ7); there is no standing list.
 |---|---|
 | `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a changed `#define`, string or character literal is a changed line; a line no feature covers is `UNFEATURED`), a changed header a `sim` file includes every feature of that file whether or not the file changed too, the recorder's own files, `tools/replay/` and `scenarios/replay-end.json` every fixture, a changed fixture entry, a scenario a fixture loads or the tool its content runs that fixture; the old side is the merge-base, as `git diff`'s is. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region), in every build that compiles the changed line: a line under `#ifdef TAGPU_LIMITS_STOCK` adds `stock-limits` and must be reached by a fixture of the stock-limits build, a line under `#ifndef` by one of the default build (`tafeat.builds`). A gated change that selects nothing to run (comments only) passes with a note of `fixtures=-`. On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
 | `landing --check` | exit 0 when nothing gated changed, or when a passing note sits on a commit R of `main..HEAD` and `R..HEAD` changes nothing gated; 1 otherwise, saying why |
-| `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, and `fixtures.json`'s `broad` entries, which no landing runs — `limits-tier1` (4 × 1,500 units, `unit_limit` 1500) with 20 round trips, and `cost-four-ai`, a ten-minute four-AI game recorded live and reported, never failed (OQ5), for the capture's cost an iteration and the file's size per hour of game time — then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
+| `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, and `fixtures.json`'s `broad` entries, which no landing runs — `limits-tier1` (4 × 1,499 units, `unit_limit` 1500: each cleared commander holds the 1,500th place) with 20 round trips, and `cost-four-ai`, a ten-minute four-AI game recorded live and reported, never failed (OQ5), for the capture's cost an iteration and the file's size per hour of game time — then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
 | `measure SCENARIO… [--end T]` | L and P of each scenario on the coverage builds, to GameTime T (default 1800; a fixture to its own end), and the functions each reached (`reached.json`) |
 | `features [--check DIR]` | the regions; with `--check`, the link's check |
 | `run --cover` | `run` on the coverage builds, each process writing its `cover-<proc>.bin` |
@@ -2705,7 +2705,7 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
 
 - **The stub.** The unit tick's 17-byte script call `0x48ADDF..0x48ADF0` jumps to a stub that gives
   the slice from C (`tagpu_patches.c`, THE SCRIPT SLICE; site facts in the
-  [engine map](../exe-reverse-engineering.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12)),
+  [engine map](../engine/cob.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12)),
   in the fail-closed table of both builds, on every level. It counts each slice at the root
   `0x48ADEB` by where it was given: aux 0 in the unit tick, 1 at a recorded marker, 2 at a
   playing's step's end.
@@ -2751,7 +2751,7 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   Landing A's DLL). `QueryNanoPiece` was the same: an order handler's, owner-only, its count
   accepted as `absent` since 2026-10-01 (battle: live 841, puppet 0). The recording now carries
   both where the engine makes them and the playing makes each through the same `0x4B0BC0` at its
-  place ([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)),
+  place ([the engine map](../engine/cob.md#the-owners-cob-queries-disassembled-2026-10-12)),
   and the `QueryNanoPiece` row is gone. MEASURED 2026-10-12 on `battle`, `slice-walkers`,
   `codec-decline` and `tenseat` under `--cob-exact`, every lane passing: the recordings held
   1,675, 15,665, 140 and 3,864 queries, every playing made all it reached (none refused), and
@@ -2765,7 +2765,7 @@ first slice a tick late, and a looping script stayed re-phased for the unit's li
   water state `+0x10A` changes starts `setSFXoccupy` (`0x43DBE8`). All four are order handlers' or
   the movement pass's, which a puppet never runs, so the recording carries them where the engine
   makes them and the playing makes each through the same entry at its place (the
-  [engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+  [engine map](../engine/cob.md#the-owners-cob-queries-disassembled-2026-10-12)).
   `BeginTransport`'s broadcast (`0x456218` from `0x411408`) is no longer recorded, and the playing
   writes `+0x10A` from each image instead of calling `0x43DB50`.
 - **The test groups** `transport-pad` and `waterline`, each in the raised and the stock-limits

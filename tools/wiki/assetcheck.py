@@ -39,12 +39,16 @@ against an independent Python resolution of the same install.
 6. **The sidebar, per compat setup** (`--side`, or with the rest; `--mods` to choose): each setup's game folder laid
    out as tools/wiki/sidepacks.py lays it out (the retail install, then the setup's files over it), its folder names
    and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
-   `wikiassettest side` against `gfx.py --side-only` with the same names: the layout (every side with its own types),
+   `wikiassettest side` against `gfx.py --side-only --stages` with the same names: the layout (every side with its own types),
    every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
-   pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
-   and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells and build list; the
+   pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint,
+   each side's resource bar (PANELTOP's and PANELBOT's frames and keys, the fifteen rects, the two colours, and its
+   font's path, archive, size and bytes' FNV), the badge's frames and the GUI colour table,
+   and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells, build list and wreck; the
    rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte; and the 3D load's unit types,
-   in its order, must be gfx.py's `stage_types` of every entry over the pack's casting. Both halves read the
+   in its order, must be gfx.py's `stage_types` of every entry over the pack's casting, and each one's death sound
+   -- its ExplodeAs weapon's soundhit WAV, null for a type the stage packs did not resolve or a WAV refused -- must
+   be gfx.py's `death_wav`. Both halves read the
    display names under --language (english by default). The setups' fixtures must be present
    (tools/compat/tacompat.py fetch).
 
@@ -487,7 +491,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
     pending_models = []                     # (dict to fill, path, where, model, why) once bound
 
     # a stage per scene, entry by entry in the scenes' order, as the native load makes them
-    scenes = [(eid, name) for eid in entries for name in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text())["scenes"]]
+    scenes = [(eid, name) for eid in entries for name in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text()).get("scenes") or {}]
     for eid, name in scenes:
         desc = json.loads((REPO / f"art/wiki/stage/{eid}.{name}.json").read_text())
         st = {"entry": eid, "scene": name, "cells": desc["cells"], "sources": [], "tiles": [], "features": []}
@@ -867,6 +871,18 @@ def pack_side(out, mod):
     for eid, b in art["minimap"]["bases"].items():
         bases[eid] = {"w": b["w"], "h": b["h"], "offx": b["offx"], "offy": b["offy"], "fnv": fnv_hex((d / b["file"]).read_bytes())}
     layout = {k: v for k, v in pack["layout"].items() if k != "note"}
+
+    def framed(fk):
+        return {"frame": frame(fk["f"]), "key": fk["key"]}
+
+    def bar(k, b):
+        if b is None:
+            return None
+        src = rep.get(f"bar {pack['layout']['sides'][k]['name']}", {})
+        blob = (d / b["font"]).read_bytes()
+        return {"top": framed(b["top"]), "bot": framed(b["bot"]), "rects": b["rects"], "ecol": b["ecol"], "mcol": b["mcol"],
+                "font": {"path": low_(src.get("font")), "where": low_(src.get("font_where")), "bytes": len(blob),
+                         "fnv": fnv_hex(blob)}}
     return {"refused": None, "layout": layout, "folders": {k: pack["folders"][k] for k in SIDE_FOLDERS},
             "sheet": {"w": sw, "h": art["sheet"]["h"], "fnv": fnv_hex(sheet)}, "pal": fnv_hex((d / art["palette"]).read_bytes()),
             "panelside": [None if ps is None else {"frame": frame(ps["f"]), "key": ps["key"]} for ps in art["panelside"]],
@@ -878,7 +894,10 @@ def pack_side(out, mod):
                         "alp": low_((mm.get("alp") or {}).get("path"))},
             "greyed": fnv_hex((d / art["greyed"]).read_bytes()) if art.get("greyed") else None,
             "casting": [casting_of(c) for c in pack["casting"]],
-            "bases": bases}
+            "bases": bases,
+            "bar": [bar(k, b) for k, b in enumerate(art.get("bar") or [])],
+            "logos": [framed(f) for f in art["logos"]] if art.get("logos") else None,
+            "gui": art.get("gui")}
 
 
 def casting_of(c):
@@ -910,7 +929,8 @@ def native_side(doc):
             "minimap": {"unexplored": mm["unexplored"], "box": mm["box"], "gui": mm["gui"], "seen": mm["seen"],
                         "alp": mm["alp"]["path"]},
             "greyed": art["greyed"], "casting": [casting_of(c) for c in s["casting"]],
-            "bases": {k: v for k, v in doc["minimap"].items() if v is not None}}
+            "bases": {k: v for k, v in doc["minimap"].items() if v is not None},
+            "bar": art["bar"], "logos": art["logos"], "gui": art["gui"]}
 
 
 def against_sidepacks(mods, retail, pak, language="english"):
@@ -935,8 +955,8 @@ def against_sidepacks(mods, retail, pak, language="english"):
             names = []
             if rec:
                 names = ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive", rec["archive"]]
-            g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", mod, "--gamedir", str(tree),
-                                "--exe", str(exe), "--out", str(out), "--language", language, *names],
+            g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--stages", "--mod", mod, "--gamedir",
+                                str(tree), "--exe", str(exe), "--out", str(out), "--language", language, *names],
                                capture_output=True, text=True)
             if g.returncode:
                 lines.append(f"assetcheck: sidebar {mod}: gfx.py made no pack ({g.returncode}): {(g.stdout + g.stderr).strip()[-500:]}")
@@ -954,6 +974,19 @@ def against_sidepacks(mods, retail, pak, language="english"):
             # the 3D load's unit types, which a demo bound to any side's casting draws its models from
             native["units3d"] = doc["units"]
             ref["units3d"] = stage_names(json.loads((out / "side" / mod / "side.json").read_text())["casting"])
+            # each one's death sound by the two rules (tagpu_wikiasset.c death_load, gfx.py death_wav): its WAV's name
+            # for a type the stage packs resolved whose WAV the PCM rule takes, else null
+            native["deaths"] = {t: w and w.lower() for t, w in doc["deaths"].items()}
+            types = json.loads((out / "side" / mod / "stage" / "sounds.json").read_text())["types"]
+            eng = gfxpy.Engine(tree, exe, rec["folders"] if rec else None, rec["archive"] if rec else None, language)
+
+            def death(t):
+                if not (types.get(t) or {}).get("death"):
+                    return None
+                fbi = eng.open(eng.dirs["units"], t, "FBI")
+                w = gfxpy.death_wav(eng, gfxpy.fbi_fields(fbi[0].decode("latin-1", "replace"))) if fbi else None
+                return w and w.lower()
+            ref["deaths"] = {t: death(t) for t in ref["units3d"]}
         bad = diff(native, ref, exact=True)
         if bad:
             ok = False
@@ -972,9 +1005,12 @@ def against_sidepacks(mods, retail, pak, language="english"):
                           for sd in lay["sides"])
         lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types {types}, "
                      f"{len(native['casting'])} castings ({sum(1 for c in native['casting'] for k in c['casts'].values() if k)} "
-                     f"casts bound), {len(native['units3d'])} 3D unit types, {npic} pictures "
+                     f"casts bound), {len(native['units3d'])} 3D unit types "
+                     f"({sum(1 for w in native['deaths'].values() if w)} with a death sound), {npic} pictures "
                      f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
-                     f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
+                     f"for byte, {len(native['bases'])} minimap bases, {sum(1 for b in native['bar'] if b)} of "
+                     f"{len(native['bar'])} sides' bars, {len(native['logos'] or [])} badge frames"
+                     f"{', the GUI table' if native['gui'] else ''}; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
     return ok, lines
 
 
@@ -1057,7 +1093,8 @@ def main():
 def cast_rule_case():
     """gfx.py's cast rule (`side_casting`) over fuzz-side's synthetic units, menus as its install gives them: the
     tower ARMWIN makes energy and stands before ARMSOLAR on the builder's menu, so the solar must skip it for a unit
-    of its own. fuzz-side checks the C rule on the same install. True when every cast is the expected unit."""
+    of its own; the commander is the walk's root. fuzz-side checks the C rule on the same install. True when every
+    cast is the expected unit."""
     import gfx  # noqa: E402
     base = dict(bmcode=0, maxvelocity=0, fx=2, fz=2, builder=0, workertime=0, canfly=0, minwaterdepth=None,
                 extractsmetal=0, g=[], energymake=0, energyuse=0, weapon1=False, fort=False)
@@ -1073,7 +1110,7 @@ def cast_rule_case():
              "armack": ["armmoho"]}
     picks, _why = gfx.side_casting(units, "ARMCOM", lambda t: menus.get(t, []))
     want = {"builder": "armck", "advbuilder": "armack", "mex": "armmex", "moho": "armmoho", "geo": "armgeo",
-            "walker": "armpw", "tower": "armwin", "wall": "armdrag", "solar": "armsolar"}
+            "walker": "armpw", "tower": "armwin", "wall": "armdrag", "solar": "armsolar", "commander": "armcom"}
     if picks != want:
         print(f"assetcheck: gfx.py's cast rule over the synthetic units FAILED: {picks}")
         return False

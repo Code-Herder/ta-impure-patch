@@ -38,7 +38,8 @@ native pass that replaces it. Gate **G13a**.*
 6. **Only defs flagged `+0xFF` bit3 are LOS-gated at all** — and only until the local
    player has seen the tile. Everything else is drawn regardless of fog and then covered
    by the fog overlay, which is why the native pass mirrors the fog rule per fragment
-   (off the engine's own fog grid — §9) rather than culling.
+   (the engine's corner masks, expanded from the whole map's fog source — §9) rather
+   than culling.
 
 ---
 
@@ -221,14 +222,60 @@ the units**, so every unit body is tested against the depth features just wrote.
   nothing yields `(0.5·rgb, 0.5)`, which the composite resolves as a 50 % blend with the
   engine's terrain underneath — the same thing the engine's ALP table does, without
   needing the terrain in our buffer.
-- **Fog** is mirrored per fragment like every other native shader — since G13c off the
-  engine's own screen fog grid rather than the LOS/MAPPED source maps (§9) — and each
+- **Fog** is mirrored per fragment like every other native shader — the engine's corner
+  masks, not a per-cell test of the LOS/MAPPED maps (§9) — and each
   vertex carries **its own** world position —
   anchor plus the corner's offset — so a tree straddling the fog edge fades across it
   instead of all at once. Getting this wrong (feeding the shader screen coordinates) made
   every feature vanish the moment fog was switched on; it is the one bug this gate had.
-- **Frames come from `tagpu_gaf.c`** (below): a 2048² `GL_R8` shelf atlas, 4096 entries,
-  raw / TA-RLE / sub-frame lists, sampled `NEAREST` so the texel *is* the palette index.
+- **Frames come from `tagpu_gaf.c`** (below): a 2048² shelf atlas, 4096 entries, raw / TA-RLE
+  / sub-frame lists, expanded on the device into an RGBA8 base atlas
+  ([modules/colour](modules/colour.html) §2.88) that is sampled `NEAREST` while a texel covers a
+  target pixel.
+- **Below a texel a target pixel, the frame's mip chain** (`tagpu_vk_feat.c`, `tagpu_feat.c`'s
+  `taFChain`; why and the level rule: [terrain & depth](terrain-depth.html) §7.1). A frame has no
+  implied place for a chain — the atlas packs frames of any size at any origin — so each frame is
+  cut, from its own first texel, into `⌈w/32⌉ × ⌈h/32⌉` tiles clipped to the frame, and each tile
+  takes one cell of two shared chain images, the base atlas's (`s_fcB`) and the restored twin's
+  (`s_fcR`): 64 × 128 cells, 1024 × 2048 at level 0, 5 levels, 11.2 MB each, made on a
+  hand-over with atlas entries and never resized (`fchain_build`). The base chain is asked for
+  once a device, and a refusal stands for the device's life; the twin's chain whenever a twin
+  image stands without one, so a twin made later gets its chain on the next such hand-over, and a
+  refusal stands for that twin image only. A level-L block measured from the frame's
+  origin lies inside one tile because `2^L` divides 32, so no level mixes two frames.
+    - **The allocation** (`fchain_alloc`, render thread) gives cells in entry order, each tile's
+      source rect clipped to its frame and the frame's to the atlas. It is rebuilt whole when the
+      atlas's entries move — a new array, generation or repack, or fewer entries — and extended as
+      entries are added; the hand-over carries the atlas's own `ents`, `nEnts`, `entsGen` and
+      `entsRepacks` for it. An entry past the 8 192 cells gets none and draws at level 0; the
+      first is logged (`feat: the chain's 8192 cells are given out - entry N (WxH) and any that do
+      not fit after it draw at level 0`), and every rebuild logs `feat: chain cells laid out for
+      atlas generation G (repack R) - N entries, C of 8192 cells, overflow=K`.
+    - **A quad finds its cells by its entry.** The vertex's `aCM.x` carries the entry's index + 1
+      (`ent`, 0 for none) where it carried the colour key, which nothing read (the hole is the base
+      atlas's alpha); the entry's index stands from the gather to the draw, because the atlas
+      repacks only at the top of a gather. A **per-slot** 64 × 64 `RGBA32UI` table (binding 43,
+      `uFTab`) holds each entry's `(x | y<<16, w | h<<16, first cell or 0xFFFFFFFF, tiles
+      across)`, written in that slot's `prepare` from the hand-over its vertices come from, under
+      the same fence, so a frame's table and vertices cannot disagree. The fragment stage reads an
+      entry only below 4096; one with no cells reads level 0 through `textureLod(…, 0)`.
+    - **The lookup** takes the sample's level-0 texel into the frame, its tile names the cell and
+      the level texel is clamped to the tile's valid blocks (`tagpu_chain_ftexel` is the C
+      mirror). The hole above level 0 is the coverage majority (`b.a < 0.5` on the chain's alpha,
+      which is the covered fraction of the block), and the twin's colour is taken where its
+      chain's alpha says painted, as at level 0.
+    - **The table and the source rects** (a 64 KB device-local buffer, the reducer's binding 7)
+      go through the slot's bounded staging on the frame the tiles do (`tagpu_vk_stage_take`); a
+      frame that cannot fit them draws at level 0. Both chains are reduced whole, never ledgered:
+      the base chain when the device's base copy (serial, palette, move) or the allocation moved,
+      the twin's when the restore job, its painted count or the allocation moved. The twin's chain
+      is not drawn (`uRestChain` 0) until it has been reduced for the current job, and a twin
+      that painted nothing is not a picture. A repack moves `entsRepacks`, so the allocation is
+      rebuilt and the chains are reduced whole after the move; the WAR between the move and earlier reductions'
+      reads rests on the reducer's `end` barrier chaining through FRAGMENT
+      ([modules/vulkan-backend](modules/vulkan-backend.html), *The mip chains' reducer*).
+    - **The wiki's stage** hands over no entries and writes `ent` 0, so it never makes the feature
+      chains, and it draws at zoom 1 (level 0) anyway.
 
 Log every 60 frames:
 
@@ -486,16 +533,20 @@ and the source maps do not reproduce it.
    terrain-depth.md §5.2.
 2. **The source map disagrees with the drawn frame.** Read in the *same frame*
    at the same cells: MAPPED said explored for cols 80..98 of row 20 while the
-   grid — and the screenshot — had only 92..96 lit. That discrepancy is still
-   unexplained and is written up in terrain-depth.md §5.2; it is moot for
-   rendering, because the grid is by construction what the engine drew.
+   grid — and the screenshot — had only 92..96 lit. Read with the builder's own
+   index, `(plotC·cy)/2 + cx` u16 per tile, MAPPED does reproduce the grid: the
+   builder replicated in C over those reads matched the engine's grid byte for
+   byte (0 of 720 cells at 1024×768 and 0 of 1972 at 1920×1080,
+   [terrain & depth](terrain-depth.html) §8's oracle).
 
 **The fix.** One shared GLSL snippet (`tagpu_glsl.h`, `TAGPU_GLSL_FOG_*`) used by
 all four passes, replacing four copy-pasted blocks and the `uLos`/`uMap` texture
 pair with a single `uFogGrid`:
 
-- the grid uploads as an **RG8 texture with no conversion** — its two bytes per
-  cell already *are* `r = unexplored corner mask, g = out-of-LOS corner mask`;
+- the corner masks are the builder's: today every pass expands them per fragment
+  from the whole map's fog source, two bits a cell in an R32UI image, exactly as
+  `0x4843C0` would (`taFogEntry`; [terrain & depth](terrain-depth.html) §8),
+  which no zoom or eye can outrun;
 - **bilinear coverage over the four corner bits, thresholded at 0.5**, is the 14
   edge shapes (`0xF` → everywhere, `0x3` → exactly the top half, a lone corner →
   its quadrant). We get a clean edge where the engine dithers one — the same
@@ -515,8 +566,8 @@ SKIRMISH mapping toggle is clear) the grid carries a fully populated grey mask w
 `b0` is all zero, so the engine paints a grey band and our shaders drew none of it.
 It was invisible while the engine still drew its own overlay over its own terrain, and
 became a missing band the moment G13b suppressed that overlay. The gate is now simply
-*"the grid uploaded"* — by the paragraph above, an inactive mode is already an all-zero
-mask, so there is nothing else to test. (Measured that this does **not** double-darken
+*"the frame has a fog source"* — by the paragraph above, an inactive mode is already an
+all-zero mask, so there is nothing else to test. (Measured that this does **not** double-darken
 where the engine's overlay is still live: the overlay remaps the 8bpp offscreen while
 our fragments composite over it afterwards, so it can never touch them — mean grey-band
 luminance 62.21 engine vs 61.77 ours. terrain-depth.md §7.5–7.6.)
@@ -566,5 +617,5 @@ rule that grey shows terrain but not units.
 | `main+0x14273` / `main+0x14281` | MAPPED bitmap / `LosType` |
 | `main+0x2A43` / `main+0x1B63 + id·0x14B` | local player id / PlayerStruct (`+0x7C` LOS map) |
 | `main+0x37F06` | gfx options, **bit4 = FShadow** |
-| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; per 32-px view cell 2 bytes = `(unexplored, out-of-LOS)` **4-bit corner masks**, origin `32·col0+16` — the fog source for every native pass (§9) |
+| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; per 32-px view cell 2 bytes = `(unexplored, out-of-LOS)` **4-bit corner masks**, origin `32·col0+16` — what the engine's overlay draws; our passes expand the same masks from the whole map's fog source, and only the oracle reads this grid (§9) |
 | `*(TAProgram+0xCC)` | u8[256] fog shade remap: the grey band's darken, applied to the palette index (§9) |

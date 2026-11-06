@@ -82,6 +82,13 @@
 #define VA_GETTPOS        0x00484B50u  /* GetTPosition, stdcall, ret 0x0C     */
 #define VA_GRIDPLOT       0x00481550u  /* GetGridPosPLOT, stdcall, ret 8      */
 #define VA_GRIDFEAT       0x00421E60u  /* GetGridPosFeature, stdcall, ret 4   */
+/* THE UNIT HIT TEST'S ONE CALL, inside GetUnitAtMouse 0x48CD80: `E8 86 F8 FF
+   FF`, the only reference to 0x48C6A0 in the image. It narrows each unit's
+   corners less the eye to int16, which a unit the widened rect lets into
+   HotUnits can overflow, so it goes through tagpu_zoom_hit_guard with the
+   rest of the widening half (tagpu_zoom.c, "the hit test's guard"). */
+#define VA_HITTEST        0x0048C6A0u  /* stdcall(unit, point), ret 8         */
+#define SITE_HITTEST      0x0048CE15u
 
 /* The three places TA's own window procedure unpacks a mouse lParam, one per
    arm of its 0x200..0x206 jump table (move, button-up, button-down). All three
@@ -513,21 +520,58 @@ static void restore(char* ta)
     flog("vpwide: viewport rect restored to 1x");
 }
 
+/* THE RECT IS THE TRANSFORM'S RANGE, AND THE TRANSFORM'S RANGE IS WHAT A CLICK
+   CAN CARRY. The addressable rect is not "the viewport, bigger" -- it is
+   exactly the range tagpu_zoom's transform produces, `u = (s - c)/z + c` about
+   the true viewport's centre, computed with the same formula so the two
+   cannot disagree at the edges, plus one pixel of slack each way against the
+   rounding: a pointer in the true viewport maps inside `[aL + 1, aR - 1]`.
+   The button lParam carries `u` as two int16s (tagpu_zoom_mouse_lparam,
+   MAKELPARAM; the wndproc unpacks them with MOVSX, 0x4B5E5F / 0x4B5EC0 /
+   0x4B5F0C), so a rect whose four edges are int16 is one in which every click
+   is delivered exactly; the WIDTH is not the limit, and a rect may be up to
+   65 535 px wide. Every engine reader of the rect compares in 32 bits
+   (0x48BAE0, 0x4B6720, 0x4B67D0, 0x4C1320; exe map, "who reads the eye"). The
+   zoom floor's lparam term (tagpu_zoom.c, "the floor") is this same function,
+   so the refusal in the apply fires only on a level the floor did not
+   produce. Pure, any thread; 1 when all four edges lie in [-32768, 32767]. */
+int tagpu_vpwide_rect_at(int tL, int tT, int tW, int tH, float z,
+                         int* aL, int* aT, int* aR, int* aB)
+{
+    float cx, cy;
+    *aL = *aT = *aR = *aB = 0;
+    /* the arguments' own bounds, so every quotient below converts to an int:
+       at most 65536 x 64 + 65536 */
+    if (!(z >= TAGPU_ZOOM_FLOOR_LO) || tW <= 0 || tH <= 0 || tW > 65536 || tH > 65536 ||
+        tL < -65536 || tL > 65536 || tT < -65536 || tT > 65536)
+        return 0;
+    cx = (float)tL + (float)tW * 0.5f;
+    cy = (float)tT + (float)tH * 0.5f;
+    *aL = iround(((float)tL            - cx) / z + cx) - 1;
+    *aR = iround(((float)(tL + tW - 1) - cx) / z + cx) + 1;
+    *aT = iround(((float)tT            - cy) / z + cy) - 1;
+    *aB = iround(((float)(tT + tH - 1) - cy) / z + cy) + 1;
+    return *aL >= -32768 && *aT >= -32768 && *aR <= 32767 && *aB <= 32767;
+}
+
 /* GAME THREAD, at the top of every in-play draw (tagpu_packet_pub.c's
-   `before`), with the latest command record. The level it carries is what
-   the addressable rect is derived from; a record that says no zoomed world
-   is live — or no record at all — puts the true rect back. */
+   `before`), with the latest command record. The level the zoom's apply put in
+   force -- the record's, clamped to the game thread's floor -- is what the
+   addressable rect is derived from; a record that says no zoomed world is
+   live — or no record at all — puts the true rect back. */
 void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
 {
     int tR, tB, tW, tH, aL, aT, aR, aB, tL, tT;
-    float cx, cy, z;
+    float z;
 
     if (!s_installed || !s_widenArmed) return;   /* the repair-only arm writes
                                                     no rect, so it verifies
                                                     nothing and counts nothing */
     if (!ptr_ok(ta)) return;
     s_applies++;
-    z = (c && c->live) ? c->zoom : 1.0f;
+    /* the zoom's apply ran first in the same `before` and clamped the level to
+       the floor this thread computed */
+    z = (c && c->live) ? tagpu_zoom_applied_level() : 1.0f;
     if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) { restore(ta); return; }
     vp_true(ta, &tL, &tT, NULL);
 
@@ -584,7 +628,7 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
         }
     }
 
-    if (!(z > 0.05f && z < 1.0f)) { restore(ta); return; }
+    if (!(z >= TAGPU_ZOOM_FLOOR_LO && z < 1.0f)) { restore(ta); return; }
 
     /* NOT WHILE THE ENGINE DRAWS THE GROUND. `0x483FA0` places its 32-px
        cells from the rect's L/T (`+0x37E27`/`+0x37E2B`, the fields widened
@@ -612,17 +656,9 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
     }
     s_refusedRun = 0;
 
-    /* The addressable rect is not "the viewport, bigger" — it is exactly the
-       range tagpu_zoom's transform produces, computed with the same formula
-       about the same centre so the two cannot disagree at the edges, plus one
-       pixel of slack each way against the rounding. */
-    cx = (float)tL + (float)tW * 0.5f;
-    cy = (float)tT + (float)tH * 0.5f;
-    aL = iround(((float)tL            - cx) / z + cx) - 1;
-    aR = iround(((float)(tL + tW - 1) - cx) / z + cx) + 1;
-    aT = iround(((float)tT            - cy) / z + cy) - 1;
-    aB = iround(((float)(tT + tH - 1) - cy) / z + cy) + 1;
-    if (aR - aL + 1 > 32768 || aB - aT + 1 > 32768) { restore(ta); return; }
+    /* the rect at this level, refused unless every edge is int16 (see
+       tagpu_vpwide_rect_at) */
+    if (!tagpu_vpwide_rect_at(tL, tT, tW, tH, z, &aL, &aT, &aR, &aB)) { restore(ta); return; }
 
     /* Compare against the FIELD, not against what we last wrote: at a steady
        zoom that is four loads and no stores, and it is also what notices the
@@ -703,11 +739,12 @@ void tagpu_vpwide_init(void)
         (!site_is(SITE_SETCLIP1, VA_SETCLIP) ||
          !site_is(SITE_SETCLIP2, VA_SETCLIP) ||
          !site_is(SITE_SETCLIP3, VA_SETCLIP) ||
+         !site_is(SITE_HITTEST, VA_HITTEST) ||
          !bytes_are(SITE_UNPACK1, UNPACK_WAS) ||
          !bytes_are(SITE_UNPACK2, UNPACK_WAS) ||
          !bytes_are(SITE_UNPACK3, UNPACK_WAS))) {
         flog("vpwide: NOT widening — engine bytes differ at one of "
-             "0x468D85/0x46964F/0x469F95/"
+             "0x468D85/0x46964F/0x469F95/0x48CE15/"
              "0x4B5E5F/0x4B5EC0/0x4B5F0C");
         s_widenArmed = 0;
     }
@@ -716,6 +753,7 @@ void tagpu_vpwide_init(void)
         ok &= redirect(SITE_SETCLIP1, (void*)vpw_setclip);
         ok &= redirect(SITE_SETCLIP2, (void*)vpw_setclip);
         ok &= redirect(SITE_SETCLIP3, (void*)vpw_setclip);
+        ok &= redirect(SITE_HITTEST, (void*)tagpu_zoom_hit_guard);
         ok &= tagpu_detour_write(SITE_UNPACK1, UNPACK_NOW, 9);
         ok &= tagpu_detour_write(SITE_UNPACK2, UNPACK_NOW, 9);
         ok &= tagpu_detour_write(SITE_UNPACK3, UNPACK_NOW, 9);
@@ -723,8 +761,9 @@ void tagpu_vpwide_init(void)
     s_installed = ok;
     if (!ok)             flog("vpwide: PARTIAL — see above");
     else if (s_widenArmed) flog("vpwide: ARMED (mouse->world 0x498DA0, surface "
-                                "clip 0x4C6B10 x3, wndproc lParam sign-extend "
-                                "x3); the rect only widens while zoom < 1");
+                                "clip 0x4C6B10 x3, unit hit test guard 0x48CE15, "
+                                "wndproc lParam sign-extend x3); the rect only "
+                                "widens while zoom < 1");
     else if (s_repairArmed) flog("vpwide: mouse->world repair only (0x498DA0) — "
                                 "the viewport rect is never widened");
     else                 flog("vpwide: mouse->world capture only (0x498DA0) — "

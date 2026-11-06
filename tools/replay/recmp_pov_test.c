@@ -95,7 +95,7 @@ static void samples(void)
 {
     RecMpRoster r=roster(10);
     RecMpSeatMaps* m=maps(&r);
-    RecMpPov* c=tagpu_recmp_pov_begin(&r);
+    RecMpPov* c=tagpu_recmp_pov_begin(&r,REC_POV_ZOOM_MIN);
     RecMpPovState st;
     RecPov p=pov(5), q;
     RecMpHeader h;
@@ -159,6 +159,21 @@ static void samples(void)
     }
     h=header(100,5,RECMP_POV,120,sizeof q);
     CHECK(tagpu_recmp_pov_put(c,m,&h,&q,sizeof q,160));
+    /* the zoom's bottom is the begin's: 1/64 live and in format 27, format 26's 0.25 in a file of
+       that format */
+    {
+        RecMpPov* c26=tagpu_recmp_pov_begin(&r,rec_pov_zoom_min(26));
+        RecPov z=pov(10);
+        CHECK(c26);
+        z.zoom=REC_POV_ZOOM_MIN;
+        h=header(101,2,RECMP_POV,120,sizeof z);
+        CHECK(tagpu_recmp_pov_put(c,m,&h,&z,sizeof z,160));
+        refused(c26,m,h,&z,sizeof z);
+        z.zoom=REC_POV_ZOOM_MIN_26-1; refused(c26,m,h,&z,sizeof z);
+        z.zoom=REC_POV_ZOOM_MIN_26;
+        CHECK(tagpu_recmp_pov_put(c26,m,&h,&z,sizeof z,160));
+        tagpu_recmp_pov_end(c26);
+    }
     /* clicks */
     {
         RecClick k=click(), b;
@@ -186,7 +201,7 @@ static void selections(void)
 {
     RecMpRoster r=roster(EACH);
     RecMpSeatMaps* m=maps(&r);
-    RecMpPov* c=tagpu_recmp_pov_begin(&r);
+    RecMpPov* c=tagpu_recmp_pov_begin(&r,REC_POV_ZOOM_MIN);
     static unsigned char b[RECMP_BODY_MAX+16];
     static RecSelEntry in[EACH], out[EACH];
     RecMpSelectState st;
@@ -236,7 +251,7 @@ static void selections(void)
     {
         RecMpRoster small=roster(10);
         RecMpSeatMaps* sm=maps(&small);
-        RecMpPov* sc=tagpu_recmp_pov_begin(&small);
+        RecMpPov* sc=tagpu_recmp_pov_begin(&small,REC_POV_ZOOM_MIN);
         CHECK(sc);
         n=chunk(b,REC_SEL_BEGIN|REC_SEL_END,11,0,1,11);             /* the units a player may have */
         refused(sc,sm,header(101,2,RECMP_SELECT,102,n),b,n);
@@ -305,7 +320,7 @@ static int sealed(int partial)
     unsigned char b[RECMP_BODY_MAX];
     unsigned n, ok, k;
     r.count=2; memset(&r.actor[2],0,sizeof r.actor[2]);
-    history=tagpu_recmp_history_begin(&file,&r,4,4); CHECK(history);
+    history=tagpu_recmp_history_begin(&file,&r,4,4,REC_FORMAT); CHECK(history);
     struct { unsigned kind, bytes; const void* body; } rec[3];
     RecMpHeader h;
     n=chunk(b,partial ? REC_SEL_BEGIN : REC_SEL_BEGIN|REC_SEL_END,partial ? 2 : 1,0,1,1501);

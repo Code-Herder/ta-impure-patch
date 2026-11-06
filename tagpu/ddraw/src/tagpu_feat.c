@@ -121,7 +121,7 @@
 /* THE BUCKETS GROW; THESE ARE ONLY WHERE THEY START. One anchor is one quad
    (more with sub-frames), and how many anchors are on screen is the map's
    density times the zoomed-out view — neither of which is a constant. As
-   fixed caps they fail: a 3840x2160 view at the 0.25x zoom floor over Town
+   fixed caps they fail: a 3840x2160 view at 0.25x over Town
    & Country offers 6206 anchors against a body bucket of 5461 and a shadow
    bucket of 2730 (MEASURED 2026-09-09 from a live session,
    `feat: ... DROPPED(full=3872)`), and because the gather walks rows from the
@@ -194,6 +194,38 @@ static int s_mirrorAsked;              /* the atlas mirror has been asked for */
 static volatile LONG s_mfWant, s_mfHaveOk, s_mfHaveLevel;
 static int s_rlistAsked;               /* ...or the published restore list    */
 
+/* THE ATLAS MIRROR AND THE RESTORE LIST, asked for together: on the arm beat,
+   and in the gather the moment `atlas_setup` has given the atlas its
+   dimensions -- before the level's first lookup paints into it. The second
+   ask is the one that matters: the Vulkan edition draws only from the
+   mirror, so a mirror that waited for the beat would leave the session's
+   first level without a feature for up to 30 frames after its ground.
+
+   THE MIRROR. Asking marks every painted entry reserved, and
+   tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
+   the time a quad carries a UV those texels are in the mirror. Entries
+   nothing draws may stay stale in it; nothing samples them. 8 MB with its
+   key plane, so it is asked OF THE CONSUMER, NOT OF THE LEVER:
+   `tagpu_vk_armed()` is true whenever `tagpu_vk.on` exists, whether or not
+   anything will consume the mirror, and these latches are one-way, so once
+   asked the memory is held for the process's life.
+   `tagpu_vk_owns_present()` is exactly "a Vulkan pass will run in this
+   process", which is the question, and one load to answer, so the gather may
+   ask it. `s_mirrorAsked` is set only on SUCCESS, so a request made before
+   the atlas has its dimensions is retried.
+
+   THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan restorer paints
+   the restored twin from this list, which is the only way the restored twin
+   exists at all. Asked until it takes, exactly as the mirror is, because the
+   knob is allowed to move mid-session. */
+static void consumer_ask(void)
+{
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
+        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
+    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
+        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+}
+
 int tagpu_feat_armed(unsigned frame_counter)
 {
     int was;
@@ -241,34 +273,7 @@ int tagpu_feat_armed(unsigned frame_counter)
        nothing. */
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
-    /* THE ATLAS MIRROR, on this beat and not per frame --
-       tagpu_vk_armed() is two file-attribute queries and a pass that asked
-       every frame would make them on every frame of ordinary play, where the
-       answer is no and stays no.
-
-       IT IS ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, which is what
-       makes the hand-over correct on the first frame that has one rather than
-       a few frames later: asking marks every painted entry reserved, and
-       tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
-       the time a quad carries a UV those texels are in the mirror. Entries
-       nothing draws may stay stale in it; nothing samples them.
-       4 MB, so it is paid for only while the Vulkan lane is armed -- and
-       `s_mirrorAsked` is set only on SUCCESS, so a request made before the
-       atlas has its dimensions (the first frames of a session) is retried. */
-    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. `tagpu_vk_armed()` is true
-    whenever `tagpu_vk.on` exists, whether or not anything will consume the
-    mirror -- and these latches are one-way, so once asked the memory is held
-    for the process's life. `tagpu_vk_owns_present()` is exactly "a Vulkan
-    pass will run in this process", which is the question. */
-    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
-        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan restorer
-       paints the restored twin from this list, which is the only way the
-       restored twin exists at all. Polled
-       on every beat until it takes, exactly as the mirror is, because the
-       knob is allowed to move mid-session. */
-    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
-        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    consumer_ask();
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -377,8 +382,55 @@ static const char* FS =
     TAGPU_GLSL_EDGE_UNIFORMS
     "uniform int uClip;\n"            /* 1 while the mirror draws (below) */
     "uniform float uNudgeW;\n"        /* TAGPU_EDGE_NUDGE / zoom, world px  */
+    /* THE MIP CHAINS (inc/tagpu_chain.h), declared after everything above for the same reason:
+       the level this frame draws at (tagpu_chain_level, written at the pass's `record`), whether
+       the twin's chain is current, the per-entry table and the two chains (tagpu_vk_feat.c) */
+    "uniform int uLod;\n"
+    "uniform int uRestChain;\n"
+    "uniform usampler2D uFTab;\n"
+    "uniform sampler2D uFChainB;\n"
+    "uniform sampler2D uFChainR;\n"
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_EDGE_FN
+    /* AN ENTRY'S RECORD: x | y << 16, w | h << 16, its first chain cell (0xFFFFFFFF: none), its
+       tiles across. THE BOUND: e < 4096, the table's 64 x 64, by the caller's test. */
+    "uvec4 taFRec(int e){ return texelFetch(uFTab, ivec2(e & 63, e >> 6), 0); }\n"
+    /* A CHAIN TEXEL OF A FRAME. The sample's atlas texel -- the one NEAREST reads at level 0 --
+       is taken into the frame, its 32 x 32 tile names the cell, and q is the level texel that holds
+       it. Tile level L is image level L-1, `32 >> L` texels a cell side, cell c at
+       (c % 64, c / 64) of a chain 64 cells wide.
+       THE BOUND: ip is inside the frame, so tl is one of its tiles and c is below its first cell
+       plus its cell count, which the allocator keeps <= 8192, the chain's 64 x 128; q is inside
+       the tile's valid blocks (lim), so no level texel is read whose block holds no frame texel.
+       THE C MIRROR is tagpu_chain_ftexel (src/tagpu_chain_ref.c): EDIT BOTH OR NEITHER. */
+    "vec4 taFChain(sampler2D s, uvec4 r, vec2 uv){\n"
+    "  ivec2 o = ivec2(int(r.x & 0xFFFFu), int(r.x >> 16)), wh = ivec2(int(r.y & 0xFFFFu), int(r.y >> 16));\n"
+    "  ivec2 ip = clamp(ivec2(floor(uv * vec2(textureSize(uBase, 0)))) - o, ivec2(0), wh - 1);\n"
+    "  ivec2 tl = ip >> 5;\n"
+    "  int c = int(r.z) + tl.y * int(r.w) + tl.x;\n"
+    "  int n = 32 >> uLod;\n"
+    "  ivec2 lim = (min(wh - tl * 32, ivec2(32)) + (1 << uLod) - 1) >> uLod;\n"
+    "  ivec2 q = min((ip & 31) >> uLod, lim - 1);\n"
+    "  return texelFetch(s, ivec2(c & 63, c >> 6) * n + q, uLod - 1);\n"
+    "}\n"
+    /* BELOW A TEXEL A TARGET PIXEL (uLod >= 1): the base and the twin of the quad's entry, from
+       its chains -- the twin's alpha is its level 0's restored mark reduced, so a texel is
+       restored or not as level 0 picks, and the base's is the frame's coverage there, so the hole
+       is the majority's. An entry with no cells (`ent` 0, past the table, or refused by the
+       allocator) reads level 0 instead, through textureLod at 0: the texel texture() gives under
+       this NEAREST sampler with maxLod 0, without implicit derivatives in a branch on the
+       entry. */
+    "void taFLevel(out vec4 b, out vec4 t){\n"
+    "  int e = int(vCM.x + 0.5) - 1;\n"
+    "  uvec4 r = (e >= 0 && e < 4096) ? taFRec(e) : uvec4(0u, 0u, 0xFFFFFFFFu, 0u);\n"
+    "  if (r.z == 0xFFFFFFFFu) {\n"
+    "    b = textureLod(uBase, vUV, 0.0);\n"
+    "    t = uRestored == 1 ? textureLod(uAtlasRGB, vUV, 0.0) : vec4(0.0);\n"
+    "  } else {\n"
+    "    b = taFChain(uFChainB, r, vUV);\n"
+    "    t = uRestChain == 1 ? taFChain(uFChainR, r, vUV) : vec4(0.0);\n"
+    "  }\n"
+    "}\n"
     "void main(){\n"
     "  int m = int(vCM.y + 0.5);\n"
     /* THE FOLDS ARE THE GROUND'S, AND SO IS EVERY SAMPLE ON ONE. The terrain
@@ -386,12 +438,13 @@ static const char* FS =
        at the fold less e on screen, e = TAGPU_EDGE_NUDGE / zoom world px (the
        shared corner keeps the map's nudge, tagpu_terr.c), so a sample belongs
        to the side its point moved by e lies on. Every clip below tests that
-       point, `s`, never vWorld itself: at the 0.25x floor every sample centre
+       point, `s`, never vWorld itself: at 0.25x every sample centre
        is a whole world px, so with the eye's parity a whole column or row of
        samples lies ON a fold, where vWorld alone would sit on the line and
        take whichever side the interpolation's rounding gave it. THE MARGIN IS
        THE INVARIANT: a sample on a fold is e from the line -- 1/8 world px at
-       the floor, 128 ulps of a world coordinate under 16 384, and at every
+       0.25x and more below it, 128 ulps of a world coordinate under 16 384 at
+       0.25x, and at every
        zoom 8 ss times the rasteriser's snap of the ground's own edge (1/256 of
        a framebuffer px, subPixelPrecisionBits 8, as the reference setup's GPU
        and llvmpipe report). What the margin cannot decide is a sample that lies
@@ -414,9 +467,15 @@ static const char* FS =
     "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
     "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
     "    if (s.x < x0 || s.x >= x0 + uMapPx.x) discard;\n"
-    "    vec4 mb = texture(uBase, vUV);\n"
-    "    if (mb.a < 0.5) discard;\n"
-    "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    vec4 mb, mt;\n"
+    "    if (uLod == 0) {\n"
+    "      mb = texture(uBase, vUV);\n"
+    "      if (mb.a < 0.5) discard;\n"
+    "      mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    } else {\n"
+    "      taFLevel(mb, mt);\n"
+    "      if (mb.a < 0.5) discard;\n"
+    "    }\n"
     "    float ma = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     "    frag = vec4(taEdge(mt.a > 0.5 ? mt.rgb : mb.rgb, vWorld) * ma, ma);\n"
     "    return;\n"
@@ -439,12 +498,21 @@ static const char* FS =
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
-    "  vec4 b = texture(uBase, vUV);\n"
+    /* uLod 0 is the atlases exactly as at 1x -- the same statements on the same inputs -- and the
+       branch is on a uniform, so texture()'s implicit derivatives stay in uniform control flow */
+    "  vec4 b, t;\n"
+    "  if (uLod == 0) {\n"
+    "    b = texture(uBase, vUV);\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
        the depth buffer too -- a tree occludes only where it has pixels. The
        base's alpha is 0 exactly where the frame's index is its key (NEAREST,
        the texel the index was) */
-    "  if (b.a < 0.5) discard;\n"
+    "    if (b.a < 0.5) discard;\n"
+    "    t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  } else {\n"
+    "    taFLevel(b, t);\n"
+    "    if (b.a < 0.5) discard;\n"
+    "  }\n"
     "  float a = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     /* the twin's colour where the lazy restore has painted it (alpha 1 --
        tagpu_gaf.h), the base atlas's otherwise -- always, under Classic --
@@ -452,7 +520,6 @@ static const char* FS =
        its own; the lab's lambertAt -- a tree on a shaded slope sits in the
        shade rather than on top of it; 1.0 under `light=0`), then the grey band
        as the RGB rule (renderers.md 2.6). Premultiplied. */
-    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
     "  vec3 c = t.a > 0.5 ? t.rgb : b.rgb;\n"
     "  c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
@@ -576,12 +643,17 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
         /* a deferral is not a failure: the anchor's rollback counts it */
         if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
     }
-    c = (float)e->ck / 255.0f;
+    /* `ent`: the entry's index + 1 (tagpu_feat.h), below ATLAS_MAX because `e` is one of
+       s_atlasEnts' first `n` */
+    {
+        const ptrdiff_t ei = e - s_atlas.ents;
+        c = (ei >= 0 && ei < s_atlas.n) ? (float)(ei + 1) : 0.0f;
+    }
     ua = flip ? e->u1 : e->u0;
     ub = flip ? e->u0 : e->u1;
     /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
        whole game px, so a sample centre can fall exactly on a texel boundary --
-       at the 0.25x floor every sample centre is a whole world px -- and there
+       at 0.25x every sample centre is a whole world px -- and there
        the texel NEAREST reads, and whether the quad covers the sample at all,
        would be the rounding's: it follows where the frame sits in the atlas,
        and a turned quad rounds the other way from an upright one. So every
@@ -593,8 +665,8 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
        IT IS A 1/32-PX SHIFT AT EVERY ZOOM, the ground's own: every sample reads
        the texel under its point plus e = NUDGE / zoom world px. On the dyadic
        zooms from 0.5x to 8x no sample lies within e before a texel boundary (at
-       1x a sample is 1/4 world px inside its texel), so none changes; at the
-       floor every tie takes the texel after it; and at the wheel's other
+       1x a sample is 1/4 world px inside its texel), so none changes; at
+       0.25x every tie takes the texel after it; and at the wheel's other
        resting levels (its 1.14 steps, tagpu_zoom.c) every sample within e
        before a boundary reads the next texel -- which is where the ground
        under the sprite is read too. Which zoom has the ties is the zoom
@@ -1294,6 +1366,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (!s_atlas.made) {
         atlas_setup();
         if (!s_atlas.made) return feat_bail();
+        consumer_ask();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* the allowance's frame, after the reset and before the first lookup */
@@ -1535,29 +1608,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
 /* Everything the gather above produced, for the Vulkan edition of this pass
    (tagpu_feat.h): each field is a uniform's value, a pointer into the vertex
    arrays, or a buffer the consumer uploads an image from. */
-/* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
-   slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
-   tagpu_packet_frame_end() -- which render_vk.c calls BEFORE `tagpu_vk_frame`
-   runs the Vulkan lane, so a pointer handed on from here is read past its
-   contract. An
-   alias would hold only because the give-back happens at the next acquire,
-   which is also where the `poison` lever fills the slot: the one stale read
-   that lever cannot see, and outside frame_end's tail==head check as well.
-   The atlas and the height grid are handed over as buffers this module owns;
-   the copy makes the fog grid the same, and makes the file header's "a pass
-   reads no engine state" true of the whole hand-over.
-
-   `cells * 2` is the grid's own size, cols x rows 16-bit cells as the packet
-   publishes them; the 1024-a-side cap bounds the ALLOCATION, and the pass
-   re-checks it (FOG_MAXDIM) because a bound in one file is a bound only while
-   both are read together. */
-#define FOG_COPY_MAXDIM 1024
-static unsigned short* s_fogCopy;
-static int             s_fogCopyCells;
-
 static void feat_publish(const TAGPU_FXVIEW* v, int total)
 {
-    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorAsked` is the latch the
        arm beat sets when the Vulkan lane is up (see there); while it is 0 the
        lane is not armed, nothing will ever call the hand-over, and the memset
@@ -1583,9 +1635,10 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
-    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
-    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     tagpu_feat_atlas_hand(&s_pub);
+    /* the entries the vertices' `ent` indexes, as they stand after this gather */
+    s_pub.ents = s_atlas.ents; s_pub.nEnts = s_atlas.n;
+    s_pub.entsGen = s_atlas.gen; s_pub.entsRepacks = s_atlas.repacks;
     /* THE REQUEST, NOT THE PICTURE: the restored twin's texels are never
        read back (tagpu_gaf.h), so the list is the only restore route this
        hand-over carries. */
@@ -1594,26 +1647,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
     }
-    /* the grid as the fragment shader will read it, and only when it will:
-       `uFog` 0 means taFog is never called and uFogGrid never sampled. */
-    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
-        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
-        int cells = v->fogCols * v->fogRows;
-        if (cells > s_fogCopyCells) {
-            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
-            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
-        }
-        if (s_fogCopy && cells <= s_fogCopyCells) {
-            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
-            s_pub.fogGrid = s_fogCopy;
-            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
-        }
-    }
-    /* fog on with no grid is not a frame this pass may draw, so it publishes
-       NOTHING -- the copy can fail, and the port would sample a 1x1 image while
-       uFogDim carried the real size. Refused the way the restored atlas already
-       is; tagpu_terr.c has the argument in full. */
-    fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass's own decision (tagpu_native.c `s_scissorOn`). A pass that clipped
@@ -1631,7 +1664,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        point into `s_verts`, which this file `realloc`s, and `s_pub.atlas` into
        the GAF mirror -- so the hand-over is this frame's or it is nothing. */
     s_pub.frame = v->frame_counter;
-    s_pubHave = total > 0 && !fogBad;
+    s_pubHave = total > 0;
 }
 
 /* The atlas's half of the hand-over (tagpu_feat.h), and the palette its

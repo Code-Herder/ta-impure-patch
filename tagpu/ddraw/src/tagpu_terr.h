@@ -20,52 +20,27 @@
 #include "tagpu_fx.h"
 #include "tagpu_restoreglsl.h"  /* TAGPU_RGLSL_FRAME -- a CPU struct, no GL in it */
 
+/* THE WIDEST GATHER SPAN, in world px along either axis, whatever level or
+   floor a consumer holds (tagpu_zoom_gather_span caps at it). It is what keeps
+   a terrain grid column at most 65536 / 32 + 2 = 2050, so the cell terms stay
+   exact integers in float. */
+#define TAGPU_GATHER_SPAN_MAX 65536
+
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
-/* build this frame's quads; returns the CELL count (0 = nothing to draw) —
-   one instanced quad each, see the vertex shader in tagpu_terr.c */
+/* size this frame's grid; returns its CELL count, columns times rows (0 =
+   nothing to draw) -- one instanced quad each, which the vertex shader in
+   tagpu_terr.c derives from the level's tile map */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 /* GATHER AND HAND OVER: despite the name it draws nothing; it finishes the
    frame's hand-over and publishes it. */
 void tagpu_terr_render(const TAGPU_FXVIEW* v);
 
-/* RESERVE FOR THIS VIEWPORT, then trim a would-be gather rect (game px) to
-   what this pass can actually draw in one frame. Called once a frame by
-   tagpu_native.c before any pass sizes itself, so every pass gathers over one
-   rect they all agree on.
-
-   THE BUDGET IS THE SCREEN, not a constant. `vw`/`vh` are the true 1x world
-   viewport, and the widest rect any zoom can ask for is that viewport at
-   TAGPU_ZOOM_MIN — so the staging is reserved for exactly that and grows when
-   the player changes resolution. Nothing here names a resolution, and no
-   screen is a special case: MEASURED, 1024x768 reserves 10672 cells,
-   2560x1440 54208, 3840x2160 124488 and 5120x2880 223568 (16 bytes a cell:
-   167 KB to 3.4 MB), and each draws its whole view at the zoom floor.
-
-   The trim fires only if the reservation could not be met — an allocation that
-   failed, or a viewport so large the module's own memory guard refuses it. A
-   gather that exceeds the staging BAILS, which hands the draw back for a frame
-   and flashes, and a flash is the one failure that reads as a bug; a black
-   margin is the honest degradation instead.
-
-   THE TRIM HAS A FLOOR THE CALLER PUTS BACK, and it is worth knowing which
-   failure that leaves. tagpu_native.c raises the rect to the viewport again
-   right after this call (`if (evw < vw) evw = vw`) because a rect narrower
-   than the screen would cull terrain that is plainly on it -- choosing a
-   visible hole over a flash. So the degradation above is real only while the
-   trim stays above the viewport, which is every case the memory ceiling can
-   produce: at the 16384-px viewport gate the reserve asks for ~65600 px and
-   the ceiling cuts it to ~56000, still far wider than the screen. Below the
-   viewport is reachable only if `realloc` itself fails, and there the gather
-   does bail and flash. Sizing the ceiling so it can never cross the viewport
-   is what keeps that path unreachable; do not lower it without re-checking
-   this.
-
-   A fixed budget does not work: 32768 cells, sized for 1024x768 and
-   1920x1080, is exceeded by an ordinary 3840x2160 desktop at any zoom below
-   about 0.5x, and the rect is then cut to roughly a third of the width the
-   view shows — terrain, units, features and markers all stopping at a black
-   margin that a player reads as the map failing to draw at the edges. */
-void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
+/* THE TERRAIN GRID'S SIDE AT THAT RECT, in 32-px cells: the gather's
+   columns are ceil32(span + fx) with the eye's fraction fx under 32, at most
+   span / 32 + 2. tagpu_vk_terr.c refuses a hand-over past it, which is the bound that
+   keeps every column and row the vertex stage derives an exact integer in
+   float (tagpu_terr.c, above the VS). */
+#define TAGPU_TERR_MAX_SIDE (TAGPU_GATHER_SPAN_MAX / 32 + 2)
 
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
    engine's terrain blit; the composite treats every OTHER index in the engine's
@@ -75,12 +50,13 @@ int  tagpu_terr_key(void);
 /* ---- the Vulkan edition of this pass
    ----------------------------------------------------------------------------
 
-   Everything the gather built for this pass, so that tagpu_vk_terr.c draws it
-   without re-deriving any of it: the instances are the array the gather
-   filled, the uniforms are the numbers the gather computed, the texels are
-   buffers this file owns (the atlas, the height grid, the fog copy) and the
-   engine's palette table, and the shader is tagpu_terr.c's GLSL through
-   tools/spirv-gen.py.
+   Everything the gather decided for this pass, so that tagpu_vk_terr.c draws
+   it without re-deriving any of it: the grid's rect and the uniforms are the
+   numbers the gather computed, the texels are buffers this file owns (the
+   atlas, the height grid, the level's tile map and the neighbourhood keys)
+   and the engine's palette table, and the shader is tagpu_terr.c's GLSL
+   through tools/spirv-gen.py. No per-cell record crosses: the vertex stage
+   derives each cell's from the tile map and its instance index.
 
    HANDED OVER EXACTLY ONCE, like the scaffold's and the feature pass's, so one
    frame's geometry can never be drawn twice; a frame this pass skipped hands
@@ -93,8 +69,9 @@ int  tagpu_terr_key(void);
    consumes this, so the game thread never touches them and there is no lock to
    take.
 
-   THAT IS NOT BY ITSELF ENOUGH. `ensure_atlas` FREES `s_atlasMirror`
-   and `build_height` frees `s_hMirror` whenever the map changes, so a
+   THAT IS NOT BY ITSELF ENOUGH. `ensure_atlas` FREES `s_atlasMirror`,
+   `build_height` frees `s_hMirror`, `ensure_tilemap` replaces `s_tileMap`
+   and the restore drop frees the keys whenever the map changes, so a
    hand-over left standing from an earlier frame names memory this file has
    given back -- and one can be left standing, because the flag is cleared
    inside `tagpu_terr_render`, which tagpu_native.c calls only when the gather
@@ -108,40 +85,10 @@ int  tagpu_terr_key(void);
 
 /* THE UNIT QUAD IS DEFINED ONCE, HERE: the two triangles whose shared edge
    runs (1,0)-(0,1), in the engine's own vertex order. It is the pass's fixed
-   geometry -- what varies is the per-INSTANCE cell record below.
-   Its one user is tagpu_vk_terr.c; the macro stays here because the geometry
-   is the pass's, stated once where the record it pairs with is stated. */
+   geometry, drawn once per cell of the grid as an instance. Its one user is
+   tagpu_vk_terr.c; the macro stays here because the geometry is the pass's. */
 #define TAGPU_TERR_QUAD  { 0.f,0.f, 1.f,0.f, 0.f,1.f, 1.f,0.f, 1.f,1.f, 0.f,1.f }
 #define TAGPU_TERR_QUADV 6
-/* SHORTS PER INSTANCE, two attributes of four: the cell's column and row in
-   this frame's gather grid, then its tile's column and row in the atlas; then
-   the cell's NEIGHBOURHOOD KEY's column and row in the neighbourhood atlas
-   (tagpu_terr.c, the keys), and two zeros. The vertex shader rebuilds the
-   quad's position, world point and UVs from those and the uniforms; see the VS
-   in tagpu_terr.c for why every term is exact in float. The key's pair is 0,0
-   on a frame whose hand-over has no neighbourhoods (`nbOn` 0), and the shader
-   does not read it then.
-   Unnormalised shorts, so the Vulkan vertex format is SSCALED and not SINT
-   -- the shader's attributes are `vec4`s, and SINT would need `ivec4`s.
-   tagpu_vk_terr.c asks the device for that format rather than assuming it. */
-#define TAGPU_TERR_ICOMP 8
-/* THE MIRROR'S FLAGS, in the tile's column and row (the edge setting,
-   `tagpu_terr_gather`). A cell past the map carries the tile of the cell it
-   reflects to, TAGPU_TERR_MIRROR in its tile column, and TAGPU_TERR_FLIP in the
-   column and/or row whose axis the reflection turned over. On a turned-over
-   axis, TAGPU_TERR_FOLD_LO and TAGPU_TERR_FOLD_HI say that the cell's low or
-   high edge on that axis lies on a fold of the reflection -- the map's own
-   edge, or a map's width further out -- where its neighbour is NOT turned
-   over (the vertex shader's nudge, in tagpu_terr.c, is why that matters).
-   They are spare bits by bound, not by habit: the tile column is under
-   ATLAS_COLS (64) and the tile row under 65536 / 64 = 1024, because a tile
-   index is a u16 -- so bits 11 to 14 are clear in every on-map record, and a
-   flagged one is still a positive short. The vertex stage takes each off as
-   one exact power of two. */
-#define TAGPU_TERR_MIRROR  0x2000
-#define TAGPU_TERR_FLIP    0x4000
-#define TAGPU_TERR_FOLD_LO 0x1000
-#define TAGPU_TERR_FOLD_HI 0x0800
 
 typedef struct TAGPU_TERRHAND {
     /* THE FRAME THIS WAS PUBLISHED ON (the fork's monotonic render-thread
@@ -150,8 +97,19 @@ typedef struct TAGPU_TERRHAND {
        It is first so that a hand-over read by a debugger leads with it. */
     unsigned frame;
 
-    /* The geometry: one record per visible cell, one INSTANCE each. */
-    const short* cells;  int ncell;
+    /* THE GRID: `cols` x `rows` cells, one INSTANCE each, instance i being
+       column i % cols and row i / cols. Grid cell (0,0) is map cell
+       (tile0X, tile0Y); a cell past the engine's area (`areaW` x `areaH`
+       32-px cells, tagpu_edge_area) is drawn as the cell it reflects to while
+       `mirror` is 1 and not at all while it is 0, and a cell whose tile index
+       is `atlasN` or past it is not drawn. tagpu_vk_terr.c refuses a grid
+       side outside [1, TAGPU_TERR_MAX_SIDE] and an area outside the tile
+       map. */
+    int cols, rows;
+    int tile0X, tile0Y;
+    int areaW, areaH;
+    int mirror;
+    int atlasN;
 
     /* The vertex stage's uniform block (std140 offsets are printed in
        inc/spirv/tagpu_terr.spv.h and are the contract for the buffer). */
@@ -159,9 +117,8 @@ typedef struct TAGPU_TERRHAND {
     float zoom, zoomCx, zoomCy;
     float depthScale, enc;
     float origX, origY;       /* screen px of grid cell (0,0)'s corner  */
-    float tile0X, tile0Y;     /* the map cell grid cell (0,0) IS        */
     float texelW, texelH;     /* 1/atlas width, 1/atlas height          */
-    /* 1 when this frame's records carry neighbourhood keys, and then the
+    /* 1 when `keys` below holds this map's neighbourhood keys, and then the
        neighbourhood atlas's texel size: `nbFrames` below is the list those
        keys' cells are painted from. Whether binding 41 IS that atlas is the
        consumer's (uNbhd). */
@@ -170,7 +127,8 @@ typedef struct TAGPU_TERRHAND {
 
     /* The fragment stage's. `restored` is the Classic++ restored-colour
        branch, `lambert` the `light=` half of the preset, `shadowOn` the
-       cast-shadow one, `fog` the engine's overlay bit.
+       cast-shadow one, `fog` the engine's overlay bit: the source it samples
+       is the slot's fog image (tagpu_vk_fog.h), not a field of this record.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
        the producer's `s_rFrames`, the published field itself.
@@ -193,7 +151,6 @@ typedef struct TAGPU_TERRHAND {
        drawn with, the sun the knobs name, uShScale = (texel, depth span,
        1/res), and the two shading scalars. */
     float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;
     /* uMapPx: the engine's area on the tile grid (tagpu_edge_area), its 32-px
@@ -249,8 +206,9 @@ typedef struct TAGPU_TERRHAND {
        (research/notes/compute-restorer.md D5): one frame per key, IN KEY
        ORDER -- frame k paints key k's 34-texel cell, column k % nbCols and row
        k / nbCols of an `nbW` x `nbH` atlas, from the base atlas -- and
-       `nbOrder`, the keys in the centre-out order. A record's key cell (its
-       shorts 4 and 5) is therefore its frame's index, row * nbCols + column.
+       `nbOrder`, the keys in the centre-out order. A map cell's key is `keys`
+       at that cell -- a cell past the area takes the key of the cell it
+       reflects to -- and is therefore its frame's index.
        Published with `restoreFrames` and under the same serial and lifetime;
        NULL when the map's keys could not be built or do not fit one image of
        the device's size, and then `restoreFrames` is the whole request.
@@ -259,13 +217,21 @@ typedef struct TAGPU_TERRHAND {
     const TAGPU_RNBFRAME*    nbFrames;
     const int*               nbOrder;
     int                      nbN, nbCols, nbW, nbH;
+    /* THE LEVEL'S TILE MAP, `mapW` x `mapH` u16 tile indices (the engine's
+       own, copied once a level: tagpu_terr.c `ensure_tilemap`), and the
+       neighbourhood key of each of its cells, u32 on the same grid, NULL
+       while `nbOn` is 0. Each serial moves when its buffer is replaced, so
+       the Vulkan lane uploads each once a level and not per frame. */
+    const unsigned short* tileMap;
+    int                   mapW, mapH;
+    unsigned              mapSerial;
+    const unsigned*       keys;
+    unsigned              keySerial;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;
     const unsigned char* pal;         /* 256 x RGBA8, tagpu_pal_engine()    */
     unsigned             palSerial;   /* tagpu_pal_engine_serial()          */
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog off */
-    int                  fogGridCols, fogGridRows;
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.

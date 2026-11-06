@@ -44,6 +44,12 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
+/* The sprocket this frame left to the wiki's layer to draw, game thread: 0 the engine drew its
+   own, 1 the wiki's layer draws it up, 2 down (held, or the panel open). Set by the post-GUI
+   observer inside DrawGameScreen and read by the same frame's wiki fill, after the draw
+   (tagpu_wiki.c), which carries it to the render thread in TAGPU_PK_WIKI.config. */
+int  tagpu_menu_bar_cog(void);
+
 /* The replay HUD's two questions about the engine's screens (tagpu_hudinput.c), game thread:
    modal -- a menu covers the world, as the engine's own test has it, or Leave's question is
    open; leave_ready -- the observer that opens Leave's question runs (the menu armed). */

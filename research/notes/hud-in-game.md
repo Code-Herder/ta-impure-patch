@@ -125,6 +125,16 @@ The owner's decisions:
 - **Sight and Follow are drawn pressed on the player they are set to, and a click on the pressed
   one undoes it** — the full map, the free camera. That replaces the cards' Full map and Free cam
   (2026-10-08).
+- **Sight shows the viewed seat's resource bar, paused or not** (2026-11-01): its `+income
+  −expense` rates from the next frame, and its stored metal and energy easing toward the seat's
+  over the following frames (an eighth of the difference a frame, at least 1). The engine re-reads
+  the rates only while the viewed record's DisplayTimer is behind GameTime, so Sight moves the
+  newly viewed record's back by whole game seconds to just behind it and the draw that follows
+  re-reads them once (`sight_change`; [render.md](engine/render.md), *The memo's layout*). The
+  stock `+View` cheat does not, and a player of the stock game sees the previous seat's rates for
+  up to a game second. After a paused seek, a takeover that leaves the game paused or a return to
+  now the rates stay the earlier ones until the game runs: the same engine rule, left for a later
+  landing by the owner's choice of 2026-11-01.
 - **The foot plate's five buttons:** game stats, which opens and closes the stats window, then
   Cursors, Clicks, Selections and Chat, the four switches of the dock's old Overlays menu. The
   map button and the capture button are removed (2026-10-08).
@@ -143,7 +153,16 @@ The owner's decisions:
   `g_ddraw.renderer` is `vk_render_main` and the pass has not refused (`tagpu_hudstate_refuse`,
   below), and `tagpu_hudstate_mode` says what the HUD shows. **The live HUD** while a rewind owns
   the level or one could open (`tagpu_replay_rewind_state`: its state is not idle, or `available`
-  — a live, recorded, non-network skirmish whose recorder is healthy); **else the replay HUD**
+  — a live, recorded, non-network skirmish whose recorder is healthy), or while the recorder
+  holds a fork armed for the next capture point (`armed`, the same conditions with
+  `tagpu_rec_fork_armed` in place of the recording): a takeover's or a rewind's fork makes the
+  level a live recorded skirmish from the frame whose visit armed it, before its first step
+  starts the recording. Until that step the rewind is not `available`, but a press on its button
+  is served later, not judged at the click: `rw_send` (`tagpu_hudinput.c`) queues the open and
+  `rw_visit` (`tagpu_replay.c`) runs it at the next frame visit, which in a running level comes
+  after that frame's step and its capture point `0x4954ED` have started the recording. The open is
+  refused, as one with no recording is ("Rewind refused"), only if the arm still stands at that
+  visit, as it does while a test's pause holds the level; **else the replay HUD**
   while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
   rewind is asked first because a rewind into the past plays the recording as puppets, where
   `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
@@ -254,13 +273,18 @@ The owner's decisions:
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
   type stops the load, and the log names it (`hud: NOT loaded - …`). The load also runs every
   rule once on a state that takes every branch, so a layout that loads cannot fail to build.
-- **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
-  (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
-  opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
+- **Decoding is off the frame, and done in the shell.** The Vulkan lane's first frame starts the
+  loader (`tagpu_hudart_start`, from `tagpu_vk_hud_prepare` before its test for anything to draw),
+  a thread of its own that decodes the parts, premultiplies them and opens the faces, then the
+  wiki's art, and publishes each with one interlocked store; the HUD draws nothing until then. The
+  loader reads only the DLL's resources, so it runs while the menus are up, and a game's first
+  frame finds the art loaded: the wiki button and the replay HUD appear with the world. Started at
+  the first in-game frame instead, the two loads (`hud: loaded … in 355 ms`, `wiki: loaded … in
+  409 ms`, MEASURED 2026-10-30 at 1920 × 1080 on the reference setup) put the buttons most of a
+  second behind the world. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
   (8.8 Mpx) and 3 faces in 343 ms`, against 21.2 Mpx in 862 ms for the same build with the parts
   as cut.
-- **The decoded parts stay for the session**, 35.2 MB of RGBA. Every teardown and resize brings
+- **The decoded parts stay for the session**, 35.5 MB of RGBA (the wiki's kit 5.5 MB more). Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
 - **Each part is its own image, with mipmaps.** The parts are drawn at 1.1 (1080p, 75 %) to 4.5
@@ -271,16 +295,15 @@ The owner's decisions:
 
 ### The uploads
 
-- **The parts go once per build, across frames.** Their level 0 totals 35.2 MB against a slot's
-  2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
-  each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
-  room, and the rest go as many as fit it.
-- **A part that does not fit what is left of this frame's buffer waits** to be the next frame's
-  first copy. That copy goes in the frame's own command buffer when it fits the whole buffer,
-  and banded when it does not. The banded ones are the nine parts over 2 MiB: `win_one`,
-  `picker_one`, `rail_forks`, `rail_one`, `tp_one`, `live_one`, `foot_one`, `head_one` and `row_one`,
-  sized from their PNGs. A pass's first upload after it is
-  built is the event the banded path is for (`tagpu_vk_stage.h`).
+- **The parts go once per build, all in one frame.** Their level 0 totals 41.0 MB with the
+  wiki's kit (92 images) against a slot's 2 MiB staging cap (`TAGPU_VK_STAGE_CAP`,
+  `tagpu_vk_stage.h`), and every one goes through `tagpu_vk_stage_copy_banded`: banded through
+  the whole buffer, one submit and one wait a band, never an in-frame copy, so the buffer is as
+  free for the last part as for the first, and the glyph atlas's whole first upload follows in the
+  same frame. As in-frame copies they would take a dozen frames, the first few parts filling the
+  buffer and every one after them waiting for the next. A pass's first upload after it is built
+  is the event the banded path is for (`tagpu_vk_stage.h`). MEASURED 2026-10-30 at 1920 × 1080
+  on the reference setup: `hud: the parts are on the device - 92 images in 14 ms`.
 - **The mip chains are made on the GPU.** After a part's level 0 lands, `blit_chain` blits each
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
   buffer. The parts are premultiplied, so a linear average is the right one.
@@ -417,8 +440,8 @@ The owner's decisions:
 - **The forks, the axis and the takeover** (`fill_forks` and `tagpu_hudinput_fill`): the file's
   live forks from the replay's timelines cache (`tagpu_replay_timelines`), ordered by branch point
   and then id as the mockup lists them, the first three (`TAGPU_PK_HUD_FORKS`, asserted equal to
-  `REC_FORK_LIMIT`), each with its id, `fork_at`, last GameTime, parent, the seat it was played as
-  (RT_OPTIONS `controlled`) and whether it is the watched one or on the chain that plays; a file
+  `REC_FORK_LIMIT`, `inc/tagpu_recrules.h`), each with its id, `fork_at`, last GameTime, parent,
+  the seat it was played as (RT_OPTIONS `controlled`) and whether it is the watched one or on the chain that plays; a file
   that holds more — only a foreign one can, since the recorder refuses a fifth live fork — logs
   that once and shows the oldest. With them: `orig_last`, the original's last GameTime (timeline
   0's row; `last` for a file without one); `fill_to`, where the watched chain leaves the original
@@ -540,7 +563,10 @@ the recorder writes nothing for it.
   of op: `HOP_LINE`, an antialiased stroke with butt ends; `HOP_CHART`, the chart's lines;
   `HOPF_DROP` on a solid, a CSS outer box shadow; and `HOPF_BASE` on a text, an SVG `<text>` on
   its baseline at its anchor.
-- **The chart's lines are data**, one RGBA32F image (`tagpu_huddraw_chart`): row 0 the globals
+- **The chart's lines are data**, one RGBA32F image a chart slot (`tagpu_huddraw_chart(slot, …)`,
+  `HUD_CHART_SLOTS` 2: slot 0 this HUD's, `HUD_TEX_CHART`, slot 1 the in-game wiki's stage HUD's,
+  `HUD_TEX_CHART_WIKI`; a list's `chart_slot` picks the image its `HOP_CHART` reads, so two stats
+  windows in one frame never share one): row 0 the globals
   (the counts, the line's and the halo's half widths, the halo's colours, the cross's size), row
   1 + g group g (its colour, its halo and cross flags, its points and, per column of eight
   segments, the y range its lines can reach). The instances are bands of those columns, so a
@@ -637,9 +663,12 @@ refuse. W checks it where seats are out: past the fixture's end scenario, at a r
 picker's clickable rows are the seats with a unit, and the takeover refuses one without by that
 line.
 
-**After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
-the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
-then. The new fork's lane is there the next time the file is watched.
+**After the takeover** the level is a live skirmish, running: puppet mode ends and the reader
+closes, and the picker's pause ends with the playing (`tk_run`, `tagpu_replay.c`), at the frame
+visit that runs the takeover, before the draw. The fork is armed at that visit, so the live HUD
+draws from that frame (*When it draws*), and the toast "Taking over <player> at m:ss" is on it
+for the rest of its 1.8 s (wall clock, from the click). The recording starts at the first step,
+GameTime R. The new fork's lane is there the next time the file is watched.
 
 ## The lanes
 
@@ -787,7 +816,7 @@ over the world, is `tagpu_menu_modal`'s.
 | `leave` | transport | Leave's question (*Leave*) |
 | `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*); closes the picker |
 | `takeover` | above the transport plate | the picker asked for: the playback paused, and the next fill plans the takeover and seeks back to its start (*Take over*); while asked for, seeking or open, closes it |
-| `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
+| `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. Refused while Leave's question is wanted or open (*Leave*). No hot for a row whose player has no unit left |
 | `picker` | the picker's plate | taken, and nothing done |
 | `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
 | `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, nothing: it stays watched (*The lanes*) |
@@ -877,8 +906,16 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
 ### Leave
 
 - **The click pauses and queues the question.** It remembers whether the playback was paused,
-  pauses it, and sets a request; when the menu's hooks did not arm (`tagpu_menu_leave_ready`) it
-  shows the toast "Leave from the game menu" instead.
+  pauses it, and sets a request; when the menu's hooks did not arm (`tagpu_menu_leave_ready`) or a
+  takeover is queued (`tk_queued`, below) it shows the toast "Leave from the game menu" instead.
+- **Leave and Take over exclude each other.** The takeover's run ends the playing's pause
+  (`tk_run`), and the question's opener writes neither `main+0x38A51` nor `main+0x37EBE`
+  [DISASSEMBLED 2026-11-01: no instruction with either displacement in `0x460680..0x4607F1` or in
+  `0x49F000..0x4AB000`, the GUI code its six calls enter], so with both in flight the live game would run under "Leave this replay?". Leave is refused
+  while a takeover is queued (`tagpu_replay_rewind_state`'s `tk_queued`), and a picker row
+  (`takeas:i`) while Leave's question is wanted or open (`tagpu_hudinput_leave_pending`), with the
+  toast "Answer Leave's question first". Each click sets what the other tests before it returns,
+  so of two clicks in one pump batch the second is refused, whichever it is.
 - **The DrawGameScreen observer opens it** (`menu_tick` in `tagpu_menu.c`, `leave_open`), where
   the engine's own screens are opened — the engine's Exit → Main Menu path, EXITMENU's handler
   at `0x46082B..0x46083A` without its `GUI_Pop`, there being no EXITMENU to pop: the question
@@ -958,7 +995,9 @@ control's place in the frame on screen — and never calls the replay's API:
 
 The replay harness's W lane drives the HUD through it ([completeness](tadr-port/demo-recorder-completeness.md),
 *The replay test harness*): the speed, play, the trigger's `hud seek <T>` (the timeline's own
-seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
+seek entry, at a GameTime of the test's choosing), Sight on row 0 and again (the full map), twice,
+each followed by the resource bar's check — a frame drew the viewed record's bar and its memo
+holds that record's four rates bit for bit — then Follow, Follow again and
 Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
 and Leave, answered Yes through `tacli ui`. On the second Watch it takes over through the HUD
 (`watch_takeover`). First at the recording's last refresh RD, where the end scenario has left one
@@ -1019,8 +1058,10 @@ frame visit.
 - **The layout** (`live`, `tagpu_hudlay.c`, a port of hud.js `live`): the button at
   `(W − (entry.r + entry.s)·k, entry.t·k)`, `entry.s·k` square, with `k = top / entry.bar` — the
   bar's own pixels, as the engine places the sprocket (`trigger_rect`, `tagpu_menu.c`: x
-  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The sprocket is the
-  engine's: the mockup's backdrop carries it, and the HUD draws none. **The strip's play is drawn
+  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The button is an emblem
+  with no plate: `rewind_emblem` is the whole button, `rewind_emblem_down` the whole button down,
+  and nothing is drawn on a face (the entry has no `icon`). The HUD draws no sprocket: the wiki's
+  layer does on this lane (`tagpu_wikilay.c`, `wiki_button`), and the mockup's backdrop carries one. **The strip's play is drawn
   disabled** (`off` in `layout.json`, the mockup too): the rewind holds the past paused and has no
   verb that plays it toward now (the owner's choice for this round). Play from here is drawn
   pressed while it is armed. The toast draws in both modes.
@@ -1310,10 +1351,9 @@ the render thread.
 ## Open
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
-- **Address space.** The decoded parts stay for the session, 35.2 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 11.9 MB. The art loads on the first frame with a HUD
-  state, which since the live rewind is the first frame of a live recorded skirmish on the Vulkan
-  lane too, not only of a replay.
+- **Address space.** The decoded parts stay for the session, 41.0 MB with the wiki's kit in a
+  32-bit process, and the archive stays mapped with the DLL, 12.0 MB. The art loads on the Vulkan
+  lane's first frame, in the shell, whether or not a game with a HUD follows.
 - **`rail_one` is packed but never drawn.** The DLL draws the housing as `rail_forks` (the
   `proposed` section, which the game always draws); `rail_one` is the mockup's `prop=0` housing,
   1.2 MB of the archive and 0.9 Mpx decoded.

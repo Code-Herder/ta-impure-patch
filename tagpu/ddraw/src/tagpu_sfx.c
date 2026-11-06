@@ -38,8 +38,9 @@
      0x4FD5A8  base (destroyed) -       nothing
 
    LOS gate = the local player's LOS counter at the tile, true LOS or the
-   MAPPED bit — applied HERE, against the fog grid the render thread holds,
-   because that grid is the render thread's own.
+   MAPPED bit — applied HERE, through tagpu_fx_tile_visible, against the
+   frame's copy of the fog source the render thread holds, because that copy
+   is the render thread's own.
    Armed by tagpu_sfx.on (tokens log, passive, nosmoke, nofire, nowake,
    nonano). Read-only over sim. */
 

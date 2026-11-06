@@ -2,35 +2,47 @@
 #define TAGPU_ZOOM_H
 #include <windows.h>
 
-/* THE RANGE THE LEVER CLAMPS TO, public because it is half of every "how much
-   world can be on screen at once" question. The rect each pass gathers over is
-   the viewport divided by the zoom, so the widest rect that can EVER be asked
-   for is this viewport at TAGPU_ZOOM_MIN — an expression with the live screen
-   in it and no resolution constant anywhere. tagpu_native.c bounds the rect
-   with it and tagpu_terr.c sizes its staging for it, so both track whatever
-   screen the player is on instead of a number someone picked. */
-#define TAGPU_ZOOM_MIN  0.25f
+/* THE LEVEL'S RANGE. The top is a constant; the bottom is the FLOOR, which
+   follows the map and the screen: the game thread computes it at every
+   in-play draw (tagpu_zoom.c, floor_compute) as the level at which the whole
+   map fits the true viewport, bounded by the widened rect's int16 edges,
+   and never above TAGPU_ZOOM_FLOOR_HI. The render thread reads it once a
+   frame from the packet (tagpu_zoom_floor). */
 #define TAGPU_ZOOM_MAX  8.0f
+
+/* The floor on any map the screen covers at 0.25x, and the top rung of the
+   reach ladder (tagpu_zoom_rung): small maps behave exactly as they did with
+   a fixed 0.25 floor. */
+#define TAGPU_ZOOM_FLOOR_HI 0.25f
+
+/* 1/64: the sanity bound on every level VALUE -- a packet's, a file's, a
+   recording's, a command's. A level below it is data that failed validation.
+   It is the recording's REC_POV_ZOOM_MIN (Q16 1024; asserted in tagpu_zoom.c),
+   so a level the floor allows can always be recorded. */
+#define TAGPU_ZOOM_FLOOR_LO 0.015625f
 
 /* THE GATHERS' SLACK, in world px: tagpu_native.c accepts a unit, wreck or
    ghost anchor up to this far outside its effective rect
-   (tagpu_zoom_gather_span), and tagpu_fogwide.c builds the wide fog grid with
-   the same margin around the same rect at the zoom floor. One number, so the
-   grid cannot come out narrower than the slab the gathers test against it. */
+   (tagpu_zoom_gather_span), and the packet's tables' reach
+   (tagpu_zoom_pub_window) carries the same margin around the same rect at the
+   reach level. One number, so the reach cannot come out narrower than the
+   slab the gathers test against it. */
 #define TAGPU_GATHER_MARGIN 256
 
 /* THE LEAD, as the divisor of the viewport on each axis: a quarter of it, in
    world px, on every side. The render thread draws from a predicted eye that
    runs ahead of the one the game thread published by the steps it has not
-   applied yet, and the fog bound (tagpu_zoom.c, predict) holds that eye only
-   when its slab would leave the wide fog grid. Every window the game thread
-   publishes about its eye is therefore the floor's slab grown by this much —
-   the wide fog grid (tagpu_fogwide.c), the units carried with their pieces and
-   the feature anchors (tagpu_packet_pub.c) — all through
+   applied yet, and the reach bound (tagpu_zoom.c, predict) holds that eye only
+   when its slab would leave the packet's reach. The reach the game thread
+   publishes about its eye is therefore the slab at the reach level (the
+   ladder's rung the render thread asked for, tagpu_zoom_rung) grown by this
+   much —
+   the units carried with their pieces, the feature anchors and the effects
+   models' cull (tagpu_packet_pub.c, table_reach) — through
    tagpu_zoom_pub_window, so an eye the bound accepts finds each of those
-   tables covering its slab. The slab itself (the native pass's tests, the
-   fog gates) stays at TAGPU_GATHER_MARGIN about the eye it draws from, and
-   the bound reads the grid's own origin and size, not this number. */
+   tables covering its slab. The slab itself (the native pass's tests) stays at
+   TAGPU_GATHER_MARGIN about the eye it draws from, and the bound reads the
+   packet's own `reach_lo/hi`, not this number. */
 #define TAGPU_LEAD_DIV 4
 
 struct TAGPU_PACKET;
@@ -64,8 +76,9 @@ struct TAGPU_CMD;
    for the input path — and it writes NOTHING into engine memory: everything the zoom
    needs the engine to do travels as a COMMAND RECORD (tagpu_packet.h,
    TAGPU_CMD) that the game thread takes at the top of every in-play draw and
-   applies there, on the thread that owns the camera, the viewport rect and
-   the scroll rate (tagpu_zoom_apply, from tagpu_packet_pub.c's observer). The
+   applies there, on the thread that owns the camera and the viewport rect
+   (tagpu_zoom_apply, from tagpu_packet_pub.c's observer); the scroll poll
+   reads the level it sets, on the same thread. The
    message thread reads the published view to convert input: five aligned
    32-bit loads, so a reader can at worst see one field from the previous
    frame — a sub-millisecond lag on a pointer, not a correctness problem.
@@ -88,8 +101,9 @@ struct TAGPU_CMD;
        minimap is screen-space and correct at 1:1 — we only rescale the rect it
        was going to draw, and clamp it to the minimap.
 
-     THE SCROLLSPEED SAVE (0x430FAE) keeps the rate we scale (see the apply)
-       out of the player's registry, where it would compound across launches.
+     THE SCROLL POLL'S STEP (0x41CEAA) is divided by the level in its
+       register, so the screen scrolls at the 1x rate at every level;
+       ScrollSpeed main+0x1434D is never written.
 
      THE CAMERA'S RANGE (0x41C3C0, the eye clamp) is BAR's centre clamp: the
        ground point at the view centre stays on the map at every zoom, so the
@@ -123,7 +137,8 @@ void  tagpu_zoom_init(void);
    force, from the three levers in priority order:
 
      tagpu_zoom.txt, when present — the file's value when it parses in
-       0.25..8.0, the last good value on a torn read. Scripted drivers (tacli,
+       1/64..8.0, drawn no lower than the floor, the last good value on a torn
+       read. Scripted drivers (tacli,
        the scenarios) own this one, and while it is there it WINS.
      the replay's Follow or Jump — the level the packet's follow_level names,
        while its follow_epoch is nonzero and no wheel notch has ended it.
@@ -143,58 +158,74 @@ void  tagpu_zoom_init(void);
    viewport describe, and the PREDICTED eye for this frame — the packet's eye
    plus every delta the game thread has not acknowledged yet — is what
    tagpu_zoom_predicted_eye() answers until the next call. The level returned
-   is the lever's, or the last frame's where the fog bound would otherwise
-   draw the view against the gesture (tagpu_zoom.c, predict). */
+   is the lever's, raised to the lowest level a packet that can still arrive
+   carries tables for (tagpu_zoom.c, "the reach ladder"), or the last frame's
+   where the reach bound would otherwise draw the view against the gesture
+   or the mega map's cut holds it (tagpu_zoom.c, predict). */
 float tagpu_zoom_read_lever(const struct TAGPU_PACKET* pk);
 
+/* RENDER THREAD: this frame's floor, as tagpu_zoom_read_lever took it from the
+   packet -- validated into [TAGPU_ZOOM_FLOOR_LO, TAGPU_ZOOM_FLOOR_HI], and
+   TAGPU_ZOOM_FLOOR_HI for a packet that carries none. Set once a frame, before
+   any pass runs, so the wheel, the levers, the reach bound and the native
+   pass's gather read one value. */
+float tagpu_zoom_floor(void);
+
+/* Pure: the largest rung of the reach ladder (0.25, 0.125, 0.0625, 0.03125,
+   1/64) at or below `z`, clamped to [floor, TAGPU_ZOOM_FLOOR_HI]. The tables'
+   reach is taken at a rung rather than at the level itself because the
+   publisher's anchor scan is cached per rect (tagpu_packet_pub.c), and a
+   continuous level would move the rect on every draw of a gesture. */
+float tagpu_zoom_rung(float z, float floor);
+
 /* The level tagpu_zoom_read_lever() settled on this frame (the file's or the
-   wheel's, or the last frame's where the fog bound held it), whether or not a
+   wheel's, or the last frame's where the reach bound or a cut held it), whether or not a
    zoomed world is on screen. */
 float tagpu_zoom_lever(void);
 
+/* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
+void  tagpu_zoom_presented(void);
+
+/* RENDER THREAD (tagpu_overlay_gone): the session goes to GDI, so no frame will end
+   a cut, read a view or post a record again: this ends the cut and posts the record
+   that hands the engine its own rect, rate and level. */
+void  tagpu_zoom_render_gone(void);
+
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
-   camera range in force and then into the fog grid this frame samples (the
-   fog bound, tagpu_zoom.c). Exact once the packet catches up (the next
+   camera range in force and then until its gather slab lies inside the
+   packet's tables' reach (the reach bound, tagpu_zoom.c); the last frame's
+   during the mega map's cut, by the same bound. Exact once the
+   packet catches up (the next
    in-play draw applies the same deltas), so a wheel notch is drawn on the
    frame it happens and does not wobble. Returns 0 — and leaves the outputs
    alone — when there is no in-game packet: then there is no world to draw. */
 int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 
-/* 1 when this frame is to sample the WIDE fog grid (tagpu_fogwide) rather
-   than the engine's, decided with the predicted eye by
-   tagpu_zoom_read_lever(). The engine's is taken only where it spans this
-   frame's view: the level this frame draws with (tagpu_zoom_lever()) is at
-   least 1, the grid's own window reaches no more than one cell past the map
-   (past that the engine places its border completions off the map), and the
-   1x rect about the predicted eye lies in the grid's fully written cells —
-   tested on the packet's own numbers. Otherwise the wide one, with the
-   predicted eye already clamped so the gathers' whole slab lies inside it.
-   A packet with no wide grid leaves the frame on the engine's grid whatever
-   this answers — the native pass counts that frame as bare. Render thread. */
-int   tagpu_zoom_wide_fog(void);
-
 /* The span a pass gathers over along one axis, for the 1x viewport's extent
    `v` at level `z`: v/z + 64 below 1 (the 64 is the partial cells at the
-   edge), never more than the zoom floor's and never less than v. The native
-   pass takes it and may only shorten it (its terrain reservation);
-   tagpu_fogwide.c sizes its window with it at the floor; the fog bound
-   clamps the predicted eye with it. One expression for all three. */
-int   tagpu_zoom_gather_span(int v, float z);
+   edge), never less than v. A level below `floor` is taken at the floor, and
+   the span is never more than TAGPU_GATHER_SPAN_MAX (tagpu_terr.h) whatever
+   floor the caller holds. The native pass gathers over it; the publisher
+   sizes the tables' reach with it at the reach level; the reach bound clamps
+   the predicted eye with it. One expression for all three. */
+int   tagpu_zoom_gather_span(int v, float z, float floor);
 
 /* The window the game thread publishes about its eye `eye` along one axis of
-   extent `v`: the floor's gather span centred as the pass centres it, plus
+   extent `v`: the gather span at `level` centred as the pass centres it, plus
    TAGPU_GATHER_MARGIN and the lead (v / TAGPU_LEAD_DIV) on each side. `*lo`
    is its first world px and `*span` its width. Pure arithmetic, any thread. */
-void  tagpu_zoom_pub_window(int eye, int v, int* lo, int* span);
+void  tagpu_zoom_pub_window(int eye, int v, float level, int* lo, int* span);
 
-/* The fog bound's cost since the DLL loaded: frames whose predicted eye it
+/* The reach bound's cost since the DLL loaded: frames whose predicted eye it
    held back and the largest hold in world px along either axis; frames it
    drew at the last frame's level so the view would not move against the
-   gesture (`paused`); and frames that moved against it anyway because the
-   grid's own eye had (`back`, the monotone rule's witness). For the native
-   pass's heartbeat. Render thread. */
-void  tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back);
+   gesture (`paused`); frames that moved against it anyway because the
+   packet's own eye had (`back`, the monotone rule's witness); and frames whose
+   level was raised to the reach ladder's (`levelHeld`, "the reach ladder").
+   For the native pass's heartbeat. Render thread. */
+void  tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back,
+                            unsigned* levelHeld);
 
 /* A mouse message on its way into the engine, offered to the wheel first.
    Returns 1 when the wheel took it — the caller must then NOT pass it on.
@@ -239,7 +270,7 @@ void  tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh);
    takes the view back down to 1:1, so a zoom lever left lying in the gamedir
    cannot bend menu clicks. And it POSTS THIS FRAME'S COMMAND RECORD: the level
    and whether it is live (the game thread derives the addressable rect, the
-   minimap box and the scroll rate from them), the anchor's cumulative delta,
+   minimap box and the scroll step from them), the anchor's cumulative delta,
    the camera hold (tagpu_input.c), the follow release, and the replay
    Follow epochs a notch ended and the render thread drew. A frame that drew
    nothing zoomed therefore hands the engine its own rect and rate back at the
@@ -263,7 +294,7 @@ float tagpu_zoom_level(void);
    store to the eye exists inside DrawGameScreen, so nothing moves the camera
    between the apply and the read. In order: the level it carries becomes
    the level every game-thread reader here uses (the minimap rect's scale,
-   the scroll rate); the camera range is chosen — the centre range when
+   the scroll step); the camera range is chosen — the centre range when
    `terr`, the render thread's terrain request that the publisher latches
    for this same draw right after, else the engine's own; the replay's
    Follow ended when the scroll target is not where its last write left it,
@@ -283,14 +314,40 @@ float tagpu_zoom_level(void);
    the minimap's view box recomputed, bit 1 of main+0x142F1 set (the
    minimap's dirty flag) and bit 3 of main+0x14281 cleared (the screen fog
    grid's is-current flag), both safe HERE, on the game thread, and nowhere
-   else; and ScrollSpeed is driven at base/z. `ta` is validated by the
-   caller. */
+   else. `ta` is validated by the caller. */
 void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c, int terr);
+
+/* GAME THREAD: the floor the last apply computed (TAGPU_ZOOM_FLOOR_HI until a
+   level's first apply, and again from its level end). */
+float tagpu_zoom_game_floor(void);
+
+/* GAME THREAD: the level the last apply put in force for every game-thread
+   reader -- the command's level clamped to the game floor. vpwide widens the
+   rect from it. */
+float tagpu_zoom_applied_level(void);
+
+/* GAME THREAD: the level the packet's tables' reach is taken at -- the
+   command's reach rung, clamped to [game floor, TAGPU_ZOOM_FLOOR_HI]; the
+   floor when there is no command. */
+float tagpu_zoom_reach_level(void);
+
+/* GAME THREAD, in place of the engine's one call of its unit hit test
+   (0x48CE15 inside GetUnitAtMouse 0x48CD80, redirected by tagpu_vpwide.c with
+   the widened rect): `0x48C6A0(unit, point)`, or 0 ("not hit") for a unit
+   whose int16 narrowing in that test could wrap. The invariant is in
+   tagpu_zoom.c, "the hit test's guard". stdcall, `ret 8`, as the original. */
+int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point);
+
+/* GAME THREAD: R, the hit guard's radius of model `m` in world px -- the
+   largest corner norm of its root box, plus 2 -- out of the level's table when
+   it is built, else measured on the spot. 0 when there is no model, 0xFFFF
+   past the guard's limit; 0 for an `m` at or past UNITINFOCount. `ta` is the
+   main block, validated by the caller. */
+unsigned tagpu_zoom_hit_radius(const char* ta, unsigned m);
 
 /* GAME THREAD, from the level teardown (the packet publisher's level end):
    the level's camera state handed back — the engine's own range back in
-   force with the eye and the target walked into it, ScrollSpeed restored to
-   the player's own value — before the shell draws; nothing applies a
+   force with the eye and the target walked into it — before the shell draws; nothing applies a
    command again until the next level's first in-play draw. The command
    EPOCH is bumped here and the applied delta reset, so a record posted for
    the old level (a notch in its last frames) carries no delta into the new
@@ -350,8 +407,9 @@ void  tagpu_zoom_follow_stop(unsigned E);
 int   tagpu_zoom_follow_state(unsigned E);
 
 /* GAME THREAD, for the packet the in-play draw publishes: the epoch the apply wrote the camera
-   for and its level x 65536, both 0 when none. */
-void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
+   for and its level x 65536, both 0 when none; and the Follow whose reach cap is
+   in force, 0 when none ("the reach ladder"). */
+void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16, unsigned* last);
 
 /* GAME THREAD: what the apply has done so far, for the packet's
    acknowledgement fields — the last record's cmd_seq, the cumulative delta
@@ -359,6 +417,15 @@ void  tagpu_zoom_follow_pub(unsigned* epoch, unsigned* levelQ16);
    force (the render thread computes the same range from it). */
 void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
                          unsigned* epoch, unsigned* centre);
+
+/* GAME THREAD: the record this draw's tagpu_zoom_apply and tagpu_vpwide_apply take
+   (tagpu_zoom.c, "a mouse record is handled through one view"). */
+const struct TAGPU_CMD* tagpu_zoom_cut_gate(const struct TAGPU_CMD* c);
+/* GAME THREAD: a mega map cut was applied since the last clear. The recorded camera
+   says so on the sample that first shows it (REC_POV_CUT), so a Follow does not blend
+   across it. */
+int   tagpu_zoom_cut_latched(void);
+void  tagpu_zoom_cut_clear(void);
 
 /* ---- the input path ---------------------------------------------------- */
 
@@ -373,7 +440,9 @@ void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
    zoom < 1 the view shows more world than the 1x viewport has room to name, so
    `u` for a pointer in that outer ring falls outside it. There the transform
    returns the pointer UNCHANGED and reports the ring, and the button event is
-   dropped — see to_engine() in tagpu_zoom.c for why identity beats clamping.
+   dropped — see to_engine() in tagpu_zoom.c for why identity beats clamping. A
+   press on the world is dropped as well during the mega map's cut (tagpu_zoom.c,
+   "a mouse record is handled through one view").
 
    The ring is the same boundary the captured marker layers stop at
    (ui-markers.md 6.1): at zoom < 1 everything outside the 1x viewport is

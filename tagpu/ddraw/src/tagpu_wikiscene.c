@@ -169,33 +169,24 @@ void tagpu_wikiscene_fog(const uint8_t* fog, int w, int h, WSCENEFOG* out)
 {
     int bw, bh, bx, bz, i, any = 0;
     out->on = 0;
-    out->cols = out->rows = 0;
-    out->orgx = out->orgz = 16.0f;
+    out->w = out->h = out->stride = 0;
     if (!fog || w < 2 || h < 2 || w > WIKISCENE_MAP || h > WIKISCENE_MAP) return;
     for (i = 0; i < w * h; i++)
         if (fog[i]) { any = 1; break; }
     if (!any) return;
     bw = w >> 1;
     bh = h >> 1;
-    /* the corners of block (bx, bz) are the centres of it and of its right, lower and lower-right
-       neighbours; the far column and row replicate their own block (tagpu_glsl.h, the clamp stops
-       one cell short of the grid). 1 unexplored, 2 grey: the view's 2 is black, its 1 grey. */
+    out->w = bw;
+    out->h = bh;
+    out->stride = tagpu_fog_stride(bw);
+    memset(out->words, 0, (size_t)out->stride * (size_t)bh * sizeof out->words[0]);
+    /* the view's 2 is black (never explored, bit 0), its 1 grey (out of LOS, bit 1) */
     for (bz = 0; bz < bh; bz++)
         for (bx = 0; bx < bw; bx++) {
-            int j, b0 = 0, b1 = 0;
-            /* tl, tr, bl, br: bit j of each mask */
-            for (j = 0; j < 4; j++) {
-                int x = bx + (j & 1), z = bz + (j >> 1), f;
-                if (x > bw - 1) x = bw - 1;
-                if (z > bh - 1) z = bh - 1;
-                f = fog[z * 2 * w + x * 2];
-                if (f == 2) b0 |= 1 << j;
-                else if (f) b1 |= 1 << j;
-            }
-            out->grid[bz * bw + bx] = (uint16_t)(b0 | b1 << 8);
+            int f = fog[bz * 2 * w + bx * 2];
+            uint32_t v = f == 2 ? TAGPU_FOG_UNEXPLORED : f ? TAGPU_FOG_OUTOFLOS : 0u;
+            out->words[bz * out->stride + (bx >> 4)] |= v << (2 * (bx & 15));
         }
-    out->cols = bw;
-    out->rows = bh;
     out->on = 1;
 }
 
@@ -242,7 +233,7 @@ static int model(WSCENEMODEL* m, const WSCENETYPE* types, int ntype, int t, int 
 }
 
 int tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int ntype,
-                           WSCENEMODEL* out, int* nunit)
+                           const WSCENEWRECK* wrecks, int nwreck, WSCENEMODEL* out, int* nunit)
 {
     int n = 0, i, j;
     *nunit = 0;
@@ -262,6 +253,31 @@ int tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int 
             m->nanoOn = (uint8_t)tagpu_nanostage(1.0f - built, (unsigned)i, (unsigned)v->tick,
                                                  &m->nanoT, m->nanoC, &m->nanoWire);
         if (m->nanoOn) m->shadow = WSCENE_SH_NONE;
+        n++;
+    }
+    /* THE GROUND'S 3D FEATURES still standing. The engine's map spawn (SpawnFeatureOnMap 0x423C50,
+       given no position or turn) puts the wreck record at the footprint's centre,
+       ((2 col + fx) << 19, (2 row + fz) << 19) at 0x423E3D..0x423E68, its turn zero at
+       0x423E95..0x423EB7, and tagpu_native.c's husk gather draws it owner 0, unlit, with no shadow
+       of its own, in the features' depth band 3 + 4 row (DISASSEMBLED). */
+    for (i = 0; wrecks && i < nwreck && i < WIKISCENE_WRECKS; i++) {
+        const WSCENEWRECK* w = &wrecks[i];
+        WSCENEMODEL* m = &out[n];
+        int g, gone = 0;
+        if (w->cz < 0 || w->cz + w->fz > v->h) continue;
+        for (g = 0; g < v->ngone && g < WIKISTAGE_FEATS && !gone; g++)
+            gone = v->gone[g][0] == w->cx && v->gone[g][1] == w->cz;
+        if (gone) continue;
+        memset(m, 0, sizeof *m);
+        m->type = (uint8_t)i;
+        m->wreck = 1;
+        m->slot = -1;
+        m->x = (float)((2 * w->cx + w->fx) * 8);
+        m->z = (float)((2 * w->cz + w->fz) * 8);
+        m->cs = 1.0f;
+        m->enc = row_key(m->z, v->h) + 2.0f;
+        m->alpha = 1.0f;
+        m->shadow = WSCENE_SH_NONE;
         n++;
     }
     *nunit = n;

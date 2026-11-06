@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The demo recorder's perspective fixture (demo-recorder-perspective-streams.md). The human's commander stands at the camera's centre, two Peewees north-west of it inside the drag box the fixture draws, and nothing else of the human's on screen; the AI's one solar is far away, so no unit dies. The fixture's keys move the pointer, left-click the commander, right-click the ground, drag-select the Peewees, scroll with an arrow key and turn the wheel once. The camera is not pinned, so the scroll moves it.",
+ "description": "The demo recorder's perspective fixture (demo-recorder-perspective-streams.md). The human's commander stands at the camera's centre, two Peewees north-west of it inside the drag box the fixture draws, and nothing else of the human's on screen; the AI's one solar is far away, so no unit dies. The fixture's keys move the pointer, left-click the commander, right-click the ground, drag-select the Peewees, scroll with an arrow key, turn the wheel once, then engage the mega map with Ctrl and one notch back -- the zoom floor, below 0.25 on this map, so the samples carry a zoom below 16384 -- and leave it with one notch forward. The camera is not pinned, so the scroll moves it.",
  "setup": {
   "map": "Core Prime Industrial Area",
   "res": "1024x768",

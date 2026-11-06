@@ -45,8 +45,9 @@ not claimed identical to the generic upstream DLL. Measured DLL SHA-256 values:
 
 **All** means E/M/P/Z/T. Existing Impure build ghosts, `PreviewPieces=`, health/group/order/range
 markers, wheel world zoom, HUD scaling and replay playback/seeking are already implemented and
-are excluded. The preview row names only the unsupported extensions. The separate megamap is
-listed as a deliberate port exclusion, not planned work.
+are excluded. The preview row names only the unsupported extensions. The megamap is not ported as
+TADR's separate view: Impure's mega map is the world zoom repurposed as a strategic zoom
+([the plan](../mega-map-plan.html), *Why not TADR's design*), and its row says what that covers.
 
 | Feature missing from Impure | Mod enabled? | Enabled mods / condition | Included in bundled TADR? |
 |---|---|---|---|
@@ -66,7 +67,7 @@ listed as a deliberate port exclusion, not planned work.
 | Allies' live resource/income panel | **Yes** | All, in multiplayer with allies | All, including the bundled recorder transport |
 | Enhanced idle/category selection hotkeys and same-type double click | **Yes** | All; TADR enhancements to stock selection | All |
 | F11 configurable sharing/command macro | **Yes** | All; nonempty default macro runs on F11 | All |
-| Separate strategic megamap view — intentionally excluded from the port | **Yes** | All; Impure already has wheel world zoom | All; E alone has the later fixed-feature/dithering enhancements |
+| Megamap — **covered differently**: no separate 2D view; Impure's mega map is the world zoomed out to the whole map, engaged by Ctrl+wheel (the *Mega map wheel* setting, `wheel=megamap`, swaps it with the plain wheel as TADR binds it), with units drawn as strategic icons by BAR's rule and the mod's TADR icon set (`iconcfg.ini`) read from its install ([the plan](../mega-map-plan.html), *Why not TADR's design*) | **Yes** | All | All; E alone has the later fixed-feature/dithering enhancements |
 | Building/factory placement rotation and directional build-menu choices | **No** | No mod has active `Rotations=` definitions | E/T; absent M/P/Z |
 | Extra build-preview keys — **partial**: `PreviewObject3D`, `PreviewPiecesS/E/N/W`, `PreviewFaceOpponent` | **Yes** | E uses `PreviewFaceOpponent=1` in 12 units; ordinary ghosts and `PreviewPieces=` already work in Impure | E/T contain the preview extensions; absent M/P/Z |
 | Accessible Chat backdrop and legible chat font | **No by default** | E has the option, default off; no shipped override | E only |

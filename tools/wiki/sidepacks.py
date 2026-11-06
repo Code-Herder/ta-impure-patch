@@ -13,12 +13,17 @@ pack's layout into tools/wiki/mockup/sim.js's checkLayout under node, the bound 
 one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
 what pins it.
 
+From the stock pack it also writes the fixture layouts' `sight` (art/wiki/side/fixture.json and fixture-tall.json),
+the stock game's sight table as gfx.py reduces it to count grids -- the tables the stock castings and the tree's players
+entries reach -- so that the wiki's fallback layout lights what the stock game lights (`fixture_sight`).
+
 This mapping is test tooling; the picture rule and the cast rule in gfx.py name no mod. `unknown`
 has no pack: the mockup gives it the fixture layout.
 """
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +34,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 OUT = HERE / "mockup" / "gfx"
 ENTRIES = REPO / "art" / "wiki" / "entries"
+FIXTURES = [REPO / "art" / "wiki" / "side" / f for f in ("fixture.json", "fixture-tall.json")]
 SIM = HERE / "mockup" / "sim.js"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "tools" / "compat"))
@@ -121,23 +127,33 @@ def check_layout(pack: Path):
 
 # An entry unit's figure and the value an absent key stands for: what the bound entry takes from the casting. The
 # casting carries every FBI's EnergyMake (a construction kbot's 8 among them), and the sims read energyMake only as a
-# geothermal plant's strength, so it is compared where the entry states it and nowhere else.
+# geothermal plant's strength, so it is compared where the entry states it and nowhere else; so are the economy's
+# figures, which only a game entry's economy reads.
 FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
            ("canstop", 0), ("canreclamate", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
+STATED = ("energyMake", "energyUse", "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage",
+          "sightDistance", "radarDistance", "sonarDistance", "modelHeight")
 
 
 def stock_identity(pack):
-    """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast: every entry unit's
-    `cast` is bound to that unit's own type, with the entry's figures and name, and builds the casts the entry says it
-    builds. Binding stock's entries to stock's casting then changes nothing, which is the check that keeps the
-    general rule honest (gfx.py `side_casting`). Returns the differences."""
-    casting = pack["casting"][0]["casts"]
+    """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast, and its second
+    ([SIDE1]) for a game entry's rival units: every entry unit's `cast` is bound to that unit's own type, with the
+    entry's figures and name, builds the casts the entry says it builds among its own side's units, and leaves the
+    wreck the entry's features table gives it. Binding stock's entries to stock's casting then changes nothing, which
+    is the check that keeps the general rule honest (gfx.py `side_casting`). Each side's commander is its own
+    (sidedata's `commander`). Returns the differences."""
     bad = []
+    for side in pack["casting"][:2]:
+        cmd = side["casts"].get("commander")
+        if not cmd or cmd["type"].lower() != side["commander"].lower():
+            bad.append(f"the stock {side['side']} commander is {cmd and cmd['type']}, sidedata names {side['commander']}")
     for f in sorted(ENTRIES.glob("*.json")):
         e = json.loads(f.read_text())
-        units = e["units"]
-        used = {v.get("cast") for v in units.values()}
+        units, feats = e.get("units") or {}, e.get("features") or {}
         for t, u in units.items():
+            rival = u.get("rival") is True
+            casting = pack["casting"][1 if rival else 0]["casts"]
+            used = {v.get("cast") for v in units.values() if (v.get("rival") is True) == rival}
             at, c = f"{e['id']} {t}", u.get("cast")
             if c not in casting:
                 bad.append(f"{at}: its cast {c!r} is none of {', '.join(casting)}")
@@ -149,7 +165,7 @@ def stock_identity(pack):
             if got["type"].lower() != t.lower():
                 bad.append(f"{at}: the stock {c} is {got['type']}")
                 continue
-            figures = FIGURES + ((("energyMake", None),) if "energyMake" in u else ())
+            figures = FIGURES + tuple((k, None) for k in STATED if k in u)
             for key, absent in figures:
                 if got[key] != u.get(key, absent):
                     bad.append(f"{at}: {key} {got[key]!r} in the casting, {u.get(key, absent)!r} in the entry")
@@ -165,7 +181,34 @@ def stock_identity(pack):
             want = sorted(units[b]["cast"] for b in u.get("builds", []) if b in units and "cast" in units[b])
             if have != want:
                 bad.append(f"{at}: builds {have} of the entry's casts in the casting, {want} in the entry")
+            if "corpse" in u:
+                wreck, row = got.get("corpse"), feats.get(u["corpse"], {})
+                mine = {"name": u["corpse"], "footprint": row.get("footprint"), "metal": row.get("metal", 0),
+                        "energy": row.get("energy", 0), "height": row.get("height", 0),
+                        "blocking": row.get("blocking", False), "reclaimable": row.get("reclaimable", False),
+                        "object": row.get("object")}
+                if wreck != mine:
+                    bad.append(f"{at}: the wreck {wreck} in the casting, {mine} in the entry")
     return bad
+
+
+def fixture_sight(pack):
+    """The stock pack's sight table written into each fixture layout as its `sight`, in place of the one it holds, one
+    stored table ({idx, cells}) a line before `screens`. Returns the files it changed."""
+    sight = pack["layout"].get("sight")
+    if sight is None:
+        return []
+    block = '  "sight": {"numtables": %d, "tables": [\n%s\n  ]},\n' % (
+        sight["numtables"], ",\n".join("    " + json.dumps(t, separators=(",", ":")) for t in sight["tables"]))
+    changed = []
+    for f in FIXTURES:
+        text = f.read_text()
+        new = re.sub(r'  "sight": .*?\n(?=  "screens": )', lambda m: block, text, flags=re.S) if '  "sight": ' in text else \
+            text.replace('  "screens": ', block + '  "screens": ', 1)
+        if new != text:
+            f.write_text(new)
+            changed.append(f.name)
+    return changed
 
 
 def main(argv=None):
@@ -210,9 +253,19 @@ def main(argv=None):
         print(f"  {msg}")
         failed += not ok
         if mod == "stock":
-            bad = stock_identity(json.loads((out_root / "side" / mod / "side.json").read_text()))
+            pack = json.loads((out_root / "side" / mod / "side.json").read_text())
+            bad = stock_identity(pack)
             print("  stock identity: " + ("ok" if not bad else "FAILED\n    " + "\n    ".join(bad)))
             failed += bool(bad)
+            # the fixtures are written only from the packs the mockup reads, never from a scratch --out
+            if pack["layout"].get("sight") is None:
+                print("  fixture sight: FAILED, the stock pack has no sight table")
+                failed += 1
+            elif args.out:
+                print("  fixture sight: not written (--out)")
+            else:
+                changed = fixture_sight(pack)
+                print("  fixture sight: " + (f"{', '.join(changed)} written" if changed else "unchanged"))
     return 1 if failed else 0
 
 

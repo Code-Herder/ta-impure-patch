@@ -496,7 +496,7 @@ a second decoder gives its records back byte for byte, else the records. Both re
 alone (decision 6); format 9 (L2, below) keeps all of it and replaces the projectiles' section. The bytes, the reset points, the fallback and the refusals are the skirmish
 slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); every engine fact the rules rest on
 is in the engine map's
-[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+[*The demo recorder's unit frame*](../engine/units.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
 
 **Where it departs from the plan above**, each decided in the building:
 
@@ -602,7 +602,7 @@ reset points, from the reader's units and pool. No header entry is added: the fr
 parameter is RT_PROJECTILES, which every header carries. Both readers take format 9 alone
 (decision 6); format 8 was never published. The bytes are the skirmish slice's
 [*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine map's
-[*The demo recorder's pool frame*](../exe-reverse-engineering.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
+[*The demo recorder's pool frame*](../engine/weapons.md#the-demo-recorders-pool-frame-the-engine-facts-it-predicts-from-disassembled-measured-2026-10-08).
 
 **Where it departs from the plan above**, each decided in the building:
 
@@ -724,7 +724,7 @@ its section's write declines the block. The `RecSecHead` is 40 bytes. L3's reade
 alone (decision 6), as L4's take format 11 alone; format 9 was never published. The bytes and the refusals are the skirmish
 slice's [*The file*](demo-recorder-skirmish-slice.md#the-file); the engine facts are the engine
 map's
-[*The demo recorder's record frames*](../exe-reverse-engineering.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10).
+[*The demo recorder's record frames*](../engine/recorder.md#the-demo-recorders-record-frames-the-engine-facts-they-predict-from-disassembled-measured-2026-10-10).
 
 **Where it departs from the plan above**, each decided in the building:
 
@@ -969,7 +969,7 @@ from the thirteenth on.
 These four are the unit's energy and metal **requested** and **granted** since its owner's last
 economy pass, float accumulators that each build, repair or stockpile step and each weapon shot
 that costs a resource adds to, and that the 30-tick pass zeroes (the engine map's
-[ledger](../exe-reverse-engineering.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
+[ledger](../engine/weapons.md#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29), *The ledger* `unit+0xBC`: every writer and the settle,
 DISASSEMBLED 2026-10-10). Packed, they are half the unit frame (*The unit frame by lane*, below).
 Format 12 predicts them from those rules (*L5a*, below): the granted is bit for bit the requested
 from a pass on until the first refused request or the first payment made at once (a weapon shot, a
@@ -1175,7 +1175,7 @@ first value after a zero. A slot whose four ledger lanes are not all zero never 
 skipping a resting slot identical to evaluating it (the argument beside `slot_advance`). The sum is
 single precision done in integers, `reccodec_f32_add`, rounded to nearest even: the sum the FPU
 gives at any precision control, so no thread's control word reaches the format. The rules and
-their engine facts: the engine map's [unit frame](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
+their engine facts: the engine map's [unit frame](../engine/units.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08).
 
 **Measured** (2026-10-11, the heavy hour's records converted to format 12 and transcoded natively at
 1,800): 56,986,121 → 42,152,970 bytes (−26 %), the unit frame packed 28.16 → 13.73 MB, 3,604 blocks
@@ -1581,7 +1581,7 @@ alone in the x86-64 build with the sanitizers, none firing.
 ## P4: the unit frame's type rules, measured
 
 **What format 19 changes.** The unit frame gains six rules, each the engine's (the engine map's
-[*The demo recorder's unit frame*](../exe-reverse-engineering.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08)
+[*The demo recorder's unit frame*](../engine/units.md#the-demo-recorders-unit-frame-the-engine-rules-it-predicts-from-disassembled-measured-2026-10-08)
 gives the addresses and how each was read):
 
 - the **hit points while built** (`+0x108`): the build step `0x41BA60` adds `trunc(fo·M) −

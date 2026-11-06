@@ -14,7 +14,7 @@ void tagpu_wikitext_words(WIKIWORDS* w, const WIKIENTRY* e, const WIKICASTING* c
             continue;
         }
         for (i = 0; e && i < e->ndef; i++)
-            if (e->def[i].cast == c) {
+            if (e->def[i].cast == c && !e->def[i].rival) {
                 w->cast[c] = e->def[i].title && e->def[i].title[0] ? e->def[i].title : e->def[i].name;
                 break;
             }

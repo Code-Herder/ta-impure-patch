@@ -208,15 +208,6 @@ static float        s_depthMat[16];
    frame has zero behind it. */
 static float        s_lastNanoT, s_lastNanoC[3];
 
-/* THE FOG GRID'S COPY. `cells` is what the packet allocated for this grid,
-   so the read is bounded by the allocation it reads from; the cap
-   (TAGPU_PD_FOG_MAXDIM) bounds OUR allocation, and the Vulkan pass re-checks
-   it because a bound in one file is a bound only while both are read
-   together. */
-#define PD_FOG_MAXDIM TAGPU_PD_FOG_MAXDIM
-static unsigned short* s_fogCopy;
-static int             s_fogCopyCells;
-
 /* the A/B lever, the same shape as every other ported pass's */
 #define PD_ABFILE "tagpu_posedraw.ab"
 static int          s_ab, s_abDone;
@@ -270,33 +261,6 @@ int tagpu_posedraw_other_forecast(void) { return s_other + s_otherLast; }
    TAGPU_SHADOWHAND. */
 int tagpu_posedraw_shadow_on(void) { return 0; }
 
-/* WHETHER THE HAND-OVER CARRIES THIS GRID, with the room for its copy made:
-   the test the publish copies against and the forecast asks, so the two are
-   one. `cells` -- not cols*rows -- is what the packet allocated, so it is the
-   bound the copy is read against; the cap bounds OUR allocation, and the
-   copy only grows, so a grid this has answered for is one the publish
-   copies. */
-static int pd_fog_room(const unsigned short* g, int cols, int rows, int cells)
-{
-    int want;
-    if (!g || cols < 1 || rows < 1 || cols > PD_FOG_MAXDIM || rows > PD_FOG_MAXDIM)
-        return 0;
-    want = cols * rows;
-    if (want > cells) return 0;
-    if (want > s_fogCopyCells) {
-        unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
-        if (!n) return 0;
-        s_fogCopy = n; s_fogCopyCells = want;
-    }
-    return 1;
-}
-
-int tagpu_posedraw_fog_carried(void)
-{
-    int cols = 0, rows = 0, cells = 0;
-    const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
-    return pd_fog_room(g, cols, rows, cells);
-}
 
 /* THE MIRRORS THROUGH THE HAND-OVER'S OWN READERS: `tagpu_posedraw_atlas_hand`
    is what the hand-over fills its atlas and palette with, and `shadeK` is
@@ -826,8 +790,6 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.scafP[0] = v->scafP[0]; s_pub.scafP[1] = v->scafP[1];
     s_pub.scafP[2] = v->scafP[2]; s_pub.scafP[3] = v->scafP[3];
     s_pub.ss = v->ss;
-    s_pub.fogOrgX = v->fogOrg[0]; s_pub.fogOrgY = v->fogOrg[1];
-    s_pub.fogCols = v->fogDim[0]; s_pub.fogRows = v->fogDim[1];
     s_pub.lambert = 0;                 /* never set -- see the header */
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
@@ -879,16 +841,6 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        publish, so a capture here would be a snapshot taken before the frame
        has finished writing it. See the handover for the ordering. */
     s_pub.shadeK = tagpu_r3d_shade_k();
-    {   /* THE GRID IS COPIED. It points into a frame packet the game thread
-           reuses; `pd_fog_room` is the bound and the room. */
-        int cols = 0, rows = 0, cells = 0;
-        const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
-        if (pd_fog_room(g, cols, rows, cells)) {
-            memcpy(s_fogCopy, g, (size_t)cols * rows * 2);
-            s_pub.fogGrid = s_fogCopy;
-            s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
-        }
-    }
 
     s_pub.depthOn = s_depthOn;
     if (s_depthOn) memcpy(s_pub.castMat, s_depthMat, sizeof s_pub.castMat);

@@ -129,7 +129,7 @@ render-loop iteration (`tagpu_vk_pass.h`). What ties each to the one game scene 
 | `tagpu_vk_terr.c` (2 064 lines, ~53 statics) | `tagpu_terr_handover`, one a frame | per-slot uniform and instance buffers and descriptor sets (`s_slot[]`); one shared base atlas and height grid, retired behind a per-slot visit mask; the restorer job; latches |
 | `tagpu_vk_feat.c` (1 729, ~45) | `tagpu_feat_handover`; the atlas protocol `tagpu_feat_atlas_hand/owed/ack` | per-slot buffers and sets; one base atlas; the atlas's single acked serial (`tagpu_gaf_atlas_ack`) |
 | `tagpu_vk_unit.c` (4 007, ~73) | `tagpu_posedraw_handover`; vertices by `tagpu_posebake_geom_mirror/mat_mirror` | per-slot pose and uniform buffers and sets; the vertex-buffer cache keyed on bake serials; one unit atlas copy and its ack (`tagpu_posedraw_atlas_ack` → `tagpu_r3d_atlas_ack`); the effects-model hold; the shadow and scaffold bindings |
-| `tagpu_posedraw.c` (1 364) | called by `tagpu_native.c`; reads `tagpu_native_foggrid`, `tagpu_native_scissor_on` | one recording window and one hand-over a frame; its arenas |
+| `tagpu_posedraw.c` (1 364) | called by `tagpu_native.c`; reads `tagpu_native_scissor_on` | one recording window and one hand-over a frame; its arenas |
 | `tagpu_posebake.c` (980) | PK_PIECE runs naming template nodes | caches sized for the game's frame (`TAGPU_PB_FRAMEMAX` = units + wrecks + builds + 1) with the "never evict what this frame asked for" bound; latched level and atlas generations |
 | `tagpu_render3do.c` (577) | face records and GAF frames | one unit atlas (`s_atlas`), its per-frame paint allowance and its single consumer's ack |
 | `tagpu_vk_world.c` (1 293) | `tagpu_native_worldtgt` (`gw`, `gh`, `ss`, the destination rect) | one colour+depth target per slot; the composite into the viewport rect, with the engine's Gamma curve (`tagpu_pal_gamma`) |
@@ -139,8 +139,10 @@ render-loop iteration (`tagpu_vk_pass.h`). What ties each to the one game scene 
   hand-over fields; `terr_scissor`, `tagpu_vk_world.h`), and TA's camera is the fixed oblique shear
   `screen y = world z − height/2` ([tascene](tascene-design.html), *Decisions locked*). A second
   camera is a second set of numbers, not new code.
-- **Palette and fog are hand-over fields** (`pal`/`palSerial`, `fogGrid`), except that
-  `tagpu_posedraw.c` asks `tagpu_native_foggrid` directly.
+- **The palette is a hand-over field** (`pal`/`palSerial`); the fog is not: every world pass
+  samples its scene's fog image (`tagpu_vk_fog.c`, one a frame slot), which the seam prepares from
+  the scene's fog source — `tagpu_native_fogsrc()` for the game's, `tagpu_wikiworld_fogsrc()` for
+  the stage's.
 - **A second scene through the same instances would be corrupted, not merely wrong**:
   - a second `prepare` on the same slot overwrites mapped uniform, instance and pose buffers that
     the first scene's draws, recorded in the same command buffer, have not read yet;
@@ -173,7 +175,8 @@ each of the seven, does four things under `TAGPU_SCENE_WIKI` and nothing otherwi
    wiki instances stay among them.
 2. **Points the hand-over sources at the wiki's producer**: `tagpu_terr_handover`,
    `tagpu_feat_handover`, `tagpu_feat_atlas_hand/owed/ack`, `tagpu_native_worldtgt`,
-   `tagpu_native_foggrid`, `tagpu_native_scissor_on` → `tagpu_wikiworld_*`.
+   `tagpu_native_scissor_on` → `tagpu_wikiworld_*`. (The fog image, `tagpu_vk_fog.c`, is an
+   eighth file compiled twice; the seam hands each instance its own scene's source.)
 3. **Points every call into a game-only module at an inert answer**: the shadow map, the scaffold,
    the effects pass, the Classic++ restorer and its switches (`tagpu_classicpp_on`,
    `_assets`), and the A/B lever answer "none" (`tagpu_wikiworld.c`'s stubs; the wiki's
@@ -449,12 +452,14 @@ its length; TNT offsets and tile indices against the file and its count; GAF dim
 
 ### 7. Fog
 
-- **Terrain and features take the engine's fog**: the producer builds the stage's fog grid in the
-  engine's own form — 32-px cells, two 4-bit corner masks, unexplored and grey (`0x4843C0`;
-  `tagpu_glsl.h` *TAGPU_GLSL_FOG_UNIFORMS*) — from the record's fog cells, with corners at the
-  centres of 32-px blocks (`uFogOrg` (16, 16)). The scenes' fog rects are whole tiles (question 5),
-  so each block is uniform, and a straight fog edge falls on the rect's edge exactly. A rect's
-  corner is rounded, as the engine feathers it.
+- **Terrain and features take the engine's fog**: the producer writes the stage's fog source in
+  the game's format (`inc/tagpu_fogsrc.h`: one cell a 32-px block, bit 0 unexplored, bit 1 grey)
+  from the record's fog cells, and the passes expand it as the game's are expanded — the engine's
+  corner masks (`0x4843C0`; `tagpu_glsl.h` *TAGPU_GLSL_FOG_FN*), corners at the centres of 32-px
+  blocks. The expansion equals the mockup's grid (`scene.js` `fogGrid`) byte for byte, which
+  `tools/wiki/scenecheck.mjs` checks on every demo. The scenes' fog rects are whole tiles
+  (question 5), so each block is uniform, and a straight fog edge falls on the rect's edge exactly.
+  A rect's corner is rounded, as the engine feathers it.
 - **Units and ghosts take no fog** (`fog` 0): the player's own units are never fogged in the game,
   and the simulation has no line of sight, so a building raised under grey fog must stay visible.
 - When the ground falls back, fog is R1's whitebox overlay, as today.
@@ -872,7 +877,8 @@ and the engine's fog; units still as whitebox boxes, now over the 3D ground (R2)
   orders them, and the atlas's border and pitch are the terrain pass's), and the features' own
   `TAGPU_GAFATLAS` (512 square, 128 entries, a key plane, no allowance) painted then, with every
   quad's six vertices as `emit_frame` makes them; every frame the fog grid and the three
-  hand-overs. A stage with a 3D feature falls back whole (no unit pass is drawn yet). The lever
+  hand-overs. A 3D feature is no part of the ground: the unit pass draws it (the reclaim entry's
+  L4, [its plan](ingame-wiki-reclaim-plan.html)). The lever
   `tagpu_wiki3d.on`: `off`, `nomap`, `nofeat`.
 - `src/tagpu_scene_wiki.h` (new): the seam's declarations of the wiki's world, terrain and feature
   entry points, written out and checked: `tagpu_wikiworld.c`, compiled with `TAGPU_SCENE_WIKI`,
@@ -945,8 +951,8 @@ and the engine's fog; units still as whitebox boxes, now over the 3D ground (R2)
   corner, grey fog over the lower-left patch, the whitebox boxes, brackets and squares over the
   image, nothing torn or offset.
 
-**Not done here**: units, ghosts and 3D features in the image (6h); a stage whose description
-names a 3D feature is drawn as the whitebox. The image's composite is LINEAR over a rect snapped to
+**Not done here**: units and ghosts in the image (6h), and 3D features (the reclaim entry's L4,
+[its plan](ingame-wiki-reclaim-plan.html)). The image's composite is LINEAR over a rect snapped to
 whole pixels, so the image may sit up to half a pixel from the fit; the mockup snaps it the same
 way, and the ops are drawn from the unsnapped fit in both.
 
@@ -979,8 +985,9 @@ the game's options give them; a type the running game does not have stays a box.
   on the engine's lit rows from its vertex normals, any other unit on the neutral row; a textured
   quad mapped and shaded over its own frame; the nanoframe's wire on the line grid thickened to
   `ss`.
-- 3D features through the unit path are **not built**: no stage names one, and both sides still
-  fall back to the whitebox for one.
+- 3D features through the unit path were built afterwards, by the reclaim entry's L4
+  ([its plan](ingame-wiki-reclaim-plan.html)): a record per standing feature, between the units and
+  the ghosts.
 
 **Invariants**: every node pointer handed to the wiki bake lies inside the arena, which the
 producer checks before the call (a bound on a value, not a probe); the wiki bake sees only the

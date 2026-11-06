@@ -808,8 +808,10 @@ static void takeover(C* c, R tb)
 /* ---- live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it
    opens under the bar over the paused game -- the transport, the track up to now, the time, Play
    from here and Back to now. The button is placed in the top bar's own pixels (entry.bar tall),
-   scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). The sprocket is
-   the engine's art and the engine draws it, so the mockup's stand-in for it is not drawn here.
+   scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). It is an emblem
+   with no plate behind it: its part is the whole button and its pressed part the whole button
+   down, with no icon on a face. The sprocket is not drawn here: the wiki's layer draws it beside
+   the wiki button (tagpu_wikilay.c, wiki_button).
    THE BUTTON IS THE TOP LAYER (HOPF_TOP): the engine's UI paints the whole bar, so an op under it
    would be painted over, and the Vulkan pass draws this layer after the UI composite.
    THE STRIP IS THE TOP LAYER TOO: the engine draws its message lines at the world's top left, in
@@ -841,7 +843,6 @@ static void live(C* c)
 
     memset(&b, 0, sizeof b);
     b.key = "rewind";
-    b.icon = obj(c, E, "icon");
     c->top = 1;
     button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
     c->top = 0;
@@ -932,6 +933,49 @@ int tagpu_hudlay_headed(const HUDSTATE* st)
     for (t = 0; t < st->nteam && t < HUD_MAXSEAT; t++)
         if (st->team_n[t] > 1) return 1;
     return 0;
+}
+
+/* a sample read from the recording: one that is not a finite number is drawn as 0 */
+static float sample(float v)
+{
+    return v == v && v < 1e30f && v > -1e30f ? v : 0.0f;
+}
+
+void tagpu_hudlay_stat_groups(HUDSTATE* st, const float* v, int nrow, int stride, const uint32_t* team_rgb, int nteam_rgb)
+{
+    HUDSTATS* S = &st->stats;
+    int i, j, k;
+    if (S->npt > HUD_MAXPT) S->npt = HUD_MAXPT;
+    if (S->npt > stride) S->npt = stride;
+    if (!v || nrow <= 0 || S->npt < 0) S->npt = 0;
+#define AT(seat_, k_) v[(size_t)((seat_) % nrow) * (size_t)stride + (size_t)(k_)]
+    if (!S->team) {
+        S->ngroup = st->nseat < HUD_MAXSEAT ? st->nseat : HUD_MAXSEAT;
+        for (i = 0; i < S->ngroup; i++) {
+            HUDGROUP* g = &S->group[i];
+            memcpy(g->name, st->seat[i].name, sizeof g->name);
+            g->colour = st->seat[i].colour;
+            g->death = -1.0f;
+            for (j = 0; j < st->nmark && j < HUD_MAXMARK; j++)
+                if (st->mark[j].kind == HUD_MK_DEATH && st->mark[j].seat == i && (g->death < 0 || st->mark[j].t < g->death))
+                    g->death = st->mark[j].t;
+            for (k = 0; k < S->npt; k++) g->v[k] = sample(AT(i, k));
+        }
+        return;
+    }
+    S->ngroup = st->nteam < HUD_MAXSEAT ? st->nteam : HUD_MAXSEAT;
+    for (i = 0; i < S->ngroup; i++) {
+        HUDGROUP* g = &S->group[i];
+        snprintf(g->name, sizeof g->name, "Team %d", i + 1);
+        g->colour = team_rgb && nteam_rgb > 0 ? team_rgb[i % nteam_rgb] : 0x808080;
+        g->death = -1.0f;
+        for (k = 0; k < S->npt; k++) {
+            float s = 0;
+            for (j = 0; j < st->team_n[i] && j < HUD_MAXSEAT; j++) s += sample(AT(st->team_seat[i][j], k));
+            g->v[k] = s;
+        }
+    }
+#undef AT
 }
 
 static void header(C* c, int t, double ox, double oy);

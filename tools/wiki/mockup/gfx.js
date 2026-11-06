@@ -9,8 +9,8 @@
    controls strip says so.
 
    What the image holds, in the world passes' order (tagpu_vk.c `world_records`):
-   - the terrain from the stage description's tiles and the features (deposits, vents), both under the engine's fog
-     grid (scene.js) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
+   - the terrain from the stage description's tiles and the features (deposits, vents), both under the fog source
+     (scene.js fogSource) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
      draws its whitebox ground under an image that is clear there;
    - every unit with a resolved model, its Classic silhouette or slant shadow first, then the bodies, a nanoframe in
      the engine's staging and then its wire; units take no fog. A unit whose script poses it (the frame's `poses`,
@@ -115,9 +115,9 @@ window.WikiGfx = (() => {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
     if (!gl) throw new Error('no WebGL2 context');
     const ground = !!d.T;
-    // the shared textures: the palette (unit 1) and the fog grid (unit 2, rewritten each frame)
+    // the shared textures: the palette (unit 1) and the fog source (unit 2, R32UI, rewritten each frame)
     TR.tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, d.pal);
-    const fogTex = TR.tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
+    const fogTex = TR.tex2D(gl, 2, gl.R32UI, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, new Uint32Array([0]));
     let terr = null, tiles = null, spr = null, sprVBO = null, anchors = [];
     if (ground) {
       TR.tex2D(gl, 0, gl.R8, pack.map.atlas.w, pack.map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.T[0]);
@@ -234,13 +234,13 @@ window.WikiGfx = (() => {
        Returns { complete, ground, resolved }. */
     function render(v, tick, poses) {
       const sc = WS.build(v, pack, tick);
-      const fog = sc.fog;
+      const fog = WS.fogSource(v.map.fog, +v.map.w || 0, +v.map.h || 0);
       const f = { GW, GH, zoom: 1, zoomC: [0, 0], depth: pack.depth, vp: [0, 0, GW, GH], SS,
-                  fog: fog ? 1 : 0, fogOrg: fog ? fog.org : [0, 0], fogDim: fog ? fog.dim : [1, 1] };
+                  fog: fog ? 1 : 0, fogSize: fog ? fog.size : [0, 0] };
       if (fog) {
         gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, fogTex);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, fog.dim[0], fog.dim[1], 0, gl.RG, gl.UNSIGNED_BYTE, fog.grid);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, fog.stride, fog.size[1], 0, gl.RED_INTEGER, gl.UNSIGNED_INT, fog.words);
         gl.activeTexture(gl.TEXTURE0);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -277,16 +277,16 @@ window.WikiGfx = (() => {
           spr.draw(got.shadow.length / TR.SVST, got.body.length / TR.SVST, got.shadow.length / TR.SVST);
         }
       }
-      const recs = sc.units.concat(sc.ghosts);
+      const recs = sc.units.concat(sc.wrecks, sc.ghosts);
       let refused = 0;
       if (cu && recs.length && layer('units')) {
         /* THE GAME'S SHADE RULE (tagpu_wikiworld.c `unit_one`, tagpu_posedraw.c VS): a structure, and every ghost, on
-           the engine's lit rows from its vertex normals; any other unit on the neutral row. The stage takes the
-           Shading option as on, the game's default. A posed record's arrays are its own this frame, under a key of
-           its slot's. */
+           the engine's lit rows from its vertex normals; any other unit, and a 3D feature (tagpu_native.c's husk:
+           lit 0), on the neutral row. The stage takes the Shading option as on, the game's default. A posed record's
+           arrays are its own this frame, under a key of its slot's. */
         const meshOf = { ...d.meshes }, slantOf = { ...d.slants }, wireOf = { ...d.wires }, posedKeys = [];
         const inst = recs.map(r => {
-          const lit = r.ghost || !(pack.units.meshes[r.type] || {}).mobile, pz = posedOf(r, poses);
+          const lit = !r.feature && (r.ghost || !(pack.units.meshes[r.type] || {}).mobile), pz = r.feature ? null : posedOf(r, poses);
           if (!pz) return { ...r, type: r.key, agl: 0, yaw: held(r.yaw), engineShade: { lit, normals: d.normals[r.key], quad: d.quads[r.key] } };
           const key = `${r.key}@${r.slot}`;
           meshOf[key] = pz.mesh; slantOf[key] = pz.slant; wireOf[key] = pz.wire; posedKeys.push(key);
@@ -385,12 +385,19 @@ window.WikiGfx = (() => {
       return { canvas: st.canvas, ...r };
     } catch (x) { console.error('wiki gfx:', x); stages[key] = { error: x }; return null; }
   }
-  // what a scripted check reads: whether an entry's stage has settled -- drawn in 3D, or failed and so whitebox -- or,
-  // with the graphics off or gfx/ absent, that nothing is coming
-  const ready = entry => { const st = stages[shown[entry]]; return mode !== 'game' || state === 'missing' ||
-    (state === 'ready' && !!st && !(st instanceof Promise)); };
+  /* what a scripted check reads: whether an entry's stage has settled -- 'ready' once it is drawn in 3D, or failed and
+     so whitebox, or with the graphics off or gfx/ absent, when nothing is coming; 'pending' while a fetch it waits on
+     is in flight; else why it never will be. Every fetch here resolves or fails, so a check may wait for anything but
+     'pending' with no deadline */
+  const settled = entry => {
+    if (mode !== 'game' || state === 'missing') return 'ready';
+    if (state !== 'ready') return 'pending';
+    if (!index || !index.entries || !index.entries[entry]) return `no stage ${entry} in ${BASE}index.json`;
+    const st = stages[shown[entry]];
+    return !st || st instanceof Promise ? 'pending' : 'ready';
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', control); else control();
   if (mode === 'game') load();
-  return { frame, url, on, ready, state: () => state, SS };
+  return { frame, url, on, settled, state: () => state, SS };
 })();

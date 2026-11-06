@@ -36,9 +36,9 @@ session unless a note is cited), **MEASURED** (with the numbers), **[INFERRED]**
 | E4 | **The world point `main+0x2CAA`** is three 16.16 dwords: x at `+0x2CAA`, height at `+0x2CAE` and z at `+0x2CB2`. `GetTPosition 0x484B50` writes it, called at `0x498EF9` with `main+0x2CAA` (`0x498EF1`). The tail shifts `+0` and `+8` right by `0x14` into the cell pair (`0x498F0A..0x498F2E`), and DrawGameScreen reads the integer halves `+0x2CAC/+0x2CB0/+0x2CB4` as words (`0x468DC4..0x468DD2`). The only other direct writer is the console command `0x416860`, which adds to x and z (`0x4168A4`, `0x4168BA`). In Impure, `0x499221` is vpwide's `vpw_mouse_world`, which hands the engine its unzoomed point, and `0x498EF9` is the zoom's GetTPosition guard. **So the point is the world point under the true pointer at any zoom, clamped inside the map.** | DISASSEMBLED, a displacement scan of the image. Sites that pass the address as an argument (`0x41781E`, `0x417873`, `0x41789F`, `0x4179ED`, `0x417A44`, `0x4196A8`, `0x4197F7`, `0x48D095`, `0x48D3D4`, `0x499073`, `0x4991E4`) were not followed |
 | E5 | **Region bits `main+0x2CC6`:** bit 0 is the minimap (`0x498DE4`, cleared `0x498E8E`), bit 1 the world viewport (`0x498EBC`), and bit 2 either of them (`0x498EE6`). | DISASSEMBLED |
 | E6 | **The two click actions each have exactly one call site in the image.** The left click's action `0x498F70` is called only at **`0x4995B3`** (`e8 b8 f9 ff ff`). It is reached from a command-mode left press (`0x4993C5..0x4993D0`), a short, still left release (fewer than 25 clock units and 32 px; `0x499435..0x499441`, then `0x4995AE`), and an Interface-Type-0 minimap press (`0x4995AA`). The right button's press `0x499100` is called only at **`0x4993AC`** (`e8 4f fd ff ff`), on `WM_RBUTTONDOWN` (`0x49939F`) unless `[main+0x2CDF]` (`0x499387`). Both take the stack copy of the record, whose wParam is at `+8`. When they run, E2 has already stored this message's world point, region and cursor index. | DISASSEMBLED, a full-image scan of `call`/`jmp` to both entries. Impure's `order_check` calls `0x499100` directly from the DLL, which is not a click |
-| E7 | **The camera.** The eye is `main+0x1431F/+0x14323`, the scroll target `main+0x14327/+0x1432B`, and the 1x view `W`/`H` `main+0x37E37/+0x37E3B`. Every camera move a player makes writes the target: the nine eye writers copy the eye into it, the smooth centre-ons store it, and the stepper's follow source writes it. Only the stepper's ease and **the shake `0x41C6F0`** move the eye alone. The shake adds an offset at `0x41C784`/`0x41C797` while `main+0x1434E` bit 0 is set and `main+0x14333 > 0`, with random values from `0x4E4870` [INFERRED: the C runtime's `rand`]. | The [camera module](../exe-reverse-engineering.md#the-camera-module--mapped-by-us) (DISASSEMBLED 2026-09-23/24); `0x41C6F0` re-read this session |
+| E7 | **The camera.** The eye is `main+0x1431F/+0x14323`, the scroll target `main+0x14327/+0x1432B`, and the 1x view `W`/`H` `main+0x37E37/+0x37E3B`. Every camera move a player makes writes the target: the nine eye writers copy the eye into it, the smooth centre-ons store it, and the stepper's follow source writes it. Only the stepper's ease and **the shake `0x41C6F0`** move the eye alone. The shake adds an offset at `0x41C784`/`0x41C797` while `main+0x1434E` bit 0 is set and `main+0x14333 > 0`, with random values from `0x4E4870` [INFERRED: the C runtime's `rand`]. | The [camera module](../engine/input.md#the-camera-module-mapped-by-us) (DISASSEMBLED 2026-09-23/24); `0x41C6F0` re-read this session |
 | E8 | **No read in this design crosses threads.** The mouse thread `0x4C2990` writes only the graphics object `0x51F320` (`+0x196` = `0x51F4B6`, `+0x1B6` = `0x51F4D6`; `replay-globals.tsv` rows `cursorpos` and `cursordrawn`). Every field in E1-E7 is written by game-thread code. | `replay-globals.tsv`; E1-E4 |
-| E9 | **The selection.** Unit `+0x110` bit 4 (`0x10`) is the selection and bit 28 (`0x10000000`) the live bit (`0x48CD08`, `0x48CD32`). The controlled player's block is `[rec+0x67, rec+0x6B]`, inclusive pointers, with `rec = main+0x1B63 + 0x14B*main[0x2A42]`. Orders and placements go to selected units of that block (`0x48CF30`, `0x419670`). The destructor clears bits 4 and 5 (`0x486DE8`). The recording does not carry bit 4: `replay-layout.tsv` row `selected` is `drop`. | [engine map](../exe-reverse-engineering.md#the-in-game-mouse-buttons--what-a-click-actually-does--mapped-by-us); `replay-layout.tsv` |
+| E9 | **The selection.** Unit `+0x110` bit 4 (`0x10`) is the selection and bit 28 (`0x10000000`) the live bit (`0x48CD08`, `0x48CD32`). The controlled player's block is `[rec+0x67, rec+0x6B]`, inclusive pointers, with `rec = main+0x1B63 + 0x14B*main[0x2A42]`. Orders and placements go to selected units of that block (`0x48CF30`, `0x419670`). The destructor clears bits 4 and 5 (`0x486DE8`). The recording does not carry bit 4: `replay-layout.tsv` row `selected` is `drop`. | [engine map](../engine/input.md#the-in-game-mouse-buttons-what-a-click-actually-does-mapped-by-us); `replay-layout.tsv` |
 | E10 | **Births.** `src/tagpu_patches.c:s_hitStamp` is a SIM_STATE column of one u32 per slot; bit 31 (`HIT_LB`) marks a lower bound. `mp_births()` finds it through the registry. A skirmish recording carries it as a declared table. **On a skirmish puppet host the engine-side column is host-own**, so the playback reads the recorded column. In a multiplayer playback the composed lifecycle's `ls.birth` is the reference, as for order lists (`mp_authority`). | `tagpu_patches.c:6518`; `tagpu_replay.c` THE SEEK (R-steps, "B4's per-slot columns") and `mp_authority` |
 | E11 | **The input mode `main+0x391F1`** is stored by `0x490B30` (`0x490B3D`). It is also stored directly with 2-5 at `0x496AF0`, `0x496B84`, `0x496BE6`, `0x496C2E`, `0x496C95` and `0x496D65`, and with register values at `0x49160B`, `0x492972` and `0x492A73`. Mode 6 installs `0x499200`. **Not established:** which of modes 2-5 occur in play, and whether their handlers refresh E4. | DISASSEMBLED, the stores only |
 | E12 | **The contribution channel.** It sends `DPSEND_GUARANTEED \| DPSEND_ASYNC` to all players (`tagpu_recmp_net.c:344`) through a 256-slot transmit queue whose overflow fails the channel (`tagpu_recmp.c:467`). `send_from` accepts only the current capture tick. `RecMpHeader` is 64 bytes, and a 16-byte body made one 80-byte DATA in one 94-byte UDP payload (MEASURED 2026-10-05, [datagram probe](demo-recorder-multiplayer-slice.md#native-contribution-datagram-probe)). | Code; slice note |
@@ -69,16 +69,16 @@ session unless a note is cited), **MEASURED** (with the numbers), **[INFERRED]**
 #define REC_CLICK_SHOW   15       /* ticks a click ring lasts                                   */
 #define REC_SEL_MAX      1500     /* entries a selection may hold: >= TAGPU_LIM_UNITS of every
                                      build (static assert), the bound of one seat's block       */
-enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2 };
+enum { REC_POV_WORLD = 1, REC_POV_MINIMAP = 2, REC_POV_CUT = 4 };
 enum { REC_SEL_BEGIN = 1, REC_SEL_END = 2 };
 #pragma pack(push, 1)
 typedef struct RecPov {           /* 32 bytes */
     uint8_t  player;              /* seat row; 0xFF in a contribution, whose origin names it */
     uint8_t  every;               /* the sampler's spacing: the playback's delay             */
-    uint8_t  flags;               /* REC_POV_*: main+0x2CC6 bit 1 / bit 0                     */
+    uint8_t  flags;               /* REC_POV_*: main+0x2CC6 bit 1 / bit 0; the mega map's cut */
     uint8_t  zero;
     uint16_t view_w, view_h;      /* main+0x37E37 / +0x37E3B                                  */
-    uint32_t zoom;                /* applied level x 65536, 16384..524288                     */
+    uint32_t zoom;                /* applied level x 65536, rec_pov_zoom_min(format)..524288  */
     int32_t  cam_x, cam_y;        /* target main+0x14327/+0x1432B + view/2, world px          */
     int32_t  cur_x, cur_h, cur_z; /* main+0x2CAC/+0x2CB0/+0x2CB4 sign-extended (E4)           */
 } RecPov;
@@ -107,7 +107,7 @@ snapshot refuses `RK_POV` and `RK_CLICK`, and every kind keeps one length everyw
 
 Validation, the same in the C readers, the history and both Python mirrors:
 - **Exact lengths:** 32, 20, 36 for `RK_POV_AT`, and `8 + 6*count`.
-- **`RecPov`:** `every` in 1..30, `flags` within the two bits, `zero` 0, `zoom` in range, `view_w`/`view_h` in 1..16384.
+- **`RecPov`:** `every` in 1..30, `flags` within the three bits (format 28 writes `REC_POV_CUT`; no reader gates the bit by format), `zero` 0, `zoom` in `[rec_pov_zoom_min(format), 524288]` — the minimum is the file's own: 16384 (0.25) in format 26, 1024 (1/64, `TAGPU_ZOOM_FLOOR_LO`) from format 27, whose zoom floor follows the map — and `view_w`/`view_h` in 1..16384. The writer, the reader's `pov_take`, the multiplayer history (`tagpu_recmp_pov_begin(roster, zmin)`, `tagpu_recmp_history_begin` given the file's format) and the Python mirrors (`tarec.pov_zoom_min`, `recmp_file.py`) each pass the minimum of the file they write or read. `RECMP_VERSION` stays 2 by the owner's decision, so a peer on an older build accepts the handshake and then refuses (`mp_refuse`) the first camera sample below 0.25, and its recording stops consuming there; only games mixing builds are affected, and the newest build's recording is whole.
 - **`RecClick`:** `button` 1 or less, `region` 3 or less, `itype` 1 or less.
 - **`RecSel`:** `total` at most the seat's block (`units_each`) and REC_SEL_MAX, `first + count <= total`, slots strictly ascending and inside the seat's block, and a transaction contiguous on its stream that publishes only at END.
 - **Coordinates are data:** never an index, bounded at use by the projection's clip.
@@ -185,7 +185,8 @@ multiplayer the composed application tick):
 - **Interpolation:** if instead `a.tick <= t < b.tick` and `b.tick - a.tick <= 2*every`,
   interpolate every field as `a + trunc((b-a)*(t-a.tick)/(b.tick-a.tick))` in 64-bit, truncating
   toward zero, and mirror that in Python. Interpolate the cursor only when both samples have
-  `REC_POV_WORLD`. Otherwise use `a`.
+  `REC_POV_WORLD`. Otherwise use `a`, and so also when `b` carries `REC_POV_CUT`: a mega map cut is not
+  blended into ([camera-zoom](../modules/camera-zoom.html) §2.3m).
 - **Why two samples suffice:** samples are at least `every` apart, so `a.tick <= t` whenever
   `b.tick > t`. In multiplayer, application ticks can bunch, so the rule falls back to `a`.
 
@@ -194,7 +195,7 @@ multiplayer the composed application tick):
   starts epoch `E` (a game-thread counter). It is refused while the seat has no sample.
 - **The frame visit** computes, after any seek, the viewer's eye `cam - (W_v/2, H_v/2)` from
   `main+0x37E37/+0x37E3B` and the level. Owner Q1 recommends fitting the recorded view:
-  `z_v = clamp(z_r * min(W_v/W_r, H_v/H_r), 0.25, 8)`, in Q16 integer arithmetic. It then calls
+  `z_v = clamp(z_r * min(W_v/W_r, H_v/H_r), zmin, 8)`, in Q16 integer arithmetic, `zmin` the recording's own minimum (`persp_follow(..., zmin)`: 0.25 for format 26, 1/64 for 27); the render thread then draws a level below this viewer's floor at the floor. It then calls
   the new `tagpu_zoom_follow(ta, eyeX, eyeY, levelQ16, E, once)`. That function hands the
   position to the next apply, and on GDI, where no apply runs, writes it at once with
   `tagpu_zoom_place_eye`'s bookkeeping.
@@ -272,7 +273,7 @@ replay HUD's rows, `src/tagpu_hudinput.c`), and `tacli replay follow|jump|pov`. 
 
 - **The fit rounds down.** Each of `z_r * W_v / W_r` and `z_r * H_v / H_r` is truncated in 64-bit
   integers before the minimum and the clamp, so the viewer's view/z_v is never smaller than the
-  recorder's view/z_r unless the 0.25 floor cuts it. The eye is `cam - W_v/2` with the half
+  recorder's view/z_r unless the recording's minimum or the viewer's floor cuts it. The eye is `cam - W_v/2` with the half
   rounded down, saturated to int32.
 - **Interpolation starts from `a`.** The fields the clock does not interpolate (`player`,
   `every`, `flags`) and, unless both samples are `REC_POV_WORLD`, the cursor are `a`'s. With one
@@ -518,7 +519,12 @@ commander and puts two Peewees inside the drag box. Its `keys` steps are `pmove`
 `pmove`, `up:lbutton`, each a step of its own so the engine sees the move between the press and the
 release); a Shift `pclick` on the commander (`down:shift` … `up:shift`, which the shield turns into
 `MK_SHIFT`); a `prclick` on the ground, which orders the three to move; a left `pclick` on empty
-ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; and `wheel:1`. The
+ground, which deselects under Interface Type 1; an arrow key held for 60 ticks; `wheel:1`; then,
+at tick 1080, the mega map (`down:ctrl`, `wheel:-1`, `up:ctrl`), which takes the view to the zoom
+floor, and at 1260 one notch forward, which leaves it. Core Prime Industrial Area is 642 × 648 cells
+of 16 px, so its floor at 1024×768 is about 0.069 (704 / 10 240) and the samples between the two carry a zoom below
+16384, which only format 27 can hold [arithmetic; not yet read off the game's `zoom: floor` line
+or a recording's `tarec.py pov`]. The
 injected `pclick`, `prclick` and `pmove` tokens are used rather than `click`, `rclick` and
 `mouse:`, which fall back to `SendInput` and the desktop's pointer when the shield is down.
 

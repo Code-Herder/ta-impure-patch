@@ -1,11 +1,12 @@
 #ifndef TAGPU_WIKISCENE_H
 #define TAGPU_WIKISCENE_H
 /* tagpu_wikiscene -- the in-game wiki's 3D stage as the world passes draw it: one stage's ground
-   and one view's fog and units turned into terrain cells, feature quads, the engine's fog grid and
+   and one view's fog and units turned into terrain cells, feature quads, the fog source and
    a model record per unit and ghost (research/notes/ingame-wiki-3d-stage-plan.md, sections 2, 3,
    6 and 7).
 
-   THE SPECIFICATION IS THE MOCKUP'S. The fog grid is tools/wiki/mockup/scene.js `fogGrid`; the
+   THE SPECIFICATION IS THE MOCKUP'S. The fog is tools/wiki/mockup/scene.js `fogGrid`, which the
+   source expands to (tagpu_wikiscene_fog); the
    cells are tools/tascene-render.js `classicTerrain().gather` and the quads its `gatherFeatures`,
    each run at the stage's camera as tools/wiki/mockup/gfx.js runs them: zoom 1, the eye at the
    map's top left, the viewport the whole map and nothing past its edge. Those two gathers are
@@ -30,6 +31,7 @@
    (`refused`), never a part of it. Pure C99 and the C library, so tools/wiki/scenecheck.mjs
    compiles it natively. */
 #include <stdint.h>
+#include "tagpu_fogsrc.h"              /* the source's format and its expansion                 */
 #include "tagpu_wikistage.h"            /* WIKISTAGEVIEW, the record's view of the stage         */
 
 #define WIKISCENE_MAP    128                                     /* cells a side: WIKISTAGE_MAP */
@@ -89,13 +91,13 @@ typedef struct {
     int16_t       anchor[WIKISCENE_MAP * WIKISCENE_MAP];    /* the build's: cell -> feature    */
 } WSCENE;                            /* about 130 KB: never on a stack                        */
 
-/* the engine's fog grid for one view: one entry a 32-unit block, two 4-bit corner masks */
-#define WIKISCENE_FOGMAX ((WIKISCENE_MAP / 2) * (WIKISCENE_MAP / 2))
+/* the fog source for one view (inc/tagpu_fogsrc.h): one cell a 32-unit block, bit 0 black
+   (never explored), bit 1 grey (out of LOS) */
+#define WIKISCENE_FOGWORDS (((WIKISCENE_MAP / 2 + 15) / 16) * (WIKISCENE_MAP / 2))
 typedef struct {
-    int      on;                        /* a cell is fogged: draw with the grid; 0 none          */
-    int      cols, rows;                /* blocks: w/2 x h/2                                     */
-    float    orgx, orgz;                /* the world point of block (0,0)'s corner sample: 16,16 */
-    uint16_t grid[WIKISCENE_FOGMAX];    /* low byte b0 unexplored, high byte b1 grey (RG8)       */
+    int      on;                        /* a cell is fogged: draw with the source; 0 none        */
+    int      w, h, stride;              /* blocks: w/2 x h/2, and words a row                    */
+    uint32_t words[WIKISCENE_FOGWORDS];
 } WSCENEFOG;
 
 /* ---- the model records: every unit and every ghost the view shows (the plan's section 6) ---- */
@@ -114,8 +116,16 @@ typedef struct {
 #define WSCENE_SH_SIL   1               /* a mobile unit's silhouette                              */
 #define WSCENE_SH_SLANT 2               /* a structure's slant                                     */
 
+/* A 3D FEATURE OF THE GROUND (a wreck, a heap: its section names a model), which the unit pass
+   draws: its anchor cell and footprint, in the stage description's order. The placements are
+   bounded by the stage's features; the distinct models by WIKIWORLD_FEAT3D. */
+#define WIKISCENE_WRECKS WIKISCENE_FEATS
+typedef struct { int16_t cx, cz, fx, fz; } WSCENEWRECK;
+
 typedef struct {
-    uint8_t  type;                      /* the view's type index                                   */
+    uint8_t  type;                      /* the view's type index; a wreck's, its index in the
+                                           caller's WSCENEWRECK list                               */
+    uint8_t  wreck;                     /* a 3D feature: owner 0, unturned, unlit, no shadow       */
     uint8_t  owner;                     /* its team colour: the frame of a team face, 0..7         */
     uint8_t  ghost;                     /* a build ghost: alpha 0.40, depth writes off, no shadow  */
     uint8_t  shadow;                    /* WSCENE_SH_*                                             */
@@ -123,20 +133,24 @@ typedef struct {
     int16_t  slot;                      /* a unit's index in the view, -1 for a ghost              */
     float    x, z;                      /* its anchor, world units: on the flat stage, target px   */
     float    cs, sn;                    /* its yaw: the model's +z turned onto its facing          */
-    float    enc;                       /* its depth row's key: 1 + 4 (z >> 4)                     */
+    float    enc;                       /* its depth row's key: 1 + 4 (z >> 4), a wreck's 3 + 4 row */
     float    alpha;
     float    nanoT, nanoC[3], nanoWire; /* tagpu_nanostage.h, when nanoOn                          */
 } WSCENEMODEL;
 
-#define WIKISCENE_MODELS (WIKISTAGE_UNITS + 1 + WIKISTAGE_SITES + WIKISTAGE_QUEUED)
+#define WIKISCENE_MODELS (WIKISTAGE_UNITS + WIKISCENE_WRECKS + 1 + WIKISTAGE_SITES + WIKISTAGE_QUEUED)
 
 /* THE RECORDS of view `v` at its tick, into `out` (WIKISCENE_MODELS of them): the units first, in
-   the view's order -- `*nunit` of them -- then the ghosts in tagpu_native.c `ghost_record`'s
-   order: the placement ghost, each gesture site's, each queued site's not yet started. A record
-   is made only for a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of
-   the eight. Returns the count. tools/wiki/mockup/scene.js `build` is the specification. */
+   the view's order, then the ground's 3D features (`wrecks`, `nwreck` of them, at most
+   WIKISCENE_WRECKS) on the map's rows whose anchor cell the view has not reclaimed (a feature
+   whose footprint ends below the map is not on it, as the ground leaves a 2D one out) --
+   `*nunit` records together,
+   the opaque window's -- then the ghosts in tagpu_native.c `ghost_record`'s order: the placement
+   ghost, each gesture site's, each queued site's not yet started. A unit's record is made only for
+   a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of the eight. Returns
+   the count. tools/wiki/mockup/scene.js `build` is the specification. */
 int  tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int ntype,
-                            WSCENEMODEL* out, int* nunit);
+                            const WSCENEWRECK* wrecks, int nwreck, WSCENEMODEL* out, int* nunit);
 
 /* THE GROUND: `g`'s cells and quads into `out`. Returns 1 when the ground can be drawn whole, 0
    with out->refused set when it cannot -- a map past WIKISCENE_MAP, a tile map entry past the
@@ -151,9 +165,17 @@ int  tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out);
    ground names none. Returns how many are set. */
 int  tagpu_wikiscene_dead(const WSCENE* sc, const int16_t (*gone)[2], int ngone, uint8_t* dead);
 
-/* THE FOG: a view's `fog` (w x h cells, 0 clear, 1 grey, 2 black; WIKISTAGEVIEW.fog) into `out`.
-   The stage's fog rects are whole tiles, so each 32-unit block is uniform and its top-left cell
-   stands for it. out->on is 0 when no cell is fogged. */
+/* THE FOG: a view's `fog` (w x h cells, 0 clear, 1 grey, 2 black; WIKISTAGEVIEW.fog) into `out`
+   as the fog source. The stage's fog rects are whole tiles, so each 32-unit block is uniform and
+   its top-left cell stands for it. out->on is 0 when no cell is fogged.
+
+   ITS EXPANSION IS THE MOCKUP'S GRID. scene.js `fogGrid` takes block (bx, bz)'s corners from it
+   and its right, lower and lower-right neighbours, the far column and row replicating their own
+   block, origin (16, 16). tagpu_fog_entry's four-corner OR is the first, its right and bottom
+   completions copy a straddling block's own corners outward, which is the second, and entry -1's
+   left and top completions give the value the shaders' old clamp to entry 0 gave. So entry
+   (bx, bz) of the source equals the mockup's block byte for byte (low nibble the black mask, the
+   next the grey), which is what tools/wiki/scenecheck.mjs pairs. */
 void tagpu_wikiscene_fog(const uint8_t* fog, int w, int h, WSCENEFOG* out);
 
 #endif

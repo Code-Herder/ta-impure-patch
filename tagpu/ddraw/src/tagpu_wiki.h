@@ -92,6 +92,14 @@ uint32_t tagpu_wiki_head_only(TAGPU_PK_WIKI* w);
    answers the trigger tagpu_wiki.dump with the record as placed. */
 void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried);
 
+/* GAME THREAD: 1 while the last published packet carried a wiki record -- its last fill returned 1
+   and its placement fit. 0 before the session's first such packet, after a fill that refused (the
+   HUD's pass off or the wiki's layout refused) and after a packet that could not carry it. The
+   Config sprocket is left to the wiki's layer only while this holds (tagpu_menu.c, draw_trigger),
+   so no state that keeps the record off the screen keeps the sprocket off it for more than the
+   frame it begins on. */
+int  tagpu_wiki_shown(void);
+
 /* The command record's take: the hit map, the scrolls and the scrollbars of the last frame the
    wiki was drawn on, copied and bounded as data, so a press between two takes reads this thread's
    own copy. NULL is no controls. */

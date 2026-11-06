@@ -38,6 +38,7 @@
 #include "tagpu_vk_mark.h"
 #include "tagpu_mark.h"
 #include "tagpu_line.h"     /* tagpu_line_grid, the line test's uGrid */
+#include "tagpu_vk_fog.h"   /* the slot's fog image, binding 42 */
 #include "spirv/tagpu_mark.spv.h"
 
 #define IFNS(X) \
@@ -72,21 +73,29 @@ DFNS(DECL)
 #define VS_ZOOM     8
 #define VS_ZOOMC   16
 
-#define FS_SZ      48          /* LFS's block: FS's five, then uGrid at 32 */
+#define FS_SZ      48          /* LFS's block: FS's four, then uGrid at 32;
+                                  FS's own ends at 40, uIconSelCol's end    */
 #define FS_KEY      0
 #define FS_TEXT     4
-#define FS_FOGORG   8
-#define FS_FOGDIM  16
-#define FS_FOG     24
-#define FS_GRID    32          /* LFS only; padding past FS's own block */
+#define FS_FOGSIZE  8
+#define FS_FOG     16
+#define FS_ICONFILL  20        /* FS only, an icon draw's: the art's markers */
+#define FS_ICONSEL   24
+#define FS_ICONWHITE 28        /* ...and the GUI's white and black          */
+#define FS_ICONINK   32
+#define FS_ICONSELCOL 36       /* ...and what a selected set picture's
+                                  SelectedColor texels show               */
+#define FS_GRID    32          /* LFS only, a line draw's; an icon draw's block
+                                  holds FS_ICONINK and FS_ICONSELCOL there */
 
 #define MVST       8           /* floats a vertex: x,y u,v wx,wz colour z */
 #define MK_VSTRIDE (MVST * 4)
 
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 /* IMG_NONE is the 1x1 0xFF stand-in that fills a sampler binding with no
-   picture this frame. */
-enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_FOG, IMG_ART, IMG_N };
+   picture this frame. The fog image is not one of these: it is the slot's in
+   tagpu_vk_fog.c, shared with every world pass. */
+enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_ART, IMG_ICON, IMG_N };
 
 static int s_state;
 static int s_downOwed, s_downPaying;
@@ -126,12 +135,14 @@ static VkDescriptorPool      s_pool;
    measured 3 891 pixels. */
 static VkDescriptorSet       s_setN[TAGPU_VK_SLOTS];
 static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
-/* and a third, the order art's palette-index atlas (tagpu_order_art) */
+/* and a third, the order art's palette-index atlas (tagpu_order_art), and a
+   fourth, the strategic icons' (tagpu_icontype_art) */
 static VkDescriptorSet       s_setA[TAGPU_VK_SLOTS];
+static VkDescriptorSet       s_setI[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;          /* NEAREST: every texel here is an
                                                  index or a coverage byte */
 
-/* the four sampled images, PER FRAME SLOT. `w`/`h` are what they were built
+/* the sampled images, PER FRAME SLOT. `w`/`h` are what they were built
    for, so a change of extent rebuilds.
 
    THEY CANNOT BE ONE SET SHARED BY EVERY SLOT. Every slot's `s_setN`/`s_setT`
@@ -141,14 +152,14 @@ static VkSampler             s_samp;          /* NEAREST: every texel here is an
    sampling them. Shared, they would fault two ways, neither of which any A/B
    can show, because both need a second frame in flight:
 
-     - the palette and the fog grid are re-uploaded EVERY frame, and `img_up`
+     - the palette is re-uploaded EVERY frame, and `img_up`
        barriers SHADER_READ_ONLY -> TRANSFER_DST and copies over an image the
        previous submission may still be reading. Nothing orders the two;
      - `img_size` destroys and rebuilds on any change of extent, which would
        free an image a live command buffer names.
 
-   Per slot is what `tagpu_vk_fx.c` ("the three small per-slot images") and
-   `tagpu_vk_terr.c` ("the two small per-slot images") already do, and the one
+   Per slot is what `tagpu_vk_fx.c` ("the two small per-slot images") and
+   `tagpu_vk_terr.c` (its per-slot palette) already do, and the one
    pass that genuinely shares a device resource carries a per-slot retirement
    mask for it instead (`tagpu_vk_unit.c`'s `VBRET.pending`). The cost is the
    text atlas uploading once per slot after a change rather than once; it is
@@ -186,11 +197,11 @@ static int s_saidFog, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO: one latch over several distinct refusals lets
    the first to fire silence a DIFFERENT one for the rest of the session. */
-static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidArtA;
+static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidArtA, s_saidIconA;
 /* ONE LATCH PER SITE. A single latch shared by six upload sites hides every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. */
-static int s_saidImgT, s_saidImgP, s_saidImgF, s_saidImgS, s_saidImgA;
+static int s_saidImgT, s_saidImgP, s_saidImgS, s_saidImgA, s_saidImgI;
 static int s_saidNoDraw, s_saidSlot;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -377,8 +388,8 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkDescriptorPoolSize ps[2];
     VkDescriptorPoolCreateInfo pi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkDescriptorSetLayout lay[3 * TAGPU_VK_SLOTS];
-    VkDescriptorSet       all[3 * TAGPU_VK_SLOTS];
+    VkDescriptorSetLayout lay[4 * TAGPU_VK_SLOTS];
+    VkDescriptorSet       all[4 * TAGPU_VK_SLOTS];
     VkDescriptorSetAllocateInfo ai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     uint32_t i;
@@ -404,23 +415,24 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     }
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    ps[0].descriptorCount = 2 * 3 * d->slots;
+    ps[0].descriptorCount = 2 * 4 * d->slots;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = NSAMP * 3 * d->slots;
-    pi.maxSets = 3 * d->slots;
+    ps[1].descriptorCount = NSAMP * 4 * d->slots;
+    pi.maxSets = 4 * d->slots;
     pi.poolSizeCount = 2; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_pool) != VK_SUCCESS) {
         s_pool = VK_NULL_HANDLE; return 0;
     }
-    for (i = 0; i < 3 * d->slots; i++) lay[i] = s_dsl;
+    for (i = 0; i < 4 * d->slots; i++) lay[i] = s_dsl;
     ai.descriptorPool = s_pool;
-    ai.descriptorSetCount = 3 * d->slots;
+    ai.descriptorSetCount = 4 * d->slots;
     ai.pSetLayouts = lay;
     if (vkAllocateDescriptorSets(d->dev, &ai, all) != VK_SUCCESS) return 0;
     for (i = 0; i < d->slots; i++) {
         s_setN[i] = all[i];
         s_setT[i] = all[d->slots + i];
         s_setA[i] = all[2 * d->slots + i];
+        s_setI[i] = all[3 * d->slots + i];
     }
     /* NEAREST on all three, and it is not a style choice: uLayer's texel IS a
        palette index and interpolating two of them gives a colour that is in
@@ -609,25 +621,29 @@ static int slot_buf(const TAGPU_VKPASS* d, uint32_t slot, VkDeviceSize ubo,
     return 1;
 }
 
-/* One of the two sets: `unit0` is what binding 40 -- the shader's `uLayer` --
-   samples in it. Everything else in the two sets is identical, which is the
+/* One of the sets: `unit0` is what binding 40 -- the shader's `uLayer` --
+   samples in it. Everything else in the sets is identical, which is the
    point: the only thing that differs between a text draw and a textureless one
    is the image on unit 0. */
 static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
-                      const IMG* unit0)
+                      const IMG* unit0, VkImageView fog)
 {
     VkDescriptorBufferInfo bi[2];
     VkDescriptorImageInfo ii[NSAMP];
     VkWriteDescriptorSet w[2 + NSAMP];
-    /* the order the shader names them: uLayer, uPal, uFogGrid. A
-       binding with no image this frame falls back to the STAND-IN's view, which
-       always exists once the pass is ready -- a set cannot be bound with a
-       hole, and the uniform that would read it is 0 on such a frame. */
-    const IMG* src[NSAMP];
+    /* the order the shader names them: uLayer, uPal, uFogSrc. A float
+       binding with no image this frame falls back to the STAND-IN's view,
+       which always exists once the pass is ready -- a set cannot be bound with
+       a hole, and the uniform that would read it is 0 on such a frame. uFogSrc
+       is an integer sampler and never takes the R8 stand-in: it names the
+       slot's fog image, which tagpu_vk_fog.c keeps live on every frame (a
+       one-texel image while there is no source). */
+    VkImageView view[NSAMP];
     uint32_t i;
     int n = 0;
-    src[0] = unit0;                  src[1] = &s_img[slot][IMG_PAL];
-    src[2] = &s_img[slot][IMG_FOG];
+    view[0] = unit0->view;
+    view[1] = s_img[slot][IMG_PAL].view;
+    view[2] = fog;
     memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii); memset(w, 0, sizeof w);
     bi[0].buffer = s_ubo[slot]; bi[0].range = VS_SZ;
     bi[1].buffer = s_ubo[slot]; bi[1].range = FS_SZ;
@@ -641,7 +657,7 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     w[n].pBufferInfo = &bi[1]; n++;
     for (i = 0; i < NSAMP; i++) {
         ii[i].sampler = s_samp;
-        ii[i].imageView = src[i]->view ? src[i]->view : s_img[slot][IMG_NONE].view;
+        ii[i].imageView = view[i] ? view[i] : s_img[slot][IMG_NONE].view;
         ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[n].dstSet = set; w[n].dstBinding = SAMP_BIND[i];
@@ -652,18 +668,24 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     vkUpdateDescriptorSets(d->dev, (uint32_t)n, w, 0, NULL);
 }
 
-static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
+/* Every set of the slot, every prepare -- legal because this is the slot's
+   own `prepare`, after the seam's wait on its fence and after
+   tagpu_vk_fog_prepare for the same slot, so the fog view named here is the
+   one the slot's submission will sample. */
+static void write_set(const TAGPU_VKPASS* d, uint32_t slot, VkImageView fog)
 {
-    write_one(d, slot, s_setN[slot], &s_img[slot][IMG_NONE]);
-    write_one(d, slot, s_setT[slot], &s_img[slot][IMG_TEXT]);
-    write_one(d, slot, s_setA[slot], &s_img[slot][IMG_ART]);
+    write_one(d, slot, s_setN[slot], &s_img[slot][IMG_NONE], fog);
+    write_one(d, slot, s_setT[slot], &s_img[slot][IMG_TEXT], fog);
+    write_one(d, slot, s_setA[slot], &s_img[slot][IMG_ART], fog);
+    write_one(d, slot, s_setI[slot], &s_img[slot][IMG_ICON], fog);
 }
 
 int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     VkPhysicalDeviceProperties props;
     VkDeviceSize vsz, usz, ssz, off;
-    int i;
+    VkImageView fogView;
+    int i, fogW = 0, fogH = 0;
 
     s_drawThis = 0; s_abFrame = 0;
     if (s_state == ST_REFUSED) return 0;
@@ -701,17 +723,21 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
     s_saidHand = 0;
     s_abFrame = s_h.ab;
+    /* the slot's fog image and the source it holds this frame: uFogSize and
+       the image the shader fetches from are one source (tagpu_vk_fog.c) */
+    fogView = tagpu_vk_fog_view((int)slot, NULL);
+    tagpu_vk_fog_size((int)slot, &fogW, &fogH);
     /* WHAT ACTUALLY CROSSED, once. A pass that draws the right vertices into
        the right place and still shows black is failing on its INPUTS, and one
        line naming all of them settles in a single run what narrowing one
        suspect at a time costs a relaunch each. */
     if (!s_saidIn) {
         s_saidIn = 1;
-        plog(d, "mark: in: %d draw(s) %d verts | pal=%s fog=%s %dx%d "
+        plog(d, "mark: in: %d draw(s) %d verts | pal=%s fog=%dx%d "
                 "text=%s %dx%d | key=%d game=%.0fx%.0f zoom=%.2f ss=%.1f",
              s_h.ndraw, s_h.nvert,
              s_h.pal ? "yes" : "NULL",
-             s_h.fogGrid ? "yes" : "NULL", s_h.fogGridCols, s_h.fogGridRows,
+             fogW, fogH,
              s_h.text ? "yes" : "NULL", s_h.textW, s_h.textH,
              s_h.key, s_h.gw, s_h.gh, s_h.zoom, s_h.ss);
     }
@@ -738,6 +764,9 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                     "drawn while that is true"); }
         return 0;
     }
+    /* NO FOG IMAGE, NO FRAME: binding 42 is an integer sampler and has no
+       stand-in (see write_one) */
+    if (!fogView) return 0;
     if (s_h.ndraw <= 0 || s_h.nvert <= 0 || !s_h.verts || !s_h.draws) {
         if (!s_saidEmpty) { s_saidEmpty = 1;
             plog(d, "mark: the hand-over is empty - ndraw=%d nvert=%d verts=%s "
@@ -767,12 +796,12 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                 plog(d, "mark: draw %d is depth-tested but not lines", i); }
             return 0;
         }
-        /* A DRAW THAT WANTED FOG AND HAS NO GRID IS REFUSED, not drawn clear:
-           an unfogged marker over fogged ground is a different picture. */
-        if (g->fog && !s_h.fogGrid) {
+        /* A DRAW THAT WANTED FOG AND HAS NO SOURCE IS REFUSED, not drawn
+           clear: an unfogged marker over fogged ground is a different picture. */
+        if (g->fog && (fogW < 1 || fogH < 1)) {
             if (!s_saidFog) {
                 s_saidFog = 1;
-                plog(d, "mark: a fogged marker draw arrived with no fog grid - "
+                plog(d, "mark: a fogged marker draw arrived with no fog source - "
                         "nothing drawn while that is true");
             }
             return 0;
@@ -797,10 +826,18 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         "nothing drawn while that is true"); }
             return 0;
         }
-        /* a blended draw is the order art's triangles and nothing else */
-        if (g->blend && (g->lines || g->tex != TAGPU_MK_TEX_ART)) {
+        if (g->tex == TAGPU_MK_TEX_ICON &&
+            !(s_h.icon && s_h.iconW > 0 && s_h.iconH > 0)) {
+            if (!s_saidIconA) { s_saidIconA = 1;
+                plog(d, "mark: an icon draw arrived with no icon atlas - "
+                        "nothing drawn while that is true"); }
+            return 0;
+        }
+        /* a blended draw is the order art's or the icons' triangles and
+           nothing else */
+        if (g->blend && (g->lines || (g->tex != TAGPU_MK_TEX_ART && g->tex != TAGPU_MK_TEX_ICON))) {
             if (!s_saidBound) { s_saidBound = 1;
-                plog(d, "mark: draw %d is blended but not order-art triangles", i); }
+                plog(d, "mark: draw %d is blended but not order-art or icon triangles", i); }
             return 0;
         }
     }
@@ -810,8 +847,9 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         ssz += (VkDeviceSize)s_h.textW * s_h.textH;
     if (s_h.art && s_h.artW > 0 && s_h.artH > 0)
         ssz += (VkDeviceSize)s_h.artW * s_h.artH;
+    if (s_h.icon && s_h.iconW > 0 && s_h.iconH > 0)
+        ssz += (VkDeviceSize)s_h.iconW * s_h.iconH;
     ssz += 256 * 4;                                  /* the palette */
-    if (s_h.fogGrid) ssz += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     /* AND THE 1x1 STAND-IN'S OWN BYTE. Reserving for the images the hand-over
        carries and forgetting the one this pass makes for itself draws nothing:
        the three real uploads land at exactly `ssz`, the stand-in asks for one
@@ -859,6 +897,15 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         off += (VkDeviceSize)s_h.artW * s_h.artH;
     }
+    /* THE ICON ART IS WRITTEN ONCE TOO (tagpu_icontype_art): once per slot */
+    if (s_h.icon && s_h.iconW > 0 && s_h.iconH > 0 && !s_img[slot][IMG_ICON].have) {
+        if (!img_size(d, &s_img[slot][IMG_ICON], s_h.iconW, s_h.iconH, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_ICON], s_h.icon, s_h.iconW, 1, off)) {
+            if (!s_saidImgI) { s_saidImgI = 1; plog(d, "mark: the %dx%d icon art would not upload", s_h.iconW, s_h.iconH); }
+            return 0;
+        }
+        off += (VkDeviceSize)s_h.iconW * s_h.iconH;
+    }
     if (s_h.pal) {
         if (!img_size(d, &s_img[slot][IMG_PAL], 256, 1, VK_FORMAT_R8G8B8A8_UNORM) ||
             !img_up(d, cb, slot, &s_img[slot][IMG_PAL], s_h.pal, 256 * 4, 4, off)) {
@@ -866,15 +913,6 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             return 0;
         }
         off += 256 * 4;
-    }
-    if (s_h.fogGrid && s_h.fogGridCols > 0 && s_h.fogGridRows > 0) {
-        if (!img_size(d, &s_img[slot][IMG_FOG], s_h.fogGridCols, s_h.fogGridRows, VK_FORMAT_R8G8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[slot][IMG_FOG], (const unsigned char*)s_h.fogGrid,
-                    s_h.fogGridCols * 2, 2, off)) {
-            if (!s_saidImgF) { s_saidImgF = 1; plog(d, "mark: the %dx%d fog grid would not upload (R8G8)", s_h.fogGridCols, s_h.fogGridRows); }
-            return 0;
-        }
-        off += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     }
     /* THE FALLBACK EVERY UNUSED BINDING NAMES, AND IT HAS TO BE INITIALISED.
        Created and left there -- no clear, no transition -- its descriptor would
@@ -904,18 +942,24 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         VkDeviceSize fstride = align_up(FS_SZ, s_ualign);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + at;
-            put_i(p, FS_KEY, s_h.draws[i].tex == TAGPU_MK_TEX_ART ? s_h.artKey : s_h.key);
+            put_i(p, FS_KEY, s_h.draws[i].tex == TAGPU_MK_TEX_ART  ? s_h.artKey :
+                             s_h.draws[i].tex == TAGPU_MK_TEX_ICON ? s_h.iconKey : s_h.key);
+            if (s_h.draws[i].tex == TAGPU_MK_TEX_ICON) {
+                put_i(p, FS_ICONFILL, s_h.iconFill);
+                put_i(p, FS_ICONSEL, s_h.iconSel);
+                put_i(p, FS_ICONWHITE, s_h.iconWhite);
+                put_i(p, FS_ICONINK, s_h.iconInk);
+                put_i(p, FS_ICONSELCOL, s_h.iconSelCol);
+            }
             put_i(p, FS_TEXT, s_h.draws[i].text);
-            put_f(p, FS_FOGORG, s_h.fogOrgX);
-            put_f(p, FS_FOGORG + 4, s_h.fogOrgY);
-            put_f(p, FS_FOGDIM, s_h.fogCols);
-            put_f(p, FS_FOGDIM + 4, s_h.fogRows);
+            put_i(p, FS_FOGSIZE, fogW);
+            put_i(p, FS_FOGSIZE + 4, fogH);
             put_i(p, FS_FOG, s_h.draws[i].fog);
             s_fsOff[i] = at;
             at += fstride;
         }
     }
-    write_set(d, slot);
+    write_set(d, slot, fogView);
     s_drawThis = 1;
     return 1;
 }
@@ -1009,14 +1053,17 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        ends on -- the game frame at the hand-over's ss -- and THIS target's
        extent: on a frame the offscreen target refused the world goes into the
        swapchain image at whatever scale that is, and a wrong scale does not
-       blur a line, it moves every pixel of it. Written into every draw's
-       block; only LFS reads it. */
+       blur a line, it moves every pixel of it. Written into every LINE draw's
+       block, the only ones LFS draws: an icon draw's block holds uIconInk and
+       uIconSelCol at the grid's offsets 32 and 36 (FS_ICONINK,
+       FS_ICONSELCOL), which this must not overwrite. */
     {
         int g[4];
         tagpu_line_grid(g, (int)(s_h.gw + 0.5f), (int)(s_h.gh + 0.5f),
                         (int)(s_h.ss + 0.5f), (int)w, (int)h);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + s_fsOff[i];
+            if (!s_h.draws[i].lines) continue;
             put_i(p, FS_GRID, g[0]);
             put_i(p, FS_GRID + 4, g[1]);
             put_i(p, FS_GRID + 8, g[2]);
@@ -1043,11 +1090,12 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
         /* UNIT 0 IS PER DRAW: the text draws sample the coverage atlas, the
-           order art its own, and everything else the 1x1 stand-in. A TEX_NONE draw does not
+           order art and the icons their own, and everything else the 1x1 stand-in. A TEX_NONE draw does not
            read it at all (its vertices carry u < 0, the flat path), so the
            stand-in is there to fill the binding rather than to be sampled. */
         set = g->tex == TAGPU_MK_TEX_TEXT ? s_setT[slot] :
-              g->tex == TAGPU_MK_TEX_ART  ? s_setA[slot] : s_setN[slot];
+              g->tex == TAGPU_MK_TEX_ART  ? s_setA[slot] :
+              g->tex == TAGPU_MK_TEX_ICON ? s_setI[slot] : s_setN[slot];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
                                 0, 1, &set, 2, dyno);
         /* a line draw's `first`/`count` are records: one six-vertex band
@@ -1082,7 +1130,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
         s_uboMem[i] = s_vbMem[i] = s_stgMem[i] = VK_NULL_HANDLE;
         s_uboMap[i] = s_vbMap[i] = s_stgMap[i] = NULL;
         s_uboCap[i] = s_vbCap[i] = s_stgCap[i] = 0;
-        s_setN[i] = s_setT[i] = s_setA[i] = VK_NULL_HANDLE;
+        s_setN[i] = s_setT[i] = s_setA[i] = s_setI[i] = VK_NULL_HANDLE;
     }
     if (s_pipeTri) { vkDestroyPipeline(d->dev, s_pipeTri, NULL); s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeTriA) { vkDestroyPipeline(d->dev, s_pipeTriA, NULL); s_pipeTriA = VK_NULL_HANDLE; }
@@ -1097,8 +1145,8 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidFog = s_saidRoom = s_saidPal = 0;
-    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidArtA = 0;
-    s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgS = 0;
+    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidArtA = s_saidIconA = 0;
+    s_saidImgT = s_saidImgP = s_saidImgS = s_saidImgA = s_saidImgI = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;
 }

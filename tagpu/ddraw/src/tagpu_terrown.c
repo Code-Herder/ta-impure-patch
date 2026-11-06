@@ -176,14 +176,14 @@ static void __cdecl terr_fill(void* ctxv)
 }
 
 /* In place of the fog overlay: its lazy grid rebuild, and only that — plus the
-   WIDE grid, which is ours. The engine's grid spans the 1x viewport and no
-   more, so at zoom < 1 the outer ring of the view falls off its lattice
-   entirely; tagpu_fogwide builds the same masks over a window the whole zoom
-   range fits in. It is ticked here, when this site is ours, because this is
-   where the lazy rebuild decides whether the engine grid was current, and that
-   is the same "the LOS state moved" signal the tick needs. What makes the maps
-   it reads safe is not this site but the level's lifetime: any in-play draw
-   falls inside it (tagpu_fogwide.h, WHERE IT RUNS). */
+   fog SOURCE, which is ours. The engine's grid spans the 1x viewport and no
+   more, so a zoomed-out view falls off its lattice; tagpu_fogwide packs the
+   bits the grid is built from for the whole map. It is ticked here, when this
+   site is ours, because this is where the lazy rebuild decides whether the
+   engine grid was current, and that is the same "the LOS state moved" signal
+   the tick needs. What makes the maps it reads safe is not this site but the
+   level's lifetime: any in-play draw falls inside it (tagpu_fogwide.h, WHERE
+   IT RUNS). */
 /* THE FOG SITE'S OWN LIVENESS, and it is a stamp rather than a flag. Our
    `terr_fogtick` runs only while `g_terrown_own` is set, and that falls on the
    next latch after the render thread drops its request on any path that hands
@@ -191,11 +191,11 @@ static void __cdecl terr_fill(void* ctxv)
    bail-out, the 90-frame watchdog. When it does, this observer stops and the
    ENGINE calls `0x4848E0` itself, at the live eye. Its builds are still seen
    — the publisher reads them off LosType bit 3 — and the publisher ticks the
-   wide grid itself in that draw's `after` (`wide_tick`), since
+   source itself in that draw's `after` (`wide_tick`), since
    `tagpu_fogwide`'s "valid" flag is only ever cleared from inside a tick and
    cannot say that this one stopped. So this tick stamps the publisher's
    in-play draw counter, the publisher ticks only on a draw without the
-   stamp, and it accepts the wide grid only from a tick of this draw. */
+   stamp, and it accepts the source only from a tick of this draw. */
 static unsigned s_fogDrawSeq;
 static int      s_fogDrawSeen;
 

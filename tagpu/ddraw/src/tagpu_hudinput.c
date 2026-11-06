@@ -54,7 +54,14 @@ static unsigned s_pov;                  /* bit S: recorded seat S's camera was r
 static unsigned s_scale;                /* the scale button's choice; 0 = the store's             */
 /* LEAVE'S QUESTION HOLDS THE PLAYBACK: the pause from before the click, put back once the question
    is gone -- answered No, or never opened. Yes tears the level down instead, and the level's end
-   forgets the question. */
+   forgets the question.
+   LEAVE AND TAKE OVER EXCLUDE EACH OTHER: the takeover's run ends the playing's pause (tk_run,
+   tagpu_replay.c) and the question's opener 0x460680..0x4607F1 writes neither main+0x38A51 nor
+   main+0x37EBE (DISASSEMBLED: no instruction with either displacement in the opener or in
+   0x49F000..0x4AB000, the GUI code its six calls enter), so with both in flight the live game would run under the question. Each refuses while
+   the other stands: Leave while a takeover is queued (TAGPU_REPLAY_RWSTATE.tk_queued), the picker's
+   row while Leave's question is wanted or shown (tagpu_hudinput_leave_pending). Both tests read
+   state set synchronously by the other's click, so two clicks in one pump batch are ordered. */
 static int      s_leaveWant, s_leaveAsked, s_leaveWasPaused;
 /* THE STATS WINDOW IS KEPT FOR THE SESSION, never in impure.cfg: its measure, its split and its
    place, until the game exits; it is closed at every replay's start. Its first measure is the mockup's (index.html, S.sm) and its first place the
@@ -347,7 +354,9 @@ static int pick_act(const char* key, size_t k, int n)
         s_pick = PICK_CLOSED;
         if (n < 0 || n >= s_hit.nseat || s_hit.seat[n] >= TAGPU_PK_HUD_SEATS) return 1;
         seat = s_hit.seat[n];
-        if (tagpu_replay_takeover_request(seat, s_pickR, -1))
+        /* LEAVE AND TAKE OVER EXCLUDE EACH OTHER (s_leaveWant) */
+        if (tagpu_hudinput_leave_pending()) toast("Answer Leave's question first");
+        else if (tagpu_replay_takeover_request(seat, s_pickR, -1))
             toast("Taking over %s at %u:%02u", s_name[seat], t / 60, t % 60);
     } else if (IS("lanes")) {
         if (s_nfork) s_lanes ^= 1;
@@ -771,7 +780,10 @@ static void act(const char* key)
         tagpu_settings_set(TS_REPLAYHUD, (int)s_scale);
         tagpu_logf("hud: the replay HUD's scale is %u%%", s_scale);
     } else if (IS("leave")) {
-        if (!tagpu_menu_leave_ready()) toast("Leave from the game menu");
+        TAGPU_REPLAY_RWSTATE rw;
+        tagpu_replay_rewind_state(&rw);
+        /* LEAVE AND TAKE OVER EXCLUDE EACH OTHER (s_leaveWant) */
+        if (!tagpu_menu_leave_ready() || rw.tk_queued) toast("Leave from the game menu");
         else if (!s_leaveWant && !s_leaveAsked) {
             s_leaveWasPaused = tagpu_replay_paused();
             tagpu_replay_pause(1);

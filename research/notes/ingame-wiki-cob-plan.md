@@ -271,9 +271,11 @@ truncations, so the host sees the same words from either.
 mockup's server, `tools/wiki/serve.py` (the repository served as `tools/hudart/serve.py` serves it,
 plus `POST /cob`), which loads the host and the core through ctypes, built by tacob's native
 builder. Under node (`simcheck.mjs`, `simparity.mjs`) the host is `tools/wiki/cobhost.mjs`: a
-worker thread that talks to `serve.py --stdio` while the caller waits on an `Atomics.wait`, so the
-checks call it synchronously as the page does; `forPack` takes every type's script from one gfx
-pack, `forPacks` each from the first of several that holds it. Without a host (`ctx.cob` absent,
+worker thread that talks to `serve.py --stdio` while the caller waits on an `Atomics.wait` until the
+worker's flag says the answer is in -- a wake-up alone is no answer, since a late notify of the
+previous answer can wake it (the file's *handshake*) -- so the checks call it synchronously as the
+page does; `forPack` takes every type's script from one gfx pack, `forPacks` each from the first of
+several that holds it. Without a host (`ctx.cob` absent,
 `WIKISIMCTX.cob` NULL) no unit runs a script and every gate reads open, as for a quarantined type
 (below), so the rule cases that test no script play no script. The page
 (`tools/wiki/mockup/cob.js`, `cobPage`) asks the host for the scripts of the gfx pack its stage

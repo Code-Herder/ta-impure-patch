@@ -63,8 +63,8 @@ what replaces it.
 | **notch** | ×1.1 on a target *level*, snapped to exactly 1 inside (0.999, 1.001) | ×(1 − 0.14 n) on the camera *distance*, which is 1/z. That is ×1.163 in and ×0.877 out, so in-then-out lands on 1.020, not 1 |
 | **ease** | each presented frame covers a quarter of the remaining log-distance and snaps at 0.0025. A notch is 82 % done in 6 frames and lands in 13, so its length follows the present rate (0.22 s at 60 Hz) | a 250 ms tween from the **drawn** pose to the new target along g = 1 − (1 − f)⁴. Centre and 1/z are lerped in straight lines. 24 % of the notch lands in the first 60 Hz frame and 80 % by 83 ms. Its length is the same at any frame rate |
 | **edge** | black | `mirror` (§1.4) |
-| **range** | 0.25..8 | 0.25..8 in the lab too. BAR's own range depends on the map (§1.2) |
-| **scroll rate** | the same on screen at every zoom (`apply_scroll_rate` scales `ScrollSpeed` by 1/z) | unchanged. BAR's is the same property (§1.2) |
+| **range** | the floor..8; the floor is `min(0.25, fit)`, the level at which the map fits the screen ([camera and zoom](modules/camera-zoom.html) §2.3) | 0.25..8 in the lab. BAR's own range depends on the map (§1.2) |
+| **scroll rate** | the same on screen at every zoom (`zoom_scroll_step` divides the scroll poll's capped step by z at `0x41CEAA`) | unchanged. BAR's is the same property (§1.2) |
 
 The notch counts from 0.25× to 8× are 36 for the game, 23 in and 27 out for BAR.
 
@@ -100,7 +100,7 @@ effective column is the one to read.
 | `CamSpringZoomInToMousePos` | true | true | zoom in moves the camera along the ray through the pointer by `1 − scaledMove` of the distance to the ground, never past `minDist` (`ZoomIn`). The point under the pointer holds |
 | `CamSpringZoomOutFromMousePos` | **false** | false (the menu's `zoomfromcursor` row) | with it false, `ZoomOut` returns with the focus point unmoved, so zoom-out pulls back from the centre |
 | `CamSpringMinZoomDistance` | 20 | **300** (`springconfig.lua` v5; the menu's `mincamheight` slider, 0..1500) | the closest zoom, in elmos along the view ray |
-| max distance | — | `1.333 × max(mapx, mapy) × 8` elmos (`SpringController.cpp:49`) | the farthest zoom: the map's longer side and a third more. It depends on the map; the game's 0.25× floor does not |
+| max distance | — | `1.333 × max(mapx, mapy) × 8` elmos (`SpringController.cpp:49`) | the farthest zoom: the map's longer side and a third more. It depends on the map, as the game's floor does |
 | `CamSpringFastScaleMousewheelMove` × `CameraMoveFastMult` | 0.2 × 10 | the same | Shift on the wheel: `shiftSpeed = 2`, so a Shift notch in is **×0.72** |
 
 #### The ease
@@ -145,7 +145,6 @@ These are listed so nothing is lost. Each would be its own decision **[OPEN]**:
 
 * Shift + wheel at ×0.72.
 * Alt + wheel, which jumps to the whole map and back.
-* A zoom-out floor sized to the map instead of a fixed 0.25×.
 * Middle-drag pan.
 * The 5 px edge-scroll band. TA's single edge pixel stays.
 
@@ -304,9 +303,10 @@ the rest of `R` and the residual on it rather than banking them.
     among clipped, unclipped, dropped and upside-down copies).
 * **Units stay on the map.** The minimap is unchanged, as BAR's is.
 
-The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad plus a per-instance
-`aCell` (col, row, cx, cy) as four signed shorts. A mirrored cell is one more instance, with its
-tile taken from the reflected cell and its flip bits in spare bits of the instance.
+The game's terrain is instanced: `tagpu_terr.c`'s vertex stage draws one quad per cell of the
+gather's grid and derives the cell from its instance index and the level's tile map, an R16UI image
+([terrain & depth](terrain-depth.html) §7.1). A mirrored cell is one more instance: the stage folds
+it onto the map, takes the tile of the cell it lands on and turns over each axis the fold turned.
 
 **What the build added to the plan** [BUILT 2026-09-24, [GPU status](gpu-status.html) §2.90]:
 

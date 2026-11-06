@@ -280,6 +280,15 @@ int tagpu_wikisound_named(const WIKI3DSOUND* s, int name)
     return play(s, s->named[name]);
 }
 
+int tagpu_wikisound_death(const WIKI3DSOUND* s, int clip)
+{
+    if (!s || tagpu_wikisound_muted()) {
+        s_silent++;
+        return 0;
+    }
+    return play(s, clip);
+}
+
 void tagpu_wikisound_tally(int* played, int* failed, int* silent, double* slow_us, const char** slow_what)
 {
     *played = s_played;

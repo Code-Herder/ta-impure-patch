@@ -9,7 +9,8 @@ usage: fit.py [--set hud|wiki]
 THE WIKI'S KIT (--set wiki) is fitted the same way from art/wiki-full/kit/ into art/wiki/kit/, at densities stated
 rather than measured: what the wiki draws is fixed by its unit. The window and everything in it are drawn at the wiki
 unit, the screen's height / 720 device pixels whatever the HUD scale (tagpu_wikilay.c), so 3 at 3840x2160; the wiki
-button sits in the top bar at the bar's own pixels, 4.5 at 3840x2160 and HUD 150 (WIKI_BAR below). A part's need there
+button and the Config sprocket sit in the top bar at the bar's own pixels, 4.5 at 3840x2160 and HUD 150 (WIKI_BAR
+below). A part's need there
 is its density over its `scale`, 1.5 times that for an `xtile` part (COPY_STRETCH); an icon is drawn as large as fits
 its box and then at 0.6 of that (wiki.js drawIcon, tagpu_wikilay.c glyph), so its need is the device pixels one of its
 texels covers in the box it is drawn in (WIKI_ICON).
@@ -47,10 +48,10 @@ WIKI_FULL = laycheck.ROOT / 'art' / 'wiki-full' / 'kit'
 WIKI_ART = laycheck.ROOT / 'art' / 'wiki' / 'kit'
 WIKI_UNIT = 3.0         # device px a wiki unit at 3840x2160: 2160 / 720
 WIKI_BAR = 4.5          # device px a top-bar pixel at 3840x2160 and HUD 150
-WIKI_ON_BAR = {'wikibtn', 'wikibtn_down', 'i_wiki'}
-# each icon's box, in the units of where it is drawn, at 0.6 of it: the wiki button's 28 bar pixels, the close
-# button's 14 units, a control's least box (layout.json controls.min x controls.h) for its play, pause and replay
-WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14), 'i_play': (24, 17), 'i_pause': (24, 17), 'i_replay': (24, 17)}
+WIKI_ON_BAR = {'wiki_emblem', 'wiki_emblem_down', 'config_emblem', 'config_emblem_down'}
+# each icon's box, in the units of where it is drawn, at 0.6 of it: the close button's 14 units, a control's least
+# box (layout.json controls.min x controls.h) for its play, pause and replay
+WIKI_ICON = {'i_close': (14, 14), 'i_play': (24, 17), 'i_pause': (24, 17), 'i_replay': (24, 17)}
 # a tree row's marks fill their whole box, layout.json tree.mark square
 WIKI_MARK = {'i_open': (7, 7), 'i_shut': (7, 7), 'i_dot': (7, 7)}
 

@@ -41,6 +41,13 @@
 #include "tagpu_fx.h"
 
 int  tagpu_mark_armed(unsigned frame_counter);   /* re-reads tagpu_mark.on (30f) */
+/* 1 when this frame's markers are drawn by this pass: armed and not passive.
+   What draws the strategic icons, so the unit pass hides no model without it. */
+int  tagpu_mark_draws(void);
+/* Room for `n_units` strategic icons this frame: 1 when the icon bucket holds
+   that many quads (grown here if it must). The unit pass asks it before it
+   decides any icon, so no model is hidden under an icon that has no quad. */
+int  tagpu_mark_icon_room(unsigned n_units);
 
 /* Is the CURSOR LAYER ours this frame — the build placement square, the drag
    band box and the pointer? Exactly gather_cursor's own gate (the lever, its
@@ -78,6 +85,16 @@ int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
 struct TAGPU_ORDART_FRAME;
 int  tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
                          float alpha, float wx, float wz);
+/* One strategic icon (tagpu_icon.c), centred on (ax, ay): `edge_w` x
+   `edge_h` SCREEN px at every zoom, its corner on a whole game pixel. `r` is its
+   art's rect in tagpu_icontype_art's atlas with `shape` 0, or NULL with
+   `shape` a generated shape, TAGPU_ICLS_* + 1, decided per game pixel
+   (inc/tagpu_icon_rule.h). Filled in palette index `team`, white when `sel`,
+   at opacity `alpha` 0..255; never fogged -- every icon is of a unit the
+   gather already judged visible, or a radar contact. 0 = the bucket is full. */
+struct TAGPU_ICONRECT;
+int  tagpu_mark_emit_icon(float ax, float ay, const struct TAGPU_ICONRECT* r, int shape,
+                          int edge_w, int edge_h, int team, int sel, int alpha);
 /* One unit's SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md
    §1): the closed loop p0->p1->p2->p3->p0 as four lines, in palette index
    `colidx`, fogged at (wx, wz).
@@ -120,7 +137,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
    become a text draw. */
 enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
        TAGPU_MK_TEX_TEXT = 2,   /* tagpu_text.c's coverage atlas */
-       TAGPU_MK_TEX_ART  = 3 }; /* tagpu_order_art's palette-index atlas */
+       TAGPU_MK_TEX_ART  = 3,   /* tagpu_order_art's palette-index atlas */
+       TAGPU_MK_TEX_ICON = 4 }; /* tagpu_icontype_art's palette-index atlas */
 
 typedef struct TAGPU_MKDRAW {
     int first, count;           /* vertices into `verts` below, or for a
@@ -135,10 +153,16 @@ typedef struct TAGPU_MKDRAW {
                                    written): the selection rects alone. Every
                                    other draw is the frame's top layer.      */
     int blend;                  /* 1 = blended at the vertex alpha: the order
-                                   art alone, TAGPU_MK_TEX_ART triangles     */
+                                   art's and the icons' triangles,
+                                   TAGPU_MK_TEX_ART and TAGPU_MK_TEX_ICON    */
 } TAGPU_MKDRAW;
 
-#define TAGPU_MK_MAXDRAW 16
+/* THE LIST'S CAP. A full frame records 16 draws -- the selection rects, the
+   icons, the order art and lines, the labels, the bars, the digits, the
+   cursor, the placement, four of the sweep and three of the overlays -- and a
+   draw past the cap drops the whole marker layer for the frame (`mk_draw`), so
+   the cap keeps room above that. */
+#define TAGPU_MK_MAXDRAW 24
 
 typedef struct TAGPU_MKHAND {
     unsigned frame;
@@ -155,19 +179,22 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_order_art: one palette index a texel, `artKey` where a frame draws
        nothing. Written once, so it is uploaded once per slot. */
     const unsigned char* art; int artW, artH, artKey;
-    /* THE TWO SHARED TEXTURES, AS BYTES: the consumer builds its own
-       images from them. They come over in the shapes `tagpu_fx.h` already uses
-       for the same two, so the two consumers agree about what they are:
-       the palette is 256 RGBA8 texels of `tagpu_pal_engine()` and the fog grid
-       is cols x rows of RG8. A draw that wants fog and whose grid did not
-       cross is refused rather than drawn unfogged. */
+    /* tagpu_icontype_art: one palette index a texel, `iconKey` where a frame
+       draws nothing, `iconFill` and `iconSel` its two markers, `iconSelCol`
+       what a `sel` texel shows on a selected unit (a mod set's SelectedColor);
+       `iconWhite` and `iconInk` the GUI's white and black, a selected icon's
+       fill and every shape's outline. Written once, so it is uploaded once per
+       slot. */
+    const unsigned char* icon; int iconW, iconH, iconKey, iconFill, iconSel, iconSelCol, iconWhite, iconInk;
+    /* THE PALETTE, AS BYTES: 256 RGBA8 texels of `tagpu_pal_engine()`, the
+       shape `tagpu_fx.h` uses for it, from which the consumer builds its own
+       image. The fog is not here: the consumer samples the slot's fog image
+       (tagpu_vk_fog.h), and a draw that wants fog while that image holds no
+       source is refused rather than drawn unfogged. */
     const unsigned char*  pal;        /* 256 x RGBA8 */
     unsigned              palSerial;
-    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
-    int                   fogGridCols, fogGridRows;
     int   key;                  /* uKey: the index an untouched layer texel holds */
     float gw, gh, zoom, zoomCx, zoomCy;
-    float fogOrgX, fogOrgY, fogCols, fogRows;
     float ss;                   /* the line width a one-screen-pixel line takes */
     /* 1 on the ONE frame `tagpu_mark.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane

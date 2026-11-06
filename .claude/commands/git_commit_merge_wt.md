@@ -220,24 +220,39 @@ main in). Decide from it:
 
 - **Does the landing touch engine code?** `tagpu/ddraw/src/**`, `tagpu/ddraw/inc/**`,
   or `tools/tacli`. If not, the gate passes — say so and go to Step 5.
-- **Which engine addresses did it touch or read?** Every VA on an *added* line of the code half
-  of the diff (context and removed lines are the previous landing's business):
-  ```
-  git diff main...HEAD -- tagpu tools | grep -E '^\+' | grep -oE '\b0x0*[45][0-9A-Fa-f]{5}\b' | sed -E 's/^0x0*/0x/' | sort -u
-  ```
-  and the `main+0x…` / `+0x…` field offsets the comments name.
-- **Are they in the notes?** Each of those must already be in
+- **Are the addresses it touched or read in the engine map, once?** Every VA on an *added* line
+  of the code half of the diff (context and removed lines are the previous landing's business)
+  must be named somewhere in the engine map — `research/notes/engine/` and
   `research/notes/exe-reverse-engineering.md` (the docs commit is part of `main...HEAD`):
   ```
-  for a in <the list>; do grep -q -i "$a" research/notes/exe-reverse-engineering.md || echo "MISSING $a"; done
+  tools/exemap-check.py             # exit 1 on a MISSING address
   ```
   A `MISSING` line means the engine map was not updated for this landing. It is also how a
   comment that cites an address the note spells differently gets caught (on G13k the code said
-  `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree.
-- **Did the module docs move?** For engine code the landing must also touch at least
-  `research/notes/gpu-status.md` (hook map / *fields we write*) and `research/notes/roadmap.md`
-  (capability row and gate entry). `.claude/skills/ta-*/SKILL.md` only if how you drive or
-  measure the game changed.
+  `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree. The
+  `main+0x…` / `+0x…` field offsets the comments name are checked by reading the diff. An
+  `EXTEND` line is a new entry — a section whose heading names the address, or a table row
+  keyed by it — for a function that already has one: fold the new facts into the existing entry
+  and delete the new one, or say in the commit why both stand.
+- **Are the sites it writes in the hook map?** Every engine address the landing *writes* — a
+  detour, a call-site redirect, a byte or dword patch — needs a row in
+  `research/notes/modules/hook-map.md`: VA, what it is, the module, the mechanism. The tool
+  finds the sites on the diff's added lines from the installer calls themselves
+  (`tagpu_detour_*`, `patch_bytes`, a module's own `VirtualProtect`) and the tables and
+  wrappers that feed them:
+  ```
+  tools/hookmap-check.py            # exit 1 on a MISSING site; --all lists the whole tree
+  ```
+  A `MISSING` line is a row to write. An `UNRESOLVED` line is an installer call whose site is
+  computed at run time (the takeover's writes into TADR's DLL are the standing case): check it
+  by hand. A site the landing stops writing loses its row. Engine **fields** the landing writes
+  go in the same note's *fields we write* table; no tool finds those, so read the diff for them.
+- **Did the module docs move?** For engine code the landing must also touch
+  `research/notes/roadmap.md` (capability row and gate entry), and the note in
+  `research/notes/modules/` of every module whose behaviour changed.
+  `.claude/skills/ta-*/SKILL.md` only if how you drive or measure the game changed. Check the
+  shape as well as the presence: a module-note diff that only *adds* a section named after this
+  landing is the journal, not the doc — rewrite it into the sections it changes.
 - **Is the landing list still shaped like the work?** If this landing is one of several in a
   gate, the plan note's `## The landings` must match what the work now knows, and the gate row
   must say which landing this was and what is still open — see *When a gate turns out to be
@@ -254,9 +269,14 @@ main in). Decide from it:
 **If anything above is missing, do the pass now** and commit it as its own commit ("docs: …")
 before Step 5, so the reviewer reads the claims. The pass itself:
 
-**The engine map first: `research/notes/exe-reverse-engineering.md`.** Update it as fully as the
-work allows. It takes every address the work **touched or merely read**, not only the ones we
-patched:
+**The engine map first: `research/notes/engine/`, one page per engine subsystem** (memory,
+process, sim, units, weapons, map, orders, render, ui, input, network, cob, recorder), entered
+from `research/notes/exe-reverse-engineering.md`. Update it as fully as the work allows. It takes
+every address the work **touched or merely read**, not only the ones we patched. **A function
+that already has an entry gets the new facts in that entry, edited in place** — the wiki's
+`engine/address-index` page lists every entry; a new section is for an area nobody has mapped
+yet, on the page of the subsystem it belongs to, never a section per landing or per project.
+Each entry carries:
 
 - what the function is, in one line, and **its call sites** (an `E8`/`E9` scan of `.text` for the
   target is cheap and it is the fact nobody has when they need it);
@@ -272,9 +292,15 @@ patched:
 
 **Then the module docs**, each in its own place:
 
-- `research/notes/gpu-status.md` — the §2.x hook map (VA, what it is, mechanism) and the
-  **"State we read, and the fields we write"** table. Anything newly written, or newly written
-  *from a second thread*, belongs in that table.
+- `research/notes/modules/<module>.md` — the module as it now is, **edited in place**: change
+  the sections the work changed, never add one named after the landing (the landing's story is
+  the commit's, the `landing-review:` note's and the plan note's). A new module gets a new note,
+  registered in `research/build_wiki.py`'s `PAGES`. `modules/log-*.md`,
+  `modules/status-snapshot.md` and `gpu-status.md` are frozen and take no writes.
+- `research/notes/modules/hook-map.md` — the register of every engine site we write (one row
+  per site, or one row naming a patch's group of sites; `tools/hookmap-check.py` finds the ones
+  missing) and the **"State we read, and the fields we write"** table. Anything newly written,
+  or newly written *from a second thread*, gets its row, replacing the row it supersedes.
 - `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
   landing did not close**. For a multi-landing gate the row is a summary and a link to the plan
   note, never the landing log (next).
@@ -298,10 +324,12 @@ note before its first landing; without it a re-cut has nowhere to go.
 - and **a link to the plan note** — `[g19f-plan](g19f-plan.html)`, written the way every other
   cross-link in these notes is.
 
-What a landing measured, what its review found and what it taught goes to its module note
-(`gpu-status.md` §2.x), its commit message, and its `landing-review:` git note — there are 82 of
-those and they carry `findings` / `acted` / `rejected` / `date` in a form nothing else does.
-**None of it goes in the row.** G19f's row reached **5 703 words in a single table cell** and
+What a landing measured and what its review found goes to its commit message, its
+`landing-review:` git note — there are 82 of those and they carry `findings` / `acted` /
+`rejected` / `date` in a form nothing else does — and the plan note's block for that landing.
+What it *taught* about the module goes into the module note as the module's present state,
+edited in place. **None of it goes in the row, and none of it becomes a new module-note section
+named after the landing** — that is how `gpu-status.md` reached 1.8 MB before it was retired. G19f's row reached **5 703 words in a single table cell** and
 G19e's 3 413, which is how the table stopped being readable and how one story came to exist in
 three places at once. The row is what someone opening `roadmap.md` reads to find where the gate
 is; it is not the record. (Rows already oversized stay as they are — they are history, and
@@ -437,7 +465,7 @@ The brief must contain, in the agent's own prompt (it starts with no context):
    `0x400000`, VAs map directly). The disassembly command is
    `i686-w64-mingw32-objdump -d -M intel --start-address=0x… --stop-address=0x… "<exe>"`;
    that patch-site bytes, branch targets and the registers the targets test must be checked
-   against it; which notes hold the static context (`research/notes/exe-reverse-engineering.md`
+   against it; which notes hold the static context (`research/notes/engine/<subsystem>.md`
    and the module note the change cites).
 4. **The docs are part of the review**: a stated address or claim in the diff's notes that the
    disassembly or the code disproves is a finding.

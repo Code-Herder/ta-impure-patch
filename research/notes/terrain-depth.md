@@ -423,7 +423,8 @@ Two things follow. First, **a reader must not assert `cells == cols*rows`** — 
 1024×768 (30×24 = 720) and fails at 1920×1080 (58×34 = 1972 against 1976), and in our stack that
 refusal cleared `fogMode` and turned the whole fog rule off at 1080p until 2026-09-09 (§8).
 Second, the grid spans the **1× viewport** and about two cells more, permanently — it cannot be
-made to cover a zoomed-out view, which is why `tagpu_fogwide.c` builds its own. Full read of the
+made to cover a zoomed-out view, which is why the Vulkan lane carries the source instead (§8).
+Full read of the
 builder's every load, and of the four border completions, is in
 [engine map](exe-reverse-engineering.html) §"The screen fog grid".
 
@@ -551,9 +552,11 @@ occlusion at native resolution — and where to read the inputs live:**
      `eye>>5`), so a per-cell test lands ~16 px off; and
    - the overlay's shape comes from **4-bit corner masks**, feathered by 14 edge
      sprites — a per-cell boolean cannot express it.
-   What actually works (`tagpu_glsl.h`, G13c): upload the grid as an RG8 texture
-   — its two bytes *are* `(b0, b1)`, so it uploads with no conversion — and take
-   bilinear coverage over the four corner bits, thresholded at 0.5. That gives
+   What actually works (`tagpu_glsl.h`): the builder's corner masks, not a
+   per-cell test — today expanded per fragment from the source bits exactly as
+   `0x4843C0` expands them, read with the builder's own MAPPED index
+   `(plotC·cy)/2 + cx` (§8; the oracle holds the expansion to the engine's grid)
+   — and bilinear coverage over the four corner bits, thresholded at 0.5. That gives
    the 14 shapes for free (`0xF` → everywhere, `0x3` → the top half, a lone
    corner → its quadrant), with a clean edge where the engine dithers one.
    - The grey darken **is** the shade-LUT `*(TAProgram+0xCC)`, applied to the
@@ -590,17 +593,52 @@ full-viewport layer inverts it.**
 ### 7.1 The pass
 
 Armed by `tagpu_terr.on` (tokens `log`, `passive`, `over`, `key=N`). It rides the
-native pass's frame like the feature pass, walks the same grid §2 walks, and emits
-one quad per visible cell. **The quad is an INSTANCE since 2026-09-09**: one static
-six-corner buffer, and per cell four shorts — its column and row in the gather's
-grid, its tile's column and row in the atlas — that the vertex shader turns back
-into the position, UV and world coordinate the per-vertex stream used to carry.
-Every term is an integer far below 2²⁴, so the floats are the same floats, bit for
-bit (verified: 0 differing pixels at 1× against the pre-change build). The reason
-is size: at 144 bytes a cell a 3840×2160 view at the 0.25× zoom floor needs 17.9 MB
-of staging and as much uploaded every frame; at 8 bytes it needs 972 KB, which is
-what let the fixed 32768-cell budget become a reservation made from the live
-viewport (`tagpu_terr_clamp_span`). Three things fall out of §2 exactly as predicted:
+native pass's frame like the feature pass and sizes the same grid §2 walks — the map cell
+its corner is (`tile0`), its columns and rows, the screen point of its corner — and
+nothing per cell. **Each cell is an INSTANCE, and no record of it is stored**: the
+draw is one static six-corner quad drawn `cols × rows` times, and the vertex stage
+derives everything about a cell from `gl_InstanceIndex` and two images that change
+only with the level (`tagpu_terr.c`, the comment above `VS`, states each term beside
+its C original):
+
+- **Which cell.** Instance `i` is grid column `i % cols`, row `i / cols`, map cell
+  `tile0` plus that. The Vulkan draw passes `firstInstance` 0, so the index is the
+  cell's.
+- **Its tile** is a `texelFetch` of **the level's tile map**, an `R16_UINT` image of
+  the engine's own `TILE_MAP` (§1) at its own size, copied once a level by the gather
+  while the Vulkan lane is armed (`ensure_tilemap`, render thread, under the teardown fence that every read of the map
+  in `tagpu_terr.c` is under — the file is `fenced` on `thread-split.allow`) and
+  uploaded once by the Vulkan lane: 2 bytes a map cell, 800 KB on Seven Islands
+  (640 × 640 cells). A cell past the
+  engine's area takes the tile of the cell it folds to (the mirrored edge,
+  [modules/map-edge](modules/map-edge.html)); with the mirror off, and for a tile index
+  at or past the atlas's count, all six corners go to one point outside the clip
+  volume and the cell has no fragment.
+- **Its neighbourhood key** (Classic++'s restore, [modules/restorer](modules/restorer.html)
+  §2.103) is a `texelFetch` of an `R32_UINT` image on the same grid, read only under
+  `uNbhd`.
+
+**The copy is keyed on the level, not on a pointer.** LoadMap `0x483610` allocates
+`TILE_MAP` (pointer stored at `0x483969`) and fills it with its one `rep movs`
+(`0x48397D`/`0x483984`); the map free `0x483DD0`, inside the level teardown, frees it
+(`0x483E9A`) and nulls the pointer (`0x483EED`). No other instruction in the exe stores
+to the pointer or through it, so the map does not change between the two
+[DISASSEMBLED; the method and its limits in [engine/memory](engine/memory.html), the
+per-map field table]. The next level's allocation can return the same address, so the
+copy is keyed on the packet's `level_gen`; a copy of other dimensions is re-made too.
+
+**Every term is an exact integer in float**, so position, UV and world point are bit
+for bit the floats a CPU would compute: a grid column or row is under
+`TAGPU_TERR_MAX_SIDE` (2050), a map cell under 2048, an atlas column under 64 and an
+atlas row under 1024. The bound on the grid is a refusal, not a hope: the native pass
+clamps the rect every pass gathers over to `TAGPU_GATHER_SPAN_MAX` (65 536 world px a
+side, `tagpu_terr.h`), the gather bails on a side past 2050, and `tagpu_vk_terr.c`
+refuses a grid outside `[1, 2050]`, a tile map past 2048 a side and an area that is not
+inside the tile map. That last one is what keeps every `texelFetch` inside its image:
+the fetched cell is on the map inside the area, or `tagpu_edge_reflect`'s answer in
+`[0, area)`. What crosses from the gather to the draw a frame is therefore the grid's
+numbers, whatever the zoom; what grows with the zoom-out is the instance count alone.
+Three things fall out of §2 exactly as predicted:
 
 - **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
   flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under
@@ -663,9 +701,93 @@ has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` tex
 32×32 cells on a **34-texel pitch**, 64 per row: **2176×2720 for 5062 tiles (5.9 MB)**,
 sized from the count and capped at `GL_MAX_TEXTURE_SIZE`. The spare texel on each side
 is the cell's own outermost row/column repeated — a guard rail, not padding, and §7.6's
-fifth failure mode is why. A map change is the `TILE_SET` pointer or its count moving;
-measured live (before the pitch changed), switching Two Continents → Anteer Strait **in
-the same process** rebuilt it for 7051 tiles.
+fifth failure mode is why. A map change is a new level — the packet's `level_gen`
+moving — or the `TILE_SET` pointer or its count moving. `TILE_SET` is as immutable as
+the tile map: LoadMap stores its pointer at `0x483B68` and writes its count and pixels
+at `0x483B72`, `0x483B80` and `0x483B9C`/`0x483BA4`, and the map free frees it
+(`0x483E5C`) and nulls it (`0x483ECA`), with no other store [DISASSEMBLED]. But the
+next level's `MEM_Alloc` can hand a set of the same count the same address, so pointer
+and count alone would keep the previous level's atlas; the height grid and the
+restorer's keys are keyed on the level for the same reason. Within a level the pointer
+test still tells a rebuild of the same set (a device limit, a mirror asked for late),
+which keeps the restore, from a new set, which drops it. Measured live (before the
+pitch changed), switching Two Continents → Anteer Strait **in the same process**
+rebuilt it for 7051 tiles.
+
+**Below a texel a target pixel the terrain reads the tile's mip chain** (`inc/tagpu_chain.h`,
+`src/tagpu_chain_ref.c`, `tagpu_vk_terr.c`, `tagpu_terr.c`'s `taChain`; the features do the same
+per frame, [Features](features.html) §5). The world is drawn into a target `gw·ss × gh·ss`
+(`tagpu_vk_world.c` `prepare`) and the composite resolves it with one LINEAR tap an output pixel,
+which at ss = 2 is the exact 2×2 box. A tile's 32 texels span `32·z` game px, so one texel spans
+`f = z·ss` target px. **While `z·ss ≥ 1` every texel is reached by at least one sample and the box
+resolve averages them**: nothing aliases, and level 0 — the atlases sampled NEAREST, as at 1× — is
+the right picture (z ≥ 0.5 at the default ss = 2). **Below `1/ss` a target pixel covers `1/f`
+texels a side and NEAREST picks one**, and which one moves with every sub-pixel pan: that is the
+far zoom's shimmer. Supersampling cannot reach it — at Seven Islands' whole-map level at 1024×768
+(z ≈ 0.034, ss = 2) a target pixel covers about 15 texels a side, so ss would have to be about 30
+— while a chain prefilters each tile once and costs one fetch a sample. So the two complement each
+other: ss× keeps geometry edges, the band `[1/ss, 1)` and everything that is not a texture (the
+fog's edge, the light, the shadows); the chains take texture minification below `1/ss`, exactly
+where the supersampling stops being enough.
+
+- **The level is one integer a frame**, `tagpu_chain_level(zoom, gw, gh, w, h)`: `f = zoom ·
+  min(w/gw, h/gh)` on the extent the pass records into, and `L` the smallest level with
+  `f·2^L ≥ 1`, capped at 5 — `L = ⌈log₂(1/f)⌉`, the finest level whose texel still covers a target
+  pixel. Its first test is `f < 1`, so **`L = 0` exactly when `f ≥ 1`**. With the world target
+  standing `w = gw·ss`, so `f = zoom·ss` exactly (a float times an integer ≤ 8, in double): every
+  zoom ≥ 1, and 0.5 at ss = 2, is level 0 by construction, and the shader's level-0 arm is the
+  statements the pass had without chains, on the same inputs — **1× and above are byte-identical by
+  construction**. A frame drawn without a world target takes the client's real footprint, so a
+  client smaller than the game frame is minified at 1× and gets `L ≥ 1`: the one 1× picture that
+  changes, and it was aliasing. The level rounds up, so no texel is ever skipped, at up to 2×
+  softer than round-to-nearest, which would keep level 0 down to 0.354× at ss = 2 and skip up to
+  29 % of the texels there. One level a frame is exact because terrain and feature quads are
+  screen-aligned and scaled by one zoom; it needs no derivatives. `uLod` is written into the
+  slot's fragment block at `record` (offset 176), the only place the extent is known, and is 0
+  while the base chain is not current (`s_lodOk`).
+- **The layout.** Each terrain atlas — the base atlas, and under Classic++ the restored one (per
+  tile or per neighbourhood key) — has a separate 5-level RGBA8 image with one 16-texel **cell** per
+  34-texel atlas cell, on the atlas's own grid (`cols = atlasW/34`, `rows = atlasH/34`; an atlas
+  that is not a whole multiple gets no chain). Image level `k` holds tile level `k+1`, `16 >> k`
+  texels a cell side. A whole-atlas chain would mix tiles from level 1 on, because the 34-texel
+  pitch puts a 2×2 block across the guard texel and the neighbour. A cell is 341 texels against
+  the atlas cell's 1 156, so a chain is 29.5 % of its atlas: 64 × 80 cells, 7.0 MB, for Two
+  Continents' per-tile base; 209 × 209 cells, about 57 MiB, for its 192 MB neighbourhood atlas
+  [the sizes' arithmetic].
+- **The reduction** is the integer mean of the level-0 bytes at every level, one rounding a level
+  and none compounded: over a level-L block `B` and its texels `O` with alpha ≥ 128,
+  `rgb = (Σ_O rgb + |O|/2) / |O|` and `a = (|O|·255 + |B|/2) / |B|`. A base tile has no hole, so it
+  gets its rounded box mean; a restored cell not painted yet has alpha 0 at level 0 and so at every
+  level. It runs on the device ([modules/vulkan-backend](modules/vulkan-backend.html), *The mip
+  chains' reducer*), and `tagpu_chain_ref` is its C reference.
+- **The lookup** (`taChain`, mirrored by `tagpu_chain_texel`). The vertex stage carries each
+  tile's two cells, `vCells` — the base atlas's and the restored atlas's, the key's under `uNbhd` as
+  `vUVR` is — and its in-tile coordinate `vIn = k·32 + e`, the function both UVs are built on less
+  the cell's origin, nudge and flip included. The fragment stage `texelFetch`es
+  `cell·(32 >> L) + clamp(floor(vIn / 2^L), 0, (32 >> L) − 1)` at image level `L − 1`: for `vIn` in
+  `[0, 32)` that block holds `floor(vIn)`, the texel level 0 samples, and the clamp keeps every
+  fetch inside the cell. Above level 0 the restored-or-base choice is the one level 0 makes, on the
+  chains' alpha; the mirrored edge takes the same pair. The branch is on a uniform, so
+  `texture()`'s implicit derivatives stay in uniform control flow.
+- **When the chains are reduced** (`chain_maintain`, once a `prepare`, after `restore_want` and
+  before `shared_bind`): the base chain whole once per map and per palette move (the base atlas's
+  serial and palette), after the banded upload; the restored chain by a ledger that follows the
+  restore job ([modules/restorer](modules/restorer.html) §2.103). Binding 47 (`uChainBase`) names
+  the base chain exactly when `uLod` may be above 0 (`s_lodOk`) and 48 (`uChainRest`) the restored
+  one exactly when `uRestChain` is 1; otherwise each names the base atlas's view, a valid descriptor
+  nothing samples, and neither names a chain before it has left `UNDEFINED`.
+- **A chain that cannot stand never refuses a frame.** A device that will not reduce
+  (`vk: chains off: <reason> - the far zoom draws the atlases at level 0`) draws every zoom from
+  level 0; a base chain the device refuses draws level 0; a restored chain refused by the memory
+  rule (D10, `vk: terr: the restored chain does not fit: …`) or the device draws the base chain
+  under Classic++ below `1/ss` — no shimmer, the dithered average's colours there only. A refused
+  size is not asked for again until the atlas's size moves or the device goes.
+- **What chains do not cover.** Units and 3DO textures: their per-face footprint is not uniform,
+  so one level a frame does not apply (Classic++'s restored unit atlas is mipped to level 2 on its
+  padded layout, [renderers](renderers.html) §1; the base unit atlas is NEAREST). Effects. And the shimmer that is not texture aliasing:
+  Classic++ lighting from the 16-px height grid, the cast-shadow PCF, the fog's 32-px cell edge.
+  The in-game A/B of 1× and 0.5×, the oracle run (`tagpu_chaincheck.on`) and the shimmer measure
+  are open ([mega map plan](mega-map-plan.html), *Landings*).
 
 **Fog needed one change, and only one.** Terrain is now the bottom layer, so where the
 overlay paints an unexplored cell **solid black it must paint black rather than
@@ -926,7 +1048,7 @@ terrain vertex shader, *after* the zoom scale so it is the same sub-pixel distan
 every zoom. That puts a coincident fragment centre inside the **following** quad, where
 it samples that cell's first texel — the thing it is standing on — and the cadence stays
 uniform. 1/32 px is ~300× the float noise in a coordinate that size and 1/8 of a texel at
-the 0.25 zoom floor, so it cannot be lost.
+0.25× (more below it: `NUDGE/zoom` world px), so it cannot be lost.
 
 **It shifts the picture 1/32 px at every zoom**, not only where a sample lies on a boundary:
 every fragment reads the texel under its world point plus `e = 1/32 ÷ zoom` world px. On the
@@ -1013,165 +1135,77 @@ were ever drawn on out-of-LOS ground, which the engine does not do.
 
 ---
 
-## 8. Fog at zoom — the grid the engine cannot give us [LIVE-VERIFIED 2026-09-09]
+## 8. Fog at zoom — the source, not the grid
 
-The four native passes sample the engine's grid, and §5.2 says why that grid can only ever span
-the 1× viewport: its dimensions are fixed at map load and its origin is recomputed from the eye
-inside the builder. At zoom < 1 the passes draw a world rect `vw/z` across, so everything outside
-the grid falls off the lattice, `taFog`'s `clamp` reads the border cell, and the outer ring gets a
-**smear of the last row and column** — horizontal and vertical grey bands with lit, un-fogged
-ground between them, and, in the black band's case, unexplored map drawn in full colour.
+The engine's grid (§5.2) can only ever span the 1× viewport: its dimensions are fixed at map load
+and its origin is recomputed from the eye inside the builder. A zoomed-out frame draws a world rect
+`vw/z` across, so no window of that lattice serves it. **It is not cosmetic**: the CPU-side gates
+take the same sample (`tagpu_native.c`'s unit and wreck gates, `tagpu_fx_tile_visible` for effects,
+particles and the feature gate), so a sample that reads "no fog" draws enemy units and buildings the
+player has never seen.
 
-**It is not cosmetic.** The CPU-side gates take the same sample: `tagpu_native.c`'s anchor test and
-`tagpu_fx_tile_visible` both call `tagpu_fog_at`, so a smear that reads "no fog" draws enemy units
-and buildings the player has never seen. Measured on `feat-forest` at 0.35× — an enemy CORE Solar
-Collector on ground with no LOS, drawn in full colour on the frame's right edge, gone with the fix.
+**So the Vulkan lane carries what the grid is built FROM, for the whole map.** `tagpu_fogwide.c`
+packs two bits per 32-px LOS cell — bit 0 never explored (the local player's MAPPED bit clear),
+bit 1 out of LOS (`LosType & 2` and the LOS counter 0) — sixteen cells a 32-bit word
+(`inc/tagpu_fogsrc.h`, THE FORMAT). Seven Islands, 640 × 640 cells, is 100 KB; the packet reserves
+the cap, 2048 × 2048 cells (1 MiB), in every slot. Every reader expands the bits as `0x4843C0`
+does (§5.2, and engine map §"The screen fog grid" for the builder's loops):
 
-**`tagpu_fogwide.c` builds its own grid** over a window sized for `TAGPU_ZOOM_MIN` — the widest
-view the levers can reach, not the level in force, because the level the game thread can read is a
-frame old and one ease step of a wheel flick is wider than the slack. It replicates `0x4843C0`
-exactly (engine map §"The screen fog grid"), on the **game thread**, from `terr_fogtick` — the fog
-overlay's own call site, where the LOS and MAPPED allocations are the engine's own to read — and
-hands the result to the render thread by swapping one of three buffers under a critical section,
-so the two never touch the same one. The render thread uses it in place of the engine's grid,
-same lattice and same bytes, and falls back to the engine's whenever the game thread is not
-building (the off lever, terrain ownership disarmed, the menus) — or whenever the frame it is
-drawing is 1:1, which since G13s is the CONSUMER's decision and no longer the producer's
-(§8a).
+1. clamp the entry to `[-1, w − 1] × [-1, h − 1]` (past the entry that straddles an edge every
+   entry repeats it);
+2. OR the four cells at its corners into the corner bits 1/2/4/8, a cell off the map contributing
+   nothing (the engine's `jae` skip);
+3. the four border completions `0x4846A1..0x4848CD` on both nibbles: top (`cy == −1`) 1 |= 4,
+   2 |= 8; bottom (`cy == h − 1`) 4 |= 1, 8 |= 2; left (`cx == −1`) 4 |= 8, 1 |= 2; right
+   (`cx == w − 1`) 8 |= 4, 2 |= 1. Two of them meet only at a corner entry, which holds one map
+   cell, so there they commute — the host test enumerates all 24 orders and finds no disagreement;
+4. the point's entry `floor((w − 16)/32)` and its fraction, then the bilinear coverage of each
+   nibble thresholded at 0.5 (`taFog`).
 
-**The oracle is exact**: with `tagpu_fogwide_check.on` the module rebuilds over the *engine's* own
-window each 120th tick and compares byte for byte — **0 differing of 720 cells (30×24, 1024×768,
-357 non-zero) and of 1972 (58×34, 1920×1080, 1555 non-zero)**.
+The shaders do it through `TAGPU_GLSL_FOG_FN` (`tagpu_glsl.h`) on an R32UI image, the CPU gates
+through `tagpu_fog_entry`/`tagpu_fog_at`; the two are one rule, edited together. A source with no
+window has no edge to outrun: every pixel and every anchor of every frame, at any level and from
+any eye, has its fog. The packet's tables still have a reach, which the drawn eye is bound by
+([camera zoom](modules/camera-zoom.html), the reach bound).
 
-Two departures from the engine, both deliberate and both documented in the source:
+**Where it runs.** On the game thread, once per tracked in-play draw: from `terr_fogtick` (the
+overlay's own call site) when our terrain owns it, else, on the Vulkan renderer, from the
+publisher's `after` of the same draw. It packs only when the engine's grid was not current on that
+draw (`LosType` bit 3 clear) or the maps themselves changed; the publisher copies the words into
+that draw's packet on the same thread. On the render thread the native pass copies the packet's
+source once a serial (`tagpu_native_fogsrc`), and `tagpu_vk_fog.c` uploads it into one image a
+frame slot that every world pass binds. On the GDI lane nothing reads it and neither runs.
 
-1. **The border completions use the derived straddling index**, not the engine's literal
-   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window an eye in the
-   engine's own range `[0, extent − W]` produces (`extent` the scroll extent `main+0x1422B`, the
-   map less 32 and 128 px; `skipped=0` measured at its far corner `(9824, 11968)` on Two
-   Continents); past it — the camera's centre range takes the view up to `W/2` off the map, so
-   `row0`/`col0` reach −2 and beyond, or the far edges' equivalent — they do
-   not, and there the engine's completion is a no-op on a wholly off-map line while ours completes
-   the straddling one. So the oracle compares only what both functions define the same way: for
-   each completion whose gate is up and whose two lines differ, both lines are left out and counted
-   as `skipped=` (`edge_skip`). Every other entry depends only on its own four cells, and each
-   completion copies bits within one entry, so nothing else can differ because of them.
-2. **`fogw_edge_fill` replicates the edge entry outward** over the entries that lie wholly off the
-   map. The engine never meets that case — its grid stops one cell past — but ours can carry forty
-   all-zero rows over open water, and an all-zero entry means "no fog": a sprite whose *projected*
-   position (`y − alt/2`) lands past the shoreline while its anchor is on the map drew in full
-   colour above a fogged map. It is applied after `fogw_build` and is not part of what the oracle
-   compares.
+**The rate is the sim tick's, not the camera's.** The is-current bit is cleared by every LOS stamp
+touching the local player's maps as well as by every scroll (§5.2), so with anything moving the
+pack runs at the tick rate (~30/s at gamespeed 10) whatever the camera does. What one pack costs is
+the heartbeat's `pack=` (`fogwide: WxH source, N KB, packs=.. pack=mean/max us`, one line per five
+seconds of wall time — a tick here is a `DrawGameScreen` call, 330/s on `crowd-static` and
+3200–4900/s on a sparse skirmish at a 60 fps cap, measured 2026-09-10, so a count per block of
+ticks is a ratio and not a rate). **Not yet measured on the source**: the pack's cost and the
+upload's against the window builder it replaced (V1a-4 of the mega-map plan).
 
-**Cost**, from the module's own heartbeat (`fogwide:` per 300 ticks): a 245×148 window — 36,260
-cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread with one game on the
-box, **109–246 µs with six of them running** and 150–220 µs with two or three, so it is a cost
-that scales with contention rather than a fixed figure; quote the load with the number. It is
-paid only on ticks where the engine's grid was invalidated or the window moved.
+**The oracle.** `tagpu_fogwide_check.on` runs, every 120 ticks, `tagpu_fog_build_window` — the
+builder's loops replicated over the ENGINE's own window, from our bits — and compares it with the
+engine's grid byte for byte (`differ=`), then compares `tagpu_fog_entry` with that window build on
+every entry the build fully defines (`mirror-differ=`). The window build departs from the engine
+in one place, deliberately: its border completions use the derived straddling index, not the
+engine's literal `0`/`rows−2`/`0`/`cols−2` (engine map, the table). The two coincide for every
+eye in the engine's own range `[0, extent − W]`; past it (the camera's centre range) the engine's
+completion is a no-op on a wholly off-map line while ours completes the straddling one, so the
+oracle leaves both lines out and counts them as `skipped=`. Off the engine's grid there is no
+reference at all, which is what the host test (`tools/replay/fog_expand_test.py`) covers: it holds
+`tagpu_fog_entry` to the window build over random maps and windows, and shows that dropping or
+turning round any one completion is caught. Live, on the source: **536 oracle lines in a 158-s
+200-v-200 fight under true LOS at 1920×1080, every one `differ=0 mirror-differ=0`** (`skipped=0` in
+the fight, 180 at the map's corners), MEASURED 2026-11-03; and the world frames at 1×, 0.5× and
+0.25×, at the map's centre and two corners, in true LOS and mapping only, **byte-identical** to the
+window builder's (nanoframes compared at one game tick).
 
-**The heartbeat is emitted per five seconds of WALL TIME and carries the rate** (G13s). It used to
-be one line per 300 ticks — but a tick here is a `DrawGameScreen` call, and the game loop turns
-that over 330 times a second on `crowd-static` and 3200–4900 on a sparse skirmish while both
-present 58–60 fps (engine map, §"The engine's rates"), so a block of 300 was anywhere from a tenth
-of a second to a second and `rebuilds=n/300` was a ratio that read like a rate. *(An earlier note
-here said it "reads 300/300 while the camera is moving". It does not, and never did.)*
-
-**And the rebuild rate is the SIM TICK rate, not the camera's.** `changed` is
-`rebuilt || the window moved || …`, and `rebuilt` is the engine's is-current bit, which §5.2
-records as cleared by every LOS stamp touching the local player's maps as well as by every scroll
-— "the grid rebuilds nearly every frame something moves". MEASURED 2026-09-10 at 1920×1080 on
-`200v200`, 400 units fighting, **camera still, zoom 1.0: 760 rebuilds in 25.0 s = 30.4/s** at
-145 µs mean, so **~4.4 ms of game-thread time per second**, doubling at `gamespeed` 20. It is
-bounded by the tick rate rather than by the unit count, and since G13s it is paid at every zoom.
-
-`tagpu_fogwide.off` in the gamedir disables it live — polled on the **game** thread, at the top of
-the tick, because the producer is the one that must obey it (polling it in the consumer left the
-game thread rebuilding a 36k-cell grid nobody read on any frame the pass never reached the fog
-block). `tagpu_fogwide_check.on` arms the oracle.
-
-### 8a. The frame that outran its own grid — G13s [MEASURED 2026-09-10]
-
-Reported from play: at the map's bottom-left corner, zoom out quickly and the fog fails for a
-moment on the outer edge of the view. Reproduced on Town & Country with the camera **scrolled**
-(never written — a written eye leaves the engine's own grid stale and its picture is then a lie),
-recorded losslessly at 60 fps and scanned for green-dominant pixels, which separates lit grass
-from the grey band: **6 frames of 1801 unmapped over seven wheel gestures, 7 of 1561 mapped +
-true LOS over six**, each a single frame, each 0.08–0.22 s after the gesture, each showing lit
-ground along the bottom and right of the fogged area at exactly the engine grid's own extent.
-
-Two faults, and only both together made it visible.
-
-1. **The producer was gated on the live zoom level.** `tagpu_fogwide_tick` withdrew the published
-   grid whenever `tagpu_zoom_level() >= 1.0f`. That level is published by the RENDER thread —
-   which is also the thread that decides, mid-frame, to draw the first zoomed-out frame of a
-   gesture, and on that frame the pass asked for a grid the game thread had had no tick to build.
-   A producer that cannot see the future must not be gated on it: it now builds **every tick**,
-   and the consumer picks per frame off the level it is actually drawing with. The instrument is
-   the heartbeat's new **`bare=`** counter — render-thread frames that asked and were refused, so
-   frames drawn zoomed over the engine's 1× grid: `bare=1 rebuilds=1/300` per gesture before (the
-   old per-300-tick line), **0
-   throughout** after. It must read 0.
-2. **The fallback failed OPEN.** The last column of any grid never has its right corners written
-   (engine map, §"The builder `0x4843C0`"), so `taFog`'s clamp to `uFogDim − 0.001` landed every
-   sample past the grid on corners nobody wrote: coverage 0, i.e. **no fog at all** rather than
-   the smear the ring is supposed to degrade to. `uFogDim − 1.0` lands it at `f = 0` in the last
-   *complete* entry instead, replicating the edge outward exactly as `fogw_edge_fill` does off the
-   map. It cannot move a fragment inside a grid, and that is the bound rather than a margin: the
-   viewport's right and bottom edges are inside the engine grid's last column and row for **every
-   viewport size the allocation accepts and every eye** — worst case 1 px, at a 64-px viewport
-   with `eye % 32 == 15`, and 16 px for the negative eyes the widened camera range produces
-   (enumerated over `0x483BB8`'s and `0x4843C0`'s own arithmetic; engine map, §"The screen fog
-   grid") — while the wide grid spans the gathers' whole slab, `TAGPU_GATHER_MARGIN` past the view
-   on each side, for any eye a frame is drawn from ([GPU status](gpu-status.html) §2.3, the fog
-   bound on the drawn eye).
-
-**After:** 0 failure frames of 1800 unmapped (max 32 green px in any frame) and 0 of 1561 mapped
-(max **0**), `bare=0` on every heartbeat, and the replication oracle still `differ=0` over
-1972 of 1972 cells at 1920×1080.
-
-**Parity**, on `crowd-static` with every pass armed, sim running, zoom 1.0 / 0.5 / 0.25: the
-**outer 64-px ring of the world viewport — the only region the clamp can reach — differs by 0
-pixels** in every pair, cross-build and same-build alike. The interior differs by 456–9049 px in
-the same-build floors as much as across builds, all of it inside the unit block and all of it
-animation phase; that fixture is static in position, not in pose, so it cannot be paired more
-tightly than its own floor. *(A first attempt at this measured nothing at all: `scenario load`
-writes `tagpu_defaults.off`, so the instance had every pass opt-in and none armed and both builds
-were drawing the stock engine's picture. Read the `opt:` line before believing a parity number.)*
-
-**What it costs, stated plainly**, because the landing bought the fix with it: ~4.4 ms of
-game-thread time a second whenever anything is moving (above), and the three buffers, allocated on
-the first in-game tick now rather than on the first zoom-out. The alternative on the table was a
-frame drawn without a grid, which is what the report was about.
-
-*(The heap half of that figure was **6 MB in every session** until 2026-09-10 — three fixed
-1024×1024 squares — and is now sized from the screen: **212 KB at 1920×1080, 84 KB at 1024×768**.
-The same change retired the second constant, `tagpu_fog_at`'s separately typed 512, which had gone
-stale against it and would have refused the very grid the producer built past a 4057-px-wide
-screen. Why the size is taken at the worst eye residue, why the set grows whole rather than per
-slot, and why the old set goes back through `tagpu_reclaim`'s fence rather than being freed on the
-spot: [sizing the wide fog grid](fog-grid-sizing.html).)*
-
-**And since 2026-09-10 a SECOND thing can ask for that rebuild.** `terr_fogtick`'s condition is
-`!(LosType & 8) || tagpu_zoom_fog_pending()`: the engine's own lazy test, OR-ed with a request
-from `tagpu_zoom` saying it has stepped the eye for a cursor-anchored zoom. It is a request and
-not a write, and that is the whole point — `0x484904` sets the bit with an **unlocked**
-`or word`, so a clear issued from the render thread can be swallowed and a swallowed clear is a
-silently stale, view-anchored fog grid. Asking here costs nothing and cannot be lost: this is
-the only code that decides, and it is already on the thread that owns the word. The handshake
-is two monotonic counters with one writer each — the render thread bumps a sequence when it
-moves the eye, this function samples it BEFORE the rebuild and stores it after, so a step that
-lands mid-rebuild is answered by the next tick rather than swallowed. While the two disagree
-the frame takes the wide grid, so a game thread that stops ticking fails safe. **Cursor
-anchoring is gated on `g_terrown_skip`** for exactly this reason: with the engine owning its
-own fog draw there is no one to ask, so the eye is not stepped at all.
-
-**The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
-`gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
-avoids. It is unreachable through the wide grid — the fog bound on the drawn eye keeps the
-gathers' whole slab inside `[0, cols − 1]` ([GPU status](gpu-status.html) §2.3) — and
-through the engine's grid at zoom ≥ 1 it is reachable for an anchor 1–32 px past the viewport
-edge, where both available answers are the same "no fog" and tightening the bound would change
-only the argument. Recorded rather than changed.
+**There is no off switch.** A frame whose packet carries no source — a pack, an append or a copy
+that failed, a puppet level before the viewed seat's counters exist — samples no fog, and the
+native pass's gates **fail closed** on it: no unit but the watched player's own and no wreck is
+drawn (`tagpu_native.c`). Fog is never off for a player; an inactive mode is an all-zero source.
 
 ## Appendix — address & offset tables
 

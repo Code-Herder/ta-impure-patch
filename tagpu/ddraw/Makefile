@@ -85,16 +85,32 @@ COVERED  := $(shell awk '$$1 !~ /^\#/ && $$3 == "sim" {print $$1}' thread-split.
 $(addsuffix $(OBJEXT), $(basename $(COVERED))): CFLAGS += -finstrument-functions -finstrument-functions-once -ffunction-sections
 endif
 
+# EVERY SECTION AT A PAGE-ALIGNED FILE OFFSET: FileAlignment = SectionAlignment
+# = 4096. Wine maps a PE section from the file only when its file offset and
+# its RVA agree modulo the page; any other section it read()s into anonymous
+# memory, which is what Wine reports as PagefileUsage -- the `vk: VA`
+# committed-peak. At ld's default 512 the agreement is a lottery that any
+# change to the code before a section can flip: `.rsrc` (13.8 MiB, the art)
+# moved by 11 KB between two builds a few KB apart and the
+# process's committed peak rose 13.7 MB before Vulkan was even up (MEASURED
+# 2026-11-03, Town & Country and Seven Islands, every run). Page alignment makes
+# every section mappable whatever precedes it, for at most a page of padding a
+# section in the file. Windows maps an image through its section object at
+# either alignment. Appended after both LDFLAGS assignments above, so the
+# coverage build carries it as well.
+LDFLAGS  += -Wl,--file-alignment,4096
+
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 
-# THE WIKI'S SCENE (src/tagpu_scene.h): the seven files that draw one world scene are compiled a
+# THE WIKI'S SCENE (src/tagpu_scene.h): the nine files that draw one world scene are compiled a
 # second time, with -DTAGPU_SCENE_WIKI, into the in-game wiki's stage -- src/<name>.wiki.o beside
 # the game's src/<name>.o, each in every build's suffix -- and both copies are linked. The two
 # share no static, which C's linkage guarantees; the link fails on a symbol tagpu_scene.h did not
 # rename, and scene-check below on a call from a wiki copy into a module only the game has.
-SCENE_SRCS := src/tagpu_vk_world.c src/tagpu_vk_terr.c src/tagpu_vk_feat.c src/tagpu_vk_unit.c \
-              src/tagpu_posedraw.c src/tagpu_posebake.c src/tagpu_render3do.c
+SCENE_SRCS := src/tagpu_vk_world.c src/tagpu_vk_fog.c src/tagpu_vk_chain.c src/tagpu_vk_terr.c \
+              src/tagpu_vk_feat.c src/tagpu_vk_unit.c src/tagpu_posedraw.c src/tagpu_posebake.c \
+              src/tagpu_render3do.c
 SCENE_OBJS := $(addsuffix .wiki$(OBJEXT), $(basename $(SCENE_SRCS)))
 OBJS     += $(SCENE_OBJS)
 
@@ -105,7 +121,7 @@ ALLEXTS  := .o .stock.o .cover.o .stock.cover.o
 ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))) \
                                      $(addsuffix .wiki$(e), $(basename $(SCENE_SRCS))))
 
-.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest
+.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest icontest iconsettest
 all: $(TARGET)
 
 %.o: %.rc
@@ -223,11 +239,15 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
 # (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
 # double, so it computes on SSE2 with them. The units' scripts' host
 # (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
-# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The game's threads align the
+# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The replay layer
+# (src/tagpu_wikireplay.h) computes on integers, its one double the demo's end the clock is compared
+# with, exactly; it is the simulation's caller in the replay demos and builds with it. The game's
+# threads align the
 # stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
 # checks the build under Wine.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
-$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)): \
+$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)) \
+$(addprefix src/tagpu_wikireplay, $(ALLEXTS)): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
@@ -236,11 +256,22 @@ $(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALL
 # tools/wiki/stagecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE WIKI'S FRAME (src/tagpu_wikiframe.h) places the viewer's cursor and Leave's question in double
+# by the mockup's frame.js arithmetic and snaps them to pixels, so it computes on SSE2 with the
+# stage. tools/wiki/framecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikiframe, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE WIKI'S SCENE (src/tagpu_wikiscene.h) stages a nanoframe by truncating a single-precision
 # product (tagpu_nanostage.h, `nano * 255.0f`) as the mockup's scene.js truncates Math.fround's,
 # so it computes on SSE2 too: an 80-bit product can land on the other side of a whole number.
 # tools/wiki/scenecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikiscene, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
+# THE WIKI'S BARS (src/tagpu_wikibar.h) fill to a truncated double quotient and print the metal
+# rates by a rounding rule in double, as the mockup's bar.js does, so they compute on SSE2 too: an
+# 80-bit intermediate can carry a fill's end or a rounded tenth across a whole number.
+# tools/wiki/barcheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikibar, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
@@ -316,10 +347,28 @@ RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.
              src/tagpu_recmp_orders.c src/tagpu_recmp_players.c src/tagpu_recmp_pov.c \
              src/tagpu_recmp_roots.c src/tagpu_recmp_stream.c src/tagpu_recmp_text.c \
              src/tagpu_recmp_units.c src/crc32.c
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h src/zstd.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h src/zstd.c
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
+# THE STRATEGIC ICONS' RULE AND SHAPES (tests/icontest.c over inc/tagpu_icon_rule.h): the defaults'
+# levels against the plan's table, the fade ramp, 1x left stock up to 4K native, and the generated
+# shapes. tests/icontest.py builds and runs the same file on the host with the sanitizers; this is
+# its Windows build. Not part of `all` or of CI -- it needs Wine to run.
+icontest: tests/icontest.exe
+
+tests/icontest.exe: tests/icontest.c inc/tagpu_icon_rule.h inc/tagpu_icontype.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/icontest.c
+
+# A MOD ICON SET'S PURE HALF (tests/iconsettest.c over src/tagpu_iconset.c): the PCX decoder, the
+# profile reader, the iconcfg's two modes and the atlas packer, malformed input included.
+# tests/iconsettest.py builds and runs the same files on the host with the sanitizers; this is its
+# Windows build. Not part of `all` or of CI -- it needs Wine to run.
+iconsettest: tests/iconsettest.exe
+
+tests/iconsettest.exe: tests/iconsettest.c src/tagpu_iconset.c inc/tagpu_iconset.h inc/tagpu_icontype.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/iconsettest.c src/tagpu_iconset.c
+
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe tests/icontest.exe tests/iconsettest.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

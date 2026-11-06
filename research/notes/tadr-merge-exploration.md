@@ -140,7 +140,10 @@ This is a source-feature grouping. The **[28-row coverage audit](tadr-port/quali
 shipped activation. Rotation is bundled only by Escalation/Twilight and enabled by no checked
 unit content; newer reload/counter/chat features have development downloads but no native bundle.
 Basic ghosts/`PreviewPieces`, existing markers, world zoom and replay playback/seeking are
-already ours. The separate megamap remains deliberately excluded.
+already ours. The megamap is not ported as TADR's separate 2D view: Impure's mega map is the world
+zoom repurposed as a strategic zoom (Ctrl+wheel, or the plain wheel under `wheel=megamap`), with
+strategic icons and TADR's icon sets read from the mod's install ([the plan](mega-map-plan.html),
+*Why not TADR's design*).
 
 ### E. Multiplayer / anti-abuse
 
@@ -493,7 +496,8 @@ proxy, one `DllMain`, one patch-address registry.
 **Way 3 — rewrite it ourselves (review-and-improve each feature).** Tractably small, because the
 expensive part is the render-side UI we already replace, and the sim/engine set is ~14 small +
 ~11 medium hook/patch modules. The infrastructure is already ours — see [gpu-status.md](gpu-status.md)
-and [exe-reverse-engineering.md](exe-reverse-engineering.md). Exclude the megamap throughout.
+and [exe-reverse-engineering.md](exe-reverse-engineering.md). The megamap is rewritten as a
+different design: Impure's mega map is the strategic zoom of [the plan](mega-map-plan.html).
 
 **Conflict audit (before either way):** the dual-proxy roles; the `EngineLimits` projectile/explosion
 pool relocation (our `tagpu_fx`/`tagpu_native` read those pools by pointer and must follow it);

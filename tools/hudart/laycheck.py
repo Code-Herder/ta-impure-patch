@@ -326,6 +326,19 @@ def pair(cs, ds, key):
     return pairs, onlyc, left
 
 
+def flat_runs_out(line, shown, tol):
+    """The DLL's chart line `line` at the points the mockup's `shown` keeps, when every other point lies on the flat run
+    between two of them; else `line` whole, whose length then disagrees"""
+    out, i = [], 0
+    for q in line:
+        if i < len(shown) and abs(q[0] - shown[i][0]) <= tol:
+            out.append(q)
+            i += 1
+        elif not (0 < i < len(shown) and abs(q[1] - shown[i - 1][1]) <= tol and abs(q[1] - shown[i][1]) <= tol):
+            return line
+    return out if i == len(shown) else line
+
+
 def main():
     keep = None
     if len(sys.argv) == 3 and sys.argv[1] == "--keep":
@@ -333,7 +346,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="laycheck"))
     exe = tmp / "laycheck"
     cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
-                         str(ROOT / "tools/hudart/laycheck.c"), str(SRC / "tagpu_json.c"),
+                         str(ROOT / "tools/hudart/laycheck.c"), str(ROOT / "tools/hudart/hudstatejson.c"), str(SRC / "tagpu_json.c"),
                          str(SRC / "tagpu_hudlay.c"), str(SRC / "tagpu_hudtext.c"), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:
@@ -487,6 +500,9 @@ def main():
                         print(f"        {keys[k](c)!r}: DLL {[round(v, 3) for v in c['r']]} mockup {[round(v, 3) for v in d['r']]}")
             # the chart's lines, group by group in paint order: colour, halo, every point, the cross
             cg, dg = ops["chart"]["groups"], dom["chart"]["groups"]
+            # hud.js leaves a flat run's inner samples out of its polyline; the DLL's line keeps them, on the same line
+            for c, d in zip(cg, dg):
+                c["pts"] = flat_runs_out(c["pts"], d["pts"], TOL_POINT + TOL)
             if cg or dg:
                 worst, att = 0, 0
                 if len(cg) != len(dg):

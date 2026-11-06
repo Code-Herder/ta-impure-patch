@@ -1737,6 +1737,10 @@ int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
    0x494421), download 0x503730 (the download reader 0x42DD0E), commongui 0x50925C (0x491542, into
    0x4AEEE0), palettes 0x5031BC and PALETTE 0x5033A4 (the PALETTE.ALP path built for 0x4290F0 at
    0x42E14B..0x42E15B, as for .SHD at 0x42E1E0), guipal 0x5031C8 (0x49810E).
+   The resource bars', DISASSEMBLED the same way: fonts 0x50338C and its extension FNT 0x503394
+   (both pushed at 0x431BCF..0x431BF1 for 0x4290F0, the side's font then read by 0x4BBE50), and
+   the badge's sequence 32xlogos 0x504728 (pushed at 0x4318EF for 0x4B8D40, called at 0x431906
+   over the logos.GAF 0x4318C0 opened).
    BOUND: each string within its buffer; one that is not terminated there is given as "", which
    resolves nothing. */
 #define VA_LANGUAGE   0x0051FB50u
@@ -1767,6 +1771,9 @@ void tagpu_replays_asset_names(struct WIKI3DNAMES* n)
     engine_name(n->palettes, sizeof n->palettes, 0x005031BCu);
     engine_name(n->palette, sizeof n->palette, 0x005033A4u);
     engine_name(n->guipal, sizeof n->guipal, 0x005031C8u);
+    engine_name(n->fonts, sizeof n->fonts, 0x0050338Cu);
+    engine_name(n->fnt_ext, sizeof n->fnt_ext, 0x00503394u);
+    engine_name(n->logos_seq, sizeof n->logos_seq, 0x00504728u);
 }
 
 /* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else
