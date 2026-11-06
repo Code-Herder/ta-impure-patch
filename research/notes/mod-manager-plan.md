@@ -122,9 +122,24 @@ Each decision is listed with what it was chosen over.
 - **One package format, `.tar.zst`.** The packing tool rebuilds every mod's original package, so
   the DLL never reads `.rar` or `.zip`: there is no unRAR licence and no miniz. While rebuilding,
   the tool:
-  - strips every file whose hash is in the original-game manifest;
-  - packs all files, loose ones included, into the package's own archive;
-  - drops mod DLLs.
+  - packs all files that win in the drop-in folder, loose ones included, into the package's own
+    archive `<id>.hpi`, except those the managed mount already answers from the player's archives
+    with the same bytes;
+  - leaves out every file whose hash is in the original-game manifest, and writes those it still
+    needs into the recipe below;
+  - drops mod DLLs and keeps the plain files Impure reads itself (`Icon/`, `ZIcon/`).
+- **A recipe rebuilds what cannot be hosted.** MEASURED by `modpack.py packages`: every mod's archive
+  carries byte-identical copies of original files under its own folders or at another path
+  (`guim/armbuild.gui` is `guis/armbuild.gui`), or an older original version of a path: 337 in
+  Escalation, 337 in Mayhem, 532 in ProTA, 82 in TA Zero, 521 in Twilight. `<id>.originals.tsv` names
+  each one's path, MD5, size and where it is in the player's own archives, and the install copies them
+  into `mods\<id>\<id>.originals.hpi`, mounted right after `<id>.hpi`. We chose this over keeping a
+  hidden original archive mounted, because those files are at other paths and the mod's first-wins
+  order differs from the original's.
+- **`hide` is measured, not declared.** It is every original archive the drop-in folder lost: replaced
+  by a file of the same name, or no longer named by a mount pattern because the exe table renames the
+  first one (`rev31.gp3` in all five, plus the seven more Twilight replaces with empty files or its own).
+- **The catalog's URLs are relative** (`<id>/<id>-<version>.tar.zst`) until there is a CDN to name.
 
 ### Download and install
 
@@ -134,6 +149,9 @@ Each decision is listed with what it was chosen over.
   against the catalog's size and sha256 (BCrypt) before anything is unpacked.
 - **The tar reader is bounded to the package's declared file list.** It refuses absolute paths,
   `..`, undeclared files and truncation.
+- **The recipe runs after the unpack**, from the player's original archives into
+  `<id>.originals.hpi`. A folder without an original archive it names cannot install that mod, and the
+  pane says which archive is missing.
 - **Unpacking goes into `mods\<id>.new\`**, which gets a done marker when complete. It is swapped in
   at start-up, before any archive is mounted. A `.new` without the marker is deleted. The live
   folder is always either the old version or the new one.
@@ -163,13 +181,20 @@ These are the engine rules the design rests on:
   feature TDFs.
 
 What follows from those rules:
-- **Impure builds the mount list:** mutators first, then the base mod, then the TA folder's original
-  archives. Precedence is then one rule for every file type.
+- **Impure builds the mount list:** mutators first, then the base mod's `<id>.hpi` and
+  `<id>.originals.hpi`, then the TA folder's original archives in the engine's order, less the mod's
+  `hide`. Precedence is then one rule for every file type. `modpack.py verify` simulates this and the
+  drop-in folder over every path by the engine's rules (`tools/wiki/tavfs.py`) and they agree: 8222
+  paths in Escalation, 7407 in Mayhem, 6018 in ProTA, 8393 in TA Zero, 8642 in Twilight. An enumeration's
+  order is not simulated; landing 4's managed column compares its result in the game.
 - **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
   The exception is a short list of paths that stock TA really does open loose (saved games, for
   instance), which must be measured. The drop-in route and "no mod" keep the loose step.
-- **Files the engine reads by plain path** rather than through `0x4BB2E0` (music, for instance) are
-  listed by the packing tool for each mod. v1 drops them with a log line.
+- **Files read by plain path** rather than through `0x4BB2E0` are listed in each package's
+  `listing.txt`. The v1 packages keep the strategic icon sets Impure reads (`Icon/`, `ZIcon/`) and drop
+  the rest: changelogs and readmes, cnc-ddraw's `ddraw.ini` and `Shaders/`, `wgmus.ini`, Twilight's
+  `aqrit.cfg`, `ChatMacro.ini` and `Settings.ini`, and each mod's options file (`mayhem.ini`,
+  `ProTA.ini`, `TAESC.ini`, `TAZero.ini`, `TA.ini`).
 
 ### Drop-in folders
 
@@ -251,10 +276,10 @@ What follows from those rules:
 | # | landing | what it does | verified by (run it) |
 |---|---|---|---|
 | 1 | Shared UI kit (built) | Moves the wiki's layout primitives into `tagpu_uikit.c` + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
-| 2 | modpack + catalog | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, builds `.tar.zst`, derives exe tables + XOR reverts, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each revert gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
+| 2 | modpack + catalog (built) | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, writes the originals recipe, builds `.tar.zst`, derives exe tables + XOR reverts, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each revert gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
 | 3 | Per-mod options | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
-| 4 | Managed start-up | `mod=`; identify → revert → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, originals by shipped SHA-256 + cache); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
-| 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
+| 4 | Managed start-up | `mod=`; identify → revert → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
+| 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
 | 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
@@ -265,8 +290,8 @@ Landings 2 and 3 are independent of each other.
 ## Not closed
 
 **Needs the owner:**
-- Where each author's permission is recorded (the `permission` field), needed before landing 2's
-  catalog builds.
+- Where each author's permission is recorded. The `permission` field says today only that the owner
+  reports having it, dated.
 - Which CDN, and what URL scheme, will the packages live at? Needed before landing 5 points at real
   packages.
 - The new art parts for the screen, needed for landing 6.
@@ -274,8 +299,9 @@ Landings 2 and 3 are independent of each other.
 **Needs research or a measurement:**
 - Which paths does stock TA really open through the loose-file step? This must be measured before
   landing 4 closes it.
-- Does any v1 mod need a plain-path file (music tracks, for example) to play correctly, or is
-  dropping them with a log line enough? modpack's listing in landing 2 answers it.
+- Each mod's options file is dropped (`mayhem.ini` and the others, *Archives and loose files*). Its
+  name is in the exe table, so the engine reads `<game folder>\<name>` and finds none. Does a mod
+  need its shipped values? Landing 4's managed column answers it.
 - What channel carries the fingerprint in the battle room? No Impure message exists there today, so
   this needs research before landing 8.
 - Which v1 setups are safe with LAA on? Landing 9's row answers it.
@@ -288,6 +314,13 @@ Landings 2 and 3 are independent of each other.
   it.
 
 ## Facts gathered for the plan
+
+- **Exe tables, as derived.** Escalation 2993 B in 253 runs, Mayhem 1549 B in 85, ProTA 886 B in 66,
+  TA Zero 1385 B in 144, Twilight 34 B in 16. Seven reverts: the four modded exes and the three loaders.
+- **What a Patch Loader writes, MEASURED** by `modpack.py loaderdump` (a process with the exe's entry
+  point spinning, read through `/proc`): see [the Patch Loader](deep-patch-loader.html). A table is its
+  list and the proxy byte; the DirectDraw call sites and the `win32.dll` thunks stay out of it.
+- **Package sizes:** Escalation 247.7 MB, TA Zero 89.6 MB, Twilight 76.0 MB, Mayhem 18.4 MB, ProTA 6.3 MB.
 
 - **Where the mods come from.** TA Forever's API (`https://api.taforever.com/data/featuredMod`,
   field `installPackage`) lists ordered package URLs and "folders" regex rules for each featured

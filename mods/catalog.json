@@ -1,0 +1,548 @@
+{
+  "version": 1,
+  "mods": [
+    {
+      "id": "escalation",
+      "kind": "mod",
+      "name": "Escalation",
+      "author": "The Escalation team",
+      "version": "10.2.0",
+      "summary": "A large total conversion that extends both sides with many new units and tech levels.",
+      "homepage": "https://taesc.tauniverse.com/",
+      "permission": "the owner reports the authors' permission, 2026-10-31",
+      "packages": [
+        {
+          "url": "escalation/escalation-10.2.0.tar.zst",
+          "sha256": "079c40409f2c3c2f1dcc608e591f7f82a8776f640134e797428e5c39c8377c4a",
+          "size": 247741891,
+          "files": [
+            {
+              "path": "escalation.hpi",
+              "sha256": "4a1df9391a2e15f326216358aef05e470da95a6150f9606ad956c8adacb7b8f5",
+              "size": 255379367
+            },
+            {
+              "path": "escalation.originals.tsv",
+              "sha256": "8aa215dfc909ab310c97ec7fc631b1c64b9b87f04de2eab4dd6568814ceb0395",
+              "size": 30081
+            }
+          ]
+        }
+      ],
+      "exe": "escalation",
+      "hide": [
+        "rev31.gp3"
+      ],
+      "memory": "4gb"
+    },
+    {
+      "id": "mayhem",
+      "kind": "mod",
+      "name": "Total Mayhem",
+      "author": "The Total Mayhem team",
+      "version": "11.3.0",
+      "summary": "A total conversion with hundreds of new units across every tech level, reworked sounds and a harder AI.",
+      "homepage": "https://mayhem.tauniverse.com/",
+      "permission": "the owner reports the authors' permission, 2026-10-31",
+      "packages": [
+        {
+          "url": "mayhem/mayhem-11.3.0.tar.zst",
+          "sha256": "b08906a9c2e1ec18d17ff70ab8a6048295ad29ad6b06c971a5af4aedf216b68d",
+          "size": 18383123,
+          "files": [
+            {
+              "path": "Icon/AIRCONS.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "Icon/AIRCRAFTCOMBAT.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "Icon/ARM.pcx",
+              "sha256": "54ec126b5d3525a21e6f2f340db6e192347fec2bcdb6c0a101154983927b7e7e",
+              "size": 1095
+            },
+            {
+              "path": "Icon/BUILDING.PCX",
+              "sha256": "079e83b0bd5e431b4b447ce0381b0a2d72417ed22a6971f2677d555b5619a57a",
+              "size": 977
+            },
+            {
+              "path": "Icon/CONS.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/CORE.pcx",
+              "sha256": "de182a1e943152c69de0d0f916c5b12bb6ebfeff7c76e0bace5976c48d24f911",
+              "size": 1135
+            },
+            {
+              "path": "Icon/FACTORY.PCX",
+              "sha256": "221462dbcbbb3fee8b0ff8ad0a1e06e1d1fd08b8e1ecb3c9d2ecb02d482a7ee9",
+              "size": 1049
+            },
+            {
+              "path": "Icon/GOK.pcx",
+              "sha256": "e838e756547ec76af47501ccacf19fdcefa6756b315d70f06735fe886dadf663",
+              "size": 1129
+            },
+            {
+              "path": "Icon/MOBILECOMBAT.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/NONE.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/NUKEICON.pcx",
+              "sha256": "13dd0cc57f039b39db914fc93ae0ae88b252fabd8828f7a434fbd3ee8ed1ea0b",
+              "size": 1031
+            },
+            {
+              "path": "Icon/UNKNOWN.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/iconcfg.ini",
+              "sha256": "b6e4ea72195c5b11cfee515d4717e76b1d6d76fbd720eaac6849be21e74aab41",
+              "size": 1000
+            },
+            {
+              "path": "Icon/smallcircle.pcx",
+              "sha256": "1dcb2e3cd3e7eb0624ff95aebc40a629dd708e94baf00de7911579b4bbd7d059",
+              "size": 1433
+            },
+            {
+              "path": "mayhem.hpi",
+              "sha256": "d30a719e0b2fe28b3ed00a60d67010a44c86cd9bf815ae639cd34ed2a8da17f1",
+              "size": 18869827
+            },
+            {
+              "path": "mayhem.originals.tsv",
+              "sha256": "2d6b8b30c267e891a47ac056730af82901962228c37884fb9f06fa14f34ec03f",
+              "size": 30100
+            }
+          ]
+        }
+      ],
+      "exe": "mayhem",
+      "hide": [
+        "rev31.gp3"
+      ]
+    },
+    {
+      "id": "prota",
+      "kind": "mod",
+      "name": "ProTA",
+      "author": "The ProTA team",
+      "version": "4.8",
+      "summary": "Rebalanced multiplayer Total Annihilation, with new units and engine fixes.",
+      "homepage": "https://prota.tauniverse.com/",
+      "permission": "the owner reports the authors' permission, 2026-10-31",
+      "packages": [
+        {
+          "url": "prota/prota-4.8.tar.zst",
+          "sha256": "6edc35ded22ec48aa5ba93a990c4e7db550edcc61de0253210c99962bb8afea9",
+          "size": 6331797,
+          "files": [
+            {
+              "path": "Icon/AIR.PCX",
+              "sha256": "7697bb10d281a24a27b320042d1b02720af9108702ae71be800df64062a51499",
+              "size": 993
+            },
+            {
+              "path": "Icon/AIRCONS.PCX",
+              "sha256": "a46dc0e803b8ad2e6219e4298554d54a9267c6c41e92bdfa50434e97696f72eb",
+              "size": 999
+            },
+            {
+              "path": "Icon/AIRCRAFTCOMBAT.PCX",
+              "sha256": "7697bb10d281a24a27b320042d1b02720af9108702ae71be800df64062a51499",
+              "size": 993
+            },
+            {
+              "path": "Icon/AIRFAC.PCX",
+              "sha256": "db320dd055e9af6e515b3eba03b0178637c5ecf23c759128833dda3a717b29df",
+              "size": 1081
+            },
+            {
+              "path": "Icon/ARM.pcx",
+              "sha256": "da083d9cc748a1d9f4d1d02e48f7fd47644fd1d4edebc5dd43b526df13b924a5",
+              "size": 1107
+            },
+            {
+              "path": "Icon/BUILDING.PCX",
+              "sha256": "172f0cd029960f6657fd7071c46b4c99e1792c8858060fdc9642b60e00871ae0",
+              "size": 993
+            },
+            {
+              "path": "Icon/CONS.PCX",
+              "sha256": "8ddbfb0d05693c7d33de0cc371c60aa8b2dd8cffd311e176424146588e11d6eb",
+              "size": 997
+            },
+            {
+              "path": "Icon/CORE.pcx",
+              "sha256": "e98248a396df060d71e11ff1645355795e58a798fb36d871171fe7971124b932",
+              "size": 1167
+            },
+            {
+              "path": "Icon/EXP.pcx",
+              "sha256": "ad51cc3769951dfcdd6934e9ccc9498f992cefc6365895f76ab0447e0ee4356a",
+              "size": 1061
+            },
+            {
+              "path": "Icon/EXPFAC.PCX",
+              "sha256": "8cbbae28c66b544d04c1c4bab6373a818a5c97c49558f077c8129eb8022f0ab6",
+              "size": 1157
+            },
+            {
+              "path": "Icon/FACTORY.PCX",
+              "sha256": "4900196065aabed6a06812b22a61feabdaf7d3489c6371f5f349b1d5573690bd",
+              "size": 1081
+            },
+            {
+              "path": "Icon/HOVCONS.pcx",
+              "sha256": "ebe6aed08540369430b2804bb0b26c22e48847c548c1a6ed206208acdcbddc87",
+              "size": 1013
+            },
+            {
+              "path": "Icon/HOVER.PCX",
+              "sha256": "0937ae2a35fef977b5ac8992895a36339dd85a61fc512e6a47fbdfd9397baf6f",
+              "size": 1005
+            },
+            {
+              "path": "Icon/HOVFAC.PCX",
+              "sha256": "0c49ddd88418df78b5c48198d8352045899158f793cdf5cf7934342315c894e2",
+              "size": 1077
+            },
+            {
+              "path": "Icon/KBOT.PCX",
+              "sha256": "12a1fd532e688706d28558ffe274a32e17ee589fd579ed1153264a837f3bcfe1",
+              "size": 989
+            },
+            {
+              "path": "Icon/KBOTCONS.pcx",
+              "sha256": "8ddbfb0d05693c7d33de0cc371c60aa8b2dd8cffd311e176424146588e11d6eb",
+              "size": 997
+            },
+            {
+              "path": "Icon/KBOTFAC.pcx",
+              "sha256": "5ee45c952c4dff28b247bef5d2f87c2ae31e80b18aaef6d42fe8e33b5688b385",
+              "size": 1045
+            },
+            {
+              "path": "Icon/MINE.PCX",
+              "sha256": "eda3c168c1ca413f2222eabaf92b0dabdd7acbdd2fa8ad06f9f7cb644f86e62b",
+              "size": 957
+            },
+            {
+              "path": "Icon/MOBILECOMBAT.PCX",
+              "sha256": "12a1fd532e688706d28558ffe274a32e17ee589fd579ed1153264a837f3bcfe1",
+              "size": 989
+            },
+            {
+              "path": "Icon/NONE.PCX",
+              "sha256": "12a1fd532e688706d28558ffe274a32e17ee589fd579ed1153264a837f3bcfe1",
+              "size": 989
+            },
+            {
+              "path": "Icon/NUKEICON.pcx",
+              "sha256": "d5d13d1fb278f4deb317364b842f464d49875348936f8c374a956c20fce67417",
+              "size": 1067
+            },
+            {
+              "path": "Icon/SHIP.PCX",
+              "sha256": "eb7e132babc1403de43caba52f595623cdf682a982248ec8543a2a19d4289a03",
+              "size": 995
+            },
+            {
+              "path": "Icon/SHIPCONS.pcx",
+              "sha256": "d72f5b81cd2d4f1d4682dfa25a42c88a8499ab599ad23e5bb3cc8067b39d1d08",
+              "size": 1003
+            },
+            {
+              "path": "Icon/SHIPFAC.PCX",
+              "sha256": "b516909b191b049ec2ae651d995e2cdde6ca35b4c79f9292d219a057859745ab",
+              "size": 1071
+            },
+            {
+              "path": "Icon/SUB.PCX",
+              "sha256": "431e459ce368b1a9db68e06bbe03dfdadad574fbe9467d889fd451437e343b70",
+              "size": 995
+            },
+            {
+              "path": "Icon/SUBCONS.pcx",
+              "sha256": "beebbb3dce96445931a393156a20a7253697654405058c75d4d5047139529556",
+              "size": 1003
+            },
+            {
+              "path": "Icon/UNKNOWN.PCX",
+              "sha256": "12a1fd532e688706d28558ffe274a32e17ee589fd579ed1153264a837f3bcfe1",
+              "size": 989
+            },
+            {
+              "path": "Icon/VEHCONS.pcx",
+              "sha256": "a8dee628b5373843734e9306f264d9edfc356a8113703fee64d5afac92d6fb36",
+              "size": 1029
+            },
+            {
+              "path": "Icon/VEHFAC.PCX",
+              "sha256": "77fcce5c12a7cdf3cc5213d68fb692e9379f2f99db5e9c15e33c1463849146e7",
+              "size": 1093
+            },
+            {
+              "path": "Icon/VEHICLE.PCX",
+              "sha256": "3890ca890ae05a28750d17023ecd3601e55899c6db3c23df1dc67e95c51b048c",
+              "size": 1021
+            },
+            {
+              "path": "Icon/iconcfg.ini",
+              "sha256": "d4a21a9279fd943a33e2aba743bd29032bbf1675b0952a1228a6611fb9daabf1",
+              "size": 1414
+            },
+            {
+              "path": "Icon/smallcircle.pcx",
+              "sha256": "c07c6dc5f4936266d842ff858304736f47dad72e99138f26b752074e2533c057",
+              "size": 1469
+            },
+            {
+              "path": "prota.hpi",
+              "sha256": "bca2db9612769e2e57edb8fe1e673d9cea08a707c93065e4521504094cad9420",
+              "size": 7393013
+            },
+            {
+              "path": "prota.originals.tsv",
+              "sha256": "bbdefdd22b66b3cd2918519c77988d60f564fdf0951a1b487ae91bf97aaf766a",
+              "size": 50224
+            }
+          ]
+        }
+      ],
+      "exe": "prota",
+      "hide": [
+        "rev31.gp3"
+      ]
+    },
+    {
+      "id": "tazero",
+      "kind": "mod",
+      "name": "TA Zero",
+      "author": "The TA Zero team",
+      "version": "Alpha 5",
+      "summary": "A rebuild of the game's balance and art, played as TA Forever installs it.",
+      "homepage": "https://www.taforever.com/",
+      "permission": "the owner reports the authors' permission, 2026-10-31",
+      "packages": [
+        {
+          "url": "tazero/tazero-Alpha-5.tar.zst",
+          "sha256": "a64b374e2c855885550a62ed0acb4688b6ebe5a38b55e1d32348c60c52492023",
+          "size": 89633675,
+          "files": [
+            {
+              "path": "ZIcon/AIRCONS.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "ZIcon/AIRCRAFTCOMBAT.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "ZIcon/ARM.pcx",
+              "sha256": "54ec126b5d3525a21e6f2f340db6e192347fec2bcdb6c0a101154983927b7e7e",
+              "size": 1095
+            },
+            {
+              "path": "ZIcon/BUILDING.PCX",
+              "sha256": "079e83b0bd5e431b4b447ce0381b0a2d72417ed22a6971f2677d555b5619a57a",
+              "size": 977
+            },
+            {
+              "path": "ZIcon/CONS.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "ZIcon/CORE.pcx",
+              "sha256": "de182a1e943152c69de0d0f916c5b12bb6ebfeff7c76e0bace5976c48d24f911",
+              "size": 1135
+            },
+            {
+              "path": "ZIcon/FACTORY.PCX",
+              "sha256": "221462dbcbbb3fee8b0ff8ad0a1e06e1d1fd08b8e1ecb3c9d2ecb02d482a7ee9",
+              "size": 1049
+            },
+            {
+              "path": "ZIcon/GOK.pcx",
+              "sha256": "e838e756547ec76af47501ccacf19fdcefa6756b315d70f06735fe886dadf663",
+              "size": 1129
+            },
+            {
+              "path": "ZIcon/MOBILECOMBAT.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "ZIcon/NONE.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "ZIcon/NUKEICON.pcx",
+              "sha256": "f4575fbe54ed138b82ba3faa29017273faf8d390c0278346204fe80a84c57cce",
+              "size": 917
+            },
+            {
+              "path": "ZIcon/UNKNOWN.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "ZIcon/iconcfg.ini",
+              "sha256": "b6e4ea72195c5b11cfee515d4717e76b1d6d76fbd720eaac6849be21e74aab41",
+              "size": 1000
+            },
+            {
+              "path": "ZIcon/smallcircle.pcx",
+              "sha256": "bda832404331a49df62a2f4c0e1b18565c4eaa5a2686257a42223c57b3ce9759",
+              "size": 1541
+            },
+            {
+              "path": "tazero.hpi",
+              "sha256": "559b7b37c6d01356c12f765fd820234ccd0d35faf76189342bde3d52afe43dfb",
+              "size": 92782481
+            },
+            {
+              "path": "tazero.originals.tsv",
+              "sha256": "13a4ba4c41d63451bdc2a0c2014973ca340b01fb7f00764c8f1f2135f2847274",
+              "size": 7134
+            }
+          ]
+        }
+      ],
+      "exe": "tazero",
+      "hide": [
+        "rev31.gp3"
+      ]
+    },
+    {
+      "id": "twilight",
+      "kind": "mod",
+      "name": "TA Twilight",
+      "author": "The TA Twilight team",
+      "version": "2.0 Beta 98",
+      "summary": "A total conversion, played as TA Forever installs it.",
+      "homepage": "https://www.taforever.com/",
+      "permission": "the owner reports the authors' permission, 2026-10-31",
+      "packages": [
+        {
+          "url": "twilight/twilight-2.0-Beta-98.tar.zst",
+          "sha256": "becdf8df58295a6546dccba0741c84c20a925d467b5c5e51fa0e95be6be814b5",
+          "size": 76001944,
+          "files": [
+            {
+              "path": "Icon/AIRCONS.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "Icon/AIRCRAFTCOMBAT.PCX",
+              "sha256": "e1ca1b5e4dc549a5a04285b410f8d938b54687bf85a40e2071e7bf6131efa3a3",
+              "size": 981
+            },
+            {
+              "path": "Icon/ARM.pcx",
+              "sha256": "54ec126b5d3525a21e6f2f340db6e192347fec2bcdb6c0a101154983927b7e7e",
+              "size": 1095
+            },
+            {
+              "path": "Icon/BUILDING.PCX",
+              "sha256": "079e83b0bd5e431b4b447ce0381b0a2d72417ed22a6971f2677d555b5619a57a",
+              "size": 977
+            },
+            {
+              "path": "Icon/CONS.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/CORE.pcx",
+              "sha256": "de182a1e943152c69de0d0f916c5b12bb6ebfeff7c76e0bace5976c48d24f911",
+              "size": 1135
+            },
+            {
+              "path": "Icon/FACTORY.PCX",
+              "sha256": "221462dbcbbb3fee8b0ff8ad0a1e06e1d1fd08b8e1ecb3c9d2ecb02d482a7ee9",
+              "size": 1049
+            },
+            {
+              "path": "Icon/GOK.pcx",
+              "sha256": "e838e756547ec76af47501ccacf19fdcefa6756b315d70f06735fe886dadf663",
+              "size": 1129
+            },
+            {
+              "path": "Icon/MOBILECOMBAT.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/NONE.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/NUKEICON.pcx",
+              "sha256": "13dd0cc57f039b39db914fc93ae0ae88b252fabd8828f7a434fbd3ee8ed1ea0b",
+              "size": 1031
+            },
+            {
+              "path": "Icon/UNKNOWN.PCX",
+              "sha256": "277d74430e3e7d6759bc85ff790efe00833fa5ff936a2bd57cc40329086114e7",
+              "size": 977
+            },
+            {
+              "path": "Icon/iconcfg.ini",
+              "sha256": "b6e4ea72195c5b11cfee515d4717e76b1d6d76fbd720eaac6849be21e74aab41",
+              "size": 1000
+            },
+            {
+              "path": "Icon/smallcircle.pcx",
+              "sha256": "bda832404331a49df62a2f4c0e1b18565c4eaa5a2686257a42223c57b3ce9759",
+              "size": 1541
+            },
+            {
+              "path": "twilight.hpi",
+              "sha256": "cbfa3f0f5debf1f04df01216f48b4bd91d1917c9d328beb05a2a5359b6961e73",
+              "size": 85138935
+            },
+            {
+              "path": "twilight.originals.tsv",
+              "sha256": "42c65c8a26ccd5ad816f601f6f8f6ab18325126b162995481498362cad0a121e",
+              "size": 47856
+            }
+          ]
+        }
+      ],
+      "exe": "twilight",
+      "hide": [
+        "AFark.ufo",
+        "AFlea.ufo",
+        "AScarab.ufo",
+        "CorNecro.ufo",
+        "Cormabm.ufo",
+        "ccdata.ccx",
+        "corplas.ufo",
+        "rev31.gp3"
+      ]
+    }
+  ]
+}

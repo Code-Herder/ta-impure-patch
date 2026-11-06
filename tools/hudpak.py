@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """hudpak.py -- pack a folder of art/ into an archive the DLL embeds.
 
-    python3 tools/hudpak.py [--set hud|wiki] <folder> <out.bin>
+    python3 tools/hudpak.py [--set hud|wiki|mods] <folder> <out.bin>
 
 The DLL reads its art as the mockups do, so nothing here converts: the files go in as they are,
 behind a directory, and res.rc embeds the result as an RCDATA resource (src/tagpu_pak.h reads it).
@@ -17,6 +17,7 @@ A set names the files of one folder:
           numbers (src/tagpu_wikilay.c), and the window's kit,
           kit/kit.json and its parts as PNG (src/tagpu_hudart.c), as tools/hudart/fit.py --set
           wiki fits them from art/wiki-full/kit/.
+    mods  mods/, the resource MODPAK: the catalog and the exe patch pack tools/modpack/modpack.py writes.
 
 THE STANDARD LIBRARY ONLY, like tools/artbake.py: the build's Python is the bare python3 CI has.
 
@@ -34,6 +35,7 @@ VERSION = 1
 # per set: the globs it keeps, and the files it cannot do without
 SETS = {
     "hud": (("layout.json", "kit.json", "parts/*.png", "fonts/*.ttf", "fonts/*.txt"), ("layout.json", "kit.json")),
+    "mods": (("catalog.json", "patches.bin"), ("catalog.json", "patches.bin")),
     "wiki": (("tree.json", "layout.json", "entries/*.json", "stage/*.json", "side/*.json", "kit/kit.json", "kit/parts/*.png"),
              ("tree.json", "layout.json", "side/fixture.json", "kit/kit.json")),
 }

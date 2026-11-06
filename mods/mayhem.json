@@ -1,0 +1,7 @@
+{
+  "id": "mayhem", "kind": "mod", "name": "Total Mayhem", "author": "The Total Mayhem team", "version": "11.3.0",
+  "summary": "A total conversion with hundreds of new units across every tech level, reworked sounds and a harder AI.",
+  "homepage": "https://mayhem.tauniverse.com/",
+  "permission": "the owner reports the authors' permission, 2026-10-31",
+  "setup": "mayhem-11.3.0", "exe": "loader"
+}

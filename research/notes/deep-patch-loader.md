@@ -92,6 +92,25 @@ ProTA's byte patches (each documented with full before/after hex rows) cover: `i
 
 Total Mayhem is a superset in spirit: difficulty-scaled AI income and reclamation multipliers (hard 1.5×, medium 1.0×, easy 0.5×), a long family of "acquire targets while X" patches spanning build/assist/reclaim/repair for ground and VTOL, hold-position guard behaviour, submerged-target and `setSFXoccupy` fixes, a Rahsennor-authored **teleport button**, `healtime` and CTRL-Z fixes, plus folder redirections (`guiM`, `unitsM`, `weaponM`, `unitpicM`) and three `; STILL UNKNOWN` bytes. Detail belongs to the sibling ProTA / Total Mayhem notes.
 
+## What a built loader writes, measured
+
+The list inside a mod's `dplayx.dll` is a plain INI (the bytes from `[Settings]` to the first NUL), so
+`tools/modpack/modpack.py` reads it statically. `modpack.py loaderdump <setup>` checks that against a
+process: the folder with stubs for `ddraw.dll`, `tdraw.dll` and `tplayx.dll` and the exe's entry point
+`0x4E6FA0` spinning (`EB FE`), so that only the loaders' `DllMain`s have run, and the image read
+through `/proc/<pid>/mem`. MEASURED 2026-11-05 on Wine, outside the import structures:
+
+| loader | the list writes | list bytes missing from the process | bytes in the process not in the list |
+|---|---|---|---|
+| Total Mayhem 11.3.0 | 1549 B | 0 | 26 B |
+| ProTA 4.8 | 886 B | 0 | 26 B |
+| Community Patch Loader 1.3.0.0 | 99 B | 0 | 8 B |
+
+The 8 B are the two `patch_call` displacements at `0x47BFA3` and `0x4B55FC`, into `tdraw.dll`'s
+`DirectDrawCreate`. The other 18 B of the two mod builds are their three `win32.dll` thunks at
+`0x4E4708`, `0x4E71A0` and `0x4EADF2`, which the source in this repository's vendor copy does not
+have: `E8 <rel32> 90` over each `call [slot]` (`FF 15`, 6 B each; DISASSEMBLED `0x4E4708`).
+
 ## Conflict detection
 
 `patches_setbytes` (`tapl/patches.c:12-58`) keeps a static `PATCH_OFFSET g_patches_offsets[4096]` of `{start, end}` VA ranges. Before writing it scans every occupied entry for overlap with `[offset, offset+size)` — three interval tests covering start-inside, end-inside and straddling — and on a hit logs `"Patch '%08X (%08X)' is conflicting with:\nPatch '%08X (%08X)'"` in both file-offset and VA form, returns 0, and aborts. Returning 0 from the inih callback makes `ini_parse_string` return the offending **line number**, surfaced as `"Failed to apply game patches. Error on line %d."` (`tapl/dllmain.c:43-58`). Empty patches and offset 0 are rejected too. Commits `193d9c6 detect conflicting patches` and `acd5fea`/`3b05f20 remove conflicting patches` show it immediately found real overlaps in the mod INIs.

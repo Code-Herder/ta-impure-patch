@@ -1,0 +1,7 @@
+{
+  "id": "twilight", "kind": "mod", "name": "TA Twilight", "author": "The TA Twilight team", "version": "2.0 Beta 98",
+  "summary": "A total conversion, played as TA Forever installs it.",
+  "homepage": "https://www.taforever.com/",
+  "permission": "the owner reports the authors' permission, 2026-10-31",
+  "setup": "twilight-2.0b98", "exe": "file"
+}

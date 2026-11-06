@@ -229,6 +229,17 @@ inc/tagpu_wikipak.bin: ../../tools/hudpak.py $(WIKI_SRCS)
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
 
+# THE MOD CATALOG (tools/modpack/modpack.py; research/notes/mod-manager-plan.md): mods/catalog.json
+# and the exe patch pack mods/patches.bin, both written by modpack.py and committed, because a build
+# has no mod files to derive them from. The catalog's schema is checked here, and both are packed by
+# the same tool in the same format into inc/tagpu_modpak.bin, the RCDATA resource MODPAK.
+MOD_SRCS := ../../mods/catalog.json ../../mods/patches.bin
+inc/tagpu_modpak.bin: ../../tools/hudpak.py ../../tools/modpack/modpack.py $(MOD_SRCS)
+	python3 ../../tools/modpack/modpack.py check ../../mods/catalog.json
+	python3 ../../tools/hudpak.py --set mods ../../mods $@
+
+$(addprefix res, $(ALLEXTS)): inc/tagpu_modpak.bin
+
 # THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
 # needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
 # otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the

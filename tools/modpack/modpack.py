@@ -1,0 +1,958 @@
+#!/usr/bin/env python3
+"""modpack.py -- what the mod manager ships: the catalog, the exe patch pack and each mod's package.
+
+    modpack.py check [CATALOG]          the catalog's schema, standard library only: the DLL's build runs it
+    modpack.py tables                   derive and print each mod's exe table and each known exe's revert
+    modpack.py loaderdump SETUP         what a setup's Patch Loader really writes, read from a process on Wine
+    modpack.py packages [ID ...]        rebuild the packages from the local fixtures (tools/compat/fixtures.json)
+    modpack.py catalog                  write mods/catalog.json and mods/patches.bin from mods/<id>.json + packages
+    modpack.py verify [ID ...]          the offline proof: tables, reverts, packages against the original manifest,
+                                        and the managed mount answering every path as the drop-in folder does
+
+The design is research/notes/mod-manager-plan.md. In short:
+
+EXE TABLES. Every mod runs on the player's own exe. A mod whose exe differs from stock 3.1 (Escalation, TA Zero, TA
+Twilight) gets the byte delta, section by section, minus the PE header, .rsrc and the import structures: the renamed
+imports (TAESC, EPLAYX, ZDRAW...) belong to TADR's route. A mod with a stock exe (Mayhem, ProTA) patches through a Patch
+Loader built with its list inside dplayx.dll as an INI (`[Settings]` keys and `[<file offset>] patch=<hex>` sections,
+vendor/Total-Annihilation-Patch-Loader/patches.c), so its table is that list applied.
+
+REVERTS. A known exe (or a known loader beside a stock exe) has an XOR run list that takes its image back to stock 3.1.
+XOR rather than the stock bytes, so the DLL carries no run of the original exe.
+
+PACKAGES. Each is one tar.zst holding <id>.hpi, its recipe <id>.originals.tsv and any plain files the DLL itself reads
+(Icon/, a mod's strategic icons). The fixture setup is simulated twice by the engine's rules (tools/wiki/tavfs.py): as
+the drop-in folder (retail files overlaid by the mod's, the mod's first mount pattern, loose files first) and as the
+managed mount (the package first, then the retail archives the drop-in folder did not lose). The package's archive holds
+exactly the paths where a mod file wins in the drop-in folder and its bytes are neither what the managed mount already
+answers from retail nor an original file.
+
+THE RECIPE. A mod's archive also carries hundreds of byte-identical copies of original files: under its own folders
+(guim/armbuild.gui is guis/armbuild.gui), or to prefer one original version over another. Those cannot be hosted, so the
+recipe says where each one is in the player's own archives ("<path> <md5> <size> <archive> <member>"), and the install
+copies them into <id>.originals.hpi, mounted right after <id>.hpi. With it the two simulations agree path by path and
+the package carries nothing original. DLLs and executables are dropped; what else a mod has that the engine reads by
+plain path, or nobody does, is named in the package's listing.txt.
+
+Packages, listings and anything else derived from a mod's files go to the fixture cache beside the mods, outside the
+repository: third-party bytes must never be one `git add -A` away from a commit.
+
+mods/patches.bin, little-endian, zstd compressed (read by the DLL through MODPAK):
+    "MPAT" | u32 version | u32 nmods | u32 nreverts
+    mod:    u8 idlen | id | 32 B sha256 of the patched image (image_hash) | u32 nruns | runs
+    revert: u8 kind (0 exe file, 1 loader DLL) | 32 B key (file_key of it) | u32 nruns | runs
+    run:    u32 va | u16 len | bytes (a revert's are the XOR with the stock image)
+"""
+import argparse
+import fnmatch
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+MODS = ROOT / "mods"
+CACHE = Path(os.environ.get("TACOMPAT_CACHE", Path.home() / ".local/share/ta-compat"))
+OUT = CACHE / "modpack"
+ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+VERSION = 1
+
+
+def main_checkout() -> Path:
+    common = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=ROOT, capture_output=True, text=True, check=True)
+    return (ROOT / common.stdout.strip()).resolve().parent
+
+
+def die(msg):
+    sys.exit(f"modpack: {msg}")
+
+
+# ---------------------------------------------------------------------------- the PE image
+
+class Pe:
+    """A 32-bit PE file: its sections and the import structures the loader fills."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        nsec, opt = struct.unpack_from("<H12xH", data, pe + 6)
+        o = pe + 24
+        self.base = struct.unpack_from("<I", data, o + 28)[0]
+        self.imp_rva, self.imp_size = struct.unpack_from("<II", data, o + 96 + 8)
+        self.sections = []                      # (name, va, raw offset, raw size), .rsrc left out
+        for i in range(nsec):
+            s = o + opt + i * 40
+            name = data[s:s + 8].split(b"\0")[0].decode("latin-1")
+            vaddr, rsize, raddr = struct.unpack_from("<III", data, s + 12)
+            if name != ".rsrc" and rsize:
+                self.sections.append((name, self.base + vaddr, raddr, rsize))
+
+    def off(self, va: int):
+        for _, v, r, n in self.sections:
+            if v <= va < v + n:
+                return r + va - v
+        return None
+
+    def cstr(self, va: int) -> bytes:
+        o = self.off(va)
+        return self.data[o:self.data.index(b"\0", o)]
+
+    def mask(self) -> list:
+        """The VA ranges the loader writes or that name imports: the descriptors, the lookup tables and the slots, the
+        names. A loader-filled slot is no patch and an import's name is a route's, so neither is part of a table."""
+        out, b = [], self.base
+        d = b + self.imp_rva
+        out.append((d, d + self.imp_size))
+        while True:
+            o = self.off(d)
+            ilt, _, _, name, iat = struct.unpack_from("<IIIII", self.data, o)
+            if not name:
+                break
+            n = self.cstr(b + name)
+            out.append((b + name, b + name + len(n) + 1))
+            for table in (ilt, iat):
+                t = b + table
+                while True:
+                    v = struct.unpack_from("<I", self.data, self.off(t))[0]
+                    out.append((t, t + 4))
+                    t += 4
+                    if not v:
+                        break
+                    if not v & 0x80000000:      # a hint and a name
+                        h = b + v
+                        s = self.cstr(h + 2)
+                        out.append((h, h + 2 + len(s) + 1))
+            d += 20
+        return out
+
+
+def masked_set(*pes) -> set:
+    s = set()
+    for p in pes:
+        for a, b in p.mask():
+            s.update(range(a, b))
+    return s
+
+
+def image(pe: Pe) -> list:
+    """The sections' raw bytes, [(va, bytearray)]."""
+    return [(v, bytearray(pe.data[r:r + n])) for _, v, r, n in pe.sections]
+
+
+def image_put(img, va: int, b: bytes):
+    for v, buf in img:
+        if v <= va and va + len(b) <= v + len(buf):
+            buf[va - v:va - v + len(b)] = b
+            return
+    die(f"0x{va:X} ({len(b)} B) is in no section of the image")
+
+
+def image_hash(img, mask: set) -> bytes:
+    """SHA-256 of the sections' raw bytes, the masked ones as zero: the hash the DLL computes on its own mapped image."""
+    h = hashlib.sha256()
+    for v, buf in img:
+        b = bytearray(buf)
+        for va in mask:
+            if v <= va < v + len(b):
+                b[va - v] = 0
+        h.update(b)
+    return h.digest()
+
+
+def runs_of(pairs: dict) -> list:
+    """{va: byte} to [(va, bytes)], adjacent bytes one run, none past a u16's length."""
+    runs, cur_va, cur = [], None, bytearray()
+    for va in sorted(pairs):
+        if cur and va == cur_va + len(cur) and len(cur) < 0xFFFF:
+            cur.append(pairs[va])
+        else:
+            if cur:
+                runs.append((cur_va, bytes(cur)))
+            cur_va, cur = va, bytearray([pairs[va]])
+    if cur:
+        runs.append((cur_va, bytes(cur)))
+    return runs
+
+
+def delta(stock: Pe, mod: Pe, mask: set) -> dict:
+    """{va: the mod's byte} wherever the mod's exe differs from stock outside the mask."""
+    if [s[1:] for s in stock.sections] != [s[1:] for s in mod.sections]:
+        die("a mod exe's section layout differs from stock 3.1: no byte table can hold it")
+    out = {}
+    for _, v, r, n in stock.sections:
+        a, b = stock.data[r:r + n], mod.data[r:r + n]
+        if a == b:
+            continue
+        for i in range(n):
+            if a[i] != b[i] and v + i not in mask:
+                out[v + i] = b[i]
+    return out
+
+
+# ---------------------------------------------------------------------------- the Patch Loader's list
+
+# The sites of its named keys, as VAs (patches.c, patches_apply_presets).
+LOADER_STR = {"registrypath": ((0x50DDFD, 0x509EB8), 21), "configfilename": ((0x5098A3,), 12), "gp3filename": ((0x5028CC,), 11),
+              "downloadpath": ((0x503730,), 11), "gameversionstring": ((0x5031B4,), 7)}
+LOADER_BYTE = {"multiplayerversionmajor": 0x49E9C0, "multiplayerversionminor": 0x49E9C9}
+LOADER_YES = {"commanderordersnotreset": ((0x406FB4, b"\xEB\x40"),),
+              "changepathfindingsearch": ((0x40EAD6, struct.pack("<I", 66650)),),
+              "directxpopupelimination": ((0x4266A5, b"\xB0\x01"),),
+              "cursorreclaim": ((0x43E786, b"\0\0"),),
+              "disablekeylastcommandrepeat": ((0x4966E7, b"\x27"),),
+              "enablef10debug": ((0x496776, b"\x24"), (0x496779, b"\x0D")),
+              "increaseatmtofillresources": ((0x4FCC7F, b"\xD4"),)}
+LOADER_PROXY_BYTE = (0x401064, b"\x01")     # dllmain.c: tells tdraw.dll the proxy is live
+
+
+def file_offset_to_va(a: int):
+    """patches.h GET_MEM_ADDRESS: the sections' offset deltas; None for an offset outside them."""
+    if a >= 0x0FF600 + 0x10A00 or a < 0x400:
+        return None
+    d = 0x1A00 if a >= 0x0FF600 else 0x1200 if a >= 0x0FAE00 else 0xC00
+    return 0x400000 + a + d
+
+
+def loader_ini(dll: bytes) -> str:
+    i = dll.find(b"[Settings]")
+    if i < 0:
+        die("no patch list inside this dplayx.dll")
+    return dll[i:dll.index(b"\0", i)].decode("latin-1")
+
+
+def loader_table(dll: bytes) -> dict:
+    """{va: byte} of a Patch Loader's built-in list, keys and customs alike, and the proxy byte. The two DirectDraw call
+    sites it also patches lead into tdraw.dll, which a managed mod does not have: they are Impure's, not the table's."""
+    out = {}
+
+    def put(va, b):
+        for i, x in enumerate(b):
+            if va + i in out and out[va + i] != x:
+                die(f"the loader list writes 0x{va + i:X} twice")
+            out[va + i] = x
+
+    section = None
+    for raw in loader_ini(dll).splitlines():
+        line = raw.split(";", 1)[0].strip()
+        if not line:
+            continue
+        m = re.match(r"^\[([^\]]+)\]$", line)
+        if m:
+            section = m.group(1)
+            continue
+        if "=" not in line:
+            die(f"loader list: cannot read {line!r}")
+        k, v = (p.strip() for p in line.split("=", 1))
+        low = k.lower()
+        if section.lower() == "settings":
+            if low in LOADER_STR:
+                sites, cap = LOADER_STR[low]
+                if len(v) > cap:
+                    die(f"loader list: {k} is longer than its {cap} characters")
+                for s in sites:
+                    put(s, v.encode("latin-1") + b"\0")
+            elif low in LOADER_BYTE:
+                put(LOADER_BYTE[low], bytes([int(v)]))
+            elif low in LOADER_YES:
+                if v.lower() == "yes":
+                    for s, b in LOADER_YES[low]:
+                        put(s, b)
+                elif v.lower() != "no":
+                    die(f"loader list: {k}={v}")
+            else:
+                die(f"loader list: unknown key {k}")
+        elif low == "patch":
+            va = file_offset_to_va(int(section, 16))
+            if va is None:
+                die(f"loader list: file offset {section} is outside the image")
+            put(va, bytes.fromhex(v))
+    put(*LOADER_PROXY_BYTE)
+    return out
+
+
+# ---------------------------------------------------------------------------- the sources
+
+def tacompat():
+    sys.path.insert(0, str(ROOT / "tools/compat"))
+    import tacompat as t
+    return t
+
+
+def tavfs():
+    sys.path.insert(0, str(ROOT / "tools/wiki"))
+    import tavfs as t
+    return t
+
+
+def stock_exe() -> bytes:
+    return (main_checkout() / "pristine/TotalA.exe.pristine").read_bytes()
+
+
+def mod_sources(ids=None) -> list:
+    out = []
+    for p in sorted(MODS.glob("*.json")):
+        if p.name == "catalog.json":
+            continue
+        j = json.loads(p.read_text())
+        if j.get("id") != p.stem:
+            die(f"{p.name}: its id is {j.get('id')!r}")
+        if not ids or j["id"] in ids:
+            out.append(j)
+    if ids and len(out) != len(ids):
+        die(f"no such mod among {sorted(ids)}")
+    return out
+
+
+def setup_files(setup_name: str) -> dict:
+    """{lower name: (name as installed, cached file)} of a compat setup, without the retail game."""
+    t = tacompat()
+    for s in t.SETUPS:
+        if s["name"] == setup_name:
+            return {dest.lower(): (dest, Path(src)) for dest, src in t.overlay(s)}
+    die(f"no compat setup {setup_name}")
+
+
+def mod_table(src: dict, stock: Pe):
+    """The mod's {va: byte} and its exe file's Pe (stock when it has none of its own)."""
+    files = setup_files(src["setup"])
+    if "totala.exe" in files:
+        exe = Pe(files["totala.exe"][1].read_bytes())
+    else:
+        exe = stock
+    if src["exe"] == "loader":
+        if exe.data != stock.data:
+            die(f"{src['id']}: a loader mod's exe is not stock 3.1")
+        return loader_table(files["dplayx.dll"][1].read_bytes()), exe
+    if src["exe"] != "file":
+        die(f"{src['id']}: exe is {src['exe']!r}")
+    return delta(stock, exe, masked_set(stock, exe)), exe
+
+
+def apply(stock: Pe, table: dict):
+    img = image(stock)
+    for va, b in runs_of(table):
+        image_put(img, va, b)
+    return img
+
+
+def file_key(data: bytes, is_exe: bool) -> bytes:
+    """A known file's identity. An exe's ignores the PE checksum and Characteristics, which the 4 GB copy changes."""
+    if is_exe:
+        d = bytearray(data)
+        pe = struct.unpack_from("<I", d, 0x3C)[0]
+        d[pe + 22:pe + 24] = b"\0\0"
+        d[pe + 24 + 64:pe + 24 + 68] = b"\0\0\0\0"
+        return hashlib.sha256(d).digest()
+    return hashlib.sha256(data).digest()
+
+
+def known_reverts(stock: Pe):
+    """[(kind, name, key, {va: xor})]: every known modded exe of a setup and every known loader, back to stock."""
+    t = tacompat()
+    seen, out = set(), []
+    for s in t.SETUPS:
+        for dest, src in t.overlay(s):
+            low, p = dest.lower(), Path(src)
+            if low == "totala.exe":
+                d = p.read_bytes()
+                k = file_key(d, True)
+                if k in seen or d == stock.data:
+                    continue
+                seen.add(k)
+                exe = Pe(d)
+                m = masked_set(stock, exe)
+                tab = delta(stock, exe, m)
+                out.append((0, f"{s['name']} exe", k, {va: b ^ stock.data[stock.off(va)] for va, b in tab.items()}))
+            elif low == "dplayx.dll":
+                d = p.read_bytes()
+                if b"[Settings]" not in d:
+                    continue
+                k = file_key(d, False)
+                if k in seen:
+                    continue
+                seen.add(k)
+                tab = loader_table(d)
+                out.append((1, f"{s['name']} loader", k, {va: b ^ stock.data[stock.off(va)] for va, b in tab.items()}))
+    return out
+
+
+# ---------------------------------------------------------------------------- the mount, simulated
+
+def manifest():
+    """The original game's files: ({hash}, {(archive lower, path lower): md5}) from _local/original-manifest.tsv."""
+    hashes, members = set(), {}
+    for line in (main_checkout() / "_local/original-manifest.tsv").read_text().splitlines():
+        md5, size, path = line.split("\t", 2)
+        if int(size):
+            hashes.add(md5)
+        if ":" in path:
+            arc, member = path.split(":", 1)
+            members[(arc.lower(), member.lower().replace("\\", "/"))] = md5
+    return hashes, members
+
+
+def member_sizes() -> dict:
+    """{md5: size} of the original game's files."""
+    out = {}
+    for line in (main_checkout() / "_local/original-manifest.tsv").read_text().splitlines():
+        md5, size, _ = line.split("\t", 2)
+        out[md5] = int(size)
+    return out
+
+
+def member_table(path: Path) -> dict:
+    """{lower path: md5} of an archive; a file too short to be one has none."""
+    v = tavfs()
+    if not v._has_trailer(path):
+        return {}
+    a = v.ta3do.HpiArchive(path)
+    return {k: hashlib.md5(a.read(k)).hexdigest() for k in a.files}
+
+
+def mount_order(names, first):
+    """InitTAHPIAry's order over bare file names (tavfs.py, the mount list), each once."""
+    out, seen = [], set()
+    ordered = sorted(names, key=str.lower)
+    for pat in (first, "*.ccx", "*.ufo", "*.hpi"):
+        for n in ordered:
+            if fnmatch.fnmatch(n.lower(), pat.lower()) and n.lower() not in seen:
+                seen.add(n.lower())
+                out.append(n)
+    return out
+
+
+def first_pattern(img, pe: Pe) -> str:
+    """The first mount pattern as the patched image spells it (0x5028CC, formatted with 0x5028D8)."""
+    def s(va):
+        for v, buf in img:
+            if v <= va < v + len(buf):
+                b = bytes(buf[va - v:])
+                return b[:b.index(b"\0")].decode("latin-1")
+        die(f"0x{va:X} is in no section")
+    f = s(0x5028CC)
+    return f.replace("%s", s(0x5028D8), 1) if "%s" in f else f
+
+
+class Plan:
+    """One mod's drop-in folder and managed mount, simulated."""
+
+    def __init__(self, src: dict, stock: Pe, members: dict):
+        v = tavfs()
+        self.src = src
+        self.files = setup_files(src["setup"])
+        table, exe = mod_table(src, stock)
+        self.table = table
+        self.img = apply(stock, table)
+        self.first = first_pattern(self.img, stock)
+        retail_dir = v.find_install(None)
+        self.retail = {p.name: p for p in retail_dir.iterdir() if p.is_file()}
+        # the folder, by bare name: the mod's file replaces a retail one of the same name, without case
+        folder = {n.lower(): (n, p, True) for n, p in self.retail.items()}
+        for low, (name, p) in self.files.items():
+            if "/" not in name.replace("\\", "/"):
+                folder[low] = (name, p, False)
+        self.mount = []                         # drop-in: (name, path, is the mod's)
+        for n in mount_order([f[0] for f in folder.values()], self.first):
+            name, p, is_retail = folder[n.lower()]
+            self.mount.append((name, p, not is_retail))
+        # the retail archives the drop-in folder lost: replaced, or no longer named by a pattern
+        kept = {n.lower() for n, _, mine in self.mount if not mine}
+        self.retail_mount = [n for n in mount_order(list(self.retail), "rev31.gp3")]
+        self.hide = sorted(n for n in self.retail_mount if n.lower() not in kept)
+        self.managed_retail = [n for n in self.retail_mount if n.lower() in kept]
+        self.members = members
+        self.loose = {}                         # the mod's loose game data: lower path -> file
+        self.plain = []                         # (name, why dropped)
+        self.kept = {}                          # the plain files the package carries: name -> file
+        for low, (name, p) in sorted(self.files.items()):
+            ext = low.rsplit(".", 1)[-1] if "." in low.rsplit("/", 1)[-1] else ""
+            if ext in ("dll", "exe"):
+                self.plain.append((name, "code: mod DLLs are never installed"))
+            elif "/" not in low.replace("\\", "/") and ext in ("gp3", "ccx", "ufo", "hpi"):
+                pass                            # an archive of the mount
+            elif "/" in low.replace("\\", "/") and low.split("/")[0] in GAME_DIRS:
+                self.loose[low.replace("\\", "/")] = p
+            elif low.replace("\\", "/").split("/")[0] in PLAIN_KEPT:
+                self.kept[name.replace("\\", "/")] = p
+            else:
+                self.plain.append((name, "read by plain path or not at all"))
+
+    def dropin_winners(self, tables) -> dict:
+        """{path: (md5, source)} as the drop-in folder answers: loose first, then the first archive in mount order."""
+        out = {}
+        for k, p in self.loose.items():
+            out[k] = (hashlib.md5(p.read_bytes()).hexdigest(), "loose")
+        for name, p, mine in self.mount:
+            for k, md5 in tables(name, p, mine).items():
+                out.setdefault(k, (md5, name))
+        return out
+
+
+# The folders the engine reads through its file open (0x4BB2E0): a loose file in one of them is game data.
+GAME_DIRS = {"anims", "bitmaps", "camera", "camps", "cdplayer", "download", "features", "fonts", "gamedata", "guis", "maps", "objects3d",
+             "palettes", "scripts", "sections", "sounds", "textures", "unitpics", "units", "ai", "weapons", "unitscript", "unitsb", "cursors"}
+
+
+# The folders of plain files a package carries, because Impure reads them itself: a mod's strategic icons.
+PLAIN_KEPT = {"icon", "zicon"}
+
+
+def retail_table(members):
+    def lookup(name):
+        low = name.lower()
+        return {m: md5 for (a, m), md5 in members.items() if a == low}
+    return lookup
+
+
+def plan_package(src, stock, hashes, members):
+    """The package's members, by the module's rule: the paths where a mod file wins in the drop-in folder, unless retail
+    already answers them with the same bytes under the managed mount. Returns (plan, wanted, dropin, stats)."""
+    plan = Plan(src, stock, members)
+    look = retail_table(members)
+    cache = {}
+
+    def tables(name, p, mine):
+        if name in cache:
+            return cache[name]
+        cache[name] = member_table(p) if mine else look(name)
+        return cache[name]
+
+    dropin = plan.dropin_winners(tables)
+    managed_retail = {}
+    for name in plan.managed_retail:
+        for k, md5 in look(name).items():
+            managed_retail.setdefault(k, md5)
+    by_md5 = {}
+    for (arc, member), md5 in members.items():
+        # the first archive in the retail mount order, so a recipe prefers the one every install has
+        if md5 not in by_md5 or order_of(plan, arc) < order_of(plan, by_md5[md5][0]):
+            by_md5[md5] = (arc, member)
+    wanted, stripped, recipe, loose_original = {}, 0, [], []
+    for k, (md5, where) in sorted(dropin.items()):
+        if managed_retail.get(k) == md5:
+            stripped += 1
+        elif md5 not in hashes:
+            wanted[k] = where
+        elif md5 in by_md5:
+            recipe.append((k, md5, *by_md5[md5]))   # the original game's bytes, not at this path under the managed mount
+        else:
+            loose_original.append(k)                # an original file with no archive to copy it from
+    return plan, wanted, dropin, {"stripped": stripped, "recipe": recipe, "loose_original": loose_original, "managed_retail": managed_retail}
+
+
+def order_of(plan, arc: str) -> int:
+    names = [n.lower() for n in plan.retail_mount]
+    return names.index(arc) if arc in names else len(names)
+
+
+# ---------------------------------------------------------------------------- the commands
+
+def cmd_tables(_):
+    stock = Pe(stock_exe())
+    for s in mod_sources():
+        tab, _ = mod_table(s, stock)
+        runs = runs_of(tab)
+        print(f"{s['id']:10} exe={s['exe']:6} {len(tab):5} bytes in {len(runs):4} runs; first pattern {first_pattern(apply(stock, tab), stock)}")
+    for kind, name, key, xor in known_reverts(stock):
+        print(f"revert {'exe   ' if kind == 0 else 'loader'} {name:32} {key.hex()[:12]} {len(xor):5} bytes in {len(runs_of(xor)):4} runs")
+
+
+def cmd_verify(a):
+    stock = Pe(stock_exe())
+    mask = masked_set(stock)
+    bad = 0
+
+    def report(ok, line):
+        nonlocal bad
+        bad += not ok
+        print(("ok   " if ok else "FAIL ") + line)
+
+    # each table reproduces its mod's exe from stock; a loader's reproduces what its list says, by construction, and
+    # `loaderdump` measures it against a process
+    for s in mod_sources(a.ids or None):
+        tab, exe = mod_table(s, stock)
+        m = masked_set(stock, exe)
+        img = apply(stock, tab)
+        if s["exe"] == "file":
+            report(image_hash(img, m) == image_hash(image(exe), m), f"{s['id']}: the table on stock gives the mod's exe, imports aside")
+        report(all(va not in mask for va in tab), f"{s['id']}: the table writes no import structure ({len(tab)} B)")
+    for kind, name, key, xor in known_reverts(stock):
+        src = None
+        if kind == 0:
+            for st in tacompat().SETUPS:
+                for dest, p in tacompat().overlay(st):
+                    if dest.lower() == "totala.exe" and file_key(Path(p).read_bytes(), True) == key:
+                        src = Pe(Path(p).read_bytes())
+                        break
+                if src:
+                    break
+            img = image(src)
+            m = masked_set(stock, src)
+        else:
+            img = image(stock)
+            m = mask
+            # the loader's writes on stock, and the XOR taking them back
+            for st in tacompat().SETUPS:
+                for dest, p in tacompat().overlay(st):
+                    if dest.lower() == "dplayx.dll" and file_key(Path(p).read_bytes(), False) == key:
+                        for va, b in runs_of(loader_table(Path(p).read_bytes())):
+                            image_put(img, va, b)
+                        src = True
+                        break
+                if src:
+                    break
+        for va, b in runs_of(xor):
+            for i, x in enumerate(b):
+                for v, buf in img:
+                    if v <= va + i < v + len(buf):
+                        buf[va + i - v] ^= x
+        report(image_hash(img, m) == image_hash(image(stock), m), f"revert {name}: gives stock 3.1")
+    # the packages against the original manifest, and the managed mount against the drop-in folder
+    hashes, members = manifest()
+    for s in mod_sources(a.ids or None):
+        tar = OUT / s["id"] / f"{s['id']}.tar.zst"
+        if not tar.is_file():
+            report(False, f"{s['id']}: no package at {tar}: modpack.py packages")
+            continue
+        plan, wanted, dropin, st = plan_package(s, stock, hashes, members)
+        with tempfile.TemporaryDirectory(dir=OUT) as d:
+            subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
+            with tarfile.open(d + "/p.tar") as t:
+                t.extractall(d, filter="data")
+                names = t.getnames()
+            ha = Path(d) / f"{s['id']}.hpi"
+            got = member_table(ha)
+            recipe = (Path(d) / f"{s['id']}.originals.tsv").read_text().splitlines()
+            carried = [hashlib.md5((Path(d) / n).read_bytes()).hexdigest() for n in names]
+        hit = [n for n, h in zip(names, carried) if h in hashes]
+        report(not hit, f"{s['id']}: no file of the package is an original file ({len(names)} files)" + (f"; first {hit[0]}" if hit else ""))
+        hits = [k for k, md5 in got.items() if md5 in hashes]
+        report(not hits, f"{s['id']}: no member of its archive is an original file ({len(got)} members)" + (f"; first {hits[0]}" if hits else ""))
+        # the recipe, as the install runs it: every member named is the player's own, with the bytes it says
+        assembled, bad_recipe = {}, []
+        for line in recipe:
+            k, md5, size, arc, member = line.split("\t")
+            if members.get((arc, member)) != md5:
+                bad_recipe.append(k)
+            assembled[k] = md5
+        report(not bad_recipe, f"{s['id']}: the recipe's {len(recipe)} files are in the retail archives it names"
+               + (f"; first {bad_recipe[0]}" if bad_recipe else ""))
+        managed = dict(st["managed_retail"])
+        managed.update(assembled)
+        managed.update(got)
+        wrong = [k for k, (md5, _) in dropin.items() if managed.get(k) != md5]
+        extra = [k for k in managed if k not in dropin]
+        report(not wrong and not extra, f"{s['id']}: the managed mount answers {len(dropin)} paths as the drop-in folder does"
+               + (f"; differ {len(wrong)}, first {wrong[0]}" if wrong else "") + (f"; only managed {len(extra)}, first {extra[0]}" if extra else ""))
+    print("verify: " + ("all passed" if not bad else f"{bad} FAILED"))
+    return 1 if bad else 0
+
+
+def write_tar(files: dict, out: Path):
+    """{name: bytes} in a tar, by name, their headers fixed, zstd compressed: the same inputs give the same package."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as t:
+        for name in sorted(files):
+            ti = tarfile.TarInfo(name)
+            ti.size, ti.mtime, ti.mode = len(files[name]), 0, 0o644
+            t.addfile(ti, io.BytesIO(files[name]))
+    tmp = out.with_suffix(".tar")
+    tmp.write_bytes(buf.getvalue())
+    subprocess.run(["zstd", "-qf", "-15", "-T0", str(tmp), "-o", str(out)], check=True)
+    tmp.unlink()
+
+
+def cmd_packages(a):
+    v = tavfs()
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hpipack
+    stock = Pe(stock_exe())
+    hashes, members = manifest()
+    for s in mod_sources(a.ids or None):
+        t0 = time.time()
+        plan, wanted, dropin, st = plan_package(s, stock, hashes, members)
+        tree, opened, cost = {}, {}, 0
+        src_by_name = {n: p for n, p, _ in plan.mount}
+        for k, where in sorted(wanted.items()):
+            if where == "loose":
+                data = plan.loose[k].read_bytes()
+            else:
+                arc = opened.get(where) or v.ta3do.HpiArchive(src_by_name[where])
+                opened[where] = arc
+                data = arc.read(k)
+            hpipack.insert(tree, k, data)
+            cost += len(data)
+        d = OUT / s["id"]
+        d.mkdir(parents=True, exist_ok=True)
+        pkg = {f"{s['id']}.hpi": hpipack.build(tree, 0, 2)}
+        sizes = member_sizes()
+        pkg[f"{s['id']}.originals.tsv"] = "".join(f"{k}\t{md5}\t{sizes[md5]}\t{arc}\t{member}\n" for k, md5, arc, member in st["recipe"]).encode()
+        for name, p in plan.kept.items():
+            pkg[name] = p.read_bytes()
+        tar = d / f"{s['id']}.tar.zst"
+        write_tar(pkg, tar)
+        lines = [f"package {s['id']}: {len(wanted)} members, {cost} bytes; {st['stripped']} paths answered by retail; hide: {plan.hide}",
+                 f"first mount pattern: {plan.first}"]
+        lines += [f"dropped {n}: {why}" for n, why in plan.plain]
+        lines += [f"original with no archive to copy it from: {k}" for k in st["loose_original"]]
+        (d / "listing.txt").write_text("\n".join(lines) + "\n")
+        print(f"{s['id']:10} {len(wanted):6} members {cost / 1e6:8.1f} MB -> {tar.stat().st_size / 1e6:7.1f} MB in {time.time() - t0:5.1f} s; "
+              f"{st['stripped']} from retail, {len(st['recipe'])} by recipe, {len(st['loose_original'])} unsourced, {len(plan.plain)} dropped; hide {plan.hide}")
+
+
+def sha_of(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def cmd_catalog(_):
+    stock = Pe(stock_exe())
+    mask = masked_set(stock)
+    entries, mods_bin = [], []
+    _, members = manifest()
+    for s in mod_sources():
+        tab, _ = mod_table(s, stock)
+        img = apply(stock, tab)
+        plan = Plan(s, stock, members)
+        tar = OUT / s["id"] / f"{s['id']}.tar.zst"
+        if not tar.is_file():
+            die(f"{s['id']}: no package: modpack.py packages")
+        with tempfile.TemporaryDirectory(dir=OUT) as d:
+            subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
+            with tarfile.open(d + "/p.tar") as t:
+                t.extractall(d, filter="data")
+                declared = [{"path": n, "sha256": sha_of(Path(d) / n), "size": (Path(d) / n).stat().st_size} for n in t.getnames()]
+        e = {k: s[k] for k in ("id", "kind", "name", "author", "version", "summary", "homepage", "permission")}
+        e.update({"packages": [{"url": f"{s['id']}/{s['id']}-{s['version'].replace(' ', '-')}.tar.zst", "sha256": sha_of(tar), "size": tar.stat().st_size,
+                                "files": declared}],
+                  "exe": s["id"], "hide": plan.hide})
+        for k in ("memory", "options"):
+            if k in s:
+                e[k] = s[k]
+        entries.append(e)
+        mods_bin.append((s["id"], image_hash(img, mask), runs_of(tab)))
+    (MODS / "catalog.json").write_text(json.dumps({"version": VERSION, "mods": entries}, indent=2) + "\n")
+    blob = bytearray(b"MPAT" + struct.pack("<I", VERSION))
+    rev = known_reverts(stock)
+    blob += struct.pack("<II", len(mods_bin), len(rev))
+    def put_runs(runs):
+        blob.extend(struct.pack("<I", len(runs)))
+        for va, b in runs:
+            blob.extend(struct.pack("<IH", va, len(b)) + b)
+    for mid, h, runs in mods_bin:
+        blob.extend(bytes([len(mid)]) + mid.encode() + h)
+        put_runs(runs)
+    for kind, _, key, xor in rev:
+        blob.extend(bytes([kind]) + key)
+        put_runs(runs_of(xor))
+    p = subprocess.run(["zstd", "-q", "-19", "--no-check", "-c"], input=bytes(blob), capture_output=True, check=True)
+    (MODS / "patches.bin").write_bytes(p.stdout)
+    print(f"catalog: {len(entries)} mods; patches.bin {len(blob)} B -> {len(p.stdout)} B, {len(rev)} reverts")
+
+
+STUB_C = "__declspec(dllexport) long __stdcall DirectDrawCreate(void* a, void* b, void* c) { return 1; }\n"
+STUB_PLAY = """LIBRARY tplayx.dll
+EXPORTS
+    DirectPlayCreate @1
+    DirectPlayEnumerateA @2
+    DirectPlayEnumerateW @3
+    DirectPlayLobbyCreateA @4
+    DirectPlayLobbyCreateW @5
+    gdwDPlaySPRefCount @6 DATA
+    DirectPlayEnumerate @9
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE
+"""
+STUB_PLAY_C = "".join(f"void __stdcall {n}(void) {{}}\n" for n in ("DirectPlayCreate", "DirectPlayEnumerateA", "DirectPlayEnumerateW",
+                      "DirectPlayLobbyCreateA", "DirectPlayLobbyCreateW", "DirectPlayEnumerate", "DllCanUnloadNow", "DllGetClassObject")) + "int gdwDPlaySPRefCount;\n"
+
+
+def cmd_loaderdump(a):
+    """Measure what a setup's dplayx.dll writes: its folder with the exe's entry point spinning (EB FE) and stubs for
+    ddraw.dll, tdraw.dll and tplayx.dll, so only the loader's DllMain writes the image; then the image read out of the
+    process and compared with the list's table. Headless: no DISPLAY, so no window can reach the desktop."""
+    stock = Pe(stock_exe())
+    mask = masked_set(stock)
+    files = setup_files(a.setup)
+    gcc = "i686-w64-mingw32-gcc"
+    with tempfile.TemporaryDirectory(prefix="loaderdump") as d:
+        d = Path(d)
+        names = {q.name.lower(): (q.name, q) for q in tavfs().find_install(None).iterdir() if q.is_file() and q.suffix.lower() == ".dll"}
+        for low, (name, p) in files.items():
+            if "/" not in name.replace("\\", "/") and not low.endswith((".gp3", ".ufo", ".ccx", ".hpi")):
+                names[low] = (name, p)
+        for name, p in names.values():
+            (d / name).symlink_to(p)
+        for n in ("ddraw.dll", "tdraw.dll", "tplayx.dll", "TotalA.exe"):
+            q = next((x for x in d.iterdir() if x.name.lower() == n.lower()), None)
+            if q:
+                q.unlink()
+        (d / "stub.c").write_text(STUB_C)
+        (d / "play.c").write_text(STUB_PLAY_C)
+        (d / "play.def").write_text(STUB_PLAY)
+        for out in ("ddraw.dll", "tdraw.dll"):
+            subprocess.run([gcc, "-shared", "-s", "-Wl,--kill-at", "-o", str(d / out), str(d / "stub.c")], check=True)
+        subprocess.run([gcc, "-shared", "-s", "-Wl,--enable-stdcall-fixup", "-o", str(d / "tplayx.dll"), str(d / "play.c"), str(d / "play.def")], check=True)
+        exe = bytearray(stock.data)
+        entry = 0x4E6FA0
+        exe[stock.off(entry):stock.off(entry) + 2] = b"\xEB\xFE"
+        (d / "TotalA.exe").write_bytes(exe)
+        env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+        # a prefix of its own: the instances' registries share one inode, and nothing here should write to it
+        env.update(WINEPREFIX=str(OUT / "prefix"), WINEDEBUG="-all", WINEDLLOVERRIDES="ddraw,dplayx,tdraw,tplayx=n,b;winemenubuilder.exe=d")
+        OUT.mkdir(parents=True, exist_ok=True)
+        if not (OUT / "prefix" / "system.reg").exists():
+            subprocess.run(["wineboot", "-i"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
+        proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=d, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        pid, dump = None, None
+        try:
+            for _ in range(60):
+                time.sleep(0.5)
+                pid = next((int(x.name) for x in Path("/proc").iterdir() if x.name.isdigit() and _exe_mapped(x, d)), None)
+                if pid:
+                    time.sleep(2)
+                    break
+            if not pid:
+                die("the game's process did not appear; a loader's error box needs a display, so run it there once")
+            dump = []
+            with open(f"/proc/{pid}/mem", "rb") as m:
+                for _, v, _, n in stock.sections:
+                    m.seek(v)
+                    dump.append((v, m.read(n)))
+        finally:
+            for victim in (pid, proc.pid):
+                try:
+                    if victim:
+                        os.kill(victim, 9)
+                except OSError:
+                    pass
+    table = loader_table(files["dplayx.dll"][1].read_bytes())
+    got = {}
+    for (name, v, r, n), (_, mem) in zip(stock.sections, dump):
+        ref = stock.data[r:r + n]
+        for i in range(n):
+            if ref[i] != mem[i] and v + i not in mask and v + i not in (entry, entry + 1):
+                got[v + i] = mem[i]
+    missing = sorted(va for va, b in table.items() if got.get(va, stock.data[stock.off(va)]) != b)
+    extra = {va: b for va, b in got.items() if table.get(va) != b}
+    print(f"{a.setup}: the list writes {len(table)} B; the process differs from stock by {len(got)} B outside the imports")
+    print(f"  in the list but not in the process: {len(missing)}" + (f", first 0x{missing[0]:X}" if missing else ""))
+    print(f"  in the process but not in the list: {len(extra)} B")
+    for va, b in runs_of(extra):
+        print(f"    0x{va:X}: {b.hex()}")
+    return 1 if missing else 0
+
+
+def _exe_mapped(proc: Path, folder: Path) -> bool:
+    try:
+        return str(folder / "TotalA.exe") in (proc / "maps").read_text()
+    except OSError:
+        return False
+
+
+def check_catalog(j) -> list:
+    """Every way the catalog can be wrong, by name. Standard library only: the DLL's build runs it."""
+    errs = []
+    if j.get("version") != VERSION:
+        errs.append(f"version is {j.get('version')!r}")
+    seen, mods = set(), j.get("mods")
+    if not isinstance(mods, list):
+        return errs + ["no mods list"]
+    ids = {e.get("id") for e in mods if isinstance(e, dict)}
+    for i, e in enumerate(mods):
+        n = e.get("id", f"#{i}")
+        for k in ("id", "kind", "name", "author", "version", "summary", "homepage", "permission"):
+            if not isinstance(e.get(k), str) or not e[k]:
+                errs.append(f"{n}: {k} is missing")
+        if not ID_RE.match(str(e.get("id", ""))):
+            errs.append(f"{n}: id is not a lower-case name")
+        if n in seen:
+            errs.append(f"{n}: id appears twice")
+        seen.add(n)
+        pk = e.get("packages")
+        if not isinstance(pk, list) or not pk:
+            errs.append(f"{n}: no packages")
+        else:
+            for p in pk:
+                if not HEX64.match(str(p.get("sha256", ""))):
+                    errs.append(f"{n}: a package's sha256 is missing or malformed")
+                if not isinstance(p.get("size"), int) or p["size"] <= 0:
+                    errs.append(f"{n}: a package's size is missing")
+                if not isinstance(p.get("url"), str) or not p["url"]:
+                    errs.append(f"{n}: a package's url is missing")
+                files = p.get("files")
+                if not isinstance(files, list) or not files:
+                    errs.append(f"{n}: a package declares no files")
+                else:
+                    for f in files:
+                        path = str(f.get("path", ""))
+                        if not path or path.startswith(("/", "\\")) or ".." in re.split(r"[\\/]", path) or ":" in path:
+                            errs.append(f"{n}: a package file's path {path!r} is unsafe")
+                        if not HEX64.match(str(f.get("sha256", ""))) or not isinstance(f.get("size"), int):
+                            errs.append(f"{n}: package file {path!r} has no sha256 or size")
+        kind = e.get("kind")
+        if kind == "mod":
+            if not isinstance(e.get("exe"), str) or not e["exe"]:
+                errs.append(f"{n}: a mod names no exe table")
+            if not isinstance(e.get("hide"), list):
+                errs.append(f"{n}: a mod has no hide list")
+        elif kind == "mutator":
+            if not isinstance(e.get("base"), str) or not e["base"]:
+                errs.append(f"{n}: a mutator names no base")
+            elif e["base"] not in ids and e["base"] != "none":
+                errs.append(f"{n}: base {e['base']} is no mod of the catalog")
+            if not isinstance(e.get("base_hashes"), dict):
+                errs.append(f"{n}: a mutator has no base_hashes")
+            if not isinstance(e.get("files"), list):
+                errs.append(f"{n}: a mutator has no files")
+            if "exe" in e:
+                errs.append(f"{n}: a mutator carries no exe patch")
+        else:
+            errs.append(f"{n}: kind is {kind!r}")
+    return errs
+
+
+def cmd_check(a):
+    p = Path(a.catalog) if a.catalog else MODS / "catalog.json"
+    try:
+        j = json.loads(p.read_text())
+    except (OSError, ValueError) as x:
+        print(f"modpack check: {p}: {x}", file=sys.stderr)
+        return 1
+    errs = check_catalog(j)
+    for e in errs:
+        print(f"modpack check: {e}", file=sys.stderr)
+    if not errs:
+        print(f"modpack check: clean -- {len(j['mods'])} entries")
+    return 1 if errs else 0
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("check").add_argument("catalog", nargs="?")
+    sub.add_parser("tables")
+    sub.add_parser("loaderdump").add_argument("setup")
+    sub.add_parser("packages").add_argument("ids", nargs="*")
+    sub.add_parser("catalog")
+    sub.add_parser("verify").add_argument("ids", nargs="*")
+    a = p.parse_args()
+    return {"check": cmd_check, "tables": cmd_tables, "loaderdump": cmd_loaderdump, "packages": cmd_packages, "catalog": cmd_catalog, "verify": cmd_verify}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
