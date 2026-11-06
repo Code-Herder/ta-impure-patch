@@ -162,6 +162,8 @@ int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
    The other sets it for the next start; "" for none. */
 int  tagpu_settings_mod(char* out, int cap);
 void tagpu_settings_set_mod(const char* id);
+/* 1 when the file holds every change made so far: what a restart that rests on one asks after tagpu_settings_flush. */
+int  tagpu_settings_saved(void);
 
 /* A key this build does not own, as the file spelled it: 1 with its value, 0 when the file has none.
    The other drops it, so the next write leaves it out. For a move into another file, at attach. */

@@ -1194,6 +1194,9 @@ variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `
 `GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
 `esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
 
+**THE OK BOX `TA_DialogBox_fn 0x4ABD90(gi, text, width, a, b)`**, stdcall, `ret 0x14` at `0x4AC056` [DISASSEMBLED 2026-11-06]. It loads `MSGBOX.GUI` by `GUI_Load 0x4AA8F0` with flags `0x800` (`0x4ABDAA`), puts the text through
+`0x4C5740` (`0x4ABDC7`) and returns with the box on the stack: nothing from `0x4AC01B` to its return loops, so a caller inside an OnCommand goes on. Of its 73 callers 69 pass an immediate width: `0x1F4` 26, `0xC8` 20, `0x140` 12, `0x1E0` 8, `0x96`, `0xFA` and `0x190` once each; 4 compute it. They pass `gi` = `main+0x519` at those read, and `a` = `b` = 1 where the box takes an OK: `0x426725`, in the builder, passes `ebp`, 1 there. `0x44153D` passes `a` = 0, `b` = 1 and `0x443789` `a` = 1, `b` = 0. MEASURED: with `a` = `b` = 0 the box's OK gadget is inactive and nothing closes it. **The text has no bound:** `0x4ABDD3`..`0x4ABDF3` copies it with `rep movs` into a 256-byte buffer on the stack, so a caller must keep it shorter. tagpu_replays.c calls it from the main menu's OnCommand for the MODS button's two refusals.
+
 **THE GADGET DRAW LOOP, AND WHY A SECOND CALL LEAKS** [DISASSEMBLED 2026-09-18, this project, for
 the vulkan-only plan's landing 9]. The dispatcher `0x4A9176` sits at the top of a loop over the
 panel's gadgets:

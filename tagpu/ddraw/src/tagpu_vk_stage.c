@@ -117,7 +117,9 @@ static int mk_stage(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st, VkDeviceSize size)
     mai.memoryTypeIndex = (uint32_t)type;
     if (type < 0 || vkAllocateMemory(d->dev, &mai, NULL, &st->mem) != VK_SUCCESS ||
         vkBindBufferMemory(d->dev, st->buf, st->mem, 0) != VK_SUCCESS ||
-        vkMapMemory(d->dev, st->mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) {
+        vkMapMemory(d->dev, st->mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS ||
+        /* on Wine on llvmpipe a call with no address space left is a success with (void*)-1: MEASURED, tagpu_vk_hud.c */
+        !p || p == (void*)-1) {
         tagpu_vk_stage_drop(d, st);
         return 0;
     }

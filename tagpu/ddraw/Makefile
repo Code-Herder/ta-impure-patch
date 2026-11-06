@@ -223,7 +223,7 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 # same format into inc/tagpu_wikipak.bin, which res.rc embeds as the RCDATA resource WIKIPAK.
 # Generated and never committed, as the HUD's.
 WIKI_DIR  := ../../art/wiki
-WIKI_SRCS := $(shell find $(WIKI_DIR) -type d -o -type f 2>/dev/null)
+WIKI_SRCS := $(shell find $(WIKI_DIR) ../../art/mods -type d -o -type f 2>/dev/null)
 inc/tagpu_wikipak.bin: ../../tools/hudpak.py $(WIKI_SRCS)
 	python3 ../../tools/hudpak.py --set wiki $(WIKI_DIR) $@
 

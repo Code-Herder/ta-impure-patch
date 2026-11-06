@@ -96,7 +96,7 @@ bar, checkboxes, sliders) already look like each mod's own; a style only has to 
 |---|---|---|
 | The Replays screen's ground | 640×480 | painted with recesses where the engine draws the list, the buttons and the minimap |
 | The title font | A–Z and 0–9 | a GAF font shaped like `hattfont12.gaf`: one frame per character code, the baseline in the frame's hotspot |
-| The main menu's REPLAYS plate | about 115×35 | the empty button recess, pasted into the slot below the centre |
+| The main menu's plate for REPLAYS and MODS | about 115×58 | the empty button recess, pasted into the slot below the centre |
 | The glyphs | sprites | list badges, the fork markers and timeline glyph for S4's selector, and the rewind button's four states |
 
 **The glyphs as drawn on 2026-10-01**, the dock's icons and markers among them: 5,645 pixels in all — 6.6 KB as an
@@ -193,7 +193,7 @@ main menu):
 
 | Mod | What changes when REPLAYS is added |
 |---|---|
-| retail, Escalation | REPLAYS at (272,393), 96×20, on our plate at (263,386) |
+| retail, Escalation | REPLAYS at (272,393), 96×20, on our plate at (263,386), with MODS at (272,416) on the same plate |
 | ProTA 4.8 | its badge, painted into its backdrop at (283,392)–(356,438), moves up to (283,338), just above REPLAYS, and our plate takes the slot; its version label moves up 54 px with it |
 | Total Mayhem 11.3.0 | its version label, drawn at run time centred on x 320 at y 418–425, moves to y 371, just above the plate |
 | TA Zero | none: its `ZGui/mainmenu.gui` comments the Credits gadget out with `/* */` and the engine honours the comment, so the slot is empty |

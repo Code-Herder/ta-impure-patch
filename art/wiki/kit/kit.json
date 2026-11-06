@@ -170,6 +170,116 @@
     128
    ],
    "xtile": true
+  },
+  "check_off": {
+   "kind": "whole",
+   "scale": 3.333
+  },
+  "check_on": {
+   "kind": "whole",
+   "scale": 3.333
+  },
+  "radio_off": {
+   "kind": "whole",
+   "scale": 3.333
+  },
+  "radio_on": {
+   "kind": "whole",
+   "scale": 3.333
+  },
+  "progress_track": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    4,
+    8,
+    3,
+    8
+   ]
+  },
+  "progress_fill": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    3,
+    8,
+    3,
+    8
+   ]
+  },
+  "tab": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    5,
+    16,
+    5,
+    16
+   ]
+  },
+  "tab_selected": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    5,
+    16,
+    5,
+    16
+   ]
+  },
+  "tab_down": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    5,
+    16,
+    5,
+    16
+   ]
+  },
+  "badge_active": {
+   "kind": "nine",
+   "scale": 5.022,
+   "slice": [
+    5.423,
+    52,
+    5.915,
+    52
+   ],
+   "xtile": true
+  },
+  "badge_update": {
+   "kind": "nine",
+   "scale": 5.022,
+   "slice": [
+    5.423,
+    52,
+    5.915,
+    52
+   ],
+   "xtile": true
+  },
+  "badge_grey": {
+   "kind": "nine",
+   "scale": 5.022,
+   "slice": [
+    5.423,
+    52,
+    5.915,
+    52
+   ],
+   "xtile": true
+  },
+  "badge_conflict": {
+   "kind": "nine",
+   "scale": 5.022,
+   "slice": [
+    5.423,
+    52,
+    5.915,
+    52
+   ],
+   "xtile": true
   }
  }
 }

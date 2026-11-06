@@ -1,0 +1,55 @@
+{
+ "format": 1,
+ "about": "The Mods screen's layout, in units (the screen's height / 720). Read by the mockup (tools/mods/mockup/: tools/uikit/uikit.js sets every number below as a CSS custom property, --w- and its path, which mods.css lays out with) and by the DLL (tagpu/ddraw/src/tagpu_modslay.c). tools/mods/modslaycheck.py compares the two. A pair is [vertical, horizontal] and a quad [top, right, bottom, left], as in CSS; `wt` is [left, right, top, height]. The frame's depths (`wt`, `wb`, `gap`, `pn`) are the wiki's, read off the same `window` and `panel` parts.",
+
+ "window": {"share": 90, "font": 10, "line": 1.35},
+ "wt": [2.6, 20.4, 2.4, 15.7],
+ "wx": [3.5, 3.2, 14, 14],
+ "wb": [23, 5.6, 5.6, 5.5],
+ "gap": 3,
+ "pn": [2.5, 2.6, 2.1, 2.5],
+ "title": {"pad": 6},
+
+ "tabs": {"h": 18, "pad": 10, "min": 72, "gap": 2},
+ "columns": [44],
+ "panel": {"pad": [4, 3]},
+ "scrollbar": 5,
+
+ "list": {"h": 28},
+ "row": {"h": 16, "pad": [2, 6], "gap": 4, "after": 1.5},
+ "lock": 7,
+ "marker": 5,
+ "check": 11,
+ "radio": 11,
+ "act": {"w": 56, "h": 15, "pad": 4, "min": 44},
+ "small": {"h": 13, "pad": 3, "min": 14, "gap": 3},
+ "value": 24,
+ "badge": {"h": 13, "pad": 7},
+ "progress": {"w": 52, "h": 8, "inset": 1.5},
+
+ "pane": {"title_line": 1.2, "para": 5, "head": 5, "after": 3},
+ "footer": {"h": 18, "pad": 10, "min": 64, "gap": 4},
+
+ "roles_about": "Each text of the screen in the replay HUD's style nearest its role (art/hud/layout.json `styles`), as the wiki's: the titles in the stats window's title; a mod's name and an option in a player row's name; the running text in the stats window's foot, its one mixed-case style; what the list says when empty and a note, each written for the moment, in the toast; the tabs and the footer's buttons in the transport's labels; a row's button, a badge and a reset in the stats window's chips; a value and a stepper's signs in the HUD's numbers.",
+ "roles": {
+  "window_title": "title",
+  "tab": "face_big",
+  "name": "name",
+  "detail": "window_foot",
+  "act": "face_chip",
+  "badge": "face_chip",
+  "empty": "toast",
+  "pane_title": "title",
+  "meta": "window_foot",
+  "summary": "window_foot",
+  "note": "toast",
+  "header": "header",
+  "option": "name",
+  "reason": "window_foot",
+  "value": "num",
+  "step": "num",
+  "reset": "face_chip",
+  "archive": "window_foot",
+  "footer": "face_big"
+ }
+}

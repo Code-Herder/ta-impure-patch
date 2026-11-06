@@ -28,6 +28,15 @@ int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* 
 /* 1 when mod `id`'s `hide` list names the archive `name`, without case. */
 int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const char* name);
 
+/* What the Mods screen says of a mod: UTF-8, each cut to its array. */
+typedef struct {
+    char name[48], author[48], version[32], summary[400];
+    int  is_mutator;
+} MODABOUT;
+
+/* Mod `id`'s entry for the screen. 1 with `out` filled, 0 when no entry names it. */
+int tagpu_modcat_about(const char* catalog, size_t n, const char* id, MODABOUT* out);
+
 /* 64 lower-case hex digits and the end of the text into `out`; 0 for anything else. */
 int tagpu_modcat_hash(const char* text, uint8_t out[32]);
 

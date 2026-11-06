@@ -77,6 +77,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dd.h"
+#include "tagpu_modsui.h"
 #include "config.h"
 #include "mouse.h"
 #include "tagpu_opt.h"
@@ -234,6 +235,17 @@ static const char* pause_in_flight(void)
     if (rw.tk_queued) return "a takeover is queued: its run ends the playing's pause";
     if (tagpu_hudinput_leave_pending()) return "Leave's question holds the pause";
     return NULL;
+}
+
+void tagpu_wiki_capture(int on)
+{
+    EnterCriticalSection(&s_cursorLock);
+    if (on) {
+        s_fx = (LONG)InterlockedCompareExchange((LONG*)&g_ddraw.cursor.x, 0, 0);
+        s_fy = (LONG)InterlockedCompareExchange((LONG*)&g_ddraw.cursor.y, 0, 0);
+    }
+    InterlockedExchange(&s_hold, on ? 1 : 0);
+    LeaveCriticalSection(&s_cursorLock);
 }
 
 static void wiki_open(int gx, int gy)
@@ -2029,6 +2041,13 @@ static int paired_up(int took)
 int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
 {
     int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
+    /* THE MODS SCREEN HOLDS THE SAME CAPTURE at the main menu, where no wiki window can be open, and takes its
+       input first. Only the release that closed it may re-lock the mouse (relocks, below). */
+    if (tagpu_modsui_is_open()) {
+        int took = tagpu_modsui_message(msg, wp, lp);
+        const int up = msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP || msg == WM_XBUTTONUP;
+        return up && !tagpu_modsui_is_open() ? paired_up(took) : took;
+    }
     switch (msg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
@@ -2095,6 +2114,7 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
 
 int tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy)
 {
+    if (tagpu_modsui_is_open()) return tagpu_modsui_mouse(code, cx, cy);
     switch (code) {
     case TAGPU_M_MOVE:
         if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); try_pointer(cx, cy, 0, 0); }
@@ -2122,18 +2142,20 @@ int tagpu_wiki_key(unsigned vk, int up)
 {
     /* an injected key never repeats: each down is a press of its own. And it posts no character
        for the wiki to take: deliver_key makes the WM_CHAR itself, only for a key it delivers */
-    int took = up ? key_up(vk) : key_down(vk, 0);
+    int took = tagpu_modsui_is_open() ? tagpu_modsui_key(vk, up) : up ? key_up(vk) : key_down(vk, 0);
     s_charOwed = 0;
     return took;
 }
 
 int tagpu_wiki_char(void)
 {
+    if (tagpu_modsui_is_open()) return 1;
     return character();
 }
 
 void tagpu_wiki_cancel(void)
 {
+    tagpu_modsui_cancel();
     s_held[0] = 0;
     s_drag = -1;
     tagpu_wikiframe_press_init(&s_press);

@@ -56,6 +56,11 @@ enum { TAGPU_RG_CRASH = 1, TAGPU_RG_LOST = 2, TAGPU_RG_SELFTEST = 3 };
    in any other launch. */
 void tagpu_rguard_attach(void);
 
+/* The process Confirm on the Mods screen starts names this one under this variable, so it waits for it as a relaunch does. */
+#define TAGPU_RG_RESTART "TAGPU_MODS_RESTART"
+/* This exe started again, with this command line and folder: 1, and the caller then ends this process; 0 with GetLastError. */
+int tagpu_rguard_restart_self(void);
+
 /* THE DEVICE the restorer is about to run on, at its bring-up (render thread).
    Installs the crash filter once, turns a marker the last run left into the
    record (and owes the notice), drops a record that names another device, and

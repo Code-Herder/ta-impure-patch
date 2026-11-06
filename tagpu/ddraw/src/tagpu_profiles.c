@@ -21,6 +21,7 @@
 #define RADIUS_MAX MODRULES_RADIUS_MAX
 #define RULES_LEVER "tagpu_rules.on"
 #define MIGRATED ".migrated"
+#define HIDE_KEY "hide."
 
 static const char* const names[MOD_N] = {
     "unknown", "retail", "escalation", "mayhem", "prota", "tazero", "twilight"
@@ -332,7 +333,7 @@ static int write_choice(const char* path, const char* key, int value, char* why,
         if (next) *next++ = 0;
         s = line;
         while (*s == ' ' || *s == '\t') s++;
-        if (!strncmp(s, key, klen) && (s[klen] == '=' || s[klen] == ' ' || s[klen] == '\t')) continue;
+        if (!_strnicmp(s, key, klen) && (s[klen] == '=' || s[klen] == ' ' || s[klen] == '\t')) continue;
         n = strlen(line);
         if (!n && !next) break;
         if ((size_t)at + n + 2 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
@@ -343,7 +344,11 @@ static int write_choice(const char* path, const char* key, int value, char* why,
     }
     if (value >= 0) {
         if ((size_t)at + klen + 16 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
-        at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
+        /* the content switches read on|off (research/notes/mod-manager-plan.md) */
+        if (!strncmp(key, HIDE_KEY, sizeof HIDE_KEY - 1))
+            at += snprintf(out + at, sizeof out - at, "%s=%s\r\n", key, value ? "on" : "off");
+        else
+            at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
     }
     snprintf(tmp, sizeof tmp, "%s.new", path);
     f = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -401,6 +406,8 @@ static void flush(int final)
 }
 
 void tagpu_profiles_flush(void) { flush(0); }
+void tagpu_profiles_flush_now(void) { s_retryAt = 0; flush(0); }
+int  tagpu_profiles_saved(void) { return InterlockedCompareExchange(&s_dirty, 0, 0) == 0; }
 void tagpu_profiles_final(void) { flush(1); }
 
 /* A hand-edited choice of an option the mod forbids has no effect, and the log says so once. */
@@ -509,6 +516,88 @@ void tagpu_profiles_set_quick(int value)
 {
     if (s_policy.quick && (value == 0 || value == 1)) tagpu_profiles_restore_choice(TAGPU_CHOICE_QUICK, value);
 }
+const char* tagpu_profiles_name(void)
+{
+    return names[s_mod];
+}
+
+static void path_of_id(const char* id, char* path, size_t cap)
+{
+    snprintf(path, cap, "profiles/%s.ini", id);     /* s_path's spelling: the running mod is told by comparing them */
+}
+
+int tagpu_profiles_choice_of(const char* id, int which)
+{
+    char path[64], error[sizeof s_error] = "";
+    int choice[TAGPU_CHOICES];
+    if (which < 0 || which >= TAGPU_CHOICES) return -1;
+    path_of_id(id, path, sizeof path);
+    if (s_path[0] && !strcmp(path, s_path)) return tagpu_profiles_choice(which);
+    return read_choices(path, choice, error, sizeof error) > 0 ? choice[which] : -1;
+}
+
+int tagpu_profiles_hide_of(const char* id, const char* archive)
+{
+    char path[64], data[PROFILE_CAP + 1], error[sizeof s_error] = "", *line, *next;
+    size_t nk = sizeof HIDE_KEY - 1, na = strlen(archive);
+    int found = -1;
+    int got;
+    path_of_id(id, path, sizeof path);
+    /* AN ORDERING: a writer replaces this file by a rename, which fails while a reader has it open, and a read during the rename finds
+       no file. The writers hold s_io. */
+    if (s_attached) EnterCriticalSection(&s_io);
+    got = read_small(path, data, error, sizeof error);
+    if (s_attached) LeaveCriticalSection(&s_io);
+    if (got <= 0) return -1;
+    for (line = data; line; line = next) {
+        char* key;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        key = trim(line);
+        if (strncmp(key, HIDE_KEY, nk) || _strnicmp(key + nk, archive, na)) continue;
+        key = trim(key + nk + na);
+        if (*key != '=') continue;
+        key = trim(key + 1);
+        if (!strcmp(key, "on")) found = 1;
+        else if (!strcmp(key, "off")) found = 0;
+        else tagpu_logf("profiles: %s: hide.%s is not on or off; ignored", path, archive);
+    }
+    return found;
+}
+
+static int write_key_of(const char* id, const char* key, int value)
+{
+    char path[64], why[sizeof s_error] = "";
+    int ok;
+    if (tagpu_settings_ignored()) return 0;     /* a control launch does not touch what it does not own */
+    path_of_id(id, path, sizeof path);
+    CreateDirectoryA("profiles", NULL);
+    EnterCriticalSection(&s_io);
+    ok = write_choice(path, key, value, why, sizeof why);
+    LeaveCriticalSection(&s_io);
+    if (!ok) tagpu_logf("profiles: %s not changed: %s", key, why);
+    return ok;
+}
+
+int tagpu_profiles_set_choice_of(const char* id, int which, int value)
+{
+    char path[64];
+    if (which < 0 || which >= TAGPU_CHOICES) return 0;
+    path_of_id(id, path, sizeof path);
+    if (s_path[0] && !strcmp(path, s_path)) {
+        tagpu_profiles_restore_choice(which, value);
+        return 1;
+    }
+    return write_key_of(id, s_choiceKey[which], value);
+}
+
+int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value)
+{
+    char key[80];
+    snprintf(key, sizeof key, HIDE_KEY "%s", archive);
+    return write_key_of(id, key, value);
+}
+
 void tagpu_profiles_status(char* out, unsigned cap)
 {
     if (s_error[0]) snprintf(out, cap, "Profile error: %s", s_error);

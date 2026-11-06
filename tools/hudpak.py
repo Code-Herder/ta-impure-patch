@@ -16,7 +16,8 @@ A set names the files of one folder:
           the one the wiki falls back to (src/tagpu_wikidata.c), layout.json, the window's
           numbers (src/tagpu_wikilay.c), and the window's kit,
           kit/kit.json and its parts as PNG (src/tagpu_hudart.c), as tools/hudart/fit.py --set
-          wiki fits them from art/wiki-full/kit/.
+          wiki fits them from art/wiki-full/kit/. The Mods screen's numbers, art/mods/layout.json, go
+          with the kit they lay out, as mods/layout.json (src/tagpu_modslay.c).
     mods  mods/, the resource MODPAK: the catalog and the exe patch pack tools/modpack/modpack.py writes.
 
 THE STANDARD LIBRARY ONLY, like tools/artbake.py: the build's Python is the bare python3 CI has.
@@ -39,6 +40,8 @@ SETS = {
     "wiki": (("tree.json", "layout.json", "entries/*.json", "stage/*.json", "side/*.json", "kit/kit.json", "kit/parts/*.png"),
              ("tree.json", "layout.json", "side/fixture.json", "kit/kit.json")),
 }
+# per set: a file from beside its folder, by the name the DLL asks for
+BESIDE = {"wiki": {"mods/layout.json": "../mods/layout.json"}}
 
 
 def main():
@@ -55,6 +58,13 @@ def main():
         if not (root / need).is_file():
             sys.exit(f"hudpak: {root / need} is missing")
     names = [p.relative_to(root).as_posix().encode() for p in files]
+    for want, source in BESIDE.get(name, {}).items():
+        if not (root / source).is_file():
+            sys.exit(f"hudpak: {root / source} is missing")
+        files.append(root / source)
+        names.append(want.encode())
+    order = sorted(range(len(files)), key=lambda i: names[i])
+    files, names = [files[i] for i in order], [names[i] for i in order]
     head = 12 + 16 * len(files)
     at = head + sum(len(n) for n in names)
     table, blobs, noff = [], [], head

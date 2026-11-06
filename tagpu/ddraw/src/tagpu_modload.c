@@ -13,6 +13,7 @@
 #include "tagpu_log.h"
 #include "tagpu_refuse.h"
 #include "tagpu_modinst.h"
+#include "tagpu_profiles.h"
 #include "zstd.h"
 
 #define PACK_MAX (1u << 20)            /* patches.bin, decompressed: far more than it holds */
@@ -494,7 +495,10 @@ static int __stdcall mount_filtered(const char* name, int flag)
         static char seen[ARCHIVES_MAX][64];
         static int nseen;
         const char* why = NULL;
-        if (tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
+        /* the player's hide.<archive> over the mod's list; the archive every mod needs stays whatever the file says */
+        const int key = lstrcmpiA(base, ESSENTIAL_ARCHIVE) ? tagpu_profiles_hide_of(s_id, base) : 0;
+        if (key > 0) why = "your profile hides it";
+        else if (key < 0 && tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
         else {
             int original = is_original_archive(name);
             if (original <= 0) why = original < 0 ? "it could not be read" : "it is no original archive of the game";
@@ -517,6 +521,52 @@ static int __stdcall mount_filtered(const char* name, int flag)
         }
     }
     return s_mountReal(name, flag);
+}
+
+/* ---- what the Mods screen asks ---------------------------------------------------------------------- */
+
+const char* tagpu_modload_essential_archive(void)
+{
+    return ESSENTIAL_ARCHIVE;
+}
+
+int tagpu_modload_exe_known(void)
+{
+    static int s_tried;
+    wchar_t path[MAX_PATH];
+    uint8_t* exe;
+    uint8_t key[32];
+    size_t n = 0;
+    int known = 0;
+    if (!s_id[0] && !s_tried) {
+        s_tried = 1;
+        if (!load_pack()) tagpu_log("modload: this build has no usable mod pack");
+    }
+    if (!s_blob) return 0;
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH) || !(exe = read_file_w(path, &n))) return 0;
+    if (tagpu_modpak_file_key(exe, n, 1, key))
+        known = !memcmp(key, s_pak.stock_key, 32) || tagpu_modpak_known(&s_pak, 0, key);
+    free(exe);
+    return known;
+}
+
+int tagpu_modload_archive_is_original(const char* path)
+{
+    static unsigned char buf[1 << 16];
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    MODSHA sha;
+    uint8_t out[32];
+    DWORD got;
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    modsha_init(&sha);
+    for (;;) {
+        if (!ReadFile(h, buf, sizeof buf, &got, NULL)) { CloseHandle(h); return -1; }
+        if (!got) break;
+        modsha_add(&sha, buf, got);
+    }
+    CloseHandle(h);
+    modsha_end(&sha, out);
+    return tagpu_modpak_is_original(&s_pak, out);
 }
 
 /* ---- the loose step ---------------------------------------------------------------------------- */

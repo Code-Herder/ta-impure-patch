@@ -1,0 +1,93 @@
+/* The page around the screen, and the screen: inside the frame every length is in units through --u, the CSS pixels of the
+   frame's height / 720. The numbers are art/mods/layout.json's, which the DLL reads too (tagpu_modslay.c): uikit.js sets each
+   as a custom property of the frame, --w- and its path (row.pad -> --w-row-pad-0, --w-row-pad-1). The parts are the wiki's kit,
+   which uikit.js paints into each part's box; the text takes the replay HUD's styles, which uikit.js writes from
+   art/hud/layout.json. A rule changed here is changed in tagpu_modslay.c. */
+@font-face { font-family: 'Oswald'; font-weight: 500; src: url('../../../art/hud/fonts/oswald-500.ttf'); }
+@font-face { font-family: 'Oswald'; font-weight: 700; src: url('../../../art/hud/fonts/oswald-700.ttf'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 600; src: url('../../../art/hud/fonts/barlowcondensed-600.ttf'); }
+:root { --bg: #111310; --fg: #d8d8c8; --muted: #8f9384; --line: #34372e; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; padding: 12px 16px 24px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+header label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+header select, header input { background: #1c1e19; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
+header output { color: var(--fg); }
+#view { display: flex; justify-content: center; }
+
+#frame { --u: 1px; position: relative; isolation: isolate; overflow: hidden; background: #000; user-select: none;
+  -webkit-user-select: none; font-family: 'DejaVu Sans', 'Helvetica Neue', Arial, sans-serif; outline: 1px solid var(--line); }
+/* opaque: the engine's menu is under it */
+#backdrop { position: absolute; inset: 0; background: #0b0c0a; }
+[data-part] { position: relative; }
+
+/* the window: a share of the frame, centred; its title in the part's groove, its own ink whatever the window's face */
+#win { position: absolute; left: calc((100% - var(--w-window-share) * 1%) / 2); top: calc((100% - var(--w-window-share) * 1%) / 2);
+  width: calc(var(--w-window-share) * 1%); height: calc(var(--w-window-share) * 1%); box-sizing: border-box;
+  font-size: calc(var(--w-window-font) * var(--u)); line-height: var(--w-window-line); --ink: #1d1d1b; --shade: none; color: var(--ink); }
+#win .wt { position: absolute; left: calc(var(--w-wt-0) * var(--u)); right: calc(var(--w-wt-1) * var(--u)); top: calc(var(--w-wt-2) * var(--u));
+  height: calc(var(--w-wt-3) * var(--u)); display: flex; align-items: center; padding-left: calc(var(--w-title-pad) * var(--u)); overflow: hidden;
+  white-space: nowrap; --ink: initial; --shade: initial; }
+/* the close button in the window part's bay */
+#wx { position: absolute; right: calc(var(--w-wx-0) * var(--u)); top: calc(var(--w-wx-1) * var(--u)); width: calc(var(--w-wx-2) * var(--u));
+  height: calc(var(--w-wx-3) * var(--u)); padding: 0; border: 0; background: none; }
+/* the body: the tabs, the two columns taking what is left, the footer */
+#win .wb { position: absolute; left: calc(var(--w-wb-3) * var(--u)); right: calc(var(--w-wb-1) * var(--u)); top: calc(var(--w-wb-0) * var(--u));
+  bottom: calc(var(--w-wb-2) * var(--u)); display: flex; flex-direction: column; gap: calc(var(--w-gap) * var(--u)); }
+#tabs { flex: none; display: flex; gap: calc(var(--w-tabs-gap) * var(--u)); height: calc(var(--w-tabs-h) * var(--u)); }
+#cols { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: calc(var(--w-columns-0) * 1%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr); gap: calc(var(--w-gap) * var(--u)); }
+#foot { flex: none; display: flex; gap: calc(var(--w-footer-gap) * var(--u)); height: calc(var(--w-footer-h) * var(--u)); }
+#foot .right { margin-left: auto; }
+
+/* a button, Chrome's default 2 px border kept and made transparent by the kit (tagpu_uikit.c ui_button) */
+#win button { font: inherit; color: inherit; cursor: pointer; flex: none; box-sizing: border-box; display: flex; align-items: center;
+  justify-content: center; white-space: nowrap; }
+#win button:disabled { opacity: .45; cursor: default; }
+#win .tab { height: calc(var(--w-tabs-h) * var(--u)); padding: 0 calc(var(--w-tabs-pad) * var(--u)); min-width: calc(var(--w-tabs-min) * var(--u)); }
+#win .fb { height: calc(var(--w-footer-h) * var(--u)); padding: 0 calc(var(--w-footer-pad) * var(--u)); min-width: calc(var(--w-footer-min) * var(--u)); }
+#win .ab { height: calc(var(--w-act-h) * var(--u)); padding: 0 calc(var(--w-act-pad) * var(--u)); min-width: calc(var(--w-act-min) * var(--u)); }
+#win .sb, #win .rb { height: calc(var(--w-small-h) * var(--u)); padding: 0 calc(var(--w-small-pad) * var(--u)); min-width: calc(var(--w-small-min) * var(--u)); }
+
+/* a panel's list scrolls inside its frame, and only up and down: a word wider than the panel is cut at its side, as the DLL's clip does */
+.pnl { min-height: 0; min-width: 0; }
+.pnl > .scr { position: absolute; left: calc(var(--w-pn-3) * var(--u)); right: calc(var(--w-pn-1) * var(--u)); top: calc(var(--w-pn-0) * var(--u));
+  bottom: calc(var(--w-pn-2) * var(--u)); margin: 0; overflow: hidden auto; padding: calc(var(--w-panel-pad-0) * var(--u)) calc(var(--w-panel-pad-1) * var(--u)); box-sizing: border-box; }
+#win ::-webkit-scrollbar { width: calc(var(--w-scrollbar) * var(--u)); height: calc(var(--w-scrollbar) * var(--u)); }
+#win ::-webkit-scrollbar-thumb { background: rgba(128, 128, 120, .7); }
+#win ::-webkit-scrollbar-track { background: transparent; }
+
+/* a row's text: it takes what its controls leave, and a word wider than it is cut at its sides, not under them */
+.t { flex: 1 1 0; min-width: 0; overflow-x: clip; }
+.t > div { display: block; }
+
+/* the list */
+.lrow { display: flex; align-items: center; gap: calc(var(--w-row-gap) * var(--u)); min-height: calc(var(--w-list-h) * var(--u)); box-sizing: border-box;
+  padding: calc(var(--w-row-pad-0) * var(--u)) calc(var(--w-row-pad-1) * var(--u)); margin-bottom: calc(var(--w-row-after) * var(--u)); cursor: pointer; }
+.bg { flex: none; display: flex; align-items: center; height: calc(var(--w-badge-h) * var(--u)); box-sizing: border-box; padding: 0 calc(var(--w-badge-pad) * var(--u)); white-space: nowrap; }
+.act { flex: none; width: calc(var(--w-act-w) * var(--u)); display: flex; justify-content: flex-end; align-items: center; }
+.radio { flex: none; display: block; width: calc(var(--w-radio) * var(--u)); height: calc(var(--w-radio) * var(--u)); }
+.track { flex: none; display: block; width: calc(var(--w-progress-w) * var(--u)); height: calc(var(--w-progress-h) * var(--u)); }
+.track .fill { position: absolute; display: block; left: calc(var(--w-progress-inset) * var(--u)); top: calc(var(--w-progress-inset) * var(--u));
+  bottom: calc(var(--w-progress-inset) * var(--u)); }
+#list.none { display: flex; align-items: center; justify-content: center; }
+#list.none .empty { text-align: center; }
+
+/* the pane */
+.pt { margin: 0 0 calc(var(--w-pane-para) * var(--u)); line-height: var(--w-pane-title_line); }
+.pa { margin: 0 0 calc(var(--w-pane-para) * var(--u)); }
+.hdr { padding-top: calc(var(--w-pane-head) * var(--u)); margin-bottom: calc(var(--w-pane-after) * var(--u)); }
+.opt { display: flex; align-items: center; gap: calc(var(--w-row-gap) * var(--u)); min-height: calc(var(--w-row-h) * var(--u)); box-sizing: border-box;
+  padding: calc(var(--w-row-pad-0) * var(--u)) calc(var(--w-row-pad-1) * var(--u)); margin-bottom: calc(var(--w-row-after) * var(--u)); }
+.mark { flex: none; display: block; width: calc(var(--w-marker) * var(--u)); height: calc(var(--w-marker) * var(--u)); border-radius: 50%; background: #e2a030; }
+.ctl { flex: none; display: flex; align-items: center; gap: calc(var(--w-small-gap) * var(--u)); }
+.v { flex: none; min-width: calc(var(--w-value) * var(--u)); display: flex; justify-content: center; align-items: center; white-space: nowrap; }
+.check { flex: none; display: block; width: calc(var(--w-check) * var(--u)); height: calc(var(--w-check) * var(--u)); }
+.ctl.sw { cursor: pointer; }
+/* a locked row: all but the disc one group faded once, the disc over it in the space its text leaves */
+.lockrow { display: grid; grid-template-columns: minmax(0, 1fr); margin-bottom: calc(var(--w-row-after) * var(--u)); }
+.lockrow > * { grid-area: 1 / 1; }
+.lockrow .opt { margin-bottom: 0; opacity: .45; }
+.lockrow .sp { flex: none; width: calc(var(--w-lock) * var(--u)); }
+.lockrow .lock { position: relative; display: block; align-self: center; justify-self: start; margin-left: calc(var(--w-row-pad-1) * var(--u)); width: calc(var(--w-lock) * var(--u));
+  height: calc(var(--w-lock) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }

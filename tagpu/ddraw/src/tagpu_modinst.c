@@ -870,6 +870,10 @@ refused:
 void tagpu_modinst_status(MODINST_STATUS* out)
 {
     out->phase = (MODINST_PHASE)InterlockedCompareExchange(&s_phase, 0, 0);
+    /* AN ORDERING: the worker stores the terminal phase and then clears s_busy, and a caller seeing a terminal phase may start the next
+       install at once. Read in that same order, a terminal phase is told only once a start cannot be refused for this job. */
+    if ((out->phase == MODINST_READY || out->phase == MODINST_FAILED) && InterlockedCompareExchange(&s_busy, 0, 0))
+        out->phase = MODINST_RECIPE;
     out->done = (unsigned)InterlockedCompareExchange(&s_done, 0, 0);
     out->total = (unsigned)InterlockedCompareExchange(&s_total, 0, 0);
     /* s_why is written before the phase says FAILED, and rewritten only by tagpu_modinst_start on this same thread */

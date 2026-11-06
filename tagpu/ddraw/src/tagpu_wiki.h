@@ -56,6 +56,9 @@ void tagpu_wiki_cancel(void);
    GetCursorPos the frozen point, which tagpu_wiki_frozen gives as one pair, under the cursor lock
    the open and the close store under. */
 LONG tagpu_wiki_holds_input(void);
+/* The capture without the window, for the Mods screen (tagpu_modsui.h): on, the engine keeps its pointer where it is now
+   and reads every key up. Off lets it go. */
+void tagpu_wiki_capture(int on);
 void tagpu_wiki_frozen(LONG* x, LONG* y);
 
 /* ANY THREAD: GetCursorPos's store of the live engine point (x, y) in g_ddraw.cursor, tested

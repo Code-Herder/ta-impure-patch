@@ -261,15 +261,17 @@ What follows from those rules:
   `art/mods/layout.json`, a pure `tagpu_modslay.c` and a `modslaycheck`.
 - **The art is the wiki's kit**, plus new parts: checkbox/radio, progress bar, three tabs, and the
   badges for active, update, greyed and conflict.
-- **The screen needs a shell-time version of the wiki's pass.** The wiki draws only in a level, on
-  the Vulkan renderer, under the replay HUD's pass (`tagpu_wiki.h`, `tagpu_wiki_fill`).
+- **The screen draws on the wiki's pass, built at its first use wherever that falls;** only the wiki's own record is tied to a level. Its page and hit map cross under
+  one lock rather than in a packet ([the module](modules/mods.html), *The screen*).
 - **Input is modal on the main menu** and reuses the wiki's paired press/release bookkeeping.
 - **It is Vulkan only.** On GDI, the MODS button opens an engine message box: the screen needs
   Vulkan, here is the running mod, and `mod=` in `impure.cfg` can be edited by hand. Choosing and
   loading a mod is start-up code and works on every renderer.
 - **The MODS button goes under REPLAYS**, through the same main-menu insertion REPLAYS uses
-  (`tagpu_replays.c`: S1 `0x4AACAE`, S2 `0x42644C`, S3 `0x429290`, the builder `0x4263B0`). Its moves
-  for each mod's menu are measured against each setup.
+  (`tagpu_replays.c`: S1 `0x4AACAE`, S2 `0x42644C`, S3 `0x429290`, the builder `0x4263B0`). MEASURED on every v1 menu: it needs no moves of its
+  own, only the taller plate.
+- **`file.<path>` switches wait for mutators.** A v1 mod's content is one archive with thousands of paths, so before there are mutators the key has no file a
+  player could sensibly turn off. `hide.<archive>` is what this screen switches.
 
 ### 4 GB (LAA)
 
@@ -308,8 +310,8 @@ What follows from those rules:
 | 3 | Per-mod options (built) | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
 | 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (unit types and keys at the menu; type IDs, weapon and feature tables in a level; every type's CRC with a drop-in peer in one network game; menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
-| 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
-| 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
+| 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
+| 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 
@@ -322,7 +324,7 @@ Landings 2 and 3 are independent of each other.
   reports having it, dated.
 - Which CDN, and what URL scheme, will the packages live at? Needed before landing 5 points at real
   packages.
-- The new art parts for the screen, needed for landing 6.
+- The art of the screen's thirteen new parts. `tools/mods/genparts.py` derives plain ones from the kit, and a painted part of the same name replaces one with no code change.
 
 **Needs research or a measurement:**
 - What channel carries the fingerprint in the battle room? No Impure message exists there today, so

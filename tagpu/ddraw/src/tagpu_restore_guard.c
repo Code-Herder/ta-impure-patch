@@ -281,13 +281,13 @@ static void install(void)
    process after the semaphore is released. The crashed process is found by
    pid AND creation time: a pid can be reused once it has exited, and then
    there is nothing left to wait for. */
-void tagpu_rguard_attach(void)
+static void wait_named(const char* var)
 {
     char v[64];
     unsigned long pid = 0, hi = 0, lo = 0;
     FILETIME c, e, k, u;
     HANDLE h;
-    if (!GetEnvironmentVariableA(RELAUNCHED, v, sizeof v)) return;
+    if (!GetEnvironmentVariableA(var, v, sizeof v)) return;
     if (sscanf(v, "%lu:%lx:%lx", &pid, &hi, &lo) != 3) {
         lstrcpynA(s_waited, "no process to wait for is named", sizeof s_waited);
         return;
@@ -316,6 +316,46 @@ void tagpu_rguard_attach(void)
         lstrcpynA(s_waited, "the crashed process was already gone (its pid is reused)", sizeof s_waited);
     }
     CloseHandle(h);
+}
+
+void tagpu_rguard_attach(void)
+{
+    /* the Mods screen's restart orders itself by the same wait, under its own name: this process is no relaunch after a crash,
+       and may relaunch after one of its own */
+    wait_named(TAGPU_RG_RESTART);
+    SetEnvironmentVariableA(TAGPU_RG_RESTART, NULL);
+    wait_named(RELAUNCHED);
+}
+
+int tagpu_rguard_restart_self(void)
+{
+    char mark[80], relaunched[80], exe[MAX_PATH], cwd[MAX_PATH];
+    FILETIME c, e, k, u;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&c, 0, sizeof c);
+    GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+    _snprintf(mark, sizeof mark, "%lu:%08lx:%08lx", (unsigned long)GetCurrentProcessId(),
+              (unsigned long)c.dwHighDateTime, (unsigned long)c.dwLowDateTime);
+    mark[sizeof mark - 1] = 0;
+    if (!GetModuleFileNameA(NULL, exe, sizeof exe) || !GetCurrentDirectoryA(sizeof cwd, cwd)) return 0;
+    /* This process may be a crash relaunch; the new one is not, so its own crash may still relaunch it. A failed start puts it back. */
+    relaunched[0] = 0;
+    GetEnvironmentVariableA(RELAUNCHED, relaunched, sizeof relaunched);
+    SetEnvironmentVariableA(RELAUNCHED, NULL);
+    SetEnvironmentVariableA(TAGPU_RG_RESTART, mark);
+    memset(&si, 0, sizeof si); si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    if (!CreateProcessA(exe, GetCommandLineA(), NULL, NULL, FALSE, 0, NULL, cwd, &si, &pi)) {
+        const DWORD err = GetLastError();
+        SetEnvironmentVariableA(TAGPU_RG_RESTART, NULL);
+        if (relaunched[0]) SetEnvironmentVariableA(RELAUNCHED, relaunched);
+        SetLastError(err);
+        return 0;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 1;
 }
 
 /* ---- the entries ---------------------------------------------------------- */

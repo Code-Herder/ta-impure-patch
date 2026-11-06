@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mods screen mockup</title>
+<!-- The Mods screen drawn from art/mods/layout.json and the wiki's kit, in the fixture's states. Serve the repository root
+     with python3 tools/hudart/serve.py and open /tools/mods/mockup/. research/notes/mod-manager-plan.md, "The screen", is
+     the specification: the game copies this page (tagpu/ddraw/src/tagpu_modslay.c), so a change to the screen is made here
+     first and tools/mods/modslaycheck.py pairs the two. -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../../uikit/uikit.css">
+<link rel="stylesheet" href="mods.css">
+</head>
+<body>
+<header id="controls">
+  <h1>Mods screen mockup</h1>
+  <label>Screen <select id="res"><option>1920x1080</option><option>2560x1440</option><option>3840x2160</option><option>3440x1440</option>
+    <option>1280x1024</option><option>1280x720</option><option>1024x768</option><option value="fit">fit the browser</option></select></label>
+  <label>State <select id="state"></select></label>
+  <label>Held <input id="held" size="12" placeholder="a control's key"></label>
+  <output id="last"></output>
+</header>
+<div id="view">
+  <div id="frame" class="kit">
+    <div id="backdrop"></div>
+    <div id="win" data-part="window">
+      <div class="wt">Mods</div>
+      <button id="wx" data-key="close" data-part="close" data-glyph="i_close"></button>
+      <div class="wb">
+        <div id="tabs"></div>
+        <div id="cols">
+          <div class="pnl" id="p-list" data-part="panel"><div id="list" class="scr"></div></div>
+          <div class="pnl" id="p-detail" data-part="panel"><div id="detail" class="scr"></div></div>
+        </div>
+        <div id="foot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="../../uikit/uikit.js"></script>
+<script src="mods.js"></script>
+</body>
+</html>
