@@ -22,7 +22,7 @@
 
 void tagpu_modload_begin(void);
 void tagpu_modload_end(void);
-/* First DirectDraw call: refuses if another DLL's jump on the entry point kept this module from running. */
+/* First DirectDraw call: refuses if the entry stage never ran, which another DLL's jump on the entry point would cause. */
 void tagpu_modload_check(void);
 
 /* The exe file as the mod's drop-in folder would hold it, for what compares the image with its file (the limit table, the

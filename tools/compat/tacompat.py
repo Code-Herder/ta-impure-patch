@@ -218,7 +218,8 @@ def managed_setups(setups) -> list:
         out.append({"name": f"managed-{m['id']}", "about": f"{m['name']} installed by hand into a clean stock folder, chosen by mod=",
                     "add": [], "managed": m["id"], "equals": m["setup"],
                     "registry_roots": dropin.get("registry_roots", []),
-                    "goal": {"outcome": "impure-active", "tadr_ran": False}, **keep})
+                    # its network game's other player is the drop-in folder, with whatever that folder's goal allows
+                    "goal": dropin["goal"], **keep})
         for b in mods:
             if b["id"] == m["id"]:
                 continue
@@ -231,6 +232,8 @@ def managed_setups(setups) -> list:
     for broken, mod, add, why in (("unknown-mod", "nosuch", [], "does not know that mod"),
                                   ("not-installed", "mayhem", [], "it is not installed"),
                                   ("unknown-exe", "mayhem", [], "this exe is not one Impure knows"),
+                                  ("damaged-package", "mayhem", [], "does not open"),
+                                  ("other-edition", "mayhem", [], "totala1.hpi is not one Impure knows"),
                                   ("unknown-loader", "prota", by["mayhem-11.3.0"]["add"],
                                    "the Patch Loader in this folder is not one Impure knows")):
         out.append({"name": f"managed-refuses-{broken}", "about": f"mod={mod} where it must refuse: {why}", "add": add,
@@ -243,6 +246,13 @@ SETUPS += managed_setups(SETUPS)
 
 
 # ------------------------------------------------------------------------- fixtures
+
+def no_package(setup) -> bool:
+    """A managed row whose package was never built (tools/modpack/modpack.py packages), skipped like a fixture not fetched."""
+    brk = setup.get("managed_break")
+    return bool(setup.get("managed")) and brk not in ("unknown-mod", "not-installed") and \
+        not (CACHE / "modpack" / setup["managed"] / f"{setup['managed']}.tar.zst").is_file()
+
 
 def fixture_problems(name) -> list:
     """What is missing or wrong in the cached copy of a fixture (empty: ready)."""
@@ -390,7 +400,9 @@ def pick_setups(names) -> list:
     missing = [n for n in names if n not in by]
     if missing:
         die(f"no setup {', '.join(missing)} (tacompat.py list)")
-    return [by[n] for n in names]
+    # a managed row is judged against its drop-in row, so one is no result without the other
+    partners = [by[by[n]["equals"]] for n in names if by[n].get("equals") and by[n]["equals"] not in names]
+    return [by[n] for n in names] + partners
 
 
 def expectation(setup, platform, which) -> "dict | None":
@@ -790,6 +802,9 @@ def inst_name(setup_name: str, suffix="") -> str:
     return PREFIX + base + suffix
 
 
+UNIT_FOLDERS = ("units", "unitsE", "ZUnits")
+
+
 def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     """A fresh tacli instance holding the setup's folder.
 
@@ -847,6 +862,14 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
         if broken not in ("unknown-mod", "not-installed"):
             subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "modpack/modpack.py"), "install",
                             setup["managed"], str(gamedir), "--link"], check=True, capture_output=True)
+        if broken == "damaged-package":
+            hpi = gamedir / "mods" / setup["managed"] / f"{setup['managed']}.hpi"
+            hpi.unlink()
+            hpi.write_bytes(b"not an archive")
+        if broken == "other-edition":
+            arc = next(p for p in gamedir.iterdir() if p.name.lower() == "totala1.hpi")
+            arc.unlink()
+            arc.write_bytes(b"an archive of another edition")
         # a file one byte from a known one, beside a real install: only its key can tell
         if broken in ("unknown-exe", "unknown-loader"):
             want = "totala.exe" if broken == "unknown-exe" else "dplayx.dll"
@@ -871,9 +894,12 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
         cfg.write_bytes((cfg.read_bytes() if cfg.exists() else b"") + f"\r\nmod={setup['managed']}\r\n".encode())
         # the loose step closed: a loose unit definition makes its unit vanish from the game (the mod manager plan, *Archives
         # and loose files*), so one here changes the type list compare_managed reads unless it is never opened
-        decoy = gamedir / "units" / "ARMCOM.fbi"
-        decoy.parent.mkdir(exist_ok=True)
-        decoy.write_text("[UNITINFO]\n{\nUnitName=ARMCOM;\n}\n")
+        # A folder for each name a v1 image gives the units; a mod with a new one fails the log's check below rather than passing.
+        for unit in (setup.get("content") or {}).get("units", [])[:1]:
+            for folder in UNIT_FOLDERS:
+                decoy = gamedir / folder / f"{unit}.fbi"
+                decoy.parent.mkdir(exist_ok=True)
+                decoy.write_text(f"[UNITINFO]\n{{\nUnitName={unit};\n}}\n")
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())
@@ -963,59 +989,115 @@ def mod_content(setup, inst) -> "dict | None":
     except (ValueError, KeyError, TypeError):
         return {"want": want, "why": f"tacli units: {(r.stderr or r.stdout).strip()[:200]}"}
     have = {str(row.get("name") if isinstance(row, dict) else row).upper() for row in rows}
-    return {"want": want, "types": len(have), "names": sorted(have), "missing": [u for u in want if u.upper() not in have]}
+    return {"want": want, "types": len(have), "names": sorted(have), "missing": [u for u in want if u.upper() not in have],
+            "keys": {str(row["name"]).upper(): row.get("key") for row in rows if isinstance(row, dict)}}
+
+
+def catalogue(name) -> dict:
+    """The engine's unit table as `tacli units` reads it now, {} when it does not answer."""
+    r = tacli("units", name, "--json", "--limit", "0", timeout=90)
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {}
+
+
+def level_tables(name) -> dict:
+    """What a level loaded, read in it: each type's ID (the level's sorted order, engine/network.md), and the recording's
+    fingerprints of the weapon and feature tables by position, which say which file won a duplicate ID."""
+    c = catalogue(name)
+    r = tacli("features", name, "--json", "--limit", "0", timeout=90)
+    try:
+        features = [[f.get("name"), f.get("metal"), f.get("energy"), f.get("dead")] for f in json.loads(r.stdout).get("features", [])]
+    except ValueError:
+        features = []
+    return {"types": [u["name"].upper() for u in c.get("units", [])], "weapons": c.get("weapons"),
+            "feature_defs": c.get("feature_defs"), "features": features}
 
 
 def type_crcs(name) -> dict:
-    """{unit type: its CRC_all} of every type the engine loaded, the value the network handshake compares (0x1A UNIT_DATA)."""
-    r = tacli("units", name, "--json", "--limit", "0", timeout=90)
-    try:
-        rows = json.loads(r.stdout)["units"]
-    except (ValueError, KeyError, TypeError):
-        return {}
-    return {u["name"].upper(): u["crc_all"] for u in rows if isinstance(u, dict) and "crc_all" in u}
+    """{unit type: its CRC_all}: scripts, guis and download of each type, as the lobby's handshake compares them
+    (0x1A UNIT_DATA). 0 until that handshake has filled it, so only a network game can read it."""
+    return {u["name"].upper(): u.get("crc_all") for u in catalogue(name).get("units", [])}
+
+
+def differs_from_dropin(s, o, d) -> list:
+    """How a managed row differs from its drop-in row. A comparison with nothing to compare fails: a table of zeros agrees
+    with anything, which is how this check once reported a match it had never made."""
+    out, a, b = [], o.get("content") or {}, d.get("content") or {}
+    if a.get("names") != b.get("names"):
+        out.append(f"unit types: only there {sorted(set(b.get('names') or []) - set(a.get('names') or []))[:6]}, "
+                   f"only here {sorted(set(a.get('names') or []) - set(b.get('names') or []))[:6]}")
+    ka, kb = a.get("keys") or {}, b.get("keys") or {}
+    if not any(int(v or "0", 16) for v in ka.values()):
+        out.append("no unit type has a key: nothing was compared")
+    wrong = [t for t in ka if t in kb and ka[t] != kb[t]]
+    if wrong:
+        out.append(f"the FBI's key differs on {wrong[:6]}")
+    la, lb = o.get("level") or {}, d.get("level") or {}
+    for what in ("types", "weapons", "feature_defs"):
+        if not la.get(what):
+            out.append(f"the level's {what} were not read")
+        elif la[what] != lb.get(what):
+            out.append(f"the level's {what} differ from {s['equals']}")
+    fa, fb = la.get("features") or [], lb.get("features") or []
+    if not fa:
+        out.append("the level's features were not read")
+    if fa != fb:
+        at = next((i for i, (x, y) in enumerate(zip(fa, fb)) if x != y), min(len(fa), len(fb)))
+        out.append(f"feature {at} of {len(fa)}/{len(fb)}: here {fa[at:at + 3]}, there {fb[at:at + 3]}")
+    mp = o.get("mp")
+    if mp is not None:
+        host, join = mp.get("crcs", {}).get("host") or {}, mp.get("crcs", {}).get("join") or {}
+        filled = [t for t, v in join.items() if int(v or "0", 16)]
+        if not filled:
+            out.append("the drop-in peer's handshake values are all zero: nothing was compared")
+        wrong = [t for t in filled if host.get(t) != join[t]]
+        if wrong:
+            out.append(f"CRC_all differs from a drop-in peer in the same game on {wrong[:6]}")
+    log = (o.get("_files") or {}).get("tagpu.log", "")
+    if not re.search(r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS), log, re.I):
+        out.append("the log names no loose unit file as refused: the decoy never reached the closed step")
+    name = re.compile(r"its archives name (\S+?),")
+    ma, mb = name.search(log), name.search((d.get("_files") or {}).get("tagpu.log", ""))
+    if not ma or not mb or ma.group(1) != mb.group(1):
+        out.append(f"the replays name this game {ma and ma.group(1)}, its drop-in folder {mb and mb.group(1)}")
+    return out
 
 
 def compare_managed(results):
-    """A managed row against its drop-in row of the same run: the same unit types, and the same CRC on each type both had in
-    play. A mod's files coming from a package is otherwise invisible to every other check."""
+    """Each managed row against its drop-in row of the same run, and each refusal against what it must say. A mod's files
+    coming from a package is otherwise invisible to every other check."""
     by = {r["setup"]: r for r in results}
     for s in SETUPS:
-        if s.get("refusal") and by.get(s["name"]):
-            r, gamedir, wrong = by[s["name"]], s["_inst"]["gamedir"], []
-            said = (gamedir / "log" / "startup-failure.txt")
+        o = by.get(s["name"])
+        if not o:
+            continue
+        wrong = []
+        if s.get("refusal"):
+            gamedir = s["_inst"]["gamedir"]
+            said = gamedir / "log" / "startup-failure.txt"
             if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
                 wrong.append(f"the box does not say that {s['refusal']}")
             if re.search(rb"(?m)^mod=", (gamedir / "impure.cfg").read_bytes()):
                 wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
             print(f"  {s['name']}: " + (f"WRONG: {wrong}" if wrong else "the box said why, and mod= is gone"))
-            if wrong:
-                r["verdict"] = "UNEXPECTED"
-                r.setdefault("differs", []).extend(wrong)
-        o, d = by.get(s["name"]), by.get(s.get("equals"))
-        if not o or not s.get("equals"):
-            continue
-        if not d:
-            print(f"  {s['name']}: not compared, {s['equals']} did not run")
-            continue
-        differs = []
-        a, b = (o.get("content") or {}).get("names"), (d.get("content") or {}).get("names")
-        if a != b:
-            gone = sorted(set(b or []) - set(a or []))[:6]
-            new = sorted(set(a or []) - set(b or []))[:6]
-            differs.append(f"unit types differ from {s['equals']}: only there {gone}, only here {new}")
-        ca, cb = o.get("crcs") or {}, d.get("crcs") or {}
-        wrong = [t for t in ca if t in cb and ca[t] != cb[t]]
+        elif s.get("equals"):
+            d = by.get(s["equals"])
+            wrong = differs_from_dropin(s, o, d) if d else [f"{s['equals']} did not run, so nothing was compared"]
+            content = o.get("content") or {}
+            join = ((o.get("mp") or {}).get("crcs") or {}).get("join") or {}
+            print(f"  {s['name']}: against {s['equals']}: {len(content.get('names') or [])} types by key and by ID, "
+                  f"{sum(1 for v in join.values() if int(v or '0', 16))} of {len(join)} CRCs with a drop-in peer"
+                  + (f"; DIFFERS: {wrong}" if wrong else ", the same"))
         if wrong:
-            differs.append(f"CRC_all differs from {s['equals']} on {wrong[:6]}")
-        if "units\\armcom.fbi" not in (o.get("_files") or {}).get("tagpu.log", "").lower():
-            differs.append("the log names no loose file refused: the decoy never reached the closed step")
-        print(f"  {s['name']}: against {s['equals']}: {len(a or [])} unit types, {len(set(ca) & set(cb))} CRCs compared"
-              + (f"; DIFFERS: {differs}" if differs else ", the same"))
-        o["compared"] = {"against": s["equals"], "types": len(a or []), "crcs": len(set(ca) & set(cb)), "differs": differs}
-        if differs:
             o["verdict"] = "UNEXPECTED"
-            o.setdefault("differs", []).extend(differs)
+            o.setdefault("differs", []).extend(wrong)
+        if o.get("content"):
+            o["content"].pop("keys", None)
+    for r in results:
+        if r.get("content"):
+            r["content"].pop("keys", None)
 
 
 def gametime(name) -> "int | None":
@@ -1820,14 +1902,14 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                         break
         content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
-        crcs = {}
+        level = {}
         # A harness setup (one with a lever) checks a mechanism at the menu, as it plays no
         # network game (mp_eligible): gui-stress's fresh start every 120 presents, run on
         # through a battle, spends the layer's 32 repaints of a palette generation by design.
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
                                 scenarios(setup)["battle"])
-            crcs = type_crcs(inst["name"]) if proc.poll() is None else {}
+            level = level_tables(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
         hooks = exe_hooks(proc.pid, gamedir) if proc.poll() is None else None
@@ -1868,7 +1950,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "tdrawlog": read(gamedir / "tdrawlog.txt"),
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
-        "battle": fight, "hooks": hooks, "content": content, "crcs": crcs,
+        "battle": fight, "hooks": hooks, "content": content, "level": level,
         "seconds": round(time.time() - t0, 1), "watch_end": watch_end,
     }
     logs = other_logs(gamedir / "log", t0)
@@ -2129,7 +2211,10 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     xv = start_xvfb()
     create_display = xv.tacompat_display
     try:
-        join = prepare_wine(setup, dll, create_display, suffix="-j")
+        # A managed row's other player is its drop-in folder: the handshake then compares every type's scripts, guis and
+        # downloads between the two in one game, and each peer holds the values.
+        peer = next((s for s in SETUPS if s["name"] == setup.get("equals")), None)
+        join = prepare_wine({**peer, "name": setup["name"]} if peer else setup, dll, create_display, suffix="-j")
     finally:
         stop_xvfb(xv)
     mine.add(str(join["prefix"]))
@@ -2158,6 +2243,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
     games = {}
     boxes, seen, why = [], set(), None
     shots, hooks, cmd_seen, sockets = {}, {}, {}, None
+    crcs = {}
     try:
         try:
             games["host"] = start_wine(peers["host"], host_display)
@@ -2202,6 +2288,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
             for role, g in games.items():        # while the games are still up (exe_hooks)
                 if g["proc"].poll() is None:
                     hooks[role] = exe_hooks(g["proc"].pid, peers[role]["gamedir"])
+                    crcs[role] = type_crcs(peers[role]["name"])
         # A step that throws is this game's failure, not the suite's: tacli can time out,
         # an Xvfb or an instance can be gone, and die() raises SystemExit. The report is
         # worth more than the traceback.
@@ -2217,7 +2304,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
     finally:
         for role, g in games.items():         # kept until the verdict below decides
             shots[f"mp-{role}-wine.log"] = stop_wine(g, keep=True)
-    out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_temps": shots}
+    out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_temps": shots, "crcs": crcs}
     if sockets:
         out["_files"]["mp-sockets.txt"] = sockets
     for role, inst in peers.items():
@@ -2299,7 +2386,7 @@ def cmd_wine(args):
         die(f"no DLL at {source} (build it: make -C tagpu/ddraw -j$(nproc))")
     dll = snapshot_dll(source)
     setups = pick_setups(args.setups)
-    ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
+    ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"]) and not no_package(s)]
     skipped = [s["name"] for s in setups if s not in ready]
     if skipped:
         print(f"skipped, fixtures not fetched: {', '.join(skipped)} (tacompat.py list)")
@@ -2804,7 +2891,8 @@ def cmd_windows(args):
         die(f"no DLL at {source}")
     dll = snapshot_dll(source)
     cfg = windows_cfg(args)
-    setups = pick_setups(args.setups)
+    # a managed row is installed by Wine's prepare and compared in Wine's run: this path would run it as a bare stock folder
+    setups = [s for s in pick_setups(args.setups) if not s.get("managed")]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")

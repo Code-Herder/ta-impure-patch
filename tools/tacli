@@ -4266,6 +4266,9 @@ def _cat_report(args, inst: Instance, kind: str, key: str, snap: dict, rows):
            "declared": snap.get("declared"), "note": note,
            "stride_check": snap.get("stride_check"),
            "cache": str(_cat_path(inst))}
+    for fingerprint in ("weapons", "feature_defs"):
+        if fingerprint in snap:
+            res[fingerprint] = snap[fingerprint]
     if "commanders" in snap:
         # every living unit whose type has `commander` set, fog or not: {owner, type}; every
         # owner with a living unit at all; every seat in the game. All three are empty until a

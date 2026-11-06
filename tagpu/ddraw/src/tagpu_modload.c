@@ -19,6 +19,7 @@
 #define IMPURE_UFO "impure-patch.ufo"  /* Impure's own menu screens, written at attach (tagpu_menu.c) */
 #define ARCHIVE_CACHE "mods\\archives.cache"
 #define ARCHIVES_MAX 64
+#define ESSENTIAL_ARCHIVE "totala1.hpi"
 
 /* The engine's sites, DISASSEMBLED 2026-11-05; modpack.py's MOUNT_SITES keeps every table off them. */
 #define VA_MOUNTER   0x4BE0B0u          /* stdcall (name, flag), ret 8; only InitTAHPIAry 0x41D4C0 calls it */
@@ -26,6 +27,7 @@
 #define VA_FOPEN     0x4E4990u
 #define VA_FIND_CALL 0x4BC5D3u          /* the enumeration 0x4BC4B0's loose listing: call 0x4E7DD0 (_findfirst) */
 #define VA_FINDFIRST 0x4E7DD0u
+#define VA_MOUNT_PATH_MAX 0x100u        /* GetFullPathNameA's limit in the mounter, 0x4BE0D1 */
 #define VA_OPTIONS_NAME 0x5098A3u       /* engine/process.md: 12 characters and a NUL */
 
 static const unsigned char MOUNTER_STOLEN[6] = { 0x81, 0xEC, 0x04, 0x01, 0x00, 0x00 };  /* sub esp, 0x104 */
@@ -43,6 +45,40 @@ static size_t s_nreference;
 static int s_entered;
 static const unsigned char* s_catalog;
 static size_t s_ncatalog;
+
+/* The folder names the engine pushes when it reads game data, which a mod's image can rename (Escalation unitsE, TA Zero ZUnits,
+   Mayhem guiM: engine/ui.md and engine/process.md, *The folder names a mod renames*). A renamed folder is still game data. */
+static const uint32_t FOLDER_NAMES[] = {
+    0x502820u, 0x503360u, 0x505FE4u, 0x503730u, 0x50925Cu, 0x5031BCu, 0x5031C8u,
+    0x503920u, 0x503720u, 0x504734u, 0x5036E4u, 0x503740u, 0x502E30u, 0x502C7Cu, 0x50392Cu, 0x504B10u
+};
+#define FOLDER_NAME_MAX 24
+static char s_folder[sizeof FOLDER_NAMES / sizeof *FOLDER_NAMES][FOLDER_NAME_MAX];
+
+/* The three sites the mount and the loose step rest on, in the file's bytes: no mod's table touches them (modpack's
+   MOUNT_SITES), so they hold on every exe of the game, known or not. */
+static const uint8_t* image_at(const MODIMG* img, uint32_t va, uint32_t n)
+{
+    int s;
+    for (s = 0; s < img->nsec; s++)
+        if (va >= img->sec[s].va && n <= img->sec[s].len && va - img->sec[s].va <= img->sec[s].len - n)
+            return img->sec[s].bytes + (va - img->sec[s].va);
+    return NULL;
+}
+
+static int calls(const MODIMG* img, uint32_t va, uint32_t to)
+{
+    const uint8_t* p = image_at(img, va, 5);
+    uint32_t rel = to - (va + 5);
+    return p && p[0] == 0xE8 && !memcmp(p + 1, &rel, 4);
+}
+
+static int is_the_game(const MODIMG* img)
+{
+    const uint8_t* m = image_at(img, VA_MOUNTER, sizeof MOUNTER_STOLEN);
+    return m && !memcmp(m, MOUNTER_STOLEN, sizeof MOUNTER_STOLEN) &&
+           calls(img, VA_OPEN_CALL, VA_FOPEN) && calls(img, VA_FIND_CALL, VA_FINDFIRST);
+}
 
 static void refuse(const char* fmt, ...)
 {
@@ -152,7 +188,7 @@ static int put_runs(const MODXOR* x, const MODIMG* img)
 
 void tagpu_modload_begin(void)
 {
-    char id[sizeof s_id], path[MAX_PATH];
+    char id[sizeof s_id], path[MAX_PATH], full[MAX_PATH];
     wchar_t exe_path[MAX_PATH], dir[MAX_PATH], *slash;
     uint8_t* exe = NULL, *dll;
     uint8_t key[32], hash[32];
@@ -162,19 +198,24 @@ void tagpu_modload_begin(void)
     int stock, i, changed;
 
     if (!tagpu_settings_mod(id, sizeof id)) return;
+    /* Any exe importing DirectDraw loads this DLL, the editor retail ships among them: without the engine's own code
+       this is not the game, and the player's mod= is none of its business. */
+    if (!GetModuleFileNameW(NULL, exe_path, MAX_PATH) || !(exe = read_file_w(exe_path, &nexe)) ||
+        !tagpu_modimg_from_exe(&s_target, exe, nexe) || !is_the_game(&s_target)) {
+        tagpu_log("modload: this exe has no engine sites to run a mod on, so mod= is left alone");
+        free(exe);
+        tagpu_modimg_free(&s_target);
+        return;
+    }
     lstrcpynA(s_id, id, sizeof s_id);
     for (i = 0; id[i]; i++)
         if (!((id[i] >= 'a' && id[i] <= 'z') || (id[i] >= '0' && id[i] <= '9') || id[i] == '_' || id[i] == '-')) {
             refuse("that is not the name of a mod");
-            return;
+            goto done;
         }
-    if (!load_pack()) { refuse("this build of Impure has no usable mod pack"); return; }
-    if (!(mod = tagpu_modpak_mod(&s_pak, id))) { refuse("Impure does not know that mod"); return; }
-    if (!GetModuleFileNameW(NULL, exe_path, MAX_PATH) || !(exe = read_file_w(exe_path, &nexe)) ||
-        !tagpu_modpak_file_key(exe, nexe, 1, key)) {
-        refuse("Total Annihilation's exe could not be read");
-        goto done;
-    }
+    if (!load_pack()) { refuse("this build of Impure has no usable mod pack"); goto done; }
+    if (!(mod = tagpu_modpak_mod(&s_pak, id))) { refuse("Impure does not know that mod"); goto done; }
+    if (!tagpu_modpak_file_key(exe, nexe, 1, key)) { refuse("Total Annihilation's exe could not be read"); goto done; }
     stock = !memcmp(key, s_pak.stock_key, 32);
     if (!stock && !(known = tagpu_modpak_known(&s_pak, 0, key))) {
         refuse("mods are not available because this exe is not one Impure knows");
@@ -201,11 +242,16 @@ void tagpu_modload_begin(void)
     if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
     snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", id, id);
     if (!exists(path)) { refuse("it is not installed: %s is missing", path); goto done; }
+    /* The mounter resolves a name into 0x100 bytes (0x4BE0D1), and an entry whose path did not fit is pruned at the next
+       InitTAHPIAry: this, the longest name it gets, has to fit for the package to stay mounted. */
+    if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
+        refuse("the game's folder is too deep for the mod's files: move it to a shorter path");
+        goto done;
+    }
 
     s_xor = &s_pak.xors[mod->xor_];
     s_loader = mod->loader;
-    if (!tagpu_modimg_from_exe(&s_target, exe, nexe) ||
-        (known && !tagpu_modimg_xor(&s_target, &s_pak.xors[known->xor_])) ||
+    if ((known && !tagpu_modimg_xor(&s_target, &s_pak.xors[known->xor_])) ||
         !tagpu_modimg_xor(&s_target, s_xor)) {
         refuse("this exe's sections do not fit the mod's patch");
         goto done;
@@ -230,6 +276,11 @@ void tagpu_modload_begin(void)
     s_reference = exe;
     s_nreference = nexe;
     exe = NULL;
+    /* s_target is the mod's whole image at this point, a loader mod's list included */
+    for (i = 0; i < (int)(sizeof FOLDER_NAMES / sizeof *FOLDER_NAMES); i++) {
+        const uint8_t* name = image_at(&s_target, FOLDER_NAMES[i], FOLDER_NAME_MAX);
+        if (name && memchr(name, 0, FOLDER_NAME_MAX)) lstrcpynA(s_folder[i], (const char*)name, FOLDER_NAME_MAX);
+    }
     /* the options file the image names (0x5098A3): the engine and the icons read it beside the exe, and it is the
        player's once there, so it is only ever copied when absent */
     {
@@ -260,6 +311,8 @@ static ARCHIVE s_arc[ARCHIVES_MAX];
 static int s_narc, s_arcLoaded;
 static int (__stdcall *s_mountReal)(const char*, int);
 static int s_ours;
+
+static void box_and_exit(void);
 
 static void hex32(const uint8_t* h, char* out)
 {
@@ -344,7 +397,16 @@ static int is_original_archive(const char* name)
     h = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
     modsha_init(&sha);
-    while (ReadFile(h, buf, sizeof buf, &got, NULL) && got) modsha_add(&sha, buf, got);
+    for (;;) {
+        if (!ReadFile(h, buf, sizeof buf, &got, NULL)) {
+            /* not a verdict on the file: no row is left to say it next time */
+            CloseHandle(h);
+            if (keep && a == &s_arc[s_narc - 1]) s_narc--;
+            return 0;
+        }
+        if (!got) break;
+        modsha_add(&sha, buf, got);
+    }
     CloseHandle(h);
     modsha_end(&sha, a->sha);
     a->size = size;
@@ -360,11 +422,19 @@ static int __stdcall mount_filtered(const char* name, int flag)
     if (!s_ours) {
         char path[MAX_PATH];
         s_ours = 1;
-        /* flag 1 as the mods' first patterns have it: the archive every path looks in first */
+        /* The list is append-only (0x4BE162), so this call, the first, is what puts them ahead of everything. Flag 1 is what
+           the mods' own first pattern passes. A package that does not open would leave the mod's exe on retail's data. */
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", s_id, s_id);
-        tagpu_logf("modload: mounted %s: %d", path, s_mountReal(path, 1));
+        if (!s_mountReal(path, 1)) {
+            refuse("%s does not open: install the mod again", path);
+            box_and_exit();
+        }
         snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", s_id, s_id);
-        tagpu_logf("modload: mounted %s: %d", path, s_mountReal(path, 1));
+        if (!s_mountReal(path, 1)) {
+            refuse("%s does not open: install the mod again", path);
+            box_and_exit();
+        }
+        tagpu_logf("modload: mounted mods\\%s\\%s.hpi and its originals", s_id, s_id);
     }
     for (p = name; *p; p++) if (*p == '\\' || *p == '/' || *p == ':') base = p + 1;
     if (lstrcmpiA(base, IMPURE_UFO)) {
@@ -373,6 +443,12 @@ static int __stdcall mount_filtered(const char* name, int flag)
         const char* why = NULL;
         if (tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
         else if (!is_original_archive(name)) why = "it is no original archive of the game";
+        /* Every recipe and every mod needs this one. Without it the game fails later, for a reason no box names: a retail
+           edition whose archives have other hashes than the ones the pack was built from. */
+        if (why && !lstrcmpiA(base, ESSENTIAL_ARCHIVE) && !tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) {
+            refuse("this folder's %s is not one Impure knows, so this copy of the game cannot run mods", base);
+            box_and_exit();
+        }
         if (why) {
             int i;
             for (i = 0; i < nseen && lstrcmpiA(seen[i], base); i++) {}
@@ -395,10 +471,11 @@ int tagpu_modload_loose_closed(const char* path)
     static const char* const dirs[] = {
         "anims", "bitmaps", "camera", "camps", "cdplayer", "download", "features", "fonts", "gamedata", "guis", "maps",
         "objects3d", "palettes", "scripts", "sections", "sounds", "textures", "unitpics", "units", "ai", "weapons",
-        "unitscript", "unitsb", "cursors"
+        "unitscript", "unitsb", "cursors", "unittextures"
     };
     char first[32];
     unsigned i, n = 0;
+    char* lang;
     if (!s_id[0] || !path) return 0;
     if (path[0] == '.' && (path[1] == '\\' || path[1] == '/')) path += 2;
     while (path[n] && path[n] != '\\' && path[n] != '/') {
@@ -408,15 +485,20 @@ int tagpu_modload_loose_closed(const char* path)
     }
     if (!path[n]) return 0;     /* a bare name: no folder of game data */
     first[n] = 0;
+    /* the path builder tries "<dir>-<language>\\<name>" first (0x4290F0): the same folder */
+    if ((lang = strchr(first, '-'))) *lang = 0;
     for (i = 0; i < sizeof dirs / sizeof *dirs; i++) if (!lstrcmpiA(first, dirs[i])) return 1;
+    for (i = 0; i < sizeof s_folder / sizeof *s_folder; i++) if (s_folder[i][0] && !lstrcmpiA(first, s_folder[i])) return 1;
     return 0;
 }
 
+#define NOTED_MAX 32
+static int s_noted;                     /* a bound on the log's lines; these filters run on more than one thread */
+
 static void note_closed(const char* path)
 {
-    static int noted;
-    if (noted < 32 && exists(path)) {
-        noted++;
+    if (s_noted < NOTED_MAX && exists(path)) {
+        s_noted++;
         tagpu_logf("modload: the loose file %s is not read under a mod", path);
     }
 }
@@ -430,9 +512,26 @@ static void* __cdecl open_filtered(const char* path, const char* mode)
     return ((void* (__cdecl*)(const char*, const char*))VA_FOPEN)(path, mode);
 }
 
+/* Whether a listing hid anything, so the log can name it. Only while the log still takes names: a closed folder is
+   usually absent, and the listing is the engine's own cost once over. */
+static void note_listing(const char* spec)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    if (s_noted >= NOTED_MAX) return;
+    h = FindFirstFileA(spec, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    FindClose(h);
+    s_noted++;
+    tagpu_logf("modload: the loose files %s are not listed under a mod", spec);
+}
+
 static long __cdecl find_filtered(const char* spec, void* data)
 {
-    if (tagpu_modload_loose_closed(spec)) return -1;
+    if (tagpu_modload_loose_closed(spec)) {
+        note_listing(spec);
+        return -1;
+    }
     return ((long (__cdecl*)(const char*, void*))VA_FINDFIRST)(spec, data);
 }
 
@@ -528,12 +627,12 @@ void tagpu_modload_end(void)
     tagpu_modload_entry_target = (void*)(uintptr_t)entry;
     rel = (unsigned)(uintptr_t)entry_stub - (entry + 5);
     memcpy(jump + 1, &rel, 4);
-    if (!tagpu_detour_write(entry, jump, 5)) tagpu_logf("modload: the entry point could not be written (%lu)", GetLastError());
+    if (!tagpu_detour_write(entry, jump, 5)) refuse("the exe's entry point could not be written (%lu)", GetLastError());
 }
 
 void tagpu_modload_check(void)
 {
     if (!s_id[0] || s_entered) return;
-    refuse("another DLL in this folder took over the exe's entry point");
+    refuse("Impure's check at the exe's entry point never ran: another DLL in this folder has most likely taken the entry point");
     box_and_exit();
 }

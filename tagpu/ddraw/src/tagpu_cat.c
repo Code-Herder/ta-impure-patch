@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include "tagpu_recorder.h"
 #include "tagpu_cat.h"
 #include "tagpu_log.h"
 #include "tagpu_packet_pub.h"
@@ -19,7 +20,8 @@
 #define OFF_UCOUNT   0x1438F      /* unsigned UNITINFOCount        */
 #define OFF_UDEFS    0x1439B      /* UnitDefStruct*                */
 #define UD_STRIDE    0x249
-#define UD_CRC_ALL   0x142      /* UnitDefStruct.CRC_all, the network handshake's value: engine/network.md */
+#define UD_KEY       0x13E      /* the FBI's checksum, from the menu-time load on: engine/network.md, *The key* */
+#define UD_CRC_ALL   0x142      /* the network handshake's value, 0 until a lobby fills it: same page */
 #define UD_DISPLAY   0x00         /* char Name[0x20]        "Peewee"        */
 #define UD_NAME      0x20         /* char UnitName[0x20]    "ARMPW"         */
 #define UD_DESC      0x40         /* char UnitDescription[0x40]            */
@@ -35,6 +37,7 @@
 #define OFF_FCOUNT   0x14253      /* int NumFeatureDefs            */
 #define OFF_FDEFS    0x1426F      /* FeatureDefStruct*             */
 #define FD_STRIDE    0x100
+#define FD_DEAD      0xF4       /* the def FeatureDead names: engine/map.md */
 #define FD_NAME      0x00         /* char Name[0x20]                       */
 #define FD_DESC      0x80         /* char Description[20]                  */
 #define FD_FOOTX     0x94         /* short, in map squares                 */
@@ -324,14 +327,21 @@ static void write_units(const TAGPU_FRAME* f)
         jfield_str(out, "display", rec + UD_DISPLAY, 0x20);
         jfield_str(out, "desc", rec + UD_DESC, 0x40);
         jfield_str(out, "side", rec + UD_SIDE, 8);
-        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s,\"crc_all\":\"0x%08X\"}",
+        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s,\"key\":\"0x%08X\",\"crc_all\":\"0x%08X\"}",
                 *(short*)(rec + UD_FOOTX), *(short*)(rec + UD_FOOTY),
                 *(void* const*)(rec + UD_CANBUILD) ? "true" : "false",
-                *(const unsigned*)(rec + UD_CRC_ALL));
+                *(const unsigned*)(rec + UD_KEY), *(const unsigned*)(rec + UD_CRC_ALL));
         emitted++;
     }
 
     fprintf(out, "],\"count\":%u", emitted);
+    {
+        /* the recording's own fingerprints of what a level loaded, position by position: which file won a duplicate ID */
+        unsigned nw, hw, w, h, nf, hf;
+        tagpu_rec_weapons_print(&nw, &hw);
+        tagpu_rec_features_print(ta, &w, &h, &nf, &hf);
+        fprintf(out, ",\"weapons\":[%u,\"0x%08X\"],\"feature_defs\":[%u,\"0x%08X\"]", nw, hw, nf, hf);
+    }
     write_commanders(out, ta, defs, count);
     finish(out, UNITS_TMP, UNITS_OUT);
 }
@@ -385,6 +395,7 @@ static void write_features(const TAGPU_FRAME* f)
                 *(short*)(rec + FD_FOOTX), *(short*)(rec + FD_FOOTZ));
         fprintf(out, ",\"metal\":%g,\"energy\":%g",
                 *(float*)(rec + FD_METAL), *(float*)(rec + FD_ENERGY));
+        fprintf(out, ",\"dead\":%u", *(const unsigned short*)(rec + FD_DEAD));
         fprintf(out, ",\"mask\":%u}", *(unsigned short*)(rec + FD_MASK));
         emitted++;
     }

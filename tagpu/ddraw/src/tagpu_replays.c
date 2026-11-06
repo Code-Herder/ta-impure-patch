@@ -755,6 +755,8 @@ static int shift_right(char* ctrls)
     return 1;
 }
 
+static const char* running_mod(void);
+
 /* S1. The record is written straight into the block, never through the engine's own append
    0x4AB2B0, which tests `count == 200` and so writes one record past the block at 199
    (0x4AB2C1). BOUND: the write index is count + 1 <= 199, inside the 200-record block.
@@ -840,8 +842,8 @@ static void mainmenu_visit(char* gi)
     s_appended = 1;
 
     if (!s_logged) {
-        rlog("replays: main menu: %s%s%s, style %s, REPLAYS at (%d,%d)%s%s", m->name,
-             version[0] ? " " : "", version, m->style, rx, REPLAYS_Y,
+        rlog("replays: main menu: %s%s%s, its archives name %s, style %s, REPLAYS at (%d,%d)%s%s", m->name,
+             version[0] ? " " : "", version, running_mod(), m->style, rx, REPLAYS_Y,
              s_mods[s_mod].plate || !s_movesOk ? " on our plate" : "",
              s_movesOk ? "" : " - the entry's guard failed: the retail placement");
         s_logged = 1;
@@ -1653,6 +1655,12 @@ static const char* mod_by_archive(const char* name)
     int m;
     for (m = MOD_RETAIL; m < MOD_N; m++)
         if (s_mods[m].archive && pat_match(s_mods[m].archive, name)) return s_mods[m].name;
+    /* Run from its package (tagpu_modload.h), a mod's first archive is <id>.hpi, and the table's ids are the catalog's. A
+       mod with no pattern is retail by name in its drop-in folder, and is the same here. */
+    for (m = MOD_RETAIL + 1; m < MOD_N; m++) {
+        size_t k = strlen(s_mods[m].name);
+        if (s_mods[m].archive && !_strnicmp(name, s_mods[m].name, k) && !lstrcmpiA(name + k, ".hpi")) return s_mods[m].name;
+    }
     return NULL;
 }
 

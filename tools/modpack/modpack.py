@@ -574,6 +574,27 @@ def mount_order(names, first):
     return out
 
 
+# The folder names the engine pushes when it reads game data, which a mod's image can rename; tagpu_modload.c's FOLDER_NAMES.
+FOLDER_NAMES = (0x502820, 0x503360, 0x505FE4, 0x503730, 0x50925C, 0x5031BC, 0x5031C8,
+                0x503920, 0x503720, 0x504734, 0x5036E4, 0x503740, 0x502E30, 0x502C7C, 0x50392C, 0x504B10)
+DOWNLOAD_FOLDER, WEAPON_FOLDER = 0x503730, 0x50392C
+
+
+def place_read_folders(img) -> tuple:
+    """The folders whose files the engine reads by enumeration, where a file's place can decide: features, which no v1 image
+    renames (0x502C7C), the weapons and the build menus."""
+    return (image_string(img, 0x502C7C).lower() + "/", image_string(img, WEAPON_FOLDER).lower() + "/",
+            image_string(img, DOWNLOAD_FOLDER).lower() + "/")
+
+
+def image_string(img, va) -> str:
+    for v, buf in img:
+        if v <= va < v + len(buf):
+            b = bytes(buf[va - v:])
+            return b[:b.index(b"\0")].decode("latin-1")
+    die(f"0x{va:X} is in no section")
+
+
 def first_pattern(img, pe: Pe) -> str:
     """The first mount pattern as the patched image spells it (0x5028CC, formatted with 0x5028D8)."""
     def s(va):
@@ -616,6 +637,7 @@ class Plan:
         # the options file the image names (0x5098A3): its [Preferences] reach the engine (0x49F5F9) as well as TADR's keys
         ini = next((bytes(buf[0x5098A3 - v:0x5098B0 - v]) for v, buf in self.img if v <= 0x5098A3 < v + len(buf)), b"")
         options_file = ini.split(b"\0")[0].decode("latin-1").lower()
+        game_dirs = GAME_DIRS | {image_string(self.img, va).lower() for va in FOLDER_NAMES}
         self.loose = {}                         # the mod's loose game data: lower path -> (name as installed, file)
         self.plain = []                         # (name, why dropped)
         self.kept = {}                          # the plain files the package carries: name -> file
@@ -625,7 +647,7 @@ class Plan:
                 self.plain.append((name, "code: mod DLLs are never installed"))
             elif "/" not in low.replace("\\", "/") and ext in ("gp3", "ccx", "ufo", "hpi"):
                 pass                            # an archive of the mount
-            elif "/" in low.replace("\\", "/") and low.split("/")[0] in GAME_DIRS:
+            elif "/" in low.replace("\\", "/") and low.split("/")[0].split("-")[0] in game_dirs:
                 self.loose[low.replace("\\", "/")] = (name.replace("\\", "/"), p)
             elif low.replace("\\", "/").split("/")[0] in PLAIN_KEPT or low == options_file:
                 self.kept[name.replace("\\", "/")] = p
@@ -648,12 +670,129 @@ class Plan:
 
 
 # The folders the engine reads through its file open (0x4BB2E0): a loose file in one of them is game data.
-GAME_DIRS = {"anims", "bitmaps", "camera", "camps", "cdplayer", "download", "features", "fonts", "gamedata", "guis", "maps", "objects3d",
+GAME_DIRS = {"unittextures", "anims", "bitmaps", "camera", "camps", "cdplayer", "download", "features", "fonts", "gamedata", "guis", "maps", "objects3d",
              "palettes", "scripts", "sections", "sounds", "textures", "unitpics", "units", "ai", "weapons", "unitscript", "unitsb", "cursors"}
 
 
 # The folders of plain files a package carries, because Impure reads them itself: a mod's strategic icons.
 PLAIN_KEPT = {"icon", "zicon"}
+
+
+# Under the first TDF enumerated that holds it, a feature section is the only thing a file's PLACE in the mount decides
+# (LoadFeature 0x4224B0; engine/process.md): every other path has one answer, which the managed mount reproduces. One archive
+# cannot keep the drop-in folder's order in general, so the sections that would change go in a TDF of their own that the
+# managed enumeration reaches first: the package is mounted first, this name sorts first in its folder, and the walk takes
+# a folder's entries in order, recursing at once (0x4BCC1F..0x4BCC5B).
+WINNERS_TDF = "features/!!section-winners.tdf"
+
+
+def tdf_sections(data: bytes) -> list:
+    """[(lower name, the section's own bytes)] of a TDF's top level, in file order."""
+    out, i, n = [], 0, len(data)
+    while i < n:
+        c = data[i:i + 1]
+        if data[i:i + 2] == b"//":
+            i = data.find(b"\n", i)
+            i = n if i < 0 else i
+        elif c == b"[":
+            close, brace = data.find(b"]", i), data.find(b"{", i)
+            if close < 0 or brace < 0:
+                break
+            depth, j = 0, brace
+            while j < n:
+                if data[j:j + 2] == b"//":
+                    j = data.find(b"\n", j)
+                    j = n if j < 0 else j
+                    continue
+                if data[j:j + 1] == b"{":
+                    depth += 1
+                elif data[j:j + 1] == b"}":
+                    depth -= 1
+                    if not depth:
+                        break
+                j += 1
+            out.append((data[i + 1:close].strip().decode("latin-1").lower(), data[i:j + 1]))
+            i = j
+        i += 1
+    return out
+
+
+def first_section(walk) -> dict:
+    """{section: (path, its bytes)} by the first TDF that holds it, over (path, bytes) in enumeration order."""
+    out = {}
+    for path, data in walk:
+        for name, raw in tdf_sections(data):
+            out.setdefault(name, (path, raw))
+    return out
+
+
+def same_section(a: bytes, b: bytes) -> bool:
+    """The same to the TDF reader: case and white space aside."""
+    return b"".join(a.lower().split()) == b"".join(b.lower().split())
+
+
+def archive_walk(path: Path, prefix: str, suffix: str):
+    """(lower path, bytes) of what an archive holds under `prefix`, in its directory's order."""
+    arc = hpipack().Archive(path)
+    for k in arc.files:
+        if k.startswith(prefix) and k.endswith(suffix):
+            yield k, arc.read(k)
+
+
+def tree_walk(tree: dict, at: str = ""):
+    """(lower path, bytes) of a tree as hpipack.build will lay it out: each folder sorted without case, depth first."""
+    for name in sorted(tree, key=str.lower):
+        low = at + name.lower()
+        if isinstance(tree[name], dict):
+            yield from tree_walk(tree[name], low + "/")
+        else:
+            yield low, tree[name]
+
+
+def enumerated(sources, prefix: str, suffix: str):
+    """The engine's enumeration over sources in mount order: each path once, from the first that holds it."""
+    seen = set()
+    for source in sources:
+        for k, data in source(prefix, suffix):
+            if k not in seen:
+                seen.add(k)
+                yield k, data
+
+
+def dropin_sources(plan) -> list:
+    def loose(prefix, suffix):
+        return ((k, p.read_bytes()) for k, (_, p) in sorted(plan.loose.items()) if k.startswith(prefix) and k.endswith(suffix))
+    return [loose] + [lambda pre, suf, p=p: archive_walk(p, pre, suf) for _, p, _ in plan.mount if tavfs()._has_trailer(p)]
+
+
+def managed_sources(plan, package: dict, originals: dict) -> list:
+    def tree(t):
+        return lambda pre, suf: ((k, d) for k, d in tree_walk(t) if k.startswith(pre) and k.endswith(suf))
+    retail = [plan.retail[name] for name in plan.managed_retail]
+    return [tree(package), tree(originals)] + [lambda pre, suf, p=p: archive_walk(p, pre, suf) for p in retail if tavfs()._has_trailer(p)]
+
+
+def originals_tree(recipe, plan) -> dict:
+    """The recipe's files that an enumeration reads by place, as the install assembles them from the player's archives."""
+    tree, opened = {}, {}
+    tops = place_read_folders(plan.img)
+    for path, _md5, arc, member in recipe:
+        a = opened.get(arc)
+        if a is None:
+            a = opened[arc] = hpipack().Archive(plan.retail[arc])
+        if path.lower().startswith(tops):
+            insert_cased(tree, path, a.read(member.lower()))
+    return tree
+
+
+def winners_tdf(plan, package: dict, originals: dict):
+    """The sections whose first TDF changes under the managed mount, as the drop-in folder has them; b"" with none."""
+    dropin = first_section(enumerated(dropin_sources(plan), "features/", ".tdf"))
+    managed = first_section(enumerated(managed_sources(plan, package, originals), "features/", ".tdf"))
+    if set(dropin) != set(managed):
+        die(f"{plan.src['id']}: the mounts define different feature sections: {sorted(set(dropin) ^ set(managed))[:5]}")
+    moved = [raw for name, (_, raw) in dropin.items() if not same_section(raw, managed[name][1])]
+    return b"\r\n".join(moved) + b"\r\n" if moved else b"", len(moved)
 
 
 def plan_package(src, stock, hashes):
@@ -815,10 +954,50 @@ def cmd_verify(a):
         managed.update(got)
         wrong = [k for k, (md5, _, stored) in dropin.items() if k not in managed or managed[k][0] != md5]
         cased = [k for k, (md5, _, stored) in dropin.items() if k in managed and leaf(managed[k][1]) != leaf(stored)]
-        extra = [k for k in managed if k not in dropin]
+        extra = [k for k in managed if k not in dropin and k != WINNERS_TDF]
         report(not wrong and not extra, f"{s['id']}: the managed mount answers {len(dropin)} paths as the drop-in folder does"
                + (f"; differ {len(wrong)}, first {wrong[0]}" if wrong else "") + (f"; only managed {len(extra)}, first {extra[0]}" if extra else ""))
         report(not cased, f"{s['id']}: every file name keeps its case" + (f"; differ {len(cased)}, first {cased[0]}" if cased else ""))
+        # what a file's place decides: the feature sections, by the module's reader, and whether anything else reads by place
+        with tempfile.TemporaryDirectory(dir=OUT) as d:
+            subprocess.run(["zstd", "-dqf", str(tar), "-o", d + "/p.tar"], check=True)
+            with tarfile.open(d + "/p.tar") as t:
+                t.extract(f"{s['id']}.hpi", d, filter="data")
+            package = {}
+            for top in place_read_folders(plan.img):
+                for k, data in archive_walk(Path(d) / f"{s['id']}.hpi", top, ""):
+                    insert_cased(package, k, data)
+        originals = originals_tree(st["recipe"], plan)
+        parse = lambda raw: tavfs().tascene.parse_tdf(raw.decode("latin-1"))
+        one, two = (first_section(enumerated(f(), "features/", ".tdf"))
+                    for f in (lambda: dropin_sources(plan), lambda: managed_sources(plan, package, originals)))
+        moved = [k for k in one if k not in two or parse(one[k][1]) != parse(two[k][1])]
+        report(not moved and set(one) == set(two), f"{s['id']}: {len(one)} feature sections read as in the drop-in folder"
+               + (f"; differ {len(moved)}, first {moved[0]}" if moved else ""))
+        # weapons by name, and a build menu's cell by what it names: what would change if an enumeration's order decided it
+        def resolved(source, top, key):
+            first, last = {}, {}
+            for k, data in enumerated(source, top, ".tdf"):
+                for name, raw in tdf_sections(data):
+                    body = parse(raw).get(name) or next(iter(parse(raw).values()), {})
+                    cell = key(name, body)
+                    if cell:
+                        first.setdefault(cell, body)
+                        last[cell] = body
+            return first, last
+        def menu_cell(_name, body):
+            b = {x.lower(): str(y).lower() for x, y in body.items()} if isinstance(body, dict) else {}
+            return (b.get("unitmenu"), b.get("menu"), b.get("button")) if b.get("unitmenu") else None
+        def weapon_slot(_name, body):
+            b = {x.lower(): str(y) for x, y in body.items()} if isinstance(body, dict) else {}
+            return b.get("id")
+        _, weapons, download = place_read_folders(plan.img)
+        for top, key in ((weapons, weapon_slot), (download, menu_cell)):
+            one_r = resolved(dropin_sources(plan), top, key)
+            two_r = resolved(managed_sources(plan, package, originals), top, key)
+            flipped = [c for w in (0, 1) for c in one_r[w] if one_r[w][c] != two_r[w].get(c)]
+            report(not flipped, f"{s['id']}: {top} resolves as in the drop-in folder, {len(one_r[0])} entries, whichever file wins"
+                   + (f"; differ {len(flipped)}, first {flipped[:3]}" if flipped else ""))
     print("verify: " + ("all passed" if not bad else f"{bad} FAILED"))
     return 1 if bad else 0
 
@@ -865,6 +1044,9 @@ def cmd_packages(a):
                 data = arc.read(k)
             insert_cased(tree, stored, data)
             cost += len(data)
+        winners, moved = winners_tdf(plan, tree, originals_tree(st["recipe"], plan))
+        if winners:
+            insert_cased(tree, WINNERS_TDF, winners)
         d = OUT / s["id"]
         d.mkdir(parents=True, exist_ok=True)
         pkg = {f"{s['id']}.hpi": hpipack().build(tree, 0, 2)}
@@ -879,6 +1061,7 @@ def cmd_packages(a):
         lines += [f"dropped {n}: {why}" for n, why in plan.plain]
         lines += [f"original with no archive to copy it from: {k}" for k in st["loose_original"]]
         (d / "listing.txt").write_text("\n".join(lines) + "\n")
+        print(f"{s['id']:10} {moved} feature sections keep their first TDF by {WINNERS_TDF}")
         print(f"{s['id']:10} {len(wanted):6} members {cost / 1e6:8.1f} MB -> {tar.stat().st_size / 1e6:7.1f} MB in {time.time() - t0:5.1f} s; "
               f"{st['stripped']} from retail, {len(st['recipe'])} by recipe, {len(st['loose_original'])} unsourced, {len(plan.plain)} dropped; hide {plan.hide}")
 
