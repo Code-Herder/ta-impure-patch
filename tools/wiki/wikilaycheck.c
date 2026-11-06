@@ -15,7 +15,7 @@
    is the mockup's page (wikilaycheck.py COLLECT); its `fallback` gives the browser's advance, in em,
    of each code point the HUD faces lack, by style. Each text op carries its baseline as the draw
    places it (tagpu_hudlay_baseline at the screen's pixels a unit). tools/wiki/wikilaycheck.py
-   compiles this with tagpu_wikilay.c, tagpu_hudlay.c, tagpu_hudtext.c, tagpu_wikidata.c,
+   compiles this with tagpu_wikilay.c, tagpu_uikit.c, tagpu_hudlay.c, tagpu_hudtext.c, tagpu_wikidata.c,
    tagpu_json.c, tagpu_pak.c and lodepng.c, and compares its output with the mockup's boxes.
 
    A game entry's theatre adds the stage HUD (`stagehud` below): the state's `stagehud` carries the

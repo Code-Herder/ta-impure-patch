@@ -21,11 +21,11 @@
 #include "tagpu_hudtext.h"
 
 /* the colours the CSS gives outright */
-#define INK         0x1D1D1Bu               /* text on a light face (uikit.js uiPaintParts --ink) */
+#define INK         0x1D1D1Bu               /* text on a light face (uikit.js paintParts --ink) */
 #define THUMB_RGB   0x808078u               /* ::-webkit-scrollbar-thumb, at THUMB_A              */
 #define THUMB_A     0.7
 #define OFF_A       0.45                    /* a disabled button                                  */
-#define ICON_F      0.6                     /* a kit glyph over its part (uiPaintParts drawIcon)  */
+#define ICON_F      0.6                     /* a kit glyph over its part (uikit.js drawIcon)      */
 
 #if UI_MAXGLYPH > TAGPU_HUDTEXT_MAX
 #error a line of one text must fit the glyphs the HUD draw sets of one op
@@ -373,14 +373,14 @@ double ui_row(UI* u, const UIROWG* g, const UIROW* rw, double x, double y, doubl
     h = fmax(ui_len(u, g->h), 2 * py + fmax(fmax(th, mh), lock));
     ih = h - 2 * py;
     b = ui_rect(x, y, w, h);
-    if (emit && meets(b, *clip)) {
+    if (emit && (!clip || meets(b, *clip))) {
         double mx = x + pxx, tx = mx + (rw->mark_w > 0 ? rw->mark_w + gap : 0);
         ui_art(u, rw->part, b, clip);
         if (rw->key) ui_hot(u, b, clip, rw->key);
         if (rw->mark_icon >= 0) {
             /* the mark's box is as tall as it is wide, centred in the row's height */
             UIR mb = ui_rect(mx, y + py + ui_half(ih - mh), rw->mark_w, mh);
-            if (meets(mb, *clip)) ui_art(u, rw->mark_icon, mb, clip);
+            if (!clip || meets(mb, *clip)) ui_art(u, rw->mark_icon, mb, clip);
         } else if (rw->mark[0]) {
             int m = ui_pens(u, &tm, rw->mark, strlen(rw->mark));
             double mw = u->pen[m];

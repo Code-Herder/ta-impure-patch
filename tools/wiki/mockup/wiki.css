@@ -1,8 +1,8 @@
 /* The page around the game, and the game frame: Impure's top bar and the wiki window. Inside the frame every length is in
    units through --u, the CSS pixels of the frame's height / 720, so the window reads the same at every resolution of one
-   aspect. The window's numbers are art/wiki/layout.json's, which the DLL reads too: wiki.js sets each as a custom
+   aspect. The window's numbers are art/wiki/layout.json's, which the DLL reads too: uikit.js sets each as a custom
    property of the frame, --w- and its path (row.pad -> --w-row-pad-0, --w-row-pad-1). The window is drawn in a skin: the whitebox (flat greys, 1 CSS pixel lines) or the kit of art/wiki/kit/, whose
-   parts wiki.js paints into each part's box (#frame.kit). Its text takes the replay HUD's styles, which wiki.js writes
+   parts uikit.js paints into each part's box (#frame.kit). Its text takes the replay HUD's styles, which uikit.js writes
    from art/hud/layout.json. */
 /* the replay HUD's faces, the files the DLL draws with */
 @font-face { font-family: 'Oswald'; font-weight: 500; src: url('../../../art/hud/fonts/oswald-500.ttf'); }

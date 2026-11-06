@@ -1,7 +1,7 @@
 # The mod manager, planned
 
-**Written** 2026-11-01, after the design grill and before anything is built. Nothing here has been
-measured in the game except where it says so. Engine facts carry their address and how they were
+**Written** 2026-11-01, after the design grill. The landings table says what is built. Nothing here
+has been measured in the game except where it says so. Engine facts carry their address and how they were
 established: DISASSEMBLED, MEASURED, cited from [the engine map](exe-reverse-engineering.html), or
 [INFERRED]. When the work closes, this file is folded into the module notes, `roadmap.md` and
 [compatibility](compat/setups.html), and then deleted.
@@ -61,8 +61,8 @@ Each decision is listed with what it was chosen over.
   A mismatch refuses before any game code runs. We chose this over testing every mod's table
   against every modded exe for byte clashes.
 - **An unknown exe makes the MODS button open an engine message box**, in the same style as the
-  DirectX version box (`0x4B5070`, called from `0x4266A0`; Impure suppresses that box at
-  `0x4266A7`). The box says mods are not available because this exe is not one Impure knows.
+  DirectX version box (the box at `0x4266A9`, gated on the check `0x4B5070` called at `0x4266A0`;
+  Impure suppresses that box at `0x4266A7`). The box says mods are not available because this exe is not one Impure knows.
 
 ### Content, choices and options
 

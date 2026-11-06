@@ -234,7 +234,7 @@ double ui_badge(UI* u, const UIBADGEG* g, int part, double x, double y, const ch
 /* The kit's part named `name`, -1 when it has none. */
 int    ui_find_part(const HUDLAY* k, const char* name);
 
-/* THE FACE LIGHTNESS RULE (tools/uikit/uikit.js uiFaceLight): a part's face is light when its
+/* THE FACE LIGHTNESS RULE (tools/uikit/uikit.js faceLight): a part's face is light when its
    middle, inside its slices, scaled to 8 x 8 and its opaque pixels (alpha above 128) averaged at
    0.3 R + 0.59 G + 0.11 B, is above a grey of 120; text on a light face is drawn in dark ink with
    no shadow. Here each of the 64 cells is the box average of the source pixels it covers, the

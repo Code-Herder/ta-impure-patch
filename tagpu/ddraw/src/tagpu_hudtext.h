@@ -10,7 +10,7 @@
 
 /* the glyphs one line sets at most; the rest of a longer string is not drawn. The in-game wiki's
    text sets a line as long as its panel is wide -- some 200 glyphs at 16:9, twice that on a 32:9
-   screen -- so the cap is the most of one wiki text the layout sets (tagpu_wikilay.c MAXGLYPH,
+   screen -- so the cap is the most of one wiki text the layout sets (tagpu_uikit.h UI_MAXGLYPH,
    which breaks at most that many code points of a text and leaves the rest of it unset, and does
    not compile above this cap): no line the layout sets is cut here. The draw keeps four arrays of
    it on its stack, 32 KB */

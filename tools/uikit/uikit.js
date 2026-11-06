@@ -116,5 +116,5 @@ const UIKit = (() => {
     }).join('\n');
     const st = document.createElement('style'); st.textContent = css; document.head.append(st);
   }
-  return { loadKit, paintParts, dropParts, drawPart, drawIcon, layoutVars, roleStyles };
+  return { loadKit, paintParts, dropParts, layoutVars, roleStyles };
 })();

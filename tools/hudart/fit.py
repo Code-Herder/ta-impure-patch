@@ -12,7 +12,7 @@ unit, the screen's height / 720 device pixels whatever the HUD scale (tagpu_wiki
 button and the Config sprocket sit in the top bar at the bar's own pixels, 4.5 at 3840x2160 and HUD 150 (WIKI_BAR
 below). A part's need there
 is its density over its `scale`, 1.5 times that for an `xtile` part (COPY_STRETCH); an icon is drawn as large as fits
-its box and then at 0.6 of that (wiki.js drawIcon, tagpu_wikilay.c glyph), so its need is the device pixels one of its
+its box and then at 0.6 of that (uikit.js drawIcon, tagpu_uikit.c ui_glyph), so its need is the device pixels one of its
 texels covers in the box it is drawn in (WIKI_ICON).
 
 THE DENSITY A PART NEEDS IS MEASURED, not assumed: the mockup draws laycheck.py's cases and the housing without the

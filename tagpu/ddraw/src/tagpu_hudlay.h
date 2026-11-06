@@ -154,7 +154,7 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 #define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */
 #define HOPF_INK    64u     /* HOP_TEXT: in its runs' colour with neither the style's shadow nor
-                               its outline: the dark ink of text on a light face (tagpu_wikilay.c) */
+                               its outline: the dark ink of text on a light face (tagpu_uikit.c) */
 #define HOPF_SPRITE 128u    /* HOP_PART: not a kit part but cell `part` of the sprite sheet
                                (HUD_TEX_SPRITE), its top-left `size` x `shade` texels drawn whole
                                into r, sampled nearest: a game cursor (tagpu_wikistage.c) */
