@@ -8,8 +8,8 @@
 #include "tagpu_modprint.h"
 
 /* DISASSEMBLED 2026-11-06. 0x456760 answers whether every seat is ready; its only callers are the battle room's two settings of START's grayed
-   state, 0x44A167 and 0x44AC46, both for the host. The click itself is 0x49FD60(message, "START") at 0x44871D, stdcall, which that grayed state
-   alone stands in front of, so it answers too: no path starts the game on a stale gadget. */
+   state, 0x44A167 and 0x44AC46, both for the host. The click itself is 0x49FD60(message, "START") at 0x44871D, stdcall, whose action asks about game
+   CDs and teams (0x448781, 0x448885) but not readiness, so it answers too: no path starts the game on a stale gadget. */
 #define VA_READY        0x00456760u
 #define VA_READY_CALL_1 0x0044A167u
 #define VA_READY_CALL_2 0x0044AC46u
@@ -22,6 +22,7 @@
 #define MAIN_ROWS       0x1B63
 #define ROW_STRIDE      0x14B
 #define ROWS            10
+#define ROW_ACTIVE      0x00            /* the engine's own test of a seat: 0x456778, 0x4567C0 */
 #define ROW_NATIVE      0x04
 #define ROW_NAME        0x2B
 #define ROW_NAME_MAX    0x1E
@@ -48,7 +49,7 @@ static int seat_differs(const char* row, const MODPRINT* mine, MODPRINT* theirs)
 {
     unsigned native;
     memcpy(&native, row + ROW_NATIVE, sizeof native);
-    if (!native || (unsigned char)row[ROW_TYPE] != TYPE_REMOTE || !tagpu_rec_player_print(native, theirs)) return 0;
+    if (!*(const unsigned*)(row + ROW_ACTIVE) || !native || (unsigned char)row[ROW_TYPE] != TYPE_REMOTE || !tagpu_rec_player_print(native, theirs)) return 0;
     return memcmp(theirs->exe, mine->exe, MODPRINT_HASH) || memcmp(theirs->content, mine->content, MODPRINT_HASH);
 }
 

@@ -1796,6 +1796,13 @@ int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
     return n < 0 ? 0 : n;
 }
 
+int tagpu_replays_archive_count(void)
+{
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    const int n = gfx && *(const char* const* const*)(gfx + GFX_ARC_LIST) ? *(const int*)(gfx + GFX_ARC_COUNT) : 0;
+    return n < 0 ? 0 : n;
+}
+
 /* THE NAMES THE ASSET LOADER RESOLVES WITH, copied beside the list: the `language` value
    0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\", which only WinMain's init
    writes: the command-line parser 0x49EE30 (called at 0x49E8D2) copies each argument that starts

@@ -607,9 +607,9 @@ static void __cdecl mp_start_receive(void* frame)
 
 /* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
    initial data. Preserve that prefix (including its password/version) and add
-   only a public key. The primary SDK binds the data to the actual native owner;
-   a private peer cannot replace another owner's key. Private bindings are signed
-   off-thread and require no extra primary-session send during play. */
+   a public key and the fingerprint. The primary SDK binds the data to the actual
+   native owner; a private peer cannot replace another owner's key. Private bindings
+   are signed off-thread and require no extra primary-session send during play. */
 static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* name,
                                            HANDLE event, const void* data,
                                            DWORD bytes, DWORD flags)
@@ -619,8 +619,11 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
     unsigned char extended[MP_DATA_BASE + MODPRINT_TAIL];
     RecMpPublic public;
     /* The test's lever: this player's data as stock sends it (tools/mods/modmp.py). */
-    if (GetFileAttributesA("tagpu_modprint_stock.on") != INVALID_FILE_ATTRIBUTES ||
-        !data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
+    if (GetFileAttributesA("tagpu_modprint_stock.on") != INVALID_FILE_ATTRIBUTES) {
+        tagpu_logf("recmp: tagpu_modprint_stock.on: stock's player data, no key and no fingerprint");
+        return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
+    }
+    if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
         tagpu_logf("recmp: primary identity unavailable: no faithful contributions");
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
@@ -1327,8 +1330,7 @@ static void mp_capture(const Level* L, unsigned tick)
                 }
                 roster.actor[roster.count++] = (RecMpSeat){native, i, first-1, last-1};
             }
-            tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
-                       native, i, ctl, (unsigned)MP_DATA_BASE);
+            tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u", native, i, ctl);
         }
         if (!tagpu_recmp_roster_valid(&roster)) {
             tagpu_logf("recmp: primary seat/unit blocks disagree with %u slots, each %u: no contributions",

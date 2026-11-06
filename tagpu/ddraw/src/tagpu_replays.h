@@ -72,6 +72,8 @@ int  tagpu_replays_style_index(void);
    asset folders' names as the running executable spells them. */
 struct WIKI3DNAMES;
 int  tagpu_replays_archive_paths(char (*out)[0x104], int max);
+/* How many archives the engine holds mounted now, whatever `max` above would keep. */
+int  tagpu_replays_archive_count(void);
 /* GAME THREAD, in the shell: InitTAHPIAry until a call mounts nothing, the mounts a level finds. */
 void tagpu_replays_mount_all(void);
 void tagpu_replays_asset_names(struct WIKI3DNAMES* out);

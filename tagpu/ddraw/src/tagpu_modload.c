@@ -179,7 +179,11 @@ static int load_pack(void)
     s_catalog = (const unsigned char*)tagpu_modinst_catalog(&s_ncatalog);
     if (!z || !s_catalog || !(s_blob = malloc(PACK_MAX))) return 0;
     got = ZSTD_decompress(s_blob, PACK_MAX, z, n);
-    return !ZSTD_isError(got) && tagpu_modpak_read(s_blob, got, &s_pak);
+    if (!ZSTD_isError(got) && tagpu_modpak_read(s_blob, got, &s_pak)) return 1;
+    /* every later use asks s_blob whether the pack is there */
+    free(s_blob);
+    s_blob = NULL;
+    return 0;
 }
 
 /* ---- the image --------------------------------------------------------------------------------- */
@@ -968,7 +972,6 @@ static long __cdecl find_filtered(const char* spec, void* data)
     return ((long (__cdecl*)(const char*, void*))VA_FINDFIRST)(spec, data);
 }
 
-/* a call's rel32 moved to `to`, after checking it reaches `from` */
 static int install_mount(void)
 {
     unsigned char* stub;

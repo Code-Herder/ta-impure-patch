@@ -5,7 +5,7 @@
 
    THE GAME THREAD ALONE: the two calls of the engine's everyone-ready test, the click on START, and the menu's flip. */
 
-/* At attach, once the recorder has armed the data that carries the print. All three sites or none. */
+/* At attach, once the recorder has armed the data that carries the print. All three sites are checked before any is written. */
 void tagpu_modgate_install(void);
 /* Each menu flip. */
 void tagpu_modgate_tick(void);

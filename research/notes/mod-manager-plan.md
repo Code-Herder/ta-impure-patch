@@ -249,7 +249,7 @@ What follows from those rules:
   That lets drop-in and managed players of the same mod match, and a cosmetic mutator mixes.
 - **A mismatch between Impure players blocks Start**, with a line naming who differs and how.
 - **A player without Impure sends no fingerprint and passes as today.**
-- **Maps do not count.** Stock already refuses a player without the map, and players' map packs differ, so counting them would stop most games ([the module](modules/mods.html), *The fingerprint*).
+- **Maps do not count.** Stock already refuses a player without the map, and players' map packs differ, so counting them would stop most games ([the module](modules/mods.html), *The fingerprint*). A map pack's other files, its features say, still count, which is a decision for the owner once a real pack has been measured.
 - **The carrier is `CreatePlayer`'s player data,** after the recorder's key. It is bound to the player by DirectPlay and needs no new message. A new packet code is no option: stock's reliable splitter takes each length from its table, so an unknown code in a batch loses the rest. **A player of a newer build cannot join an older host,** whose exact size test refuses the longer data.
 
 ### The screen

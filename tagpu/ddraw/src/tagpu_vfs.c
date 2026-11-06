@@ -280,7 +280,7 @@ TAGPU_VFS* tagpu_vfs_open(const char* cwd, const char (*arc)[TAGPU_VFS_PATHMAX],
 {
     TAGPU_VFS* v = (TAGPU_VFS*)calloc(1, sizeof *v);
     int i;
-    if (narc > TAGPU_VFS_ARCMAX) narc = TAGPU_VFS_ARCMAX;
+    if (narc > TAGPU_VFS_ARCSANE) narc = TAGPU_VFS_ARCSANE;
     if (narc < 0) narc = 0;
     if (!v || !(v->arc = (ARC*)calloc((size_t)narc + 1, sizeof *v->arc))) { free(v); return NULL; }
     copy(v->cwd, sizeof v->cwd, cwd);
@@ -510,12 +510,11 @@ static void walk_arc(WALK* w, int k, const char* dir)
     }
 }
 
-void tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx)
+int tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx)
 {
-    const char (*top)[TAGPU_VFS_PATHMAX] = NULL;
     char (*tops)[TAGPU_VFS_PATHMAX] = NULL;
-    int ntop = 0, cap = 0, k, i, t;
-    if (!v) return;
+    int ntop = 0, cap = 0, k, i, t, whole = 1;
+    if (!v) return 0;
     for (k = 0; k < v->narc; k++) {
         TAGPU_HPI* a = v->arc[k].hpi;
         const int n = a ? tagpu_hpi_children(a, 0) : 0;
@@ -524,10 +523,19 @@ void tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx)
             const char* name = tagpu_hpi_name(a, e);
             if (!tagpu_hpi_is_dir(a, e)) {
                 TAGPU_VFILE f;
-                if (snprintf(f.path, sizeof f.path, "%s", name) >= (int)sizeof f.path || shadowed(v, k, e, f.path)) continue;
-                f.src = k;
-                f.entry = e;
-                f.size = tagpu_hpi_size(a, e);
+                uint32_t size = 0;
+                if (snprintf(f.path, sizeof f.path, "%s", name) >= (int)sizeof f.path) continue;
+                if (source_kind(v, f.path, &size) == 1) {
+                    f.src = -1;
+                    f.entry = -1;
+                    f.size = size;
+                } else if (shadowed(v, k, e, f.path)) {
+                    continue;
+                } else {
+                    f.src = k;
+                    f.entry = e;
+                    f.size = tagpu_hpi_size(a, e);
+                }
                 if (!each(ctx, &f)) goto done;
                 continue;
             }
@@ -536,17 +544,17 @@ void tagpu_vfs_enum_game(TAGPU_VFS* v, TAGPU_VFSEACH each, void* ctx)
             if (ntop == cap) {
                 const int grown = cap ? cap * 2 : 64;
                 char (*more)[TAGPU_VFS_PATHMAX] = (char (*)[TAGPU_VFS_PATHMAX])realloc(tops, (size_t)grown * TAGPU_VFS_PATHMAX);
-                if (!more) goto done;
+                if (!more) { whole = 0; goto done; }
                 tops = more;
                 cap = grown;
             }
             strcpy(tops[ntop++], name);
         }
     }
-    top = (const char (*)[TAGPU_VFS_PATHMAX])tops;
-    for (t = 0; t < ntop; t++) tagpu_vfs_enum(v, top[t], "*", 1, each, ctx);
+    for (t = 0; t < ntop; t++) tagpu_vfs_enum(v, tops[t], "*", 1, each, ctx);
 done:
     free(tops);
+    return whole;
 }
 
 void tagpu_vfs_enum(TAGPU_VFS* v, const char* dir, const char* pattern, int recursive, TAGPU_VFSEACH each, void* ctx)
