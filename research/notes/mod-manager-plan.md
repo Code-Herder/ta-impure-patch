@@ -84,11 +84,12 @@ Each decision is listed with what it was chosen over.
      as a catalog mod reads the same entry.
   3. **The player's changes, in `profiles\<id>.ini`.** A missing key means "the mod's default". The
      file took in `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once at
-     attach; old rule files are renamed `.migrated`. The move leaves nothing behind that it could
-     repeat, so it keeps no record of its own (`impure-migration.txt` is the store's). The file will hold the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
+     attach; old rule files are renamed `.migrated`. What did not finish runs again next launch: a key
+     leaves `impure.cfg` only once its value is in the file, so the move keeps no record of its own
+     (`impure-migration.txt` is the store's). The file will hold the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
 
-  `impure.cfg` keeps only global settings. Profile names come from the catalog, not the fixed
-  seven-name list. A `file.` key naming a file the current version no longer has is ignored with a
+  `impure.cfg` keeps only global settings. Profile names will come from the catalog (landing 4;
+  today they are the fixed seven). A `file.` key naming a file the current version no longer has is ignored with a
   log line, not rejected. We rejected keeping the player's per-mod choices split between
   `impure.cfg` and `profiles\`, and keeping mod rules hardcoded in the DLL.
 - **Play options are per mod; visuals are not.** Building, placement, snapping, reclaim and orders

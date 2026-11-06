@@ -1439,11 +1439,12 @@ static void commit_row(int row)
     commit_one(row);
 }
 
-static void commit_all_rows(int resource_rows)
+/* All but the resource rows, which hold a per-mod value of their own. */
+static void commit_all_rows(void)
 {
     int i;
     for (i = 0; i < R_COUNT; i++)
-        if (i != R_STYLE && (resource_rows || (i != R_RESOURCE && i != R_QUICK))) commit_one(i);
+        if (i != R_STYLE && i != R_RESOURCE && i != R_QUICK) commit_one(i);
     if (!row_held(R_STYLE)) tagpu_settings_set(TS_STYLE, style_value());
 }
 
@@ -1513,6 +1514,7 @@ void tagpu_menu_present(void)
     /* whether or not the menu is armed: the guard's record is the store's
        too, and its crash marker goes only once the record is written */
     tagpu_settings_flush();
+    tagpu_profiles_flush();
 }
 
 /* ---- the trigger's two jobs: it is drawn, and it is hit-tested ----------- */
@@ -2804,9 +2806,9 @@ static void vis_undo(void)
     int i;
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
-    /* A profile cap changes the plate, not the saved preference. Undo restores
-       raw values through the store's global bounds, including a higher radius. */
-    commit_all_rows(0);
+    /* A mod's cap changes the plate, not the saved value: Undo puts back the raw
+       one, a higher radius included, and a missing key as a missing key. */
+    commit_all_rows();
     if (tagpu_profiles_mod() == s_resourceModOpen)
         for (i = 0; i < 2; i++)
             tagpu_profiles_restore_choice(i, s_resourceOpen[i]);
@@ -2855,7 +2857,11 @@ static void vis_restore(void)
     s_stage[R_WHEEL]   = 0;
     s_stage[R_MEGAZOOM] = 0;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
-    commit_all_rows(1);
+    commit_all_rows();
+    /* the mod's default again, by removing the key: a value written here would stay when the
+       mod's default changes */
+    if (!row_held(R_RESOURCE)) tagpu_profiles_restore_choice(TAGPU_CHOICE_RADIUS, -1);
+    if (!row_held(R_QUICK)) tagpu_profiles_restore_choice(TAGPU_CHOICE_QUICK, -1);
     /* UI scale back to OFF, the store's default: HUD scale is off the play
        defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
        No stage of the row means off, so the pass is turned off here directly,

@@ -24,6 +24,7 @@
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_settings.h"
+#include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
@@ -480,6 +481,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_settings_detaching();
         cfg_save();
         tagpu_settings_final();
+        tagpu_profiles_final();
 
         if (!tagpu_regstore_active())
             indeo_disable();

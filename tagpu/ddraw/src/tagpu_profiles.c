@@ -27,11 +27,26 @@ static const char* const names[MOD_N] = {
 };
 static int s_attached, s_mod, s_match;
 static char s_version[64], s_path[64];
-static char s_error[240], s_refused[200];
+static char s_error[240], s_refused[400];
 static TagpuResourcePolicy s_policy, s_base;
 static int s_choice[TAGPU_CHOICES];     /* the player's, -1 where the file has no key */
 static const char* const s_choiceKey[TAGPU_CHOICES] = { "resource_radius", "quick_build" };
 static DWORD s_poll;
+
+/* THE PLAYER'S FILE IS WRITTEN OFF THE GAME THREAD. TA is lockstep and a disk write inside a click is
+   an unbounded stall (tagpu_menu_present), so a click records its value in s_pending and the render
+   thread writes it, retrying once a second, and the last writer is the exit's.
+
+   s_dirty counts the changes and a writer clears it only by the count it saw, once all it saw has
+   landed. A click and the menu tick are both on the game thread, so while the tick sees s_dirty at 0
+   no write is pending or can start, and it reads the file the clicks are in. */
+#define PENDING_NONE (-2)
+#define RETRY_MS 1000
+static volatile LONG s_pending[MOD_N][TAGPU_CHOICES];
+static volatile LONG s_dirty;
+static CRITICAL_SECTION s_io;
+static DWORD s_retryAt;                 /* writers only, under s_io */
+static int s_failing;                   /* writers only, under s_io */
 
 /* The rules of `mod`: the catalog's entry, or the built-in defaults for the stock game and an
    unidentified mod. An entry that cannot be read turns its options off, named in the log: it is
@@ -69,98 +84,6 @@ static const char* reason(int which)
     return s_state[s_mod] == 1 && r[0] ? r : "this mod does not allow it";
 }
 
-/* The one-time move out of the old layout. Each step is finished by what it leaves behind, so an
-   interrupted one simply runs again: a rule file renamed aside, a key gone from impure.cfg.
-   Renamed, never deleted, as the store's own migration: a bad move is undone by hand. Rule files
-   held the rules the catalog now owns; their values are dropped. A preference equal to the mod's
-   default is dropped too, because the old menu wrote the default on first sight. */
-static void write_choice(const char* path, const char* key, int value);
-
-static void move_rules_aside(const char* path)
-{
-    char to[MAX_PATH];
-    snprintf(to, sizeof to, "%s" MIGRATED, path);
-    if (MoveFileExA(path, to, 0)) tagpu_logf("profiles: rule file moved aside: %s", to);
-    else tagpu_logf("profiles: cannot move the rule file %s aside (%lu)", path, GetLastError());
-}
-
-static int file_has_rules(const char* path)
-{
-    char data[PROFILE_CAP + 1];
-    DWORD got = 0;
-    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) return 0;
-    if (!ReadFile(f, data, PROFILE_CAP, &got, NULL)) got = 0;
-    CloseHandle(f);
-    data[got] = 0;
-    return strstr(data, "manual_snapping") || strstr(data, "max_radius") || strstr(data, "default_radius") ||
-           strstr(data, "quick_build_default");
-}
-
-static void migrate(void)
-{
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA("profiles\\*@*.ini", &fd);
-    int i, k;
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            char path[MAX_PATH];
-            snprintf(path, sizeof path, "profiles\\%s", fd.cFileName);
-            move_rules_aside(path);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
-    }
-    for (i = 0; i < MOD_N; i++) {
-        char path[64];
-        snprintf(path, sizeof path, "profiles/%s.ini", names[i]);
-        if (file_has_rules(path)) move_rules_aside(path);
-    }
-    for (i = 0; i < MOD_N; i++) {
-        TagpuResourcePolicy p = mod_rules(i);
-        char path[64];
-        snprintf(path, sizeof path, "profiles/%s.ini", names[i]);
-        for (k = 0; k < TAGPU_CHOICES; k++) {
-            char key[64], value[16], *end;
-            long v;
-            snprintf(key, sizeof key, "%s.%s", s_choiceKey[k], names[i]);
-            if (!tagpu_settings_extra(key, value, sizeof value)) continue;
-            if (!strcmp(value, "on")) v = 1;
-            else if (!strcmp(value, "off")) v = 0;
-            else if (!strcmp(value, "auto")) v = -1;
-            else {
-                v = strtol(value, &end, 10);
-                if (!*value || *end || v < 0 || v > (k == TAGPU_CHOICE_RADIUS ? RADIUS_MAX : 1)) v = -1;
-            }
-            if (v >= 0 && v != (k == TAGPU_CHOICE_RADIUS ? p.radius : p.quick_default)) write_choice(path, s_choiceKey[k], (int)v);
-            tagpu_settings_extra_drop(key);
-            tagpu_logf("profiles: %s=%s moved to %s", key, value, path);
-        }
-    }
-}
-
-void tagpu_profiles_attach(void)
-{
-    int i;
-    if (s_attached) return;
-    s_attached = 1;
-    s_policy = s_base = mod_rules(MOD_UNKNOWN);
-    for (i = 0; i < TAGPU_CHOICES; i++) s_choice[i] = -1;
-    if (!CreateDirectoryA("profiles", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
-        tagpu_logf("profiles: cannot create profiles directory (%lu)", GetLastError());
-    /* never under tagpu_defaults.off: that is a control launch, and it does not touch what it does
-       not own; the store read nothing it can move when it could not read its file */
-    if (!tagpu_settings_ignored()) migrate();
-}
-
-static char* trim(char* p)
-{
-    char* end;
-    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
-    end = p + strlen(p);
-    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) *--end = 0;
-    return p;
-}
-
 /* A whole small file into `data` (PROFILE_CAP + 1 bytes), NUL-terminated. 1 read, 0 no such file,
    -1 with the reason in `error`. The handle denies writers. */
 static int read_small(const char* path, char* data, char* error, unsigned cap)
@@ -186,6 +109,120 @@ static int read_small(const char* path, char* data, char* error, unsigned cap)
     }
     data[size] = 0;
     return 1;
+}
+
+/* The one-time move out of the old layout. A step is finished by what it leaves behind, so what did
+   not finish runs again next launch: a rule file not yet renamed, a key not yet gone from impure.cfg.
+   A key leaves impure.cfg only once its value is in the player's file or needs no place there.
+   Renamed, never deleted, and no earlier copy overwritten, as in the store's own migration. Rule files
+   held the rules the catalog now owns, so their values are dropped. A preference equal to the mod's
+   default is dropped too, because the old menu wrote the default on first sight. */
+static int write_choice(const char* path, const char* key, int value, char* why, unsigned cap);
+
+static int move_rules_aside(const char* path)
+{
+    char to[MAX_PATH];
+    int n;
+    for (n = 0; n < 10; n++) {
+        if (n) snprintf(to, sizeof to, "%s" MIGRATED ".%d", path, n);
+        else snprintf(to, sizeof to, "%s" MIGRATED, path);
+        if (MoveFileExA(path, to, 0)) {
+            tagpu_logf("profiles: rule file moved aside: %s", to);
+            return 1;
+        }
+        if (GetLastError() != ERROR_ALREADY_EXISTS && GetLastError() != ERROR_FILE_EXISTS) break;
+    }
+    tagpu_logf("profiles: cannot move the rule file %s aside (%lu)", path, GetLastError());
+    return 0;
+}
+
+/* whether a line, not a comment, names one of the old layout's rule keys */
+static int file_has_rules(const char* path)
+{
+    static const char* const rule[] = { "manual_snapping", "default_radius", "max_radius", "quick_build_default" };
+    char data[PROFILE_CAP + 1], error[16], *line, *next;
+    if (read_small(path, data, error, sizeof error) <= 0) return 0;
+    for (line = data; line; line = next) {
+        unsigned i;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        while (*line == ' ' || *line == '\t') line++;
+        for (i = 0; i < sizeof rule / sizeof *rule; i++) {
+            size_t n = strlen(rule[i]);
+            if (!_strnicmp(line, rule[i], n) && (line[n] == '=' || line[n] == ' ' || line[n] == '\t')) return 1;
+        }
+    }
+    return 0;
+}
+
+static void migrate(void)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA("profiles\\*@*.ini", &fd);
+    int i, k;
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            char path[MAX_PATH];
+            snprintf(path, sizeof path, "profiles\\%s", fd.cFileName);
+            move_rules_aside(path);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    for (i = 0; i < MOD_N; i++) {
+        TagpuResourcePolicy p = mod_rules(i);
+        char path[64];
+        int can_write;
+        snprintf(path, sizeof path, "profiles/%s.ini", names[i]);
+        can_write = !file_has_rules(path) || move_rules_aside(path);
+        /* a catalog that cannot be read says nothing of the mod's defaults; mod_rules logged it */
+        if (s_state[i] < 0 && i != MOD_RETAIL && i != MOD_UNKNOWN) continue;
+        for (k = 0; k < TAGPU_CHOICES; k++) {
+            char key[64], value[16], why[160] = "", *end;
+            long v;
+            snprintf(key, sizeof key, "%s.%s", s_choiceKey[k], names[i]);
+            if (!tagpu_settings_extra(key, value, sizeof value)) continue;
+            if (!lstrcmpiA(value, "on")) v = 1;
+            else if (!lstrcmpiA(value, "off")) v = 0;
+            else {
+                v = strtol(value, &end, 10);
+                if (!*value || *end || v < 0 || v > (k == TAGPU_CHOICE_RADIUS ? RADIUS_MAX : 1)) v = -1;
+            }
+            if (v >= 0 && v != (k == TAGPU_CHOICE_RADIUS ? p.radius : p.quick_default)) {
+                if (!can_write) continue;
+                if (!write_choice(path, s_choiceKey[k], (int)v, why, sizeof why)) {
+                    tagpu_logf("profiles: %s=%s stays in impure.cfg: %s", key, value, why);
+                    continue;
+                }
+            }
+            tagpu_settings_extra_drop(key);
+            tagpu_logf("profiles: %s=%s moved out of impure.cfg", key, value);
+        }
+    }
+}
+
+void tagpu_profiles_attach(void)
+{
+    int i;
+    if (s_attached) return;
+    s_attached = 1;
+    InitializeCriticalSection(&s_io);
+    for (i = 0; i < MOD_N * TAGPU_CHOICES; i++) s_pending[i / TAGPU_CHOICES][i % TAGPU_CHOICES] = PENDING_NONE;
+    s_policy = s_base = mod_rules(MOD_UNKNOWN);
+    for (i = 0; i < TAGPU_CHOICES; i++) s_choice[i] = -1;
+    if (!CreateDirectoryA("profiles", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+        tagpu_logf("profiles: cannot create profiles directory (%lu)", GetLastError());
+    /* never under tagpu_defaults.off: that is a control launch, and it does not touch what it does
+       not own; the store read nothing it can move when it could not read its file */
+    if (!tagpu_settings_ignored()) migrate();
+}
+
+static char* trim(char* p)
+{
+    char* end;
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    end = p + strlen(p);
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) *--end = 0;
+    return p;
 }
 
 /* The test lever's rules over `p`; the candidate stays private until the caller validated it. */
@@ -276,16 +313,17 @@ invalid:
     return r;
 }
 
-/* `key`=`value` in `path`, every other line kept, -1 removing the key. Written aside and moved in,
-   so a crash leaves the old file or the new one. */
-static void write_choice(const char* path, const char* key, int value)
+/* `key`=`value` in `path`, every other line kept as it is, -1 removing the key. Written aside and
+   moved in, so a crash leaves the old file or the new one, and never larger than read_small takes. 1,
+   or 0 with the reason in `why`. */
+static int write_choice(const char* path, const char* key, int value, char* why, unsigned cap)
 {
-    char data[PROFILE_CAP + 1], out[PROFILE_CAP + 96], tmp[MAX_PATH], error[120] = "", *line, *next;
+    char data[PROFILE_CAP + 1], out[PROFILE_CAP + 1], tmp[MAX_PATH], *line, *next;
     size_t klen = strlen(key);
-    int at = 0, r = read_small(path, data, error, sizeof error);
+    int at = 0, r = read_small(path, data, why, cap);
     HANDLE f;
     DWORD put;
-    if (r < 0) { tagpu_logf("profiles: %s; the choice was not saved", error); return; }
+    if (r < 0) return 0;
     if (!r) at = snprintf(out, sizeof out, "# Your choices for this mod. A missing key is the mod's default.\r\n");
     if (r) for (line = data; line; line = next) {
         char* s;
@@ -296,29 +334,84 @@ static void write_choice(const char* path, const char* key, int value)
         while (*s == ' ' || *s == '\t') s++;
         if (!strncmp(s, key, klen) && (s[klen] == '=' || s[klen] == ' ' || s[klen] == '\t')) continue;
         n = strlen(line);
-        if (n && line[n - 1] == '\r') line[--n] = 0;
-        if (!n && !next) continue;
-        if ((size_t)at + n + 3 > sizeof out - 32) { tagpu_logf("profiles: %s is full; the choice was not saved", path); return; }
-        at += snprintf(out + at, sizeof out - at, "%s\r\n", line);
+        if (!n && !next) break;
+        if ((size_t)at + n + 2 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
+        memcpy(out + at, line, n);
+        at += (int)n;
+        if (next) out[at++] = '\n';
+        else { out[at++] = '\r'; out[at++] = '\n'; }
     }
-    if (value >= 0) at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
+    if (value >= 0) {
+        if ((size_t)at + klen + 16 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
+        at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
+    }
     snprintf(tmp, sizeof tmp, "%s.new", path);
     f = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) { tagpu_logf("profiles: cannot write %s (%lu)", tmp, GetLastError()); return; }
+    if (f == INVALID_HANDLE_VALUE) { snprintf(why, cap, "cannot write %s (%lu)", tmp, GetLastError()); return 0; }
     r = WriteFile(f, out, (DWORD)at, &put, NULL) && put == (DWORD)at && FlushFileBuffers(f);
     CloseHandle(f);
-    if (!r || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-        tagpu_logf("profiles: cannot replace %s (%lu)", path, GetLastError());
+    if (!r || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        snprintf(why, cap, "cannot replace %s (%lu)", path, GetLastError());
+        DeleteFileA(tmp);
+        return 0;
+    }
+    return 1;
 }
+
+static void flush(int final)
+{
+    LONG seen;
+    int m, k, ok = 1;
+    char why[200] = "";
+    if (!s_attached) return;
+    if (!final && s_retryAt && (LONG)(GetTickCount() - s_retryAt) < 0) return;
+    seen = s_dirty;
+    if (!seen) return;
+    if (final) {
+        /* as tagpu_settings_final: no other thread can be inside, so a lock held here is orphaned */
+        if (!TryEnterCriticalSection(&s_io)) {
+            tagpu_logf("profiles: the writer's lock was left held by a dead thread; the last choice is not written");
+            return;
+        }
+    } else {
+        EnterCriticalSection(&s_io);
+    }
+    for (m = 0; m < MOD_N; m++) for (k = 0; k < TAGPU_CHOICES; k++) {
+        char path[64];
+        LONG v = InterlockedExchange(&s_pending[m][k], PENDING_NONE);
+        if (v == PENDING_NONE) continue;
+        snprintf(path, sizeof path, "profiles/%s.ini", names[m]);
+        if (!write_choice(path, s_choiceKey[k], (int)v, why, sizeof why)) {
+            /* put back unless a newer click has replaced it */
+            InterlockedCompareExchange(&s_pending[m][k], v, PENDING_NONE);
+            ok = 0;
+        }
+    }
+    if (ok) {
+        InterlockedCompareExchange(&s_dirty, 0, seen);
+        s_retryAt = 0;
+        s_failing = 0;
+    } else {
+        if (!s_failing) tagpu_logf("profiles: a choice is not saved yet: %s", why);
+        s_failing = 1;
+        s_retryAt = GetTickCount() + RETRY_MS;
+        if (!s_retryAt) s_retryAt = 1;
+    }
+    LeaveCriticalSection(&s_io);
+}
+
+void tagpu_profiles_flush(void) { flush(0); }
+void tagpu_profiles_final(void) { flush(1); }
 
 /* A hand-edited choice of an option the mod forbids has no effect, and the log says so once. */
 static void note_refused(const TagpuResourcePolicy* p)
 {
     char line[sizeof s_refused] = "";
+    int at = 0;
     if (s_choice[TAGPU_CHOICE_RADIUS] > 0 && !p->manual)
-        snprintf(line, sizeof line, "resource_radius in %s: %s", s_path, reason(TAGPU_CHOICE_RADIUS));
-    else if (s_choice[TAGPU_CHOICE_QUICK] == 1 && !p->quick)
-        snprintf(line, sizeof line, "quick_build in %s: %s", s_path, reason(TAGPU_CHOICE_QUICK));
+        at = snprintf(line, sizeof line, "resource_radius in %s: %s; ", s_path, reason(TAGPU_CHOICE_RADIUS));
+    if (s_choice[TAGPU_CHOICE_QUICK] == 1 && !p->quick)
+        snprintf(line + at, sizeof line - at, "quick_build in %s: %s", s_path, reason(TAGPU_CHOICE_QUICK));
     if (line[0] && strcmp(line, s_refused)) tagpu_logf("profiles: refused %s", line);
     lstrcpynA(s_refused, line, sizeof s_refused);
 }
@@ -336,7 +429,7 @@ void tagpu_profiles_menu_tick(void)
     if (lever >= 0 && p.radius > p.maximum)
         snprintf(error, sizeof error, RULES_LEVER ": default_radius exceeds max_radius");
     memcpy(choice, s_choice, sizeof choice);
-    if (!error[0] && !tagpu_settings_ignored()) read_choices(s_path, choice, error, sizeof error);
+    if (!error[0] && !tagpu_settings_ignored() && !s_dirty) read_choices(s_path, choice, error, sizeof error);
     if (error[0]) {
         if (strcmp(error, s_error)) tagpu_logf("profiles: rejected %s; previous rules remain", error);
         lstrcpynA(s_error, error, sizeof s_error);
@@ -402,7 +495,9 @@ void tagpu_profiles_restore_choice(int which, int value)
     if (tagpu_settings_ignored() || !s_path[0]) return;
     if (value == s_choice[which]) return;
     s_choice[which] = value;
-    write_choice(s_path, s_choiceKey[which], value);
+    InterlockedExchange(&s_pending[s_mod][which], value);
+    /* the value first: a writer that sees the count has the value behind it */
+    InterlockedIncrement(&s_dirty);
 }
 
 void tagpu_profiles_set_radius(int value)

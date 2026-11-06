@@ -69,16 +69,20 @@ quick_build=0
 
 Booleans accept `0`/`1` or `off`/`on`; the radius accepts integers 0-8. Comments start with `#` or `;`.
 Duplicate keys, a value out of range, embedded NULs and files over 4096 bytes are rejected, and the
-previous values remain. A key this build does not read stays in the file. A menu's write
-goes to a new file moved over the old one.
+previous values remain. A key this build does not read stays in the file. A click only records its
+value: the render thread writes it to a new file moved over the old one, retrying once a second, and the
+exit writes what is left. A write that would pass 4096 bytes is refused. Restore defaults and an Undo
+back to no choice remove the key.
 
 `tagpu_rules.on` beside the exe replaces a mod's rules, for a test, with the keys `manual_snapping`,
 `quick_build`, `default_radius`, `max_radius` and `quick_build_default`.
 
 The old layout moves once, at attach. A rule file (one naming a rule key, or any `<mod>@<hex>.ini`) is
-renamed `.migrated`, and its rules are dropped for the catalog's. `resource_radius.<mod>` and
-`quick_build.<mod>` move from `impure.cfg` to the player's file, and a value equal to the mod's default is
-dropped, because the old menu wrote the default on first sight.
+renamed `.migrated` (`.migrated.1` and on if that is taken), and its rules are dropped for the catalog's.
+`resource_radius.<mod>` and `quick_build.<mod>` move from `impure.cfg` to the player's file, and a value equal
+to the mod's default is dropped, because the old menu wrote the default on first sight. A key whose value
+cannot be written stays in `impure.cfg` for the next launch. If `impure.cfg` itself cannot be written, the
+stale key overwrites a newer choice each launch until it can.
 
 Identity shares the replay browser's config/archive table and Twilight's menu label. The stock
 policy additionally requires the stock config and archive formats. A custom package retaining

@@ -20,6 +20,7 @@
 #include "tagpu_cfg.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_profiles.h"
 #include "tagpu_window.h"
 
 
@@ -1629,6 +1630,7 @@ ULONG dd_Release()
            flushed yet, and the frame cfg_save recorded above. After the join,
            so no other thread is inside the store. */
         tagpu_settings_final();
+        tagpu_profiles_final();
 
         if (!g_config.windowed)
         {

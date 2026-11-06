@@ -988,7 +988,7 @@ def check_options(n: str, o) -> list:
         if not isinstance(p, dict) or not isinstance(p.get("allowed"), bool):
             errs.append(f"{n}: option {name} does not say whether it is allowed")
             continue
-        if not p["allowed"] and not p.get("reason"):
+        if not p["allowed"] and not (isinstance(p.get("reason"), str) and p["reason"]):
             errs.append(f"{n}: option {name} is off with no reason")
         if not default_ok(p.get("default")):
             errs.append(f"{n}: option {name} has no default")

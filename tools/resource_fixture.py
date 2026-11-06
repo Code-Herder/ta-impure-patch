@@ -76,15 +76,14 @@ def main():
                  "geothermal=1;indestructible=1;reclaimable=0;}")
     hpipack.insert(tree, "features/green/resource-test.tdf", features.encode())
     (a.gamedir / "resource-test.ufo").write_bytes(hpipack.build(tree, method=2))
-    # the test's rules in place of the mod's config, as tagpu_profiles.c reads them
-    on = a.policy != "locked"
-    rules = {"manual_snapping": int(on), "quick_build": int(on), "default_radius": 3 if on else 0,
-             "max_radius": 3 if on else 0, "quick_build_default": int(on)}
-    if a.policy == "inherit":
-        rules.update(quick_build=0, default_radius=1, max_radius=1)
-    (a.gamedir / "tagpu_rules.on").write_text("".join(f"{k}={v}\n" for k, v in rules.items()))
-    for stale in ("profiles/retail.ini", "profiles/retail@76332e31.ini"):
-        (a.gamedir / stale).unlink(missing_ok=True)
+    # the test's rules in place of the built-in ones (tagpu_profiles.c) when it locks or caps them
+    lever = a.gamedir / "tagpu_rules.on"
+    lever.unlink(missing_ok=True)
+    if a.policy == "locked":
+        lever.write_text("manual_snapping=0\nquick_build=0\ndefault_radius=0\nmax_radius=0\nquick_build_default=0\n")
+    elif a.policy == "inherit":
+        lever.write_text("manual_snapping=1\nquick_build=0\ndefault_radius=1\nmax_radius=1\nquick_build_default=1\n")
+    (a.gamedir / "profiles/retail.ini").unlink(missing_ok=True)
     if a.geo_upgrade:
         # Derived test content stays inside the private game folder. Reuse
         # the installed unit's model/script, with a stronger output and short

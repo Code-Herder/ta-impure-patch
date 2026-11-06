@@ -22,9 +22,13 @@ int tagpu_profiles_quick(void);
 void tagpu_profiles_set_radius(int value);
 void tagpu_profiles_set_quick(int value);
 void tagpu_profiles_status(char* out, unsigned cap);
-/* The player's raw value, -1 for "the mod's default", kept above a cap or under a lock; and the
-   same value put back, by the menu's Undo. */
+/* The player's raw value, -1 for "the mod's default", kept above a cap or under a lock; and a value
+   put back, by the menu's Undo and Restore, -1 removing the key. */
 int tagpu_profiles_choice(int which);
 void tagpu_profiles_restore_choice(int which, int value);
+/* The file's write: the render thread each frame, and the exit once no other thread is inside. A
+   click only records its value (tagpu_menu_present). */
+void tagpu_profiles_flush(void);
+void tagpu_profiles_final(void);
 
 #endif

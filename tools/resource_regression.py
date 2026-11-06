@@ -789,6 +789,13 @@ def migrated(c, gamedir):
         (profiles / "retail.ini").write_text(old_rules)
         (profiles / "retail@76332e31.ini").write_text("max_radius=8\n")
         (profiles / "unknown.ini").write_text(old_rules.replace("=1", "=0").replace("=3", "=0"))
+        # a key whose file cannot be written stays in impure.cfg, for the next launch
+        (profiles / "mayhem.ini").mkdir()
+        menu()
+        c.until(lambda: logged("profiles: resource_radius.mayhem=2 stays in impure.cfg"), "the failed move was not named")
+        c.until(lambda: per_mod_keys() == ["resource_radius.mayhem"], "the failed move lost its key, or another stayed")
+        c.call("stop")
+        (profiles / "mayhem.ini").rmdir()
         menu()
         c.until(lambda: controls()["RESOURCE"]["stage"] == 1, "the migrated radius did not apply")
         assert controls()["QUICKBUILD"]["stage"] == 0, "the migrated Quick Build did not apply"
@@ -808,6 +815,31 @@ def migrated(c, gamedir):
         menu()
         c.until(lambda: controls()["RESOURCE"]["stage"] == 1, "the radius did not survive a restart")
         assert before == {p.name: p.read_bytes() for p in profiles.glob("*")}, "the second launch moved something"
+        # a click whose write fails keeps its value and is written once it can be
+        retail = profiles / "retail.ini"
+        saved = retail.read_bytes()
+        retail.unlink()
+        retail.mkdir()
+        c.call("ui", "click", "RESOURCE")
+        c.until(lambda: logged("profiles: a choice is not saved yet"), "the failed write was not named")
+        time.sleep(1)
+        assert controls()["RESOURCE"]["stage"] == 2, "the tick took back a click that is not on disk"
+        retail.rmdir()
+        c.until(lambda: "resource_radius=2" in retail.read_text() if retail.is_file() else False, "the write was not retried")
+        # Restore defaults removes the keys: the mod's default is no choice of the player's
+        c.call("ui", "click", "RESTORE")
+        c.until(lambda: retail.is_file() and "resource_radius" not in retail.read_text() and "quick_build" not in retail.read_text(),
+                "Restore wrote the default as a choice")
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "Restore did not give the mod's default")
+        # Undo of a click puts back a missing key as missing
+        c.call("stop")
+        menu()
+        c.until(lambda: controls()["RESOURCE"]["stage"] == 3, "the default did not survive a restart")
+        c.call("ui", "click", "RESOURCE")
+        c.until(lambda: "resource_radius=0" in retail.read_text(), "the click was not written")
+        c.call("ui", "click", "UNDO")
+        c.until(lambda: "resource_radius" not in retail.read_text(), "Undo did not remove the key")
+        retail.write_bytes(saved)
         # a forbidden value edited in by hand has no effect and is named in the log
         rules.write_text("manual_snapping=0\nquick_build=0\ndefault_radius=0\nmax_radius=0\nquick_build_default=0\n")
         (profiles / "retail.ini").write_text("quick_build=1\n")
@@ -818,14 +850,16 @@ def migrated(c, gamedir):
         c.until(lambda: logged("profiles: rejected profiles/retail.ini:1"), "a bad value was not rejected")
         print("resource-migration: the move, its once, a refused and a rejected edit passed")
     finally:
-        c.call("stop")
-        for p in profiles.glob("*"):
-            p.unlink()
-        rules.unlink(missing_ok=True)
-        for p, data in keep.items():
-            p.write_bytes(data)
-        if cfg not in keep:
-            cfg.unlink(missing_ok=True)
+        try:
+            c.call("stop")
+        finally:
+            for p in profiles.glob("*"):
+                p.rmdir() if p.is_dir() else p.unlink()
+            rules.unlink(missing_ok=True)
+            for p, data in keep.items():
+                p.write_bytes(data)
+            if cfg not in keep:
+                cfg.unlink(missing_ok=True)
 
 
 def frontend(name, gamedir):

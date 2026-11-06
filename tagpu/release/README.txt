@@ -61,8 +61,9 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
   The Visuals rows "Resource snapping" and "Quick mex/geo" are kept per mod.
   They start on in stock TA, Total Mayhem, ProTA and TA Twilight, and locked
-  off in TA: Escalation, TA Zero and any other mod. The per-mod rules are the
-  files in profiles\, which the patch creates when they are missing.
+  off in TA: Escalation, TA Zero and any other mod. What you change in them is
+  kept in profiles\, one file per mod; delete a line to go back to the mod's
+  default. Older rule files there are renamed .migrated and no longer read.
 
   Everything is ON by default. A pass is turned off by an empty file next to
   TotalA.exe named tagpu_<pass>.off, and back on by deleting that file. The
@@ -130,8 +131,8 @@ WHAT IT WRITES
   the oldest recordings beyond the newest 50, never a favourite, a bookmarked
   one or one with a taken-over branch.
 
-  profiles\ in the game folder: the per-mod rules for resource snapping and
-  Quick Build, created at start when missing.
+  profiles\ in the game folder: your changes to resource snapping and Quick
+  Build, one file per mod, written when you change one.
 
   impure-patch.ufo next to TotalA.exe: the patch's own menu screens, written at
   every start.

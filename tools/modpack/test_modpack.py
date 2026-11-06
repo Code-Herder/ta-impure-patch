@@ -172,7 +172,7 @@ class Rules(unittest.TestCase):
 
     def test_committed(self):
         j = json.loads((m.MODS / "catalog.json").read_text())
-        for e in j["mods"]:
+        for e in (x for x in j["mods"] if x["kind"] == "mod"):
             o = e["options"]
             snap, quick = o["resource_snapping"], o["quick_build"]
             want = (f'{int(snap["allowed"])} {snap["default"]} {snap["max"]} {int(quick["allowed"])} {int(quick["default"])} '

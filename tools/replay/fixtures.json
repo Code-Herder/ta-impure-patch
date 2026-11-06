@@ -461,6 +461,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -512,6 +513,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -643,7 +645,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "tagpu_cobtrace.on"
     ]
    }
@@ -695,6 +697,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -734,6 +737,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    },
@@ -785,6 +789,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    },
@@ -836,6 +841,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    },
@@ -903,6 +909,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -958,6 +965,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -1010,6 +1018,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -1051,7 +1060,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "resource-geo.ufo"
     ]
    },
@@ -1105,7 +1114,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "resource-vents.ufo"
     ]
    },
@@ -1169,6 +1178,7 @@
     ],
     "files": [
      "resource-test.ufo",
+     "profiles/retail.ini",
      "tagpu_rules.on"
     ]
    }
@@ -1222,7 +1232,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "tagpu_zoom.off"
     ]
    },
@@ -1280,7 +1290,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "resource-refusal.ufo"
     ]
    }
@@ -1294,6 +1304,9 @@
     "tagpu/ddraw/src/tagpu_buildmenu.h",
     "tagpu/ddraw/src/tagpu_guifile.c",
     "tagpu/ddraw/src/tagpu_guifile.h",
+    "mods/catalog.json",
+    "tagpu/ddraw/src/tagpu_modcat.c",
+    "tagpu/ddraw/src/tagpu_modcat.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1333,7 +1346,7 @@
     "files": [
      "resource-test.ufo",
      "profiles/retail.ini",
-     "profiles/retail@76332e31.ini",
+     "tagpu_rules.on",
      "tagpu_packet.off"
     ]
    },
