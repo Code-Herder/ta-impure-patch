@@ -263,6 +263,7 @@ void tagpu_modload_begin(void)
     const MODPATCH* mod;
     const MODKNOWN* known = NULL;
     int stock, i, changed;
+    DWORD need;
 
     if (!tagpu_settings_mod(id, sizeof id)) {
         s_folderMutators = folder_wants_mutators();
@@ -322,7 +323,9 @@ void tagpu_modload_begin(void)
     if (!exists(path)) { not_installed(path); goto done; }
     /* The mounter's duplicate test resolves a name into 0x100 bytes (0x4BE0D1) and the handle keeps its path in 0x104
        (0x4BDDC1), read back by the prune's open at 0x4BE1B5. This, the longest name it gets, stays inside the smaller. */
-    if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
+    /* the size it returns, since a result past the buffer writes nothing there */
+    need = GetFullPathNameA(path, sizeof full, full, NULL);
+    if (!need || need >= VA_MOUNT_PATH_MAX) {
         refuse("the game's folder is too deep for the mod's files: move it to a shorter path");
         goto done;
     }
@@ -635,6 +638,7 @@ static void mount_mutators(const char* base)
         char path[MAX_PATH], full[MAX_PATH], archive[48], version[32], stale[8][MODCAT_PATH];
         const char* why = NULL;
         int total, handle;
+        DWORD need;
         if (!tagpu_modcat_mutator(cat, ncat, ids.id[i], &m)) continue;
         if (strcmp(m.base, base) || tagpu_profiles_mutator_of(base, m.id) != 1) { tagpu_modcat_mutator_free(&m); continue; }
         if (!tagpu_modinst_installed(m.id, version, sizeof version)) {
@@ -660,7 +664,8 @@ static void mount_mutators(const char* base)
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", m.id, m.id);
         snprintf(archive, sizeof archive, "%s.hpi", m.id);
         /* the mounter's two path buffers, as tagpu_modload_begin's check of the mod's own */
-        if (!GetFullPathNameA(path, sizeof full, full, NULL) || strlen(full) >= VA_MOUNT_PATH_MAX) {
+        need = GetFullPathNameA(path, sizeof full, full, NULL);
+        if (!need || need >= VA_MOUNT_PATH_MAX) {
             tagpu_logf("modload: mutator %s: the game's folder is too deep for its files", m.id);
             tagpu_modcat_mutator_free(&m);
             continue;
@@ -719,7 +724,7 @@ static int __stdcall mount_filtered(const char* name, int flag)
         s_ours = 1;
         mount_mutators(s_id[0] ? s_id : FOLDER_BASE);
         if (!s_id[0]) return s_mountReal(name, flag);
-        /* The list is append-only (0x4BE162), so this call, the first, is what puts them ahead of everything. Flag 1 is what
+        /* The list is appended to at its end (0x4BE162) and its order never changes, so this call, the first, is what puts them ahead of everything. Flag 1 is what
            the mods' own first pattern passes. A package that does not open would leave the mod's exe on retail's data. */
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", s_id, s_id);
         if (!(handle = s_mountReal(path, 1))) {

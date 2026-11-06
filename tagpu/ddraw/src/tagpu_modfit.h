@@ -4,7 +4,8 @@
 
    Files only: no engine memory, no render state, so any one thread may hold a MODFIT. The answer is the first source holding the path as a
    file, in the order the mount gives them: mods\<base>\<base>.hpi, its originals, then the folder's archives by the engine's patterns and
-   order (InitTAHPIAry 0x41D4C0). The base "none" is the folder's own game, every archive those patterns find. A loose file is not looked at:
+   order (InitTAHPIAry 0x41D4C0). The base "none" is the folder's own game, every archive retail's patterns find; a drop-in exe that renames the first pattern
+   mounts one this does not read. A loose file is not looked at:
    see research/notes/modules/mods.md, *Mutators*. */
 #include <stdint.h>
 

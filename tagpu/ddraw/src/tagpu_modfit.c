@@ -69,7 +69,8 @@ MODFIT* tagpu_modfit_open(const char* base, int (*original)(const char* name))
         snprintf(path, sizeof path, "mods\\%s\\%s.originals.hpi", base, base);
         add(f, path);
     }
-    for (k = 0; k < sizeof PATTERN / sizeof *PATTERN; k++) {
+    /* every catalog mod's exe renames the first pattern, so a .gp3 never mounts under a mod */
+    for (k = folder ? 0 : 1; k < sizeof PATTERN / sizeof *PATTERN; k++) {
         WIN32_FIND_DATAA fd;
         HANDLE h = FindFirstFileA(PATTERN[k], &fd);
         if (h == INVALID_HANDLE_VALUE) continue;

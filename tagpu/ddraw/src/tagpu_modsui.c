@@ -43,6 +43,7 @@ typedef struct {
     MODMUTATOR mut;
     int        base;            /* a mutator's base: FOLDER, a mod's index, NONE no such mod */
     uint8_t    on;              /* mutator.<id> */
+    uint8_t    taken;           /* the mount will take it (walk_taken) */
     uint8_t*   off;             /* file.<path> has it off: its files, then its hides */
     int        nstale;          /* -1 until the fit has answered */
     char       stale[STALE_MAX][MODCAT_PATH];
@@ -132,13 +133,12 @@ static volatile LONG s_fitState;        /* 0 idle, 1 running, 2 an answer waits 
 static int           s_fitDirty;
 static struct { uint8_t want; int nstale; char stale[STALE_MAX][MODCAT_PATH]; } s_fitOut[MAX_MOD];
 
-/* what the scan found to be original, without hashing it again; the scan has no pattern for the .gp3 a mod renames, and all five hide it, so only a player's
-   own key asks this for it */
+/* what the scan found to be original, without hashing it again */
 static int scanned_original(const char* name)
 {
     int i;
     for (i = 0; i < s_narc; i++) if (!lstrcmpiA(s_arc[i], name)) return 1;
-    return !lstrcmpiA(name, "rev31.gp3") && tagpu_modload_archive_is_original(name) > 0;
+    return 0;
 }
 
 static DWORD WINAPI fit_thread(void* arg)
@@ -234,13 +234,29 @@ enum { FIT_UNKNOWN, FIT_OK, FIT_STALE, FIT_CLASH };
 
 static const char* mod_name(int m);
 
-/* What a mutator is now, as mount_mutators will find it: it walks those on in the catalog's order and takes each that fits and clashes with
-   nothing taken. One on gives way to what was taken before it, and one not on to anything taken. `why`, a sentence for the pane. */
+/* Those mount_mutators will take: it walks each base's mutators that are on in the catalog's order, and takes each that fits and clashes with nothing
+   taken. A clash costs the square of the files, so this runs once a publish. */
+static void walk_taken(void)
+{
+    int m, k;
+    for (m = 0; m < s_nmod; m++) {
+        ENTRY* e = &s_mod[m];
+        e->taken = 0;
+        if (!e->has_mut || !e->on || !(e->installed[0] || e->ready) || stale_path(m)) continue;
+        for (k = 0; k < m; k++)
+            if (s_mod[k].taken && s_mod[k].base == e->base &&
+                tagpu_modcat_clash(&e->mut, &s_mod[k].mut, path_off, (void*)(intptr_t)e->base)) break;
+        e->taken = k == m;
+    }
+}
+
+/* What a mutator is now, as the mount will find it. One that is on gives way to what was taken before it, and one that is not to anything taken. `why`, a
+   sentence for the pane. */
 static int verdict(int m, char* why, size_t cap)
 {
     const ENTRY* e = &s_mod[m];
     const char* p;
-    int applied[MAX_MOD], napplied = 0, k, i;
+    int k;
     if (e->nstale < 0) return FIT_UNKNOWN;
     if ((p = stale_path(m)) != NULL) {
         snprintf(why, cap, "Needs an update for %s: %s differs from the file it was built on.", mod_name(e->base), p);
@@ -248,14 +264,7 @@ static int verdict(int m, char* why, size_t cap)
     }
     for (k = 0; k < s_nmod; k++) {
         const ENTRY* o = &s_mod[k];
-        if (!o->has_mut || o->base != e->base || !o->on || !(o->installed[0] || o->ready) || stale_path(k)) continue;
-        if (k == m) break;      /* one that is on answers to those before it alone */
-        for (i = 0; i < napplied; i++)
-            if (tagpu_modcat_clash(&o->mut, &s_mod[applied[i]].mut, path_off, (void*)(intptr_t)e->base)) break;
-        if (i == napplied) applied[napplied++] = k;
-    }
-    for (i = 0; i < napplied; i++) {
-        const ENTRY* o = &s_mod[applied[i]];
+        if (k == m || !o->taken || o->base != e->base || (e->on && k > m)) continue;
         if ((p = tagpu_modcat_clash(&e->mut, &o->mut, path_off, (void*)(intptr_t)e->base)) != NULL) {
             snprintf(why, cap, "%s is also %s's. Only one of them can be on.", p, o->about.name);
             return FIT_CLASH;
@@ -284,7 +293,7 @@ static int is_mutator(int m)
 
 static int has_update(const ENTRY* e)
 {
-    return e->installed[0] && strcmp(e->installed, e->about.version) && !e->ready;
+    return e->installed[0] && strcmp(e->installed, e->about.version) && !e->ready && (!e->about.is_mutator || e->has_mut);
 }
 
 static int is_active_install(int m)
@@ -369,7 +378,7 @@ static void mutator_rows_of(int base)
 static void build_rows(void)
 {
     int m;
-    char detail[sizeof s_page.row[0].detail], why[200];
+    char detail[sizeof s_page.row[0].detail];
     s_page.nrow = 0;
     s_page.empty[0] = 0;
     if (s_tab == MODS_TAB_MANAGE) {
@@ -422,7 +431,7 @@ static void build_rows(void)
                 r->act = MODS_ACT_UPDATE;
                 row_badge(r, MODS_BADGE_UPDATE, "Update");
             }
-        } else if (s_tab == MODS_TAB_UPDATES && have && verdict(m, why, sizeof why) == FIT_STALE) {
+        } else if (s_tab == MODS_TAB_UPDATES && have && stale_path(m)) {
             text(detail, sizeof detail, "Needs an update for %s", mod_name(e->base), "");
             if ((r = add_row(m, e->about.name, detail)) != NULL) row_badge(r, MODS_BADGE_GREY, "Stale");
         }
@@ -609,9 +618,9 @@ static void note_shape(void)
 static void publish(void)
 {
     int updates = 0, i;
-    char why[200];
+    walk_taken();
     for (i = 0; i < s_nmod; i++)
-        if (has_update(&s_mod[i]) || (s_mod[i].has_mut && (s_mod[i].installed[0] || s_mod[i].ready) && verdict(i, why, sizeof why) == FIT_STALE)) updates++;
+        if (has_update(&s_mod[i]) || (s_mod[i].has_mut && (s_mod[i].installed[0] || s_mod[i].ready) && stale_path(i))) updates++;
     s_page.tab = s_tab;
     s_page.updates = updates;
     build_rows();
@@ -994,24 +1003,26 @@ static void option_key(int i, char what)
     const int m = s_sel[s_tab];
     MODRULES r;
     const char* id = NULL;
+    int saved;
     if (i < 0 || i >= s_page.nopt || s_page.opt[i].locked || !rules_of(m, &r, &id)) return;
     if (i == 0) {
         const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_RADIUS);
         int v = have >= 0 ? have : r.radius;
         if (what == '-' && v > 0) v--;
         if (what == '+' && v < r.maximum) v++;
-        tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_RADIUS, v);
+        saved = tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_RADIUS, v);
     } else {
         const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_QUICK);
-        tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_QUICK, !(have >= 0 ? have : r.quick_default));
+        saved = tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_QUICK, !(have >= 0 ? have : r.quick_default));
     }
+    lstrcpynA(s_note, saved ? "" : NOT_SAVED, sizeof s_note);
 }
 
 static void option_reset(int i)
 {
     const char* id = mod_id_of(s_sel[s_tab]);
     if (i >= 0 && i < TAGPU_CHOICES && i < s_page.nopt && id)
-        tagpu_profiles_set_choice_of(id, i == 0 ? TAGPU_CHOICE_RADIUS : TAGPU_CHOICE_QUICK, -1);
+        lstrcpynA(s_note, tagpu_profiles_set_choice_of(id, i == 0 ? TAGPU_CHOICE_RADIUS : TAGPU_CHOICE_QUICK, -1) ? "" : NOT_SAVED, sizeof s_note);
 }
 
 static void switch_set(int i, int reset)
@@ -1019,6 +1030,7 @@ static void switch_set(int i, int reset)
     const int m = s_sel[s_tab];
     const MODSSWITCH* w;
     if (m < 0 || i < 0 || i >= s_page.nsw || s_page.sw[i].locked) return;
+    s_note[0] = 0;
     w = &s_page.sw[i];
     if (s_mod[m].has_mut) {
         ENTRY* e = &s_mod[m];
