@@ -11,10 +11,10 @@ suppressed does not imply those conveniences survive; each needs Impure's own im
 
 ## Summary
 
-Twenty-four setups: sixteen game folders as a player has them — the retail 3.1 game, what a mod or
-patch install puts next to it, and Impure's `ddraw.dll` — and eight checks of the harness and the renderer
+Twenty-five setups: sixteen game folders as a player has them — the retail 3.1 game, what a mod or
+patch install puts next to it, and Impure's `ddraw.dll` — and nine checks of the harness and the renderer
 (`retail+tadr1-recorder`, `mayhem-11.3.0-net`, `gui-stress`, `pass-refused`, `pass-refused-gdi`,
-`pass-full`, `pass-full-gdi`, `wiki-stage-refused`).
+`pass-full`, `pass-full-gdi`, `pass-card-full`, `wiki-stage-refused`).
 
 **Fifteen of the sixteen player setups meet the goal in full, on both platforms: Impure runs, and
 none of TADR's code runs.** The retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside

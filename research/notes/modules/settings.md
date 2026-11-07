@@ -404,7 +404,9 @@ run under wine).
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
 above are the only way the code of `TotalA.exe` and of the folder's DLLs reaches the registry once
 Impure has attached, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
-meets the real registry during it: the attach line names them (`started before us:`). Nothing hooks the system
+meets the real registry during it: the attach line names them (`started before us:`, from the loader's
+initialisation order, `+0x1C`), and a Windows smoke row fails on any. MEASURED 2026-11-07 on Windows: `nothing of the
+folder` on `loader+tadr-ota`, Total Mayhem and ProTA, whose `tplayx.DLL 9 of 9` is the forwarder's target. Nothing hooks the system
 DLLs the game uses and loads by name; the programs the game starts (what `ShellExecuteA`
 opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
 while it exists, and those of the programs it runs). The full list: [tacli

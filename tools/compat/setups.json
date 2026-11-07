@@ -122,6 +122,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -151,6 +152,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -175,6 +177,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -251,6 +254,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       },
@@ -275,6 +279,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       },

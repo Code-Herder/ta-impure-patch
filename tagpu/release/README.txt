@@ -11,7 +11,8 @@ WHAT IT IS
     - every unit, wreck, feature, effect and the terrain drawn by the patch,
       at the screen's resolution, instead of the 1997 software renderer
     - Classic++: the game's art restored to true colour, lit, with cast shadows
-    - a strategic zoom on the mouse wheel
+    - a strategic zoom on the mouse wheel, out to a Mega map of the whole map
+      with strategic icons for the units
     - 0 to N weapons per unit, for units built for it
     - the game's own UI drawn by the patch too
     - every game recorded, with a Replays browser, replay controls, taking
@@ -27,7 +28,8 @@ WHAT IT IS
   TA Twilight and TA: Escalation. For a mod, copy it into the mod's folder and
   leave the mod's files as they are, TADR's included. TADR's own code does not
   run while the patch is installed: no TADR demo recording (the patch records
-  games itself, see REPLAYS), no TADR mega map or overlays.
+  games itself, see REPLAYS), and its own Mega map and strategic icons replace TADR's;
+  no TADR overlays.
   gammata's drop-in package is not supported yet.
 
   Needs a GPU and driver with Vulkan (1.0 or later). Runs under Wine too;

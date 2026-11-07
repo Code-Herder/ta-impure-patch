@@ -175,8 +175,10 @@ remote registry isolation. It checks commanders and mod content, applies the bat
 requires the rendered roster to change, and runs the same window/code watcher during play.
 It checks UI health and crash/refusal logs, then removes its own remote instance. Windows
 multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
-The refusal rows (`pass-refused`, `pass-full`, their `-gdi` twins) run only under it and refuse the lane in
-that battle; a setup with a lever plays no smoke.
+The refusal rows (`pass-refused`, `pass-full`, their `-gdi` twins, `pass-card-full`) run only under it and refuse
+the lane in that battle; a setup with a lever plays no smoke. `pass-card-full` fills the test machine's GPU with
+`vkfill`, and never runs on Wine, whose GPU is also the desktop's. Every row also judges test mode's attach line
+(`store_misses`).
 
 ## The managed rows
 

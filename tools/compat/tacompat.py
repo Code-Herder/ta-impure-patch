@@ -3167,6 +3167,19 @@ def vkfill_exe() -> Path:
     return exe
 
 
+def store_misses(log: str, goal: dict) -> list:
+    """Test mode's attach line against the row: every DLL the row names answers to the store, and nothing of
+    the folder started before Impure, whose entry point would have met the real registry."""
+    m = re.search(r"registry: TEST MODE.*hooks: (.*); started before us: (.*)", log or "")
+    if not m:
+        return ["no test mode line in the log"]
+    hooks, early = m.group(1).lower(), m.group(2).strip()
+    misses = [f"{d} does not answer to the store" for d in goal.get("store_covers", []) if d.lower() not in hooks]
+    if early != "nothing of the folder":
+        misses.append(f"started before Impure, so it met the real registry: {early}")
+    return misses
+
+
 def windows_cfg(args) -> dict:
     cfg = json.loads(WINDOWS_CFG.read_text()) if WINDOWS_CFG.exists() else {}
     for k in ("ssh", "key", "game"):
@@ -3390,6 +3403,9 @@ def windows_smoke(w: Win, setup, seconds):
         result['gui'] = gui_health(log)
         if gui_misses(result['gui'], setup['goal']):
             raise RuntimeError('; '.join(gui_misses(result['gui'], setup['goal'])))
+        misses = store_misses(log, setup['goal'])
+        if misses:
+            raise RuntimeError('; '.join(misses))
         for leaf in ('ErrorLog.txt', 'log\\startup-failure.txt'):
             if w.read_b64(ntpath.join(rem.folder, leaf)):
                 raise RuntimeError(f'in-game smoke produced {leaf}')

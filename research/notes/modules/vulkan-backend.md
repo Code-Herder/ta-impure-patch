@@ -738,9 +738,13 @@ real refusal was first met: 18 games at about 900 MiB each reached 11 824 of 12 
 (MEASURED 2026-11-06, 4 setups of 32 with no UI, 2 on the next run, each from a real refusal). One game
 alone peaks at 917-921 MiB, before and after the mod manager's landings.
 
-**Not run:** a card that is actually full. The lever refuses where the driver would; a full card has
-been seen only before this seam, and filling a shared GPU on purpose takes it from everything else on
-the machine.
+**A card another process has filled.** `tools/compat/vkfill.c` holds a card's device-local memory until the
+driver refuses it, and `pass-card-full` plays a battle beside it. WDDM gives a process its own account: on the
+Windows test setup's AMD R9 200 (MEASURED 2026-11-07), `vkfill` held 2816 of 2816 MiB with `VK_ERROR_OUT_OF_DEVICE_MEMORY`
+on the next chunk, and the lever's rebuild beside it came `up in 93 ms` with every pass built. So there a full card
+pages and refuses nothing. **Not run:** the rebuilt lane against a driver that does refuse across processes, as NVIDIA's
+did on the reference setup (the real refusal in the table's first paragraph, before this seam). That GPU also
+drives the desktop, so the suite never fills it (`fill_device` rows run on Windows only), and the levers stand in.
 
 **A rebuild does not move the camera.** The rebuild's frames draw nothing, and the world's claim on the
 camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
@@ -749,7 +753,9 @@ frame reaches the screen or `LIVE_HELD_FRAMES` (600) have passed, the world stay
 (`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first. MEASURED
 2026-11-07: with the eye at x −206 under the mirror, no `terrain restored` line and the same eye across the
 rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there. That was
-measured on a failure's rebuild; the other two take the same hold and have not been run under the mirror.
+measured on a failure's rebuild. The other two cannot start one in a battle: the GPU row is on the front-end's
+Visuals screen alone and is greyed with one device (the reference setup and the Windows test setup each have one), and the game
+window lasts the session. With no world live the hold is zero.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 
