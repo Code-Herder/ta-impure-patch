@@ -340,8 +340,9 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   standing down; fewer passes right after a load is the level not being up yet.
 - **`tacli crash <name>`** — the last crash TA recorded, **symbolised** from
   `tools/ta_symbols.txt` (the nearest preceding name: a neighbourhood, not a signature).
-  `launch`, `wait` and `scenario apply/load` poll `ErrorLog.txt` and fail fast with the fault
-  address. The file is per instance and rotated at every launch.
+  `launch`, `wait` and `scenario apply/load` poll `ErrorLog.txt` and `log\crash-report.txt` (a fault on
+  a thread TA's handler does not cover, with module offsets and the stack) and fail fast with the fault
+  address. Each file is per instance and starts over at every launch.
 - **A sim tick that stops while every thread sleeps, with no `ErrorLog.txt`, may be a wild jump,
   not a pause.** `tacli peek <i> '*0x511DE8+0x38A47:4'` twice, four seconds apart, is the test
   (30/s at gamespeed 10). ptrace is off on the reference setup, so bisect the change

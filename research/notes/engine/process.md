@@ -1058,7 +1058,8 @@ wrote 32).
   nothing else of the registry. It reads `musicvol` (`0x100011AE`, `0x100011D4`) and `cdmode`
   (`0x10001259`, `0x1000127F`) from `HKCU\SOFTWARE\Cavedog Entertainment\Total Annihilation\`
   with `KEY_READ`, and imports no `RegCloseKey`, so it never closes them [DISASSEMBLED, image
-  base `0x10000000`]. The store hooks its two imports as well.
+  base `0x10000000`]. The store hooks its two imports as it does those of every DLL of the folder in
+  the exe's import closure ([settings](../modules/settings.md)).
 - **`online.dll` and what it loads and starts.** `TotalA.exe` loads `online.dll` itself: a
   path built into `0x512DD0` from `online.dll` (`0x4FD4D0`, at `0x45B30B`), then `LoadLibraryA`
   at `0x45B33F` (the same at `0x45B557` and `0x45B747`). `online.dll` imports no registry

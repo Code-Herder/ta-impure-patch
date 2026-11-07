@@ -60,7 +60,8 @@ import-directory order, and Impure imports nothing from the game folder, so a mo
 that walk is the place of the exe's import descriptor that names it. `to_descriptor_of` gives the
 first such index — a descriptor names a module by its *name* (the module the loader bound it to,
 `GetModuleHandleA`) or by any *slot* leading into it (how a forwarder such as the Patch Loader's
-`dplayx.dll` → `tplayx.dll` is seen) — and a module is made inert only when that descriptor comes
+`dplayx.dll` → `tplayx.dll` is seen, with test mode's store hooks in the registry slots skipped, since
+those lead into Impure without naming it) — and a module is made inert only when that descriptor comes
 after the descriptor of the module Impure is running inside, **and** the loader's own
 initialisation-order list (`PEB_LDR_DATA.InInitializationOrderModuleList`, read under the loader
 lock) does not hold it yet. The name is what a first launch needs: Windows' compatibility engine

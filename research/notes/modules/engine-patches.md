@@ -95,6 +95,15 @@ the md5 is a known build, and every differing site as `want` and `have` bytes (t
 all of them in `log\tagpu.log`). It prints no path. The same text is written to
 `log\startup-failure.txt`. `tagpu_log_dir()` gives the folder.
 
+**A fault no handler of TA's covers writes `log\crash-report.txt`** (`tagpu_crashlog.c`). TA's own
+handler writes `ErrorLog.txt` for what it covers; a fault on any other thread reaches the top-level
+filter, and the process then sits under the system's debugger or its error box with nothing said. The
+filter writes the exception, the access, the registers and the stack words that lie inside a module, each
+as module and offset, and returns what the filter before it returns, so the crash ends as it would have.
+It runs on a thread that has just faulted, so it allocates nothing and takes no lock, which is why the
+report is its own file and not a log line. `tests/crashlogtest.c` is its test, by hand under Wine. `tacli`
+fails a wait with the report's first line, and the compat suite scores it as a crash.
+
 **The safety net.** The same first DirectDraw call re-reads every site once more (`lim_verify`),
 now against the bytes Impure wrote: it comes after every DLL's `DllMain`, so a site that no longer
 holds them was rewritten by a patcher that started after Impure. The report then says so — *changed

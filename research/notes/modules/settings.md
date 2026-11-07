@@ -334,8 +334,8 @@ carries no hook of this section.
 
 **Test mode fails closed.** A store that is missing, a folder, unreadable or not loaded whole,
 no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
-(`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
-`TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
+(the exe's, or one of a DLL of its folder that it statically imports), or such a DLL not loaded at attach
+(the loader maps a static import before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
 log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
 first instruction never runs. The signal in every line names the module whose attach it ends
 (`s_exe`: `the tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s
@@ -352,9 +352,16 @@ were whole.
 | module | imports | slots |
 |---|---|---|
 | `TotalA.exe` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCreateKeyA`, `RegOpenKeyA`, `RegQueryValueA`, `RegCreateKeyExA`, `RegSetValueExA`, `RegFlushKey`, `RegCloseKey` | `0x4FC000..0x4FC020`, one each in that order; every call site is in the engine map |
-| `win32.dll` | `RegOpenKeyExA`, `RegQueryValueExA` | its own; it reads `musicvol` and `cdmode` |
+| every DLL of the game's folder in the exe's import closure | whichever registry functions it imports | its own |
 
-After patching, `rs_count` walks the import directories of the exe and of `win32.dll`: every
+`rs_hook_folder_imports` walks that closure breadth first over the import tables, by what the tables
+say and never by a name: the retail exe's music DLL is `win32.dll`, and a mod that renames the exe's
+imports renames it (Escalation's exe imports `TAESC.dll`, `EMUSI.dll` and `EPLAYX.dll`, TA Zero's
+`ZDRAW.dll`, `ZMUSI.dll` and `ZPLAYX.dll`). A library outside the folder is left alone, so the real
+DirectPlay and winmm keep the real registry, and Impure's own module is what answers. Thirty-two
+modules bound the walk, and a closure past that fails closed.
+
+After patching, `rs_count` walks the import directories of the exe and of each of those modules: every
 ADVAPI32 import whose name begins with `Reg` must now hold one of the hooks, or the process is
 terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
 registry function, so nothing overwrites these slots.
@@ -384,7 +391,7 @@ values in a burst, but only the ones that changed cost a rewrite (two rewrites i
 run under wine).
 
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
-above are the only way `TotalA.exe`'s and `win32.dll`'s code reaches the registry, and the `-r`
+above are the only way the code of `TotalA.exe` and of the folder's DLLs it imports reaches the registry, and the `-r`
 switch is closed. Nothing hooks the system DLLs the game uses and loads by name; the other
 DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
 process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
@@ -404,5 +411,7 @@ reads and 1 closes, and for no write ... 1 writes were refused`.
 parse of `GetCommandLineW` (the program name quoted or not), and the `TerminateProcess` inside
 `DllMain`; the `PREFIX` handles and `RS_READ_SAM` (what counts as a read-only open);
 `RegFlushKey` on a real key answering success without a call; the persistence under the lock;
-the handle range; the `-r` jump-table patch and its fail-closed mismatch; `win32.dll`
-required at attach (a static import of `TotalA.exe`).
+the handle range; the `-r` jump-table patch and its fail-closed mismatch; the folder's static
+imports required at attach. **The takeover reads these slots too:** a store hook in an ADVAPI32 slot
+points into Impure's own image, and `tagpu_regstore_is_hook` is what keeps `to_descriptor_of` from
+taking it for Impure's descriptor ([TADR exclusion](tadr-exclusion.md)).
