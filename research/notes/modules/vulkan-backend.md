@@ -692,6 +692,48 @@ toggle restarted the Classic++ restore, 26.6 s of terrain job at 50–52 fps wit
 art on screen. On Xvfb (1024 × 768, Classic++, three images), a window grab is byte-identical before
 and after an off and an on toggle.
 
+### A pass refused its memory (`tagpu_vk.c`'s seam, `render_vk.c`)
+
+A driver that will not give a pass its memory says so once, and asking again every frame would stall
+every frame, so a refusal is settled once. How depends on what the picture loses.
+
+| the pass | what its refusal does | when it comes back |
+|---|---|---|
+| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread, never earned back) then hands the session to GDI, whose picture is whole |
+| `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down`, or a swapchain rebuild that changes the extent, image count or format |
+| `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the same |
+| the HUD and the wiki | `tagpu_hudstate_refuse` | the same (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
+| the wiki stage's `terr`, `unit`, `feat`, `world` | the seam drains the device and that copy stays off: the page has no 3D image, and the game is not touched | the same |
+| `surf` | the seam drains the device and it stays off: nothing samples it | never in that process |
+
+So every frame is a whole picture on one of two renderers, minus at most the passes in the lower
+rows. A `build` of a pass in the first row that fails is the same refusal: a driver that cannot make
+the pipeline has no picture to offer. The seam asks the device whether it is lost before the teardown
+(`LL_ASK`), so a device the restorer lost is blamed on the restorer and not rebuilt into losing it again. The restorer's own refusals are not refusals of this kind: an
+atlas that does not fit falls back to tiny or per tile, and a twin that is not there draws the base
+atlas.
+
+`vk_down` gives back everything the process holds on the device, which is the only memory the lane
+can answer for. A GPU that something else has filled stays full: the retries then spend their
+budget in about a second and the session is on GDI, with its slow-renderer warning on screen.
+
+**What the lane's return costs the UI.** The store starts empty, and the producer re-seeds it
+empty, since composed pixels do not cross. What the engine redraws comes back at once; the chrome,
+the panel's emblem and the resource block are owed by the reset. A surface nothing draws into again
+has nothing to carry when it is copied out of: [The engine's UI](engine-ui.md) §2.104 has the orders
+panel's save-under, which owes the emblem. **Open:** a dialog's save-under restored over the world
+keeps what it covered until the engine next draws there. No such dialog has been seen doing it.
+
+`tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
+suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. Filling the card is how the
+real refusal was first met: 18 games at about 900 MiB each reached 11 824 of 12 282 MiB on an RTX 4070
+(MEASURED 2026-11-06, 4 setups of 32 with no UI, 2 on the next run, each from a real refusal). One game
+alone peaks at 917-921 MiB, before and after the mod manager's landings.
+
+**Not run:** the real refusal on the rebuilt lane. The lever proves the road; the same run on a full
+card has been seen only before this fix, and filling a shared GPU on purpose takes it from everything
+else on the machine.
+
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 
 The engine's logical mode recreation releases DirectDraw at `0x4B5061`, then asks to resize

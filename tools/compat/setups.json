@@ -310,6 +310,30 @@
       ]
     },
     {
+      "name": "pass-refused",
+      "about": "The retail game with the UI pass refused its resources once in a live battle, as a full GPU does: the lane comes down and back, and the picture it comes back with passes the side-panel check.",
+      "add": [],
+      "refuse_in_battle": "once",
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
+    },
+    {
+      "name": "pass-refused-gdi",
+      "about": "The retail game with the UI pass refused its resources every time from a live battle on: the lane's retries are spent, the session goes to GDI, and GDI's screen shows the engine's side panel.",
+      "add": [],
+      "refuse_in_battle": "keep",
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
+    },
+    {
       "name": "gui-stress",
       "about": "Total Mayhem 11.3.0 with the UI layer asking itself for a fresh start every 120 presents (reseedstress=120 in tagpu_gui.on): each one re-lays the UI atlas while the frame in flight still says Classic++ colour, and re-creates every surface without colour while colour is valid -- the two one-frame disagreements that used to be answered with another fresh start until the layer composited nothing. Under it the layer must ask for no fresh start of its own and never give up",
       "add": [

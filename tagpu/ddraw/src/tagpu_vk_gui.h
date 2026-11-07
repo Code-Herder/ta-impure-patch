@@ -77,11 +77,14 @@ int  tagpu_vk_gui_panel_rect(uint32_t slot, uint32_t w, uint32_t h, VkRect2D* r)
    written. Consumed. */
 int  tagpu_vk_gui_ab_frame(void);
 
-/* The owed-teardown protocol every pass on this lane uses: a refusal mid-frame
-   may destroy nothing, because other slots' submits still name it. */
 void tagpu_vk_gui_down(const TAGPU_VKPASS* d);
+/* 1 while the pass has stopped drawing mid-frame because the device would not
+   give it this frame's resources. The picture has a hole without this pass, so
+   the seam brings the whole lane down at the top of the next frame and the retry
+   rebuilds it (render_vk.c's budget, then GDI). The pass destroys nothing itself:
+   only its own slot's fence has been waited on, and the command buffer of the
+   frame in hand already names its objects. */
 int  tagpu_vk_gui_down_owed(void);
-void tagpu_vk_gui_down_paid(const TAGPU_VKPASS* d);
 
 /* THE RESTORER IS GOING DOWN AND THIS PASS IS NOT -- a swapchain resize
    (`passes_down` in tagpu_vk.c) keeps the twins and drops the restorer. Gives

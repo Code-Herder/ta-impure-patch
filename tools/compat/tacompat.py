@@ -477,6 +477,28 @@ def lever_file(lever) -> tuple:
     return lever, ""
 
 
+# THE DEVICE SAID NO. Each of these is a pass of the renderer losing its memory (tagpu_vk.c, the
+# seam): the picture comes back through the lane's retry or a pass stays off until a new swapchain,
+# and either way a player would have seen it. No pixel check sees most of them -- a dead HUD leaves
+# the side panel right -- so they are judged by name. A suite that fits the device never meets one
+# (GameSlots), so one here is the renderer's footprint growing or something else on the GPU.
+DEVICE_REFUSED = re.compile(
+    r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
+    r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
+    r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*"
+    # the one line every refusal of a pass the picture needs passes through, logged or not, and the end of the road
+    r"|vk: a pass the picture cannot do without.*|vk: .*the session goes to GDI.*)$", re.M)
+
+
+GUI_LANE_BACK = "the lane failed after it had come up - bringing it up again"
+GUI_LANE_GDI = "the session goes to GDI"
+
+
+def device_refused(text: str) -> list:
+    """Every refusal the log names, in order."""
+    return [m.group(0) for m in DEVICE_REFUSED.finditer(text or "")]
+
+
 GUI_INDEXED = re.compile(r"^vk: gui: a restored sprite arrived while this lane holds no restored atlas", re.M)
 # the producer's repaint budget for one palette generation, spent: what is on screen keeps its indices
 GUI_SPENT = "gui: the restored UI atlas has settled 32 times in one palette generation"
@@ -512,6 +534,7 @@ def gui_health(text: str) -> dict:
     fired = [int(m) for m in GUI_STRESS.findall(text)]
     return {"asks": asks, "asks_stress": asks_stress, "gave_up": GUI_GAVE_UP in text,
             "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text)),
+            "refused": device_refused(text), "lane_back": GUI_LANE_BACK in text,
             "spent": GUI_SPENT in text, "pixels": gui_pixels(text)}
 
 
@@ -523,6 +546,13 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     miss = []
     if g["gave_up"]:
         miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
+    if g.get("refused") and not exp.get("refuse_lever"):
+        miss.append(f"the device refused the renderer's memory ({len(g['refused'])}x), "
+                    f"first: {g['refused'][0][:120]}")
+    # The lever's refusal has to have happened, and the lane has to have come back from it: the
+    # side-panel step and the frames that follow then judge the picture it came back with.
+    if exp.get("refuse_lever") and not g.get("lane_back"):
+        miss.append("the lever refused the UI pass and the lane did not come back")
     stress = exp.get("gui_stress")
     # Past the start-up nothing may ask; under the lever, nothing at all may, whatever the reason.
     bad = {r: n for r, n in g["asks"].items() if r not in GUI_STARTUP}
@@ -1332,7 +1362,7 @@ def hud_strip_diff(a: Path, b: Path) -> "float | None":
         return None
 
 
-def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
+def hud_deselect(name, display, gamedir: Path, where: Path, while_open=None) -> dict:
     """Select the commander (ctrl+c), deselect it, and compare the side panel on screen with
     the engine's surface. `opened` is how much the deselect changed the engine's own strip --
     the proof the step exercised anything -- and `stale` the share of the strip where the
@@ -1349,7 +1379,9 @@ def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     the ground deselects and a left click orders a move; under the right-click layout it is
     the other way round (MEASURED 2026-09-27: Escalation's instance deselects on the right
     click, retail's gives a move order). So the right click goes first, and when the engine's
-    strip has not changed, a left click on other ground."""
+    strip has not changed, a left click on other ground.
+
+    `while_open`, when given, runs with the panel open, between the selection and the deselect."""
     where.mkdir(parents=True, exist_ok=True)
 
     def shot(path, step):
@@ -1379,6 +1411,10 @@ def hud_deselect(name, display, gamedir: Path, where: Path) -> dict:
     try:
         tacli("keys", name, "ctrl+c", timeout=150)   # past tacli's own 90 s input bound
         sel = capture("selected")
+        if while_open:
+            why = while_open()
+            if why:
+                raise Unsettled(why)
         for click in (["--right", name, "700", "600"], [name, "900", "400"]):
             tacli("click", *click, timeout=150)
             desel = capture("deselected")
@@ -1409,6 +1445,75 @@ def hud_misses(hud: "dict | None", exp: dict) -> list:
         return [f"after a deselect the side panel on screen differs from the engine's at "
                 f"{hud['stale']:.1%} of its pixels ({hud.get('where')})"]
     return []
+
+
+# A GAME'S DEVICE MEMORY, MEASURED 2026-11-06 on an RTX 4070 alone (917-921 MiB) and at its worst
+# with others on the GPU (935), a 200v200 skirmish on the default settings. 1000 leaves it room.
+GAME_DEVICE_MIB = 1000
+
+
+def device_free_mib() -> "int | None":
+    """What the largest GPU has free now, or None where nothing here can say: `nvidia-smi`, or the
+    amdgpu driver's counters. Intel's shared memory and Windows have no such limit to plan for."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.total,memory.used",
+                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=30)
+        rows = [[int(v) for v in l.split(",")] for l in r.stdout.splitlines() if l.strip()]
+        if r.returncode == 0 and rows:
+            return max(a - b for a, b in rows)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    free = []
+    for total in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
+        try:
+            used = total.with_name("mem_info_vram_used")
+            free.append((int(total.read_text()) - int(used.read_text())) >> 20)
+        except (OSError, ValueError):
+            pass
+    return max(free, default=None)
+
+
+class GameSlots:
+    """How many games may hold device memory at once, so a suite cannot refuse itself its memory.
+
+    A BOUND, NOT A TIMING: the pools are sized for the CPU, and a battle plus a two-player game
+    per pool is 18 games at about 900 MiB each, which is what filled a 12 GB card (MEASURED
+    2026-11-06: 11 824 of 12 282 MiB, and four setups lost their UI). A run takes its slots before
+    its game starts and gives them back after its game has ended. `capacity` None is no bound."""
+
+    def __init__(self, capacity: "int | None"):
+        self.capacity, self.free = capacity, capacity
+        self.cv = threading.Condition()
+
+    def hold(self, n: int, fn, *args, **kw):
+        """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
+        and two of them can never each hold half of what they need."""
+        if self.capacity is None:
+            return fn(*args, **kw)
+        n = min(n, self.capacity)
+        with self.cv:
+            self.cv.wait_for(lambda: self.free >= n)
+            self.free -= n
+        try:
+            return fn(*args, **kw)
+        finally:
+            with self.cv:
+                self.free += n
+                self.cv.notify_all()
+
+
+def game_slots(jobs: int, mp_jobs: int) -> GameSlots:
+    """The bound for this run: what the device has free now, at GAME_DEVICE_MIB a game. Never
+    below two, because a network game is two games and a smaller GPU still has to run them."""
+    free = device_free_mib()
+    wanted = jobs + 2 * mp_jobs
+    if free is None:
+        print(f"device memory: unknown here, {wanted} games at once at most")
+        return GameSlots(None)
+    can = max(2, free // GAME_DEVICE_MIB)
+    print(f"device memory: {free} MiB free, {min(can, wanted)} games at once at most"
+          + (f" (the pools alone would run {wanted})" if can < wanted else ""))
+    return GameSlots(can if can < wanted else None)
 
 
 def wine_skirmish(name, proc) -> "str | None":
@@ -1451,7 +1556,79 @@ def wine_skirmish(name, proc) -> "str | None":
     return "the skirmish never reached the game screen"
 
 
-def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario) -> dict:
+def log_says(gamedir: Path, text: str, seconds: float) -> bool:
+    """Whether tagpu.log comes to hold `text` within `seconds`. A bound on the wait for a line the
+    render thread writes within a second of the lever; the run fails by name when it never does."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            if text in (gamedir / "log" / "tagpu.log").read_text(errors="replace"):
+                return True
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def refuse_lever_write(gamedir: Path, text: str):
+    """The lever, whole or not at all: the render thread polls this file, and an empty read of a
+    half-written `keep` is the once lever."""
+    tmp = gamedir / "tagpu_passrefuse.tmp"
+    tmp.write_text(text)
+    tmp.replace(gamedir / "tagpu_passrefuse.on")
+
+
+def refuse_once(gamedir: Path) -> "str | None":
+    """The UI pass refused once, with the orders panel open, so a reset empties its save-under
+    (tagpu_gui_hook.c, `lost`). The deselect comes only once the rebuilt lane has presented, which
+    is what makes this the reset-before-the-restore order and not a race with it. Why it failed, or
+    None."""
+    refuse_lever_write(gamedir, "once")
+    if not log_says(gamedir, GUI_LANE_BACK, 90):
+        return f"the lever refused the UI pass and the log never said {GUI_LANE_BACK!r}"
+    # The heartbeats count the overlay's frames, which run with the lane down too, so the lane's
+    # own line after the retry's is what says it is up, and only then do they say it presented.
+    end = time.monotonic() + 90
+    while True:
+        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+        if "vk: up in " in text[text.rfind(GUI_LANE_BACK):]:
+            break
+        if time.monotonic() > end:
+            return "the lane was retried and the log never said it came up"
+        time.sleep(0.5)
+    if not presents_after(gamedir):
+        return f"no frame presented for {STALL_S} s after the lane came back"
+    return None
+
+
+def refuse_to_gdi(name, display, gamedir: Path) -> "tuple[dict | None, str | None]":
+    """The UI pass refused every time, in a live battle: the retries are spent and the session goes
+    to GDI. The screen is compared with the engine's surface until they agree or the bound ends:
+    GDI's first frames are not its picture, and the heartbeats that time the Vulkan comparison end
+    with the lane. Returns (the side panel's result, why the step failed)."""
+    where = gamedir / "hudcheck"
+    where.mkdir(parents=True, exist_ok=True)
+    engine, screen = where / "gdi-engine.png", where / "gdi-screen.png"
+    refuse_lever_write(gamedir, "keep")
+    if not log_says(gamedir, GUI_LANE_GDI, 90):
+        return None, f"the lever refused the UI pass every time and the log never said {GUI_LANE_GDI!r}"
+    end, stale = time.monotonic() + 60, None
+    while time.monotonic() < end:
+        r = tacli("shot", name, "-o", str(engine), "--timeout", str(ACK_S), timeout=ACK_S + 30)
+        if r.returncode or not engine.exists():
+            return None, f"the engine's surface on GDI: {(r.stderr or r.stdout).strip()[:200]}"
+        r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(screen)],
+                           capture_output=True, timeout=ACK_S)
+        if r.returncode or not screen.exists():
+            return None, f"the screen on GDI: {r.stderr.decode(errors='replace')[:200]}"
+        stale = hud_strip_diff(screen, engine)
+        if stale is not None and stale <= HUD_STALE:
+            break
+        time.sleep(1)
+    return {"opened": 1.0, "stale": stale, "where": str(where)}, None
+
+
+def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
     patchers that both started can still collide in play, where the limits are used.
     The menus are driven by tacli's gadget layer and the units placed by its scenario
@@ -1468,7 +1645,14 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 "why": "the skirmish started without a commander each: " + cmd["why"]}
     # Before the scenario: the start is the one moment the commander is sure to exist and the
     # view to hold nothing else a right click could land on.
-    hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck")
+    if refuse == "keep":
+        hud, why = refuse_to_gdi(name, display, gamedir)
+        if why:
+            return {"ok": False, "hud": None, "why": why}
+        return {"ok": proc.poll() is None, "hud": hud,
+                "why": "the session went to GDI" if proc.poll() is None else "the game exited on GDI"}
+    hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck",
+                       (lambda: refuse_once(gamedir)) if refuse == "once" else None)
     r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}", "hud": hud}
@@ -1986,7 +2170,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         # through a battle, spends the layer's 32 repaints of a palette generation by design.
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
-                                scenarios(setup)["battle"])
+                                scenarios(setup)["battle"],
+                                refuse=setup.get("refuse_in_battle"))
             level = level_tables(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
@@ -2513,9 +2698,10 @@ def cmd_wine(args):
     ports = queue.Queue()
     for k in range(mp_jobs):
         ports.put(MP_PORT_BASE + k)
+    slots = game_slots(args.jobs, mp_jobs if args.mp else 0)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
-        futs = {pool.submit(journaled, s, "run", run_wine, s, dll, args.watch, None,
+        futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
                             args.screens, args.battle): s
                 for s in ready}
         for f in concurrent.futures.as_completed(futs):
@@ -2528,7 +2714,7 @@ def cmd_wine(args):
             if s.get("no_network_game"):
                 o["mp_skip"] = s["no_network_game"]
             if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
-                mp_futs[s["name"]] = (s, o, mp_pool.submit(journaled, s, "mp", run_wine_mp, s,
+                mp_futs[s["name"]] = (s, o, mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s,
                                                            dll, args.mp, taken, mine, ports))
             else:
                 if args.mp and mp_eligible(s):
@@ -2539,6 +2725,11 @@ def cmd_wine(args):
                 m = f.result()
             except BaseException as e:
                 m = {"ok": False, "why": f"{type(e).__name__}: {e}", "evidence": []}
+            refused = [x for k, v in m.get("_files", {}).items()
+                       if k.startswith("mp-") and k.endswith("-tagpu.log") for x in device_refused(v)]
+            if refused and m["ok"]:
+                m["ok"], m["why"] = False, (f"the device refused a peer's renderer its memory "
+                                            f"({len(refused)}x), first: {refused[0][:120]}")
             J.finish(name, "mp", "done" if m["ok"] else
                      "unrun" if m["why"].startswith("could not run") else "fail", m.get("why"))
             o["_files"].update(m.pop("_files", {}))
@@ -2981,7 +3172,8 @@ def cmd_windows(args):
     asked = [n for n in args.setups or [] if not wine_only(by_name.get(n, {}))]
     if args.setups and not asked:
         die("nothing to run: the Windows path has no install or exe bit, so it leaves the managed and laa rows out")
-    setups = [s for s in pick_setups(asked) if not wine_only(s)]
+    # nor the rows that drive a lever through a Wine battle: this path plays no battle to drive
+    setups = [s for s in pick_setups(asked) if not wine_only(s) and "refuse_in_battle" not in s]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")
@@ -3180,6 +3372,14 @@ GUI_CASES = [
     ("stress, startup ask after", _FIRE.format(1) + _IDX + _FIRE.format(2) +
      _ask("the presented surface has no twin here"), _STRESS, 1),
     ("stress too few fires", _FIRE.format(1) + _IDX, _STRESS, 1),
+    ("a slot refused", "vk: gui: slot 0 would not take this frame's resources - x\n", _ACTIVE, 1),
+    ("an atlas refused", "vk: feat: a 2048-texel-square atlas image was refused\n", _ACTIVE, 1),
+    ("the HUD refused", "hud: the HUD cannot draw (x) - y\n", _ACTIVE, 1),
+    ("a restore refused is no miss", "vk: gui: 1 picture(s) restored HERE - 1 stored, 0 refused\n", _ACTIVE, 0),
+    ("lever, lane back", "vk: gui: slot 0 would not take x\nvk: " + GUI_LANE_BACK + "\n",
+     {"outcome": "impure-active", "refuse_lever": True}, 0),
+    ("lever, lane stayed down", "vk: gui: slot 0 would not take x\n",
+     {"outcome": "impure-active", "refuse_lever": True}, 1),
     ("stress never indexed", _FIRE.format(1) + _FIRE.format(2), _STRESS, 1),
     ("stress budget spent", _FIRE.format(1) + _IDX + _FIRE.format(2) + GUI_SPENT + "\n", _STRESS, 1),
     ("not judged when inactive", _ask("x"), {"outcome": "impure-refused"}, 0),

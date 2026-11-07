@@ -21,10 +21,11 @@ struct TAGPU_FRAME;
    replay has no on-screen controls and a live game no rewind button. Game thread. */
 int  tagpu_hudstate_on(void);
 
-/* The HUD cannot draw for the rest of the session -- its art did not load, its pass could not
+/* The HUD cannot draw until its pass is next torn down -- its art did not load, its pass could not
    be built or the device failed it, its layout did not build: `tagpu_hudstate_on` answers 0 from
    now on. Render thread; published with a full barrier. */
 void tagpu_hudstate_refuse(const char* why);
+void tagpu_hudstate_forgive(void);
 
 /* What the HUD shows for the level in play, the fill's own test, while it is on: the live
    rewind's controls while a rewind owns the level or one could open (a live, recorded,

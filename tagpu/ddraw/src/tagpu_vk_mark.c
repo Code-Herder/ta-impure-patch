@@ -1141,7 +1141,9 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     if (s_pool) { vkDestroyDescriptorPool(d->dev, s_pool, NULL); s_pool = VK_NULL_HANDLE; }
     if (s_plo) { vkDestroyPipelineLayout(d->dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     if (s_dsl) { vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
-    s_state = ST_UNBUILT;
+    /* the seam's own teardown keeps the verdict: a pass that came straight back would be refused
+       again on the next frame, a device drain and a rebuild on every frame */
+    s_state = s_downPaying ? ST_REFUSED : ST_UNBUILT;
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidFog = s_saidRoom = s_saidPal = 0;

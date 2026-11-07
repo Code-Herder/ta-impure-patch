@@ -1154,7 +1154,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        to draw: the HUD's and the wiki's art take most of a second to decode (`hud: loaded` and
        `wiki: loaded` in the log), which is spent in the shell, so a game's first frame finds them
        loaded and the wiki button and the replay HUD appear with the world. The loader reads only
-       the DLL's own resources, never the game's. Every way the HUD cannot draw for the session is
+       the DLL's own resources, never the game's. Every way the HUD cannot draw on this lane is
        told to tagpu_hudstate_refuse. */
     if (!(art = tagpu_hudart_get())) {
         if (tagpu_hudart_failed()) tagpu_hudstate_refuse("its art did not load");
@@ -1406,7 +1406,7 @@ lost:
        and the banded path's resources may still be in flight, so the pass stops drawing and asks
        for nothing more. Nothing is destroyed here, mid-frame, where other slots' submits still
        name these objects: tagpu_vk_hud_down gives them back behind the seam's vkDeviceWaitIdle
-       on the seam's next teardown (vk_down, passes_down). The HUD stays off for the session
+       on the seam's next teardown (vk_down, passes_down). The HUD stays off until then
        (tagpu_hudstate_refuse). */
     plog(d, "hud: the device failed an upload - the pass stops drawing");
     s_state = ST_REFUSED;
@@ -1483,6 +1483,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     int i;
+    tagpu_hudstate_forgive();
     if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
     for (i = 0; i < TAGPU_VK_SLOTS; i++)
         if (s_stage[i].buf) tagpu_vk_stage_drop(d, &s_stage[i]);
