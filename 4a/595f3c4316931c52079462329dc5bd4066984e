@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=high range=8cfbe44a..4a595f3c findings=20 acted=20 rejected=0 date=2026-11-06
+first review 12 findings (2 medium), delta re-review 8 (1 medium). The test then found one more itself: with the exe gone the MODS button called it unknown. Open and stated: Windows not run, the failing rollback not run.
