@@ -20,6 +20,7 @@ main menu's MODS button: *The screen*, below.
 - `tagpu_modfit.c/.h`: what a base holds at a path, by reading its archives: files only, on any one thread.
 - `tagpu_modprint.c/.h`: the fingerprint: the walk on its own thread, what counts, the data a peer reads. Names no engine memory.
 - `tagpu_modgate.c/.h`: the battle room's Start against the fingerprints, and the line that says why.
+- `tagpu_modmem.c/.h`: the exe's large-address bit on disk. Files only.
 - `tagpu_modsui.c/.h`: the screen's state and input, on the game thread. Names no engine memory.
 - `tagpu_modslay.c/.h`: the screen's window, a pure function of the page. Pure C.
 - `tools/modpack/modpack.py install ID GAMEDIR`: a package installed by hand, its recipe run from that
@@ -154,6 +155,20 @@ Two Impure players with different game files do not start together. Stock would:
 
 - **A player who sends none.** A joiner sending stock's 21 bytes, or an older Impure's 301, is taken by a current one and compared with nobody. A stock host refuses an Impure joiner, since it takes exactly 21 bytes: that has been so since the key.
 - **A player of this build cannot join a host older than it.** The older host's stub takes 21 or exactly 301 bytes, and MEASURED on Wine the joiner lands back on Select Game with no message: the refusal is the older build's, so nothing in the new one can explain it. A current host's stub takes the key with up to 1024 bytes of tail, so a later, longer print will not repeat this.
+
+## 4 GB
+
+The large-address bit has to be in the exe's header before the system loads the process, so a mod that needs the room gets it at Confirm. A catalog entry's `memory` says what its exe needs: `4gb` (Escalation), `bit-off`, or nothing.
+
+**`4gb`, on an exe without the bit.** `tagpu_modmem_apply` writes a copy with the bit set and the header's checksum fixed to `TotalA.exe.4gb.tmp`, renames the running `TotalA.exe` to `TotalA.exe.pre-4gb`, renames the copy to `TotalA.exe`, and the restart that Confirm always does runs it. Only the bit and the checksum differ, and `file_key` leaves both out, so the exe is still the exe every table knows, a drop-in's and a managed mod's fingerprint included.
+
+**Before the choice is saved.** A folder that will not take the file refuses Confirm with the reason and nothing changed, since the other order would leave `mod=` naming a mod its exe cannot load. A choice that then fails to save leaves the bit on, which costs nothing, as every setup runs with it.
+
+**The bit stays on.** An entry with no `memory` leaves the exe as it is, and so does the folder's own game. The price is a row for each: `laa-<setup>` in the [compatibility suite](../compat/setups.html) runs retail, each mod's drop-in and each managed mod with the bit, and Escalation's own managed row already does.
+
+**`bit-off`** is for an entry that fails its row until it is fixed: Confirm puts the `.pre-4gb` copy back when that copy is this exe, byte for byte what was there, and otherwise clears the bit in place. The running file goes to `TotalA.exe.4gb-old`, removed at a later start. No entry is marked so today.
+
+**A reverted exe.** A file check that restores the old exe leaves `mod=` naming a mod without its bit. Opening the screen compares them, and "Restart to apply" is offered with nothing else to apply. Until then the game runs on the 2 GB it has, and such a mod runs out of memory loading a level. `TotalA.exe.pre-4gb` is replaced by the file that was reverted to.
 
 ## Download and install
 
@@ -299,7 +314,9 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not
   been run.
-- Managed Escalation needs the large-address bit to load a game. Its rows set it by hand until the 4 GB landing.
+- The 4 GB swap has run on Wine alone. A new file at the exe's path may meet Windows' first-launch compatibility hook ([the takeover](../compat/takeover.html)); not run. A machine that stops between its two renames leaves no `TotalA.exe` and the old file as `.pre-4gb`, which a file check restores.
+- The `laa-*` rows set the bit by hand, as the managed rows do. Only `tools/mods/modmem.py` sets it through Confirm, on Escalation.
+- A mod that starts with its bit reverted says nothing until the screen is opened.
 - The originals list is one install's hashes. A folder from another edition whose `totala1.hpi` matches, and whose other
   archives do not, loses those archives with only a log line.
 - The mount and the loose step are not part of any recording's identity, and neither is the fingerprint.

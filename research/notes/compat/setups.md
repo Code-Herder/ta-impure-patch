@@ -137,6 +137,10 @@ the machine at its limits — a load of 28 on 32 cores, and GPU memory near its 
 game's restorer sizes its atlas against (half of what is free) at any count. The Windows runs take
 about 45 s a setup, one at a time; there is no battle or network stage there yet.
 
+## The large-address rows
+
+A mod that sets the exe's large-address bit leaves it on ([the mod manager](../modules/mods.html), *4 GB*), so whatever that folder runs next runs with it. `laa-<setup>` is retail, each mod's drop-in and each managed mod with the bit set by hand: ten rows beside `managed-escalation`, which sets it for its own need. A managed row among them still compares against its drop-in, which keeps the bit off, so those rows also show the two agree across the bit.
+
 ## Total Mayhem's maps with no terrain
 
 **What a player saw** before the fix. A fresh Total Mayhem 11.3.0 on the Steam install shows a box naming

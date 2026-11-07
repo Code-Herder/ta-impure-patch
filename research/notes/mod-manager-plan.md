@@ -315,7 +315,7 @@ What follows from those rules:
 | 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
 | 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint (built) | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
-| 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
+| 9 | 4 GB (LAA) (built) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 
 Landings 2 and 3 are independent of each other.
 
@@ -331,7 +331,7 @@ Landings 2 and 3 are independent of each other.
 **Needs research or a measurement:**
 - Which v1 setups are safe with LAA on? Landing 9's row answers it. Managed Escalation already needs it
   to load a game: its 550 unit types run out of address space without it (MEASURED 2026-11-05, the
-  engine's out-of-memory box), so its compatibility rows set the bit by hand until landing 9.
+  engine's out-of-memory box), so Confirm sets the bit for it, and its compatibility rows set it by hand ([the module](modules/mods.html), *4 GB*).
 - A jump on the entry point by another DLL, written after Impure's, keeps the entry stage from running.
   The first DirectDraw call refuses that case, and no setup in the suite produces it, so that refusal
   has not been run.
