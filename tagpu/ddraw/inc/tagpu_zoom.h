@@ -186,6 +186,7 @@ float tagpu_zoom_lever(void);
 /* RENDER THREAD: this frame reached the screen's queue (render_vk.c). */
 void  tagpu_zoom_presented(void);
 void  tagpu_zoom_lane_retrying(void);
+int   tagpu_zoom_live_held(void);
 
 /* RENDER THREAD (tagpu_overlay_gone): the session goes to GDI, so no frame will end
    a cut, read a view or post a record again: this ends the cut and posts the record

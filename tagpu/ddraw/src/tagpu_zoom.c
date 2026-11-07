@@ -932,6 +932,8 @@ void tagpu_zoom_presented(void)
    again, which is some frames after the first one presents, since they draw nothing until their
    atlases are back. LIVE_HELD_FRAMES bounds it for a world that never returns (the level ended under
    the rebuild), and a lane given up on ends it at once: `tagpu_zoom_render_gone`. */
+int tagpu_zoom_live_held(void) { return s_liveHeld > 0; }
+
 void tagpu_zoom_lane_retrying(void)
 {
     s_liveHeld = s_live ? LIVE_HELD_FRAMES : 0;

@@ -2917,6 +2917,28 @@ def crash_mtime(inst: "Instance") -> float:
         return 0.0
 
 
+def thread_crash_report(inst: "Instance", since: float):
+    """The DLL's report of a fault no handler of TA's covers (tagpu_crashlog.c), or None. TA's own
+    handler writes ErrorLog.txt for the threads it starts; a fault anywhere else leaves the process
+    held by the system's debugger, a game that stopped with nothing said, and this file is the only
+    thing that says where. It holds offsets into the modules, so nothing needs attributing."""
+    path = inst.gamedir / "log" / "crash-report.txt"
+    try:
+        if path.stat().st_mtime <= since:
+            return None
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines:
+        return None
+    stack = re.findall(r"^  \[esp\+0x[0-9A-Fa-f]+\] [0-9A-Fa-f]{8} (\S+)$", text, re.M)[:6]
+    msg = f"{inst.name} CRASHED off TA's handler: {lines[0]}"
+    if stack:
+        msg += " | stack words: " + " <- ".join(stack)
+    return msg + f" (full report: {path})"
+
+
 def crash_report(inst: "Instance", since: float):
     """A one-line summary of a crash newer than `since` belonging to THIS
     instance, or None. The exe path inside the report is what attributes it.
@@ -2934,10 +2956,10 @@ def crash_report(inst: "Instance", since: float):
     path = inst.gamedir / "ErrorLog.txt"
     try:
         if path.stat().st_mtime <= since:
-            return None
+            return thread_crash_report(inst, since)
         text = path.read_text(errors="replace")
     except OSError:
-        return None
+        return thread_crash_report(inst, since)
     want = str(inst.gamedir).replace("/", "\\").lower()
     if want not in text.replace("/", "\\").lower():
         return None                    # another instance's crash, same file

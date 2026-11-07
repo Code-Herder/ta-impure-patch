@@ -72,6 +72,7 @@ static void say_ready(void)
    setter names. */
 void tagpu_overlay_gone(void)
 {
+    tagpu_zoom_render_gone();           /* first: it ends the hold the setters below would obey */
     tagpu_fxown_set_skip(0);
     tagpu_fxown_set_skip_sfx(0);
     tagpu_fxown_set_want(0, 0, 0);
@@ -83,7 +84,6 @@ void tagpu_overlay_gone(void)
     tagpu_markown_set_digits(0);
     tagpu_terrown_set_skip(0);
     tagpu_owndraw_set_structshadow(0, 0);
-    tagpu_zoom_render_gone();
 }
 
 void tagpu_overlay_draw(const TAGPU_FRAME* f)

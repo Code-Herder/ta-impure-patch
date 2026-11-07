@@ -581,7 +581,7 @@ def classify(o: dict) -> str:
     if o.get("watched") is False:
         return "no-result"          # the window watcher never finished: nothing seen is evidence
     titles = [b["title"] for b in o["boxes"]]
-    if o.get("errorlog") or any(CRASH_TITLES.search(t) for t in titles):
+    if o.get("errorlog") or o.get("crash_report") or any(CRASH_TITLES.search(t) for t in titles):
         return "battle-crash" if o.get("menu") and o.get("battle") is not None else "crash"
     for t in titles:
         if t in KNOWN_BOXES:
@@ -950,7 +950,7 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     ddraw = gamedir / "ddraw.dll"
     ddraw.unlink(missing_ok=True)
     shutil.copy2(dll, ddraw)
-    for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
+    for leftover in ("ErrorLog.txt", "tdrawlog.txt", "log/crash-report.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
     if setup.get("managed"):
         broken = setup.get("managed_break")
@@ -1780,7 +1780,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
         new_boxes(display, seen, boxes, t0)
         if proc.poll() is not None:
             return {"ok": False, "hud": hud, "why": f"the game exited during the battle ({applied})"}
-        if boxes or (gamedir / "ErrorLog.txt").exists():
+        if boxes or (gamedir / "ErrorLog.txt").exists() or (gamedir / "log" / "crash-report.txt").exists():
             return {"ok": False, "hud": hud, "why": f"a box or a crash report during the battle ({applied})"}
         try:
             if soak.done():
@@ -2317,6 +2317,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "packet_pub": packet_pub(tagpu or ""),
         "menu": menu if tagpu is not None else None,
         "errorlog": read(gamedir / "ErrorLog.txt"),
+        "crash_report": read(gamedir / "log" / "crash-report.txt"),
         "tdrawlog": read(gamedir / "tdrawlog.txt"),
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
@@ -2328,10 +2329,10 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     o["outcome"] = classify(o)
     o["gui"] = gui_health(tagpu or "")
     files = {"wine.log": wlog, **{f"log-{k}": v for k, v in logs.items()}}
-    for k in ("tdrawlog", "failure", "errorlog"):
+    for k in ("tdrawlog", "failure", "errorlog", "crash_report"):
         if o[k]:
             files[{"tdrawlog": "tdrawlog.txt", "failure": "startup-failure.txt",
-                   "errorlog": "ErrorLog.txt"}[k]] = o[k]
+                   "errorlog": "ErrorLog.txt", "crash_report": "crash-report.txt"}[k]] = o[k]
     if tagpu:
         files["tagpu.log"] = tagpu
     o["_files"], o["_temps"] = files, shots
@@ -3075,6 +3076,7 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
         "packet_pub": packet_pub(tagpu or ""),
         "menu": None,
         "errorlog": w.read_b64(ntpath.join(work, "ErrorLog.txt")),
+        "crash_report": w.read_b64(ntpath.join(work, "log", "crash-report.txt")),
         "tdrawlog": w.read_b64(ntpath.join(work, "tdrawlog.txt")),
         "failure": w.read_b64(ntpath.join(work, "log", "startup-failure.txt")),
         "modules_known": any(e.get("modules") is not None for e in events),
@@ -3092,7 +3094,7 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     files = {"watch.jsonl": "\n".join(json.dumps(e) for e in events),
              **{f"log-{k}": v for k, v in logs.items()}}
     for k, fname in (("tdrawlog", "tdrawlog.txt"), ("failure", "startup-failure.txt"),
-                     ("errorlog", "ErrorLog.txt")):
+                     ("errorlog", "ErrorLog.txt"), ("crash_report", "crash-report.txt")):
         if o[k]:
             files[fname] = o[k]
     if tagpu:
