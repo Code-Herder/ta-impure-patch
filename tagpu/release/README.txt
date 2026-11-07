@@ -28,8 +28,8 @@ WHAT IT IS
   TA Twilight and TA: Escalation. For a mod, copy it into the mod's folder and
   leave the mod's files as they are, TADR's included. TADR's own code does not
   run while the patch is installed: no TADR demo recording (the patch records
-  games itself, see REPLAYS), and its own Mega map and strategic icons replace TADR's;
-  no TADR overlays.
+  games itself, see REPLAYS), no TADR overlays, and the patch's own Mega map and
+  strategic icons stand in for TADR's.
   gammata's drop-in package is not supported yet.
 
   Needs a GPU and driver with Vulkan (1.0 or later). Runs under Wine too;
