@@ -9364,6 +9364,57 @@ static void __cdecl saved_map_terrain(unsigned int* r)
     if (!r[PR_EAX]) s_mapsDiag.savedNoTerrain++;
 }
 
+SIM_FEATURE(map_picture, SIM_PUPPET_RUNS, "battle resource-plain");
+
+/* THE MAP'S MINIMAP PICTURE, SMALLER THAN THE SHRINK READS [DISASSEMBLED, MEASURED 2026-11-07].
+   BuildMinimapSurface's one call 0x46685F hands 0x4B95A0 the TNT's picture (main+0x1426B, a GAF frame
+   LoadMap sized from the file) and the 126-pixel surface it fits. 0x4B95A0 reads 2w x 2h of the frame
+   with the frame's own width as the pitch and no test against its height or width, so a picture
+   smaller than that is read past its block: `w*h + 0x18` bytes from 0x4B8DA0. 32x32 into 126x113 read
+   7 KB out of 1 KB, which faulted on the loader thread only where the block ended at unmapped memory
+   (0x4B9626, a read of 0x0E4B0001, under a map that loaded on every other launch). Nothing else in
+   the engine reads the picture.
+
+   THE BOUND: a picture that holds 2w x 2h goes to the engine's shrink, byte for byte the stock
+   picture; a smaller one is sampled into the surface here, every index below w and h by the
+   arithmetic. The plane is `w*h` bytes at frame+0x18 (tagpu_recorder.c's `minimap_build` holds the
+   same); `dest` starts with the surface's i16 pitch and rows, and pixels at +0x10 (0x4B8AE0). */
+static void __stdcall map_picture_shrink(const unsigned char* fr, const unsigned char* dest)
+{
+    unsigned short w, h, dw, dh;
+    unsigned char* out;
+    const unsigned char* px;
+    unsigned x, y;
+    char b[128];
+    memcpy(&w, fr, 2);
+    memcpy(&h, fr + 2, 2);
+    memcpy(&dw, dest, 2);
+    memcpy(&dh, dest + 2, 2);
+    if (w >= 2u * dw && h >= 2u * dh) {
+        ((void (__stdcall*)(const void*, const void*))0x004B95A0)(fr, dest);
+        return;
+    }
+    out = *(unsigned char* const*)(dest + 0x10);
+    px = fr + 0x18;
+    for (y = 0; y < dh; y++, out += dw) {
+        if (!w || !h) { memset(out, 0, dw); continue; }
+        for (x = 0; x < dw; x++)
+            out[x] = px[(size_t)(y * h / dh) * w + x * w / dw];
+    }
+    _snprintf(b, sizeof b, "enginefix: this map's minimap picture is %ux%u, smaller than the %ux%u "
+              "the shrink reads - sampled instead", w, h, 2u * dw, 2u * dh);
+    b[sizeof b - 1] = 0;
+    plog(b);
+}
+
+static int fix_map_picture(void)
+{
+    FIXSITE site[1] = { { 0x0046685F, 5, { 0xE8, 0x3C, 0x2D, 0x05, 0x00 }, { 0 } } };  /* call 0x4B95A0 */
+    if (!fix_match(site, 1)) return FIX_BYTES;
+    fix_branch(&site[0], 0xE8, (unsigned char*)(size_t)map_picture_shrink);
+    return fix_table(site, 1, "the map's minimap picture");
+}
+
 static int fix_map_terrain(void)
 {
     FIXSITE site[2] = {
@@ -9509,6 +9560,7 @@ static void patch_engine_defects(void)
     int built = fix_built_bounds();
     int tx   = fix_transported();
     int maps = fix_map_terrain();
+    int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
@@ -9617,10 +9669,11 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
-              "enginefix: maps with no terrain -- left out of the map list (0x434D87) and "
+              "enginefix: a minimap picture smaller than the shrink reads (0x46685F) %s; maps with "
+              "no terrain -- left out of the map list (0x434D87) and "
               "never kept as the saved skirmish map (0x430B87) %s. Maps left out counted at "
               "0x%08X, saved maps set aside at 0x%08X",
-              fix_state(maps), (unsigned int)(size_t)&s_mapsDiag.noTerrain,
+              fix_state(mmpic), fix_state(maps), (unsigned int)(size_t)&s_mapsDiag.noTerrain,
               (unsigned int)(size_t)&s_mapsDiag.savedNoTerrain);
     b[sizeof b - 1] = 0;
     plog(b);

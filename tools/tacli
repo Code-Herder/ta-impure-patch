@@ -3348,6 +3348,9 @@ def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False
         time.sleep(0.05)
     if soft:
         return None          # the caller is waiting for a UI to exist at all
+    report = crash_report(inst, -1.0)
+    if report:
+        die(report)
     if last:
         die(f"no UI to read after {timeout:g}s: {last}")
     die("no UI snapshot appeared — is the instance running and past its first frame?")
@@ -5954,7 +5957,8 @@ def _replay_start(args, verb, tail=""):
         deadline = time.time() + args.load_timeout
         while verdict is None:
             if not inst.running():
-                die(f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
+                die(crash_report(inst, -1.0) or
+                    f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
             got = lines()
             for i, line in enumerate(got):
                 m = REPLAY_RX.search(line)
@@ -5963,6 +5967,10 @@ def _replay_start(args, verb, tail=""):
                     rest = got[i + 1:]
                     break
             if verdict is None:
+                # a fault under the system's debugger is a game that stopped: it exits for nobody
+                report = crash_report(inst, -1.0)
+                if report:
+                    die(report)
                 if time.time() >= deadline:
                     die(f"no `replay: playing` in {args.load_timeout:g}s "
                         f"(tacli log {args.name} -g replay)")
