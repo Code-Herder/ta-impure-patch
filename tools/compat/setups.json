@@ -349,6 +349,19 @@
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },
     {
+      "name": "pass-card-full",
+      "about": "The retail game in a live battle on a card vkfill has really filled, on Windows only: the lever brings the lane down once and what it gave back is taken. The game has to go on: the lane back if the driver gives it memory, as WDDM does, or GDI with the engine's side panel if the driver refuses.",
+      "add": [],
+      "refuse_in_battle": "keep",
+      "fill_device": true,
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the card is one machine's, and a network game would only repeat the start-up"
+    },
+    {
       "name": "wiki-stage-refused",
       "about": "The retail game whose in-game wiki page is opened with the driver refusing the stage its memory: the page has no 3D image, the game's lane stays up and the battle goes on.",
       "add": [],

@@ -5952,8 +5952,13 @@ def _replay_start(args, verb, tail=""):
         deadline = time.time() + args.load_timeout
         while verdict is None:
             if not inst.running():
+                try:
+                    tail = (inst.gamedir / "log" / "tagpu.log").read_text(errors="replace").splitlines()[-12:]
+                except OSError:
+                    tail = ["(no tagpu.log)"]
                 die(crash_report(inst, -1.0) or
-                    f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
+                    f"{args.name} exited while the replay loaded, with no crash report; the log's "
+                    f"last lines:\n  " + "\n  ".join(tail))
             got = lines()
             for i, line in enumerate(got):
                 m = REPLAY_RX.search(line)

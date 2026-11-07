@@ -23,9 +23,9 @@
    (tacli seeds it: a remote instance's by reading the player's key, a local instance's by
    reading the template prefix's user.reg; `launch` puts its test values in it). A signal
    alone, a store that is missing, a folder, unreadable or not loaded whole, no memory, an
-   exe path that cannot be read, a registry import these hooks do not answer, or a
-   win32.dll not loaded at attach (it is a static import of TotalA.exe) ends the process at
-   attach, with a log line first and before the game's first instruction: a test launch
+   exe path that cannot be read, a registry import these hooks do not answer in the exe or
+   in any DLL loaded from its folder, or a loader that will not notify of later loads ends
+   the process, at attach or at that DLL's load, with a log line first: a test launch
    never runs against the real registry. The line names the module whose attach it ends
    (`entered by the tacli-state folder beside <module>`), so a cnc-ddraw config tool opened
    in a test folder is refused in words about itself, not about TotalA.exe.

@@ -688,16 +688,14 @@ and nothing has to be restored: a test killed at any moment, a reboot included, 
 player's key as it was.
 
 - **What the guarantee covers, and what it does not.** It covers the registry imports of
-  `TotalA.exe` and `win32.dll`, which are served from the file, and the `-r` switch, which is
-  closed. It does not cover what no hook reaches ([exe reverse
+  `TotalA.exe` and of every DLL loaded from the game's folder, whichever road brought it (online.dll's
+  extension DLLs, an export forwarder's target), which are served from the file, and the `-r` switch, which
+  is closed. It does not cover what no hook reaches ([exe reverse
   engineering](exe-reverse-engineering.html) §"The registry", "Outside TotalA.exe's own code"):
     - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
       (`IMAGEHLP.DLL`, `psapi.dll`);
-    - the other DLLs it loads at run time: `online.dll`, the extension DLLs `online.dll` loads
-      into the game's process (`tamplayx`, `takalix`, `taheatx`, `tawirepx`, `tadwngox`,
-      `tatenx`; the Steam install's import no registry function but `RegOpenKeyExA`,
-      `RegQueryValueExA` and `RegCloseKey`), and `reporter.dll` and `DebugHelper.dll` (neither
-      is in the Steam install);
+    - a DLL of the folder whose `DllMain` runs before Impure's, during that `DllMain`: the attach
+      line names them (`started before us:`);
     - the programs the game starts: what `ShellExecuteA` opens, and what `online.dll` starts;
     - Windows' own records: the Task Scheduler's of the instance's task in
       `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`

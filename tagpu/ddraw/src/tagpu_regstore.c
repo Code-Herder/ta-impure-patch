@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include "hook.h"
 #include "tagpu_log.h"
@@ -992,88 +993,162 @@ static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* 
 
 int tagpu_regstore_is_hook(unsigned long fn) { return rs_is_hook((ULONG_PTR)fn); }
 
-/* 1 when `m` was loaded from the folder `exe` sits in, and is not a system library. */
-static int rs_in_exe_folder(HMODULE m, const WCHAR* exe, size_t dir)
+/* THE LOADER'S OWN LISTS, 32-bit layout as Windows and Wine both keep it (MEASURED on both by the
+   compat suite's test-mode rows): PEB+0x0C is the loader data, whose +0x0C heads the load order and
+   +0x1C the initialisation order; an entry's links sit at +0x00 and +0x10, its base at +0x18. We
+   read them inside our own attach, under the loader lock, so nothing can change them under us. */
+typedef struct RS_LDR_ENTRY {
+    LIST_ENTRY load;
+    LIST_ENTRY memory;
+    LIST_ENTRY init;
+    void*      base;
+} RS_LDR_ENTRY;
+
+static LIST_ENTRY* rs_ldr_list(unsigned at)
+{
+    const BYTE* peb;
+    __asm__("movl %%fs:0x30, %0" : "=r"(peb));
+    return (LIST_ENTRY*)(*(BYTE* const*)(peb + 0x0C) + at);
+}
+
+/* The folder the exe sits in, ending at the slash, and its length: 0 when it cannot be read. */
+static WCHAR s_exeDir[MAX_PATH * 2];
+static size_t s_exeDirLen;
+
+/* 1 when `m` was loaded from the game's folder or below it. */
+static int rs_in_game_folder(HMODULE m)
 {
     WCHAR path[MAX_PATH * 2];
     DWORD n = GetModuleFileNameW(m, path, sizeof path / sizeof path[0]);
-    if (!n || n >= sizeof path / sizeof path[0] || n <= dir) return 0;
-    return !_wcsnicmp(path, exe, dir) && !wcschr(path + dir, L'\\');
+    if (!n || n >= sizeof path / sizeof path[0] || n <= s_exeDirLen) return 0;
+    return !_wcsnicmp(path, s_exeDir, s_exeDirLen);
 }
 
-/* EVERY DLL OF THE GAME'S FOLDER THE GAME STATICALLY IMPORTS ANSWERS TO THE STORE, BY THE IMPORT
-   TABLES AND NOT BY A NAME. The retail exe's music DLL is `win32.dll`, and a mod that renames the
-   exe's imports renames it: Escalation's exe imports `TAESC.dll`, `EMUSI.dll` and `EPLAYX.dll`,
-   TA Zero's `ZDRAW.dll`, `ZMUSI.dll` and `ZPLAYX.dll`, TADR's `TDRAW`, `TMUSI` and `TPLAYX`. All of
-   them read the registry. The loader has mapped a static import before any DllMain runs, so one
-   that is in the folder and not mapped now would load later with its imports unhooked: that fails
-   closed, as does a registry import the store cannot answer or a closure past the table.
-   A system library is left alone: the real DirectPlay and winmm keep the real registry.
-   Our own module is not hooked: it is what answers. `out` gets the log's `, name n of m` list. */
-static void rs_hook_folder_imports(const char* by, HMODULE exe, char* out, size_t cap)
-{
-    enum { RS_MAX_FOLDER_MODS = 32 };
-    HMODULE seen[RS_MAX_FOLDER_MODS];
-    int nseen = 1, at;
-    WCHAR exepath[MAX_PATH * 2];
-    WCHAR* slash;
-    size_t dir, used = 0;
-    HMODULE self = NULL;
-    char what[300];
-    DWORD n = GetModuleFileNameW(exe, exepath, sizeof exepath / sizeof exepath[0]);
+static char s_refuseBy[400];    /* who entered test mode: every refusal's line starts with it */
 
-    out[0] = 0;
-    if (!n || n >= sizeof exepath / sizeof exepath[0] || !(slash = wcsrchr(exepath, L'\\')))
-        rs_refuse_run(by, "the exe's own path could not be read for its import tables");
-    dir = (size_t)(slash - exepath) + 1;
+/* Hooks one module of the game's folder and returns its registry imports, 0 for a module not of the
+   folder or the one that answers. A registry import the store cannot answer ends the run. */
+static int rs_answer_module(HMODULE m, int* answered, const char* name)
+{
+    HMODULE self = NULL;
+    int regs = 0, ours = 0;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                       (LPCWSTR)(void*)rs_in_exe_folder, &self);
-    seen[0] = exe;
-    for (at = 0; at < nseen; at++) {
-        BYTE* base = (BYTE*)seen[at];
-        IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
-        DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
-        IMAGE_IMPORT_DESCRIPTOR* d;
-        if (!rva) continue;
-        for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
-            const char* name = d->Name ? (const char*)(base + d->Name) : NULL;
-            HMODULE m;
-            int regs, ours, i, known = 0;
-            if (!name) continue;
-            m = GetModuleHandleA(name);
-            if (!m) {
-                WCHAR there[MAX_PATH * 2 + 64];
-                _snwprintf(there, sizeof there / sizeof there[0], L"%.*s%hs", (int)dir, exepath, name);
-                there[sizeof there / sizeof there[0] - 1] = 0;
-                if (GetFileAttributesW(there) == INVALID_FILE_ATTRIBUTES) continue;
-                _snprintf(what, sizeof what, "%s, a static import in the game's folder, is not "
-                          "loaded at attach", name);
-                what[sizeof what - 1] = 0;
-                rs_refuse_run(by, what);
-            }
-            if (m == self) continue;
-            if (!rs_in_exe_folder(m, exepath, dir)) continue;
-            for (i = 0; i < nseen; i++) if (seen[i] == m) known = 1;
-            if (known) continue;
-            if (nseen == RS_MAX_FOLDER_MODS)
-                rs_refuse_run(by, "the game's folder has more static imports than the store's table");
-            seen[nseen++] = m;
-            rs_hook(m);
-            rs_count(m, &regs, &ours);
-            if (ours != regs) {
-                _snprintf(what, sizeof what, "%d of %s's %d registry imports are not answered "
-                          "by the store", regs - ours, name, regs);
-                what[sizeof what - 1] = 0;
-                rs_refuse_run(by, what);
-            }
-            if (regs && used < cap) {
-                int w = _snprintf(out + used, cap - used, ", %s %d of %d", name, ours, regs);
-                if (w < 0 || (size_t)w >= cap - used) { out[cap - 1] = 0; used = cap; }
-                else used += (size_t)w;
-            }
+                       (LPCWSTR)(void*)rs_in_game_folder, &self);
+    if (m == self || m == GetModuleHandleW(NULL) || !rs_in_game_folder(m)) return 0;
+    rs_hook(m);
+    rs_count(m, &regs, &ours);
+    if (ours != regs) {
+        char what[300];
+        _snprintf(what, sizeof what, "%d of %s's %d registry imports are not answered by the store",
+                  regs - ours, name, regs);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(s_refuseBy, what);
+    }
+    *answered = ours;
+    return regs;
+}
+
+/* A module's file name without its folder, narrowed for the log. */
+static void rs_module_name(HMODULE m, char* out, size_t cap)
+{
+    WCHAR path[MAX_PATH * 2];
+    const WCHAR* leaf;
+    DWORD n = GetModuleFileNameW(m, path, sizeof path / sizeof path[0]);
+    if (!n || n >= sizeof path / sizeof path[0]) { _snprintf(out, cap, "?"); out[cap - 1] = 0; return; }
+    leaf = wcsrchr(path, L'\\');
+    _snprintf(out, cap, "%ls", leaf ? leaf + 1 : path);
+    out[cap - 1] = 0;
+}
+
+typedef struct RS_DLL_NOTICE {
+    ULONG Flags;
+    const void* FullDllName;
+    const void* BaseDllName;
+    void* DllBase;
+    ULONG SizeOfImage;
+} RS_DLL_NOTICE;
+
+/* THE LOADER CALLS THIS FOR EVERY MODULE IT LOADS, once its imports are bound and before its entry
+   point runs: an export forwarder's target, what `online.dll` searches for, anything `LoadLibrary`
+   brings in. So a DLL of the game's folder reaches the registry only through the store whichever
+   road brought it, and no name or import table has to say it would come. */
+static VOID CALLBACK rs_on_dll_load(ULONG reason, const RS_DLL_NOTICE* notice, PVOID ctx)
+{
+    enum { RS_LDR_LOADED = 1 };
+    char name[120];
+    int regs, ours = 0;
+    (void)ctx;
+    if (reason != RS_LDR_LOADED) return;
+    rs_module_name((HMODULE)notice->DllBase, name, sizeof name);
+    regs = rs_answer_module((HMODULE)notice->DllBase, &ours, name);
+    if (regs) tagpu_logf("registry: test mode, %s loaded: %d of %d registry imports answered", name, ours, regs);
+}
+
+/* EVERY DLL OF THE GAME'S FOLDER ANSWERS TO THE STORE, BY WHERE IT WAS LOADED FROM AND NOT BY A NAME
+   OR BY WHO ASKED FOR IT. A mod renames the exe's imports (Escalation's `TAESC`, `EMUSI` and `EPLAYX`,
+   TA Zero's `ZDRAW`, `ZMUSI` and `ZPLAYX`, TADR's `TDRAW`, `TMUSI` and `TPLAYX`), and the Patch Loader's
+   `dplayx.dll`, with Total Mayhem's and ProTA's, reaches `tplayx.dll` through export forwarders alone,
+   so no import table names it. What is mapped now is answered from the loader's list, what comes
+   later from its notification, and a process with no notification is refused.
+   A library outside the folder is left alone: the real DirectPlay and winmm keep the real registry.
+   Our own module is not hooked: it is what answers. `out` gets the log's `, name n of m` list and
+   `early` the folder DLLs whose entry points ran before ours, which met the real registry. */
+static void rs_hook_folder(HMODULE exe, char* out, size_t cap, char* early, size_t earlycap)
+{
+    typedef LONG (NTAPI* Register)(ULONG, void*, void*, void**);
+    static void* s_cookie;
+    LIST_ENTRY* head, *e;
+    WCHAR* slash;
+    size_t used = 0, eused = 0;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"), pin = NULL;
+    Register reg = ntdll ? (Register)(void*)GetProcAddress(ntdll, "LdrRegisterDllNotification") : NULL;
+    DWORD n = GetModuleFileNameW(exe, s_exeDir, sizeof s_exeDir / sizeof s_exeDir[0]);
+
+    out[0] = early[0] = 0;
+    if (!n || n >= sizeof s_exeDir / sizeof s_exeDir[0] || !(slash = wcsrchr(s_exeDir, L'\\')))
+        rs_refuse_run(s_refuseBy, "the exe's own path could not be read");
+    slash[1] = 0;
+    s_exeDirLen = (size_t)(slash - s_exeDir) + 1;
+
+    head = rs_ldr_list(0x0C);
+    for (e = head->Flink; e != head; e = e->Flink) {
+        HMODULE m = (HMODULE)((RS_LDR_ENTRY*)e)->base;
+        char name[120];
+        int regs, ours = 0;
+        rs_module_name(m, name, sizeof name);
+        regs = rs_answer_module(m, &ours, name);
+        if (regs && used < cap) {
+            int w = _snprintf(out + used, cap - used, ", %s %d of %d", name, ours, regs);
+            if (w < 0 || (size_t)w >= cap - used) { out[cap - 1] = 0; used = cap; }
+            else used += (size_t)w;
         }
     }
+
+    /* The initialisation order holds what has started, ending at us. */
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void*)rs_in_game_folder, &pin);
+    head = rs_ldr_list(0x1C);
+    for (e = head->Flink; e != head; e = e->Flink) {
+        RS_LDR_ENTRY* entry = (RS_LDR_ENTRY*)((BYTE*)e - offsetof(RS_LDR_ENTRY, init));
+        HMODULE m = (HMODULE)entry->base;
+        if (m == pin) break;
+        if (m != exe && rs_in_game_folder(m) && eused < earlycap) {
+            char name[120];
+            int w;
+            rs_module_name(m, name, sizeof name);
+            w = _snprintf(early + eused, earlycap - eused, "%s%s", eused ? ", " : "", name);
+            if (w < 0 || (size_t)w >= earlycap - eused) { early[earlycap - 1] = 0; eused = earlycap; }
+            else eused += (size_t)w;
+        }
+    }
+
+    /* The callback lives in this module, so this module may never leave. */
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            (LPCWSTR)(void*)rs_in_game_folder, &pin) ||
+        !reg || reg(0, (void*)rs_on_dll_load, NULL, &s_cookie) < 0)
+        rs_refuse_run(s_refuseBy, "the loader will not say what it loads later");
 }
 
 /* Whether the command line carries RS_TOKEN as a whole argument. The program name is
@@ -1167,6 +1242,7 @@ void tagpu_regstore_init(void)
     DWORD at, aterr;
     size_t dir;
     static char hooks[400];  /* the log's `, name n of m` list */
+    static char early[200];  /* the folder's DLLs whose entry points ran before ours */
     int nvalues, regs, ours;
 
     if (!s_by) {
@@ -1244,11 +1320,13 @@ void tagpu_regstore_init(void)
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }
-    rs_hook_folder_imports(by, GetModuleHandleW(NULL), hooks, sizeof hooks);
+    _snprintf(s_refuseBy, sizeof s_refuseBy, "%s", by);
+    s_refuseBy[sizeof s_refuseBy - 1] = 0;
+    rs_hook_folder(GetModuleHandleW(NULL), hooks, sizeof hooks, early, sizeof early);
     tagpu_logf("registry: TEST MODE, entered by %s -- its registry is "
                "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: %s %d of %d "
-               "registry imports%s",
-               by, s_nkeys, nvalues, s_exe, ours, regs, hooks);
+               "registry imports%s; started before us: %s",
+               by, s_nkeys, nvalues, s_exe, ours, regs, hooks, early[0] ? early : "nothing of the folder");
 }
 
 int tagpu_regstore_active(void)

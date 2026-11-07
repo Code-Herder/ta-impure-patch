@@ -334,8 +334,8 @@ carries no hook of this section.
 
 **Test mode fails closed.** A store that is missing, a folder, unreadable or not loaded whole,
 no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
-(the exe's, or one of a DLL of its folder that it statically imports), or such a DLL not loaded at attach
-(the loader maps a static import before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
+(the exe's, or one of any DLL of its folder, whenever that DLL loads), or a loader that will not notify
+ends the process with `TerminateProcess`, at attach or at that DLL's load, after one
 log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
 first instruction never runs. The signal in every line names the module whose attach it ends
 (`s_exe`: `the tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s
@@ -352,14 +352,24 @@ were whole.
 | module | imports | slots |
 |---|---|---|
 | `TotalA.exe` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCreateKeyA`, `RegOpenKeyA`, `RegQueryValueA`, `RegCreateKeyExA`, `RegSetValueExA`, `RegFlushKey`, `RegCloseKey` | `0x4FC000..0x4FC020`, one each in that order; every call site is in the engine map |
-| every DLL of the game's folder in the exe's import closure | whichever registry functions it imports | its own |
+| every DLL loaded from the game's folder or below it, whenever and however | whichever registry functions it imports | its own |
 
-`rs_hook_folder_imports` walks that closure breadth first over the import tables, by what the tables
-say and never by a name: the retail exe's music DLL is `win32.dll`, and a mod that renames the exe's
-imports renames it (Escalation's exe imports `TAESC.dll`, `EMUSI.dll` and `EPLAYX.dll`, TA Zero's
-`ZDRAW.dll`, `ZMUSI.dll` and `ZPLAYX.dll`). A library outside the folder is left alone, so the real
-DirectPlay and winmm keep the real registry, and Impure's own module is what answers. Thirty-two
-modules bound the walk, and a closure past that fails closed.
+`rs_hook_folder` decides by where a module was loaded from and never by a name or by who asked for it.
+The retail exe's music DLL is `win32.dll`; a mod that renames the exe's imports renames it (Escalation's
+exe imports `TAESC.dll`, `EMUSI.dll` and `EPLAYX.dll`, TA Zero's `ZDRAW.dll`, `ZMUSI.dll` and `ZPLAYX.dll`);
+and the Patch Loader's `dplayx.dll`, as Total Mayhem and ProTA ship it, reaches `tplayx.dll` through
+export forwarders alone, so no import table names it. At attach it walks the loader's own list
+(`PEB+0x0C`, load order at `+0x0C`), under the loader lock, and then registers
+`LdrRegisterDllNotification`: `rs_on_dll_load` hooks what loads later, once its imports are bound and
+before its entry point runs, and logs `registry: test mode, <name> loaded: n of m registry imports
+answered`. That covers an export forwarder's target, the extension DLLs `online.dll` searches for and
+anything else `LoadLibrary` brings in. The callback pins Impure's module, since it lives there. A library
+outside the folder is left alone, so the real DirectPlay and winmm keep the real registry, and Impure's
+own module is what answers.
+
+No fixture and no retail DLL imports a registry function the hooks do not answer, and no DLL with no
+registry import resolves one by name: its strings hold no `Reg*` name [MEASURED 2026-11-07 over every
+DLL of the 20 fixtures and the Steam install].
 
 After patching, `rs_count` walks the import directories of the exe and of each of those modules: every
 ADVAPI32 import whose name begins with `Reg`, or for a descriptor with no name table (TADR's `tplayx`
@@ -392,12 +402,10 @@ values in a burst, but only the ones that changed cost a rewrite (two rewrites i
 run under wine).
 
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
-above are the only way the code of `TotalA.exe` and of the folder's DLLs it imports reaches the registry once
+above are the only way the code of `TotalA.exe` and of the folder's DLLs reaches the registry once
 Impure has attached, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
-meets the real registry during it, and one reached only through an export forwarder is outside the walk
-unless something also imports it. Nothing hooks the system DLLs the game uses and loads by name; the other
-DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
-process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
+meets the real registry during it: the attach line names them (`started before us:`). Nothing hooks the system
+DLLs the game uses and loads by name; the programs the game starts (what `ShellExecuteA`
 opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
 while it exists, and those of the programs it runs). The full list: [tacli
 design](../tacli-design.html) §"The registry: a file in the test folder".

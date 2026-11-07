@@ -1335,6 +1335,7 @@ def scenarios(setup) -> dict:
 # v0.3; 0.1% with the fix, which is colour rounding). Nothing else here reads pixels of the
 # UI, so a stale region passes every other check.
 HUD_STRIP = (0, 140, 128, 845)      # x, y, w, h: the side panel below the minimap, at 1280x1024
+WIN_HUD_STRIP = (0, 140, 128, 596)  # the same panel in the Windows smoke's 1024x768 window
 HUD_FUZZ = "9.4%"                   # a channel off by more than 24 of 255 is a different pixel
 HUD_STALE = 0.05                    # past this, the screen is not showing the engine's panel
 DIALOG_BOX = (128, 32, 1152, 960)   # x, y, w, h: the view on the battle's 1280x1024, panel and bars out
@@ -1346,6 +1347,31 @@ def hud_strip_diff(a: Path, b: Path) -> "float | None":
     """The share of HUD_STRIP's pixels that differ between two captures, or None when
     either capture is missing or ImageMagick cannot compare them."""
     return region_diff(a, b, HUD_STRIP)
+
+
+def letterboxed(screen: Path, engine: Path, out: Path):
+    """`screen`, the whole client area, with the bars taken off and scaled back to the engine's size:
+    the window shows the engine's aspect centred at any desktop size. MEASURED 2026-11-07 on a GDI
+    session at 1440x1080 in 1920x1080: 0.0 % of the strip differs from the engine's after a box filter."""
+    def size(p):
+        return [int(n) for n in subprocess.run(["identify", "-format", "%w %h", str(p)], capture_output=True,
+                                               text=True, timeout=60).stdout.split()]
+    (cw, ch), (w, h) = size(screen), size(engine)
+    s = min(cw / w, ch / h)
+    sw, sh = round(w * s), round(h * s)
+    subprocess.run(["convert", str(screen), "-crop", f"{sw}x{sh}+{(cw - sw) // 2}+{(ch - sh) // 2}", "+repage",
+                    "-filter", "Box", "-resize", f"{w}x{h}!", str(out)], check=True, timeout=60)
+
+
+def region_mean(a: Path, box) -> "float | None":
+    """How bright `box` of a capture is on average, 0 to 1: a comparison of two black strips proves nothing."""
+    x, y, w, h = box
+    r = subprocess.run(["convert", f"{a}[{w}x{h}+{x}+{y}]", "-format", "%[fx:mean]", "info:"],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return None
 
 
 def region_diff(a: Path, b: Path, box) -> "float | None":
@@ -2759,6 +2785,8 @@ def cmd_wine(args):
     if args.refuse:
         setups = [dict(s, refuse_in_battle=args.refuse, goal=dict(s["goal"], refuse_lever=True))
                   for s in setups]
+    # A row that fills the GPU never runs here: this one is the desktop's as well.
+    setups = [s for s in setups if not s.get("fill_device")]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"]) and not no_package(s)]
     skipped = [s["name"] for s in setups if s not in ready]
     if skipped:
@@ -2869,6 +2897,8 @@ def cmd_clean(args):
 WIN_ROOT = "ta-compat"
 WIN_GAME_TASK = "\\tacli\\compat-game"
 WIN_WATCH_TASK = "\\tacli\\compat-watch"
+WIN_SHOT_TASK = "\\tacli\\compat-shot"
+WIN_FILL_TASK = "\\tacli\\compat-fill"
 # Files a player's folder may carry that would change which route a setup takes: none
 # of them reaches `base`, and each setup puts back only what it names.
 WIN_EXCLUDE = ("ddraw.dll", "dplayx.dll", "tdraw.dll", "tplayx.dll", "zplayx.dll", "eplayx.dll",
@@ -2901,6 +2931,26 @@ class Win:
                   f'--headless "{self.powershell32}" -NoProfile -ExecutionPolicy Bypass '
                   f'-File {self.path("watch.ps1")} {argument}', self.root)
 
+    def screen(self, folder: str, dest: Path):
+        """The game window as Windows composes it, into `dest`: win-shot.ps1 in the logged-on
+        session, headless for the reason watch_task gives."""
+        out = self.path("results", "shot-" + uuid.uuid4().hex[:8] + ".png")
+        self.task(WIN_SHOT_TASK, self.conhost,
+                  f'--headless "{self.powershell32}" -NoProfile -ExecutionPolicy Bypass '
+                  f'-File {self.path("shot.ps1")} -Folder "{folder}" -Out "{out}"', self.root)
+        deadline = time.monotonic() + ACK_S
+        while time.monotonic() < deadline:
+            data = self.read_bytes(out)
+            if data:
+                dest.write_bytes(data)
+                self.run([f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue"])
+                return
+            why = self.read_b64(out + ".err")
+            if why:
+                raise RuntimeError(f"the screen shot: {why.strip()[:300]}")
+            time.sleep(1)
+        raise RuntimeError(f"the screen shot never came (task result {self.task_result(WIN_SHOT_TASK)})")
+
     def run(self, statements, timeout=120.0):
         return self.s.run(statements, timeout=timeout)
 
@@ -2926,15 +2976,19 @@ class Win:
             argv += ["-i", str(self.cfg["key"]), "-o", "IdentitiesOnly=yes"]
         subprocess.run(argv + [str(local), f"{self.cfg['ssh']}:{dest}"], check=True, timeout=1800)
 
-    def read_b64(self, win_path):
+    def read_bytes(self, win_path):
         out = self.run([f"if (Test-Path -LiteralPath {ps(win_path)}) {{ Write-Output ([Convert]::"
                         f"ToBase64String([IO.File]::ReadAllBytes({ps(win_path)}))) }}"], timeout=120)
         if not out:
             return None
         import base64
+        return base64.b64decode("".join(out))
+
+    def read_b64(self, win_path):
+        data = self.read_bytes(win_path)
         # utf-8-sig: Windows PowerShell 5 starts a file it writes as UTF8 with a byte-order
         # mark, and a first line that does not start with "{" is not read as an event.
-        return base64.b64decode("".join(out)).decode("utf-8-sig", "replace")
+        return None if data is None else data.decode("utf-8-sig", "replace")
 
     def game_procs(self) -> list:
         return self.run(["Get-Process TotalA -ErrorAction SilentlyContinue | ForEach-Object "
@@ -3101,6 +3155,18 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     return o
 
 
+def vkfill_exe() -> Path:
+    """vkfill.c built for the test machine, in the cache: a binary is never one `git add` away."""
+    exe = CACHE / "vkfill.exe"
+    src = HERE / "vkfill.c"
+    if not exe.exists() or exe.stat().st_mtime < src.stat().st_mtime:
+        r = subprocess.run(["i686-w64-mingw32-gcc", "-O2", f"-I{HERE.parents[1] / 'tagpu/ddraw/inc'}", "-o", str(exe),
+                            str(src), "-static"], capture_output=True, text=True, timeout=120)
+        if r.returncode:
+            die(f"vkfill.c does not build: {r.stderr.strip()[:300]}")
+    return exe
+
+
 def windows_cfg(args) -> dict:
     cfg = json.loads(WINDOWS_CFG.read_text()) if WINDOWS_CFG.exists() else {}
     for k in ("ssh", "key", "game"):
@@ -3118,6 +3184,7 @@ def windows_smoke(w: Win, setup, seconds):
     """A second, registry-isolated copy, driven through tacli's remote workflow."""
     name = 'compatwin-' + uuid.uuid4().hex[:12]
     result = dict(ok=False)
+    fill_status, fill_stop = w.path('results', name + '-fill.txt'), w.path('results', name + '-fill.stop')
     files = {}
     rem = None
     watch_out = None
@@ -3144,30 +3211,78 @@ def windows_smoke(w: Win, setup, seconds):
     def log_lines():
         return json.loads(checked('log', name, '-n', '10000', '--json'))['lines']
 
+    def engine_shot(dest: Path):
+        """The engine's surface, by the overlay's own trigger: `tacli shot` is local only."""
+        shots = rem.root / 'Screenshots'
+        before = {p.name for p in shots.glob('*.png')} if shots.exists() else set()
+        (rem.root / 'tagpu_shot.trigger').write_text('')
+        deadline = time.monotonic() + ACK_S
+        while time.monotonic() < deadline:
+            fresh = [p for p in shots.glob('*.png') if p.name not in before] if shots.exists() else []
+            if fresh:
+                dest.write_bytes(fresh[0].read_bytes())
+                return
+            if not rem.pid():
+                raise RuntimeError('game exited awaiting a surface screenshot')
+            time.sleep(.5)
+        raise RuntimeError('no surface screenshot came')
+
     def refuse_lane():
         """The row's refusal, in the battle: `once` has the rebuilt lane present again, `keep` spends
-        the retries and ends on GDI. The driver refuses when the row names `device_full`. No screen
-        comparison here: the Windows path's watcher reads windows and modules, not pixels."""
+        the retries and ends on GDI. The driver refuses when the row names `device_full`. On GDI the
+        screen's side panel has to be the engine's, as on Wine, against a shot taken before the lever
+        because the overlay that takes one goes with the lane. A Vulkan picture is not judged here:
+        nothing on the test setup can read one (win-shot.ps1)."""
         def write(lever, text):
             tmp = rem.root / (lever + '.tmp')
             tmp.write_text(text)
             tmp.rename(rem.root / lever)
         keep = setup['refuse_in_battle'] == 'keep'
         full = setup.get('device_full')
+        fill = setup.get('fill_device')
+        where = Path(tempfile.mkdtemp(prefix='compat-refuse-'))
+        engine, screen, shown = where / 'engine.png', where / 'screen.png', where / 'shown.png'
+        if keep:
+            engine_shot(engine)
         if full is not None:
             write('tagpu_vkfull.on', full)
-        write('tagpu_passrefuse.on', 'once' if full is not None or not keep else 'keep')
-        want = GUI_LANE_GDI if keep else 'vk: up in '
+        if fill:
+            # The card itself: everything else is taken, and what the lane gives back is taken too.
+            w.upload(vkfill_exe(), w.path('vkfill.exe'))
+            w.task(WIN_FILL_TASK, w.path('vkfill.exe'), f'"{fill_status}" "{fill_stop}" 300', w.root)
+            deadline = time.monotonic() + ACK_S
+            while 'refused 0' in (status := w.read_b64(fill_status) or 'refused 0'):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f'the driver never refused the filler: {status.strip()}')
+                time.sleep(1)
+            result['filled'] = status.strip()
+        write('tagpu_passrefuse.on', 'once' if full is not None or fill or not keep else 'keep')
+        # Filled by another process, a card may refuse nothing: WDDM pages (MEASURED 2026-11-07 on an AMD
+        # R9 200: 2816 of 2816 MiB held beside the game, whose rebuild was given all it asked). Either
+        # road may then end this: the lane back, or GDI if the driver does refuse.
+        want = GUI_LANE_GDI if keep and not fill else 'vk: up in '
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             lines = log_lines()
             back = next((i for i, l in enumerate(lines) if GUI_LANE_BACK in l), None)
             if back is not None and any(want in l for l in lines[back:]):
-                return
+                break
             if not rem.pid():
                 raise RuntimeError('game exited after the refusal')
             time.sleep(1)
-        raise RuntimeError(f'the refusal never reached {want!r}')
+        else:
+            raise RuntimeError(f'the refusal never reached {want!r}')
+        if not keep or (fill and not any(GUI_LANE_GDI in l for l in log_lines())):
+            return
+        time.sleep(5)       # GDI's first frames: nothing is judged until they are over
+        w.screen(rem.folder, screen)
+        letterboxed(screen, engine, shown)
+        stale = region_diff(shown, engine, WIN_HUD_STRIP)
+        lit = region_mean(engine, WIN_HUD_STRIP)
+        result['picture'] = dict(stale=stale, engine_lit=lit, where=str(where))
+        if stale is None or stale > HUD_STALE or not lit:
+            raise RuntimeError(f'the screen after the refusal is not the engine\'s side panel: '
+                               f'{stale} of the strip differs, the engine\'s strip is {lit} lit; see {where}')
 
     def roster():
         log = log_lines()
@@ -3284,6 +3399,9 @@ def windows_smoke(w: Win, setup, seconds):
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
         result['why'] = str(exc)
     finally:
+        if setup.get('fill_device'):
+            w.run([f"New-Item -ItemType File -Force -Path {ps(fill_stop)} | Out-Null"])
+            w.task_remove(WIN_FILL_TASK)
         if (INSTANCES / name / 'instance.json').exists():
             tacli('stop', name, timeout=60)
             if rem:
@@ -3349,6 +3467,7 @@ def cmd_windows(args):
         if w.md5(w.path("dll", "ddraw.dll")) != md5_file(dll):
             w.upload(dll, w.path("dll", "ddraw.dll"))
         w.upload(HERE / "win-watch.ps1", w.path("watch.ps1"))
+        w.upload(HERE / "win-shot.ps1", w.path("shot.ps1"))
         results = []
         for s in ready:
             print(f"  {s['name']} ...", end="", flush=True)
@@ -3376,7 +3495,7 @@ def cmd_windows(args):
                 stop_work_games(w, w.work)
         except Exception:  # noqa: BLE001 -- best effort; the report says what ran
             pass
-        for t in (WIN_GAME_TASK, WIN_WATCH_TASK):
+        for t in (WIN_GAME_TASK, WIN_WATCH_TASK, WIN_SHOT_TASK, WIN_FILL_TASK):
             try:
                 w.task_remove(t)
             except Exception:  # noqa: BLE001 -- the report matters more than the tidy-up
