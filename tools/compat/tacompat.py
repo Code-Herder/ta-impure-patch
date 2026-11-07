@@ -3175,8 +3175,14 @@ def store_misses(log: str, goal: dict) -> list:
         return ["no test mode line in the log"]
     hooks, early = m.group(1).lower(), m.group(2).strip()
     misses = [f"{d} does not answer to the store" for d in goal.get("store_covers", []) if d.lower() not in hooks]
-    if early != "nothing of the folder":
-        misses.append(f"started before Impure, so it met the real registry: {early}")
+    started = [] if early == "nothing of the folder" else [d.strip() for d in early.split(",")]
+    # Where TADR's DllMain loads Impure, the module that loaded us has started: it is on the list by being that.
+    if goal.get("tadr_started") and started:
+        started.pop()
+    misses += [f"{d} loaded during play and did not answer to the store" for d in goal.get("store_loaded", [])
+               if not re.search(rf"registry: test mode, {re.escape(d)}\S* loaded: (\d+) of \1 ", log, re.I)]
+    if started:
+        misses.append(f"started before Impure, so it met the real registry: {', '.join(started)}")
     return misses
 
 
@@ -3273,18 +3279,20 @@ def windows_smoke(w: Win, setup, seconds):
         # Filled by another process, a card may refuse nothing: WDDM pages (MEASURED 2026-11-07 on an AMD
         # R9 200: 2816 of 2816 MiB held beside the game, whose rebuild was given all it asked). Either
         # road may then end this: the lane back, or GDI if the driver does refuse.
-        want = GUI_LANE_GDI if keep and not fill else 'vk: up in '
+        wants = [GUI_LANE_GDI] if keep else ['vk: up in ']
+        if fill:
+            wants = [GUI_LANE_GDI, 'vk: up in ']
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             lines = log_lines()
             back = next((i for i, l in enumerate(lines) if GUI_LANE_BACK in l), None)
-            if back is not None and any(want in l for l in lines[back:]):
+            if back is not None and any(want in l for want in wants for l in lines[back:]):
                 break
             if not rem.pid():
                 raise RuntimeError('game exited after the refusal')
             time.sleep(1)
         else:
-            raise RuntimeError(f'the refusal never reached {want!r}')
+            raise RuntimeError(f'the refusal never reached {wants!r}')
         if not keep or (fill and not any(GUI_LANE_GDI in l for l in log_lines())):
             return
         time.sleep(5)       # GDI's first frames: nothing is judged until they are over
@@ -3327,7 +3335,9 @@ def windows_smoke(w: Win, setup, seconds):
             fields = [p['slot'], controllers[p['controller']], sides.get(p['side'], 0), p['color']]
             launch += ['--player', ':'.join(str(n) for n in fields)]
         checked(*launch, timeout=180)
-        for gadget in ('SINGLE', 'Skirmish', 'Start'):
+        # The Multiplayer screen is what loads online.dll's extension DLLs: the store has to take a DLL
+        # that comes during play, and this is the one that does on a retail folder.
+        for gadget in (('MULTI', 'PREVMENU') if setup['goal'].get('store_loaded') else ()) + ('SINGLE', 'Skirmish', 'Start'):
             deadline = time.monotonic() + POLL_S
             while True:
                 # "no active gui" is a state here, as it is in wine_skirmish: a mod's intro or a
@@ -3412,7 +3422,7 @@ def windows_smoke(w: Win, setup, seconds):
         if result['content'] and (result['content'].get('why') or result['content'].get('missing')):
             raise RuntimeError('mod-specific content is missing in game')
         result['ok'] = True
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
         result['why'] = str(exc)
     finally:
         if setup.get('fill_device'):

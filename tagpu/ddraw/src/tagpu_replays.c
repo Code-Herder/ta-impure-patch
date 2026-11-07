@@ -234,7 +234,7 @@ static const Mod s_mods[MOD_N] = {
 #define MODS_NAME        "MODS"
 #define MODS_Y           416            /* under REPLAYS: the plate holds both                   */
 #define PLATE_ONE_H      35             /* the plate's height with REPLAYS alone on it           */
-#define PLATE_FOOT       12             /* its bottom edge, which moves up with that height      */
+#define PLATE_FOOT       17             /* the art's rows that move up to make that height       */
 #define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, a, b), MSGBOX.GUI: most
                                            callers pass 1, 1 (DISASSEMBLED); with 0, 0 its OK button is
                                            inactive (MEASURED)                                    */
@@ -945,7 +945,8 @@ static void frontend_edit(unsigned char* s)
     if (!pe || pe->nframes != 1) { rlog("replays: no plate art"); return; }
     {
         const TAGPU_ART_FRAME* f = &pe->frames[0];
-        /* With REPLAYS alone the plate is the art's top and foot, joined: its middle is flat. */
+        /* With REPLAYS alone the plate is the art's top and foot, joined where the rows agree:
+           MEASURED 2026-11-07, every pixel of both styles equals the 115x35 plate drawn for REPLAYS alone. */
         const int plate_h = mods_button_shown() || f->h < PLATE_ONE_H ? f->h : PLATE_ONE_H;
         for (j = 0; j < plate_h; j++) {
             const int row = j < plate_h - PLATE_FOOT ? j : j + f->h - plate_h;

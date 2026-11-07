@@ -172,7 +172,8 @@ path's GPU is the desktop's as well. `wiki-stage-refused` is left out: that path
 plays no smoke, by the rule above.
 
 **Test mode's attach line is judged on every Windows smoke row** (`store_misses`): a folder DLL started before Impure
-fails it, and a row's `store_covers` names DLLs no import table reaches, such as the forwarder's `tplayx`.
+fails it, but for the last one named on a route where TADR's `DllMain` loads Impure (`tadr_started`), and a row's `store_covers` names DLLs no import table reaches, such as the forwarder's `tplayx`. `store_loaded`
+has the row open the Multiplayer screen first, so that `online.dll`'s extension DLLs load during play and answer.
 
 **Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line
 counts every box that crossed as engine pixels — which the layer drops — by cause, and a

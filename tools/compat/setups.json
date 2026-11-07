@@ -6,6 +6,7 @@
       "about": "the control: Impure alone on the retail exe",
       "add": [],
       "goal": {
+        "store_loaded": ["tamplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }

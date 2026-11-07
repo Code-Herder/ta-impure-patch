@@ -996,7 +996,9 @@ int tagpu_regstore_is_hook(unsigned long fn) { return rs_is_hook((ULONG_PTR)fn);
 /* THE LOADER'S OWN LISTS, 32-bit layout as Windows and Wine both keep it (MEASURED on both by the
    compat suite's test-mode rows): PEB+0x0C is the loader data, whose +0x0C heads the load order and
    +0x1C the initialisation order; an entry's links sit at +0x00 and +0x10, its base at +0x18. We
-   read them inside our own attach, under the loader lock, so nothing can change them under us. */
+   read them inside our own attach, under the loader lock, which [INFERRED for Windows, as in
+   tagpu_takeover.c] keeps them still; a list that ends in nothing or runs past RS_LDR_WALK ends the run. */
+enum { RS_LDR_WALK = 4096 };
 typedef struct RS_LDR_ENTRY {
     LIST_ENTRY load;
     LIST_ENTRY memory;
@@ -1025,6 +1027,26 @@ static int rs_in_game_folder(HMODULE m)
 }
 
 static char s_refuseBy[400];    /* who entered test mode: every refusal's line starts with it */
+
+/* 0 while a module's ADVAPI32 slots still hold what its file holds, an RVA to a name or an ordinal: the
+   loader has not bound them, and what hooks them now it would overwrite. A bound slot is an address in
+   ADVAPI32, far above any module's SizeOfImage. */
+static int rs_imports_bound(HMODULE m)
+{
+    BYTE* base = (BYTE*)m;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    IMAGE_IMPORT_DESCRIPTOR* d;
+    if (!rva) return 1;
+    for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
+        const IMAGE_THUNK_DATA* t = (const IMAGE_THUNK_DATA*)(base + d->FirstThunk);
+        if (!d->Name || _stricmp((char*)(base + d->Name), "ADVAPI32.dll")) continue;
+        for (; t->u1.Function; t++)
+            if (t->u1.Function < nt->OptionalHeader.SizeOfImage || (t->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+                return 0;
+    }
+    return 1;
+}
 
 /* Hooks one module of the game's folder and returns its registry imports, 0 for a module not of the
    folder or the one that answers. A registry import the store cannot answer ends the run. */
@@ -1072,7 +1094,8 @@ typedef struct RS_DLL_NOTICE {
 /* THE LOADER CALLS THIS FOR EVERY MODULE IT LOADS, once its imports are bound and before its entry
    point runs: an export forwarder's target, what `online.dll` searches for, anything `LoadLibrary`
    brings in. So a DLL of the game's folder reaches the registry only through the store whichever
-   road brought it, and no name or import table has to say it would come. */
+   road brought it, and no name or import table has to say it would come. "Bound" is checked each time,
+   because hooks written before the binding would be overwritten without a word. */
 static VOID CALLBACK rs_on_dll_load(ULONG reason, const RS_DLL_NOTICE* notice, PVOID ctx)
 {
     enum { RS_LDR_LOADED = 1 };
@@ -1081,6 +1104,12 @@ static VOID CALLBACK rs_on_dll_load(ULONG reason, const RS_DLL_NOTICE* notice, P
     (void)ctx;
     if (reason != RS_LDR_LOADED) return;
     rs_module_name((HMODULE)notice->DllBase, name, sizeof name);
+    if (s_exeDirLen && rs_in_game_folder((HMODULE)notice->DllBase) && !rs_imports_bound((HMODULE)notice->DllBase)) {
+        char what[200];
+        _snprintf(what, sizeof what, "the loader told of %s before binding its imports", name);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(s_refuseBy, what);
+    }
     regs = rs_answer_module((HMODULE)notice->DllBase, &ours, name);
     if (regs) tagpu_logf("registry: test mode, %s loaded: %d of %d registry imports answered", name, ours, regs);
 }
@@ -1101,6 +1130,7 @@ static void rs_hook_folder(HMODULE exe, char* out, size_t cap, char* early, size
     LIST_ENTRY* head, *e;
     WCHAR* slash;
     size_t used = 0, eused = 0;
+    int walked = 0;
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"), pin = NULL;
     Register reg = ntdll ? (Register)(void*)GetProcAddress(ntdll, "LdrRegisterDllNotification") : NULL;
     DWORD n = GetModuleFileNameW(exe, s_exeDir, sizeof s_exeDir / sizeof s_exeDir[0]);
@@ -1113,9 +1143,11 @@ static void rs_hook_folder(HMODULE exe, char* out, size_t cap, char* early, size
 
     head = rs_ldr_list(0x0C);
     for (e = head->Flink; e != head; e = e->Flink) {
-        HMODULE m = (HMODULE)((RS_LDR_ENTRY*)e)->base;
+        HMODULE m;
         char name[120];
         int regs, ours = 0;
+        if (!e || ++walked > RS_LDR_WALK) rs_refuse_run(s_refuseBy, "the loader's module list has no end");
+        m = (HMODULE)((RS_LDR_ENTRY*)e)->base;
         rs_module_name(m, name, sizeof name);
         regs = rs_answer_module(m, &ours, name);
         if (regs && used < cap) {
@@ -1130,9 +1162,11 @@ static void rs_hook_folder(HMODULE exe, char* out, size_t cap, char* early, size
                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                        (LPCWSTR)(void*)rs_in_game_folder, &pin);
     head = rs_ldr_list(0x1C);
+    walked = 0;
     for (e = head->Flink; e != head; e = e->Flink) {
-        RS_LDR_ENTRY* entry = (RS_LDR_ENTRY*)((BYTE*)e - offsetof(RS_LDR_ENTRY, init));
-        HMODULE m = (HMODULE)entry->base;
+        HMODULE m;
+        if (!e || ++walked > RS_LDR_WALK) rs_refuse_run(s_refuseBy, "the loader's initialisation list has no end");
+        m = (HMODULE)((RS_LDR_ENTRY*)((BYTE*)e - offsetof(RS_LDR_ENTRY, init)))->base;
         if (m == pin) break;
         if (m != exe && rs_in_game_folder(m) && eused < earlycap) {
             char name[120];

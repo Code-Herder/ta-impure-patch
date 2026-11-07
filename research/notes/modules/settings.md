@@ -336,8 +336,8 @@ carries no hook of this section.
 no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
 (the exe's, or one of any DLL of its folder, whenever that DLL loads), or a loader that will not notify
 ends the process with `TerminateProcess`, at attach or at that DLL's load, after one
-log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
-first instruction never runs. The signal in every line names the module whose attach it ends
+log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. At attach the game's
+first instruction never runs; a DLL refused at its load ends a game that has started, in the same words. The signal in every line names the module whose attach it ends
 (`s_exe`: `the tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s
 command line`), so a cnc-ddraw config tool opened in a test folder is refused in words about
 itself and told to run from a folder with no `tacli-state`; only TotalA.exe's folder-alone
@@ -362,14 +362,18 @@ export forwarders alone, so no import table names it. At attach it walks the loa
 (`PEB+0x0C`, load order at `+0x0C`), under the loader lock, and then registers
 `LdrRegisterDllNotification`: `rs_on_dll_load` hooks what loads later, once its imports are bound and
 before its entry point runs, and logs `registry: test mode, <name> loaded: n of m registry imports
-answered`. That covers an export forwarder's target, the extension DLLs `online.dll` searches for and
+answered`. That order is checked each time, as hooks written before the binding would be overwritten
+silently: an ADVAPI32 slot still holding an RVA or an ordinal ends the run (`rs_imports_bound`). MEASURED 2026-11-07 on
+Windows 10 and Wine: opening the Multiplayer screen logs `taheatx`, `takalix`, `tamplayx` and `tawirepx`, each
+`3 of 3`, none refused; the retail row's smoke requires it (`store_loaded`). That covers an export forwarder's target, the extension DLLs `online.dll` searches for and
 anything else `LoadLibrary` brings in. The callback pins Impure's module, since it lives there. A library
 outside the folder is left alone, so the real DirectPlay and winmm keep the real registry, and Impure's
 own module is what answers.
 
 No fixture and no retail DLL imports a registry function the hooks do not answer, and no DLL with no
-registry import resolves one by name: its strings hold no `Reg*` name [MEASURED 2026-11-07 over every
-DLL of the 20 fixtures and the Steam install].
+registry import holds a `Reg*` name among its strings [MEASURED 2026-11-07 over every
+DLL of the 20 fixtures and the Steam install]. A packed DLL hides both: `basscd.dll` (Total Mayhem, ProTA) is
+Petite-packed, so `1 of 1` is its stub's `RegCloseKey`, and a call it resolves itself goes round the hooks.
 
 After patching, `rs_count` walks the import directories of the exe and of each of those modules: every
 ADVAPI32 import whose name begins with `Reg`, or for a descriptor with no name table (TADR's `tplayx`
@@ -402,11 +406,13 @@ values in a burst, but only the ones that changed cost a rewrite (two rewrites i
 run under wine).
 
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
-above are the only way the code of `TotalA.exe` and of the folder's DLLs reaches the registry once
+above are the only way the code of `TotalA.exe` and of the folder's DLLs reaches the registry through its imports, once
 Impure has attached, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
 meets the real registry during it: the attach line names them (`started before us:`, from the loader's
-initialisation order, `+0x1C`), and a Windows smoke row fails on any. MEASURED 2026-11-07 on Windows: `nothing of the
-folder` on `loader+tadr-ota`, Total Mayhem and ProTA, whose `tplayx.DLL 9 of 9` is the forwarder's target. Nothing hooks the system
+initialisation order, `+0x1C`). A Windows smoke row fails on any, but for the one that loads Impure on the
+routes where TADR's `DllMain` does. MEASURED 2026-11-07 on Windows: `nothing of the
+folder` on retail, `loader+tadr-ota`, Total Mayhem and ProTA, whose `tplayx.DLL 9 of 9` is the forwarder's target;
+`TAESC.dll` on Escalation and `ZDRAW.dll` on TA Zero, which load Impure. Nothing hooks the system
 DLLs the game uses and loads by name; the programs the game starts (what `ShellExecuteA`
 opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
 while it exists, and those of the programs it runs). The full list: [tacli
