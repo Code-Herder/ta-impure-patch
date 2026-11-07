@@ -309,6 +309,16 @@ def proc_prefix(pid, environ: list):
     return None
 
 
+def _proc_is_totala(pid: int) -> bool:
+    """Whether `pid` is a TotalA.exe that has not ended. A leader that is a zombie is not an answer:
+    the process may live on in its other threads, and the listing can tell."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(errors="replace")
+    except OSError:
+        return False
+    return stat[stat.find("(") + 1:stat.rfind(")")] == "TotalA.exe" and stat[stat.rfind(")") + 2:][:1] != "Z"
+
+
 def totala_by_prefix() -> dict:
     """{resolved prefix: pid} of every local TotalA.exe, from one process listing: the first
     pid in pgrep's order for each prefix. An instance's game is the one running from its
@@ -432,7 +442,14 @@ class Instance:
         remote instance, by the test folder it runs from."""
         if self.remote:
             return self.remote.pid()
-        return totala_by_prefix().get(prefix_key(self.prefix))
+        # THE GAME THIS OBJECT HAS ALREADY FOUND ANSWERS FOR ITSELF. The listing reads the process's
+        # environment, which a live process can answer empty, and one such read here would report a
+        # running game as exited. Only a process that is gone, or a zombie, loses the pid.
+        known = getattr(self, "_known_pid", None)
+        if known and _proc_is_totala(known):
+            return known
+        self._known_pid = totala_by_prefix().get(prefix_key(self.prefix))
+        return self._known_pid
 
     def running(self) -> bool:
         return self.pid() is not None
