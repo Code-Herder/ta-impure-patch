@@ -14,6 +14,9 @@ int  tagpu_modmem_exe_has_bit(void);
    nothing, so the bit stays on after a mod that set it. 1 when the exe is as asked, changed or not; 0 with a sentence for the player in `why`. That says the game stays as it is, or, in the one case where the old
    file could not go back, where it is. */
 int  tagpu_modmem_apply(int memory, char* why, size_t nwhy);
+/* 1 with a sentence for the player when a swap could not put the old file back, so no file holds the exe's name and the old one waits beside it. Nothing can
+   restart until the player renames it, whatever is chosen. */
+int  tagpu_modmem_exe_lost(char* why, size_t nwhy);
 /* At start-up: the file set aside, which the process before this one was still running from, and a copy a stopped process left. */
 void tagpu_modmem_sweep(void);
 

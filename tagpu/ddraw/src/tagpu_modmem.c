@@ -93,8 +93,8 @@ static int swap_in(const wchar_t* exe, const wchar_t* fresh, const wchar_t* work
     }
     if (kept) {
         free_name(kept);
-        if (!MoveFileExW(work, kept, MOVEFILE_REPLACE_EXISTING))
-            tagpu_logf("modmem: the old exe could not be kept as .pre-4gb (error %lu), and the next start removes it", (unsigned long)GetLastError());
+        if (MoveFileExW(work, kept, MOVEFILE_REPLACE_EXISTING)) tagpu_log("modmem: the old exe is kept as .pre-4gb");
+        else tagpu_logf("modmem: the old exe could not be kept as .pre-4gb (error %lu), and the next start removes it", (unsigned long)GetLastError());
     }
     return SWAP_DONE;
 }
@@ -103,6 +103,21 @@ static int same_exe(const uint8_t* a, size_t na, const uint8_t* b, size_t nb)
 {
     uint8_t ka[32], kb[32];
     return tagpu_modpak_file_key(a, na, 1, ka) && tagpu_modpak_file_key(b, nb, 1, kb) && !memcmp(ka, kb, sizeof ka);
+}
+
+static const char* lost_sentence(char* why, size_t nwhy)
+{
+    snprintf(why, nwhy, "The game's exe is missing, and your file is TotalA.exe.4gb-old: rename it TotalA.exe.");
+    return why;
+}
+
+int tagpu_modmem_exe_lost(char* why, size_t nwhy)
+{
+    wchar_t exe[MAX_PATH], old[MAX_PATH];
+    if (!exe_path(exe, L"") || !exe_path(old, SUFFIX_OLD)) return 0;
+    if (GetFileAttributesW(exe) != INVALID_FILE_ATTRIBUTES || GetFileAttributesW(old) == INVALID_FILE_ATTRIBUTES) return 0;
+    lost_sentence(why, nwhy);
+    return 1;
 }
 
 int tagpu_modmem_apply(int memory, char* why, size_t nwhy)
@@ -137,11 +152,11 @@ int tagpu_modmem_apply(int memory, char* why, size_t nwhy)
         DeleteFileW(tmp);
     }
     if (swap == SWAP_NO_EXE)
-        snprintf(why, nwhy, "The game's exe could not be replaced or put back (error %lu). Your file is TotalA.exe.4gb-old: rename it TotalA.exe.", (unsigned long)err);
+        tagpu_logf("modmem: %s (error %lu)", lost_sentence(why, nwhy), (unsigned long)err);
     else if (swap == SWAP_REFUSED)
         snprintf(why, nwhy, "%s the game's exe could not be replaced (error %lu), so the game stays as it is.", lead, (unsigned long)err);
     else
-        tagpu_logf("modmem: the exe's large-address bit is %s", memory == MODCAT_MEMORY_4GB ? "on, the old file kept as .pre-4gb" : "off");
+        tagpu_logf("modmem: the exe's large-address bit is %s", memory == MODCAT_MEMORY_4GB ? "on" : "off");
 done:
     free(data);
     free(backup);

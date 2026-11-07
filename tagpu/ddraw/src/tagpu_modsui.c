@@ -897,6 +897,7 @@ void tagpu_modsui_open(const char* folder)
     s_sel[MODS_TAB_EXPLORE] = s_sel[MODS_TAB_UPDATES] = NONE;
     s_held[0] = s_note[0] = 0;
     s_exeStale = exe_stale();
+    tagpu_modmem_exe_lost(s_note, sizeof s_note);
     s_owed = 0;
     memset(s_keyOwed, 0, sizeof s_keyOwed);
     s_drag = -1;
@@ -925,6 +926,12 @@ static void confirm(void)
 {
     char id[32], was[32] = "";
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
+    if (tagpu_modmem_exe_lost(s_note, sizeof s_note)) {
+        tagpu_logf("modsui: %s", s_note);
+        s_paneStale = 1;
+        publish();
+        return;
+    }
     /* THE PROFILE FIRST: a choice it could not save refuses the restart with impure.cfg as it was */
     tagpu_profiles_flush_now();
     if (!tagpu_profiles_saved()) {
@@ -934,7 +941,8 @@ static void confirm(void)
         publish();
         return;
     }
-    /* BEFORE THE CHOICE IS SAVED: refused, nothing has changed. The other way round would leave mod= naming a mod its exe cannot load. */
+    /* BEFORE THE CHOICE IS SAVED: refused, nothing has changed, but for the swap whose old file could not go back, which says where it is. The other way round
+       would leave mod= naming a mod its exe cannot load. */
     if (s_chosen >= 0 && !tagpu_modmem_apply(s_mod[s_chosen].about.memory, s_note, sizeof s_note)) {
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;
@@ -949,7 +957,7 @@ static void confirm(void)
        held goes back, since its retry would otherwise write the refused one once the file frees. */
     if (!tagpu_settings_saved()) {
         tagpu_settings_set_mod(was);
-        lstrcpynA(s_note, "Your choice could not be saved in impure.cfg, so the game stays as it is.", sizeof s_note);
+        lstrcpynA(s_note, "Your choice could not be saved in impure.cfg, so the game keeps the mod it runs.", sizeof s_note);
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;
         publish();

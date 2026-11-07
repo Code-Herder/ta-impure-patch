@@ -128,18 +128,35 @@ def main():
         report("could not be replaced" in s["note"], f"Confirm refuses and says why: {s['note']!r}")
         report(exe.read_bytes() == original and kept.read_bytes() == b"another file", "the exe and the kept file are as they were")
         tmp.rmdir()
-        # the first rename refused as well: a folder in the way of the name it moves to
+        # the first rename refused as well: a folder in the way of the name it moves to. The note is already there, so the log says this click was answered
         old.mkdir()
         (old / "x").write_text("")
+        before = g.logs().count("could not be replaced")
         g.click("confirm")
-        s = g.settled(lambda s: "could not be replaced" in s["note"], 10)
-        report("could not be replaced" in s["note"] and exe.read_bytes() == original and kept.read_bytes() == b"another file", f"a refused rename changes nothing: {s['note']!r}")
+        end = time.time() + 10
+        while g.logs().count("could not be replaced") == before and time.time() < end:
+            time.sleep(0.2)
+        report(g.logs().count("could not be replaced") > before, "the refused rename's click was answered")
+        report(exe.read_bytes() == original and kept.read_bytes() == b"another file", "a refused rename changes nothing")
         (old / "x").unlink()
         old.rmdir()
+        # no file holds the exe's name, as when a rollback fails: the note says where it is, on a Confirm and at an open
+        running = exe.read_bytes()
+        exe.rename(old)
+        g.click("confirm")
+        s = g.settled(lambda s: "TotalA.exe.4gb-old" in s["note"], 10)
+        report("TotalA.exe.4gb-old" in s["note"], f"with the exe gone Confirm names the file: {s['note']!r}")
+        g.click("back")
+        s = confirm_page(g)
+        report("TotalA.exe.4gb-old" in s["note"], "and so does opening the screen")
+        old.rename(exe)
+        report(exe.read_bytes() == running, "a rename puts it back")
+        g.click("tab:0")
+        kept.chmod(0o444)   # a read-only name in the way of the last rename
         g.click_ending("confirm")
         report(g.menu(180), "with the folder free the game comes back")
         report(fields(exe.read_bytes())[0], "the next Confirm set the bit again")
-        report(kept.read_bytes() == original, "and the old file replaces what was kept")
+        report(kept.read_bytes() == original, "and the old file replaces what was kept, read-only as it was")
 
         # an entry marked bit-off: Confirm puts the kept file back
         catalog = json.loads((ROOT / "mods/catalog.json").read_text())
@@ -170,6 +187,20 @@ def main():
         now = exe.read_bytes()
         report(not fields(now)[0] and key(now) == key(original), "with no copy kept the bit is cleared and the key holds")
         report(fields(now)[1] == fields(now)[2], "and its checksum fits")
+
+        # the last rename refused: the exe is right, and the log says no copy was kept
+        tacli("stop", ms.NAME, check=False)
+        (g.dir / "tagpu_modcatalog.on").unlink()
+        kept.mkdir()
+        (kept / "x").write_text("")
+        g.launch()
+        confirm_page(g)
+        g.click_ending("confirm")
+        report(g.menu(180), "the game comes back with the old file not kept")
+        report(fields(exe.read_bytes())[0], "the bit is on all the same")
+        report("the old exe could not be kept" in g.logs(), "the log says no copy was kept")
+        relaunch(g)
+        report(not old.exists(), "and the next start removes the file set aside")
     finally:
         tacli("stop", ms.NAME, check=False)
         if film:
