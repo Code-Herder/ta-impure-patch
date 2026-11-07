@@ -334,10 +334,11 @@ DFNS(DECL)
    GPU answers, for the lane and every pass of both worlds, since every pass resolves its entry points
    through `gdpa`: the refusal then takes the road a real one takes, whichever pass met it. Filling a
    shared GPU to get the real answer would take it from everything else on the machine. The file says
-   `keep` to refuse every allocation while it is there; otherwise a number K, or nothing for 0: K
-   allocations pass and the next is refused, and the file is consumed. Read at each allocation, which
-   a settled frame makes none of. */
+   `keep` to refuse every allocation while it is there, or `wiki` to refuse only the wiki stage's
+   (`s_inWikiStage`); otherwise a number K, or nothing for 0: K allocations pass and the next is
+   refused, and the file is consumed. Read at each allocation, which a settled frame makes none of. */
 static PFN_vkAllocateMemory s_realAllocate;
+static int s_inWikiStage;           /* the render thread is preparing the wiki's copies of the passes */
 static LONG s_fullPassed = -1;      /* allocations let by since the file appeared; -1: no file seen */
 
 static int full_refuses(void)
@@ -349,6 +350,7 @@ static int full_refuses(void)
     n = fread(text, 1, sizeof text - 1, f);
     fclose(f);
     text[n] = 0;
+    if (strstr(text, "wiki")) return s_inWikiStage;
     if (strstr(text, "keep")) return 1;
     if (InterlockedIncrement(&s_fullPassed) < atoi(text)) return 0;
     DeleteFileA("tagpu_vkfull.on");
@@ -2548,6 +2550,10 @@ static int vk_present(void)
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
+        if (tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
+            tagpu_vkw_world_down_owed())
+            vklog("the wiki's stage was refused its resources - the page has no 3D image until "
+                  "the lane is next rebuilt");
         if (tagpu_vkw_terr_down_owed())    tagpu_vkw_terr_down_refused(&s_pass);
         if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_refused(&s_pass);
         if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_refused(&s_pass);
@@ -2793,6 +2799,7 @@ static int vk_present(void)
             wiki_on = tagpu_wikiworld_wants(s_pass.frame, &wiki_want);
             if (wiki_on) {
                 QueryPerformanceCounter(&wiki_t0);
+                s_inWikiStage = 1;
                 wiki_world = tagpu_vkw_world_prepare(&s_pass, cb, fi, &wtw, &wth);
                 if (wiki_world) {
                     /* the stage's own fog image, before its passes, for the game's reason */
@@ -2804,6 +2811,7 @@ static int vk_present(void)
                         if (wiki_want.unitWhole) wiki_unit = tagpu_vkw_unit_prepare(&s_pass, cb, fi);
                     }
                 }
+                s_inWikiStage = 0;
                 wiki_image = wiki_world && (!wiki_want.terr || wiki_terr) && (!wiki_want.feat || wiki_feat) &&
                              (!wiki_want.unit || wiki_unit);
                 wiki_ms += ms_since(wiki_t0);

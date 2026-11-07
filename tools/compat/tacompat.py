@@ -478,7 +478,7 @@ DEVICE_REFUSED = re.compile(
 
 GUI_LANE_BACK = "the lane failed after it had come up - bringing it up again"
 GUI_LANE_GDI = "the session goes to GDI"
-GUI_STAGE_REFUSED = "the wiki's stage:"
+GUI_STAGE_REFUSED = "the wiki's stage was refused"
 
 
 def device_refused(text: str) -> list:
@@ -1337,7 +1337,8 @@ def scenarios(setup) -> dict:
 HUD_STRIP = (0, 140, 128, 845)      # x, y, w, h: the side panel below the minimap, at 1280x1024
 HUD_FUZZ = "9.4%"                   # a channel off by more than 24 of 255 is a different pixel
 HUD_STALE = 0.05                    # past this, the screen is not showing the engine's panel
-DIALOG_BOX = (320, 272, 640, 480)   # the in-game menu's box on the battle's 1280x1024
+DIALOG_BOX = (128, 32, 1152, 960)   # x, y, w, h: the view on the battle's 1280x1024, panel and bars out
+DIALOG_OPENED = 0.10                # HELP changes about 18 % of it (MEASURED 2026-11-06, 204 143 pixels)
 HUD_OPENED = 0.20                   # the selection must change the engine's own strip this much
 
 
@@ -1433,8 +1434,8 @@ class Unsettled(Exception):
 
 def wiki_stage_refused(name, gamedir: Path) -> "str | None":
     """The driver refuses the wiki's stage its memory: the page opens and the 3D image is missing,
-    and the game's lane stays up. The lever goes before the click, the stage is built when the page
-    first draws, and the game's own passes have settled by now, so what asks is the stage. Why it
+    and the game's lane stays up. The lever goes before the click and refuses only what the stage's
+    passes allocate: opening the page makes the UI pass allocate too, and that is the game's. Why it
     failed, or None."""
     out, ask = gamedir / "tagpu_wiki.json", gamedir / "tagpu_wiki.dump"
     out.unlink(missing_ok=True)
@@ -1452,7 +1453,7 @@ def wiki_stage_refused(name, gamedir: Path) -> "str | None":
     rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == "wiki"), None)
     if not rect:
         return f"the last frame has no wiki button: {[h['key'] for h in d.get('hits', [])][:8]}"
-    refuse_lever_write(gamedir, "keep", "tagpu_vkfull.on")
+    refuse_lever_write(gamedir, "wiki", "tagpu_vkfull.on")
     tacli("keys", name, "dclick:%d,%d" % ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2), timeout=150)
     said = log_says(gamedir, GUI_STAGE_REFUSED, 60)
     (gamedir / "tagpu_vkfull.on").unlink(missing_ok=True)
@@ -1465,11 +1466,11 @@ def wiki_stage_refused(name, gamedir: Path) -> "str | None":
 
 
 def dialog_after_reset(name, display, gamedir: Path, where: Path) -> dict:
-    """The in-game menu open (Tab, `ARMOPT.GUI`) across a reset: the UI pass is refused while it is
-    up, and once it is closed the screen where it stood has to show what it showed before it opened.
-    Screen against screen, since the Vulkan world is no pixel of the engine's: `opened` is how much
-    the menu changed that box, and `stale` how much of it is still different after the close. Run
-    before the scenario, so the world under it holds still."""
+    """A dialog over the world across a reset: the game's HELP (Tab, then HELP, `HELP.GUI`) stands
+    over about a fifth of the view, the UI pass is refused while it is up, and once it is closed the
+    view has to show what it showed before it opened. Screen against screen, since the Vulkan world
+    is no pixel of the engine's: the menu pauses the game, so the world under it holds still.
+    `opened` is how much the dialog changed the view, and `stale` how much is still different."""
     where.mkdir(parents=True, exist_ok=True)
 
     def grab(step):
@@ -1484,17 +1485,22 @@ def dialog_after_reset(name, display, gamedir: Path, where: Path) -> dict:
             raise Unsettled(f"the screen at {step}: {r.stderr.decode(errors='replace')[:200]}")
         return path
 
+    def click(gadget):
+        r = tacli("ui", name, "click", gadget, timeout=60)
+        if r.returncode:
+            raise Unsettled(f"{gadget}: {(r.stderr or r.stdout).strip()[:200]}")
+
     try:
-        before = grab("before")
         tacli("keys", name, "Tab", timeout=150)
+        before = grab("before")
+        click("HELP")
         up = grab("open")
         why = refuse_once(gamedir)
         if why:
             raise Unsettled(why)
-        tacli("keys", name, "Tab", timeout=150)
-        if "OPT" in (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]:
-            tacli("keys", name, "Escape", timeout=150)
+        click("OK")
         after = grab("closed")
+        click("OK")
         return {"opened": region_diff(before, up, DIALOG_BOX), "stale": region_diff(before, after, DIALOG_BOX),
                 "where": str(where)}
     except subprocess.TimeoutExpired as e:
@@ -1507,11 +1513,11 @@ def dialog_misses(dlg: "dict | None") -> list:
     if dlg is None:
         return []
     if dlg.get("opened") is None or dlg.get("stale") is None:
-        return [f"the menu across a reset could not be compared ({dlg.get('where')})"]
-    if dlg["opened"] < HUD_OPENED:
-        return [f"the menu changed {dlg['opened']:.0%} of the box it stands in, so its close was not exercised"]
+        return [f"the dialog across a reset could not be compared ({dlg.get('where')})"]
+    if dlg["opened"] < DIALOG_OPENED:
+        return [f"the dialog changed {dlg['opened']:.0%} of the view, so its close was not exercised"]
     if dlg["stale"] > HUD_STALE:
-        return [f"after a reset and a close the menu's box still differs at {dlg['stale']:.1%} of its "
+        return [f"after a reset and a close the view still differs at {dlg['stale']:.1%} of its "
                 f"pixels ({dlg.get('where')})"]
     return []
 
@@ -3481,9 +3487,9 @@ GUI_CASES = [
     ("a restore refused is no miss", "vk: gui: 1 picture(s) restored HERE - 1 stored, 0 refused\n", _ACTIVE, 0),
     ("lever, lane back", "vk: gui: slot 0 would not take x\nvk: " + GUI_LANE_BACK + "\n",
      {"outcome": "impure-active", "refuse_lever": True}, 0),
-    ("the stage alone", "vk: the wiki's stage: terr was refused\nvk: terr: slot 0 would not take x\n",
+    ("the stage alone", "vk: the wiki's stage was refused\nvk: terr: slot 0 would not take x\n",
      {"outcome": "impure-active", "stage_refused": True}, 0),
-    ("the stage took the lane down", "vk: the wiki's stage: terr was refused\nvk: " + GUI_LANE_BACK + "\n",
+    ("the stage took the lane down", "vk: the wiki's stage was refused\nvk: " + GUI_LANE_BACK + "\n",
      {"outcome": "impure-active", "stage_refused": True}, 1),
     ("lever, lane stayed down", "vk: gui: slot 0 would not take x\n",
      {"outcome": "impure-active", "refuse_lever": True}, 1),
