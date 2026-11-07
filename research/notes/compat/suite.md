@@ -156,7 +156,15 @@ bound it. A game launched by hand during a run is not counted; the refusal it ca
 with a lever plays no battle. `once`: the panel is opened, the lane is refused and has to come back and
 present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
 the side panel has to pass. `keep`: the session has to reach GDI, and GDI's screen has to come to show
-the engine's side panel within 60 s. Wine only, since the Windows path plays no battle to drive them.
+the engine's side panel within 60 s. `pass-full` and `pass-full-gdi` are the same two roads with the
+driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and `wiki-stage-refused` refuses the
+wiki's stage alone: the page loses its 3D image, and the lane has to stay up.
+
+**On Windows** the refusal rows run only under `--smoke`, whose battle is where the refusal happens
+(`refuse_lane`): the log has to say the lane came back, or that the session went to GDI, and the game has
+to stay alive through the watch. No picture is judged there, since that path's watcher reads windows and
+modules. `wiki-stage-refused` is left out: that path has no way to open the page. A setup with a lever
+plays no smoke, by the rule above.
 
 **Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line
 counts every box that crossed as engine pixels — which the layer drops — by cause, and a

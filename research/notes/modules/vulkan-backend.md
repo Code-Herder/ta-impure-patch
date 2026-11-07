@@ -699,7 +699,7 @@ every frame, so a refusal is settled once. How depends on what the picture loses
 
 | the pass | what its refusal does | when it comes back |
 |---|---|---|
-| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread, never earned back) then hands the session to GDI, whose picture is whole |
+| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread) then hands the session to GDI, whose picture is whole. `VK_RETRY_EARNED_FRAMES` (18 000 presented frames since the last failure, five minutes at 60 Hz) earns the spent retries back, so the budget bounds a lane that keeps failing and not the failures of a long session |
 | `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down`, or a swapchain rebuild that changes the extent, image count or format |
 | `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the same |
 | the HUD and the wiki | `tagpu_hudstate_refuse` | the same (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
@@ -725,14 +725,25 @@ panel's save-under, which owes the emblem. **Open:** a dialog's save-under resto
 keeps what it covered until the engine next draws there. No such dialog has been seen doing it.
 
 `tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
-suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. Filling the card is how the
+suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. `tagpu_vkfull.on` is the driver's
+own no: it sits on the device's `vkAllocateMemory` and on what `gdpa` hands the passes, and refuses with
+`VK_ERROR_OUT_OF_DEVICE_MEMORY` after the file's K allocations (the file is consumed), every one with
+`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-gdi` and
+`wiki-stage-refused` rows use it, so the rebuilt lane's real road has been run: an allocation refused on
+it costs another retry, and the retries end on GDI. MEASURED 2026-11-07: one refusal, the line after
+18 000 presented frames (478 s under Xvfb), then three more refusals and no GDI. Filling the card is how the
 real refusal was first met: 18 games at about 900 MiB each reached 11 824 of 12 282 MiB on an RTX 4070
 (MEASURED 2026-11-06, 4 setups of 32 with no UI, 2 on the next run, each from a real refusal). One game
 alone peaks at 917-921 MiB, before and after the mod manager's landings.
 
-**Not run:** the real refusal on the rebuilt lane. The lever proves the road; the same run on a full
-card has been seen only before this fix, and filling a shared GPU on purpose takes it from everything
-else on the machine.
+**Not run:** a card that is actually full. The lever refuses where the driver would; a full card has
+been seen only before this seam, and filling a shared GPU on purpose takes it from everything else on
+the machine.
+
+**A rebuild does not move the camera.** The rebuild's frames draw nothing, and the world's claim on the
+camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
+from the retry until a frame reaches the screen the world stays live and the skip stays
+(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 
