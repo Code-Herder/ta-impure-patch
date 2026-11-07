@@ -281,12 +281,13 @@ What follows from those rules:
   time.
 - **The catalog flags the mods that need it**, e.g. `memory=4gb` on Escalation.
 - **Confirming a flagged mod on an exe without the bit:**
-  1. renames `TotalA.exe` to `TotalA.exe.pre-4gb` (Windows allows renaming a running exe);
-  2. writes a copy with LAA set and the header checksum fixed;
+  1. writes a copy with LAA set and the header checksum fixed;
+  2. renames `TotalA.exe` aside (Windows allows renaming a running exe), the copy to `TotalA.exe`, and the old file to `TotalA.exe.pre-4gb`;
   3. restarts.
 - **Exe identification ignores that bit.**
 - **The bit stays on afterwards.** Every setup must pass an LAA-on compat row. Until a setup does,
-  its entry is marked bit-off and Confirm restores the `.pre-4gb` copy for it.
+  its entry is marked bit-off and Confirm restores the `.pre-4gb` copy for it, or clears the bit in place when there is no matching copy. A retail or drop-in
+  setup has no such mark: it runs with the bit once a mod has set it, so a failing row there is a bug to fix.
 - **If Steam's file verification reverts the exe,** the next Confirm of a flagged mod sets the bit
   again.
 - **There is no global switch in v1.**

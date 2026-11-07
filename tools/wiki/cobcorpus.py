@@ -243,7 +243,8 @@ def main(argv=None):
     runs = {}                   # corpus key -> (the setup that ran it, its result)
     out, refused, ran = [], [], 0
     t0 = time.monotonic()
-    for name in args.setups or [s["name"] for s in tacompat.SETUPS]:
+    # a laa row's files are its plain row's
+    for name in args.setups or [s["name"] for s in tacompat.SETUPS if not s["name"].startswith("laa-")]:
         setup = by_name[name]
         missing = sorted({a["fixture"] for a in setup["add"] if tacompat.fixture_problems(a["fixture"])})
         if missing:

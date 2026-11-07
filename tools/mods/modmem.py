@@ -2,7 +2,7 @@
 """The exe's large-address bit through the Mods screen on Wine: Confirm sets it, keeps the old file and restarts; a file check's revert is set again; a folder
 that will not take the new file refuses with nothing changed; a bit-off entry puts the old file back.
 
-    python3 tools/mods/modmem.py [--display :N] [--film FILE]
+    python3 tools/mods/modmem.py --display :N [--film FILE]
 
 The verdicts read the exe on disk, its key, impure.cfg, the log and a skirmish played under the mod."""
 import argparse
@@ -120,17 +120,26 @@ def main():
         report("the next Confirm settles it" in g.logs(), "the log names the difference")
 
         # a folder that refuses the new file: nothing changes, and the screen says so
+        kept.write_bytes(b"another file")
         tmp.mkdir()
         g.click("confirm")
         s = g.settled(lambda s: "could not be replaced" in s["note"], 10)
         g.shot("mem-refused")
         report("could not be replaced" in s["note"], f"Confirm refuses and says why: {s['note']!r}")
-        report(exe.read_bytes() == original, "the exe is as it was")
+        report(exe.read_bytes() == original and kept.read_bytes() == b"another file", "the exe and the kept file are as they were")
         tmp.rmdir()
+        # the first rename refused as well: a folder in the way of the name it moves to
+        old.mkdir()
+        (old / "x").write_text("")
+        g.click("confirm")
+        s = g.settled(lambda s: "could not be replaced" in s["note"], 10)
+        report("could not be replaced" in s["note"] and exe.read_bytes() == original and kept.read_bytes() == b"another file", f"a refused rename changes nothing: {s['note']!r}")
+        (old / "x").unlink()
+        old.rmdir()
         g.click_ending("confirm")
         report(g.menu(180), "with the folder free the game comes back")
         report(fields(exe.read_bytes())[0], "the next Confirm set the bit again")
-        report(kept.read_bytes() == original, "and the old file is still the one kept")
+        report(kept.read_bytes() == original, "and the old file replaces what was kept")
 
         # an entry marked bit-off: Confirm puts the kept file back
         catalog = json.loads((ROOT / "mods/catalog.json").read_text())
@@ -144,7 +153,6 @@ def main():
         report(g.menu(180), "the game comes back")
         report(exe.read_bytes() == original, "a bit-off entry's Confirm puts the old exe back, byte for byte")
         report(not kept.exists(), "the kept file went back, none left beside it")
-        report(not old.exists() or len(old.read_bytes()) == len(original), "the file set aside is at most waiting for the next start")
         relaunch(g)
         report(not old.exists(), "the next start removes the file set aside")
 
@@ -161,6 +169,7 @@ def main():
         report(g.menu(180), "the game comes back with no copy to restore")
         now = exe.read_bytes()
         report(not fields(now)[0] and key(now) == key(original), "with no copy kept the bit is cleared and the key holds")
+        report(fields(now)[1] == fields(now)[2], "and its checksum fits")
     finally:
         tacli("stop", ms.NAME, check=False)
         if film:

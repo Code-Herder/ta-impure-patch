@@ -190,7 +190,8 @@ multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 `tacompat.py windows` leaves all of them out: its path has no install.
 
 A row with `memory: 4gb` has the exe's large-address bit set by hand, as Confirm sets it for such a mod and leaves it on afterwards. `laa-<setup>` is retail,
-each mod's drop-in and each managed mod with the bit: a setup that fails its row gets `"memory": "bit-off"` in its `mods/<id>.json` until it is fixed.
+each mod's drop-in and each managed mod with the bit, on Wine only (`tacompat.py windows` leaves them out). A managed mod that fails its row gets `"memory": "bit-off"` in its
+`mods/<id>.json` until it is fixed, which also drops the row. Retail and a drop-in have no such mark: they run with the bit once a mod has set it, so a failure there blocks the release.
 Escalation's managed row is its own: without the bit that mod runs out of memory loading.
 
 ## Adding a setup

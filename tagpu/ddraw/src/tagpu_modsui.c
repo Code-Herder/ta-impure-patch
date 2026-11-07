@@ -923,7 +923,7 @@ static void close_screen(const char* how)
 
 static void confirm(void)
 {
-    char id[32], was[32] = "", why[96];
+    char id[32], was[32] = "";
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
     /* THE PROFILE FIRST: a choice it could not save refuses the restart with impure.cfg as it was */
     tagpu_profiles_flush_now();
@@ -935,8 +935,7 @@ static void confirm(void)
         return;
     }
     /* BEFORE THE CHOICE IS SAVED: refused, nothing has changed. The other way round would leave mod= naming a mod its exe cannot load. */
-    if (s_chosen >= 0 && !tagpu_modmem_apply(s_mod[s_chosen].about.memory, why, sizeof why)) {
-        snprintf(s_note, sizeof s_note, "This mod needs more memory, and %s, so the game stays as it is.", why);
+    if (s_chosen >= 0 && !tagpu_modmem_apply(s_mod[s_chosen].about.memory, s_note, sizeof s_note)) {
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;
         publish();

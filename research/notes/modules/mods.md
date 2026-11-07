@@ -160,11 +160,11 @@ Two Impure players with different game files do not start together. Stock would:
 
 The large-address bit has to be in the exe's header before the system loads the process, so a mod that needs the room gets it at Confirm. A catalog entry's `memory` says what its exe needs: `4gb` (Escalation), `bit-off`, or nothing.
 
-**`4gb`, on an exe without the bit.** `tagpu_modmem_apply` writes a copy with the bit set and the header's checksum fixed to `TotalA.exe.4gb.tmp`, renames the running `TotalA.exe` to `TotalA.exe.pre-4gb`, renames the copy to `TotalA.exe`, and the restart that Confirm always does runs it. Only the bit and the checksum differ, and `file_key` leaves both out, so the exe is still the exe every table knows, a drop-in's and a managed mod's fingerprint included.
+**`4gb`, on an exe without the bit.** `tagpu_modmem_apply` writes a copy with the bit set and the header's checksum fixed to `TotalA.exe.4gb.tmp`, renames the running `TotalA.exe` to `TotalA.exe.4gb-old`, the copy to `TotalA.exe` and only then the old file over `TotalA.exe.pre-4gb`, and the restart that Confirm always does runs it. A swap refused at any step leaves `.pre-4gb` as it was. Only the bit and the checksum differ, and `file_key` leaves both out, so the exe is still the exe every table knows, a drop-in's and a managed mod's fingerprint included.
 
-**Before the choice is saved.** A folder that will not take the file refuses Confirm with the reason and nothing changed, since the other order would leave `mod=` naming a mod its exe cannot load. A choice that then fails to save leaves the bit on, which costs nothing, as every setup runs with it.
+**Before the choice is saved.** A folder that will not take the file refuses Confirm with the reason and nothing changed, since the other order would leave `mod=` naming a mod its exe cannot load. A choice that then fails to save keeps the mod that was running and the exe as changed. That leaves a bit on, which every row has run with, or a bit cleared under a mod that needs it, which opening the screen offers to settle.
 
-**The bit stays on.** An entry with no `memory` leaves the exe as it is, and so does the folder's own game. The price is a row for each: `laa-<setup>` in the [compatibility suite](../compat/setups.html) runs retail, each mod's drop-in and each managed mod with the bit, and Escalation's own managed row already does.
+**The bit stays on.** An entry with no `memory` leaves the exe as it is, and so does the folder's own game. The price is a row for each: `laa-<setup>` in the [compatibility suite](../compat/setups.html) runs retail, each mod's drop-in and each managed mod with the bit, on Wine, and Escalation's own managed row already does. Retail and a drop-in have no mark to take the bit off: a failure there is a bug to fix.
 
 **`bit-off`** is for an entry that fails its row until it is fixed: Confirm puts the `.pre-4gb` copy back when that copy is this exe, byte for byte what was there, and otherwise clears the bit in place. The running file goes to `TotalA.exe.4gb-old`, removed at a later start. No entry is marked so today.
 
@@ -314,8 +314,10 @@ The mount list itself is not compared with the drop-in folder's, because it diff
 - A download starts again from nothing after any interruption: there is no resume.
 - A jump over the entry point by another DLL has no setup that produces it, so `tagpu_modload_check`'s refusal has not
   been run.
-- The 4 GB swap has run on Wine alone. A new file at the exe's path may meet Windows' first-launch compatibility hook ([the takeover](../compat/takeover.html)); not run. A machine that stops between its two renames leaves no `TotalA.exe` and the old file as `.pre-4gb`, which a file check restores.
-- The `laa-*` rows set the bit by hand, as the managed rows do. Only `tools/mods/modmem.py` sets it through Confirm, on Escalation.
+- The 4 GB swap has run on Wine alone. A new file at the exe's path may meet Windows' first-launch compatibility hook ([the takeover](../compat/takeover.html)) at the very restart Confirm does; not run, and worth a Windows skirmish before a tag.
+- A machine that stops between the swap's first two renames leaves no `TotalA.exe` and the old file as `.4gb-old`, which a file check restores. The same state comes from a second rename and its rollback both failing: the screen then names the file. That path has not run, as nothing on Wine makes the second rename fail.
+- If the last rename of a swap fails, the old file is logged and swept at the next start, so `.pre-4gb` holds an older copy or none, and bit-off clears the bit in place instead.
+- The `laa-*` rows set the bit by hand, as the managed rows do, on Wine only: `tacompat.py windows` leaves them out, so Windows has run no setup with the bit that Impure set. Only `tools/mods/modmem.py` sets it through Confirm, on Escalation.
 - A mod that starts with its bit reverted says nothing until the screen is opened.
 - The originals list is one install's hashes. A folder from another edition whose `totala1.hpi` matches, and whose other
   archives do not, loses those archives with only a log line.

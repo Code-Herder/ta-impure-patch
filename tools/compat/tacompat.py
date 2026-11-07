@@ -254,12 +254,13 @@ SETUPS += managed_setups(SETUPS)
 
 def laa_setups(setups) -> list:
     """A MOD THAT SETS THE BIT LEAVES IT ON, so whatever that folder runs next runs with it (research/notes/modules/mods.md, *4 GB*): retail, each mod's
-    drop-in and each managed mod with the exe's large-address bit set. A row that already sets it is that mod's row."""
+    drop-in and each managed mod with the exe's large-address bit set. A row that already sets it is that mod's row, and a bit-off mod's exe never has it.
+    A retail or drop-in row has no switch: it runs with the bit once any mod has set it, so a failure there is a bug to fix."""
     mods = [json.loads(p.read_text()) for p in sorted((Path(__file__).resolve().parents[2] / "mods").glob("*.json")) if p.name != "catalog.json"]
     by = {s["name"]: s for s in setups}
     rows = [by["retail"]] + [by[m["setup"]] for m in mods] + [by[f"managed-{m['id']}"] for m in mods]
     return [{**s, "name": f"laa-{s['name']}", "about": f"{s['about']}, with the exe's large-address bit set", "memory": "4gb"}
-            for s in rows if s.get("memory") != "4gb"]
+            for s in rows if s.get("memory") not in ("4gb", "bit-off")]
 
 
 SETUPS += laa_setups(SETUPS)
@@ -2973,12 +2974,14 @@ def cmd_windows(args):
         die(f"no DLL at {source}")
     dll = snapshot_dll(source)
     cfg = windows_cfg(args)
-    # a managed row is installed by Wine's prepare and compared in Wine's run: this path would run it as a bare stock folder
+    # a managed row is installed by Wine's prepare and compared in Wine's run, and only Wine's prepare sets the exe's bit: this path would run either as a
+    # bare folder under a name that claims more
     by_name = {s["name"]: s for s in SETUPS}
-    asked = [n for n in args.setups or [] if not by_name.get(n, {}).get("managed")]
+    wine_only = lambda s: s.get("managed") or s.get("memory") == "4gb"
+    asked = [n for n in args.setups or [] if not wine_only(by_name.get(n, {}))]
     if args.setups and not asked:
-        die("nothing to run: the Windows path has no install, so it leaves the managed rows out")
-    setups = [s for s in pick_setups(asked) if not s.get("managed")]
+        die("nothing to run: the Windows path has no install or exe bit, so it leaves the managed and laa rows out")
+    setups = [s for s in pick_setups(asked) if not wine_only(s)]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")
