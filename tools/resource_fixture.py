@@ -36,6 +36,8 @@ def terrain(mode):
     mini = anim + len(names)
     header = struct.pack("<16i", 0x2000, w, h, 64, attr, tilegfx, 1, 4, anim, 0,
                          mini, 1, 0, 0, 0, 0)
+    # 32x32, under the 252 a map normally has, and the engine's shrink reads twice the minimap's box
+    # regardless: these maps are what drives the bound at 0x46685F (tagpu_patches.c, map_picture_shrink)
     return header + tiles + attrs + gfx + names + struct.pack("<ii", 32, 32) + bytes([40]) * 1024
 
 

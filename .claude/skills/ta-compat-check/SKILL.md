@@ -173,10 +173,10 @@ stops the game before reading its logs. One setup at a time, by design. `--smoke
 adds an in-game test for every Impure-active setup in a second unique folder, using tacli's
 remote registry isolation. It checks commanders and mod content, applies the battle scenario,
 requires the rendered roster to change, and runs the same window/code watcher during play.
-The refusal rows (`pass-refused`, `pass-full`, their `-gdi` twins) run only under it and refuse the lane in
-that battle; a setup with a lever plays no smoke.
 It checks UI health and crash/refusal logs, then removes its own remote instance. Windows
 multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
+The refusal rows (`pass-refused`, `pass-full`, their `-gdi` twins) run only under it and refuse the lane in
+that battle; a setup with a lever plays no smoke.
 
 ## The managed rows
 
