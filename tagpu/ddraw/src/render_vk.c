@@ -211,6 +211,7 @@ DWORD WINAPI vk_render_main(void)
             }
             retries++;
             presented = 0;
+            tagpu_zoom_lane_retrying();
             tagpu_vk_retry();
         }
 

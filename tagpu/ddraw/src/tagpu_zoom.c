@@ -46,6 +46,7 @@
 static volatile float s_zoom = 1.0f;
 static volatile LONG  s_vpL, s_vpT, s_vw, s_vh;
 static volatile LONG  s_live;          /* a zoomed world is on screen right now */
+static int            s_liveHeld;      /* render thread: the lane is being rebuilt under that world */
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() redirected the minimap rect */
 
@@ -910,6 +911,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
 void tagpu_zoom_render_gone(void)
 {
     cut_end();
+    s_liveHeld = 0;
     s_live = 0;
     /* the apply goes on running on the last record (render_gdi.c posts none), so
        without this the scroll step, the minimap box and the pick stay at the last
@@ -919,7 +921,18 @@ void tagpu_zoom_render_gone(void)
 
 void tagpu_zoom_presented(void)
 {
+    s_liveHeld = 0;
     if (s_cutDrawn) s_cutShown = 1;
+}
+
+/* A LANE BEING REBUILT IS NOT A WORLD THAT LEFT THE SCREEN. Its frames draw nothing zoomed, and a
+   record saying so hands the engine its own camera clamp back, which moves an eye out in the mirror's
+   margin onto the map (MEASURED 2026-11-06: eye x -206 to 0 across a rebuild, and held there while
+   the game is paused). So the world stays live from the retry until the next frame on the screen, or
+   until the lane is given up on: `tagpu_zoom_render_gone` is that road. */
+void tagpu_zoom_lane_retrying(void)
+{
+    s_liveHeld = s_live ? 1 : 0;
 }
 
 float tagpu_zoom_lever(void)
@@ -2776,7 +2789,7 @@ static unsigned s_epochSeen;               /* the cmd_epoch of the last packet s
 void tagpu_zoom_frame_end(void)
 {
     TAGPU_CMD rec;
-    if (!s_fresh) s_live = 0;
+    if (!s_fresh && !s_liveHeld) s_live = 0;
     s_fresh = 0;
     /* THE RECORD: this frame's level and whether a zoomed world is on screen
        (the game thread derives the addressable rect, the minimap box and the
