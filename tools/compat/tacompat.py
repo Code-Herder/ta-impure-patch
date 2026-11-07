@@ -3143,8 +3143,36 @@ def windows_smoke(w: Win, setup, seconds):
             time.sleep(.2)
         raise RuntimeError('no acknowledged engine reply for ' + kind)
 
+    def log_lines():
+        return json.loads(checked('log', name, '-n', '10000', '--json'))['lines']
+
+    def refuse_lane():
+        """The row's refusal, in the battle: `once` has the rebuilt lane present again, `keep` spends
+        the retries and ends on GDI. The driver refuses when the row names `device_full`. No screen
+        comparison here: the Windows path's watcher reads windows and modules, not pixels."""
+        def write(lever, text):
+            tmp = rem.root / (lever + '.tmp')
+            tmp.write_text(text)
+            tmp.rename(rem.root / lever)
+        keep = setup['refuse_in_battle'] == 'keep'
+        full = setup.get('device_full')
+        if full is not None:
+            write('tagpu_vkfull.on', full)
+        write('tagpu_passrefuse.on', 'once' if full is not None or not keep else 'keep')
+        want = GUI_LANE_GDI if keep else 'vk: up in '
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            lines = log_lines()
+            back = next((i for i, l in enumerate(lines) if GUI_LANE_BACK in l), None)
+            if back is not None and any(want in l for l in lines[back:]):
+                return
+            if not rem.pid():
+                raise RuntimeError('game exited after the refusal')
+            time.sleep(1)
+        raise RuntimeError(f'the refusal never reached {want!r}')
+
     def roster():
-        log = json.loads(checked('log', name, '-n', '10000', '--json'))['lines']
+        log = log_lines()
         rows = []
         for line in reversed(log):
             if re.match(r'\s*u\d+\s+\S+\s+own=', line):
@@ -3214,6 +3242,8 @@ def windows_smoke(w: Win, setup, seconds):
             before = roster()
         if len(before) < 10:
             raise RuntimeError('in-game roster contains fewer than ten scenario units')
+        if setup.get('refuse_in_battle'):
+            refuse_lane()
         watch_out = w.path('results', name + '.jsonl')
         w.watch_task(f'-Folder {rem.folder} -Seconds {seconds} -Out {watch_out}')
         deadline = time.monotonic() + seconds + 45
@@ -3229,7 +3259,8 @@ def windows_smoke(w: Win, setup, seconds):
         if not any(e.get('done') for e in events):
             raise RuntimeError('in-game watcher did not finish')
         after = roster()
-        if before == after:
+        # the roster is the overlay's, and the overlay goes with the lane
+        if before == after and setup.get('refuse_in_battle') != 'keep':
             raise RuntimeError('scenario roster did not change during play')
         result['roster_before'] = len(before)
         result['roster_after'] = len(after)
@@ -3246,7 +3277,7 @@ def windows_smoke(w: Win, setup, seconds):
         result['gui'] = gui_health(log)
         if gui_misses(result['gui'], setup['goal']):
             raise RuntimeError('; '.join(gui_misses(result['gui'], setup['goal'])))
-        for leaf in ('ErrorLog.txt', 'log\\startup-failure.txt'):
+        for leaf in ('ErrorLog.txt', 'log\\startup-failure.txt', 'log\\crash-report.txt'):
             if w.read_b64(ntpath.join(rem.folder, leaf)):
                 raise RuntimeError(f'in-game smoke produced {leaf}')
         if result['content'] and (result['content'].get('why') or result['content'].get('missing')):
@@ -3282,9 +3313,10 @@ def cmd_windows(args):
     asked = [n for n in args.setups or [] if not by_name.get(n, {}).get("managed")]
     if args.setups and not asked:
         die("nothing to run: the Windows path has no install, so it leaves the managed rows out")
-    # nor the rows that drive a lever through a Wine battle: this path plays no battle to drive
-    setups = [s for s in pick_setups(asked) if not s.get("managed")
-              and not any(k in s for k in ("refuse_in_battle", "wiki_refused"))]
+    # The refusal rows need the in-game smoke, which is this path's battle. The wiki's stage has no
+    # page this path can open.
+    setups = [s for s in pick_setups(asked) if not s.get("managed") and "wiki_refused" not in s
+              and (args.smoke or "refuse_in_battle" not in s)]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")
@@ -3324,13 +3356,19 @@ def cmd_windows(args):
             print(f"  {s['name']} ...", end="", flush=True)
             o = journaled(s, "run", run_windows_setup, w, s, args.watch)
             J.finish(s["name"], "run", "done", o["outcome"])
-            if args.smoke and o['outcome'] == 'impure-active':
+            # a setup with a lever plays no battle, here as in the Wine path: run on through one, the
+            # stress lever spends the layer's repaint budget by design
+            if args.smoke and s.get('levers'):
+                J.finish(s["name"], "smoke", "skipped", "a setup with a lever plays no battle")
+            elif args.smoke and o['outcome'] == 'impure-active':
                 o['smoke'], smoke_files = journaled(s, "smoke", windows_smoke, w, s, args.smoke)
                 o['_files'].update(smoke_files)
                 J.finish(s["name"], "smoke", "done")
             elif args.smoke:
                 J.finish(s["name"], "smoke", "skipped", f"outcome {o['outcome']}")
-            verdict(o, s, "windows")
+            # the refusal happens in the smoke, whose own judgement holds the lever to its goal; the
+            # start-up run before it has met none
+            verdict(o, dict(s, goal={k: v for k, v in s["goal"].items() if k != "refuse_lever"}), "windows")
             judged(s, o)
             print(f" {o['outcome']} ({o['verdict']})")
             results.append(o)
