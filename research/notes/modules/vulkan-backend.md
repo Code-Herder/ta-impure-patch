@@ -721,8 +721,10 @@ budget in about a second and the session is on GDI, with its slow-renderer warni
 empty, since composed pixels do not cross. What the engine redraws comes back at once; the chrome,
 the panel's emblem and the resource block are owed by the reset. A surface nothing draws into again
 has nothing to carry when it is copied out of: [The engine's UI](engine-ui.md) §2.104 has the orders
-panel's save-under, which owes the emblem. **Open:** a dialog's save-under restored over the world
-keeps what it covered until the engine next draws there. No such dialog has been seen doing it.
+panel's save-under, which owes the emblem. A dialog over the world costs nothing: the viewport's clear on
+each game flip takes what its dead save-under would have left. MEASURED 2026-11-07 on the `pass-refused`
+row: `HELP.GUI` open across the reset, 18.2 % of the view changed by opening it and 0.0 % left after it
+closed.
 
 `tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
 suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. `tagpu_vkfull.on` is the driver's
@@ -743,7 +745,9 @@ the machine.
 **A rebuild does not move the camera.** The rebuild's frames draw nothing, and the world's claim on the
 camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
 from the retry until a frame reaches the screen the world stays live and the skip stays
-(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first.
+(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first. MEASURED
+2026-11-07: with the eye at x −206 under the mirror, no `terrain restored` line and the same eye across the
+rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 

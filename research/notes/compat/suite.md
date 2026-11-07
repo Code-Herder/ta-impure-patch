@@ -156,7 +156,9 @@ bound it. A game launched by hand during a run is not counted; the refusal it ca
 with a lever plays no battle. `once`: the panel is opened, the lane is refused and has to come back and
 present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
 the side panel has to pass. `keep`: the session has to reach GDI, and GDI's screen has to come to show
-the engine's side panel within 60 s. `pass-full` and `pass-full-gdi` are the same two roads with the
+the engine's side panel within 60 s. `pass-refused` also opens `HELP.GUI` from the in-game menu across a
+second refusal (`dialog_after_reset`): the view has to change when it opens and be back when it closes.
+`pass-full` and `pass-full-gdi` are the same two roads with the
 driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and `wiki-stage-refused` refuses the
 wiki's stage alone: the page loses its 3D image, and the lane has to stay up.
 

@@ -3474,9 +3474,18 @@ static void publish_window(unsigned flipSurf)
                composed pixels may not, and it lands in the panel's place. Repainting it for a
                copy that restored something else costs one op and changes no pixel.
                `panel_emit` runs only at the end of a repaint, so this asks for the repaint too.
+               THE BOX GOES EMPTY FIRST, which is what a copy out of an empty twin means. An emblem
+               shorter than the panel's rect leaves the rest of the box in the frame's twin
+               otherwise, and every mod's is (MEASURED 2026-11-07 on Total Mayhem, ProTA, Escalation, TA
+               Zero and Twilight: 22-30 % of the strip kept the orders, where retail reads 0.0 %).
+               What the box held is the repaint's to redraw.
                ONCE PER LOSS: clearing `lost` is what bounds it, since a source copied on every
                flip would otherwise ask for a repaint on every flip. */
             if (src && src->lost && s->base == s_frameBase) {
+                TAGPU_PUBOP* c = pub_op(PK_CLEAR, s->base);
+                if (!c) return;
+                c->l = op->l; c->t = op->t; c->r = op->r; c->b = op->b;
+                pub_commit();
                 src->lost = 0;
                 s_panelPend = 1;
                 s_panelAsks = PANEL_ASKS;
