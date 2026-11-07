@@ -958,6 +958,94 @@ static void rs_hook(HMODULE m)
         hook_patch_iat(m, FALSE, "ADVAPI32.dll", (char*)s_hooks[j].name, s_hooks[j].fn);
 }
 
+static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* what);
+
+int tagpu_regstore_is_hook(unsigned long fn) { return rs_is_hook((ULONG_PTR)fn); }
+
+/* 1 when `m` was loaded from the folder `exe` sits in, and is not a system library. */
+static int rs_in_exe_folder(HMODULE m, const WCHAR* exe, size_t dir)
+{
+    WCHAR path[MAX_PATH * 2];
+    DWORD n = GetModuleFileNameW(m, path, sizeof path / sizeof path[0]);
+    if (!n || n >= sizeof path / sizeof path[0] || n <= dir) return 0;
+    return !_wcsnicmp(path, exe, dir) && !wcschr(path + dir, L'\\');
+}
+
+/* EVERY DLL OF THE GAME'S FOLDER THE GAME STATICALLY IMPORTS ANSWERS TO THE STORE, BY THE IMPORT
+   TABLES AND NOT BY A NAME. The retail exe's music DLL is `win32.dll`, and a mod that renames the
+   exe's imports renames it: Escalation's exe imports `TAESC.dll`, `EMUSI.dll` and `EPLAYX.dll`,
+   TA Zero's `ZDRAW.dll`, `ZMUSI.dll` and `ZPLAYX.dll`, TADR's `TDRAW`, `TMUSI` and `TPLAYX`. All of
+   them read the registry. The loader has mapped a static import before any DllMain runs, so one
+   that is in the folder and not mapped now would load later with its imports unhooked: that fails
+   closed, as does a registry import the store cannot answer or a closure past the table.
+   A system library is left alone: the real DirectPlay and winmm keep the real registry.
+   Our own module is not hooked: it is what answers. `out` gets the log's `, name n of m` list. */
+static void rs_hook_folder_imports(const char* by, HMODULE exe, char* out, size_t cap)
+{
+    enum { RS_MAX_FOLDER_MODS = 32 };
+    HMODULE seen[RS_MAX_FOLDER_MODS];
+    int nseen = 1, at;
+    WCHAR exepath[MAX_PATH * 2];
+    WCHAR* slash;
+    size_t dir, used = 0;
+    HMODULE self = NULL;
+    char what[300];
+    DWORD n = GetModuleFileNameW(exe, exepath, sizeof exepath / sizeof exepath[0]);
+
+    out[0] = 0;
+    if (!n || n >= sizeof exepath / sizeof exepath[0] || !(slash = wcsrchr(exepath, L'\\')))
+        rs_refuse_run(by, "the exe's own path could not be read for its import tables");
+    dir = (size_t)(slash - exepath) + 1;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void*)rs_in_exe_folder, &self);
+    seen[0] = exe;
+    for (at = 0; at < nseen; at++) {
+        BYTE* base = (BYTE*)seen[at];
+        IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+        DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+        IMAGE_IMPORT_DESCRIPTOR* d;
+        if (!rva) continue;
+        for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
+            const char* name = d->Name ? (const char*)(base + d->Name) : NULL;
+            HMODULE m;
+            int regs, ours, i, known = 0;
+            if (!name) continue;
+            m = GetModuleHandleA(name);
+            if (!m) {
+                WCHAR there[MAX_PATH * 2 + 64];
+                _snwprintf(there, sizeof there / sizeof there[0], L"%.*s%hs", (int)dir, exepath, name);
+                there[sizeof there / sizeof there[0] - 1] = 0;
+                if (GetFileAttributesW(there) == INVALID_FILE_ATTRIBUTES) continue;
+                _snprintf(what, sizeof what, "%s, a static import in the game's folder, is not "
+                          "loaded at attach", name);
+                what[sizeof what - 1] = 0;
+                rs_refuse_run(by, what);
+            }
+            if (m == self) continue;
+            if (!rs_in_exe_folder(m, exepath, dir)) continue;
+            for (i = 0; i < nseen; i++) if (seen[i] == m) known = 1;
+            if (known) continue;
+            if (nseen == RS_MAX_FOLDER_MODS)
+                rs_refuse_run(by, "the game's folder has more static imports than the store's table");
+            seen[nseen++] = m;
+            rs_hook(m);
+            rs_count(m, &regs, &ours);
+            if (ours != regs) {
+                _snprintf(what, sizeof what, "%d of %s's %d registry imports are not answered "
+                          "by the store", regs - ours, name, regs);
+                what[sizeof what - 1] = 0;
+                rs_refuse_run(by, what);
+            }
+            if (regs && used < cap) {
+                int w = _snprintf(out + used, cap - used, ", %s %d of %d", name, ours, regs);
+                if (w < 0 || (size_t)w >= cap - used) { out[cap - 1] = 0; used = cap; }
+                else used += (size_t)w;
+            }
+        }
+    }
+}
+
 /* Whether the command line carries RS_TOKEN as a whole argument. The program name is
    skipped as the CRT skips it (quoted, or up to the first blank); the rest is split at
    blanks, as the engine's parser splits it. */
@@ -1048,8 +1136,8 @@ void tagpu_regstore_init(void)
     char what[400];
     DWORD at, aterr;
     size_t dir;
-    HMODULE w32;
-    int nvalues, regs, ours, wregs = 0, wours = 0;
+    static char hooks[400];  /* the log's `, name n of m` list */
+    int nvalues, regs, ours;
 
     if (!s_by) {
         tagpu_logf("registry: real (no " RS_TOKEN_A " token, and %s)", s_why);
@@ -1126,22 +1214,11 @@ void tagpu_regstore_init(void)
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }
-    /* win32.dll is a static import of TotalA.exe, so the loader has mapped it before any
-       DllMain runs; one that is not there now would load later with its imports unhooked. */
-    if ((w32 = GetModuleHandleW(L"win32.dll")) == NULL)
-        rs_refuse_run(by, "win32.dll, a static import of TotalA.exe, is not loaded at attach");
-    rs_hook(w32);
-    rs_count(w32, &wregs, &wours);
-    if (wours != wregs) {
-        _snprintf(what, sizeof what, "%d of win32.dll's %d registry imports are not answered "
-                  "by the store", wregs - wours, wregs);
-        what[sizeof what - 1] = 0;
-        rs_refuse_run(by, what);
-    }
+    rs_hook_folder_imports(by, GetModuleHandleW(NULL), hooks, sizeof hooks);
     tagpu_logf("registry: TEST MODE, entered by %s -- its registry is "
                "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: %s %d of %d "
-               "registry imports, win32.dll %d of %d",
-               by, s_nkeys, nvalues, s_exe, ours, regs, wours, wregs);
+               "registry imports%s",
+               by, s_nkeys, nvalues, s_exe, ours, regs, hooks);
 }
 
 int tagpu_regstore_active(void)

@@ -111,6 +111,8 @@
 /* DllMain, DLL_PROCESS_ATTACH, first: whether this is a test launch (1) or not (0), from
    the command line and the exe's folder. Logs nothing and installs nothing. */
 int tagpu_regstore_decide(void);
+/* 1 when `fn` is one of the store's own registry answers: a slot it wrote, not a binding. */
+int tagpu_regstore_is_hook(unsigned long fn);
 
 /* DllMain, DLL_PROCESS_ATTACH, right after tagpu_log_init: logs the mode; in test mode
    loads the store and installs the hooks, or ends the process. */

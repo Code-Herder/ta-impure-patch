@@ -3050,17 +3050,22 @@ def windows_smoke(w: Win, setup, seconds):
         for gadget in ('SINGLE', 'Skirmish', 'Start'):
             deadline = time.monotonic() + POLL_S
             while True:
-                ui = checked('ui', name)
-                if IN_GAME_PANEL.search((ui.splitlines() or [''])[0]):
+                # "no active gui" is a state here, as it is in wine_skirmish: a mod's intro or a
+                # slow first load has no menu yet, and only the bound says it never comes
+                if IN_GAME_PANEL.search((tacli('ui', name, timeout=20).stdout.splitlines() or [''])[0]):
                     break
                 r = tacli('ui', name, 'click', gadget, timeout=60)
                 if r.returncode == 0:
                     break
+                if not rem.pid():
+                    raise RuntimeError('game exited before its menu: ' + (r.stderr or r.stdout).strip())
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(r.stderr or r.stdout)
+                    raise RuntimeError((r.stderr or r.stdout).strip())
                 time.sleep(1)
         deadline = time.monotonic() + POLL_S
-        while not IN_GAME_PANEL.search((checked('ui', name).splitlines() or [''])[0]):
+        while not IN_GAME_PANEL.search((tacli('ui', name, timeout=20).stdout.splitlines() or [''])[0]):
+            if not rem.pid():
+                raise RuntimeError('game exited on its way into play')
             if time.monotonic() >= deadline:
                 raise RuntimeError('skirmish did not enter play')
             time.sleep(1)
