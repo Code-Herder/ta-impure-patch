@@ -9367,7 +9367,7 @@ static void __cdecl saved_map_terrain(unsigned int* r)
 SIM_FEATURE(map_picture, SIM_PUPPET_RUNS, "battle resource-plain");
 
 /* THE MAP'S MINIMAP PICTURE, SMALLER THAN THE SHRINK READS [DISASSEMBLED, MEASURED 2026-11-07].
-   BuildMinimapSurface's one call 0x46685F hands 0x4B95A0 the TNT's picture (main+0x1426B, a GAF frame
+   BuildMinimapSurface's call at 0x46685F hands 0x4B95A0 the TNT's picture (main+0x1426B, a GAF frame
    LoadMap sized from the file) and the 126-pixel surface it fits. 0x4B95A0 reads 2w x 2h of the frame
    with the frame's own width as the pitch and no test against its height or width, so a picture
    smaller than that is read past its block: `w*h + 0x18` bytes from 0x4B8DA0. 32x32 into 126x113 read

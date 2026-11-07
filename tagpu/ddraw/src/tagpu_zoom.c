@@ -931,8 +931,9 @@ void tagpu_zoom_presented(void)
    margin onto the map (MEASURED 2026-11-06: eye x -206 to 0 across a rebuild, and held there while
    the game is paused). The gather goes on publishing the view with the lane down, so a published view
    says nothing about the lane: the world stays live, and the ground ours (tagpu_terrown_set_skip),
-   from the retry until a frame reaches the screen. LIVE_HELD_FRAMES bounds it for a lane that neither
-   presents nor fails, and a lane given up on ends it at once: `tagpu_zoom_render_gone`. */
+   from any rebuild's start until a frame reaches the screen. LIVE_HELD_FRAMES bounds it, counted on
+   every frame, for a lane that neither presents nor fails and for a level that ends under the rebuild,
+   and a lane given up on ends it at once: `tagpu_zoom_render_gone`. */
 int tagpu_zoom_live_held(void) { return s_liveHeld > 0; }
 
 void tagpu_zoom_lane_retrying(void)
@@ -2794,10 +2795,8 @@ static unsigned s_epochSeen;               /* the cmd_epoch of the last packet s
 void tagpu_zoom_frame_end(void)
 {
     TAGPU_CMD rec;
-    if (!s_fresh) {
-        if (s_liveHeld > 0) s_liveHeld--;
-        else s_live = 0;
-    }
+    if (s_liveHeld > 0) s_liveHeld--;
+    else if (!s_fresh) s_live = 0;
     s_fresh = 0;
     /* THE RECORD: this frame's level and whether a zoomed world is on screen
        (the game thread derives the addressable rect, the minimap box and the

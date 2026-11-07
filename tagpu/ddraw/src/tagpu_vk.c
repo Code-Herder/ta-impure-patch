@@ -123,6 +123,7 @@
    Vulkan would fail to LOAD rather than simply not arming the lane. */
 /* tagpu_vk_pass.h defines VK_NO_PROTOTYPES and pulls the headers in, and the
    comment above is why both are needed. */
+#include "tagpu_zoom.h"
 #include "tagpu_vk_pass.h"
 #include "tagpu_ftime.h"
 #include <windows.h>
@@ -3360,6 +3361,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
               : tagpu_window_generation(hwnd) != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)
                               ? "the window lifetime changed - rebuilding"
                               : "the GPU row changed - rebuilding");
+        tagpu_zoom_lane_retrying();
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
         return 0;

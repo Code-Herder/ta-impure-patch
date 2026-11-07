@@ -923,6 +923,27 @@ static int rs_is_hook(ULONG_PTR fn)
 
 /* A module's ADVAPI32 imports whose names begin with "Reg", and how many of their import
    table slots now hold one of our hooks -- read from the module's own import directory. */
+/* 1 when `fn` is what ADVAPI32 hands out for one of its Reg* exports. */
+static int rs_is_real_registry(ULONG_PTR fn)
+{
+    const BYTE* base = (const BYTE*)GetModuleHandleA("ADVAPI32.dll");
+    const IMAGE_NT_HEADERS* nt;
+    const IMAGE_EXPORT_DIRECTORY* ex;
+    const DWORD* names;
+    DWORD i, rva;
+    if (!base) return 0;
+    nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+    if (!rva) return 0;
+    ex = (const IMAGE_EXPORT_DIRECTORY*)(base + rva);
+    names = (const DWORD*)(base + ex->AddressOfNames);
+    for (i = 0; i < ex->NumberOfNames; i++) {
+        const char* nm = (const char*)(base + names[i]);
+        if (!strncmp(nm, "Reg", 3) && (ULONG_PTR)GetProcAddress((HMODULE)base, nm) == fn) return 1;
+    }
+    return 0;
+}
+
 static void rs_count(HMODULE m, int* regs, int* ours)
 {
     BYTE* base = (BYTE*)m;
@@ -934,8 +955,17 @@ static void rs_count(HMODULE m, int* regs, int* ours)
     if (!rva) return;
     for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
         IMAGE_THUNK_DATA* t, *o;
-        if (!d->Name || !d->OriginalFirstThunk || _stricmp((char*)(base + d->Name), "ADVAPI32.dll")) continue;
+        if (!d->Name || _stricmp((char*)(base + d->Name), "ADVAPI32.dll")) continue;
         t = (IMAGE_THUNK_DATA*)(base + d->FirstThunk);
+        /* NO NAME TABLE (TADR's tplayx and its renames have none), SO THE SLOTS ARE ALL THERE IS: a
+           slot still holding one of ADVAPI32's Reg* is an import the store does not answer. */
+        if (!d->OriginalFirstThunk) {
+            for (; t->u1.Function; t++) {
+                if (rs_is_hook((ULONG_PTR)t->u1.Function)) { (*regs)++; (*ours)++; }
+                else if (rs_is_real_registry((ULONG_PTR)t->u1.Function)) (*regs)++;
+            }
+            continue;
+        }
         o = (IMAGE_THUNK_DATA*)(base + d->OriginalFirstThunk);
         for (; o->u1.AddressOfData; t++, o++) {
             const char* nm;

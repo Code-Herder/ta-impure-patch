@@ -320,13 +320,6 @@ tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
 	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 -DTLOG_SELFTEST \
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
-# THE CRASH REPORT'S TEST (tests/crashlogtest.c, run under Wine by hand): a thread faults and the
-# report has to name it. Not part of `all` or of CI -- it needs Wine to run.
-crashlogtest: tests/crashlogtest.exe
-
-tests/crashlogtest.exe: tests/crashlogtest.c src/tagpu_crashlog.c src/tagpu_log.c inc/tagpu_crashlog.h inc/tagpu_log.h
-	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/crashlogtest.c src/tagpu_crashlog.c src/tagpu_log.c
-
 # THE ART'S SELF-TEST (tests/arttest.c, driven by tests/arttest.py under Wine): the real
 # tagpu_art.c inflates the baked art and prints every frame, which arttest.py compares with
 # the PNGs in art/ui/. Not part of `all` or of CI -- it needs Wine to run.

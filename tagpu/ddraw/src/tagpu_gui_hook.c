@@ -3478,7 +3478,8 @@ static void publish_window(unsigned flipSurf)
                shorter than the panel's rect leaves the rest of the box in the frame's twin
                otherwise, and every mod's is (MEASURED 2026-11-07 on Total Mayhem, ProTA, Escalation, TA
                Zero and Twilight: 22-30 % of the strip kept the orders, where retail reads 0.0 %).
-               What the box held is the repaint's to redraw.
+               The repaint redraws the gadgets in it, and the chrome and the resource block are
+               owed as a reset owes them, since nothing else redraws those.
                ONCE PER LOSS: clearing `lost` is what bounds it, since a source copied on every
                flip would otherwise ask for a repaint on every flip. */
             if (src && src->lost && s->base == s_frameBase) {
@@ -3487,6 +3488,9 @@ static void publish_window(unsigned flipSurf)
                 c->l = op->l; c->t = op->t; c->r = op->r; c->b = op->b;
                 pub_commit();
                 src->lost = 0;
+                s_chromePend = 1;
+                s_hudPend = 1;
+                s_hudPoked = 0;
                 s_panelPend = 1;
                 s_panelAsks = PANEL_ASKS;
                 s_repaintPend = 1; s_repaintCounted = 0;

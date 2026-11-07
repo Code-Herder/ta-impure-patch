@@ -50,7 +50,6 @@
 #include "delay_imports.h"
 #include "keyboard.h"
 #include "tagpu_log.h"
-#include "tagpu_crashlog.h"
 #include "tagpu_addr.h"
 #include "tagpu_simreg.h"
 #include "tagpu_regstore.h"
@@ -106,7 +105,6 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            After the config tool's return above, so opening the tool never rotates the
            player's logs. */
         tagpu_log_init();
-        tagpu_crashlog_install();
 
         /* tagpu: the in-game wiki's cursor lock (tagpu_wiki.h), which fake_GetCursorPos takes
            once a DirectDraw object exists -- long after this. */

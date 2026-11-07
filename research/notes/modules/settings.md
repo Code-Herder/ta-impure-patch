@@ -362,7 +362,8 @@ DirectPlay and winmm keep the real registry, and Impure's own module is what ans
 modules bound the walk, and a closure past that fails closed.
 
 After patching, `rs_count` walks the import directories of the exe and of each of those modules: every
-ADVAPI32 import whose name begins with `Reg` must now hold one of the hooks, or the process is
+ADVAPI32 import whose name begins with `Reg`, or for a descriptor with no name table (TADR's `tplayx`
+and its renames) every slot holding one of ADVAPI32's `Reg*` exports, must now hold one of the hooks, or the process is
 terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
 registry function, so nothing overwrites these slots.
 
@@ -391,8 +392,10 @@ values in a burst, but only the ones that changed cost a rewrite (two rewrites i
 run under wine).
 
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
-above are the only way the code of `TotalA.exe` and of the folder's DLLs it imports reaches the registry, and the `-r`
-switch is closed. Nothing hooks the system DLLs the game uses and loads by name; the other
+above are the only way the code of `TotalA.exe` and of the folder's DLLs it imports reaches the registry once
+Impure has attached, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
+meets the real registry during it, and one reached only through an export forwarder is outside the walk
+unless something also imports it. Nothing hooks the system DLLs the game uses and loads by name; the other
 DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
 process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
 opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task

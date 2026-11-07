@@ -316,8 +316,9 @@ void tagpu_terrown_flush(unsigned int frame_counter)
     if (!g_installed) return;
     /* if the native pass stops running (overlay off, a level teardown, a
        frame path that never reaches it) the engine's terrain comes back
-       rather than the viewport going flat key-colour */
-    if (g_terrown_skip && frame_counter - g_beat > 90) {
+       rather than the viewport going flat key-colour; a lane being rebuilt has no
+       viewport to show and holds the skip, with its own bound (tagpu_zoom.c) */
+    if (g_terrown_skip && frame_counter - g_beat > 90 && !tagpu_zoom_live_held()) {
         flog("terrown: terrain pass silent for 90 frames");
         tagpu_terrown_set_skip(0);
     }

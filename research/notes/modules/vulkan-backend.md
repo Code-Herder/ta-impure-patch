@@ -744,10 +744,12 @@ the machine.
 
 **A rebuild does not move the camera.** The rebuild's frames draw nothing, and the world's claim on the
 camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
-from the retry until a frame reaches the screen the world stays live and the skip stays
+from the start of any rebuild, a failure's or the one a changed GPU row or window lifetime asks for, until a
+frame reaches the screen or `LIVE_HELD_FRAMES` (600) have passed, the world stays live and the skip stays
 (`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first. MEASURED
 2026-11-07: with the eye at x −206 under the mirror, no `terrain restored` line and the same eye across the
-rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there.
+rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there. That was
+measured on a failure's rebuild; the other two take the same hold and have not been run under the mirror.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 
