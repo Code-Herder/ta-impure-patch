@@ -897,7 +897,6 @@ void tagpu_modsui_open(const char* folder)
     s_sel[MODS_TAB_EXPLORE] = s_sel[MODS_TAB_UPDATES] = NONE;
     s_held[0] = s_note[0] = 0;
     s_exeStale = exe_stale();
-    tagpu_modmem_exe_lost(s_note, sizeof s_note);
     s_owed = 0;
     memset(s_keyOwed, 0, sizeof s_keyOwed);
     s_drag = -1;

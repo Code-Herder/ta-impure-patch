@@ -43,6 +43,7 @@
 #include "tagpu_modsui.h"
 #include "tagpu_modprint.h"
 #include "tagpu_modload.h"
+#include "tagpu_modmem.h"
 #include "tagpu_hudart.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_wikistate.h"
@@ -1032,6 +1033,12 @@ static void mods_click(char* gi)
         const Mod* m = &s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod];
         _snprintf(folder, sizeof folder, "%s", m->title);
         folder[sizeof folder - 1] = 0;
+    }
+    /* first: to the test below a missing exe reads as an unknown one, which would send the player looking for the wrong thing */
+    if (tagpu_modmem_exe_lost(text, sizeof text)) {
+        rlog("mods: %s", text);
+        ((dialog_fn)VA_DIALOG)(gi, text, DIALOG_W, 1, 1);
+        return;
     }
     if (!tagpu_modload_exe_known()) {
         static const char NOT_KNOWN[] = "Mods are not available because this copy of the game's exe is not one Impure knows.";
