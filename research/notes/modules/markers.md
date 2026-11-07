@@ -67,8 +67,9 @@ and then teleported 4 px while the body glided underneath it, which is what the 
 as a diagonal twitch at max zoom-in. (The selection rect never showed it because it does not
 actually floor in these units — `tagpu_native.c` snaps its corners *forward through the zoom*,
 floors there and comes back. The glyph atlas has done the same since G15.) `tagpu_mark.c`'s
-`snap_device()` is now that rule, shared by the bar, the group digit and the text, so the step
+`snap_device()` is now that rule, shared by the bar and the anchor of the group digit, so the step
 is **1/ss of a displayed pixel at every zoom** and the bound does not grow with the zoom at all.
+Bitmaps go one step coarser, to a whole game pixel (`snap_game_px`), for the reason given where the glyph atlas is described below.
 
 **Measured** on a walking commander, 1920x1080, camera pinned, TA's normal game speed, at 4x —
 the separation between the bar and the body it sits over, in *displayed* pixels
@@ -170,8 +171,12 @@ stopping short. `tagpu_text.c` calls the blitter underneath, `0x4CCF60`, which t
 and a pitch directly and has no bound of any kind, with `(fg,bg,transparent) = (255,0,0)` —
 that turns it into a 1-bit coverage mask, so one raster per string serves every colour it is
 drawn in. Each string lands once in a shelf-packed 512×256 atlas; the quads are constant
-SCREEN size and snapped to the device pixel grid by pre-image, because a bitmap glyph at a
-fractional anchor resolves each 1-px stroke across two device pixels.
+SCREEN size and snapped by pre-image to a whole **game pixel** (`snap_game_px`), not the 1/ss
+target pixel: the target is box-resolved to the game resolution, so a bitmap on an odd target pixel
+at ss 2 comes out half-covered over two game pixels, each 1-px stroke a grey smear. Every bitmap in
+the pass takes this snap: the labels, the group digits, the reclaim sweep's readout, the order art
+and the strategic icons. Under `devres` nothing resolves and a target pixel would do; the game
+pixel holds there as well.
 
 **The strategic icons are a draw of this pass** ([strategic icons](icons.html), *The draw*): one
 blended, unfogged, untested quad an icon, constant screen size and snapped like the text, drawn

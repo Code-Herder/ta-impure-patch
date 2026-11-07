@@ -1091,11 +1091,11 @@ font as often as the game's; between hook 8 and `0x469CF9` nothing calls `0x4C14
 and the labels would have drawn with. `[globals+0x208]` is their colour — `gui[0xF]`, set at
 `0x4696E7`.
 
-**Constant SCREEN size, snapped to the device grid.** A bitmap glyph magnified with the zoom
+**Constant SCREEN size, snapped to the game-pixel grid.** A bitmap glyph magnified with the zoom
 is the 1997 art this pass exists to stop — two pixels tall at 0.25×, blocky at 4× — so the
 quad is sized by `1/zoom`, as the order art is (§6.5). And it is snapped: the vertex shader
-applies the zoom, so the snap takes the post-zoom position, rounds it onto the `1/ss` grid and
-hands back the point that transforms to it. Without that the anchor arrives fractional from
+applies the zoom, so the snap (`snap_game_px`) takes the post-zoom position, rounds it onto a
+whole game pixel, the grid the resolve keeps, and hands back the point that transforms to it. Without that the anchor arrives fractional from
 the marker pass's own `project()` and each 1-px stroke is resolved across two device pixels —
 **measured at 1×, ss=2: 66 pure-white pixels in "build distance" against the engine's 183;
 209 against 205 once snapped.**
@@ -1161,8 +1161,8 @@ at **opacity 0.70**. The engine blits it through `PALETTE.ALP`, a 50/50 mix of a
 (engine map, "The waypoint sprite is translucent"); 0.70 is a look chosen 2026-10-27, more solid
 so a waypoint reads at a glance over busy ground. **The dots** are opaque at rest, as the
 engine's are. Both are **one texel a screen pixel at every zoom** — the engine's picture at 1×,
-never a magnified sprite — with the frame's corner put on the device pixel grid by pre-image
-(`snap_device`, the text's rule, §6.4).
+never a magnified sprite — with the frame's corner put on a whole game pixel by pre-image
+(`snap_game_px`, the text's rule, §6.4).
 
 **The route line** (flag == 1 records only, the engine's rule):
 
