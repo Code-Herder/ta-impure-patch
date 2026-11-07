@@ -252,6 +252,19 @@ def managed_setups(setups) -> list:
 SETUPS += managed_setups(SETUPS)
 
 
+def laa_setups(setups) -> list:
+    """A MOD THAT SETS THE BIT LEAVES IT ON, so whatever that folder runs next runs with it (research/notes/modules/mods.md, *4 GB*): retail, each mod's
+    drop-in and each managed mod with the exe's large-address bit set. A row that already sets it is that mod's row."""
+    mods = [json.loads(p.read_text()) for p in sorted((Path(__file__).resolve().parents[2] / "mods").glob("*.json")) if p.name != "catalog.json"]
+    by = {s["name"]: s for s in setups}
+    rows = [by["retail"]] + [by[m["setup"]] for m in mods] + [by[f"managed-{m['id']}"] for m in mods]
+    return [{**s, "name": f"laa-{s['name']}", "about": f"{s['about']}, with the exe's large-address bit set", "memory": "4gb"}
+            for s in rows if s.get("memory") != "4gb"]
+
+
+SETUPS += laa_setups(SETUPS)
+
+
 # ------------------------------------------------------------------------- fixtures
 
 def no_package(setup) -> bool:
@@ -942,15 +955,6 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
                 d[0x1000] ^= 1      # .text, whichever the instruction: this exe never runs
                 d = bytes(d)
             f.write_bytes(d + (b"\0" if broken == "unknown-loader" else b""))
-        if setup.get("memory") == "4gb":
-            # by hand what Confirm does for a flagged mod (the plan, landing 9): the exe's large-address bit, which a
-            # known exe's key ignores. Without it a mod this large runs out of memory loading a game.
-            exe = next(p for p in gamedir.iterdir() if p.name.lower() == "totala.exe")
-            d = bytearray(exe.read_bytes())
-            at = struct.unpack_from("<I", d, 0x3C)[0] + 22
-            struct.pack_into("<H", d, at, struct.unpack_from("<H", d, at)[0] | 0x20)
-            exe.unlink()
-            exe.write_bytes(d)
         cfg = gamedir / "impure.cfg"
         cfg.write_bytes((cfg.read_bytes() if cfg.exists() else b"") + f"\r\nmod={setup['managed']}\r\n".encode())
         # the loose step closed: a loose unit definition makes its unit vanish from the game (the mod manager plan, *Archives
@@ -961,6 +965,15 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
                 decoy = gamedir / folder / f"{unit}.fbi"
                 decoy.parent.mkdir(exist_ok=True)
                 decoy.write_text(f"[UNITINFO]\n{{\nUnitName={unit};\n}}\n")
+    if setup.get("memory") == "4gb":
+        # by hand what Confirm does for a flagged mod, and what stays behind in a folder after it (research/notes/modules/mods.md, *4 GB*): the exe's
+        # large-address bit, which a known exe's key ignores
+        exe = next(p for p in gamedir.iterdir() if p.name.lower() == "totala.exe")
+        d = bytearray(exe.read_bytes())
+        at = struct.unpack_from("<I", d, 0x3C)[0] + 22
+        struct.pack_into("<H", d, at, struct.unpack_from("<H", d, at)[0] | 0x20)
+        exe.unlink()
+        exe.write_bytes(d)
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())

@@ -191,6 +191,41 @@ int tagpu_modpak_is_original(const MODPAK* p, const uint8_t sha[32])
 
 /* ---- the exe ----------------------------------------------------------------------------------- */
 
+/* e_lfanew, Characteristics at PE+22 and the optional header's CheckSum at PE+88: the same two fields file_key leaves out. */
+static int pe_at(const uint8_t* exe, size_t n, uint32_t* pe)
+{
+    if (n < 0x40) return 0;
+    *pe = u32(exe + 0x3C);
+    return *pe <= n && n - *pe >= 92 && !memcmp(exe + *pe, "PE\0\0", 4);
+}
+
+int tagpu_modpak_exe_has_laa(const uint8_t* exe, size_t n)
+{
+    uint32_t pe;
+    return pe_at(exe, n, &pe) ? (exe[pe + 22] & 0x20) != 0 : -1;
+}
+
+int tagpu_modpak_exe_set_laa(uint8_t* exe, size_t n, int on)
+{
+    uint32_t pe, sum = 0;
+    size_t i;
+    if (!pe_at(exe, n, &pe)) return 0;
+    exe[pe + 22] = (uint8_t)(on ? exe[pe + 22] | 0x20 : exe[pe + 22] & ~0x20);
+    /* the header's checksum: the file's 16-bit words with carries folded, the field itself as zero, plus the length */
+    for (i = 0; i < n; i += 2) {
+        const uint32_t word = i >= pe + 88 && i < pe + 92 ? 0 : (uint32_t)exe[i] | (i + 1 < n ? (uint32_t)exe[i + 1] << 8 : 0);
+        sum += word;
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    }
+    sum = (sum & 0xFFFFu) + (sum >> 16);
+    sum += (uint32_t)n;
+    exe[pe + 88] = (uint8_t)sum;
+    exe[pe + 89] = (uint8_t)(sum >> 8);
+    exe[pe + 90] = (uint8_t)(sum >> 16);
+    exe[pe + 91] = (uint8_t)(sum >> 24);
+    return 1;
+}
+
 int tagpu_modpak_file_key(const uint8_t* d, size_t n, int is_exe, uint8_t out[32])
 {
     MODSHA s;

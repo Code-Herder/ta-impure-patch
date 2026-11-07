@@ -6,6 +6,7 @@
 #include "dd.h"
 #include "config.h"
 #include "mouse.h"
+#include "tagpu_modmem.h"
 #include "tagpu_modsui.h"
 #include "tagpu_modcat.h"
 #include "tagpu_modinst.h"
@@ -66,6 +67,7 @@ static size_t   s_ncatalog;
 static char     s_folder[64];
 static int      s_tab, s_sel[MODS_NTAB];        /* the mod selected on each tab: FOLDER, an index, or NONE */
 static int      s_chosen;                       /* Manage's radio */
+static int      s_exeStale;                     /* the running mod's `memory` and the exe on disk disagree, as after a file check puts the old one back */
 static int      s_running;                      /* the mod this process runs */
 static int      s_rowMod[MODS_MAXROW];
 static int      s_hideChanged;                  /* the running mod's archives differ from what it mounted */
@@ -597,7 +599,7 @@ static void build_footer(void)
     if (busy()) return;
     if (s_chosen != s_running)
         snprintf(s_page.confirm, sizeof s_page.confirm, "Restart with %.32s", mod_name(s_chosen));
-    else if (s_hideChanged || (s_running >= 0 && s_mod[s_running].ready))
+    else if (s_hideChanged || s_exeStale || (s_running >= 0 && s_mod[s_running].ready))
         lstrcpynA(s_page.confirm, "Restart to apply", sizeof s_page.confirm);
 }
 
@@ -865,6 +867,19 @@ int tagpu_modsui_is_open(void)
     return InterlockedCompareExchange(&s_open, 0, 0) != 0;
 }
 
+static int exe_stale(void)
+{
+    int memory, has;
+    if (s_running < 0) return 0;
+    memory = s_mod[s_running].about.memory;
+    if (memory == MODCAT_MEMORY_LEAVE) return 0;
+    has = tagpu_modmem_exe_has_bit();
+    if (has < 0 || has == (memory == MODCAT_MEMORY_4GB)) return 0;
+    tagpu_logf("modsui: %s and the exe's large-address bit disagree: the next Confirm settles it", s_mod[s_running].id);
+    return 1;
+}
+
+
 void tagpu_modsui_open(const char* folder)
 {
     char mod[64] = "";
@@ -881,6 +896,7 @@ void tagpu_modsui_open(const char* folder)
     s_sel[MODS_TAB_MANAGE] = s_chosen;
     s_sel[MODS_TAB_EXPLORE] = s_sel[MODS_TAB_UPDATES] = NONE;
     s_held[0] = s_note[0] = 0;
+    s_exeStale = exe_stale();
     s_owed = 0;
     memset(s_keyOwed, 0, sizeof s_keyOwed);
     s_drag = -1;
@@ -907,12 +923,20 @@ static void close_screen(const char* how)
 
 static void confirm(void)
 {
-    char id[32], was[32] = "";
+    char id[32], was[32] = "", why[96];
     lstrcpynA(id, s_chosen >= 0 ? s_mod[s_chosen].id : "", sizeof id);
     /* THE PROFILE FIRST: a choice it could not save refuses the restart with impure.cfg as it was */
     tagpu_profiles_flush_now();
     if (!tagpu_profiles_saved()) {
         lstrcpynA(s_note, "Your options could not be saved, so the game stays as it is.", sizeof s_note);
+        tagpu_logf("modsui: %s", s_note);
+        s_paneStale = 1;
+        publish();
+        return;
+    }
+    /* BEFORE THE CHOICE IS SAVED: refused, nothing has changed. The other way round would leave mod= naming a mod its exe cannot load. */
+    if (s_chosen >= 0 && !tagpu_modmem_apply(s_mod[s_chosen].about.memory, why, sizeof why)) {
+        snprintf(s_note, sizeof s_note, "This mod needs more memory, and %s, so the game stays as it is.", why);
         tagpu_logf("modsui: %s", s_note);
         s_paneStale = 1;
         publish();

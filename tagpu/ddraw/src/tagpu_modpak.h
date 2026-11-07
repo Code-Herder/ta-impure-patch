@@ -43,6 +43,11 @@ const MODPATCH* tagpu_modpak_mod(const MODPAK* p, const char* id);
 const MODKNOWN* tagpu_modpak_known(const MODPAK* p, int kind, const uint8_t key[32]);
 int  tagpu_modpak_is_original(const MODPAK* p, const uint8_t sha[32]);
 
+/* The exe's large-address bit: 1, 0, or -1 when `exe` holds no PE header. */
+int  tagpu_modpak_exe_has_laa(const uint8_t* exe, size_t n);
+/* Set or clear it, with the PE checksum that the bytes then have. 0 with `exe` untouched when it holds no PE header. */
+int  tagpu_modpak_exe_set_laa(uint8_t* exe, size_t n, int on);
+
 /* A known file's identity. An exe's ignores the PE checksum and Characteristics, which the 4 GB copy
    changes; 0 for an exe too short to have them. */
 int  tagpu_modpak_file_key(const uint8_t* data, size_t n, int is_exe, uint8_t out[32]);

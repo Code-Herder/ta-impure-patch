@@ -1725,6 +1725,8 @@ def check_catalog(j) -> list:
                 if len(f.get("path", "")) >= 96 or not installer_takes(f.get("path", "")) or not HEX64.match(str(f.get("here", ""))) or not HEX64.match(str(f.get("dropin", ""))):
                     errs.append(f"{n}: a same_as entry nothing could act on: {f}")
             errs += check_options(n, e.get("options"))
+            if e.get("memory", "4gb") not in ("4gb", "bit-off"):
+                errs.append(f"{n}: memory is 4gb or bit-off, not {e['memory']!r}")
             if not isinstance(e.get("exe"), str) or not e["exe"]:
                 errs.append(f"{n}: a mod names no exe table")
             if not isinstance(e.get("hide"), list):

@@ -115,6 +115,8 @@ int tagpu_modcat_about(const char* catalog, size_t n, const char* id, MODABOUT* 
         snprintf(out->summary, sizeof out->summary, "%s", tj_str(tj_get(m, "summary"), ""));
         out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
         snprintf(out->base, sizeof out->base, "%s", tj_str(tj_get(m, "base"), ""));
+        out->memory = !strcmp(tj_str(tj_get(m, "memory"), ""), "4gb") ? MODCAT_MEMORY_4GB :
+                      !strcmp(tj_str(tj_get(m, "memory"), ""), "bit-off") ? MODCAT_MEMORY_BIT_OFF : MODCAT_MEMORY_LEAVE;
         hit = 1;
     }
     tagpu_json_free(d);

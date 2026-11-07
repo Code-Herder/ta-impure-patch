@@ -28,10 +28,14 @@ int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* 
 /* 1 when mod `id`'s `hide` list names the archive `name`, without case. */
 int tagpu_modcat_hidden(const char* catalog, size_t n, const char* id, const char* name);
 
+/* A mod's `memory`: what its exe needs of the large-address bit (tagpu_modmem.h). */
+enum { MODCAT_MEMORY_LEAVE, MODCAT_MEMORY_4GB, MODCAT_MEMORY_BIT_OFF };
+
 /* What the Mods screen says of a mod: UTF-8, each cut to its array. */
 typedef struct {
     char name[48], author[48], version[32], summary[400];
     int  is_mutator;
+    int  memory;                /* MODCAT_MEMORY_* */
     char base[32];              /* a mutator's base mod, "none" for the folder's own game */
 } MODABOUT;
 

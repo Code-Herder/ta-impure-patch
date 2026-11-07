@@ -27,6 +27,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_profiles.h"
 #include "tagpu_modinst.h"
+#include "tagpu_modmem.h"
 #include "tagpu_modload.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
@@ -135,6 +136,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         /* tagpu: what the last run's mod install left, settled before anything looks in mods\ (tagpu_modinst.h). */
         tagpu_modinst_sweep_at_start();
+        tagpu_modmem_sweep();
 
         /* tagpu: a mod chosen by mod= (tagpu_modload.h): its image in place before Impure's first patch */
         tagpu_modload_begin();
