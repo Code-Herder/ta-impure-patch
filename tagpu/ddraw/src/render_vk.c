@@ -61,9 +61,15 @@ DWORD WINAPI vk_render_main(void)
        genuinely gone reaches GDI in about a second and a transient stall costs
        one rebuild. See the loop for why the two cases are not the same case. */
 #define VK_RETRY_BUDGET 3
+/* WHAT EARNS THE BUDGET BACK: this many frames on the screen since the lane last failed, about five
+   minutes at 60 Hz. A count of frames, so a lane that keeps failing at once spends the budget in a
+   second and reaches GDI whatever the clock says, and four refusals an hour apart cost four rebuilds
+   and not the session's renderer. */
+#define VK_RETRY_EARNED_FRAMES 18000
 
     unsigned fc = 0;
     int gave_up = 0, came_up = tagpu_vk_ready(), retries = 0;
+    unsigned presented = 0;
     DWORD timeout;
 
     fpsl_init();
@@ -170,6 +176,11 @@ DWORD WINAPI vk_render_main(void)
             /* the world's fog witnesses count what reached the screen */
             tagpu_native_presented(fc);
             tagpu_zoom_presented();
+            if (retries && ++presented >= VK_RETRY_EARNED_FRAMES) {
+                tagpu_logf("vk: %u frames presented since the lane last failed - its %d spent "
+                           "retries are earned back", presented, retries);
+                retries = 0;
+            }
         }
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
@@ -199,6 +210,7 @@ DWORD WINAPI vk_render_main(void)
                 break;
             }
             retries++;
+            presented = 0;
             tagpu_vk_retry();
         }
 

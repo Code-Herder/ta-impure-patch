@@ -2750,6 +2750,8 @@ void tagpu_vk_terr_down_refused(const TAGPU_VKPASS* d)
 {
     tagpu_vk_terr_down(d);
     s_state = ST_REFUSED;
+    plog(d, "the wiki's stage: terr was refused its resources - the page has no 3D image until "
+            "the lane is next rebuilt");
 }
 #endif
 

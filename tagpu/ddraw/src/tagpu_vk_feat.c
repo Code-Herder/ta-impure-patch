@@ -2251,6 +2251,8 @@ void tagpu_vk_feat_down_refused(const TAGPU_VKPASS* d)
 {
     tagpu_vk_feat_down(d);
     s_state = ST_REFUSED;
+    plog(d, "the wiki's stage: feat was refused its resources - the page has no 3D image until "
+            "the lane is next rebuilt");
 }
 #endif
 

@@ -478,6 +478,7 @@ DEVICE_REFUSED = re.compile(
 
 GUI_LANE_BACK = "the lane failed after it had come up - bringing it up again"
 GUI_LANE_GDI = "the session goes to GDI"
+GUI_STAGE_REFUSED = "the wiki's stage:"
 
 
 def device_refused(text: str) -> list:
@@ -521,6 +522,7 @@ def gui_health(text: str) -> dict:
     return {"asks": asks, "asks_stress": asks_stress, "gave_up": GUI_GAVE_UP in text,
             "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text)),
             "refused": device_refused(text), "lane_back": GUI_LANE_BACK in text,
+            "stage_refused": GUI_STAGE_REFUSED in text,
             "spent": GUI_SPENT in text, "pixels": gui_pixels(text)}
 
 
@@ -532,13 +534,17 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     miss = []
     if g["gave_up"]:
         miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
-    if g.get("refused") and not exp.get("refuse_lever"):
+    if g.get("refused") and not (exp.get("refuse_lever") or exp.get("stage_refused")):
         miss.append(f"the device refused the renderer's memory ({len(g['refused'])}x), "
                     f"first: {g['refused'][0][:120]}")
     # The lever's refusal has to have happened, and the lane has to have come back from it: the
     # side-panel step and the frames that follow then judge the picture it came back with.
     if exp.get("refuse_lever") and not g.get("lane_back"):
         miss.append("the lever refused the UI pass and the lane did not come back")
+    # The wiki stage's refusal is the page's own: the game's lane never comes down for it.
+    if exp.get("stage_refused") and (not g.get("stage_refused") or g.get("lane_back")):
+        miss.append("the wiki's stage was to be refused alone: "
+                    f"said so {bool(g.get('stage_refused'))}, the lane retried {bool(g.get('lane_back'))}")
     stress = exp.get("gui_stress")
     # Past the start-up nothing may ask; under the lever, nothing at all may, whatever the reason.
     bad = {r: n for r, n in g["asks"].items() if r not in GUI_STARTUP}
@@ -657,6 +663,7 @@ def judge(o: dict, exp: dict) -> list:
         miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
     miss += gui_misses(o.get("gui"), exp)
     miss += hud_misses((o.get("battle") or {}).get("hud"), exp)
+    miss += dialog_misses((o.get("battle") or {}).get("dialog"))
     return miss
 
 
@@ -1330,13 +1337,19 @@ def scenarios(setup) -> dict:
 HUD_STRIP = (0, 140, 128, 845)      # x, y, w, h: the side panel below the minimap, at 1280x1024
 HUD_FUZZ = "9.4%"                   # a channel off by more than 24 of 255 is a different pixel
 HUD_STALE = 0.05                    # past this, the screen is not showing the engine's panel
+DIALOG_BOX = (320, 272, 640, 480)   # the in-game menu's box on the battle's 1280x1024
 HUD_OPENED = 0.20                   # the selection must change the engine's own strip this much
 
 
 def hud_strip_diff(a: Path, b: Path) -> "float | None":
     """The share of HUD_STRIP's pixels that differ between two captures, or None when
     either capture is missing or ImageMagick cannot compare them."""
-    x, y, w, h = HUD_STRIP
+    return region_diff(a, b, HUD_STRIP)
+
+
+def region_diff(a: Path, b: Path, box) -> "float | None":
+    """The share of `box`'s pixels (x, y, w, h) that differ between two captures, or None."""
+    x, y, w, h = box
     crop = f"[{w}x{h}+{x}+{y}]"
     if not (a.exists() and b.exists()):
         return None
@@ -1416,6 +1429,91 @@ def hud_deselect(name, display, gamedir: Path, where: Path, while_open=None) -> 
 
 class Unsettled(Exception):
     pass
+
+
+def wiki_stage_refused(name, gamedir: Path) -> "str | None":
+    """The driver refuses the wiki's stage its memory: the page opens and the 3D image is missing,
+    and the game's lane stays up. The lever goes before the click, the stage is built when the page
+    first draws, and the game's own passes have settled by now, so what asks is the stage. Why it
+    failed, or None."""
+    out, ask = gamedir / "tagpu_wiki.json", gamedir / "tagpu_wiki.dump"
+    out.unlink(missing_ok=True)
+    ask.write_text("")
+    end, d = time.monotonic() + ACK_S, None
+    while d is None:
+        if time.monotonic() >= end:
+            return "no tagpu_wiki.json: the wiki filled no record"
+        try:
+            if out.exists() and not ask.exists():
+                d = json.loads(out.read_text())
+        except ValueError:
+            pass
+        time.sleep(0.2)
+    rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == "wiki"), None)
+    if not rect:
+        return f"the last frame has no wiki button: {[h['key'] for h in d.get('hits', [])][:8]}"
+    refuse_lever_write(gamedir, "keep", "tagpu_vkfull.on")
+    tacli("keys", name, "dclick:%d,%d" % ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2), timeout=150)
+    said = log_says(gamedir, GUI_STAGE_REFUSED, 60)
+    (gamedir / "tagpu_vkfull.on").unlink(missing_ok=True)
+    tacli("keys", name, "Escape", timeout=150)
+    if not said:
+        return f"the driver refused the wiki's stage and the log never said {GUI_STAGE_REFUSED!r}"
+    if not presents_after(gamedir):
+        return f"no frame presented for {STALL_S} s after the stage was refused"
+    return None
+
+
+def dialog_after_reset(name, display, gamedir: Path, where: Path) -> dict:
+    """The in-game menu open (Tab, `ARMOPT.GUI`) across a reset: the UI pass is refused while it is
+    up, and once it is closed the screen where it stood has to show what it showed before it opened.
+    Screen against screen, since the Vulkan world is no pixel of the engine's: `opened` is how much
+    the menu changed that box, and `stale` how much of it is still different after the close. Run
+    before the scenario, so the world under it holds still."""
+    where.mkdir(parents=True, exist_ok=True)
+
+    def grab(step):
+        path = where / f"dialog-{step}.png"
+        path.unlink(missing_ok=True)
+        tacli("shot", name, "-o", str(where / f"dialog-{step}-engine.png"), "--timeout", str(ACK_S), timeout=ACK_S + 30)
+        if not presents_after(gamedir):
+            raise Unsettled(f"no frame presented for {STALL_S} s at {step}")
+        r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(path)],
+                           capture_output=True, timeout=ACK_S)
+        if r.returncode or not path.exists():
+            raise Unsettled(f"the screen at {step}: {r.stderr.decode(errors='replace')[:200]}")
+        return path
+
+    try:
+        before = grab("before")
+        tacli("keys", name, "Tab", timeout=150)
+        up = grab("open")
+        why = refuse_once(gamedir)
+        if why:
+            raise Unsettled(why)
+        tacli("keys", name, "Tab", timeout=150)
+        if "OPT" in (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]:
+            tacli("keys", name, "Escape", timeout=150)
+        after = grab("closed")
+        return {"opened": region_diff(before, up, DIALOG_BOX), "stale": region_diff(before, after, DIALOG_BOX),
+                "where": str(where)}
+    except subprocess.TimeoutExpired as e:
+        return {"opened": None, "stale": None, "where": f"{where}: timed out: {e.cmd[:2]}"}
+    except Unsettled as e:
+        return {"opened": None, "stale": None, "where": f"{where}: {e}"}
+
+
+def dialog_misses(dlg: "dict | None") -> list:
+    if dlg is None:
+        return []
+    if dlg.get("opened") is None or dlg.get("stale") is None:
+        return [f"the menu across a reset could not be compared ({dlg.get('where')})"]
+    if dlg["opened"] < HUD_OPENED:
+        return [f"the menu changed {dlg['opened']:.0%} of the box it stands in, so its close was not exercised"]
+    if dlg["stale"] > HUD_STALE:
+        return [f"after a reset and a close the menu's box still differs at {dlg['stale']:.1%} of its "
+                f"pixels ({dlg.get('where')})"]
+    return []
 
 
 def hud_misses(hud: "dict | None", exp: dict) -> list:
@@ -1556,19 +1654,22 @@ def log_says(gamedir: Path, text: str, seconds: float) -> bool:
     return False
 
 
-def refuse_lever_write(gamedir: Path, text: str):
+def refuse_lever_write(gamedir: Path, text: str, lever: str = "tagpu_passrefuse.on"):
     """The lever, whole or not at all: the render thread polls this file, and an empty read of a
     half-written `keep` is the once lever."""
-    tmp = gamedir / "tagpu_passrefuse.tmp"
+    tmp = gamedir / (lever + ".tmp")
     tmp.write_text(text)
-    tmp.replace(gamedir / "tagpu_passrefuse.on")
+    tmp.replace(gamedir / lever)
 
 
-def refuse_once(gamedir: Path) -> "str | None":
+def refuse_once(gamedir: Path, device_full: "str | None" = None) -> "str | None":
     """The UI pass refused once, with the orders panel open, so a reset empties its save-under
     (tagpu_gui_hook.c, `lost`). The deselect comes only once the rebuilt lane has presented, which
-    is what makes this the reset-before-the-restore order and not a race with it. Why it failed, or
-    None."""
+    is what makes this the reset-before-the-restore order and not a race with it. `device_full` is
+    tagpu_vkfull.on's text: the rebuild then meets the driver's own refusal, K allocations in. Why
+    it failed, or None."""
+    if device_full is not None:
+        refuse_lever_write(gamedir, device_full, "tagpu_vkfull.on")
     refuse_lever_write(gamedir, "once")
     if not log_says(gamedir, GUI_LANE_BACK, 90):
         return f"the lever refused the UI pass and the log never said {GUI_LANE_BACK!r}"
@@ -1587,15 +1688,20 @@ def refuse_once(gamedir: Path) -> "str | None":
     return None
 
 
-def refuse_to_gdi(name, display, gamedir: Path) -> "tuple[dict | None, str | None]":
+def refuse_to_gdi(name, display, gamedir: Path, device_full: "str | None" = None
+                  ) -> "tuple[dict | None, str | None]":
     """The UI pass refused every time, in a live battle: the retries are spent and the session goes
-    to GDI. The screen is compared with the engine's surface until they agree or the bound ends:
-    GDI's first frames are not its picture, and the heartbeats that time the Vulkan comparison end
-    with the lane. Returns (the side panel's result, why the step failed)."""
+    to GDI. With `device_full`, it is the driver that refuses: one refusal of the pass takes the
+    lane down, and every allocation of the rebuilds is refused. The screen is compared with the
+    engine's surface until they agree or the bound ends: GDI's first frames are not its picture, and
+    the heartbeats that time the Vulkan comparison end with the lane. Returns (the side panel's
+    result, why the step failed)."""
     where = gamedir / "hudcheck"
     where.mkdir(parents=True, exist_ok=True)
     engine, screen = where / "gdi-engine.png", where / "gdi-screen.png"
-    refuse_lever_write(gamedir, "keep")
+    if device_full is not None:
+        refuse_lever_write(gamedir, device_full, "tagpu_vkfull.on")
+    refuse_lever_write(gamedir, "once" if device_full is not None else "keep")
     if not log_says(gamedir, GUI_LANE_GDI, 90):
         return None, f"the lever refused the UI pass every time and the log never said {GUI_LANE_GDI!r}"
     end, stale = time.monotonic() + 60, None
@@ -1614,7 +1720,8 @@ def refuse_to_gdi(name, display, gamedir: Path) -> "tuple[dict | None, str | Non
     return {"opened": 1.0, "stale": stale, "where": str(where)}, None
 
 
-def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None) -> dict:
+def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None,
+                device_full=None, wiki_refused=False, menu_reset=False) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
     patchers that both started can still collide in play, where the limits are used.
     The menus are driven by tacli's gadget layer and the units placed by its scenario
@@ -1631,14 +1738,19 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 "why": "the skirmish started without a commander each: " + cmd["why"]}
     # Before the scenario: the start is the one moment the commander is sure to exist and the
     # view to hold nothing else a right click could land on.
+    if wiki_refused:
+        why = wiki_stage_refused(name, gamedir)
+        if why:
+            return {"ok": False, "hud": None, "why": why}
     if refuse == "keep":
-        hud, why = refuse_to_gdi(name, display, gamedir)
+        hud, why = refuse_to_gdi(name, display, gamedir, device_full)
         if why:
             return {"ok": False, "hud": None, "why": why}
         return {"ok": proc.poll() is None, "hud": hud,
                 "why": "the session went to GDI" if proc.poll() is None else "the game exited on GDI"}
     hud = hud_deselect(name, display, gamedir, gamedir / "hudcheck",
-                       (lambda: refuse_once(gamedir)) if refuse == "once" else None)
+                       (lambda: refuse_once(gamedir, device_full)) if refuse == "once" else None)
+    dialog = dialog_after_reset(name, display, gamedir, gamedir / "hudcheck") if menu_reset else None
     r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}", "hud": hud}
@@ -1669,7 +1781,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 break
         except Stalled as e:
             return {"ok": False, "hud": hud, "why": f"the battle stood at GameTime {e} ({applied})"}
-    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud}
+    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud, "dialog": dialog}
 
 
 # ------------------------------------------------------- the running game's own code
@@ -2157,7 +2269,10 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
                                 scenarios(setup)["battle"],
-                                refuse=setup.get("refuse_in_battle"))
+                                refuse=setup.get("refuse_in_battle"),
+                                device_full=setup.get("device_full"),
+                                wiki_refused=setup.get("wiki_refused", False),
+                                menu_reset=setup.get("menu_reset", False))
             level = level_tables(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
@@ -2635,6 +2750,9 @@ def cmd_wine(args):
         die(f"no DLL at {source} (build it: make -C tagpu/ddraw -j$(nproc))")
     dll = snapshot_dll(source)
     setups = pick_setups(args.setups)
+    if args.refuse:
+        setups = [dict(s, refuse_in_battle=args.refuse, goal=dict(s["goal"], refuse_lever=True))
+                  for s in setups]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"]) and not no_package(s)]
     skipped = [s["name"] for s in setups if s not in ready]
     if skipped:
@@ -3157,7 +3275,8 @@ def cmd_windows(args):
     if args.setups and not asked:
         die("nothing to run: the Windows path has no install, so it leaves the managed rows out")
     # nor the rows that drive a lever through a Wine battle: this path plays no battle to drive
-    setups = [s for s in pick_setups(asked) if not s.get("managed") and "refuse_in_battle" not in s]
+    setups = [s for s in pick_setups(asked) if not s.get("managed")
+              and not any(k in s for k in ("refuse_in_battle", "wiki_refused"))]
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     if len(ready) < len(setups):
         print(f"skipped, fixtures not fetched: {', '.join(s['name'] for s in setups if s not in ready)}")
@@ -3362,6 +3481,10 @@ GUI_CASES = [
     ("a restore refused is no miss", "vk: gui: 1 picture(s) restored HERE - 1 stored, 0 refused\n", _ACTIVE, 0),
     ("lever, lane back", "vk: gui: slot 0 would not take x\nvk: " + GUI_LANE_BACK + "\n",
      {"outcome": "impure-active", "refuse_lever": True}, 0),
+    ("the stage alone", "vk: the wiki's stage: terr was refused\nvk: terr: slot 0 would not take x\n",
+     {"outcome": "impure-active", "stage_refused": True}, 0),
+    ("the stage took the lane down", "vk: the wiki's stage: terr was refused\nvk: " + GUI_LANE_BACK + "\n",
+     {"outcome": "impure-active", "stage_refused": True}, 1),
     ("lever, lane stayed down", "vk: gui: slot 0 would not take x\n",
      {"outcome": "impure-active", "refuse_lever": True}, 1),
     ("stress never indexed", _FIRE.format(1) + _FIRE.format(2), _STRESS, 1),
@@ -3404,6 +3527,8 @@ def main():
                          "it is up (a game Impure is not in: SECONDS of its main thread's CPU time)")
     wi.add_argument("--screens", action="store_true", help="keep a picture of every run's display")
     wi.add_argument("--strict", action="store_true", help="a known gap fails the run too")
+    wi.add_argument("--refuse", choices=("once", "keep"),
+                    help="refuse the UI pass in every named setup's battle, as the pass-refused rows do")
     wi.add_argument("--battle", type=int, default=60, metavar="SECONDS",
                     help="where the menu is reached, also fight a 200v200 skirmish for SECONDS x 30 "
                          "ticks of game time (0: start-up only)")

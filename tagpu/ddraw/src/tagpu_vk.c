@@ -330,6 +330,49 @@ IFNS(DECL)
 DFNS(DECL)
 #undef DECL
 
+/* THE DRIVER'S NO, AT THE DRIVER'S DOOR. `tagpu_vkfull.on` makes vkAllocateMemory answer what a full
+   GPU answers, for the lane and every pass of both worlds, since every pass resolves its entry points
+   through `gdpa`: the refusal then takes the road a real one takes, whichever pass met it. Filling a
+   shared GPU to get the real answer would take it from everything else on the machine. The file says
+   `keep` to refuse every allocation while it is there; otherwise a number K, or nothing for 0: K
+   allocations pass and the next is refused, and the file is consumed. Read at each allocation, which
+   a settled frame makes none of. */
+static PFN_vkAllocateMemory s_realAllocate;
+static LONG s_fullPassed = -1;      /* allocations let by since the file appeared; -1: no file seen */
+
+static int full_refuses(void)
+{
+    char text[16];
+    size_t n;
+    FILE* f = fopen("tagpu_vkfull.on", "rb");
+    if (!f) { InterlockedExchange(&s_fullPassed, -1); return 0; }
+    n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    if (strstr(text, "keep")) return 1;
+    if (InterlockedIncrement(&s_fullPassed) < atoi(text)) return 0;
+    DeleteFileA("tagpu_vkfull.on");
+    return 1;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL full_AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo* ai,
+                                                          const VkAllocationCallbacks* cb,
+                                                          VkDeviceMemory* mem)
+{
+    if (full_refuses()) {
+        tagpu_logf("vk: tagpu_vkfull.on refuses an allocation of %llu bytes",
+                   (unsigned long long)ai->allocationSize);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    return s_realAllocate(dev, ai, cb, mem);
+}
+
+static PFN_vkVoidFunction VKAPI_CALL full_gdpa(VkDevice dev, const char* name)
+{
+    if (!strcmp(name, "vkAllocateMemory")) return (PFN_vkVoidFunction)(void*)full_AllocateMemory;
+    return vkGetDeviceProcAddr(dev, name);
+}
+
 /* ---- the live objects ----------------------------------------------------
    ONE OWNER AT A TIME, decided by s_state (see the header comment). */
 typedef struct {
@@ -2230,6 +2273,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
 #define RES(n) n = (PFN_##n)vkGetDeviceProcAddr(s_vk.dev, #n);
     DFNS(RES)
 #undef RES
+    s_realAllocate = vkAllocateMemory;
+    vkAllocateMemory = full_AllocateMemory;
     if (!vkCreateSwapchainKHR || !vkQueuePresentKHR || !vkAcquireNextImageKHR) {
         vklog("device entry points missing"); goto fail;
     }
@@ -2280,7 +2325,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.anisook = s_vk.anisook;
     s_pass.maxAniso = s_vk.maxAniso;
     s_pass.gipa = s_gipa;
-    s_pass.gdpa = vkGetDeviceProcAddr;
+    s_pass.gdpa = full_gdpa;
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
