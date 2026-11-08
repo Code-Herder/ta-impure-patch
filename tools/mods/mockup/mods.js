@@ -101,7 +101,7 @@ const SHOW = {
   prota: {
     /* About is the owner's text of 2026-11-08; Mission and Credits sum up the site's pages of those names in our own words and
        link to them for the full text */
-    name: 'ProTA', logo: 'prota.png', banner: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
+    name: 'ProTA', logo: 'prota.png', backdrop: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
     pages: [
       { name: 'About', about: [
         'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
@@ -246,12 +246,14 @@ function optRow(o) {
   const row = `<div class="opt" data-part="row">${inner}</div>`;
   return o.locked ? `<div class="lockrow">${row}<i class="lock"></i></div>` : row;
 }
-/* The showcase head: the logo centred, then the version and authors, the website (a click opens the player's browser), the description */
+/* The showcase head: the logo, the version and authors, the website (a click opens the player's browser), then the description.
+   With a backdrop the three sit left-aligned over the mod's picture, darkened towards the text; without one they are centred. */
 function showcase(m) {
   const host = new URL(m.site).host;
-  return `<div class="logo"><img src="${LOGOS + m.logo}" alt="${esc(m.name)}" onerror="this.replaceWith(Object.assign(document.createElement('h2'), {className: 'pt', textContent: this.alt}))"></div>`
-    + `<div class="pa m c">${esc(m.version)} · ${esc(m.by)}</div>`
-    + `<div class="pa m c"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`
+  const head = `<div class="logo"><img src="${LOGOS + m.logo}" alt="${esc(m.name)}" onerror="this.replaceWith(Object.assign(document.createElement('h2'), {className: 'pt', textContent: this.alt}))"></div>`
+    + `<div class="pa m${m.backdrop ? '' : ' c'}">${esc(m.version)} · ${esc(m.by)}</div>`
+    + `<div class="pa m${m.backdrop ? '' : ' c'}"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`;
+  return (m.backdrop ? `<div class="hero" style="--backdrop: url('${BANNERS + m.backdrop}')">${head}</div>` : head)
     + `<div class="rule"></div>`
     + (m.banner ? `<div class="banner"><img src="${BANNERS + m.banner}" alt="" onerror="this.parentNode.remove()"></div>` : '')
     + (m.pages ? pageTabs(m.pages) + blocks(m.pages[Math.min(S.page, m.pages.length - 1)].about) : blocks(m.about));

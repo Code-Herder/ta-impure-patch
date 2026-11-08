@@ -106,3 +106,8 @@ header output { color: var(--fg); }
 .sec { margin-top: 1lh; }
 /* a showcase's page tabs: the window's tabs, in a row of their own above the page */
 .ptabs { display: flex; gap: calc(var(--w-tabs-gap) * var(--u)); margin: 0 0 calc(10 * var(--u)); }
+/* a showcase backdrop: the mod's picture filling the head, its right side kept, darkened from the left where the logo and text sit */
+.hero { padding: calc(10 * var(--u)) calc(12 * var(--u)) calc(10 * var(--u));
+  background: linear-gradient(90deg, rgba(3, 9, 13, .9), rgba(3, 9, 13, .55) 45%, rgba(3, 9, 13, .1)), var(--backdrop) right center / cover no-repeat; }
+.hero .logo { justify-content: flex-start; padding: 0 0 calc(6 * var(--u)); }
+.hero .logo img { max-width: 55%; }
