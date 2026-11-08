@@ -175,8 +175,9 @@ SCREEN size and snapped by pre-image to a whole **game pixel** (`snap_game_px`),
 target pixel: the target is box-resolved to the game resolution, so a bitmap on an odd target pixel
 at ss 2 comes out half-covered over two game pixels, each 1-px stroke a grey smear. Every bitmap in
 the pass takes this snap: the labels, the group digits, the reclaim sweep's readout, the order art
-and the strategic icons. Under `devres` nothing resolves and a target pixel would do; the game
-pixel holds there as well.
+and the strategic icons. Under `devres` nothing resolves, a texel is `ss` target pixels wide and
+whole on any target pixel, so the snap falls back to the target grid (`snap_device`) and the bitmap
+keeps the finer step.
 
 **The strategic icons are a draw of this pass** ([strategic icons](icons.html), *The draw*): one
 blended, unfogged, untested quad an icon, constant screen size and snapped like the text, drawn

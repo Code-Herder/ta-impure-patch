@@ -289,6 +289,7 @@ static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  *
 static int    s_clipL, s_clipT, s_clipR, s_clipB, s_clipW, s_clipH;
 static TAGPU_LINE_AB s_lab;            /* an A/B frame's lines before the clip */
 static int    s_ss;
+static int    s_devres;               /* the composite reads the target unresolved */
 static int   s_ntext, s_xover;         /* strings drawn / quads refused        */
 
 /* THE SHADER SOURCES ARE A BUILD INPUT, NOT CODE THIS FILE RUNS -- this file
@@ -617,10 +618,12 @@ static void snap_device(float* x, float* y)
    icons, whatever is laid out in whole game pixels. Half a game pixel is a target pixel at ss 2,
    and the box resolve to the game resolution then averages each texel with its neighbour: a 1-px
    stroke comes out half-covered over two pixels, the same string crisp at one position and fuzzy
-   at the next. Under devres nothing resolves and a target pixel would do, but the game pixel
-   holds there as well. On the engine's integers at zoom 1 this is the identity. */
+   at the next. Under devres nothing resolves: a texel is ss target pixels wide and stays whole on
+   any target pixel, so the snap is the target grid's and the bitmap keeps the finer step, as
+   sw_widths' quantum does. On the engine's integers at zoom 1 this is the identity. */
 static void snap_game_px(float* x, float* y)
 {
+    if (s_devres) { snap_device(x, y); return; }
     double gx = ((double)*x - s_zcx) * s_zoom + s_zcx;
     double gy = ((double)*y - s_zcy) * s_zoom + s_zcy;
     *x = (float)((floor(gx + 0.5) - s_zcx) / s_zoom + s_zcx);
@@ -1460,6 +1463,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;
     s_ss  = v->ss > 0 ? v->ss : 1;
+    s_devres = v->devres != 0;
     /* the viewport and the surface on the line grid (tagpu_line.h) */
     tagpu_line_rect(v->vpL, v->vpT, v->vw, v->vh, s_ss,
                     &s_clipL, &s_clipT, &s_clipR, &s_clipB);

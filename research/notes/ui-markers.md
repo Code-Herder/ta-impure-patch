@@ -1095,10 +1095,14 @@ and the labels would have drawn with. `[globals+0x208]` is their colour — `gui
 is the 1997 art this pass exists to stop — two pixels tall at 0.25×, blocky at 4× — so the
 quad is sized by `1/zoom`, as the order art is (§6.5). And it is snapped: the vertex shader
 applies the zoom, so the snap (`snap_game_px`) takes the post-zoom position, rounds it onto a
-whole game pixel, the grid the resolve keeps, and hands back the point that transforms to it. Without that the anchor arrives fractional from
-the marker pass's own `project()` and each 1-px stroke is resolved across two device pixels —
-**measured at 1×, ss=2: 66 pure-white pixels in "build distance" against the engine's 183;
-209 against 205 once snapped.**
+whole game pixel, the grid the resolve keeps, and hands back the point that transforms to it
+(under `devres`, where nothing resolves, the target pixel). Without that the anchor arrives
+fractional from the marker pass's own `project()` and each 1-px stroke is resolved across two game
+pixels — **measured at 1×, ss=2: 66 pure-white pixels in "build distance" against the engine's
+183; 209 against 205 snapped to the target grid.** A target-grid snap still leaves half a game
+pixel at other zooms: **on the reclaim sweep's readout, 72.8 % of glyph pixels blended at
+1024×768 over six zooms and 70.8 % at 3840×2160 over four, against 1.0 % and 1.2 % on the game
+pixel.**
 
 **The label's anchor is the engine's.** `0x438EA0` remembers the second endpoint of the
 segment whose index is `labelSlot·3` and draws the string at `y + 4`; the slots are a running
