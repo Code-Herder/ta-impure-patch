@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -551,7 +552,7 @@ static void build_pane(void)
         if (e->failed[0]) lstrcpynA(s_page.note, e->failed, sizeof s_page.note);
         else if (e->ready) lstrcpynA(s_page.note, "Installed. It takes effect when the game next starts.", sizeof s_page.note);
     }
-    if (m >= 0 && s_mod[m].has_mut && !s_mod[m].failed[0]) {
+    if (m >= 0 && m < s_nmod && s_mod[m].has_mut && !s_mod[m].failed[0]) {
         char why[200];
         /* why it cannot go on matters more than that its install is waiting */
         if (verdict(m, why, sizeof why) >= FIT_STALE) lstrcpynA(s_page.note, why, sizeof s_page.note);
@@ -988,19 +989,26 @@ static void select_mod(int mod)
     s_page.scroll[MODS_SCROLL_DETAIL] = 0;
 }
 
-/* Acts on a control the release landed on. */
 /* A showcase's link, in the player's browser: on a thread of its own, as ShellExecute may wait on the shell, and through
-   shell32 loaded then, which the DLL does not import. Only an https address opens, and only the catalog's (build_show). */
+   shell32 loaded then, which the DLL does not import. Only an https address opens, and only the catalog's (build_show).
+   THE LIFETIME: SEE_MASK_NOASYNC makes ShellExecuteEx finish its work before it returns, as it must for a thread that ends
+   after it, and shell32 is never freed, so no work it started can outlive the module it runs in. */
 static DWORD WINAPI open_thread(void* arg)
 {
+    typedef BOOL (WINAPI *SHELLEXECEX)(SHELLEXECUTEINFOA*);
     char* url = (char*)arg;
-    HMODULE sh = LoadLibraryA("shell32.dll");
-    typedef HINSTANCE (WINAPI *SHELLEXEC)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
-    SHELLEXEC run = sh ? (SHELLEXEC)(void*)GetProcAddress(sh, "ShellExecuteA") : NULL;
+    const HMODULE sh = LoadLibraryA("shell32.dll");
+    const SHELLEXECEX run = sh ? (SHELLEXECEX)(void*)GetProcAddress(sh, "ShellExecuteExA") : NULL;
     const HRESULT co = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    if (!run || (INT_PTR)run(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL) <= 32) tagpu_logf("modsui: %s could not be opened", url);
+    SHELLEXECUTEINFOA x;
+    memset(&x, 0, sizeof x);
+    x.cbSize = sizeof x;
+    x.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    x.lpVerb = "open";
+    x.lpFile = url;
+    x.nShow = SW_SHOWNORMAL;
+    if (!run || !run(&x)) tagpu_logf("modsui: %s could not be opened", url);
     if (SUCCEEDED(co)) CoUninitialize();
-    if (sh) FreeLibrary(sh);
     free(url);
     return 0;
 }
@@ -1025,6 +1033,7 @@ static void open_link(int n)
     else free(copy);
 }
 
+/* Acts on a control the release landed on. */
 static void act(const char* key)
 {
     int i = -1;

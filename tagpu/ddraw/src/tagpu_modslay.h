@@ -31,6 +31,8 @@
 #define MODS_MAXBLOCK 64        /* a showcase's blocks, a list's items each one: tools/modpack/modpack.py SHOW_BLOCKS */
 #define MODS_SHOWTEXT 6144      /* a showcase's strings, each with its NUL: modpack.py SHOW_TEXT */
 #define MODS_MAXCOLS  4         /* a list's columns: modpack.py SHOW_COLS */
+#define MODS_SHOWLINE 2048      /* a block's text with its link, in bytes: no more code points than the widgets set in one
+                                   text (UI_MAXGLYPH); modpack.py SHOW_LINE */
 
 enum { MODS_TAB_MANAGE, MODS_TAB_EXPLORE, MODS_TAB_UPDATES, MODS_NTAB };
 enum { MODS_SCROLL_LIST, MODS_SCROLL_DETAIL, MODS_NSCROLL };
@@ -128,7 +130,8 @@ void     tagpu_modslay_light(MODSLAY* l, int part, int light);
 int      tagpu_modslay_build(const MODSLAY* l, const UIFACES* f, const MODSPAGE* st, HUDOPS* out, MODSFRAME* fr, char* err, size_t errn);
 
 /* A catalog entry's `show` (tools/modpack/modpack.py check_show) into `out`, for the mod `id` named `name` at `version`. 0, and
-   out->id "", when there is none or it does not fit MODSSHOW: a showcase is drawn whole or not at all. */
+   out->id "", when there is none or any of it does not fit MODSSHOW whole -- a string its array would cut, a block past
+   MODS_SHOWLINE: a showcase is drawn whole or not at all. */
 int      tagpu_modslay_show(const TJV* show, const char* id, const char* name, const char* version, MODSSHOW* out);
 
 /* At the load: 1 when the fullest page there can be builds whole, with nothing dropped and every row's controls within the row, on

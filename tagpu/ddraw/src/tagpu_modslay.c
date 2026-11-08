@@ -677,8 +677,9 @@ static void worst(char* d, size_t n, int broken)
 #define WORST(a, b) worst((a), sizeof(a), (b))
 
 /* The fullest showcase: every block, the text full, in runs of four items of the most columns, a paragraph, a section and
-   two links. Its id names no picture, which adds three parts at most and no text. */
-static void fullest_show(MODSSHOW* s, int broken)
+   two links, or with `links` every block a link, the most hits (MODS_MAXHOT). Its id names no picture, which adds three
+   parts at most and no text. */
+static void fullest_show(MODSSHOW* s, int broken, int links)
 {
     const int per = MODS_SHOWTEXT / MODS_MAXBLOCK;
     int i;
@@ -690,7 +691,7 @@ static void fullest_show(MODSSHOW* s, int broken)
     for (i = 0; i < MODS_MAXBLOCK; i++) {
         MODSBLOCK* b = &s->block[i];
         const int r = i % 8;
-        b->kind = (uint8_t)(r < 4 ? MODS_BLOCK_ITEM : r == 4 ? MODS_BLOCK_PARA : r == 5 ? MODS_BLOCK_SECTION : MODS_BLOCK_LINK);
+        b->kind = (uint8_t)(links ? MODS_BLOCK_LINK : r < 4 ? MODS_BLOCK_ITEM : r == 4 ? MODS_BLOCK_PARA : r == 5 ? MODS_BLOCK_SECTION : MODS_BLOCK_LINK);
         b->cols = MODS_MAXCOLS;
         b->first = (uint8_t)(r == 0);
         b->text = (uint16_t)(i * per);
@@ -731,8 +732,9 @@ static void fullest(MODSPAGE* s, float W, float H, int broken, int locked)
         WORST(o->label, broken); WORST(o->value, broken); WORST(o->reason, broken);
         o->locked = (uint8_t)locked;
     }
-    /* broken texts make the most lines, so the showcase is checked with them, and the plain pane with the widest words */
-    if (broken) fullest_show(&s->show, broken);
+    /* broken texts make the most lines, so the showcase is checked with them, and the plain pane with the widest words; with
+       every option locked, every block of it is a link */
+    if (broken) fullest_show(&s->show, broken, locked);
 }
 
 int tagpu_modslay_check(const MODSLAY* l, const UIFACES* f, HUDOPS* scratch, char* err, size_t errn)
@@ -900,10 +902,15 @@ static uint16_t show_put(SHOWPUT* q, const char* str)
     q->used += n;
     return (uint16_t)at;
 }
+/* `src` into `dst` of `n` bytes, `ok` cleared when it would be cut */
+static void show_copy(SHOWPUT* q, char* dst, size_t n, const char* src)
+{
+    if ((size_t)snprintf(dst, n, "%s", src) >= n) q->ok = 0;
+}
 static MODSBLOCK* show_block(SHOWPUT* q, int kind, const char* text)
 {
     MODSBLOCK* b;
-    if (!q->ok || q->s->nblock >= MODS_MAXBLOCK) { q->ok = 0; return NULL; }
+    if (!q->ok || q->s->nblock >= MODS_MAXBLOCK || strlen(text) > MODS_SHOWLINE) { q->ok = 0; return NULL; }
     b = &q->s->block[q->s->nblock++];
     b->kind = (uint8_t)kind;
     b->cols = 1;
@@ -920,11 +927,11 @@ int tagpu_modslay_show(const TJV* show, const char* id, const char* name, const 
     memset(s, 0, sizeof *s);
     if (!id || !id[0] || !tj_is(about, TJ_ARR)) return 0;
     q.s = s; q.used = 0; q.ok = 1;
-    snprintf(s->id, sizeof s->id, "%s", id);
-    snprintf(s->name, sizeof s->name, "%s", name ? name : id);
-    snprintf(s->version, sizeof s->version, "%s", version ? version : "");
-    snprintf(s->by, sizeof s->by, "%s", tj_str(tj_get(show, "by"), ""));
-    snprintf(s->site, sizeof s->site, "%s", tj_str(tj_get(show, "site"), ""));
+    show_copy(&q, s->id, sizeof s->id, id);
+    show_copy(&q, s->name, sizeof s->name, name ? name : id);
+    show_copy(&q, s->version, sizeof s->version, version ? version : "");
+    show_copy(&q, s->by, sizeof s->by, tj_str(tj_get(show, "by"), ""));
+    show_copy(&q, s->site, sizeof s->site, tj_str(tj_get(show, "site"), ""));
     if (strncmp(s->site, "https://", 8)) q.ok = 0;
     for (i = 0; q.ok && (b = tj_at(about, i)); i++) {
         if (tj_is(b, TJ_STR)) show_block(&q, MODS_BLOCK_PARA, tj_str(b, ""));
@@ -932,7 +939,7 @@ int tagpu_modslay_show(const TJV* show, const char* id, const char* name, const 
         else if ((v = tj_get(b, "link"))) {
             MODSBLOCK* k = show_block(&q, MODS_BLOCK_LINK, tj_str(tj_at(v, 0), ""));
             const char* url = tj_str(tj_at(v, 1), "");
-            if (strncmp(url, "https://", 8)) q.ok = 0;
+            if (strncmp(url, "https://", 8) || (k && strlen(s->text + k->text) + strlen(url) > MODS_SHOWLINE)) q.ok = 0;
             else if (k) k->link = show_put(&q, url);
         } else if ((v = tj_get(b, "list")) && tj_is(v, TJ_ARR)) {
             const int cols = clampi((int)tj_num(tj_get(b, "cols"), 1), 1, MODS_MAXCOLS);

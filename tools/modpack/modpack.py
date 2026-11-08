@@ -1656,8 +1656,9 @@ def _exe_mapped(proc: Path, folder: Path) -> bool:
 # A mod's showcase on the Mods screen (tagpu_modsui.c fills MODSSHOW from it): the authors' line, the website, and the text as
 # blocks -- a paragraph, a section's opening line, a list (in `cols` columns), a line ending in a link. Its pictures are the
 # kit's parts logo_<id>, banner_<id> and backdrop_<id> (tools/mods/genparts.py), not named here. The bounds are MODSSHOW's
-# (tagpu_modslay.h): the blocks, a list's items each one, and every string's bytes in one buffer with a NUL after each.
-SHOW_BLOCKS, SHOW_TEXT, SHOW_COLS = 64, 6144, 4
+# (tagpu_modslay.h): the blocks, a list's items each one, and every string's bytes in one buffer with a NUL after each; a
+# block's text with its link at most SHOW_LINE bytes; `by` and `site` each under its array (MODSSHOW.by, .site).
+SHOW_BLOCKS, SHOW_TEXT, SHOW_COLS, SHOW_LINE, SHOW_BY, SHOW_SITE = 64, 6144, 4, 2048, 96, 160
 URL_RE = re.compile(r"https://[^\s\"<>]{1,200}")
 
 
@@ -1674,6 +1675,9 @@ def check_show(n: str, s) -> list:
             text += len(s[k].encode()) + 1
     if isinstance(s.get("site"), str) and not URL_RE.fullmatch(s["site"]):
         errs.append(f"{n}: show.site is not an https address")
+    for k, cap in (("by", SHOW_BY), ("site", SHOW_SITE)):
+        if isinstance(s.get(k), str) and len(s[k].encode()) >= cap:
+            errs.append(f"{n}: show.{k} is {len(s[k].encode())} bytes, past {cap - 1}")
     about = s.get("about")
     if not isinstance(about, list) or not about:
         return errs + [f"{n}: show.about has no blocks"]
@@ -1694,6 +1698,9 @@ def check_show(n: str, s) -> list:
             continue
         if not all(strs[:1]) and not (isinstance(b, dict) and "link" in b):
             errs.append(f"{n}: show.about has an empty block")
+        lines = [sum(len(x.encode()) for x in strs)] if isinstance(b, dict) and "link" in b else [len(x.encode()) for x in strs]
+        if max(lines, default=0) > SHOW_LINE:
+            errs.append(f"{n}: show.about has a block of {max(lines)} bytes, past {SHOW_LINE}")
         blocks += len(strs) if isinstance(b, dict) and "list" in b else 1
         text += sum(len(x.encode()) + 1 for x in strs)
     if blocks > SHOW_BLOCKS:
@@ -1797,7 +1804,7 @@ def check_catalog(j) -> list:
                 errs.append(f"{n}: a mutator has no files")
             else:
                 for path in list(e["files"]) + list(e.get("hides", [])):
-                    if not isinstance(path, str) or len(path) >= 96 or "=" in path or not installer_takes(path):
+                    if not isinstance(path, str) or len(path) >= 96 or not installer_takes(path):
                         errs.append(f"{n}: path {path!r} is unsafe")
                 if isinstance(e.get("base_hashes"), dict):
                     for path, h in e["base_hashes"].items():

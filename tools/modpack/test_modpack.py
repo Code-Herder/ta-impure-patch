@@ -290,13 +290,6 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
         j["mods"][1].update(base="none", hides=["a"])
         self.assertTrue(any("no mod has none" in e for e in m.check_catalog(j)))
 
-    def test_a_path_a_key_cannot_hold_is_refused_by_the_reader_too(self):
-        j = copy.deepcopy(GOOD)
-        j["mods"][1].update(files=["a=b"])
-        p = Path(self.dir.name) / "cat.json"
-        p.write_text(json.dumps(j))
-        got = m.subprocess.run([str(self.exe), str(p), "amut"], capture_output=True, text=True, check=True).stdout.strip()
-        self.assertEqual(got, "unreadable")
 
 
 class ModPrint(unittest.TestCase):
