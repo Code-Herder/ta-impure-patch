@@ -75,11 +75,11 @@ const SCROLLS = {
 /* ---- the showcase look: the mod's own logo, its authors, its website and a description, for the two mods offered for now ---- */
 /* The logos are art like every other part: art/mods/logos/, packed into the DLL with the rest of art/mods/ (WIKIPAK); nothing is
    read from the web. A missing file shows the mod's name instead. */
-const LOGOS = ART + 'mods/logos/';
+const LOGOS = ART + 'mods/logos/', BANNERS = ART + 'mods/banners/';
 const SHOW = {
   mayhem: {
     /* the text is the author's, as given to the owner on 2026-11-08 */
-    name: 'Total Mayhem', logo: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma', site: 'https://mayhem.tauniverse.com/',
+    name: 'Total Mayhem', logo: 'mayhem.png', banner: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma', site: 'https://mayhem.tauniverse.com/',
     about: ['Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
       'The goal is to make all of the original units useful, and add more units for more strategic choices.',
       'gamma, @gammata, is the main author. Contributors include:',
@@ -203,6 +203,7 @@ function showcase(m) {
     + `<div class="pa m c">${esc(m.version)} · ${esc(m.by)}</div>`
     + `<div class="pa m c"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`
     + `<div class="rule"></div>`
+    + (m.banner ? `<div class="banner"><img src="${BANNERS + m.banner}" alt=""></div>` : '')
     + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>` : b.list ? `<ul class="pa s lst">${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
       : b.link ? `<div class="pa s">${esc(b.link[0])}<a class="lnk" href="${b.link[1]}" target="_blank" rel="noopener" data-key="link">${esc(b.link[1].replace(/^https:\/\//, ''))}</a></div>` : '').join('');
 }

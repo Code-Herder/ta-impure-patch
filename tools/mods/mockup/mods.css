@@ -99,3 +99,6 @@ header output { color: var(--fg); }
 .rule { height: 1px; background: rgba(216, 216, 200, .18); margin: calc(4 * var(--u)) 0 calc(10 * var(--u)); }
 .lst { padding-left: calc(14 * var(--u)); }
 .lst li { margin: 0 0 calc(2 * var(--u)); }
+/* a wide picture of the mod in play, the pane's full width at its own aspect */
+.banner { margin: 0 0 calc(10 * var(--u)); }
+.banner img { display: block; width: 100%; height: auto; }
