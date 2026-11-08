@@ -72,60 +72,17 @@ const SCROLLS = {
   opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'Off', { locked: 1, reason: 'This mod does not allow it.' })],
   confirm: 'Play Total Mayhem',
 };
-/* ---- the showcase look: the mod's own logo, its authors, its website and a description, for the two mods offered for now ---- */
-/* The logos are art like every other part: art/mods/logos/, packed into the DLL with the rest of art/mods/ (WIKIPAK); nothing is
-   read from the web. A missing file shows the mod's name instead. */
-const LOGOS = ART + 'mods/logos/', BANNERS = ART + 'mods/banners/';
-const SHOW = {
-  mayhem: {
-    /* the text is the author's, as given to the owner on 2026-11-08 */
-    name: 'Total Mayhem', logo: 'mayhem.png', banner: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma', site: 'https://mayhem.tauniverse.com/',
-    about: [
-      'Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
-      'Total Mayhem takes Total Annihilation, bugfixes and extends it the way Cavedog might have. All units are useful while retaining original TA gameplay. Many new units added (longtime players will recognise some 3rd-party units), including a whole new 3rd tech level tier.. Existing and added units have been bugfixed, rebalanced, re-modeled, re-textured and re-rendered to equal or exceed the standard of the original TA units',
-      { section: 'TOTAL MAYHEM\'s features include:' },
-      { list: ['An extended builder interface with 12 buttons per page instead of the usual 6, with hotkey overlays',
-        'Lots of UX and ease-of-use improvements including hotkeys and shortcut keys',
-        'Loads of bugfixes that prevent lockups and crashes, improve unit AI and improve game performance, meaning more units ingame with less lag',
-        'endeavors to make all the units useful, open up more strategic options without removing any existing ones',
-        'LOADS of added units, including a complete Level 3 tier: experimental kbots, tanks, navy and air, mobile fortresses, nuke bombers, nuke cannons and more'] },
-      { section: 'gamma, @gammata, is the main author. Contributors include:' },
-      { list: ['thaldren (TA ddraw patch dev)',
-        'keeper, or mnhebi - colour mod and music player dev',
-        'm1garland - has contributed many 3D models',
-        'archdragon - has contributed a number of 3D models',
-        'plasmoidthunder - several unit pictures/build button art'] },
-      'Credit also to many other unitmakers in the past whose creations many units are based on. The SYs, Xon, Rime and Xpoy for dev work on the TA recorder, the \"megamap\" and many other added features to TA, that thaldren has continued to build on (and rewrite). ProTA, Venom and the team for their balancing work that I have used as a reference point. The team who have helped playtest and give balance feedback on the Mayhem Gang Discord server',
-      { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
-  },
-  prota: {
-    /* The text opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims sum up the site's mission
-       page in our own words; links lead to it and to the credits page */
-    name: 'ProTA', logo: 'prota.png', backdrop: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
-    about: [
-      'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
-      'ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against '
-        + 'each other, and the mod looks for the ground between them.',
-      { section: 'Its eight aims:' },
-      { list: ['Every unit useful: each one gets a real job, widening the choices without diluting the game.',
-        'The original feel: the pace and the classic strategies stay.',
-        'Cheap and quick: a weak unit is made cheaper or stronger, almost never dearer, so armies stay replaceable and the fight over wreck fields stays at the centre.',
-        'Familiar units left alone: the units players use most change as little as possible.',
-        'Arm and Core asymmetric: the two sides differ, and both stay viable on every map.',
-        'Built on experience: balance rests on the games of long-time high-level players; anyone\'s feedback counts when it fits the mod\'s goals and comes with evidence or replays.',
-        'Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.',
-        'A better interface: new hotkeys and a longer build menu, within what the engine allows.'] },
-      'The team hopes to make the TA mod that newcomers and veterans alike call their own.',
-      { link: ['The full mission: ', 'https://prota.tauniverse.com/mission.html'] },
-      { section: 'Main Contributors:' },
-      { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
-        'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 },
-      { link: ['The full credits: ', 'https://prota.tauniverse.com/credits.html'] }],
-  },
-};
+/* ---- the showcase look: a mod's own pictures, its authors, its website and its text, for the mods that have one ----
+   The text is the catalog's (mods/<id>.json `show`, carried into mods/catalog.json by tools/modpack/modpack.py), as the game
+   reads it. The pictures are the kit's whole parts logo_<id>, banner_<id> and backdrop_<id> (tools/mods/genparts.py), packed in
+   the DLL like every other part; nothing is read from the web. */
+const CATALOG = await fetch('../../../mods/catalog.json').then(r => r.json());
+/* tagpu_modsui.c's MODSSHOW from a catalog entry: its id, which names its pictures, its name for a missing logo, its version */
+const showOf = id => { const e = CATALOG.mods.find(m => m.id === id); return { id, name: e.name, version: `Version ${e.version}`, ...e.show }; };
+const SHOW = { mayhem: showOf('mayhem'), prota: showOf('prota') };
 const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')];
 const SHOWCASE_MANAGE = {
-  tab: 0, updates: 0, selected: 1, show: SHOW.mayhem,
+  tab: 0, updates: 0, selected: 1, show: SHOW.mayhem, note: 'Total Mayhem runs now.',
   row: [row('This folder', 'As it is on disk', BADGE.NONE, '', ACT.RADIO),
         row('Total Mayhem', 'Version 11.3.0', BADGE.ACTIVE, 'Active', ACT.RADIO_ON)],
   opt: PLAY,
@@ -182,6 +139,7 @@ function layout() {
   G.gh = gh; G.k = gw / cw;
   frame.style.width = cw + 'px'; frame.style.height = ch + 'px';
   frame.style.setProperty('--u', ch / 720 + 'px');
+  fitBackdrops();
 }
 
 /* ---- the screen: each rule's boxes, in tagpu_modslay.c's order ---- */
@@ -220,26 +178,43 @@ function optRow(o) {
   const row = `<div class="opt" data-part="row">${inner}</div>`;
   return o.locked ? `<div class="lockrow">${row}<i class="lock"></i></div>` : row;
 }
-/* The showcase head: the logo, the version and authors, the website (a click opens the player's browser), then the description.
-   With a backdrop the three sit left-aligned over the mod's picture, darkened towards the text; without one they are centred. */
+/* THE SHOWCASE (tagpu_modslay.c show_rows), the kit's pictures sized by their own shape:
+   the logo as large as fits `show.logo.w` percent of the pane (`hero_w` over a backdrop) and `show.logo.h` units high, centred,
+   or left-aligned over a backdrop; under it the version and authors and the website, whose click opens the player's browser;
+   a backdrop filling the head behind those, as CSS background-size cover anchored at its right (fitBackdrops); the rule; a
+   banner the pane's width; then the text's blocks. A mod without a logo shows its name as the pane's title. */
+const has = n => !!(KIT && KIT.parts[n]);
+const aspect = n => KIT.img[n].naturalWidth / KIT.img[n].naturalHeight;
 function showcase(m) {
-  const host = new URL(m.site).host;
-  const head = `<div class="logo"><img src="${LOGOS + m.logo}" alt="${esc(m.name)}" onerror="this.replaceWith(Object.assign(document.createElement('h2'), {className: 'pt', textContent: this.alt}))"></div>`
-    + `<div class="pa m${m.backdrop ? '' : ' c'}">${esc(m.version)} · ${esc(m.by)}</div>`
-    + `<div class="pa m${m.backdrop ? '' : ' c'}"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`;
-  return (m.backdrop ? `<div class="hero" style="--backdrop: url('${BANNERS + m.backdrop}')">${head}</div>` : head)
+  const logo = `logo_${m.id}`, back = `backdrop_${m.id}`, banner = `banner_${m.id}`, hero = has(back), c = hero ? '' : ' c';
+  let links = 0;
+  const link = (url, text) => `<a class="lnk" href="${url}" target="_blank" rel="noopener" data-key="link:${links++}">${esc(text)}</a>`;
+  const head = (has(logo)
+      ? `<div class="logo"><i data-part="${logo}" style="aspect-ratio: ${aspect(logo)}; width: min(${hero ? 'var(--w-show-logo-hero_w)' : 'var(--w-show-logo-w)'} * 1%, `
+        + `var(--w-show-logo-h) * var(--u) * ${aspect(logo)})"></i></div>`
+      : `<h2 class="pt">${esc(m.name)}</h2>`)
+    + `<div class="pa m${c}">${esc(m.version)} · ${esc(m.by)}</div>`
+    + `<div class="pa m${c}">${link(m.site, new URL(m.site).host)}</div>`;
+  return (hero ? `<div class="hero"><i class="bd" data-part="${back}" data-aspect="${aspect(back)}"></i>${head}</div>` : head)
     + `<div class="rule"></div>`
-    + (m.banner ? `<div class="banner"><img src="${BANNERS + m.banner}" alt="" onerror="this.parentNode.remove()"></div>` : '')
-    + blocks(m.about);
+    + (has(banner) ? `<div class="banner"><i data-part="${banner}" style="aspect-ratio: ${aspect(banner)}"></i></div>` : '')
+    + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>`
+      : b.section ? `<div class="pa s sec">${esc(b.section)}</div>`
+      : b.list ? `<div class="pa s lst" style="--cols: ${b.cols || 1}; --rows: ${Math.ceil(b.list.length / (b.cols || 1))}">`
+        + b.list.map(x => `<div class="li"><i class="bul" data-part="i_dot"></i>${esc(x)}</div>`).join('') + '</div>'
+      : b.link ? `<div class="pa s">${esc(b.link[0])}${link(b.link[1], b.link[1].replace(/^https:\/\//, ''))}</div>` : '').join('');
 }
-/* The text blocks: a paragraph, a section's opening line, a list (in `cols` columns when it has them), a line ending in a link */
-const blocks = about => about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>`
-  : b.section ? `<div class="pa s sec">${esc(b.section)}</div>`
-  : b.list ? `<ul class="pa s lst"${b.cols ? ` style="columns: ${b.cols}"` : ''}>${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
-  : b.link ? `<div class="pa s">${esc(b.link[0])}<a class="lnk" href="${b.link[1]}" target="_blank" rel="noopener" data-key="link">${esc(b.link[1].replace(/^https:\/\//, ''))}</a></div>` : '').join('');
+/* a backdrop covers its head, its right edge on the head's and its middle on the head's middle */
+function fitBackdrops() {
+  for (const e of document.querySelectorAll('#detail .bd')) {
+    const h = e.parentElement, w = h.clientWidth, hh = h.clientHeight, a = +e.dataset.aspect, s = Math.max(w / a, hh);
+    Object.assign(e.style, { width: `${s * a}px`, height: `${s}px`, left: `${w - s * a}px`, top: `${(hh - s) / 2}px` });
+  }
+}
 function detail(p) {
   let h = '';
-  if (p.show) return showcase(p.show) + (p.opt.length ? `<div class="hdr">Play options</div>` + p.opt.map(optRow).join('') : '');
+  if (p.show) return showcase(p.show) + (p.note ? `<div class="pa nt">${esc(p.note)}</div>` : '')
+    + (p.opt.length ? `<div class="hdr">Play options</div>` + p.opt.map(optRow).join('') : '');
   if (p.title) h += `<h2 class="pt">${esc(p.title)}</h2>`;
   if (p.meta) h += `<div class="pa m">${esc(p.meta)}</div>`;
   if (p.summary) h += `<div class="pa s">${esc(p.summary)}</div>`;
@@ -263,6 +238,7 @@ function render() {
   list.classList.toggle('none', !p.row.length);
   list.innerHTML = p.row.length ? p.row.map((r, i) => listRow(r, i, p)).join('') : (p.empty ? `<div class="empty">${esc(p.empty)}</div>` : '');
   $('#detail').innerHTML = detail(p);
+  fitBackdrops();
   $('#foot').innerHTML = foot(p);
 }
 
@@ -273,6 +249,7 @@ const ROLE = {
   option: ['#win .l'], reason: ['#win .r'], value: ['#win .v'], footer: ['#win .fb'],
 };
 UIKit.layoutVars(frame, LAY);
+let KIT = null;
 const STYLES = fetch(ART + 'hud/layout.json').then(r => r.json()).then(L => UIKit.roleStyles(ROLE, LAY.roles, L.styles));
 
 /* ---- the controls strip, and what a click says ---- */
@@ -283,8 +260,9 @@ $('#held').value = S.held; $('#held').onchange = e => { S.held = e.target.value.
 frame.addEventListener('click', e => { const k = e.target.closest('[data-key]'); $('#last').textContent = k ? `clicked ${k.dataset.key}` : ''; });
 window.addEventListener('resize', layout);
 
-layout(); render();
-const KIT = await UIKit.loadKit(ART + 'wiki/kit/');
+layout();
+KIT = await UIKit.loadKit(ART + 'wiki/kit/');
+render();
 await STYLES;
 (function loop() { UIKit.paintParts(KIT, 'kit', G.gh / 720, G.k); requestAnimationFrame(loop); })();
 

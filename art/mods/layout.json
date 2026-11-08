@@ -27,6 +27,9 @@
  "progress": {"w": 52, "h": 8, "inset": 1.5},
 
  "pane": {"title_line": 1.2, "para": 5, "head": 5, "after": 3},
+ "show_about": "A mod's showcase (tagpu_modslay.c show_rows). logo: its box's most height, its padding [above, below], its most width as a percent of the pane, and over a backdrop; hero: a backdrop's head, its padding [top, sides, bottom] and the logo's room below it; rule: the room [above, below] the line under the head; banner: the room under a banner; list: an item's text inset, its bullet's side, the gap between columns, and between items.",
+ "show": {"logo": {"h": 96, "pad": [10, 8], "w": 80, "hero_w": 55}, "hero": {"pad": [10, 12, 10], "logo_after": 6}, "rule": [4, 10], "banner": 10,
+          "list": {"indent": 14, "bullet": 4, "gap": 8, "after": 2}},
  "footer": {"h": 18, "pad": 10, "min": 64, "gap": 4},
 
  "roles_about": "Each text of the screen in the replay HUD's style nearest its role (art/hud/layout.json `styles`), as the wiki's: the titles in the stats window's title; a mod's name and an option in a player row's name; the running text in the stats window's foot, its one mixed-case style; what the list says when empty and a note, each written for the moment, in the toast; the tabs and the footer's buttons in the transport's labels; a row's button and a badge in the stats window's chips; a value and a stepper's signs in the HUD's numbers.",

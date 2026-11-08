@@ -89,23 +89,28 @@ header output { color: var(--fg); }
 .lockrow .lock { position: relative; display: block; align-self: center; justify-self: start; margin-left: calc(var(--w-row-pad-1) * var(--u)); width: calc(var(--w-lock) * var(--u));
   height: calc(var(--w-lock) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
 
-/* the showcase look: the logo centred in the pane at its own aspect, the website as a link */
-.logo { display: flex; justify-content: center; align-items: center; padding: calc(10 * var(--u)) 0 calc(8 * var(--u)); }
-.logo img { display: block; max-width: 80%; max-height: calc(96 * var(--u)); object-fit: contain; }
-.logo .pt { margin: 0; }
+/* THE SHOWCASE (tagpu_modslay.c show_rows): its numbers are layout.json `show`, its two colours (the link's, the rule's) are
+   tagpu_modslay.c's LINK_RGB and RULE_RGB, RULE_A. Its pictures are kit parts, each box at its picture's own aspect. */
+.logo { display: flex; justify-content: center; padding: calc(var(--w-show-logo-pad-0) * var(--u)) 0 calc(var(--w-show-logo-pad-1) * var(--u)); }
+.logo i { display: block; flex: none; }
 .c { text-align: center; }
-.lnk { font: inherit; letter-spacing: inherit; color: #e2b84a; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.lnk:hover { color: #f4d27a; }
-.rule { height: 1px; background: rgba(216, 216, 200, .18); margin: calc(4 * var(--u)) 0 calc(10 * var(--u)); }
-.lst { padding-left: calc(14 * var(--u)); }
-.lst li { margin: 0 0 calc(2 * var(--u)); }
-/* a wide picture of the mod in play, the pane's full width at its own aspect */
-.banner { margin: 0 0 calc(10 * var(--u)); }
-.banner img { display: block; width: 100%; height: auto; }
-/* a block that opens a section of the description: one blank line above it */
+/* a link is the run's colour alone: no underline, which the game would draw as a solid of its own */
+.lnk { font: inherit; letter-spacing: inherit; color: #e2b84a; text-decoration: none; cursor: pointer; }
+.rule { height: 1px; background: rgba(216, 216, 200, .18);
+  margin: calc(var(--w-show-rule-0) * var(--u)) 0 calc(var(--w-show-rule-1) * var(--u)); }
+.banner { margin: 0 0 calc(var(--w-show-banner) * var(--u)); }
+.banner i { display: block; width: 100%; }
+/* a block that opens a section of the text: one blank line above it, which the margin collapsing with the block before's keeps */
 .sec { margin-top: 1lh; }
-/* a showcase backdrop: the mod's picture filling the head, its right side kept, darkened from the left where the logo and text sit */
-.hero { padding: calc(10 * var(--u)) calc(12 * var(--u)) calc(10 * var(--u));
-  background: linear-gradient(90deg, rgba(3, 9, 13, .9), rgba(3, 9, 13, .55) 45%, rgba(3, 9, 13, .1)), var(--backdrop) right center / cover no-repeat; }
-.hero .logo { justify-content: flex-start; padding: 0 0 calc(6 * var(--u)); }
-.hero .logo img { max-width: 55%; }
+/* a list: its items down the columns, as many to a column as the first holds, each a bullet and its text */
+.lst { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); grid-template-rows: repeat(var(--rows), auto); grid-auto-flow: column;
+  column-gap: calc(var(--w-show-list-gap) * var(--u)); row-gap: calc(var(--w-show-list-after) * var(--u)); }
+.li { position: relative; min-width: 0; padding-left: calc(var(--w-show-list-indent) * var(--u)); }
+.bul { position: absolute; display: block; left: calc((var(--w-show-list-indent) - var(--w-show-list-bullet)) / 2 * var(--u));
+  top: calc((1lh - var(--w-show-list-bullet) * var(--u)) / 2); width: calc(var(--w-show-list-bullet) * var(--u)); height: calc(var(--w-show-list-bullet) * var(--u)); }
+/* a backdrop: the mod's picture behind the head, already shaded from its left (genparts.py), its box set by fitBackdrops */
+.hero { position: relative; overflow: hidden;
+  padding: calc(var(--w-show-hero-pad-0) * var(--u)) calc(var(--w-show-hero-pad-1) * var(--u)) calc(var(--w-show-hero-pad-2) * var(--u)); }
+.hero > * { position: relative; }
+.hero > .bd { position: absolute; display: block; }
+.hero .logo { justify-content: flex-start; padding: 0 0 calc(var(--w-show-hero-logo_after) * var(--u)); }
