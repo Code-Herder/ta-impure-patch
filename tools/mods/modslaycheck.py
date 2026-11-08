@@ -58,10 +58,9 @@ CASES = (
        ("fullest_broken", (1024, 768), {}), ("fullest_broken", (1920, 1080), {"scroll": {"list": "max", "detail": "half"}}),
        ("fullest_locked", (1280, 720), {}), ("fullest_locked", (3440, 1440), {"scroll": {"detail": "max"}})]
     + [("manage", (1920, 1080), {"held": "confirm"}), ("manage", (1920, 1080), {"held": "tab:0"}), ("manage", (1024, 768), {"held": "tab:1"}),
-       ("manage", (1920, 1080), {"held": "act:2"}), ("manage", (1920, 1080), {"held": "row:3"}), ("manage", (2560, 1440), {"held": "swreset:3"}),
-       ("manage", (2560, 1440), {"held": "sw:4"}), ("manage", (3840, 2160), {"held": "back"}), ("explore", (1920, 1080), {"held": "act:0"}),
-       ("updates", (1920, 1080), {"held": "updateall"}),
-       ("mutators", (1920, 1080), {}), ("mutators", (1920, 1080), {"held": "act:5"}), ("mutators", (2560, 1440), {"held": "sw:1"})]
+       ("manage", (1920, 1080), {"held": "act:2"}), ("manage", (1920, 1080), {"held": "row:3"}), ("manage", (3840, 2160), {"held": "back"}),
+       ("explore", (1920, 1080), {"held": "act:0"}), ("updates", (1920, 1080), {"held": "updateall"}),
+       ("mutators", (1920, 1080), {}), ("mutators", (1920, 1080), {"held": "act:5"})]
 )
 # the panels, in the order of MODSPAGE.scroll
 SCROLLS = {"list": "#list", "detail": "#detail"}
@@ -103,15 +102,11 @@ COLLECT = r"""async () => {
     if (r[2] > 0 && r[3] > 0) els.push({ kind: 'hot', key, r }); };
   for (const [k, sel] of Object.entries(SCR)) hot($(sel), 'scroll:' + k, client($(sel)));
   for (const e of document.querySelectorAll('[data-key]')) hot(e, e.dataset.key);
-  // the discs: a lock's 1 px border round a fill, a marker's one fill
+  // the discs: a lock's 1 px border round a fill
   for (const e of document.querySelectorAll('#win .lock')) {
     const r = B(e), k = clipOf(e), p = 1 / u;
     if (k && !overlapY(r, k)) continue;
     els.push({ kind: 'dot', rgb: '5a0808', r }, { kind: 'dot', rgb: 'd01818', r: [r[0] + p, r[1] + p, r[2] - 2 * p, r[3] - 2 * p] });
-  }
-  for (const e of document.querySelectorAll('#win .mark')) {
-    const r = B(e), k = clipOf(e);
-    if (!k || overlapY(r, k)) els.push({ kind: 'dot', rgb: 'e2a030', r });
   }
   // every line of text: its characters grouped by baseline, each character's baseline its box's top plus the ascent of its face
   const ctx = document.createElement('canvas').getContext('2d');

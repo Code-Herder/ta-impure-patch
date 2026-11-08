@@ -150,7 +150,7 @@ static void page_json(const TJV* S, MODSPAGE* p)
     p->selected = (int)tj_num(tj_get(S, "selected"), -1);
     p->update_all = (int)tj_num(tj_get(S, "update_all"), 0);
     STR(p->empty, S, "empty"); STR(p->title, S, "title"); STR(p->meta, S, "meta"); STR(p->summary, S, "summary");
-    STR(p->sw_head, S, "sw_head"); STR(p->note, S, "note"); STR(p->held, S, "held"); STR(p->confirm, S, "confirm");
+    STR(p->note, S, "note"); STR(p->held, S, "held"); STR(p->confirm, S, "confirm");
     v = tj_get(S, "scroll");
     for (i = 0; i < MODS_NSCROLL; i++) p->scroll[i] = (float)tj_num(tj_at(v, i), 0);
     v = tj_get(S, "row");
@@ -166,14 +166,6 @@ static void page_json(const TJV* S, MODSPAGE* p)
         MODSOPT* o = &p->opt[p->nopt++];
         STR(o->label, e, "label"); STR(o->value, e, "value"); STR(o->reason, e, "reason");
         o->locked = (uint8_t)tj_num(tj_get(e, "locked"), 0);
-    }
-    v = tj_get(S, "sw");
-    for (e = v ? v->first : NULL; e && p->nsw < MODS_MAXSW; e = e->next) {
-        MODSSWITCH* w = &p->sw[p->nsw++];
-        STR(w->name, e, "name");
-        w->on = (uint8_t)tj_num(tj_get(e, "on"), 0);
-        w->changed = (uint8_t)tj_num(tj_get(e, "changed"), 0);
-        w->locked = (uint8_t)tj_num(tj_get(e, "locked"), 0);
     }
 }
 

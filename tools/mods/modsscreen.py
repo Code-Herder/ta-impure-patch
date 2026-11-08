@@ -3,9 +3,9 @@
 
     python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]
 
-`flow` opens the screen from the main menu button and clicks through it: the tabs, the play options shown and not set, a switch,
-its reset, a locked option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen
-mod, with the switch in force at its mount, and back again. `real` does a little of that by hardware events on the private display,
+`flow` opens the screen from the main menu button and clicks through it: the tabs, the play options shown and not set, a locked
+option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen mod, with every archive
+it mounts mounted whatever a key an older build wrote says, and back again. `real` does a little of that by hardware events on the private display,
 in a window larger than the shell, which is the path a player's mouse takes. `boxes` is the screen refused: GDI and an unknown exe. `menus` starts each v1 mod and photographs its main menu and the
 screen over it, for the eye: tmp/modsscreen/. `hosted`, run only when asked for since it downloads from the internet, installs each
 mod whose catalog entry names its base_url from that real address, through the screen with no local server, and starts the game on it.
@@ -213,27 +213,19 @@ def flow(display):
     g.click("tab:0")
     s = g.settled(lambda s: s["tab"] == 0)
     g.click(f"row:{row_of(s, 'ProTA')}")
-    s = g.settled(lambda s: s["scan_done"] and s["sw"])
+    s = g.settled(lambda s: s["opts"])
     report([(o["label"], o["value"], o["locked"]) for o in s["opts"]] == [("Resource snapping radius", "3", 0), ("Quick Build", "On", 0)],
            f"ProTA's options show the mod's values: {[(o['label'], o['value']) for o in s['opts']]}")
-    report(not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]), "an option is shown, not set: it takes no click")
-    report(any(w["locked"] and w["name"].lower() == "totala1.hpi" for w in s["sw"]), f"the archive every mod needs is locked: {[w['name'] for w in s['sw']]}")
-    profile = g.dir / "profiles/prota.ini"
-    want = next((i for i, w in enumerate(s["sw"]) if w["name"].lower() == "ccdata.ccx"), -1)
-    if want < 0:
-        want = next(i for i, w in enumerate(s["sw"]) if not w["locked"])
-    arc = s["sw"][want]["name"]
-    was = s["sw"][want]["on"]
-    g.click(f"sw:{want}")
-    s = g.settled(lambda s: s["sw"][want]["changed"])
-    report(s["sw"][want]["on"] != was and f"hide.{arc}=on" in profile.read_text(), f"the switch hides {arc} in the profile")
+    # the Mods screen sets no game setting: its controls are the list's, the tabs, the footer's and the close button
+    others = [h["key"] for h in s["hits"] if not h["key"].startswith(("tab:", "row:", "act:", "scroll:")) and h["key"] not in ("close", "back", "confirm", "updateall")]
+    report(not others, f"the pane takes no click: {others}")
     g.shot("manage-prota")
-    other = next(i for i, w in enumerate(s["sw"]) if not w["locked"] and i != want)
-    g.click(f"sw:{other}")
-    s = g.settled(lambda s: s["sw"][other]["changed"])
-    g.click(f"swreset:{other}")
-    s = g.settled(lambda s: not s["sw"][other]["changed"])
-    report(f"hide.{s['sw'][other]['name']}" not in profile.read_text(), "a switch's reset takes its key out")
+    # a hide. key an older build wrote: the mount reads no player's choice of archive
+    arc = next((p.name for p in g.dir.iterdir() if p.name.lower() == "ccdata.ccx"), None)
+    report(arc is not None, "the folder has ccdata.ccx")
+    profile = g.dir / "profiles/prota.ini"
+    profile.parent.mkdir(exist_ok=True)
+    profile.write_bytes((profile.read_bytes() if profile.exists() else b"") + f"hide.{arc}=on\r\n".encode())
 
     g.click("tab:2")
     s = g.settled(lambda s: s["tab"] == 2)
@@ -263,14 +255,14 @@ def flow(display):
     logs = g.logs()
     report(f"mod=prota" in (g.dir / "impure.cfg").read_text(), "Confirm wrote mod=prota")
     report("modload: mounted mods\\prota\\prota.hpi" in logs, "the new process runs ProTA")
-    report(f"not mounted {arc}: your profile hides it" in logs, "the switch is in force at the mount")
+    report(not re.search(rf"not mounted {re.escape(str(arc))}:", logs, re.I), f"{arc} mounts, whatever the older key says")
     report((g.dir / "mods/prota/installed.txt").read_text().strip() != "0.9", "the update went in at the start")
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "ProTA" and s["chosen"] == "ProTA", "the screen says so")
     # the mod running now: its options read from the profile module's own store
     g.click(f"row:{row_of(s, 'ProTA')}")
-    s = g.settled(lambda s: s["opts"] and s["scan_done"] and s["sw"])
+    s = g.settled(lambda s: s["opts"])
     report([o["value"] for o in s["opts"]] == ["3", "On"] and not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]),
            f"the running mod's options show its values and take no click: {[o['value'] for o in s['opts']]}")
     g.click("close")
@@ -284,11 +276,6 @@ def flow(display):
     time.sleep(1)
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
-    g.click(f"row:{row_of(s, 'ProTA')}")
-    s = g.settled(lambda s: s["scan_done"] and s["sw"] and s["scroll_max"][1] > 0)
-    tacli("wheel", NAME, "-3", "--at", "320", "240", check=False)
-    s = g.settled(lambda s: s["scroll"][1] > 0, 5)
-    report(s["scroll"][1] > 0, f"the wheel scrolls the pane: {s['scroll']}")
     tacli("keys", NAME, "esc")
     s = g.settled(lambda s: not s["open"], 5)
     report(not s["open"], "Esc closes it")
@@ -301,7 +288,7 @@ def flow(display):
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "This folder" and "mod=" not in (g.dir / "impure.cfg").read_text(), "the folder runs again, and mod= is gone")
-    report((g.dir / "profiles/prota.ini").read_text().count("hide.") == 1, "ProTA's profile survives it")
+    report(f"hide.{arc}=on" in (g.dir / "profiles/prota.ini").read_text(), "ProTA's profile survives it, with the key this build does not read")
     tacli("stop", NAME, check=False)
     srv.shutdown()
 
@@ -422,7 +409,8 @@ def real(display):
 
 
 def mutators(display):
-    """A mutator from install to the game: the look it changes in a skirmish, its file switched off, the stale and the conflicting one, what a recording says."""
+    """A mutator from install to the game: the look it changes in a skirmish, mounted whole whatever a key an older build wrote says, the stale and the
+    conflicting one, a hide, what a recording says."""
     sys.path.insert(0, str(ROOT / "tools/modpack"))
     import modpack as mp
     work = OUT / "mutators"
@@ -560,6 +548,9 @@ def mutators(display):
     g.click("tab:0")
     s = g.settled(lambda s: s["tab"] == 0)
     report(s["confirm"] == "Restart to apply", f"Confirm offers the restart: {s['confirm']!r}")
+    # a file. key an older build wrote, which turned that file off: a mutator mounts whole or not at all
+    prof = g.dir / "profiles/prota.ini"
+    prof.write_bytes(prof.read_bytes() + b"file.objects3d\\armcom.3do=off\r\n")
     g.click_ending("confirm")
 
     # the game with it: the look in a skirmish
@@ -569,6 +560,7 @@ def mutators(display):
     report("modload: not mounted mutator" not in log or "tstale" not in log, "the stale one stays out, switched off as it is")
     skirmish("mut-look")
     d_look = diff("mut-base", "mut-look")
+    report(d_look > 500, f"the look changes the picture, the older key notwithstanding: {d_look} px against the base")
 
     recs = sorted(g.dir.rglob("*.imprec"), key=lambda p: p.stat().st_mtime)
     if recs:
@@ -579,41 +571,10 @@ def mutators(display):
     else:
         report(False, "no recording to read")
 
-    # its file switched off: the base's file answers
-    relaunch()
-    tacli("ui", NAME, "click", "MODS")
-    s = g.settled(lambda s: s["open"] and s["drawn"])
-    s = g.settled(lambda s: all(r["detail"] != "Checking its files" for r in s["rows"]), 60)
-    g.click(f"row:{row_of(s, 'Tall commander')}")
-    s = g.settled(lambda s: s["sw"], 15)
-    report(s["sw"][0]["name"].lower().endswith("armcom.3do"), f"its pane lists its files: {s['sw']}")
-    g.click("sw:0")
-    s = g.settled(lambda s: s["sw"] and not s["sw"][0]["on"])
-    report(s["sw"][0]["changed"] == 1 and s["confirm"] == "Restart to apply", "a switched-off file asks for the restart")
-    g.click_ending("confirm")
-    g.menu(120)
-    log = g.logs()
-    report("is switched off, 1 entries" in log, "the file goes from the engine's directory")
-    skirmish("mut-off")
-    d_off = diff("mut-base", "mut-off")
-    report(d_look > 3 * max(d_off, 50), f"the look changes the picture and the switch takes it back: {d_look} px against the base, {d_off} px switched off")
-
-    # a key naming no file: ignored, with a line
-    prof = g.dir / "profiles/prota.ini"
-    prof.write_bytes(prof.read_bytes() + b"file.objects3d\\nothing.3do=off\r\n")
-    relaunch()
-    report("file.objects3d\\nothing.3do names no file" in g.logs(), "a file. key naming no file is ignored with a line")
-
     # a hide: the base's own file leaves its directory, and the original archives answer
+    relaunch()
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"] and all(r["detail"] != "Checking its files" for r in s["rows"]), 60)
-    # the key is the path's: the switch left off above would take this hide out of play too
-    g.click(f"row:{row_of(s, 'Tall commander')}")
-    s = g.settled(lambda s: s["sw"] and s["sw"][0]["changed"], 15)
-    report(True, "its file still shows off in the pane")
-    g.click("swreset:0")
-    s = g.settled(lambda s: s["sw"] and not s["sw"][0]["changed"], 15)
-    report(s["sw"][0]["on"] == 1, "Reset puts it back on")
     g.click(f"act:{row_of(s, 'Tall commander')}")
     s = g.settled(lambda s: next(r for r in s["rows"] if r["name"] == "Tall commander")["act"] == 6)
     r = next(r for r in s["rows"] if r["name"] == "Other commander")

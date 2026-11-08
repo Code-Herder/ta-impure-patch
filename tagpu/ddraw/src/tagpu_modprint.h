@@ -3,10 +3,10 @@
 /* tagpu_modprint -- what this process plays with, as two hashes other Impure players can compare (research/notes/modules/mods.md,
    *The fingerprint*).
 
-   ONE PRINT SERVES THE PROCESS. It is taken once InitTAHPIAry mounts nothing more, when a level's own call would mount nothing either, and a mutator's
-   or a hide's choice takes a restart. The exe's half names the image the mod's table makes, so a managed player and a drop-in player of one mod agree. The content's
-   half walks the files under every folder the mounted archives have, once each from the source it opens from, after the mount's removals: that is how a mutator, a
-   hide and a file switch all reach it without being looked at.
+   ONE PRINT SERVES THE PROCESS. It is taken once InitTAHPIAry mounts nothing more, when a level's own call would mount nothing either, and a mutator
+   turned on or off takes a restart. The exe's half names the image the mod's table makes, so a managed player and a drop-in player of one mod agree. The content's
+   half walks the files under every folder the mounted archives have, once each from the source it opens from, after the mount's removals: that is how a mutator
+   and what it hides reach it without being looked at.
 
    Files only: no engine memory on its thread. */
 #include <stddef.h>

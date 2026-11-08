@@ -29,19 +29,12 @@ void tagpu_profiles_status(char* out, unsigned cap);
 int tagpu_profiles_choice(int which);
 void tagpu_profiles_restore_choice(int which, int value);
 /* Any mod's file, for the Mods screen at the main menu, where a write inside a click holds up no game.
-   The player's value of a choice, or -1; hide.<archive>'s, 1 hidden, 0 mounted, -1 no key, without case. */
+   The player's value of a choice, or -1. */
 int tagpu_profiles_choice_of(const char* id, int which);
-int tagpu_profiles_hide_of(const char* id, const char* archive);
-/* Sets a key of that file, -1 removing it: 1, or 0 with the reason in the log. */
-int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
-/* A base mod's file holds its mutators' switches too ("none" the folder's own game): mutator.<id> and file.<path>, each
-   1 on, 0 off, -1 no key, without case. A mutator is off and a file on with no key. */
+/* A base mod's file holds which of its mutators are on ("none" the folder's own game): mutator.<id>, 1 on, 0 off, -1 no
+   key, without case. A mutator is off with no key. Setting -1 removes the key: 1, or 0 with the reason in the log. */
 int tagpu_profiles_mutator_of(const char* base, const char* mutator);
-int tagpu_profiles_file_of(const char* base, const char* path);
 int tagpu_profiles_set_mutator_of(const char* base, const char* mutator, int value);
-int tagpu_profiles_set_file_of(const char* base, const char* path, int value);
-/* `fn` with the path of each file.<path> key in that file. */
-void tagpu_profiles_each_file(const char* base, void (*fn)(void* ctx, const char* path), void* ctx);
 
 /* The file's write: the render thread each frame, the Mods screen's Confirm, and the exit once no other thread is inside. A
    click only records its value (tagpu_menu_present). */

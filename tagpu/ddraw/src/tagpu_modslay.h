@@ -14,7 +14,6 @@
      tab:0 tab:1 tab:2     Manage, Explore, Updates
      row:<i>               row i of the list: selects it
      act:<i>               row i's action button (Install, Update, or its radio on Manage)
-     sw:<i>                archive switch i; swreset:<i> its reset
      close back confirm updateall
      scroll:list scroll:detail   a scrollbar's track, as the wiki's */
 #include <stddef.h>
@@ -26,7 +25,6 @@
 #define MODS_KEY      16u
 #define MODS_MAXROW   16        /* "This folder", the catalog's mods; a mutator lists here too */
 #define MODS_MAXOPT   8
-#define MODS_MAXSW    40        /* the folder's archives */
 
 enum { MODS_TAB_MANAGE, MODS_TAB_EXPLORE, MODS_TAB_UPDATES, MODS_NTAB };
 enum { MODS_SCROLL_LIST, MODS_SCROLL_DETAIL, MODS_NSCROLL };
@@ -51,13 +49,6 @@ typedef struct {
     uint8_t locked;             /* greyed, a lock disc */
 } MODSOPT;
 
-typedef struct {
-    char    name[96];           /* an archive's file name, or a mutator's path */
-    uint8_t on;                 /* mounted; a mutator's file: in play */
-    uint8_t changed;
-    uint8_t locked;             /* the base archive every mod needs */
-} MODSSWITCH;
-
 /* The page as the player has it. Values only, read on a copy: every count is bounded in the build. */
 typedef struct {
     float      W, H;            /* the screen, pixels */
@@ -73,9 +64,6 @@ typedef struct {
     char       note[200];       /* under the summary: a refusal, an install's failure, what Confirm will do */
     int        nopt;
     MODSOPT    opt[MODS_MAXOPT];
-    char       sw_head[24];     /* the switches' heading */
-    int        nsw;
-    MODSSWITCH sw[MODS_MAXSW];
     float      scroll[MODS_NSCROLL];
     unsigned   gen;             /* the page's shape generation, handed back with the frame's hit map */
     char       held[MODS_KEY];  /* the key of the control held down; "" none */

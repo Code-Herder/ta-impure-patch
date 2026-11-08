@@ -589,35 +589,6 @@ static void note_gone(const char* archive, const char* path)
     s_ngone++;
 }
 
-static int file_off(void* base, const char* path)
-{
-    return tagpu_profiles_file_of((const char*)base, path) == 0;
-}
-
-/* a file.<path> key no mutator of this base now holds: ignored, and said */
-static void note_file_key(void* ctx, const char* path)
-{
-    const char* base = (const char*)ctx;
-    int i, k;
-    size_t n = 0;
-    const char* cat = tagpu_modinst_catalog(&n);
-    IDS ids;
-    ids.n = 0;
-    if (cat) tagpu_modcat_each_id(cat, n, note_catalog_id, &ids);
-    for (i = 0; i < ids.n; i++) {
-        MODMUTATOR m;
-        int hit = 0;
-        if (!tagpu_modcat_mutator(cat, n, ids.id[i], &m)) continue;
-        if (!strcmp(m.base, base)) {
-            for (k = 0; k < m.nfiles && !hit; k++) hit = tagpu_modcat_same_path(m.files[k].path, path);
-            for (k = 0; k < m.nhides && !hit; k++) hit = tagpu_modcat_same_path(m.hides[k], path);
-        }
-        tagpu_modcat_mutator_free(&m);
-        if (hit) return;
-    }
-    tagpu_logf("modload: file.%s names no file of a mutator of %s; ignored", path, base);
-}
-
 static int mounts_as_original(const char* name)
 {
     return is_original_archive(name) > 0;
@@ -639,7 +610,7 @@ static void mount_mutators(const char* base)
     for (i = 0; i < ids.n; i++) {
         MODMUTATOR m;
         MODABOUT about;
-        char path[MAX_PATH], full[MAX_PATH], archive[48], version[32], stale[8][MODCAT_PATH];
+        char path[MAX_PATH], full[MAX_PATH], version[32], stale[8][MODCAT_PATH];
         const char* why = NULL;
         int total, handle;
         DWORD need;
@@ -653,20 +624,19 @@ static void mount_mutators(const char* base)
         if (!fit) fit = tagpu_modfit_open(base, mounts_as_original);
         total = fit ? tagpu_modcat_stale(&m, tagpu_modfit_hash, fit, stale, 8) : 1;
         if (!fit) lstrcpynA(stale[0], "?", sizeof stale[0]);
-        why = tagpu_modcat_stale_live(stale, total, 8, file_off, (void*)base);
+        why = tagpu_modcat_stale_live(stale, total, 8, NULL, NULL);
         if (why) {
             tagpu_logf("modload: not mounted mutator %s: %s differs from the file it was built on", m.id, why);
             tagpu_modcat_mutator_free(&m);
             continue;
         }
         for (k = 0; k < s_nmounted && !why; k++) {
-            if ((why = tagpu_modcat_clash(&m, &s_applied[k], file_off, (void*)base)) != NULL)
+            if ((why = tagpu_modcat_clash(&m, &s_applied[k], NULL, NULL)) != NULL)
                 tagpu_logf("modload: not mounted mutator %s: %s is %s's too", m.id, why, s_applied[k].id);
         }
         if (why) { tagpu_modcat_mutator_free(&m); continue; }
 
         snprintf(path, sizeof path, "mods\\%s\\%s.hpi", m.id, m.id);
-        snprintf(archive, sizeof archive, "%s.hpi", m.id);
         /* the mounter's two path buffers, as tagpu_modload_begin's check of the mod's own */
         need = GetFullPathNameA(path, sizeof full, full, NULL);
         if (!need || need >= VA_MOUNT_PATH_MAX) {
@@ -679,11 +649,6 @@ static void mount_mutators(const char* base)
             tagpu_modcat_mutator_free(&m);
             continue;
         }
-        for (k = 0; k < m.nfiles; k++)
-            if (file_off((void*)base, m.files[k].path)) {
-                tagpu_logf("modload: %s: %s is switched off, %d entries", m.id, m.files[k].path, forget_in_engine((char*)(intptr_t)handle, m.files[k].path));
-                note_gone(archive, m.files[k].path);
-            }
         if (tagpu_modcat_about(cat, ncat, m.id, &about)) {
             size_t at = strlen(s_mutators);
             snprintf(s_mutators + at, sizeof s_mutators - at, "%s%s %s", at ? ", " : "", about.name, version);
@@ -692,7 +657,6 @@ static void mount_mutators(const char* base)
         s_applied[s_nmounted++] = m;    /* the table keeps its arrays */
     }
     if (fit) tagpu_modfit_close(fit);
-    tagpu_profiles_each_file(base, note_file_key, (void*)base);
 }
 
 /* What the mounted mutators hide from the base's own archives, right after each has mounted; a later source answers the path. */
@@ -702,7 +666,6 @@ static void apply_hides(int handle, const char* archive)
     for (i = 0; i < s_nmounted; i++)
         for (k = 0; k < s_applied[i].nhides; k++) {
             const char* p = s_applied[i].hides[k];
-            if (file_off(s_id, p)) continue;
             tagpu_logf("modload: %s hides %s from %s: %d entries", s_applied[i].id, p, archive, forget_in_engine((char*)(intptr_t)handle, p));
             note_gone(archive, p);
         }
@@ -756,10 +719,8 @@ static int __stdcall mount_filtered(const char* name, int flag)
         static char seen[ARCHIVES_MAX][64];
         static int nseen;
         const char* why = NULL;
-        /* the player's hide.<archive> over the mod's list; the archive every mod needs stays whatever the file says */
-        const int key = lstrcmpiA(base, ESSENTIAL_ARCHIVE) ? tagpu_profiles_hide_of(s_id, base) : 0;
-        if (key > 0) why = "your profile hides it";
-        else if (key < 0 && tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
+        /* the mod's list; the archive every mod needs stays whatever the list says */
+        if (lstrcmpiA(base, ESSENTIAL_ARCHIVE) && tagpu_modcat_hidden((const char*)s_catalog, s_ncatalog, s_id, base)) why = "the mod hides it";
         else {
             int original = is_original_archive(name);
             if (original <= 0) why = original < 0 ? "it could not be read" : "it is no original archive of the game";

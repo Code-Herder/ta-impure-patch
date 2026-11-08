@@ -22,9 +22,7 @@
 #define RADIUS_MAX MODRULES_RADIUS_MAX
 #define RULES_LEVER "tagpu_rules.on"
 #define MIGRATED ".migrated"
-#define HIDE_KEY "hide."
 #define MUTATOR_KEY "mutator."
-#define FILE_KEY "file."
 
 static const char* const names[MOD_N] = {
     "unknown", "retail", "escalation", "mayhem", "prota", "tazero", "twilight"
@@ -275,9 +273,9 @@ invalid:
     return 1;
 }
 
-/* The player's changes in `path` into `choice`. A key this build does not read stays in the file
-   for the build that does: `file.` and `hide.`, and whatever comes later. 1 with the file's values,
-   0 with no file, -1 with the reason in `error` and `choice` untouched. */
+/* The player's changes in `path` into `choice`. A key that is no choice is passed over and stays in
+   the file: a mutator's `mutator.`, which switch_of reads, and any key another build wrote. 1 with the
+   file's values, 0 with no file, -1 with the reason in `error` and `choice` untouched. */
 static int read_choices(const char* path, int* choice, char* error, unsigned cap)
 {
     char data[PROFILE_CAP + 1], *line, *next;
@@ -346,9 +344,8 @@ static int write_choice(const char* path, const char* key, int value, char* why,
     }
     if (value >= 0) {
         if ((size_t)at + klen + 16 > PROFILE_CAP) { snprintf(why, cap, "%s is full", path); return 0; }
-        /* the content switches read on|off (research/notes/mod-manager-plan.md) */
-        if (!strncmp(key, HIDE_KEY, sizeof HIDE_KEY - 1) || !strncmp(key, MUTATOR_KEY, sizeof MUTATOR_KEY - 1) ||
-            !strncmp(key, FILE_KEY, sizeof FILE_KEY - 1))
+        /* a mutator's key reads on|off (research/notes/mod-manager-plan.md) */
+        if (!strncmp(key, MUTATOR_KEY, sizeof MUTATOR_KEY - 1))
             at += snprintf(out + at, sizeof out - at, "%s=%s\r\n", key, value ? "on" : "off");
         else
             at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
@@ -539,11 +536,11 @@ int tagpu_profiles_choice_of(const char* id, int which)
     return read_choices(path, choice, error, sizeof error) > 0 ? choice[which] : -1;
 }
 
-/* <prefix><name>=on|off in a mod's file: 1, 0, or -1 for no key. With `name` NULL, `each` gets every name under the prefix. */
-static int switch_of(const char* id, const char* prefix, const char* name, void (*each)(void*, const char*), void* ctx)
+/* <prefix><name>=on|off in a mod's file: 1, 0, or -1 for no key. */
+static int switch_of(const char* id, const char* prefix, const char* name)
 {
     char path[64], data[PROFILE_CAP + 1], error[sizeof s_error] = "", *line, *next;
-    const size_t nk = strlen(prefix), na = name ? strlen(name) : 0;
+    const size_t nk = strlen(prefix), na = strlen(name);
     int found = -1;
     int got;
     path_of_id(id, path, sizeof path);
@@ -558,18 +555,7 @@ static int switch_of(const char* id, const char* prefix, const char* name, void 
         next = strchr(line, '\n');
         if (next) *next++ = 0;
         key = trim(line);
-        if (strncmp(key, prefix, nk)) continue;
-        if (!name) {
-            char* eq = strchr(key, '=');
-            if (eq) {
-                char* end = eq;
-                while (end > key + nk && (end[-1] == ' ' || end[-1] == '\t')) end--;
-                *end = 0;
-                if (each) each(ctx, key + nk);
-            }
-            continue;
-        }
-        if (_strnicmp(key + nk, name, na)) continue;
+        if (strncmp(key, prefix, nk) || _strnicmp(key + nk, name, na)) continue;
         key = trim(key + nk + na);
         if (*key != '=') continue;
         key = trim(key + 1);
@@ -580,24 +566,9 @@ static int switch_of(const char* id, const char* prefix, const char* name, void 
     return found;
 }
 
-int tagpu_profiles_hide_of(const char* id, const char* archive)
-{
-    return switch_of(id, HIDE_KEY, archive, NULL, NULL);
-}
-
 int tagpu_profiles_mutator_of(const char* base, const char* mutator)
 {
-    return switch_of(base, MUTATOR_KEY, mutator, NULL, NULL);
-}
-
-int tagpu_profiles_file_of(const char* base, const char* path)
-{
-    return switch_of(base, FILE_KEY, path, NULL, NULL);
-}
-
-void tagpu_profiles_each_file(const char* base, void (*fn)(void* ctx, const char* path), void* ctx)
-{
-    switch_of(base, FILE_KEY, NULL, fn, ctx);
+    return switch_of(base, MUTATOR_KEY, mutator);
 }
 
 static int write_key_of(const char* id, const char* key, int value)
@@ -614,24 +585,10 @@ static int write_key_of(const char* id, const char* key, int value)
     return ok;
 }
 
-int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value)
-{
-    char key[80];
-    snprintf(key, sizeof key, HIDE_KEY "%s", archive);
-    return write_key_of(id, key, value);
-}
-
 int tagpu_profiles_set_mutator_of(const char* base, const char* mutator, int value)
 {
     char key[80];
     snprintf(key, sizeof key, MUTATOR_KEY "%s", mutator);
-    return write_key_of(base, key, value);
-}
-
-int tagpu_profiles_set_file_of(const char* base, const char* path, int value)
-{
-    char key[128];
-    snprintf(key, sizeof key, FILE_KEY "%s", path);
     return write_key_of(base, key, value);
 }
 

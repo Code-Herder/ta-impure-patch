@@ -7,7 +7,6 @@
 #include "tagpu_modinst.h"
 #include "tagpu_modload.h"
 #include "tagpu_modpak.h"
-#include "tagpu_profiles.h"
 #include "tagpu_hpi.h"
 
 #define FILE_MAX (64u << 20)    /* a file a mutator replaces; a larger one reads as differing */
@@ -76,9 +75,8 @@ MODFIT* tagpu_modfit_open(const char* base, int (*original)(const char* name))
         if (h == INVALID_HANDLE_VALUE) continue;
         do {
             if (!folder) {
-                /* mount_filtered's rule: the player's key over the mod's list, and the archive every mod needs stays */
-                const int key = lstrcmpiA(fd.cFileName, tagpu_modload_essential_archive()) ? tagpu_profiles_hide_of(base, fd.cFileName) : 0;
-                if (key > 0 || (key < 0 && cat && tagpu_modcat_hidden(cat, ncat, base, fd.cFileName))) continue;
+                /* mount_filtered's rule: what the mod's list hides, but for the archive every mod needs */
+                if (lstrcmpiA(fd.cFileName, tagpu_modload_essential_archive()) && cat && tagpu_modcat_hidden(cat, ncat, base, fd.cFileName)) continue;
                 if (!original(fd.cFileName)) continue;
             }
             add(f, fd.cFileName);
