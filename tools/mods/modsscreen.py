@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """modsscreen.py -- the Mods screen played in the game, on Wine: the real DLL, the real button, device clicks.
 
-    python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus] [--display :N] [--software]
+    python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]
 
 `flow` opens the screen from the main menu button and clicks through it: the tabs, a stepper, a switch, the reset, a locked
 option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen
 mod, with the switch in force at its mount, and back again. `real` does a little of that by hardware events on the private display,
 in a window larger than the shell, which is the path a player's mouse takes. `boxes` is the screen refused: GDI and an unknown exe. `menus` starts each v1 mod and photographs its main menu and the
-screen over it, for the eye: tmp/modsscreen/.
+screen over it, for the eye: tmp/modsscreen/. `hosted`, run only when asked for since it downloads from the internet, installs each
+mod whose catalog entry names its base_url from that real address, through the screen with no local server, and starts the game on it.
 
 Each control is found in the screen's own state dump (tagpu_modsui.dump), the hit map of the frame last drawn, so a click lands
 where the player would aim. It needs the packages tools/modpack/modpack.py packages builds, and starts its own Xvfb when no display is given.
@@ -716,9 +717,40 @@ def menus(display):
         tacli("stop", NAME, check=False)
 
 
+def hosted(display):
+    """Each hosted mod from its real download place: HTTPS and the host's redirects, through the screen, then a start on it."""
+    catalog = json.loads((ROOT / "mods/catalog.json").read_text())["mods"]
+    want = [e for e in catalog if e.get("base_url") and e["kind"] == "mod"]
+    print(f"hosted: {[e['id'] for e in want]}", flush=True)
+    for e in want:
+        g = Game(display)
+        g.launch()
+        tacli("ui", NAME, "click", "MODS")
+        s = g.settled(lambda s: s["open"] and s["drawn"])
+        g.click("tab:1")
+        s = g.settled(lambda s: s["tab"] == 1)
+        names = sorted(r["name"] for r in s["rows"])
+        report(names == sorted(x["name"] for x in want), f"Explore offers the hosted mods alone: {names}")
+        g.shot(f"hosted-explore-{e['id']}")
+        g.click(f"act:{row_of(s, e['name'])}")
+        s = g.settled(lambda s: row_of(s, e["name"]) < 0 or s["note"], 600)
+        new = g.dir / "mods" / f"{e['id']}.new" / "installed.txt"
+        report(row_of(s, e["name"]) < 0 and new.exists() and new.read_text().strip() == e["version"],
+               f"{e['name']} downloaded from {e['base_url']} and installed: note {s['note']!r}")
+        g.click("tab:0")
+        s = g.settled(lambda s: s["tab"] == 0)
+        g.click(f"act:{row_of(s, e['name'])}")
+        s = g.settled(lambda s: s["chosen"] == e["name"])
+        g.click_ending("confirm")
+        report(g.menu(), "the game comes back to its main menu by itself")
+        report(f"modload: mounted mods\\{e['id']}\\{e['id']}.hpi" in g.logs(), f"the new process runs {e['name']}")
+        g.shot(f"hosted-menu-{e['id']}")
+        tacli("stop", NAME, check=False)
+
+
 def main():
     a = argparse.ArgumentParser()
-    a.add_argument("--only", choices=["flow", "menus", "boxes", "real", "mutators"])
+    a.add_argument("--only", choices=["flow", "menus", "boxes", "real", "mutators", "hosted"])
     # With no GPU to use: on llvmpipe a mod's menu has too little of the 2 GB left for the screen's pass (MEASURED: 60 MB free and the
     # process gone at the open, twice of twice, under ProTA; 227 MB with only this driver loaded and the restorer off)
     a.add_argument("--software", action="store_true", help="llvmpipe alone, the restorer off")
@@ -753,6 +785,8 @@ def main():
             boxes(display)
         if args.only in (None, "menus"):
             menus(display)
+        if args.only == "hosted":
+            hosted(display)
     finally:
         if xv:
             xv.terminate()

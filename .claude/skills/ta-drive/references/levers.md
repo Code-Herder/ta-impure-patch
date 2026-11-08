@@ -471,7 +471,7 @@ that map's size.
 - `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the session goes to GDI.
 - `tagpu_vkfull.on`: the driver's own no, `VK_ERROR_OUT_OF_DEVICE_MEMORY` from `vkAllocateMemory`. A number K (or nothing, 0): K allocations pass, one is refused, the file is consumed. `keep`: every one. `wiki`: only while the wiki's stage is being prepared. An allocation is what it needs to meet, so a rebuild is the usual way in: write it beside `tagpu_passrefuse.on`.
 - `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print.
-- `tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators] [--display :N] [--software]` plays the screen on a private display and holds the run lock.
+- `tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]` plays the screen on a private display and holds the run lock. `hosted` alone downloads from the real hosts, so it runs only when named.
 
 ## The heartbeats: what must read zero
 

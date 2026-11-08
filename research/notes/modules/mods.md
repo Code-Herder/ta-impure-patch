@@ -261,6 +261,9 @@ runs it after fitting. A painted part of the same name replaces one with no code
 longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
 restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
 `menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on and with its file switched off.
+`hosted`, run only when asked for since it downloads from the internet, installs each entry with a `base_url` from that real
+address through the screen, with no local server, and starts the game on it: ProTA from GitHub, through its redirect, MEASURED
+2026-11-07 on Wine (Explore offering ProTA alone, the install, the restart mounting `mods\prota\prota.hpi`). Windows has not run it.
 
 `tools/modpack/installtest.py` needs no game: the tar reader natively under the sanitizers, and the module itself under Wine with its
 real WinHTTP, against a local server. `tests/modinsttest.exe` is built with a hook that ends the process at a chosen step, as a
