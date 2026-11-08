@@ -73,8 +73,9 @@ const SCROLLS = {
   confirm: 'Play Total Mayhem',
 };
 /* ---- the showcase look: the mod's own logo, its authors, its website and a description, for the two mods offered for now ---- */
-/* The logos are the mods' own art, kept out of the repository (tmp/ is ignored); a missing file shows the mod's name instead. */
-const LOGOS = '../../../tmp/modlogos/';
+/* The logos are art like every other part: art/mods/logos/, packed into the DLL with the rest of art/mods/ (WIKIPAK); nothing is
+   read from the web. A missing file shows the mod's name instead. */
+const LOGOS = ART + 'mods/logos/';
 const SHOW = {
   mayhem: {
     /* the text is the author's, as given to the owner on 2026-11-08 */
@@ -91,7 +92,7 @@ const SHOW = {
       { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
-    name: 'ProTA', logo: 'prota.webp', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
+    name: 'ProTA', logo: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
     about: ['ProTA is a rebalance of Total Annihilation led by veteran competitive players. It makes more units worth building while keeping the '
       + 'original game’s speed, its fights over wreck fields and the asymmetry between Arm and Core.',
       'Weak units are made cheaper or stronger rather than more expensive, the units players already rely on change as little as possible, and '
