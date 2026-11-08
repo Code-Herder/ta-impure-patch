@@ -99,16 +99,12 @@ const SHOW = {
       { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
-    /* About is the owner's text of 2026-11-08; Mission and Credits sum up the site's pages of those names in our own words and
-       link to them for the full text */
+    /* About opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims and the Credits page sum up the
+       site's mission and credits pages in our own words and link to them for the full text */
     name: 'ProTA', logo: 'prota.png', backdrop: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
     pages: [
       { name: 'About', about: [
         'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
-        { section: 'Main Contributors:' },
-        { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
-          'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 }] },
-      { name: 'Mission', about: [
         'ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against '
           + 'each other, and the mod looks for the ground between them.',
         { section: 'Its eight aims:' },
@@ -121,7 +117,10 @@ const SHOW = {
           'Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.',
           'A better interface: new hotkeys and a longer build menu, within what the engine allows.'] },
         'The team hopes to make the TA mod that newcomers and veterans alike call their own.',
-        { link: ['The full text: ', 'https://prota.tauniverse.com/mission.html'] }] },
+        { link: ['The full mission: ', 'https://prota.tauniverse.com/mission.html'] },
+        { section: 'Main Contributors:' },
+        { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
+          'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 }] },
       { name: 'Credits', about: [
         'Fine-tuned and play-tested by the players listed under About. The mod was also made possible by:',
         { list: ['gamma: scripting, balance discussions, and Total Mayhem\'s scripts, fixes and models, used with permission',
