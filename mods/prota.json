@@ -20,5 +20,63 @@
       "allowed": true,
       "default": true
     }
+  },
+  "show": {
+    "by": "By TAG_Venom and the ProTA team",
+    "site": "https://prota.tauniverse.com/",
+    "about": [
+      "A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.",
+      "ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against each other, and the mod looks for the ground between them.",
+      {
+        "section": "Its eight aims:"
+      },
+      {
+        "list": [
+          "Every unit useful: each one gets a real job, widening the choices without diluting the game.",
+          "The original feel: the pace and the classic strategies stay.",
+          "Cheap and quick: a weak unit is made cheaper or stronger, almost never dearer, so armies stay replaceable and the fight over wreck fields stays at the centre.",
+          "Familiar units left alone: the units players use most change as little as possible.",
+          "Arm and Core asymmetric: the two sides differ, and both stay viable on every map.",
+          "Built on experience: balance rests on the games of long-time high-level players; anyone's feedback counts when it fits the mod's goals and comes with evidence or replays.",
+          "Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.",
+          "A better interface: new hotkeys and a longer build menu, within what the engine allows."
+        ]
+      },
+      "The team hopes to make the TA mod that newcomers and veterans alike call their own.",
+      {
+        "link": [
+          "The full mission: ",
+          "https://prota.tauniverse.com/mission.html"
+        ]
+      },
+      {
+        "section": "Main Contributors:"
+      },
+      {
+        "list": [
+          "TAG_Venom",
+          "TAG_ROCK",
+          "PRO_rANDY",
+          "Tiptushi",
+          "TAG_Metn",
+          "timmyfred",
+          "TAG_Sensation",
+          "FFAxPostal",
+          "TAG_Dominator",
+          "Gnug215",
+          "OZ_coolnick",
+          "BTU_Natas",
+          "TAG_Mastah",
+          "Gnug115"
+        ],
+        "cols": 3
+      },
+      {
+        "link": [
+          "The full credits: ",
+          "https://prota.tauniverse.com/credits.html"
+        ]
+      }
+    ]
   }
 }

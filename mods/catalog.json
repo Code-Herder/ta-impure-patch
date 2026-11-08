@@ -170,6 +170,45 @@
           "allowed": true,
           "default": true
         }
+      },
+      "show": {
+        "by": "By gamma",
+        "site": "https://mayhem.tauniverse.com/",
+        "about": [
+          "Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.",
+          "Total Mayhem takes Total Annihilation, bugfixes and extends it the way Cavedog might have. All units are useful while retaining original TA gameplay. Many new units added (longtime players will recognise some 3rd-party units), including a whole new 3rd tech level tier.. Existing and added units have been bugfixed, rebalanced, re-modeled, re-textured and re-rendered to equal or exceed the standard of the original TA units",
+          {
+            "section": "TOTAL MAYHEM's features include:"
+          },
+          {
+            "list": [
+              "An extended builder interface with 12 buttons per page instead of the usual 6, with hotkey overlays",
+              "Lots of UX and ease-of-use improvements including hotkeys and shortcut keys",
+              "Loads of bugfixes that prevent lockups and crashes, improve unit AI and improve game performance, meaning more units ingame with less lag",
+              "endeavors to make all the units useful, open up more strategic options without removing any existing ones",
+              "LOADS of added units, including a complete Level 3 tier: experimental kbots, tanks, navy and air, mobile fortresses, nuke bombers, nuke cannons and more"
+            ]
+          },
+          {
+            "section": "gamma, @gammata, is the main author. Contributors include:"
+          },
+          {
+            "list": [
+              "thaldren (TA ddraw patch dev)",
+              "keeper, or mnhebi - colour mod and music player dev",
+              "m1garland - has contributed many 3D models",
+              "archdragon - has contributed a number of 3D models",
+              "plasmoidthunder - several unit pictures/build button art"
+            ]
+          },
+          "Credit also to many other unitmakers in the past whose creations many units are based on. The SYs, Xon, Rime and Xpoy for dev work on the TA recorder, the \"megamap\" and many other added features to TA, that thaldren has continued to build on (and rewrite). ProTA, Venom and the team for their balancing work that I have used as a reference point. The team who have helped playtest and give balance feedback on the Mayhem Gang Discord server",
+          {
+            "link": [
+              "See the #total-mayhem channel on the TA Universe Discord server: ",
+              "https://discord.gg/Z4hJpVbmyW"
+            ]
+          }
+        ]
       }
     },
     {
@@ -387,7 +426,65 @@
           "default": true
         }
       },
-      "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download"
+      "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download",
+      "show": {
+        "by": "By TAG_Venom and the ProTA team",
+        "site": "https://prota.tauniverse.com/",
+        "about": [
+          "A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.",
+          "ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against each other, and the mod looks for the ground between them.",
+          {
+            "section": "Its eight aims:"
+          },
+          {
+            "list": [
+              "Every unit useful: each one gets a real job, widening the choices without diluting the game.",
+              "The original feel: the pace and the classic strategies stay.",
+              "Cheap and quick: a weak unit is made cheaper or stronger, almost never dearer, so armies stay replaceable and the fight over wreck fields stays at the centre.",
+              "Familiar units left alone: the units players use most change as little as possible.",
+              "Arm and Core asymmetric: the two sides differ, and both stay viable on every map.",
+              "Built on experience: balance rests on the games of long-time high-level players; anyone's feedback counts when it fits the mod's goals and comes with evidence or replays.",
+              "Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.",
+              "A better interface: new hotkeys and a longer build menu, within what the engine allows."
+            ]
+          },
+          "The team hopes to make the TA mod that newcomers and veterans alike call their own.",
+          {
+            "link": [
+              "The full mission: ",
+              "https://prota.tauniverse.com/mission.html"
+            ]
+          },
+          {
+            "section": "Main Contributors:"
+          },
+          {
+            "list": [
+              "TAG_Venom",
+              "TAG_ROCK",
+              "PRO_rANDY",
+              "Tiptushi",
+              "TAG_Metn",
+              "timmyfred",
+              "TAG_Sensation",
+              "FFAxPostal",
+              "TAG_Dominator",
+              "Gnug215",
+              "OZ_coolnick",
+              "BTU_Natas",
+              "TAG_Mastah",
+              "Gnug115"
+            ],
+            "cols": 3
+          },
+          {
+            "link": [
+              "The full credits: ",
+              "https://prota.tauniverse.com/credits.html"
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "tazero",

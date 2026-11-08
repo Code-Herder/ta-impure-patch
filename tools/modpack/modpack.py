@@ -1519,7 +1519,7 @@ def cmd_catalog(_):
                   "exe": s["id"], "hide": plan.hide})
         if same_as:
             e["same_as"] = same_as
-        for k in ("memory", "options", "base_url"):
+        for k in ("memory", "options", "base_url", "show"):
             if k in s:
                 e[k] = s[k]
         entries.append(e)
@@ -1653,6 +1653,56 @@ def _exe_mapped(proc: Path, folder: Path) -> bool:
         return False
 
 
+# A mod's showcase on the Mods screen (tagpu_modsui.c fills MODSSHOW from it): the authors' line, the website, and the text as
+# blocks -- a paragraph, a section's opening line, a list (in `cols` columns), a line ending in a link. Its pictures are the
+# kit's parts logo_<id>, banner_<id> and backdrop_<id> (tools/mods/genparts.py), not named here. The bounds are MODSSHOW's
+# (tagpu_modslay.h): the blocks, a list's items each one, and every string's bytes in one buffer with a NUL after each.
+SHOW_BLOCKS, SHOW_TEXT, SHOW_COLS = 64, 6144, 4
+URL_RE = re.compile(r"https://[^\s\"<>]{1,200}")
+
+
+def check_show(n: str, s) -> list:
+    if s is None:
+        return []
+    if not isinstance(s, dict) or set(s) - {"by", "site", "about"}:
+        return [f"{n}: show is an object of by, site and about"]
+    errs, blocks, text = [], 0, 0
+    for k in ("by", "site"):
+        if not isinstance(s.get(k), str) or not s[k]:
+            errs.append(f"{n}: show.{k} is missing")
+        else:
+            text += len(s[k].encode()) + 1
+    if isinstance(s.get("site"), str) and not URL_RE.fullmatch(s["site"]):
+        errs.append(f"{n}: show.site is not an https address")
+    about = s.get("about")
+    if not isinstance(about, list) or not about:
+        return errs + [f"{n}: show.about has no blocks"]
+    for b in about:
+        strs = []
+        if isinstance(b, str):
+            strs = [b]
+        elif isinstance(b, dict) and set(b) == {"section"} and isinstance(b["section"], str):
+            strs = [b["section"]]
+        elif isinstance(b, dict) and set(b) <= {"list", "cols"} and isinstance(b.get("list"), list) and b["list"] \
+                and all(isinstance(x, str) for x in b["list"]) and b.get("cols", 1) in range(1, SHOW_COLS + 1):
+            strs = b["list"]
+        elif isinstance(b, dict) and set(b) == {"link"} and isinstance(b["link"], list) and len(b["link"]) == 2 \
+                and all(isinstance(x, str) for x in b["link"]) and URL_RE.fullmatch(b["link"][1]):
+            strs = b["link"]
+        else:
+            errs.append(f"{n}: show.about has a block that is no paragraph, section, list or link: {str(b)[:60]}")
+            continue
+        if not all(strs[:1]) and not (isinstance(b, dict) and "link" in b):
+            errs.append(f"{n}: show.about has an empty block")
+        blocks += len(strs) if isinstance(b, dict) and "list" in b else 1
+        text += sum(len(x.encode()) + 1 for x in strs)
+    if blocks > SHOW_BLOCKS:
+        errs.append(f"{n}: show.about has {blocks} blocks, past {SHOW_BLOCKS}")
+    if text > SHOW_TEXT:
+        errs.append(f"{n}: show's text is {text} bytes, past {SHOW_TEXT}")
+    return errs
+
+
 def check_options(n: str, o) -> list:
     """A mod's play options, by the rules tagpu_modcat.c reads them under."""
     errs = []
@@ -1729,6 +1779,7 @@ def check_catalog(j) -> list:
                 if len(f.get("path", "")) >= 96 or not installer_takes(f.get("path", "")) or not HEX64.match(str(f.get("here", ""))) or not HEX64.match(str(f.get("dropin", ""))):
                     errs.append(f"{n}: a same_as entry nothing could act on: {f}")
             errs += check_options(n, e.get("options"))
+            errs += check_show(n, e.get("show"))
             if e.get("memory", "4gb") not in ("4gb", "bit-off"):
                 errs.append(f"{n}: memory is 4gb or bit-off, not {e['memory']!r}")
             if not isinstance(e.get("exe"), str) or not e["exe"]:
