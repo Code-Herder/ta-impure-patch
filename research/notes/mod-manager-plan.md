@@ -319,6 +319,7 @@ What follows from those rules:
 | 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint (built) | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) (built) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
+| 10 | Mod showcase (built) | A mod's catalog entry carries its `show` (the authors, the website, its text as paragraphs, sections, lists and links); the pane draws it with the mod's own logo, banner or backdrop, kit parts packed in the DLL; a link opens the player's browser, never a fetch; only Total Mayhem and ProTA have one (owner, 2026-11-08) | `modslaycheck` pairs both showcases with the mockup (63 cases); modpack's `check_show` bounds the catalog by the page's arrays; `modsscreen` flow finds ProTA's showcase whole, clicks its website (logged in a test launch) and scrolls Total Mayhem's |
 
 Landings 2 and 3 are independent of each other.
 
