@@ -102,3 +102,5 @@ header output { color: var(--fg); }
 /* a wide picture of the mod in play, the pane's full width at its own aspect */
 .banner { margin: 0 0 calc(10 * var(--u)); }
 .banner img { display: block; width: 100%; height: auto; }
+/* a block that opens a section of the description: one blank line above it */
+.sec { margin-top: 1lh; }

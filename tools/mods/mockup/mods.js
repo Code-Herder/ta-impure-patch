@@ -83,13 +83,13 @@ const SHOW = {
     about: [
       'Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
       'Total Mayhem takes Total Annihilation, bugfixes and extends it the way Cavedog might have. All units are useful while retaining original TA gameplay. Many new units added (longtime players will recognise some 3rd-party units), including a whole new 3rd tech level tier.. Existing and added units have been bugfixed, rebalanced, re-modeled, re-textured and re-rendered to equal or exceed the standard of the original TA units',
-      'TOTAL MAYHEM\'s features include:',
+      { section: 'TOTAL MAYHEM\'s features include:' },
       { list: ['An extended builder interface with 12 buttons per page instead of the usual 6, with hotkey overlays',
         'Lots of UX and ease-of-use improvements including hotkeys and shortcut keys',
         'Loads of bugfixes that prevent lockups and crashes, improve unit AI and improve game performance, meaning more units ingame with less lag',
         'endeavors to make all the units useful, open up more strategic options without removing any existing ones',
         'LOADS of added units, including a complete Level 3 tier: experimental kbots, tanks, navy and air, mobile fortresses, nuke bombers, nuke cannons and more'] },
-      'gamma, @gammata, is the main author. Contributors include:',
+      { section: 'gamma, @gammata, is the main author. Contributors include:' },
       { list: ['thaldren (TA ddraw patch dev)',
         'keeper, or mnhebi - colour mod and music player dev',
         'm1garland - has contributed many 3D models',
@@ -211,7 +211,7 @@ function showcase(m) {
     + `<div class="pa m c"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`
     + `<div class="rule"></div>`
     + (m.banner ? `<div class="banner"><img src="${BANNERS + m.banner}" alt=""></div>` : '')
-    + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>` : b.list ? `<ul class="pa s lst">${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
+    + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>` : b.section ? `<div class="pa s sec">${esc(b.section)}</div>` : b.list ? `<ul class="pa s lst">${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
       : b.link ? `<div class="pa s">${esc(b.link[0])}<a class="lnk" href="${b.link[1]}" target="_blank" rel="noopener" data-key="link">${esc(b.link[1].replace(/^https:\/\//, ''))}</a></div>` : '').join('');
 }
 function detail(p) {
