@@ -72,6 +72,36 @@ const SCROLLS = {
   opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'Off', { locked: 1, reason: 'This mod does not allow it.' })],
   confirm: 'Play Total Mayhem',
 };
+/* ---- the showcase look: the mod's own logo, its authors, its website and a description, for the two mods offered for now ---- */
+/* The logos are the mods' own art, kept out of the repository (tmp/ is ignored); a missing file shows the mod's name instead. */
+const LOGOS = '../../../tmp/modlogos/';
+const SHOW = {
+  mayhem: {
+    name: 'Total Mayhem', logo: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma and Mayhem Inc.', site: 'https://mayhem.tauniverse.com/',
+    about: ['Total Mayhem is Mayhem Inc’s expansion and rebalance of Total Annihilation, from a group that has been making TA content since 2001. '
+      + 'It adds hundreds of new units to both Arm and Core at every tech level, up to a third tier of heavy units, with reworked sounds and a harder AI.',
+      'Armies and economies grow larger than in the original game, so battles run longer and end bigger.'],
+  },
+  prota: {
+    name: 'ProTA', logo: 'prota.webp', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
+    about: ['ProTA is a rebalance of Total Annihilation led by veteran competitive players. It makes more units worth building while keeping the '
+      + 'original game’s speed, its fights over wreck fields and the asymmetry between Arm and Core.',
+      'Weak units are made cheaper or stronger rather than more expensive, the units players already rely on change as little as possible, and '
+      + 'every change is judged in real games and replays. It also adds hotkeys and a longer build menu.'],
+  },
+};
+const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')];
+const SHOWCASE_MANAGE = {
+  tab: 0, updates: 0, selected: 1, show: SHOW.mayhem,
+  row: [row('This folder', 'As it is on disk', BADGE.NONE, '', ACT.RADIO),
+        row('Total Mayhem', 'Version 11.3.0', BADGE.ACTIVE, 'Active', ACT.RADIO_ON)],
+  opt: PLAY,
+};
+const SHOWCASE_EXPLORE = {
+  tab: 1, updates: 0, selected: 0, show: SHOW.prota,
+  row: [row('ProTA', 'Version 4.8, 6 MB', BADGE.NONE, '', ACT.INSTALL)],
+  opt: PLAY,
+};
 const W = (n, broken) => Array.from({ length: n }, (_, i) => broken && i % 2 && i < n - 1 ? ' ' : 'W').join('');
 /* tagpu_modslay.c `fullest`: every array full, every text as long as its array holds, a word that cannot break or the most lines */
 const fullest = (broken, locked) => ({
@@ -87,6 +117,8 @@ const STATES = {
   updates: ['Updates: a count and Update all', UPDATES],
   empty: ['An empty list', EMPTY],
   long: ['A long summary, a locked option', SCROLLS],
+  showcase_mayhem: ['Showcase: Total Mayhem, installed and running', SHOWCASE_MANAGE],
+  showcase_prota: ['Showcase: ProTA, to install from Explore', SHOWCASE_EXPLORE],
   fullest: ['The fullest page, words that cannot break', fullest(false, false)],
   fullest_broken: ['The fullest page, the most lines', fullest(true, false)],
   fullest_locked: ['The fullest page, all locked', fullest(false, true)],
@@ -155,8 +187,18 @@ function optRow(o) {
   const row = `<div class="opt" data-part="row">${inner}</div>`;
   return o.locked ? `<div class="lockrow">${row}<i class="lock"></i></div>` : row;
 }
+/* The showcase head: the logo centred, then the version and authors, the website (a click opens the player's browser), the description */
+function showcase(m) {
+  const host = new URL(m.site).host;
+  return `<div class="logo"><img src="${LOGOS + m.logo}" alt="${esc(m.name)}" onerror="this.replaceWith(Object.assign(document.createElement('h2'), {className: 'pt', textContent: this.alt}))"></div>`
+    + `<div class="pa m c">${esc(m.version)} · ${esc(m.by)}</div>`
+    + `<div class="pa m c"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`
+    + `<div class="rule"></div>`
+    + m.about.map(t => `<div class="pa s">${esc(t)}</div>`).join('');
+}
 function detail(p) {
   let h = '';
+  if (p.show) return showcase(p.show) + (p.opt.length ? `<div class="hdr">Play options</div>` + p.opt.map(optRow).join('') : '');
   if (p.title) h += `<h2 class="pt">${esc(p.title)}</h2>`;
   if (p.meta) h += `<div class="pa m">${esc(p.meta)}</div>`;
   if (p.summary) h += `<div class="pa s">${esc(p.summary)}</div>`;

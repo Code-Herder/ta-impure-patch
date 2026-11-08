@@ -88,3 +88,12 @@ header output { color: var(--fg); }
 .lockrow .sp { flex: none; width: calc(var(--w-lock) * var(--u)); }
 .lockrow .lock { position: relative; display: block; align-self: center; justify-self: start; margin-left: calc(var(--w-row-pad-1) * var(--u)); width: calc(var(--w-lock) * var(--u));
   height: calc(var(--w-lock) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+
+/* the showcase look: the logo centred in the pane at its own aspect, the website as a link */
+.logo { display: flex; justify-content: center; align-items: center; padding: calc(10 * var(--u)) 0 calc(8 * var(--u)); }
+.logo img { display: block; max-width: 80%; max-height: calc(96 * var(--u)); object-fit: contain; }
+.logo .pt { margin: 0; }
+.c { text-align: center; }
+.lnk { font: inherit; letter-spacing: inherit; color: #e2b84a; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.lnk:hover { color: #f4d27a; }
+.rule { height: 1px; background: rgba(216, 216, 200, .18); margin: calc(4 * var(--u)) 0 calc(10 * var(--u)); }
