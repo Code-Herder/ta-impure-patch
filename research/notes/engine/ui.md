@@ -2275,6 +2275,19 @@ only moment the picture is reachable from a hook of ours is inside `0x466780`.]
 at its entry with the usual game-thread guard fired on every map load and refused, naming the
 thread. Every other site the GL UI renderer observes is called from the game loop; this one is not.
 
+**`0x4B95A0` reads whatever the file's picture leaves it** [DISASSEMBLED; MEASURED 2026-11-07]: stdcall
+`(frame, dest)`, two dwords off the stack. `dest` is the box-sized context `0x4B8AE0` filled: i16 pitch at
+`+0`, i16 rows at `+2`, pixels at `+0x10`. It reads rows `0..2·rows−1` and columns `0..2·pitch−1` of
+the frame through the frame's own width as the pitch (`+0`, i16; the plane is at `+0x10`) and tests neither
+against the frame's size. The frame is `w·h + 0x18` bytes from `0x4B8DA0`, with w and h from the file (the
+dwords at the picture's offset, `0x4838E9`), so a map with a picture under 2·box is read past its block.
+A 32×32 picture into a 126×113 box faulted at `0x4B9626` (`mov al,[edi+1]`, `edi = 0x0E4B0000`, row 25,
+column 240) on the loader thread, only on the launches whose block ended at unmapped memory: 3 of 6 rounds
+of the resource fixtures, always on a map with that picture (RS plain, RS nearby, RS uniform) and never on Comet
+Catcher, which most of a round's lanes play. TA's own handler
+writes `ErrorLog.txt` (`Exception handler called in Load Thread`), and the process then sits under the
+system's debugger. **Patched:** `0x46685F`, `fix_map_picture`, which [the engine patches](../modules/engine-patches.md) list.
+
 **The fit, exactly** [VERIFIED 2026-09-09 by disassembly of `0x466780`..`0x466868`]: with
 `w = [main+0x1422B]` and `h = [main+0x1422F]`, the long axis gets **126** and the short one
 `short × 126 / long`, truncating, and the box is centred in a 126×126 area — `+0x142E7` is

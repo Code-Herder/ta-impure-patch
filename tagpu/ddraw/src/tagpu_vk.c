@@ -123,6 +123,7 @@
    Vulkan would fail to LOAD rather than simply not arming the lane. */
 /* tagpu_vk_pass.h defines VK_NO_PROTOTYPES and pulls the headers in, and the
    comment above is why both are needed. */
+#include "tagpu_zoom.h"
 #include "tagpu_vk_pass.h"
 #include "tagpu_ftime.h"
 #include <windows.h>
@@ -329,6 +330,51 @@ static PFN_vkGetInstanceProcAddr s_gipa;
 IFNS(DECL)
 DFNS(DECL)
 #undef DECL
+
+/* THE DRIVER'S NO, AT THE DRIVER'S DOOR. `tagpu_vkfull.on` makes vkAllocateMemory answer what a full
+   GPU answers, for the lane and every pass of both worlds, since every pass resolves its entry points
+   through `gdpa`: the refusal then takes the road a real one takes, whichever pass met it. Filling a
+   shared GPU to get the real answer would take it from everything else on the machine. The file says
+   `keep` to refuse every allocation while it is there, or `wiki` to refuse only the wiki stage's
+   (`s_inWikiStage`); otherwise a number K, or nothing for 0: K allocations pass and the next is
+   refused, and the file is consumed. Read at each allocation, which a settled frame makes none of. */
+static PFN_vkAllocateMemory s_realAllocate;
+static int s_inWikiStage;           /* the render thread is preparing the wiki's copies of the passes */
+static LONG s_fullPassed = -1;      /* allocations let by since the file appeared; -1: no file seen */
+
+static int full_refuses(void)
+{
+    char text[16];
+    size_t n;
+    FILE* f = fopen("tagpu_vkfull.on", "rb");
+    if (!f) { InterlockedExchange(&s_fullPassed, -1); return 0; }
+    n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    if (strstr(text, "wiki")) return s_inWikiStage;
+    if (strstr(text, "keep")) return 1;
+    if (InterlockedIncrement(&s_fullPassed) < atoi(text)) return 0;
+    DeleteFileA("tagpu_vkfull.on");
+    return 1;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL full_AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo* ai,
+                                                          const VkAllocationCallbacks* cb,
+                                                          VkDeviceMemory* mem)
+{
+    if (full_refuses()) {
+        tagpu_logf("vk: tagpu_vkfull.on refuses an allocation of %llu bytes",
+                   (unsigned long long)ai->allocationSize);
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    return s_realAllocate(dev, ai, cb, mem);
+}
+
+static PFN_vkVoidFunction VKAPI_CALL full_gdpa(VkDevice dev, const char* name)
+{
+    if (!strcmp(name, "vkAllocateMemory")) return (PFN_vkVoidFunction)(void*)full_AllocateMemory;
+    return vkGetDeviceProcAddr(dev, name);
+}
 
 /* ---- the live objects ----------------------------------------------------
    ONE OWNER AT A TIME, decided by s_state (see the header comment). */
@@ -2230,6 +2276,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
 #define RES(n) n = (PFN_##n)vkGetDeviceProcAddr(s_vk.dev, #n);
     DFNS(RES)
 #undef RES
+    s_realAllocate = vkAllocateMemory;
+    vkAllocateMemory = full_AllocateMemory;
     if (!vkCreateSwapchainKHR || !vkQueuePresentKHR || !vkAcquireNextImageKHR) {
         vklog("device entry points missing"); goto fail;
     }
@@ -2280,7 +2328,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.anisook = s_vk.anisook;
     s_pass.maxAniso = s_vk.maxAniso;
     s_pass.gipa = s_gipa;
-    s_pass.gdpa = vkGetDeviceProcAddr;
+    s_pass.gdpa = full_gdpa;
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
@@ -2503,6 +2551,10 @@ static int vk_present(void)
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
+        if (tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
+            tagpu_vkw_world_down_owed())
+            vklog("the wiki's stage was refused its resources - the page has no 3D image until "
+                  "the lane is next rebuilt");
         if (tagpu_vkw_terr_down_owed())    tagpu_vkw_terr_down_refused(&s_pass);
         if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_refused(&s_pass);
         if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_refused(&s_pass);
@@ -2748,6 +2800,7 @@ static int vk_present(void)
             wiki_on = tagpu_wikiworld_wants(s_pass.frame, &wiki_want);
             if (wiki_on) {
                 QueryPerformanceCounter(&wiki_t0);
+                s_inWikiStage = 1;
                 wiki_world = tagpu_vkw_world_prepare(&s_pass, cb, fi, &wtw, &wth);
                 if (wiki_world) {
                     /* the stage's own fog image, before its passes, for the game's reason */
@@ -2759,6 +2812,7 @@ static int vk_present(void)
                         if (wiki_want.unitWhole) wiki_unit = tagpu_vkw_unit_prepare(&s_pass, cb, fi);
                     }
                 }
+                s_inWikiStage = 0;
                 wiki_image = wiki_world && (!wiki_want.terr || wiki_terr) && (!wiki_want.feat || wiki_feat) &&
                              (!wiki_want.unit || wiki_unit);
                 wiki_ms += ms_since(wiki_t0);
@@ -3307,6 +3361,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
               : tagpu_window_generation(hwnd) != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)
                               ? "the window lifetime changed - rebuilding"
                               : "the GPU row changed - rebuilding");
+        tagpu_zoom_lane_retrying();
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
         return 0;

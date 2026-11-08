@@ -6,6 +6,7 @@
       "about": "the control: Impure alone on the retail exe",
       "add": [],
       "goal": {
+        "store_loaded": ["tamplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -122,6 +123,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -151,6 +153,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -175,6 +178,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       }
@@ -251,6 +255,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       },
@@ -275,6 +280,7 @@
         }
       ],
       "goal": {
+        "store_covers": ["tplayx"],
         "outcome": "impure-active",
         "tadr_ran": false
       },
@@ -314,10 +320,62 @@
       "about": "The retail game with the UI pass refused its resources once in a live battle, as a full GPU does: the lane comes down and back, and the picture it comes back with passes the side-panel check.",
       "add": [],
       "refuse_in_battle": "once",
+      "menu_reset": true,
       "goal": {
         "outcome": "impure-active",
         "tadr_ran": false,
         "refuse_lever": true
+      },
+      "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
+    },
+    {
+      "name": "pass-full",
+      "about": "The retail game whose lane is rebuilt in a live battle and meets the driver's own refusal of an allocation: the road a full GPU takes, through the real failing call, and the lane comes back.",
+      "add": [],
+      "refuse_in_battle": "once",
+      "device_full": "0",
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
+    },
+    {
+      "name": "pass-full-gdi",
+      "about": "The retail game whose lane is rebuilt in a live battle with the driver refusing every allocation: the retries are spent on real refusals and the session goes to GDI, whose screen shows the engine's side panel.",
+      "add": [],
+      "refuse_in_battle": "keep",
+      "device_full": "keep",
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
+    },
+    {
+      "name": "pass-card-full",
+      "about": "The retail game in a live battle on a card vkfill has really filled, on Windows only: the lever brings the lane down once and what it gave back is taken. The game has to go on: the lane back if the driver gives it memory, as WDDM does, or GDI with the engine's side panel if the driver refuses.",
+      "add": [],
+      "refuse_in_battle": "keep",
+      "fill_device": true,
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "refuse_lever": true
+      },
+      "no_network_game": "the card is one machine's, and a network game would only repeat the start-up"
+    },
+    {
+      "name": "wiki-stage-refused",
+      "about": "The retail game whose in-game wiki page is opened with the driver refusing the stage its memory: the page has no 3D image, the game's lane stays up and the battle goes on.",
+      "add": [],
+      "wiki_refused": true,
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "stage_refused": true
       },
       "no_network_game": "the lever is one process's, and a network game would only repeat the start-up"
     },

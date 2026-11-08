@@ -699,7 +699,7 @@ every frame, so a refusal is settled once. How depends on what the picture loses
 
 | the pass | what its refusal does | when it comes back |
 |---|---|---|
-| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread, never earned back) then hands the session to GDI, whose picture is whole |
+| `gui`, `terr`, `unit`, `feat` | the frame would have no UI, ground, units or features, so the seam returns `-2` at the top of the next frame: `vk_down`, `ST_FAILED`, and `render_vk.c` retries | at once, on the rebuilt lane. `VK_RETRY_BUDGET` (3 per render thread) then hands the session to GDI, whose picture is whole. `VK_RETRY_EARNED_FRAMES` (18 000 presented frames since the last failure, five minutes at 60 Hz) earns the spent retries back, so the budget bounds a lane that keeps failing and not the failures of a long session |
 | `fx`, `shadow`, `mark`, `scaffold` | the seam drains the device, tears that pass down and it stays off | the next `vk_down`, or a swapchain rebuild that changes the extent, image count or format |
 | `world`'s target | the world draws on the swapchain image at 1×, with its own Gamma path | the same |
 | the HUD and the wiki | `tagpu_hudstate_refuse` | the same (`tagpu_vk_hud_down` forgives), and a cause that remains refuses again |
@@ -721,18 +721,41 @@ budget in about a second and the session is on GDI, with its slow-renderer warni
 empty, since composed pixels do not cross. What the engine redraws comes back at once; the chrome,
 the panel's emblem and the resource block are owed by the reset. A surface nothing draws into again
 has nothing to carry when it is copied out of: [The engine's UI](engine-ui.md) §2.104 has the orders
-panel's save-under, which owes the emblem. **Open:** a dialog's save-under restored over the world
-keeps what it covered until the engine next draws there. No such dialog has been seen doing it.
+panel's save-under, which owes the emblem. A dialog over the world costs nothing: the viewport's clear on
+each game flip takes what its dead save-under would have left. MEASURED 2026-11-07 on the `pass-refused`
+row: `HELP.GUI` open across the reset, 18.2 % of the view changed by opening it and 0.0 % left after it
+closed.
 
 `tagpu_passrefuse.on` refuses the UI pass in a live game, once or with `keep` every time; the compat
-suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. Filling the card is how the
+suite's `pass-refused` and `pass-refused-gdi` rows drive it in a battle. `tagpu_vkfull.on` is the driver's
+own no: it sits on the device's `vkAllocateMemory` and on what `gdpa` hands the passes, and refuses with
+`VK_ERROR_OUT_OF_DEVICE_MEMORY` after the file's K allocations (the file is consumed), every one with
+`keep`, or only while the wiki's stage is being prepared with `wiki`. The `pass-full`, `pass-full-gdi` and
+`wiki-stage-refused` rows use it, so the rebuilt lane's real road has been run: an allocation refused on
+it costs another retry, and the retries end on GDI. MEASURED 2026-11-07: one refusal, the line after
+18 000 presented frames (478 s under Xvfb), then three more refusals and no GDI. Filling the card is how the
 real refusal was first met: 18 games at about 900 MiB each reached 11 824 of 12 282 MiB on an RTX 4070
 (MEASURED 2026-11-06, 4 setups of 32 with no UI, 2 on the next run, each from a real refusal). One game
 alone peaks at 917-921 MiB, before and after the mod manager's landings.
 
-**Not run:** the real refusal on the rebuilt lane. The lever proves the road; the same run on a full
-card has been seen only before this fix, and filling a shared GPU on purpose takes it from everything
-else on the machine.
+**A card another process has filled.** `tools/compat/vkfill.c` holds a card's device-local memory until the
+driver refuses it, and `pass-card-full` plays a battle beside it. WDDM gives a process its own account: on the
+Windows test setup's AMD R9 200 (MEASURED 2026-11-07), `vkfill` held 2816 of 2816 MiB with `VK_ERROR_OUT_OF_DEVICE_MEMORY`
+on the next chunk, and the lever's rebuild beside it came `up in 93 ms` with every pass built. So there a full card
+pages and refuses nothing. **Not run:** the rebuilt lane against a driver that does refuse across processes, as NVIDIA's
+did on the reference setup (the real refusal in the table's first paragraph, before this seam). That GPU also
+drives the desktop, so the suite never fills it (`fill_device` rows run on Windows only), and the levers stand in.
+
+**A rebuild does not move the camera.** The rebuild's frames draw nothing, and the world's claim on the
+camera's range past the map's edge lasts only while the terrain skip does ([map edge](map-edge.md)). So
+from the start of any rebuild, a failure's or the one a changed GPU row or window lifetime asks for, until a
+frame reaches the screen or `LIVE_HELD_FRAMES` (600) have passed, the world stays live and the skip stays
+(`tagpu_zoom_lane_retrying`, `tagpu_zoom_live_held`); the road to GDI ends the hold first. MEASURED
+2026-11-07: with the eye at x −206 under the mirror, no `terrain restored` line and the same eye across the
+rebuild; without the hold the eye went to 0 on the one draw the skip lapsed, and stayed there. That was
+measured on a failure's rebuild. The other two cannot start one in a battle: the GPU row is on the front-end's
+Visuals screen alone and is greyed with one device (the reference setup and the Windows test setup each have one), and the game
+window lasts the session. With no world live the hold is zero.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 

@@ -309,6 +309,16 @@ def proc_prefix(pid, environ: list):
     return None
 
 
+def _proc_is_totala(pid: int) -> bool:
+    """Whether `pid` is a TotalA.exe that has not ended. A leader that is a zombie is not an answer:
+    the process may live on in its other threads, and the listing can tell."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(errors="replace")
+    except OSError:
+        return False
+    return stat[stat.find("(") + 1:stat.rfind(")")] == "TotalA.exe" and stat[stat.rfind(")") + 2:][:1] != "Z"
+
+
 def totala_by_prefix() -> dict:
     """{resolved prefix: pid} of every local TotalA.exe, from one process listing: the first
     pid in pgrep's order for each prefix. An instance's game is the one running from its
@@ -432,7 +442,14 @@ class Instance:
         remote instance, by the test folder it runs from."""
         if self.remote:
             return self.remote.pid()
-        return totala_by_prefix().get(prefix_key(self.prefix))
+        # THE GAME THIS OBJECT HAS ALREADY FOUND ANSWERS FOR ITSELF. The listing reads the process's
+        # environment, which a live process can answer empty, and one such read here would report a
+        # running game as exited. Only a process that is gone, or a zombie, loses the pid.
+        known = getattr(self, "_known_pid", None)
+        if known and _proc_is_totala(known):
+            return known
+        self._known_pid = totala_by_prefix().get(prefix_key(self.prefix))
+        return self._known_pid
 
     def running(self) -> bool:
         return self.pid() is not None
@@ -3326,6 +3343,9 @@ def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False
         time.sleep(0.05)
     if soft:
         return None          # the caller is waiting for a UI to exist at all
+    report = crash_report(inst, -1.0)
+    if report:
+        die(report)
     if last:
         die(f"no UI to read after {timeout:g}s: {last}")
     die("no UI snapshot appeared — is the instance running and past its first frame?")
@@ -5932,7 +5952,13 @@ def _replay_start(args, verb, tail=""):
         deadline = time.time() + args.load_timeout
         while verdict is None:
             if not inst.running():
-                die(f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
+                try:
+                    tail = (inst.gamedir / "log" / "tagpu.log").read_text(errors="replace").splitlines()[-12:]
+                except OSError:
+                    tail = ["(no tagpu.log)"]
+                die(crash_report(inst, -1.0) or
+                    f"{args.name} exited while the replay loaded, with no crash report; the log's "
+                    f"last lines:\n  " + "\n  ".join(tail))
             got = lines()
             for i, line in enumerate(got):
                 m = REPLAY_RX.search(line)
@@ -5941,6 +5967,10 @@ def _replay_start(args, verb, tail=""):
                     rest = got[i + 1:]
                     break
             if verdict is None:
+                # a fault under the system's debugger is a game that stopped: it exits for nobody
+                report = crash_report(inst, -1.0)
+                if report:
+                    die(report)
                 if time.time() >= deadline:
                     die(f"no `replay: playing` in {args.load_timeout:g}s "
                         f"(tacli log {args.name} -g replay)")

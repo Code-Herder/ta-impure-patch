@@ -326,6 +326,8 @@ static void copy_record(struct SURF* s, const int* dst, const int* src, int x, i
                                               /* the copy leaf's body, same reason */
 static int      s_chromePend = 0;             /* a reset owes the chrome a re-emit */
 static int      s_panelPend = 0;              /* ... and owes the panel blit too   */
+enum { PANEL_ASKS = 8 };
+static int      s_panelAsks = 0;              /* the repaints a lost save-under's debt may still ask for */
 static int      s_repaintPend = 0;            /* the engine's redraw is owed (`repaint_arm`); game thread only */
 static int      s_repaintCounted = 0;         /* this pending episode's refusal is counted */
 static int      s_hudPend = 0;                /* ... and owes the resource block   */
@@ -3472,11 +3474,25 @@ static void publish_window(unsigned flipSurf)
                composed pixels may not, and it lands in the panel's place. Repainting it for a
                copy that restored something else costs one op and changes no pixel.
                `panel_emit` runs only at the end of a repaint, so this asks for the repaint too.
+               THE BOX GOES EMPTY FIRST, which is what a copy out of an empty twin means. An emblem
+               shorter than the panel's rect leaves the rest of the box in the frame's twin
+               otherwise, and every mod's is (MEASURED 2026-11-07 on Total Mayhem, ProTA, Escalation, TA
+               Zero and Twilight: 22-30 % of the strip kept the orders, where retail reads 0.0 %).
+               The repaint redraws the gadgets in it, and the chrome and the resource block are
+               owed as a reset owes them, since nothing else redraws those.
                ONCE PER LOSS: clearing `lost` is what bounds it, since a source copied on every
                flip would otherwise ask for a repaint on every flip. */
             if (src && src->lost && s->base == s_frameBase) {
+                TAGPU_PUBOP* c = pub_op(PK_CLEAR, s->base);
+                if (!c) return;
+                c->l = op->l; c->t = op->t; c->r = op->r; c->b = op->b;
+                pub_commit();
                 src->lost = 0;
+                s_chromePend = 1;
+                s_hudPend = 1;
+                s_hudPoked = 0;
                 s_panelPend = 1;
+                s_panelAsks = PANEL_ASKS;
                 s_repaintPend = 1; s_repaintCounted = 0;
             }
         }
@@ -4403,7 +4419,19 @@ static void repaint_refused(void)
    reset, and a reset owes another of these copies: emitting one blind is a loop,
    not a wasted op. So we emit only when the redraw actually put an op on the
    panel surface's own base -- a checked fact about this window. When it did not,
-   the debt is kept and the next redraw gets the chance; nothing is emitted. */
+   the debt is kept and the next redraw gets the chance; nothing is emitted.
+
+   A LOST SAVE-UNDER'S DEBT ASKS FOR THAT NEXT REDRAW, because nothing else may come: the restore
+   that raised it is the last the engine will draw there. `s_panelAsks` bounds it, set once per
+   loss at the raise, so a redraw that never paints the panel's surface costs PANEL_ASKS engine
+   redraws and not one per flip. Past that the debt waits for whatever redraw comes next. */
+static void panel_ask_again(void)
+{
+    if (s_panelAsks <= 0) return;
+    s_panelAsks--;
+    s_repaintPend = 1; s_repaintCounted = 0;
+}
+
 static void panel_emit(const char* ctrls, int n0)
 {
     const int* psurf;
@@ -4417,14 +4445,14 @@ static void panel_emit(const char* ctrls, int n0)
     }
     if (!tagpu_packet_pub_level_open()) return;      /* not yet in play: keep the debt */
     fs = surf_by_base(s_frameBase);
-    if (!fs) return;
+    if (!fs) { panel_ask_again(); return; }
     psurf = (const int*)(size_t)*(const void* const*)(ctrls + P_SURFACE);
     if (!ptr_ok(psurf)) { s_panelPend = 0; s_panelRefused++; return; }
     pbase = (unsigned)psurf[CTX_BASE];
     if (!pbase) { s_panelPend = 0; s_panelRefused++; return; }
     for (i = n0; i < s_nops; i++)
         if (s_ops[i].base == pbase && s_ops[i].kind != OP_FREE) { filled = 1; break; }
-    if (!filled) return;                             /* keep the debt */
+    if (!filled) { panel_ask_again(); return; }      /* keep the debt */
     surf_of_ctx(psurf);                              /* the source is a surface too */
     copy_record(fs, NULL, psurf,
                 *(const short*)(ctrls + P_RECT_X), *(const short*)(ctrls + P_RECT_Y));
@@ -4434,7 +4462,7 @@ static void panel_emit(const char* ctrls, int n0)
        the debt would clear it for a copy that was never recorded, and the
        emblem would stay missing until the next reset. The debt is kept
        instead; the next repaint re-offers it. */
-    if (!s_lastOp) return;
+    if (!s_lastOp) { panel_ask_again(); return; }
     s_panelPend = 0;
     s_panelEmits++;
 }

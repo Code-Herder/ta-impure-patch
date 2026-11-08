@@ -23,9 +23,9 @@
    (tacli seeds it: a remote instance's by reading the player's key, a local instance's by
    reading the template prefix's user.reg; `launch` puts its test values in it). A signal
    alone, a store that is missing, a folder, unreadable or not loaded whole, no memory, an
-   exe path that cannot be read, a registry import these hooks do not answer, or a
-   win32.dll not loaded at attach (it is a static import of TotalA.exe) ends the process at
-   attach, with a log line first and before the game's first instruction: a test launch
+   exe path that cannot be read, a registry import these hooks do not answer in the exe or
+   in any DLL loaded from its folder, or a loader that will not notify of later loads ends
+   the process, at attach or at that DLL's load, with a log line first: a test launch
    never runs against the real registry. The line names the module whose attach it ends
    (`entered by the tacli-state folder beside <module>`), so a cnc-ddraw config tool opened
    in a test folder is refused in words about itself, not about TotalA.exe.
@@ -33,7 +33,7 @@
    The decision (tagpu_regstore_decide) comes before DllMain's return for cnc-ddraw's config
    tool, so an inherited cnc_ddraw_config_init cannot skip test mode.
 
-   WHAT IT ANSWERS. TotalA.exe's nine ADVAPI32 imports (RegOpenKeyExA, RegOpenKeyA,
+   WHAT IT ANSWERS. These in the exe and in every DLL of its folder: TotalA.exe's nine ADVAPI32 imports (RegOpenKeyExA, RegOpenKeyA,
    RegCreateKeyA, RegCreateKeyExA, RegQueryValueExA, RegQueryValueA, RegSetValueExA,
    RegFlushKey, RegCloseKey -- the exe resolves no registry function by name) and the two of
    the `win32.dll` the Steam install loads (RegOpenKeyExA, RegQueryValueExA: it reads the
@@ -53,7 +53,7 @@
                                                      a query and a close go to the real
                                                      registry
 
-   So no call from TotalA.exe or win32.dll reaches a registry function that writes: the hooks
+   So no call through those imports reaches a registry function that writes: the hooks
    call only RegOpenKeyExA with read rights, RegQueryValueExA, RegQueryValueA and
    RegCloseKey. RegFlushKey on a real key returns success without a call, since nothing in
    test mode has changed one.
@@ -63,14 +63,12 @@
    (close_register_switch), under the same rule: an exe that differs there is not run.
 
    THE GUARANTEE, AND ITS EDGE. TA's settings key is never written in test mode: the registry
-   imports of TotalA.exe and win32.dll are served from the file, and `-r` is closed. Nothing
-   here reaches:
+   imports of TotalA.exe and of every DLL loaded from its folder are served from the file, and
+   `-r` is closed. Nothing here reaches:
+     - a folder DLL's entry point that ran before Impure's (the attach line names them), or a
+       registry call it makes through GetProcAddress, which a packed DLL may (basscd.dll);
      - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
        (IMAGEHLP.DLL, psapi.dll);
-     - the other DLLs it loads at run time: online.dll, the extension DLLs online.dll loads
-       into the game's process (tamplayx, takalix, taheatx, tawirepx, tadwngox, tatenx; the
-       Steam install's import no registry function but RegOpenKeyExA, RegQueryValueExA and
-       RegCloseKey), and reporter.dll and DebugHelper.dll (neither is in the Steam install);
      - the programs the game starts: what ShellExecuteA opens, and what online.dll starts;
      - Windows' own records: the Task Scheduler's of the instance's task while it exists,
        and those of the programs it runs.
@@ -99,7 +97,8 @@
    file or the new one, whole.
 
    THREADS. One critical section covers the store, its file and the first-seen log; any
-   thread may call the hooks (win32.dll's music thread among them). Under it run this
+   thread may call the hooks (win32.dll's music thread among them). The loader's notification
+   runs on whichever thread loads a DLL, under the loader lock, and takes only the log's lock. Under it run this
    module's code, kernel32 file calls and tagpu_log, whose own lock is a leaf; nothing under
    it calls back into the engine or takes another lock of ours. Real registry calls run
    outside it.
@@ -111,6 +110,8 @@
 /* DllMain, DLL_PROCESS_ATTACH, first: whether this is a test launch (1) or not (0), from
    the command line and the exe's folder. Logs nothing and installs nothing. */
 int tagpu_regstore_decide(void);
+/* 1 when `fn` is one of the store's own registry answers: a slot it wrote, not a binding. */
+int tagpu_regstore_is_hook(unsigned long fn);
 
 /* DllMain, DLL_PROCESS_ATTACH, right after tagpu_log_init: logs the mode; in test mode
    loads the store and installs the hooks, or ends the process. */

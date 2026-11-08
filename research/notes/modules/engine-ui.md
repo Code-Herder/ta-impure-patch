@@ -370,13 +370,15 @@ off-thread free, a same-base re-make and a full window still drop at once.
 **A reset while the panel is open.** A reset re-seeds every surface empty, because composed pixels
 do not cross, and nothing draws into a save-under again, so the restore has nothing to carry: it
 crosses as `PK_PIXELS`, is dropped, and the orders panel stays over nothing. `SURF::lost` marks a
-surface whose drawn twin a reset emptied, and a copy out of one onto the frame owes the panel's
-emblem (`panel_emit`) and the repaint that pays it, once per loss. The emblem is our own op and lands
-in the panel's place. Measured on the `pass-refused` row, which opens the panel before the reset
-and deselects after it: 31.0 % of the strip wrong without it. `lost` leaves asset and
+surface whose drawn twin a reset emptied. A copy out of one onto the frame empties its box, which is what
+copying an empty twin means, and owes the panel's emblem (`panel_emit`) and the repaint that pays it,
+once per loss. The emblem is our own op and lands in the panel's place; the box has to go first because
+every mod's emblem is shorter than the panel. Measured on the `pass-refused` row, which opens the panel
+before the reset and deselects after it: 31.0 % of the strip wrong without the emblem on retail, and
+22-30 % without the emptied box on Total Mayhem, ProTA, Escalation, TA Zero and Twilight, all 0.0 % with
+both (2026-11-07, `tacompat.py wine --refuse once`). `lost` leaves asset and
 snapshot surfaces out: those re-seed with their bytes, and the `copy-unseeded` count of an ordinary
 game (about 4 300 in a battle on retail) is untouched, since those sources were never seeded.
-**Open:** `panel_emit` keeps its debt when the repaint put no op on the panel surface, and nothing
-then asks for another repaint, since asking on every flip is the loop `lost` exists to prevent. The
-next repaint pays it. Retail's redraw paints that surface (MEASURED, `panel_emit`'s comment); a mod's
-panel is untested.
+`panel_emit` keeps its debt when the repaint put no op on the panel surface, and asks for up to
+`PANEL_ASKS` (8) more repaints, so a debt cannot wait on an engine repaint that never comes and cannot
+become a repaint on every flip either.

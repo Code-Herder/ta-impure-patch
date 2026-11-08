@@ -11,6 +11,7 @@
 #include "hook.h"
 #include "utils.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 #include "tagpu_refuse.h"
 #include "tagpu_takeover.h"
 #include "git.h"
@@ -354,6 +355,11 @@ static int to_descriptor_of(const BYTE* exe, DWORD image, HMODULE m, DWORD* fore
             DWORD t = ((const DWORD*)(exe + d->FirstThunk))[j];
             if (!t) break;
             if (t - (DWORD)(size_t)m >= mnt->OptionalHeader.SizeOfImage) continue;
+            /* The store's answers live in Impure and sit in ADVAPI32's slots by test mode's own
+               write: they say nothing about what the loader bound. Read as a binding, they make
+               ADVAPI32 "Impure's descriptor" in a folder whose exe imports no DDRAW at all, and
+               the module that loaded us is then left running. */
+            if (tagpu_regstore_is_hook(t)) continue;
             return k;                                  /* the first descriptor that names it */
         }
         if (to_descriptor_module(exe, image, d) == m) {
