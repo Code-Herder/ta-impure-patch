@@ -88,11 +88,10 @@ Each decision is listed with what it was chosen over.
      file took in `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once at
      attach; old rule files are renamed `.migrated`. What did not finish runs again next launch: a key
      leaves `impure.cfg` only once its value is in the file, so the move keeps no record of its own
-     (`impure-migration.txt` is the store's). The file will hold the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
+     (`impure-migration.txt` is the store's). A base's file also holds which of its mutators are on, `mutator.<id>=on`.
 
   `impure.cfg` keeps only global settings. Profile names are the fixed seven, which every v1 mod's
-  id is one of; a mod beyond v1 needs them from the catalog, with its row in the replays' mod table. A `file.` key naming a file the current version no longer has is ignored with a
-  log line, not rejected. We rejected keeping the player's per-mod choices split between
+  id is one of; a mod beyond v1 needs them from the catalog, with its row in the replays' mod table. We rejected keeping the player's per-mod choices split between
   `impure.cfg` and `profiles\`, and keeping mod rules hardcoded in the DLL.
 - **Play options are per mod; visuals are not.** Building, placement, snapping, reclaim and orders
   are per mod: Quick Build and resource snapping today, with placement spacing and the reclaim sweep
@@ -274,8 +273,9 @@ What follows from those rules:
 - **The MODS button goes under REPLAYS**, through the same main-menu insertion REPLAYS uses
   (`tagpu_replays.c`: S1 `0x4AACAE`, S2 `0x42644C`, S3 `0x429290`, the builder `0x4263B0`). MEASURED on every v1 menu: it needs no moves of its
   own, only the taller plate.
-- **`file.<path>` switches are a mutator's.** A v1 mod's content is one archive with thousands of paths, so the key names only a file or a hide of a mutator of that base: off, that file is out of play.
-  `hide.<archive>` is what the screen switches for a mod. A mutator's hide reaches the base's own two archives, so the original archives answer next.
+- **The player chooses mods and mutators, never their content.** No game setting is set from the Mods screen (owner, 2026-11-08), so an
+  archive the mod mounts is always mounted and a mutator is mounted whole or not at all. A mutator's hide reaches the base's own two
+  archives, so the original archives answer next.
 
 ### 4 GB (LAA)
 
@@ -315,8 +315,8 @@ What follows from those rules:
 | 3 | Per-mod options (built) | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
 | 4 | Managed start-up (built) | `mod=`; identify and hash at attach, then the image, Impure's patches, and the rest taken back at the entry point (refusal box); the mount list (mutators, base, its originals archive, originals by shipped SHA-256 + cache, less `hide`); the loose step closed under a managed mod | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (unit types and keys at the menu; type IDs, weapon and feature tables in a level; every type's CRC with a drop-in peer in one network game; menu / fight / two-player game); the base-exe × mod matrix |
 | 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, the originals recipe, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
-| 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with the play options shown, never set (locked rows grey with the mod's reason), and hide switches; the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
-| 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the `file.` switches, the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
+| 6 | Mods screen (built) | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with the play options shown, never set (locked rows grey with the mod's reason); the unknown-exe and GDI boxes; Confirm's relaunch | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
+| 7 | Mutators (built) | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
 | 8 | Multiplayer fingerprint (built) | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
 | 9 | 4 GB (LAA) (built) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
 

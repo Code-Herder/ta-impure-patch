@@ -464,7 +464,7 @@ that map's size.
 
 ### The Mods screen
 
-- `tagpu_modsui.dump`: touching it writes `tagpu_modsui.json`, the screen's state with the hit map of the frame last drawn in client pixels (`open`, `holds`, `drawn`, `tab`, `rows`, `opts`, `sw`, `mutators`, `hits`, `note`, `running`, `chosen`).
+- `tagpu_modsui.dump`: touching it writes `tagpu_modsui.json`, the screen's state with the hit map of the frame last drawn in client pixels (`open`, `holds`, `drawn`, `tab`, `rows`, `opts`, `mutators`, `hits`, `note`, `running`, `chosen`).
 - `tagpu_modbase.on`: its contents are a download server's address, standing in for every catalog entry's `base_url`; read at each open of the Mods screen, it also has Explore and Updates offer every entry.
 - `tagpu_modcatalog.on`: its contents replace the catalog packed in the DLL, read once at attach; the patch pack stays the DLL's. For test mutators.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.

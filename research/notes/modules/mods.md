@@ -117,19 +117,18 @@ A mutator is game files over one base mod: its catalog entry has `base`, a mod's
 `mods\\<id>\\<id>.hpi`, and no recipe runs. **No mutator ships until a real one exists**, so the committed catalog has none: `modpack.py mutator FOLDER --id .. --base ..` writes the package and an entry in `mods/mutators/`,
 which `modpack.py catalog` adds. It reads the base as the mount does and records the SHA-256 of each file the base holds at a path the mutator carries, and it refuses a file of the original game by content.
 
-**The switches** are in the base's `profiles\\<base>.ini`: `mutator.<id>=on`, with no key off, and `file.<path>=off`, with no key on. `file.` covers a mutator's files and its hides alike: off, that file is out of play, so the
-base answers the path, or the hide does not happen. The key is the path's, so two mutators of one base holding one path share it, and each pane shows it off. A key naming no file of any mutator of that base is ignored, with a log line. `hide.<archive>` stays what it was, a whole archive.
+**Which are on** is in the base's `profiles\\<base>.ini`: `mutator.<id>=on`, with no key off. A mutator is in play whole or not at all: nothing chooses its files one by one, and nothing the player sets takes one of the base's archives out (*The Mods screen*).
 
 **The mount.** The first call of the mounter runs `mount_mutators` ahead of everything, in the catalog's order. A mutator mounts only if it is on and installed, no file still in play differs from what it was built on, and no mutator already mounted
-holds one of its paths. The hash check runs at every start because a base can be swapped at that very start, and what the screen shows is only what this will do. A file switched off leaves the mutator's directory right after its mount, and a hide
+holds one of its paths. The hash check runs at every start because a base can be swapped at that very start, and what the screen shows is only what this will do. A hide
 leaves the base's two archives right after each mounts, by editing the engine's directory ([the engine map](../engine/process.html), *The directory in memory*). Each pointer read there is held inside the block first. A hide reaches `<base>.hpi` and `<base>.originals.hpi` only, so the folder's
 original archives answer the path next. `tagpu_modload_each_gone` tells the wiki's reader the same removals, through `tagpu_hpi_forget`.
 
 With no `mod=`, `tagpu_modload_end` takes the mounter's detour only when a mutator of `none` is on, and never on a control launch. Nothing else is filtered and the loose step stays open: that launch's other detours pass everything through. An exe whose mounter is not the expected bytes keeps its own game, with a log line.
 
-**The fit on the screen.** Each opening, after each install and after an archive's switch, `fit_thread` reads the base's files once the archive scan has ended, and hands back up to eight stale paths per mutator. A `file.` switch needs no second read: `tagpu_modcat_stale_live` takes the first of those still in play, and past the list the verdict stays stale.
+**The fit on the screen.** Each opening and after each install, `fit_thread` reads the base's files once the archive scan has ended (`scan_thread`, which hashes the folder's archives off the game thread and keeps up to 40 it finds original), and hands back up to eight stale paths per mutator; the pane names the first.
 Manage lists a mutator under its base's row, only for the base chosen, with a check. A stale one reads Stale with no check and its pane names the file; one that clashes with what the mount will take reads Conflict and names both: `walk_taken` walks them as the mount does, and one that is on gives way only to those taken before it, one that is not to any taken. One already on keeps its check, so a player can always turn it off. Explore lists the chosen base's mutators; Updates lists one with a newer
-version, and one a base update broke as "Needs an update for X", which the tab's count includes. The pane lists its first 40 files and hides, and says so past that.
+version, and one a base update broke as "Needs an update for X", which the tab's count includes.
 
 **The replays.** `RT_MUTATORS` holds what the start mounted, `name version, name version`, and no record means none. The browser's index line keeps it (`INFO_GEN` 2). Where the fingerprint differs, the hint says "The installed archives differ.", and where the lists differ too the footer, the only line with the width, names them: "Recorded with X 1.0. You have none."; a selection that needs neither puts the disk line back.
 
@@ -137,7 +136,7 @@ version, and one a base update broke as "Needs an update for X", which the tab's
 
 Two Impure players with different game files do not start together. Stock would: its per-unit handshake disables the types that differ on both sides with no message, and starts ([networking](../networking-lobbies.html)). The fingerprint is two 16-byte hashes and a label, compared in the battle room.
 
-**The content's hash** walks the files under every folder the mounted archives have, each path once, loose or from the archive it opens from: `tagpu_vfs`, the same reader the wiki uses, over the engine's mount list after the mount's removals. So a mutator, a hide and a `file.` key all reach it with nothing here knowing them. Each file hashes as its lower-cased path and its bytes, in path order.
+**The content's hash** walks the files under every folder the mounted archives have, each path once, loose or from the archive it opens from: `tagpu_vfs`, the same reader the wiki uses, over the engine's mount list after the mount's removals. So a mutator and what it hides reach it with nothing here knowing them. Each file hashes as its lower-cased path and its bytes, in path order.
 
 **One mod has one print however it is installed.** The managed mount answers every path as the drop-in folder does, with one exception by design: a package can rename a section so the engine's order finds the drop-in's winner, and that file's bytes differ. The catalog's `same_as` names each such file with both hashes, and the walk counts one as the other only when the bytes are exactly the package's, so a mutator on that path still differs. `modpack.py catalog` derives the list and `modpack.py verify` compares the two sets of counted files for every mod.
 
@@ -236,12 +235,12 @@ entry that names its `base_url`, or every entry while `tagpu_modbase.on` names a
 without one shows on Manage alone. The worker is `tagpu_modinst`, one install at a time; a finished one is
 `ready` for this session and waits in `mods\\<id>.new` for the next start. A failure's reason stands in the pane.
 
-**The pane.** Play options are the mod's to decide, so the pane shows them and sets none: each row is its label and the value in force, from `tagpu_modcat_rules`, or the running
-policy for this folder, over a value `profiles\\<id>.ini` holds (the in-game Impure options still write one), with no control, marker or reset and no hit. A forbidden one is grey with the mod's reason. The archive switches are `hide.<archive>=on|off`
-in the same file, read at the mount over the mod's `hide` list. They list the folder's `*.ccx`, `*.ufo` and `*.hpi` that hash as originals, since nothing else mounts under a mod, hashed once on their own thread;
-`totala1.hpi`, which every mod needs, is locked, and the mount ignores a key for it. A `.gp3` is not listed: a mod renames that pattern, so no switch could mount it. A switch takes effect at the next start.
+**The pane.** Nothing on the screen is a game setting: the only choices it takes are which mod runs and which of its mutators are on. Play options are the mod's to decide, so the pane shows them and sets none: each row is its label and the value in force, from `tagpu_modcat_rules`, or the running
+policy for this folder, over a value `profiles\\<id>.ini` holds (the in-game Impure options still write one), with no control and no hit. A forbidden one is grey with the mod's reason. Nor does the player choose archives or files: under a mod the mount
+leaves out what the mod's `hide` list names (never `totala1.hpi`, which every mod needs) and what does not hash as an original, and nothing else; a mutator is mounted whole or not at all. A `hide.<archive>` or `file.<path>` key an older build wrote is
+passed over by the profile reader like any key it does not read, and stays in the file.
 
-**Confirm's restart.** Confirm shows only with something to do: another mod chosen, a switch of the running mod changed, or its update ready. It writes `mod=` (nothing for this folder), flushes the store and goes on only when
+**Confirm's restart.** Confirm shows only with something to do: another mod chosen, a mutator of the running mod turned on or off, or its update ready. It writes `mod=` (nothing for this folder), flushes the store and goes on only when
 `tagpu_settings_saved` says the file holds it; otherwise a note says so and the game stays. `tagpu_rguard_restart_self` starts the same exe with the same command line, naming this process in
 `TAGPU_MODS_RESTART`, and `tagpu_rguard_attach` waits for it, since `WinMain` refuses to start beside the semaphore the old process holds. **The old process is terminated, not exited.** `ExitProcess` kills the render thread
 wherever it stands and then runs the detaches, the graphics driver's among them, and MEASURED on Wine with an NVIDIA device a process that did so stayed in its detach for minutes, holding that semaphore. The engine's own exit
@@ -257,10 +256,10 @@ after a crash, so it may still make one.
 runs it after fitting. A painted part of the same name replaces one with no code change.
 
 
-`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 51 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
-longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, sees the play options shown with no hit, clicks a switch and its reset, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
-restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
-`menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on and with its file switched off.
+`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 48 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
+longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, sees the pane take no click, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
+restart on the chosen mod with the update swapped in and an archive an older build's `hide.` key names still mounted, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
+`menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on, mounted whole under an older build's `file.` key for its file, and with a hide.
 `hosted`, run only when asked for since it downloads from the internet, installs each entry with a `base_url` from that real
 address through the screen, with no local server, and starts the game on it: ProTA from GitHub, through its redirect, MEASURED
 2026-11-07 on Wine (Explore offering ProTA alone, the install, the restart mounting `mods\prota\prota.hpi`). Windows has not run it.
@@ -302,7 +301,6 @@ The mount list itself is not compared with the drop-in folder's, because it diff
   folder and the engine moves to it at its first mount pass (`0x49F540`, engine map).
 - One install at a time, with no way to stop one but ending the game. A queue runs on with the screen shut, starting its next install only in the shell, and is lost at an exit with no word.
 - The `(void*)-1` test covers the HUD's pass and the staging buffers. The other passes' `vkMapMemory` still trust the success, and a process can vanish with no ErrorLog on llvmpipe around the restorer's self-test, on a build without the screen too.
-- A hide key can take what a level needs. MEASURED on ProTA alone: with its 28 other archives hidden it still reaches its menu, so the screen stays there to undo them; no level was played so. Hide keys change the content between network peers, for the fingerprint landing to compare.
 - The screen has run on Wine only, windowed, on an NVIDIA device and on llvmpipe. Steam loses track of a game Confirm restarts, as the plan accepts.
 - The thirteen generated parts stand until the owner paints them.
 - No real mutator exists, so everything about them has run on test mutators the harness builds.
