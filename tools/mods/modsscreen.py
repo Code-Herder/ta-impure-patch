@@ -61,6 +61,7 @@ class Game:
         tacli("create", NAME, "--display", display, "--res", "1280x720", "--private-registry")
         self.display = display
         self.dir = Path(json.loads((INSTANCES / NAME / "instance.json").read_text())["gamedir"])
+        (self.dir / "tagpu_mods.on").write_text("")   # the menu's button is off without it
 
     def launch(self):
         # --defaults: the store is read and written, as a player's is

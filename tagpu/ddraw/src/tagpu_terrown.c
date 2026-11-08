@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_terrown.h"
+#include "tagpu_zoom.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_owndraw.h"
 #include "tagpu_opt.h"
@@ -268,6 +269,11 @@ void tagpu_terrown_init(void)
 
 void tagpu_terrown_set_skip(int on)
 {
+    /* A LANE BEING REBUILT STILL OWNS THE GROUND. The camera's range past the map's edge holds only
+       while this skip does (tagpu_zoom.c, "the camera's range"), and the frames in the gap reach no
+       screen, so the engine's terrain would be drawn for nobody and the eye moved for everybody.
+       `tagpu_zoom_render_gone` ends the hold on the road to GDI, before the overlay comes here. */
+    if (!on && tagpu_zoom_live_held()) return;
     unsigned char v = (unsigned char)(on && g_installed);
     if (v != g_terrown_skip) {
         /* THE STRUCTURE-SHADOW GATE GOES UP BEFORE THE SKIP, AND DOWN AFTER IT.
@@ -310,8 +316,9 @@ void tagpu_terrown_flush(unsigned int frame_counter)
     if (!g_installed) return;
     /* if the native pass stops running (overlay off, a level teardown, a
        frame path that never reaches it) the engine's terrain comes back
-       rather than the viewport going flat key-colour */
-    if (g_terrown_skip && frame_counter - g_beat > 90) {
+       rather than the viewport going flat key-colour; a lane being rebuilt has no
+       viewport to show and holds the skip, with its own bound (tagpu_zoom.c) */
+    if (g_terrown_skip && frame_counter - g_beat > 90 && !tagpu_zoom_live_held()) {
         flog("terrown: terrain pass silent for 90 frames");
         tagpu_terrown_set_skip(0);
     }

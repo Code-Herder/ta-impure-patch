@@ -156,7 +156,24 @@ bound it. A game launched by hand during a run is not counted; the refusal it ca
 with a lever plays no battle. `once`: the panel is opened, the lane is refused and has to come back and
 present, and only then is the panel closed, so its restore meets the emptied save-under every time, and
 the side panel has to pass. `keep`: the session has to reach GDI, and GDI's screen has to come to show
-the engine's side panel within 60 s. Wine only, since the Windows path plays no battle to drive them.
+the engine's side panel within 60 s. `pass-refused` also opens `HELP.GUI` from the in-game menu across a
+second refusal (`dialog_after_reset`): the view has to change when it opens and be back when it closes.
+`pass-full` and `pass-full-gdi` are the same two roads with the
+driver refusing every allocation of the rebuild (`tagpu_vkfull.on`), and `wiki-stage-refused` refuses the
+wiki's stage alone: the page loses its 3D image, and the lane has to stay up.
+
+**On Windows** the refusal rows run only under `--smoke`, whose battle is where the refusal happens
+(`refuse_lane`): the log has to say the lane came back, or that the session went to GDI, and the game has
+to stay alive through the watch. On GDI the screen's side panel has to be the engine's (`win-shot.ps1`, the window
+letterboxed back to the engine's size, against a shot from before the lever): 0.003 % of the strip differs, MEASURED
+2026-11-07. A Vulkan picture is not judged there: on that setup's AMD card a copy from the screen and `PrintWindow`
+read black, and desktop duplication gets no frame. `pass-card-full` is the card filled for real (`vkfill`), Windows only, as the Wine
+path's GPU is the desktop's as well. `wiki-stage-refused` is left out: that path has no way to open the page. A setup with a lever
+plays no smoke, by the rule above.
+
+**Test mode's attach line is judged on every Windows smoke row** (`store_misses`): a folder DLL started before Impure
+fails it, but for the last one named on a route where TADR's `DllMain` loads Impure (`tadr_started`), and a row's `store_covers` names DLLs no import table reaches, such as the forwarder's `tplayx`. `store_loaded`
+has the row open the Multiplayer screen first, so that `online.dll`'s extension DLLs load during play and answer.
 
 **Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line
 counts every box that crossed as engine pixels — which the layer drops — by cause, and a

@@ -3256,8 +3256,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        is an early `return` above. A menu, a game not yet loaded, a teardown
        and a fully disarmed pass therefore publish NOTHING, and
        `tagpu_zoom_frame_end` takes the transform back to 1:1 on the very next
-       frame that does not reach here. The claim is one frame long by
-       construction; it cannot latch. */
+       frame that does not reach here, or once a lane's rebuild has ended
+       (`tagpu_zoom_lane_retrying`, bounded in frames). The claim cannot latch. */
     tagpu_zoom_publish_view(vpL, vpT, vw, vh);
 }
 

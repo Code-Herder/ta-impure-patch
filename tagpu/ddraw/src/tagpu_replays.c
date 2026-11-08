@@ -235,6 +235,8 @@ static const Mod s_mods[MOD_N] = {
 #define REPLAYS_Y        393
 #define MODS_NAME        "MODS"
 #define MODS_Y           416            /* under REPLAYS: the plate holds both                   */
+#define PLATE_ONE_H      35             /* the plate's height with REPLAYS alone on it           */
+#define PLATE_FOOT       17             /* the art's rows that move up to make that height       */
 #define VA_DIALOG        0x004ABD90u    /* TA_DialogBox_fn, stdcall(gi, text, width, a, b), MSGBOX.GUI: most
                                            callers pass 1, 1 (DISASSEMBLED); with 0, 0 its OK button is
                                            inactive (MEASURED)                                    */
@@ -254,6 +256,17 @@ static const Mod s_mods[MOD_N] = {
 #define BADGE_TO         338
 #define BADGE_SRC_FNV    0x559B02CDu
 #define BADGE_DST_FNV    0xCC236597u
+
+/* THE MODS SCREEN IS NOT OFFERED YET: the catalog names no place to download a mod from, and installing
+   has not been run on Windows. `tagpu_mods.on` beside the game shows the button, for the screen's tests
+   (tools/mods/modsscreen.py). Read at the menu's first use and kept, so a menu never changes shape
+   between its two reads below. */
+static int mods_button_shown(void)
+{
+    static int s_shown = -1;
+    if (s_shown < 0) s_shown = GetFileAttributesA("tagpu_mods.on") != INVALID_FILE_ATTRIBUTES;
+    return s_shown;
+}
 
 /* ---- the layouts: where each style's ground paints its boxes ----------------------------------
    Each layout is a screen of its own in the archive, so a style's rects and its ground always
@@ -852,7 +865,7 @@ static void mainmenu_visit(char* gi)
     r[G_ACTIVE] = 1;
     *(unsigned short*)(r + G_GRAYED) &= (unsigned short)~1u;
     /* MODS under it, a copy of the record just made. BOUND: n + 2 <= 199, by the test above. */
-    {
+    if (mods_button_shown()) {
         char* d = ctrls + (size_t)(n + 2) * STRIDE;
         memcpy(d, r, STRIDE);
         memset(d + G_NAME, 0, 16);
@@ -862,7 +875,7 @@ static void mainmenu_visit(char* gi)
         memcpy(d + G_TEXT, MODS_NAME, sizeof MODS_NAME - 1);
         d[G_QUICKKEY] = 'O';            /* no main menu of the six setups uses O */
     }
-    *(short*)(ctrls + P_COUNT) = (short)(n + 2);
+    *(short*)(ctrls + P_COUNT) = (short)(n + (mods_button_shown() ? 2 : 1));
     s_appended = 1;
 
     if (!s_logged) {
@@ -934,17 +947,22 @@ static void frontend_edit(unsigned char* s)
     if (!pe || pe->nframes != 1) { rlog("replays: no plate art"); return; }
     {
         const TAGPU_ART_FRAME* f = &pe->frames[0];
-        for (j = 0; j < f->h; j++)
+        /* With REPLAYS alone the plate is the art's top and foot, joined where the rows agree:
+           MEASURED 2026-11-07, every pixel of both styles equals the 115x35 plate drawn for REPLAYS alone. */
+        const int plate_h = mods_button_shown() || f->h < PLATE_ONE_H ? f->h : PLATE_ONE_H;
+        for (j = 0; j < plate_h; j++) {
+            const int row = j < plate_h - PLATE_FOOT ? j : j + f->h - plate_h;
             for (i = 0; i < f->w; i++) {
                 int x = PLATE_X + i, y = PLATE_Y + j;
-                unsigned char v = f->pix[j * f->w + i];
+                unsigned char v = f->pix[row * f->w + i];
                 if (v != f->key && x < w && y < h) px[(size_t)y * pitch + x] = v;
             }
+        }
         /* the plate is ours, drawn for the palette: Classic++ leaves its box as drawn, and
            restores the mod's backdrop around it */
         tagpu_gui_asset_exact(px, PLATE_X, PLATE_Y,
                               PLATE_X + f->w <= w ? f->w : w - PLATE_X,
-                              PLATE_Y + f->h <= h ? f->h : h - PLATE_Y);
+                              PLATE_Y + plate_h <= h ? plate_h : h - PLATE_Y);
     }
 }
 

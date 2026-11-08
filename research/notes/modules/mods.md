@@ -6,6 +6,11 @@ network game with a drop-in player whose handshake agrees on every unit's script
 [the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html). The player reaches all of it from the
 main menu's MODS button: *The screen*, below.
 
+**The button is not offered yet.** The catalog names no place to download from, and installing has not been
+run on Windows. `mods_button_shown` (`tagpu_replays.c`) appends the MODS record only when `tagpu_mods.on` sits
+beside the game, read once and kept, and the plate is the art's top and foot joined at `PLATE_ONE_H` around REPLAYS
+alone. `tools/mods/modsscreen.py` writes the lever. A `mod=` in `impure.cfg` still runs that mod.
+
 *A module note: it states the module as it is now.*
 
 ## The files
@@ -209,7 +214,7 @@ while it exists.
 
 ## The screen
 
-The MODS button lies under REPLAYS on each menu, a second record appended where REPLAYS' is (`tagpu_replays.c` `mainmenu_visit`), with quick key `O`
+With `tagpu_mods.on`, the MODS button lies under REPLAYS on each menu, a second record appended where REPLAYS' is (`tagpu_replays.c` `mainmenu_visit`), with quick key `O`
 and the plate grown to hold both: `art/ui/*/plate.png` is 115 x 58. Twilight has no plate. No mod's menu needed another move for it:
 MEASURED on each v1 mod's main menu and on retail, all but Twilight at (272,416), Twilight at (317,416).
 

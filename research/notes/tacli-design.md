@@ -688,16 +688,16 @@ and nothing has to be restored: a test killed at any moment, a reboot included, 
 player's key as it was.
 
 - **What the guarantee covers, and what it does not.** It covers the registry imports of
-  `TotalA.exe` and `win32.dll`, which are served from the file, and the `-r` switch, which is
-  closed. It does not cover what no hook reaches ([exe reverse
+  `TotalA.exe` and of every DLL loaded from the game's folder, whichever road brought it (online.dll's
+  extension DLLs, an export forwarder's target), which are served from the file, and the `-r` switch, which
+  is closed. It does not cover what no hook reaches ([exe reverse
   engineering](exe-reverse-engineering.html) §"The registry", "Outside TotalA.exe's own code"):
     - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
       (`IMAGEHLP.DLL`, `psapi.dll`);
-    - the other DLLs it loads at run time: `online.dll`, the extension DLLs `online.dll` loads
-      into the game's process (`tamplayx`, `takalix`, `taheatx`, `tawirepx`, `tadwngox`,
-      `tatenx`; the Steam install's import no registry function but `RegOpenKeyExA`,
-      `RegQueryValueExA` and `RegCloseKey`), and `reporter.dll` and `DebugHelper.dll` (neither
-      is in the Steam install);
+    - a DLL of the folder whose `DllMain` runs before Impure's, during that `DllMain`: the attach
+      line names them (`started before us:`), and where TADR's loads Impure, that is TADR's;
+    - a registry call a DLL makes through `GetProcAddress`, which a packed one may (`basscd.dll`
+      shows the stub's imports alone);
     - the programs the game starts: what `ShellExecuteA` opens, and what `online.dll` starts;
     - Windows' own records: the Task Scheduler's of the instance's task in
       `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`
@@ -718,9 +718,9 @@ player's key as it was.
   hand does not run either. The decision comes first in `DllMain`, before the return for
   cnc-ddraw's config tool, so an inherited `cnc_ddraw_config_init` cannot skip it.
 - **In test mode everything fails closed.** A store that is missing, a folder, unreadable or
-  not loaded whole, no memory, an exe path that cannot be read, a registry import the hooks
-  do not answer, or a `win32.dll` not loaded at attach (a static import of `TotalA.exe`) ends
-  the process at attach, with its log line first: `registry: TEST MODE, entered by <signal>,
+  not loaded whole, no memory, an exe path that cannot be read, or a registry import the hooks
+  do not answer, in the exe or a DLL of its folder whenever that loads, ends
+  the process, with its log line first: `registry: TEST MODE, entered by <signal>,
   but <what>: the game is not run`. The signal names the module whose attach it ends (`the
   tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s command line`), so
   a cnc-ddraw config tool opened in a test folder is refused in words about itself and told to
@@ -729,8 +729,8 @@ player's key as it was.
   call. `launch` succeeds only on the other answer, the run's `registry: TEST MODE, entered
   by <signal> -- ...` line: a refused run has written its log header and can still be seen as
   a process, so neither is enough.
-- **What is served, refused and passed.** The DLL replaces TotalA.exe's nine ADVAPI32 imports
-  and `win32.dll`'s two in their import tables. `HKCU\Software\Cavedog Entertainment` and every
+- **What is served, refused and passed.** The DLL replaces the registry imports of TotalA.exe (nine)
+  and of every DLL loaded from its folder, in their import tables. `HKCU\Software\Cavedog Entertainment` and every
   key under it are the store. Any other key is read-only: a read goes to the real registry, and
   a writable open, a create or a value write is refused. The engine map lists every call site
   and value. The one registry write of TotalA.exe's own code outside those imports, the `-r`
