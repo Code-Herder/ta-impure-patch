@@ -38,9 +38,12 @@
    RegFlushKey, RegCloseKey -- the exe resolves no registry function by name) and the two of
    the `win32.dll` the Steam install loads (RegOpenKeyExA, RegQueryValueExA: it reads the
    music volume from TA's key) are replaced in their import tables at attach, before
-   TotalA.exe's entry point runs. So is each one's GetProcAddress: a registry function that
-   code of the folder looks up, by name or by ordinal, is answered by the same hook, and one
-   the store does not answer ends the run, as such an import does (tagpu_regstore_proc). A
+   TotalA.exe's entry point runs -- by name in a system DLL's descriptor, by value in every
+   other slot, so kernel32's and KernelBase's exports of the same functions are answered too.
+   So is each one's GetProcAddress: a registry function that code of the folder looks up, by
+   name or by ordinal, is answered by the same hook, GetProcAddress itself by the store's, and
+   a registry function the store does not answer ends the run, as such an import does
+   (tagpu_regstore_proc; DDGetProcAddress, Impure's own export, ends in it too). A
    packed DLL's stub imports one function of each DLL and looks up the rest (basscd.dll,
    Petite-packed, imports RegCloseKey and GetProcAddress, and its unpacked code, in memory of
    no module, looks up RegOpenKeyExA, RegQueryValueExA, RegEnumKeyA and RegCloseKey [MEASURED 2026-11-08,
@@ -61,7 +64,8 @@
 
    So no call through those imports reaches a registry function that writes: the hooks
    call only RegOpenKeyExA with read rights, RegQueryValueExA, RegQueryValueA, RegEnumKeyA
-   and RegCloseKey. A store key's subkeys are the store's keys one level below it. RegFlushKey on a real key returns success without a call, since nothing in
+   and RegCloseKey. A store key's subkeys are the store's keys one level below it, sorted
+   by name without case. RegFlushKey on a real key returns success without a call, since nothing in
    test mode has changed one.
 
    The one registry write of TotalA.exe's own code outside those imports, the `-r` switch's

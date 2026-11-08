@@ -556,7 +556,10 @@ FARPROC WINAPI DDGetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 {
     TRACE("%s [%p]\n", __FUNCTION__, _ReturnAddress());
 
-    return real_GetProcAddress(hModule, lpProcName);
+    /* tagpu: the store answers a registry function looked up here as it does through the
+       kernel32 import (tagpu_regstore.h) */
+    return (FARPROC)tagpu_regstore_proc((void*)real_GetProcAddress(hModule, lpProcName),
+                                        __builtin_return_address(0));
 }
 
 HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnknown FAR* pUnkOuter)
