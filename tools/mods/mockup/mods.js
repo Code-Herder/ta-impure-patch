@@ -99,51 +99,49 @@ const SHOW = {
       { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
-    /* About opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims and the Credits page sum up the
+    /* The text opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims and the credits sum up the
        site's mission and credits pages in our own words and link to them for the full text */
     name: 'ProTA', logo: 'prota.png', backdrop: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
-    pages: [
-      { name: 'About', about: [
-        'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
-        'ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against '
-          + 'each other, and the mod looks for the ground between them.',
-        { section: 'Its eight aims:' },
-        { list: ['Every unit useful: each one gets a real job, widening the choices without diluting the game.',
-          'The original feel: the pace and the classic strategies stay.',
-          'Cheap and quick: a weak unit is made cheaper or stronger, almost never dearer, so armies stay replaceable and the fight over wreck fields stays at the centre.',
-          'Familiar units left alone: the units players use most change as little as possible.',
-          'Arm and Core asymmetric: the two sides differ, and both stay viable on every map.',
-          'Built on experience: balance rests on the games of long-time high-level players; anyone\'s feedback counts when it fits the mod\'s goals and comes with evidence or replays.',
-          'Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.',
-          'A better interface: new hotkeys and a longer build menu, within what the engine allows.'] },
-        'The team hopes to make the TA mod that newcomers and veterans alike call their own.',
-        { link: ['The full mission: ', 'https://prota.tauniverse.com/mission.html'] },
-        { section: 'Main Contributors:' },
-        { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
-          'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 }] },
-      { name: 'Credits', about: [
-        'Fine-tuned and play-tested by the players listed under About. The mod was also made possible by:',
-        { list: ['gamma: scripting, balance discussions, and Total Mayhem\'s scripts, fixes and models, used with permission',
-          'Switeck: many fixes taken from TA Bugfix',
-          'ArmouredFish: scripting help and fixes such as sea wrecks that no longer block',
-          'Vohvelieläin: model and script editing',
-          'Axle1975: recorder fixes, taforever.com, and engine fixes and features',
-          'FunkyFr3sh: CnC-DDraw adapted for TA on modern systems, and engine fixes',
-          'poosticks: a TA guide used to check unit statistics',
-          'Idec Sdawkminn: the TAU guides to unit FBI files and to weapons',
-          'zwzsg: the TAU posts behind the non-blocking sea wrecks',
-          'SnakeInTheMirror: the colour enhancement pack\'s orange and teal team colours, and a better yellow',
-          'PlasmoidThunder: sound category bugs and other findings',
-          'TAAN: Evolva models, some used as they are and some reworked',
-          'ACE_Beeky: a TAU guide to every unit in TA',
-          'Wotan: showed the sceptics what modding could do',
-          'Dragun101: promotion, and ProTA in SCTA showmatch streams',
-          'Postal: the Total Annihilation Replays YouTube channel, Core Commander knowledge and balance discussions',
-          'timmyfred: testing fixes, playtesting and balance discussions',
-          'TAG_ROCK: showcasing the gameplay, long playtesting, and funding new 3D models',
-          'Tristan: the new units\' 3D models, in Cavedog\'s style'] },
-        'And everyone else: the players, casters, map makers, feedback givers and content creators.',
-        { link: ['The full text: ', 'https://prota.tauniverse.com/credits.html'] }] }],
+    about: [
+      'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
+      'ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against '
+        + 'each other, and the mod looks for the ground between them.',
+      { section: 'Its eight aims:' },
+      { list: ['Every unit useful: each one gets a real job, widening the choices without diluting the game.',
+        'The original feel: the pace and the classic strategies stay.',
+        'Cheap and quick: a weak unit is made cheaper or stronger, almost never dearer, so armies stay replaceable and the fight over wreck fields stays at the centre.',
+        'Familiar units left alone: the units players use most change as little as possible.',
+        'Arm and Core asymmetric: the two sides differ, and both stay viable on every map.',
+        'Built on experience: balance rests on the games of long-time high-level players; anyone\'s feedback counts when it fits the mod\'s goals and comes with evidence or replays.',
+        'Games over spreadsheets: what a change does in live matches weighs more than numbers read from the game files.',
+        'A better interface: new hotkeys and a longer build menu, within what the engine allows.'] },
+      'The team hopes to make the TA mod that newcomers and veterans alike call their own.',
+      { link: ['The full mission: ', 'https://prota.tauniverse.com/mission.html'] },
+      { section: 'Main Contributors:' },
+      { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
+        'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 },
+      { section: 'Credits:' },
+      { list: ['gamma: scripting, balance discussions, and Total Mayhem\'s scripts, fixes and models, used with permission',
+        'Switeck: many fixes taken from TA Bugfix',
+        'ArmouredFish: scripting help and fixes such as sea wrecks that no longer block',
+        'Vohvelieläin: model and script editing',
+        'Axle1975: recorder fixes, taforever.com, and engine fixes and features',
+        'FunkyFr3sh: CnC-DDraw adapted for TA on modern systems, and engine fixes',
+        'poosticks: a TA guide used to check unit statistics',
+        'Idec Sdawkminn: the TAU guides to unit FBI files and to weapons',
+        'zwzsg: the TAU posts behind the non-blocking sea wrecks',
+        'SnakeInTheMirror: the colour enhancement pack\'s orange and teal team colours, and a better yellow',
+        'PlasmoidThunder: sound category bugs and other findings',
+        'TAAN: Evolva models, some used as they are and some reworked',
+        'ACE_Beeky: a TAU guide to every unit in TA',
+        'Wotan: showed the sceptics what modding could do',
+        'Dragun101: promotion, and ProTA in SCTA showmatch streams',
+        'Postal: the Total Annihilation Replays YouTube channel, Core Commander knowledge and balance discussions',
+        'timmyfred: testing fixes, playtesting and balance discussions',
+        'TAG_ROCK: showcasing the gameplay, long playtesting, and funding new 3D models',
+        'Tristan: the new units\' 3D models, in Cavedog\'s style'] },
+      'And everyone else: the players, casters, map makers, feedback givers and content creators.',
+      { link: ['The full credits: ', 'https://prota.tauniverse.com/credits.html'] }],
   },
 };
 const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')];
@@ -182,17 +180,15 @@ const STATES = {
 
 /* ---- the state, from the URL ---- */
 const RES = [...$('#res').options].map(o => o.value);
-const S = { res: '1920x1080', state: 'manage', held: '', page: 0 };
+const S = { res: '1920x1080', state: 'manage', held: '' };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('state') in STATES) S.state = q.get('state');
-  if (q.get('held')) S.held = q.get('held');
-  S.page = Math.max(0, parseInt(q.get('page')) || 0); }
+  if (q.get('held')) S.held = q.get('held'); }
 const P = () => page(STATES[S.state][1]);
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, state: S.state });
   if (S.held) q.set('held', S.held);
-  if (S.page) q.set('page', S.page);
   history.replaceState(null, '', '?' + q);
 }
 
@@ -255,11 +251,8 @@ function showcase(m) {
   return (m.backdrop ? `<div class="hero" style="--backdrop: url('${BANNERS + m.backdrop}')">${head}</div>` : head)
     + `<div class="rule"></div>`
     + (m.banner ? `<div class="banner"><img src="${BANNERS + m.banner}" alt="" onerror="this.parentNode.remove()"></div>` : '')
-    + (m.pages ? pageTabs(m.pages) + blocks(m.pages[Math.min(S.page, m.pages.length - 1)].about) : blocks(m.about));
+    + blocks(m.about);
 }
-/* A mod with more to say than a description splits it into pages, picked by a row of tabs under the banner */
-const pageTabs = pages => `<div class="ptabs">${pages.map((g, i) =>
-  `<button class="tab" data-key="page:${i}" data-part="${i === Math.min(S.page, pages.length - 1) ? 'tab_selected' : 'tab'}">${esc(g.name)}</button>`).join('')}</div>`;
 /* The text blocks: a paragraph, a section's opening line, a list (in `cols` columns when it has them), a line ending in a link */
 const blocks = about => about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>`
   : b.section ? `<div class="pa s sec">${esc(b.section)}</div>`
@@ -305,15 +298,10 @@ const STYLES = fetch(ART + 'hud/layout.json').then(r => r.json()).then(L => UIKi
 
 /* ---- the controls strip, and what a click says ---- */
 $('#state').innerHTML = Object.entries(STATES).map(([k, [t]]) => `<option value="${k}">${esc(t)}</option>`).join('');
-$('#state').value = S.state; $('#state').onchange = e => { S.state = e.target.value; S.page = 0; render(); syncURL(); };
+$('#state').value = S.state; $('#state').onchange = e => { S.state = e.target.value; render(); syncURL(); };
 $('#res').value = S.res; $('#res').onchange = e => { S.res = e.target.value; layout(); syncURL(); };
 $('#held').value = S.held; $('#held').onchange = e => { S.held = e.target.value.trim(); render(); syncURL(); };
-/* a showcase's page tabs are the one click the mockup follows, so each page can be read */
-frame.addEventListener('click', e => {
-  const k = e.target.closest('[data-key]');
-  $('#last').textContent = k ? `clicked ${k.dataset.key}` : '';
-  if (k && k.dataset.key.startsWith('page:')) { S.page = +k.dataset.key.slice(5); render(); syncURL(); }
-});
+frame.addEventListener('click', e => { const k = e.target.closest('[data-key]'); $('#last').textContent = k ? `clicked ${k.dataset.key}` : ''; });
 window.addEventListener('resize', layout);
 
 layout(); render();
