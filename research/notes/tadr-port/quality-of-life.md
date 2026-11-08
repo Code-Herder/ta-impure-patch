@@ -1,8 +1,9 @@
 # D. Quality-of-life coverage in supported mods
 
-Several conveniences enabled by native supported mods remain missing from Impure: placement and
-reclaim snapping, editing queued orders, build spacing, construction behavior controls,
-and allied information. Other gaps require a preference change, or belong to newer TADR builds
+Several conveniences enabled by native supported mods remain missing from Impure: reclaim
+snapping, editing queued orders, construction behavior controls, and allied information in a live
+game. Mex/geo placement snapping, line/rectangle/ring placement with spacing, and replay camera
+follow are covered. Other gaps require a preference change, or belong to newer TADR builds
 that none of those mods bundles. **Rotation support ships with Escalation and Twilight, but no
 checked mod enables rotation in its unit definitions.**
 
@@ -10,7 +11,9 @@ Checked **2026-10-04** against Impure source, native DLLs, public release assets
 and mod archives. This is an availability/defaults audit, not player-usage telemetry or a new
 gameplay test. The [compatibility setups](../compat/setups.md) define the supported installations;
 `tools/compat/fixtures.json` pins their files and `tools/compat/setups.json` defines their layers.
-An optional player-installed TADR upgrade is a different installation.
+An optional player-installed TADR upgrade is a different installation. The evidence is in three
+passes: [what Impure has](quality-of-life-impure.md), [the TADR the mods bundle](quality-of-life-bundles.md)
+and [newer TADR builds](quality-of-life-newer.md).
 
 **Mod enabled = Yes** means at least one supported native distribution enables the feature
 through shipped content/settings or fresh defaults. A normal keypress or gesture counts as
@@ -49,9 +52,9 @@ are excluded. The preview row names only the unsupported extensions. The megamap
 TADR's separate view: Impure's mega map is the world zoom repurposed as a strategic zoom
 ([the plan](../mega-map-plan.html), *Why not TADR's design*), and its row says what that covers.
 
-| Feature missing from Impure | Mod enabled? | Enabled mods / condition | Included in bundled TADR? |
+| Feature missing from Impure, unless its row says otherwise | Mod enabled? | Enabled mods / condition | Included in bundled TADR? |
 |---|---|---|---|
-| Metal/geo placement snapping | **Yes** | M/P/T | Code present in M/P/Z/T; Z's gate disables it; E build disables support |
+| Metal/geo placement snapping — **covered**: manual mex/geo snapping and contextual Quick Build ([resource snapping](resource-snapping.md)) | **Yes** | M/P/T | Code present in M/P/Z/T; Z's gate disables it; E build disables support |
 | Reclaim cursor snapping to wrecks/features | **Yes** | E/M/P/T | Code present in all five; Z's gate disables it |
 | Drag queued build/move orders to edit positions | **Yes** | All | All |
 | Line/ring building — **partial**: optimized DT rows and Build Split; lines, rectangles, rings and spacing [are built](#what-impure-does) | **Yes** | All; TA Hook placement gesture | All |
@@ -63,8 +66,8 @@ TADR's separate view: Impure's mega map is the world zoom repurposed as a strate
 | Map-owned DTs/fort walls visible independently of LOS | **Yes** | P only; loader supplies required owner markers | All contain the hook; only P's bundle makes it effective |
 | Shared whiteboard drawings and labelled map markers | **Yes** | All, with allies | All, including the bundled recorder transport |
 | Allies' minimap camera rectangles / camera sharing | **Yes** | All; `.sharemappos` defaults on | All, including the bundled recorder transport |
-| Follow another player's recorded camera during replay (`.lockon <name>`) | **Yes** | All; choose a player whose camera data exists in the recording | All native recorder/TADR pairings |
-| Allies' live resource/income panel | **Yes** | All, in multiplayer with allies | All, including the bundled recorder transport |
+| Follow another player's recorded camera during replay (`.lockon <name>`) — **covered**: Jump and Follow on the replay HUD's player rows play the recorded camera, and a seat without one says "Camera was not recorded" ([the replay's players](demo-recorder-player-cards.md)) | **Yes** | All; choose a player whose camera data exists in the recording | All native recorder/TADR pairings |
+| Allies' live resource/income panel — **replay only**: the replay HUD's stats window shows each recorded player's resources; a live game shows none ([The replay HUD in game](../hud-in-game.md)) | **Yes** | All, in multiplayer with allies | All, including the bundled recorder transport |
 | Enhanced idle/category selection hotkeys and same-type double click | **Yes** | All; TADR enhancements to stock selection | All |
 | F11 configurable sharing/command macro | **Yes** | All; nonempty default macro runs on F11 | All |
 | Megamap — **covered differently**: no separate 2D view; Impure's mega map is the world zoomed out to the whole map, engaged by Ctrl+wheel (the *Mega map wheel* setting, `wheel=megamap`, swaps it with the plain wheel as TADR binds it), with units drawn as strategic icons by BAR's rule and the mod's TADR icon set (`iconcfg.ini`) read from its install ([the plan](../mega-map-plan.html), *Why not TADR's design*) | **Yes** | All | All; E alone has the later fixed-feature/dithering enhancements |
@@ -165,9 +168,8 @@ plus the BAR widgets named in the table.
 #### What Impure does
 
 `tagpu_place.c`, with the shapes in `tagpu_placegeo.c`; the hooks are in
-[gpu-status §2.109](../gpu-status.md), the engine side in the [engine
-map](../exe-reverse-engineering.md), *The placement's mouse path, and several buildings in one
-gesture*. With a building armed, a left press that carries Shift starts a gesture instead of
+[the placement module](../modules/placement.md), the engine side in the [engine
+map](../engine/input.md#the-placements-mouse-path-and-several-buildings-in-one-gesture-disassembled-measured-2026-10-25). With a building armed, a left press that carries Shift starts a gesture instead of
 placing; the shape follows the cursor while the button is held, with the modifiers read live; the
 release with Shift held orders it.
 
@@ -396,7 +398,8 @@ The development downloads were not gameplay-tested in this audit.
 ## What Impure already covers, and the remaining boundaries
 
 The checked source is Impure `faabb488`, with feature readers, handlers, settings and draw paths
-examined together rather than inferring absence from module names:
+examined together rather than inferring absence from module names; the rows later landings changed
+were re-read at `2b40c748` on 2026-11-08 ([what Impure has](quality-of-life-impure.md)):
 
 - `tagpu_datakeys.c` reads `PreviewPieces`; `tagpu_native.c` renders the masked ghost and default
   heading. It does not read `Rotations`, alternate preview models, per-facing lists or
@@ -406,7 +409,7 @@ examined together rather than inferring absence from module names:
   manual mex/geo snapping and contextual Quick Build; `tagpu_place.c` (2026-10-25) lays lines,
   rectangles and rings ([What Impure does](#what-impure-does)); `tagpu_sweep.c` (2026-10-28) is an
   area reclaim by kind — with RECLAIM armed a dragged ring orders the selected reclaimers to take
-  its wrecks, trees or both, split nearest-first ([gpu-status §2.110](../gpu-status.md)). Build spacing is
+  its wrecks, trees or both, split nearest-first ([the reclaim sweep](../modules/reclaim-sweep.md)). Build spacing is
   `placespacing=` (Alt+Z / Alt+X). Reclaim snapping, blocker kickout and other construction
   behavior controls remain unimplemented.
 - `tagpu_mark.c` draws health/group markers, without reload bars or stockpile/transport counters.

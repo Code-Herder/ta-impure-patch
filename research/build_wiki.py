@@ -56,7 +56,9 @@ ASSETS = SITE / "assets"
 SITE_TITLE = "TotalA.exe Modding Wiki"
 SUBTITLE = "How the Total Annihilation community adds engine features to a closed-source 1997 binary"
 
-# slug -> (nav label, section). Order here is the nav order.
+# slug -> (nav label, section[, sub-group]). Order here is the nav order. A sub-group gathers its
+# pages under one heading inside their section, in the nav and on the index, at the place its
+# first page is listed.
 PAGES = [
     ("project-map",                "Project map",                 "Overview"),
     ("roadmap",                    "GPU renderer roadmap",        "Overview"),
@@ -198,8 +200,15 @@ PAGES = [
     ("tadr-port/sim-fixes-evidence", "B. Simulation bug fixes — evidence", "TADR port"),
     ("tadr-port/data-keys",       "C. New data keys — plan",   "TADR port"),
     ("tadr-port/data-keys-evidence", "C. New data keys — evidence", "TADR port"),
-    ("tadr-port/quality-of-life", "D. Quality-of-life — coverage", "TADR port"),
-    ("tadr-port/resource-snapping", "D. Resource snapping / Quick Build — design", "TADR port"),
+    ("tadr-port/quality-of-life", "Coverage in supported mods", "TADR port", "D. Quality of life"),
+    ("tadr-port/resource-snapping", "Resource snapping & Quick Build — design", "TADR port",
+     "D. Quality of life"),
+    ("tadr-port/quality-of-life-impure", "Evidence — what Impure has", "TADR port",
+     "D. Quality of life"),
+    ("tadr-port/quality-of-life-bundles", "Evidence — the TADR the mods bundle", "TADR port",
+     "D. Quality of life"),
+    ("tadr-port/quality-of-life-newer", "Evidence — newer TADR builds", "TADR port",
+     "D. Quality of life"),
     ("tadr-port/cob",             "F. COB compatibility — plan", "TADR port"),
 
     ("compat/overview",           "Overview & load routes",    "Compatibility"),
@@ -303,6 +312,11 @@ code,kbd,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Cons
   font-family:"Saira Condensed","Arial Narrow",sans-serif; font-size:.76rem; font-weight:600;
   letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3);
   margin:14px 0 7px; padding-bottom:5px; border-bottom:1px solid var(--edge);
+}
+.navsub{margin:6px 0 8px 4px; padding-left:7px; border-left:1px solid var(--edge)}
+.navsub h5{
+  font-family:"Saira Condensed","Arial Narrow",sans-serif; font-size:.74rem; font-weight:600;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); margin:8px 0 3px 2px;
 }
 .nav a{
   display:block; padding:5px 9px; margin:1px 0; border-radius:6px; text-decoration:none;
@@ -985,39 +999,60 @@ def main(bake="auto"):
     def has_source(slug):
         return slug in GENERATED or (NOTES / f"{slug}.md").exists() or (NOTES / f"{slug}.html").exists()
 
-    present = [(s, l, sec) for s, l, sec in PAGES if has_source(s)]
-    known = {s for s, _, _ in PAGES}
+    # (slug, label, section, sub-group or None)
+    present = [(p + (None,))[:4] for p in PAGES if has_source(p[0])]
+    known = {p[0] for p in PAGES}
     for f in sorted(list(NOTES.glob("*.md")) + list(NOTES.glob("*.html"))):
         if f.stem.startswith("_"):
             continue
         if f.stem not in known:
-            present.append((f.stem, f.stem.replace("-", " ").title(), "Survey"))
+            present.append((f.stem, f.stem.replace("-", " ").title(), "Survey", None))
             known.add(f.stem)
     for folder, folder_sec in FOLDERS.items():
         for f in sorted((NOTES / folder).glob("*.md")):
             slug = f"{folder}/{f.stem}"
             if f.stem.startswith("_") or slug in known:
                 continue
-            present.append((slug, f.stem.replace("-", " ").capitalize(), folder_sec))
+            present.append((slug, f.stem.replace("-", " ").capitalize(), folder_sec, None))
             known.add(slug)
 
+    def runs(sec):
+        """The section's pages in nav order as (sub-group, [(slug, label)]) runs: a page outside
+        any sub-group is a run of its own with None, and a sub-group's pages are one run."""
+        out, group_run = [], {}
+        for s, l, sc, g in present:
+            if sc != sec:
+                continue
+            if g is None:
+                out.append((None, [(s, l)]))
+            elif g in group_run:
+                group_run[g].append((s, l))
+            else:
+                group_run[g] = [(s, l)]
+                out.append((g, group_run[g]))
+        return out
+
     def nav_for(current, base):
+        def link(s, l):
+            cls = ' class="current"' if s == current else ""
+            return f'<a href="{base}{s}.html"{cls}>{l}</a>'
+
         out = []
         for sec in SECTION_ORDER:
-            items = [(s, l) for s, l, sc in present if sc == sec]
-            if not items:
+            sec_runs = runs(sec)
+            if not sec_runs:
                 continue
             out.append(f'<div class="navgroup"><h4>{sec}</h4>')
-            for s, l in items:
-                cls = ' class="current"' if s == current else ""
-                out.append(f'<a href="{base}{s}.html"{cls}>{l}</a>')
+            for group, pages in sec_runs:
+                links = "".join(link(s, l) for s, l in pages)
+                out.append(f'<div class="navsub"><h5>{group}</h5>{links}</div>' if group else links)
             out.append("</div>")
         return "".join(out)
 
     search_index = []
     meta = {}
 
-    for slug, label, sec in present:
+    for slug, label, sec, _ in present:
         base = base_of(slug)
         if slug not in GENERATED and not (NOTES / f"{slug}.md").exists():
             title, plain, blurb = emit_html_page(slug, label, sec, NOTES / f"{slug}.html", nav_for(slug, base))
@@ -1050,13 +1085,10 @@ def main(bake="auto"):
 
     # ---- index ----
     total_words = sum(m["words"] for m in meta.values())
-    cards = {sec: [] for sec in SECTION_ORDER}
-    for slug, label, sec in present:
+    def card(slug):
         m = meta[slug]
-        cards[sec].append(
-            f'<a class="card" href="{slug}.html"><h3>{m["label"]}</h3>'
-            f'<p>{m["blurb"]}</p></a>'
-        )
+        return (f'<a class="card" href="{slug}.html"><h3>{m["label"]}</h3>'
+                f'<p>{m["blurb"]}</p></a>')
 
     index_md = (NOTES / "_index.md")
     overview_html = ""
@@ -1065,11 +1097,25 @@ def main(bake="auto"):
 
     sections_html = ""
     for sec in SECTION_ORDER:
-        if not cards[sec]:
+        sec_runs = runs(sec)
+        if not sec_runs:
             continue
+        # the section's loose pages share one grid; a sub-group is a heading and a grid of its own
+        grids, loose = [], []
+        for group, pages in sec_runs:
+            if group is None:
+                loose.append(card(pages[0][0]))
+                continue
+            if loose:
+                grids.append(f'<div class="cards">{"".join(loose)}</div>')
+                loose = []
+            grids.append(f'<h3 id="{slugify(group)}">{group}</h3>'
+                         f'<div class="cards">{"".join(card(s) for s, _ in pages)}</div>')
+        if loose:
+            grids.append(f'<div class="cards">{"".join(loose)}</div>')
         sections_html += (f'<h2 id="{slugify(sec)}">{sec}</h2>'
                           f'<p style="color:var(--ink-3);margin-top:-.4em">{SECTION_BLURB[sec]}</p>'
-                          f'<div class="cards">{"".join(cards[sec])}</div>')
+                          + "".join(grids))
 
     hero = f"""<div class="hero">
 <h1>{SITE_TITLE}</h1>
