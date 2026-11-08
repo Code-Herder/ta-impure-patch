@@ -97,3 +97,5 @@ header output { color: var(--fg); }
 .lnk { font: inherit; letter-spacing: inherit; color: #e2b84a; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .lnk:hover { color: #f4d27a; }
 .rule { height: 1px; background: rgba(216, 216, 200, .18); margin: calc(4 * var(--u)) 0 calc(10 * var(--u)); }
+.lst { padding-left: calc(14 * var(--u)); }
+.lst li { margin: 0 0 calc(2 * var(--u)); }

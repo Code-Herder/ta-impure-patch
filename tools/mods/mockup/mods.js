@@ -77,10 +77,18 @@ const SCROLLS = {
 const LOGOS = '../../../tmp/modlogos/';
 const SHOW = {
   mayhem: {
-    name: 'Total Mayhem', logo: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma and Mayhem Inc.', site: 'https://mayhem.tauniverse.com/',
-    about: ['Total Mayhem is Mayhem Inc’s expansion and rebalance of Total Annihilation, from a group that has been making TA content since 2001. '
-      + 'It adds hundreds of new units to both Arm and Core at every tech level, up to a third tier of heavy units, with reworked sounds and a harder AI.',
-      'Armies and economies grow larger than in the original game, so battles run longer and end bigger.'],
+    /* the text is the author's, as given to the owner on 2026-11-08 */
+    name: 'Total Mayhem', logo: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma', site: 'https://mayhem.tauniverse.com/',
+    about: ['Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
+      'The goal is to make all of the original units useful, and add more units for more strategic choices.',
+      'gamma, @gammata, is the main author. Contributors include:',
+      { list: ['thaldren (TA ddraw patch dev)', 'keeper, or mnhebi - colour mod and music player dev', 'm1garland - has contributed many 3D models',
+        'archdragon - has contributed a number of 3D models', 'plasmoidthunder - several unit pictures/build button art'] },
+      'Credit also to many other unitmakers in the past whose creations many units are based on. The SYs, Xon, Rime and Xpoy for dev work on the '
+      + 'TA recorder, the "megamap" and many other added features to TA, that thaldren has continued to build on (and rewrite). ProTA, Venom and the '
+      + 'team for their balancing work that I have used as a reference point. The team who have helped playtest and give balance feedback on the '
+      + 'Mayhem Gang Discord server.',
+      { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
     name: 'ProTA', logo: 'prota.webp', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
@@ -194,7 +202,8 @@ function showcase(m) {
     + `<div class="pa m c">${esc(m.version)} · ${esc(m.by)}</div>`
     + `<div class="pa m c"><a class="lnk" href="${m.site}" target="_blank" rel="noopener" data-key="link">${esc(host)}</a></div>`
     + `<div class="rule"></div>`
-    + m.about.map(t => `<div class="pa s">${esc(t)}</div>`).join('');
+    + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>` : b.list ? `<ul class="pa s lst">${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
+      : b.link ? `<div class="pa s">${esc(b.link[0])}<a class="lnk" href="${b.link[1]}" target="_blank" rel="noopener" data-key="link">${esc(b.link[1].replace(/^https:\/\//, ''))}</a></div>` : '').join('');
 }
 function detail(p) {
   let h = '';
