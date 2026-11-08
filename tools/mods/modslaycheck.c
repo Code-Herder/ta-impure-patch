@@ -150,6 +150,10 @@ static void page_json(const TJV* S, MODSPAGE* p)
     p->selected = (int)tj_num(tj_get(S, "selected"), -1);
     p->update_all = (int)tj_num(tj_get(S, "update_all"), 0);
     STR(p->empty, S, "empty"); STR(p->title, S, "title"); STR(p->meta, S, "meta"); STR(p->summary, S, "summary");
+    /* the mockup's showcase is its catalog entry's `show` with the id, name and version the game adds (mods.js showOf) */
+    v = tj_get(S, "show");
+    if (v && !tj_is(v, TJ_NULL) && !tagpu_modslay_show(v, tj_str(tj_get(v, "id"), ""), tj_str(tj_get(v, "name"), ""), tj_str(tj_get(v, "version"), ""), &p->show))
+        fprintf(stderr, "modslaycheck: the state's showcase does not fit MODSSHOW\n");
     STR(p->note, S, "note"); STR(p->held, S, "held"); STR(p->confirm, S, "confirm");
     v = tj_get(S, "scroll");
     for (i = 0; i < MODS_NSCROLL; i++) p->scroll[i] = (float)tj_num(tj_at(v, i), 0);

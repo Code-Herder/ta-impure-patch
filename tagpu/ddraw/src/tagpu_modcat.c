@@ -259,14 +259,14 @@ int tagpu_modcat_each_id(const char* catalog, size_t n, void (*fn)(void* ctx, co
 
 /* ---- a mutator ---------------------------------------------------------------------------------- */
 
-/* The catalog's spelling into the engine's. 0 for one a mount cannot act on or a profile's `file.<path>=` key cannot hold. */
+/* The catalog's spelling into the engine's. 0 for one a mount cannot act on: unsafe, too long, or with a control character. */
 static int engine_path(const char* in, char out[MODCAT_PATH])
 {
     size_t i, n = strlen(in);
     if (!n || n >= MODCAT_PATH || !modtar_path_safe(in)) return 0;
     for (i = 0; i <= n; i++) {
         const char c = in[i];
-        if (c == '=' || (c && (unsigned char)c < 0x20)) return 0;
+        if (c && (unsigned char)c < 0x20) return 0;
         out[i] = c == '/' ? '\\' : c;
     }
     return 1;
@@ -374,28 +374,19 @@ int tagpu_modcat_stale(const MODMUTATOR* m, MODCAT_HASH hash, void* ctx, char (*
     return total;
 }
 
-const char* tagpu_modcat_stale_live(char (*list)[MODCAT_PATH], int total, int max, MODCAT_OFF off, void* ctx)
-{
-    int i;
-    for (i = 0; i < total && i < max; i++)
-        if (!off || !off(ctx, list[i])) return list[i];
-    return total > max ? list[0] : NULL;
-}
 
-const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b, MODCAT_OFF off, void* ctx)
+const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b)
 {
     int i, k;
     for (i = 0; i < a->nfiles; i++) {
         const char* p = a->files[i].path;
-        if (off && off(ctx, p)) continue;
         for (k = 0; k < b->nfiles; k++)
             if (tagpu_modcat_same_path(p, b->files[k].path)) return p;
         for (k = 0; k < b->nhides; k++)
-            if (tagpu_modcat_same_path(p, b->hides[k]) && !(off && off(ctx, b->hides[k]))) return p;
+            if (tagpu_modcat_same_path(p, b->hides[k])) return p;
     }
     for (i = 0; i < a->nhides; i++) {
         const char* p = a->hides[i];
-        if (off && off(ctx, p)) continue;
         for (k = 0; k < b->nfiles; k++)
             if (tagpu_modcat_same_path(p, b->files[k].path)) return p;
     }

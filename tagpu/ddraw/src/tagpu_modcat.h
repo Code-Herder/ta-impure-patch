@@ -111,19 +111,13 @@ void tagpu_modcat_mutator_free(MODMUTATOR* m);
 /* The same path as the engine's lookup takes it: without case, '/' and '\\' alike. */
 int  tagpu_modcat_same_path(const char* a, const char* b);
 
-/* What the player has switched off: 1 for a path the switch `file.<path>` has off. NULL: nothing is off. */
-typedef int (*MODCAT_OFF)(void* ctx, const char* path);
 /* The file the base answers for a path: 1 with its SHA-256, 0 when it holds none. */
 typedef int (*MODCAT_HASH)(void* ctx, const char* path, uint8_t out[32]);
 
-/* Every file `m` replaces that the base no longer holds as it was packed against, whatever the switches say, so a verdict
-   survives a switch: into `out`, up to `max`; returns how many there are. New files and hides are not checked. */
+/* Every file `m` replaces that the base no longer holds as it was packed against: into `out`, up to `max`; returns how many
+   there are, the first being the one a verdict names. New files and hides are not checked. */
 int  tagpu_modcat_stale(const MODMUTATOR* m, MODCAT_HASH hash, void* ctx, char (*out)[MODCAT_PATH], int max);
-/* The first of that list a switch has not taken out of play, or NULL: with `total` past `max` a file past the list may be the
-   one in play, so the answer is never NULL there. */
-const char* tagpu_modcat_stale_live(char (*list)[MODCAT_PATH], int total, int max, MODCAT_OFF off, void* ctx);
-/* The first path two mutators of one base cannot both have, or NULL: a file both carry, or one's file the other hides. A path
-   a switch has off is in neither. */
-const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b, MODCAT_OFF off, void* ctx);
+/* The first path two mutators of one base cannot both have, or NULL: a file both carry, or one's file the other hides. */
+const char* tagpu_modcat_clash(const MODMUTATOR* a, const MODMUTATOR* b);
 
 #endif

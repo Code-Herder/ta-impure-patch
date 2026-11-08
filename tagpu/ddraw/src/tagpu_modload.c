@@ -624,14 +624,14 @@ static void mount_mutators(const char* base)
         if (!fit) fit = tagpu_modfit_open(base, mounts_as_original);
         total = fit ? tagpu_modcat_stale(&m, tagpu_modfit_hash, fit, stale, 8) : 1;
         if (!fit) lstrcpynA(stale[0], "?", sizeof stale[0]);
-        why = tagpu_modcat_stale_live(stale, total, 8, NULL, NULL);
+        why = total > 0 ? stale[0] : NULL;
         if (why) {
             tagpu_logf("modload: not mounted mutator %s: %s differs from the file it was built on", m.id, why);
             tagpu_modcat_mutator_free(&m);
             continue;
         }
         for (k = 0; k < s_nmounted && !why; k++) {
-            if ((why = tagpu_modcat_clash(&m, &s_applied[k], NULL, NULL)) != NULL)
+            if ((why = tagpu_modcat_clash(&m, &s_applied[k])) != NULL)
                 tagpu_logf("modload: not mounted mutator %s: %s is %s's too", m.id, why, s_applied[k].id);
         }
         if (why) { tagpu_modcat_mutator_free(&m); continue; }

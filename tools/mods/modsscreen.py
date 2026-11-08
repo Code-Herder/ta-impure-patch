@@ -217,8 +217,16 @@ def flow(display):
     report([(o["label"], o["value"], o["locked"]) for o in s["opts"]] == [("Resource snapping radius", "3", 0), ("Quick Build", "On", 0)],
            f"ProTA's options show the mod's values: {[(o['label'], o['value']) for o in s['opts']]}")
     # the Mods screen sets no game setting: its controls are the list's, the tabs, the footer's and the close button
-    others = [h["key"] for h in s["hits"] if not h["key"].startswith(("tab:", "row:", "act:", "scroll:")) and h["key"] not in ("close", "back", "confirm", "updateall")]
-    report(not others, f"the pane takes no click: {others}")
+    others = [h["key"] for h in s["hits"] if not h["key"].startswith(("tab:", "row:", "act:", "scroll:", "link:")) and h["key"] not in ("close", "back", "confirm", "updateall")]
+    report(not others, f"the pane takes no click but a link: {others}")
+    show = json.loads((ROOT / "mods/prota.json").read_text())["show"]
+    want = sum(len(b["list"]) if isinstance(b, dict) and "list" in b else 1 for b in show["about"])
+    report(s["show"] == "prota" and s["show_blocks"] == want, f"the pane is ProTA's showcase, its {want} blocks from the catalog: {s['show']!r}, {s['show_blocks']}")
+    links = sorted(h["key"] for h in s["hits"] if h["key"].startswith("link:"))
+    report(links[:1] == ["link:0"], f"its website is a link: {links}")
+    g.click("link:0")
+    time.sleep(1)
+    report(f"a test launch opens no browser: {show['site']}" in g.logs(), "a click on it would open the website, which a test launch only logs")
     g.shot("manage-prota")
     # a hide. key an older build wrote: the mount reads no player's choice of archive
     arc = next((p.name for p in g.dir.iterdir() if p.name.lower() == "ccdata.ccx"), None)
@@ -276,6 +284,16 @@ def flow(display):
     time.sleep(1)
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
+    # Total Mayhem's showcase is longer than its pane
+    g.click(f"row:{row_of(s, 'Total Mayhem')}")
+    s = g.settled(lambda s: s["show"] == "mayhem" and s["scroll_max"][1] > 0)
+    report(s["show"] == "mayhem" and s["scroll_max"][1] > 0, f"Total Mayhem's showcase overflows its pane: {s['show']!r}, {s['scroll_max']}")
+    g.shot("manage-mayhem")
+    # over the pane, in the window's pixels the hit map is in
+    x0, y0, x1, y1 = next(h["r"] for h in s["hits"] if h["key"] == "scroll:detail")
+    tacli("keys", NAME, f"dmove:{(x0 + x1) // 2},{(y0 + y1) // 2}", "wheel:-3", check=False)
+    s = g.settled(lambda s: s["scroll"][1] > 0, 5)
+    report(s["scroll"][1] > 0, f"the wheel scrolls the pane: {s['scroll']}")
     tacli("keys", NAME, "esc")
     s = g.settled(lambda s: not s["open"], 5)
     report(not s["open"], "Esc closes it")

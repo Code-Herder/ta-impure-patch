@@ -3,6 +3,7 @@
 
     python3 tools/mods/modslaycheck.py [--keep DIR] [--shots DIR]
     python3 tools/mods/modslaycheck.py --check-only
+    python3 tools/mods/modslaycheck.py --only showcase      the cases whose state name holds the word
 
 First, and alone with --check-only (no browser), the layout's load-time check, tagpu_modslay_check as the game runs it: the
 fullest page must build whole (modslaycheck.c --check).
@@ -62,6 +63,13 @@ CASES = (
        ("explore", (1920, 1080), {"held": "act:0"}), ("updates", (1920, 1080), {"held": "updateall"}),
        ("mutators", (1920, 1080), {}), ("mutators", (1920, 1080), {"held": "act:5"})]
 )
+# the showcases: each mod's, at every screen, scrolled, and with a link held
+CASES += (
+    [(st, res, {}) for st in ("showcase_mayhem", "showcase_prota") for res in SCREENS]
+    + [("showcase_mayhem", (1920, 1080), {"scroll": {"detail": "max"}}), ("showcase_prota", (1024, 768), {"scroll": {"detail": "half"}}),
+       ("showcase_prota", (3840, 2160), {"scroll": {"detail": "max"}}), ("showcase_prota", (1920, 1080), {"held": "link:0"}),
+       ("showcase_prota", (1920, 1080), {"held": "link:1"})]
+)
 # the panels, in the order of MODSPAGE.scroll
 SCROLLS = {"list": "#list", "detail": "#detail"}
 
@@ -90,6 +98,11 @@ COLLECT = r"""async () => {
   const alpha = e => { let a = 255; for (let n = e; n && n !== document.body; n = n.parentElement) a *= +getComputedStyle(n).opacity; return a; };
   const els = [];
   els.push({ kind: 'solid', rgb: getComputedStyle($('#backdrop')).backgroundColor, r: B($('#backdrop')) });
+  // a showcase's rule, a solid of its own colour
+  for (const e of document.querySelectorAll('#detail .rule')) {
+    const r = B(e), k = clipOf(e);
+    if (!k || overlapY(r, k)) els.push({ kind: 'solid', rgb: getComputedStyle(e).backgroundColor, r });
+  }
   for (const e of document.querySelectorAll('#frame [data-part]')) {
     if (!e._pk) continue;
     const r = B(e), k = clipOf(e);
@@ -283,6 +296,7 @@ def main():
     only = args == ["--check-only"]
     keep = Path(args[args.index("--keep") + 1]) if "--keep" in args else None
     shots = Path(args[args.index("--shots") + 1]).resolve() if "--shots" in args else None
+    word = args[args.index("--only") + 1] if "--only" in args else ""
     t0 = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="modslaycheck"))
     exe = tmp / "modslaycheck"
@@ -311,7 +325,7 @@ def main():
     bad, glyphs = 0, set()
     run("open", "about:blank")
     try:
-        for state, (gw, gh), acts in CASES:
+        for state, (gw, gh), acts in (c for c in CASES if word in c[0]):
             name = f"{gw}x{gh}-{state}" + "".join(f"-{k}-{v}" for k, v in acts.get("scroll", {}).items()) + (f"-held-{acts['held']}" if "held" in acts else "")
             run("resize", str(gw + 34), str(gh + 900))
             q = f"res={gw}x{gh}&state={state}" + (f"&held={acts['held']}" if "held" in acts else "")
@@ -359,7 +373,7 @@ def main():
     if glyphs:
         bad += 1
         print(f"the mockup sets {sorted(glyphs)} in the browser's fallback face, which the DLL does not carry: the game draws no glyph for them <-- DIFFERS")
-    print(f"modslaycheck: {len(CASES)} cases in {time.time() - t0:.0f} s: "
+    print(f"modslaycheck: {sum(word in c[0] for c in CASES)} cases in {time.time() - t0:.0f} s: "
           + ("the DLL and the mockup agree, every box, line and baseline" if not bad else f"{bad} disagreement(s)"))
     return 1 if bad else 0
 

@@ -22,6 +22,8 @@
 #include "tagpu_modfit.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
+#include "tagpu_json.h"
+#include "tagpu_regstore.h"
 
 #define MAX_MOD      (MODS_MAXROW - 1)    /* the first row of Manage is the folder */
 #define FOLDER       (-1)                 /* a row's mod: this folder's own */
@@ -212,7 +214,7 @@ static void load_mutators(void)
 static const char* stale_path(int m)
 {
     ENTRY* e = &s_mod[m];
-    return e->nstale > 0 ? tagpu_modcat_stale_live(e->stale, e->nstale, STALE_MAX, NULL, NULL) : NULL;
+    return e->nstale > 0 ? e->stale[0] : NULL;
 }
 
 enum { FIT_UNKNOWN, FIT_OK, FIT_STALE, FIT_CLASH };
@@ -230,7 +232,7 @@ static void walk_taken(void)
         if (!e->has_mut || !e->on || !(e->installed[0] || e->ready) || stale_path(m)) continue;
         for (k = 0; k < m; k++)
             if (s_mod[k].taken && s_mod[k].base == e->base &&
-                tagpu_modcat_clash(&e->mut, &s_mod[k].mut, NULL, NULL)) break;
+                tagpu_modcat_clash(&e->mut, &s_mod[k].mut)) break;
         e->taken = k == m;
     }
 }
@@ -250,7 +252,7 @@ static int verdict(int m, char* why, size_t cap)
     for (k = 0; k < s_nmod; k++) {
         const ENTRY* o = &s_mod[k];
         if (k == m || !o->taken || o->base != e->base || (e->on && k > m)) continue;
-        if ((p = tagpu_modcat_clash(&e->mut, &o->mut, NULL, NULL)) != NULL) {
+        if ((p = tagpu_modcat_clash(&e->mut, &o->mut)) != NULL) {
             snprintf(why, cap, "%s is also %s's. Only one of them can be on.", p, o->about.name);
             return FIT_CLASH;
         }
@@ -499,6 +501,25 @@ static void build_options(int mod)
     }
 }
 
+/* The entry's showcase, its catalog entry's `show`, which the pane draws in place of the title, the meta and the summary */
+static void build_show(int m)
+{
+    char err[120], version[sizeof s_page.show.version];
+    const TJV* e;
+    TJDOC* d;
+    int i;
+    s_page.show.id[0] = 0;
+    if (m < 0 || !s_catalog || !(d = tagpu_json_parse(s_catalog, s_ncatalog, err, sizeof err))) return;
+    for (i = 0; (e = tj_at(tj_get(tagpu_json_root(d), "mods"), i)); i++) {
+        if (strcmp(tj_str(tj_get(e, "id"), ""), s_mod[m].id)) continue;
+        snprintf(version, sizeof version, "Version %s", s_mod[m].about.version);
+        if (tj_get(e, "show") && !tagpu_modslay_show(tj_get(e, "show"), s_mod[m].id, s_mod[m].about.name, version, &s_page.show))
+            tagpu_logf("modsui: %s's showcase does not fit the page", s_mod[m].id);
+        break;
+    }
+    tagpu_json_free(d);
+}
+
 static void build_pane(void)
 {
     const int m = s_sel[s_tab];
@@ -510,6 +531,7 @@ static void build_pane(void)
     if (!s_paneStale) return;
     s_paneStale = 0;
     s_page.title[0] = s_page.meta[0] = s_page.summary[0] = s_page.note[0] = 0;
+    s_page.show.id[0] = 0;
     s_page.nopt = 0;
     if (s_page.selected < 0) {
         /* Confirm stands on every tab, so its refusal can have no row to stand under */
@@ -520,11 +542,12 @@ static void build_pane(void)
         lstrcpynA(s_page.title, "This folder", sizeof s_page.title);
         lstrcpynA(s_page.meta, s_folder, sizeof s_page.meta);
         lstrcpynA(s_page.summary, "The game as this folder holds it, with whatever you have installed in it.", sizeof s_page.summary);
-    } else {
+    } else if (m >= 0 && m < s_nmod) {
         const ENTRY* e = &s_mod[m];
         lstrcpynA(s_page.title, e->about.name, sizeof s_page.title);
         snprintf(s_page.meta, sizeof s_page.meta, "%s, version %s", e->about.author, e->about.version);
         lstrcpynA(s_page.summary, e->about.summary, sizeof s_page.summary);
+        build_show(m);
         if (e->failed[0]) lstrcpynA(s_page.note, e->failed, sizeof s_page.note);
         else if (e->ready) lstrcpynA(s_page.note, "Installed. It takes effect when the game next starts.", sizeof s_page.note);
     }
@@ -704,6 +727,9 @@ static void dump(void)
     jstr(f, mod_name(s_running));
     fputs(",\"confirm\":", f);
     jstr(f, s_page.confirm);
+    fputs(",\"show\":", f);
+    jstr(f, s_page.show.id);
+    fprintf(f, ",\"show_blocks\":%d", s_page.show.nblock);
     fputs(",\"mutators\":", f);
     jstr(f, tagpu_modload_mutators());
     fprintf(f, ",\"update_all\":%d,\"scan_done\":%ld,\"scroll\":[%.2f,%.2f],\"scroll_max\":[%.2f,%.2f],\"rows\":[",
@@ -963,6 +989,42 @@ static void select_mod(int mod)
 }
 
 /* Acts on a control the release landed on. */
+/* A showcase's link, in the player's browser: on a thread of its own, as ShellExecute may wait on the shell, and through
+   shell32 loaded then, which the DLL does not import. Only an https address opens, and only the catalog's (build_show). */
+static DWORD WINAPI open_thread(void* arg)
+{
+    char* url = (char*)arg;
+    HMODULE sh = LoadLibraryA("shell32.dll");
+    typedef HINSTANCE (WINAPI *SHELLEXEC)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
+    SHELLEXEC run = sh ? (SHELLEXEC)(void*)GetProcAddress(sh, "ShellExecuteA") : NULL;
+    const HRESULT co = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (!run || (INT_PTR)run(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL) <= 32) tagpu_logf("modsui: %s could not be opened", url);
+    if (SUCCEEDED(co)) CoUninitialize();
+    if (sh) FreeLibrary(sh);
+    free(url);
+    return 0;
+}
+
+/* link:0 the showcase's website, link:<n> its n-th link block. A test launch logs it instead: the desktop is the player's. */
+static void open_link(int n)
+{
+    const MODSSHOW* s = &s_page.show;
+    const char* url = NULL;
+    char* copy;
+    HANDLE t;
+    int i, k = 0;
+    if (!s->id[0]) return;
+    if (n == 0) url = s->site;
+    for (i = 0; !url && i < s->nblock; i++)
+        if (s->block[i].kind == MODS_BLOCK_LINK && ++k == n) url = s->text + s->block[i].link;
+    if (!url || strncmp(url, "https://", 8)) return;
+    if (tagpu_regstore_active()) { tagpu_logf("modsui: a test launch opens no browser: %s", url); return; }
+    tagpu_logf("modsui: opening %s", url);
+    if (!(copy = _strdup(url))) return;
+    if ((t = CreateThread(NULL, 0, open_thread, copy, 0, NULL))) CloseHandle(t);
+    else free(copy);
+}
+
 static void act(const char* key)
 {
     int i = -1;
@@ -989,6 +1051,9 @@ static void act(const char* key)
                 load_mutators();
             } else s_chosen = m;
         }
+    } else if (!strncmp(key, "link:", 5)) {
+        open_link(atoi(key + 5));
+        return;
     } else if (!strcmp(key, "updateall")) {
         int m;
         for (m = 0; m < s_nmod; m++) if (has_update(&s_mod[m])) queue_install(m);

@@ -199,12 +199,10 @@ class Rules(unittest.TestCase):
 
 
 class Mutators(unittest.TestCase):
-    """tagpu_modcat.c's verdicts, native: a stale base by the file, the switches, and two mutators of one file."""
+    """tagpu_modcat.c's verdicts, native: a stale base by the file, and two mutators of one file."""
     MAIN = rb"""#include <stdio.h>
 #include <string.h>
 #include "tagpu_modcat.h"
-static const char* OFF;
-static int off(void* c, const char* p) { (void)c; return OFF && tagpu_modcat_same_path(OFF, p); }
 /* the base: objects3d\a.3do hashes to 11.., objects3d\gone.3do has gone */
 static int base(void* c, const char* p, uint8_t o[32]) { (void)c;
     if (tagpu_modcat_same_path(p, "objects3d/gone.3do")) return 0;
@@ -212,11 +210,10 @@ static int base(void* c, const char* p, uint8_t o[32]) { (void)c;
 int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb"); size_t n = fread(b, 1, sizeof b, f);
     MODMUTATOR x, y; char s[2][MODCAT_PATH]; int t; const char* live;
     if (!tagpu_modcat_mutator(b, n, v[2], &x)) { puts("unreadable"); return 0; }
-    OFF = c > 4 ? v[4] : NULL;
     t = tagpu_modcat_stale(&x, base, NULL, s, 2);
-    live = tagpu_modcat_stale_live(s, t, 2, off, NULL);
+    live = t > 0 ? s[0] : NULL;
     printf("files %d hides %d stale %d live %s", x.nfiles, x.nhides, t, live ? live : "-");
-    if (c > 3 && v[3][0] && tagpu_modcat_mutator(b, n, v[3], &y)) { live = tagpu_modcat_clash(&x, &y, off, NULL); printf(" clash %s", live ? live : "-"); tagpu_modcat_mutator_free(&y); }
+    if (c > 3 && v[3][0] && tagpu_modcat_mutator(b, n, v[3], &y)) { live = tagpu_modcat_clash(&x, &y); printf(" clash %s", live ? live : "-"); tagpu_modcat_mutator_free(&y); }
     puts(""); tagpu_modcat_mutator_free(&x); return 0; }
 """
     H11, H99 = "11" * 32, "99" * 32
@@ -261,15 +258,10 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
     def test_a_new_file_needs_no_check(self):
         self.assertEqual(self.run_on({"x": (["objects3d/new.3do"], {}, [])}, "x"), "files 1 hides 0 stale 0 live -")
 
-    def test_a_file_switched_off_is_out_of_the_verdict(self):
-        got = self.run_on({"x": (["objects3d/a.3do"], {"objects3d/a.3do": self.H99}, [])}, "x", "", "OBJECTS3D\\A.3DO")
-        self.assertEqual(got, "files 1 hides 0 stale 1 live -")
-
-    def test_past_the_list_is_never_clean(self):
+    def test_past_the_list_the_count_stands(self):
         files = [f"objects3d/f{i}.3do" for i in range(3)]
-        got = self.run_on({"x": (files, {f: self.H99 for f in files}, [])}, "x", "", "objects3d/f0.3do")
-        self.assertEqual(got, "files 3 hides 0 stale 3 live objects3d\\f1.3do")
-        self.assertIn("stale 3 live objects3d", self.run_on({"x": (files, {f: self.H99 for f in files}, [])}, "x"))
+        got = self.run_on({"x": (files, {f: self.H99 for f in files}, [])}, "x")
+        self.assertEqual(got, "files 3 hides 0 stale 3 live objects3d\\f0.3do")
 
     def test_two_of_one_file_clash_and_the_file_is_named(self):
         e = {"x": (["objects3d/a.3do"], {}, []), "y": (["OBJECTS3D/A.3do", "b"], {}, [])}
@@ -283,10 +275,6 @@ int main(int c, char** v) { static char b[1 << 20]; FILE* f = fopen(v[1], "rb");
     def test_different_files_do_not_clash_nor_two_hides(self):
         e = {"x": (["a"], {}, ["z"]), "y": (["b"], {}, ["z"])}
         self.assertTrue(self.run_on(e, "x", "y").endswith("clash -"))
-
-    def test_a_file_switched_off_no_longer_clashes(self):
-        e = {"x": (["objects3d/a.3do"], {}, []), "y": (["objects3d/a.3do"], {}, [])}
-        self.assertTrue(self.run_on(e, "x", "y", "objects3d/a.3do").endswith("clash -"))
 
     def test_the_schema_refuses(self):
         for what, entry in {

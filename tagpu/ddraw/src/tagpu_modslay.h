@@ -15,16 +15,22 @@
      row:<i>               row i of the list: selects it
      act:<i>               row i's action button (Install, Update, or its radio on Manage)
      close back confirm updateall
+     link:<n>              a showcase's link: 0 its website, n its n-th link block (MODSSHOW), which opens the player's browser
      scroll:list scroll:detail   a scrollbar's track, as the wiki's */
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_hudlay.h"
+#include "tagpu_json.h"
 #include "tagpu_uikit.h"
 
 #define MODS_MAXHOT   128
 #define MODS_KEY      16u
 #define MODS_MAXROW   16        /* "This folder", the catalog's mods; a mutator lists here too */
 #define MODS_MAXOPT   8
+
+#define MODS_MAXBLOCK 64        /* a showcase's blocks, a list's items each one: tools/modpack/modpack.py SHOW_BLOCKS */
+#define MODS_SHOWTEXT 6144      /* a showcase's strings, each with its NUL: modpack.py SHOW_TEXT */
+#define MODS_MAXCOLS  4         /* a list's columns: modpack.py SHOW_COLS */
 
 enum { MODS_TAB_MANAGE, MODS_TAB_EXPLORE, MODS_TAB_UPDATES, MODS_NTAB };
 enum { MODS_SCROLL_LIST, MODS_SCROLL_DETAIL, MODS_NSCROLL };
@@ -49,6 +55,31 @@ typedef struct {
     uint8_t locked;             /* greyed, a lock disc */
 } MODSOPT;
 
+/* A showcase's block: a paragraph, a section's opening line (one blank line above it), a list's item, or a paragraph ending
+   in a link. A list is a run of items, the first marked. */
+enum { MODS_BLOCK_PARA, MODS_BLOCK_SECTION, MODS_BLOCK_ITEM, MODS_BLOCK_LINK };
+typedef struct {
+    uint8_t  kind;              /* MODS_BLOCK_* */
+    uint8_t  cols;              /* an item: its list's columns, 1..MODS_MAXCOLS, filled down each */
+    uint8_t  first;             /* an item: the first of its list */
+    uint16_t text;              /* its text's offset in MODSSHOW.text */
+    uint16_t link;              /* a link: its address's offset there, an https address */
+} MODSBLOCK;
+
+/* A mod's showcase, from its catalog entry's `show` (tagpu_modslay_show), which the pane draws in place of the title, the
+   meta and the summary. Its pictures are the kit's whole parts logo_<id>, banner_<id> and backdrop_<id>, each drawn when the
+   kit has it (tools/mods/genparts.py); a mod with no logo shows its name. */
+typedef struct {
+    char      id[32];           /* "" no showcase */
+    char      name[48];
+    char      version[32];      /* "Version 4.8" */
+    char      by[96];           /* "By ..." */
+    char      site[160];        /* an https address: link:0 */
+    int       nblock;
+    MODSBLOCK block[MODS_MAXBLOCK];
+    char      text[MODS_SHOWTEXT];
+} MODSSHOW;
+
 /* The page as the player has it. Values only, read on a copy: every count is bounded in the build. */
 typedef struct {
     float      W, H;            /* the screen, pixels */
@@ -62,6 +93,7 @@ typedef struct {
     char       meta[120];       /* author and version */
     char       summary[400];
     char       note[200];       /* under the summary: a refusal, an install's failure, what Confirm will do */
+    MODSSHOW   show;            /* show.id "": the title, the meta and the summary are the pane's head */
     int        nopt;
     MODSOPT    opt[MODS_MAXOPT];
     float      scroll[MODS_NSCROLL];
@@ -94,6 +126,10 @@ void     tagpu_modslay_light(MODSLAY* l, int part, int light);
 /* The ops for `st` into `out` (never on a stack) and what the frame answers. 0 with the reason in `err` for a missing argument or
    no memory; `out->overflow` is set when an op, a text or a hit did not fit and was dropped. */
 int      tagpu_modslay_build(const MODSLAY* l, const UIFACES* f, const MODSPAGE* st, HUDOPS* out, MODSFRAME* fr, char* err, size_t errn);
+
+/* A catalog entry's `show` (tools/modpack/modpack.py check_show) into `out`, for the mod `id` named `name` at `version`. 0, and
+   out->id "", when there is none or it does not fit MODSSHOW: a showcase is drawn whole or not at all. */
+int      tagpu_modslay_show(const TJV* show, const char* id, const char* name, const char* version, MODSSHOW* out);
 
 /* At the load: 1 when the fullest page there can be builds whole, with nothing dropped and every row's controls within the row, on
    1024 x 768, 1280 x 720 and 3840 x 2160, at every scroll. `scratch` is a HUDOPS the caller owns. 0 with the reason in `err`. */

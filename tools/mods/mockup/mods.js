@@ -179,7 +179,7 @@ function optRow(o) {
   return o.locked ? `<div class="lockrow">${row}<i class="lock"></i></div>` : row;
 }
 /* THE SHOWCASE (tagpu_modslay.c show_rows), the kit's pictures sized by their own shape:
-   the logo as large as fits `show.logo.w` percent of the pane (`hero_w` over a backdrop) and `show.logo.h` units high, centred,
+   the logo as large as fits layout.json `show_logo.w` percent of the pane (`hero_w` over a backdrop) and `show_logo.h` units high, centred,
    or left-aligned over a backdrop; under it the version and authors and the website, whose click opens the player's browser;
    a backdrop filling the head behind those, as CSS background-size cover anchored at its right (fitBackdrops); the rule; a
    banner the pane's width; then the text's blocks. A mod without a logo shows its name as the pane's title. */
@@ -190,8 +190,8 @@ function showcase(m) {
   let links = 0;
   const link = (url, text) => `<a class="lnk" href="${url}" target="_blank" rel="noopener" data-key="link:${links++}">${esc(text)}</a>`;
   const head = (has(logo)
-      ? `<div class="logo"><i data-part="${logo}" style="aspect-ratio: ${aspect(logo)}; width: min(${hero ? 'var(--w-show-logo-hero_w)' : 'var(--w-show-logo-w)'} * 1%, `
-        + `var(--w-show-logo-h) * var(--u) * ${aspect(logo)})"></i></div>`
+      ? `<div class="logo"><i data-part="${logo}" style="aspect-ratio: ${aspect(logo)}; width: min(${hero ? 'var(--w-show_logo-hero_w)' : 'var(--w-show_logo-w)'} * 1%, `
+        + `var(--w-show_logo-h) * var(--u) * ${aspect(logo)})"></i></div>`
       : `<h2 class="pt">${esc(m.name)}</h2>`)
     + `<div class="pa m${c}">${esc(m.version)} · ${esc(m.by)}</div>`
     + `<div class="pa m${c}">${link(m.site, new URL(m.site).host)}</div>`;
@@ -207,7 +207,8 @@ function showcase(m) {
 /* a backdrop covers its head, its right edge on the head's and its middle on the head's middle */
 function fitBackdrops() {
   for (const e of document.querySelectorAll('#detail .bd')) {
-    const h = e.parentElement, w = h.clientWidth, hh = h.clientHeight, a = +e.dataset.aspect, s = Math.max(w / a, hh);
+    /* the head's exact box, not clientWidth's whole pixels: the game sizes the picture from the same lengths */
+    const r = e.parentElement.getBoundingClientRect(), w = r.width, hh = r.height, a = +e.dataset.aspect, s = Math.max(w / a, hh);
     Object.assign(e.style, { width: `${s * a}px`, height: `${s}px`, left: `${w - s * a}px`, top: `${(hh - s) / 2}px` });
   }
 }
