@@ -3168,8 +3168,9 @@ def vkfill_exe() -> Path:
 
 
 def store_misses(log: str, goal: dict) -> list:
-    """Test mode's attach line against the row: every DLL the row names answers to the store, and nothing of
-    the folder started before Impure, whose entry point would have met the real registry."""
+    """Test mode's attach line against the row: every DLL the row names answers to the store (by its imports,
+    and by the registry functions `store_lookups` names look up through GetProcAddress), and nothing of the
+    folder started before Impure, whose entry point would have met the real registry."""
     m = re.search(r"registry: TEST MODE.*hooks: (.*); started before us: (.*)", log or "")
     if not m:
         return ["no test mode line in the log"]
@@ -3181,6 +3182,9 @@ def store_misses(log: str, goal: dict) -> list:
         started.pop()
     misses += [f"{d} loaded during play and did not answer to the store" for d in goal.get("store_loaded", [])
                if not re.search(rf"registry: test mode, {re.escape(d)}\S* loaded: (\d+) of \1 ", log, re.I)]
+    misses += [f"code {d} looked up no registry function the store answered" for d in goal.get("store_lookups", [])
+               if not re.search(rf"registry: test mode, [^\n]*{re.escape(d)}[^\n]* looked up \w+: answered by the store",
+                                log, re.I)]
     if started:
         misses.append(f"started before Impure, so it met the real registry: {', '.join(started)}")
     return misses

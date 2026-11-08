@@ -84,6 +84,7 @@ static int              s_saveLogged;
 
 static volatile LONG s_nOpen, s_nCreated, s_nRead, s_nMiss, s_nWrite, s_nSaved, s_nSaveFail;
 static volatile LONG s_nRealOpen, s_nRealRead, s_nRealClose, s_nRefused;
+static volatile LONG s_nLookups;  /* registry functions the folder's code looked up, answered by a hook */
 
 /* ------------------------------------------------------------------ keys and values */
 
@@ -325,10 +326,11 @@ static void rs_counters(char* out, size_t cap)
     _snprintf(out, cap, "the store served %ld opens (%ld keys created), %ld reads (%ld absent) and "
               "%ld writes, and the file was written %ld times (%ld failed); the real registry was "
               "asked for %ld read-only opens, %ld reads and %ld closes, and for no write (no hook "
-              "calls a registry function that writes); %ld writes were refused",
+              "calls a registry function that writes); %ld writes were refused; %ld registry functions "
+              "looked up by name were answered",
               (long)s_nOpen, (long)s_nCreated, (long)s_nRead, (long)s_nMiss, (long)s_nWrite,
               (long)s_nSaved, (long)s_nSaveFail, (long)s_nRealOpen, (long)s_nRealRead,
-              (long)s_nRealClose, (long)s_nRefused);
+              (long)s_nRealClose, (long)s_nRefused, (long)s_nLookups);
     out[cap - 1] = 0;
 }
 
@@ -879,6 +881,61 @@ static LONG WINAPI rs_RegSetValueExA(HKEY h, LPCSTR name, DWORD reserved, DWORD 
     return r;
 }
 
+/* The index-th subkey's name. A store key's are the store's own keys one level below it, in
+   the order they were added; a prefix key's (HKCU, HKCU\Software) and any other key's are the
+   real key's, read-only, as their values are. */
+static LONG WINAPI rs_RegEnumKeyA(HKEY h, DWORD index, LPSTR name, DWORD cch)
+{
+    char path[RS_PATH_MAX], hivename[8];
+    const char* rest;
+    size_t n;
+    DWORD seen = 0;
+    HKEY k;
+    LONG r;
+    int i;
+
+    EnterCriticalSection(&s_lock);
+    i = rs_index(h);
+    if (i < 0) {
+        LeaveCriticalSection(&s_lock);
+        InterlockedIncrement(&s_nRealRead);
+        return RegEnumKeyA(h, index, name, cch);
+    }
+    strcpy(path, s_keys[i].path);
+    if (s_keys[i].stored) {
+        n = strlen(path);
+        InterlockedIncrement(&s_nRead);
+        for (i = 0; i < s_nkeys; i++) {
+            const char* c = s_keys[i].path;
+            size_t len;
+            if (_strnicmp(c, path, n) || c[n] != '\\' || strchr(c + n + 1, '\\')) continue;
+            if (seen++ != index) continue;
+            len = strlen(c + n + 1);
+            if (!name || cch <= len) r = ERROR_MORE_DATA;
+            else { memcpy(name, c + n + 1, len + 1); r = ERROR_SUCCESS; }
+            LeaveCriticalSection(&s_lock);
+            return r;
+        }
+        LeaveCriticalSection(&s_lock);
+        return ERROR_NO_MORE_ITEMS;
+    }
+    rs_seen("enumerate", path, "", "through a prefix key, passed to the real registry");
+    LeaveCriticalSection(&s_lock);
+    rest = strchr(path, '\\');
+    n = rest ? (size_t)(rest - path) : strlen(path);
+    if (n >= sizeof hivename) return ERROR_FILE_NOT_FOUND;
+    memcpy(hivename, path, n);
+    hivename[n] = 0;
+    InterlockedIncrement(&s_nRealOpen);
+    r = RegOpenKeyExA(rs_hive(hivename), rest ? rest + 1 : NULL, 0, KEY_ENUMERATE_SUB_KEYS, &k);
+    if (r != ERROR_SUCCESS) return r;
+    InterlockedIncrement(&s_nRealRead);
+    r = RegEnumKeyA(k, index, name, cch);
+    InterlockedIncrement(&s_nRealClose);
+    RegCloseKey(k);
+    return r;
+}
+
 static LONG WINAPI rs_RegFlushKey(HKEY h)
 {
     EnterCriticalSection(&s_lock);
@@ -901,6 +958,8 @@ static LONG WINAPI rs_RegCloseKey(HKEY h)
 
 /* ------------------------------------------------------------------ attach and exit */
 
+static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* what);
+
 static const struct { const char* name; PROC fn; } s_hooks[] = {
     { "RegOpenKeyExA",    (PROC)rs_RegOpenKeyExA },
     { "RegOpenKeyA",      (PROC)rs_RegOpenKeyA },
@@ -908,43 +967,84 @@ static const struct { const char* name; PROC fn; } s_hooks[] = {
     { "RegCreateKeyExA",  (PROC)rs_RegCreateKeyExA },
     { "RegQueryValueExA", (PROC)rs_RegQueryValueExA },
     { "RegQueryValueA",   (PROC)rs_RegQueryValueA },
+    { "RegEnumKeyA",      (PROC)rs_RegEnumKeyA },
     { "RegSetValueExA",   (PROC)rs_RegSetValueExA },
     { "RegFlushKey",      (PROC)rs_RegFlushKey },
     { "RegCloseKey",      (PROC)rs_RegCloseKey },
 };
 #define RS_NHOOKS ((int)(sizeof s_hooks / sizeof s_hooks[0]))
 
+static FARPROC WINAPI rs_GetProcAddress(HMODULE m, LPCSTR name);
+
+/* 1 for a slot the store wrote: a registry hook or its GetProcAddress answer. */
 static int rs_is_hook(ULONG_PTR fn)
 {
     int j;
     for (j = 0; j < RS_NHOOKS; j++)
         if ((ULONG_PTR)s_hooks[j].fn == fn) return 1;
-    return 0;
+    return fn == (ULONG_PTR)rs_GetProcAddress;
 }
 
-/* A module's ADVAPI32 imports whose names begin with "Reg", and how many of their import
-   table slots now hold one of our hooks -- read from the module's own import directory. */
-/* 1 when `fn` is what ADVAPI32 hands out for one of its Reg* exports. */
-static int rs_is_real_registry(ULONG_PTR fn)
+/* EVERY REGISTRY FUNCTION ADVAPI32 HANDS OUT, by the address GetProcAddress gives for it, and the
+   hook that answers it (-1 for one the store does not answer). Built in the attach, before any
+   hook is installed, and never changed: any thread may read it. A registry function is an
+   export named Reg* but not Register* (RegisterEventSourceA and its kind are not the registry). */
+enum { RS_MAX_REGS = 256 };
+static struct { ULONG_PTR fn; const char* name; int hook; } s_regs[RS_MAX_REGS];
+static int s_nregs;
+
+static int rs_is_registry_name(const char* nm)
+{
+    return !strncmp(nm, "Reg", 3) && strncmp(nm, "Register", 8);
+}
+
+static void rs_registry_table(const char* by)
 {
     const BYTE* base = (const BYTE*)GetModuleHandleA("ADVAPI32.dll");
     const IMAGE_NT_HEADERS* nt;
     const IMAGE_EXPORT_DIRECTORY* ex;
     const DWORD* names;
     DWORD i, rva;
-    if (!base) return 0;
+    if (!base) rs_refuse_run(by, "ADVAPI32.dll is not loaded, so its registry functions cannot be known");
     nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
     rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
-    if (!rva) return 0;
+    if (!rva) rs_refuse_run(by, "ADVAPI32.dll has no export table");
     ex = (const IMAGE_EXPORT_DIRECTORY*)(base + rva);
     names = (const DWORD*)(base + ex->AddressOfNames);
     for (i = 0; i < ex->NumberOfNames; i++) {
         const char* nm = (const char*)(base + names[i]);
-        if (!strncmp(nm, "Reg", 3) && (ULONG_PTR)GetProcAddress((HMODULE)base, nm) == fn) return 1;
+        ULONG_PTR fn;
+        int j;
+        if (!rs_is_registry_name(nm)) continue;
+        fn = (ULONG_PTR)GetProcAddress((HMODULE)base, nm);
+        if (!fn) continue;
+        if (s_nregs == RS_MAX_REGS) rs_refuse_run(by, "ADVAPI32.dll exports more registry functions than the store's table holds");
+        s_regs[s_nregs].fn = fn;
+        s_regs[s_nregs].name = nm;
+        s_regs[s_nregs].hook = -1;
+        for (j = 0; j < RS_NHOOKS; j++)
+            if (!strcmp(nm, s_hooks[j].name)) s_regs[s_nregs].hook = j;
+        s_nregs++;
     }
-    return 0;
 }
 
+/* The table's entry for an address, or -1. */
+static int rs_registry_entry(ULONG_PTR fn)
+{
+    int i;
+    for (i = 0; i < s_nregs; i++)
+        if (s_regs[i].fn == fn) return i;
+    return -1;
+}
+
+/* 1 when `fn` is what ADVAPI32 hands out for one of its registry functions. */
+static int rs_is_real_registry(ULONG_PTR fn)
+{
+    return rs_registry_entry(fn) >= 0;
+}
+
+/* A module's ADVAPI32 registry imports, and how many of their import table slots now hold one of
+   our hooks -- read from the module's own import directory. */
 static void rs_count(HMODULE m, int* regs, int* ours)
 {
     BYTE* base = (BYTE*)m;
@@ -975,21 +1075,44 @@ static void rs_count(HMODULE m, int* regs, int* ours)
                 continue;
             }
             nm = (const char*)((IMAGE_IMPORT_BY_NAME*)(base + o->u1.AddressOfData))->Name;
-            if (strncmp(nm, "Reg", 3)) continue;
+            if (!rs_is_registry_name(nm)) continue;
             (*regs)++;
             if (rs_is_hook((ULONG_PTR)t->u1.Function)) (*ours)++;
         }
     }
 }
 
+/* The registry imports, and GetProcAddress: a registry function looked up by name or ordinal is
+   answered as one imported (tagpu_regstore_proc). A packed DLL's stub imports one function of
+   each DLL and looks up the rest (basscd.dll, Petite: `RegCloseKey` and GetProcAddress). */
 static void rs_hook(HMODULE m)
 {
     int j;
     for (j = 0; j < RS_NHOOKS; j++)
         hook_patch_iat(m, FALSE, "ADVAPI32.dll", (char*)s_hooks[j].name, s_hooks[j].fn);
+    hook_patch_iat(m, FALSE, "kernel32.dll", "GetProcAddress", (PROC)rs_GetProcAddress);
 }
 
-static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* what);
+/* The import slots of `m`, under whatever DLL name, that still hold the real GetProcAddress,
+   kernel32's or KernelBase's: each is a way to a registry function the store does not see. */
+static int rs_lookups_unanswered(HMODULE m)
+{
+    BYTE* base = (BYTE*)m;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    HMODULE k32 = GetModuleHandleA("kernel32.dll"), kb = GetModuleHandleA("KernelBase.dll");
+    ULONG_PTR real1 = k32 ? (ULONG_PTR)GetProcAddress(k32, "GetProcAddress") : 0;
+    ULONG_PTR real2 = kb ? (ULONG_PTR)GetProcAddress(kb, "GetProcAddress") : 0;
+    IMAGE_IMPORT_DESCRIPTOR* d;
+    int left = 0;
+    if (!rva) return 0;
+    for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
+        const IMAGE_THUNK_DATA* t = (const IMAGE_THUNK_DATA*)(base + d->FirstThunk);
+        for (; t->u1.Function; t++)
+            if ((real1 && t->u1.Function == real1) || (real2 && t->u1.Function == real2)) left++;
+    }
+    return left;
+}
 
 int tagpu_regstore_is_hook(unsigned long fn) { return rs_is_hook((ULONG_PTR)fn); }
 
@@ -1028,9 +1151,9 @@ static int rs_in_game_folder(HMODULE m)
 
 static char s_refuseBy[400];    /* who entered test mode: every refusal's line starts with it */
 
-/* 0 while a module's ADVAPI32 slots still hold what its file holds, an RVA to a name or an ordinal: the
+/* 0 while a module's import slots still hold what its file holds, an RVA to a name or an ordinal: the
    loader has not bound them, and what hooks them now it would overwrite. A bound slot is an address in
-   ADVAPI32, far above any module's SizeOfImage. */
+   another module, far above any module's SizeOfImage. */
 static int rs_imports_bound(HMODULE m)
 {
     BYTE* base = (BYTE*)m;
@@ -1040,7 +1163,6 @@ static int rs_imports_bound(HMODULE m)
     if (!rva) return 1;
     for (d = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); d->FirstThunk; d++) {
         const IMAGE_THUNK_DATA* t = (const IMAGE_THUNK_DATA*)(base + d->FirstThunk);
-        if (!d->Name || _stricmp((char*)(base + d->Name), "ADVAPI32.dll")) continue;
         for (; t->u1.Function; t++)
             if (t->u1.Function < nt->OptionalHeader.SizeOfImage || (t->u1.Ordinal & IMAGE_ORDINAL_FLAG))
                 return 0;
@@ -1067,6 +1189,12 @@ static int rs_answer_module(HMODULE m, int* answered, const char* name)
         what[sizeof what - 1] = 0;
         rs_refuse_run(s_refuseBy, what);
     }
+    if (rs_lookups_unanswered(m)) {
+        char what[300];
+        _snprintf(what, sizeof what, "%s's GetProcAddress import is not answered by the store", name);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(s_refuseBy, what);
+    }
     *answered = ours;
     return regs;
 }
@@ -1081,6 +1209,47 @@ static void rs_module_name(HMODULE m, char* out, size_t cap)
     leaf = wcsrchr(path, L'\\');
     _snprintf(out, cap, "%ls", leaf ? leaf + 1 : path);
     out[cap - 1] = 0;
+}
+
+/* WHAT A LOOKUP OF A REGISTRY FUNCTION RETURNS, by who looked it up. `caller` is the return address
+   of the GetProcAddress call. Code of the game's folder -- or code in no module at all, which a
+   packer's stub may unpack itself into -- gets the hook, as its imports do, and a registry function
+   the store does not answer ends the run, as such an import does. Code of a module outside the
+   folder (the real DirectPlay, winmm) gets ADVAPI32's own, as its imports do. Decided by the
+   address it returns, not the name asked for, so an ordinal or another DLL's name for the same
+   function is answered the same. */
+void* tagpu_regstore_proc(void* proc, const void* caller)
+{
+    HMODULE from = NULL, self = NULL;
+    int i;
+    if (!s_active || !proc || (i = rs_registry_entry((ULONG_PTR)proc)) < 0) return proc;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)(void*)rs_in_game_folder, &self);
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)caller, &from) &&
+        (from == self || (from != GetModuleHandleW(NULL) && !rs_in_game_folder(from))))
+        return proc;
+    {
+        char name[120], what[300];
+        if (from) rs_module_name(from, name, sizeof name);
+        else _snprintf(name, sizeof name, "code at %p in no module", caller);
+        name[sizeof name - 1] = 0;
+        if (s_regs[i].hook < 0) {
+            _snprintf(what, sizeof what, "%s looked up %s, a registry function the store does not answer",
+                      name, s_regs[i].name);
+            what[sizeof what - 1] = 0;
+            rs_refuse_run(s_refuseBy, what);
+        }
+        if (InterlockedIncrement(&s_nLookups) <= 32)
+            tagpu_logf("registry: test mode, %s looked up %s: answered by the store", name, s_regs[i].name);
+    }
+    return (void*)s_hooks[s_regs[i].hook].fn;
+}
+
+static FARPROC WINAPI rs_GetProcAddress(HMODULE m, LPCSTR name)
+{
+    return (FARPROC)tagpu_regstore_proc((void*)GetProcAddress(m, name), __builtin_return_address(0));
 }
 
 typedef struct RS_DLL_NOTICE {
@@ -1342,6 +1511,7 @@ void tagpu_regstore_init(void)
         rs_refuse_run(by, "tacli-state\\registry.txt did not load whole (the line above says why)");
     s_dirty = 0;
 
+    rs_registry_table(by);
     rs_hook(GetModuleHandleW(NULL));
     rs_count(GetModuleHandleW(NULL), &regs, &ours);
     if (!regs || ours != regs) {
@@ -1351,6 +1521,11 @@ void tagpu_regstore_init(void)
         else
             _snprintf(what, sizeof what, "%d of %s's %d registry imports are not answered by "
                       "the store", regs - ours, s_exe, regs);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
+    }
+    if (rs_lookups_unanswered(GetModuleHandleW(NULL))) {
+        _snprintf(what, sizeof what, "%s's GetProcAddress import is not answered by the store", s_exe);
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }

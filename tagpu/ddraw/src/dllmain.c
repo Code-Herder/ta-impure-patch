@@ -502,7 +502,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         timeEndPeriod(1);
         keyboard_hook_exit();
         dinput_hook_exit();
-        hook_exit();
+        /* tagpu: in a test launch the module is pinned (tagpu_regstore.c), so no slot can outlive
+           it, and putting the real GetProcAddress back would hand a folder DLL's last lookups
+           ADVAPI32's own registry functions */
+        if (!tagpu_regstore_active())
+            hook_exit();
 
         SetThreadExecutionState(ES_CONTINUOUS);
 
