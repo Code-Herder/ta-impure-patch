@@ -99,8 +99,8 @@ const SHOW = {
       { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
-    /* The text opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims and the credits sum up the
-       site's mission and credits pages in our own words and link to them for the full text */
+    /* The text opens with the owner's text of 2026-11-08 and the contributors the owner listed; the aims sum up the site's mission
+       page in our own words; links lead to it and to the credits page */
     name: 'ProTA', logo: 'prota.png', backdrop: 'prota.png', version: 'Version 4.8', by: 'By TAG_Venom and the ProTA team', site: 'https://prota.tauniverse.com/',
     about: [
       'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
@@ -120,27 +120,6 @@ const SHOW = {
       { section: 'Main Contributors:' },
       { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
         'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 },
-      { section: 'Credits:' },
-      { list: ['gamma: scripting, balance discussions, and Total Mayhem\'s scripts, fixes and models, used with permission',
-        'Switeck: many fixes taken from TA Bugfix',
-        'ArmouredFish: scripting help and fixes such as sea wrecks that no longer block',
-        'Vohvelieläin: model and script editing',
-        'Axle1975: recorder fixes, taforever.com, and engine fixes and features',
-        'FunkyFr3sh: CnC-DDraw adapted for TA on modern systems, and engine fixes',
-        'poosticks: a TA guide used to check unit statistics',
-        'Idec Sdawkminn: the TAU guides to unit FBI files and to weapons',
-        'zwzsg: the TAU posts behind the non-blocking sea wrecks',
-        'SnakeInTheMirror: the colour enhancement pack\'s orange and teal team colours, and a better yellow',
-        'PlasmoidThunder: sound category bugs and other findings',
-        'TAAN: Evolva models, some used as they are and some reworked',
-        'ACE_Beeky: a TAU guide to every unit in TA',
-        'Wotan: showed the sceptics what modding could do',
-        'Dragun101: promotion, and ProTA in SCTA showmatch streams',
-        'Postal: the Total Annihilation Replays YouTube channel, Core Commander knowledge and balance discussions',
-        'timmyfred: testing fixes, playtesting and balance discussions',
-        'TAG_ROCK: showcasing the gameplay, long playtesting, and funding new 3D models',
-        'Tristan: the new units\' 3D models, in Cavedog\'s style'] },
-      'And everyone else: the players, casters, map makers, feedback givers and content creators.',
       { link: ['The full credits: ', 'https://prota.tauniverse.com/credits.html'] }],
   },
 };
