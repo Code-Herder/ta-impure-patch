@@ -104,3 +104,5 @@ header output { color: var(--fg); }
 .banner img { display: block; width: 100%; height: auto; }
 /* a block that opens a section of the description: one blank line above it */
 .sec { margin-top: 1lh; }
+/* a showcase's page tabs: the window's tabs, in a row of their own above the page */
+.ptabs { display: flex; gap: calc(var(--w-tabs-gap) * var(--u)); margin: 0 0 calc(10 * var(--u)); }
