@@ -36,6 +36,7 @@ typedef struct {
     char name[48], author[48], version[32], summary[400];
     int  is_mutator;
     int  memory;                /* MODCAT_MEMORY_* */
+    int  hosted;                /* the entry names its download place: its base_url */
     char base[32];              /* a mutator's base mod, "none" for the folder's own game */
 } MODABOUT;
 
@@ -57,7 +58,7 @@ typedef struct {
 typedef struct {
     char*   id;
     char*   version;
-    char*   base_url;           /* the catalog's own, "" until there is a place to name */
+    char*   base_url;           /* the entry's own: where its relative package URLs resolve, "" when it names none */
     MODPKG* packages;
     int     npackages;
     int     is_mutator;         /* its package is one archive: no recipe runs */

@@ -386,7 +386,8 @@
           "allowed": true,
           "default": true
         }
-      }
+      },
+      "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download"
     },
     {
       "id": "tazero",

@@ -6,11 +6,6 @@ network game with a drop-in player whose handshake agrees on every unit's script
 [the mod manager plan](../mod-manager-plan.html); the sites are in [the hook map](hook-map.html). The player reaches all of it from the
 main menu's MODS button: *The screen*, below.
 
-**The button is not offered yet.** The catalog names no place to download from, and installing has not been
-run on Windows. `mods_button_shown` (`tagpu_replays.c`) appends the MODS record only when `tagpu_mods.on` sits
-beside the game, read once and kept, and the plate is the art's top and foot joined at `PLATE_ONE_H` around REPLAYS
-alone. `tools/mods/modsscreen.py` writes the lever. A `mod=` in `impure.cfg` still runs that mod.
-
 *A module note: it states the module as it is now.*
 
 ## The files
@@ -183,7 +178,10 @@ engine memory and no render state, so it is in no list of `thread-split.allow`. 
 
 1. **The download** goes to `mods\<id>.part` through WinHTTP, loaded when a download runs so that nothing about a normal
    start changes. Bytes past the catalog's size are never written. The address is the package's `url`, resolved against the
-   catalog's `base_url`, which the catalog does not have until there is a place to name; until then a download reports that.
+   entry's own `base_url` (`tagpu_modbase.on` beside the game stands in for it, for the harness). Only ProTA's entry names one:
+   `https://github.com/Code-Herder/ta-impure-mods/releases/download`, one GitHub release per mod tagged with its id, the package
+   its asset. GitHub answers with a redirect to its asset host, which WinHTTP follows. An entry with no `base_url` is not
+   offered (*The tabs*), and a download of one reports that the catalog names no place for it.
 2. **The check**: the file's size and SHA-256 against the catalog, by `modsha`, before anything reads it as a package.
 3. **The unpack** into `mods\<id>.new\`, zstd with its window bounded to 128 MiB and then `tagpu_modtar.c`, whose list of
    acceptable files is the catalog's. A member must have a safe path, be declared, come once and be a regular file of the
@@ -214,7 +212,7 @@ while it exists.
 
 ## The screen
 
-With `tagpu_mods.on`, the MODS button lies under REPLAYS on each menu, a second record appended where REPLAYS' is (`tagpu_replays.c` `mainmenu_visit`), with quick key `O`
+The MODS button lies under REPLAYS on each menu, a second record appended where REPLAYS' is (`tagpu_replays.c` `mainmenu_visit`), with quick key `O`
 and the plate grown to hold both: `art/ui/*/plate.png` is 115 x 58. Twilight has no plate. No mod's menu needed another move for it:
 MEASURED on each v1 mod's main menu and on retail, all but Twilight at (272,416), Twilight at (317,416).
 
@@ -233,7 +231,9 @@ release is taken: the one of the key that opened the screen is the engine's. Of 
 `mouse_note_client`, since no move reaches cnc-ddraw's store under the capture and the drawn cursor follows that point.
 
 **The tabs.** Manage is `This folder` first, then what is installed, each with a radio. Explore is the catalog less that, each with Install. Updates is what is
-installed at another version than the catalog's, each with Update, and Update all queues them. The worker is `tagpu_modinst`, one install at a time; a finished one is
+installed at another version than the catalog's, each with Update, and Update all queues them. Explore and Updates offer only an
+entry that names its `base_url`, or every entry while `tagpu_modbase.on` names a server (read at each open); a mod installed
+without one shows on Manage alone. The worker is `tagpu_modinst`, one install at a time; a finished one is
 `ready` for this session and waits in `mods\\<id>.new` for the next start. A failure's reason stands in the pane.
 
 **The pane.** Play options come from `tagpu_modcat_rules`, or the running policy for this folder, and the player's values from `profiles\\<id>.ini`: a changed one shows the marker and

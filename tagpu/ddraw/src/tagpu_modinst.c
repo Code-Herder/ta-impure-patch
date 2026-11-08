@@ -748,7 +748,7 @@ static int install(JOB* j)
         const MODPKG* p = &j->m.packages[i];
         int fits;
         if (strstr(p->url, "://")) fits = path_of(url, sizeof url, "%s", p->url);
-        else if (!base[0]) return fail("the catalog does not yet name where to download from");
+        else if (!base[0]) return fail("the catalog names no place to download it from");
         else fits = path_of(url, sizeof url, "%s%s%s", base, base[strlen(base) - 1] == '/' ? "" : "/", p->url);
         if (!fits) return fail("the package's address is too long");
 

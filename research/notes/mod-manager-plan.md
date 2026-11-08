@@ -152,8 +152,9 @@ Each decision is listed with what it was chosen over.
 - **`hide` is measured, not declared.** It is every original archive the drop-in folder lost: replaced
   by a file of the same name, or no longer named by a mount pattern because the exe table renames the
   first one (`rev31.gp3` in all five, plus the seven more Twilight replaces with empty files or its own).
-- **The catalog's URLs are relative** (`<id>/<id>-<version>.tar.zst`), and resolve against a top-level `base_url`, absent until
-  there is a CDN to name; a download then reports that the catalog names no place to fetch from.
+- **The catalog's URLs are relative** (`<id>/<id>-<version>.tar.zst`), and resolve against the entry's own `base_url`: GitHub
+  releases of `Code-Herder/ta-impure-mods`, one per mod tagged with its id. An entry with none is not offered. ProTA is the
+  only one with a `base_url` so far.
 
 ### Download and install
 
@@ -325,8 +326,7 @@ Landings 2 and 3 are independent of each other.
 **Needs the owner:**
 - Where each author's permission is recorded. The `permission` field says today only that the owner
   reports having it, dated.
-- Which CDN, and what URL scheme, will the packages live at? Needed before landing 5 points at real
-  packages.
+- When each of the other four mods is uploaded and given its `base_url`: ProTA alone is hosted today.
 - The art of the screen's thirteen new parts. `tools/mods/genparts.py` derives plain ones from the kit, and a painted part of the same name replaces one with no code change.
 
 **Needs research or a measurement:**

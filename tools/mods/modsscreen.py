@@ -61,7 +61,6 @@ class Game:
         tacli("create", NAME, "--display", display, "--res", "1280x720", "--private-registry")
         self.display = display
         self.dir = Path(json.loads((INSTANCES / NAME / "instance.json").read_text())["gamedir"])
-        (self.dir / "tagpu_mods.on").write_text("")   # the menu's button is off without it
 
     def launch(self):
         # --defaults: the store is read and written, as a player's is
@@ -186,6 +185,17 @@ def flow(display):
     g.click("tab:1")
     s = g.settled(lambda s: s["tab"] == 1)
     names = [r["name"] for r in s["rows"]]
+    hosted = {e["name"] for e in json.loads((ROOT / "mods/catalog.json").read_text())["mods"] if e.get("base_url")}
+    report(s["tab"] == 1 and set(names) == hosted - {"ProTA"}, f"Explore offers only what the catalog names a download place for: {names}")
+    # From here on the local server stands in for every entry's download place; the screen reads that at its open.
+    (g.dir / "tagpu_modbase.on").write_text(f"http://127.0.0.1:{srv.server_address[1]}")
+    g.click("close")
+    g.settled(lambda s: not s["open"])
+    tacli("ui", NAME, "click", "MODS")
+    g.settled(lambda s: s["open"] and s["drawn"])
+    g.click("tab:1")
+    s = g.settled(lambda s: s["tab"] == 1)
+    names = [r["name"] for r in s["rows"]]
     report(s["tab"] == 1 and "ProTA" not in names and "Escalation" in names and "Total Mayhem" in names, f"Explore lists what is not installed: {names}")
     g.click(f"row:{row_of(s, 'Escalation')}")
     s = g.settled(lambda s: s["opts"])
@@ -193,11 +203,6 @@ def flow(display):
     k = [h["key"] for h in s["hits"]]
     report(not any(x.startswith("opt:") for x in k), "a locked option takes no click")
     g.shot("explore-locked")
-
-    g.click(f"act:{row_of(s, 'Total Mayhem')}")
-    s = g.settled(lambda s: s["note"], 15)
-    report("where to download" in s["note"], f"a catalog that names no place says so: {s['note']!r}")
-    (g.dir / "tagpu_modbase.on").write_text(f"http://127.0.0.1:{srv.server_address[1]}")
 
     g.click("tab:2")
     s = g.settled(lambda s: s["tab"] == 2)

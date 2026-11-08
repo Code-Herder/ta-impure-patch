@@ -43,7 +43,7 @@ void tagpu_modinst_sweep_at_start(void);        /* with the DLL's own catalog */
 int  tagpu_modinst_locked(void);
 
 /* Starts installing mod `id` from `catalog`. `base` is where a relative package URL resolves when it
-   is not NULL, and otherwise the catalog's base_url. 1 when the thread is running; 0 with the reason in
+   is not NULL, and otherwise the entry's base_url. 1 when the thread is running; 0 with the reason in
    `why` when one is already running or the entry cannot be acted on. Call from one thread at a time. */
 int  tagpu_modinst_start(const char* catalog, size_t n, const char* id, const char* base, char* why, size_t nwhy);
 

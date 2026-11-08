@@ -115,6 +115,7 @@ int tagpu_modcat_about(const char* catalog, size_t n, const char* id, MODABOUT* 
         snprintf(out->summary, sizeof out->summary, "%s", tj_str(tj_get(m, "summary"), ""));
         out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
         snprintf(out->base, sizeof out->base, "%s", tj_str(tj_get(m, "base"), ""));
+        out->hosted = tj_str(tj_get(m, "base_url"), "")[0] != 0;
         out->memory = !strcmp(tj_str(tj_get(m, "memory"), ""), "4gb") ? MODCAT_MEMORY_4GB :
                       !strcmp(tj_str(tj_get(m, "memory"), ""), "bit-off") ? MODCAT_MEMORY_BIT_OFF : MODCAT_MEMORY_LEAVE;
         hit = 1;
@@ -204,7 +205,7 @@ int tagpu_modcat_install(const char* catalog, size_t n, const char* id, MODINSTA
     out->id = copy_text(id);
     out->version = copy_text(tj_str(tj_get(m, "version"), ""));
     out->is_mutator = !strcmp(tj_str(tj_get(m, "kind"), ""), "mutator");
-    out->base_url = copy_text(tj_str(tj_get(tagpu_json_root(d), "base_url"), ""));
+    out->base_url = copy_text(tj_str(tj_get(m, "base_url"), ""));
     /* each count set only with its array: the free walks them */
     out->packages = (MODPKG*)calloc((size_t)count_of(pk) + 1, sizeof(MODPKG));
     if (!out->id || !out->version || !out->base_url || !out->packages) { bad(err, errn, id, "out of memory"); goto done; }

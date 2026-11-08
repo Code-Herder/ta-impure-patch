@@ -65,6 +65,9 @@ class Schema(unittest.TestCase):
             "outside 0..its max": lambda j: j["mods"][0]["options"]["resource_snapping"].update(default=4),
             "outside 0..8": lambda j: j["mods"][0]["options"]["resource_snapping"].update(max=9),
             "whether it is allowed": lambda j: j["mods"][0]["options"]["quick_build"].pop("allowed"),
+            "not an https address": lambda j: j["mods"][0].update(base_url="http://example.invalid/x"),
+            "not an https address ": lambda j: j["mods"][0].update(base_url="https://example.invalid/x?y"),
+            "an entry's, not the catalog's": lambda j: j.update(base_url="https://example.invalid/x"),
         }
         for want, edit in cases.items():
             errs = self.broken(edit)

@@ -62,6 +62,7 @@ static MODSPAGE s_page;
 static TAGPU_CMD_WIKI s_hit;
 static ENTRY    s_mod[MAX_MOD];
 static int      s_nmod;
+static int      s_baseLever;    /* tagpu_modbase.on names a server, read at each open: every entry is offered */
 static const char* s_catalog;
 static size_t   s_ncatalog;
 static char     s_folder[64];
@@ -293,9 +294,17 @@ static int is_mutator(int m)
     return m >= 0 && m < s_nmod && s_mod[m].about.is_mutator;
 }
 
+/* A mod the catalog names no download place for is not offered: Explore and Updates leave it out, and an installed copy of
+   it shows on Manage alone. */
+static int offered(const ENTRY* e)
+{
+    return e->about.hosted || s_baseLever;
+}
+
 static int has_update(const ENTRY* e)
 {
-    return e->installed[0] && strcmp(e->installed, e->about.version) && !e->ready && (!e->about.is_mutator || e->has_mut);
+    return e->installed[0] && strcmp(e->installed, e->about.version) && !e->ready && (!e->about.is_mutator || e->has_mut) &&
+           offered(e);
 }
 
 static int is_active_install(int m)
@@ -406,7 +415,7 @@ static void build_rows(void)
             row_progress(r, m);
             if (r && s_chosen == m) mutator_rows_of(m);
             continue;
-        } else if (s_tab == MODS_TAB_EXPLORE && !have) {
+        } else if (s_tab == MODS_TAB_EXPLORE && !have && offered(e)) {
             text(detail, sizeof detail, "Version %s", e->about.version, "");
             if ((r = add_row(m, e->about.name, detail)) != NULL) r->act = MODS_ACT_INSTALL;
         } else if (s_tab == MODS_TAB_UPDATES && has_update(e)) {
@@ -424,7 +433,7 @@ static void build_rows(void)
         const int have = e->installed[0] || e->ready;
         MODSROW* r = NULL;
         if (!e->has_mut) continue;
-        if (s_tab == MODS_TAB_EXPLORE && !have && e->base == s_chosen) {
+        if (s_tab == MODS_TAB_EXPLORE && !have && offered(e) && e->base == s_chosen) {
             text(detail, sizeof detail, "For %s", mod_name(e->base), "");
             if ((r = add_row(m, e->about.name, detail)) != NULL) r->act = MODS_ACT_INSTALL;
         } else if (s_tab == MODS_TAB_UPDATES && has_update(e)) {
@@ -440,7 +449,7 @@ static void build_rows(void)
         row_progress(r, m);
     }
     if (!s_page.nrow) {
-        if (s_tab == MODS_TAB_EXPLORE) lstrcpynA(s_page.empty, "Every mod Impure knows is installed.", sizeof s_page.empty);
+        if (s_tab == MODS_TAB_EXPLORE) lstrcpynA(s_page.empty, "Every mod Impure offers is installed.", sizeof s_page.empty);
         if (s_tab == MODS_TAB_UPDATES) lstrcpynA(s_page.empty, "Every installed mod is up to date.", sizeof s_page.empty);
     }
 }
@@ -657,9 +666,13 @@ static int index_of(const char* id)
     return NONE;
 }
 
+static const char* base_lever(char* out, DWORD cap);
+
 static void load_mods(void)
 {
+    char base[512];
     int i;
+    s_baseLever = base_lever(base, sizeof base) != NULL;
     if (!s_catalog) {
         s_catalog = tagpu_modinst_catalog(&s_ncatalog);
         if (s_catalog) tagpu_modcat_each_id(s_catalog, s_ncatalog, add_id, NULL);
@@ -681,7 +694,7 @@ static void load_mods(void)
 
 /* ---- installing --------------------------------------------------------------------------------- */
 
-/* A local server's address, for the harness: in the game's folder until the catalog names a place of its own. */
+/* A local server's address, for the harness: in the game's folder, it stands in for every entry's base_url. */
 static const char* base_lever(char* out, DWORD cap)
 {
     HANDLE f = CreateFileA(BASE_LEVER, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);

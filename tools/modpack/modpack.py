@@ -1519,7 +1519,7 @@ def cmd_catalog(_):
                   "exe": s["id"], "hide": plan.hide})
         if same_as:
             e["same_as"] = same_as
-        for k in ("memory", "options"):
+        for k in ("memory", "options", "base_url"):
             if k in s:
                 e[k] = s[k]
         entries.append(e)
@@ -1682,6 +1682,8 @@ def check_catalog(j) -> list:
     errs = []
     if j.get("version") != VERSION:
         errs.append(f"version is {j.get('version')!r}")
+    if "base_url" in j:
+        errs.append("base_url is an entry's, not the catalog's")
     seen, mods = set(), j.get("mods")
     if not isinstance(mods, list):
         return errs + ["no mods list"]
@@ -1693,6 +1695,8 @@ def check_catalog(j) -> list:
                 errs.append(f"{n}: {k} is missing")
         if not ID_RE.match(str(e.get("id", ""))):
             errs.append(f"{n}: id is not a lower-case name")
+        if "base_url" in e and not re.fullmatch(r"https://[^\s?#]{1,400}", str(e["base_url"])):
+            errs.append(f"{n}: base_url is not an https address")
         if e.get("id") == "none":
             errs.append(f"{n}: id none is the base of a mutator for no mod")
         if n in seen:

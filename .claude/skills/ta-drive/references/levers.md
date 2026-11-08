@@ -465,10 +465,9 @@ that map's size.
 ### The Mods screen
 
 - `tagpu_modsui.dump`: touching it writes `tagpu_modsui.json`, the screen's state with the hit map of the frame last drawn in client pixels (`open`, `holds`, `drawn`, `tab`, `rows`, `opts`, `sw`, `mutators`, `hits`, `note`, `running`, `chosen`).
-- `tagpu_modbase.on`: its contents are the download server's address, until the catalog names one.
+- `tagpu_modbase.on`: its contents are a download server's address, standing in for every catalog entry's `base_url`; read at each open of the Mods screen, it also has Explore and Updates offer every entry.
 - `tagpu_modcatalog.on`: its contents replace the catalog packed in the DLL, read once at attach; the patch pack stays the DLL's. For test mutators.
 - `tagpu_hudrefuse.on`: the replay HUD's and wiki's pass refuses at its build, as it does with no address space left.
-- `tagpu_mods.on`: the main menu offers the MODS button, read once at the menu's first use. Without it the menu has REPLAYS alone.
 - `tagpu_passrefuse.on`: the UI pass is refused its resources as a full GPU refuses it, once (the file is consumed) or on every frame when the file says `keep`; written into a live game's folder, it takes effect within half a second. Once, the lane comes down and back; `keep`, the session goes to GDI.
 - `tagpu_vkfull.on`: the driver's own no, `VK_ERROR_OUT_OF_DEVICE_MEMORY` from `vkAllocateMemory`. A number K (or nothing, 0): K allocations pass, one is refused, the file is consumed. `keep`: every one. `wiki`: only while the wiki's stage is being prepared. An allocation is what it needs to meet, so a rebuild is the usual way in: write it beside `tagpu_passrefuse.on`.
 - `tools/mods/modmp.py [--only dropin|gameplay|cosmetic|stock|older|olderhost] [--old-dll PATH] [--film FILE]`: the multiplayer fingerprint, in two-player games on Wine. `tagpu_modprint_stock.on` in a game folder sends stock's 21 bytes of player data, with no key and no print.
