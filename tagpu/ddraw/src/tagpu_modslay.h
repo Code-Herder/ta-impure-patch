@@ -14,8 +14,6 @@
      tab:0 tab:1 tab:2     Manage, Explore, Updates
      row:<i>               row i of the list: selects it
      act:<i>               row i's action button (Install, Update, or its radio on Manage)
-     opt:<i>:-  opt:<i>:+  option i's stepper; opt:<i>:t its switch
-     reset:<i>             option i's reset, shown while it is not at its default and not locked
      sw:<i>                archive switch i; swreset:<i> its reset
      close back confirm updateall
      scroll:list scroll:detail   a scrollbar's track, as the wiki's */
@@ -37,9 +35,6 @@ enum { MODS_SCROLL_LIST, MODS_SCROLL_DETAIL, MODS_NSCROLL };
 enum { MODS_BADGE_NONE, MODS_BADGE_ACTIVE, MODS_BADGE_UPDATE, MODS_BADGE_GREY, MODS_BADGE_CONFLICT };
 /* A row's control at its right. */
 enum { MODS_ACT_NONE, MODS_ACT_RADIO, MODS_ACT_RADIO_ON, MODS_ACT_INSTALL, MODS_ACT_UPDATE, MODS_ACT_BUSY, MODS_ACT_CHECK, MODS_ACT_CHECK_ON };
-/* An option's control. */
-enum { MODS_OPT_SWITCH, MODS_OPT_STEPPER };
-
 typedef struct {
     char    name[48];           /* UTF-8, as every text here; a NUL inside its array bounds it */
     char    detail[48];         /* under the name: a version, a state */
@@ -51,12 +46,9 @@ typedef struct {
 
 typedef struct {
     char    label[48];
-    char    value[16];          /* a stepper's number, or "On" and "Off" */
+    char    value[16];          /* the value in force, a number or "On" and "Off": shown, never set here */
     char    reason[120];        /* a locked option's: why it is off */
-    uint8_t kind;               /* MODS_OPT_* */
-    uint8_t on;                 /* a switch: on */
-    uint8_t changed;            /* the player's value differs from the mod's: the marker and the reset show */
-    uint8_t locked;             /* greyed, a lock disc, no reset, no hit */
+    uint8_t locked;             /* greyed, a lock disc */
 } MODSOPT;
 
 typedef struct {

@@ -236,8 +236,8 @@ entry that names its `base_url`, or every entry while `tagpu_modbase.on` names a
 without one shows on Manage alone. The worker is `tagpu_modinst`, one install at a time; a finished one is
 `ready` for this session and waits in `mods\\<id>.new` for the next start. A failure's reason stands in the pane.
 
-**The pane.** Play options come from `tagpu_modcat_rules`, or the running policy for this folder, and the player's values from `profiles\\<id>.ini`: a changed one shows the marker and
-a reset, which takes its key out; a forbidden one is grey with the mod's reason and has no hit. For a mod running now a choice takes effect at once. The archive switches are `hide.<archive>=on|off`
+**The pane.** Play options are the mod's to decide, so the pane shows them and sets none: each row is its label and the value in force, from `tagpu_modcat_rules`, or the running
+policy for this folder, over a value `profiles\\<id>.ini` holds (the in-game Impure options still write one), with no control, marker or reset and no hit. A forbidden one is grey with the mod's reason. The archive switches are `hide.<archive>=on|off`
 in the same file, read at the mount over the mod's `hide` list. They list the folder's `*.ccx`, `*.ufo` and `*.hpi` that hash as originals, since nothing else mounts under a mod, hashed once on their own thread;
 `totala1.hpi`, which every mod needs, is locked, and the mount ignores a key for it. A `.gp3` is not listed: a mod renames that pattern, so no switch could mount it. A switch takes effect at the next start.
 
@@ -257,8 +257,8 @@ after a crash, so it may still make one.
 runs it after fitting. A painted part of the same name replaces one with no code change.
 
 
-`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 54 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
-longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, stepper, reset, switch, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
+`tools/mods/modslaycheck.py` pairs the layout with `tools/mods/mockup/`, every part, control, text line and baseline at five screens and 51 cases; `--check-only` is the check the DLL runs at the load: the fullest page, each array at its
+longest, builds whole. `tools/mods/modsscreen.py` plays the screen in the game on a private display, and `tools/mods/modmp.py` plays the fingerprint's two-player cases. With no GPU to use, `--software` runs it on llvmpipe with the restorer off and only that driver loaded, since the screen's pass takes about 70 MB there and the loader's other drivers about 240 MB. `flow` clicks the tabs, sees the play options shown with no hit, clicks a switch and its reset, Install against a catalog that names no place and then a local server, Update and Confirm, and sees the game
 restart on the chosen mod with the switch at its mount and the update swapped in, and back. `real` does part of it by hardware events in a window larger than the shell, which is the only way the drawn cursor and the messages are run. `boxes` is both refusals,
 `menus` photographs each mod's menu and the screen over it, for the eye, and `mutators` builds three test mutators on ProTA, installs them from Explore, finds the stale and the conflicting one named, and compares a skirmish's picture against the base's with one on and with its file switched off.
 `hosted`, run only when asked for since it downloads from the internet, installs each entry with a `base_url` from that real

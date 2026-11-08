@@ -23,9 +23,9 @@ static const char* const PART[P_N] = { "window", "close", "close_down", "i_close
 
 /* layout.json `roles`, the text of each element */
 enum { R_WINDOW_TITLE, R_TAB, R_NAME, R_DETAIL, R_ACT, R_BADGE, R_EMPTY, R_PANE_TITLE, R_META, R_SUMMARY, R_NOTE, R_HEADER,
-       R_OPTION, R_REASON, R_VALUE, R_STEP, R_RESET, R_ARCHIVE, R_FOOTER, R_N };
+       R_OPTION, R_REASON, R_VALUE, R_RESET, R_ARCHIVE, R_FOOTER, R_N };
 static const char* const ROLE[R_N] = { "window_title", "tab", "name", "detail", "act", "badge", "empty", "pane_title", "meta",
-    "summary", "note", "header", "option", "reason", "value", "step", "reset", "archive", "footer" };
+    "summary", "note", "header", "option", "reason", "value", "reset", "archive", "footer" };
 
 /* The mockup's strings (mods.js) and the colours its CSS gives outright (mods.css). modslaycheck.py
    compares every text, dot and solid, so one that drifts from the mockup's is named there. */
@@ -48,7 +48,7 @@ typedef struct {
     double wt[4], wx[4], wb[4], gap;       /* wt l r t h, wx r t w h, wb t r b l */
     UIPANELG pnl;
     double title_pad;
-    UIBUTTONG tab, foot, act, step, rst;
+    UIBUTTONG tab, foot, act, rst;
     double tab_gap, foot_gap, small_gap;
     double col;                     /* the list's share of the body, percent */
     double list_h;
@@ -100,7 +100,6 @@ static void page_bound(MODSPAGE* s)
     for (i = 0; i < s->nopt; i++) {
         MODSOPT* o = &s->opt[i];
         TERM(o->label); TERM(o->value); TERM(o->reason);
-        if (o->kind > MODS_OPT_STEPPER) o->kind = MODS_OPT_SWITCH;
     }
     for (i = 0; i < s->nsw; i++) TERM(s->sw[i].name);
     TERM(s->sw_head); TERM(s->empty); TERM(s->title); TERM(s->meta); TERM(s->summary); TERM(s->note); TERM(s->held); TERM(s->confirm);
@@ -284,14 +283,12 @@ static double list_rows(UI* u, const UIPANEL* p, double w, int emit, void* user)
 
 /* ---- the pane's rows (.opt): the text, the marker and reset while changed, and the control ------- */
 
-/* A row's control (.ctl), a flex row of the stepper's minus, value and plus, or of the value and the
-   switch's box; an archive has no value. A key "" makes it no control: a locked row's. */
+/* A row's right end (.ctl): an option's value, which the player reads and does not set (the mod decides it), or an
+   archive's switch box. A key "" makes the box no control: a locked row's. */
 typedef struct {
-    int         stepper, on;
+    int         box, on;
     const char* value;
-    const char* key;        /* the switch's, over the value and the box together, the player's target */
-    const char* minus;
-    const char* plus;
+    const char* key;        /* the switch's, over its box, the player's target */
 } CTL;
 
 static double value_w(C* c, const CTL* k) { return fmax(U(c, c->l->g.value), text_w(c, R_VALUE, k->value)); }
@@ -299,14 +296,9 @@ static double value_w(C* c, const CTL* k) { return fmax(U(c, c->l->g.value), tex
 static void ctl_size(C* c, const CTL* k, double* w, double* h)
 {
     const MG* g = &c->l->g;
-    const double gap = U(c, g->small_gap), v = value_w(c, k), L = k->value[0] ? ts(c, R_VALUE).L : 0;
-    if (k->stepper) {
-        *w = ui_button_w(&c->u, &g->step, "-") + gap + v + gap + ui_button_w(&c->u, &g->step, "+");
-        *h = fmax(U(c, g->step.h), L);
-    } else {
-        *w = (k->value[0] ? v + gap : 0) + U(c, g->check);
-        *h = fmax(U(c, g->check), L);
-    }
+    const double gap = U(c, g->small_gap), L = k->value[0] ? ts(c, R_VALUE).L : 0;
+    *w = (k->value[0] ? value_w(c, k) : 0) + (k->box ? (k->value[0] ? gap : 0) + U(c, g->check) : 0);
+    *h = fmax(k->box ? U(c, g->check) : 0, L);
 }
 
 /* .v: its text centred in the value's box */
@@ -319,19 +311,11 @@ static void value_at(C* c, const CTL* k, double x, double top, double ch, int in
 /* A held switch shows on, the kit having no pressed face for it. */
 static void ctl_draw(C* c, const CTL* k, double x, double top, double cw, double ch, int ink, const UIR* clip)
 {
-    const MG* g = &c->l->g;
-    const double gap = U(c, g->small_gap), v = value_w(c, k);
-    if (k->stepper) {
-        const double by = top + ui_half(ch - U(c, g->step.h));
-        const double mw = button(c, &g->step, x, by, k->minus[0] ? k->minus : NULL, "-", clip);
-        value_at(c, k, x + mw + gap, top, ch, ink, clip);
-        button(c, &g->step, x + mw + gap + v + gap, by, k->plus[0] ? k->plus : NULL, "+", clip);
-    } else {
-        const double d = U(c, g->check);
-        if (k->key[0]) ui_hot(&c->u, ui_rect(x, top, cw, ch), clip, k->key);
-        value_at(c, k, x, top, ch, ink, clip);
-        art(c, part(c, k->on || held(c, k->key) ? P_CHECK_ON : P_CHECK_OFF), ui_rect(x + cw - d, top + ui_half(ch - d), d, d), clip);
-    }
+    const double d = U(c, c->l->g.check);
+    value_at(c, k, x, top, ch, ink, clip);
+    if (!k->box) return;
+    if (k->key[0]) ui_hot(&c->u, ui_rect(x, top, cw, ch), clip, k->key);
+    art(c, part(c, k->on || held(c, k->key) ? P_CHECK_ON : P_CHECK_OFF), ui_rect(x + cw - d, top + ui_half(ch - d), d, d), clip);
 }
 
 /* One row of the pane, from `y0` in the list: an option's or an archive's. While `locked` it has a lock
@@ -378,19 +362,11 @@ static double pane_row(C* c, const UIPANEL* p, int role, const char* label, cons
 static double opt_row(C* c, const UIPANEL* p, int i, double y, double w, int emit)
 {
     const MODSOPT* o = &c->st.opt[i];
-    char t[MODS_KEY] = "", m[MODS_KEY] = "", pl[MODS_KEY] = "", r[MODS_KEY];
     CTL k;
-    if (!o->locked) {
-        snprintf(t, sizeof t, "opt:%d:t", i);
-        snprintf(m, sizeof m, "opt:%d:-", i);
-        snprintf(pl, sizeof pl, "opt:%d:+", i);
-    }
-    snprintf(r, sizeof r, "reset:%d", i);
-    k.stepper = o->kind == MODS_OPT_STEPPER;
-    k.on = o->on;
+    k.box = k.on = 0;
     k.value = o->value;
-    k.key = t; k.minus = m; k.plus = pl;
-    return pane_row(c, p, R_OPTION, o->label, o->locked ? o->reason : "", o->locked, o->changed, r, &k, y, w, emit);
+    k.key = "";
+    return pane_row(c, p, R_OPTION, o->label, o->locked ? o->reason : "", o->locked, 0, "", &k, y, w, emit);
 }
 
 static double sw_row(C* c, const UIPANEL* p, int i, double y, double w, int emit)
@@ -400,10 +376,10 @@ static double sw_row(C* c, const UIPANEL* p, int i, double y, double w, int emit
     CTL k;
     if (!s->locked) snprintf(t, sizeof t, "sw:%d", i);
     snprintf(r, sizeof r, "swreset:%d", i);
-    k.stepper = 0;
+    k.box = 1;
     k.on = s->on;
     k.value = "";
-    k.key = t; k.minus = ""; k.plus = "";
+    k.key = t;
     return pane_row(c, p, R_ARCHIVE, s->name, "", s->locked, s->changed, r, &k, y, w, emit);
 }
 
@@ -514,9 +490,9 @@ static void window_(C* c)
 
 /* MODS_MAXHOT, the bound: H is 720 units, so the pane's scroller is under 600 units tall once the
    window's frame, the tabs and the footer are off it, and one of its rows is at least layout.json's
-   row.h + row.after, 17.5 today, which puts at most 35 rows on screen: 8 with a stepper and a reset, 3
-   hits each, and 27 with a switch and a reset, 2 each, 78 in all. The list holds MODS_MAXROW rows of 2
-   hits, 32; the tabs, the footer and the two scrollbars' tracks are 8. 118, under MODS_MAXHOT, so no
+   row.h + row.after, 17.5 today, which puts at most 35 rows on screen. An option has no hit, and an
+   archive a switch and a reset, 2: 70 at most. The list holds MODS_MAXROW rows of 2
+   hits, 32; the tabs, the footer and the two scrollbars' tracks are 8. 110, under MODS_MAXHOT, so no
    control on screen goes without its hit; tagpu_modslay_check builds that page at every scroll. */
 static int build(const MODSLAY* l, const UIFACES* f, const MODSPAGE* st, HUDOPS* out, MODSFRAME* fr, int* cut, char* err, size_t errn)
 {
@@ -562,7 +538,7 @@ static void worst(char* d, size_t n, int broken)
 #define WORST(a, b) worst((a), sizeof(a), (b))
 
 /* the fullest page there can be: every array full, every text at its array's length. `locked` greys
-   every option and archive: most groups, fewest hits; else every one is changed: most hits. */
+   every option and archive: most groups, fewest hits; else every archive is changed: most hits. */
 static void fullest(MODSPAGE* s, float W, float H, int broken, int locked)
 {
     int i;
@@ -587,8 +563,6 @@ static void fullest(MODSPAGE* s, float W, float H, int broken, int locked)
     for (i = 0; i < MODS_MAXOPT; i++) {
         MODSOPT* o = &s->opt[i];
         WORST(o->label, broken); WORST(o->value, broken); WORST(o->reason, broken);
-        o->kind = MODS_OPT_STEPPER;
-        o->changed = 1;
         o->locked = (uint8_t)locked;
     }
     for (i = 0; i < MODS_MAXSW; i++) {
@@ -652,7 +626,7 @@ static int read_layout(MODSLAY* l, const TJV* L, char* err, size_t errn)
     x.L = L; x.bad = 0; x.err = err; x.errn = errn; x.what = "mods layout";
     g->share = ui_num(&x, "window", "share", -1);
     g->line = ui_num(&x, "window", "line", -1);
-    g->tab.line = g->foot.line = g->act.line = g->step.line = g->rst.line = g->line;
+    g->tab.line = g->foot.line = g->act.line = g->rst.line = g->line;
     for (i = 0; i < 4; i++) {
         g->wt[i] = ui_num(&x, "wt", NULL, i);
         g->wx[i] = ui_num(&x, "wx", NULL, i);
@@ -682,9 +656,9 @@ static int read_layout(MODSLAY* l, const TJV* L, char* err, size_t errn)
     g->act.h = ui_num(&x, "act", "h", -1);
     g->act.pad = ui_num(&x, "act", "pad", -1);
     g->act.min = ui_num(&x, "act", "min", -1);
-    g->step.h = g->rst.h = ui_num(&x, "small", "h", -1);
-    g->step.pad = g->rst.pad = ui_num(&x, "small", "pad", -1);
-    g->step.min = g->rst.min = ui_num(&x, "small", "min", -1);
+    g->rst.h = ui_num(&x, "small", "h", -1);
+    g->rst.pad = ui_num(&x, "small", "pad", -1);
+    g->rst.min = ui_num(&x, "small", "min", -1);
     g->small_gap = ui_num(&x, "small", "gap", -1);
     g->value = ui_num(&x, "value", NULL, -1);
     g->badge_h = ui_num(&x, "badge", "h", -1);
@@ -730,7 +704,6 @@ MODSLAY* tagpu_modslay_load(const char* layout, size_t nlayout, const HUDLAY* ki
     l->g.tab.style = l->role[R_TAB];
     l->g.foot.style = l->role[R_FOOTER];
     l->g.act.style = l->role[R_ACT];
-    l->g.step.style = l->role[R_STEP];
     l->g.rst.style = l->role[R_RESET];
     ok = 1;
 done:

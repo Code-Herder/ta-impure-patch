@@ -32,9 +32,7 @@ void tagpu_profiles_restore_choice(int which, int value);
    The player's value of a choice, or -1; hide.<archive>'s, 1 hidden, 0 mounted, -1 no key, without case. */
 int tagpu_profiles_choice_of(const char* id, int which);
 int tagpu_profiles_hide_of(const char* id, const char* archive);
-/* Sets a key of that file, -1 removing it: 1, or 0 with the reason in the log. A choice of the mod running takes
-   effect at once. */
-int tagpu_profiles_set_choice_of(const char* id, int which, int value);
+/* Sets a key of that file, -1 removing it: 1, or 0 with the reason in the log. */
 int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value);
 /* A base mod's file holds its mutators' switches too ("none" the folder's own game): mutator.<id> and file.<path>, each
    1 on, 0 off, -1 no key, without case. A mutator is off and a file on with no key. */

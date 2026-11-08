@@ -614,18 +614,6 @@ static int write_key_of(const char* id, const char* key, int value)
     return ok;
 }
 
-int tagpu_profiles_set_choice_of(const char* id, int which, int value)
-{
-    char path[64];
-    if (which < 0 || which >= TAGPU_CHOICES) return 0;
-    path_of_id(id, path, sizeof path);
-    if (s_path[0] && !strcmp(path, s_path)) {
-        tagpu_profiles_restore_choice(which, value);
-        return 1;
-    }
-    return write_key_of(id, s_choiceKey[which], value);
-}
-
 int tagpu_profiles_set_hide_of(const char* id, const char* archive, int value)
 {
     char key[80];

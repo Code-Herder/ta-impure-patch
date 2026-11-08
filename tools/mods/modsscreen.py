@@ -3,8 +3,8 @@
 
     python3 tools/mods/modsscreen.py [--only flow|real|boxes|menus|mutators|hosted] [--display :N] [--software]
 
-`flow` opens the screen from the main menu button and clicks through it: the tabs, a stepper, a switch, the reset, a locked
-option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen
+`flow` opens the screen from the main menu button and clicks through it: the tabs, the play options shown and not set, a switch,
+its reset, a locked option, a downloaded Install and Update against a local server, the radio and Confirm, then sees the game restart on the chosen
 mod, with the switch in force at its mount, and back again. `real` does a little of that by hardware events on the private display,
 in a window larger than the shell, which is the path a player's mouse takes. `boxes` is the screen refused: GDI and an unknown exe. `menus` starts each v1 mod and photographs its main menu and the
 screen over it, for the eye: tmp/modsscreen/. `hosted`, run only when asked for since it downloads from the internet, installs each
@@ -214,17 +214,11 @@ def flow(display):
     s = g.settled(lambda s: s["tab"] == 0)
     g.click(f"row:{row_of(s, 'ProTA')}")
     s = g.settled(lambda s: s["scan_done"] and s["sw"])
-    report(len(s["opts"]) == 2 and not s["opts"][0]["locked"], "ProTA's options show")
+    report([(o["label"], o["value"], o["locked"]) for o in s["opts"]] == [("Resource snapping radius", "3", 0), ("Quick Build", "On", 0)],
+           f"ProTA's options show the mod's values: {[(o['label'], o['value']) for o in s['opts']]}")
+    report(not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]), "an option is shown, not set: it takes no click")
     report(any(w["locked"] and w["name"].lower() == "totala1.hpi" for w in s["sw"]), f"the archive every mod needs is locked: {[w['name'] for w in s['sw']]}")
     profile = g.dir / "profiles/prota.ini"
-    before = s["opts"][0]["value"]
-    g.click("opt:0:-")
-    s = g.settled(lambda s: s["opts"][0]["changed"])
-    report(s["opts"][0]["changed"] == 1 and s["opts"][0]["value"] != before, f"the stepper moves the radius {before} -> {s['opts'][0]['value']}, and the marker shows")
-    report("resource_radius=" in profile.read_text(), "the choice is in profiles\\prota.ini")
-    g.click("reset:0")
-    s = g.settled(lambda s: not s["opts"][0]["changed"])
-    report(s["opts"][0]["value"] == before and "resource_radius" not in profile.read_text(), "the reset takes the key out and the mod's default is back")
     want = next((i for i, w in enumerate(s["sw"]) if w["name"].lower() == "ccdata.ccx"), -1)
     if want < 0:
         want = next(i for i, w in enumerate(s["sw"]) if not w["locked"])
@@ -274,17 +268,11 @@ def flow(display):
     tacli("ui", NAME, "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "ProTA" and s["chosen"] == "ProTA", "the screen says so")
-    # the mod running now: its choice takes effect at once, through the profile module's own store
+    # the mod running now: its options read from the profile module's own store
     g.click(f"row:{row_of(s, 'ProTA')}")
-    # the scan's end changes the page's shape, and a click across a change of shape is dropped by design
     s = g.settled(lambda s: s["opts"] and s["scan_done"] and s["sw"])
-    was = s["opts"][0]["value"]
-    g.click("opt:0:+" if was == "0" else "opt:0:-")
-    s = g.settled(lambda s: s["opts"][0]["value"] != was, 5)
-    report(s["opts"][0]["value"] != was, f"the running mod's option changes at once: {was} to {s['opts'][0]['value']}")
-    g.click("reset:0")
-    s = g.settled(lambda s: not s["opts"][0]["changed"], 5)
-    report(not s["opts"][0]["changed"], "and its reset takes it back")
+    report([o["value"] for o in s["opts"]] == ["3", "On"] and not any(h["key"].startswith(("opt:", "reset:")) for h in s["hits"]),
+           f"the running mod's options show its values and take no click: {[o['value'] for o in s['opts']]}")
     g.click("close")
     s = g.settled(lambda s: not s["open"])
     report(not s["open"] and s["holds"] == 0, "the close button closes it and gives the input back")

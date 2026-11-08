@@ -10,14 +10,13 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 /* tagpu_modslay.h's enums */
 const BADGE = { NONE: 0, ACTIVE: 1, UPDATE: 2, GREY: 3, CONFLICT: 4 };
 const ACT = { NONE: 0, RADIO: 1, RADIO_ON: 2, INSTALL: 3, UPDATE: 4, BUSY: 5, CHECK: 6, CHECK_ON: 7 };
-const KIND = { SWITCH: 0, STEPPER: 1 };
 const BADGE_PART = ['', 'badge_active', 'badge_update', 'badge_grey', 'badge_conflict'];
 const TAB = ['Manage', 'Explore', 'Updates'];
 
 /* ---- the fixture ---- */
 const row = (name, detail, badge, badge_text, act, progress = -1) => ({ name, detail, badge, badge_text, act, progress });
-const stepper = (label, value, more = {}) => ({ label, value, reason: '', kind: KIND.STEPPER, on: 0, changed: 0, locked: 0, ...more });
-const toggle = (label, on, more = {}) => ({ label, value: on ? 'On' : 'Off', reason: '', kind: KIND.SWITCH, on: +on, changed: 0, locked: 0, ...more });
+/* a play option: the mod's value in force, shown and never set here */
+const opt = (label, value, more = {}) => ({ label, value, reason: '', locked: 0, ...more });
 const sw = (name, on, more = {}) => ({ name, on: +on, changed: 0, locked: 0, ...more });
 const page = more => ({ sw_head: 'Game archives', tab: 0, updates: 0, selected: -1, row: [], empty: '', title: '', meta: '', summary: '', note: '', opt: [], sw: [], held: '', confirm: '', update_all: 0, ...more });
 
@@ -34,9 +33,7 @@ const MANAGE = {
         row('Escalation', 'Not installed', BADGE.GREY, 'Absent', ACT.NONE)],
   title: 'Total Mayhem', meta: 'By its authors, version 8.1', summary: SHORT,
   note: 'Confirm restarts the game with this mod.',
-  opt: [stepper('Unit limit', '1500', { changed: 1 }), stepper('Weapons', '4096'), toggle('Extra sidebar', true, { changed: 1 }),
-        toggle('Wide unit menus', false, { locked: 1, reason: 'This mod draws its own menus, so the option has nothing to change.' }),
-        stepper('Commander lives', '1', { locked: 1, reason: 'Fixed by the mod.' })],
+  opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')],
   sw: [sw('totala1.hpi', 1, { locked: 1 }), sw('totala2.hpi', 1, { locked: 1 }), sw('btdata.ccx', 1), sw('ccdata.ccx', 0, { changed: 1 }), sw('ccmaps.ccx', 1)],
   confirm: 'Play Total Mayhem',
 };
@@ -76,7 +73,7 @@ const SCROLLS = {
   tab: 0, updates: 0, selected: 0,
   row: [row('Total Mayhem', 'Version 8.1', BADGE.ACTIVE, 'Active', ACT.RADIO_ON)],
   title: 'Total Mayhem', meta: 'By its authors', summary: LONG, note: 'Confirm restarts the game with this mod.',
-  opt: [stepper('Unit limit', '1500'), stepper('Weapons', '4096', { changed: 1 }), toggle('Extra sidebar', true), toggle('Wide unit menus', false)],
+  opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'Off', { locked: 1, reason: 'This mod does not allow it.' })],
   sw: Array.from({ length: 24 }, (_, i) => sw(`archive${i}.ufo`, i % 3 !== 0, { changed: +(i % 7 === 0) })),
   confirm: 'Play Total Mayhem',
 };
@@ -86,7 +83,7 @@ const fullest = (broken, locked) => ({
   tab: 2, updates: 999, selected: 0, update_all: 1,
   row: Array.from({ length: 16 }, (_, i) => row(W(47, broken), W(47, broken), 1 + i % 4, W(15, broken), 1 + i % 5, 500)),
   title: W(47, broken), meta: W(119, broken), summary: W(399, broken), note: W(199, broken), confirm: W(47, broken),
-  opt: Array.from({ length: 8 }, () => stepper(W(47, broken), W(15, broken), { reason: W(119, broken), changed: 1, locked: +locked })),
+  opt: Array.from({ length: 8 }, () => opt(W(47, broken), W(15, broken), { reason: W(119, broken), locked: +locked })),
   sw: Array.from({ length: 40 }, () => sw(W(31, broken), 0, { changed: 1, locked: +locked })),
 });
 const STATES = {
@@ -164,13 +161,7 @@ function paneRow(cls, label, reason, locked, changed, resetKey, ctl, p) {
   return locked ? `<div class="lockrow">${opt}<i class="lock"></i></div>` : opt;
 }
 const value = o => `<div class="v">${esc(o.value)}</div>`;
-function optRow(o, i, p) {
-  const live = !o.locked;
-  const ctl = o.kind === KIND.STEPPER
-    ? `<div class="ctl">${button('sb', live && `opt:${i}:-`, '-', p)}${value(o)}${button('sb', live && `opt:${i}:+`, '+', p)}</div>`
-    : `<div class="ctl${live ? ' sw' : ''}" ${live ? `data-key="opt:${i}:t"` : ''}>${o.value ? value(o) : ''}<i class="check" data-part="${o.on || `opt:${i}:t` === p.held ? 'check_on' : 'check_off'}"></i></div>`;
-  return paneRow('l', o.label, o.reason, o.locked, o.changed, `reset:${i}`, ctl, p);
-}
+const optRow = (o, i, p) => paneRow('l', o.label, o.reason, o.locked, 0, '', `<div class="ctl">${value(o)}</div>`, p);
 function swRow(s, i, p) {
   const live = !s.locked;
   const ctl = `<div class="ctl${live ? ' sw' : ''}" ${live ? `data-key="sw:${i}"` : ''}><i class="check" data-part="${s.on || `sw:${i}` === p.held ? 'check_on' : 'check_off'}"></i></div>`;
@@ -209,7 +200,7 @@ function render() {
 const ROLE = {
   window_title: ['#win .wt'], tab: ['#win .tab'], name: ['#win .n'], detail: ['#win .d'], act: ['#win .ab'], badge: ['#win .bg'],
   empty: ['#win .empty'], pane_title: ['#win .pt'], meta: ['#win .m'], summary: ['#win .s'], note: ['#win .nt'], header: ['#win .hdr'],
-  option: ['#win .l'], reason: ['#win .r'], value: ['#win .v'], step: ['#win .sb'], reset: ['#win .rb'], archive: ['#win .a'], footer: ['#win .fb'],
+  option: ['#win .l'], reason: ['#win .r'], value: ['#win .v'], reset: ['#win .rb'], archive: ['#win .a'], footer: ['#win .fb'],
 };
 UIKit.layoutVars(frame, LAY);
 const STYLES = fetch(ART + 'hud/layout.json').then(r => r.json()).then(L => UIKit.roleStyles(ROLE, LAY.roles, L.styles));

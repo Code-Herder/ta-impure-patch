@@ -165,9 +165,6 @@ static void page_json(const TJV* S, MODSPAGE* p)
     for (e = v ? v->first : NULL; e && p->nopt < MODS_MAXOPT; e = e->next) {
         MODSOPT* o = &p->opt[p->nopt++];
         STR(o->label, e, "label"); STR(o->value, e, "value"); STR(o->reason, e, "reason");
-        o->kind = (uint8_t)tj_num(tj_get(e, "kind"), 0);
-        o->on = (uint8_t)tj_num(tj_get(e, "on"), 0);
-        o->changed = (uint8_t)tj_num(tj_get(e, "changed"), 0);
         o->locked = (uint8_t)tj_num(tj_get(e, "locked"), 0);
     }
     v = tj_get(S, "sw");

@@ -58,8 +58,7 @@ CASES = (
        ("fullest_broken", (1024, 768), {}), ("fullest_broken", (1920, 1080), {"scroll": {"list": "max", "detail": "half"}}),
        ("fullest_locked", (1280, 720), {}), ("fullest_locked", (3440, 1440), {"scroll": {"detail": "max"}})]
     + [("manage", (1920, 1080), {"held": "confirm"}), ("manage", (1920, 1080), {"held": "tab:0"}), ("manage", (1024, 768), {"held": "tab:1"}),
-       ("manage", (1920, 1080), {"held": "act:2"}), ("manage", (1920, 1080), {"held": "row:3"}), ("manage", (1920, 1080), {"held": "opt:0:-"}),
-       ("manage", (1920, 1080), {"held": "opt:2:t"}), ("manage", (2560, 1440), {"held": "reset:0"}), ("manage", (2560, 1440), {"held": "swreset:3"}),
+       ("manage", (1920, 1080), {"held": "act:2"}), ("manage", (1920, 1080), {"held": "row:3"}), ("manage", (2560, 1440), {"held": "swreset:3"}),
        ("manage", (2560, 1440), {"held": "sw:4"}), ("manage", (3840, 2160), {"held": "back"}), ("explore", (1920, 1080), {"held": "act:0"}),
        ("updates", (1920, 1080), {"held": "updateall"}),
        ("mutators", (1920, 1080), {}), ("mutators", (1920, 1080), {"held": "act:5"}), ("mutators", (2560, 1440), {"held": "sw:1"})]
@@ -266,8 +265,10 @@ def compare(name, dom, ops, faces, fallback):
             miss.append(pn)
         elif d:
             worst = max(worst, abs(cands[0]["y"] - d[0]), abs(cands[0]["h"] - d[1]))
-    flag = " <-- DIFFERS" if miss or worst * u > TOL_THUMB_PX else ""
-    bad += bool(miss) or worst * u > TOL_THUMB_PX
+    # in whole pixels, as both paint it: the units' round trip leaves a 1-pixel rounding a hair over 1.0 (MEASURED 1638 against 1637 px read as 1.0001)
+    px = round(worst * u, 3)
+    flag = " <-- DIFFERS" if miss or px > TOL_THUMB_PX else ""
+    bad += bool(miss) or px > TOL_THUMB_PX
     print(f"  thumb {len(dom['thumbs']):4d} painted, worst {worst * u:.2f} px{', only one side: ' + ', '.join(miss) if miss else ''}{flag}")
     return bad, glyphs
 

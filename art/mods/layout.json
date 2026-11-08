@@ -47,7 +47,6 @@
   "option": "name",
   "reason": "window_foot",
   "value": "num",
-  "step": "num",
   "reset": "face_chip",
   "archive": "window_foot",
   "footer": "face_big"

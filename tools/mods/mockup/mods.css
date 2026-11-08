@@ -47,7 +47,7 @@ header output { color: var(--fg); }
 #win .tab { height: calc(var(--w-tabs-h) * var(--u)); padding: 0 calc(var(--w-tabs-pad) * var(--u)); min-width: calc(var(--w-tabs-min) * var(--u)); }
 #win .fb { height: calc(var(--w-footer-h) * var(--u)); padding: 0 calc(var(--w-footer-pad) * var(--u)); min-width: calc(var(--w-footer-min) * var(--u)); }
 #win .ab { height: calc(var(--w-act-h) * var(--u)); padding: 0 calc(var(--w-act-pad) * var(--u)); min-width: calc(var(--w-act-min) * var(--u)); }
-#win .sb, #win .rb { height: calc(var(--w-small-h) * var(--u)); padding: 0 calc(var(--w-small-pad) * var(--u)); min-width: calc(var(--w-small-min) * var(--u)); }
+#win .rb { height: calc(var(--w-small-h) * var(--u)); padding: 0 calc(var(--w-small-pad) * var(--u)); min-width: calc(var(--w-small-min) * var(--u)); }
 
 /* a panel's list scrolls inside its frame, and only up and down: a word wider than the panel is cut at its side, as the DLL's clip does */
 .pnl { min-height: 0; min-width: 0; }

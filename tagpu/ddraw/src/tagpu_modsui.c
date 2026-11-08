@@ -454,7 +454,7 @@ static void build_rows(void)
     }
 }
 
-static void add_opt(const char* label, int kind, int on, const char* value, int changed, const char* locked)
+static void add_opt(const char* label, const char* value, const char* locked)
 {
     MODSOPT* o;
     if (s_page.nopt >= MODS_MAXOPT) return;
@@ -462,9 +462,6 @@ static void add_opt(const char* label, int kind, int on, const char* value, int 
     memset(o, 0, sizeof *o);
     lstrcpynA(o->label, label, sizeof o->label);
     lstrcpynA(o->value, value, sizeof o->value);
-    o->kind = (uint8_t)kind;
-    o->on = (uint8_t)on;
-    o->changed = (uint8_t)changed;
     if (locked) {
         o->locked = 1;
         lstrcpynA(o->reason, locked, sizeof o->reason);
@@ -498,6 +495,7 @@ static int rules_of(int mod, MODRULES* r, const char** id)
     }
 }
 
+/* A mod's play options are the mod's to decide: the pane shows the value in force and takes no click. */
 static void build_options(int mod)
 {
     MODRULES r;
@@ -510,14 +508,12 @@ static void build_options(int mod)
         char value[16];
         if (v > r.maximum) v = r.maximum;
         snprintf(value, sizeof value, "%d", r.manual ? v : 0);
-        add_opt("Resource snapping radius", MODS_OPT_STEPPER, 0, value, r.manual && have >= 0 && have != r.radius,
-                r.manual ? NULL : r.manual_reason);
+        add_opt("Resource snapping radius", value, r.manual ? NULL : r.manual_reason);
     }
     {
         const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_QUICK);
         const int on = r.quick && (have >= 0 ? have : r.quick_default);
-        add_opt("Quick Build", MODS_OPT_SWITCH, on, on ? "On" : "Off", r.quick && have >= 0 && have != r.quick_default,
-                r.quick ? NULL : r.quick_reason);
+        add_opt("Quick Build", on ? "On" : "Off", r.quick ? NULL : r.quick_reason);
     }
 }
 
@@ -786,7 +782,7 @@ static void dump(void)
         jstr(f, o->value);
         fputs(",\"reason\":", f);
         jstr(f, o->reason);
-        fprintf(f, ",\"on\":%d,\"changed\":%d,\"locked\":%d}", o->on, o->changed, o->locked);
+        fprintf(f, ",\"locked\":%d}", o->locked);
     }
     fputs("],\"sw\":[", f);
     for (i = 0; i < s_page.nsw; i++) {
@@ -1034,40 +1030,6 @@ static void select_mod(int mod)
     s_page.scroll[MODS_SCROLL_DETAIL] = 0;
 }
 
-static const char* mod_id_of(int mod)
-{
-    if (mod >= 0) return s_mod[mod].id;
-    return tagpu_profiles_name();
-}
-
-/* An option's change. BOUND: an index read out of a hit key is bounded against the page it is about. */
-static void option_key(int i, char what)
-{
-    const int m = s_sel[s_tab];
-    MODRULES r;
-    const char* id = NULL;
-    int saved;
-    if (i < 0 || i >= s_page.nopt || s_page.opt[i].locked || !rules_of(m, &r, &id)) return;
-    if (i == 0) {
-        const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_RADIUS);
-        int v = have >= 0 ? have : r.radius;
-        if (what == '-' && v > 0) v--;
-        if (what == '+' && v < r.maximum) v++;
-        saved = tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_RADIUS, v);
-    } else {
-        const int have = tagpu_profiles_choice_of(id, TAGPU_CHOICE_QUICK);
-        saved = tagpu_profiles_set_choice_of(id, TAGPU_CHOICE_QUICK, !(have >= 0 ? have : r.quick_default));
-    }
-    lstrcpynA(s_note, saved ? "" : NOT_SAVED, sizeof s_note);
-}
-
-static void option_reset(int i)
-{
-    const char* id = mod_id_of(s_sel[s_tab]);
-    if (i >= 0 && i < TAGPU_CHOICES && i < s_page.nopt && id)
-        lstrcpynA(s_note, tagpu_profiles_set_choice_of(id, i == 0 ? TAGPU_CHOICE_RADIUS : TAGPU_CHOICE_QUICK, -1) ? "" : NOT_SAVED, sizeof s_note);
-}
-
 static void switch_set(int i, int reset)
 {
     const int m = s_sel[s_tab];
@@ -1096,7 +1058,6 @@ static void switch_set(int i, int reset)
 static void act(const char* key)
 {
     int i = -1;
-    char what = 0;
     s_paneStale = 1;
     if (!strncmp(key, "tab:", 4)) {
         i = atoi(key + 4);
@@ -1120,10 +1081,6 @@ static void act(const char* key)
                 load_switches();
             } else s_chosen = m;
         }
-    } else if (sscanf(key, "opt:%d:%c", &i, &what) == 2) {
-        option_key(i, what);
-    } else if (!strncmp(key, "reset:", 6)) {
-        option_reset(atoi(key + 6));
     } else if (!strncmp(key, "swreset:", 8)) {
         switch_set(atoi(key + 8), 1);
     } else if (!strncmp(key, "sw:", 3)) {
