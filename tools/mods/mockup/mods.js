@@ -80,15 +80,22 @@ const SHOW = {
   mayhem: {
     /* the text is the author's, as given to the owner on 2026-11-08 */
     name: 'Total Mayhem', logo: 'mayhem.png', banner: 'mayhem.png', version: 'Version 11.3.0', by: 'By gamma', site: 'https://mayhem.tauniverse.com/',
-    about: ['Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
-      'The goal is to make all of the original units useful, and add more units for more strategic choices.',
+    about: [
+      'Mayhem, or Total Mayhem, is a mod for the game Total Annihilation.',
+      'Total Mayhem takes Total Annihilation, bugfixes and extends it the way Cavedog might have. All units are useful while retaining original TA gameplay. Many new units added (longtime players will recognise some 3rd-party units), including a whole new 3rd tech level tier.. Existing and added units have been bugfixed, rebalanced, re-modeled, re-textured and re-rendered to equal or exceed the standard of the original TA units',
+      'TOTAL MAYHEM\'s features include:',
+      { list: ['An extended builder interface with 12 buttons per page instead of the usual 6, with hotkey overlays',
+        'Lots of UX and ease-of-use improvements including hotkeys and shortcut keys',
+        'Loads of bugfixes that prevent lockups and crashes, improve unit AI and improve game performance, meaning more units ingame with less lag',
+        'endeavors to make all the units useful, open up more strategic options without removing any existing ones',
+        'LOADS of added units, including a complete Level 3 tier: experimental kbots, tanks, navy and air, mobile fortresses, nuke bombers, nuke cannons and more'] },
       'gamma, @gammata, is the main author. Contributors include:',
-      { list: ['thaldren (TA ddraw patch dev)', 'keeper, or mnhebi - colour mod and music player dev', 'm1garland - has contributed many 3D models',
-        'archdragon - has contributed a number of 3D models', 'plasmoidthunder - several unit pictures/build button art'] },
-      'Credit also to many other unitmakers in the past whose creations many units are based on. The SYs, Xon, Rime and Xpoy for dev work on the '
-      + 'TA recorder, the "megamap" and many other added features to TA, that thaldren has continued to build on (and rewrite). ProTA, Venom and the '
-      + 'team for their balancing work that I have used as a reference point. The team who have helped playtest and give balance feedback on the '
-      + 'Mayhem Gang Discord server.',
+      { list: ['thaldren (TA ddraw patch dev)',
+        'keeper, or mnhebi - colour mod and music player dev',
+        'm1garland - has contributed many 3D models',
+        'archdragon - has contributed a number of 3D models',
+        'plasmoidthunder - several unit pictures/build button art'] },
+      'Credit also to many other unitmakers in the past whose creations many units are based on. The SYs, Xon, Rime and Xpoy for dev work on the TA recorder, the \"megamap\" and many other added features to TA, that thaldren has continued to build on (and rewrite). ProTA, Venom and the team for their balancing work that I have used as a reference point. The team who have helped playtest and give balance feedback on the Mayhem Gang Discord server',
       { link: ['See the #total-mayhem channel on the TA Universe Discord server: ', 'https://discord.gg/Z4hJpVbmyW'] }],
   },
   prota: {
