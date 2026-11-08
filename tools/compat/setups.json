@@ -256,6 +256,7 @@
       ],
       "goal": {
         "store_covers": ["tplayx"],
+        "store_lookups": ["in no module"],
         "outcome": "impure-active",
         "tadr_ran": false
       },
@@ -281,6 +282,7 @@
       ],
       "goal": {
         "store_covers": ["tplayx"],
+        "store_lookups": ["in no module"],
         "outcome": "impure-active",
         "tadr_ran": false
       },

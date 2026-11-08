@@ -28,6 +28,7 @@
 #include "tagpu_shield.h"
 #include "tagpu_wiki.h"
 #include "tagpu_recorder.h"
+#include "tagpu_regstore.h"
 #include "tagpu_window.h"
 
 
@@ -1896,7 +1897,10 @@ FARPROC WINAPI fake_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
     }
 #endif
 
-    FARPROC proc = real_GetProcAddress(hModule, lpProcName);
+    /* tagpu: in a test launch a registry function the game folder's code looks up is the store's
+       (tagpu_regstore.h): this hook replaces the store's own in the modules whose imports name it */
+    FARPROC proc = (FARPROC)tagpu_regstore_proc((void*)real_GetProcAddress(hModule, lpProcName),
+                                                __builtin_return_address(0));
 
     if (!hook || !hModule || !HIWORD(lpProcName))
         return proc;

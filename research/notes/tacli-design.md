@@ -689,15 +689,18 @@ player's key as it was.
 
 - **What the guarantee covers, and what it does not.** It covers the registry imports of
   `TotalA.exe` and of every DLL loaded from the game's folder, whichever road brought it (online.dll's
-  extension DLLs, an export forwarder's target), which are served from the file, and the `-r` switch, which
-  is closed. It does not cover what no hook reaches ([exe reverse
+  extension DLLs, an export forwarder's target), and the registry functions their code looks up through
+  `GetProcAddress`, which are served from the file, and the `-r` switch, which is closed. It does not cover what no hook reaches ([exe reverse
   engineering](exe-reverse-engineering.html) §"The registry", "Outside TotalA.exe's own code"):
     - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
       (`IMAGEHLP.DLL`, `psapi.dll`);
     - a DLL of the folder whose `DllMain` runs before Impure's, during that `DllMain`: the attach
-      line names them (`started before us:`), and where TADR's loads Impure, that is TADR's;
-    - a registry call a DLL makes through `GetProcAddress`, which a packed one may (`basscd.dll`
-      shows the stub's imports alone);
+      line names them (`started before us:`). Where TADR's loads Impure, that is TADR's, whose
+      code before that load reaches no registry function in any build a setup loads
+      ([settings](modules/settings.html), "The guarantee, and its edge");
+    - a registry function a DLL finds without `GetProcAddress` (a walk of ADVAPI32's exports,
+      `LdrGetProcedureAddress`). One it looks up through `GetProcAddress` is answered as an
+      import is, which is how `basscd.dll`'s unpacked code reaches the store;
     - the programs the game starts: what `ShellExecuteA` opens, and what `online.dll` starts;
     - Windows' own records: the Task Scheduler's of the instance's task in
       `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`
@@ -730,7 +733,8 @@ player's key as it was.
   by <signal> -- ...` line: a refused run has written its log header and can still be seen as
   a process, so neither is enough.
 - **What is served, refused and passed.** The DLL replaces the registry imports of TotalA.exe (nine)
-  and of every DLL loaded from its folder, in their import tables. `HKCU\Software\Cavedog Entertainment` and every
+  and of every DLL loaded from its folder, in their import tables, and their `GetProcAddress`, so a
+  registry function looked up is answered the same. `HKCU\Software\Cavedog Entertainment` and every
   key under it are the store. Any other key is read-only: a read goes to the real registry, and
   a writable open, a create or a value write is refused. The engine map lists every call site
   and value. The one registry write of TotalA.exe's own code outside those imports, the `-r`

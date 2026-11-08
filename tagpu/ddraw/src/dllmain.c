@@ -504,7 +504,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         timeEndPeriod(1);
         keyboard_hook_exit();
         dinput_hook_exit();
-        hook_exit();
+        /* tagpu: in a test launch the module is pinned (tagpu_regstore.c), so no slot can outlive
+           it, and putting the real GetProcAddress back would hand a folder DLL's last lookups
+           ADVAPI32's own registry functions */
+        if (!tagpu_regstore_active())
+            hook_exit();
 
         SetThreadExecutionState(ES_CONTINUOUS);
 
@@ -554,7 +558,10 @@ FARPROC WINAPI DDGetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 {
     TRACE("%s [%p]\n", __FUNCTION__, _ReturnAddress());
 
-    return real_GetProcAddress(hModule, lpProcName);
+    /* tagpu: the store answers a registry function looked up here as it does through the
+       kernel32 import (tagpu_regstore.h) */
+    return (FARPROC)tagpu_regstore_proc((void*)real_GetProcAddress(hModule, lpProcName),
+                                        __builtin_return_address(0));
 }
 
 HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnknown FAR* pUnkOuter)

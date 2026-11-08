@@ -363,7 +363,7 @@ export forwarders alone, so no import table names it. At attach it walks the loa
 `LdrRegisterDllNotification`: `rs_on_dll_load` hooks what loads later, once its imports are bound and
 before its entry point runs, and logs `registry: test mode, <name> loaded: n of m registry imports
 answered`. That order is checked each time, as hooks written before the binding would be overwritten
-silently: an ADVAPI32 slot still holding an RVA or an ordinal ends the run (`rs_imports_bound`). MEASURED 2026-11-07 on
+silently: an import slot still unbound ends the run (`rs_imports_bound`, below). MEASURED 2026-11-07 on
 Windows 10 and Wine: opening the Multiplayer screen logs `taheatx`, `takalix`, `tamplayx` and `tawirepx`, each
 `3 of 3`, none refused; the retail row's smoke requires it (`store_loaded`). That covers an export forwarder's target, the extension DLLs `online.dll` searches for and
 anything else `LoadLibrary` brings in. The callback pins Impure's module, since it lives there. A library
@@ -373,13 +373,42 @@ own module is what answers.
 No fixture and no retail DLL imports a registry function the hooks do not answer, and no DLL with no
 registry import holds a `Reg*` name among its strings [MEASURED 2026-11-07 over every
 DLL of the 20 fixtures and the Steam install]. A packed DLL hides both: `basscd.dll` (Total Mayhem, ProTA) is
-Petite-packed, so `1 of 1` is its stub's `RegCloseKey`, and a call it resolves itself goes round the hooks.
+Petite-packed, so `1 of 1` is its stub's `RegCloseKey`, and the stub looks up the rest through
+`GetProcAddress`.
 
-After patching, `rs_count` walks the import directories of the exe and of each of those modules: every
-ADVAPI32 import whose name begins with `Reg`, or for a descriptor with no name table (TADR's `tplayx`
-and its renames) every slot holding one of ADVAPI32's `Reg*` exports, must now hold one of the hooks, or the process is
-terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
-registry function, so nothing overwrites these slots.
+**Lookups are answered as imports are.** The store tables, at attach, every registry function the system
+DLLs hand out (an export named `Reg*` and not `Register*`) by the address `GetProcAddress` gives for it:
+ADVAPI32's, and kernel32's and KernelBase's, which export the same names — on Wine at addresses of their
+own, thunks into KernelBase (`RegOpenKeyExA` at advapi32 `+0x60d4`, kernel32 `+0xd78c`, kernelbase
+`+0x59320` in the reference setup's prefix); on Windows 10 forwarders that resolve to one address. Each
+module of the folder, the exe among them, has every import slot set from that table: by the import's name
+where a system DLL's descriptor has names (whatever the slot holds, so a shim's or another hook's wrapper is
+replaced, as the fork replaces it), and by the slot's value everywhere else — a table with no names, an
+import by ordinal, another DLL's name for the function. A registry function becomes its hook, and the real
+`GetProcAddress`, kernel32's or KernelBase's, becomes the store's (`rs_GetProcAddress`). `tagpu_regstore_proc`
+answers a lookup by the address it returns, so an ordinal or another DLL's name is answered alike: a
+registry function looked up by code of the folder, or by code in no module at all, gets the store's hook,
+`GetProcAddress` itself gets the store's, and a registry function the store does not answer ends the run.
+Code of a module outside the folder gets the real one. The fork's `fake_GetProcAddress`, which `hook_init`
+writes over the store's slot in every module whose import table has names, and Impure's own exported
+`DDGetProcAddress` end in the same function, and in test mode the fork's revert at exit is skipped (the
+module is pinned, so no slot outlives it).
+
+`rs_count` then reads each module's slots back: every registry import must hold its hook, and every
+`GetProcAddress` import the store's, or the process is terminated with a log line — at attach, before the
+game's first instruction, or at that DLL's load. `rs_imports_bound` reads every descriptor: a slot still
+holding its name table's entry, an RVA or an ordinal (the flag over 16 bits; a bound address above 2 GB in
+a large-address-aware process has the flag and more) is unbound.
+
+MEASURED 2026-11-08 on Windows 10, Total Mayhem and ProTA: `basscd.dll`'s unpacked code runs in memory of
+no module and looks up `RegOpenKeyExA`, `RegQueryValueExA`, `RegEnumKeyA` and `RegCloseKey`, and before
+this all four reached the real registry (among them an open of `HKLM\SOFTWARE\Classes\AudioCD\shell`
+with full rights, now refused). The store answers `RegEnumKeyA` for it: a store key's subkeys are the
+store's keys one level below it, sorted by name without case as Windows lists them; any other key's, the
+prefixes `HKCU` and `HKCU\Software` included, are the real key's, read-only, as their values are. The
+takeover's descriptor search skips the `GetProcAddress` slot as it skips the registry ones
+(`tagpu_regstore_is_hook`): read as a binding, it made KERNEL32 "Impure's descriptor" on Escalation and TA
+Zero, and TADR's `DllMain` ran on.
 
 **What the hooks do.** `HKCU\Software\Cavedog Entertainment` and every key below it are served
 from the store in memory; each change rewrites the file whole (a temporary file, flushed, moved
@@ -405,14 +434,24 @@ rewrites the file under that lock, on the calling thread: the game's saver write
 values in a burst, but only the ones that changed cost a rewrite (two rewrites in the logged
 run under wine).
 
-**The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
-above are the only way the code of `TotalA.exe` and of the folder's DLLs reaches the registry through its imports, once
-Impure has attached, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
+**The guarantee, and its edge.** TA's settings key is never written in test mode: once Impure has
+attached, the code of `TotalA.exe` and of the folder's DLLs reaches the registry through its imports and
+through `GetProcAddress` only by the hooks above, and the `-r` switch is closed. A DLL of the folder whose `DllMain` runs before that attach
 meets the real registry during it: the attach line names them (`started before us:`, from the loader's
 initialisation order, `+0x1C`). A Windows smoke row fails on any, but for the one that loads Impure on the
 routes where TADR's `DllMain` does. MEASURED 2026-11-07 on Windows: `nothing of the
 folder` on retail, `loader+tadr-ota`, Total Mayhem and ProTA, whose `tplayx.DLL 9 of 9` is the forwarder's target;
-`TAESC.dll` on Escalation and `ZDRAW.dll` on TA Zero, which load Impure. Nothing hooks the system
+`TAESC.dll` on Escalation and `ZDRAW.dll` on TA Zero, which load Impure. Those meet no registry: in every
+TADR build a setup loads before Impure (tadr-dev-ota's and v2026.8.6's `tdraw`, Escalation's `TAESC` and
+tadr-dev-escalation's copy of it, TA Zero's 2025.4.24 `zdraw`, Twilight's v2026.6.8 `tdraw`), nothing that
+runs before `LoadLibraryA("ddraw.dll")` returns reaches a `Reg*` import: not the C runtime's start-up, its
+static-initialiser tables, its TLS callbacks (thread attach and detach only), nor `DllMain` up to that call,
+which tests the reason, writes its log, and loads `dplayx` and then `ddraw` [DISASSEMBLED 2026-11-08: every
+`Reg*` slot's call sites, direct and through a register, and the call graph from each of those roots,
+indirect targets the reached code names included; the ddraw calls at `0x10040274`, `0x10033c34`,
+`0x10035304`, `0x10046c54`, `0x1001d8e6`, `0x10031664`]. Their first registry use is in the part of
+`DllMain` the takeover stops (tadr-dev-ota `0x100402fb`, `TAESC` `0x1003538b`). A TADR build not among
+these is not read. Nothing hooks the system
 DLLs the game uses and loads by name; the programs the game starts (what `ShellExecuteA`
 opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
 while it exists, and those of the programs it runs). The full list: [tacli

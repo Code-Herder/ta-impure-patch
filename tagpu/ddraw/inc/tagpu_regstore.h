@@ -38,7 +38,16 @@
    RegFlushKey, RegCloseKey -- the exe resolves no registry function by name) and the two of
    the `win32.dll` the Steam install loads (RegOpenKeyExA, RegQueryValueExA: it reads the
    music volume from TA's key) are replaced in their import tables at attach, before
-   TotalA.exe's entry point runs. By the key's full path:
+   TotalA.exe's entry point runs -- by name in a system DLL's descriptor, by value in every
+   other slot, so kernel32's and KernelBase's exports of the same functions are answered too.
+   So is each one's GetProcAddress: a registry function that code of the folder looks up, by
+   name or by ordinal, is answered by the same hook, GetProcAddress itself by the store's, and
+   a registry function the store does not answer ends the run, as such an import does
+   (tagpu_regstore_proc; DDGetProcAddress, Impure's own export, ends in it too). A
+   packed DLL's stub imports one function of each DLL and looks up the rest (basscd.dll,
+   Petite-packed, imports RegCloseKey and GetProcAddress, and its unpacked code, in memory of
+   no module, looks up RegOpenKeyExA, RegQueryValueExA, RegEnumKeyA and RegCloseKey [MEASURED 2026-11-08,
+   Windows 10, Total Mayhem and ProTA]); RegEnumKeyA is answered for it. By the key's full path:
 
      HKCU\Software\Cavedog Entertainment and below   the store: every open, create, read
                                                      and write is served from memory, and
@@ -54,8 +63,9 @@
                                                      registry
 
    So no call through those imports reaches a registry function that writes: the hooks
-   call only RegOpenKeyExA with read rights, RegQueryValueExA, RegQueryValueA and
-   RegCloseKey. RegFlushKey on a real key returns success without a call, since nothing in
+   call only RegOpenKeyExA with read rights, RegQueryValueExA, RegQueryValueA, RegEnumKeyA
+   and RegCloseKey. A store key's subkeys are the store's keys one level below it, sorted
+   by name without case. RegFlushKey on a real key returns success without a call, since nothing in
    test mode has changed one.
 
    The one registry write of TotalA.exe's own code outside those imports, the `-r` switch's
@@ -63,10 +73,12 @@
    (close_register_switch), under the same rule: an exe that differs there is not run.
 
    THE GUARANTEE, AND ITS EDGE. TA's settings key is never written in test mode: the registry
-   imports of TotalA.exe and of every DLL loaded from its folder are served from the file, and
-   `-r` is closed. Nothing here reaches:
-     - a folder DLL's entry point that ran before Impure's (the attach line names them), or a
-       registry call it makes through GetProcAddress, which a packed DLL may (basscd.dll);
+   imports of TotalA.exe and of every DLL loaded from its folder, and the registry functions
+   their code looks up through GetProcAddress, are served from the file, and `-r` is closed.
+   Nothing here reaches:
+     - a folder DLL's entry point that ran before Impure's (the attach line names them);
+     - a registry function found without GetProcAddress (a walk of ADVAPI32's export table,
+       ntdll's LdrGetProcedureAddress), or looked up through a system DLL on the folder's behalf;
      - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
        (IMAGEHLP.DLL, psapi.dll);
      - the programs the game starts: what ShellExecuteA opens, and what online.dll starts;
@@ -101,7 +113,9 @@
    runs on whichever thread loads a DLL, under the loader lock, and takes only the log's lock. Under it run this
    module's code, kernel32 file calls and tagpu_log, whose own lock is a leaf; nothing under
    it calls back into the engine or takes another lock of ours. Real registry calls run
-   outside it.
+   outside it. tagpu_regstore_proc takes no lock of ours but the log's, and asks the loader
+   which module holds the caller (which may take the loader lock) before it logs, never
+   while holding the log's lock.
 
    EXIT. tagpu_regstore_final logs the counters, taking the lock with TryEnter: the loader
    has killed every other thread by then, possibly one inside it. The file is whole either
@@ -110,12 +124,20 @@
 /* DllMain, DLL_PROCESS_ATTACH, first: whether this is a test launch (1) or not (0), from
    the command line and the exe's folder. Logs nothing and installs nothing. */
 int tagpu_regstore_decide(void);
-/* 1 when `fn` is one of the store's own registry answers: a slot it wrote, not a binding. */
+/* 1 when `fn` is a slot the store wrote, not a binding: one of its registry answers, or its
+   GetProcAddress, which every module of the folder imports, the exe among them. */
 int tagpu_regstore_is_hook(unsigned long fn);
 
 /* DllMain, DLL_PROCESS_ATTACH, right after tagpu_log_init: logs the mode; in test mode
    loads the store and installs the hooks, or ends the process. */
 void tagpu_regstore_init(void);
+
+/* What a GetProcAddress call that returned `proc` returns instead, `caller` being its return
+   address: in test mode, the store's hook for a registry function the game folder's code looked
+   up; `proc` itself otherwise. Ends the run for a registry function the store does not answer.
+   Any thread. fake_GetProcAddress, which the fork installs over the store's own in the folder's
+   modules, ends in it too. */
+void* tagpu_regstore_proc(void* proc, const void* caller);
 
 /* 1 in test mode, from tagpu_regstore_init on. */
 int tagpu_regstore_active(void);

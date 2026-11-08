@@ -289,6 +289,7 @@ static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  *
 static int    s_clipL, s_clipT, s_clipR, s_clipB, s_clipW, s_clipH;
 static TAGPU_LINE_AB s_lab;            /* an A/B frame's lines before the clip */
 static int    s_ss;
+static int    s_devres;               /* the composite reads the target unresolved */
 static int   s_ntext, s_xover;         /* strings drawn / quads refused        */
 
 /* THE SHADER SOURCES ARE A BUILD INPUT, NOT CODE THIS FILE RUNS -- this file
@@ -613,6 +614,22 @@ static void snap_device(float* x, float* y)
     *y = (float)((gy - s_zcy) / s_zoom + s_zcy);
 }
 
+/* The corner of a bitmap, by pre-image, on a whole GAME pixel: text, the order art, the strategic
+   icons, whatever is laid out in whole game pixels. Half a game pixel is a target pixel at ss 2,
+   and the box resolve to the game resolution then averages each texel with its neighbour: a 1-px
+   stroke comes out half-covered over two pixels, the same string crisp at one position and fuzzy
+   at the next. Under devres nothing resolves: a texel is ss target pixels wide and stays whole on
+   any target pixel, so the snap is the target grid's and the bitmap keeps the finer step, as
+   sw_widths' quantum does. On the engine's integers at zoom 1 this is the identity. */
+static void snap_game_px(float* x, float* y)
+{
+    if (s_devres) { snap_device(x, y); return; }
+    double gx = ((double)*x - s_zcx) * s_zoom + s_zcx;
+    double gy = ((double)*y - s_zcy) * s_zoom + s_zcy;
+    *x = (float)((floor(gx + 0.5) - s_zcx) / s_zoom + s_zcx);
+    *y = (float)((floor(gy + 0.5) - s_zcy) / s_zoom + s_zcy);
+}
+
 /* One atlas rect's quad -- a string's or a glyph's, (ax, ay, w, h) in texels with the blitter's
    row offset `yoff` -- at the engine's anchor (x, y), into `base` at vertex `i`. Returns the x
    its right edge lands on, where the blitter's next glyph would start. */
@@ -626,19 +643,13 @@ static float text_quad(float* base, int i, float x, float y, int ax, int ay, int
     u1 = (float)(ax + w) / (float)aw;    v1 = (float)(ay + h) / (float)ah;
     y0 = y - (float)((double)yoff * s_px);
 
-    /* SNAP TO THE DEVICE PIXEL GRID, and do it by pre-image rather than by
-       rounding the vertex. Text is the one thing in this pass that is a bitmap:
-       every other primitive here is geometry and wants its fraction, but a
-       glyph whose quad starts half a pixel off has each 1-px stroke resolved
-       across two device pixels and reads as a grey smear. (Measured against the
-       engine's own label at 1x, ss=2: 66 pure-white pixels in "build distance"
-       against its 183, at the same position and size.)
-
-       `snap_device` is that snap (it is shared with the health bars). The
-       quad's SIZE needs no such care — the text is constant screen size, so it
-       is `w` game-frame units after the zoom whatever the zoom is, and
-       `w * ss` device pixels is an integer. */
-    snap_device(&x, &y0);
+    /* SNAP TO THE GAME PIXEL GRID (`snap_game_px`). A glyph whose quad starts
+       half a pixel off has each 1-px stroke resolved across two pixels and reads
+       as a grey smear. (Measured against the engine's own label at 1x, ss=2: 66
+       pure-white pixels in "build distance" against its 183, at the same position
+       and size.) The quad's SIZE needs no such care — the text is constant screen
+       size, so it is `w` game pixels after the zoom whatever the zoom is. */
+    snap_game_px(&x, &y0);
     x1 = x + (float)((double)w * s_px);
     y1 = y0 + (float)((double)h * s_px);
     c  = (float)colidx / 255.0f;
@@ -677,9 +688,8 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
 /* One frame of the order art, its hotspot at (x, y). CONSTANT SCREEN SIZE, as
    the text is: the frame is `w` game pixels after the zoom whatever the zoom,
    so one texel is one screen pixel and at 1x the frame is the engine's blit.
-   Its corner goes on the device grid by pre-image (`snap_device`), for the
-   text's reason: a bitmap half a pixel off resolves every texel across two
-   device pixels. The colour slot carries the opacity (FS's art path). */
+   Its corner goes on a whole game pixel (`snap_game_px`), for the text's reason.
+   The colour slot carries the opacity (FS's art path). */
 int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
                         float alpha, float wx, float wz)
 {
@@ -688,7 +698,7 @@ int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
     if (s_norda + QUADV > MAXORDA) return 0;
     x0 = x - (float)((double)f->hx * s_px);
     y0 = y - (float)((double)f->hy * s_px);
-    snap_device(&x0, &y0);
+    snap_game_px(&x0, &y0);
     x1 = x0 + (float)((double)f->w * s_px);
     y1 = y0 + (float)((double)f->h * s_px);
     u0 = (float)f->x / (float)TAGPU_ORDART_W;          v0 = (float)f->y / (float)TAGPU_ORDART_H;
@@ -701,19 +711,6 @@ int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
     put_at(s_orda, i + 5, x0, y1, u0, v1, wx, wz, alpha);
     s_norda += QUADV;
     return 1;
-}
-
-/* The corner of a quad laid out in whole game pixels, by pre-image: art whose
-   texel is k game pixels, and a generated shape decided once per game pixel. Half
-   a game pixel is a device pixel at ss 2, and from there the presented image
-   averages each 1-px line of ink with the fill beside it: the same icon reads
-   black at one camera position and washed at the next. */
-static void snap_game_px(float* x, float* y)
-{
-    double gx = ((double)*x - s_zcx) * s_zoom + s_zcx;
-    double gy = ((double)*y - s_zcy) * s_zoom + s_zcy;
-    *x = (float)((floor(gx + 0.5) - s_zcx) / s_zoom + s_zcx);
-    *y = (float)((floor(gy + 0.5) - s_zcy) / s_zoom + s_zcy);
 }
 
 /* One strategic icon. CONSTANT SCREEN SIZE, as the order art: `edge` game
@@ -1466,6 +1463,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;
     s_ss  = v->ss > 0 ? v->ss : 1;
+    s_devres = v->devres != 0;
     /* the viewport and the surface on the line grid (tagpu_line.h) */
     tagpu_line_rect(v->vpL, v->vpT, v->vw, v->vh, s_ss,
                     &s_clipL, &s_clipT, &s_clipR, &s_clipB);
@@ -1560,8 +1558,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            game pixels at a time while the body glides continuously underneath it:
            4 px at 4x, 8 px at ZOOM_MAX, a diagonal twitch at max zoom-in.
            `snap_device` puts the anchor on the
-           DEVICE grid instead, the same rule the selection rect and the glyph atlas
-           already follow, so the step is 1/ss of a displayed pixel at every zoom.
+           DEVICE grid instead, the same rule the selection rect follows,
+           so the step is 1/ss of a displayed pixel at every zoom.
            It runs on BOTH branches: on the engine's integers it is the identity at
            1x, so engine parity there is exact, and away from 1x it only makes an
            already sim-rate anchor land crisply. */
@@ -1587,10 +1585,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         if (x + 0x12 < v->evpL || x - 0x12 > v->evpL + v->evw ||
             y + 3 < v->evpT || y - 3 > v->evpT + v->evh) continue;
 
-        /* one snap for the bar and the group digit both, so the two cannot part
-           company. (The digit's own snap inside `tagpu_mark_emit_text` is over the
-           glyph's baseline, four rows below this, and is idempotent on a point
-           already on the grid.) The fog is sampled at the UNSNAPPED anchor, in the
+        /* one snap for the bar and the group digit both, so the two stay within half
+           a game pixel of each other. (The digit's own snap inside
+           `tagpu_mark_emit_text` is over the glyph's baseline, four rows below this,
+           on the coarser grid a bitmap needs.) The fog is sampled at the UNSNAPPED anchor, in the
            projected world space the engine's screen grid is built in (tagpu_fx.h) —
            it is a world lookup, and the snap is a screen-space concern. */
         snap_device(&x, &y);
