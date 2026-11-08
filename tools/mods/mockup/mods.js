@@ -105,9 +105,9 @@ const SHOW = {
     pages: [
       { name: 'About', about: [
         'A veteran-led rebalance that makes more units matter while preserving the speed, asymmetry, and battlefield chaos that define classic TA.',
-        { section: 'Creators:' },
+        { section: 'Main Contributors:' },
         { list: ['TAG_Venom', 'TAG_ROCK', 'PRO_rANDY', 'Tiptushi', 'TAG_Metn', 'timmyfred', 'TAG_Sensation', 'FFAxPostal', 'TAG_Dominator',
-          'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'] }] },
+          'Gnug215', 'OZ_coolnick', 'BTU_Natas', 'TAG_Mastah', 'Gnug115'], cols: 3 }] },
       { name: 'Mission', about: [
         'ProTA sets out to give every unit a reason to be built without changing what Total Annihilation is. The two aims pull against '
           + 'each other, and the mod looks for the ground between them.',
@@ -261,10 +261,10 @@ function showcase(m) {
 /* A mod with more to say than a description splits it into pages, picked by a row of tabs under the banner */
 const pageTabs = pages => `<div class="ptabs">${pages.map((g, i) =>
   `<button class="tab" data-key="page:${i}" data-part="${i === Math.min(S.page, pages.length - 1) ? 'tab_selected' : 'tab'}">${esc(g.name)}</button>`).join('')}</div>`;
-/* The text blocks: a paragraph, a section's opening line, a list, a line ending in a link */
+/* The text blocks: a paragraph, a section's opening line, a list (in `cols` columns when it has them), a line ending in a link */
 const blocks = about => about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>`
   : b.section ? `<div class="pa s sec">${esc(b.section)}</div>`
-  : b.list ? `<ul class="pa s lst">${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
+  : b.list ? `<ul class="pa s lst"${b.cols ? ` style="columns: ${b.cols}"` : ''}>${b.list.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
   : b.link ? `<div class="pa s">${esc(b.link[0])}<a class="lnk" href="${b.link[1]}" target="_blank" rel="noopener" data-key="link">${esc(b.link[1].replace(/^https:\/\//, ''))}</a></div>` : '').join('');
 function detail(p) {
   let h = '';
