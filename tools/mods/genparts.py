@@ -4,7 +4,12 @@
     python3 tools/mods/genparts.py
 
 Writes art/wiki/kit/parts/<name>.png and each part's entry in art/wiki/kit/kit.json: the checkbox, the radio, the
-progress bar's track and fill, the three tabs and the four badges of tagpu_modslay.c. Nothing here is painted: each part
+progress bar's track and fill, the three tabs and the four badges of tagpu_modslay.c, and each mod's showcase pictures.
+
+THE SHOWCASE PICTURES are a mod's own art, filed under art/mods/ by the mod's id: logos/<id>.png, banners/<id>.png and
+backdrops/<id>.png become the whole parts logo_<id>, banner_<id> and backdrop_<id>. A logo and a banner are copied byte for
+byte. A backdrop is darkened from its left, where the showcase's logo and text lie over it (BACKDROP_SHADE), so the shade
+is the picture's and the screen draws it as it is. Nothing here is painted: each part
 is resampled and tinted from `button`, `button_down`, `row`, `badge` and `i_dot`, so it carries their bevels and wear, and
 a run on unchanged inputs rewrites the same bytes. A painted part replaces a generated one with no code change: its PNG
 and its entry under the same name.
@@ -15,10 +20,15 @@ tools/hudart/fit.py --set wiki rewrites art/wiki/kit/ from art/wiki-full/kit/ an
 these among them, and then runs this. tagpu_modslay_load refuses a kit without them, by name.
 """
 import json
+import shutil
 from pathlib import Path
 from PIL import Image, ImageDraw
 
 KIT = Path(__file__).resolve().parents[2] / "art" / "wiki" / "kit"
+MODS_ART = Path(__file__).resolve().parents[2] / "art" / "mods"
+# a backdrop's shade, from its left edge to its right: (where across, 0..1, how dark, 0..1), in the colour BACKDROP_INK
+BACKDROP_SHADE = ((0.0, 0.9), (0.45, 0.55), (1.0, 0.1))
+BACKDROP_INK = (3, 9, 13)
 SS = 4              # a drawn shape is drawn this many times over and reduced, for its edge
 BOX = 40            # a checkbox's and a radio's side, in texels: 12 units at the kit's 3.333 texels a unit
 SCALE = 3.333
@@ -109,6 +119,28 @@ def radio(well, top, bottom):
     return big.resize((BOX, BOX), Image.LANCZOS)
 
 
+def shaded(im):
+    """A backdrop with BACKDROP_SHADE over it, column by column, kept in 256 colours as filed."""
+    im = im.convert("RGB")
+    over = Image.new("RGB", im.size, BACKDROP_INK)
+    mask = Image.new("L", im.size)
+    for x in range(im.width):
+        f = x / max(1, im.width - 1)
+        (x0, a0), (x1, a1) = next((s, e) for s, e in zip(BACKDROP_SHADE, BACKDROP_SHADE[1:]) if f <= e[0])
+        a = a0 + (a1 - a0) * (f - x0) / (x1 - x0)
+        mask.paste(int(a * 255 + 0.5), (x, 0, x + 1, im.height))
+    return Image.composite(over, im, mask).quantize(256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG)
+
+
+def pictures():
+    """Each mod's showcase pictures under art/mods/, by part name: (the file to copy, or the image to write, its entry)."""
+    whole, out = {"kind": "whole", "scale": 1.0}, {}
+    for folder, prefix in (("logos", "logo"), ("banners", "banner"), ("backdrops", "backdrop")):
+        for f in sorted((MODS_ART / folder).glob("*.png")):
+            out[f"{prefix}_{f.stem}"] = (shaded(Image.open(f)) if folder == "backdrops" else f, whole)
+    return out
+
+
 def build():
     button, down, row, badge, dot = part("button"), part("button_down"), part("row"), part("badge"), part("i_dot")
     well, ink, rim_top, rim_bot = face(down, 0.5), brightest(dot), face(button, 0.3), face(button, 0.95)
@@ -138,8 +170,12 @@ def main():
     parts = build()
     path = KIT / "kit.json"
     K = json.loads(path.read_text())
+    parts.update(pictures())
     for name, (im, entry) in parts.items():
-        im.save(KIT / "parts" / f"{name}.png", optimize=True, compress_level=9)
+        if isinstance(im, Path):
+            shutil.copyfile(im, KIT / "parts" / f"{name}.png")
+        else:
+            im.save(KIT / "parts" / f"{name}.png", optimize=True, compress_level=9)
         K["parts"][name] = entry
     path.write_text(json.dumps(K, indent=1))
     print(f"genparts: {len(parts)} parts in {KIT.relative_to(KIT.parents[2])}, {len(K['parts'])} in the kit")
