@@ -507,9 +507,13 @@ select, ok and `0x48B090`'s):
   `0x48C997`.
 - ok, kind 5: one push, `0x438899` in `0x438880`, which speaks once an order (it clears the
   order's `+0x42` bit `0x2000` first, `0x438883..0x43888B`). Thirty handlers call it at their
-  start, Move_Ground (`0x40322D`), ReclaimUnit (`0x4047C1`) and Follow_Ground (`0x40670C`,
-  `0x406800`) among them; MobileBuild (`0x403A20..0x403F6F`) never does, so a build order says no
-  ok [DISASSEMBLED: the 30 calls of `0x438880` listed, none in that range].
+  start, Move_Ground (`0x40322D`), VTOL_Move (`0x40FA20`, at `0x40FA6B`), ReclaimUnit (`0x4047C1`)
+  and Follow_Ground (`0x40670C`, `0x406800`) among them; MobileBuild (`0x403A20..0x403F6F`) never does, so a build order says no
+  ok [DISASSEMBLED: the 30 calls of `0x438880` listed, none in that range]. The bit is `0x43ADC0`'s: it sets
+  `+0x42 |= 0x2000` only when its `shift` is 0 (`0x43AEE7`), and the push refuses a kind already
+  queued (`0x47FB0A`), so a group given one move without Shift answers with one ok and a Shift
+  append with none. An order the DLL makes through `0x43ADC0` with stock's shift therefore sounds
+  as stock's click does, with no sound call of its own (the formation move).
 - arrived, kind 6: Move_Ground (`0x4031D0`) says it in state 1 only on its goal event `0x20`
   (`0x4031EB..0x403206`, result 5); without it (a give-up, `0x40`) the order ends silent with
   result 9 (`0x403209`). State 0 says ok (`0x40322D`) and starts the move (`0x438930(order+0x22,

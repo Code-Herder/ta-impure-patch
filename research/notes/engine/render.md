@@ -1740,6 +1740,20 @@ lookup at `0x439952`, frame `(gameTime / (2·period)) % nframes` of
 `cursor_ary[idx]` = `*(main+0x1487F + idx*4)` is alpha-blitted through
 `AlphaCompsteBuf2OFFScreen 0x4B8500` (`0x4399BB`). `pos ← p`.
 
+**The blit, `0x439948..0x4399BB`** [DISASSEMBLED 2026-11-09], `ebp` the view `main+0x142F3`: the
+index is the descriptor's byte `+0x10` (`[0x512344] + 0x19·action`, `0x439952..0x439965`); `seq =
+[main + 0x1487F + 4·idx]` (`0x43997A`); `k = (GameTime / (2·u16[seq+0x2C])) % u16[seq+0]`, GameTime
+`main+0x38A47` (`0x439993..0x4399B3`) — **both divisions unguarded**, so a sequence with a zero
+frame count or a zero first duration would fault here; `frame = [seq + 0x28 + 8·k]` (`0x4399B5`);
+`x = (p.x >> 16) − [view+0x2C] + 0x80` and `y = (p.z >> 16) − ((p.alt >> 16) >> 1) − [view+0x30] +
+0x20` (`0x439969..0x439997`; `view+0x2C`/`+0x30` are the eye `main+0x1431F`/`+0x14323`), the
+projection `0x469C63..0x469C94` uses for a unit; then `0x4B8500(ctx, frame, x, y)`, which clips.
+`tagpu_order.c` (`ART_MOVE`) and the formation move (`CURSOR_MOVE`) take 14 as the move orders'
+index, Move_Ground's, VTOL_Move's and QMove's [INFERRED: the descriptor vector is runtime data, not
+read here]. The formation move's GDI dots (`tagpu_formation_gdi`, from markown's hook 9) repeat
+this blit for `cursor_ary[14]` at each slot, with a zero count drawing nothing and a zero duration
+counted as 1.
+
 `0x439811..0x439948` is a `ShowRanges`-only limb, and it draws CIRCLES as well as labels: for
 descriptor cursor index 1 or 2 it emits, through `0x438EA0` and **at the resolved target
 position**, each live weapon's AoE (`w+0xD6`) and `coverage` (`w+0xE0`, stored at `0x42E540` from the

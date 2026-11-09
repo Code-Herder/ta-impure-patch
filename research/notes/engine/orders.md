@@ -99,7 +99,9 @@ the scan as unconditional]:
 43afe0  mov  esi,[edi+0x5c]     ; else walk the order list, head ALWAYS +0x5C
 ```
 
-`0x43B08A` re-pushes the arguments and calls the allocator **`0x43ADC0`**, which takes `0x56`
+With `shift` 0 the `je` at `0x43AFDA` goes straight to `0x43B08A`, which re-pushes the seven
+arguments unchanged — action, shift, unit, target, pos, p1, p2 (`0x43B08A..0x43B09C`) — and calls
+the allocator **`0x43ADC0`** (`0x43B09D`), which takes `0x56`
 bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and constructs the order in place with
 **`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0`, so
 **that is the whole of its path** and everything below about the scan is context, not
@@ -293,8 +295,9 @@ and resets STOP's radio group (`0x4990A3..0x4990F1`: `0x49FE60([[main+0x531]+4],
 (`0x499041..0x49906A`). **No sound on this path.** `0x4958C0(keep)` (`ret 4`) is that same tail as
 a function: `keep` ≠ 0 → bit 5 (`0x4958CD`); else mode 1 (`0x4958D7`), bit 5 cleared, the STOP
 reset (`0x4958FD..0x49591F`). It reads `[main+0x531]` and its `+4` with no test. **It has no caller
-and no stored address in the image** (a call scan and a literal scan); the sweep calls it after a
-commit.
+and no stored address in the image** (a call scan and a literal scan); the reclaim sweep calls it
+after a commit, and the formation move after a commit made with Move armed (mode 2), each testing
+`[main+0x531]` and its `+4` first.
 
 **`0x49FE60(ctrls, name)` is a substring search.** `ret 8`; the count is `ControlsAry[0]`'s i16
 `+0xB6` (`0x49FE67`), the walk starts at `ControlsAry + 0x15D`, record 1's name (`0x49FE7D`), and
@@ -497,7 +500,7 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 | `0x47D820` | Blocked-site altitude [DISASSEMBLED 2026-10-09], `stdcall(def, x \| z<<16)`, `ret 8`; callers `0x4198FE` (the build cursor, on a refused site) and `0x47DE4A`. Answers 0 for an origin below 1 or a footprint end at or past W/H (`0x47D834..0x47D888`); otherwise walks the yardmap `def+0x14E` over the footprint `def+0x14A`/`+0x14C` (grid `main+0x14287`, 13-byte cells, width `+0x14233`) and, over the cells whose yard byte has `0x08`, takes the lowest cell byte `+6` and the highest `+5`: it returns the lowest `+6` as a byte, or sea level `main+0x1427F` less `def+0x22C` when that highest `+5` is below it, which includes a footprint with no such cell (`0x47D92A..0x47D94A`). It writes nothing outside its own frame. Quick Build gives it to the ghost of a queued plan whose ground the site test refuses |
 | `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
 | `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
-| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard. **The move answers** [DISASSEMBLED 2026-11-09], the mode `(byte)mode − 1` into the table `0x4401EC`: mode 2, Move (entry 1, `0x43F845`), needs def `+0x245` bit `0x80` (else refused, `0x43F84E`); a unit whose first dword is 0 [INFERRED: it has no mover object] gets `QMOVE` (`0x50531C`, `0x43F854..0x43F870`) whatever the target and `pos`; else with no target `VTOL_MOVE` (`0x5016CC`) when def `+0x241` bit 11 is set, otherwise `MOVE_GROUND` (`0x5052E4`, through `0x4401C2`). Mode 1 at Interface Type 1 (entry 0, `0x43F9E9`; its Type 0 arm is `0x43FE35`) with no target and no reclaimable feature at `pos` ends in the move fallback `0x43FDFF..0x43FE30`: def `+0x245` bit `0x80` and a non-zero first dword (the unit, `edi` from `0x43FCD1`), then `VTOL_MOVE` / `MOVE_GROUND` by the same bit 11 — **the same answer as mode 2 for a mover**, and 0 for a unit without one (`0x43FE13` → `0x4401DC`), which `0x48CF30` then skips. The formation move asks it once per selected unit at a press, with the press's point, and starts a gesture only on these answers |
 | `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
@@ -728,7 +731,14 @@ that Shift can append a distinct adjacent site. Its 27 direct callers are `0x402
 `0x402EFA`, `0x403DC5`, `0x408064`, `0x4082B0`, `0x408421`, `0x408453`, `0x4085A1`, `0x4140F3`,
 `0x43B09D`, `0x43B120`, `0x4804BB`, `0x487D70`, `0x487DE8`, `0x487E3F`, `0x487E8A`, `0x487F25`,
 `0x487FA5`, `0x487FF6`, `0x4880AB`, `0x4880D2`, `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`,
-`0x48821E` (instruction-level call scan).
+`0x48821E` (instruction-level call scan). It calls only the allocator `0x4B4F10`, the constructor `0x43A0C0`, the destructor
+`0x43A1F0` and the free `0x4B4F20` (`0x43ADC6`, `0x43ADEF`, `0x43AE47`/`0x43AEB8`,
+`0x43AE4D`/`0x43AEBE`) [DISASSEMBLED 2026-11-09]: **nothing it does reaches the network**, so an
+order the DLL makes through it is a stock click's order as far as a peer can tell — orders are not
+on the wire, their effects are. The formation move (`tagpu_formation.c`) gives each unit its slot
+through it with the release's Shift: an append, or without Shift the replace above, as `0x43AFC0`
+forwards a no-Shift click; it does not go through `0x43AFC0`, whose Shift scan would let one
+unit's slot cancel its own queued move within 16 units.
 
 **Geo identity:** `0x47D684` tests candidate yard bit `0x80`. `0x47D69D` reads the feature ID
 at grid-cell `+8`; an ID below `0xFFFB` is checked against the feature count. `0xFFFE` resolves

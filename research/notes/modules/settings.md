@@ -9,9 +9,11 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 ### 2.8 The play defaults (`tagpu_opt.c`, `tagpu_defaults.off`) — since 2026-09-08
 
 Every pass is armed by a file beside `TotalA.exe`, `tagpu_<x>.on`, whose contents are its tokens.
-**With no file at all, the play set is on.** A pass that is also a menu row (only
-`tagpu_classicpp.on`, the Renderer row) asks the settings store in between: its own `.on`/`.off`
-first, then `impure.cfg`, then this table ([renderers](../renderers.html) §2.10b). `tagpu_opt.c` answers two questions for the fifteen files below — *is the pass on*
+**With no file at all, the play set is on.** A pass that is also a menu row
+(`tagpu_classicpp.on`, the Renderer row; `tagpu_mirror.on`, Map edge; `tagpu_formation.on`,
+Formation move) asks the settings store in between: its own `.on`/`.off` first, then
+`impure.cfg`, then `tagpu_defaults.off`, then this table ([renderers](../renderers.html) §2.10b).
+`tagpu_opt.c` answers two questions for the files below — *is the pass on*
 (`tagpu_opt_on`) and *what are its tokens* (`tagpu_opt_read`) — and every reader of those files,
 at attach and on its per-frame poll, asks it instead of the file system. Nothing else changed:
 the parsers, the polls, the `*own` install-at-attach rule.
@@ -26,9 +28,13 @@ the parsers, the polls, the `*own` install-at-attach rule.
 | `tagpu_ghost.on` | | `native` |
 | `tagpu_zoom.on`, `tagpu_vpwide.on` | | `vpwide` with `zoom` |
 | `tagpu_mirror.on`, `tagpu_gui.on`, `tagpu_classicpp.on` | | |
+| `tagpu_formation.on` | | |
+| `tagpu_recorder.on` | | |
 
 Nothing on it changes the simulation: the extra weapons are always on, in the fail-closed table
-([extra weapons](../extra-weapons.html), *Layer 1*). `tagpu_owndraw`, `tagpu_featown` and
+([extra weapons](../extra-weapons.html), *Layer 1*). The formation move is input: it chooses where
+each selected unit is sent and gives those orders through the engine's own roots, as a click does
+([formation](formation.html)). `tagpu_owndraw`, `tagpu_featown` and
 `tagpu_fxown` are not on it either: each stops the engine drawing something, which holes the
 reference frame the golden source is taken from (`tagpu_opt.c` has the argument and the numbers).
 
@@ -240,21 +246,26 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is `PANEL_H` 438 px tall for thirteen rows: `ROW_Y0 34 + ROW_PITCH 28 × 12 = 370`,
-`ROW_H` 20, so the last row (Mega map zoom in) ends at 390, the floor rule `DIV_BOT` is at 398 and the
-Resource profile caption sits under it at 406. At 640×480 the panel hangs from engine row 32 and
-ends at 470, over the bottom bar's rows 448..469 at x 320..623, whose presses it takes while it is
-open. *Mega map zoom in* is this panel's alone: the front-end screen's two columns are full
-(`vis_shown`), so a player sets it in game or in `impure.cfg`. One define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
-are all sized from it — and the panel is **composed at runtime** from the player's install rather
-than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
-copy of this layout, not its source.
+The in-game panel is 304×440 for fourteen rows on a 26 px pitch: `ROW_Y0 34 + ROW_PITCH 26 × 13 =
+372`, `ROW_H` 20, so the last row (Mega map zoom in) ends at 392; a row's recess is `ROW_H + 2·PAD`
+= 24 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px under the last row,
+at 400, the Resource profile caption under it at 408, and the bottom bolts at `PANEL_H − 10`.
+**The height follows the row count**: `DIV_BOT` is `ROW_Y0 + ROW_PITCH·(R_COUNT − 1) + ROW_H + 8`
+and `PANEL_H` is `DIV_BOT + 40`, and a compile-time check (`menu_panel_fits_480`) refuses a build
+whose panel, hanging from engine row `BAR_H` 32, would end past row 480 — fourteen rows end at
+472. At 640×480 it lies over the bottom bar's rows 448..469 at x 320..623, whose presses it takes
+while it is open. *Formation move* and *Mega map zoom in* are this panel's alone: the front-end
+screen's two columns are full (`vis_shown`), so a player sets them in game or in `impure.cfg`.
+`PANEL_W` and `PANEL_H` size the GAF frame header, the ground, the ramp, the border and the corner
+bolts, and the panel is **composed at runtime** from the player's install rather than shipped, so
+no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212: the columns are its,
+the row pitch and the height are `tagpu_menu.c`'s alone.
 
 **The strategic icons' three keys have no row on either panel** — `iconscale`, `icondist`,
 `iconfade` in `impure.cfg` ([renderers](../renderers.html) §2.10b, [strategic icons](icons.html)).
-The front-end screen's two columns are full, and the in-game panel has no room left: one more row
-would end at 498 from engine row 32, 18 px past a 640×480 screen. Rows wait for a panel layout that
-fits 640×480; until then the keys are set in the file and read live.
+The front-end screen's two columns are full, and the in-game panel holds no fifteenth row: it
+would end at 498 from engine row 32, which the compile-time check refuses. The keys are set in the
+file and read live.
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`

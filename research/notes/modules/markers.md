@@ -13,7 +13,7 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 | `0x4699EB` | `call 0x46A530` — selection rect, ground sweep | call-site redirect, **per-unit** test |
 | `0x469B8A` | `call 0x46A530` — selection rect, air sweep | call-site redirect, per-unit test |
 | `0x469BD7` | `call 0x471F90(ctx,8)` — hook 8, the marker block's start | call-site redirect; since G13p it opens no capture — it brackets the order arena's block and **latches `[globals+0x204]`/`+0x208`**, the font and text colour the block's own text would use |
-| `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, the block's end | call-site redirect; closes the order arena's block |
+| `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, the block's end | call-site redirect; closes the order arena's block, then, while this pass does not draw the cursor layer (`g_cursor` clear: GDI, `mark.on=nocursor`/`passive`, or `mark` unarmed), blits the formation move's dots into the engine's frame (`tagpu_formation_gdi`, `0x4B8500`), before the layer-9 particles |
 | `0x469CF9` | `call 0x4C14F0` — the group digit | call-site redirect; the engine's call is **skipped** and the digit re-drawn out of our text atlas (G13p) |
 | `0x469EC5` | `call 0x4BF8C0` — build-cursor rect | call-site redirect; the engine's call is **skipped** and the rect re-drawn (G13n) |
 | `0x469F1E` | `call 0x4BF8C0` — drag band box | call-site redirect, same — one rect, one gate, both re-drawn |
@@ -162,6 +162,20 @@ every zoom, out of an atlas the game thread decodes once ([UI markers](../ui-mar
 OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
 projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
 markers away before our buffer saw them.
+
+**The formation move's dots draw with the order art** ([formation](formation.html), *The
+preview*). While a formation drag is held the frame packet carries its slots by value
+(`PK_FORMDOT`, at most 1500, bounded at the acquire), and `tagpu_mark_gather` hands them to
+`tagpu_order_formation_gather` right after the placement's sites, under the same gate
+(`tagpu_mark_cursor_ours`: the cursor layer is ours). Each dot is the move waypoint sprite,
+`cursor_ary[14]`, drawn as `draw_sprite` draws an order's — the engine's frame rule, 0.70
+opacity, one texel a screen pixel at every zoom — into the order art's bucket (`MAXORDA`, 6000
+quads shared with the order markers, a refusal ending the dots for the frame), so the dots are
+fogged as the order sprites are. The atlas is the order module's: without `order.on` there are no
+dots on this lane, and with it the packet's fill builds the atlas the first time a dot rides
+(`tagpu_order_art_ensure`), since the order snapshot builds it only behind the engine's Shift
+gate. `mark: … form=` counts the dots drawn and `order: … form= formover=` the dots drawn and
+refused.
 
 **And the text went the same way in G13p.** The bound on a string is not even a clip:
 `DrawTextCustomFont 0x4C14F0` measures the whole box, tests it for CONTAINMENT in the

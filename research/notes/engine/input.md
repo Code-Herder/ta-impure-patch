@@ -475,8 +475,14 @@ routine that ends at `0x499A2A`:
 0x4999AB  if (A.msg == B.msg)  GetMouseEvent(main+0x2C76)     ; 0x4C2D60 — pops
           else if (A.msg == 0x202 || A.msg == 0x205) main+0x2C76 = A
           else                                       main+0x2C76 = B
+0x499A13  if ([[main+0xC]+0xF1] & 8) skip the handler   ; test, jne 0x499A22
 0x499A1C  call [main+0x391F5]                      ; the per-input-mode handler
 ```
+
+The handler is skipped for the record while byte `+0xF1` of the object at `main+0xC` has bit 3
+(`0x499A13..0x499A1A`, DISASSEMBLED 2026-11-09) [INFERRED: what sets that bit not traced]: a
+record that arrives then reaches none of `0x499200`'s readers, and a gesture that waits for its
+next record keeps its last state until one comes.
 
 `0x499200` (input mode 6, in-game — see the next section) then copies those 6 dwords to its own
 stack and passes the copy to `0x498DA0`. **The copy is not what the readers after that call
@@ -833,11 +839,11 @@ change test.** One call site, `0x4995B3`, which every left-button path above jum
 0x499046  if (main[0x37EFA] == 1 && cl == 1)
 0x49905C      { 0x48BD00(); 0x491D70(1); done }           ; -> deselect everything
           done                                            ; -> nothing at all
-0x49906D  act: 0x48CF30(&rec, cl, main+0x2CAA, 0, 0, 0)   ; issue order `cl` at the world point
+0x49906D  act: 0x48CF30(&rec, cl, 0, main+0x2CAA, 0, 0)   ; issue order `cl` at the world point
           main[0x2CC3] = 1; clear 0x2CC6 bit 5; reset STOP's radio ("STOP" 0x502714)
 ```
 
-`cmp dl, 0x11` is the whole of the left button's interface-type behaviour, standing on the fact
+`cmp dl, 0x11` (`0x499041`, its `jl 0x49906D` at `0x499044`) is the whole of the left button's interface-type behaviour, standing on the fact
 that **`0x43EB02` — the Interface Type 1 arm of the contextual case — returns 15, 17, 18 or 19
 and nothing else**. Verified by walking every branch reachable from `0x43EB02` (220 blocks) and
 collecting the returns: `0x43EB56` → 15, `0x43EB67` → 17, `0x43EB78` → 18, `0x43EC8D` → 18,
@@ -855,7 +861,7 @@ it without a second interface-type read.
                 reset STOP's radio (0x49FE60(menu, "STOP" 0x502714), 0x4A6A40); done }
 0x499162  if (main[0x37EFA] != 0) {               ; Interface Type 1: right orders
 0x4991D5      if (main[0x2CC6] & 0x04)            ; pointer on the viewport or the minimap
-                  0x48CF30(&rec, 1, main+0x2CAA, 0, 0, 0)   ; issue the contextual order
+                  0x48CF30(&rec, 1, 0, main+0x2CAA, 0, 0)   ; issue the contextual order
               done
           }
 0x499172  if (al & 0x02)                          ; type 0, on the world:
@@ -867,11 +873,19 @@ Note the asymmetry: the right button issues its order with a **hard-coded order 
 left button with `main+0x2CC3`. The right button therefore never executes a pressed command
 button — it cancels it — while the left button always does.
 
+**Both clicks read their record only at `+8`**, the key flags: `0x499100` at `0x49917A`
+(`MK_CONTROL`, Type 0's Ctrl arm) and `0x498F70` at `0x498FA9` and `0x49908C` (Shift); otherwise
+each passes the pointer on — `0x498F70` to `0x419670` (`0x498F97`), `0x48C7F0` (`0x499032`) and
+`0x48CF30` (`0x499086`), `0x499100` to `0x48CF30` (`0x4991F4`) — and each of those reads `+8` alone
+(`0x41967B`, `0x48C890`, `0x48CF3A`) [DISASSEMBLED 2026-11-09]. Everything else a click depends on is the handler's per-record fields
+(*The record and the world point*, below) or live state: the selection, the units, the mode, the
+Interface Type.
+
 **The helpers, and how each was established.**
 
 | VA | What | How |
 | --- | --- | --- |
-| `0x48CF30` | issue the order — `(rec, orderByte, &worldPoint, 0, 0, 0)`, the one call both buttons make | **16 call sites in the image**; the two on this path are `0x499087` (left) and `0x4991F5` (right). Plus live: the click that reaches it walks the unit to the point clicked. *[The count was “two call sites” until the 2026-09-07 review; two is how many are in THIS path, not in the image.]* |
+| `0x48CF30` | issue the order — stdcall `(rec, mode, action, pos, p1, p2)`, `ret 0x18`, the one call both buttons make, each with `action` a zero byte and `pos` = `main+0x2CAA` (the pushes `0x4991D9..0x4991F4`, `0x49906D..0x499086`). Shift is the record's `+8` bit 2 (`0x48CF3A..0x48CF42`), the one field of the record it reads; the target is the hovered unit `main+0x2CBA` when `0x43E470(mode)` answers non-zero (with `mode` 0, bit 9 of the action's descriptor dword `+0x11`, `0x48CF5E..0x48CF6D`). It walks the controlled player's units (`main+0x1B63 + 0x14B·main+0x2A42`, `+0x67..+0x6B`, stride `0x118`), takes the selected ones (`+0x110` bit 4) other than the target, returns when there are none (`0x48D011`) and averages their whole-unit x and z into a 16.16 centroid (`×65536.0` at `0x4FD760`, `0x48CFDF..0x48D049`). Per unit the resolver `0x43F0E0(&out, mode, unit, target, main+0x2CAA)` — **the click's own point, not `pos`** (`0x48D08B..0x48D0A0`) — gives the action, a zero answer skipping the unit (`0x48D0AF`); `Standing_FireOrder` (`0x50120C`) needs def `+0x245 & 2` and `Standing_MoveOrder` (`0x501220`) `& 1`. With `pos` non-NULL and the action's descriptor `+0x11` bit 1 (`0x48D126`) a unit keeps its offset from the centroid when `(dx²)>>32 + (dz²)>>32 <= 3000·n` on the 16.16 deltas (`0x48D130..0x48D184`, `3000·n` built at `0x48D04D..0x48D05B`), the altitude `pos`'s; else it gets `pos`. Then `0x43AFC0(action, shift, unit, target, pos′, p1, p2)` (`0x48D1F4`). Its calls are `0x43E470`, `0x438830`, `0x4E43A0`, `0x43F0E0`, `0x438760`, `0x4E4400`, `0x4E43D0` and `0x43AFC0`: **none sends**, so a click's orders are not on the wire [DISASSEMBLED 2026-11-09] | **16 call sites in the image**; the two on this path are `0x499087` (left) and `0x4991F5` (right). Plus live: the click that reaches it walks the unit to the point clicked |
 | `0x48BD00` | **deselect everything** — walks the whole unit array `main+0x14357 .. main+0x1435B` in `0x118` steps clearing bits `0xD0` of `[unit+0x110]`, whose bit 4 is "selected" | disassembly; live, the selection drops (`ARMCOM1.GUI` → `ARMMAIN2.GUI`) |
 | `0x491D70(1)` | the selection-changed UI refresh *[INFERRED]*; reads the GUI-variant word `main+0x37EBE`. Always called immediately after `0x48BD00` | call sites |
 | `0x48C7F0` | select the unit under the cursor *[INFERRED]* — reached only from the `0x0F` arm | call site + live: a left click on an own unit selects it at either interface type |
@@ -982,8 +996,8 @@ own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
 the group recall (below). In both clicks a press whose record has `+8` bit 2 keeps the mode and
 sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
 (`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too: `0x4958C0` has no caller in the
-image and its address is stored nowhere, and the reclaim sweep calls it as stock's click tail
-(*The reclaim sweep's engine side*, below). The setter `0x419BC0`, which stores its argument at
+image and its address is stored nowhere; the reclaim sweep and the formation move (with Move
+armed) call it as stock's click tail ([orders](orders.html), *The reclaim sweep's engine side*). The setter `0x419BC0`, which stores its argument at
 `0x419BC9`, has no caller either. The command modes are armed by the orders menu's handler, one value per gadget
 (the names compared through `0x4E49B0`): MOVE 2 (`0x419C6A`), ATTACK 3 (`0x419D44`), BLAST 4
 (`0x419DB9`), UNLOAD 5 (`0x41A066`), LOAD 6 (`0x41A0D7`), DEFEND 7 (`0x419E2D`), REPAIR 8
@@ -1088,7 +1102,19 @@ handler `0x499200` runs it, and where `tagpu_place.c` hooks it ([gpu-status
 (`0x499221`). `0x498DA0` reads only the copy's x and y, through `ebp` (`[ebp+0]`, `[ebp+4]`), and
 writes no dword through it; its own stores into the main block are `+0x2CC6` (the region bits),
 `+0x2C8E` (the cell, `0x498F2E`) and `+0x2CBC` (the feature, `0x498F5D`), and it hands `+0x2CAA` to
-`0x484B50` as the out-parameter for the world point (`0x498EF1`). Nothing between the copy and the
+`0x484B50` as the out-parameter for the world point (`0x498EF1`).
+
+**The per-record fields, and the clicks' only inputs from the record's handling.** `0x498DA0`'s
+`+0x2CC6` stores, `0x498E19..0x498EE6`, write bits 0..2 alone (each a read-modify-write of the
+byte: bit 0 set at `0x498DE4` or cleared at `0x498E8E`, bit 1 cleared at `0x498E26` or rebuilt
+at `0x498EB7..0x498EBC`, bit 2 rebuilt at `0x498EDE..0x498EE6`), so bits 3..7 are live state the record's handling never touches. With the hover
+query's store `main+0x2CBA` (`0x499283`) and the cursor chooser's `main+0x2CBE` (`0x4992AD`), the
+set is: `main+0x2C8E` (dword, the cell words `x >> 20`, `z >> 20`), `+0x2CAA` (12 bytes, 16.16 x,
+altitude, z), `+0x2CBA` (u16), `+0x2CBC` (u16), `+0x2CBE` (u8) and `+0x2CC6` bits 0..2. Those are
+what either click reads that its record's handling wrote; the record itself it reads only at `+8`
+(*The in-game mouse buttons*). The formation move (`tagpu_formation.c`, `replay`) runs a stock
+click at a later record by writing this set over that record's, calling the click's call-site
+target and putting the set back [DISASSEMBLED 2026-11-09]. Nothing between the copy and the
 build cursor writes `main+0x2C76`, so the record the build cursor's call sees and the copy the
 click routing hands on hold the same six dwords: an observer of `0x4197D0` can tell the record it
 evaluated by value. With region bit 1 and the byte `0x0E` the head calls `0x4197D0` (`0x499241`)
@@ -1103,8 +1129,27 @@ the controlled player's record `main + 0x1B63 + main[0x2A42] · 0x14B` (`0x4198B
 ecx,[ecx+eax*2+0x1b63]` with `ecx = main + p` and `eax = 165·p`). Its bit 0 becomes `0x2CC6` bit 6
 (`0x4198D1..0x4198E1`), the bit the click tests at `0x498F86`.
 
-**The click routing, byte for byte.** The message is the copy's fifth dword, `[esp+0x1C]`
-(`0x49939B`). A right press is taken first (`0x49939F` → `0x499100`, the cancel). Then:
+**The click routing, byte for byte.** The message is the copy's fifth dword, `[esp+0x1C]`. A
+right press is taken first, in every mode:
+
+```
+0x49939B  8B 54 24 1C            mov edx,[esp+0x1C]      ; the message
+0x49939F  81 FA 04 02 00 00      cmp edx,0x204           ; WM_RBUTTONDOWN
+0x4993A5  75 0F                  jne 0x4993B6            ; the mode test, below
+0x4993A7  8D 44 24 0C            lea eax,[esp+0xC]       ; the handler's copy of the record
+0x4993AB  50                     push eax
+0x4993AC  E8 4F FD FF FF         call 0x499100           ; the right press: the cancel, or Type 1's order
+0x4993B1  E9 02 02 00 00         jmp 0x4995B8            ; the frame
+```
+
+The only branch to `0x49939B` is `0x49938F je 0x49939B`, which follows the unconditional `jmp
+0x4995B8` at `0x499396`; no branch in `.text` lands on `0x49939C..0x4993A6` and no dword in the
+file names an address in `0x49939B..0x4993B5` (an instruction-level scan and a literal scan,
+2026-11-09). So every record the handler does not divert before it — a button held on the minimap
+(`0x499348`, reached from `0x4992DF`) and Type 0's Ctrl+right scroll (`main+0x2CDF`, `0x499387`,
+reached from `0x499350`) — passes `0x49939B`, whatever the mode, with `ecx` = main (loaded at
+`0x4992D2` or `0x499342`), which `0x4993B6` reads. The demo recorder rewrites the rel32 at
+`0x4993AC` (`tagpu_recorder.c`, *THE CLICKS*). Then:
 
 ```
 0x4993B6  80 B9 C3 2C 00 00 01   cmp byte [ecx+0x2CC3],1
@@ -1124,9 +1169,9 @@ and the double click (`0x203`, which Windows sends in place of the second press)
 in `.text` lands on `0x4993BF..0x4993D4` and no absolute reference in the file names an address
 there (an instruction-level scan and a literal scan, 2026-10-25).
 
-**Impure's three hooks** (all on the game thread inside this handler, written at attach; the
+**Impure's placement hooks** (all on the game thread inside this handler, written at attach; the
 entry observer and the stub are the router's, `tagpu_route.c`, which hands a mode-14 record to
-`tagpu_place.c` and a mode-12 one to the reclaim sweep): a before-observer on the handler's entry
+`tagpu_place.c`, a mode-12 one to the reclaim sweep and a mode-2 one to the formation move): a before-observer on the handler's entry
 `0x499200` (stolen `A1 E8 1D 51 00 83 EC 18`) whose placement client ends a gesture whenever a
 record is handled in a mode other than 14 — in mode 1 the routing
 skips the route (`0x4993BD`) and `0x4197D0` is not called, so neither other hook sees a disarm
@@ -1141,6 +1186,16 @@ instructions. The stub keeps every register (`pushad`/`popad`); only EFLAGS diff
 two ways, and neither target reads a flag. What the commit then calls is the order roots of
 *Contextual cancellation through the native order roots* (`0x439F80`, `0x43ADC0`), the sound
 `0x47F1A0("oktobuild", 0)` and the bit-5 store of `0x498FB4`.
+
+**The router's fourth site, for the formation move**: a 12-byte stub over `0x49939B` (`E9 rel32`
+and seven `90`, written after the 18 bytes up to `0x4993AC`'s `E8` and the `jmp` at `0x4993B1`
+match; the call's rel32 is the recorder's to rewrite) that asks `tagpu_formation_right` about every
+record reaching it: 1, consumed, to the frame `0x4995B8`; 0, the three replaced instructions, the
+`mov edx` reloading the message, on to `0x4993B6` or `0x4993A7`. `pushad`/`popad` keep every
+register, `ecx` among them; EFLAGS differ on the consumed way only, where `0x4995B8` is a call.
+Interface Type 1 in mode 1, a right press that only moves units is deferred to its release
+there, and a mode-2 left drag reaches the module through the `0x4993BF` stub
+([formation move](../modules/formation.html)).
 
 **What the module reads for it.** `0x4C1B80` for Shift, Ctrl and Alt at each evaluation (the ids:
 *`KeyboardHotkeySampler 0x4C1B80`*); `0x48CD80` for the ring's unit, asked on the same record that
