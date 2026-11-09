@@ -328,7 +328,7 @@ Landings 2 and 3 are independent of each other.
 **Needs the owner:**
 - Where each author's permission is recorded. The `permission` field says today only that the owner
   reports having it, dated.
-- When each of the other four mods is uploaded and given its `base_url`: ProTA alone is hosted today.
+- When each of the other three mods is uploaded and given its `base_url`: Total Mayhem and ProTA are hosted today.
 - The art of the screen's thirteen new parts. `tools/mods/genparts.py` derives plain ones from the kit, and a painted part of the same name replaces one with no code change.
 
 **Needs research or a measurement:**

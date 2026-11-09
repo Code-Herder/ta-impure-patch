@@ -171,6 +171,7 @@
           "default": true
         }
       },
+      "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download",
       "show": {
         "by": "By gamma",
         "site": "https://mayhem.tauniverse.com/",
