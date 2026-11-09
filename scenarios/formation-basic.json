@@ -1,0 +1,119 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Formation move (tools/formation_regression.py): eight Arm mobiles -- four Peewees, two Stumpies, a construction kbot and a Brawler gunship -- and a kbot lab on Comet Catcher's plateau west of the centre, cells 66..124 x 350..415 all at height 55 with no feature but one at cell 111,379 (read from the map's TNT). The drags run north of the units (rows 356..400); the lab stands east of them, so a selection with it has a unit with no mover. The commanders stay, so the seats keep their storage; the nearest start position lies over 1100 world units from the plateau.",
+ "seed": 20261109,
+ "on_error": "abort",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "pw1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1150,
+    6400
+   ]
+  },
+  {
+   "id": "pw2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1200,
+    6400
+   ]
+  },
+  {
+   "id": "pw3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1250,
+    6400
+   ]
+  },
+  {
+   "id": "pw4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1300,
+    6400
+   ]
+  },
+  {
+   "id": "stump1",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    1150,
+    6500
+   ]
+  },
+  {
+   "id": "stump2",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    1250,
+    6500
+   ]
+  },
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1350,
+    6500
+   ]
+  },
+  {
+   "id": "gun",
+   "type": "ARMBRAWL",
+   "owner": 0,
+   "pos": [
+    1450,
+    6450
+   ]
+  },
+  {
+   "id": "lab",
+   "type": "ARMLAB",
+   "owner": 0,
+   "pos": [
+    1750,
+    6450
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1450,
+   6000
+  ]
+ }
+}

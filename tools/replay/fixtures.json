@@ -1407,6 +1407,31 @@
     ]
    ],
    "end": 2400
+  },
+  "formation-basic": {
+   "load": "formation-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_formation.c",
+    "tagpu/ddraw/src/tagpu_formation.h",
+    "tagpu/ddraw/src/tagpu_formgeo.c",
+    "tagpu/ddraw/src/tagpu_formgeo.h",
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tools/formation_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/formation_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
   }
  },
  "broad": {

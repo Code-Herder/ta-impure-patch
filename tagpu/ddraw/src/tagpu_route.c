@@ -4,9 +4,12 @@
    0x498DA0 make the world point main+0x2CAA and the region bits main+0x2CC6 (0x499221), runs the
    build cursor 0x4197D0 in mode 14 or else the hover query 0x48CD80 and the cursor chooser
    0x48D220 (0x499297), whose answer it stores in main+0x2CBE with its sprite (0x4992A2..0x4992C8),
-   and then routes the click: mode 1 skips the route (0x4993BD), every other mode reaches
-   0x4993BF. Three hooks are shared here, because more than one client needs each:
+   and then routes the click: a right press goes to 0x499100 (0x4993AC), mode 1 skips the route
+   (0x4993BD), every other mode reaches 0x4993BF. The hooks here are shared, or sit on the
+   routing itself:
 
+   - the stub at 0x49939B, the right-press branch, which every record not diverted before it
+     passes in every mode, and which asks tagpu_formation.c what to do with it;
    - the stub at 0x4993BF, which asks the armed mode's client what to do with the record;
    - a before-observer on the handler's entry, where each client ends its own gesture when a
      record is handled in another mode;
@@ -22,6 +25,7 @@
 #include "tagpu_route.h"
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
+#include "tagpu_formation.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
 #include "tagpu_packet.h"
@@ -37,6 +41,9 @@
 #define VA_ROUTE       0x004993BFu
 #define VA_ROUTE_CLICK 0x004993CBu
 #define VA_ROUTE_FRAME 0x004995B8u
+#define VA_RIGHT       0x0049939Bu
+#define VA_RIGHT_PRESS 0x004993A7u   /* lea eax,[esp+0xc]; push eax; call 0x499100 */
+#define VA_RIGHT_NOT   0x004993B6u   /* cmp byte [ecx+0x2cc3],1: the mode test       */
 #define VA_CHOOSER     0x0048D220u
 #define VA_CURSOR      0x00499296u   /* push eax; call 0x48D220 (0x499297) */
 
@@ -130,19 +137,21 @@ static int __cdecl route_button(const int* rec, unsigned msg)
     switch (ta[M_MODE]) {
     case 14: return tagpu_place_button(rec, msg);
     case 12: return tagpu_sweep_button(rec, msg);
+    case 2:  return tagpu_formation_button(rec, msg);
     default: return 0;
     }
 }
 
 /* THE IN-PLAY HANDLER'S ENTRY, 0x499200 (IdleTick's per-mode call at 0x499A1C, through
    main+0x391F5): each client ends its own gesture when the record is handled in another mode
-   (tagpu_place_entry, tagpu_sweep_entry, which say why that is enough for each). A
-   before-observer: the handler runs unchanged. */
+   (tagpu_place_entry, tagpu_sweep_entry, tagpu_formation_entry, which say why that is enough
+   for each). A before-observer: the handler runs unchanged. */
 static int __cdecl handler_entry(void* entry_esp)
 {
     (void)entry_esp;
     tagpu_place_entry();
     tagpu_sweep_entry();
+    tagpu_formation_entry();
     return 0;
 }
 
@@ -191,6 +200,63 @@ static int install_route(void)
     return 1;
 }
 
+static int __cdecl right_button(const int* rec, unsigned msg)
+{
+    return tagpu_formation_right(rec, msg);
+}
+
+/* THE RIGHT-PRESS BRANCH AT 0x49939B. The click routing's first test, DISASSEMBLED:
+       0x49939B  8B 54 24 1C          mov edx,[esp+0x1c]   ; the record's message
+       0x49939F  81 FA 04 02 00 00    cmp edx,0x204        ; WM_RBUTTONDOWN
+       0x4993A5  75 0F                jne 0x4993B6         ; the mode test
+       0x4993A7  8D 44 24 0C          lea eax,[esp+0xc]    ; the handler's record copy
+       0x4993AB  50                   push eax
+       0x4993AC  E8 <rel32>           call 0x499100        ; the right press
+       0x4993B1  E9 02 02 00 00       jmp 0x4995B8         ; the frame
+   The only branch to it is 0x49938F `je 0x49939B`, after the unconditional `jmp 0x4995B8` at
+   0x499396; no branch lands on 0x49939C..0x4993A6 and no absolute reference names them (a scan
+   of the disassembly and of the file), so nothing enters the NOPs. Every record the handler does
+   not divert before it -- the minimap held (main+0x2CC6 bit 4, 0x499348) and Type 0's Ctrl+right
+   scroll (main+0x2CDF, 0x499387) -- passes here, in every mode. The 18 bytes up to the call's
+   E8 are matched, not its rel32, which the recorder rewrites (tagpu_recorder.c, THE CLICKS); the
+   jmp at 0x4993B1 is matched too. The first 12 bytes -- the three instructions to the jne --
+   become `jmp stub` and seven NOPs. The stub asks right_button: 1, consumed, to the frame
+   0x4995B8; 0, the three original instructions, `mov edx` reloading the message. pushad/popad
+   keep every register, ecx (main, read at 0x4993B6) among them; EFLAGS differ on the consumed
+   way only, where 0x4995B8 is a call. Written at attach, before the game thread can run the
+   handler. */
+static int install_right(void)
+{
+    static const unsigned char want[18] = {
+        0x8B,0x54,0x24,0x1C, 0x81,0xFA,0x04,0x02,0x00,0x00, 0x75,0x0F,
+        0x8D,0x44,0x24,0x0C, 0x50, 0xE8 };
+    static const unsigned char jmp_frame[5] = {0xE9,0x02,0x02,0x00,0x00};
+    unsigned char patch[12];
+    unsigned char *s, *p;
+    int32_t rel;
+    if (memcmp((const void*)(uintptr_t)VA_RIGHT, want, sizeof want) ||
+        memcmp((const void*)(uintptr_t)0x004993B1u, jmp_frame, sizeof jmp_frame)) return 0;
+    if (!(s = p = tagpu_detour_stub())) return 0;
+    *p++ = 0x60;                                            /* pushad                    */
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x2C;     /* lea eax,[esp+0x2C]: the record, [esp+0xc] before pushad */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x3C;     /* push dword [esp+0x3C]: the message, [esp+0x1c] before */
+    *p++ = 0x50;                                            /* push eax: the record      */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(uintptr_t)right_button); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8                 */
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;                  /* cmp eax,1                 */
+    *p++ = 0x61;                                            /* popad: the flags stand    */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, VA_ROUTE_FRAME); p += 4;  /* je: consumed   */
+    memcpy(p, want, 10); p += 10;                           /* mov edx,[esp+0x1c]; cmp edx,0x204 */
+    *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, VA_RIGHT_NOT); p += 4;    /* jne the mode test */
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_RIGHT_PRESS);                       /* jmp the press  */
+    rel = (int32_t)((unsigned)(uintptr_t)s - (VA_RIGHT + 5));
+    patch[0] = 0xE9;
+    memcpy(patch + 1, &rel, 4);
+    memset(patch + 5, 0x90, sizeof patch - 5);
+    if (!tagpu_detour_write(VA_RIGHT, patch, sizeof patch)) { tagpu_detour_stub_free(s); return 0; }
+    return 1;
+}
+
 /* THE CURSOR CHOOSER'S CALL. 0x48D220(order) is stdcall, `ret 4`, and reads only the low byte
    of its argument (DISASSEMBLED); the handler pushes the cursor mode main+0x2CC3 as that
    argument, reads nothing after the call but EAX, and reloads main from 0x511DE8 at once
@@ -230,6 +296,9 @@ void tagpu_route_init(void)
     /* the stub first: route_button answers stock until each client arms */
     if (install_route()) s_ok |= TAGPU_ROUTE_STUB;
     else tagpu_logf("route: the click routing (0x4993BF) holds other bytes; not installed");
+    /* right_button answers stock until tagpu_formation_init arms */
+    if (install_right()) s_ok |= TAGPU_ROUTE_RIGHT;
+    else tagpu_logf("route: the right-press branch (0x49939B) holds other bytes; not installed");
     if (tagpu_detour_bytes_ok(VA_HANDLER, handler, sizeof handler) &&
         tagpu_detour_observe(VA_HANDLER, handler, sizeof handler, handler_entry, NULL))
         s_ok |= TAGPU_ROUTE_ENTRY;
@@ -240,6 +309,6 @@ void tagpu_route_init(void)
     else if (!cursor_write(VA_CURSOR, (void*)cursor_handler))
         tagpu_logf("route: the cursor chooser's call could not be written; not installed");
     else s_ok |= TAGPU_ROUTE_CURSOR;
-    if (s_ok == (TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY | TAGPU_ROUTE_CURSOR))
-        tagpu_logf("route: armed (stub 0x4993BF, entry 0x499200, cursor 0x499297)");
+    if (s_ok == (TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY | TAGPU_ROUTE_CURSOR | TAGPU_ROUTE_RIGHT))
+        tagpu_logf("route: armed (stub 0x4993BF, right 0x49939B, entry 0x499200, cursor 0x499297)");
 }

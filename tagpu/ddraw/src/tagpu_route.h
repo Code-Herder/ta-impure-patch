@@ -2,17 +2,21 @@
 #define TAGPU_ROUTE_H
 /* tagpu_route.c -- the in-play mouse handler's shared hooks and the bounded world view their
    clients use. The handler 0x499200 is the engine's per-mode call for a mouse record in play;
-   two clients act inside it, each in its own cursor mode: tagpu_place.c (14, a building armed)
-   and tagpu_sweep.c (12, RECLAIM armed). Everything here runs on the GAME thread. */
+   three clients act inside it: tagpu_place.c (cursor mode 14, a building armed), tagpu_sweep.c
+   (12, RECLAIM armed) and tagpu_formation.c (mode 2, Move armed, and the right press at
+   Interface Type 1). Everything here runs on the GAME thread. */
 #include <stdint.h>
 
 /* The sites, for tagpu_route_ok: the click routing's stub at 0x4993BF, the before-observer on
-   the handler's entry 0x499200, and the cursor chooser 0x48D220's call 0x499297 in the handler. */
+   the handler's entry 0x499200, the cursor chooser 0x48D220's call 0x499297 in the handler, and
+   the right-press branch's stub at 0x49939B. */
 #define TAGPU_ROUTE_STUB   1u
 #define TAGPU_ROUTE_ENTRY  2u
 #define TAGPU_ROUTE_CURSOR 4u
+#define TAGPU_ROUTE_RIGHT  8u
 
-/* DLL attach, before tagpu_place_init and tagpu_sweep_init: byte-matches and writes the sites.
+/* DLL attach, before tagpu_place_init, tagpu_sweep_init and tagpu_formation_init: byte-matches
+   and writes the sites.
    Each client asks tagpu_route_ok for the ones it needs and arms only on all of them. */
 void tagpu_route_init(void);
 /* 1 when every site in `what` is installed */
