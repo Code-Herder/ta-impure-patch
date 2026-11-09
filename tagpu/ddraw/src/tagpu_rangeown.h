@@ -28,6 +28,10 @@
    most `max` rings. Returns 1 when a ring shows; `*cut` is set when more
    wanted to. Every record's `uidx` is 0xFFFF: the publisher maps `slot` onto
    its own unit table. */
+/* 1 while the rings are on (`ranges`, default on). The order markers' port of
+   the engine's ShowRanges circles (tagpu_order.c) draws them only while this
+   is 0: the rings replace them, and switching the rings off brings them back. */
+int  tagpu_rangeown_on(void);
 int  tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                          unsigned* n, int* cut);
 

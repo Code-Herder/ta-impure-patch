@@ -157,6 +157,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "tagpu_rangeown.h"
 #include "tagpu_order.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_opt.h"
@@ -949,7 +950,9 @@ int tagpu_order_snapshot(void* ctx, void* view)
     A->n = 0;
     A->dropped = 0;
     A->gameTime  = *(const int*)(ta + OFF_GAMETIME);
-    A->showRanges = *(const int*)(ta + OFF_SHOWRANGE) != 0;
+    /* the engine's ShowRanges, unless the weapon range rings are on: they
+       replace its circles (tagpu_rangeown.h) */
+    A->showRanges = *(const int*)(ta + OFF_SHOWRANGE) != 0 && !tagpu_rangeown_on();
 
     if (ptr_ok(first) && ptr_ok(last) && first <= last &&
         (size_t)(last - first) <= (size_t)UNIT_STRIDE * 20000) {

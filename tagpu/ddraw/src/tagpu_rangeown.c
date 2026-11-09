@@ -351,6 +351,8 @@ static int setting(TagpuSetting k, int def)
     return tagpu_settings_get(k, &v) ? v : def;
 }
 
+int tagpu_rangeown_on(void) { return setting(TS_RANGES, 1) != 0; }
+
 int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                         unsigned* n, int* cut)
 {
