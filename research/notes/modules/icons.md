@@ -551,9 +551,11 @@ stock's click. The placement's ring target calls `0x48CD80` itself (`tagpu_place
 the `main+0x2CBA` row). Two matter to a player. The order-marker driver `0x48CC30` asks whether the
 camera, tracked or hovered unit's def can build (`+0x156`, `0x48CCB0..0x48CCEE`) without asking its
 owner, and so does its mirror `tagpu_order.c`, so hovering a constructor's dot shows the player's own
-builders' queued build squares — the tell the stock minimap gives on the same contact. The bottom
-bar's unit read does test sight (`0x465AC0` from `0x46AF3D`), as does `0x494354` (`0x494396`), so a
-contact's name is not shown [DISASSEMBLED 2026-11-09]. The debug key at `0x495751`, behind
+builders' queued build squares — the tell the stock minimap gives on the same contact. The read at
+`0x46ABA9` reaches `UnitInPlayerLOS 0x465AC0` at `0x46AF3D` before it reads the unit's def, and
+`0x494354` reaches it at `0x494396` [DISASSEMBLED 2026-11-09; that `0x46ABA9`'s function is the
+bottom bar's unit name is INFERRED, and MEASURED 2026-11-09 the bar stayed empty with a contact's
+dot hovered]. The debug key at `0x495751`, behind
 `main+0x3923B` bit 1, writes `+0xF4` and `+0x110` of the hovered unit, a contact included.
 
 ## Settings
