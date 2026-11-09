@@ -41,13 +41,15 @@ void     form_slots(const FormPt* node, unsigned m, unsigned n, FormPt* out);
 int32_t  form_cost(FormPt a, FormPt b);
 
 /* slot_of[i] = the slot unit i takes; always a permutation of 0..n-1.
-   form_hungarian: the optimal (minimum total form_cost) assignment, n <= FORM_HUNGARIAN_MAX,
-   ties to the lowest slot. form_nox: units and slots sorted along the direction of the furthest
-   pair and paired in order, then at most FORM_UNCROSS_PASSES passes (and FORM_UNCROSS_WORK
-   segment tests in all) swap the slots of two units whose paths cross properly. Only a proper
-   crossing swaps, and uncrossing two segments strictly shortens their total (the triangle
-   inequality), so the passes cannot cycle. form_assign picks the first up to
-   FORM_HUNGARIAN_MAX units, the second above. Returns 'h' or 'x'. */
+   form_hungarian: the optimal (minimum total form_cost) assignment, n <= FORM_HUNGARIAN_MAX
+   (above it, form_nox's answer), ties to the lowest slot. form_nox: units and slots sorted along
+   the direction of the furthest pair and paired in order, then at most FORM_UNCROSS_PASSES passes
+   (and FORM_UNCROSS_WORK segment tests in all) swap the slots of two units whose paths cross
+   properly; n <= FORM_MAX_UNITS (above it, the identity). Only a proper crossing swaps, and
+   uncrossing two segments strictly shortens their total (the triangle inequality), so the passes
+   cannot cycle; the work cap bounds them regardless. form_assign picks the first up to
+   FORM_HUNGARIAN_MAX units, the second above. Returns 'h' or 'x'.
+   All three use static scratch: one caller at a time (the game thread). */
 void     form_hungarian(const FormPt* start, const FormPt* slot, unsigned n, uint16_t* slot_of);
 void     form_nox(const FormPt* start, const FormPt* slot, unsigned n, uint16_t* slot_of);
 int      form_assign(const FormPt* start, const FormPt* slot, unsigned n, uint16_t* slot_of);
