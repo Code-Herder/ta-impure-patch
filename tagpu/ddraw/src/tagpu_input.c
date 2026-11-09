@@ -83,6 +83,9 @@ static int token_vk(const char* t)
     if (!lstrcmpiA(t, "left"))   return VK_LEFT;
     if (!lstrcmpiA(t, "right"))  return VK_RIGHT;
     if (!lstrcmpiA(t, "tab"))    return VK_TAB;
+    /* alt+period / alt+comma: the range rings' per-type cycling (tagpu_rangeown.h) */
+    if (!lstrcmpiA(t, "period")) return VK_OEM_PERIOD;
+    if (!lstrcmpiA(t, "comma"))  return VK_OEM_COMMA;
     /* the game's own pause: in a network game it pauses every peer, where Tab only
        opens the options panel */
     if (!lstrcmpiA(t, "pause"))  return VK_PAUSE;

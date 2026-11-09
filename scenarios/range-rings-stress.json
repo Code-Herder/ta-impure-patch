@@ -1,0 +1,102 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The range rings' worst case on Two Continents' two largest land patches: 400 ARM Lugers (ballistic, every one selected past BAR's 358 cap) and 1000 CORE Punishers (ballistic defenses) packed edge to edge, with a Commander each so neither side has lost. Load with --los 0 so every Punisher is in sight.",
+ "seed": 20261110,
+ "on_error": "skip",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "lugers",
+   "owner": 0,
+   "at": [
+    7200,
+    6900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 20,
+    "spacing": 44,
+    "jitter": 0
+   },
+   "composition": [
+    {
+     "type": "ARMMART",
+     "count": 400
+    }
+   ],
+   "facing": 90
+  },
+  {
+   "id": "punishers",
+   "owner": 1,
+   "at": [
+    9500,
+    4768
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 32,
+    "spacing": 48,
+    "jitter": 0
+   },
+   "composition": [
+    {
+     "type": "CORPUN",
+     "count": 1000
+    }
+   ],
+   "facing": 270
+  }
+ ],
+ "units": [
+  {
+   "id": "armcom",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    6900,
+    6500
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "corcom",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    9500,
+    3990
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   8350,
+   5850
+  ]
+ }
+}

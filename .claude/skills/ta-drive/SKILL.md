@@ -186,7 +186,7 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
 - **`tacli click X Y` is positionally correct on its own**: the DLL posts a MOVE to (x,y), the
   button, then a MOVE back to the screen centre. So after any click the pointer is at the centre,
   and `wheel:` notches or a position-less `click`/`rclick` land there unless you `pmove:X,Y`.
-- **Key tokens**: names (`space return esc tab plus minus up down left right backspace delete
+- **Key tokens**: names (`space return esc tab plus minus period comma up down left right backspace delete
   home end y …`), combos `ctrl+d`/`shift+2`/`ctrl+shift+a` (modifier down, key down and up,
   modifier up, each handled before the next is sent, so TA's poll sees the modifier), `char:c`, `down:<tok>`/`up:<tok>` to hold keys or `lbutton`/`rbutton`/`mbutton`
   across frames, `mouse:x,y`, `pmove:x,y`, `click:x,y`/`rclick:x,y`/`pclick:x,y`, `wheel:n`; **device** pixels:

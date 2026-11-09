@@ -16,9 +16,10 @@
    thread (`tagpu_range_render`, tagpu_range.c) turns them into the
    instances and the draw list below, and tagpu_vk_range.c draws them. The
    SHAPE of a ring -- its reach in each direction over the terrain -- is
-   computed by the vertex stage from the height grid the terrain pass already
-   holds, so the render thread reads no engine memory and the CPU walks no
-   terrain.
+   computed on the GPU by a compute pass (tagpu_range_comp.h) from the height
+   grid the terrain pass already holds, once per ring for as long as the ring
+   stays the same, so the render thread reads no engine memory and the CPU
+   walks no terrain.
 
    THE UNION IS THE STENCIL'S, as BAR's fallback path has it: a class's
    discs write its bit, and its outer rings are drawn only where no disc of
@@ -34,7 +35,8 @@ typedef struct TAGPU_RGINST {
                      1 = ballistic, the radius scale (BAR's D-gun 1.05)          */
     float col[4]; /* straight RGBA; the alpha is the ring's, fades included      */
     float w[4];   /* half width in game px with the AA rim, segments, half width
-                     without the rim, 0                                          */
+                     without the rim, and the ring's first entry in the reach
+                     buffer (tagpu_vk_range.c writes it; 0 here)                */
 } TAGPU_RGINST;
 
 enum {

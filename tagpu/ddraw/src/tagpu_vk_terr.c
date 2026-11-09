@@ -2661,13 +2661,14 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     vkCmdDraw(cb, TAGPU_TERR_QUADV, s_cells, 0, 0);
 }
 
-VkImageView tagpu_vk_terr_height(uint32_t slot, int* w, int* h)
+VkImageView tagpu_vk_terr_height(uint32_t slot, int* w, int* h, unsigned* serial)
 {
     if (slot >= TAGPU_VK_SLOTS || !s_height.view || !s_height.have ||
         s_height.w < 2 || s_height.h < 2 ||   /* 1x1 is the no-grid stand-in */
         s_slot[slot].boundHeight != s_height.view) return VK_NULL_HANDLE;
     if (w) *w = s_height.w;
     if (h) *h = s_height.h;
+    if (serial) *serial = s_height.serial;
     return s_height.view;
 }
 

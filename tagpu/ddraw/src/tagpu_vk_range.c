@@ -1,6 +1,17 @@
 /* tagpu_vk_range.c -- the weapon range rings, drawn by Vulkan.
    Contract: tagpu_vk_range.h. What is drawn: tagpu_range.h.
 
+   THE REACH FIRST, ONCE A RING. A compute pass (tagpu_range_comp.h) walks the
+   terrain for every direction of a ring and writes the radius and the surface
+   altitude there into this slot's reach buffer; the disc and the two bands of
+   the ring then read those points. A ring's block is kept from one use of the
+   slot to the next while the ring's inputs -- centre, altitude, range,
+   velocity, minbarrel, segments -- and the grid, the sea and gravity stay the
+   same, so a structure's ring is walked once per slot and a moving unit's
+   every frame. THE CACHE IS PER SLOT, and that is what makes reusing a block
+   safe: a slot's buffer is read and written only by that slot's submissions,
+   and the seam waits on the slot's fence before `prepare`.
+
    THREE PIPELINES, ONE PROGRAM PAIR EACH:
      disc   DVS/FS, stencil NOT_EQUAL against the draw's bit and REPLACE: a
             class's discs set its bit once per pixel, and the fill colour they
@@ -33,15 +44,16 @@
 #include "tagpu_vk_terr.h"     /* the slot's height grid */
 #include "tagpu_range.h"
 #include "spirv/tagpu_range.spv.h"
+#include "spirv/tagpu_range_comp.spv.h"
 
 #define IFNS(X) \
-    X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceProperties)
+    X(vkGetPhysicalDeviceMemoryProperties)
 
 #define DFNS(X) \
     X(vkCreateShaderModule) X(vkDestroyShaderModule) \
     X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
     X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
-    X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) \
+    X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkDestroyPipeline) \
     X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
     X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
     X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
@@ -51,7 +63,8 @@
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) \
-    X(vkCmdSetStencilReference) X(vkCmdClearAttachments)
+    X(vkCmdSetStencilReference) X(vkCmdClearAttachments) \
+    X(vkCmdDispatch) X(vkCmdPipelineBarrier) X(vkCmdPushConstants)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -59,18 +72,33 @@ DFNS(DECL)
 #undef DECL
 
 /* the vertex stages' std140 block, as tagpu_range.spv.h prints it */
-#define VS_SZ       64
+#define VS_SZ       48
 #define VS_GAME      0
 #define VS_ZOOM      8
 #define VS_ZOOMC    16
 #define VS_EYE      24
-#define VS_HDIM     32
-#define VS_MAPEXT   40
-#define VS_SEA      48
-#define VS_GRAV     52
-#define VS_PXGAME   56
+#define VS_MAPEXT   32
+#define VS_PXGAME   40
+
+/* the reach pass's push constants, tagpu_range_comp.h's PC in std430 */
+#define PC_SZ       24
+#define PC_HDIM      0
+#define PC_SEA       8
+#define PC_GRAV     12
+#define PC_JOBS     16
+#define PC_CAP      20
 
 #define INST_STRIDE ((uint32_t)sizeof(TAGPU_RGINST))
+#define JOB_STRIDE  48u                 /* three vec4 a job                    */
+#define ENTRY_SZ    8u                  /* one direction's (radius, altitude)  */
+
+/* THE RINGS ONE FRAME CAN HOLD, and the two block sizes the reach buffer is cut
+   into: a ring is 128 or 1024 segments (tagpu_range.c's styles), and `prepare`
+   refuses a draw list naming any other count. */
+#define RG_MAXRING  4096
+#define SEG_A       128
+#define SEG_B       1024
+#define HASH_N      8192                /* a power of two, twice RG_MAXRING    */
 
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
@@ -79,28 +107,51 @@ static int s_downOwed, s_downPaying;
 static int s_drawThis;
 static uint32_t s_slot;
 
-static VkDescriptorSetLayout s_dsl;
-static VkPipelineLayout      s_plo;
-static VkPipeline            s_pipeDisc, s_pipeOuter, s_pipeLine;
+static VkDescriptorSetLayout s_dsl, s_cdsl;
+static VkPipelineLayout      s_plo, s_cplo;
+static VkPipeline            s_pipeDisc, s_pipeOuter, s_pipeLine, s_pipeReach;
 static VkRenderPass          s_pipeRp;
 static VkDescriptorPool      s_pool;
-static VkDescriptorSet       s_set[TAGPU_VK_SLOTS];
+static VkDescriptorSet       s_set[TAGPU_VK_SLOTS], s_cset[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;
 
-static VkBuffer       s_ubo[TAGPU_VK_SLOTS];
-static VkDeviceMemory s_uboMem[TAGPU_VK_SLOTS];
-static unsigned char* s_uboMap[TAGPU_VK_SLOTS];
-static VkDeviceSize   s_uboCap[TAGPU_VK_SLOTS];
-static VkBuffer       s_vb[TAGPU_VK_SLOTS];
-static VkDeviceMemory s_vbMem[TAGPU_VK_SLOTS];
-static unsigned char* s_vbMap[TAGPU_VK_SLOTS];
-static VkDeviceSize   s_vbCap[TAGPU_VK_SLOTS];
+typedef struct {
+    VkBuffer buf; VkDeviceMemory mem; unsigned char* map; VkDeviceSize cap;
+} BUF;
+
+/* a ring as the reach knows it: x, z, altitude, range, v, minbarrel,
+   ballistic, scale, segments */
+typedef struct { float k[9]; } RKEY;
+typedef struct { RKEY key; int base; } RENT;
+
+typedef struct {
+    BUF ubo, vb, jobs, reach;
+    /* the reach buffer's blocks: `capA` of SEG_A entries, then `capB` of SEG_B */
+    int  capA, capB;
+    int  freeA[RG_MAXRING]; int nfreeA;
+    int  freeB[RG_MAXRING]; int nfreeB;
+    /* the rings whose points the buffer holds, and what they were walked over */
+    RENT ent[RG_MAXRING]; int nent;
+    unsigned serial; int hW, hH; float sea, grav; int epoch;
+} SLOTDATA;
+
+static SLOTDATA s_sd[TAGPU_VK_SLOTS];
+
+/* this frame's scratch, render thread only */
+static RENT          s_uniq[RG_MAXRING];
+static int           s_nuniq;
+static int           s_instRing[TAGPU_RG_MAXINST];
+static int           s_hash[HASH_N], s_hashOld[HASH_N];
+static unsigned char s_taken[RG_MAXRING];
+static float         s_jobBuf[RG_MAXRING * 12];
+static TAGPU_RGINST  s_inst[TAGPU_RG_MAXINST];
 
 static TAGPU_RGHAND s_h;
+static unsigned s_cWalked, s_cKept;      /* rings walked / reused, a heartbeat */
 /* ONE LATCH PER SITE: a latch shared by two refusals lets the first silence
    the second for the session. */
 static int s_saidUp, s_saidStencil, s_saidHeight, s_saidRoom, s_saidBound;
-static int s_saidPipe, s_saidSlot, s_saidDrew;
+static int s_saidPipe, s_saidSlot, s_saidDrew, s_saidGrow;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -125,35 +176,55 @@ static int mem_type(const TAGPU_VKPASS* d, uint32_t bits, VkMemoryPropertyFlags 
     return -1;
 }
 
-static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlags use,
-                     VkBuffer* buf, VkDeviceMemory* mem, unsigned char** map)
+static void kill_buf(const TAGPU_VKPASS* d, BUF* b)
+{
+    if (b->buf) vkDestroyBuffer(d->dev, b->buf, NULL);
+    if (b->mem) vkFreeMemory(d->dev, b->mem, NULL);
+    memset(b, 0, sizeof *b);
+}
+
+/* `host` 1: host-visible and mapped; 0: device-local, which only the GPU
+   writes (the reach), falling back to any type the buffer allows */
+static int mk_buf(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlags use, int host,
+                  BUF* b)
 {
     VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     VkMemoryRequirements req;
     int type;
     void* p = NULL;
-    *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *map = NULL;
+    memset(b, 0, sizeof *b);
     bci.size = size;
     bci.usage = use;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(d->dev, &bci, NULL, buf) != VK_SUCCESS) { *buf = VK_NULL_HANDLE; return 0; }
-    vkGetBufferMemoryRequirements(d->dev, *buf, &req);
-    type = mem_type(d, req.memoryTypeBits,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkCreateBuffer(d->dev, &bci, NULL, &b->buf) != VK_SUCCESS) { b->buf = VK_NULL_HANDLE; return 0; }
+    vkGetBufferMemoryRequirements(d->dev, b->buf, &req);
+    type = host ? mem_type(d, req.memoryTypeBits,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                : mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (!host && type < 0) type = mem_type(d, req.memoryTypeBits, 0);
     if (type < 0) goto bad;
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = (uint32_t)type;
-    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) { *mem = VK_NULL_HANDLE; goto bad; }
-    if (vkBindBufferMemory(d->dev, *buf, *mem, 0) != VK_SUCCESS) goto bad;
-    if (vkMapMemory(d->dev, *mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) goto bad;
-    *map = (unsigned char*)p;
+    if (vkAllocateMemory(d->dev, &mai, NULL, &b->mem) != VK_SUCCESS) { b->mem = VK_NULL_HANDLE; goto bad; }
+    if (vkBindBufferMemory(d->dev, b->buf, b->mem, 0) != VK_SUCCESS) goto bad;
+    if (host) {
+        if (vkMapMemory(d->dev, b->mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) goto bad;
+        b->map = (unsigned char*)p;
+    }
+    b->cap = size;
     return 1;
 bad:
-    if (*mem) vkFreeMemory(d->dev, *mem, NULL);
-    if (*buf) vkDestroyBuffer(d->dev, *buf, NULL);
-    *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *map = NULL;
+    kill_buf(d, b);
     return 0;
+}
+
+/* a host buffer at least `size`: this slot's own, behind its fence */
+static int need_buf(const TAGPU_VKPASS* d, BUF* b, VkDeviceSize size, VkBufferUsageFlags use)
+{
+    if (b->buf && b->cap >= size) return 1;
+    kill_buf(d, b);
+    return mk_buf(d, size, use, 1, b);
 }
 
 static VkShaderModule mk_module(const TAGPU_VKPASS* d, const uint32_t* w, size_t words)
@@ -177,14 +248,16 @@ static int resolve(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* binding 0 the vertex stages' block, 8 their height grid (spirv-gen's
-   allocation by stage) */
+/* the draws: binding 0 the vertex stages' block, 1 the reach (spirv-gen's
+   allocation by stage). The reach pass: 0 the height grid, 1 the jobs, 2 the
+   reach, as tagpu_range_comp.h states them. */
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayoutBinding b[3];
     VkDescriptorSetLayoutCreateInfo li = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    VkDescriptorPoolSize ps[2];
+    VkPushConstantRange pr;
+    VkDescriptorPoolSize ps[3];
     VkDescriptorPoolCreateInfo pi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
     VkDescriptorSetAllocateInfo ai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -194,7 +267,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     memset(b, 0, sizeof b);
     b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    b[1].binding = 8; b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     li.bindingCount = 2; li.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_dsl) != VK_SUCCESS) {
@@ -204,21 +277,42 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     if (vkCreatePipelineLayout(d->dev, &pli, NULL, &s_plo) != VK_SUCCESS) {
         s_plo = VK_NULL_HANDLE; return 0;
     }
+
+    memset(b, 0, sizeof b);
+    b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[2].binding = 2; b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[2].descriptorCount = 1; b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    li.bindingCount = 3; li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_cdsl) != VK_SUCCESS) {
+        s_cdsl = VK_NULL_HANDLE; return 0;
+    }
+    memset(&pr, 0, sizeof pr);
+    pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pr.offset = 0; pr.size = PC_SZ;
+    pli.setLayoutCount = 1; pli.pSetLayouts = &s_cdsl;
+    pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pr;
+    if (vkCreatePipelineLayout(d->dev, &pli, NULL, &s_cplo) != VK_SUCCESS) {
+        s_cplo = VK_NULL_HANDLE; return 0;
+    }
+
     memset(ps, 0, sizeof ps);
-    ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    ps[0].descriptorCount = d->slots;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = d->slots;
-    pi.maxSets = d->slots;
-    pi.poolSizeCount = 2; pi.pPoolSizes = ps;
+    ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots;
+    ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[1].descriptorCount = 3 * d->slots;
+    ps[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[2].descriptorCount = d->slots;
+    pi.maxSets = 2 * d->slots;
+    pi.poolSizeCount = 3; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_pool) != VK_SUCCESS) {
         s_pool = VK_NULL_HANDLE; return 0;
     }
-    for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
     ai.descriptorPool = s_pool;
     ai.descriptorSetCount = d->slots;
     ai.pSetLayouts = lay;
+    for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
     if (vkAllocateDescriptorSets(d->dev, &ai, s_set) != VK_SUCCESS) return 0;
+    for (i = 0; i < d->slots; i++) lay[i] = s_cdsl;
+    if (vkAllocateDescriptorSets(d->dev, &ai, s_cset) != VK_SUCCESS) return 0;
     /* NEAREST and texelFetch: the shader does its own bilinear, the engine's */
     si.magFilter = si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -227,6 +321,24 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     if (vkCreateSampler(d->dev, &si, NULL, &s_samp) != VK_SUCCESS) {
         s_samp = VK_NULL_HANDLE; return 0;
     }
+    return 1;
+}
+
+static int build_reach_pipeline(const TAGPU_VKPASS* d)
+{
+    VkComputePipelineCreateInfo ci = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+    VkShaderModule m = mk_module(d, tagpu_spv_tagpu_range_comp_REACH_CS,
+                                 sizeof tagpu_spv_tagpu_range_comp_REACH_CS / 4);
+    VkResult r;
+    if (!m) return 0;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = m;
+    ci.stage.pName = "main";
+    ci.layout = s_cplo;
+    r = vkCreateComputePipelines(d->dev, VK_NULL_HANDLE, 1, &ci, NULL, &s_pipeReach);
+    vkDestroyShaderModule(d->dev, m, NULL);
+    if (r != VK_SUCCESS) { s_pipeReach = VK_NULL_HANDLE; return 0; }
     return 1;
 }
 
@@ -350,41 +462,220 @@ done:
 }
 
 static void put_f(unsigned char* p, int off, float v) { memcpy(p + off, &v, 4); }
+static void put_i(unsigned char* p, int off, int v)   { memcpy(p + off, &v, 4); }
 
-/* A grow destroys this slot's own buffer and nobody else's, behind the seam's
-   wait on this slot's fence. */
-static int slot_buf(const TAGPU_VKPASS* d, uint32_t slot, VkDeviceSize vert)
+static uint32_t key_hash(const RKEY* k)
 {
-    if (!s_ubo[slot]) {
-        if (!mk_buffer(d, VS_SZ, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                       &s_ubo[slot], &s_uboMem[slot], &s_uboMap[slot])) return 0;
-        s_uboCap[slot] = VS_SZ;
+    const unsigned char* p = (const unsigned char*)k;
+    uint32_t h = 2166136261u;
+    size_t i;
+    for (i = 0; i < sizeof *k; i++) { h ^= p[i]; h *= 16777619u; }
+    return h;
+}
+
+/* index of `k` in `tab` (a HASH_N open-addressed table of indices into
+   `ents`), or the free cell to put it in as -(cell + 1) */
+static int key_find(const int* tab, const RENT* ents, const RKEY* k)
+{
+    uint32_t c = key_hash(k) & (HASH_N - 1);
+    for (;;) {
+        int e = tab[c];
+        if (e < 0) return -(int)c - 1;
+        if (!memcmp(&ents[e].key, k, sizeof *k)) return e;
+        c = (c + 1) & (HASH_N - 1);
     }
-    if (!s_vb[slot] || s_vbCap[slot] < vert) {
-        if (s_vb[slot]) { vkDestroyBuffer(d->dev, s_vb[slot], NULL); vkFreeMemory(d->dev, s_vbMem[slot], NULL); }
-        s_vb[slot] = VK_NULL_HANDLE; s_vbMem[slot] = VK_NULL_HANDLE; s_vbMap[slot] = NULL; s_vbCap[slot] = 0;
-        if (!mk_buffer(d, vert, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                       &s_vb[slot], &s_vbMem[slot], &s_vbMap[slot])) return 0;
-        s_vbCap[slot] = vert;
+}
+
+static int seg_of(const RKEY* k) { return (int)k->k[8]; }
+
+/* every block free again: nothing the buffer holds is kept */
+static void reach_forget(SLOTDATA* sd)
+{
+    int j;
+    sd->nent = 0;
+    sd->nfreeA = sd->nfreeB = 0;
+    for (j = sd->capA - 1; j >= 0; j--) sd->freeA[sd->nfreeA++] = j * SEG_A;
+    for (j = sd->capB - 1; j >= 0; j--) sd->freeB[sd->nfreeB++] = sd->capA * SEG_A + j * SEG_B;
+}
+
+static int pow2_at_least(int n, int floor)
+{
+    int c = floor;
+    while (c < n && c < RG_MAXRING) c <<= 1;
+    return c < RG_MAXRING ? c : RG_MAXRING;
+}
+
+/* the slot's reach buffer with room for `needA` blocks of SEG_A and `needB`
+   of SEG_B; a new buffer keeps nothing. The slot's last submission has been
+   waited on (the seam's fence), so the old buffer is no one's. */
+static int reach_room(const TAGPU_VKPASS* d, SLOTDATA* sd, int needA, int needB)
+{
+    int a, b;
+    if (sd->reach.buf && needA <= sd->capA && needB <= sd->capB) return 1;
+    a = pow2_at_least(needA > sd->capA ? needA : sd->capA, 256);
+    b = pow2_at_least(needB > sd->capB ? needB : sd->capB, 16);
+    kill_buf(d, &sd->reach);
+    sd->capA = sd->capB = 0;
+    reach_forget(sd);
+    if (!mk_buf(d, (VkDeviceSize)a * SEG_A * ENTRY_SZ + (VkDeviceSize)b * SEG_B * ENTRY_SZ,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &sd->reach))
+        return 0;
+    sd->capA = a; sd->capB = b;
+    reach_forget(sd);
+    if (!s_saidGrow) { s_saidGrow = 1;
+        plog(d, "range: reach buffer for %d + %d rings, %u KB", a, b,
+             (unsigned)(sd->reach.cap >> 10)); }
+    return 1;
+}
+
+/* The draw list is checked before any of it reaches the device: each draw's
+   instances inside the list, and every instance a draw reads with exactly
+   the draw's segment count, 128 or 1024. That last one is the reach's read
+   bound -- the vertex stages read entries base + k for k < the instance's
+   count, which is inside the block its count chose. */
+static int draws_ok(const TAGPU_VKPASS* d)
+{
+    int i, j;
+    if (s_h.ninst > TAGPU_RG_MAXINST || s_h.ndraw > TAGPU_RG_MAXDRAW) {
+        if (!s_saidBound) { s_saidBound = 1;
+            plog(d, "range: %d instances / %d draws is past what this pass carries",
+                 s_h.ninst, s_h.ndraw); }
+        return 0;
+    }
+    for (i = 0; i < s_h.ninst; i++) {
+        float n = s_h.inst[i].w[1];
+        if (n != (float)SEG_A && n != (float)SEG_B) {
+            if (!s_saidBound) { s_saidBound = 1;
+                plog(d, "range: instance %d has %g segments, not %d or %d",
+                     i, (double)n, SEG_A, SEG_B); }
+            return 0;
+        }
+    }
+    for (i = 0; i < s_h.ndraw; i++) {
+        const TAGPU_RGDRAW* g = &s_h.draws[i];
+        int bad = 0;
+        if (g->kind == TAGPU_RG_CLEAR) continue;
+        if (g->first < 0 || g->count <= 0 || g->first + g->count > s_h.ninst ||
+            (g->nseg != SEG_A && g->nseg != SEG_B) ||
+            (g->kind != TAGPU_RG_LINE && (g->bit < 1 || g->bit > 255)))
+            bad = 1;
+        for (j = 0; !bad && j < g->count; j++)
+            if (s_h.inst[g->first + j].w[1] != (float)g->nseg) bad = 1;
+        if (bad) {
+            if (!s_saidBound) { s_saidBound = 1;
+                plog(d, "range: draw %d is out of bounds - kind=%d bit=%d first=%d "
+                        "count=%d nseg=%d of %d", i, g->kind, g->bit, g->first,
+                        g->count, g->nseg, s_h.ninst); }
+            return 0;
+        }
     }
     return 1;
 }
 
+/* This frame's rings, each once, and which ring every instance draws. */
+static int collect_rings(const TAGPU_VKPASS* d)
+{
+    int i;
+    s_nuniq = 0;
+    memset(s_hash, 0xFF, sizeof s_hash);
+    for (i = 0; i < s_h.ninst; i++) {
+        const TAGPU_RGINST* t = &s_h.inst[i];
+        RKEY k;
+        int e;
+        memcpy(&k.k[0], t->c, 4 * sizeof(float));
+        memcpy(&k.k[4], t->b, 4 * sizeof(float));
+        k.k[8] = t->w[1];
+        e = key_find(s_hash, s_uniq, &k);
+        if (e < 0) {
+            if (s_nuniq >= RG_MAXRING) {
+                if (!s_saidBound) { s_saidBound = 1;
+                    plog(d, "range: more than %d distinct rings in one frame", RG_MAXRING); }
+                return 0;
+            }
+            s_hash[-e - 1] = s_nuniq;
+            s_uniq[s_nuniq].key = k;
+            s_uniq[s_nuniq].base = -1;
+            e = s_nuniq++;
+        }
+        s_instRing[i] = e;
+    }
+    return 1;
+}
+
+/* Give every ring of this frame a block: the one it had last time this slot
+   was used when the ring and what it was walked over are the same, else a new
+   one, which gets a job. Returns the job count, or -1. */
+static int assign_blocks(const TAGPU_VKPASS* d, SLOTDATA* sd, int hW, int hH, unsigned serial)
+{
+    int j, u, needA = 0, needB = 0, njob = 0;
+    if (serial != sd->serial || hW != sd->hW || hH != sd->hH ||
+        s_h.sea != sd->sea || s_h.grav != sd->grav) {
+        reach_forget(sd);
+        sd->serial = serial; sd->hW = hW; sd->hH = hH;
+        sd->sea = s_h.sea; sd->grav = s_h.grav;
+    }
+    for (u = 0; u < s_nuniq; u++) {
+        if (seg_of(&s_uniq[u].key) == SEG_A) needA++; else needB++;
+    }
+    if (needA > sd->capA || needB > sd->capB || !sd->reach.buf) {
+        if (!reach_room(d, sd, needA, needB)) return -1;
+    }
+    /* keep what is still drawn, free the rest, then place the new ones */
+    memset(s_hashOld, 0xFF, sizeof s_hashOld);
+    for (j = 0; j < sd->nent; j++) {
+        int e = key_find(s_hashOld, sd->ent, &sd->ent[j].key);
+        if (e < 0) s_hashOld[-e - 1] = j;
+        s_taken[j] = 0;
+    }
+    s_cKept = 0;
+    for (u = 0; u < s_nuniq; u++) {
+        int e = sd->nent ? key_find(s_hashOld, sd->ent, &s_uniq[u].key) : -1;
+        if (e >= 0 && !s_taken[e]) {
+            s_uniq[u].base = sd->ent[e].base;
+            s_taken[e] = 1;
+            s_cKept++;
+        }
+    }
+    for (j = 0; j < sd->nent; j++) {
+        if (s_taken[j]) continue;
+        if (seg_of(&sd->ent[j].key) == SEG_A) sd->freeA[sd->nfreeA++] = sd->ent[j].base;
+        else                                  sd->freeB[sd->nfreeB++] = sd->ent[j].base;
+    }
+    for (u = 0; u < s_nuniq; u++) {
+        RENT* r = &s_uniq[u];
+        float* jb;
+        if (r->base >= 0) continue;
+        if (seg_of(&r->key) == SEG_A) r->base = sd->freeA[--sd->nfreeA];
+        else                          r->base = sd->freeB[--sd->nfreeB];
+        jb = &s_jobBuf[njob * 12];
+        memcpy(jb, r->key.k, 8 * sizeof(float));
+        jb[8] = (float)r->base; jb[9] = r->key.k[8]; jb[10] = 0.0f; jb[11] = 0.0f;
+        njob++;
+    }
+    memcpy(sd->ent, s_uniq, (size_t)s_nuniq * sizeof *s_uniq);
+    sd->nent = s_nuniq;
+    s_cWalked = (unsigned)njob;
+    return njob;
+}
+
 int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
-    VkDescriptorBufferInfo bi;
+    VkDescriptorBufferInfo bu, br, bj;
     VkDescriptorImageInfo ii;
-    VkWriteDescriptorSet w[2];
+    VkWriteDescriptorSet w[5];
+    VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkImageView hv;
-    VkDeviceSize vsz;
-    int hW = 0, hH = 0, i;
+    SLOTDATA* sd;
+    unsigned serial = 0;
+    unsigned char pc[PC_SZ];
+    int hW = 0, hH = 0, i, njob;
     unsigned char* u;
-    (void)cb;
 
     s_drawThis = 0;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     s_slot = slot;
+    sd = &s_sd[slot];
     if (!tagpu_range_handover(&s_h, d->frame)) return 0;
     if (s_h.ndraw <= 0 || s_h.ninst <= 0) return 0;
 
@@ -397,21 +688,18 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         return 0;
     }
     if (s_state == ST_UNBUILT) {
-        VkPhysicalDeviceProperties props;
-        if (!resolve(d) || !build_descriptors(d)) {
-            plog(d, "range: an entry point or the descriptors would not build - "
-                    "the range rings stay down");
+        if (!resolve(d) || !build_descriptors(d) || !build_reach_pipeline(d)) {
+            plog(d, "range: an entry point, the descriptors or the reach pipeline would "
+                    "not build - the range rings stay down");
             s_state = ST_REFUSED; s_downOwed = 1; return 0;
         }
-        vkGetPhysicalDeviceProperties(d->pd, &props);
         s_state = ST_READY;
         if (!s_saidUp) { s_saidUp = 1;
-            plog(d, "range: up - %u frame slots, %u vertex-stage samplers",
-                 (unsigned)d->slots, (unsigned)props.limits.maxPerStageDescriptorSamplers); }
+            plog(d, "range: up - %u frame slots", (unsigned)d->slots); }
     }
     /* THE RINGS' SHAPE IS THE TERRAIN'S: no height grid bound for this slot,
        no rings this frame */
-    hv = tagpu_vk_terr_height(slot, &hW, &hH);
+    hv = tagpu_vk_terr_height(slot, &hW, &hH, &serial);
     if (!hv) {
         if (!s_saidHeight) { s_saidHeight = 1;
             plog(d, "range: the terrain pass bound no height grid for this frame - "
@@ -419,55 +707,84 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         return 0;
     }
     s_saidHeight = 0;
-    if (s_h.ninst > TAGPU_RG_MAXINST || s_h.ndraw > TAGPU_RG_MAXDRAW) {
-        if (!s_saidBound) { s_saidBound = 1;
-            plog(d, "range: %d instances / %d draws is past what this pass carries",
-                 s_h.ninst, s_h.ndraw); }
-        return 0;
-    }
-    for (i = 0; i < s_h.ndraw; i++) {
-        const TAGPU_RGDRAW* g = &s_h.draws[i];
-        if (g->kind == TAGPU_RG_CLEAR) continue;
-        if (g->first < 0 || g->count <= 0 || g->first + g->count > s_h.ninst ||
-            g->nseg < 3 || g->nseg > 4096 ||
-            (g->kind != TAGPU_RG_LINE && (g->bit < 1 || g->bit > 255))) {
-            if (!s_saidBound) { s_saidBound = 1;
-                plog(d, "range: draw %d is out of bounds - kind=%d bit=%d first=%d "
-                        "count=%d nseg=%d of %d", i, g->kind, g->bit, g->first,
-                        g->count, g->nseg, s_h.ninst); }
-            return 0;
-        }
-    }
-    vsz = (VkDeviceSize)s_h.ninst * INST_STRIDE;
-    if (!slot_buf(d, slot, vsz)) {
+    if (!draws_ok(d) || !collect_rings(d)) return 0;
+    njob = assign_blocks(d, sd, hW, hH, serial);
+    if (njob < 0 ||
+        !need_buf(d, &sd->ubo, VS_SZ, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) ||
+        !need_buf(d, &sd->vb, (VkDeviceSize)s_h.ninst * INST_STRIDE,
+                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !need_buf(d, &sd->jobs, (VkDeviceSize)(s_nuniq > 0 ? s_nuniq : 1) * JOB_STRIDE,
+                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
         if (!s_saidRoom) { s_saidRoom = 1;
             plog(d, "range: the device would not take this frame's buffers"); }
+        reach_forget(sd);
         return 0;
     }
-    memcpy(s_vbMap[slot], s_h.inst, (size_t)vsz);
-    u = s_uboMap[slot];
+    for (i = 0; i < s_h.ninst; i++) {
+        s_inst[i] = s_h.inst[i];
+        s_inst[i].w[3] = (float)s_uniq[s_instRing[i]].base;
+    }
+    memcpy(sd->vb.map, s_inst, (size_t)s_h.ninst * INST_STRIDE);
+    if (njob > 0) memcpy(sd->jobs.map, s_jobBuf, (size_t)njob * JOB_STRIDE);
+    u = sd->ubo.map;
     memset(u, 0, VS_SZ);
     put_f(u, VS_GAME, s_h.gw);        put_f(u, VS_GAME + 4, s_h.gh);
     put_f(u, VS_ZOOM, s_h.zoom);
     put_f(u, VS_ZOOMC, s_h.zoomCx);   put_f(u, VS_ZOOMC + 4, s_h.zoomCy);
     put_f(u, VS_EYE, s_h.eyeX);       put_f(u, VS_EYE + 4, s_h.eyeY);
-    put_f(u, VS_HDIM, (float)hW);     put_f(u, VS_HDIM + 4, (float)hH);
     put_f(u, VS_MAPEXT, s_h.mapW);    put_f(u, VS_MAPEXT + 4, s_h.mapH);
-    put_f(u, VS_SEA, s_h.sea);
-    put_f(u, VS_GRAV, s_h.grav);
     put_f(u, VS_PXGAME, s_h.ss > 0.0f ? 1.0f / s_h.ss : 1.0f);
 
-    memset(&bi, 0, sizeof bi); memset(&ii, 0, sizeof ii); memset(w, 0, sizeof w);
-    bi.buffer = s_ubo[slot]; bi.range = VS_SZ;
+    memset(&bu, 0, sizeof bu); memset(&br, 0, sizeof br); memset(&bj, 0, sizeof bj);
+    memset(&ii, 0, sizeof ii); memset(w, 0, sizeof w);
+    bu.buffer = sd->ubo.buf;   bu.range = VS_SZ;
+    br.buffer = sd->reach.buf; br.range = VK_WHOLE_SIZE;
+    bj.buffer = sd->jobs.buf;  bj.range = VK_WHOLE_SIZE;
     ii.sampler = s_samp; ii.imageView = hv;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[0].dstSet = s_set[slot]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bi;
-    w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[1].dstSet = s_set[slot]; w[1].dstBinding = 8; w[1].descriptorCount = 1;
-    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &ii;
-    vkUpdateDescriptorSets(d->dev, 2, w, 0, NULL);
+    for (i = 0; i < 5; i++) { w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[i].descriptorCount = 1; }
+    w[0].dstSet = s_set[slot];  w[0].dstBinding = 0;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bu;
+    w[1].dstSet = s_set[slot];  w[1].dstBinding = 1;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &br;
+    w[2].dstSet = s_cset[slot]; w[2].dstBinding = 0;
+    w[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[2].pImageInfo = &ii;
+    w[3].dstSet = s_cset[slot]; w[3].dstBinding = 1;
+    w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[3].pBufferInfo = &bj;
+    w[4].dstSet = s_cset[slot]; w[4].dstBinding = 2;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[4].pBufferInfo = &br;
+    vkUpdateDescriptorSets(d->dev, 5, w, 0, NULL);
+
+    if (njob > 0) {
+        /* THE HEIGHT GRID'S UPLOAD BEFORE THE WALK. The terrain pass's copy
+           ends in a barrier whose second scope is the fragment stage (and its
+           layout change happens there); a barrier whose first scope takes the
+           fragment stage chains onto it, as the terrain's own vertex-stage
+           barrier does. */
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+        put_f(pc, PC_HDIM, (float)hW); put_f(pc, PC_HDIM + 4, (float)hH);
+        put_f(pc, PC_SEA, s_h.sea);    put_f(pc, PC_GRAV, s_h.grav);
+        put_i(pc, PC_JOBS, njob);
+        put_i(pc, PC_CAP, sd->capA * SEG_A + sd->capB * SEG_B);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipeReach);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_cplo, 0, 1,
+                                &s_cset[slot], 0, NULL);
+        vkCmdPushConstants(cb, s_cplo, VK_SHADER_STAGE_COMPUTE_BIT, 0, PC_SZ, pc);
+        vkCmdDispatch(cb, (uint32_t)njob, 1, 1);
+    }
+    /* THE WALK BEFORE THE DRAWS, recorded every frame and not only after a
+       dispatch: a kept block was written by an earlier submission of this
+       slot, and a barrier's first scope covers every command submitted to the
+       queue before it. */
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                         0, 1, &mb, 0, NULL, 0, NULL);
+    if (d->frame % 300u == 0u)
+        plog(d, "range: %d rings, %u walked, %u kept", s_nuniq, s_cWalked, s_cKept);
     s_drawThis = 1;
     return 1;
 }
@@ -536,7 +853,7 @@ void tagpu_vk_range_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     vp.minDepth = 0.5f; vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
-    vkCmdBindVertexBuffers(cb, 0, 1, &s_vb[slot], &zero);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s_sd[slot].vb.buf, &zero);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1,
                             &s_set[slot], 0, NULL);
     for (i = 0; i < s_h.ndraw; i++) {
@@ -577,24 +894,27 @@ void tagpu_vk_range_down(const TAGPU_VKPASS* d)
     uint32_t i;
     if (s_state == ST_UNBUILT && !s_pool) return;
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
-        if (s_ubo[i]) { vkDestroyBuffer(d->dev, s_ubo[i], NULL); vkFreeMemory(d->dev, s_uboMem[i], NULL); }
-        if (s_vb[i])  { vkDestroyBuffer(d->dev, s_vb[i], NULL);  vkFreeMemory(d->dev, s_vbMem[i], NULL); }
-        s_ubo[i] = s_vb[i] = VK_NULL_HANDLE;
-        s_uboMem[i] = s_vbMem[i] = VK_NULL_HANDLE;
-        s_uboMap[i] = s_vbMap[i] = NULL;
-        s_uboCap[i] = s_vbCap[i] = 0;
-        s_set[i] = VK_NULL_HANDLE;
+        SLOTDATA* sd = &s_sd[i];
+        kill_buf(d, &sd->ubo); kill_buf(d, &sd->vb);
+        kill_buf(d, &sd->jobs); kill_buf(d, &sd->reach);
+        sd->capA = sd->capB = 0;
+        reach_forget(sd);
+        sd->serial = 0; sd->hW = sd->hH = 0;
+        s_set[i] = s_cset[i] = VK_NULL_HANDLE;
     }
     kill_pipes(d);
+    if (s_pipeReach) { vkDestroyPipeline(d->dev, s_pipeReach, NULL); s_pipeReach = VK_NULL_HANDLE; }
     if (s_samp) { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
     if (s_pool) { vkDestroyDescriptorPool(d->dev, s_pool, NULL); s_pool = VK_NULL_HANDLE; }
     if (s_plo)  { vkDestroyPipelineLayout(d->dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
+    if (s_cplo) { vkDestroyPipelineLayout(d->dev, s_cplo, NULL); s_cplo = VK_NULL_HANDLE; }
     if (s_dsl)  { vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
+    if (s_cdsl) { vkDestroyDescriptorSetLayout(d->dev, s_cdsl, NULL); s_cdsl = VK_NULL_HANDLE; }
     s_state = s_downPaying ? ST_REFUSED : ST_UNBUILT;
     s_drawThis = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidStencil = s_saidHeight = s_saidRoom = s_saidBound = 0;
-    s_saidPipe = s_saidSlot = s_saidDrew = 0;
+    s_saidPipe = s_saidSlot = s_saidDrew = s_saidGrow = 0;
 }
 
 int  tagpu_vk_range_down_owed(void) { return s_downOwed && !s_downPaying; }

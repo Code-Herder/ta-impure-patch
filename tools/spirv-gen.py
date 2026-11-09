@@ -245,6 +245,7 @@ PROGRAMS = [
 COMPUTE_HDRS = [
     ("tagpu_restore_comp", "TAGPU_RESTORE_", {"FILL_CS", "CONV_CS", "OUT_CS", "MIP_CS"}),
     ("tagpu_chain_comp",   "TAGPU_CHAIN_",   {"REDUCE_CS"}),
+    ("tagpu_range_comp",   "TAGPU_RANGE_",   {"REACH_CS"}),
 ]
 COMPUTE_NAMES  = {h for h, _, _ in COMPUTE_HDRS}
 RESTORE_MODELS = ("tiny", "full")
@@ -992,10 +993,11 @@ def sym(key):
 
 
 def sym_key(name):
-    """`tagpu_fps_VS` back to `tagpu_fps::VS` -- the inverse of `sym`, which is
-    unambiguous because a shader symbol never contains `_` at the join and the
-    C file names are fixed in SOURCES."""
-    for cfile in SOURCES:
+    """`tagpu_fps_VS` back to `tagpu_fps::VS` -- the inverse of `sym`. The C
+    file names are fixed in SOURCES, and the LONGEST one the symbol starts with
+    is its file: `tagpu_range` is a prefix of `tagpu_range_comp`, so
+    `tagpu_range_comp_REACH_CS` would otherwise split after `tagpu_range`."""
+    for cfile in sorted(SOURCES, key=len, reverse=True):
         if name.startswith(cfile + "_"):
             return "%s::%s" % (cfile, name[len(cfile) + 1:])
     return name

@@ -19,6 +19,7 @@
 #include "tagpu_range.h"
 #include "tagpu_packet.h"
 #include "tagpu_native.h"
+#include "tagpu_log.h"
 #include "tagpu_range_glsl.inc"
 
 #define FOV_SPAN 0.82842712f       /* 2 tan(pi/8) */
@@ -258,6 +259,12 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
     }
     for (L = 0; L <= TAGPU_PK_RL_LAST; L++)
         if (nl[L]) draw_layer(layer[L], nl[L], devPx, ss);
+    /* the heartbeat: what arrived per layer and what it became */
+    if ((v->frame_counter % 300u) == 0u)
+        tagpu_logf("range: rings=%u def=%d/%d atk=%d/%d sel=%u build=%u inst=%d draws=%d "
+                   "camDist=%.0f%s", n, nl[0], nl[1], nl[2], nl[3], (unsigned)h->nsel,
+                   (unsigned)h->nbuild, s_ninst, s_ndraw, camDist,
+                   (pk->truncated & TAGPU_PK_TRUNC_RING) ? " CUT" : "");
     if (!s_ndraw) return;
 
     memset(&s_pub, 0, sizeof s_pub);
