@@ -1057,6 +1057,10 @@ typedef struct TAGPU_PACKET {
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
     uint8_t  resource_queued;         /* TAGPU_RESOURCE_QUEUED / TAGPU_RESOURCE_CANCEL */
+    uint16_t hovered_id;              /* 0x2CBA: the unit under the pointer, its
+                                         +0xA8 as the hover query answered it; 0 =
+                                         none. The radar dot it names is drawn
+                                         with radlogohigh, as the minimap's is   */
     uint32_t shd_off, shd_len;        /* the engine's 32x256 shade table
                                          (PALETTE.SHD at graphics+0xC4), copied
                                          whole: the Gouraud LUT the unit pass

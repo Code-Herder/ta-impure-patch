@@ -552,6 +552,11 @@ static int player_logo(const char* ta, unsigned id)
     return b < PLAYER_COUNT ? (int)b : -1;
 }
 
+int tagpu_packet_pub_player_logo(const char* ta, unsigned id)
+{
+    return player_logo(ta, id);
+}
+
 /* ---- THE IN-GAME WIKI'S CONTEXT: the controlled player's side and the Interface Type, read
    here at the fill, on the game thread, in game, and handed to tagpu_wiki_fill by value
    (tagpu_wiki.c reads no engine memory). ---- */
@@ -959,8 +964,12 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
    they never change after. The team colour of a logo is its frame's texel at
    the hotspot -- MEASURED 2026-11-03 on the retail fx.GAF: ten 4x4 frames,
    hotspot (1,1), a 2x2 centre of the colour in a ring -- read from the frame,
-   never from a table, because mods recolour it. */
+   never from a table, because mods recolour it. `radlogohigh` frame 0 is the
+   ring the minimap blits over the hovered unit's dot (0x466F11..0x466F37) --
+   6x6, hotspot (2,2), on the same retail file -- packed after the logos and
+   drawn as its own indices. */
 #define OFF_RADLOGO        0x147DF   /* GAF sequence*: radlogo                */
+#define OFF_RADLOGOHIGH    0x147E3   /* GAF sequence*: radlogohigh, frame 0 */
 #define ICONART_FRMAX      16        /* the largest logo frame kept, a side    */
 /* THE LAYOUT is tagpu_iconart_pack's: the logo frames, then the mod set's
    pictures, left to right a texel apart -- the gap keeps a neighbour out of
@@ -976,7 +985,7 @@ static const unsigned char UTYPE_LAYER[TAGPU_ICLS_N] = {
 #define ICONART_PICMAX     (ICONART_FRMAX > TAGPU_PCX_MAXW ? ICONART_FRMAX : TAGPU_PCX_MAXW)
 #define ICONART_CELL       (ICONART_PICMAX + 1)
 #define ICONART_ROWCELLS   ((TAGPU_ICONART_W - 1) / ICONART_CELL)
-#define ICONART_PICS       (TAGPU_ICONART_LOGOS + TAGPU_ICONART_SETS)
+#define ICONART_PICS       (TAGPU_ICONART_LOGOS + 1 + TAGPU_ICONART_SETS)
 _Static_assert(TAGPU_PCX_MAXH <= TAGPU_PCX_MAXW && ICONART_FRMAX <= ICONART_PICMAX &&
                1 + ((ICONART_PICS + ICONART_ROWCELLS - 1) / ICONART_ROWCELLS) * ICONART_CELL
                <= TAGPU_ICONART_H, "every picture the build reads has a place in the atlas");
@@ -987,6 +996,8 @@ static volatile LONG  s_iconArtReady;
 /* the logo frames as decoded, before the packer places them: this thread's */
 static unsigned char  s_logoPix[TAGPU_ICONART_LOGOS][ICONART_FRMAX * ICONART_FRMAX];
 static unsigned char  s_logoCls[TAGPU_ICONART_LOGOS][ICONART_FRMAX * ICONART_FRMAX];
+static unsigned char  s_highPix[ICONART_FRMAX * ICONART_FRMAX];
+static unsigned char  s_highCls[ICONART_FRMAX * ICONART_FRMAX];
 
 /* ---- a mod's own icon set (inc/tagpu_iconset.h) ----
    WHERE IT IS. TADR reads `[Preferences] MegaMapConfig` from its own ini,
@@ -1164,7 +1175,8 @@ static void iconart_build(const char* ta)
     static TAGPU_ICONSRC src[ICONART_PICS];
     static TAGPU_ICONRECT rect[ICONART_PICS];
     const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
-    int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed;
+    const char* hseq = *(const char* const*)(ta + OFF_RADLOGOHIGH);
+    int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed, high = 0;
     char b[200];
 
     memset(&s_iconArt, 0, sizeof s_iconArt);
@@ -1191,10 +1203,25 @@ static void iconart_build(const char* ta)
             s_iconArt.team[i] = (unsigned char)t;
         }
     }
+    /* the hover ring, only beside logo frames: it is drawn over a dot */
+    if (i > 0 && ptr_ok(hseq) && tagpu_gaf_seq_nframes(hseq) > 0) {
+        const unsigned char* g = tagpu_gaf_seq_frame(hseq, 0);
+        TAGPU_GAFGEOM gm;
+        if (g && tagpu_gaf_frame_geom(g, &gm) && gm.w > 0 && gm.h > 0 &&
+            gm.w <= ICONART_FRMAX && gm.h <= ICONART_FRMAX &&
+            tagpu_gaf_decode_cov(g, gm.w, gm.h, s_highPix, cov)) {
+            if (!*(const unsigned char*)(g + TAGPU_GF_COMP))
+                for (px = 0; px < gm.w * gm.h; px++) if (s_highPix[px] == gm.ck) cov[px] = 0;
+            for (px = 0; px < gm.w * gm.h; px++) s_highCls[px] = cov[px] ? TAGPU_ITX_DRAWN : TAGPU_ITX_KEY;
+            src[i].pix = s_highPix; src[i].cls = s_highCls; src[i].w = gm.w; src[i].h = gm.h;
+            s_iconArt.high.hx = (int16_t)gm.hotx; s_iconArt.high.hy = (int16_t)gm.hoty;
+            high = 1;
+        }
+    }
     iconset_load(ta);
     for (k = 0; k < s_isN; k++) {
-        src[i + k].pix = s_isPix[k]; src[i + k].cls = s_isCls[k];
-        src[i + k].w = s_isW[k]; src[i + k].h = s_isH[k];
+        src[i + high + k].pix = s_isPix[k]; src[i + high + k].cls = s_isCls[k];
+        src[i + high + k].w = s_isW[k]; src[i + high + k].h = s_isH[k];
     }
     /* THE MARKERS are chosen over every picture the atlas holds
        (tagpu_iconart_pack): the smallest indices no drawn texel holds. A set
@@ -1203,22 +1230,27 @@ static void iconart_build(const char* ta)
        art, ten 4x4 frames, draws at most 160 texels, so three are free for
        it; a mod's logo art can draw every index, and then there is no art. */
     nset = s_isN;
-    packed = tagpu_iconart_pack(src, i + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    packed = tagpu_iconart_pack(src, i + high + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     if (!packed && nset) {
         plog("icons: the mod set leaves no three free palette indices beside the radar logo - not drawn");
         nset = s_isN = 0; s_isNone = s_isUnknown = -1;
-        packed = tagpu_iconart_pack(src, i, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+        packed = tagpu_iconart_pack(src, i + high, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     }
     if (!packed) {
         memset(s_iconArt.logo, 0, sizeof s_iconArt.logo);
         memset(s_iconPix, 0, sizeof s_iconPix);
-        i = 0; marks[0] = 0; marks[1] = 1; marks[2] = 2;
+        i = 0; high = 0; marks[0] = 0; marks[1] = 1; marks[2] = 2;
     }
     for (k = 0; k < i; k++) {
         s_iconArt.logo[k].x = rect[k].x; s_iconArt.logo[k].y = rect[k].y;
         s_iconArt.logo[k].w = rect[k].w; s_iconArt.logo[k].h = rect[k].h;
     }
-    for (k = 0; k < nset; k++) s_iconArt.set[k] = rect[i + k];
+    if (high) {
+        s_iconArt.high.x = rect[i].x; s_iconArt.high.y = rect[i].y;
+        s_iconArt.high.w = rect[i].w; s_iconArt.high.h = rect[i].h;
+    }
+    s_iconArt.has_high = high;
+    for (k = 0; k < nset; k++) s_iconArt.set[k] = rect[i + high + k];
     s_iconArt.pix = s_iconPix;
     s_iconArt.w = TAGPU_ICONART_W; s_iconArt.h = TAGPU_ICONART_H;
     s_iconArt.key = marks[0]; s_iconArt.fill = marks[1]; s_iconArt.sel = marks[2];
@@ -1235,8 +1267,8 @@ static void iconart_build(const char* ta)
        art's argument (tagpu_order.c). Not InterlockedExchange: mingw spells it
        __sync_lock_test_and_set, whose contract is acquire-only. */
     __atomic_store_n(&s_iconArtReady, 1, __ATOMIC_RELEASE);
-    _snprintf(b, sizeof b, "icons: art %d radar logo frame(s) of %d, %d mod set picture(s), "
-              "key %d fill %d sel %d", i, nfr, nset, s_iconArt.key, s_iconArt.fill, s_iconArt.sel);
+    _snprintf(b, sizeof b, "icons: art %d radar logo frame(s) of %d, hover ring %d, %d mod set picture(s), "
+              "key %d fill %d sel %d", i, nfr, high, nset, s_iconArt.key, s_iconArt.fill, s_iconArt.sel);
     b[sizeof b - 1] = 0; plog(b);
 }
 
@@ -3427,6 +3459,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->cursor_mode  = RDU8(ta, OFF_CURMODE);
     p->region_flags = RDU8(ta, OFF_REGIONFL);
     p->build_unit_id = RDU16(ta, OFF_BUILDUNITID);
+    p->hovered_id   = RDU16(ta, OFF_HOVERED);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
     p->resource_queued = 0;
     tagpu_profiles_begin_match();

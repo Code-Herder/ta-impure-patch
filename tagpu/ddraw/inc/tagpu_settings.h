@@ -57,6 +57,8 @@ typedef enum {
     TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
     TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */
     TS_FORMATION,   /* 1 on | 0 off: formation move (tagpu_formation.c) */
+    TS_RADARDOTS,   /* 1 always | 0 zoomed: a radar contact's dot in the world view at every
+                       level, or only past the icon distance as the icons are (tagpu_icon.c) */
     TS_NKEYS
 } TagpuSetting;
 
@@ -196,6 +198,10 @@ int  tagpu_settings_fps(void);
    TS_ICONFADE): the store's, else the compiled 100, 100 and 33. Any thread;
    the render thread asks every frame, the pick every hit test. */
 void tagpu_settings_icons(int* scale, int* dist, int* fade);
+/* Radar dots (TS_RADARDOTS): 1 = a contact's dot at every level, 0 = only past the icon
+   distance. The store's, else 1; 0 under tagpu_defaults.off, whose frame is the stock one at 1x.
+   Any thread; the render thread asks every frame, the pick every hover query. */
+int  tagpu_settings_radardots(void);
 /* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
    No lever: the harness sets it through the store. It is the only frame pacing
    there is -- on, the present waits for the vertical blank and the limiter

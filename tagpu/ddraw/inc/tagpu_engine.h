@@ -266,6 +266,9 @@
                                           UnitDef index; the footprint in
                                           OFF_BUILDRECT matched its def.]    */
 #define OFF_REGIONFL       0x2CC6      /* u8, bit3 band box, bit6 site OK       */
+#define OFF_HOVERED        0x2CBA      /* u16, the unit under the pointer: the
+                                          hover query 0x48CD80's answer, a unit's
+                                          +0xA8, stored at 0x499283; 0 = none   */
 
 /* ---- the effects: the four per-frame arrays -------------------------------
    All four are SIM state: the tick moves them, the two engine draw passes

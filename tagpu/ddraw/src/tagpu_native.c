@@ -2356,10 +2356,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* THE STRATEGIC ICONS' DECISIONS for this frame, before the walk that reads
        them (tagpu_icon.h): which unit is an icon, which model is hidden under
        one. Only while this pass draws the units and the marker pass draws the
-       icons, and its icon bucket has a quad for every unit -- a model is never
-       hidden under an icon nothing would draw. */
+       icons, and its icon bucket has a quad for every unit and the hovered
+       dot's ring -- a model is never hidden under an icon nothing would draw. */
     tagpu_icon_frame(pk, s_zoom, s_armed && markOn && tagpu_mark_draws() &&
-                                 tagpu_mark_icon_room(pk->n_units));
+                                 tagpu_mark_icon_room(pk->n_units + 1u));
     if (s_armed) {                 /* units are gathered only by the unit pass */
     for (unsigned pui = 0; pui < pk->n_units && (unsigned)nu < ucap; pui++) {
         const TAGPU_PK_UNIT* pu = &pkUnits[pui];
@@ -2435,9 +2435,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             /* A RADAR DOT is exactly the minimap's dot (0x466DC0) restricted to
                the units this gather refuses: a radar or sonar contact
                (`+0x110 & 0x300`) with a model -- drawn as the logo's dot, or as
-               a mod set's NONE picture (tagpu_icon_push). Under the icon
-               distance rule, so none at 1x; never pickable in the world view,
-               as in stock. */
+               a mod set's NONE picture (tagpu_icon_push), at every level under
+               `radardots=always`, else under the icon distance rule. The game
+               thread's pick (tagpu_zoom_radar_pick) asks these same gates of
+               the engine's records, so a dot is hovered and ordered on as the
+               minimap's is. */
             if ((st & ST_RADARSEEN) && pu->model_id) tagpu_icon_push(pui, pu, ax, ay, 0, 1);
             continue;
         }
