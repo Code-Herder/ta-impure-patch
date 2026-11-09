@@ -196,12 +196,11 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
            unidentified contact -- at the set's scale when it has one, else
            the minimap's dot, the owner's logo frame at its own scale */
         const TAGPU_ICONRECT* f;
-        int k, e, setpic = 0;
+        int k, e;
         if (s_art->none >= 0 && s_art->none < s_art->nset && s_art->none < TAGPU_ICONART_SETS) {
             f = &s_art->set[s_art->none];
             k = tagpu_icon_art_k(&s_view);
             r->team = u->logo < s_art->nlogo ? s_art->team[u->logo] : s_ink;
-            setpic = 1;
         } else {
             if (u->logo >= s_art->nlogo) return 0;
             f = &s_art->logo[u->logo];
@@ -223,21 +222,23 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
         layer = 1;                       /* BAR's unidentified contact: drawOrder 1 */
         s_dots++;
         /* THE HOVERED CONTACT, as the minimap shows it (0x466F11..0x466F37):
-           the logo's dot gets radlogohigh frame 0 over it, at the dot's scale,
-           drawn after every icon; a set's NONE picture has no such frame and
-           is drawn as a selected picture is, its SelectedColor shown and its
-           fill white. One unit is hovered at most. */
-        if (s_hovered && u->id == s_hovered) {
-            if (setpic) sel = 1;
-            else if (s_art->has_high) {
-                s_hov = *r;
-                s_hov.art = &s_art->high;
-                s_hov.ew = (unsigned short)(k * s_art->high.w);
-                s_hov.eh = (unsigned short)(k * s_art->high.h);
-                s_hov.ax = ax; s_hov.ay = ay;
-                s_hov.sel = 0;
-                s_hovOn = 1;
-            }
+           radlogohigh frame 0 over the dot, drawn after every icon. Its hole
+           is the frame less a texel each side (6x6 about the logo's 4x4), so
+           the ring takes the smallest integer scale whose hole holds the
+           picture as drawn: the dot's own k for the logo, larger for a set's
+           NONE picture. Never the selected look: a contact is never white.
+           One unit is hovered at most. */
+        if (s_hovered && u->id == s_hovered && s_art->has_high) {
+            const int hw = s_art->high.w > s_art->high.h ? s_art->high.w : s_art->high.h;
+            const int hole = hw > 2 ? hw - 2 : 1;
+            const int kr = (e + hole - 1) / hole;
+            s_hov = *r;
+            s_hov.art = &s_art->high;
+            s_hov.ew = (unsigned short)(kr * s_art->high.w);
+            s_hov.eh = (unsigned short)(kr * s_art->high.h);
+            s_hov.ax = ax; s_hov.ay = ay;
+            s_hov.sel = 0;
+            s_hovOn = 1;
         }
     } else {
         const TAGPU_PK_UTYPE* t;

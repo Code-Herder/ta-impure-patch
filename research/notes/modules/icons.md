@@ -317,10 +317,12 @@ nothing. No fog source, no foreign unit and no contact.
 **The hovered contact** — the unit the hover query named, `main+0x2CBA`, carried in the packet
 header as `hovered_id` — is drawn as the minimap draws it (`0x466F11..0x466F37`): frame 0 of
 `radlogohigh` (`main+0x147E3`, a 6 × 6 ring, hotspot (2, 2), on the retail `fx.GAF`) over its
-dot, on the dot's anchor, at the dot's `k_r` and alpha, after every other icon of the frame, in
-its own palette indices. Whichever way the unit was hovered — on the minimap or on the dot — both
-pictures show the ring. A contact drawn as a set's NONE picture has no such frame and is drawn as
-a selected set picture is: its SelectedColor texels shown and its FillColor white. One unit is
+dot, on the dot's anchor, at the dot's alpha, after every other icon of the frame, in its own
+palette indices. The ring's hole is its frame less a texel each side (4 × 4 about the logo's
+4 × 4), and it takes the smallest integer scale whose hole holds the contact's picture as drawn:
+the dot's own `k_r` for the logo, larger for a set's NONE picture (`tagpu_icon_push`). Whichever
+way the unit was hovered — on the minimap or on the dot — both pictures show the ring. A contact
+is never drawn as a selected picture is, so it is never white. One unit is
 hovered at most, so a frame queues at most one ring, and the icon bucket is grown for one quad
 more than the packet's units (`tagpu_mark_icon_room(n_units + 1)`).
 
@@ -613,7 +615,7 @@ run it to 540, 60 px past a 640×480 screen.
 
 - **No menu rows** for the three keys until a panel layout fits 640×480.
 - **No hover indication** on an icon (BAR has none; a set's `HoverColor` and `UseCircleHover` are
-  not read); only a radar dot has one, the minimap's ring.
+  not read); only a radar contact has one, the minimap's ring, round a set's NONE picture too.
 - **A mod set needs `MegaMapConfig`.** In default mode with no `MegaMapConfig`, TADR looks for the
   fixed pictures in the current directory; here there is no set. The iconcfg is resolved against
   the exe's folder, not the current directory [INFERRED the same under every launcher in use], and
