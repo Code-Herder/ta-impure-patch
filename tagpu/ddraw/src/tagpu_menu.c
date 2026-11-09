@@ -196,14 +196,18 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
    then the engine's surface and `tacli shot` do not show it. */
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
-/* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
+/* ---- the geometry ------------------------------------------------------- */
+/* The columns are tools/guipanel.py's; that lab draws a six-row panel 212 px
+   tall, so the row pitch and the panel's height are this file's alone. The
+   runtime ground and its frame header share PANEL_W and PANEL_H (below the
+   rows: the height follows their count). */
 #define PANEL_W   304
-/* The runtime ground and its frame header share these dimensions. */
-#define PANEL_H   438
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
-#define ROW_PITCH  28
+/* 26: a row's recess is ROW_H + 2 * PAD = 24 px, so 2 px of face between two
+   recesses, and fourteen rows fit a 640x480 screen (PANEL_H) */
+#define ROW_PITCH  26
 #define ROW_H      20
 #define CTL_X     166
 #define CTL_W     120
@@ -224,7 +228,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_WHEEL, R_MEGAZOOM, R_COUNT };
+       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -253,6 +257,9 @@ static const Row s_row[R_COUNT] = {
     { "EDGE",    "Map edge",          "Black|Mirror",             2 },
     { "RESOURCE", "Resource snapping", "Off|1|2|3|4|5|6|7|8",      9 },
     { "QUICKBUILD", "Quick mex/geo",    "Off|On",                   2 },
+    /* the drag that lays the selection out along a line (tagpu_formation.c,
+       read at each press). The in-game panel's alone, as Mega map zoom in is. */
+    { "FORMATION", "Formation move",    "Off|On",                   2 },
     /* which wheel engages the mega map; the other one zooms (tagpu_zoom.c,
        wheel_is_mega). The second stage is TADR's binding. */
     { "MEGAWHEEL", "Mega map wheel",    "Ctrl+wheel|Wheel",         2 },
@@ -332,6 +339,8 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define CPP_OFF    "tagpu_classicpp.off"
 #define EDGE_ON    "tagpu_mirror.on"
 #define EDGE_OFF   "tagpu_mirror.off"
+#define FORM_ON    "tagpu_formation.on"
+#define FORM_OFF   "tagpu_formation.off"
 #define POLL_MS    250
 
 /* The trigger's ink walks the SAME ramp, re-hung around a lighter ground than
@@ -349,7 +358,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G21e-1"
+#define UFO_STAMP  "formation-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -392,8 +401,16 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   398           /* under the last row: 370 + 20 + 8 */
+#define DIV_BOT   (ROW_Y0 + ROW_PITCH * (R_COUNT - 1) + ROW_H + 8)   /* under the last row */
 #define PAD         2
+/* The floor: the Resource profile caption at DIV_BOT + 8, 24 tall, and the
+   bottom bolts at PANEL_H - 10. */
+#define PANEL_H   (DIV_BOT + 40)
+/* THE PANEL FITS THE SMALLEST SCREEN BY CONSTRUCTION. It hangs from engine
+   row BAR_H (panel_rect) and the in-game screen is never smaller than
+   640x480, so a row that would push its floor past row 480 fails the build
+   here instead of hanging off that screen. Fourteen rows end at 472. */
+typedef char menu_panel_fits_480[(BAR_H + PANEL_H <= 480) ? 1 : -1];
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
    surface rather than reading PANEL_W. The front-end screen's recesses are
@@ -1013,6 +1030,9 @@ static void read_state(void)
     s_stage[R_EDGE]    = tagpu_opt_on(EDGE_ON) ? 1 : 0;
     s_stage[R_RESOURCE] = tagpu_profiles_radius();
     s_stage[R_QUICK] = tagpu_profiles_quick();
+    /* formation move in force, in tagpu_opt.c's order as the map edge is: on
+       by default, off under tagpu_defaults.off */
+    s_stage[R_FORMATION] = tagpu_opt_on(FORM_ON) ? 1 : 0;
     /* the store's value, else the compiled default: Ctrl+wheel */
     if (!tagpu_settings_get(TS_WHEEL, &s_stage[R_WHEEL]) ||
         s_stage[R_WHEEL] < 0 || s_stage[R_WHEEL] > 1) s_stage[R_WHEEL] = 0;
@@ -1054,6 +1074,7 @@ static int row_held(int row)
     case R_SS:    return exists(SS_OFF);
     case R_FPS:   return exists(FPS_ON);
     case R_EDGE:  return exists(EDGE_ON) || exists(EDGE_OFF);
+    case R_FORMATION: return exists(FORM_ON) || exists(FORM_OFF);
     case R_RESOURCE: return !tagpu_resource_live() || !tagpu_profiles_policy()->manual;
     case R_QUICK: return !tagpu_resource_live() || !tagpu_profiles_policy()->quick;
     default:      break;
@@ -1079,7 +1100,7 @@ static int row_greyed(int row)
        (fps_limiter.c). */
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
-        row == R_WHEEL || row == R_MEGAZOOM) return 0;
+        row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1402,6 +1423,7 @@ static void commit_one(int row)
     case R_EDGE:    tagpu_settings_set(TS_EDGE, s_stage[R_EDGE]); break;
     case R_RESOURCE: tagpu_profiles_set_radius(s_stage[R_RESOURCE]); break;
     case R_QUICK: tagpu_profiles_set_quick(s_stage[R_QUICK]); break;
+    case R_FORMATION: tagpu_settings_set(TS_FORMATION, s_stage[R_FORMATION]); break;
     case R_WHEEL:   tagpu_settings_set(TS_WHEEL, s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     default:        break;
@@ -2004,7 +2026,7 @@ static const short VC0_SLD[2] = { 244, 336 };
    one slot each, top down, closing up over the gaps they leave. */
 static int vis_shown(int row)
 {
-    return row != R_MEGAZOOM;
+    return row != R_FORMATION && row != R_MEGAZOOM;
 }
 
 static void vis_pos(int row, int* x, int* y)
@@ -2327,7 +2349,8 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        1 + VIS_STOCK_N + 3 + (rows - (rows > R_MEGAZOOM) + VD_COUNT) * 2);
+        1 + VIS_STOCK_N + 3 +
+        (rows - (rows > R_FORMATION) - (rows > R_MEGAZOOM) + VD_COUNT) * 2);
 
     /* THE GROUND FIRST, so every caption and control is drawn on top of it --
        gadgets are drawn in array order, and ours are appended to STARTOPT's,
@@ -2854,6 +2877,7 @@ static void vis_restore(void)
     s_stage[R_EDGE]    = 1;
     s_stage[R_RESOURCE] = tagpu_profiles_policy()->radius;
     s_stage[R_QUICK] = tagpu_profiles_policy()->quick_default;
+    s_stage[R_FORMATION] = 1;
     s_stage[R_WHEEL]   = 0;
     s_stage[R_MEGAZOOM] = 0;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];

@@ -56,6 +56,7 @@ typedef enum {
     TS_ICONSCALE,   /* 100 | 75 | 125 | 150 | 200: the strategic icons' size, percent of BAR's */
     TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
     TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */
+    TS_FORMATION,   /* 1 on | 0 off: formation move (tagpu_formation.c) */
     TS_NKEYS
 } TagpuSetting;
 

@@ -100,6 +100,10 @@ static const Opt O_ICONSCALE[] = { {"100", 100}, {"75", 75}, {"125", 125}, {"150
 static const Opt O_ICONDIST[]  = { {"100", 100}, {"50", 50}, {"75", 75}, {"150", 150}, {"200", 200} };
 static const Opt O_ICONFADE[]  = { {"33", 33}, {"0", 0}, {"67", 67} };
 
+/* Formation move: a drag that lays the selection out along the drawn line
+   (tagpu_formation.c). Read at each press, so no value needs a restart. */
+static const Opt O_FORMATION[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
+
 #define N(a) (int)(sizeof a / sizeof a[0])
 
 /* TS_MONITOR and TS_RESOLUTION have no option list: the monitor is stored by
@@ -134,6 +138,7 @@ static const Key s_key[TS_NKEYS] = {
     { "iconscale", O_ICONSCALE, N(O_ICONSCALE), 100 },
     { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },
     { "iconfade",  O_ICONFADE,  N(O_ICONFADE),  33 },
+    { "formation", O_FORMATION, N(O_FORMATION), 1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];

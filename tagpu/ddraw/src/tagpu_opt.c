@@ -42,6 +42,14 @@ static int store_mirror(void)
     return v != 0;
 }
 
+/* The Formation move row: on or off. */
+static int store_formation(void)
+{
+    int v;
+    if (!tagpu_settings_get(TS_FORMATION, &v)) return -1;
+    return v != 0;
+}
+
 /* The table: the ta-drive skill's default arm set and Classic++. Order is the order
    the log line lists them in. Nothing that changes the simulation is here: the extra
    weapons are always on, in the fail-closed table (tagpu_weapons.h). */
@@ -115,6 +123,10 @@ static const Def s_defs[] = {
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
     { "tagpu_mirror.on",    "", 0, 0, store_mirror },       /* the world reflected past the map edge */
+    /* FORMATION MOVE IS INPUT, not simulation: it chooses where each selected
+       unit is sent and issues those orders through the engine's own order
+       roots, as a click does (tagpu_formation.c). */
+    { "tagpu_formation.on", "", 0, 0, store_formation },    /* a drag lays the selection out along the line */
     /* `tagpu_gui.on` IS A DRAW. The layer it arms has no composite -- the
        twins and the device-resolution sharp layer are ours, and `LAY_FS`
        declares no sampler for TA's own frame -- so it is the UI and belongs on
