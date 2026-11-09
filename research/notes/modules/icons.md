@@ -3,21 +3,21 @@
 Zoomed out, a unit is drawn as a flat team-coloured icon of constant screen size, by BAR's rule;
 where its model is smaller than the icon, or at once under a hollow shape, the model is not drawn
 at all, and the icon answers the pick. A mod that ships an icon set for TADR's megamap has its types drawn with that set's
-pictures, read from the player's install.
+pictures, read from the player's install. A radar contact is drawn as the minimap's dot, at every
+level by default, and is hovered and ordered on in the world view as it is on the minimap.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`. The design and the landings: [mega map plan](../mega-map-plan.html), landings 3 and 4.
 
-**Not yet checked in game.** The host tests pass and the DLL builds; none of the in-game checks
-has been run — 1× against the stock frame, every class at the floor in both team colours, the
-fade band's alphas, click, hover, band box and orders on icons, radar dots, the 4K numbers, the
-cost against the models replaced, the keys changing the live view (the plan's landing 3), and for
-the mod sets V4-1..V4-5: Mayhem's set at the floor in team colours and selected, ProTA's
-categories and its UNKNOWN, Escalation's set from a full install and the compat setups' Escalation
-with no set, TA Zero's `ZIcon` folder and retail with none, and the pick on set pictures (the
-plan's landing 4). Offline, every picture the compat setups' sets ship decodes at its size through
-the pure decoder (6 to 20 px); only the 100 × 10 hover circle `smallcircle` is refused.
+**Checked in game**: the [plan](../mega-map-plan.html)'s checks of its landings 3 and 4 (1× against
+the stock frame, every class at the floor, the fade band's alphas, orders on icons, the 4K numbers,
+the keys, and every mod set's pictures), and the radar dots at every level and under `zoomed`, the
+hover ring and an attack order on a contact at 1920 × 1080 and 3840 × 2160
+(`scenarios/radar-dots.json`, *Radar dots*). **Not run in game**: a contact drawn as a mod set's
+NONE picture, hovered or ordered on, and the radar pick in a multiplayer game. Offline, every
+picture the compat setups' sets ship decodes at its size through the pure decoder (6 to 20 px);
+only the 100 × 10 hover circle `smallcircle` is refused.
 
 | file | what it holds | thread |
 |---|---|---|
@@ -27,7 +27,9 @@ the pure decoder (6 to 20 px); only the 100 × 10 hover circle `smallcircle` is 
 | `src/tagpu_packet_pub.c` (`utype_level`, `utype_level_end`, `iconart_build`, `iconset_load`, `iset_level`) | the per-type class table and each type's set picture, built once a level inside the in-play fill and carried in the packet; the art — the radar logo and a mod's set — read once a process | game |
 | `src/tagpu_icon.c` | per frame: which packet unit is an icon, which model is hidden, the queue and its sort | render |
 | `src/tagpu_native.c` (the unit gather), `src/tagpu_mark.c`, `src/tagpu_vk_mark.c` | the icons placed, emitted and drawn by the marker pass | render |
-| `src/tagpu_zoom.c` (`icon_hit`) | the pick, inside the unit hit test's guard at `0x48CE15` | game |
+| `src/tagpu_zoom.c` (`icon_hit`, `tagpu_zoom_radar_pick`) | the pick, inside the unit hit test's guard at `0x48CE15`; the radar dot under the pointer | game |
+| `src/tagpu_route.c` (`hover_handler`) | the hover query's call `0x499278`, which asks the radar pick when the engine found no unit | game |
+| `src/tagpu_settings.c`, `src/tagpu_menu.c` | the four keys (*Settings*); the in-game panel's *Radar dots* row | any |
 | `tests/icontest.c`, `tests/icontest.py` | the rule's host test (`make icontest` is its Windows build) | host |
 | `tests/iconsettest.c`, `tests/iconsettest.py` | the set's host test under ASan and UBSan, every input built by the test — no mod file is committed (`make iconsettest` is its Windows build) | host |
 
@@ -88,9 +90,11 @@ starts to fade in (`d'` = 0.67) and is opaque (`d'` = 1):
 | FACTORY | 14 px, 0.233 / 0.156 | 28 px, 0.467 / 0.313 |
 | COMMANDER | 16 px, 0.204 / 0.137 | 33 px, 0.396 / 0.266 |
 
-**1× is the stock frame.** With the defaults, `z = 1` gives alpha 0 for every class and the radar
-dot while `gh ≤ 0.67 · 4970 · min(mult)`; with `S` rounded to whole px the first alpha at 1× comes
-at 2569 to 2666 px tall by the frame's shape (a radar contact at 5:4, COMBAT at 4:3 first). The
+**1× is the stock frame**, but for the radar contacts `radardots=always` draws there (*Radar
+dots*). With the defaults, `z = 1` gives alpha 0 for every class, and for the radar dot under
+`radardots=zoomed`, while `gh ≤ 0.67 · 4970 · min(mult)`; with `S` rounded to whole px the first
+alpha at 1× comes at 2569 to 2666 px tall by the frame's shape (a radar contact at 5:4, COMBAT at
+4:3 first). The
 host test asserts alpha 0 for every frame 480..2560 px tall at 4:3, 5:4, 16:10, 16:9, 21:9 and
 32:9, for the shapes and for every set picture size (*Drawing a set picture*). With `iconfade=67`
 the smallest classes fade in at 1× on a 4K-native frame; above about 2570 px tall (5K native)
@@ -227,7 +231,7 @@ shipped list names it.
 **Into the atlas.** Each picture's texels are classed in TADR's precedence — TransparentColor is
 nothing, else FillColor is the team colour, else SelectedColor is shown only when selected, else
 the texel is drawn as its own index (`tagpu_iconset_classify`) — and packed with the radar logo
-frames into one atlas (*Radar dots*). The art keeps the set's SelectedColor as `selcol`.
+frames and the hover ring into one atlas (*Radar dots*). The art keeps the set's SelectedColor as `selcol`.
 
 **Each type's picture** (`iset_level`, once a level inside the in-play fill, right after the class
 rule): the first entry in load order whose types hold the type's row, else the set's UNKNOWN, else
@@ -291,35 +295,68 @@ With no set, every type's `icon` is `TAGPU_ICON_NOSET` and every path is the gen
 ## Radar dots
 
 **Stock draws a radar contact on the minimap alone** ([ui](../engine/ui.html), *The minimap,
-located*), so ours follow the same distance rule and 1× stays stock. A unit the gather refuses by
-the cloak test or the fog test (an unexplored tile, or a grey one for a foreign unit) that is a
-radar or sonar contact (`+0x110 & 0x300`) with a model is drawn as **the minimap's own dot**: its
-owner's logo frame of `radlogo` (`main+0x147DF`), at an integer scale `k_r = max(1, round(0.8 ·
-base / 4))` and `E = k_r × max(w, h)` (8 px at 1080p, 4 px at the smallest scale; the 7-px floor
-is the generated shapes', not the art's), switching at `S = round(0.8 · base)`, the size `k_r` is
-rounded from (`tagpu_icon_dot_size`): equal to `4 k_r` at 1080p and 4K native, and never the
-rounded-down scale, which would bring contacts in at 1× on a 3186 × 2390 frame. On layer 1 (BAR's
-unidentified contact). **With a mod set that has a NONE picture** — the mod's art for an unidentified contact —
-the contact is drawn as that picture instead, at the set's art scale `k` (*Mod icon sets*), its
-FillColor in the owner's team colour, `E = k × max(w, h)`, switching at the same contact `S`. A contact hides
-nothing, is never white and is not pickable in the world view — the engine's own rule (`0x48CD80`
-picks a radar contact on the minimap only). No fog source, no foreign unit and no contact.
+located*), and hovers and orders on it there alone ([input](../engine/input.html), the `0x48CD80`
+row). Ours draw it in the world view as well, as **the minimap's own dot**: at every level under
+`radardots=always`, the default, and under `radardots=zoomed` by the icons' distance rule, which
+keeps 1× stock (*Settings*). A unit the gather refuses by the cloak test or the fog test (an
+unexplored tile, or a grey one for a foreign unit) that is a radar or sonar contact (`+0x110 &
+0x300`) with a model is drawn as its owner's logo frame of `radlogo` (`main+0x147DF`), at an
+integer scale `k_r = max(1, round(0.8 · base / 4))` and `E = k_r × max(w, h)` (8 px at 1080p and
+16 at 4K native, `k_r` 2 and 4; 4 px at the smallest scale; the 7-px floor is the generated
+shapes', not the art's). It is the same call, art and scale at every level, so the dot at 1× and
+in the mega map is one picture. **Under `always`** its alpha is 255. **Under `zoomed`** it switches
+at `S = round(0.8 · base)`, the size `k_r` is rounded from (`tagpu_icon_dot_size`): equal to `4
+k_r` at 1080p and 4K native, and never the rounded-down scale, which would bring contacts in at 1×
+on a 3186 × 2390 frame; at 1920 × 1080 it fades in below z 0.409 and is opaque below 0.274 (the
+COMBAT row of *The rule*'s table). On layer 1 (BAR's unidentified contact). **With a mod set that
+has a NONE picture** — the mod's art for an unidentified contact — the contact is drawn as that
+picture instead, at the set's art scale `k` (*Mod icon sets*), its FillColor in the owner's team
+colour, `E = k × max(w, h)`, under `zoomed` switching at the same contact `S`. A contact hides
+nothing. No fog source, no foreign unit and no contact.
+
+**The hovered contact** — the unit the hover query named, `main+0x2CBA`, carried in the packet
+header as `hovered_id` — is drawn as the minimap draws it (`0x466F11..0x466F37`): frame 0 of
+`radlogohigh` (`main+0x147E3`, a 6 × 6 ring, hotspot (2, 2), on the retail `fx.GAF`) over its
+dot, on the dot's anchor, at the dot's `k_r` and alpha, after every other icon of the frame, in
+its own palette indices. Whichever way the unit was hovered — on the minimap or on the dot — both
+pictures show the ring. A contact drawn as a set's NONE picture has no such frame and is drawn as
+a selected set picture is: its SelectedColor texels shown and its FillColor white. One unit is
+hovered at most, so a frame queues at most one ring, and the icon bucket is grown for one quad
+more than the packet's units (`tagpu_mark_icon_room(n_units + 1)`).
+
+**A dot is hovered and ordered on as the minimap's is.** The hover query's call `0x499278` asks
+the radar pick when the engine found no unit (*The pick*); the id it answers is stored by the
+engine at `0x499283` as its own would be, and the engine's cursor chooser `0x48D220` and click
+`0x48CF30` take the contact from there — the attack cursor with an armed unit selected, and an
+attack on the unit — with no order code of ours. MEASURED 2026-11-09 (`scenarios/radar-dots.json`,
+1920 × 1080, Vulkan, `--defaults`, True LOS): 4 to 6 dots at z 1.0, 2.0, 0.6, 0.4 and the mega
+map's floor 0.135; the pointer on a contact's dot gave `main+0x2CBA` = its id and the ring; with
+a Peewee selected the cursor index `main+0x2CBE` read 1 (attack), and the press — the right
+button under Interface Type 1, the left under 0 — set the Peewee attacking the contact (under
+Type 1 it walked to the solar and destroyed it). Under
+`zoomed`: no dot at z 1, alpha 129 at 0.35, 255 at 0.25. At 3840 × 2160: 16-px dots, the hover
+and the ring.
 
 **The art** — the radar logo and a mod's set — is built once a process at the first in-play fill
 (`iconart_build`, which calls `iconset_load` before it packs): `radlogo` is
 session art, loaded by `0x429870` from start-up's `0x49134D`, and `0x42991E` is the only write of
-its pointer ([weapons](../engine/weapons.html), *The effect GAF sequences are a SESSION asset*). Up
-to 16 frames of at most 16 × 16, then a mod set's pictures (up to 64, at most 22 × 22), go into a
+its pointer ([weapons](../engine/weapons.html), *The effect GAF sequences are a SESSION asset*);
+`radlogohigh` is loaded beside it, and `0x429935` is the only write of its pointer. Up
+to 16 `radlogo` frames of at most 16 × 16, then `radlogohigh` frame 0 (the hover ring, at most 16 ×
+16, packed only when a logo frame was, its key texels not drawn), then a mod set's pictures (up to
+64, at most 22 × 22), go into a
 256 × 256 atlas of palette indices through `tagpu_iconart_pack` (`src/tagpu_iconset.c`): left to
 right a texel apart, in rows from texel `(1, 1)`, a new row under the tallest of the last. The packer
 refuses any layout that would leave the atlas, and a compile-time assert in `tagpu_packet_pub.c`
 shows the worst case cannot: a picture advances a row by at most a 23-texel cell, so a row holds at
-least 11 and is at most 23 tall, and 80 pictures take 8 rows, 185 texels of the 256. **Each logo's
+least 11 and is at most 23 tall, and 81 pictures take 8 rows, 185 texels of the 256. The ring is
+the art's `high` (`has_high` 0 when the sequence or its frame does not decode, and then a hovered
+dot has no ring). **Each logo's
 team colour is its frame's texel at the hotspot** (the commonest drawn texel when the hotspot draws
 nothing), never a table, because mods recolour it. The atlas's key, fill and selected markers are
 the three smallest indices no drawn texel of any picture holds — a set's TransparentColor,
 FillColor and SelectedColor texels are rewritten to them; a set that leaves fewer than three free
-is dropped and the logos are packed alone, and logo art that draws every index leaves no art. A unit whose logo has no frame is filled in the
+is dropped and the logos and the ring are packed alone, and logo art that draws every index leaves no art. A unit whose logo has no frame is filled in the
 GUI's black; with no `radlogo` there are no radar dots and the shapes still draw.
 
 ## What an icon hides
@@ -354,16 +391,17 @@ slab, fog and cloak gates before the no-pieces exit.
 
 **Order** — BAR's, with its depth sort on: by layer, then far to near (a smaller anchor y is
 further up the screen), then packet index; the sort key is `layer << 48 | sortable(ay) << 16 |
-index`. **Place** — the marker pass's second draw, right after the selection rects: over the world,
+index`, and the hover ring after all of them (*Radar dots*). **Place** — the marker pass's second draw, right after the selection rects: over the world,
 under the orders, the bars, the digits and every UI layer, not fogged (the gather placed each over a
 unit it judged visible, or a radar contact), not depth-tested, blended at the icon's alpha.
 
 `tagpu_mark_emit_icon` puts one quad of `edge` screen px on the unit's anchor, its corner on a whole
 game pixel (`snap_game_px`, so art and generated shapes, both laid out in whole game pixels, cover
-whole presented pixels), into a bucket of one quad a packet unit. **The bucket is grown before
-any icon is decided** (`tagpu_mark_icon_room`, asked by the native pass in the same condition as
-`tagpu_mark_draws`): a frame on which it would not grow decides no icon and hides no model, and a
-frame queues at most one icon a unit, so an icon of a frame that hid a model always has its quad. The fill colour, the
+whole presented pixels), into a bucket of one quad a packet unit and one for the hover ring.
+**The bucket is grown before any icon is decided** (`tagpu_mark_icon_room(n_units + 1)`, asked by
+the native pass in the same condition as `tagpu_mark_draws`): a frame on which it would not grow
+decides no icon and hides no model, and a frame queues at most one icon a unit and one ring, so an
+icon of a frame that hid a model always has its quad. The fill colour, the
 selection, the alpha and the shape **ride the vertex's world slot as two integers under 2¹²** —
 `team + 256 · selected` and `alpha + 256 · shape` — so the interpolated value rounds back to the
 integer at every fragment; a generated shape's edge rides the colour slot. The marker FS's `uText == 2` is the icon branch (text is `uText == 1`):
@@ -451,21 +489,75 @@ record yet, the engine's test. Hover sets `main+0x2CBA`
 through the same answer; the band box `0x48C390` tests each unit's anchor, the point an icon is
 centred on, and needs no change.
 
+**The radar dot under the pointer** (`tagpu_zoom_radar_pick`). The engine never names a radar
+contact in the world view: `0x48CD80`'s viewport branch walks HotUnits, which lists a foreign unit
+only when `0x465AC0` says it is in sight (`0x48BC56`). So the router redirects the hover query's
+call `0x499278` ([hook map](hook-map.html), *The in-play mouse handler*) to `hover_handler`, which
+calls `0x48CD80` and asks the radar pick only when it answered 0: **a unit the engine names always
+wins over a dot**. The pick answers 0 unless the latest command record drew icons (`s_gIcons`, the
+gate `icon_hit` has), the art is published, the dispatched point `main+0x2C76`/`+0x2C7A` lies in
+the viewport rect `main+0x37E27` (inclusive on all four edges, the test `0x4B6720` makes at
+`0x48CDB0`) and the game thread packs a fog source. Then, over the unit array's slots from 1 below
+the slot count `u16 main+0x14351` (at most `TAGPU_PK_MAX_UNITS`), it asks the render gather's own
+gates of the engine's records, in the gather's order:
+
+- alive (`+0x110` bit 28), not excluded (bit 14), a radar or sonar contact (`& 0x300`), and a model
+  id `+0xA6` from 1 below `UNITINFOCount` `main+0x1438F`;
+- drawn by the unit pass (`tagpu_native_owns_unit`);
+- refused by the picture (`icon_refused` on the packed fog source: a foreign unit cloaked, on
+  unexplored ground or out of sight at its anchor's tile) — the test that makes the gather draw a
+  dot instead of the unit;
+- drawn as the art the gather picks: a set's NONE picture at the art scale, else the owner's logo
+  frame (`PlayerInfo+0x96`, `tagpu_packet_pub_player_logo`, bounded by the art's logo count) at
+  `k_r`; under `radardots=zoomed` only where the rule gives it an alpha at the game thread's level.
+
+A dot is hit when the pointer is inside its drawn rect: half its edge over `z` each side of the
+anchor `icon_circle` takes (`0x48C6A0`'s without its corner offsets, in 64 bits). Among dots that
+overlap, the one drawn last answers — the larger anchor y, then the later slot, the order
+`tagpu_icon_emit` draws them in, all on one layer. The answer is the unit's `+0xA8`, logged as
+`zoom: radar pick` (*Logs*).
+
+*Why it is safe by construction*: it runs on the game thread inside the engine's own call and
+reads the engine's records there; every slot is a stride-aligned record below the engine's slot
+count, the model id is bounded by `UNITINFOCount` and the logo by the art's count, and the art is
+never written after its release store. The level and the fog source carry `icon_hit`'s
+one-record lag, so at a zoom switch or a fog edge a hover can, for one record, name a dot the
+frame did not draw or miss one it did.
+
+**What the answer does downstream is the engine's.** The cursor chooser `0x48D220` maps the
+hovered unit with no sight test, and the click `0x48CF30` makes it the target when `0x43E470(mode)`
+is non-zero, which it is for every mode but 5, 10 and 14 (mode 0 asks the action's descriptor
+instead, bit 9 of `+0x11`); per selected unit the resolver `0x43F0E0`
+needs the target alive (`0x43F0F4`) and takes an enemy (`0x43F118`) under order 1, when the unit's
+def has `+0x245` bit `0x10`, as order 3 (`push 3` at `0x43FE57`), the attack on a unit. None of the
+three, nor the chooser's mapper `0x43E490`, calls `UnitInPlayerLOS 0x465AC0` directly: its seven
+direct callers (`0x40AB11`, `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`, `0x48BC56`, `0x494396`)
+lie outside all four [DISASSEMBLED 2026-11-09]. So an order on a dot is the minimap's order on the same contact. The formation move
+leaves a press with a hovered unit to stock (`tagpu_formation.c`, `admit`), so a press on a dot is
+stock's click. The placement's ring target calls `0x48CD80` itself (`tagpu_place.c`,
+`ring_target`) and gets no dot; the dead copy `0x491D18` in `0x491CC0` keeps the engine's call.
+
 ## Settings
 
-Three closed-list `impure.cfg` keys ([renderers](../renderers.html) §2.10b), read live by both
-threads — every frame on the render thread, every pick on the game thread — so none needs a
-restart. An unknown value in the file leaves the default and is logged; under
-`tagpu_defaults.off` (every tacli control launch without `--defaults`) the defaults hold.
+Four closed-list `impure.cfg` keys ([renderers](../renderers.html) §2.10b), read live by both
+threads — every frame on the render thread, every pick and hover query on the game thread — so
+none needs a restart. An unknown value in the file leaves the default and is logged; under
+`tagpu_defaults.off` (every tacli control launch without `--defaults`) the store is not read, the
+three icon keys take their defaults and `radardots` reads `zoomed` (`tagpu_settings_radardots`),
+whose frame at 1× is the stock one.
 
 | key | values (default first) | meaning |
 |---|---|---|
 | `iconscale` | `100` `75` `125` `150` `200` | the icon size, percent of BAR's (`UnitIconScaleUI` 1.05) |
 | `icondist` | `100` `50` `75` `150` `200` | where icons take over, percent of BAR's 3000 elmos; 200 = icons only from twice as far |
 | `iconfade` | `33` `0` `67` | the fade band `b`, percent; 0 = BAR's hard switch, 67 = Recoil's own 1000/3000 |
+| `radardots` | `always` `zoomed` (`1` `0` also read) | a radar contact's dot in the world view at every level, or only where the icon rule brings it in (`TS_RADARDOTS`) |
 
-**No menu rows**: the front-end screen has no free slot, and three rows would run the in-game
-panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
+**`radardots` is the in-game panel's *Radar dots* row** (Zoomed out \| Always; Restore defaults
+sets Always), not the front-end screen's, whose two columns are full ([defaults and
+settings](settings.html)); under `tagpu_defaults.off` the row is held and reads Zoomed out. **The
+three icon keys have no row**: the in-game panel's fifteen rows end at 468, and three more would
+run it to 540, 60 px past a 640×480 screen.
 
 ## Threads
 
@@ -486,11 +578,16 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   stays valid and unchanging for the process — the order art's argument.
 - **`tagpu_icon_frame`** runs once a frame on the render thread before the unit gather and the
   marker gather, which read its arrays in the same frame on the same thread: program order is the
-  ordering. `tagpu_icon.c` reads only the packet and the published art.
+  ordering. `tagpu_icon.c` reads only the packet — the hovered unit too, `hovered_id`, which the
+  publisher copies from `main+0x2CBA` at the fill — and the published art.
+- **The radar pick** runs on the game thread, inside the hover query's call in the in-play handler,
+  and reads the engine's records there; it shares nothing with the render thread but the command
+  record's icon answer and the published art, both taken as `icon_hit` takes them.
 - `thread-split.allow` names the new game-thread reads inside the existing `publisher` lines of
-  `tagpu_packet_pub.c` (the type table, the radar logo, the TADR ini's name, the sides' names, the
-  install's files and the category walk with the def fields it reads) and `tagpu_zoom.c` (the
-  pick's reads); `tagpu_iconset.c` is pure and has no line;
+  `tagpu_packet_pub.c` (the type table, the radar logo and its hover ring, the TADR ini's
+  name, the sides' names, the install's files and the category walk with the def fields
+  it reads), `tagpu_zoom.c` (the pick's and the radar pick's reads) and `tagpu_route.c` (the hover
+  query's call); `tagpu_iconset.c` is pure and has no line;
   `tagpu_icon.c` reads no engine memory and has no line. Presentation only: nothing writes
   simulation state, and no `sim` file is touched.
 
@@ -502,19 +599,21 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
 | `icons: mod set <folder> from <ini> (<MegaMapConfig>), <mode> mode, N picture(s) loaded of M, R [Icon] line(s) refused, skipped: <files>` | once a process, when a set's iconcfg reads; `<mode>` is `default` or `custom`, `M` the load list's length, `<files>` the pictures that did not read or decode, or `none` |
 | `icons: no mod set - the exe names no TADR ini`, `… - <ini> names no MegaMapConfig of the install's own`, `… - <ini>'s MegaMapConfig <value> does not read` | once a process, instead of the line above |
 | `icons: the mod set leaves no three free palette indices beside the radar logo - not drawn` | once a process: the set is dropped and the logos packed alone |
-| `icons: art N radar logo frame(s) of M, S mod set picture(s), key K fill F sel S` | once a process, at the art's publication |
+| `icons: art N radar logo frame(s) of M, hover ring H, S mod set picture(s), key K fill F sel S` | once a process, at the art's publication; `H` 1 when `radlogohigh` frame 0 is in the atlas |
 | `icons: mod set by type - E map entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W=a CTRL_B=b CTRL_F=c; <category>=<types> …` | once a level with a set loaded: the category map's entries, the types (rows past 0) given a picture and those given UNKNOWN, the three Ctrl categories' type counts, and each custom line's category with its type count, or `absent` for one the map does not hold |
 | `icons: the category map's bounds are not a map - no categories this level` | a level whose map bounds the walk refuses |
 | `icons: N unit types, past the table's T - no icons this level` | a level with too many types |
 | `icons: N units in the packet, past the T the icons hold - no icons while that is true` | once |
 | `zoom: icon pick - N hit(s), M miss(es) so far` | at most once a second, on the game thread |
+| `zoom: radar pick - N hover(s) on a dot so far, the last id I` | at most once a second, on the game thread, while hover queries land on a radar dot; `I` the unit's `+0xA8` |
+| `route: armed (stub 0x4993BF, right 0x49939B, entry 0x499200, cursor 0x499297, hover 0x499278)` | once, at attach, when every router site was written; `route: the hover query's call (0x499278) holds other bytes; not installed` or `… could not be written; not installed` instead when that one was not, and then the engine's own call answers alone |
 | `mark: … icons= iconover= …` | the marker pass's `log` line: icon quads, and those the bucket refused |
 
 ## What it does not do
 
 - **No menu rows** for the three keys until a panel layout fits 640×480.
 - **No hover indication** on an icon (BAR has none; a set's `HoverColor` and `UseCircleHover` are
-  not read).
+  not read); only a radar dot has one, the minimap's ring.
 - **A mod set needs `MegaMapConfig`.** In default mode with no `MegaMapConfig`, TADR looks for the
   fixed pictures in the current directory; here there is no set. The iconcfg is resolved against
   the exe's folder, not the current directory [INFERRED the same under every launcher in use], and
@@ -529,7 +628,17 @@ panel 46 px past a 640×480 screen ([defaults and settings](settings.html)).
   the set's for the process.
 - **A unit the rule does not hide** goes to the engine's test whatever the gather decides: a foreign
   model listed through a visible box corner with its anchor out of sight draws nothing, and can still
-  be hit, its key beating a drawn icon under the pointer. A nanoframe too.
+  be hit, its key beating a drawn icon under the pointer. A nanoframe too. A radar contact listed
+  that way is the same case: the engine names it, so the radar pick is not asked. MEASURED
+  2026-11-09 (`scenarios/radar-dots.json`, 1920 × 1080): a Core solar whose box corner was in a
+  Peewee's sight and whose anchor was on grey ground was hovered by the engine's own pick with
+  neither a dot nor a model drawn, and the radar pick's count did not move.
+- **The radar pick's dot is the frame's only to a record**: the level and the fog source are the
+  game thread's, one command record behind the picture at a zoom switch or a fog edge
+  (*The pick*).
+- **Multiplayer and mod sets, not run**: the radar pick and its order in a multiplayer game, and a
+  contact drawn as a set's NONE picture hovered or ordered on, are not run in game. Nothing in the
+  pick writes simulation state; the order goes through the engine's own click.
 - **Overlapping icons** answer by nearness, which need not be the icon drawn on top. An opaque icon
   over a model the rule does not hide has no circle, so two of those are settled by the model's box
   and the engine's key.

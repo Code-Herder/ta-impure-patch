@@ -266,10 +266,14 @@ only the low byte is the mode, read nothing after the call but EAX, and reload `
 `0x48D220` and may answer `0x13` instead, and leaves the dead copy alone — the engine's own "nothing", stored
 by the handler at `0x49925D` and returned by `0x43E490`'s default at `0x43F098`.
 
-**The router's three hooks** (`tagpu_route.c`, written at attach, each byte-matched first): the
-two rel32 fields above (`0x499298..0x49929B`, `0x491D37..0x491D3A`), the before-observer on the
-handler's entry `0x499200`, and the 12-byte stub over `0x4993BF` (`E9 rel32` and seven `90`; the
-stub's three ways are the section above's). No branch in `.text` lands on `0x4993C0..0x4993CA`,
+**The router's hooks** (`tagpu_route.c`, written at attach, each byte-matched first): the live
+call's rel32 above (`0x499298..0x49929B`; the dead copy's `0x491D37..0x491D3A` keeps the engine's
+bytes), the before-observer on the handler's entry `0x499200`, the 12-byte stub over `0x4993BF`
+(`E9 rel32` and seven `90`; the stub's three ways are the section above's), the right-press
+branch's stub at `0x49939B` ([formation](../modules/formation.html)) and the hover query's rel32
+at `0x499279..0x49927C` (the call `0x499278` to `0x48CD80`, re-pointed to a function that asks the
+strategic icons' radar pick when the engine names no unit, [strategic icons](../modules/icons.html),
+*The pick*; the dead copy's call `0x491D18` keeps the engine's bytes). No branch in `.text` lands on `0x4993C0..0x4993CA`,
 the bytes the jump and the NOPs cover, and no absolute reference in the file names an address
 there (a branch scan and a literal scan of the pristine file, 2026-10-28). The stub dispatches on
 `main+0x2CC3`: 14 to the placement, 12 to the sweep, every other mode stock's.

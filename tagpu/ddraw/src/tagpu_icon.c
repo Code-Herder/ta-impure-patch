@@ -225,7 +225,8 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
         /* THE HOVERED CONTACT, as the minimap shows it (0x466F11..0x466F37):
            the logo's dot gets radlogohigh frame 0 over it, at the dot's scale,
            drawn after every icon; a set's NONE picture has no such frame and
-           takes its SelectedColor instead. One unit is hovered at most. */
+           is drawn as a selected picture is, its SelectedColor shown and its
+           fill white. One unit is hovered at most. */
         if (s_hovered && u->id == s_hovered) {
             if (setpic) sel = 1;
             else if (s_art->has_high) {

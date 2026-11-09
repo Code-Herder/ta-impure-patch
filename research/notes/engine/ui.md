@@ -2342,7 +2342,9 @@ list*). **The team colour is the frame's hotspot texel** [MEASURED 2026-11-03 on
 `anims\fx.GAF`, a scratchpad read through `tools/wiki/gfx.py`]: ten `radlogo` frames, each 4 × 4
 with hotspot (1, 1) and key 9, a 2 × 2 centre of one colour in a ring — centres 227, 212, 255, 235,
 108, 218, 208, 245, 131, 67, rings 89 (frame 7: 86); `radlogohigh` frame 0 is 6 × 6, hotspot
-(2, 2), a ring of 81. The colours in TADR's commented-out switch beside `PlayerDotColor`
+(2, 2), a ring of 81 — the frame Impure decodes once a process beside the `radlogo` frames and
+draws over the hovered unit's dot in the world view ([strategic icons](../modules/icons.html),
+*Radar dots*). The colours in TADR's commented-out switch beside `PlayerDotColor`
 (`vendor/TADR/src/DDraw/UnitMinimap.cpp`) differ from these in four places, so a reader takes the
 colour from the frame, never from a table.
 

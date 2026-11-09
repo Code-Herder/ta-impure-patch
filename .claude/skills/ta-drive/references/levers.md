@@ -247,7 +247,13 @@ Driving the camera at a zoom other than 1:
   AIRCOMBAT, AIR, CONS, COMBAT. Icons need the unit pass and the marker pass both drawing (`on=0`
   otherwise). A click on an icon whose model is hidden is answered by the icon's circle on the game
   thread: `zoom: icon pick - N hit(s), M miss(es) so far`, at most once a second. Radar contacts
-  show as the minimap's dot under the same rule (`dots=`) and are not pickable in the world view.
+  show as the minimap's dot (`dots=`): at every level under `radardots=always` (the default, and
+  the in-game panel's *Radar dots* row), only past the icon rule under `radardots=zoomed` — which a
+  control launch without `--defaults` uses, so its 1x frame is stock. Hovering a dot sets
+  `main+0x2CBA` to the contact's id and rings the dot, and an order on it is the minimap's attack;
+  the game thread logs `zoom: radar pick - N hover(s) on a dot so far, the last id I` at most once a
+  second. A dot answers only when the engine names no unit there. `scenarios/radar-dots.json` puts
+  radar contacts on grey ground in view at 1x on 1920x1080.
 - **A mod's TADR icon set replaces the shapes** where the install ships one (no lever; it is read
   once a process from the files `MegaMapConfig` names in the ini the exe's `0x5098A3` string
   names — Mayhem, ProTA, TA Zero and Twilight do; retail and the compat setups' Escalation do not). The

@@ -782,29 +782,29 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*The panel has fourteen rows: the nine below that are about the picture or its pacing, then five
-that are not rendering options — Resource snapping, Quick mex/geo, Formation move, Mega map wheel
-and Mega map zoom in ([settings](modules/settings.html) §2.12). The row table and every geometry
-number here are the current fourteen.*
+*The panel has fifteen rows: the nine below that are about the picture or its pacing, then six
+that are not rendering options — Resource snapping, Quick mex/geo, Formation move, Mega map wheel,
+Mega map zoom in and Radar dots ([settings](modules/settings.html) §2.12). The row table and every
+geometry number here are the current fifteen.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Fourteen gadgets, and everything else demoted to the cfg. (Six when the rules
+2. **Simplify.** Fifteen gadgets, and everything else demoted to the cfg. (Six when the rules
    were set; the additions are the readout, a diagnostic rather than a render option, vsync, the
-   map edge and the five rows that are not rendering options — see the row table.)
+   map edge and the six rows that are not rendering options — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−304, 32) 304×440` — right-aligned by `MARGIN = 16`, hanging from the
-top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Fourteen
-`id=1` buttons at `x=166 w=120 h=20` on a **26 px** pitch, each with an `id=5` label at
+panel `id=0` at `(w−16−304, 32) 304×436` — right-aligned by `MARGIN = 16`, hanging from the
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Fifteen
+`id=1` buttons at `x=166 w=120 h=18` on a **24 px** pitch, each with an `id=5` label at
 `x=14 w=144` **on the same line**:
 
-*The height is **440**, and it is derived from the row count: fourteen rows on the 26 px pitch
-put the last row's end at `34 + 26×13 + 20 = 392`, the bottom rule (`DIV_BOT`) sits 8 px under it
-at 400, and the panel ends 40 px under the rule, past the Resource profile caption and the bolts.
+*The height is **436**, and it is derived from the row count: fifteen rows on the 24 px pitch
+put the last row's end at `34 + 24×14 + 18 = 388`, the bottom rule (`DIV_BOT`) sits 8 px under it
+at 396, and the panel ends 40 px under the rule, past the Resource profile caption and the bolts.
 `tagpu_menu.c` computes `DIV_BOT` and `PANEL_H` from `R_COUNT` and refuses at compile time a panel
-that would end past row 480 at 640×480 (`menu_panel_fits_480`; fourteen rows end at 472).
+that would end past row 480 at 640×480 (`menu_panel_fits_480`; fifteen rows end at 468).
 **`tools/guipanel.py` is not the source of truth for these numbers** — it draws `W,H = 304,212`
 — and the panel is composed at runtime from the player's install, so nothing is regenerated when
 they change.*
@@ -813,19 +813,20 @@ they change.*
 |---|---|---|---|
 | 9 | *(the caption, `Render options`)* | — | an `id=5` label above the rule at y=30 |
 | 34 | **Renderer Style** | Classic \| Classic++ \| Custom | sets every row below it |
-| 60 | **Undithered assets** | Off \| On \| Off (driver) | `assets=` — done, G18a; the third stage is On as chosen and off because the restorer turned itself off on this driver, and a click on it is the retry |
-| 86 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
-| 112 | **Shadows** | Off \| Hard | `shadows=` — G18b; **Soft was the third stage and was dropped 2026-09-22**, because the soft map has no producer and the stage was Off under another name ([GPU status](gpu-status.html) §2.83). Hard is the Classic++ preset |
-| 138 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
-| 164 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
-| 190 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
-| 216 | **Vsync** | Off \| On | `vsync=` in the store (§2.10c) — FIFO present and the limiter's backstop, on by default. Never greyed with the lane; greyed under `tagpu_defaults.off`, where the harness owns it |
-| 242 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.90. Never greyed with the lane: the mirror is drawn under either preset |
-| 268 | **Resource snapping** | Off \| 1..8 | the snapping radius ([resource snapping](modules/resource-snapping.html)); held while resource input is not live or the mod's rules (`tagpu_profiles_policy`) give no manual radius |
-| 294 | **Quick mex/geo** | Off \| On | Quick Build; held while resource input is not live or the mod's rules do not offer it |
-| 320 | **Formation move** | Off \| On | `formation=` in the store (§2.10b); `tagpu_formation.on`/`.off` are its levers — a drag lays the selection out along a line ([formation](modules/formation.html)). Never greyed with the lane; in-game only |
-| 346 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
-| 372 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
+| 58 | **Undithered assets** | Off \| On \| Off (driver) | `assets=` — done, G18a; the third stage is On as chosen and off because the restorer turned itself off on this driver, and a click on it is the retry |
+| 82 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
+| 106 | **Shadows** | Off \| Hard | `shadows=` — G18b; **Soft was the third stage and was dropped 2026-09-22**, because the soft map has no producer and the stage was Off under another name ([GPU status](gpu-status.html) §2.83). Hard is the Classic++ preset |
+| 130 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
+| 154 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
+| 178 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
+| 202 | **Vsync** | Off \| On | `vsync=` in the store (§2.10c) — FIFO present and the limiter's backstop, on by default. Never greyed with the lane; greyed under `tagpu_defaults.off`, where the harness owns it |
+| 226 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.90. Never greyed with the lane: the mirror is drawn under either preset |
+| 250 | **Resource snapping** | Off \| 1..8 | the snapping radius ([resource snapping](modules/resource-snapping.html)); held while resource input is not live or the mod's rules (`tagpu_profiles_policy`) give no manual radius |
+| 274 | **Quick mex/geo** | Off \| On | Quick Build; held while resource input is not live or the mod's rules do not offer it |
+| 298 | **Formation move** | Off \| On | `formation=` in the store (§2.10b); `tagpu_formation.on`/`.off` are its levers — a drag lays the selection out along a line ([formation](modules/formation.html)). Never greyed with the lane; in-game only |
+| 322 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
+| 346 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
+| 370 | **Radar dots** | Zoomed out \| Always | `radardots=` in the store (§2.10b) — a radar contact's dot in the world view only where the strategic icons come in, or at every level ([strategic icons](modules/icons.html), *Radar dots*). Never greyed with the lane; in-game only |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -872,7 +873,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 304×440 in a corner, covering ~17 % of a
+you would click, close, look, reopen; and the panel is 304×436 in a corner, covering ~17 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
@@ -1354,8 +1355,9 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `replayhud` | 100 | 75, 100, 125 or 150: the replay HUD's own scale, in percent; one HUD unit is the screen height / 720 times it, whatever `hudscale` is ([The replay HUD in game](hud-in-game.html)). No settings row: the HUD's own scale button writes it, cycling the four |
 | `iconscale` | 100 | 75, 100, 125, 150 or 200: the strategic icons' size, percent of BAR's (`UnitIconScaleUI` 1.05) ([strategic icons](modules/icons.html)) |
 | `icondist` | 100 | 50, 75, 100, 150 or 200: the distance the icons take over at, percent of BAR's 3000 elmos; 200 = icons only from twice as far |
-| `iconfade` | 33 | 0, 33 or 67: the fade band, percent; 0 = BAR's hard switch, 67 = Recoil's own. 33 keeps 1× the stock frame on every frame up to about 2600 px tall. The three icon keys have no row (the in-game panel holds no fifteenth: its fit in 640×480 is checked at build time, [settings](modules/settings.html) §2.12), are read live by both threads, and under `tagpu_defaults.off` take these defaults |
+| `iconfade` | 33 | 0, 33 or 67: the fade band, percent; 0 = BAR's hard switch, 67 = Recoil's own. 33 keeps 1× the stock frame on every frame up to about 2600 px tall. The three icon keys have no row (the in-game panel holds no sixteenth: its fit in 640×480 is checked at build time, [settings](modules/settings.html) §2.12), are read live by both threads, and under `tagpu_defaults.off` take these defaults |
 | `formation` | `on` | `on` or `off` (`1`/`0` also read): formation move — a drag with the order button lays the selection out along the drawn line ([formation](modules/formation.html)). The in-game panel's *Formation move* row; read at each press, so a change applies from the next one. Its levers `tagpu_formation.on`/`.off` win over the key; under `tagpu_defaults.off` the store is ignored and the move is off |
+| `radardots` | `always` | `always` or `zoomed` (`1`/`0` also read): a radar contact's dot in the world view at every level, or only where the strategic icons come in, which keeps 1× stock ([strategic icons](modules/icons.html), *Radar dots*). The in-game panel's *Radar dots* row (Zoomed out / Always); read every frame by the render thread and every hover query by the game thread. Under `tagpu_defaults.off` the store is ignored and it reads `zoomed` |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's
@@ -1591,7 +1593,7 @@ gives the refresh rate on a 60 Hz screen.
 **The key and the rows.** `vsync` in `impure.cfg`, 1 by default, written `1`/`0` (`on`/`off`
 also read). It is answered under `tagpu_defaults.off` too, like the placement, and the render
 thread reads it every frame (`tagpu_settings_vsync`), so a click is live on the next frame. It is
-a row of the in-game panel (fourteen rows, `PANEL_H` 440) and of the shell's Visuals screen, where
+a row of the in-game panel (fifteen rows, `PANEL_H` 436) and of the shell's Visuals screen, where
 it sits in the Window column in the slot between the two sliders (caption 276). Restore Default
 puts it on. It is not greyed under the GDI backend, whose frames it paces too (below).
 
