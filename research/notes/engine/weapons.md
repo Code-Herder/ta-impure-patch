@@ -472,6 +472,30 @@ ID 256 overwrites the pool's header; ID −1 overwrites `main+0x2BDE..0x2CF2`, t
 `0x2CC4`). Stock content's highest ID is 246, and every section has one
 ([evidence §9](../tadr-port/limits-evidence.md)).
 
+**What the loader writes into the record** [DISASSEMBLED 2026-11-09], the fields the weapon range
+rings read (`tagpu_rangeown.c`). Each key is read through `0x4C46C0` (an integer, `(key,
+default)`) or `0x4C4760` (a double):
+
+| field | key | how it is stored |
+|---|---|---|
+| `+0x68`, i32 | `weaponvelocity` | × 65 536/30 (`fmul [0x4FD240]` at `0x42E4C6`), truncated by `0x4E43A0`, stored at `0x42E4DC`: world px a tick in 16.16 |
+| `+0xDC`, i32 | `range` | as read, default `0x7FFF` (`0x42E50D`), stored at `0x42E52A` |
+| `+0xE0`, i32 | `coverage` | as read, default 0, stored at `0x42E540`: an interceptor's coverage radius |
+| `+0xC8`, float | `minbarrelangle` | × π/180 (`fmul [0x4FD260]`), default −11.25° (`push 0xC0268000` at `0x42E70F`), stored at `0x42E738`: radians |
+| `+0x111`, u32 | the booleans below | one key a bit: each read is masked to bit 0, shifted, and merged over that bit alone, `0x42E5E4..0x42E603` for the first and `0x42EBEB..0x42EC05` for the last |
+
+The bits of `+0x111`, each key's read paired with the store that follows it: bit 0
+`lineofsight` (`0x42E81A`), 1 `ballistic` (`0x42E83E`), 2 `shellweapon`, 3 `beamweapon`, 4
+`vlaunch`, 5 `meteor`, 6 `noradar`, 7 `paralyzer` (`0x42EBBB`), 8 `dropped` (`0x42EB27`), 9
+`startsmoke`, 10 `endsmoke` (`0x42EC05`), 11 `soundtrigger`, 12 `guidance`, 13 `tracks`, 14
+`unitsonly`, 15 `groundbounce`, 16 `waterweapon` (`0x42E8B0`), 17 `toairweapon` (`0x42E8D6`), 18
+`smoketrail`, 19 `turret`, 20 `selfprop`, 21 `propeller`, 22 `noexplode`, 23 `burnblow`, 24
+`twophase`, 25 `cruise`, 26 `commandfire` (`0x42EA40`), 27 `noautorange` (`0x42E603`), 28
+`stockpile` (`0x42EA5F`), 29 `targetable`, 30 `interceptor` (`0x42EAB6`); bit 31 is not written
+here. The bits the rest of this page tests agree: bit 23 `burnblow` (`0x49CECC`), bit 19 the
+turret's aim path and bit 4 `vlaunch` (`0x49E010`), bit 16 the water path and bit 17 the air test
+of `0x49ABB0`.
+
 **The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes and a slot from the wire
 unbounded.** It indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5
 (`0x49D2A6`) scales the `u16` shooter at `+0x21` (`0x49D329..0x49D34A`) and the `u16` target at
@@ -840,6 +864,36 @@ callers: acquisition `0x40B914`, retaliation `0x4070D0`/`0x407125`/`0x40714F`, t
 **Can-aim `0x49AA80(unit, &from, &to, idx)`**: the range test first, then a water weapon returns 1
 at once (`0x49AB26`); other weapons test a submerged firer and the ballistic reach. It has no air
 test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
+
+### The ballistic reach `0x49A890(dx, dy, dz, v, minbarrel)` [DISASSEMBLED 2026-11-09]
+
+`stdcall`, `ret 0x14`; `dx`, `dy`, `dz` and `v` are integers (`fild`), `minbarrel` a float. Four
+callers: can-aim `0x49AA80` (`0x49AB87`), can-engage `0x49ABB0` (`0x49AD67`), the turret's aim
+routine `0x49D580` (`0x49D614`, handed `w+0x68` at `0x49D608`), and AutoAim's slot loop
+`0x49E1A0` (`0x49E28E`). It answers the launch pitch in TA's angle units (radians × 32 768/π,
+`0x49AA55..0x49AA61`, truncated by `0x4E43A0`), or `0x8000` when no pitch reaches
+(`0x49AA6C..0x49AA75`).
+
+- `d` = `0x4FB440(dx, dz)` (`0x49A8C0`; the two-double entry of the CRT's math dispatcher,
+  [INFERRED] `hypot`, [cob](cob.html)), `g` = gravity `main+0x14263` (read at `0x49A89F`). Can-engage
+  hands it the shooter's 16.16 position `+0x6A`/`+0x6E`/`+0x72` less the target's on each axis, so
+  `dy` is the shooter's altitude less the target's, then the weapon's `+0x68` and `+0xC8`
+  (`0x49AD2E..0x49AD66`).
+- `D′ = v⁴ + 2·g·dy·v² − g²·d²`; below 0 refuses (`fcom 0.0` at `0x49A966`, `jne 0x49AA6C`).
+- The two roots `s± = d²(v² + g·dy) ± d²√D′`, each over `2(d² + dy²)` (`0x49A977..0x49A9B9`), are
+  `v²cos²θ`; each becomes `acos(√s / v)` through `0x4E67F0` (`0x49A9CE`, `0x49AA04`), and a root
+  ≤ 0 becomes π/2 (the double `0x3FF921FB54442D11` stored at `0x49A9D9`, or `[0x4FDA78]`).
+- **`0x4E67F0` is the CRT's `acos`** on the x87 stack: `fst [esp]` (`0x4E67F3`), then for an
+  argument inside ±1 `atan2(√((1 + x)(1 − x)), x)` by `fpatan` (`0x4E6828..0x4E6836`). Those two
+  calls are its only callers in `.text` (an `E8`/`E9` scan). It answers 0..π, so a downhill pitch
+  is taken by its size.
+- An angle is taken when `minbarrel < angle ≤ π/4` (`[0x4FDA80]`), the first root's angle tried
+  before the second's (`0x49AA11..0x49AA53`). The 45° cap refuses every steeper shot, so a target
+  close below a steep drop is out of reach even inside `range`.
+
+The range itself is not tested here: can-aim and can-engage compare `dx² + dz²` with `range²` on
+their own, so the reach of a ballistic weapon is the set both tests pass. The weapon range rings'
+compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings](../weapon-range-rings.html), *The reach*).
 
 ### The attack cursor `0x43E545` and the order action `0x43F0E0`
 

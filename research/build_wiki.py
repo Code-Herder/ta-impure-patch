@@ -114,6 +114,7 @@ PAGES = [
     ("modules/wiki",                      "In-game wiki", "Modules"),
     ("modules/placement",                 "Several buildings in one gesture", "Modules"),
     ("modules/reclaim-sweep",             "Reclaim sweep", "Modules"),
+    ("modules/range-rings",               "Weapon range rings", "Modules"),
     ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
     ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
     ("modules/log-g16-pose-race",         "Log: pose race (frozen)", "Modules"),

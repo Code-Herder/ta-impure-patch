@@ -163,6 +163,15 @@ OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwid
 projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
 markers away before our buffer saw them.
 
+**The engine's `ShowRanges` set gives way to the weapon range rings.** The snapshot takes the
+toggle `main+0x391BF` as on only while the rings are off (`tagpu_order_snapshot`:
+`showRanges = flag && !tagpu_rangeown_on()`), and that one value gates both limbs that draw it —
+`draw_ranges`' labelled per-unit circles (`0x4390A0`'s `ShowRanges` branch) and `draw_sprite`'s
+AoE and coverage circles at an order's target (`0x439740`'s `0x439811..0x439948`). So with
+`ranges` on (the default) the rings replace them, and `ranges=off` brings them back as the engine
+draws them. The normal-play limb does not read it: a cloaked unit's `mincloak` circle and a
+kamikaze's two circles are drawn either way ([range rings](range-rings.html)).
+
 **The formation move's dots draw with the order art** ([formation](formation.html), *The
 preview*). While a formation drag is held the frame packet carries its slots by value
 (`PK_FORMDOT`, at most 1500, bounded at the acquire), and `tagpu_mark_gather` hands them to

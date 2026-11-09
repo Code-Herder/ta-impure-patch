@@ -1722,8 +1722,18 @@ counted (`recorder: N footprint calls a playing cannot put in their order`).
 
 **The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, has seven callers: `0x40AB11`
 (in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,
-`0x48BC56` and `0x494396`; our order markers call it too. A unit of the player's own is visible
-(`0x465AD4`); one with `+0x10E` bit 2 is not. It tests up to four points of the unit's box in turn,
+`0x48BC56` and `0x494396`; our order markers and the weapon range rings (`tagpu_rangeown.c`) call
+it too. The HotUnits cull's call is the test the engine's own unit draw rests on: `0x48BC42..0x48BC4E`
+compares the unit's owner byte `+0xFF` with the viewed player `main+0x2A43` and lists the unit at
+once when they match; only another owner's unit reaches the call at `0x48BC56`, and a 0 there
+leaves it out of the list (`0x48BC5D`) ([units](units.html), *The draw's unit list*). The
+function's own first tests, before any point [DISASSEMBLED 2026-11-09]: a unit whose owner record
+`+0x96` is the `player` argument is visible (`0x465AD4`); one with `+0x10E` bit 2 is not
+(`0x465AE8`); and **one whose model is wholly under water is not, unless it is a sonar contact**
+— the first point's y, the altitude `+0x6E` plus the def's `+0x16E` (the model's top, [weapons](weapons.html),
+*The target box*), below the sea level byte `main+0x1427F` << 16 returns 0 when `+0x110` bit 9,
+the viewed player's sonar contact, is clear (`0x465B30..0x465B59`, the bit tested at `0x465B38`).
+It tests up to four points of the unit's box in turn,
 until one is visible, as [line of sight](../line-of-sight.md) describes — 16.16 dwords at `[esp+0x10]`
 (x), `+0x14` (y) and `+0x18` (z), `def` the unit's type at `+0x92`: `(x + def+0x15E, y + def+0x16E,
 z + def+0x166)` (`0x465AFD..0x465B3B`); the same with `x + def+0x176` (`0x465BDB..0x465BED`); then

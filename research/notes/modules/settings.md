@@ -273,6 +273,16 @@ The front-end screen's two columns are full, and the in-game panel holds no sixt
 would end at 492 from engine row 32, which the compile-time check refuses. The keys are set in the
 file and read live.
 
+**Neither have the weapon range rings' keys**, for the same reason ([range rings](range-rings.html),
+*Settings*): `ranges` (`on`/`off`, default on; off brings the engine's `ShowRanges` circles back),
+`rangeshift` (default off: the attack rings only under Shift), `rangecursor` (default on: the unit
+under the cursor), and the defense classes per side, `rangeally` (default `nuke`) and `rangeenemy`
+(default `ground,air,nuke,cannon`), each a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`
+or `none` (`TS_RC_*` bits in the store; a word that is not a class keeps the default, logged).
+`rangetoggle=NAME:n:ally:enemy,...` is the Alt+. / Alt+, map, kept by unit name like
+`placespacing`: at most 64 types, `n` 1..16. All are read every frame by the game thread; under
+`tagpu_defaults.off` the store is ignored and the compiled defaults apply, rings on.
+
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
 created and deleted; `tagpu_fps.on` created and deleted (§2.14); and **both**

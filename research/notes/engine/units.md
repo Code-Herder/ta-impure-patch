@@ -1187,6 +1187,12 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   minimap, located*). A hit test that answers differently — the strategic icons' circle at
   `0x48CE15`, which walks this list once a pick for the nearest icon — changes what `0x48CD80`
   returns, not how many ids the list holds.
+- **Who is listed** [DISASSEMBLED 2026-11-09]: a unit inside the rect whose owner byte `+0xFF`
+  equals the viewed player `main+0x2A43` is listed at once (`0x48BC42..0x48BC4E`); any other is
+  listed only when `UnitInPlayerLOS 0x465AC0(player, unit)` answers non-zero (the call at
+  `0x48BC56`, the skip at `0x48BC5D`), so a unit wholly under water and not a sonar contact is
+  never listed ([map](map.html), *Line of sight at the map's edge*). The weapon range rings ask
+  the same two questions of every unit they draw a ring for (`tagpu_rangeown.c`, `shown`).
 - **The bar loop** `0x469C09..0x469D1F`, inside `DrawGameScreen 0x468CF0`, walks that list and
   never tests a slot's type. It draws a bar only when option-word bit 0 is set (damagebars,
   `0x469C97`) and the slot's owner record `+0x146` equals the viewed record (`0x46967D..0x469689`,
