@@ -206,6 +206,40 @@ than snapping at the tick. It is only this small because G16 turned the pose bac
   printed when the lever was off. **Gone since 2026-09-23**: nothing called `tagpu_lerp_stats` any
   more, and it was deleted.
 
+### Which units the pass draws — the gather's refusals (`tagpu_native.c`, `tagpu_packet_pub.c`)
+
+The gather draws a unit the engine would draw for the player and no other. After the slab test
+(its anchor inside the reach), in order (`tagpu_native_frame`):
+
+1. **No fog source, no foreign unit**: until the packet carries the fog source, only the
+   watched player's own units are drawn, and no radar dot.
+2. **A foreign unit actively cloaked** (`PK_UNIT.cloak`, unit `+0x10E`, bit 2) is refused.
+3. **A unit the engine's draw list leaves out** is refused: the record's `TAGPU_PK_U_UNSEEN`
+   (`0x10`). The publisher sets it on the game thread for every unit the viewed player
+   `main+0x2A43` does not own when `UnitInPlayerLOS 0x465AC0` refuses it
+   (`tagpu_packet_pub_unit_seen`, in `fill_world`), with the viewed player's record
+   `main + 0x1B63 + main+0x2A43 · 0x14B` — what the HotUnits cull asks (`0x48BC3D..0x48BC5D`),
+   with the record it computes at `0x48BB05..0x48BB23` ([units](../engine/units.html), *The
+   draw's unit list*). Before any sight is read that call refuses a cloaked unit and a unit whose
+   model is wholly under water with no sonar contact (`+0x110` bit 9, `0x465B30..0x465B59`). The
+   waterline clip below runs on the depth-plane path only, which no stationary building takes, so
+   without this test such a structure was drawn whole.
+4. **The fog at the anchor tile**: unexplored is refused; grey refuses a foreign unit.
+
+A refused unit that is a radar or sonar contact (`+0x110 & 0x300`) with a model is drawn as its
+radar dot instead ([strategic icons](icons.html), *Radar dots*), and the radar pick's
+`icon_refused` (`tagpu_zoom.c`) asks the same draw-list test, so a dot is hovered where it is
+drawn. A unit that is drawn and stands below the sea is still clipped at the waterline on the
+depth-plane path: a foreign one with no sonar contact erased under it, the player's own or a sonar
+contact tinted.
+
+The own-unit tests above key on the packet's `watched` (`main+0x2A42`); the draw-list test keys on
+the viewed player `main+0x2A43`, as the cull does.
+
+**MEASURED 2026-11-09** on `scenarios/submerged-unseen.json` with `--los 0` (CORE's torpedo
+launcher CORTL and submarine CORSUB in deep water, ARM with no sonar): GDI and the unit pass draw
+neither; with an ARMSONAR at (5656, 1292), in sonar range, both draw both.
+
 ### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for the design point
 
 **What was wrong.** Past **512 posed units on screen, no unit body drew at all**. The Vulkan unit

@@ -1191,8 +1191,13 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   equals the viewed player `main+0x2A43` is listed at once (`0x48BC42..0x48BC4E`); any other is
   listed only when `UnitInPlayerLOS 0x465AC0(player, unit)` answers non-zero (the call at
   `0x48BC56`, the skip at `0x48BC5D`), so a unit wholly under water and not a sonar contact is
-  never listed ([map](map.html), *Line of sight at the map's edge*). The weapon range rings ask
-  the same two questions of every unit they draw a ring for (`tagpu_rangeown.c`, `shown`).
+  never listed ([map](map.html), *Line of sight at the map's edge*). The `player` it passes is the
+  viewed player's record, `main + 0x1B63 + main+0x2A43 · 0x14B`, computed at `0x48BB05..0x48BB23`.
+  Impure asks the same two questions on the game thread: the frame packet's publisher for every
+  unit it copies (`tagpu_packet_pub_unit_seen`, which marks a refused one `TAGPU_PK_U_UNSEEN` so
+  the unit pass and the radar pick leave it out, [the unit renderer](../modules/units.html),
+  *Which units the pass draws*), and the weapon range rings for every unit they draw a ring for
+  (`tagpu_rangeown.c`, `shown`).
 - **The bar loop** `0x469C09..0x469D1F`, inside `DrawGameScreen 0x468CF0`, walks that list and
   never tests a slot's type. It draws a bar only when option-word bit 0 is set (damagebars,
   `0x469C97`) and the slot's owner record `+0x146` equals the viewed record (`0x46967D..0x469689`,

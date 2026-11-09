@@ -246,17 +246,27 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is 304×436 for fifteen rows on a 24 px pitch: `ROW_Y0 34 + ROW_PITCH 24 × 14 =
-370`, `ROW_H` 18, so the last row (Radar dots) ends at 388; a row's recess is `ROW_H + 2·PAD`
-= 22 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px under the last row,
-at 396, the Resource profile caption under it at 404, and the bottom bolts at `PANEL_H − 10`.
-**The height follows the row count**: `DIV_BOT` is `ROW_Y0 + ROW_PITCH·(R_COUNT − 1) + ROW_H + 8`
-and `PANEL_H` is `DIV_BOT + 40`, and a compile-time check (`menu_panel_fits_480`) refuses a build
-whose panel, hanging from engine row `BAR_H` 32, would end past row 480 — fifteen rows end at
-468, and a sixteenth on this pitch would end at 492. At 640×480 it lies over the bottom bar's rows
-448..467 at x 320..623, whose presses it takes while it is open. *Formation move*, *Mega map zoom
-in* and *Radar dots* are this panel's alone: the front-end screen's two columns are full
-(`vis_shown`), so a player sets them in game or in `impure.cfg`. *Radar dots* (Zoomed out \|
+The in-game panel is 496×364: **two columns of `COL_W` 248** (`PANEL_W` = 2·`COL_W`), twenty-three
+rows on a 24 px pitch filling the left column first (`row_pos`: `COL_ROWS` = `(R_COUNT + 1)/2` =
+12 on the left, 11 on the right), each row a label at `x0 + 12` (112 wide) beside a control at
+`x0 + 128` (108 wide), `x0` its column's left edge. The left column's last row (Formation move)
+starts at `ROW_Y0 34 + ROW_PITCH 24 × 11 = 298` and ends at 316; a row's recess is
+`ROW_H + 2·PAD` = 22 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px
+under the last row, at 324, the Resource profile caption under it at 332, and the bottom bolts at
+`PANEL_H − 10`. **The height follows the left column's count**: `DIV_BOT` is
+`ROW_Y0 + ROW_PITCH·(COL_ROWS − 1) + ROW_H + 8` and `PANEL_H` is `DIV_BOT + 40`, and a
+compile-time check (`menu_panel_fits_480`) refuses a build whose panel, hanging from engine row
+`BAR_H` 32, would end past row 480 — twelve rows a column end at 396, fifteen would end at 468.
+**The width keeps it off the side bar**: a second check, `menu_panel_clears_side`, requires
+`SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel covers x 128..623 and rows 32..395
+and never reaches the side bar. The reason is a strip of the side bar, between the minimap and the
+ORDERS buttons, that belongs to no GUI window: the engine draws it once a level and never again,
+so a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
+304-px columns, two labels stayed through the close, a select and a deselect, and the engine's
+own surface (`tacli shot`) showed them too. The generated `.GUI` is written into a 24 KB buffer;
+the twenty-three rows take 15 001 bytes (the log's `gui=15001`). *Formation move*, *Mega map zoom
+in*, *Radar dots* and the eight range-ring rows are this panel's alone: the front-end screen's two
+columns are full (`vis_shown`), so a player sets them in game or in `impure.cfg`. *Radar dots* (Zoomed out \|
 Always) is `radardots=` (`TS_RADARDOTS`, `zoomed` or `always`, default `always`): a radar
 contact's dot in the world view at every level, or only where the strategic icons come in
 ([strategic icons](icons.html), *Radar dots*); read every frame by the render thread and every
@@ -264,24 +274,27 @@ hover query by the game thread, never greyed with the lane, held under `tagpu_de
 where it reads Zoomed out, and set to Always by Restore defaults.
 `PANEL_W` and `PANEL_H` size the GAF frame header, the ground, the ramp, the border and the corner
 bolts, and the panel is **composed at runtime** from the player's install rather than shipped, so
-no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212: the columns are its,
-the row pitch and the height are `tagpu_menu.c`'s alone.
+no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212; the columns, the row
+pitch and the size are `tagpu_menu.c`'s alone.
 
 **The strategic icons' three keys have no row on either panel** — `iconscale`, `icondist`,
 `iconfade` in `impure.cfg` ([renderers](../renderers.html) §2.10b, [strategic icons](icons.html)).
-The front-end screen's two columns are full, and the in-game panel holds no sixteenth row: it
-would end at 492 from engine row 32, which the compile-time check refuses. The keys are set in the
-file and read live.
+The keys are set in the file and read live.
 
-**Neither have the weapon range rings' keys**, for the same reason ([range rings](range-rings.html),
-*Settings*): `ranges` (`on`/`off`, default on; off brings the engine's `ShowRanges` circles back),
-`rangeshift` (default off: the attack rings only under Shift), `rangecursor` (default on: the unit
-under the cursor), and the defense classes per side, `rangeally` (default `nuke`) and `rangeenemy`
-(default `ground,air,nuke,cannon`), each a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`
-or `none` (`TS_RC_*` bits in the store; a word that is not a class keeps the default, logged).
+**The weapon range rings' rows** ([range rings](range-rings.html), *Settings*), the right column's
+last eight, in game only: *Range rings* (Off \| On, `ranges`; Off brings the engine's `ShowRanges`
+circles back), *Attack rings* (Always \| Shift held, `rangeshift`), *Cursor range* (Off \| On,
+`rangecursor`), and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon* and *LRPC
+defense* — cycling None \| Enemy \| Allied \| Both: stage bit 1 is the class's bit of
+`rangeenemy`, bit 2 its bit of `rangeally` (`RCLASS_BIT`), and a click on any of the five writes
+both masks whole from all five rows. The seven rows under *Range rings* grey while it is Off.
+Restore defaults sets BAR's: rings on, Always, cursor on, enemies' ground, air, nuke and cannon,
+allies' nuke. In the file the masks are comma lists of `ground`, `air`, `nuke`, `cannon`, `lrpc`
+or `none` (a word that is not a class keeps the default, logged), and
 `rangetoggle=NAME:n:ally:enemy,...` is the Alt+. / Alt+, map, kept by unit name like
-`placespacing`: at most 64 types, `n` 1..16. All are read every frame by the game thread; under
-`tagpu_defaults.off` the store is ignored and the compiled defaults apply, rings on.
+`placespacing` (at most 64 types, `n` 1..16), which has no row. The game thread reads every key
+every frame; under `tagpu_defaults.off` the store is ignored, the rows are held at the compiled
+defaults, and the rings are on.
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
@@ -295,9 +308,9 @@ already writes seven files from seventeen create-for-write sites.
 **The trigger is not a gadget and cannot be one.** No GUI screen owns the top bar (every
 in-game panel is the side panel at `(0,128) 128×352`) and a gadget is drawn into its panel's
 own `w×h` surface at panel-relative coordinates, so a gadget at `x=1876` has nowhere to be
-drawn. It is 28×28 at `(w−16−28, 2)`, sharing `MARGIN = 16` with the panel at `(w−16−304, 32)`
-so the two right edges land on one line — measured at both 1024 (988, 704) and 1920 (1876,
-1600).
+drawn. It is 28×28 at `(w−16−28, 2)`, sharing `MARGIN = 16` with the panel at `(w−16−496, 32)`
+so the two right edges land on one line, at `w − 16`; the panel's left edge is 512 at 1024 and
+1408 at 1920.
 
 **Who draws it.** On GDI the engine's blitter draws the code-made sprocket (`sprocket`,
 `build_trigger`: eight teeth in palette indices, normal, hover and pressed). On the Vulkan lane

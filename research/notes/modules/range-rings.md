@@ -21,6 +21,7 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 | `tagpu_vk_range.c/.h` | render | the Vulkan pass: the per-slot reach cache, the dispatch, the stencil union |
 | `tagpu_weapons.c` (`tagpu_weapons_type_weapon`) | game | a unit type's weapon `idx` (weapon1..3, then the extra-weapons record), NULL past the type's count; reads only and builds nothing |
 | `tagpu_settings.c` | game, render | the keys below and `rangetoggle=` |
+| `tagpu_menu.c` | game | the eight rows of the in-game Visuals panel (*Settings*) |
 | `tagpu_shield.c` | game | routes Alt+. / Alt+, to the module on both paths, injected and real |
 | `tagpu_order.c` | game | the engine's `ShowRanges` circles, drawn only while the rings are off |
 
@@ -200,10 +201,13 @@ cloaked unit's `mincloak` circle and a kamikaze's circles draw either way ([mark
 
 ## Settings
 
-In `impure.cfg`, read every frame by the game thread, so no value needs a restart. **File-only:
-no Visuals row.** The in-game panel holds fifteen rows, and `menu_panel_fits_480` refuses a
-sixteenth at build time (it would end at row 492); the front-end screen's two columns are full
-([settings](settings.html) §2.12).
+In `impure.cfg`, read every frame by the game thread, so no value needs a restart. **The in-game
+Visuals panel has a row for each but `rangetoggle`**: *Range rings*, *Attack rings* (Always \|
+Shift held), *Cursor range*, and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon*, *LRPC
+defense* — cycling None \| Enemy \| Allied \| Both over the class's bit of `rangeenemy` (stage bit
+1) and of `rangeally` (bit 2). The seven rows under *Range rings* grey while it is Off, and
+Restore defaults sets the defaults below. The front-end screen has none of them: its two columns
+are full ([settings](settings.html) §2.12).
 
 | key | default | values |
 |---|---|---|
@@ -220,7 +224,6 @@ an Alt+. choice lasts for the session.
 
 ## What is not closed
 
-- **No Visuals rows**: every key is set in the file.
 - **GDI draws no rings**: the rings are a pass of the Vulkan lane; GDI shows the engine's own
   `ShowRanges` circles.
 - **The fades are BAR's distances, untested past 1024×768**: at that size TA's zoom range never

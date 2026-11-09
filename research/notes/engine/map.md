@@ -1722,8 +1722,9 @@ counted (`recorder: N footprint calls a playing cannot put in their order`).
 
 **The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, has seven callers: `0x40AB11`
 (in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,
-`0x48BC56` and `0x494396`; our order markers and the weapon range rings (`tagpu_rangeown.c`) call
-it too. The HotUnits cull's call is the test the engine's own unit draw rests on: `0x48BC42..0x48BC4E`
+`0x48BC56` and `0x494396`; Impure calls it too, on the game thread: the order markers, the weapon
+range rings (`tagpu_rangeown.c`) and the frame packet's publisher, which asks it of every unit the
+viewed player does not own exactly as the HotUnits cull does (`tagpu_packet_pub_unit_seen`). The HotUnits cull's call is the test the engine's own unit draw rests on: `0x48BC42..0x48BC4E`
 compares the unit's owner byte `+0xFF` with the viewed player `main+0x2A43` and lists the unit at
 once when they match; only another owner's unit reaches the call at `0x48BC56`, and a 0 there
 leaves it out of the list (`0x48BC5D`) ([units](units.html), *The draw's unit list*). The

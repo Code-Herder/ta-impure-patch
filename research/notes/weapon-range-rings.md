@@ -16,7 +16,7 @@ weapon record and the ballistic reach `0x49A890`), `tascene-design.md` (the lab)
 | The look | **BAR exactly:** per class a faint merged fill (attack rings only), a merged outline of the union (3 px attack, 5 px defense), faint 1.8 px per-unit inner rings dimmed by the selection size; BAR's colours, camera-distance fades, map-edge fade and mouse-proximity highlight; rings on the water surface. No arc wedges: TA weapon data has no turret arc. |
 | Defense set | **Derived from data, not BAR's hand list:** a unit that cannot move (`BMcode=0`) with a weapon. Class: an interceptor is `nuke` at its `coverage`, `toairweapon` is `air`, otherwise the attack rule. Defaults as BAR: enemies ground, air, nuke, cannon; allies nuke only. |
 | Fogged enemies | **Only what the engine shows:** a ring for an enemy structure the game currently draws for the player; no memory of defenses once out of sight (BAR keeps them until seen dead). |
-| Controls | **All of BAR's:** alt+. / alt+, cycle a per-unit-type on/off bitmap over that type's rings (one unit selected; ally and enemy kept apart), "shift only", "cursor range", the defense classes for allies and enemies. Stored in `impure.cfg` (`ranges`, `rangeshift`, `rangecursor`, `rangeally`, `rangeenemy`, `rangetoggle`). **As built the settings are file-only**: the in-game panel has no room for a sixteenth row (its fit in 640×480 is a build-time check) and the front-end screen's columns are full. |
+| Controls | **All of BAR's:** alt+. / alt+, cycle a per-unit-type on/off bitmap over that type's rings (one unit selected; ally and enemy kept apart), "shift only", "cursor range", the defense classes for allies and enemies. Stored in `impure.cfg` (`ranges`, `rangeshift`, `rangecursor`, `rangeally`, `rangeenemy`, `rangetoggle`). As built, every key but `rangetoggle` is a row of the in-game Visuals panel, which became two columns for them (the front-end screen's columns are full, so it has none). |
 | The reach | **TA's engine rule, not BAR's formula.** See below. |
 | Ring edge | **The first point the engine refuses**, per direction: march outward on the height grid, then refine. Everything inside is in reach; a reachable valley beyond an unreachable crest is not drawn. |
 | Renderers | **Vulkan replaces the stock rings while the rings are on** (owner's decision 2026-11-09, reversing the interview's "deleted, no old mode"): `tagpu_order.c` draws the engine's `ShowRanges` set (`+showranges`, the labelled per-unit circles and the AoE/coverage circles at an order's target) only while `ranges` is off, so `ranges=off` brings it back as the engine draws it. The cloak and kamikaze circles of normal play are untouched. GDI keeps the stock engine behaviour and draws no rings. |
@@ -69,7 +69,6 @@ placement ring with the builders' rings; Alt+. / Alt+, cycling 7 → 0 → 1 →
 
 ## Gaps still open
 
-- **No Visuals rows**: the settings are set in `impure.cfg`.
 - **GDI draws no rings.**
 - **The fades at larger screens**: at 1024×768 TA's zoom range never reaches BAR's fade
   distances; a larger screen fades the inner rings at low zoom, which has not been seen live.

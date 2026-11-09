@@ -298,7 +298,8 @@ With no set, every type's `icon` is `TAGPU_ICON_NOSET` and every path is the gen
 located*), and hovers and orders on it there alone ([input](../engine/input.html), the `0x48CD80`
 row). Ours draw it in the world view as well, as **the minimap's own dot**: at every level under
 `radardots=always`, the default, and under `radardots=zoomed` by the icons' distance rule, which
-keeps 1× stock (*Settings*). A unit the gather refuses by the cloak test or the fog test (an
+keeps 1× stock (*Settings*). A unit the gather refuses by the cloak test, the engine's draw-list test (`TAGPU_PK_U_UNSEEN`,
+[units](units.html), *Which units the pass draws*) or the fog test (an
 unexplored tile, or a grey one for a foreign unit) that is a radar or sonar contact (`+0x110 &
 0x300`) with a model is drawn as its owner's logo frame of `radlogo` (`main+0x147DF`), at an
 integer scale `k_r = max(1, round(0.8 · base / 4))` and `E = k_r × max(w, h)` (8 px at 1080p and
@@ -512,8 +513,10 @@ gates of the engine's records, in the gather's order:
 - alive (`+0x110` bit 28), not excluded (bit 14), a radar or sonar contact (`& 0x300`), and a model
   id `+0xA6` from 1 below `UNITINFOCount` `main+0x1438F`;
 - drawn by the unit pass (`tagpu_native_owns_unit`);
-- refused by the picture (`icon_refused` on the packed fog source: a foreign unit cloaked, on
-  unexplored ground or out of sight at its anchor's tile) — the test that makes the gather draw a
+- refused by the picture (`icon_refused` on the packed fog source: a foreign unit cloaked, one
+  the engine's draw list leaves out — `tagpu_packet_pub_unit_seen`, the same call that sets the
+  unit pass's `TAGPU_PK_U_UNSEEN` — or one on unexplored ground or out of sight at its anchor's
+  tile) — the test that makes the gather draw a
   dot instead of the unit;
 - drawn as the art the gather picks: a set's NONE picture at the art scale, else the owner's logo
   frame (`PlayerInfo+0x96`, `tagpu_packet_pub_player_logo`, bounded by the art's logo count) at
@@ -577,8 +580,7 @@ whose frame at 1× is the stock one.
 **`radardots` is the in-game panel's *Radar dots* row** (Zoomed out \| Always; Restore defaults
 sets Always), not the front-end screen's, whose two columns are full ([defaults and
 settings](settings.html)); under `tagpu_defaults.off` the row is held and reads Zoomed out. **The
-three icon keys have no row**: the in-game panel's fifteen rows end at 468, and three more would
-run it to 540, 60 px past a 640×480 screen.
+three icon keys have no row**: they are set in `impure.cfg` and read live.
 
 ## Threads
 
