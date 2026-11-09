@@ -15,7 +15,10 @@
      record is handled in another mode;
    - the cursor chooser's call 0x499297, which tagpu_sweep.c filters. Its one other call,
      0x491D36, lies in 0x491CC0, which nothing calls: no call or jump in .text and no four-byte
-     value in the file inside it (DISASSEMBLED), so it is left alone.
+     value in the file inside it (DISASSEMBLED), so it is left alone;
+   - the hover query's call 0x499278, whose answer the handler stores in main+0x2CBA
+     (0x499283): when the engine finds no unit, the radar dot under the pointer answers
+     (tagpu_zoom_radar_pick). Its other in-game call, 0x491D18, is in the same dead 0x491CC0.
 
    Cursor modes are exclusive, so each record has at most one client, and in every other mode the
    record is stock's. Everything here is game-thread state: the simulation never reads it. */
@@ -26,6 +29,7 @@
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
 #include "tagpu_formation.h"
+#include "tagpu_zoom.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
 #include "tagpu_packet.h"
@@ -46,6 +50,8 @@
 #define VA_RIGHT_NOT   0x004993B6u   /* cmp byte [ecx+0x2cc3],1: the mode test       */
 #define VA_CHOOSER     0x0048D220u
 #define VA_CURSOR      0x00499296u   /* push eax; call 0x48D220 (0x499297) */
+#define VA_HOVERQ      0x0048CD80u   /* GetUnitAtMouse: no argument, a unit's +0xA8 in AX */
+#define VA_HOVER       0x00499278u   /* call 0x48CD80 */
 
 static unsigned s_ok;
 
@@ -289,6 +295,37 @@ static int cursor_write(unsigned va, void* fn)
     return tagpu_detour_write(va + 2, (const unsigned char*)&rel, 4);
 }
 
+/* THE HOVER QUERY'S CALL. 0x48CD80 takes nothing, pushes and pops EBX, EBP, ESI and EDI, and
+   answers in AX (DISASSEMBLED 0x48CD80..0x48CF2B); the handler reads only AX after it (0x499283,
+   a word store) and reloads main from 0x511DE8 at once (0x49927D). So a cdecl function of no
+   argument returning an unsigned short stands in for it exactly. The engine's answer stands
+   whenever it names a unit: a unit in sight always wins over a dot. */
+typedef unsigned short (__cdecl* HoverQuery)(void);
+
+static unsigned short __cdecl hover_handler(void)
+{
+    const unsigned short id = ((HoverQuery)VA_HOVERQ)();
+    return id ? id : tagpu_zoom_radar_pick();
+}
+
+/* `E8 03 3B FF FF` at 0x499278, decoded to 0x48CD80 before anything is written; then the rel32
+   is rewritten to reach `fn`, relative to the call's own end. Nothing else in the tree writes
+   the call (a grep of src/). */
+static int hover_matches(unsigned va)
+{
+    const unsigned char* p = (const unsigned char*)(uintptr_t)va;
+    int32_t rel;
+    if (p[0] != 0xE8) return 0;
+    memcpy(&rel, p + 1, 4);
+    return va + 5 + (unsigned)rel == VA_HOVERQ;
+}
+
+static int hover_write(unsigned va, void* fn)
+{
+    int32_t rel = (int32_t)((unsigned)(uintptr_t)fn - (va + 5));
+    return tagpu_detour_write(va + 1, (const unsigned char*)&rel, 4);
+}
+
 void tagpu_route_init(void)
 {
     /* mov eax,[0x511DE8]; sub esp,0x18 */
@@ -309,6 +346,13 @@ void tagpu_route_init(void)
     else if (!cursor_write(VA_CURSOR, (void*)cursor_handler))
         tagpu_logf("route: the cursor chooser's call could not be written; not installed");
     else s_ok |= TAGPU_ROUTE_CURSOR;
-    if (s_ok == (TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY | TAGPU_ROUTE_CURSOR | TAGPU_ROUTE_RIGHT))
-        tagpu_logf("route: armed (stub 0x4993BF, right 0x49939B, entry 0x499200, cursor 0x499297)");
+    if (!hover_matches(VA_HOVER))
+        tagpu_logf("route: the hover query's call (0x499278) holds other bytes; not installed");
+    else if (!hover_write(VA_HOVER, (void*)hover_handler))
+        tagpu_logf("route: the hover query's call could not be written; not installed");
+    else s_ok |= TAGPU_ROUTE_HOVER;
+    if (s_ok == (TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY | TAGPU_ROUTE_CURSOR | TAGPU_ROUTE_RIGHT |
+                 TAGPU_ROUTE_HOVER))
+        tagpu_logf("route: armed (stub 0x4993BF, right 0x49939B, entry 0x499200, cursor 0x499297, "
+                   "hover 0x499278)");
 }

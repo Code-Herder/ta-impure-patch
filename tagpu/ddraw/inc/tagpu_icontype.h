@@ -58,6 +58,10 @@ typedef struct TAGPU_ICONART {
     TAGPU_ICONRECT logo[TAGPU_ICONART_LOGOS];
     unsigned char team[TAGPU_ICONART_LOGOS]; /* each logo's team colour: the
                                                 frame's texel at its hotspot   */
+    int has_high;                            /* 1 = `high` below is in the atlas */
+    TAGPU_ICONRECT high;                     /* radlogohigh frame 0: the ring the
+                                                minimap draws over the dot of the
+                                                unit under the pointer         */
     int nset;                                /* a mod set's icons; 0 = none     */
     TAGPU_ICONRECT set[TAGPU_ICONART_SETS];
     int none, unknown;                       /* set indices, -1 = absent        */

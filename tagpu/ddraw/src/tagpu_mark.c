@@ -1418,8 +1418,9 @@ static int grow_verts(float** p, unsigned* cap, unsigned need)
 /* THE ICON BUCKET IS GROWN HERE, BEFORE THE ICONS ARE DECIDED, and nowhere
    else: tagpu_icon_frame hides a model only on a frame this answered 1 for,
    and a frame queues at most one icon a packet unit (its class icon or its
-   radar contact, never both), so every icon of a frame with hidden models
-   has its quad -- tagpu_mark_emit_icon's capacity test can refuse none. The
+   radar contact, never both) and one hover ring, which the caller counts
+   (tagpu_native.c asks for n_units + 1), so every icon of a frame with hidden
+   models has its quad -- tagpu_mark_emit_icon's capacity test can refuse none. The
    bucket is not touched again until the next frame's call. */
 int tagpu_mark_icon_room(unsigned n_units)
 {

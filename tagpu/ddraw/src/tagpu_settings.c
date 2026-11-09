@@ -104,6 +104,10 @@ static const Opt O_ICONFADE[]  = { {"33", 33}, {"0", 0}, {"67", 67} };
    (tagpu_formation.c). Read at each press, so no value needs a restart. */
 static const Opt O_FORMATION[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
 
+/* A radar contact's dot in the world view: at every level, or only where the icon distance rule
+   brings the icons in, which keeps 1x the stock frame (tagpu_icon.c). Read live by both threads:
+   the render thread's dot and the game thread's pick ask the same value. */
+static const Opt O_RADARDOTS[] = { {"always", 1}, {"zoomed", 0}, {"1", 1}, {"0", 0} };
 /* The weapon range rings (tagpu_rangeown.c): on, the attack rings only under Shift, the rings of
    the unit under the cursor -- BAR's gui_attackrange_gl4 options -- and the defense widget's
    classes per side, a list of class names (`rangeclass`, below). Read every frame by the game
@@ -146,6 +150,7 @@ static const Key s_key[TS_NKEYS] = {
     { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },
     { "iconfade",  O_ICONFADE,  N(O_ICONFADE),  33 },
     { "formation", O_FORMATION, N(O_FORMATION), 1 },
+    { "radardots", O_RADARDOTS, N(O_RADARDOTS), 1 },
     { "ranges",      O_ONOFF, N(O_ONOFF), 1 },
     { "rangeshift",  O_ONOFF, N(O_ONOFF), 0 },
     { "rangecursor", O_ONOFF, N(O_ONOFF), 1 },
@@ -1188,6 +1193,13 @@ void tagpu_settings_icons(int* scale, int* dist, int* fade)
     if (!tagpu_settings_get(TS_ICONSCALE, scale)) *scale = 100;
     if (!tagpu_settings_get(TS_ICONDIST, dist)) *dist = 100;
     if (!tagpu_settings_get(TS_ICONFADE, fade)) *fade = 33;
+}
+
+int tagpu_settings_radardots(void)
+{
+    int v;
+    if (s_ignored) return 0;
+    return tagpu_settings_get(TS_RADARDOTS, &v) ? v : s_key[TS_RADARDOTS].def;
 }
 
 int tagpu_settings_fps(void)

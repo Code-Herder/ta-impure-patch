@@ -205,10 +205,10 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
-/* 26: a row's recess is ROW_H + 2 * PAD = 24 px, so 2 px of face between two
-   recesses, and fourteen rows fit a 640x480 screen (PANEL_H) */
-#define ROW_PITCH  26
-#define ROW_H      20
+/* 24: a row's recess is ROW_H + 2 * PAD = 22 px, so 2 px of face between two
+   recesses, and fifteen rows fit a 640x480 screen (PANEL_H) */
+#define ROW_PITCH  24
+#define ROW_H      18
 #define CTL_X     166
 #define CTL_W     120
 #define LBL_X      14
@@ -228,7 +228,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_COUNT };
+       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS, R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -266,6 +266,10 @@ static const Row s_row[R_COUNT] = {
     /* where leaving it lands (tagpu_zoom.c, NOTCH.tadr). The in-game panel's
        alone: the front-end screen has no slot left (vis_shown). */
     { "MEGAZOOM", "Mega map zoom in",   "Zoom to mouse|TADR default", 2 },
+    /* a radar contact's dot in the world view at every level, or only where the
+       icons come in (tagpu_icon.c, read every frame). The in-game panel's
+       alone, as Mega map zoom in is. */
+    { "RADARDOTS", "Radar dots",        "Zoomed out|Always",        2 },
 };
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
@@ -409,7 +413,7 @@ static int exists(const char* p)
 /* THE PANEL FITS THE SMALLEST SCREEN BY CONSTRUCTION. It hangs from engine
    row BAR_H (panel_rect) and the in-game screen is never smaller than
    640x480, so a row that would push its floor past row 480 fails the build
-   here instead of hanging off that screen. Fourteen rows end at 472. */
+   here instead of hanging off that screen. Fifteen rows end at 468. */
 typedef char menu_panel_fits_480[(BAR_H + PANEL_H <= 480) ? 1 : -1];
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
@@ -1038,6 +1042,7 @@ static void read_state(void)
         s_stage[R_WHEEL] < 0 || s_stage[R_WHEEL] > 1) s_stage[R_WHEEL] = 0;
     if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
         s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
+    s_stage[R_RADARDOTS] = tagpu_settings_radardots() ? 1 : 0;
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -1100,7 +1105,7 @@ static int row_greyed(int row)
        (fps_limiter.c). */
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
-        row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM) return 0;
+        row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1426,6 +1431,7 @@ static void commit_one(int row)
     case R_FORMATION: tagpu_settings_set(TS_FORMATION, s_stage[R_FORMATION]); break;
     case R_WHEEL:   tagpu_settings_set(TS_WHEEL, s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
+    case R_RADARDOTS: tagpu_settings_set(TS_RADARDOTS, s_stage[R_RADARDOTS]); break;
     default:        break;
     }
 }
@@ -2026,7 +2032,7 @@ static const short VC0_SLD[2] = { 244, 336 };
    one slot each, top down, closing up over the gaps they leave. */
 static int vis_shown(int row)
 {
-    return row != R_FORMATION && row != R_MEGAZOOM;
+    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS;
 }
 
 static void vis_pos(int row, int* x, int* y)
@@ -2350,7 +2356,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
         1 + VIS_STOCK_N + 3 +
-        (rows - (rows > R_FORMATION) - (rows > R_MEGAZOOM) + VD_COUNT) * 2);
+        (rows - (rows > R_FORMATION) - (rows > R_MEGAZOOM) - (rows > R_RADARDOTS) + VD_COUNT) * 2);
 
     /* THE GROUND FIRST, so every caption and control is drawn on top of it --
        gadgets are drawn in array order, and ours are appended to STARTOPT's,
@@ -2880,6 +2886,7 @@ static void vis_restore(void)
     s_stage[R_FORMATION] = 1;
     s_stage[R_WHEEL]   = 0;
     s_stage[R_MEGAZOOM] = 0;
+    s_stage[R_RADARDOTS] = 1;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
     /* the mod's default again, by removing the key: a value written here would stay when the

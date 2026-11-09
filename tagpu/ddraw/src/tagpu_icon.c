@@ -44,6 +44,10 @@ static TAGPU_ICON_VIEW s_view;
 static float         s_zoom;
 static int           s_size[TAGPU_ICLS_N], s_edge[TAGPU_ICLS_N], s_dotK;
 static unsigned char s_ink;                     /* gui_col[0], a logo-less fill */
+static int           s_dotsAlways;              /* tagpu_settings_radardots()  */
+static unsigned      s_hovered;                 /* the packet's hovered_id      */
+static int           s_hovOn;                   /* the ring below is queued     */
+static ICREC         s_hov;                     /* the hovered dot's ring       */
 static const TAGPU_ICONART*  s_art;
 static const TAGPU_PK_UTYPE* s_types;
 static unsigned      s_ntypes;
@@ -73,7 +77,7 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
     unsigned i;
     int scale, dist, fade, c, pass;
 
-    s_on = 0; s_n = 0; s_nrec = 0; s_drop = 0;
+    s_on = 0; s_n = 0; s_nrec = 0; s_drop = 0; s_hovOn = 0;
     s_hidden = s_supp = s_dots = s_setpics = 0;
     memset(s_cls, 0, sizeof s_cls);
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
@@ -102,6 +106,8 @@ void tagpu_icon_frame(const TAGPU_PACKET* pk, float zoom, int on)
         s_edge[c] = tagpu_icon_gen_edge(&s_view, c);
     }
     s_dotK = tagpu_icon_dot_k(&s_view);
+    s_dotsAlways = tagpu_settings_radardots();
+    s_hovered = pk->hovered_id;
     s_ink = pk->gui_col[0];
     s_n = pk->n_units;
     units = tagpu_pk_units(pk);
@@ -201,17 +207,39 @@ int tagpu_icon_push(unsigned i, const TAGPU_PK_UNIT* u, float ax, float ay, int 
             k = s_dotK;
             r->team = s_art->team[u->logo];
         }
-        /* the switch at the contact's BAR size, whatever art draws it, so a
-           mod's bigger frame or NONE picture does not bring contacts in
-           sooner -- 1x stays stock (tagpu_icon_dot_size) */
+        /* `radardots=always`: opaque at every level. Otherwise the switch at
+           the contact's BAR size, whatever art draws it, so a mod's bigger
+           frame or NONE picture does not bring contacts in sooner -- 1x stays
+           stock (tagpu_icon_dot_size). The pick (tagpu_zoom.c,
+           tagpu_zoom_radar_pick) asks the same rule of the same art. */
         e = k * (f->w > f->h ? f->w : f->h);
-        r->alpha = (unsigned char)tagpu_icon_eval(&s_view, s_zoom, tagpu_icon_dot_size(&s_view), e, 0u, &hide);
+        r->alpha = s_dotsAlways ? 255u
+                 : (unsigned char)tagpu_icon_eval(&s_view, s_zoom, tagpu_icon_dot_size(&s_view), e, 0u, &hide);
         if (!r->alpha) return 0;
         r->art = f;
         r->ew = (unsigned short)(k * f->w); r->eh = (unsigned short)(k * f->h);
         r->shape = 0;
         layer = 1;                       /* BAR's unidentified contact: drawOrder 1 */
         s_dots++;
+        /* THE HOVERED CONTACT, as the minimap shows it (0x466F11..0x466F37):
+           radlogohigh frame 0 over the dot, drawn after every icon. Its hole
+           is the frame less a texel each side (6x6 about the logo's 4x4), so
+           the ring takes the smallest integer scale whose hole holds the
+           picture as drawn: the dot's own k for the logo, larger for a set's
+           NONE picture. Never the selected look: a contact is never white.
+           One unit is hovered at most. */
+        if (s_hovered && u->id == s_hovered && s_art->has_high) {
+            const int hw = s_art->high.w > s_art->high.h ? s_art->high.w : s_art->high.h;
+            const int hole = hw > 2 ? hw - 2 : 1;
+            const int kr = (e + hole - 1) / hole;
+            s_hov = *r;
+            s_hov.art = &s_art->high;
+            s_hov.ew = (unsigned short)(kr * s_art->high.w);
+            s_hov.eh = (unsigned short)(kr * s_art->high.h);
+            s_hov.ax = ax; s_hov.ay = ay;
+            s_hov.sel = 0;
+            s_hovOn = 1;
+        }
     } else {
         const TAGPU_PK_UTYPE* t;
         const TAGPU_ICONRECT* pic;
@@ -265,6 +293,9 @@ void tagpu_icon_emit(void)
                                       r->alpha))
                 s_drop++;
         }
+        if (s_hovOn && !tagpu_mark_emit_icon(s_hov.ax, s_hov.ay, s_hov.art, 0, s_hov.ew, s_hov.eh, s_hov.team,
+                                             0, s_hov.alpha))
+            s_drop++;
     }
     s_usEmit = us_since(&t0);
     if (s_frames % IC_LOG_FRAMES == 0) {

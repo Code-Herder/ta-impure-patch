@@ -2315,6 +2315,137 @@ int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
     return 0;
 }
 
+/* THE RADAR DOT UNDER THE POINTER. Stock hovers and orders on a radar contact
+   only from the minimap: GetUnitAtMouse 0x48CD80 walks HotUnits in the world
+   view, and HotUnits lists a foreign unit only when 0x465AC0 says it is in
+   sight (0x48BC56), so a contact is never there (DISASSEMBLED 0x48CD80..
+   0x48CF2B). This answers in its place when it found no unit: the dot the
+   render thread draws for a contact (tagpu_native.c, "A RADAR DOT";
+   tagpu_icon_push) is asked of the engine's own records with the gather's own
+   gates, in the gather's order --
+     - a live, not excluded unit (the packet's fill) with a model below
+       UNITINFOCount and a radar or sonar bit (+0x110 & 0x300);
+     - drawn by the unit pass (tagpu_native_owns_unit);
+     - refused by the picture (icon_refused, which needs the fog source; with
+       none the gather draws no foreign unit and no dot);
+     - drawn as the art the gather picks, a mod set's NONE picture or the
+       owner's logo frame, and under `radardots=zoomed` only where the icon
+       rule gives it an alpha;
+   then the pointer inside the drawn rect, half its edge / z each side of the
+   anchor 0x48C6A0 projects (icon_circle's). Where dots overlap, the one drawn
+   last wins, as the picture shows it: the larger anchor y, then the later
+   slot (tagpu_icon_emit's order). The answer goes where the hover query's
+   would (0x499283), so the cursor chooser 0x48D220 and the click's 0x48CF30
+   take the contact as the minimap's branch hands it to them -- an attack on
+   the unit -- with no order code of ours.
+   ONLY WHAT A FRAME DREW: the record's icon answer (s_gIcons) gates it as it
+   gates icon_hit, and the level and the source carry the same one-record lag.
+   ONLY ON THE WORLD: bit 1 of the region byte main+0x2CC6, "the pointer is on
+   the world", which 0x498DA0 writes for this record before the hover query
+   runs -- and which vpwide's replacement of it computes from the TRUE
+   viewport, clearing it over the minimap. The viewport RECT alone is not the
+   test: below zoom 1 vpwide widens it over the minimap's click rect, so a
+   minimap point would name a dot elsewhere on screen. The rect stays as a
+   sanity filter on the point.
+   Every record is a stride-aligned slot below the engine's slot count, and the
+   id answered is bounded by that count too: the engine indexes the unit array
+   with it (0x48CF8C, 0x48D229). */
+#define OFF_VIEWRECT     0x37E27       /* RECT L,T,R,B, inclusive: 0x48CDB0's viewport test */
+#define OFF_POINT        0x2C76        /* the dispatched point, x then y (+0x2C7A)  */
+#define OFF_REGION       0x2CC6        /* u8: bit 0 the minimap, bit 1 the world    */
+#define U_STATEW         0x110         /* u32: bit 28 alive, 14 excluded, 8 radar, 9 sonar */
+#define U_INDEXW         0xA8          /* u16: the id the hover query answers      */
+#define RP_ALIVE         0x10000000u
+#define RP_EXCLUDED      0x4000u
+#define RP_CONTACT       0x300u
+static unsigned s_radarHits;
+
+unsigned short tagpu_zoom_radar_pick(void)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const TAGPU_ICONART* art;
+    const char* beg;
+    const int* rect;
+    TAGPU_ICON_VIEW v;
+    TAGPU_FOGSRC fs;
+    unsigned slots, ndefs, i, best = 0;
+    int scale, dist, fade, always, px, py, artK, dotK, dotS;
+    long long bestY = 0;
+    float z;
+
+    if (!ta_ok(ta) || !s_gIcons || !(*(const unsigned char*)(ta + OFF_REGION) & 2)) return 0;
+    art = tagpu_icontype_art();
+    if (!art) return 0;
+    rect = (const int*)(ta + OFF_VIEWRECT);
+    px = *(const int*)(ta + OFF_POINT);
+    py = *(const int*)(ta + OFF_POINT + 4);
+    if (px < rect[0] || px > rect[2] || py < rect[1] || py > rect[3]) return 0;
+    if (!tagpu_fogwide_source(&fs)) return 0;
+    beg = *(const char* const*)(ta + OFF_UNITBEG);
+    slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
+    ndefs = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+    if (!model_ptr_ok(beg) || slots < 2 || !ndefs) return 0;
+    if (slots > TAGPU_PK_MAX_UNITS) slots = TAGPU_PK_MAX_UNITS;
+    tagpu_settings_icons(&scale, &dist, &fade);
+    tagpu_icon_view(&v, *(const int*)(ta + OFF_SCREENW), *(const int*)(ta + OFF_SCREENH), scale, dist, fade);
+    always = tagpu_settings_radardots();
+    artK = tagpu_icon_art_k(&v);
+    dotK = tagpu_icon_dot_k(&v);
+    dotS = tagpu_icon_dot_size(&v);
+    z = game_level();
+    if (!(z > 0.0f)) return 0;
+    for (i = 1; i < slots; i++) {
+        const char* u = beg + (size_t)i * UNIT_STRIDE;
+        const unsigned st = *(const unsigned*)(u + U_STATEW);
+        const unsigned m = *(const unsigned short*)(u + U_MODELID);
+        const unsigned owner = *(const unsigned char*)(u + U_OWNER);
+        const TAGPU_ICONRECT* fr;
+        long long ax, ay, dx, dy;
+        double hw, hh;
+        int k, hide;
+        if (!(st & RP_ALIVE) || (st & RP_EXCLUDED) || !(st & RP_CONTACT)) continue;
+        if (!m || m >= ndefs) continue;
+        if (!tagpu_native_owns_unit(u) || !icon_refused(ta, u)) continue;
+        if (art->none >= 0 && art->none < art->nset && art->none < TAGPU_ICONART_SETS) {
+            fr = &art->set[art->none];
+            k = artK;
+        } else {
+            const int lg = tagpu_packet_pub_player_logo(ta, owner);
+            if (lg < 0 || lg >= art->nlogo) continue;
+            fr = &art->logo[lg];
+            k = dotK;
+        }
+        if (!always &&
+            !tagpu_icon_eval(&v, z, dotS, k * (fr->w > fr->h ? fr->w : fr->h), 0u, &hide)) continue;
+        ax = (((long long)*(const int*)(u + U_X) - ((long long)*(const int*)(ta + OFF_EYEX) << 16)) >> 16) + 0x80;
+        ay = (((long long)*(const int*)(u + U_Z) - ((long long)*(const int*)(ta + OFF_EYEY) << 16)) >> 16)
+             - ((long long)(*(const int*)(u + U_ALT) >> 16) >> 1) + 0x20;
+        dx = (long long)px - ax;
+        dy = (long long)py - ay;
+        hw = 0.5 * (double)(k * fr->w) / (double)z;
+        hh = 0.5 * (double)(k * fr->h) / (double)z;
+        if ((double)(dx < 0 ? -dx : dx) > hw || (double)(dy < 0 ? -dy : dy) > hh) continue;
+        if ((!best || ay >= bestY) && *(const unsigned short*)(u + U_INDEXW) < slots) {
+            best = *(const unsigned short*)(u + U_INDEXW);
+            bestY = ay;
+        }
+    }
+    if (best) {
+        static DWORD tick;                   /* game thread only */
+        DWORD now = GetTickCount();
+        s_radarHits++;
+        if (now - tick > 1000) {
+            char b[96];
+            tick = now;
+            _snprintf(b, sizeof b, "zoom: radar pick - %u hover(s) on a dot so far, the last id %u",
+                      s_radarHits, best);
+            b[sizeof b - 1] = 0;
+            zlog(b);
+        }
+    }
+    return (unsigned short)best;
+}
+
 float tagpu_zoom_applied_level(void)
 {
     return s_gLevel;

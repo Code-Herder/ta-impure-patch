@@ -246,16 +246,22 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is 304×440 for fourteen rows on a 26 px pitch: `ROW_Y0 34 + ROW_PITCH 26 × 13 =
-372`, `ROW_H` 20, so the last row (Mega map zoom in) ends at 392; a row's recess is `ROW_H + 2·PAD`
-= 24 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px under the last row,
-at 400, the Resource profile caption under it at 408, and the bottom bolts at `PANEL_H − 10`.
+The in-game panel is 304×436 for fifteen rows on a 24 px pitch: `ROW_Y0 34 + ROW_PITCH 24 × 14 =
+370`, `ROW_H` 18, so the last row (Radar dots) ends at 388; a row's recess is `ROW_H + 2·PAD`
+= 22 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px under the last row,
+at 396, the Resource profile caption under it at 404, and the bottom bolts at `PANEL_H − 10`.
 **The height follows the row count**: `DIV_BOT` is `ROW_Y0 + ROW_PITCH·(R_COUNT − 1) + ROW_H + 8`
 and `PANEL_H` is `DIV_BOT + 40`, and a compile-time check (`menu_panel_fits_480`) refuses a build
-whose panel, hanging from engine row `BAR_H` 32, would end past row 480 — fourteen rows end at
-472. At 640×480 it lies over the bottom bar's rows 448..469 at x 320..623, whose presses it takes
-while it is open. *Formation move* and *Mega map zoom in* are this panel's alone: the front-end
-screen's two columns are full (`vis_shown`), so a player sets them in game or in `impure.cfg`.
+whose panel, hanging from engine row `BAR_H` 32, would end past row 480 — fifteen rows end at
+468, and a sixteenth on this pitch would end at 492. At 640×480 it lies over the bottom bar's rows
+448..467 at x 320..623, whose presses it takes while it is open. *Formation move*, *Mega map zoom
+in* and *Radar dots* are this panel's alone: the front-end screen's two columns are full
+(`vis_shown`), so a player sets them in game or in `impure.cfg`. *Radar dots* (Zoomed out \|
+Always) is `radardots=` (`TS_RADARDOTS`, `zoomed` or `always`, default `always`): a radar
+contact's dot in the world view at every level, or only where the strategic icons come in
+([strategic icons](icons.html), *Radar dots*); read every frame by the render thread and every
+hover query by the game thread, never greyed with the lane, held under `tagpu_defaults.off`,
+where it reads Zoomed out, and set to Always by Restore defaults.
 `PANEL_W` and `PANEL_H` size the GAF frame header, the ground, the ramp, the border and the corner
 bolts, and the panel is **composed at runtime** from the player's install rather than shipped, so
 no art is regenerated. `tools/guipanel.py` draws a six-row panel 304×212: the columns are its,
@@ -263,8 +269,8 @@ the row pitch and the height are `tagpu_menu.c`'s alone.
 
 **The strategic icons' three keys have no row on either panel** — `iconscale`, `icondist`,
 `iconfade` in `impure.cfg` ([renderers](../renderers.html) §2.10b, [strategic icons](icons.html)).
-The front-end screen's two columns are full, and the in-game panel holds no fifteenth row: it
-would end at 498 from engine row 32, which the compile-time check refuses. The keys are set in the
+The front-end screen's two columns are full, and the in-game panel holds no sixteenth row: it
+would end at 492 from engine row 32, which the compile-time check refuses. The keys are set in the
 file and read live.
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every

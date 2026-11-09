@@ -340,6 +340,14 @@ float tagpu_zoom_reach_level(void);
    tagpu_zoom.c, "the hit test's guard". stdcall, `ret 8`, as the original. */
 int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point);
 
+/* GAME THREAD, from the hover query's call in the in-play handler (tagpu_route.c, 0x499278) when
+   GetUnitAtMouse 0x48CD80 answered no unit: the id (+0xA8) of the radar dot drawn under the
+   dispatched point in the world view, or 0. A dot is the render thread's (tagpu_native.c, "A
+   RADAR DOT"), and this asks its gates of the engine's own records; the id it answers goes where
+   the hover query's would, so the engine's cursor and order paths treat the contact as they do
+   the minimap's (tagpu_zoom.c, "the radar dot under the pointer"). */
+unsigned short tagpu_zoom_radar_pick(void);
+
 /* GAME THREAD: R, the hit guard's radius of model `m` in world px -- the
    largest corner norm of its root box, plus 2 -- out of the level's table when
    it is built, else measured on the spot. 0 when there is no model, 0xFFFF

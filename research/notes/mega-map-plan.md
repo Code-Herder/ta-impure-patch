@@ -138,9 +138,11 @@ the arithmetic, Seven Islands (20 480² px) gives 0.0346 at 1024×768, about 0.0
   `0x466DC0` — TADR's megamap draws from it. **Stock draws a radar contact on the minimap alone**
   and picks one there alone ([ui](engine/ui.html), *The minimap, located*; [input](engine/input.html),
   the `0x48CD80` row), so BAR's "radar-only enemies are always icons" would change 1×. Ours are the
-  minimap's own dot under the icons' distance rule, not pickable in the world view, decided from
-  the packet's +0x110 for the units the gather's cloak and fog tests refuse — no copy of the radar
-  list. BAR's "real icon once identified" and out-of-radar ghost buildings have no TA counterpart.
+  minimap's own dot, decided from the packet's +0x110 for the units the gather's cloak and fog
+  tests refuse — no copy of the radar list. Landing 3 drew them under the icons' distance rule and
+  left them unpickable in the world view; they are now drawn at every level by default
+  (`radardots=always`; `zoomed` keeps the rule) and hovered and ordered on in the world view as on
+  the minimap ([strategic icons](modules/icons.html), *Radar dots*). BAR's "real icon once identified" and out-of-radar ghost buildings have no TA counterpart.
 - **Selected** +0x110 bit 4; **hovered** main+0x2CBA; **team colour** PlayerInfo+0x96. The minimap
   dot is frame PlayerInfo+0x96 of `radlogo`, fetched by `0x4B7F30` (the frame pointer, bounded by the
   sequence's count), and its team colour is the frame's hotspot texel [MEASURED on the retail

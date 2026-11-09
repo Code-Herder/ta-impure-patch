@@ -1,0 +1,120 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Radar dots in the world view (tagpu_icon.c, tagpu_zoom_radar_pick): an Arm radar tower and two Peewees on Comet Catcher's plateau west of the centre, and four Core AKs about 1300 world units east of them -- past the tower's and the Peewees' sight, inside the tower's radar -- with true line of sight, so the AKs -- and two Core solar collectors south of them, which stand still -- are contacts on grey ground. The camera frames both groups at 1x on a 1920x1080 view. The commanders stay, so the seats keep their storage.",
+ "seed": 20261109,
+ "on_error": "abort",
+ "setup": {
+  "map": "Comet Catcher",
+  "clear_existing": false,
+  "los": "true",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "radar",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    1120,
+    6300
+   ]
+  },
+  {
+   "id": "pw1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1150,
+    6450
+   ]
+  },
+  {
+   "id": "pw2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1200,
+    6450
+   ]
+  },
+  {
+   "id": "ak1",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    2380,
+    6300
+   ]
+  },
+  {
+   "id": "ak2",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    2430,
+    6350
+   ]
+  },
+  {
+   "id": "ak3",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    2410,
+    6430
+   ]
+  },
+  {
+   "id": "ak4",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    2490,
+    6400
+   ]
+  },
+  {
+   "id": "sol1",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2250,
+    6700
+   ]
+  },
+  {
+   "id": "sol2",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2400,
+    6750
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1800,
+   6400
+  ]
+ }
+}

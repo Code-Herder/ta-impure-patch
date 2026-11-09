@@ -96,6 +96,9 @@ unsigned tagpu_packet_pub_draw_seq(void);
    per-level state stamps it beside the draw counter, so the latch cannot
    outlive its level. */
 unsigned tagpu_packet_pub_level_gen(void);
+/* GAME THREAD. Player `id`'s logo colour, PlayerInfo+0x96 -- the frame of radlogo the minimap
+   draws its units' dots with and the packet's PK_UNIT.logo -- below the ten colours, else -1. */
+int tagpu_packet_pub_player_logo(const char* ta, unsigned id);
 /* GAME THREAD: 1 once this level's FIRST in-play packet has published, 0 again
    from the level end. It is the producer-side reading of the packet's `in_game`,
    and it is the gate a producer uses to ask "is a level actually on screen" --
