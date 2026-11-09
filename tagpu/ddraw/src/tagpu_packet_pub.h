@@ -99,6 +99,14 @@ unsigned tagpu_packet_pub_level_gen(void);
 /* GAME THREAD. Player `id`'s logo colour, PlayerInfo+0x96 -- the frame of radlogo the minimap
    draws its units' dots with and the packet's PK_UNIT.logo -- below the ten colours, else -1. */
 int tagpu_packet_pub_player_logo(const char* ta, unsigned id);
+/* Game thread. 1 when the engine's draw list would take `unit` for the viewed
+   player: the HotUnits cull 0x48BAE0 lists a unit of the viewed player
+   (main+0x2A43) outright and asks UnitInPlayerLOS 0x465AC0 of every other one
+   (0x48BC3D..0x48BC5D), with the viewed player's record (0x48BB05..0x48BB23).
+   That test refuses a cloaked unit, and one with no sonar contact (+0x110 bit 9)
+   whose box top is below the sea (0x465B30..0x465B59), before any line of
+   sight is read. `unit` is a live slot of the unit array. */
+int tagpu_packet_pub_unit_seen(const char* ta, const char* unit);
 /* GAME THREAD: 1 once this level's FIRST in-play packet has published, 0 again
    from the level end. It is the producer-side reading of the packet's `in_game`,
    and it is the gate a producer uses to ask "is a level actually on screen" --

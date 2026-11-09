@@ -558,6 +558,18 @@ static int player_logo(const char* ta, unsigned id)
     return b < PLAYER_COUNT ? (int)b : -1;
 }
 
+typedef int (__stdcall *UnitLosFn)(const char* player, const char* unit);
+#define VA_UNITINLOS 0x00465AC0u        /* UnitInPlayerLOS(player, unit), ret 8 */
+
+int tagpu_packet_pub_unit_seen(const char* ta, const char* unit)
+{
+    const unsigned viewed = RDU8(ta, OFF_LOCALPLAYER);
+    if (RDU8(unit, U_OWNER) == viewed) return 1;
+    /* the id indexes the ten player records, as the cull's own lea does */
+    if (viewed >= PLAYER_COUNT) return 1;
+    return ((UnitLosFn)VA_UNITINLOS)(ta + OFF_PLAYERS + viewed * PLAYER_STRIDE, unit) != 0;
+}
+
 int tagpu_packet_pub_player_logo(const char* ta, unsigned id)
 {
     return player_logo(ta, id);
@@ -1616,6 +1628,9 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
             ue = &s_uScratch[nu];
             fill_unit(ue, ta, u, i, udefCount, udefs);
+            /* what the engine's draw list would leave out for the viewed player:
+               the unit pass draws none of it (tagpu_native.c, the refusals) */
+            if (!tagpu_packet_pub_unit_seen(ta, u)) ue->flags |= TAGPU_PK_U_UNSEEN;
             /* the recorded selections this slot is in, as the replay's frame visit left them
                before this draw (fill_overlay below states the ordering) */
             ue->rsel = (uint16_t)tagpu_replay_rsel(i);

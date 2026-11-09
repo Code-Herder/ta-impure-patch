@@ -197,24 +197,34 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry ------------------------------------------------------- */
-/* The columns are tools/guipanel.py's; that lab draws a six-row panel 212 px
-   tall, so the row pitch and the panel's height are this file's alone. The
+/* TWO COLUMNS of COL_W, side by side, the rows filling the left one first
+   (row_pos): the label and control offsets below are a column's own. The
    runtime ground and its frame header share PANEL_W and PANEL_H (below the
-   rows: the height follows their count). */
-#define PANEL_W   304
+   rows: the height follows the left column's count).
+
+   THE PANEL NEVER REACHES THE SIDE BAR, and that is what sizes a column. The
+   strip of the side bar between the minimap and the ORDERS buttons belongs to
+   no GUI window: the engine draws it once a level and never again, so a panel
+   over it leaves its pixels there after it closes -- MEASURED 2026-11-09 at
+   640x480 with 304-px columns: two labels stayed through the close, a select
+   and a deselect. Both columns and the trigger's margin therefore fit the
+   smallest screen's width beside the side bar (menu_panel_clears_side). */
+#define COL_W     248
+#define PANEL_W   (2 * COL_W)
+#define SIDE_W    128                   /* the side bar's width at 640x480     */
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
 /* 24: a row's recess is ROW_H + 2 * PAD = 22 px, so 2 px of face between two
-   recesses, and fifteen rows fit a 640x480 screen (PANEL_H) */
+   recesses, and fifteen rows a column fit a 640x480 screen (PANEL_H) */
 #define ROW_PITCH  24
 #define ROW_H      18
-#define CTL_X     166
-#define CTL_W     120
-#define LBL_X      14
-#define LBL_W     144
+#define CTL_X     128
+#define CTL_W     108
+#define LBL_X      12
+#define LBL_W     112                   /* the longest label, ~100 px          */
 #define TITLE_Y     9                   /* the caption, above the rule at 30   */
-#define TITLE_W   276
+#define TITLE_W   (PANEL_W - 2 * LBL_X)
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
@@ -228,7 +238,11 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    the render thread reads the store every frame and the lane rebuilds its
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
-       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS, R_COUNT };
+       R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS,
+       R_RANGES, R_RSHIFT, R_RCURSOR, R_RGROUND, R_RAIR, R_RNUKE, R_RCANNON, R_RLRPC, R_COUNT };
+
+/* the rows a column holds: the left one takes the odd row */
+#define COL_ROWS  ((R_COUNT + 1) / 2)
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -270,7 +284,27 @@ static const Row s_row[R_COUNT] = {
        icons come in (tagpu_icon.c, read every frame). The in-game panel's
        alone, as Mega map zoom in is. */
     { "RADARDOTS", "Radar dots",        "Zoomed out|Always",        2 },
+    /* the weapon range rings (tagpu_rangeown.c, which reads the store every
+       frame): on, the attack rings only under Shift, the rings of the unit
+       under the cursor -- BAR's gui_attackrange_gl4 options -- and per defense
+       class the sides whose rings show, BAR's gui_defenseRange. The in-game
+       panel's alone, as Mega map zoom in is. */
+    { "RANGES",    "Range rings",       "Off|On",                   2 },
+    { "RSHIFT",    "Attack rings",      "Always|Shift held",        2 },
+    { "RCURSOR",   "Cursor range",      "Off|On",                   2 },
+    { "RGROUND",   "Ground defense",    "None|Enemy|Allied|Both",   4 },
+    { "RAIR",      "Air defense",       "None|Enemy|Allied|Both",   4 },
+    { "RNUKE",     "Nuke defense",      "None|Enemy|Allied|Both",   4 },
+    { "RCANNON",   "Cannon defense",    "None|Enemy|Allied|Both",   4 },
+    { "RLRPC",     "LRPC defense",      "None|Enemy|Allied|Both",   4 },
 };
+
+/* A class row's stage is its class's two bits of the store's masks: 1 the
+   enemies' (`rangeenemy`), 2 the allies' (`rangeally`). */
+static const unsigned RCLASS_BIT[5] = {
+    TS_RC_GROUND, TS_RC_AIR, TS_RC_NUKE, TS_RC_CANNON, TS_RC_LRPC
+};
+#define R_IS_CLASS(r) ((r) >= R_RGROUND && (r) <= R_RLRPC)
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
    alternates Classic and Classic++, and touching any row below makes it read
@@ -362,7 +396,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "formation-1"
+#define UFO_STAMP  "ranges-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -405,7 +439,7 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   (ROW_Y0 + ROW_PITCH * (R_COUNT - 1) + ROW_H + 8)   /* under the last row */
+#define DIV_BOT   (ROW_Y0 + ROW_PITCH * (COL_ROWS - 1) + ROW_H + 8)  /* under the last row */
 #define PAD         2
 /* The floor: the Resource profile caption at DIV_BOT + 8, 24 tall, and the
    bottom bolts at PANEL_H - 10. */
@@ -413,8 +447,18 @@ static int exists(const char* p)
 /* THE PANEL FITS THE SMALLEST SCREEN BY CONSTRUCTION. It hangs from engine
    row BAR_H (panel_rect) and the in-game screen is never smaller than
    640x480, so a row that would push its floor past row 480 fails the build
-   here instead of hanging off that screen. Fifteen rows end at 468. */
+   here instead of hanging off that screen. Fifteen rows a column end at 468.
+   The width likewise: both columns and the sprocket's margin within the
+   640-px screen beside its side bar (the geometry's comment says why). */
 typedef char menu_panel_fits_480[(BAR_H + PANEL_H <= 480) ? 1 : -1];
+typedef char menu_panel_clears_side[(SIDE_W + PANEL_W + MARGIN <= 640) ? 1 : -1];
+
+/* where row i sits on the panel: its column's left edge, and its top */
+static void row_pos(int i, int* x0, int* y)
+{
+    *x0 = (i / COL_ROWS) * COL_W;
+    *y = ROW_Y0 + ROW_PITCH * (i % COL_ROWS);
+}
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
    surface rather than reading PANEL_W. The front-end screen's recesses are
@@ -512,8 +556,9 @@ static void draw_panel(unsigned char* f, int rows)
     divider(&s, DIV_BOT);
 
     for (i = 0; i < rows; i++) {
-        y = ROW_Y0 + ROW_PITCH * i;
-        recess(&s, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+        int x0;
+        row_pos(i, &x0, &y);
+        recess(&s, x0 + CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
     }
 }
 
@@ -695,8 +740,9 @@ static int compose_ground_once(int rows)
     {
         Surf s; s.p = s_ground; s.w = PANEL_W; s.h = PANEL_H;
         for (i = 0; i < rows; i++) {
-            int y = ROW_Y0 + ROW_PITCH * i;
-            recess(&s, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+            int x0, y;
+            row_pos(i, &x0, &y);
+            recess(&s, x0 + CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
         }
     }
     s_groundOk = 1;
@@ -979,15 +1025,16 @@ static int build_gui(char* b, int cap, int rows)
     at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Impure options");
 
     for (i = 0; i < rows; i++) {
-        int y = ROW_Y0 + ROW_PITCH * i;
+        int x0, y;
+        row_pos(i, &x0, &y);
         /* the label, BESIDE its control -- every stock runtime screen puts it
            16 px above, which six rows have no room for (gui-gadgets.md 10.3) */
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
-        at = common(b, cap, at, 5, 0, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15, 0);
+        at = common(b, cap, at, 5, 0, "TEXT", x0 + LBL_X, y, LBL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 4);
-        at = common(b, cap, at, 1, 0, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
+        at = common(b, cap, at, 1, 0, s_row[i].name, x0 + CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
             s_row[i].text, s_row[i].stages);
@@ -1017,6 +1064,13 @@ static int derive_style(void)
            ? STYLE_CUSTOM : STYLE_PP;
 }
 
+/* the store's value, else the compiled default `def` (tagpu_rangeown.c's own) */
+static int setting_or(TagpuSetting k, int def)
+{
+    int v;
+    return tagpu_settings_get(k, &v) ? v : def;
+}
+
 static void read_state(void)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
@@ -1043,6 +1097,17 @@ static void read_state(void)
     if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
         s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = tagpu_settings_radardots() ? 1 : 0;
+    s_stage[R_RANGES]  = setting_or(TS_RANGES, 1) ? 1 : 0;
+    s_stage[R_RSHIFT]  = setting_or(TS_RANGESHIFT, 0) ? 1 : 0;
+    s_stage[R_RCURSOR] = setting_or(TS_RANGECURSOR, 1) ? 1 : 0;
+    {
+        const int ally  = setting_or(TS_RANGEALLY, TS_RC_NUKE);
+        const int enemy = setting_or(TS_RANGEENEMY,
+                                     TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON);
+        for (i = 0; i < 5; i++)
+            s_stage[R_RGROUND + i] = ((enemy & RCLASS_BIT[i]) ? 1 : 0) |
+                                     ((ally & RCLASS_BIT[i]) ? 2 : 0);
+    }
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -1105,7 +1170,10 @@ static int row_greyed(int row)
        (fps_limiter.c). */
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
-        row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS) return 0;
+        row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS ||
+        row == R_RANGES) return 0;
+    /* the rings' own options bite only while the rings are on */
+    if (row > R_RANGES && row < R_COUNT) return s_stage[R_RANGES] == 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1432,7 +1500,22 @@ static void commit_one(int row)
     case R_WHEEL:   tagpu_settings_set(TS_WHEEL, s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     case R_RADARDOTS: tagpu_settings_set(TS_RADARDOTS, s_stage[R_RADARDOTS]); break;
-    default:        break;
+    case R_RANGES:  tagpu_settings_set(TS_RANGES, s_stage[R_RANGES]); break;
+    case R_RSHIFT:  tagpu_settings_set(TS_RANGESHIFT, s_stage[R_RSHIFT]); break;
+    case R_RCURSOR: tagpu_settings_set(TS_RANGECURSOR, s_stage[R_RCURSOR]); break;
+    default:
+        /* a class row writes both masks whole, from all five rows: what the
+           plates show is what the store holds */
+        if (R_IS_CLASS(row)) {
+            int i, ally = 0, enemy = 0;
+            for (i = 0; i < 5; i++) {
+                if (s_stage[R_RGROUND + i] & 1) enemy |= (int)RCLASS_BIT[i];
+                if (s_stage[R_RGROUND + i] & 2) ally  |= (int)RCLASS_BIT[i];
+            }
+            tagpu_settings_set(TS_RANGEALLY, ally);
+            tagpu_settings_set(TS_RANGEENEMY, enemy);
+        }
+        break;
     }
 }
 
@@ -2032,7 +2115,15 @@ static const short VC0_SLD[2] = { 244, 336 };
    one slot each, top down, closing up over the gaps they leave. */
 static int vis_shown(int row)
 {
-    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS;
+    return row != R_FORMATION && row != R_MEGAZOOM && row != R_RADARDOTS && row < R_RANGES;
+}
+
+/* how many of the first `rows` rows the front-end screen shows */
+static int vis_count(int rows)
+{
+    int i, n = 0;
+    for (i = 0; i < rows; i++) n += vis_shown(i);
+    return n;
 }
 
 static void vis_pos(int row, int* x, int* y)
@@ -2356,7 +2447,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
         1 + VIS_STOCK_N + 3 +
-        (rows - (rows > R_FORMATION) - (rows > R_MEGAZOOM) - (rows > R_RADARDOTS) + VD_COUNT) * 2);
+        (vis_count(rows) + VD_COUNT) * 2);
 
     /* THE GROUND FIRST, so every caption and control is drawn on top of it --
        gadgets are drawn in array order, and ours are appended to STARTOPT's,
@@ -2887,6 +2978,14 @@ static void vis_restore(void)
     s_stage[R_WHEEL]   = 0;
     s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = 1;
+    s_stage[R_RANGES]  = 1;
+    s_stage[R_RSHIFT]  = 0;
+    s_stage[R_RCURSOR] = 1;
+    s_stage[R_RGROUND] = 1;                 /* BAR's defaults: enemies ground, air, */
+    s_stage[R_RAIR]    = 1;                 /* nuke and cannon; allies nuke alone   */
+    s_stage[R_RNUKE]   = 3;
+    s_stage[R_RCANNON] = 1;
+    s_stage[R_RLRPC]   = 0;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
     /* the mod's default again, by removing the key: a value written here would stay when the
@@ -3558,7 +3657,8 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    static char gui[12288];
+    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 23 rows */
+    static char gui[24576];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel
        gadget's own name (`0x4A8537`): anims\\RENDER.GAF and anims\\VISUALS.GAF */

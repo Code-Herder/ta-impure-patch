@@ -2424,6 +2424,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            arrives -- and no radar dot either. */
         if (!s_fogHave && owner != watched) continue;
         if (cloaked && owner != watched) refused = 1;   /* enemies never see cloak */
+        /* the engine's own draw-list test, asked on the game thread: a submerged
+           unit with no sonar contact is not drawn at all, structures included,
+           which the waterline clip below (path B only) would not do */
+        else if (pu->flags & TAGPU_PK_U_UNSEEN) refused = 1;
         /* fog gate at the anchor tile: engine draws nothing there */
         else if (fogMode & 1) {
             int fog = tagpu_fog_at(&s_fogSrc, wx, wy - wz / 2);

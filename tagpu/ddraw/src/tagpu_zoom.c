@@ -2134,6 +2134,8 @@ static int icon_refused(const char* ta, const char* unit)
     int fog;
     if (!tagpu_fogwide_source(&f)) return foreign;
     if (foreign && (*(const unsigned char*)(unit + U_CLOAKF) & 4)) return 1;
+    /* the unit pass's TAGPU_PK_U_UNSEEN, from the same call */
+    if (!tagpu_packet_pub_unit_seen(ta, unit)) return 1;
     fog = tagpu_fog_at(&f, wx, wy - wz / 2);
     return (fog & 1) || (foreign && (fog & 2));
 }

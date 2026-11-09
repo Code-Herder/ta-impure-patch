@@ -1,0 +1,76 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A submerged enemy with no sonar contact: the engine's draw list (HotUnits 0x48BAE0) leaves CORE's torpedo launcher and submarine out, because UnitInPlayerLOS 0x465AC0 refuses a unit whose box top is under the sea without +0x110 bit 9. ARM has no sonar. Load with --los 0, so line of sight is not what hides them.",
+ "seed": 20261109,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "armcom",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    4252,
+    1104
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "corcom",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5200,
+    1300
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "tl",
+   "type": "CORTL",
+   "owner": 1,
+   "pos": [
+    4752,
+    1104
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "sub",
+   "type": "CORSUB",
+   "owner": 1,
+   "pos": [
+    4800,
+    1250
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   4600,
+   1150
+  ]
+ }
+}

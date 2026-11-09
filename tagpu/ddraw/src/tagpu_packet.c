@@ -671,8 +671,8 @@ static const char* frame_valid(const void* rec)
                 return "formation dot coordinate";
     }
     /* the range rings: tagpu_range.c walks the count, indexes PK_UNIT with `uidx` after its
-       own test against n_units, and hands the numbers to a vertex stage whose loops are bounded
-       by the range -- so the range, the velocity and gravity are bounded here */
+       own test against n_units, and hands the numbers to a compute pass whose march is bounded
+       by the range (tagpu_range_comp.h) -- so the range, the velocity and gravity are bounded here */
     if (!table_ok(p, p->off_range, p->n_range, sizeof(TAGPU_PK_RANGE))) return "range header";
     if (p->n_range > 1u) return "more than one range header";
     if (!table_ok(p, p->off_ring, p->n_ring, sizeof(TAGPU_PK_RING))) return "range ring table";

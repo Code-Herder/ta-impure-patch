@@ -161,6 +161,10 @@ typedef struct TAGPU_PK_UNIT {
                                         room                                     */
 #define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
                                         tile was inside the map                   */
+#define TAGPU_PK_U_UNSEEN     0x10u  /* the engine's draw list leaves this unit out:
+                                        not the viewed player's, and
+                                        UnitInPlayerLOS 0x465AC0 refuses it
+                                        (tagpu_packet_pub_unit_seen)              */
 
 /* 8 B, one per UnitDef row, indexed by PK_UNIT.type_row: what the strategic icons
    need to know of a unit's TYPE (tagpu_icontype.h). Built once a level on the
@@ -440,7 +444,7 @@ typedef struct TAGPU_PK_FORMDOT {
    the player's per-type toggles -- and resolves every weapon field to a
    number here, so the render thread reads no engine memory. The render
    thread decides how each one LOOKS (BAR's colours, widths and fades) and
-   the vertex stage its shape over the terrain.
+   the reach compute pass (tagpu_range_comp.h) its shape over the terrain.
 
    The acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, the range
    to [1, TAGPU_PK_RING_RMAX], `v` to (0, TAGPU_PK_RING_VMAX], `minbarrel`

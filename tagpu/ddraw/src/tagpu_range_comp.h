@@ -13,9 +13,11 @@
 
    THE REACH is the engine's, and tools/tascene-ranges.js is the reference these functions are
    ported from (`ground`, `surface`, `solverAccepts`, `reachable`, `reachAlong`):
-   - the ground is GetPosHeight 0x485070's: bilinear over the 16-px height grid, the nearest
-     cell at the edge (the image holds the engine's height byte per cell, tagpu_terr.c
-     build_height);
+   - the ground is bilinear over the 16-px height grid, as GetPosHeight 0x485070 blends it --
+     in float, where the engine steps in truncating integers, so a point may sit a fraction of
+     a unit from the engine's. At the grid's last row and column the engine answers -1
+     (0x48508F..0x4850C4); this takes the nearest cell there instead, a rule of ours (the image
+     holds the engine's height byte per cell, tagpu_terr.c build_height);
    - a target on water stands on the surface;
    - range is horizontal (can-aim 0x49AA80, can-engage 0x49ABB0), and a ballistic weapon must
      also pass the solver 0x49A890: with D' = v^4 + 2 g dy v^2 - g^2 d^2 (dy = shooter minus
