@@ -42,6 +42,14 @@ art/wiki/kit/*
 # The same parts at the resolution they were cut at, which tools/hudart/fit.py fits into art/wiki/kit/
 art/wiki-full/*
 
+# NOT OUR OUTPUT: a mod's own art for its showcase on the Mods screen -- its logo, a banner, a backdrop --
+# carried with the authors' permission its catalog entry records (mods/<id>.json `permission`), filed by
+# the mod's id. tools/mods/genparts.py copies each into the wiki's kit as the part logo_<id>, banner_<id>
+# or backdrop_<id> (art/wiki/kit/ above), which the DLL embeds; nothing of it is fetched from the web.
+art/mods/logos/*
+art/mods/banners/*
+art/mods/backdrops/*
+
 # The exe patch pack: one XOR with the original exe per mod and the hashes of the exes, loaders and
 # original archives Impure knows, derived by tools/modpack/modpack.py and embedded in the DLL. Neither image is in it:
 # only a byte a mod sets to zero reads as the original's, 15 B at the longest

@@ -280,6 +280,22 @@
     52
    ],
    "xtile": true
+  },
+  "logo_mayhem": {
+   "kind": "whole",
+   "scale": 1.0
+  },
+  "logo_prota": {
+   "kind": "whole",
+   "scale": 1.0
+  },
+  "banner_mayhem": {
+   "kind": "whole",
+   "scale": 1.0
+  },
+  "backdrop_prota": {
+   "kind": "whole",
+   "scale": 1.0
   }
  }
 }
