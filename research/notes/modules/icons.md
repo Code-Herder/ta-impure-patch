@@ -547,6 +547,15 @@ leaves a press with a hovered unit to stock (`tagpu_formation.c`, `admit`), so a
 stock's click. The placement's ring target calls `0x48CD80` itself (`tagpu_place.c`,
 `ring_target`) and gets no dot; the dead copy `0x491D18` in `0x491CC0` keeps the engine's call.
 
+**The field's other readers see the contact as the minimap hands it to them** ([input](../engine/input.html),
+the `main+0x2CBA` row). Two matter to a player. The order-marker driver `0x48CC30` asks whether the
+camera, tracked or hovered unit's def can build (`+0x156`, `0x48CCB0..0x48CCEE`) without asking its
+owner, and so does its mirror `tagpu_order.c`, so hovering a constructor's dot shows the player's own
+builders' queued build squares — the tell the stock minimap gives on the same contact. The bottom
+bar's unit read does test sight (`0x465AC0` from `0x46AF3D`), as does `0x494354` (`0x494396`), so a
+contact's name is not shown [DISASSEMBLED 2026-11-09]. The debug key at `0x495751`, behind
+`main+0x3923B` bit 1, writes `+0xF4` and `+0x110` of the hovered unit, a contact included.
+
 ## Settings
 
 Four closed-list `impure.cfg` keys ([renderers](../renderers.html) §2.10b), read live by both
@@ -610,6 +619,7 @@ run it to 540, 60 px past a 640×480 screen.
 | `icons: no mod set - the exe names no TADR ini`, `… - <ini> names no MegaMapConfig of the install's own`, `… - <ini>'s MegaMapConfig <value> does not read` | once a process, instead of the line above |
 | `icons: the mod set and the hover ring leave no three free palette indices - no hover ring` | once a process: the ring gives way first, and the set is packed with the logos; a hovered contact then has no ring |
 | `icons: the mod set leaves no three free palette indices beside the radar logo - not drawn` | once a process, when the set does not fit without the ring either: the set is dropped and the logos packed alone, with the ring |
+| `icons: the hover ring leaves no three free palette indices beside the radar logo - no hover ring` | once a process, when the logos and the ring do not fit and the logos alone do: no ring, the dots stay |
 | `icons: art N radar logo frame(s) of M, hover ring H, S mod set picture(s), key K fill F sel S` | once a process, at the art's publication; `H` 1 when `radlogohigh` frame 0 is in the atlas |
 | `icons: mod set by type - E map entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W=a CTRL_B=b CTRL_F=c; <category>=<types> …` | once a level with a set loaded: the category map's entries, the types (rows past 0) given a picture and those given UNKNOWN, the three Ctrl categories' type counts, and each custom line's category with its type count, or `absent` for one the map does not hold |
 | `icons: the category map's bounds are not a map - no categories this level` | a level whose map bounds the walk refuses |

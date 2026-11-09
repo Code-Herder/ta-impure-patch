@@ -1250,6 +1250,12 @@ static void iconart_build(const char* ta)
         if (hadHigh) { src[i] = ring; high = 1; }
         packed = tagpu_iconart_pack(src, i + high, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     }
+    /* the logos alone, before no art at all: the ring is the one picture past them */
+    if (!packed && high) {
+        plog("icons: the hover ring leaves no three free palette indices beside the radar logo - no hover ring");
+        high = 0;
+        packed = tagpu_iconart_pack(src, i, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    }
     if (!packed) {
         memset(s_iconArt.logo, 0, sizeof s_iconArt.logo);
         memset(s_iconPix, 0, sizeof s_iconPix);
