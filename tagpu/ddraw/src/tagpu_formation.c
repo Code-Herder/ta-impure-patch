@@ -73,6 +73,7 @@ _Static_assert(FORM_MAX_UNITS >= TAGPU_LIM_UNITS, "every unit of a player can ta
 #define VA_ACTION     0x00438760u
 #define VA_TAIL       0x004958C0u
 #define VA_BLIT       0x004B8500u
+#define VA_GROUP      0x0048CF30u
 
 #define CURSOR_MOVE 14             /* cursor_ary index of Move_Ground, VTOL_Move and QMove */
 #define LIST_WALK      16384u
@@ -90,6 +91,7 @@ typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, 
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 typedef void (__stdcall* ClickTail)(int);
 typedef void (__stdcall* Blit)(void* ctx, const void* frame, int x, int y);
+typedef void (__stdcall* GroupOrder)(int* rec, int mode, int action, const void* pos, int, int);
 
 /* The per-record fields a click depends on: exactly what 0x498DA0, the hover query and the
    cursor chooser write for a record before the routing (DISASSEMBLED: 0x498E19..0x498F5D,
@@ -111,6 +113,8 @@ static int s_actOk;
 
 static struct {
     int active, button, mode, itype;
+    int keep;                      /* mode 2: main+0x2CC6 bit 5 at the press, a Shift-kept Move */
+    int shed;                      /* the engine disarmed that Move while the button was held   */
     int press[6];                  /* the press record, by value                               */
     Snap at_press, at_last;        /* at the press; at the last record in the world view       */
     int stale[6];                  /* tagpu_route_stale_move at the press                      */
@@ -203,6 +207,24 @@ static FormPt point_of(const char* ta)
     return p;
 }
 
+/* THE GESTURE'S MODE STILL HOLDS. A Shift-kept Move (main+0x2CC6 bit 5, set by a Shift click's
+   tail 0x4958C0) is disarmed by the handler itself at the first record that finds Shift up
+   (0x4992D8..0x49930F: mode 1, bit 5 cleared), which runs before the routing for that record.
+   Stock had already ordered at the press, so a left gesture admitted under such a Move outlives
+   that disarm (`shed`) and still commits at the left release, with Move's orders and without
+   the tail the engine has already run. Any other change of mode or Interface Type ends it. */
+static int still_armed(const char* ta)
+{
+    unsigned mode = (unsigned char)ta[M_MODE];
+    if (interface_type(ta) != s_g.itype) return 0;
+    if (!s_g.shed && mode == (unsigned)s_g.mode) return 1;
+    if (s_g.button == FB_LEFT && s_g.keep && mode == 1 && !((unsigned char)ta[M_REGION] & 0x20)) {
+        s_g.shed = 1;
+        return 1;
+    }
+    return 0;
+}
+
 static void drop(const char* reason)
 {
     if (!s_g.active) return;
@@ -227,7 +249,10 @@ static char* participant(const TagpuWorld* w, unsigned slot)
    presented height and clamped to 8..40, plus 16; never below 20 wu. The presented px become
    game px through the mouse's unscale, and game px become wu through the zoom (one game px is
    1/zoom wu, tagpu_zoom_to_engine). TA's projection is orthographic (0x469C63..0x469C94), so on
-   level ground one game px is one wu on both axes; a slope changes z's ratio and is ignored. */
+   level ground one game px is one wu on both axes; a slope changes z's ratio and is ignored.
+   The viewport height and the unscale are the presentation's (dd.c / the render thread writes
+   them on a mode change); read here as values, each range-checked, so an old or new value
+   costs at most one gesture's threshold. */
 static int threshold_wu(void)
 {
     int h = g_ddraw.render.viewport.height, base;
@@ -323,7 +348,10 @@ static void preview(void)
    a point inside the map; and every selected unit's order MOVE_GROUND or VTOL_MOVE, or in mode
    2 QMOVE (a factory's rally), or nothing (mode 1: a unit with no mover is given nothing by
    stock either). Any other answer -- a reclaim under the pointer, say -- leaves the press to
-   stock, unchanged. Nothing is written until the press is admitted. */
+   stock, unchanged; so does a right press Quick Build's gate on 0x499100 would turn into a build
+   (tagpu_resource_quick_right), which the player sees as the build ghost under the pointer.
+   The scan fills s_g's unit lists as it goes; the gesture exists only once s_g.active is set,
+   at the end. */
 static int admit(char* ta, const int* rec, int button, int mode, int itype)
 {
     TagpuWorld w;
@@ -336,6 +364,7 @@ static int admit(char* ta, const int* rec, int button, int mode, int itype)
         unsigned c = (unsigned char)ta[M_CURSOR];
         if (c >= 0x11 || c == 0x0F) return 0;
     }
+    if (button == FB_RIGHT && tagpu_resource_quick_right()) return 0;
     if (!in_map(ta, p) || !tagpu_route_world(&w) || !actions()) return 0;
     for (slot = w.first; slot <= w.last; slot++) {
         char* u = participant(&w, slot);
@@ -353,6 +382,7 @@ static int admit(char* ta, const int* rec, int button, int mode, int itype)
     if (!n) return 0;
     s_g.n = n; s_g.nq = nq;
     s_g.active = 1; s_g.button = button; s_g.mode = mode; s_g.itype = itype;
+    s_g.keep = mode == 2 && ((unsigned char)ta[M_REGION] & 0x20); s_g.shed = 0;
     memcpy(s_g.press, rec, sizeof s_g.press);
     snap_take(ta, &s_g.at_press);
     s_g.at_last = s_g.at_press;
@@ -381,7 +411,8 @@ static void track(const char* ta, const int* rec)
 
 /* STOCK'S CLICK, RUN AT THE RELEASE. The record `rec6` (the press's, or the release's) is
    handed to the very function stock's call site calls -- the recorder's click stub when it is
-   installed, else 0x499100 or 0x498F70 (tagpu_formation_init) -- with the per-record fields of
+   installed, else 0x499100 or 0x498F70 (tagpu_formation_init); for a shed Move, the group
+   order 0x48CF30 that 0x498F70 calls -- with the per-record fields of
    the record it stands for written over the release's for the call and the release's put back
    after it.
    INVARIANT, AN ORDERING: this runs on the game thread inside the handler for the release
@@ -389,13 +420,16 @@ static void track(const char* ta, const int* rec)
    before anything else of the handler reads them. Snap is exactly those fields
    (DISASSEMBLED), which are the only per-record inputs of either click, of the resolver they
    call and of the resource module's gate on them; both clicks read the record only at +8
-   (0x49917A; 0x498F70 passes it on to 0x419670, 0x48C7F0, 0x48CF30, which read +8 alone). No
-   click writes a Snap field, so restoring them undoes only this function's own writes. The
+   (0x49917A; 0x498F70 passes it on to 0x419670, 0x48C7F0, 0x48CF30, which read +8 alone). The
+   one arm of either click that writes a Snap field is 0x499100's Interface Type 0 minimap arm
+   (main+0x2CBE and +0x2CC6 bit 4, 0x49919D..0x4991B4), which a replay never reaches: a right
+   gesture exists only at Type 1 and is dropped when the type changes. So restoring the fields
+   undoes only this function's own writes. The
    render thread reads none of them (it reads the frame packet), and the recorder leaves
    main+0x2AA7..+0x2CC6 out of a recording (replay-globals.tsv), so the transient values are
    invisible to both. tagpu_resource_mouse re-samples Quick Build's raw point from the restored
    point, and only where vpwide's redirect sampled it for this record in the first place. */
-static void replay(char* ta, const int rec6[6], const Snap* s, int button)
+static void replay(char* ta, const int rec6[6], const Snap* s, int button, int shed)
 {
     Snap cur;
     int copy[6];
@@ -403,7 +437,11 @@ static void replay(char* ta, const int rec6[6], const Snap* s, int button)
     snap_put(ta, s);
     if (tagpu_vpwide_mouse_world_live()) tagpu_resource_mouse();
     memcpy(copy, rec6, sizeof copy);
-    (button == FB_RIGHT ? s_clickRight : s_clickLeft)(copy);
+    /* A shed Move (still_armed) is mode 1 now, where 0x498F70 would select: the call it makes
+       in mode 2 is made instead, 0x48CF30(rec, 2, 0, main+0x2CAA, 0, 0) (0x49906D..0x499087),
+       without the tail the engine already ran. It records no click. */
+    if (shed) ((GroupOrder)VA_GROUP)(copy, 2, 0, ta + M_POINT, 0, 0);
+    else (button == FB_RIGHT ? s_clickRight : s_clickLeft)(copy);
     snap_put(ta, &cur);
     if (tagpu_vpwide_mouse_world_live()) tagpu_resource_mouse();
 }
@@ -426,7 +464,7 @@ static void commit(char* ta, const int* rec)
     TagpuWorld w;
     int64_t len;
     unsigned i, live = 0, issued = 0, qissued = 0, listcap = 0, mode, button;
-    int thr, shift, algo = '-';
+    int thr, shift, algo = '-', shed = s_g.shed;
     if (((unsigned char)ta[M_REGION] & 0x02) && in_map(ta, (const int32_t*)(ta + M_POINT))) {
         s_g.m = form_path_add(s_g.node, s_g.m, point_of(ta));
         snap_take(ta, &s_g.at_last);
@@ -436,7 +474,7 @@ static void commit(char* ta, const int* rec)
     len = form_path_length(s_g.node, s_g.m);
     thr = threshold_wu();
     if (len < ((int64_t)thr << 16)) {
-        replay(ta, s_g.press, &s_g.at_press, (int)button);
+        replay(ta, s_g.press, &s_g.at_press, (int)button, shed);
         s_cShort++;
         tagpu_logf("formation: short button=%s len=%d thr=%d", button == FB_RIGHT ? "right" : "left",
                    (int)(len >> 16), thr);
@@ -456,7 +494,7 @@ static void commit(char* ta, const int* rec)
         live++;
     }
     if (live <= 1) {
-        replay(ta, rec, &s_g.at_last, (int)button);
+        replay(ta, rec, &s_g.at_last, (int)button, shed);
         s_cSingle++;
         tagpu_logf("formation: single button=%s units=%u", button == FB_RIGHT ? "right" : "left",
                    live);
@@ -478,10 +516,16 @@ static void commit(char* ta, const int* rec)
     if (mode == 2) {
         /* A unit with no mover (a factory) gets stock's own call for it: 0x48CF30 hands QMOVE
            to 0x43AFC0 with the click's point unshifted, QMove's descriptor lacking the group
-           offset's +0x11 bit 1 (0x48CFDF). Its rally is the path's end, the release point. */
+           offset's +0x11 bit 1 (0x48D121..0x48D126). Its rally is the path's end, the release
+           point. FORM_LIST_CAP holds for its list as for a mover's. */
         for (i = 0; i < s_g.nq; i++) {
             char* u = participant(&w, s_g.qslot[i]);
+            unsigned qlen = 0;
             if (!u) continue;
+            if (shift) {
+                (void)queue_end(&w, u, &qlen);
+                if (qlen >= FORM_LIST_CAP) { listcap++; continue; }
+            }
             ((Order)VA_TOGGLE)(s_act[A_QMOVE], shift, u, NULL, &s_g.node[s_g.m - 1], 0, 0);
             qissued++;
         }
@@ -490,16 +534,16 @@ static void commit(char* ta, const int* rec)
            cleared and STOP's radio group reset -- 0x499092..0x4990F1 exactly (DISASSEMBLED). It
            reads [main+0x531] and its +4 unchecked, so both are tested first; the screen is this
            thread's and no call between frees it. */
-        {
+        if (!shed) {
             const char* top = *(const char* const*)(ta + M_TOP);
             if (top && *(const char* const*)(top + 4)) ((ClickTail)VA_TAIL)(shift);
         }
     }
     s_cCommit++; s_cListCap += listcap;
     tagpu_logf("formation: commit button=%s mode=%u itype=%u units=%u qmove=%u nodes=%u len=%d "
-               "thr=%d shift=%d algo=%c issued=%u listcap=%u", button == FB_RIGHT ? "right" : "left",
-               mode, (unsigned)s_g.itype, live, qissued, s_g.m, (int)(len >> 16), thr, shift, algo,
-               issued, listcap);
+               "thr=%d shift=%d algo=%c issued=%u listcap=%u shed=%d",
+               button == FB_RIGHT ? "right" : "left", mode, (unsigned)s_g.itype, live, qissued,
+               s_g.m, (int)(len >> 16), thr, shift, algo, issued, listcap, shed);
 }
 
 int tagpu_formation_right(const int* rec, unsigned msg)
@@ -510,7 +554,7 @@ int tagpu_formation_right(const int* rec, unsigned msg)
     if (!(ta = main_block())) { drop("nomain"); return 0; }
     mode = (unsigned char)ta[M_MODE];
     itype = interface_type(ta);
-    if (s_g.active && (mode != s_g.mode || itype != s_g.itype)) drop("mode");
+    if (s_g.active && !still_armed(ta)) drop("mode");
     switch (msg) {
     case WM_RBUTTONDOWN:
         /* another press of the gesture's own button is a release the handler never saw */
@@ -519,11 +563,17 @@ int tagpu_formation_right(const int* rec, unsigned msg)
         return admit(ta, rec, FB_RIGHT, 1, itype);
     case WM_LBUTTONDOWN:
         /* the other button cancels the gesture (BAR); a left gesture's own press is the click
-           route's, which sees this record next */
-        if (s_g.active && s_g.button == FB_RIGHT) drop("other");
+           route's, which sees this record next -- except a shed Move's, which the route no
+           longer sees: that press is a release the handler never saw */
+        if (s_g.active && (s_g.button == FB_RIGHT || s_g.shed)) drop("other");
         return 0;
     case WM_MOUSEMOVE:
         if (s_g.active) track(ta, rec);
+        return 0;
+    case WM_LBUTTONUP:
+        /* a shed Move's release arrives in mode 1, past the click route: committed here, then
+           handed on to stock's mode-1 path, which stock's own release reached too */
+        if (s_g.active && s_g.button == FB_LEFT && s_g.shed) commit(ta, rec);
         return 0;
     case WM_RBUTTONUP:
         /* the release still reaches stock afterwards, which does nothing with it in mode 1 */
@@ -555,8 +605,7 @@ void tagpu_formation_entry(void)
 {
     const char* ta = main_block();
     if (!s_g.active) return;
-    if (!ta || (unsigned char)ta[M_MODE] != s_g.mode || interface_type(ta) != s_g.itype)
-        drop("mode");
+    if (!ta || !still_armed(ta)) drop("mode");
 }
 
 unsigned tagpu_formation_dots(TagpuFormDot* out, unsigned max, int* cut)
@@ -564,8 +613,7 @@ unsigned tagpu_formation_dots(TagpuFormDot* out, unsigned max, int* cut)
     const char* ta = main_block();
     unsigned i;
     *cut = 0;
-    if (!s_armed || !s_g.active || !s_g.shown || !ta ||
-        (unsigned char)ta[M_MODE] != s_g.mode || interface_type(ta) != s_g.itype) return 0;
+    if (!s_armed || !s_g.active || !s_g.shown || !ta || !still_armed(ta)) return 0;
     for (i = 0; i < s_g.ndot && i < max; i++) {
         out[i].x = s_g.dot[i].x >> 16;
         out[i].alt = s_g.dot[i].alt >> 16;
@@ -618,6 +666,7 @@ void tagpu_formation_level_end(void)
         tagpu_logf("formation: level end commits=%u short=%u single=%u drops=%u listcap=%u gdi=%u",
                    s_cCommit, s_cShort, s_cSingle, s_cDrop, s_cListCap, s_cGdi);
     memset(&s_g, 0, sizeof s_g);
+    s_actOk = 0;
     s_cCommit = s_cShort = s_cSingle = s_cDrop = s_cListCap = s_cGdi = 0;
 }
 

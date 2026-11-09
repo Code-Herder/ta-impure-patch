@@ -733,9 +733,11 @@ that Shift can append a distinct adjacent site. Its 27 direct callers are `0x402
 `0x487FA5`, `0x487FF6`, `0x4880AB`, `0x4880D2`, `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`,
 `0x48821E` (instruction-level call scan). It calls only the allocator `0x4B4F10`, the constructor `0x43A0C0`, the destructor
 `0x43A1F0` and the free `0x4B4F20` (`0x43ADC6`, `0x43ADEF`, `0x43AE47`/`0x43AEB8`,
-`0x43AE4D`/`0x43AEBE`) [DISASSEMBLED 2026-11-09]: **nothing it does reaches the network**, so an
-order the DLL makes through it is a stock click's order as far as a peer can tell — orders are not
-on the wire, their effects are. The formation move (`tagpu_formation.c`) gives each unit its slot
+`0x43AE4D`/`0x43AEBE`) [DISASSEMBLED 2026-11-09, direct calls only: the destructor `0x43A1F0`'s
+calls through the order's table (`0x43A21A`, `0x43A285`, `0x43A293`) and the constructor's
+`0x4895C0`/`0x489690` are not traced]. None of those direct calls sends anything; an order the DLL
+makes through it with a click's arguments is a stock click's order by parity — `0x43AFC0` forwards
+a no-Shift click to it unchanged — whatever the untraced calls do. The formation move (`tagpu_formation.c`) gives each unit its slot
 through it with the release's Shift: an append, or without Shift the replace above, as `0x43AFC0`
 forwards a no-Shift click; it does not go through `0x43AFC0`, whose Shift scan would let one
 unit's slot cancel its own queued move within 16 units.

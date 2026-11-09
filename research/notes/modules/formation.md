@@ -34,8 +34,10 @@ not `0x0F`, the test at `0x499027..0x499044`); the point inside the map; and the
 `0x43F0E0`, asked for every selected unit of the controlled player with the press's point,
 answering `MOVE_GROUND` or `VTOL_MOVE`, or in mode 2 `QMOVE` (a factory's rally), or nothing (in
 mode 1 a unit with no mover is given nothing by stock either). Any other answer — a reclaim of the
-feature under the pointer, say — leaves the press to stock, unchanged. A refused press writes
-nothing.
+feature under the pointer, say — leaves the press to stock, unchanged. So does a right press
+that Quick Build's gate on `0x499100` would turn into a build (`tagpu_resource_quick_right`, the
+same `quick_choice` the gate and its build ghost use): a right drag that starts on a metal or geo
+spot with the ghost showing builds there, as a click does. A refused press writes nothing.
 
 An admitted right press is **deferred**: stock gives the order on the press (`0x499100` →
 `0x48CF30` at `0x4991F5`), and with formation on that order is given at the release instead.
@@ -53,12 +55,22 @@ rule). Two or more: the slots, the assignment, and one order per unit through `0
 as its rally, and then stock's click tail `0x4958C0(shift)`: without Shift Move disarms (mode 1, bit 5 cleared, STOP's radio
 reset); with Shift `main+0x2CC6` bit 5 keeps it armed until Shift is released (`0x4992D8`).
 
+**A Shift-kept Move outlives its own disarm.** With bit 5 set at the press (`keep`), the handler
+disarms Move at the first record that finds Shift up (`0x4992D8..0x49930F`: mode 1, bit 5
+cleared), before the routing sees that record. Stock had already ordered at the press, so the
+gesture carries on (`shed`, `still_armed`): its moves are tracked, and its left release —
+arriving in mode 1, past the click route, so taken at the right-press stub and then handed on to
+stock's mode-1 path as stock's own release was — commits with Move's orders and without the tail
+the engine has already run. A short or single release then calls what `0x498F70` calls in mode 2,
+`0x48CF30(rec, 2, 0, main+0x2CAA, 0, 0)` (`0x49906D..0x499087`), under the same field swap; it
+records no click. The commit's log line says `shed=1`.
+
 **A gesture ends without an order** (`drop`, logged with its reason) on: a press of the other
 button (BAR's cancel; in mode 2 the right press then cancels Move, as stock), a second press of
 the gesture's own button (a release the handler never saw), a move without the gesture's button
 that is not the stale pre-press move IdleTick re-reads (`tagpu_route_same_move`; *After a press,
 IdleTick re-reads the move made before it* in the engine map), a record handled in another cursor
-mode or Interface Type (the handler's entry observer), and a release whose world view the router
+mode or Interface Type (the handler's entry observer; the shed Move above aside), and a release whose world view the router
 refuses (`drop reason=world`). The level's end clears a gesture too. Stock would have ordered at
 the press; a deferred press whose release never arrives orders nothing (owner's decision).
 
@@ -101,7 +113,9 @@ armed (…)`. Unarmed, every entry point answers stock.
   `+0x2CBC`, `+0x2CBE` and bits 0..2 of `+0x2CC6`, exactly what those three producers write for a
   record ([input](../engine/input.html), *The record and the world point*) — calls the decoded
   target with a copy of the record, and puts the release's fields back. Both clicks read the
-  record only at `+8` (`0x49917A`; `0x498F70` passes it on), no click writes one of those fields,
+  record only at `+8` (`0x49917A`; `0x498F70` passes it on); the one arm of either click that
+  writes one of those fields, `0x499100`'s Interface Type 0 minimap arm (`+0x2CBE`, `+0x2CC6` bit 4,
+  `0x49919D..0x4991B4`), is never reached by a replay, since a right gesture exists only at Type 1;
   the render thread reads none of them (it reads the frame packet), and the recorder leaves
   `main+0x2AA7..+0x2CC6` out of a recording (`replay-globals.tsv`). Quick Build's raw point is
   re-sampled around the call (`tagpu_resource_mouse`) only where vpwide's redirect sampled it for
@@ -232,7 +246,10 @@ move under `--defaults` passes it through the deferral, since the module is on t
 - **The dots outlive the gesture's input** while the handler receives no records (IdleTick skips
   it while `[[main+0xC]+0xF1] & 8`, `0x499A13..0x499A1A`), until the next record — as the
   placement's preview does.
-- **Multiplayer** is parity by construction (no order is on the wire); no two-player game with
+- **Multiplayer** is parity by construction: every order is made by the root a stock click's
+  reaches with the same arguments (`0x43ADC0`, as `0x43AFC0` forwards a no-Shift click,
+  `0x43AFDA` → `0x43B08A..0x43B09D`). That no order root sends anything rests on a scan of their
+  direct calls only (the destructor's table calls are not traced); no two-player game with
   the module on is part of its tests.
 - **A side panel with no Move gadget gives no mode-2 gesture**; which supported mods' panels lack
   one is not established.

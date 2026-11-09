@@ -1088,6 +1088,22 @@ void tagpu_resource_packet(TAGPU_PACKET* p)
 
 int tagpu_resource_live(void) { return s_armed; }
 
+/* What right_click would decide for the record being handled, without ordering: the same
+   preconditions -- armed, a world, Interface Type 1 -- and the same quick_choice, with the
+   build menu's scratch words saved around it as the gate and the packet fill save them. */
+int tagpu_resource_quick_right(void)
+{
+    World w;
+    Choice c;
+    unsigned scratch0, scratch1;
+    int have;
+    if (!s_armed || !world(&w) || *(int*)(w.ta + 0x37EFA) == 0) return 0;
+    scratch0 = *(unsigned*)0x0051E684u; scratch1 = *(unsigned*)0x0051E688u;
+    have = quick_choice(&w, &c);
+    *(unsigned*)0x0051E684u = scratch0; *(unsigned*)0x0051E688u = scratch1;
+    return have;
+}
+
 void tagpu_resource_init(void)
 {
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
