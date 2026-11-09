@@ -43,6 +43,7 @@
 #include "tagpu_vk_range.h"
 #include "tagpu_vk_terr.h"     /* the slot's height grid */
 #include "tagpu_range.h"
+#include "tagpu_rangeown.h"   /* refuse / forgive: the lane draws no rings */
 #include "spirv/tagpu_range.spv.h"
 #include "spirv/tagpu_range_comp.spv.h"
 
@@ -683,6 +684,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
        format has no plane to draw it in, and rings without their union are a
        different picture: none are drawn. */
     if (!d->stencilok) {
+        tagpu_rangeown_refuse();
         if (!s_saidStencil) { s_saidStencil = 1;
             plog(d, "range: the target has no stencil plane - no range rings are drawn"); }
         return 0;
@@ -691,7 +693,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         if (!resolve(d) || !build_descriptors(d) || !build_reach_pipeline(d)) {
             plog(d, "range: an entry point, the descriptors or the reach pipeline would "
                     "not build - the range rings stay down");
-            s_state = ST_REFUSED; s_downOwed = 1; return 0;
+            s_state = ST_REFUSED; s_downOwed = 1; tagpu_rangeown_refuse(); return 0;
         }
         s_state = ST_READY;
         if (!s_saidUp) { s_saidUp = 1;
@@ -778,7 +780,9 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     /* THE WALK BEFORE THE DRAWS, recorded every frame and not only after a
        dispatch: a kept block was written by an earlier submission of this
        slot, and a barrier's first scope covers every command submitted to the
-       queue before it. */
+       queue before it. The height grid's next copy is ordered after this
+       frame's walk by the stage's own barrier, whose source scope names the
+       COMPUTE stage (tagpu_vk_stage.c, barrier_in). */
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
@@ -911,6 +915,7 @@ void tagpu_vk_range_down(const TAGPU_VKPASS* d)
     if (s_dsl)  { vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
     if (s_cdsl) { vkDestroyDescriptorSetLayout(d->dev, s_cdsl, NULL); s_cdsl = VK_NULL_HANDLE; }
     s_state = s_downPaying ? ST_REFUSED : ST_UNBUILT;
+    if (s_state == ST_UNBUILT) tagpu_rangeown_forgive();   /* the next device answers again */
     s_drawThis = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidStencil = s_saidHeight = s_saidRoom = s_saidBound = 0;

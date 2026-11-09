@@ -2351,9 +2351,9 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         /* THE TWO THE VERTEX STAGE READS. Each copy is ordered after every
            earlier frame's reads of the same image by the stage's own barrier:
-           its source scope is the FRAGMENT stage, and a source stage mask
-           takes in every logically earlier stage, the vertex stage among them,
-           which is all a write-after-read needs. What the stage's barrier does
+           its source scope is the FRAGMENT and COMPUTE stages, and a source
+           stage mask takes in every logically earlier stage, the vertex stage
+           among them, which is all a write-after-read needs. What the stage's barrier does
            not give is the other direction -- it makes the copy and its layout
            transition visible to the FRAGMENT stage only -- so `s_vsOwed` owes
            the vertex stage its own, recorded below on the frame that draws. */

@@ -185,8 +185,12 @@ static void barrier_in(VkCommandBuffer cb, VkImage img, int had)
     /* THE WRITE-AFTER-READ ORDER. The image is shared by every slot, so the
        frames still in flight may be sampling it; a barrier's first
        synchronisation scope includes everything submitted to this queue
-       before it, which is all of them. With no contents to keep there is
-       nothing to order against and the image comes in UNDEFINED. */
+       before it, which is all of them -- in the stages the source mask names:
+       FRAGMENT for the passes that sample it while drawing, and COMPUTE for
+       the range rings' reach walk (tagpu_vk_range.c), which samples the height
+       grid and is not a stage logically earlier than FRAGMENT. With no
+       contents to keep there is nothing to order against and the image comes
+       in UNDEFINED. */
     b.oldLayout = had ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -196,7 +200,8 @@ static void barrier_in(VkCommandBuffer cb, VkImage img, int had)
     b.subresourceRange.layerCount = 1;
     b.srcAccessMask = had ? VK_ACCESS_SHADER_READ_BIT : 0;
     b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cb, had ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    vkCmdPipelineBarrier(cb, had ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                  : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
 }

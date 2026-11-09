@@ -2120,8 +2120,10 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    when any of four box points is in sight (0x465AC0, from 0x48BC56), where the
    gather asks only the anchor's tile, so the list holds units with no icon, or
    only a radar dot, which is never pickable. These are the gather's own gates
-   (tagpu_native.c): a foreign unit with no source or cloaked, any unit on
-   unexplored ground, a foreign unit out of sight. The source is the one this
+   (tagpu_native.c): a foreign unit with no source or cloaked, one the
+   engine's own draw-list test refuses (tagpu_packet_pub_unit_seen, the
+   TAGPU_PK_U_UNSEEN mark), any unit on unexplored ground, a foreign unit out
+   of sight. The source is the one this
    thread packs for the packet, so it can be one packet ahead of the frame the
    player saw, which costs at most one click at a fog edge. */
 static int icon_refused(const char* ta, const char* unit)

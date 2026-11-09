@@ -564,9 +564,20 @@ typedef int (__stdcall *UnitLosFn)(const char* player, const char* unit);
 int tagpu_packet_pub_unit_seen(const char* ta, const char* unit)
 {
     const unsigned viewed = RDU8(ta, OFF_LOCALPLAYER);
+    const uintptr_t udefs = (uintptr_t)*(const char* const*)(ta + OFF_UNITDEFS);
+    const uintptr_t def   = (uintptr_t)*(const char* const*)(unit + U_TYPE);
+    const unsigned  ndef  = RDU32(ta, OFF_UDEFCOUNT);
     if (RDU8(unit, U_OWNER) == viewed) return 1;
     /* the id indexes the ten player records, as the cull's own lea does */
     if (viewed >= PLAYER_COUNT) return 1;
+    /* THE DEF IS BOUNDED BEFORE THE ENGINE FOLLOWS IT. 0x465AC0 compares the
+       owner pointer +0x96 as a value, tests the cloak byte, then reads the def
+       +0x92 at +0x15E..+0x17E (0x465AFD..). HotUnits asks only of a slot whose
+       ModelId is set (0x48BB3E); this walk asks of every live slot, so a def
+       that is not a row of the engine's own table (UNITINFOCount rows of
+       UDEF_STRIDE) is refused -- not drawn -- rather than followed. */
+    if (!udefs || def < udefs || (def - udefs) % UDEF_STRIDE != 0 ||
+        (def - udefs) / UDEF_STRIDE >= ndef) return 0;
     return ((UnitLosFn)VA_UNITINLOS)(ta + OFF_PLAYERS + viewed * PLAYER_STRIDE, unit) != 0;
 }
 

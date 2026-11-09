@@ -20,6 +20,8 @@
 #include "tagpu_settings.h"
 #include "tagpu_weapons.h"
 #include "tagpu_log.h"
+#include "dd.h"
+#include "render_vk.h"
 
 #define M_HOVER      0x2CBA      /* u16 the unit under the pointer: its slot      */
 #define M_POINT      0x2CAA      /* 16.16 {x, altitude, z} the pointer's world point */
@@ -283,10 +285,9 @@ static TsRangeToggle* tog_find(const char* def)
     return NULL;
 }
 
-/* 1 when ring k of n of this type shows on this side */
-static int ring_on(const char* def, int ally, int k, int n)
+/* 1 when ring k of n shows on this side, under the type's saved choice `t` */
+static int ring_on(const TsRangeToggle* t, int ally, int k, int n)
 {
-    const TsRangeToggle* t = tog_find(def);
     if (!t || t->n != n) return 1;
     return ((ally ? t->ally : t->enemy) >> k) & 1;
 }
@@ -336,10 +337,11 @@ static void emit_attack(Sink* s, const World* w, char* u, unsigned slot, const c
     RDEF r[RING_MAX];
     int32_t pos[3];
     int n = attack_rings(def, r), k, ally = allied(w, owner_of(u));
+    const TsRangeToggle* t = n && !nanoOnly ? tog_find(def) : NULL;
     unit_pos(u, pos);
     for (k = 0; k < n; k++) {
         if (nanoOnly && r[k].cls != TAGPU_PK_RC_NANO) continue;
-        if (!nanoOnly && !ring_on(def, ally, k, n)) continue;
+        if (!nanoOnly && !ring_on(t, ally, k, n)) continue;
         emit(s, slot, pos, &r[k], ally ? TAGPU_PK_RL_ATK_ALLY : TAGPU_PK_RL_ATK_ENEMY);
         if (ally && r[k].cls == TAGPU_PK_RC_NANO) (*nbuild)++;
     }
@@ -351,7 +353,23 @@ static int setting(TagpuSetting k, int def)
     return tagpu_settings_get(k, &v) ? v : def;
 }
 
-int tagpu_rangeown_on(void) { return setting(TS_RANGES, 1) != 0; }
+/* THE LANE DRAWS RINGS: the Vulkan backend, until its range pass refuses.
+   `g_ddraw.renderer` is stored before the first draw and once more by the
+   hand-over to GDI, after which no frame is drawn from a packet
+   (tagpu_packet_pub.c, wide_tick). `s_refused` is a one-way latch the render
+   thread sets and clears only in the pass's teardown; what a draw reads of it
+   decides which picture the markers draw, never what memory is read. */
+static volatile LONG s_refused;
+
+static int lane_draws(void)
+{
+    return g_ddraw.renderer == vk_render_main && !InterlockedCompareExchange(&s_refused, 0, 0);
+}
+
+void tagpu_rangeown_refuse(void)  { InterlockedExchange(&s_refused, 1); }
+void tagpu_rangeown_forgive(void) { InterlockedExchange(&s_refused, 0); }
+
+int tagpu_rangeown_on(void) { return setting(TS_RANGES, 1) != 0 && lane_draws(); }
 
 int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                         unsigned* n, int* cut)
@@ -366,7 +384,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
 
     *n = 0; *cut = 0;
     memset(h, 0, sizeof *h);
-    if (!world(&w)) return 0;
+    if (!world(&w) || !lane_draws()) return 0;
     s_inPlay = 1;
     s_cFill++;
     tog_load();
@@ -481,6 +499,8 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
 void tagpu_rangeown_level_end(void)
 {
     s_inPlay = 0;
+    /* outside play: a choice still pending may wait for the store's lock here */
+    if (s_togDirty && tagpu_settings_put_rtoggle(s_tog, s_ntog, 1)) s_togDirty = 0;
 }
 
 /* ---- alt+. / alt+, --------------------------------------------------------
@@ -498,7 +518,7 @@ int tagpu_rangeown_key(unsigned vk, int alt_known)
     if (vk != VK_OEM_PERIOD && vk != VK_OEM_COMMA) return 0;
     if (!s_inPlay) return 0;
     if (!alt_known && !((KeyDown)VA_KEYDOWN)(KEY_MENU)) return 0;
-    if (!world(&w) || !setting(TS_RANGES, 1)) return 0;
+    if (!world(&w) || !tagpu_rangeown_on()) return 0;
     s_cKey++;
     dir = vk == VK_OEM_PERIOD ? 1 : -1;
     for (i = 1; i < w.nslots; i++) {

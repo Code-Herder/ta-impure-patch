@@ -24,14 +24,24 @@
 
 #include "tagpu_packet.h"
 
+/* 1 while the rings are on (`ranges`, default on) and this lane draws them:
+   the Vulkan backend, until its range pass refuses. The order markers' port of
+   the engine's ShowRanges circles (tagpu_order.c) draws them only while this
+   is 0: the rings replace them, and switching the rings off -- or a lane that
+   cannot draw them -- brings them back. */
+int  tagpu_rangeown_on(void);
+
+/* The render thread: the range pass cannot draw on this device (no stencil
+   plane, a pipeline that would not build). Sticky until `forgive`, which the
+   pass's teardown calls when it does not leave the pass refused. */
+void tagpu_rangeown_refuse(void);
+void tagpu_rangeown_forgive(void);
+
 /* Inside the in-play draw (tagpu_packet_pub.c fill_frame): the header and at
    most `max` rings. Returns 1 when a ring shows; `*cut` is set when more
    wanted to. Every record's `uidx` is 0xFFFF: the publisher maps `slot` onto
-   its own unit table. */
-/* 1 while the rings are on (`ranges`, default on). The order markers' port of
-   the engine's ShowRanges circles (tagpu_order.c) draws them only while this
-   is 0: the rings replace them, and switching the rings off brings them back. */
-int  tagpu_rangeown_on(void);
+   its own unit table. Nothing is filled, and Alt+. / Alt+, are not taken, on
+   a lane that cannot draw rings. */
 int  tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                          unsigned* n, int* cut);
 

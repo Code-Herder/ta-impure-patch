@@ -105,7 +105,9 @@ int tagpu_packet_pub_player_logo(const char* ta, unsigned id);
    (0x48BC3D..0x48BC5D), with the viewed player's record (0x48BB05..0x48BB23).
    That test refuses a cloaked unit, and one with no sonar contact (+0x110 bit 9)
    whose box top is below the sea (0x465B30..0x465B59), before any line of
-   sight is read. `unit` is a live slot of the unit array. */
+   sight is read. `unit` is a live slot of the unit array. A foreign unit whose
+   def (+0x92) is not a row of the engine's def table answers 0 without the
+   call: the test reads the def. */
 int tagpu_packet_pub_unit_seen(const char* ta, const char* unit);
 /* GAME THREAD: 1 once this level's FIRST in-play packet has published, 0 again
    from the level end. It is the producer-side reading of the packet's `in_game`,
