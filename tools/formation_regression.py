@@ -25,7 +25,11 @@ The cases (core), the eight mobiles selected unless named, Interface Type 1:
   path's end, then mode 1; (f') the same under Shift held through the release: appended, Move kept
   armed until Shift's release; (g) Move armed, a right press mid left-drag: nothing ordered, mode 1;
   (h) tagpu_formation.off: a long right drag orders at the press and nothing after, no line;
-  (i) the in-game row FORMATION 0 is (h), 1 is (a); (j) the level's counters (`level end`, listcap=0).
+  (i) the in-game row FORMATION 0 is (h), 1 is (a); (k2) a Shift-kept Move shed mid-drag (Shift
+  released before the button) commits with `shed=1` and the release's Shift, and a short one is
+  the module-off Shift click's orders; (q) a long right drag from where Quick Build shows its
+  ghost builds as the click does, with no formation line; (j) the level's counters (`level end`,
+  listcap=0).
 (type0) (k) a right press deselects at the press, no gesture; (l) Move armed and a left drag form up.
 
 What each commit orders is computed here: the path from the world point main+0x2CAA read after the
@@ -689,7 +693,7 @@ def commit_case(f, what, path, ids=MOBILES, button="rbutton", mods=(), keep=Fals
     c = commits[0]
     want = {"button": "right" if button == "rbutton" else "left", "mode": mode, "itype": int(itype != 0),
             "units": len(parts), "qmove": len(qmove), "nodes": len(nodes), "shift": int(shift),
-            "algo": algo, "issued": len(parts), "listcap": 0}
+            "algo": algo, "issued": len(parts), "listcap": 0, "shed": 0}
     wrong = {k: (c.get(k), v) for k, v in want.items() if c.get(k) != v}
     assert not wrong, f"{what}: commit line {c}: (got, want) {wrong}"
     assert c["len"] >= c["thr"], f"{what}: a {c['len']} wu drag under the {c['thr']} wu threshold"
@@ -850,6 +854,158 @@ def case_i(f):
     case_a(f, ((1100, 6250), (1650, 6050)), "(i) the row on")
 
 
+def case_k2(f):
+    """(k2) A Shift-kept Move shed mid-drag. After a Shift left drag Move stays armed with
+    main+0x2CC6 bit 5 set; a second left drag pressed under Shift outlives the engine's disarm at
+    the first record that finds Shift up (0x4992D8) and commits at the release, with Move's orders
+    and no tail (`shed=1`). Its Shift is the release record's, which no longer has it: each unit's
+    list is replaced by its slot. A short one is stock's Shift click at the press point, the group
+    order 0x48CF30 in mode 2 with the press's record: the same orders as that click with the
+    module off."""
+    what = "(k2) a Shift-kept Move shed mid-drag"
+    f.select(*MOBILES)
+    f.arm_move()
+    commit_case(f, what + ": the first drag", ((1100, 6200), (1650, 6200)), button="lbutton",
+                mods=("shift",), keep=True)
+    assert f.mode() == 2 and f.flags() & 0x20, \
+        f"{what}: mode {f.mode()}, main+0x2CC6 0x{f.flags():02x} after a Shift drag"
+    parts = sorted(MOBILES, key=lambda u: f.ids[u])
+    pos = f.positions(parts)
+    starts = [pos[u] for u in parts]
+    start = f.mark()
+    nodes = []
+    f.aim(1100, 6050)
+    f.press("lbutton")
+    path_add(nodes, f.point())
+    f.aim(1300, 6000)
+    path_add(nodes, f.point())
+    f.lift("shift")
+    for w in ((1500, 6000), (1650, 6050)):
+        f.aim(*w)
+        path_add(nodes, f.point())
+    f.lift("lbutton")
+    slot = slots(nodes, len(parts))
+    algo, slot_of = assign(starts, slot)
+    after = f.queues(parts)
+    for k, u in enumerate(parts):
+        got = [(n, p) for n, p, _ in after[u]]
+        want = [(move_name(f, u), tuple(slot[slot_of[k]]))]
+        assert got == want, f"{what}: {u}'s orders {got}, want {want}"
+    got = f.lines(start)
+    assert [k for k, _ in got] == ["commit"], f"{what}: the formation lines {got}, want one commit"
+    c = got[0][1]
+    want = {"button": "left", "mode": 2, "itype": 1, "units": len(parts), "qmove": 0,
+            "nodes": len(nodes), "shift": 0, "algo": algo, "issued": len(parts), "listcap": 0,
+            "shed": 1}
+    wrong = {k: (c.get(k), v) for k, v in want.items() if c.get(k) != v}
+    assert not wrong, f"{what}: commit line {c}: (got, want) {wrong}"
+    assert f.mode() == 1 and not f.flags() & 0x20, \
+        f"{what}: mode {f.mode()}, main+0x2CC6 0x{f.flags():02x} after the release"
+
+    what = "(k2) a short Shift-kept Move shed mid-drag"
+    C = (1300, 6150)
+    f.select(*MOBILES)
+    f.stop_all(MOBILES)
+    stopped = f.queues(MOBILES)
+    with Lever(f.gamedir, "tagpu_formation.off"):
+        f.arm_move()
+        f.press("shift")
+        f.aim(*C)
+        f.press("lbutton")
+        f.lift("lbutton")
+        control = f.queues(MOBILES)
+        f.lift("shift")
+        f.until(lambda: f.mode() == 1, f"{what}: Shift's release did not disarm the control's Move")
+    assert control != stopped, f"{what}: the control's Shift click ordered nothing"
+    f.select(*MOBILES)
+    f.arm_move()
+    commit_case(f, what + ": the first drag", ((1100, 6250), (1650, 6250)), button="lbutton",
+                mods=("shift",), keep=True)
+    f.stop_all(MOBILES)
+    assert f.queues(MOBILES) == stopped, f"{what}: Stop left other orders"
+    start = f.mark()
+    f.aim(*C)
+    f.press("lbutton")
+    assert f.queues(MOBILES) == stopped, f"{what}: the press ordered"
+    sx, sy = f.screen_at(*C)
+    f.keys(f"pmove:{sx + 4},{sy}")
+    f.lift("shift")
+    f.keys(f"pmove:{sx + 8},{sy}")
+    f.lift("lbutton")
+    got = f.queues(MOBILES)
+    assert got == control, f"{what}: the orders {got}, the control's {control}"
+    lines = f.lines(start)
+    assert [k for k, _ in lines] == ["short"] and lines[0][1].get("button") == "left", \
+        f"{what}: the formation lines {lines}, want one short button=left"
+    assert f.mode() == 1 and not f.flags() & 0x20, \
+        f"{what}: mode {f.mode()}, main+0x2CC6 0x{f.flags():02x} after the release"
+
+
+# Quick Build needs a deposit, and the plateau has none: every cell's metal byte (+7 of the
+# feature grid main+0x14287) reads 3, the threshold [main+0x391E9]+0xD30 itself (READ
+# 2026-11-09). So (q) adds one ARMCK in Comet Catcher's north, beside the deposit the resource
+# fixtures use (resource_regression.mex: the eye (1000, 950), the pointer at screen (588, 377)).
+QB_UNIT = {"id": "qbck", "type": "ARMCK", "owner": 0, "pos": [1550, 1500]}
+QB_EYE = (1000, 950)
+QB_SCREEN = (588, 377)
+
+
+def add_unit(f, unit):
+    """`unit` (a scenario unit) added to the held level, every other unit kept, and known by its
+    id from then on."""
+    doc = f.gamedir / "formation-unit.json"
+    doc.write_text(json.dumps({"format": "ta-scenario/1", "setup": {"clear_existing": False},
+                               "units": [unit]}))
+    try:
+        tacli("scenario", "apply", f.name, doc, timeout=300)
+    finally:
+        doc.unlink(missing_ok=True)
+
+    def found():
+        for r in f.call("roster", "--json")["units"]:
+            idx = r["engine_index"]
+            if r["owner"] == 0 and r["type"].upper() == unit["type"] and idx not in f.ids.values():
+                x, _, z = f.position_at(idx)
+                if abs((x >> 16) - unit["pos"][0]) <= 16 and abs((z >> 16) - unit["pos"][1]) <= 16:
+                    return idx
+        return None
+    f.ids[unit["id"]] = f.until(found, f"the added {unit['type']} is not in the roster")
+    f.types[unit["id"]] = unit["type"]
+
+
+def case_q(f):
+    """(q) A right press that Quick Build turns into a build is left to it
+    (tagpu_resource_quick_right): from the deposit where the module-off click builds a mex, a long
+    right drag gives the same build and no formation line."""
+    what = "(q) Quick Build left to stock"
+    add_unit(f, QB_UNIT)
+    f.eye(*QB_EYE)
+    f.select("qbck")
+    sx, sy = QB_SCREEN
+    f.stop_all(("qbck",))
+    stopped = f.queue("qbck")
+    with Lever(f.gamedir, "tagpu_formation.off"):
+        f.keys(f"pmove:{sx},{sy}")
+        f.press("rbutton")
+        f.lift("rbutton")
+        control = f.queue("qbck")
+    assert any(n == "MOBILEBUILD" for n, _, _ in control), \
+        f"{what}: the module-off click at the deposit is no build: {control}"
+    f.stop_all(("qbck",))
+    assert f.queue("qbck") == stopped, f"{what}: Stop left other orders"
+    start = f.mark()
+    f.keys(f"pmove:{sx},{sy}")
+    f.press("rbutton")
+    f.keys(f"pmove:{sx - 150},{sy}")
+    f.keys(f"pmove:{sx - 300},{sy}")
+    f.lift("rbutton")
+    got = f.queue("qbck")
+    assert got == control, f"{what}: the ARMCK's orders {got}, the click's {control}"
+    assert not f.any_line(start), f"{what}: the module logged {f.any_line(start)}"
+    f.eye(*EYE)
+    return control
+
+
 def level_end(f):
     """(j) The level ended (replay-end.json, as tareplay ends a fixture; the module writes its
     counters at the teardown) and its counters read; returns the line's fields."""
@@ -886,8 +1042,10 @@ def core(f, a):
     case_g(f)
     case_h(f)
     case_i(f)
+    case_k2(f)
+    built = case_q(f)
     fl = level_end(f)
-    print(f"formation-core: (a)-(j) passed; level end {fl}")
+    print(f"formation-core: (a)-(i), (k2), (q) and (j) passed; (q) built {built}; level end {fl}")
 
 
 def type0(f, a):
