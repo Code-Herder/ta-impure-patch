@@ -709,6 +709,85 @@ def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
             "defs": defs_out}
 
 
+# THE RANGE FACTS the range-ring lab draws from (tascene-view.html, RANGE
+# RINGS; tascene-ranges.js). Every unit of the stock sides, not only the
+# scenario's, because placement offers any armed structure. Each weapon is read
+# from weapons/*.tdf in the units the ENGINE keeps (loader 0x42E440,
+# engine/weapons.md): weaponvelocity is stored x65536/30, 16.16 world units per
+# tick, so `v` here is weaponvelocity / 30 in world units per tick, and
+# minbarrelangle is stored in radians.
+RANGE_FLAGS = ("ballistic", "toairweapon", "waterweapon", "paralyzer", "dropped",
+               "commandfire", "stockpile", "interceptor")
+# 112 world units per second squared, stored x65536/900 (the factor the loader
+# uses for weaponacceleration): 8155, the value `main+0x14263` holds in every
+# measured game (engine/units.md). [INFERRED] that the map's OTA `gravity` is
+# where the engine takes it from -- no store to it was found by displacement.
+DEFAULT_GRAVITY = 112
+
+
+def build_ranges(assets, tnt_path):
+    weapons = {}
+    for path in assets.glob("weapons/*.tdf"):
+        try:
+            tdf = parse_tdf(assets.read(path).decode("latin-1"))
+        except Exception:
+            continue
+        for name, body in tdf.items():
+            if isinstance(body, dict):
+                weapons.setdefault(name, body)
+
+    def num(d, k, default=0.0):
+        try:
+            return float((d.get(k) or "").strip() or default)
+        except ValueError:
+            return default
+
+    def flag(d, k):
+        return (d.get(k, "0") or "0").strip() not in ("", "0")
+
+    gravity, source = DEFAULT_GRAVITY, "default"
+    ota = tnt_path[:-4] + ".ota"
+    if assets.has(ota):
+        try:
+            for body in parse_tdf(assets.read(ota).decode("latin-1")).values():
+                if isinstance(body, dict) and body.get("gravity", "").strip():
+                    gravity, source = float(body["gravity"]), "ota"
+                    break
+        except Exception:
+            pass
+
+    types = {}
+    for entry in ta3do.unit_roster(assets):
+        key = entry["unit"]
+        try:
+            fbi = ta3do.fbi_fields(assets, key)
+        except Exception:
+            continue
+        slots = sorted((int(k[6:]), v) for k, v in fbi.items()
+                       if k.startswith("weapon") and k[6:].isdigit() and v.strip())
+        wl = []
+        for slot, wname in slots:
+            w = weapons.get(wname.strip().lower())
+            if w is None:
+                continue
+            wl.append({"slot": slot, "name": wname.strip(),
+                       "range": int(num(w, "range")),
+                       "v": num(w, "weaponvelocity") / 30.0,
+                       "minbarrel": math.radians(num(w, "minbarrelangle")),
+                       "coverage": int(num(w, "coverage")),
+                       **{f: flag(w, f) for f in RANGE_FLAGS}})
+        types[key] = {
+            "name": entry["name"], "side": entry["side"],
+            "mobile": (fbi.get("bmcode", "1") or "1").strip() != "0",
+            "builder": flag(fbi, "builder"),
+            "builddist": int(num(fbi, "builddistance")),
+            "canfly": flag(fbi, "canfly"), "floater": flag(fbi, "floater"),
+            "foot": [int(num(fbi, "footprintx", 1)), int(num(fbi, "footprintz", 1))],
+            "weapons": wl}
+    return {"gravity": gravity, "gravitySource": source,
+            "g16": int(gravity * 65536 / 900), "types": types}
+
+
 def build_orders(assets, out):
     """Every sequence of `anims/cursors.gaf`: the order markers' art.
 
@@ -984,6 +1063,9 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         # the ground under the unit -- the builder never reads the height map
         if isinstance(unit.get("height"), (int, float)):
             inst["alt"] = int(unit["height"])
+        # the scenario's player slot: the range-ring lab sorts units into
+        # ally and enemy by it (player 0 is the one watching)
+        inst["owner"] = int(unit.get("owner", 0) or 0)
         # the viewer draws the list as a shift-queue, which is what the
         # scenario format means by it (scenario-format.md: the game's applier
         # keeps only the last order today)
@@ -1244,6 +1326,7 @@ def cmd_build(args):
         features = build_features(tnt, defs, GafBank(assets), out, restore, scenario)
     units = None if args.no_units else build_units(scenario, assets, out, restore, defs)
     orders = build_orders(assets, out)
+    ranges = None if args.no_units else build_ranges(assets, tnt_path)
 
     manifest = {
         "format": "ta-scene/1",
@@ -1266,6 +1349,7 @@ def cmd_build(args):
         "features": features,
         "units": units,
         "orders": orders,
+        "ranges": ranges,
         "depth": {"terrain": 0.10, "scale": 512.0,
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
@@ -1318,6 +1402,7 @@ def scenario_centre(scenario, tnt):
 
 VIEWER = HERE / "tascene-view.html"
 RENDERER = HERE / "tascene-render.js"    # the Classic lane, which the viewer loads
+RANGES = HERE / "tascene-ranges.js"      # the range-ring lab (`rings=1`)
 PRESETS = HERE / "tascene-presets.json"
 
 
@@ -1354,7 +1439,7 @@ RELOAD_TOKEN = "__reload"
 def _source_token() -> str:
     """mtime+size of every checked-in file the served page is built from."""
     parts = []
-    for f in (VIEWER, RENDERER, PRESETS):
+    for f in (VIEWER, RENDERER, RANGES, PRESETS):
         st = f.stat() if f.exists() else None
         parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
     return " ".join(parts)
@@ -1390,6 +1475,7 @@ def _stage_viewer(pack: Path):
         die(f"renderer missing: {RENDERER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
     (pack / RENDERER.name).write_text(RENDERER.read_text())
+    (pack / RANGES.name).write_text(RANGES.read_text())
     if PRESETS.exists():
         (pack / PRESETS.name).write_text(PRESETS.read_text())
 

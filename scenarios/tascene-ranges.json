@@ -1,0 +1,235 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The range-ring lab fixture (tascene-view.html, RANGE RINGS): an ARM base on Two Continents' eastern hill and shore, with two Guardians (one on the hilltop, one on the flat) so the ballistic reach can be compared, a Big Bertha, Hammers, an LLT pair, a Defender, a Commander and a construction kbot, an anti-nuke, a torpedo launcher and a Crusader at sea; and CORE defenses to the north-west (Punisher, Gaat Gun, Pulverizer, Intimidator, anti-nuke, torpedo launcher) with two A.K.s to hover.",
+ "seed": 20261109,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "camera": {
+  "at": [
+   6000,
+   11900
+  ]
+ },
+ "units": [
+  {
+   "id": "guard_hill",
+   "type": "ARMGUARD",
+   "owner": 0,
+   "pos": [
+    5350,
+    11900
+   ]
+  },
+  {
+   "id": "guard_flat",
+   "type": "ARMGUARD",
+   "owner": 0,
+   "pos": [
+    6450,
+    12000
+   ]
+  },
+  {
+   "id": "llt1",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    6650,
+    11950
+   ]
+  },
+  {
+   "id": "llt2",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    6750,
+    12250
+   ]
+  },
+  {
+   "id": "bertha",
+   "type": "ARMBRTHA",
+   "owner": 0,
+   "pos": [
+    6150,
+    12550
+   ]
+  },
+  {
+   "id": "ham1",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    5950,
+    12250
+   ]
+  },
+  {
+   "id": "ham2",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    6020,
+    12300
+   ]
+  },
+  {
+   "id": "ham3",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    5980,
+    12360
+   ]
+  },
+  {
+   "id": "rl",
+   "type": "ARMRL",
+   "owner": 0,
+   "pos": [
+    6850,
+    11850
+   ]
+  },
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    6500,
+    12450
+   ]
+  },
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    6300,
+    12300
+   ]
+  },
+  {
+   "id": "amd",
+   "type": "ARMAMD",
+   "owner": 0,
+   "pos": [
+    6000,
+    12650
+   ]
+  },
+  {
+   "id": "tl",
+   "type": "ARMTL",
+   "owner": 0,
+   "pos": [
+    7350,
+    12150
+   ]
+  },
+  {
+   "id": "roy",
+   "type": "ARMROY",
+   "owner": 0,
+   "pos": [
+    7550,
+    12350
+   ]
+  },
+  {
+   "id": "pun",
+   "type": "CORPUN",
+   "owner": 1,
+   "pos": [
+    5700,
+    11150
+   ]
+  },
+  {
+   "id": "gaat",
+   "type": "CORHLT",
+   "owner": 1,
+   "pos": [
+    5150,
+    11250
+   ]
+  },
+  {
+   "id": "pulv",
+   "type": "CORRL",
+   "owner": 1,
+   "pos": [
+    5900,
+    11350
+   ]
+  },
+  {
+   "id": "int",
+   "type": "CORINT",
+   "owner": 1,
+   "pos": [
+    4300,
+    10800
+   ]
+  },
+  {
+   "id": "fmd",
+   "type": "CORFMD",
+   "owner": 1,
+   "pos": [
+    4650,
+    11000
+   ]
+  },
+  {
+   "id": "ctl",
+   "type": "CORTL",
+   "owner": 1,
+   "pos": [
+    7350,
+    11550
+   ]
+  },
+  {
+   "id": "ak1",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5800,
+    11280
+   ]
+  },
+  {
+   "id": "ak2",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5860,
+    11250
+   ]
+  }
+ ]
+}
