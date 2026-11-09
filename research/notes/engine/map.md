@@ -1720,7 +1720,10 @@ counted (`recorder: N footprint calls a playing cannot put in their order`).
 
 ### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `PositionInPlayerMapped 0x408090` [DISASSEMBLED + MEASURED 2026-09-25]
 
-**The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, has seven callers: `0x40AB11`
+**The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, body `0x465AC0..0x465E1E`,
+writes nothing but its own stack (nor does its helper `0x408090`); it compares the unit's owner
+pointer `+0x96` with `player` as a value, tests the cloak byte `+0x10E`, then reads the def
+`+0x92` at `+0x15E..+0x17E` [DISASSEMBLED 2026-11-09]. It has seven callers: `0x40AB11`
 (in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,
 `0x48BC56` and `0x494396`; Impure calls it too, on the game thread: the order markers, the weapon
 range rings (`tagpu_rangeown.c`) and the frame packet's publisher, which asks it of every unit the

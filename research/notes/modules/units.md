@@ -220,7 +220,10 @@ The gather draws a unit the engine would draw for the player and no other. After
    (`tagpu_packet_pub_unit_seen`, in `fill_world`), with the viewed player's record
    `main + 0x1B63 + main+0x2A43 · 0x14B` — what the HotUnits cull asks (`0x48BC3D..0x48BC5D`),
    with the record it computes at `0x48BB05..0x48BB23` ([units](../engine/units.html), *The
-   draw's unit list*). Before any sight is read that call refuses a cloaked unit and a unit whose
+   draw's unit list*). The call reads the unit's def (`+0x92`, at `+0x15E..+0x17E`) and HotUnits
+   asks only of a slot whose ModelId is set (`0x48BB3E`), while the publisher asks of every live
+   slot, so a def that is not a row of the engine's table (UNITINFOCount rows of `0x249`) is
+   refused without the call. Before any sight is read that call refuses a cloaked unit and a unit whose
    model is wholly under water with no sonar contact (`+0x110` bit 9, `0x465B30..0x465B59`). The
    waterline clip below runs on the depth-plane path only, which no stationary building takes, so
    without this test such a structure was drawn whole.

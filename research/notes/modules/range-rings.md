@@ -25,8 +25,9 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 | `tagpu_shield.c` | game | routes Alt+. / Alt+, to the module on both paths, injected and real |
 | `tagpu_order.c` | game | the engine's `ShowRanges` circles, drawn only while the rings are off |
 
-`tagpu_rangeown.c` is listed in `thread-split.allow` as `publisher presentation`; that line is
-the owner's to approve and is not yet approved. It is presentation: nothing in it is read by the
+`tagpu_rangeown.c` is listed in `thread-split.allow` as `publisher presentation`, a line the
+owner approved: every engine word it reads is read on the game thread, inside the in-play draw,
+and reaches the render thread only as numbers in the frame packet. It is presentation: nothing in it is read by the
 simulation and nothing enters a recording.
 
 ## Which rings show (`tagpu_rangeown_fill`)
@@ -101,11 +102,12 @@ BAR's `cycleUnitDisplay`: with exactly one unit selected, its type's rings on it
 enemy, kept apart) are a bitmap, and Alt+. adds one, Alt+, subtracts one, modulo 2ⁿ for a type
 with n rings. The log says `range: NAME (ally) shows ring config N of M`; with no unit or several
 selected, `range: alt+. needs exactly one selected unit`. The choice is kept by unit name and
-saved as `rangetoggle=`; a type back at every ring on both sides loses its entry, and an entry
+saved as `rangetoggle=` — from the next fill, which does not wait for the store's lock, or at
+the level's end, which does; a type back at every ring on both sides loses its entry, and an entry
 whose ring count no longer matches the type is ignored.
 
 The keys are taken in play only (from the level's first in-play draw to its end), with the rings
-on, and with Alt held — `WM_SYSKEYDOWN` on the real path, `0x4C1B80(0xFB)` for an injected key.
+on and a lane that draws them (*The lane*, below), and with Alt held — `WM_SYSKEYDOWN` on the real path, `0x4C1B80(0xFB)` for an injected key.
 **A taken key never reaches TA**, which would otherwise page the build menu with it (as
 `tagpu_shield.c` states; the stock key handler's NEXT and PREV calls are `0x49608F` and
 `0x496083`, but which key reaches them was not traced in the disassembly). `period` and `comma`
@@ -190,13 +192,26 @@ draws no rings** (logged once); neither does a frame whose slot has no height gr
 
 Premultiplied over, the target's alpha kept.
 
+## The lane
+
+`tagpu_rangeown_on()` is 1 while `ranges` is on **and** the lane draws rings: the session's
+backend is Vulkan (`g_ddraw.renderer == vk_render_main`, stored before the first draw and once
+more by the hand-over to GDI) and the range pass has not refused. The pass refuses — a one-way
+latch, `tagpu_rangeown_refuse()` — on a target with no stencil plane or a pipeline that would not
+build, and its teardown clears it (`tagpu_rangeown_forgive()`) unless it leaves the pass refused,
+so the next device answers again; the HUD's `tagpu_hudstate` latch has the same shape. What a
+draw reads of the latch decides which picture the markers draw, never what memory is read. On a
+lane that draws no rings nothing is filled, Alt+. and Alt+, go to the engine, and the
+`ShowRanges` circles below come back.
+
 ## The engine's `ShowRanges` circles (`tagpu_order.c`)
 
 The order-marker port draws the engine's `ShowRanges` set — the per-unit circles of
 `0x4390A0`'s labelled branch and the AoE and coverage circles `0x439740` draws at an order's
 target — only while `main+0x391BF` is set **and the rings are off**
 (`showRanges = flag && !tagpu_rangeown_on()`). With `ranges` on, the rings replace them; with
-`ranges=off` the set comes back as the engine draws it. The normal-play limb is untouched: a
+`ranges=off`, or on a lane that cannot draw rings, the set comes back as the engine draws it. A
+frame with no height grid bound yet (the first frames of a level) draws neither. The normal-play limb is untouched: a
 cloaked unit's `mincloak` circle and a kamikaze's circles draw either way ([markers](markers.html)).
 
 ## Settings
@@ -224,8 +239,6 @@ an Alt+. choice lasts for the session.
 
 ## What is not closed
 
-- **GDI draws no rings**: the rings are a pass of the Vulkan lane; GDI shows the engine's own
-  `ShowRanges` circles.
 - **The fades are BAR's distances, untested past 1024×768**: at that size TA's zoom range never
   reaches the distances where BAR fades the inner rings; a larger screen fades them at low zoom,
   which has not been seen live.
@@ -233,5 +246,9 @@ an Alt+. choice lasts for the session.
   fills them as a live game's does [INFERRED]), but what it shows has not been verified.
 - **Fill rate at low zoom**: with about a thousand discs on screen the remaining cost is their
   fill, not the walk.
+- **The cold walk is not bounded per frame.** A slot's first frame, a height-grid change and a
+  reach-buffer growth walk every ring at once: 1024 directions of up to 4096 steps for a
+  long-range ring. The stress scenario (1358 short rings) was measured; hundreds of LRPC- or
+  nuke-class rings in one dispatch were not, and could show as a hitch on a slow card.
 - The plan note's own open questions: the shooter's altitude is the unit's position, not a weapon
   piece's; the water-weapon and above-sea gates of can-engage are not drawn.
