@@ -497,9 +497,15 @@ only when `0x465AC0` says it is in sight (`0x48BC56`). So the router redirects t
 call `0x499278` ([hook map](hook-map.html), *The in-play mouse handler*) to `hover_handler`, which
 calls `0x48CD80` and asks the radar pick only when it answered 0: **a unit the engine names always
 wins over a dot**. The pick answers 0 unless the latest command record drew icons (`s_gIcons`, the
-gate `icon_hit` has), the art is published, the dispatched point `main+0x2C76`/`+0x2C7A` lies in
-the viewport rect `main+0x37E27` (inclusive on all four edges, the test `0x4B6720` makes at
-`0x48CDB0`) and the game thread packs a fog source. Then, over the unit array's slots from 1 below
+gate `icon_hit` has), the pointer is on the world — bit 1 of the region byte `main+0x2CC6`, which
+`0x498DA0` writes for the record before the hover query runs and vpwide's replacement of it
+computes from the TRUE viewport, clearing it over the minimap — the art is published, the
+dispatched point `main+0x2C76`/`+0x2C7A` lies in the viewport rect `main+0x37E27` (inclusive on all
+four edges, the test `0x4B6720` makes at `0x48CDB0`) and the game thread packs a fog source. The
+rect alone is not the test: below zoom 1 vpwide widens it over the minimap's click rect
+(10, 0)–(115, 125), so a minimap point would name a dot elsewhere on the screen — the same
+collision `0x48CD80`'s own viewport branch has for units in sight [INFERRED from vpwide's rect;
+not measured]. Then, over the unit array's slots from 1 below
 the slot count `u16 main+0x14351` (at most `TAGPU_PK_MAX_UNITS`), it asks the render gather's own
 gates of the engine's records, in the gather's order:
 
@@ -516,12 +522,14 @@ gates of the engine's records, in the gather's order:
 A dot is hit when the pointer is inside its drawn rect: half its edge over `z` each side of the
 anchor `icon_circle` takes (`0x48C6A0`'s without its corner offsets, in 64 bits). Among dots that
 overlap, the one drawn last answers — the larger anchor y, then the later slot, the order
-`tagpu_icon_emit` draws them in, all on one layer. The answer is the unit's `+0xA8`, logged as
-`zoom: radar pick` (*Logs*).
+`tagpu_icon_emit` draws them in, all on one layer. The answer is the unit's `+0xA8`, kept only
+below the slot count (the engine indexes the unit array with it, `0x48CF8C`, `0x48D229`), and
+logged as `zoom: radar pick` (*Logs*).
 
 *Why it is safe by construction*: it runs on the game thread inside the engine's own call and
 reads the engine's records there; every slot is a stride-aligned record below the engine's slot
-count, the model id is bounded by `UNITINFOCount` and the logo by the art's count, and the art is
+count, the model id is bounded by `UNITINFOCount`, the id answered by the slot count and the logo
+by the art's count, and the art is
 never written after its release store. The level and the fog source carry `icon_hit`'s
 one-record lag, so at a zoom switch or a fog edge a hover can, for one record, name a dot the
 frame did not draw or miss one it did.
@@ -600,7 +608,8 @@ run it to 540, 60 px past a 640×480 screen.
 | `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z= alpha(combat)= alpha(dot)= edges=<9> dotk= by-class=<9> us=<frame>+<emit>` | every 300 render frames, from the marker gather; `set=` the icons drawn as a mod set's picture (radar contacts not counted), `dots=` the radar contacts, as a dot or the set's NONE; the nine are in `TAGPU_ICLS_*` order — UNKNOWN, COMMANDER, FACTORY, BUILDING, AIRCONS, AIRCOMBAT, AIR, CONS, COMBAT, and count set pictures by their type's class. At 1× with the defaults `icons=0 hidden=0` |
 | `icons: mod set <folder> from <ini> (<MegaMapConfig>), <mode> mode, N picture(s) loaded of M, R [Icon] line(s) refused, skipped: <files>` | once a process, when a set's iconcfg reads; `<mode>` is `default` or `custom`, `M` the load list's length, `<files>` the pictures that did not read or decode, or `none` |
 | `icons: no mod set - the exe names no TADR ini`, `… - <ini> names no MegaMapConfig of the install's own`, `… - <ini>'s MegaMapConfig <value> does not read` | once a process, instead of the line above |
-| `icons: the mod set leaves no three free palette indices beside the radar logo - not drawn` | once a process: the set is dropped and the logos packed alone |
+| `icons: the mod set and the hover ring leave no three free palette indices - no hover ring` | once a process: the ring gives way first, and the set is packed with the logos; a hovered contact then has no ring |
+| `icons: the mod set leaves no three free palette indices beside the radar logo - not drawn` | once a process, when the set does not fit without the ring either: the set is dropped and the logos packed alone, with the ring |
 | `icons: art N radar logo frame(s) of M, hover ring H, S mod set picture(s), key K fill F sel S` | once a process, at the art's publication; `H` 1 when `radlogohigh` frame 0 is in the atlas |
 | `icons: mod set by type - E map entr(ies), P of T type(s) by a picture, U UNKNOWN; CTRL_W=a CTRL_B=b CTRL_F=c; <category>=<types> …` | once a level with a set loaded: the category map's entries, the types (rows past 0) given a picture and those given UNKNOWN, the three Ctrl categories' type counts, and each custom line's category with its type count, or `absent` for one the map does not hold |
 | `icons: the category map's bounds are not a map - no categories this level` | a level whose map bounds the walk refuses |

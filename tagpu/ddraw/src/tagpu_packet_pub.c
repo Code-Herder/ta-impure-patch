@@ -1176,7 +1176,8 @@ static void iconart_build(const char* ta)
     static TAGPU_ICONRECT rect[ICONART_PICS];
     const char* seq = *(const char* const*)(ta + OFF_RADLOGO);
     const char* hseq = *(const char* const*)(ta + OFF_RADLOGOHIGH);
-    int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed, high = 0;
+    int marks[3] = { 0, 1, 2 }, i = 0, k, px, nfr = 0, nset, packed, high = 0, hadHigh;
+    TAGPU_ICONSRC ring;
     char b[200];
 
     memset(&s_iconArt, 0, sizeof s_iconArt);
@@ -1231,9 +1232,22 @@ static void iconart_build(const char* ta)
        it; a mod's logo art can draw every index, and then there is no art. */
     nset = s_isN;
     packed = tagpu_iconart_pack(src, i + high + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    /* the hover ring gives way before the set: a set that leaves exactly
+       three indices free beside the logos keeps its pictures, and the hovered
+       contact then has no ring */
+    hadHigh = high;
+    if (high) ring = src[i];
+    if (!packed && nset && high) {
+        plog("icons: the mod set and the hover ring leave no three free palette indices - no hover ring");
+        for (k = 0; k < nset; k++) src[i + k] = src[i + 1 + k];
+        high = 0;
+        packed = tagpu_iconart_pack(src, i + nset, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
+    }
     if (!packed && nset) {
         plog("icons: the mod set leaves no three free palette indices beside the radar logo - not drawn");
         nset = s_isN = 0; s_isNone = s_isUnknown = -1;
+        /* the logos alone take the ring back */
+        if (hadHigh) { src[i] = ring; high = 1; }
         packed = tagpu_iconart_pack(src, i + high, s_iconPix, TAGPU_ICONART_W, TAGPU_ICONART_H, rect, marks);
     }
     if (!packed) {

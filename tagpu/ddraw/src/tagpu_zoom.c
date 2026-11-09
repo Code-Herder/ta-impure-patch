@@ -2340,9 +2340,19 @@ int __stdcall tagpu_zoom_hit_guard(const char* unit, const int* point)
    the unit -- with no order code of ours.
    ONLY WHAT A FRAME DREW: the record's icon answer (s_gIcons) gates it as it
    gates icon_hit, and the level and the source carry the same one-record lag.
-   Every record is a stride-aligned slot below the engine's slot count. */
+   ONLY ON THE WORLD: bit 1 of the region byte main+0x2CC6, "the pointer is on
+   the world", which 0x498DA0 writes for this record before the hover query
+   runs -- and which vpwide's replacement of it computes from the TRUE
+   viewport, clearing it over the minimap. The viewport RECT alone is not the
+   test: below zoom 1 vpwide widens it over the minimap's click rect, so a
+   minimap point would name a dot elsewhere on screen. The rect stays as a
+   sanity filter on the point.
+   Every record is a stride-aligned slot below the engine's slot count, and the
+   id answered is bounded by that count too: the engine indexes the unit array
+   with it (0x48CF8C, 0x48D229). */
 #define OFF_VIEWRECT     0x37E27       /* RECT L,T,R,B, inclusive: 0x48CDB0's viewport test */
 #define OFF_POINT        0x2C76        /* the dispatched point, x then y (+0x2C7A)  */
+#define OFF_REGION       0x2CC6        /* u8: bit 0 the minimap, bit 1 the world    */
 #define U_STATEW         0x110         /* u32: bit 28 alive, 14 excluded, 8 radar, 9 sonar */
 #define U_INDEXW         0xA8          /* u16: the id the hover query answers      */
 #define RP_ALIVE         0x10000000u
@@ -2363,7 +2373,7 @@ unsigned short tagpu_zoom_radar_pick(void)
     long long bestY = 0;
     float z;
 
-    if (!ta_ok(ta) || !s_gIcons) return 0;
+    if (!ta_ok(ta) || !s_gIcons || !(*(const unsigned char*)(ta + OFF_REGION) & 2)) return 0;
     art = tagpu_icontype_art();
     if (!art) return 0;
     rect = (const int*)(ta + OFF_VIEWRECT);
@@ -2415,7 +2425,7 @@ unsigned short tagpu_zoom_radar_pick(void)
         hw = 0.5 * (double)(k * fr->w) / (double)z;
         hh = 0.5 * (double)(k * fr->h) / (double)z;
         if ((double)(dx < 0 ? -dx : dx) > hw || (double)(dy < 0 ? -dy : dy) > hh) continue;
-        if (!best || ay >= bestY) {
+        if ((!best || ay >= bestY) && *(const unsigned short*)(u + U_INDEXW) < slots) {
             best = *(const unsigned short*)(u + U_INDEXW);
             bestY = ay;
         }
