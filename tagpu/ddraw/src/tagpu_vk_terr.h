@@ -45,6 +45,16 @@ int  tagpu_vk_terr_ab_frame(void);
 /* Give everything back. Called by the seam from `vk_down`, after its
    vkDeviceWaitIdle and before the device is destroyed. Safe when nothing was
    ever built. */
+/* THE HEIGHT GRID THIS SLOT'S SET NAMES, for a pass that samples it in the
+   same submission (tagpu_vk_range.c): the R8 image of the map's height byte
+   per 16-px cell, and its size in cells. VK_NULL_HANDLE unless this slot's set
+   names this pass's own height image and a copy has been recorded into it.
+   The view lives as long as this slot's set names it -- the retire of item 3
+   destroys a replaced image only once no slot's set does -- so a pass that
+   asks after this slot's `prepare`, and binds what it is told for this slot
+   alone, is covered by the same proof. */
+VkImageView tagpu_vk_terr_height(uint32_t slot, int* w, int* h);
+
 void tagpu_vk_terr_down(const TAGPU_VKPASS* d);
 
 /* 1 while the pass has stopped drawing mid-frame because the device would not

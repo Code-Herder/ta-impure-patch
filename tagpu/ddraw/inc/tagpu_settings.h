@@ -57,10 +57,26 @@ typedef enum {
     TS_ICONDIST,    /* 100 | 50 | 75 | 150 | 200: where they take over, percent of BAR's distance */
     TS_ICONFADE,    /* 33 | 0 | 67: their fade band, percent; 0 = BAR's hard switch */
     TS_FORMATION,   /* 1 on | 0 off: formation move (tagpu_formation.c) */
+    TS_RANGES,      /* 1 on | 0 off: the weapon range rings (tagpu_rangeown.c) */
+    TS_RANGESHIFT,  /* 0 | 1: the attack rings only while Shift is held   */
+    TS_RANGECURSOR, /* 1 | 0: the rings of the unit under the cursor      */
+    TS_RANGEALLY,   /* TS_RC_* bits: the allied defenses' classes shown   */
+    TS_RANGEENEMY,  /* TS_RC_* bits: the enemy defenses' classes shown    */
     TS_NKEYS
 } TagpuSetting;
 
 enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };
+
+/* The defense widget's classes, as TS_RANGEALLY / TS_RANGEENEMY hold them and
+   the file spells them: `rangeenemy=ground,air,nuke,cannon`, `none` for no
+   class. BAR's defaults: the enemies' ground, air, nuke and cannon rings, the
+   allies' nuke rings. */
+#define TS_RC_GROUND  0x01
+#define TS_RC_AIR     0x02
+#define TS_RC_NUKE    0x04
+#define TS_RC_CANNON  0x08
+#define TS_RC_LRPC    0x10
+#define TS_RC_ALL     0x1F
 
 /* A screen size packed into one LONG, so it crosses threads like every other
    value. 0 is "native": the selected monitor's own mode. */
@@ -158,6 +174,18 @@ typedef struct { char name[TS_SPACING_NAME]; int cells; } TsSpacing;
 int  tagpu_settings_spacing_load(TsSpacing* out, int max);
 int  tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait);
 int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
+
+/* The range rings' per-type choice (alt+. / alt+,, tagpu_rangeown.c), keyed by unit name as the
+   spacing is: `rangetoggle=NAME:n:ally:enemy,...`, with `n` the type's ring count when chosen and
+   `ally`/`enemy` the rings shown, one bit a ring. An entry whose `n` no longer matches the type
+   is ignored by the module (BAR keeps its bitmap only while the weapon count is the same). At
+   most TS_RTOGGLE_SAVED types; a type at "every ring on both sides" has no entry. GAME THREAD,
+   the spacing's rules: the load at attach, `put` with `wait` 0 never waits. */
+#define TS_RTOGGLE_SAVED 64
+#define TS_RTOGGLE_RINGS 16
+typedef struct { char name[TS_SPACING_NAME]; int n; int ally; int enemy; } TsRangeToggle;
+int  tagpu_settings_rtoggle_load(TsRangeToggle* out, int max);
+int  tagpu_settings_put_rtoggle(const TsRangeToggle* table, int n, int wait);
 
 /* `mod=`, the mod a start runs (tagpu_modload.h): 1 with its name, 0 with none or under tagpu_defaults.off.
    The other sets it for the next start; "" for none. */

@@ -432,6 +432,77 @@ typedef struct TAGPU_PK_FORMDOT {
 
 #define TAGPU_PK_MAX_FORM   1500u
 
+/* ---- THE WEAPON RANGE RINGS (tagpu_rangeown.c, game thread, BY VALUE) ----
+   What tagpu_range.c draws (tagpu_range.h): one header and one record per
+   ring. The game thread decides WHICH rings show and of what class -- the
+   selection, the unit under the cursor, the builders while a build command
+   is active, the defenses by side and class, the defense being placed, and
+   the player's per-type toggles -- and resolves every weapon field to a
+   number here, so the render thread reads no engine memory. The render
+   thread decides how each one LOOKS (BAR's colours, widths and fades) and
+   the vertex stage its shape over the terrain.
+
+   The acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, the range
+   to [1, TAGPU_PK_RING_RMAX], `v` to (0, TAGPU_PK_RING_VMAX], `minbarrel`
+   to [-pi, pi], gravity to (0, 1] world px a tick squared and every enum to
+   its last value, and refuses records without their header. */
+typedef struct TAGPU_PK_RANGE {
+    uint8_t  flags;          /* TAGPU_PK_RG_*                                  */
+    uint8_t  pad;
+    uint16_t nsel;           /* the selected units whose rings show (BAR's
+                                inner-ring dimming counts them)                */
+    uint16_t nbuild;         /* the builders whose build rings show            */
+    uint16_t pad2;
+    int32_t  mouse[3];       /* world x, altitude, z under the cursor, when
+                                TAGPU_PK_RG_MOUSE                              */
+    float    grav;           /* the engine's gravity, world px a tick squared  */
+} TAGPU_PK_RANGE;
+
+#define TAGPU_PK_RG_MOUSE   0x01u   /* `mouse` holds a point on the map        */
+
+/* 32 B, at most TAGPU_PK_MAX_RING. */
+typedef struct TAGPU_PK_RING {
+    uint16_t uidx;           /* the ring's unit in this packet's PK_UNIT table,
+                                for the interpolated position; 0xFFFF = none
+                                (a placement), and then `pos` is the centre    */
+    uint16_t slot;           /* that unit's slot, which the render thread
+                                matches against PK_UNIT.slot                   */
+    int32_t  pos[3];         /* world x, altitude, z: the shooter's place      */
+    float    v;              /* weapon+0x68, world px a tick                   */
+    float    minbarrel;      /* weapon+0xC8, radians                           */
+    uint16_t range;          /* world px: weapon+0xDC, +0xE0 for a nuke
+                                ring, UnitDef+0x212 for a build ring           */
+    uint8_t  cls;            /* TAGPU_PK_RC_*                                  */
+    uint8_t  layer;          /* TAGPU_PK_RL_*                                  */
+    uint8_t  style;          /* TAGPU_PK_RS_*                                  */
+    uint8_t  flags;          /* TAGPU_PK_RF_*                                  */
+    uint16_t pad;
+} TAGPU_PK_RING;
+
+/* the classes, BAR's: an attack ring's for the two attack layers, a defense
+   ring's for the two defense layers */
+enum {
+    TAGPU_PK_RC_GROUND = 0, TAGPU_PK_RC_NANO, TAGPU_PK_RC_AA, TAGPU_PK_RC_CANNON,
+    TAGPU_PK_RC_LRPC, TAGPU_PK_RC_AIR, TAGPU_PK_RC_NUKE,
+    TAGPU_PK_RC_LAST = TAGPU_PK_RC_NUKE
+};
+/* the layers, in their draw order: the defense widget's under the attack
+   widget's, allies before enemies */
+enum {
+    TAGPU_PK_RL_DEF_ALLY = 0, TAGPU_PK_RL_DEF_ENEMY, TAGPU_PK_RL_ATK_ALLY,
+    TAGPU_PK_RL_ATK_ENEMY, TAGPU_PK_RL_LAST = TAGPU_PK_RL_ATK_ENEMY
+};
+/* the sub-styles that replace a class's colour */
+enum {
+    TAGPU_PK_RS_NONE = 0, TAGPU_PK_RS_EMP, TAGPU_PK_RS_DGUN, TAGPU_PK_RS_WATER,
+    TAGPU_PK_RS_LAST = TAGPU_PK_RS_WATER
+};
+#define TAGPU_PK_RF_BALLISTIC 0x01u  /* the solver bounds the reach         */
+
+#define TAGPU_PK_MAX_RING    4096u
+#define TAGPU_PK_RING_RMAX   32767   /* world px                             */
+#define TAGPU_PK_RING_VMAX   4096.0f /* world px a tick                      */
+
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
@@ -746,6 +817,9 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_FORM    0x8000000u /* the formation's dots did not fit
                                              this packet, or were more than its
                                              cap                             */
+#define TAGPU_PK_TRUNC_RING    0x10000000u /* the range rings did not fit this
+                                              packet, or were more than its
+                                              cap                            */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,
@@ -1103,6 +1177,11 @@ typedef struct TAGPU_PACKET {
     uint32_t n_form, off_form;        /* PK_FORMDOT, at most TAGPU_PK_MAX_FORM;
                                          0 when no formation gesture shows dots */
 
+    /* ---- the weapon range rings (tagpu_rangeown.c) ---- */
+    uint32_t n_range, off_range;      /* PK_RANGE: 1 while a ring shows, else 0 */
+    uint32_t n_ring, off_ring;        /* PK_RING, at most TAGPU_PK_MAX_RING;
+                                         none without the header               */
+
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
@@ -1391,6 +1470,11 @@ static __inline const TAGPU_PK_SWEEPITEM* tagpu_pk_sweepitems(const TAGPU_PACKET
 /* the formation move's dots, or NULL */
 static __inline const TAGPU_PK_FORMDOT* tagpu_pk_form(const TAGPU_PACKET* p)
 { return p->n_form ? (const TAGPU_PK_FORMDOT*)(const void*)((const unsigned char*)p + p->off_form) : (const TAGPU_PK_FORMDOT*)0; }
+/* the range rings' header and records, or NULL */
+static __inline const TAGPU_PK_RANGE* tagpu_pk_range(const TAGPU_PACKET* p)
+{ return p->n_range ? (const TAGPU_PK_RANGE*)(const void*)((const unsigned char*)p + p->off_range) : (const TAGPU_PK_RANGE*)0; }
+static __inline const TAGPU_PK_RING* tagpu_pk_rings(const TAGPU_PACKET* p)
+{ return p->n_ring ? (const TAGPU_PK_RING*)(const void*)((const unsigned char*)p + p->off_ring) : (const TAGPU_PK_RING*)0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }

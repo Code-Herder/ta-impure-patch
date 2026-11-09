@@ -670,6 +670,35 @@ static const char* frame_valid(const void* rec)
                 fd[k].z < -TAGPU_PK_PLACE_COORD || fd[k].z > TAGPU_PK_PLACE_COORD)
                 return "formation dot coordinate";
     }
+    /* the range rings: tagpu_range.c walks the count, indexes PK_UNIT with `uidx` after its
+       own test against n_units, and hands the numbers to a vertex stage whose loops are bounded
+       by the range -- so the range, the velocity and gravity are bounded here */
+    if (!table_ok(p, p->off_range, p->n_range, sizeof(TAGPU_PK_RANGE))) return "range header";
+    if (p->n_range > 1u) return "more than one range header";
+    if (!table_ok(p, p->off_ring, p->n_ring, sizeof(TAGPU_PK_RING))) return "range ring table";
+    if (p->n_ring > TAGPU_PK_MAX_RING) return "more range rings than the table holds";
+    if (p->n_ring && !p->n_range) return "range rings without their header";
+    if (p->n_range) {
+        const TAGPU_PK_RANGE* h = tagpu_pk_range(p);
+        const TAGPU_PK_RING* r = tagpu_pk_rings(p);
+        unsigned k, c;
+        if (!(h->grav > 0.0f && h->grav <= 1.0f)) return "range gravity";
+        for (c = 0; c < 3; c++)
+            if (h->mouse[c] < -TAGPU_PK_PLACE_COORD || h->mouse[c] > TAGPU_PK_PLACE_COORD)
+                return "range mouse";
+        for (k = 0; k < p->n_ring; k++) {
+            for (c = 0; c < 3; c++)
+                if (r[k].pos[c] < -TAGPU_PK_PLACE_COORD || r[k].pos[c] > TAGPU_PK_PLACE_COORD)
+                    return "range ring centre";
+            if (r[k].range < 1 || r[k].range > TAGPU_PK_RING_RMAX) return "range ring radius";
+            if (r[k].cls > TAGPU_PK_RC_LAST || r[k].layer > TAGPU_PK_RL_LAST ||
+                r[k].style > TAGPU_PK_RS_LAST) return "range ring enum";
+            if (r[k].flags & TAGPU_PK_RF_BALLISTIC) {
+                if (!(r[k].v > 0.0f && r[k].v <= TAGPU_PK_RING_VMAX)) return "range ring velocity";
+                if (!(r[k].minbarrel >= -3.2f && r[k].minbarrel <= 3.2f)) return "range ring barrel";
+            }
+        }
+    }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its
        per-frame arrays from -- a count past them is not a packet it wrote */

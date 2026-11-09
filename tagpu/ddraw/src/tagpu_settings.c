@@ -104,6 +104,13 @@ static const Opt O_ICONFADE[]  = { {"33", 33}, {"0", 0}, {"67", 67} };
    (tagpu_formation.c). Read at each press, so no value needs a restart. */
 static const Opt O_FORMATION[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
 
+/* The weapon range rings (tagpu_rangeown.c): on, the attack rings only under Shift, the rings of
+   the unit under the cursor -- BAR's gui_attackrange_gl4 options -- and the defense widget's
+   classes per side, a list of class names (`rangeclass`, below). Read every frame by the game
+   thread, so no value needs a restart. */
+static const Opt O_ONOFF[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
+static const char* const RC_NAME[5] = { "ground", "air", "nuke", "cannon", "lrpc" };
+
 #define N(a) (int)(sizeof a / sizeof a[0])
 
 /* TS_MONITOR and TS_RESOLUTION have no option list: the monitor is stored by
@@ -139,6 +146,11 @@ static const Key s_key[TS_NKEYS] = {
     { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },
     { "iconfade",  O_ICONFADE,  N(O_ICONFADE),  33 },
     { "formation", O_FORMATION, N(O_FORMATION), 1 },
+    { "ranges",      O_ONOFF, N(O_ONOFF), 1 },
+    { "rangeshift",  O_ONOFF, N(O_ONOFF), 0 },
+    { "rangecursor", O_ONOFF, N(O_ONOFF), 1 },
+    { "rangeally",   NULL,    0,          TS_RC_NUKE },
+    { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -177,6 +189,9 @@ static int s_nspacing;
    or the player chose is written. Under s_io like the spacing. */
 static const char* const s_rkindName[3] = { "metal", "energy", "all" };
 static int s_rkind = 2, s_rkindSet;
+/* The range rings' per-type choice, `rangetoggle=`: under s_io like the spacing. */
+static TsRangeToggle s_rtoggle[TS_RTOGGLE_SAVED];
+static int s_nrtoggle;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -204,6 +219,7 @@ static int valid(TagpuSetting k, int v)
     int i;
     if (k == TS_MONITOR) return v == -1 || (v >= 0 && v < s_monCount);
     if (k == TS_RESOLUTION) return res_ok(v);
+    if (k == TS_RANGEALLY || k == TS_RANGEENEMY) return v >= 0 && v <= TS_RC_ALL;
     for (i = 0; i < s_key[k].nopts; i++)
         if (s_key[k].opts[i].value == v) return 1;
     return 0;
@@ -300,6 +316,18 @@ static int serialise(char* b, int cap)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, cap - at, "resolution=%dx%d\r\n", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, cap - at, "resolution=native\r\n");
+        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY) {
+            int v = read_val((TagpuSetting)i), c, n = 0;
+            k = _snprintf(b + at, cap - at, "%s=", s_key[i].name);
+            if (k < 0 || k >= cap - at) return -1;
+            at += k;
+            for (c = 0; c < 5; c++) {
+                if (!(v & (1 << c))) continue;
+                k = _snprintf(b + at, cap - at, "%s%s", n++ ? "," : "", RC_NAME[c]);
+                if (k < 0 || k >= cap - at) return -1;
+                at += k;
+            }
+            k = _snprintf(b + at, cap - at, "%s\r\n", n ? "" : "none");
         } else {
             /* the value IN FORCE: under Classic or Classic++ a render key is the
                preset's, whatever a custom session left in the slot */
@@ -338,6 +366,21 @@ static int serialise(char* b, int cap)
     }
     if (s_rkindSet) {
         k = _snprintf(b + at, cap - at, "reclaimkind=%s\r\n", s_rkindName[s_rkind]);
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
+    if (s_nrtoggle) {
+        int i;
+        k = _snprintf(b + at, cap - at, "rangetoggle=");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+        for (i = 0; i < s_nrtoggle; i++) {
+            k = _snprintf(b + at, cap - at, "%s%s:%d:%d:%d", i ? "," : "", s_rtoggle[i].name,
+                          s_rtoggle[i].n, s_rtoggle[i].ally, s_rtoggle[i].enemy);
+            if (k < 0 || k >= cap - at) return -1;
+            at += k;
+        }
+        k = _snprintf(b + at, cap - at, "\r\n");
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
@@ -533,6 +576,62 @@ int tagpu_settings_spacing_name_ok(const char* n, size_t len)
     return 1;
 }
 
+/* One range-toggle entry's numbers: a ring count 1..TS_RTOGGLE_RINGS and two masks inside it. */
+static int rtoggle_ok(int n, int ally, int enemy)
+{
+    int lim = n >= 1 && n <= TS_RTOGGLE_RINGS ? (1 << n) - 1 : -1;
+    return lim > 0 && ally >= 0 && ally <= lim && enemy >= 0 && enemy <= lim;
+}
+
+/* `ground,air,...` or `none` into TS_RC_* bits; -1 when a word is not a class */
+static int parse_rclass(const char* v)
+{
+    char b[96];
+    char* w;
+    char* e;
+    int m = 0, c;
+    lstrcpynA(b, v, sizeof b);
+    if (!lstrcmpiA(trim(b), "none")) return 0;
+    for (w = b; w && *w; w = e) {
+        e = strchr(w, ',');
+        if (e) *e++ = 0;
+        w = trim(w);
+        for (c = 0; c < 5 && lstrcmpiA(w, RC_NAME[c]); c++) {}
+        if (c == 5) return -1;
+        m |= 1 << c;
+    }
+    return m;
+}
+
+/* `NAME:n:ally:enemy,...`, skipped entry by entry as the spacing's are */
+static void parse_rtoggle(char* v)
+{
+    char* e;
+    for (; v && *v; v = e) {
+        char* colon;
+        int n = 0, a = 0, en = 0, j;
+        e = strchr(v, ',');
+        if (e) *e++ = 0;
+        v = trim(v);
+        colon = strchr(v, ':');
+        if (!colon || !tagpu_settings_spacing_name_ok(v, (size_t)(colon - v)) ||
+            sscanf(colon + 1, "%d:%d:%d", &n, &a, &en) != 3 || !rtoggle_ok(n, a, en) ||
+            s_nrtoggle >= TS_RTOGGLE_SAVED) {
+            slog("rangetoggle entry \"%s\" skipped", v);
+            continue;
+        }
+        *colon = 0;
+        for (j = 0; j < s_nrtoggle && lstrcmpiA(s_rtoggle[j].name, v); j++) {}
+        if (j < s_nrtoggle) { slog("rangetoggle names %s twice: the first stands", v); continue; }
+        memset(&s_rtoggle[s_nrtoggle], 0, sizeof s_rtoggle[s_nrtoggle]);
+        lstrcpynA(s_rtoggle[s_nrtoggle].name, v, TS_SPACING_NAME);
+        s_rtoggle[s_nrtoggle].n = n;
+        s_rtoggle[s_nrtoggle].ally = a;
+        s_rtoggle[s_nrtoggle].enemy = en;
+        s_nrtoggle++;
+    }
+}
+
 /* `NAME:n,NAME:n`: each entry that is not a name and a spacing 1..TS_SPACING_MAX is skipped and
    named in the log; the rest stand. Attach only, before any other thread reads the table. */
 static void parse_spacing(char* v)
@@ -586,6 +685,15 @@ static void parse_line(char* line)
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
     if (!lstrcmpiA(k, "mod")) { lstrcpynA(s_mod, v, sizeof s_mod); return; }
     if (!lstrcmpiA(k, "placespacing")) { parse_spacing(v); return; }
+    if (!lstrcmpiA(k, "rangetoggle")) { parse_rtoggle(v); return; }
+    if (!lstrcmpiA(k, "rangeally") || !lstrcmpiA(k, "rangeenemy")) {
+        TagpuSetting t = !lstrcmpiA(k, "rangeally") ? TS_RANGEALLY : TS_RANGEENEMY;
+        int m = parse_rclass(v);
+        if (m >= 0) s_val[t] = m;
+        else slog("%s=%s is not a list of ground, air, nuke, cannon, lrpc or none - "
+                  "the default stands", s_key[t].name, v);
+        return;
+    }
     if (!lstrcmpiA(k, "reclaimkind")) {
         for (i = 0; i < 3 && lstrcmpiA(v, s_rkindName[i]); i++) {}
         if (i < 3) { s_rkind = i; s_rkindSet = 1; }
@@ -854,7 +962,10 @@ void tagpu_settings_attach(void)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, sizeof b - at, " resolution=%dx%d", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, sizeof b - at, " resolution=native");
-        } else
+        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY)
+            k = _snprintf(b + at, sizeof b - at, " %s=0x%x", s_key[i].name,
+                          (unsigned)read_val((TagpuSetting)i));
+        else
             k = _snprintf(b + at, sizeof b - at, " %s=%s", s_key[i].name,
                           spelling((TagpuSetting)i, read_val((TagpuSetting)i)));
         if (k < 0) break;
@@ -963,6 +1074,47 @@ int tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait)
         memset(s_spacing, 0, sizeof s_spacing);
         memcpy(s_spacing, kept, (size_t)k * sizeof *kept);
         s_nspacing = k;
+        InterlockedIncrement(&s_dirty);
+    }
+    LeaveCriticalSection(&s_io);
+    return 1;
+}
+
+int tagpu_settings_rtoggle_load(TsRangeToggle* out, int max)
+{
+    int n;
+    if (!s_attached || s_ignored || !out || max <= 0) return 0;
+    EnterCriticalSection(&s_io);
+    n = s_nrtoggle < max ? s_nrtoggle : max;
+    memcpy(out, s_rtoggle, (size_t)n * sizeof *out);
+    LeaveCriticalSection(&s_io);
+    return n;
+}
+
+int tagpu_settings_put_rtoggle(const TsRangeToggle* table, int n, int wait)
+{
+    TsRangeToggle kept[TS_RTOGGLE_SAVED];
+    int i, k = 0;
+    if (!s_attached || s_ignored) return 1;            /* no say, nothing to hand over */
+    for (i = 0; i < n && k < TS_RTOGGLE_SAVED; i++) {
+        const char* end = memchr(table[i].name, 0, TS_SPACING_NAME);
+        size_t len = end ? (size_t)(end - table[i].name) : TS_SPACING_NAME;
+        if (len < TS_SPACING_NAME && tagpu_settings_spacing_name_ok(table[i].name, len) &&
+            rtoggle_ok(table[i].n, table[i].ally, table[i].enemy)) {
+            memset(&kept[k], 0, sizeof kept[k]);
+            memcpy(kept[k].name, table[i].name, len);
+            kept[k].n = table[i].n;
+            kept[k].ally = table[i].ally;
+            kept[k].enemy = table[i].enemy;
+            k++;
+        }
+    }
+    if (wait) EnterCriticalSection(&s_io);
+    else if (!TryEnterCriticalSection(&s_io)) return 0;
+    if (k != s_nrtoggle || memcmp(kept, s_rtoggle, (size_t)k * sizeof *kept)) {
+        memset(s_rtoggle, 0, sizeof s_rtoggle);
+        memcpy(s_rtoggle, kept, (size_t)k * sizeof *kept);
+        s_nrtoggle = k;
         InterlockedIncrement(&s_dirty);
     }
     LeaveCriticalSection(&s_io);

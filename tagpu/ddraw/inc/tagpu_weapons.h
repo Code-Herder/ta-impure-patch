@@ -79,6 +79,10 @@ int   tagpu_weapons_check_slot(char* unit, char* target, unsigned idx);
    any side-row read does. */
 char* tagpu_weapons_slot_weapon(char* unit, unsigned idx);
 
+/* A unit type's weapon `idx` (0 = weapon1), or NULL past the type's count; the no-weapon
+   entry Weapons[0] where the FBI named none. Reads only, game thread. */
+char* tagpu_weapons_type_weapon(const char* def, unsigned idx);
+
 /* A seek on a level that plays a recording (tagpu_replay.c, seek_run), on the game thread between
    two sim steps, once the rebuild has written this module's declared tables: re-establishes the
    def records' invariants their layout cannot express. Returns what it repaired. */

@@ -21,6 +21,7 @@
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_place.h"
+#include "tagpu_rangeown.h"
 #include "tagpu_sweep.h"
 #include "tagpu_gui.h"
 #include "tagpu_input.h"
@@ -203,6 +204,10 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
     /* Alt+Z / Alt+X with a building armed step the placement's spacing and reach the game no
        further, as on the real path below; Alt is virtual here, so the module asks for it */
     if (!up && tagpu_place_key((unsigned)vk, 0))
+        return;
+    /* Alt+. / Alt+, in play cycle the selected unit's range rings (tagpu_rangeown.h); TA would
+       page the build menu with them */
+    if (!up && tagpu_rangeown_key((unsigned)vk, 0))
         return;
 
     to_game(hwnd, up ? WM_KEYUP : WM_KEYDOWN, (WPARAM)vk, lparam);
@@ -492,6 +497,13 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
            while the shield lets them through. A letter under Alt is WM_SYSKEYDOWN. */
         if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&
             tagpu_place_key((unsigned)wparam, msg == WM_SYSKEYDOWN))
+        {
+            *result = 0;
+            return TRUE;
+        }
+        /* Alt+. / Alt+, in play: the selected unit's range rings, not TA's build-menu pages */
+        if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&
+            tagpu_rangeown_key((unsigned)wparam, msg == WM_SYSKEYDOWN))
         {
             *result = 0;
             return TRUE;

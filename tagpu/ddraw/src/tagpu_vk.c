@@ -157,6 +157,7 @@
 #include "tagpu_restore_guard.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
+#include "tagpu_vk_range.h"
 #include "tagpu_vk_shot.h"
 #include "tagpu_vk_stage.h"
 
@@ -1960,6 +1961,7 @@ static void vk_down(void)
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
+        tagpu_vk_range_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
         tagpu_vk_fog_down(&s_pass);
@@ -2397,7 +2399,7 @@ fail:
    and would make the pass's own lifetime depend on a target it never sees. */
 static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t h,
                           int draw_terr, int draw_feat, int draw_unit,
-                          int draw_fx, int draw_mark)
+                          int draw_fx, int draw_range, int draw_mark)
 {
     if (draw_terr) tagpu_vk_terr_record(&s_pass, cb, fi, w, h);
     if (draw_feat) tagpu_vk_feat_record(&s_pass, cb, fi, w, h);
@@ -2413,6 +2415,9 @@ static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t 
        difference is up to the ghost's own alpha share.
        Both calls or neither: the second is what ends the unit pass's frame. */
     if (draw_unit) tagpu_vk_unit_record_ghosts(&s_pass, cb, fi, w, h);
+    /* THE RANGE RINGS over the world and under the markers, BAR's layer: a
+       ring passes under the selection rects and the health bars it surrounds */
+    if (draw_range) tagpu_vk_range_record(&s_pass, cb, fi, s_vk.rp, w, h);
     if (draw_mark) tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp, w, h);
 }
 
@@ -2530,7 +2535,7 @@ static int vk_present(void)
        than destroy on a hope. The cost is one drain on the frame after a
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
-        tagpu_vk_shadow_down_owed() || tagpu_vk_mark_down_owed() ||
+        tagpu_vk_shadow_down_owed() || tagpu_vk_mark_down_owed() || tagpu_vk_range_down_owed() ||
         tagpu_vk_surf_down_owed() || tagpu_vk_world_down_owed() ||
         tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
         tagpu_vkw_world_down_owed()) {
@@ -2549,6 +2554,7 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
+        if (tagpu_vk_range_down_owed())    tagpu_vk_range_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
         if (tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
@@ -2650,7 +2656,7 @@ static int vk_present(void)
         LARGE_INTEGER wiki_t0;
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
         int draw_gui = 0, draw_hud = 0, gui_drew = 0;
-        int draw_mark = 0, ab_mark = 0;
+        int draw_mark = 0, ab_mark = 0, draw_range = 0;
         int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
         int ab_gui = 0;
@@ -2766,6 +2772,9 @@ static int vk_present(void)
             ab_fx = tagpu_vk_fx_ab_frame();
             /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below
                the UI. */
+            /* THE RANGE RINGS sample the height grid the terrain pass bound
+               for this slot above, so they prepare after it */
+            draw_range = tagpu_vk_range_prepare(&s_pass, cb, fi);
             draw_mark = tagpu_vk_mark_prepare(&s_pass, cb, fi);
             ab_mark = tagpu_vk_mark_ab_frame();
             /* THE UI LAYER, WITHOUT THE ENGINE'S COMPOSITE. The engine's half
@@ -2847,7 +2856,7 @@ static int vk_present(void)
             tagpu_vk_restore_step(&s_pass, cb, fi);
 
         }
-        ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
+        ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_range + draw_mark + draw_scaf +
                 draw_gui + draw_fps + draw_hud;
         nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
         /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
@@ -2895,7 +2904,7 @@ static int vk_present(void)
         if (draw_world) {
             tagpu_vk_world_begin(&s_pass, cb, fi);
             world_records(cb, fi, tw, th,
-                          draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+                          draw_terr, draw_feat, draw_unit, draw_fx, draw_range, draw_mark);
             tagpu_vk_world_end(&s_pass, cb);
         }
         /* THE WIKI'S STAGE, INTO ITS OWN TARGET, for the same reason and in the game's layer
@@ -2947,11 +2956,11 @@ static int vk_present(void)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             else {
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
-                              draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+                              draw_terr, draw_feat, draw_unit, draw_fx, draw_range, draw_mark);
                 /* AND THE GAMMA ON IT, which a target would have applied in
                    its composite: here, after the last world pass and before
                    the UI, so it reaches the finished world and nothing else. */
-                if (draw_terr || draw_feat || draw_unit || draw_fx || draw_mark)
+                if (draw_terr || draw_feat || draw_unit || draw_fx || draw_range || draw_mark)
                     tagpu_vk_world_record_direct(&s_pass, cb, s_vk.ext.width,
                                                  s_vk.ext.height);
             }
@@ -3046,9 +3055,9 @@ static int vk_present(void)
            counters print on different frames and cannot be compared. */
         if ((s_pass.frame % 300u) == 0u)
             vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
-                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d hud=%d)",
+                  "feat=%d unit=%d fx=%d range=%d mark=%d scaf=%d gui=%d fps=%d hud=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
-                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps, draw_hud);
+                  draw_unit, draw_fx, draw_range, draw_mark, draw_scaf, draw_gui, draw_fps, draw_hud);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
 
            A WORLD PASS'S CAPTURE IS THE WORLD TARGET, NOT THE WINDOW: `gw*ss`
@@ -3193,6 +3202,7 @@ static int vk_present(void)
 static void passes_down(void)
 {
     tagpu_vk_mark_down(&s_pass);
+    tagpu_vk_range_down(&s_pass);
     tagpu_vk_fps_down(&s_pass);
     tagpu_vk_hud_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);

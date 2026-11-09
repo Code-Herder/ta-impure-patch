@@ -400,6 +400,15 @@ char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)
     return row[idx - 3].weapon;
 }
 
+/* A unit TYPE's weapon i for a reader that draws (tagpu_rangeown.c): the def's own weapon1..3,
+   then the type's record; NULL past the type's count. It reads g_def and the def and builds
+   nothing -- no side row, no def record -- so a presentation caller changes no state. */
+char* tagpu_weapons_type_weapon(const char* def, unsigned idx)
+{
+    if (!def || idx >= WPN_CAP || idx >= (unsigned)def_count(def)) return 0;
+    return def_weapon(def, (int)idx);
+}
+
 /* =========================================================================
    5. Script names — stock strings for 0-2, Spring's names beyond
    ========================================================================= */

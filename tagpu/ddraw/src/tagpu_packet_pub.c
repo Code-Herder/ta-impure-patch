@@ -95,6 +95,7 @@
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
+#include "tagpu_rangeown.h"
 #include "tagpu_formation.h"  /* the formation move's dots, copied in THIS draw */
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
@@ -381,6 +382,10 @@ typedef char pk_place_layout[(offsetof(TagpuPlaceSite, rect) == offsetof(TAGPU_P
                               offsetof(TagpuPlaceSite, type) == offsetof(TAGPU_PK_PLACE, type) &&
                               offsetof(TagpuPlaceSite, colour) == offsetof(TAGPU_PK_PLACE, colour) &&
                               offsetof(TagpuPlaceSite, pad) == offsetof(TAGPU_PK_PLACE, pad)) ? 1 : -1];
+/* the range rings' two records: tagpu_rangeown.c fills them by name and tagpu_range.c reads them
+   by name, so only the sizes the acquire's strides assume are pinned */
+typedef char pk_range_size[(sizeof(TAGPU_PK_RANGE) == 24 && sizeof(TAGPU_PK_RING) == 32) ? 1 : -1];
+
 /* the sweep's two records, field by field: tagpu_sweep.c fills them by name and the marker pass
    reads them by name, so a padding the compiler chose differently would only move the bytes --
    but the layout is the one the header's comment states, and the acquire's bounds name it */
@@ -447,6 +452,7 @@ static unsigned        s_aRowAt[PK_ANCH_MAXROWS], s_aRowN[PK_ANCH_MAXROWS];
    in this packet. Sized like the scratch and rewritten for the slots the walk
    actually visits, so no memset of 32 KB per frame. */
 static unsigned short  s_slotIdx[TAGPU_PK_MAX_UNITS];
+static unsigned        s_slotWalk;      /* the slots this frame's walk wrote: 0 = none */
 /* the stable-id collision oracle: one bit per id, cleared only for the ids
    this packet used (the sweep is over n_units, not over 65536) */
 static unsigned char   s_idSeen[8192];
@@ -1540,6 +1546,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 
     /* ---- the units, and their pieces ---- */
     walk = slots;
+    s_slotWalk = 0;
     if (ptr_ok(beg) && slots > 1) {
         if (walk > TAGPU_PK_MAX_UNITS) { walk = TAGPU_PK_MAX_UNITS; s_cUnitTrunc++; p->truncated |= TAGPU_PK_TRUNC_UNITS; }
         /* THE RELATION, ASSERTED RATHER THAN RELIED ON. `end` is stored once in
@@ -1642,6 +1649,8 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             }
             if (++nu >= TAGPU_PK_MAX_UNITS) { s_cUnitTrunc++; p->truncated |= TAGPU_PK_TRUNC_UNITS; break; }
         }
+        /* a walk cut by the table's cap wrote slots 1..i, a whole one 1..walk-1 */
+        s_slotWalk = i < walk ? i + 1u : walk;
         /* slots -> packet indices, now that every slot the walk visited has one */
         for (i = 0; i < nu; i++) {
             int s1 = s_uScratch[i].cargo_first, s2 = s_uScratch[i].cargo_next;
@@ -3095,6 +3104,37 @@ static unsigned fill_form(TAGPU_PACKET* p, unsigned* cursor)
                         &p->off_form, &p->n_form, TAGPU_PK_TRUNC_FORM);
 }
 
+/* THE WEAPON RANGE RINGS, COPIED BY VALUE: tagpu_rangeown.c answers on this game thread from the
+   engine's units, types and weapons, read inside this draw (tagpu_rangeown.h). The header and at
+   most TAGPU_PK_MAX_RING rings, the caps the acquire checks again with every field. Each ring's
+   unit is mapped onto this packet's unit table through the slot map fill_world wrote this frame,
+   so the render thread can take the unit's interpolated position; a slot the walk did not reach
+   maps to none, and the ring then stands at the position the record carries. */
+static TAGPU_PK_RANGE s_rgHead;
+static TAGPU_PK_RING  s_rgRings[TAGPU_PK_MAX_RING];
+
+static unsigned fill_range(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned n = 0, need = *cursor, e, k;
+    int cut = 0;
+    if (!tagpu_rangeown_fill(&s_rgHead, s_rgRings, TAGPU_PK_MAX_RING, &n, &cut)) return need;
+    if (n > TAGPU_PK_MAX_RING) n = TAGPU_PK_MAX_RING;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_RING;
+    for (k = 0; k < n; k++) {
+        unsigned slot = s_rgRings[k].slot;
+        s_rgRings[k].uidx = slot && slot < s_slotWalk && slot < TAGPU_PK_MAX_UNITS
+                            ? s_slotIdx[slot] : 0xFFFFu;
+    }
+    e = append_table(p, cursor, &s_rgHead, 1u, (unsigned)sizeof(TAGPU_PK_RANGE),
+                     &p->off_range, &p->n_range, TAGPU_PK_TRUNC_RING);
+    if (e > need) need = e;
+    if (!p->n_range) return need;      /* no rings without their header */
+    e = append_table(p, cursor, s_rgRings, n, (unsigned)sizeof(TAGPU_PK_RING),
+                     &p->off_ring, &p->n_ring, TAGPU_PK_TRUNC_RING);
+    if (e > need) need = e;
+    return need;
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -3481,6 +3521,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the formation move's dots: 18 KB at most (1500 of 12 B) ---- */
     e = fill_form(p, &cursor);
     if (e > need) need = e;
+    /* ---- the weapon range rings: 128 KB at most (4096 of 32 B) ---- */
+    e = fill_range(p, &cursor);
+    if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor, nplace);
     if (e > need) need = e;
@@ -3792,6 +3835,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
         tagpu_place_level_end();
         tagpu_sweep_level_end();
         tagpu_formation_level_end();
+        tagpu_rangeown_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never

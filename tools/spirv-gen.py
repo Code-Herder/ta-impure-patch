@@ -219,6 +219,10 @@ PROGRAMS = [
     # ...and the effects lines (lasers, lightning) the same way
     ("fx_line",      "tagpu_fx::LVS",           "tagpu_fx::LFS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
+    # tagpu_range.c (paired in tagpu_vk_range.c) -- the weapon range rings: the
+    # union's discs and the rings' bands share one fragment stage
+    ("range_disc",   "tagpu_range::DVS",        "tagpu_range::FS"),
+    ("range_line",   "tagpu_range::LVS",        "tagpu_range::FS"),
 ]
 
 # ---------------------------------------------------------- the compute headers
@@ -303,7 +307,7 @@ def conv_key(cin, cout, last, th):
 # Every C source a shader is read out of, in the order the headers are emitted.
 SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
-           "tagpu_fx", "tagpu_feat", "tagpu_huddraw"]
+           "tagpu_fx", "tagpu_feat", "tagpu_huddraw", "tagpu_range"]
 
 # WHERE A VERTEX ATTRIBUTE'S LOCATION COMES FROM WHEN THE GLSL DOES NOT SAY.
 # Our passes all write `layout(location = N) in ...` and need nothing here, so

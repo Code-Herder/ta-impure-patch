@@ -79,6 +79,7 @@
 #define tagpu_vk_terr_down              tagpu_vkw_terr_down
 #define tagpu_vk_terr_down_owed         tagpu_vkw_terr_down_owed
 #define tagpu_vk_terr_down_refused      tagpu_vkw_terr_down_refused
+#define tagpu_vk_terr_height            tagpu_vkw_terr_height
 #define tagpu_vk_terr_prepare           tagpu_vkw_terr_prepare
 #define tagpu_vk_terr_record            tagpu_vkw_terr_record
 

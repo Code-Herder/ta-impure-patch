@@ -83,6 +83,7 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
+#include "tagpu_range.h"
 #include "tagpu_icon.h"     /* the strategic icons: which unit is one, which model hides */
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_set_structshadow */
@@ -3163,6 +3164,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        heartbeat has to run even on a frame with no markers: without it the
        watchdog reads a dead pass and hands the draw back to the engine. */
     if (markOn) tagpu_mark_render(&fv);
+    /* THE RANGE RINGS, recorded between the world and the markers
+       (tagpu_vk_range.h); every frame, so a frame with none publishes none */
+    tagpu_range_render(&fv);
     /* AND THE UNIT PASS, last of the world's five (below the heartbeat):
        `begin` opens the recording window and arms the A/B, `unit` records
        each pose, `end` publishes -- which is the whole of the hand-over. */
