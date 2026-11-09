@@ -95,6 +95,7 @@
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
+#include "tagpu_formation.h"  /* the formation move's dots, copied in THIS draw */
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -109,7 +110,8 @@
 #include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
 #include "tagpu_log.h"
 #include "tagpu_order.h"     /* tagpu_order_copy_builds: the build-ghost table,
-                                out of the snapshot the squares draw from        */
+                                out of the snapshot the squares draw from; and
+                                tagpu_order_art_ensure, the art the dots draw    */
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
@@ -405,6 +407,13 @@ typedef char pk_sweepitem_layout[(offsetof(TAGPU_PK_SWEEPITEM, kind) == 0 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, z) == 12 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, w) == 16 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, d) == 18) ? 1 : -1];
+/* the formation table is tagpu_formation.h's dot byte for byte: fill_form hands the module's
+   own array to append_table as the packet's rows */
+typedef char pk_form_size  [(sizeof(TAGPU_PK_FORMDOT) == 12 &&
+                             sizeof(TagpuFormDot) == sizeof(TAGPU_PK_FORMDOT)) ? 1 : -1];
+typedef char pk_form_layout[(offsetof(TagpuFormDot, x) == offsetof(TAGPU_PK_FORMDOT, x) &&
+                             offsetof(TagpuFormDot, alt) == offsetof(TAGPU_PK_FORMDOT, alt) &&
+                             offsetof(TagpuFormDot, z) == offsetof(TAGPU_PK_FORMDOT, z)) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -3068,6 +3077,24 @@ static unsigned fill_sweep(TAGPU_PACKET* p, unsigned* cursor)
     return need;
 }
 
+/* THE FORMATION MOVE'S DOTS, COPIED BY VALUE: tagpu_formation.c answers on this game thread from
+   its own game-thread gesture state (tagpu_formation.h). At most TAGPU_PK_MAX_FORM, the cap the
+   acquire checks again with every coordinate; dots cut by the cap or by the packet's room set the
+   table's bit, and the marker pass then draws what arrived. The order art is built here when a
+   dot rides (tagpu_order_art_ensure), so the dots do not wait for a Shift-held order snapshot. */
+static TagpuFormDot s_formScratch[TAGPU_PK_MAX_FORM];
+
+static unsigned fill_form(TAGPU_PACKET* p, unsigned* cursor)
+{
+    int cut = 0;
+    unsigned n = tagpu_formation_dots(s_formScratch, TAGPU_PK_MAX_FORM, &cut);
+    if (n > TAGPU_PK_MAX_FORM) n = TAGPU_PK_MAX_FORM;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_FORM;
+    if (n) tagpu_order_art_ensure();
+    return append_table(p, cursor, s_formScratch, n, (unsigned)sizeof(TAGPU_PK_FORMDOT),
+                        &p->off_form, &p->n_form, TAGPU_PK_TRUNC_FORM);
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -3451,6 +3478,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the reclaim sweep: 26 KB at most (the header and 1281 items of 20 B) ---- */
     e = fill_sweep(p, &cursor);
     if (e > need) need = e;
+    /* ---- the formation move's dots: 18 KB at most (1500 of 12 B) ---- */
+    e = fill_form(p, &cursor);
+    if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor, nplace);
     if (e > need) need = e;
@@ -3761,6 +3791,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
         tagpu_resource_level_end();
         tagpu_place_level_end();
         tagpu_sweep_level_end();
+        tagpu_formation_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never

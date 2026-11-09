@@ -657,6 +657,19 @@ static const char* frame_valid(const void* rec)
                 return "sweep item size";
         }
     }
+    /* the formation move's dots: the marker pass walks the count as its loop bound and projects
+       every dot with arithmetic that the coordinate bound keeps from overflowing */
+    if (!table_ok(p, p->off_form, p->n_form, sizeof(TAGPU_PK_FORMDOT))) return "formation table";
+    if (p->n_form > TAGPU_PK_MAX_FORM) return "more formation dots than the table holds";
+    {
+        const TAGPU_PK_FORMDOT* fd = tagpu_pk_form(p);
+        unsigned k;
+        for (k = 0; k < p->n_form; k++)
+            if (fd[k].x < -TAGPU_PK_PLACE_COORD || fd[k].x > TAGPU_PK_PLACE_COORD ||
+                fd[k].alt < -TAGPU_PK_PLACE_COORD || fd[k].alt > TAGPU_PK_PLACE_COORD ||
+                fd[k].z < -TAGPU_PK_PLACE_COORD || fd[k].z > TAGPU_PK_PLACE_COORD)
+                return "formation dot coordinate";
+    }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its
        per-frame arrays from -- a count past them is not a packet it wrote */

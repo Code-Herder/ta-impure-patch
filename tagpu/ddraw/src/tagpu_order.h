@@ -103,6 +103,10 @@ typedef struct TAGPU_ORDART_FRAME {
     unsigned short dur;             /* 30 Hz ticks it is shown               */
 } TAGPU_ORDART_FRAME;
 const unsigned char* tagpu_order_art(int* key);
+/* GAME THREAD ONLY (the packet publisher, when its fill carries a formation
+   dot): build the art now if no snapshot has, so the dots do not wait for
+   the order markers' Shift gate. Nothing once it is built. */
+void tagpu_order_art_ensure(void);
 
 /* ---- present thread ---- */
 /* Walk the published arena and emit this frame's marker geometry through
@@ -110,5 +114,9 @@ const unsigned char* tagpu_order_art(int* key);
    records drawn. Called from tagpu_mark_gather, because the geometry lands in
    that pass's buckets and its draw slot is the engine's own. */
 int  tagpu_order_gather(const TAGPU_FXVIEW* v);
+/* The move waypoint sprite at each dot of the packet's formation table
+   (PK_FORMDOT), into the same art bucket. Returns the dots emitted. Called
+   from tagpu_mark_gather under the cursor layer's own gate. */
+int  tagpu_order_formation_gather(const TAGPU_FXVIEW* v);
 void tagpu_order_frame_done(const TAGPU_FXVIEW* v);   /* per-frame log */
 #endif

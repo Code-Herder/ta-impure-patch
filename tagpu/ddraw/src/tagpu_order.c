@@ -251,6 +251,8 @@
 #define GUI_WHITE     0x0F
 
 #define GROW_TICKS    10
+#define ART_MOVE      14             /* cursor_ary[14]: the Move descriptors'
+                                        +0x10 (Move_Ground, VTOL_Move, QMove) */
 #define ART_PATHICON  21             /* cursor_ary[21] = main+0x148D3         */
 #define ART_SEQS      22             /* cursor_ary[0..21]                     */
 #define ART_MAXFR     64             /* frames kept a sequence                */
@@ -784,7 +786,9 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
    table is filled once, by its loader (`0x429870`, from start-up's
    `0x491200`, exe-reverse-engineering.md *cursor_ary*), before any marker
    block runs, so the first decode is the session's art. It runs at the
-   first snapshot that finds `pathicon`; a sequence or frame that is absent,
+   first snapshot, or the first packet fill that carries a formation dot
+   (`tagpu_order_art_ensure`), that finds `pathicon` -- both on the game
+   thread, so it has one writer; a sequence or frame that is absent,
    wider than ART_FRMAX or past the atlas's room is left out (its `n` stops
    before it), logged once, and draws nothing. */
 typedef struct {
@@ -871,6 +875,19 @@ const unsigned char* tagpu_order_art(int* key)
     if (__atomic_load_n(&s_artReady, __ATOMIC_ACQUIRE) != 1) return NULL;
     if (key) *key = s_artKey;
     return s_art;
+}
+
+/* The snapshot builds the atlas only behind the engine's Shift gate at
+   `0x469BE1`, and a formation move's dots can be the first art a session
+   draws, so the packet's fill asks for it here when it carries one. Game
+   thread, the snapshot's own, so the build keeps its single writer and its
+   release store publishes it as before. */
+void tagpu_order_art_ensure(void)
+{
+    const char* ta;
+    if (s_armed != 1 || s_artReady) return;
+    ta = *(const char* const*)TA_MAINPP;
+    if (ptr_ok(ta)) art_build(ta);
 }
 
 /* the frames of cursor_ary[idx] on the present thread, NULL when the art is
@@ -1040,6 +1057,11 @@ static float    s_lodOp[2 * LOD_SPAN + 1];
 static LONGLONG s_lodQpc;
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
 static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
+/* the formation dots drawn and refused, this frame: their own pair, because
+   tagpu_mark_gather runs the formation gather before the order gather, whose
+   reset would otherwise take the refusals with it; tagpu_order_frame_done
+   clears them */
+static int    s_nform, s_nformOver;
 
 /* the engine's projection, with the +0x80/+0x20 baked immediates the rest of
    this pass uses (tagpu_mark.c, the health bar). The engine halves the
@@ -1664,6 +1686,19 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
     }
 }
 
+/* THIS FRAME'S CONSTANTS, which `project`, `on_screen` and every emit read:
+   the view, the packet and its GUI colours, and one screen pixel in game-frame
+   units. 0 when there is no in-play packet to draw from. */
+static int frame_begin(const TAGPU_FXVIEW* v)
+{
+    if (!ptr_ok(v) || !v->packet || !v->packet->in_game) return 0;
+    s_v   = v;
+    s_pk  = v->packet;
+    s_gui = s_pk->gui_col;
+    s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
+    return 1;
+}
+
 int tagpu_order_gather(const TAGPU_FXVIEW* v)
 {
     const ORDARENA* A;
@@ -1682,8 +1717,7 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES:
        the units the records name and the GUI colour table. No main pointer,
        no unit array pair, no def dereference. */
-    s_pk = v->packet;
-    if (!ptr_ok(v) || !s_pk || !s_pk->in_game) return 0;
+    if (!frame_begin(v)) return 0;
     /* Taking the draw is done HERE and not from the arm poll, for the reason
        tagpu_mark_armed spells out: the render is the only place that knows the
        pass is really running, and the arm poll is reached at the menus too. */
@@ -1726,9 +1760,6 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     }
     if (n <= 0) return 0;
 
-    s_v   = v;
-    s_gui = s_pk->gui_col;
-    s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
     route_step(gameTime, v->zoom > 0.0f ? (double)v->zoom : 1.0);
 
     for (i = 0; i < n; i++) {
@@ -1743,24 +1774,68 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     return s_nrec;
 }
 
+/* THE FORMATION MOVE'S DOTS: the move waypoint sprite (cursor_ary[ART_MOVE])
+   at each dot of the packet's PK_FORMDOT table, drawn as `draw_sprite` draws
+   an order's sprite -- the engine's frame rule (`0x439740`, frame
+   (GameTime / (2 * frame 0's ticks)) % nframes, its two divisions guarded
+   here), ART_SPRITE_ALPHA, one texel a screen pixel at every zoom. The table
+   is the game thread's copy (tagpu_formation.c), its count and coordinates
+   bounded by the acquire, so nothing here reads engine memory. */
+int tagpu_order_formation_gather(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PK_FORMDOT* d;
+    const ARTSEQ* s;
+    unsigned i, period, frame;
+    int drawn = 0;
+
+    if (!frame_begin(v)) return 0;
+    d = tagpu_pk_form(s_pk);
+    s = art_seq(ART_MOVE);
+    if (!d || !s) return 0;
+    period = s->f[0].dur ? s->f[0].dur : 1u;
+    frame = (s_pk->tick / (2u * period)) % (unsigned)s->n;
+    for (i = 0; i < s_pk->n_form; i++) {
+        float cx, cy;
+        project((double)d[i].x, (double)d[i].alt, (double)d[i].z, &cx, &cy);
+        if (!on_screen(cx, cy, (float)(ART_FRMAX * s_px))) continue;
+        /* a refusal is the art bucket full: every later emit would be refused too */
+        if (!tagpu_mark_emit_art(cx, cy, &s->f[frame], ART_SPRITE_ALPHA,
+                                 cx - (float)s_v->vpL + (float)s_v->eyeX,
+                                 cy - (float)s_v->vpT + (float)s_v->eyeY)) {
+            s_nformOver++;
+            break;
+        }
+        drawn++;
+    }
+    s_nform += drawn;
+    return drawn;
+}
+
 void tagpu_order_frame_done(const TAGPU_FXVIEW* v)
 {
     static unsigned last = 0;
     const ORDARENA* A;
     int slot;
+    /* taken and cleared every frame, logged or not: the formation gather runs
+       only on frames whose cursor layer is ours, and a frame without it drew
+       no dot */
+    const int nform = s_nform, nformOver = s_nformOver;
+    s_nform = s_nformOver = 0;
     if (!s_log || s_armed != 1) return;
     if (v->frame_counter - last < 120) return;
     last = v->frame_counter;
     slot = g_pub;
     A = (slot == 0 || slot == 1) ? &g_arena[slot] : NULL;
     {
-        char b[224];
+        char b[256];
         _snprintf(b, sizeof b,
             "order: arena=%d recs=%d drawn=%d lines=%d dots=%d labels=%d "
-            "over=%d dropped=%d zoom=%.2f%s%s",
+            "over=%d form=%d formover=%d dropped=%d zoom=%.2f%s%s",
             slot, A ? A->n : -1, s_nrec, s_nline, s_ndot, s_nlabel, s_nover,
+            nform, nformOver,
             A ? A->dropped : 0, v->zoom,
             s_passive ? " (passive)" : "", s_trace ? " (trace)" : "");
+        b[sizeof b - 1] = 0;
         flog(b);
     }
 }

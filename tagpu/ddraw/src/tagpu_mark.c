@@ -274,6 +274,7 @@ static int   s_ncurs;                  /* build cursor / band box verts       */
 static int   s_nplace;                 /* placement site verts, this frame    */
 static int   s_cPlace;                 /* placement sites drawn, this frame   */
 static int   s_cPlaceRed, s_cPlaceTake; /* of them red, and yellow (tagpu_place.h) */
+static int   s_cForm;                  /* formation dots drawn, this frame    */
 static int   s_norda, s_nordl;         /* order art verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
@@ -1441,6 +1442,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_novt = 0; s_novl = 0; s_novlRing = 0;
     s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
     s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
+    s_cForm = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -1479,6 +1481,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        anything to say about them */
     gather_cursor(v);
     gather_place(v);
+    /* the formation move's dots: the player's gesture, so the cursor layer's
+       gate, which is placement's -- the engine's GDI frame draws them instead
+       while that layer is not ours (tagpu_markown.c, hook 9) */
+    s_cForm = tagpu_mark_cursor_ours() ? tagpu_order_formation_gather(v) : 0;
     if (s_armed == 1 && !s_passive) gather_sweep(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
@@ -1912,13 +1918,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
                 "mark: bars=%d sel=%d selover=%d icons=%d iconover=%d cursor=%d place=%d placered=%d placetake=%d "
-                "sweep=%d swover=%d ordart=%d "
+                "sweep=%d swover=%d form=%d ordart=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
                 s_cBar, s_nsel / 4, s_selover, s_nicon / QUADV, s_iconover, s_ncurs / QUADV, s_cPlace,
                 s_cPlaceRed, s_cPlaceTake,
-                s_cSweep, s_swover, s_norda / QUADV,
+                s_cSweep, s_swover, s_cForm, s_norda / QUADV,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

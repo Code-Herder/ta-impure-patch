@@ -16,6 +16,7 @@
 #include "tagpu_log.h"
 #include "tagpu_place.h"
 #include "tagpu_placegeo.h"
+#include "tagpu_formation.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -135,15 +136,23 @@ static void __stdcall mark_hook8(void* ctx, int n)
     tagpu_order_block_begin();
 }
 
-/* hook 9: the end of the marker block, and the only thing left that needs it
-   is the order arena. Every in-game frame reaches this hook — the one branch
-   that does not is drawUnits == 0, which only TA's movie recorder passes
-   (`0x469C03 je 0x469D38` lands PAST it; the recorder is `0x4962C2`, function
-   `0x495E88`, `xor ebx,ebx` at `0x495EA1`) [BINARY-VERIFIED] — and `opens ==
-   ends` over ~50 000 blocks of live play agreed. */
+/* hook 9: the end of the marker block, where the order arena's block closes
+   and a formation move's dots are blitted into the engine's frame. Every
+   in-game frame reaches this hook — the one branch that does not is
+   drawUnits == 0, which only TA's movie recorder passes (`0x469C03 je
+   0x469D38` lands PAST it; the recorder is `0x4962C2`, function `0x495E88`,
+   `xor ebx,ebx` at `0x495EA1`) [BINARY-VERIFIED] — and `opens == ends` over
+   ~50 000 blocks of live play agreed.
+
+   The dots go to the engine's frame only while our cursor layer is not drawn,
+   the rule `mark_transp` keeps for the build square: with `g_cursor` set the
+   marker pass draws them (tagpu_order_formation_gather), and drawing both
+   would leave the engine's copy at the unzoomed position. Before PASS_SFX,
+   so the layer-9 particles draw over them as over the block's own markers. */
 static void __stdcall mark_hook9(void* ctx, int n)
 {
     tagpu_order_block_end();
+    if (!g_cursor) tagpu_formation_gdi(ctx);
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 

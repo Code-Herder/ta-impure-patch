@@ -42,7 +42,8 @@
    the whole 256-byte GUI colour LUT they need; the fog of war's source bits; the UI
    layer's render half; and a playback's overlays, its recorded cursors and
    clicks with each recorded player's colour; the sites a multi-building
-   placement previews; and the reclaim sweep's ring. Every table has its `off`/`n` here. The acquire is
+   placement previews; the reclaim sweep's ring; and the dots a held formation
+   move would order. Every table has its `off`/`n` here. The acquire is
    tick-aware, so the two packets the consumer holds always span two distinct
    sim ticks. The effect tables' gather is CACHED PER SIM TICK in the
    publisher: the engine's two effect passes read their arrays and write
@@ -419,6 +420,18 @@ typedef struct TAGPU_PK_SWEEPITEM {
 #define TAGPU_PK_SWEEP_TARGETS 1024u  /* the targets bracketed, at most          */
 #define TAGPU_PK_MAX_SWEEP  (TAGPU_PK_SWEEP_RINGPTS + TAGPU_PK_SWEEP_TARGETS + 1u)
 
+/* 12 B, one per slot of a held formation move, at most TAGPU_PK_MAX_FORM: the
+   dots the gesture would order this frame (tagpu_formation.c, on the game
+   thread, copied BY VALUE). The layout is tagpu_formation.h's TagpuFormDot,
+   which the publisher asserts field by field. World px; the acquire bounds
+   every coordinate to +-TAGPU_PK_PLACE_COORD, so a consumer projects them as
+   given. */
+typedef struct TAGPU_PK_FORMDOT {
+    int32_t  x, alt, z;
+} TAGPU_PK_FORMDOT;
+
+#define TAGPU_PK_MAX_FORM   1500u
+
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
@@ -730,6 +743,9 @@ typedef struct TAGPU_PK_PART {
                                              packet, or were more than its cap */
 #define TAGPU_PK_TRUNC_UTYPE   0x4000000u /* the unit-type table did not fit:
                                              no icons this frame              */
+#define TAGPU_PK_TRUNC_FORM    0x8000000u /* the formation's dots did not fit
+                                             this packet, or were more than its
+                                             cap                             */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,
@@ -1083,6 +1099,10 @@ typedef struct TAGPU_PACKET {
                                          TAGPU_PK_MAX_SWEEP; none without the
                                          header                                  */
 
+    /* ---- the formation move (tagpu_formation.c) ---- */
+    uint32_t n_form, off_form;        /* PK_FORMDOT, at most TAGPU_PK_MAX_FORM;
+                                         0 when no formation gesture shows dots */
+
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
@@ -1368,6 +1388,9 @@ static __inline const TAGPU_PK_SWEEP* tagpu_pk_sweep(const TAGPU_PACKET* p)
 { return p->n_sweep ? (const TAGPU_PK_SWEEP*)(const void*)((const unsigned char*)p + p->off_sweep) : (const TAGPU_PK_SWEEP*)0; }
 static __inline const TAGPU_PK_SWEEPITEM* tagpu_pk_sweepitems(const TAGPU_PACKET* p)
 { return p->n_sweepitem ? (const TAGPU_PK_SWEEPITEM*)(const void*)((const unsigned char*)p + p->off_sweepitem) : (const TAGPU_PK_SWEEPITEM*)0; }
+/* the formation move's dots, or NULL */
+static __inline const TAGPU_PK_FORMDOT* tagpu_pk_form(const TAGPU_PACKET* p)
+{ return p->n_form ? (const TAGPU_PK_FORMDOT*)(const void*)((const unsigned char*)p + p->off_form) : (const TAGPU_PK_FORMDOT*)0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }
