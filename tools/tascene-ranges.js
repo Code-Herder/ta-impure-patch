@@ -146,7 +146,51 @@ function defenseRings(T) {
   return out;
 }
 
+// ---------------------------------------------------------------- sensors
+// The placement preview of a sensor building, on the engine's coverage rule
+// (the radar pass 0x467440): a flat circle on x/z, no terrain. BAR's look,
+// gui_sensor_ranges_radar_preview.lua (l.42-82) for radar and
+// gui_sensor_ranges_jammer_preview.lua (l.98-135) for the jammers; sonar
+// takes the radar preview's structure in gui_sensor_ranges_sonar.lua's colour.
+//   outline: the union outline of the new ring and the existing coverage
+//   sheet:   the fill under the new ring
+//   muted:   the fill of the existing coverage alone, at mutedRel of the sheet
+const SENSOR = {
+  radar:    { outline: [0.45, 1.0, 0.57, 0.40], sheet: [0.22, 0.85, 0.50, 0.20],
+              muted: [0.35, 0.62, 0.50], mutedRel: 0.55, w: 2.0, dash: false, water: false },
+  sonar:    { outline: [0.50, 0.70, 0.90, 0.45], sheet: [0.40, 0.60, 0.85, 0.20],
+              muted: [0.35, 0.48, 0.62], mutedRel: 0.55, w: 2.0, dash: false, water: true },
+  radarjam: { outline: [1.0, 0.32, 0.22, 0.80], sheet: [0.90, 0.22, 0.20, 0.17],
+              muted: [0.55, 0.25, 0.45], mutedRel: 0.55, w: 2.0, dash: true, water: false },
+  sonarjam: { outline: [1.0, 0.32, 0.22, 0.80], sheet: [0.90, 0.22, 0.20, 0.17],
+              muted: [0.55, 0.25, 0.45], mutedRel: 0.55, w: 2.0, dash: true, water: true },
+};
+const SENSOR_KINDS = ["radar", "sonar", "radarjam", "sonarjam"];
+// a type's sensors that will emit: a value above 0 on a def that switches on
+// when built or that the player can switch on (Q1 of the 2026-11-09 grill)
+function sensorKinds(T) {
+  if (!T || !(T.awb || T.onoff)) return [];
+  return SENSOR_KINDS.filter((k) => (T[k] || 0) > 0);
+}
+// the radius the engine tests: radar is (RadarDistance + 2 * altitude)^2, but
+// the bucket walk only visits units within max(radar, sonar), so the bonus
+// survives only past a larger sonar (0x46755E..0x4675A3)
+function sensorRadius(T, kind, alt) {
+  if (kind !== "radar") return T[kind];
+  return Math.min(T.radar + 2 * Math.trunc(alt), Math.max(T.radar, T.sonar || 0));
+}
+
 // ---------------------------------------------------------------- GL
+const SFILL_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uMask;
+uniform vec4 uSheet;         // premultiplied: under the new ring
+uniform vec4 uMuted;         // premultiplied: the existing coverage alone
+out vec4 o;
+void main() {
+  vec4 m = texelFetch(uMask, ivec2(gl_FragCoord.xy), 0);
+  o = m.r > 0.5 ? uSheet : (m.g > 0.5 ? uMuted : vec4(0.0));
+}`;
 const LINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
@@ -332,6 +376,7 @@ function create(ctx) {
     ally: { ...DEFENSE_DEFAULT.ally }, enemy: { ...DEFENSE_DEFAULT.enemy },
     toggles: {},          // type -> { ally: [bool…], enemy: [bool…] } (alt+. / alt+,)
     reach: false,         // lab only: paint the engine's reachable cells
+    sensor: true,         // the sensor rings while a sensor building is placed
   };
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || "null");
@@ -358,6 +403,7 @@ function create(ctx) {
     if (pl && types[pl[1].toLowerCase()]) { placing = pl[1].toLowerCase(); mouse = [+pl[2], +pl[3]]; }
     if (Q.get("rrreach") === "1") settings.reach = true;
     if (Q.get("rrshift") === "1") shift = true;
+    if (Q.get("rrsensor") === "0") settings.sensor = false;
     if (Q.get("rrdef") === "0")
       for (const side of ["ally", "enemy"]) for (const c of DEFENSE_CLASSES) settings[side][c] = false;
   }
@@ -373,11 +419,13 @@ function create(ctx) {
   const maskProg = compile(gl, MASK_VS, MASK_FS, "range mask");
   const fillProg = compile(gl, FILL_VS, FILL_FS, "range fill");
   const ptProg = compile(gl, PT_VS, PT_FS, "range reach");
+  const sfillProg = compile(gl, FILL_VS, SFILL_FS, "sensor fill");
   const U = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const LU = U(lineProg, ["uCanvas", "uMask", "uMaskBit"]);
   const MU = U(maskProg, ["uCanvas"]);
   const FU = U(fillProg, ["uMask", "uCol"]);
   const PU = U(ptProg, ["uCanvas", "uSize"]);
+  const SU = U(sfillProg, ["uMask", "uSheet", "uMuted"]);
   const TEX_UNIT = 14;
   const maskTex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
@@ -489,6 +537,9 @@ function create(ctx) {
     gl.scissor(vpL, GH - vpT - vh, vw, vh);
 
     if (settings.reach) drawReach(proj, ids);
+
+    // the sensor layer is under the weapon rings: larger and fainter
+    if (settings.on) drawSensors(ghost, proj);
 
     // the defense widget's layer is under the attack widget's (layer -100 vs -99)
     for (const side of ["ally", "enemy"])
@@ -651,9 +702,10 @@ function create(ctx) {
 
   // a closed screen-space polyline as quads, each segment extended by half a
   // width at both ends so the joints close
-  function polyline(scr, oob, width, col, alpha) {
+  function polyline(scr, oob, width, col, alpha, dash) {
     const n = scr.length / 2, half = width / 2 + 0.5;
     for (let i = 0; i < n; i++) {
+      if (dash && Math.floor(i / dash) % 2) continue;
       const j = (i + 1) % n;
       let x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
       const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
@@ -664,6 +716,141 @@ function create(ctx) {
       const c0 = [col[0], col[1], col[2], alpha * oob[i]], c1 = [col[0], col[1], col[2], alpha * oob[j]];
       pushV(x0 + nx, y0 + ny, 1, c0, half); pushV(x0 - nx, y0 - ny, -1, c0, half); pushV(x1 + nx, y1 + ny, 1, c1, half);
       pushV(x1 + nx, y1 + ny, 1, c1, half); pushV(x0 - nx, y0 - ny, -1, c0, half); pushV(x1 - nx, y1 - ny, -1, c1, half);
+    }
+  }
+
+  // ---- the sensor rings of a building being placed (one pass a sensor kind):
+  // the new ring and every own unit that emits that sensor, merged into one
+  // outline; the sheet under the new ring, the muted fill under the rest.
+  // Sonar finds only targets at or below sea level (0x4678E6), so its fill and
+  // outline are cut to water, a 16-wu height cell at a time.
+  const waterCells = new Map();
+  function waterCellsOf(x0, z0, r) {
+    const key = `${x0},${z0},${r}`;
+    let c = waterCells.get(key);
+    if (c) return c;
+    c = [];
+    const r2 = r * r;
+    for (let z = Math.floor((z0 - r) / 16) * 16; z < z0 + r; z += 16)
+      for (let x = Math.floor((x0 - r) / 16) * 16; x < x0 + r; x += 16) {
+        const cx = x + 8, cz = z + 8;
+        if ((cx - x0) ** 2 + (cz - z0) ** 2 > r2) continue;
+        if (x < 0 || z < 0 || x + 16 > MAPW || z + 16 > MAPH) continue;
+        if (ground(cx, cz) > SEA) continue;
+        c.push(x, z);
+      }
+    waterCells.set(key, c);
+    if (waterCells.size > 64) waterCells.delete(waterCells.keys().next().value);
+    return c;
+  }
+  function drawSensors(ghost, proj) {
+    if (!settings.sensor || !ghost) return;
+    for (const kind of sensorKinds(types[ghost.type])) {
+      const st = SENSOR[kind];
+      const list = [{ u: ghost, isNew: true }];
+      for (const u of units)
+        if (isAlly(u) && sensorKinds(types[u.type]).includes(kind)) list.push({ u, isNew: false });
+      const items = list.map((e) => {
+        const T = types[e.u.type], alt = unitAlt(e.u);
+        const r = sensorRadius(T, kind, alt), nseg = r > 1500 ? 1024 : 512;
+        const scr = new Float32Array(nseg * 2), vis = new Float32Array(nseg);
+        const disc = new Float32Array(nseg * 2);   // the disc cut to the scroll extent
+        for (let i = 0; i < nseg; i++) {
+          const a = (i / nseg) * Math.PI * 2;
+          const x = e.u.x + Math.sin(a) * r, z = e.u.z + Math.cos(a) * r;
+          const [sx, sy] = proj([x, surface(x, z), z]);
+          scr[i * 2] = sx; scr[i * 2 + 1] = sy;
+          const cx = Math.min(MAPW, Math.max(0, x)), cz = Math.min(MAPH, Math.max(0, z));
+          const [dx, dy] = proj([cx, surface(cx, cz), cz]);
+          disc[i * 2] = dx; disc[i * 2 + 1] = dy;
+          const inb = Math.min(x, z, MAPW - x, MAPH - z);
+          vis[i] = (1 - Math.min(1, Math.max(0, inb * -0.02))) * (st.water && ground(x, z) > SEA ? 0 : 1);
+        }
+        const [cx, cy] = proj([e.u.x, alt, e.u.z]);
+        return { ...e, r, scr, vis, disc, c: [cx, cy] };
+      });
+
+      // the mask: R the new ring's fill, G the existing coverage's fill (both
+      // cut to water for sonar), A the union of the whole discs, which the
+      // outline is clipped by
+      gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.colorMask(true, true, true, true);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.BLEND);
+      gl.useProgram(maskProg);
+      gl.uniform2f(MU.uCanvas, GW, GH);
+      gl.bindVertexArray(mvao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, mvbo);
+      const flush = (r, g, a) => {
+        if (!maskN) return;
+        gl.colorMask(r, g, false, a);
+        gl.bufferData(gl.ARRAY_BUFFER, maskBuf.subarray(0, maskN), gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.TRIANGLES, 0, maskN / 2);
+      };
+      for (const isNew of [true, false]) {
+        maskN = 0;
+        for (const it of items) {
+          if (it.isNew !== isNew) continue;
+          const n = it.disc.length / 2;
+          for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            pushM(it.c[0], it.c[1]);
+            pushM(it.disc[i * 2], it.disc[i * 2 + 1]);
+            pushM(it.disc[j * 2], it.disc[j * 2 + 1]);
+          }
+        }
+        flush(!st.water && isNew, !st.water && !isNew, true);
+        if (!st.water) continue;
+        maskN = 0;
+        for (const it of items) {
+          if (it.isNew !== isNew) continue;
+          const cells = waterCellsOf(it.u.x, it.u.z, it.r);
+          for (let k = 0; k < cells.length; k += 2) {
+            const x = cells[k], z = cells[k + 1];
+            const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
+            const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
+            pushM(p00[0], p00[1]); pushM(p10[0], p10[1]); pushM(p11[0], p11[1]);
+            pushM(p00[0], p00[1]); pushM(p11[0], p11[1]); pushM(p01[0], p01[1]);
+          }
+        }
+        flush(isNew, !isNew, false);
+      }
+      gl.colorMask(true, true, true, true);
+      gl.bindVertexArray(null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.enable(gl.SCISSOR_TEST);
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
+      gl.bindTexture(gl.TEXTURE_2D, maskTex);
+      gl.activeTexture(gl.TEXTURE0);
+
+      // the fill
+      const sa = st.sheet[3], ma = st.sheet[3] * st.mutedRel;
+      gl.useProgram(sfillProg);
+      gl.uniform1i(SU.uMask, TEX_UNIT);
+      gl.uniform4f(SU.uSheet, st.sheet[0] * sa, st.sheet[1] * sa, st.sheet[2] * sa, sa);
+      gl.uniform4f(SU.uMuted, st.muted[0] * ma, st.muted[1] * ma, st.muted[2] * ma, ma);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      // the union outline: each ring's line survives only outside the union
+      lineN = 0;
+      for (const it of items)
+        polyline(it.scr, it.vis, st.w, st.outline, st.outline[3], st.dash ? 6 : 0);
+      if (lineN) {
+        gl.useProgram(lineProg);
+        gl.uniform2f(LU.uCanvas, GW, GH);
+        gl.uniform1i(LU.uMask, TEX_UNIT);
+        gl.uniform1i(LU.uMaskBit, 3);
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, lineBuf.subarray(0, lineN), gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.TRIANGLES, 0, lineN / 8);
+        gl.bindVertexArray(null);
+      }
     }
   }
 
@@ -825,7 +1012,7 @@ function create(ctx) {
 
   // ---- the panel
   const armedStructures = () => Object.entries(types)
-    .filter(([, T]) => !T.mobile && T.side === "ARM" && defenseRings(T).length)
+    .filter(([, T]) => !T.mobile && T.side === "ARM" && (defenseRings(T).length || sensorKinds(T).length))
     .sort((a, b) => a[1].name.localeCompare(b[1].name));
   function rows() {
     const b = (k, on, label) => `<button data-rr="${k}" class="${on ? "on" : ""}">${label}</button>`;
@@ -845,6 +1032,7 @@ function create(ctx) {
       `<div class="row modes"><span>range rings</span>${b("on", settings.on, "on")}` +
       `${b("shiftOnly", settings.shiftOnly, "shift only")}${b("cursorRange", settings.cursorRange, "cursor range")}` +
       `<span>enemy defenses</span>${cls("enemy")}<span>ally defenses</span>${cls("ally")}` +
+      `${b("sensor", settings.sensor, "sensor rings")}` +
       `<span>lab</span>${b("reach", settings.reach, "reach cells")}</div>`,
       `<div class="row modes"><span>place</span>` +
       armedStructures().map(([k, T]) => `<button data-rrplace="${k}" class="${placing === k ? "on" : ""}">${T.name}</button>`).join("") +

@@ -783,6 +783,15 @@ def build_ranges(assets, tnt_path):
             "builddist": int(num(fbi, "builddistance")),
             "canfly": flag(fbi, "canfly"), "floater": flag(fbi, "floater"),
             "foot": [int(num(fbi, "footprintx", 1)), int(num(fbi, "footprintz", 1))],
+            # the sensors: def +0x204 radar, +0x206 sonar, +0x20A radar jam,
+            # +0x20C sonar jam (engine/render.md); a unit emits only while
+            # activated (+0x10E bit 0), which ActivateWhenBuilt sets at
+            # completion and the on/off order sets on an onoffable def
+            "radar": int(num(fbi, "radardistance")),
+            "sonar": int(num(fbi, "sonardistance")),
+            "radarjam": int(num(fbi, "radardistancejam")),
+            "sonarjam": int(num(fbi, "sonardistancejam")),
+            "awb": flag(fbi, "activatewhenbuilt"), "onoff": flag(fbi, "onoffable"),
             "weapons": wl}
     return {"gravity": gravity, "gravitySource": source,
             "g16": int(gravity * 65536 / 900), "types": types}

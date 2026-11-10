@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The range-ring lab fixture (tascene-view.html, RANGE RINGS): an ARM base on Two Continents' eastern hill and shore, with two Guardians (one on the hilltop, one on the flat) so the ballistic reach can be compared, a Big Bertha, Hammers, an LLT pair, a Defender, a Commander and a construction kbot, an anti-nuke, a torpedo launcher and a Crusader at sea; and CORE defenses to the north-west (Punisher, Gaat Gun, Pulverizer, Intimidator, anti-nuke, torpedo launcher) with two A.K.s to hover.",
+ "description": "The range-ring lab fixture (tascene-view.html, RANGE RINGS): an ARM base on Two Continents' eastern hill and shore, with two Guardians (one on the hilltop, one on the flat) so the ballistic reach can be compared, a Big Bertha, Hammers, an LLT pair, a Defender, a Commander and a construction kbot, an anti-nuke, a radar tower, a torpedo launcher and a Crusader at sea; and CORE defenses to the north-west (Punisher, Gaat Gun, Pulverizer, Intimidator, anti-nuke, torpedo launcher) with two A.K.s to hover.",
  "seed": 20261109,
  "on_error": "abort",
  "setup": {
@@ -139,6 +139,15 @@
    "pos": [
     6000,
     12650
+   ]
+  },
+  {
+   "id": "rad",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    5300,
+    12300
    ]
   },
   {
