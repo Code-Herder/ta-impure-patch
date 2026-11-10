@@ -3,25 +3,28 @@
 BAR's weapon range preview on the Vulkan renderer, on TA's own reach rule: the rings of the
 selected units, of the unit under the cursor, of the builders while a building is armed, of the
 building being placed, and of the defenses by side and class, each class's rings merged into the
-outline of their union. They replace the engine's `ShowRanges` circles while they are on.
+outline of their union. While a building that will emit is placed, BAR's sensor preview draws under
+them: its radar, sonar and jammer coverage over the viewed player's existing coverage of the same
+kinds, by the engine's own emitter rule. They replace the engine's `ShowRanges` circles while they
+are on.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
-Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`. The decisions and the reach's derivation are the plan note's, [weapon range rings](../weapon-range-rings.html); the engine side is in the engine map: the weapon record and the ballistic reach `0x49A890` in [weapons](../engine/weapons.html), `UnitInPlayerLOS 0x465AC0` in [map](../engine/map.html), HotUnits in [units](../engine/units.html), the placement fields in [orders](../engine/orders.html) and [render](../engine/render.html) (`0x4197D0`). Every field the module reads is a row of the [hook map](hook-map.html) §2.5; it writes no engine byte and installs no hook.
+Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`. The decisions and the reach's derivation are the plan note's, [weapon range rings](../weapon-range-rings.html); the engine side is in the engine map: the weapon record and the ballistic reach `0x49A890` in [weapons](../engine/weapons.html), `UnitInPlayerLOS 0x465AC0` in [map](../engine/map.html), HotUnits and the activation byte `+0x10E` in [units](../engine/units.html), the radar pass `0x467440` in [recorder](../engine/recorder.html), the activation's script starts in [cob](../engine/cob.html), the placement fields in [orders](../engine/orders.html) and [render](../engine/render.html) (`0x4197D0`). Every field the module reads is a row of the [hook map](hook-map.html) §2.5; it writes no engine byte and installs no hook.
 
 ## The files
 
 | file | thread | what |
 |---|---|---|
-| `tagpu_rangeown.c/.h` | game | which rings show, of what class, around which unit; every engine field resolved to a number in the packet; the Alt+. / Alt+, keys |
+| `tagpu_rangeown.c/.h` | game | which rings show, of what class, around which unit, the sensor preview's coverage included; every engine field resolved to a number in the packet; the Alt+. / Alt+, keys |
 | `tagpu_packet.h`, `tagpu_packet.c`, `tagpu_packet_pub.c` (`fill_range`) | game / render | `TAGPU_PK_RANGE` (one 24-byte header) and `TAGPU_PK_RING` (32 bytes a ring, at most 4096, 128 KB) in the frame packet; the acquire's bounds |
-| `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight; 64-byte instances and the draw list |
+| `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight, and the sensor table `SENS`; 64-byte instances and the draw list |
 | `tagpu_range_comp.h` → `inc/spirv/tagpu_range_comp.spv.h` | GPU | the reach, a compute pass: one workgroup a ring |
-| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage; they read the reach and place the points |
+| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage; they read the reach and place the points; the sensor rings' extent cut, dashes and water test |
 | `tagpu_vk_range.c/.h` | render | the Vulkan pass: the per-slot reach cache, the dispatch, the stencil union |
 | `tagpu_weapons.c` (`tagpu_weapons_type_weapon`) | game | a unit type's weapon `idx` (weapon1..3, then the extra-weapons record), NULL past the type's count; reads only and builds nothing |
 | `tagpu_settings.c` | game, render | the keys below and `rangetoggle=` |
-| `tagpu_menu.c` | game | the eight rows of the in-game Visuals panel (*Settings*) |
+| `tagpu_menu.c` | game | the nine rows of the in-game Visuals panel (*Settings*) |
 | `tagpu_shield.c` | game | routes Alt+. / Alt+, to the module on both paths, injected and real |
 | `tagpu_order.c` | game | the engine's `ShowRanges` circles, drawn only while the rings are off |
 
@@ -46,7 +49,37 @@ takes at `0x48BC42..0x48BC56`, so a ring stands where the engine draws a unit an
 That includes its refusal of a unit whose model is wholly under water and is not a sonar contact
 (`0x465B38`). Allied units go through the same test.
 
-**The defense layers**, drawn first:
+**The sensor layer** (`TAGPU_PK_RL_SENSOR`, drawn first, under everything below), under
+`rangesensor`, only in placement — mode `main+0x2CC3` 14 with the pointer on the world, the type
+`main+0x2CC4` at the snapped site as the defense rings take it:
+
+- **the placed type's coverage**, flagged `TAGPU_PK_RF_NEW`, when the type **will emit once
+  built**: it switches on at completion (ActivateWhenBuilt, def `+0x241` bit 18, the bit the
+  completion `0x41B8D0` reads at `0x41B9AC`) or the player can switch it on (onoffable, def
+  `+0x245` bit 2, which the Activate handler `0x403010` reads at `0x40301A` and Deactivate
+  `0x403040` at `0x40304A`). One ring per kind whose distance, a signed word, is above 0: radar
+  def `+0x204`, sonar `+0x206`, radar jam `+0x20A`, sonar jam `+0x20C` (classes `RC_RADAR` ..
+  `RC_SONARJAM`). A factory is neither, so placing an air plant shows no radar though a working
+  one emits it (below);
+- **the existing coverage**, only of the kinds the placed type has: every unit of the viewed
+  player's own, alive and not dying (`unit_at`), **activated** (`+0x10E` bit 0) and with that
+  kind's distance above 0 — the radar pass's emitter test, `0x467521..0x467542` and the word
+  tests after it ([recorder](../engine/recorder.html), `0x467440`). Activation is the engine's
+  state, not the type's: a radar switched off with its button contributes nothing, and a factory
+  contributes its def's radar while its build order runs, which is when BuildingBuild `0x402640`
+  keeps it activated (`0x4027AE`). Allies' units never count — the pass walks only the viewer's
+  own emitters.
+
+**The radius** is the one the pass tests. Sonar and both jammers: the distance. Radar:
+`min(|R + 2·altitude|, max(R, sonar))` — the contact test is `d² < (R + 2y)²` (the square built
+at `0x46755E..0x46757C`), but the bucket walk only offers units within `max(R, sonar)`
+(`0x46757F..0x4675A3`), so the altitude bonus shows only past a larger sonar, which no stock unit
+has. The coverage is a plain horizontal circle: no terrain hides anything (the walk's and the
+visitor's tests are `dx² + dz²`). The placed type's altitude is the site's, an existing unit's its
+own. The placed type's rings are emitted right after its defense rings and the existing coverage
+last of everything, so a full table drops existing coverage first.
+
+**The defense layers**, drawn next:
 
 - every structure (`+0x110` bit 29: the def's `bmcode` `+0x22F` is 0) with a weapon, shown, its
   rings filtered by side: an allied one by `rangeally`, an enemy one by `rangeenemy`, each a set
@@ -134,6 +167,18 @@ times the inner alpha); the defense widget none.
 The widths reach the target through the composite's device-pixel scale and the supersample, with
 half a target pixel of rim each side.
 
+**The sensor preview** is BAR's sensor widgets on the engine's coverage —
+`gui_sensor_ranges_radar_preview.lua` for radar, `gui_sensor_ranges_jammer_preview.lua` for the
+jammers, and sonar on the radar preview's structure in `gui_sensor_ranges_sonar.lua`'s colour; the
+table `SENS` is the same as `tools/tascene-ranges.js`'s `SENSOR`. Per kind: **the sheet** under
+the new ring, **a muted fill** under the existing coverage where the new ring does not reach (0.55
+of the sheet's alpha), and **one 2-px outline of the union** of all of them. Radar is green, sonar
+blue, both jammers red with a dashed outline (every other run of 12 of the ring's 1024 segments).
+Sensor rings take no camera fade, highlight or dimming. **A sonar ring shows over water only**,
+since the pass contacts a sonar target only at or below sea level (`0x4678E6`): its fill per
+pixel, its outline per segment end (*The pass*). **Every sensor disc is cut to the scroll
+extent**, the map's own edge; its outline past the extent fades as a weapon ring's does.
+
 ## The reach — a compute pass (`tagpu_range_comp.h`)
 
 One workgroup a ring, 64 invocations striding over its directions; each direction writes the
@@ -158,6 +203,11 @@ grid, `0x48508F..0x4850C4`).
 count come from the pass's own block allocator, and the shader refuses any write at or past the
 buffer's length; the march is bounded by the range (at most 4096 steps).
 
+**A ring's kind** is the job's third component: 0 a flat ring, 1 a ballistic one, 2 and up a
+sensor ring (+1 water only, +2 dashed). A sensor ring is a flat circle whose surface altitude is
+taken at the point held to the scroll extent (the push constant `mapext`), where its disc's rim
+is drawn.
+
 ## The pass (`tagpu_vk_range.c`)
 
 **Recorded between the world and the markers**, in the world's render pass: after the units and
@@ -166,9 +216,9 @@ after the terrain pass's, since it binds the height grid that pass bound for the
 test.
 
 **The per-slot reach cache.** A ring is keyed by its centre, altitude, range, velocity,
-minbarrel, ballistic flag, radius scale and segment count; a slot keeps each ring's block from its
-last use while the key and what it was walked over — the grid's serial and size, the sea level and
-gravity — are the same, so a structure's ring is walked once and a moving unit's every frame. The
+minbarrel, kind (flat, ballistic or a sensor's), radius scale and segment count; a slot keeps each
+ring's block from its last use while the key and what it was walked over — the grid's serial and
+size, the sea level, gravity and the scroll extent — are the same, so a structure's ring is walked once and a moving unit's every frame. The
 reach buffer is cut into blocks of 128 and 1024 entries; growing it starts a new buffer that keeps
 nothing. The cache is safe to reuse because it is per slot: a slot's buffer is read and written
 only by that slot's submissions, and the seam waits on the slot's fence before `prepare`. **The
@@ -181,8 +231,18 @@ onto the terrain pass's height upload (its copy ends in a barrier whose second s
 fragment stage); and every frame, dispatch or not, `COMPUTE_SHADER → VERTEX_SHADER`, since a kept
 block was written by an earlier submission.
 
-**The union is the stencil's**, BAR's fallback path. Four layers in order — defense ally,
-defense enemy, attack ally, attack enemy — and per layer with a merged class: clear the stencil;
+**The union is the stencil's**, BAR's fallback path. Five layers in order — the sensor layer,
+defense ally, defense enemy, attack ally, attack enemy. **The sensor layer** has one stencil bit a
+kind: clear the stencil; per kind its discs (1024 segments, each fan's rim held to the scroll
+extent) with `NOT_EQUAL` and `REPLACE`, the new ring's first because the game thread published
+them first, so the sheet takes its own ground and the muted fill only what is left; then per kind
+the outlines with `NOT_EQUAL` and `KEEP`, which survive only outside the kind's union. **A water
+ring's land is transparent, not discarded**: the fragment still writes the stencil, so the
+outline is cut by the whole disc while the fill shows over water only. The fragment stage reads
+the height grid (binding 40) bilinearly at the world point the pixel shows if the ground there is
+at sea level — exact over water, and a land pixel that maps onto water lies within
+(altitude − sea) / 2 px south of it; the outline takes alpha 0 at a band end whose surface is
+above the sea. Each weapon layer with a merged class: clear the stencil;
 each class's discs (a fan a ring) with `NOT_EQUAL` against its bit and `REPLACE`, writing the
 fill once a pixel; the outer bands with `NOT_EQUAL` and `KEEP`, so a ring's outline survives only
 outside every disc of its class; then the inner bands and the never-merged lrpc rings with no
@@ -201,7 +261,8 @@ latch, `tagpu_rangeown_refuse()` — on a target with no stencil plane or a pipe
 build, and its teardown clears it (`tagpu_rangeown_forgive()`) unless it leaves the pass refused,
 so the next device answers again; the HUD's `tagpu_hudstate` latch has the same shape. What a
 draw reads of the latch decides which picture the markers draw, never what memory is read. On a
-lane that draws no rings nothing is filled, Alt+. and Alt+, go to the engine, and the
+lane that draws no rings nothing is filled — the sensor preview neither, so GDI and a device
+with no stencil show none — Alt+. and Alt+, go to the engine, and the
 `ShowRanges` circles below come back.
 
 ## The engine's `ShowRanges` circles (`tagpu_order.c`)
@@ -218,9 +279,9 @@ cloaked unit's `mincloak` circle and a kamikaze's circles draw either way ([mark
 
 In `impure.cfg`, read every frame by the game thread, so no value needs a restart. **The in-game
 Visuals panel has a row for each but `rangetoggle`**: *Range rings*, *Attack rings* (Always \|
-Shift held), *Cursor range*, and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon*, *LRPC
+Shift held), *Cursor range*, *Sensor preview* (Off \| On), and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon*, *LRPC
 defense* — cycling None \| Enemy \| Allied \| Both over the class's bit of `rangeenemy` (stage bit
-1) and of `rangeally` (bit 2). The seven rows under *Range rings* grey while it is Off, and
+1) and of `rangeally` (bit 2). The eight rows under *Range rings* grey while it is Off, and
 Restore defaults sets the defaults below. The front-end screen has none of them: its two columns
 are full ([settings](settings.html) §2.12).
 
@@ -229,6 +290,7 @@ are full ([settings](settings.html) §2.12).
 | `ranges` | `on` | `on`/`off` (`1`/`0`): the rings; off brings the engine's `ShowRanges` circles back |
 | `rangeshift` | `off` | the attack rings only while Shift is held |
 | `rangecursor` | `on` | the rings of the unit under the cursor |
+| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed |
 | `rangeally` | `nuke` | the allied defenses' classes: a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none` |
 | `rangeenemy` | `ground,air,nuke,cannon` | the enemy defenses' classes, the same spelling |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`, the Alt+. map; at most 64 types, `n` 1..16, each mask inside 2ⁿ − 1 |
@@ -236,6 +298,34 @@ are full ([settings](settings.html) §2.12).
 A class list with a word that is not a class keeps the default and is logged. Under
 `tagpu_defaults.off` the store is ignored: the compiled defaults apply, so the rings are on, and
 an Alt+. choice lasts for the session.
+
+## How it is checked
+
+`tools/tacli` drives the game; the DLL's log carries a `range:` heartbeat every 300 frames —
+`rings=` the records published, `sensor=` the sensor layer's, then the defense and attack layers'
+counts, the instances and draws. The scenarios:
+
+- `scenarios/sensor-preview.json` — Two Continents with true LOS: the site (6750, 11900) on the
+  eastern hill, an Arm radar tower switched on when built (`radA`), a second one to switch off
+  with its button (`radOff`), an air plant (`ap`) that emits its 500 of radar only while a build
+  order runs, the commander (400 of radar and sonar), open water for a sonar station at
+  (7700, 11500), and two Core solar collectors 1416 and 1464 from the site for the edge check.
+  `scenarios/sensor-preview-built.json`, applied over it, puts a finished Arm radar tower at the
+  site.
+- `scenarios/tascene-ranges.json` — the browser lab's fixture, with a radar tower among the
+  defenses.
+
+**MEASURED 2026-11-10** on that scenario (the reference setup, Vulkan), reading `+0x10E` live:
+the commander 1, `radA` 1, `radOff` 1 and 0 after its on/off button, the air plant 0, 1 with a
+build queued (`0x09` while an ARMTHUND stalled), and 0 again both when an ARMPEEP finished and
+when the queued build was cancelled with a right click. An ARMRAD placed at (6750, 11900) — the
+engine's snapped site centre (6752, 11904) — published `sensor=4` (the new ring, `radA`, the air
+plant while producing, the commander), 3 after the cancel; an ARMSONAR at (7696, 11504)
+`sensor=2` (the new ring and the commander's sonar); an ARMAP or an ARMSOLAR placed `sensor=0`;
+`rangesensor=off` 0; with Range rings Off no rings and *Sensor preview* greyed. **The radius
+against the engine**: with the finished radar at the site (`+0x10E` 1), `+0x110` of the CORSOLAR
+1415.75 away read `0x30280121` (bit 8, the radar contact) and of the one 1464.02 away
+`0x30280021`, on four reads 2 s apart; before the radar both read `0x30280021`.
 
 ## What is not closed
 
@@ -252,3 +342,11 @@ an Alt+. choice lasts for the session.
   nuke-class rings in one dispatch were not, and could show as a hitch on a slow card.
 - The plan note's own open questions: the shooter's altitude is the unit's position, not a weapon
   piece's; the water-weapon and above-sea gates of can-engage are not drawn.
+- **The jammer look has not been seen in game**: no stock structure jams (the stock jammers are
+  all mobile), so no stock placement draws it.
+- **Allied coverage is not drawn.** The radar pass walks only the viewer's own emitters; an
+  ally's radar does not extend the viewer's coverage (its *units* are shared as contacts when the
+  ally shares radar, loop 1 of `0x467440`), so the preview draws the viewer's own coverage alone.
+- **The browser lab draws the existing coverage by type**: `tools/tascene-ranges.js` has no
+  activation state, so it counts every unit of the player's whose type will emit — a radar
+  switched off and a factory not producing included.

@@ -1810,6 +1810,10 @@ down, because a blanket cast either way is a guess: `movsx` for cloak `0x439229`
 (each after a `mov dx,WORD PTR [eax+…]` at `0x43924A`, `0x439284`, `0x4392BE`, `0x4392F8`,
 `0x439332`), and `and 0xffff` for builddistance `0x43937A`, maneuver `0x4393B7` and
 kamikazedistance `0x439404`. Inert for any value below 32768, which every stock one is.
+**None of the four sensor circles tests activation**: each is drawn when its word is non-zero
+(`test dx,dx` / `je` after each read), so a radar switched off draws its full radar circle while
+the radar pass `0x467440` gives it no coverage ([recorder.md](recorder.md), loop 2's `+0x10E` bit 0
+test). The minimap's circles do test it ([ui.md](ui.md), `0x466DC0`).
 
 **An engine quirk worth knowing before it looks like a bug in a port:** weapon 1 is gated on
 `unit[0x1F] & 2` and weapon 2 on `unit[0x3B] & 2` (= `0x1F + 0x1C`), but weapon 3 is gated on

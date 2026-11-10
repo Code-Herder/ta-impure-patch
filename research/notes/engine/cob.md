@@ -633,8 +633,15 @@ create (`0x4860B2` in the local create `0x485F50`, `0x4862CA` in `0x4861D0`, `0x
   def `+0x241` (`0x42C6B9..0x42C6DE`). It is `0x41B8D0`'s only script start: without
   ActivateWhenBuilt a finished structure is not switched on by the engine.
 - **The player's on and off**: the orders Activate `0x403010` and Deactivate `0x403040` call
-  `0x48B090(1, 1)` / `(1, 0)` (`0x40302C`, `0x40305C`) only when def `+0x245` bit 2 is set — FBI
+  `0x48B090(1, 1)` / `(1, 0)` (`0x40302C`, `0x40305C`) only when def `+0x245` bit 2 is set (the
+  dword read at `0x40301A` and `0x40304A`, `shr 2`, `test 1`) — FBI
   **`onoffable`** (`0x503AE4`, loader `0x42C89A..0x42C8C1`, the same `and 1`) — and return 5.
+- **A factory while it produces**: BuildingBuild `0x402640`'s state 0, for a structure, calls
+  `0x48B090(1, 1)` at `0x4027AE` while the order's count `+0x3A` is above 0 and `(1, 0)` at
+  `0x402796` once it is not; its cancel clears bits 0 and 3 with `(9, 0)` at `0x40270C`
+  ([recorder.md](recorder.md), the `0x402640` row). So a stock plant starts `Activate` when it
+  starts a queue, though its FBI is neither ActivateWhenBuilt nor onoffable. The other writers of
+  bit 0: [units.md](units.md), `+0x10E`.
 - **`SET ACTIVATION`** (case 0, `0x480B49`) is `0x48B090(unit, 1, value)` then the dirty bit: a
   script that sets the value it already has starts nothing, and one that turns itself on from
   anywhere but `Activate` starts its own `Activate`.

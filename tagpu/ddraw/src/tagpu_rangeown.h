@@ -13,7 +13,12 @@
    - the defense rings of every structure with a weapon, by side and class
      (`rangeally`, `rangeenemy`), and those of the building being placed, which
      also light every allied ring of its classes;
-   - per unit type and side, the rings alt+. and alt+, leave on.
+   - per unit type and side, the rings alt+. and alt+, leave on;
+   - while a building is placed whose type will emit once built (it switches on
+     when built or the player can switch it on), its radar, sonar and jammer
+     coverage, with the viewed player's own coverage of the same kinds: every
+     unit of theirs the radar pass 0x467440 counts as an emitter now -- alive,
+     not dying, activated -- under `rangesensor`.
    An enemy or allied unit counts only while the engine shows it to the viewed
    player (UnitInPlayerLOS 0x465AC0, the test HotUnits takes).
 

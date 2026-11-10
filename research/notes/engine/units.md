@@ -449,7 +449,27 @@ index `+0xA6` holds.
   function of the altitude.
 - **`+0x10E`**, the activation bits: 0 at create (`0x485B7F`), the saved value in a restore
   (`0x4872D9`), and otherwise written through `0x48B090(unit, mask, on)` (45 call sites), where a
-  change of bit 0 starts COB `Activate` or `Deactivate` (`0x48B0EE..`).
+  change of bit 0 starts COB `Activate` or `Deactivate` (`0x48B0EE..`). **Bit 0, activated**, is
+  what the radar pass `0x467440` asks of an emitter and a jammer ([recorder.md](recorder.md)) — the
+  type's sensor distances count only while it is set. The calls with bit 0 in the mask
+  [DISASSEMBLED 2026-11-10, every `call 0x48b090` in the listing; a pointer to it was not
+  searched]: completion `0x41B9BF` and the finished create `0x486148`, both only with
+  ActivateWhenBuilt (def `+0x241` bit 18); the orders Activate `0x40302C` and Deactivate
+  `0x40305C`, only when onoffable (def `+0x245` bit 2); BuildingBuild `0x402640` — set at
+  `0x4027AE` while the factory's queue count is above 0, cleared at `0x402796` and by the cancel's
+  `(9, 0)` at `0x40270C`; COB `SET ACTIVATION` `0x480B52`; a toggle on the owner's stored energy against its
+  capacity with a random draw `0x4B6C30(5)` (`0x408670`: `0x4086B4`, `0x4086C3`; and `0x40876D`,
+  `0x40877A`) [INFERRED: the AI switching its metal makers]; the VTOL order handlers (VTOL_Move `0x40FA20`, VTOL_Pickup `0x4111B0`, VTOL_MobileBuild `0x413D80`
+  and their kin, named in [cob.md](cob.md) and [recorder.md](recorder.md)), which set it — an aircraft's flight [INFERRED] — (`0x40F22C`,
+  `0x40F6C4`, `0x40FB53`, `0x4102AC`, `0x4107AC`, `0x41111D`, `0x4112B9`, `0x411984`, `0x412145`,
+  `0x412900`, `0x4133E2`, `0x413730`, `0x413E40`, `0x41443E`, `0x414856`, `0x414DD6`, `0x414FD3`,
+  `0x41584E`) and once clear it (`0x40F4C7`); the flight-mode change `0x43D210` (clear at
+  `0x43D265` for mode 1, set at `0x43D275` otherwise); and three copies that write the byte from another value, mask and value
+  taken from data (`0x4555A1`/`0x4555B0`, `0x48B50E`/`0x48B519`, `0x4887E0`/`0x4887F2`;
+  the `0x11` receiver, the round robin and [INFERRED] the capture copy: [cob.md](cob.md), *COB on a puppet*). The other masks: 4 (cloak,
+  `0x401872`), 8 (`0x4029B0`, `0x402B1B`), `0x10` (`0x402D23`, `0x402D82`), 2 (COB `0x480BEC`).
+  MEASURED 2026-11-10 (`scenarios/sensor-preview.json`): a skirmish commander and a finished ARMRAD
+  read 1, an ARMRAD 0 after its on/off button, an idle ARMAP 0 and `0x09` while it produces.
 - **`+0x10F`** bits 0–3 (COB `0x480B7A`, `0x480B9E`, `0x480BD9`; YARD_OPEN `0x47DAF1`); **`+0x114`**
   bit 0 = def `+0x241` bit 7 at create (`0x485AE1`), read by the AI (`0x4586D6`).
 

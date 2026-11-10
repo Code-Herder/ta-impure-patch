@@ -2330,7 +2330,15 @@ owner's logo colour) of `radlogo` `main+0x147DF`, fetched by `0x4B7F30` at `0x46
 by `0x4B7F90`; the unit whose `+0xA8` equals the hovered id `main+0x2CBA` also gets frame 0 of
 `radlogohigh` `main+0x147E3` (`0x466F11..0x466F37`). Each dot is appended to the **radar list**
 `main+0x14363` as a 10-byte entry `{u16 id +0xA8, i32 x, i32 y}` in minimap pixels, the offsets
-`+0x142E7`/`+0x142E9` added (`0x46713B..0x467180`). The list is allocated per level beside
+`+0x142E7`/`+0x142E9` added (`0x46713B..0x467180`). **A selected unit's sensor circles**: between
+the dot and the list entry, a unit with `+0x110` bit 4 (`0x466F42..0x466F4E`) that is activated
+(`+0x10E` bit 0, `0x466F54`) **or** whose def is not onoffable (`+0x245` bit 2 clear,
+`0x466F5D..0x466F6A`) gets a circle through `0x4C0070` for each of radar `+0x204`, sonar
+`+0x206`, radar jam `+0x20A` and sonar jam `+0x20C` that is non-zero, the radius the word × the
+signed word `main+0x142EB` / `main+0x1422B` (`0x466F76..0x467071`), the colour the byte at `+0xA`
+(radar, sonar) or `+0xC` (the jammers) of a structure whose pointer is at `[esp+0x14]`. So a switched-off radar tower
+draws none, and a factory, which is not onoffable, draws its radar whether it produces or not —
+where the radar pass `0x467440` counts it only while it does ([recorder.md](recorder.md)). The list is allocated per level beside
 HotUnits, `100 · MaxUnits` bytes — `10 · MaxUnits` entries — at `0x4855AA` in `0x4854A0`, and
 freed and nulled by `0x485980` (`0x4859BC..0x4859D4`). Its only other reader is
 `GetUnitAtMouse`'s minimap branch ([input](input.html), the `0x48CD80` row), and `radlogo`'s only
