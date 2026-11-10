@@ -17,8 +17,9 @@
    - while a building is placed whose type will emit once built (it switches on
      when built or the player can switch it on), its radar, sonar and jammer
      coverage, with the viewed player's own coverage of the same kinds: every
-     unit of theirs the radar pass 0x467440 counts as an emitter now -- alive,
-     not dying, activated -- under `rangesensor`.
+     unit of theirs alive, not dying and activated -- the radar pass 0x467440's
+     emitter test for radar and sonar; their jammers act in the other players'
+     passes -- under `rangesensor`.
    An enemy or allied unit counts only while the engine shows it to the viewed
    player (UnitInPlayerLOS 0x465AC0, the test HotUnits takes).
 

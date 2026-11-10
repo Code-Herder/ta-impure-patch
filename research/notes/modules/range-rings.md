@@ -5,7 +5,7 @@ selected units, of the unit under the cursor, of the builders while a building i
 building being placed, and of the defenses by side and class, each class's rings merged into the
 outline of their union. While a building that will emit is placed, BAR's sensor preview draws under
 them: its radar, sonar and jammer coverage over the viewed player's existing coverage of the same
-kinds, by the engine's own emitter rule. They replace the engine's `ShowRanges` circles while they
+kinds, by the engine's own emitter rule for radar and sonar. They replace the engine's `ShowRanges` circles while they
 are on.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -63,8 +63,11 @@ That includes its refusal of a unit whose model is wholly under water and is not
   one emits it (below);
 - **the existing coverage**, only of the kinds the placed type has: every unit of the viewed
   player's own, alive and not dying (`unit_at`), **activated** (`+0x10E` bit 0) and with that
-  kind's distance above 0 — the radar pass's emitter test, `0x467521..0x467542` and the word
-  tests after it ([recorder](../engine/recorder.html), `0x467440`). Activation is the engine's
+  kind's distance above 0 — for radar and sonar the radar pass's emitter test,
+  `0x467521..0x467542` and the word tests after it ([recorder](../engine/recorder.html),
+  `0x467440`). The player's own jammers count by the same test, which is BAR's meaning rather
+  than the pass's: its jammer loop walks every *other* owner's activated jammers
+  (`0x4675F5..0x467600`), so a player's jammers act in the other players' passes. Activation is the engine's
   state, not the type's: a radar switched off with its button contributes nothing, and a factory
   contributes its def's radar while its build order runs, which is when BuildingBuild `0x402640`
   keeps it activated (`0x4027AE`). Allies' units never count — the pass walks only the viewer's

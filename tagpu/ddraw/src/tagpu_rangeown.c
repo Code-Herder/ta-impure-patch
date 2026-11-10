@@ -259,11 +259,14 @@ static int defense_rings(const char* def, RDEF* out)
 }
 
 /* ---- the sensors ---------------------------------------------------------
-   The coverage the radar pass 0x467440 tests, in its four kinds. An emitter is
-   one of the viewed player's own units, alive, not dying (`unit_at`) and
-   activated (U_ACTIVATION bit 0), whose def has the kind's distance above 0
-   (0x467521..0x467542; the jammer loop 0x4675EC..0x46766C asks the same less
-   the dying test). Activation is the engine's state, not the type's: a radar
+   The coverage the radar pass 0x467440 tests, in its four kinds. A radar or
+   sonar emitter is one of the viewed player's own units, alive, not dying
+   (`unit_at`) and activated (U_ACTIVATION bit 0), whose def has the kind's
+   distance above 0 (0x467521..0x467542). The preview counts the player's own
+   jammers by the same test, which is BAR's meaning and not the pass's: the
+   jammer loop 0x4675EC..0x46766C walks every OTHER owner's activated jammers
+   (0x4675F5..0x467600), so the player's own jam only the other players'
+   passes. Activation is the engine's state, not the type's: a radar
    switched off emits nothing, and a factory emits while its build order runs
    (BuildingBuild 0x402640 sets it at 0x4027AE). The coverage is a plain 2D
    circle -- no terrain hides anything (0x47E890's test is dx^2 + dz^2). */
