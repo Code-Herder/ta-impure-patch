@@ -1,0 +1,100 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The sensor preview (tagpu_rangeown.c, the placement preview of radar, sonar and jammer coverage) on Two Continents' eastern hill, with true line of sight. The site the preview is placed at is (6750, 11900), a flat spot on land; an Arm radar tower stands 510 world units south-east of it (switched on when built), a second one (6600, 12450) is to be switched off with its on/off button, an Arm air plant (6150, 12350) emits its 500 of radar only while a build order runs, and the commander (6200, 11900) has 400 of radar and sonar. Open water for a sonar station's site is at (7700, 11500). Two Core solar collectors are the edge check: one 1416 world units from the site (inside an Arm radar tower's 1440) and one 1464 from it (outside), both at least 1483 from every other radar and far past every unit's sight, so the engine's radar contact bit (+0x110 bit 8) is set on the first and clear on the second once a radar stands at the site (scenarios/sensor-preview-built.json). The Core commander is on the northern continent, across the water.",
+ "seed": 20261110,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "clear_existing": true,
+  "los": "true",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    6200,
+    11900
+   ]
+  },
+  {
+   "id": "radA",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    6850,
+    12400
+   ]
+  },
+  {
+   "id": "radOff",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    6600,
+    12450
+   ]
+  },
+  {
+   "id": "ap",
+   "type": "ARMAP",
+   "owner": 0,
+   "pos": [
+    6150,
+    12350
+   ]
+  },
+  {
+   "id": "inside",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    5524,
+    11192
+   ]
+  },
+  {
+   "id": "outside",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    5294,
+    11747
+   ]
+  },
+  {
+   "id": "corcom",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5200,
+    1300
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   6400,
+   11900
+  ]
+ }
+}

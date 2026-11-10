@@ -80,14 +80,16 @@ DFNS(DECL)
 #define VS_EYE      24
 #define VS_MAPEXT   32
 #define VS_PXGAME   40
+#define VS_SEA      44
 
 /* the reach pass's push constants, tagpu_range_comp.h's PC in std430 */
-#define PC_SZ       24
+#define PC_SZ       32
 #define PC_HDIM      0
 #define PC_SEA       8
 #define PC_GRAV     12
 #define PC_JOBS     16
 #define PC_CAP      20
+#define PC_MAPEXT   24
 
 #define INST_STRIDE ((uint32_t)sizeof(TAGPU_RGINST))
 #define JOB_STRIDE  48u                 /* three vec4 a job                    */
@@ -133,7 +135,7 @@ typedef struct {
     int  freeB[RG_MAXRING]; int nfreeB;
     /* the rings whose points the buffer holds, and what they were walked over */
     RENT ent[RG_MAXRING]; int nent;
-    unsigned serial; int hW, hH; float sea, grav; int epoch;
+    unsigned serial; int hW, hH; float sea, grav, mapW, mapH; int epoch;
 } SLOTDATA;
 
 static SLOTDATA s_sd[TAGPU_VK_SLOTS];
@@ -249,9 +251,11 @@ static int resolve(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* the draws: binding 0 the vertex stages' block, 1 the reach (spirv-gen's
-   allocation by stage). The reach pass: 0 the height grid, 1 the jobs, 2 the
-   reach, as tagpu_range_comp.h states them. */
+/* the draws: binding 0 the vertex stages' block, 1 the reach, 40 the height
+   grid the fragment stage tests a water ring's pixels against (spirv-gen's
+   allocation by stage: a fragment stage's first sampler). The reach pass: 0
+   the height grid, 1 the jobs, 2 the reach, as tagpu_range_comp.h states
+   them. */
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
     VkDescriptorSetLayoutBinding b[3];
@@ -270,7 +274,9 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    li.bindingCount = 2; li.pBindings = b;
+    b[2].binding = 40; b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[2].descriptorCount = 1; b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    li.bindingCount = 3; li.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_dsl) != VK_SUCCESS) {
         s_dsl = VK_NULL_HANDLE; return 0;
     }
@@ -301,7 +307,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots;
     ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;         ps[1].descriptorCount = 3 * d->slots;
-    ps[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[2].descriptorCount = d->slots;
+    ps[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[2].descriptorCount = 2 * d->slots;
     pi.maxSets = 2 * d->slots;
     pi.poolSizeCount = 3; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_pool) != VK_SUCCESS) {
@@ -610,10 +616,12 @@ static int assign_blocks(const TAGPU_VKPASS* d, SLOTDATA* sd, int hW, int hH, un
 {
     int j, u, needA = 0, needB = 0, njob = 0;
     if (serial != sd->serial || hW != sd->hW || hH != sd->hH ||
-        s_h.sea != sd->sea || s_h.grav != sd->grav) {
+        s_h.sea != sd->sea || s_h.grav != sd->grav ||
+        s_h.mapW != sd->mapW || s_h.mapH != sd->mapH) {
         reach_forget(sd);
         sd->serial = serial; sd->hW = hW; sd->hH = hH;
         sd->sea = s_h.sea; sd->grav = s_h.grav;
+        sd->mapW = s_h.mapW; sd->mapH = s_h.mapH;
     }
     for (u = 0; u < s_nuniq; u++) {
         if (seg_of(&s_uniq[u].key) == SEG_A) needA++; else needB++;
@@ -663,7 +671,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 {
     VkDescriptorBufferInfo bu, br, bj;
     VkDescriptorImageInfo ii;
-    VkWriteDescriptorSet w[5];
+    VkWriteDescriptorSet w[6];
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkImageView hv;
     SLOTDATA* sd;
@@ -736,6 +744,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     put_f(u, VS_EYE, s_h.eyeX);       put_f(u, VS_EYE + 4, s_h.eyeY);
     put_f(u, VS_MAPEXT, s_h.mapW);    put_f(u, VS_MAPEXT + 4, s_h.mapH);
     put_f(u, VS_PXGAME, s_h.ss > 0.0f ? 1.0f / s_h.ss : 1.0f);
+    put_f(u, VS_SEA, s_h.sea);
 
     memset(&bu, 0, sizeof bu); memset(&br, 0, sizeof br); memset(&bj, 0, sizeof bj);
     memset(&ii, 0, sizeof ii); memset(w, 0, sizeof w);
@@ -744,7 +753,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     bj.buffer = sd->jobs.buf;  bj.range = VK_WHOLE_SIZE;
     ii.sampler = s_samp; ii.imageView = hv;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    for (i = 0; i < 5; i++) { w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[i].descriptorCount = 1; }
+    for (i = 0; i < 6; i++) { w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[i].descriptorCount = 1; }
     w[0].dstSet = s_set[slot];  w[0].dstBinding = 0;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bu;
     w[1].dstSet = s_set[slot];  w[1].dstBinding = 1;
@@ -755,7 +764,9 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[3].pBufferInfo = &bj;
     w[4].dstSet = s_cset[slot]; w[4].dstBinding = 2;
     w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[4].pBufferInfo = &br;
-    vkUpdateDescriptorSets(d->dev, 5, w, 0, NULL);
+    w[5].dstSet = s_set[slot];  w[5].dstBinding = 40;
+    w[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[5].pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 6, w, 0, NULL);
 
     if (njob > 0) {
         /* THE HEIGHT GRID'S UPLOAD BEFORE THE WALK. The terrain pass's copy
@@ -771,6 +782,7 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         put_f(pc, PC_SEA, s_h.sea);    put_f(pc, PC_GRAV, s_h.grav);
         put_i(pc, PC_JOBS, njob);
         put_i(pc, PC_CAP, sd->capA * SEG_A + sd->capB * SEG_B);
+        put_f(pc, PC_MAPEXT, s_h.mapW); put_f(pc, PC_MAPEXT + 4, s_h.mapH);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipeReach);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_cplo, 0, 1,
                                 &s_cset[slot], 0, NULL);
@@ -903,7 +915,7 @@ void tagpu_vk_range_down(const TAGPU_VKPASS* d)
         kill_buf(d, &sd->jobs); kill_buf(d, &sd->reach);
         sd->capA = sd->capB = 0;
         reach_forget(sd);
-        sd->serial = 0; sd->hW = sd->hH = 0;
+        sd->serial = 0; sd->hW = sd->hH = 0; sd->mapW = sd->mapH = 0.0f;
         s_set[i] = s_cset[i] = VK_NULL_HANDLE;
     }
     kill_pipes(d);

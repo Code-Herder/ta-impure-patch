@@ -32,7 +32,8 @@
 typedef struct TAGPU_RGINST {
     float c[4];   /* the centre: world x, world z, the shooter's altitude, range */
     float b[4];   /* velocity (world px a tick), minbarrelangle (radians),
-                     1 = ballistic, the radius scale (BAR's D-gun 1.05)          */
+                     the kind -- 0 flat, 1 ballistic, 2.. a sensor ring
+                     (tagpu_range_glsl.inc) --, the radius scale (BAR's D-gun 1.05) */
     float col[4]; /* straight RGBA; the alpha is the ring's, fades included      */
     float w[4];   /* half width in game px with the AA rim, segments, half width
                      without the rim, and the ring's first entry in the reach

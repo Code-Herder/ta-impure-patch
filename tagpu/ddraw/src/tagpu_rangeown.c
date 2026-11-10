@@ -36,6 +36,16 @@
 #define UD_BUILDDIST 0x212       /* u16 builddistance                             */
 #define UD_BMCODE    0x22F       /* u8, 0 = a structure                           */
 #define UD_BUILDER   0x40u       /* UD_TYPEMASK: the FBI's builder                */
+#define UD_AWB       (1u << 18)  /* UD_TYPEMASK: ActivateWhenBuilt (0x41B9AC)     */
+#define UD_FLAGS2    0x245       /* u32, more FBI booleans                        */
+#define UD_ONOFF     (1u << 2)   /* UD_FLAGS2: onoffable (0x40301A)               */
+#define UD_RADAR     0x204       /* s16 radardistance                             */
+#define UD_SONAR     0x206       /* s16 sonardistance                             */
+#define UD_RADARJAM  0x20A       /* s16 radardistancejam                          */
+#define UD_SONARJAM  0x20C       /* s16 sonardistancejam                          */
+
+#define U_ACTIVATION 0x10E       /* u8, bit 0: activated -- 0x48B090 writes it    */
+#define UA_ON        0x01u
 
 #define W_VELOCITY   0x68        /* i32 16.16 world px a tick                     */
 #define W_MINBARREL  0xC8        /* float radians                                 */
@@ -248,6 +258,52 @@ static int defense_rings(const char* def, RDEF* out)
     return n;
 }
 
+/* ---- the sensors ---------------------------------------------------------
+   The coverage the radar pass 0x467440 tests, in its four kinds. An emitter is
+   one of the viewed player's own units, alive, not dying (`unit_at`) and
+   activated (U_ACTIVATION bit 0), whose def has the kind's distance above 0
+   (0x467521..0x467542; the jammer loop 0x4675EC..0x46766C asks the same less
+   the dying test). Activation is the engine's state, not the type's: a radar
+   switched off emits nothing, and a factory emits while its build order runs
+   (BuildingBuild 0x402640 sets it at 0x4027AE). The coverage is a plain 2D
+   circle -- no terrain hides anything (0x47E890's test is dx^2 + dz^2). */
+static const unsigned SENSOR_OFF[4] = { UD_RADAR, UD_SONAR, UD_RADARJAM, UD_SONARJAM };
+static const uint8_t  SENSOR_CLS[4] = { TAGPU_PK_RC_RADAR, TAGPU_PK_RC_SONAR,
+                                        TAGPU_PK_RC_RADARJAM, TAGPU_PK_RC_SONARJAM };
+
+static int def_s16(const char* def, unsigned off)
+{
+    int16_t v;
+    memcpy(&v, def + off, 2);
+    return v;
+}
+
+/* The radius sensor `k` of `def` covers at altitude `alt`, 0 for none. Radar
+   contacts at d^2 < (RadarDistance + 2 alt)^2, but the bucket walk that offers
+   the targets reaches max(radar, sonar) (0x46755E..0x4675A3), so the bonus
+   survives only past a larger sonar. */
+static int sensor_radius(const char* def, int k, int alt)
+{
+    int v = def_s16(def, SENSOR_OFF[k]);
+    if (v <= 0) return 0;
+    if (k == 0) {
+        int sonar = def_s16(def, UD_SONAR), walk = v > sonar ? v : sonar;
+        v += 2 * alt;
+        if (v < 0) v = -v;
+        if (v > walk) v = walk;
+        if (v <= 0) return 0;
+    }
+    return v > TAGPU_PK_RING_RMAX ? TAGPU_PK_RING_RMAX : v;
+}
+
+/* a building being placed will emit once built when its type switches on at
+   completion or the player can switch it on: the two ways 0x48B090 is reached
+   for a structure that is not a factory */
+static int will_emit(const char* def)
+{
+    return (rd32(def + UD_TYPEMASK) & UD_AWB) || (rd32(def + UD_FLAGS2) & UD_ONOFF);
+}
+
 static int def_class_bit(int cls)
 {
     switch (cls) {
@@ -330,6 +386,18 @@ static void unit_pos(const char* u, int32_t pos[3])
     pos[2] = rdi32(u + U_YFIX) >> 16;
 }
 
+static void emit_sensor(Sink* s, unsigned slot, const int32_t pos[3], int k, int radius, int isNew)
+{
+    RDEF r;
+    unsigned before = s->n;
+    memset(&r, 0, sizeof r);
+    r.cls = SENSOR_CLS[k];
+    r.style = TAGPU_PK_RS_NONE;
+    r.range = (uint16_t)radius;
+    emit(s, slot, pos, &r, TAGPU_PK_RL_SENSOR);
+    if (isNew && s->n > before) s->out[before].flags |= TAGPU_PK_RF_NEW;
+}
+
 /* a unit's attack rings into its layer, the per-type choice applied */
 static void emit_attack(Sink* s, const World* w, char* u, unsigned slot, const char* def,
                         int nanoOnly, unsigned* nbuild)
@@ -377,7 +445,8 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     World w;
     Sink s;
     unsigned i, nsel = 0, nbuild = 0, hover;
-    int on, shiftOnly, cursor, wantAlly, wantEnemy, showAttack, placing, region, overrideBits = 0;
+    int on, shiftOnly, cursor, sensor, wantAlly, wantEnemy, showAttack, placing, region;
+    int overrideBits = 0, sensorKinds = 0;
     int32_t g;
     char* ghostDef = NULL;
     int32_t ghost[3] = { 0, 0, 0 };
@@ -393,6 +462,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     on        = setting(TS_RANGES, 1);
     shiftOnly = setting(TS_RANGESHIFT, 0);
     cursor    = setting(TS_RANGECURSOR, 1);
+    sensor    = setting(TS_RANGESENSOR, 1);
     wantAlly  = setting(TS_RANGEALLY, TS_RC_NUKE);
     wantEnemy = setting(TS_RANGEENEMY, TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON);
     if (!on) return 0;
@@ -425,6 +495,15 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             overrideBits |= def_class_bit(r[k].cls);
             emit(&s, 0, ghost, &r[k], TAGPU_PK_RL_DEF_ALLY);
         }
+        /* its sensors, before every other sensor ring: the draw lays the new
+           ring's sheet first, and the existing coverage fills only around it */
+        if (sensor && will_emit(ghostDef))
+            for (k = 0; k < 4; k++) {
+                int rad = sensor_radius(ghostDef, k, ghost[1]);
+                if (!rad) continue;
+                sensorKinds |= 1 << k;
+                emit_sensor(&s, 0, ghost, k, rad, 1);
+            }
     }
     for (i = 1; i < w.nslots; i++) {
         char* u = unit_at(&w, i);
@@ -472,6 +551,25 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                 if (rd32(u + U_STATE) & ST_SELECTED) continue;
                 if (!(def = unit_def(&w, u)) || !(rd32(def + UD_TYPEMASK) & UD_BUILDER)) continue;
                 emit_attack(&s, &w, u, i, def, 1, &nbuild);
+            }
+        }
+    }
+    /* the existing coverage of the placed building's kinds, last: of everything
+       here it is what a full table can best do without */
+    if (sensorKinds) {
+        for (i = 1; i < w.nslots; i++) {
+            char* u = unit_at(&w, i);
+            char* def;
+            int32_t pos[3];
+            int k;
+            if (!u || owner_of(u) != (int)w.viewer) continue;
+            if (!(*(const unsigned char*)(u + U_ACTIVATION) & UA_ON)) continue;
+            if (!(def = unit_def(&w, u))) continue;
+            unit_pos(u, pos);
+            for (k = 0; k < 4; k++) {
+                int rad;
+                if (!(sensorKinds & (1 << k))) continue;
+                if ((rad = sensor_radius(def, k, pos[1])) != 0) emit_sensor(&s, i, pos, k, rad, 0);
             }
         }
     }

@@ -154,6 +154,7 @@ static const Key s_key[TS_NKEYS] = {
     { "ranges",      O_ONOFF, N(O_ONOFF), 1 },
     { "rangeshift",  O_ONOFF, N(O_ONOFF), 0 },
     { "rangecursor", O_ONOFF, N(O_ONOFF), 1 },
+    { "rangesensor", O_ONOFF, N(O_ONOFF), 1 },
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
 };

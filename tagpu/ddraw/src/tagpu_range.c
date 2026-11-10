@@ -57,6 +57,36 @@ static const RSTYLE DEF[5] = {
 };
 static const float DEF_WATER[4] = { 0.48f, 0.67f, 1.0f, 0.30f };
 
+/* THE SENSOR PREVIEW, BAR's sensor widgets on the engine's coverage:
+   gui_sensor_ranges_radar_preview.lua (l.42-82) for radar,
+   gui_sensor_ranges_jammer_preview.lua (l.98-135) for the jammers, and sonar on
+   the radar preview's structure in gui_sensor_ranges_sonar.lua's colour. Per
+   kind one union outline of the new ring and the existing coverage, the sheet
+   under the new ring and the muted fill under the rest -- `mutedRel` of the
+   sheet's alpha. tools/tascene-ranges.js's SENSOR is the same table. */
+typedef struct {
+    float outline[4];    /* straight RGBA                                    */
+    float sheet[4];      /* the fill under the new ring                       */
+    float muted[3];      /* the fill under the existing coverage alone        */
+    float mutedRel;
+    float w;             /* the outline, screen px                            */
+    int   dash, water;
+} SSTYLE;
+static const SSTYLE SENS[4] = {
+    /* radar    */ { { 0.45f, 1.0f, 0.57f, 0.40f }, { 0.22f, 0.85f, 0.50f, 0.20f },
+                     { 0.35f, 0.62f, 0.50f }, 0.55f, 2.0f, 0, 0 },
+    /* sonar    */ { { 0.50f, 0.70f, 0.90f, 0.45f }, { 0.40f, 0.60f, 0.85f, 0.20f },
+                     { 0.35f, 0.48f, 0.62f }, 0.55f, 2.0f, 0, 1 },
+    /* radarjam */ { { 1.0f, 0.32f, 0.22f, 0.80f },  { 0.90f, 0.22f, 0.20f, 0.17f },
+                     { 0.55f, 0.25f, 0.45f }, 0.55f, 2.0f, 1, 0 },
+    /* sonarjam */ { { 1.0f, 0.32f, 0.22f, 0.80f },  { 0.90f, 0.22f, 0.20f, 0.17f },
+                     { 0.55f, 0.25f, 0.45f }, 0.55f, 2.0f, 1, 1 },
+};
+/* every sensor ring: a coverage circle of up to 2880 px (ARMARAD) wants the
+   finer of the two counts tagpu_vk_range.c carries, and its dash is cut in
+   runs of segments */
+#define SENSOR_SEGS 1024
+
 /* one ring as this frame draws it */
 typedef struct {
     float x, z, alt;
@@ -64,6 +94,8 @@ typedef struct {
     const RSTYLE* st;
     const float* col;
     int   attack, dgun, nano;
+    int   sensor, isNew;  /* sensor: 0..3, the kind (radar, sonar, radarjam,
+                             sonarjam); -1 for a weapon ring              */
     float aOuter, aInner;
 } RITEM;
 
@@ -161,6 +193,37 @@ static int put_inst(const RITEM* it, int kind, float devPx, float ss)
     return 1;
 }
 
+/* a sensor ring's disc (the sheet or the muted fill) or its outline */
+static int put_sensor(const RITEM* it, int outline, float devPx, float ss)
+{
+    const SSTYLE* st = &SENS[it->sensor];
+    TAGPU_RGINST* o;
+    if (s_ninst >= TAGPU_RG_MAXINST) return 0;
+    o = &s_inst[s_ninst];
+    o->c[0] = it->x; o->c[1] = it->z; o->c[2] = it->alt; o->c[3] = it->range;
+    /* the kind tagpu_range_glsl.inc reads: 2, + 1 water only, + 2 dashed */
+    o->b[0] = 0.0f; o->b[1] = 0.0f;
+    o->b[2] = 2.0f + (st->water ? 1.0f : 0.0f) + (st->dash ? 2.0f : 0.0f);
+    o->b[3] = 1.0f;
+    if (outline) {
+        float wGame = st->w / devPx, halfT = wGame * ss * 0.5f + 0.5f;
+        memcpy(o->col, st->outline, sizeof o->col);
+        o->w[0] = halfT / ss;
+        o->w[2] = wGame * 0.5f;
+    } else {
+        if (it->isNew) memcpy(o->col, st->sheet, sizeof o->col);
+        else {
+            memcpy(o->col, st->muted, 3 * sizeof(float));
+            o->col[3] = st->sheet[3] * st->mutedRel;
+        }
+        o->w[0] = 0.0f; o->w[2] = 0.0f;
+    }
+    o->w[1] = (float)SENSOR_SEGS;
+    o->w[3] = 0.0f;
+    s_ninst++;
+    return 1;
+}
+
 static void put_draw(int kind, int bit, int first, int nseg)
 {
     TAGPU_RGDRAW* g;
@@ -207,6 +270,27 @@ static void draw_layer(const RITEM* const* L, int n, float devPx, float ss)
     }
 }
 
+/* The sensor layer, one stencil bit a kind. THE DISCS CLAIM EACH PIXEL ONCE
+   (the disc pipeline's NOT_EQUAL + REPLACE), and the new ring's come first in
+   the draw because the publisher puts them first: the sheet takes its own
+   ground and the muted fill only what is left, which is the reference's "R,
+   else G". The outlines then survive only outside the kind's union. */
+static void draw_sensors(const RITEM* const* L, int n, float devPx, float ss)
+{
+    int b, k, first;
+    put_draw(TAGPU_RG_CLEAR, 0, 0, 0);
+    for (b = 0; b < 4; b++) {
+        first = s_ninst;
+        for (k = 0; k < n; k++) if (L[k]->sensor == b) put_sensor(L[k], 0, devPx, ss);
+        put_draw(TAGPU_RG_DISC, 1 << b, first, SENSOR_SEGS);
+    }
+    for (b = 0; b < 4; b++) {
+        first = s_ninst;
+        for (k = 0; k < n; k++) if (L[k]->sensor == b) put_sensor(L[k], 1, devPx, ss);
+        put_draw(TAGPU_RG_OUTER, 1 << b, first, SENSOR_SEGS);
+    }
+}
+
 void tagpu_range_render(const TAGPU_FXVIEW* v)
 {
     static const RITEM* layer[TAGPU_PK_RL_LAST + 1][TAGPU_PK_MAX_RING];
@@ -241,6 +325,16 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
             it->x = ux; it->alt = uy; it->z = uz;
         }
         it->range = (float)e->range;
+        it->sensor = -1;
+        it->isNew = 0;
+        if (e->layer == TAGPU_PK_RL_SENSOR) {
+            /* a sensor ring in any other class is not one this file made */
+            if (e->cls < TAGPU_PK_RC_RADAR) continue;
+            it->sensor = e->cls - TAGPU_PK_RC_RADAR;
+            it->isNew = (e->flags & TAGPU_PK_RF_NEW) != 0;
+            layer[e->layer][nl[e->layer]++] = it;
+            continue;
+        }
         it->ballistic = (e->flags & TAGPU_PK_RF_BALLISTIC) ? 1.0f : 0.0f;
         it->v = it->ballistic > 0.5f ? e->v : 0.0f;
         it->minbarrel = it->ballistic > 0.5f ? e->minbarrel : 0.0f;
@@ -257,12 +351,15 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
         it->aInner = ring_alpha(it, camDist, 0, h, h->nsel, h->nbuild);
         layer[e->layer][nl[e->layer]++] = it;
     }
-    for (L = 0; L <= TAGPU_PK_RL_LAST; L++)
+    if (nl[TAGPU_PK_RL_SENSOR]) draw_sensors(layer[TAGPU_PK_RL_SENSOR], nl[TAGPU_PK_RL_SENSOR], devPx, ss);
+    for (L = TAGPU_PK_RL_DEF_ALLY; L <= TAGPU_PK_RL_LAST; L++)
         if (nl[L]) draw_layer(layer[L], nl[L], devPx, ss);
     /* the heartbeat: what arrived per layer and what it became */
     if ((v->frame_counter % 300u) == 0u)
-        tagpu_logf("range: rings=%u def=%d/%d atk=%d/%d sel=%u build=%u inst=%d draws=%d "
-                   "camDist=%.0f%s", n, nl[0], nl[1], nl[2], nl[3], (unsigned)h->nsel,
+        tagpu_logf("range: rings=%u sensor=%d def=%d/%d atk=%d/%d sel=%u build=%u inst=%d "
+                   "draws=%d camDist=%.0f%s", n, nl[TAGPU_PK_RL_SENSOR],
+                   nl[TAGPU_PK_RL_DEF_ALLY], nl[TAGPU_PK_RL_DEF_ENEMY],
+                   nl[TAGPU_PK_RL_ATK_ALLY], nl[TAGPU_PK_RL_ATK_ENEMY], (unsigned)h->nsel,
                    (unsigned)h->nbuild, s_ninst, s_ndraw, camDist,
                    (pk->truncated & TAGPU_PK_TRUNC_RING) ? " CUT" : "");
     if (!s_ndraw) return;

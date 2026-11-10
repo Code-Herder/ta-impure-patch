@@ -27,15 +27,17 @@
    - the ring sits at the FIRST refused point along each direction: an 8-px march, then eight
      halvings between the last kept and the first refused.
 
-   A JOB is three vec4: (x, z, shooter altitude, range), (velocity, minbarrel, 1 = ballistic,
-   radius scale), (base, segments, 0, 0). THE BOUND: a write lands at base + k with k < segments,
+   A JOB is three vec4: (x, z, shooter altitude, range), (velocity, minbarrel, kind, radius
+   scale), (base, segments, 0, 0). The kind is tagpu_range_glsl.inc's: 1 a ballistic ring, which
+   the solver bounds; 2 and up a sensor ring, a flat circle whose altitude is taken at the point
+   held to the scroll extent (`mapext`), where its disc's rim is drawn. THE BOUND: a write lands at base + k with k < segments,
    and tagpu_vk_range.c hands out base and segments from its own block allocator inside the
    buffer it binds; `cap` is that buffer's length in entries and the shader refuses any write at
    or past it, so a job the allocator got wrong cannot write past the buffer. The march is
    bounded by the range (at most 4096 steps of 8 px, the 32767 cap of TAGPU_PK_RING_RMAX). */
 #define TAGPU_RANGE_COMMON_CS \
     "layout(push_constant) uniform PC {\n" \
-    "  vec2 hdim; float sea; float grav; int jobs; int cap;\n" \
+    "  vec2 hdim; float sea; float grav; int jobs; int cap; vec2 mapext;\n" \
     "} pc;\n" \
     "layout(binding = 0) uniform sampler2D uHeight;\n" \
     "layout(std430, binding = 1) readonly buffer Jobs { vec4 j[]; } jobs;\n" \
@@ -107,8 +109,10 @@
     "    float a = float(k) / float(n) * 6.2831853;\n" \
     "    vec2 dir = vec2(sin(a), cos(a));\n" \
     "    float r = c.w * b.w;\n" \
-    "    if (b.z > 0.5) r = taReach(c, b, dir);\n" \
-    "    rch.p[base + k] = vec2(r, taSurface(c.xy + dir * r));\n" \
+    "    if (b.z > 0.5 && b.z < 1.5) r = taReach(c, b, dir);\n" \
+    "    vec2 q = c.xy + dir * r;\n" \
+    "    if (b.z > 1.5) q = clamp(q, vec2(0.0), pc.mapext);\n" \
+    "    rch.p[base + k] = vec2(r, taSurface(q));\n" \
     "  }\n" \
     "}\n"
 

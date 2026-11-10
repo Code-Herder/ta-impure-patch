@@ -1,0 +1,20 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Applied over a running scenarios/sensor-preview.json: an Arm radar tower at the preview's site (6750, 11900), finished, so it switches on as a built one does. Its 1440 of radar reaches the Core solar 1416 away and not the one 1464 away.",
+ "seed": 20261110,
+ "on_error": "abort",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "radB",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    6750,
+    11900
+   ]
+  }
+ ]
+}

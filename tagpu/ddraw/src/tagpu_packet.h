@@ -475,7 +475,8 @@ typedef struct TAGPU_PK_RING {
     float    v;              /* weapon+0x68, world px a tick                   */
     float    minbarrel;      /* weapon+0xC8, radians                           */
     uint16_t range;          /* world px: weapon+0xDC, +0xE0 for a nuke
-                                ring, UnitDef+0x212 for a build ring           */
+                                ring, UnitDef+0x212 for a build ring, the
+                                coverage radius for a sensor ring              */
     uint8_t  cls;            /* TAGPU_PK_RC_*                                  */
     uint8_t  layer;          /* TAGPU_PK_RL_*                                  */
     uint8_t  style;          /* TAGPU_PK_RS_*                                  */
@@ -484,16 +485,20 @@ typedef struct TAGPU_PK_RING {
 } TAGPU_PK_RING;
 
 /* the classes, BAR's: an attack ring's for the two attack layers, a defense
-   ring's for the two defense layers */
+   ring's for the two defense layers, a sensor's for the sensor layer (the
+   coverage the radar pass 0x467440 tests: def +0x204 radar, +0x206 sonar,
+   +0x20A radar jam, +0x20C sonar jam) */
 enum {
     TAGPU_PK_RC_GROUND = 0, TAGPU_PK_RC_NANO, TAGPU_PK_RC_AA, TAGPU_PK_RC_CANNON,
     TAGPU_PK_RC_LRPC, TAGPU_PK_RC_AIR, TAGPU_PK_RC_NUKE,
-    TAGPU_PK_RC_LAST = TAGPU_PK_RC_NUKE
+    TAGPU_PK_RC_RADAR, TAGPU_PK_RC_SONAR, TAGPU_PK_RC_RADARJAM, TAGPU_PK_RC_SONARJAM,
+    TAGPU_PK_RC_LAST = TAGPU_PK_RC_SONARJAM
 };
-/* the layers, in their draw order: the defense widget's under the attack
-   widget's, allies before enemies */
+/* the layers, in their draw order: the sensor preview under the defense
+   widget's, the defense widget's under the attack widget's, allies before
+   enemies */
 enum {
-    TAGPU_PK_RL_DEF_ALLY = 0, TAGPU_PK_RL_DEF_ENEMY, TAGPU_PK_RL_ATK_ALLY,
+    TAGPU_PK_RL_SENSOR = 0, TAGPU_PK_RL_DEF_ALLY, TAGPU_PK_RL_DEF_ENEMY, TAGPU_PK_RL_ATK_ALLY,
     TAGPU_PK_RL_ATK_ENEMY, TAGPU_PK_RL_LAST = TAGPU_PK_RL_ATK_ENEMY
 };
 /* the sub-styles that replace a class's colour */
@@ -502,6 +507,9 @@ enum {
     TAGPU_PK_RS_LAST = TAGPU_PK_RS_WATER
 };
 #define TAGPU_PK_RF_BALLISTIC 0x01u  /* the solver bounds the reach         */
+#define TAGPU_PK_RF_NEW       0x02u  /* a sensor ring of the building being
+                                        placed; every other sensor ring is
+                                        the player's existing coverage      */
 
 #define TAGPU_PK_MAX_RING    4096u
 #define TAGPU_PK_RING_RMAX   32767   /* world px                             */
