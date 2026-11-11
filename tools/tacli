@@ -1064,16 +1064,20 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # `Metal`/`Energy` are TA's starting resources, and measured 2026-09-01 they set
 # the player's **storage** as well as the level — which is exactly why writing
 # them into a running game does not stick (the engine recomputes storage from
-# owned units every tick and clamps the level to it). `AllyGroup` exists too and
-# is not exposed: seats with the same group start allied -- 1, 1 and 2 allied
-# players 0 and 2 and not 1, by the player records' +0x108 bytes (measured
-# 2026-11-11; scenarios/sensor-view.json) -- and every seat read 5 before it
-# was written; what 5 itself means is not established.
-PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy")
+# owned units every tick and clamps the level to it).
+# `AllyGroup`: the skirmish settings load reads `Player%dAllyGroup` (format at
+# 0x5043C4) at 0x430D03 into the settings entry's +8, 5 when the key is absent
+# (0x430D3C); the seat fill allies two seats whose groups are equal when the other
+# seat's controller is non-zero and the group is not 5 (0x47A863..0x47A872), so 5
+# is "no group" (DISASSEMBLED 2026-11-11). MEASURED 2026-11-11
+# (scenarios/sensor-view.json): groups 1, 2, 1 on seats 0..2 gave the player
+# records' +0x108 rows 01 00 01 / 00 01 00 / 01 00 01.
+PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy", "AllyGroup")
+PLAYER_SPEC = "N:controller[:side[:color[:metal[:energy[:allygroup]]]]]"
 
 
 def player_keys(spec: str):
-    """`N:controller[:side[:color[:metal[:energy]]]]` -> registry values to write.
+    """`N:controller[:side[:color[:metal[:energy[:allygroup]]]]]` -> registry values to write.
 
     An **empty field is "leave that key alone"**, so a colour can be set without
     naming a side (`0:1::3`) — the fields are positional and there is no other
@@ -1084,9 +1088,9 @@ def player_keys(spec: str):
     if not (2 <= len(parts) <= len(PLAYER_KEYS) + 1 and parts[0].isdigit()
             and parts[1].isdigit()
             and all(p == "" or p.isdigit() for p in parts[2:])):
-        die(f"--player {spec!r}: say "
-            f"N:controller[:side[:color[:metal[:energy]]]], numbers only "
-            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE)")
+        die(f"--player {spec!r}: say {PLAYER_SPEC}, numbers only "
+            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE, allygroup "
+            f"0..4 or 5 for none)")
     names = PLAYER_KEYS
     return [(f"Player{parts[0]}{names[i - 1]}", parts[i])
             for i in range(1, len(parts)) if parts[i] != ""]
@@ -4770,7 +4774,8 @@ def _scn_setup(doc, label):
     for i, p in enumerate(_scn_list(node, "players", w)):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
-                  optional=("controller", "side", "color", "metal", "energy"))
+                  optional=("controller", "side", "color", "metal", "energy",
+                            "ally_group"))
         slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
@@ -4783,6 +4788,8 @@ def _scn_setup(doc, label):
             "color": _scn_int(p, "color", pw, 0, 9),
             "metal": _scn_int(p, "metal", pw, 0, 1000000),
             "energy": _scn_int(p, "energy", pw, 0, 1000000),
+            # 5 is the engine's "no group" (PLAYER_KEYS), so a scenario names 0..4.
+            "ally_group": _scn_int(p, "ally_group", pw, 0, 4),
         })
     return setup
 
@@ -5603,20 +5610,26 @@ SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")
 # it does not have, so the registry says what was asked for and only the engine
 # says what happened.
 SCN_GAMEINGSTATE = "*0x511DE8+0x391E9:4"
+SCN_NO_ALLY_GROUP = 5           # the engine's "no group" (PLAYER_KEYS)
 SCN_TNTFILE = 0x204
 
 
 def _scn_player_flags(setup) -> list:
-    """setup.players -> the `--player N:controller[:side[:color]]` launch flags.
+    """setup.players -> the `--player` launch flags (PLAYER_SPEC).
 
     One numbering, one path: the same strings a human would type, so a scenario
     and a hand-driven launch cannot disagree about what slot 0 means.
+
+    The ally group is always written, 5 ("no group") when the scenario names
+    none: the instance's registry store persists across loads, so a seat left
+    alone would inherit the previous scenario's alliance.
     """
     flags = []
     for p in setup["players"]:
+        group = SCN_NO_ALLY_GROUP if p["ally_group"] is None else p["ally_group"]
         fields = [SCN_CONTROLLERS[p["controller"]],
                   "" if p["side"] is None else SCN_SIDES[p["side"]],
-                  p["color"], p["metal"], p["energy"]]
+                  p["color"], p["metal"], p["energy"], group]
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
@@ -7293,10 +7306,12 @@ def build_parser():
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
                    help="per-player unit cap in totala.ini (20-1500; 1500 when unset)")
     l.add_argument("--player", action="append",
-                   help="N:controller[:side[:color[:metal[:energy]]]] (controller "
+                   help=f"{PLAYER_SPEC} (controller "
                         "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "
                         "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
-                        "are the skirmish starting resources, and set storage too.")
+                        "are the skirmish starting resources, and set storage too. "
+                        "Seats with the same allygroup 0..4 start allied; 5 is no "
+                        "group.")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int,
                    help="SkirmishMapping (TA's saved value; the SKIRMISH screen's "
