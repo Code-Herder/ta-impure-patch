@@ -260,16 +260,19 @@ static int defense_rings(const char* def, RDEF* out)
 
 /* ---- the sensors ---------------------------------------------------------
    The coverage the radar pass 0x467440 tests, in its four kinds. A radar or
-   sonar emitter is one of the viewed player's own units, alive, not dying
+   sonar emitter of a player is one of its units, alive, not dying
    (`unit_at`) and activated (U_ACTIVATION bit 0), whose def has the kind's
-   distance above 0 (0x467521..0x467542). The preview counts the player's own
-   jammers by the same test, which is BAR's meaning and not the pass's: the
-   jammer loop 0x4675EC..0x46766C walks every OTHER owner's activated jammers
-   (0x4675F5..0x467600), so the player's own jam only the other players'
-   passes. Activation is the engine's state, not the type's: a radar
-   switched off emits nothing, and a factory emits while its build order runs
-   (BuildingBuild 0x402640 sets it at 0x4027AE). The coverage is a plain 2D
-   circle -- no terrain hides anything (0x47E890's test is dx^2 + dz^2). */
+   distance above 0 (0x467521..0x467542). What is drawn is that test applied
+   to the viewed player and its allies (`allied`), BAR's meaning: an ally's
+   radar does not extend the viewed player's own pass, and the jammers are
+   counted by the same test although the pass's jammer loop
+   0x4675EC..0x46766C walks every OTHER owner's activated jammers
+   (0x4675F5..0x467600), so a player's own jam only the other players'
+   passes. An enemy's coverage is never drawn. Activation is the engine's
+   state, not the type's: a radar switched off emits nothing, and a factory
+   emits while its build order runs (BuildingBuild 0x402640 sets it at
+   0x4027AE). The coverage is a plain 2D circle -- no terrain hides anything
+   (0x47E890's test is dx^2 + dz^2). */
 static const unsigned SENSOR_OFF[4] = { UD_RADAR, UD_SONAR, UD_RADARJAM, UD_SONARJAM };
 static const uint8_t  SENSOR_CLS[4] = { TAGPU_PK_RC_RADAR, TAGPU_PK_RC_SONAR,
                                         TAGPU_PK_RC_RADARJAM, TAGPU_PK_RC_SONARJAM };
@@ -448,8 +451,8 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     World w;
     Sink s;
     unsigned i, nsel = 0, nbuild = 0, hover;
-    int on, shiftOnly, cursor, sensor, wantAlly, wantEnemy, showAttack, placing, region;
-    int overrideBits = 0, sensorKinds = 0;
+    int on, shiftOnly, cursor, sensor, view, wantAlly, wantEnemy, showAttack, placing, region;
+    int overrideBits = 0, sensorKinds = 0, emitKinds;
     int32_t g;
     char* ghostDef = NULL;
     int32_t ghost[3] = { 0, 0, 0 };
@@ -466,16 +469,17 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     shiftOnly = setting(TS_RANGESHIFT, 0);
     cursor    = setting(TS_RANGECURSOR, 1);
     sensor    = setting(TS_RANGESENSOR, 1);
+    view      = setting(TS_SENSORVIEW, 1);
     wantAlly  = setting(TS_RANGEALLY, TS_RC_NUKE);
     wantEnemy = setting(TS_RANGEENEMY, TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON);
-    if (!on) return 0;
+    if (!on && !sensor && !view) return 0;
     g = rdi32(w.ta + M_GRAVITY);
     if (g <= 0 || g > 65536) return 0;
 
     s.out = out; s.max = max; s.n = 0; s.cut = 0;
     region = *(const unsigned char*)(w.ta + M_REGION);
     placing = *(const unsigned char*)(w.ta + OFF_CURMODE) == MODE_BUILD;
-    showAttack = !shiftOnly || ((KeyDown)VA_KEYDOWN)(KEY_SHIFT) != 0;
+    showAttack = on && (!shiftOnly || ((KeyDown)VA_KEYDOWN)(KEY_SHIFT) != 0);
 
     /* the building being placed: its defense rings at the engine's own snapped
        site (0x4197D0 writes the rect only while the pointer is on the world) */
@@ -493,7 +497,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     /* the defense layers, under the attack layers: allies first */
     if (ghostDef) {
         RDEF r[RING_MAX];
-        int k, nr = defense_rings(ghostDef, r);
+        int k, nr = on ? defense_rings(ghostDef, r) : 0;
         for (k = 0; k < nr; k++) {
             overrideBits |= def_class_bit(r[k].cls);
             emit(&s, 0, ghost, &r[k], TAGPU_PK_RL_DEF_ALLY);
@@ -508,7 +512,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                 emit_sensor(&s, 0, ghost, k, rad, 1);
             }
     }
-    for (i = 1; i < w.nslots; i++) {
+    for (i = 1; on && i < w.nslots; i++) {
         char* u = unit_at(&w, i);
         char* def;
         RDEF r[RING_MAX];
@@ -557,21 +561,22 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             }
         }
     }
-    /* the existing coverage of the placed building's kinds, last: of everything
-       here it is what a full table can best do without */
-    if (sensorKinds) {
+    /* the existing coverage, last: every kind under `sensorview`, and the
+       placed building's kinds for its preview */
+    emitKinds = view ? 0xF : sensorKinds;
+    if (emitKinds) {
         for (i = 1; i < w.nslots; i++) {
             char* u = unit_at(&w, i);
             char* def;
             int32_t pos[3];
             int k;
-            if (!u || owner_of(u) != (int)w.viewer) continue;
+            if (!u || !allied(&w, owner_of(u))) continue;
             if (!(*(const unsigned char*)(u + U_ACTIVATION) & UA_ON)) continue;
-            if (!(def = unit_def(&w, u))) continue;
+            if (!(def = unit_def(&w, u)) || !shown(&w, u)) continue;
             unit_pos(u, pos);
             for (k = 0; k < 4; k++) {
                 int rad;
-                if (!(sensorKinds & (1 << k))) continue;
+                if (!(emitKinds & (1 << k))) continue;
                 if ((rad = sensor_radius(def, k, pos[1])) != 0) emit_sensor(&s, i, pos, k, rad, 0);
             }
         }
@@ -581,6 +586,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     h->nsel = (uint16_t)nsel;
     h->nbuild = (uint16_t)(nbuild > 0xFFFF ? 0xFFFF : nbuild);
     h->grav = (float)g / 65536.0f;
+    if (view) h->flags |= TAGPU_PK_RG_SVIEW;
     if (region & 2) {
         int c;
         h->flags |= TAGPU_PK_RG_MOUSE;

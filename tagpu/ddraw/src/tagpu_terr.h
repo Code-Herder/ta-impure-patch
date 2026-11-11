@@ -42,6 +42,15 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
    float (tagpu_terr.c, above the VS). */
 #define TAGPU_TERR_MAX_SIDE (TAGPU_GATHER_SPAN_MAX / 32 + 2)
 
+/* THE HEIGHT GRID THE VULKAN LANE DRAWS FROM, for another reader on the RENDER
+   THREAD: `*w` x `*h` bytes, one a 16-px corner, and the serial that moves
+   when the bytes are replaced. 0 while there is none (no Vulkan lane, or no
+   grid built). The pointer is good until this thread's next
+   tagpu_terr_gather: only `build_height`, which that call alone reaches,
+   frees or replaces the buffer -- so a caller later in the same frame, as
+   tagpu_range_render is (tagpu_native.c), reads it whole. */
+int  tagpu_terr_heights(const unsigned char** grid, int* w, int* h, unsigned* serial);
+
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
    engine's terrain blit; the composite treats every OTHER index in the engine's
    frame as "an overlay the engine still draws, and we must not cover it" */

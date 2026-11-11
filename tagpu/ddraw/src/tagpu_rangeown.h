@@ -14,12 +14,16 @@
      (`rangeally`, `rangeenemy`), and those of the building being placed, which
      also light every allied ring of its classes;
    - per unit type and side, the rings alt+. and alt+, leave on;
+   - the radar, sonar and jammer coverage of the viewed player and its allies,
+     always, under `sensorview`: every unit of theirs alive, not dying and
+     activated -- the radar pass 0x467440's emitter test for radar and sonar;
+     the jammers act in the other players' passes. An enemy's coverage is
+     never published;
    - while a building is placed whose type will emit once built (it switches on
      when built or the player can switch it on), its radar, sonar and jammer
-     coverage, with the viewed player's own coverage of the same kinds: every
-     unit of theirs alive, not dying and activated -- the radar pass 0x467440's
-     emitter test for radar and sonar; their jammers act in the other players'
-     passes -- under `rangesensor`.
+     coverage, with the existing coverage of the same kinds, under
+     `rangesensor`.
+   The weapon rings are under `ranges`; the sensors are not.
    An enemy or allied unit counts only while the engine shows it to the viewed
    player (UnitInPlayerLOS 0x465AC0, the test HotUnits takes).
 
@@ -30,7 +34,7 @@
 
 #include "tagpu_packet.h"
 
-/* 1 while the rings are on (`ranges`, default on) and this lane draws them:
+/* 1 while the weapon rings are on (`ranges`, default on) and this lane draws them:
    the Vulkan backend, until its range pass refuses. The order markers' port of
    the engine's ShowRanges circles (tagpu_order.c) draws them only while this
    is 0: the rings replace them, and switching the rings off -- or a lane that
@@ -44,7 +48,7 @@ void tagpu_rangeown_refuse(void);
 void tagpu_rangeown_forgive(void);
 
 /* Inside the in-play draw (tagpu_packet_pub.c fill_frame): the header and at
-   most `max` rings. Returns 1 when a ring shows; `*cut` is set when more
+   most `max` rings, weapon and sensor. Returns 1 when a ring shows; `*cut` is set when more
    wanted to. Every record's `uidx` is 0xFFFF: the publisher maps `slot` onto
    its own unit table. Nothing is filled, and Alt+. / Alt+, are not taken, on
    a lane that cannot draw rings. */

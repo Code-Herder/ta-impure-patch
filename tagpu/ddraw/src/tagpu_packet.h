@@ -463,6 +463,9 @@ typedef struct TAGPU_PK_RANGE {
 } TAGPU_PK_RANGE;
 
 #define TAGPU_PK_RG_MOUSE   0x01u   /* `mouse` holds a point on the map        */
+#define TAGPU_PK_RG_SVIEW   0x02u   /* the sensor view is on (`sensorview`): the
+                                       sensor records not NEW are drawn as the
+                                       coverage, and not only as the preview's */
 
 /* 32 B, at most TAGPU_PK_MAX_RING. */
 typedef struct TAGPU_PK_RING {
@@ -494,7 +497,7 @@ enum {
     TAGPU_PK_RC_RADAR, TAGPU_PK_RC_SONAR, TAGPU_PK_RC_RADARJAM, TAGPU_PK_RC_SONARJAM,
     TAGPU_PK_RC_LAST = TAGPU_PK_RC_SONARJAM
 };
-/* the layers, in their draw order: the sensor preview under the defense
+/* the layers, in their draw order: the sensors under the defense
    widget's, the defense widget's under the attack widget's, allies before
    enemies */
 enum {
@@ -509,7 +512,8 @@ enum {
 #define TAGPU_PK_RF_BALLISTIC 0x01u  /* the solver bounds the reach         */
 #define TAGPU_PK_RF_NEW       0x02u  /* a sensor ring of the building being
                                         placed; every other sensor ring is
-                                        the player's existing coverage      */
+                                        the existing coverage of the viewed
+                                        player and its allies              */
 
 #define TAGPU_PK_MAX_RING    4096u
 #define TAGPU_PK_RING_RMAX   32767   /* world px                             */
