@@ -1,4 +1,4 @@
-/* tasim_run -- tasim's command-line driver. This landing gives it one subcommand:
+/* tasim_run -- tasim's command-line driver. It has one subcommand:
 
      tasim_run roles --cwd DIR --archives FILE [--language L] --json
 

@@ -196,7 +196,8 @@ unit names by scanning the live definition table. This design follows its recipe
   - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
     apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
     as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
-    target's cell changes first, if a later apply's clear kills it, or, fail-closed, if GameTime
+    target's cell changes first (a unit whose death is pending, `+0x110` bit 14, counts as dead), if
+    a later apply's clear kills it, if the level changes, or, fail-closed, if GameTime
     advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
     frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
     log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped

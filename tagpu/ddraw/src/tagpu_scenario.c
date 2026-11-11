@@ -20,6 +20,7 @@
 #include "tagpu_zoom.h"     /* tagpu_zoom_place_eye: the camera's range */
 #include "tagpu_patches.h"  /* tagpu_kill_hold: a create's messages wait for dress_unit */
 #include "tagpu_puppet.h"   /* tagpu_puppet_on: the recorder is the only writer on a puppet */
+#include "tagpu_packet_pub.h" /* tagpu_packet_pub_level_gen: the delayed orders' level */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -63,12 +64,16 @@
 
 #define OFF_WATCHED   0x2A42       /* u8 watched player id — whose selection it is */
 #define OFF_NETWORK   0x2A44       /* bit 0: a network game (the pump's test, 0x453D4B) */
-#define OFF_OBJECTIVE 0x391ED      /* the level's objective, made by the level setup
-                                      0x435DA0 and freed only by the next setup   */
+#define OFF_OBJECTIVE 0x391ED      /* the level's objective: level_objective   */
 #define OBJ_ARMED     0x88         /* u32: the end tests run while it is non-zero */
 
 #define OFF_BEGIN     0x14357      /* UnitStruct* BeginUnitsArray_p               */
-#define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p               */
+#define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p: the LAST slot
+                                      itself, begin + count*0x118 - 0x118 (stored at
+                                      0x4855CF..0x4855D6; the engine's own walks end
+                                      with jbe, 0x401F12, 0x48BD38), so a walk runs
+                                      while u <= end and holds (end - begin) / 0x118
+                                      + 1 slots (DISASSEMBLED)                     */
 #define UNIT_STRIDE   0x118
 
 #define OFF_UCOUNT    0x1438F      /* unsigned UNITINFOCount                      */
@@ -566,11 +571,19 @@ static int stance(const char* t, int* out)
 
 static void arena_reset(void)
 {
+    int i;
+
     g_nunits = g_nfeats = g_norders = g_nerrs = g_errdrop = 0;
     g_seed = 0; g_clear = 1; g_abort = 1; g_limit = SCN_UNSET;
     g_map[0] = 0;
     g_sw_set = g_sw_clr = 0;
     g_npl = 0;
+    for (i = 0; i < 10; i++)
+    {
+        g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
+        g_pl_got_mstore[i] = g_pl_got_estore[i] = -1.0f;
+        g_pl_ai_done[i] = 0;
+    }
     g_clearfeat = 0;
     g_objective = -1;
     g_feat_cleared = 0;
@@ -1233,9 +1246,12 @@ static int unit_type_index(char* ta, const char* name)
    are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
    10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
    controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
-/* The level's objective, or NULL. LIFETIME: the level setup 0x435DA0 makes it and only the
-   next setup frees it (tagpu_replay.c, over tk_live), so the pointer read here, on the game
-   thread at the apply visit, is this level's own for the whole visit. */
+/* The level's objective, or NULL. LIFETIME: two places free it, both on the game thread and
+   neither inside the tick's visit (DISASSEMBLED): the `.ota` reader 0x435DA0, which frees the
+   old one as it makes the next at a level's setup, and the gaming state's destructor
+   0x434FF0, which frees main+0x391ED (0x43500E) and nulls it (0x43501C), called from
+   SetGameMode 0x434AB0 (0x434AD6) and 0x434B90 (0x434BCF) at a game-mode change. So the
+   pointer read here, at the apply visit, is this level's own for the whole visit. */
 static char* level_objective(char* ta)
 {
     char* obj;
@@ -1422,11 +1438,11 @@ static int resolve_all(char* ta)
             if (g_units[i].ok && g_units[i].owner >= 0 && g_units[i].owner < 10)
                 want[g_units[i].owner]++;
 
-        if (!g_clear && readable(beg, UNIT_STRIDE) && end > beg &&
+        if (!g_clear && readable(beg, UNIT_STRIDE) && end >= beg &&
             (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
         {
             char* u;
-            for (u = beg; u + UNIT_STRIDE <= end; u += UNIT_STRIDE)
+            for (u = beg; u <= end; u += UNIT_STRIDE)
             {
                 int owner;
                 if (!readable(u, UNIT_STRIDE))
@@ -1525,13 +1541,13 @@ static void snapshot_existing(char* ta)
 
     g_nclear = 0;
 
-    if (!readable(beg, UNIT_STRIDE) || end <= beg)
+    if (!readable(beg, UNIT_STRIDE) || end < beg)
         return;
 
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000)
         return;
 
-    for (u = beg; u + UNIT_STRIDE <= end; u += UNIT_STRIDE)
+    for (u = beg; u <= end; u += UNIT_STRIDE)
     {
         if (!readable(u, UNIT_STRIDE))
             break;
@@ -2051,6 +2067,14 @@ static int issue_one(int cmd, char* unit, void* target, int* pos)
      freed in an earlier tick) could hand out in the next step before the watch's next
      look, so the apply cancels every entry its clear touched in the same visit
      (delay_cancel_cleared);
+   - PRECONDITION: every death while entries are pending happens inside a step or at an
+     apply. A kill made between two steps by anything else -- a console command in the
+     message pump, say -- frees a slot the fallback may refill in the next step before the
+     watch looks, which neither of the two rules above covers. The calibration runner's
+     lanes kill only through steps and applies;
+   - the table belongs to the level it was filled in: each entry's level is the
+     publisher's level generation (tagpu_packet_pub_level_gen), and a look in another level
+     cancels every entry, as does GameTime moving by anything but 0 or 1;
    - an entry keeps a slot index, never a pointer, and every look forms the address only
      after bounding the slot by the array (watched_unit). The array is fixed for the level
      (Mode B, research/notes/thread-safe-destruction.md), so a stale slot costs a cancelled
@@ -2071,12 +2095,14 @@ typedef struct {
 
 static scn_delayed g_delay[SCN_MAX_ORDERS];
 static int         g_ndelay;
+static unsigned    g_dl_level;            /* the level generation the table was filled in */
 static int         g_dl_last;             /* the GameTime the watch last looked at */
 /* counted over every entry since the last report line; `deaths` holds a subject's death and a
    target's (a unit gone, or a feature cell whose def changed) */
 static struct { int of, issued, deaths, cleared, skipped; } g_dl;
 
 #define SCN_SLOT_MAX 20000                /* snapshot_existing's own bound on the array */
+#define U_DYING      0x4000u              /* +0x110 bit 14: the death is pending (engine/units.md) */
 static unsigned char g_slotbits[SCN_SLOT_MAX / 8 + 1];
 
 /* The slot of a unit pointer the apply holds, or -1 when it is not a slot of the array. */
@@ -2093,7 +2119,9 @@ static int slot_of(char* ta, char* u)
 
 /* The unit in `slot` when it is still the unit the entry watched, else 0. BOUNDED: the slot
    is tested against the array, whose end is the last slot itself, inclusive (0x4855D6),
-   before any address is formed. */
+   before any address is formed. A unit whose death is pending (+0x110 bit 14, which the next
+   step's reaper turns into the death, 0x48AFB9..0x48AFD1) still has its alive bit; it is dead
+   here, so its order is counted under deaths and never issued. */
 static char* watched_unit(char* beg, char* end, int slot, unsigned short type,
                           unsigned char owner)
 {
@@ -2104,7 +2132,7 @@ static char* watched_unit(char* beg, char* end, int slot, unsigned short type,
 
     u = beg + (size_t)slot * UNIT_STRIDE;
 
-    if (!(*(unsigned*)(u + U_STATE) & 0x10000000u) ||
+    if ((*(unsigned*)(u + U_STATE) & (0x10000000u | U_DYING)) != 0x10000000u ||
         *(unsigned short*)(u + U_TYPEWORD) != type || *(unsigned char*)(u + U_OWNER) != owner)
         return 0;
 
@@ -2139,14 +2167,33 @@ static void delay_report(void)
     memset(&g_dl, 0, sizeof g_dl);
 }
 
+/* Cancels every pending entry when the table was filled in another level than the live one,
+   and says so. Returns 1 when it did. */
+static int delay_drop_other_level(void)
+{
+    if (!g_ndelay || g_dl_level == tagpu_packet_pub_level_gen())
+        return 0;
+
+    scnlogf("scenario: delayed orders: the level changed; %d pending cancelled", g_ndelay);
+    g_dl.skipped += g_ndelay;
+    g_ndelay = 0;
+    delay_report();
+    return 1;
+}
+
 /* An entry for subject `u` of order `o`, due at the apply's GameTime plus its after. 0 when
    the table is full. */
 static int delay_add(char* ta, const scn_order* o, char* u, char* target, const int* pos)
 {
     scn_delayed* d;
 
+    delay_drop_other_level();
+
     if (g_ndelay >= SCN_MAX_ORDERS)
         return 0;
+
+    if (!g_ndelay)
+        g_dl_level = tagpu_packet_pub_level_gen();
 
     d = &g_delay[g_ndelay];
     memset(d, 0, sizeof *d);
@@ -2223,7 +2270,7 @@ static void delay_watch(void)
 
     now = *(int*)(ta + OFF_GAMETIME);
 
-    if (now == g_dl_last)
+    if (delay_drop_other_level() || now == g_dl_last)
         return;
 
     if (now != g_dl_last + 1)
@@ -2507,9 +2554,9 @@ static void apply_now(void)
     {
         char* beg = *(char**)(ta + OFF_BEGIN);
         char* end = *(char**)(ta + OFF_END);
-        if (readable(beg, UNIT_STRIDE) && end > beg &&
+        if (readable(beg, UNIT_STRIDE) && end >= beg &&
             (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
-            g_cap = (int)((end - beg) / UNIT_STRIDE);
+            g_cap = (int)((end - beg) / UNIT_STRIDE) + 1;
     }
 
     if (map_w <= 0 || map_h <= 0)
@@ -2733,9 +2780,11 @@ static void write_result(void)
             if (pl)
                 fprintf(f, ",\"now\":{\"metal\":%d,\"energy\":%d}",
                         (int)*(float*)(pl + PL_METAL), (int)*(float*)(pl + PL_ENERGY));
-            if (g_pl_hasstore[i])
+            if (g_pl_hasstore[i] && g_pl_got_mstore[i] >= 0.0f)
                 fprintf(f, ",\"storage\":[%.9g,%.9g]", (double)g_pl_got_mstore[i],
                         (double)g_pl_got_estore[i]);
+            else if (g_pl_hasstore[i])
+                fprintf(f, ",\"storage\":null");
             if (g_pl_ai_done[i])
                 fprintf(f, ",\"ai\":\"off\"");
             fprintf(f, "}");

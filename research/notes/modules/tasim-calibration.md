@@ -225,4 +225,4 @@ on one line per verb.
   duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on recordings, the exact scenario
   (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a course, and their costs.
 - The iteration of the paused frame's events is read from the source, not yet from a recording.
-- `tasim_run play` and `predict` are T1 and A2; `defs` is not in this landing.
+- `tasim_run play` and `predict` are T1 and A2; `defs` does not exist yet.
