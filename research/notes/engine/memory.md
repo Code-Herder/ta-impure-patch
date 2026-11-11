@@ -675,7 +675,7 @@ the command table at `0x502040`) and by the scenario applier's `clear_features`
 argument, a plain `ret` at `0x42488D`. It walks `main+0x14233 × main+0x14237` cells, stride `0xD`
 from `main+0x14287`, re-reading the main pointer after each call (`0x42487F`), and calls
 `0x4246B0(cell, 1)` (`0x424877..0x42487A`, no `add esp` after it: the callee's `ret 8`) on every
-cell whose def word `+8` is below `0xFFFB` or equal to `0xFFFE` (`0x424865..0x424875`). Force 1
+cell whose def word `+8` is below `0xFFFB` or equal to `0xFFFE` (read at `0x424865`, tested at `0x424869..0x424875`). Force 1
 takes indestructible features and geothermal vents too. **It spawns no successor**: the successor
 comes only from the swap `0x423710`, which this path never calls. The demo recorder observes the entry
 ([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),

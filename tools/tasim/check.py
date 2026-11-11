@@ -257,13 +257,14 @@ def check(tasim, only=None, require_fresh=False, j=8):
             stale = "stale" if why else None
             if "exact" in block["kind"]:
                 eng = engine_traces(ref, p)
-                fam = block["exact_family"]
-                for run, (lines, _o) in zip(ref["runs"], played):
-                    ok, diff = rule_exact(metrics.exact_series(eng[run["index"]], fam),
-                                          metrics.exact_series(lines, fam))
-                    rows.append({"id": sid, "area": area, "metric": fam, "kind": "exact",
-                                 "run": run["index"], "verdict": stale or ("in" if ok else "out"),
-                                 "margin": diff, "engine": None, "tasim": None})
+                for fam in block["metrics"]:
+                    for run, (lines, _o) in zip(ref["runs"], played):
+                        ok, diff = rule_exact(metrics.exact_series(eng[run["index"]], fam),
+                                              metrics.exact_series(lines, fam))
+                        rows.append({"id": sid, "area": area, "metric": fam, "kind": "exact",
+                                     "run": run["index"],
+                                     "verdict": stale or ("in" if ok else "out"),
+                                     "margin": diff, "engine": None, "tasim": None})
                 continue
             R = ref["values"]["R"]
             t_runs = [metrics.compute(lines, block, values, R) for lines, _o in played]
@@ -351,18 +352,20 @@ def seat_effect(ref):
 
 
 def self_consistency(ref, path):
-    """An exact scenario: runs 0 and 1 (reload) and 2 (fresh) give the same family series."""
+    """An exact scenario: runs 0 and 1 (reload) and 2 (fresh) give the same series for each of
+    its metrics."""
     eng = engine_traces(ref, path)
-    fam = ref["scenario"]["calib"]["exact_family"]
     if 0 not in eng:
         return "not exact: no run 0 in the reference"
-    base = metrics.exact_series(eng[0], fam)
-    for k in sorted(eng):
-        if k == 0:
-            continue
-        d = metrics.first_difference(base, metrics.exact_series(eng[k], fam))
-        if d:
-            return f"not exact: runs 0 and {k} differ at item {d[0]} ({d[1]} against {d[2]})"
+    for fam in ref["scenario"]["calib"]["metrics"]:
+        base = metrics.exact_series(eng[0], fam)
+        for k in sorted(eng):
+            if k == 0:
+                continue
+            d = metrics.first_difference(base, metrics.exact_series(eng[k], fam))
+            if d:
+                return (f"not exact: {fam}: runs 0 and {k} differ at item {d[0]} ({d[1]} against "
+                        f"{d[2]})")
     return None
 
 

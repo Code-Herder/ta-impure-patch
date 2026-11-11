@@ -26,8 +26,8 @@ On the same scenario, tasim on one core runs at least **20 × the game's turbo**
 
 ## The harness
 
-- **`tasim_run`**, in C: one game per process (players, start positions, win and loss) with the results printed as JSON. It is also built for i686, so whole games get the same Wine parity check as the wiki's demos.
-- **`tools/tasim/`**, in Python, in the shared venv: tournaments, Elo, tuning sweeps and the calibration runner.
+- **`tasim_run`**, in C: one game per process (players, start positions, win and loss) with the results printed as JSON. It is also built for i686, so whole games get the same Wine parity check as the wiki's demos. Today it has one subcommand, `roles`, which classifies every unit of an install with the shared core's `tasim_roles` (`tools/tasim/tasim_run.c`, built natively by `tools/tasim/native.py`); `play`, which the calibration check runs per run, lands with T1.
+- **`tools/tasim/`**, in Python, in the shared venv: tournaments, Elo, tuning sweeps and the [calibration runner](../modules/tasim-calibration.html), which is built: the engine phase, the references, the check and its scoreboard, and the duel generator.
 
 ## Watching a game
 

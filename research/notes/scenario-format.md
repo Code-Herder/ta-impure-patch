@@ -175,7 +175,7 @@ unit names by scanning the live definition table. This design follows its recipe
   **error**, over the default cap of 1500 with no limit set is a **warning** (the engine
   would silently drop the rest).
 - **The calibration keys** reset a level between runs of the calibration runner
-  ([calibration](impai/calibration.html)). Each writes engine state no other
+  ([the calibration runner](modules/tasim-calibration.html)). Each writes engine state no other
   machine sees, so the applier refuses each in a network game and on a puppet, as an error
   naming the key that `on_error` then handles:
   - `setup.clear_features` (default `false`): every feature of the level burned through the
@@ -202,6 +202,9 @@ unit names by scanning the live definition table. This design follows its recipe
     log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped
     S)`. The result's `delayed` is the number pending after the apply, and `cleared_slots` lists
     the slots the apply's clear emptied.
+- **The top-level `calib` object** is the calibration runner's: the scenario's kinds, metrics,
+  runs, tick limit, end clauses and scoreboard area (`tools/tasim/calibref.py` validates it).
+  The compiler accepts it as an object and never writes it to the wire.
 
 ## Order vocabulary
 
