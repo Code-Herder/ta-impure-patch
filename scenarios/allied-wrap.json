@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "Allied sight's wrap test (research/notes/modules/allied-sharing.md): 289 CORAK of player 0 on a 17x17 grid at 32 wu, one to a sight block, centred on (2608, 1200) of the Two Continents plateau, with true line of sight. MEASURED 2026-11-11: 55 blocks of the stack take more than 255 stamps, at most 305 at the centre, where the engine's one-byte counter reads 49 (305 mod 256) and Impure's reads 255 with the true count beside it. Player 2 (Arm AI) is the ally to be, with a radar tower `arad` far south, so its counters receive the stack's stamps too; player 1 (Core AI) has a radar tower `crad`. The alliance is the skirmish key's Player<N>AllyGroup in the instance's registry store, set before the load: Player0AllyGroup=1, Player2AllyGroup=1, Player1AllyGroup=2 ally records 0 and 2 and not 1. The unit limit is raised to 500 for the stack.",
+ "description": "Allied sight's wrap test (research/notes/modules/allied-sharing.md): 289 CORAK of player 0 on a 17x17 grid at 32 wu, one to a sight block, centred on (2608, 1200) of the Two Continents plateau, with true line of sight. MEASURED 2026-11-11: 55 blocks of the stack take more than 255 stamps, at most 305 at the centre, where the engine's one-byte counter reads 49 (305 mod 256) and Impure's reads 255 with the true count beside it. Player 2 (Arm AI) is the ally, with a radar tower `arad` far south, so its counters receive the stack's stamps too; player 1 (Core AI) has a radar tower `crad`. The alliance is the players' ally_group keys: seats 0 and 2 in group 1 and seat 1 in group 2 ally records 0 and 2 and not 1. The unit limit is raised to 500 for the stack.",
  "seed": 20261111,
  "on_error": "abort",
  "setup": {
@@ -17,19 +17,22 @@
     "slot": 0,
     "controller": "human",
     "side": "arm",
-    "color": 0
+    "color": 0,
+    "ally_group": 1
    },
    {
     "slot": 1,
     "controller": "ai",
     "side": "core",
-    "color": 1
+    "color": 1,
+    "ally_group": 2
    },
    {
     "slot": 2,
     "controller": "ai",
     "side": "arm",
-    "color": 2
+    "color": 2,
+    "ally_group": 1
    }
   ]
  },
