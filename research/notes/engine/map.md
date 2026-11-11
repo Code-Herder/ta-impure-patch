@@ -2143,10 +2143,16 @@ walk with `dec` (`0x481E7E`, `0x481F5F`): a byte compare of `0x482270..0x4824D6`
 removal returns the counters to their value when the stored words, the height byte, the sight word,
 the table and the grid are what the stamp saw.
 
-**Engine-defect candidate: the counters wrap.** A player's sight counters are one byte a block,
-`inc` and `dec` symmetric: one TABLE8 stamp adds at most 7 to a block (plus 1 on its own), so about 37
-units of one owner stacked over a block would wrap it to 0 and show it unlit [INFERRED arithmetic,
-not measured]. Not patched.
+**Engine defect: the counters wrap.** A player's sight counters are one byte a block, `inc` and
+`dec` symmetric, so a block under more than 255 stamps holds the count mod 256 and reads unlit at
+every multiple of 256. MEASURED 2026-11-11 (`scenarios/allied-wrap.json`: 289 CORAK of one owner on
+a 17×17 grid of 32 wu on Two Continents, true LOS, main `39fa2ea3`'s DLL against the allied-sight
+DLL): 55 blocks of the stack take more than 255 stamps, at most 305; the stock byte there is the
+count mod 256 in every one (49 at the centre, and 0 at some), and equal to the true count everywhere
+else in the stack. Clearing the stack returns every one of its blocks to 0 on both DLLs. Patched by
+[allied sharing](../modules/allied-sharing.html) for every record it keeps wide counters for — every
+eligible seat of a level whose records share one counter length — where the byte holds
+`min(count, 255)`.
 
 **MEASURED 2026-11-01** (M0-P1: main `28c1c6e0`'s DLL, Over Crude Water's flat plate at height 139,
 True LOS, `numtables` 9, each unit's counters read from its owner's record): each unit lights

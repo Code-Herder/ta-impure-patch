@@ -1,0 +1,2374 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Allied sight's wrap test (research/notes/modules/allied-sharing.md): 289 CORAK of player 0 on a 17x17 grid at 32 wu, one to a sight block, centred on (2608, 1200) of the Two Continents plateau, with true line of sight. MEASURED 2026-11-11: 55 blocks of the stack take more than 255 stamps, at most 305 at the centre, where the engine's one-byte counter reads 49 (305 mod 256) and Impure's reads 255 with the true count beside it. Player 2 (Arm AI) is the ally to be, with a radar tower `arad` far south, so its counters receive the stack's stamps too; player 1 (Core AI) has a radar tower `crad`. The alliance is the skirmish key's Player<N>AllyGroup in the instance's registry store, set before the load: Player0AllyGroup=1, Player2AllyGroup=1, Player1AllyGroup=2 ally records 0 and 2 and not 1. The unit limit is raised to 500 for the stack.",
+ "seed": 20261111,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "true",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   }
+  ]
+ },
+ "camera": {
+  "at": [
+   2608,
+   1200
+  ]
+ },
+ "units": [
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    944
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    976
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1008
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1040
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1072
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1104
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1136
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1168
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1200
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1232
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1264
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1296
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1328
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1360
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1392
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1424
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2352,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2384,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2416,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2448,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2480,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2512,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2544,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2576,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2608,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2640,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2672,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2704,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2736,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2768,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2800,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2832,
+    1456
+   ]
+  },
+  {
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2864,
+    1456
+   ]
+  },
+  {
+   "id": "arad",
+   "type": "ARMRAD",
+   "owner": 2,
+   "pos": [
+    6900,
+    12650
+   ]
+  },
+  {
+   "id": "crad",
+   "type": "CORRAD",
+   "owner": 1,
+   "pos": [
+    4800,
+    11400
+   ]
+  }
+ ]
+}
