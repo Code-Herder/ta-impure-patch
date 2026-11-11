@@ -150,6 +150,7 @@ PAGES = [
     ("engine/sim",                     "Sim step & clock", "Engine map"),
     ("engine/units",                   "Units", "Engine map"),
     ("engine/weapons",                 "Weapons & effects", "Engine map"),
+    ("engine/keys",                    "Data keys", "Engine map"),
     ("engine/map",                     "Map, fog & sight", "Engine map"),
     ("engine/orders",                  "Orders & AI", "Engine map"),
     ("engine/render",                  "Drawing the frame", "Engine map"),

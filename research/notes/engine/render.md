@@ -1469,7 +1469,12 @@ name with the comparator `0x43C020`, `_stricmp(a+0x15, b+0x15) < 0`. The 68 reco
 process, so **an order's type byte `+4` is its record's rank in that sorted vector**, not its
 position in `.rdata`: `BuildingBuild` is `0x0C` only because the compare folds case (under a
 case-sensitive compare `BuildWeapon` would come first). The engine reads only these heap copies;
-rewriting a handler dword in `.rdata` after `0x43C050` has run changes nothing.
+rewriting a handler dword in `.rdata` after `0x43C050` has run changes nothing. **Type 0 is
+`Ready`**: the record at `0x4FD288` names `0x5119B8`, an empty string (eight zero bytes), which
+sorts before every other name. Its handler `0x439EA0` is `mov eax,5; ret 0xC`, unlink and free at
+the first dispatch, so the 0 a refused `0x43F0E0` writes, passed on to `0x43ADC0`, makes a node
+that does nothing and frees itself — after `0x43ADC0` without Shift has wiped the queue
+([orders](orders.html), *The group order `0x480460`*) [DISASSEMBLED 2026-11-11].
 
 | Offset | What | Read at |
 | --- | --- | --- |

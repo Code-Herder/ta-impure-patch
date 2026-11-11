@@ -31,5 +31,6 @@ ImpAI is a planned skirmish AI that plays beside the stock one. tasim is a headl
 
 - The 100/100 bar is to be re-evaluated by the owner once A2's results exist.
 - C1 verifies that a scenario can be reloaded into a running game instead of relaunched; the calibration set's cost depends on it.
-- Which `SKIRMISH.GUI` gadget a seat click cycles, and through which values, is not documented anywhere (L0).
-- That Hard Difficulty applies no income scaling to OTA AI is [INFERRED]: the notes give only 50 % and 70 %.
+- Who reads each key the engine loads: the [key inventory](../engine/keys.html) lists what the parsers read, not yet which fields the simulation consumes. tasim's coverage needs it.
+- The stock AI's helpers, a few loose ends of the seam and the AI in a network game are not documented yet ([entering the game](engine-seam.html), *Not documented yet*).
+- Whether the shipped AI profiles use `plan` sections, which make the stock AI's profile depend on the Difficulty.

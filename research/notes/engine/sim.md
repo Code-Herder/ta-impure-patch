@@ -42,7 +42,9 @@ the measured runs and what they mean for the design are in the
   records' alliance rows (PlayerInfo `+0x108`, [units](units.html)) of records 0 and 2 a 1 for each
   other and none for record 1 (MEASURED 2026-11-11, `scenarios/sensor-view.json`; every seat's key
   held 5 before it was written, and what 5 means is not established) — `+0xC` metal, `+0x10` energy,
-  `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
+  `+0x14` the colour (read by the fill and the seat setup below); how the screen's buttons cycle
+  them, and `+0x224` (the clicked seat) and `+0x228` (`SkirmishDifficulty`): [the GUI](ui.html),
+  *The SKIRMISH screen's handler*. Past them, the loader's type-2
   branch (`0x4973C1..0x497457`) copies `+0x108` into `ActiveCommanderDeath` `main+0x37EF6` and bit 0
   of `+0x10C`, `+0x110` and `+0x114` into bits 0, 1 and 2 of the LosType word `main+0x14281`, the
   bits the `Mapping`, `LOS` and `LOSType` console commands toggle; `+0x118` nonzero means fixed
@@ -134,6 +136,66 @@ the measured runs and what they mean for the design are in the
   no unit at all ran on (68 s measured) and took new units. With `ActiveCommanderDeath` set to 1, a
   type-3 commander's death cleared its `+0x149` bit 0 and killed nothing else: the kill-all is for a
   local owner only (*`Send_UnitDeath 0x4864B0`*, below, `0x48667E..0x4866B3`).
+
+### Difficulty and the AI handicap — `main+0x37EEE` [DISASSEMBLED 2026-11-11]
+
+The skirmish Difficulty is one global, `main+0x37EEE`: 0 Easy, 1 Medium, 2 Hard (the gadget and
+its other writers: [the GUI](ui.html), *The SKIRMISH screen's handler*). **It scales the resources of
+type-2 players at seventeen sites and nothing else in the simulation.** A sweep of `.text` finds 56
+instructions with the displacement `0x37EEE` (objdump's linear sweep; no `lea` or `add` form); the
+simulation's readers are the seventeen below and the AI profile command `plan`.
+
+**Every site has the same shape.** The record `rec` is tested active (`[rec]` ≠ 0) and of type 2
+(`byte [rec+0x73] == 2`) while it is live in a register; then `switch (main+0x37EEE)`: 0 → the value
+× 0.5, 1 → × 0.7, anything else unscaled. The value is multiplied by −0.5 or −0.7 and subtracted from
+the destination, which adds half or seven tenths of it. **Hard applies no scaling, at every site**:
+the switch is `sub eax,0` (or `sub eax,ebx` with `ebx` = 0) / `je` → × 0.5, `dec eax` / `jne` →
+unscaled. The constants are pairs of doubles, −0.7 then −0.5: `0x4FC480`, `0x4FC6D8`, `0x4FCC90`,
+`0x4FD040`, `0x4FD540`, `0x4FD700` (each read from the image). Every type test's bytes and branch
+below were checked against the image.
+
+| # | Function: what is scaled | Record tested | Type test (address: bytes) | Difficulty read | The type test's branch (unscaled) |
+|---|---|---|---|---|---|
+| 1 | economy pass `0x401360`: a structure's negative EnergyUse (its production) → unit `+0xBC` | unit `+0xEC` in `eax` | `0x401435: 80 78 73 02 75 37` | `0x401441` | `0x401472` |
+| 2 | economy: an extractor's metal (unit `+0x58`) → unit `+0xD4` | same | `0x4014B2: 80 78 73 02 0F 85 83 00 00 00` | `0x4014C2` | `0x40153F` |
+| 3 | economy: `makesmetal` (def `+0x22D`) → `+0xD4` | same | `0x4014F3: 80 78 73 02 75 46` | `0x4014FE` | `0x40153F` |
+| 4 | economy: the wind `main+0x37EDE` × `windgenerator` (def `+0x1D2`) → `+0xBC` | same | `0x40157F: 80 78 73 02 75 26` | `0x401585` | `0x4015AB` |
+| 5 | economy: the tide `main+0x14267` × `tidalgenerator` (def `+0x1D6`) → `+0xBC` | same | `0x4015F3: 80 78 73 02 0F 85 B8 00 00 00` | `0x4015FD` | `0x4016B5` |
+| 6 | economy: a mobile unit's negative EnergyUse → `+0xBC` | same | `0x40167C: 80 78 73 02 75 33` | `0x401688` | `0x4016B5` |
+| 7 | economy: `energymake` (def `+0x1C2`) → `+0xBC` | same | `0x4016F2: 80 78 73 02 75 33` | `0x4016FE` | `0x40172B` |
+| 8 | economy: `metalmake` (def `+0x1CA`) → `+0xD4` | same | `0x401753: 80 78 73 02 75 36` | `0x40175E` | `0x40178F` |
+| 9 | BuildingBuild `0x402640`, event 2: the refund of the target's def `+0x18A` × (1 − target `+0x104`) → the builder's `+0xD4` | builder `+0xEC`, `eax` | `0x40269F: 80 78 73 02 75 38` | `0x4026AB` | `0x4026DD` |
+| 10 | the build step `0x41BA60` with a negative amount (unbuilding): the metal returned → the frame's `+0xD4` | frame `+0xEC`, `eax` | `0x41BBB1: 80 78 73 02 75 37` | `0x41BBBD` | `0x41BBEE` |
+| 11 | the reclaim payout `0x4237D0`: FeatureDef `+0xEC` energy → the reclaimer's `+0xBC` | reclaimer `+0xEC`, `eax` | `0x4238C4: 38 58 73 75 2E` (`cmp [eax+0x73],bl`, `bl` = 2) | `0x4238C9` | `0x4238F7` |
+| 12 | the reclaim payout: FeatureDef `+0xF0` metal → `+0xD4` | same | `0x423918: 38 58 73 75 38` | `0x423923` | `0x423955` |
+| 13 | the energy transfer `0x464B30` → the recipient | `[obj+0x30]`, `ecx` | `0x464C06: 80 79 73 02 75 32` | `0x464C0C` | `0x464C3E` |
+| 14 | the metal transfer `0x464C60` | same | `0x464D36: 80 79 73 02 75 34` | `0x464D3C` | `0x464D70` |
+| 15 | the Deathmatch respawn `0x4653D9`: PlayerInfo `+0xA1` × 100 energy → the new commander's `+0xBC` | the new unit's `+0xEC`, `eax` | `0x465437: 80 78 73 02 75 38` | `0x465443` | `0x465475` |
+| 16 | the respawn: PlayerInfo `+0xA3` × 100 metal → `+0xD4` | same | `0x4654A3: 80 78 73 02 75 38` | `0x4654AF` | `0x4654E1` |
+| 17 | unit death `0x486C9E..`, the kind nibble (argument `+0xA` & `0xF0`) `0x50` [INFERRED: a reclaimed unit]: (1 − victim `+0x104`) × the victim's def `+0x18A` → the killer's (`+0xF0`) `+0xD4` | killer `+0xEC`, `ecx` | `0x486CDA: 80 79 73 02 75 38` | `0x486CE6` | `0x486D18` |
+
+Sites 2 and 3 share one switch (`0x401504..0x40153A`). What each destination field means is the
+economy pass's ([network](network.html), the economy pass) and [memory](memory.html)'s (the kill
+credit); the rows name the stores, not their meanings.
+
+**Difficulty-dependent, but not a handicap: the AI profile.** The profile command `plan`
+(`0x406C90`, registered with `weight` `0x406DB0` and `limit` `0x406E40` at `0x406F00..0x406F2E`)
+sets the gate `0x501774` when one of its arguments is `any` or names the current difficulty
+(`easy` 0, `medium` 1, `hard` 2: `0x406CE6..0x406D75`); `weight` and `limit` apply only while the
+gate is set (`0x406DB0`, `0x406E40`), and `limit` only to type-2 records (`0x406EA8`). So **the stock
+AI's profile can depend on difficulty**; whether the shipped `ai\*.txt` use `plan` sections was not
+checked. `0x40C3DF` only prints `EASY`/`MEDIUM`/`HARD` into an AI debug dump. The other readers are
+the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game writers), `0x42FB47`
+(the registry load), the cycles' own reads (`0x41EE9A`, `0x47B93F`), and the labels `0x4368E3`,
+`0x45F53B`, `0x477431..0x47848E` and `0x47BC26..0x47BC88` — 38 reads and 18 writes in all.
+
+**Who writes it**: the SKIRMISH screen ([the GUI](ui.html)); the registry load (`0x42FB2E`,
+`0x42FB3C`); the post-game screen's own `Difficulty` cycle (`0x41EEBB..0x41EF1B`, which writes the
+settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`); the campaign screens
+(`0x477D26..0x477D62`); a saved game's load (its `Difficulty` key, `0x4926DF..0x492701`); an
+unidentified three-way switch (`0x426A66`, `0x426A80`, `0x426A9B`); and **`0x448A0B`, which stores 2
+right after `0x430F00`** in the network setup [INFERRED: the battle room], so **a network game's AI
+plays unscaled**. No console command writes it; it changes during play only through a restart.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 

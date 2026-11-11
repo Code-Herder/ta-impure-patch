@@ -643,7 +643,8 @@ the `+0xEC` record (`0x40190E..0x40193D`), adds the base storage `+0xDC`/`+0xE0`
 consumption up to what there is, keeping the fraction met per resource (`0x401A4D..0x401AB1`), and
 clamps `+0x8C`/`+0x98` to storage, the excess into wasted `+0xCC`/`+0xD4`
 (`0x401AB3..0x401B27`). A type-2 player's income is scaled there by the difficulty
-`main+0x37EEE` (behind `0x401435`, eight reads `0x401441..0x40175E`). The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
+`main+0x37EEE`: eight reads `0x401441..0x40175E`, each behind its own test of the unit's owner record
+for type 2 (`0x401435` is the first); rows 1–8 of [sim](sim.html), *Difficulty and the AI handicap*. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
 records in DPID order in a network game**: `0x485842` sorts the ten record pointers on `+4` when
 `0x435100` answers 3 (otherwise on the pointer itself), and `0x4858BD` gives the k-th of the sorted
 list the block `1 + k·N` (`+0x67`, and its last slot at `+0x6B`, `0x4858E0`), so record k owns

@@ -115,6 +115,7 @@ What we have mapped of the engine lives in one page per subsystem; this page kee
 - [The simulation step and its clock](engine/sim.md) — The sim tick, its rate, the step's phases and counts, and how a level starts and ends.
 - [Units: records, creation, death and transport](engine/units.md) — The unit and player records, creation, the unit cap, build lists, death, transport and attachment.
 - [Weapons, damage and effects](engine/weapons.md) — Weapon decisions and IDs, damage, veterancy, area damage, projectiles, the effect pools and the nano spray.
+- [Data keys the engine reads](engine/keys.md) — The TDF getters, the parsers that call them, and every key each parser reads: the unit FBI, the move classes, weapons, features, the map's OTA and the sidedata.
 - [The map: terrain, features, footprints, fog and sight](engine/map.md) — The terrain pass, features and wrecks, the wind, the grid stamp and footprint contest, the fog grids and line of sight.
 - [Orders and the AI](engine/orders.md) — The order module, order fallbacks, resurrect, the AI's order activity and resource placement.
 - [Drawing the frame: blits, rasterisers, shadows and markers](engine/render.md) — The offscreen and flip, `DrawGameScreen`'s sweep, the unit blit and its shadows, the rasterisers, the order markers.

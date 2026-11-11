@@ -113,6 +113,57 @@ is absent at launch (an archive installed only some of the time) is replaced in 
 the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
 load its `.ota` (`0x47BCD7`).
 
+### The SKIRMISH screen's handler `0x47AE60`: the seat button `Player<N>`, its cycle `0x4797E0` and the Difficulty gadget [DISASSEMBLED 2026-11-11]
+
+**The handler** `0x47AE60`, `stdcall(gui)`, `ret 4`, serves the screen loaded from `SKIRMISH.GUI`
+(`0x5084AC`, at `0x47BBC2`). It takes the actuated gadget's index `gui+0x60` (−1: nothing), copies
+that gadget's name (`0x49FED0`), stores **`atoi` of the name's last character** into the settings'
+`+0x224`, the clicked seat (`0x47AE80..0x47AEC0`), and strips that character. Whole names are tested
+through `0x49FD60(gui, name)`: `Start`, `PrevMenu`, `CommanderDeath`, `StartLocation`, `Mapping`,
+`LineOfSight`, `SelectMap`, `Difficulty`; the stripped names by an inline compare: `Player`, `Side`,
+`Allies`, `Color`, `Energy`, `Metal`. The Start branch and the seat fill it calls: [sim](sim.html),
+*Seating a level*.
+
+**The seat's controller button is the gadget `Player<N>`** (`0x47B133..0x47B191`): it plays the
+sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`), whose one caller is
+`0x47B178`. The `Player` branch does not look at which mouse button was pressed.
+
+**The cycle `0x4797E0`** reads the seat's entry `+0x00` in the settings `[main+0x29A0]`
+(`0x47981D..0x47982D`) and writes the next value and the button's label:
+
+- 0, Open → **2**, label `Computer` (`0x5080DC`, `0x4798C2..0x4798C9`);
+- 1, Player → **0**, label `Open` (`0x5056F8`, `0x47989A..0x4798A1`);
+- 2, Computer → **1**, label `Player` (`0x504F6C`), when no seat among the first `main+0x38D81`
+  holds 1 (`0x479833..0x47985E`), else **0**, `Open`.
+
+So a seat cycles **Open → Computer → Player (when no seat is the player) → Open**. The label goes
+through the translator `0x4C5740` and `0x4A0BF0(gui, "Player<N>", text)` (the name formatted from
+`Player%d`, `0x5080E8`). An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
+`Color<N>` through `0x4A0570(gui, name, 0)`; otherwise they are enabled and a colour shared with
+another seat is changed (`0x4799F9..0x479ADB`). The screen's init `0x47A0E0` writes the same three
+labels from `+0x00` (`0x47A1DF..0x47A23F`).
+
+**The other per-seat buttons** step the entry's other fields: `Side<N>` `+0x04` modulo the side
+count `main+0x37F39` (`0x47B1D3..0x47B1F6`); `Allies<N>` `+0x08` modulo 6 (`0x47B24E..0x47B271`;
+[sim](sim.html) shows equal groups start allied and group 5 allies nobody [INFERRED: 5 is "no
+alliance"]); `Metal<N>` `+0x0C` and `Energy<N>` `+0x10` in steps of 500 up to 10000
+(`0x47B510..0x47B5F4` for metal) [the lower bounds by mouse button, 500 and 200, not each traced].
+
+**The settings block's fields this screen owns** — `+0x00` the controller (0 Open, 1 Player, 2
+Computer), copied to the record's `+0x73` verbatim by the seat fill through `0x464290`, so the
+entry can hold no fourth value (3 is a replay puppet's type); `+0x224` the clicked seat; `+0x228`
+`SkirmishDifficulty`. **The registry** keeps `+0x00` as `Player%dController` (`0x5043F8`) in
+`Total Annihilation\Skirmish` (`0x503300`) for seats 0 to `main+0x38D81` − 1: loaded at
+`0x430C21..0x430C40` (`0x4B69D0`) and saved at `0x4315F1..0x43161B` (`0x4B6A50`).
+
+**The Difficulty gadget** is one global, not per seat. A click (`0x47B939..0x47B9C6`) steps
+`main+0x37EEE` 0 → 1 → 2 → 0 and writes the settings' `+0x228` with it; the sound is `SKirmish`
+(`0x502A6C`). The screen's init copies `+0x228` into `main+0x37EEE` (`0x47BBF7..0x47BC03`), then
+for the value v writes the gadget's byte `+0x137` = v and calls `0x4A1110(main+0x519, name, 1)` with
+0 `Easy` (`0x504EA8`), 1 `Medium` (`0x504EA0`), 2 `Hard` (`0x504E98`) (`0x47BC26..0x47BCAA`)
+[INFERRED: `+0x137` is the button's stage and the call shows its name]. What the value scales, and its other writers: [sim](sim.html),
+*Difficulty and the AI handicap*.
+
 ### The in-game wiki's engine questions: the four input channels, the network bit `main+0x2A44` and the pause [DISASSEMBLED 2026-10-25]
 
 The in-game wiki (`tagpu_wiki.c`, [the plan](../ingame-wiki-plan.html), landing 2) holds every input

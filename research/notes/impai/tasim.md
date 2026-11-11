@@ -18,7 +18,7 @@ tasim is the shared core run headless by a game driver. It simulates the whole g
 
 ## Coverage is measured, not claimed
 
-L0 adds to the engine map an inventory of every FBI, weapon-TDF and `moveinfo` key the engine's parsers read, taken from the disassembly. `tasim_defs` loads against that inventory, and names every unit and key it does not model. "The whole game" therefore means every key in the inventory is modelled. A mod with keys nobody listed shows up on its first run.
+The engine map's [key inventory](../engine/keys.html) lists every FBI, weapon-TDF, `moveinfo`, feature and map key the engine's parsers read, taken from the disassembly; which of those fields the simulation reads back is not mapped yet. `tasim_defs` loads against that inventory, and names every unit and key it does not model. "The whole game" therefore means every key in the inventory is modelled. A mod with keys nobody listed shows up on its first run.
 
 ## Speed
 

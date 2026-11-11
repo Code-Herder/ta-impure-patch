@@ -427,8 +427,9 @@ On the counting path:
   killer's player `+0xF4` (`0x4869BA..0x4869C8`).
 
 Two more reads of `+0x104` come after the stats. `0x486C9E..0x486D1E` (kind 5 with a killer) credits
-`(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. The credit is scaled by a factor that
-depends on `main+0x37EEE` when the killer's `+0xEC` record is active and its `+0x73` is 2. [INFERRED: `+0xD4` is the
+`(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. When the killer's `+0xEC` record is active
+and its `+0x73` is 2 (`0x486CDA`), the credit is × 0.5 on Easy and × 0.7 on Medium, unscaled on Hard
+(`main+0x37EEE` read at `0x486CE6`; row 17 of [sim](sim.html), *Difficulty and the AI handicap*). [INFERRED: `+0xD4` is the
 reclaimer's metal intake, `def+0x18A` the metal cost.] `0x486D24..0x486D50` runs the death explosion
 `0x49B000` only when `rec+9 > 0` and `+0x104 == 0.0` (`0x486D2F`). The explosion's damage is computed
 only on the owner's peer (C's evidence), so elsewhere it is a picture. The severity `rec+9` is read
