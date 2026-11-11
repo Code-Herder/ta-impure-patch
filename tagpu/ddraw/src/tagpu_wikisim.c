@@ -131,45 +131,10 @@ static XZ map_cursor(const WIKISIM* s)
 /* ---- the units' scripts: the in-game wiki's COB host (tagpu_wikicob.h), sim.js's COB, facts,
    stance, cobCall, extractorSpeed and spawn ---- */
 
-/* GET's facts: every unit with a script handle, in creation order -- its handle, owner, centre,
-   the build fraction still to go as the float unit+0x104 holds, and HEALTH in percent, 100 since
-   the wiki has no damage. The count, 0 when the scratch could not grow (oom set). */
-int tasim_facts(WIKISIM* s)
-{
-    int i, n = 0;
-    if (s->nunit > s->cfact) {
-        WIKICOBFACT* p = (WIKICOBFACT*)realloc(s->fact, (size_t)s->nunit * sizeof *p);
-        if (!p) { s->oom = 1; return 0; }
-        s->fact = p;
-        s->cfact = s->nunit;
-    }
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        WIKICOBFACT* f = &s->fact[n];
-        if (!u->cob) continue;
-        f->unit = u->cob;
-        f->owner = u->owner;
-        f->x = tasim_fix16(u->x);
-        f->z = tasim_fix16(u->z);
-        f->left = (float)(1.0 - u->built);
-        f->health = 100;
-        n++;
-    }
-    return n;
-}
-
 /* INBUILDSTANCE, the gate a builder's work waits on (0x438700); open for a unit that runs no script */
 static int stance(const WIKISIM* s, const WIKIUNIT* u)
 {
     return !s->cob || !u->cob || tagpu_wikicob_value(s->cob, u->cob, WIKICOB_INBUILDSTANCE) != 0;
-}
-
-void tasim_cob_call(WIKISIM* s, const WIKIUNIT* u, const char* script, int how, int argc, const int32_t* args)
-{
-    int n;
-    if (!s->cob || !u->cob) return;
-    n = tasim_facts(s);
-    tagpu_wikicob_call(s->cob, u->cob, script, how, argc, args, s->fact, n);
 }
 
 /* JS's ToInt32 of a finite double's integer part, its low byte: a cell's metal as the engine's byte */
