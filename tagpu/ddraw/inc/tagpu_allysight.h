@@ -11,6 +11,11 @@ void tagpu_allysight_init(void);
    with viewer. The game thread, and the loader thread during a load. */
 int tagpu_allysight_shares(unsigned owner, unsigned viewer);
 
+/* 1 when the radar pass gives viewer the contacts of owner's units, walks owner's radar and sonar
+   units for viewer and skips owner's jammers: tagpu_allysight_shares, and the radar pass's sites
+   installed. The game thread. */
+int tagpu_allysight_contacts(unsigned owner, unsigned viewer);
+
 /* The replay's table write (tagpu_replay.c, tables_put): begin before the poison and the first
    table is written, restored after the writes. restored returns 1 when S changed and the
    counters were migrated to it. The game thread, between two sim steps. */

@@ -3,10 +3,11 @@
 Allies see what each other sees. Two players allied both ways share their line of sight, the
 death vision of their units and their explored map, in skirmish and in network games, with AI
 seats as with human ones: a unit acquires and fires at what only an ally sees, the fog and the
-minimap fog open where an ally sees, and the cull draws what an ally sees. The engine's one-byte
-sight counters never wrap: a cell under more than 255 stamps reads 255, not 0. Radar and sonar
-contacts, allied jammers, allied minimap dots and allied cloaked or submerged units are not shared
-yet (*Gaps*).
+minimap fog open where an ally sees, and the cull draws what an ally sees. They share their radar
+and sonar contacts: an ally's radar and sonar mark enemies on your radar picture, an ally's jammers
+do not jam you, and an ally's units keep their dot on the minimap. The engine's one-byte sight
+counters never wrap: a cell under more than 255 stamps reads 255, not 0. Allied cloaked or
+submerged units are not shown yet (*Gaps*).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
@@ -41,6 +42,7 @@ picture is exact, since both rows involving a local seat are local.
 | `tagpu_allysight.c/.h` | game, loader | S and W, the hooks, the walk, the migration, the replay's pair; `sim` in `thread-split.allow` |
 | `tagpu_replay.c` `tables_put` | game | calls `tagpu_allysight_restore_begin` / `_restored` around the table write |
 | `tagpu_recorder.c` `dump_sight` | game | writes each kept record's W after its counters (`RK_SIGHTW`) |
+| `tagpu_rangeown.c` | game | the sensor view draws the coverage of the owners `tagpu_allysight_contacts` names |
 | `tools/replay/tarec.py` | — | reads `RK_SIGHTW`; `compare-dumps` compares W as it compares the counters, and checks `u8 = min(W, 255)` in each dump |
 
 ## S and W
@@ -86,6 +88,35 @@ kill-all on the game thread's load loop at the same time ([units](../engine/unit
 runs on whichever thread pumps*). That race is the engine's own, on its counters and its unit array,
 and it is not closed here: the lock keeps one walk at a time and W consistent through it.
 
+## Contacts
+
+The radar pass `0x467440` builds the viewed record's radar picture, `+0x110` bits 8–10 of every unit
+(bit 8 a radar contact, bit 9 a sonar contact, bit 10 jammed), every 30 ticks in the players phase.
+It runs for the viewed record only. Four sites make it share (`ally_radar`), each answering by S:
+
+- **Loop 1's share test** (`0x4674BA`): the engine gives bits 8–9 to a unit whose owner's row toward
+  the viewer is non-zero and whose owner's PlayerInfo has ShareRadar (`+0x97 & 0x40`); here, when S
+  shares the owner with the viewer. ShareRadar is not read; the watcher test after it is the
+  engine's.
+- **Loop 2's emitters** (`0x46750E`, its head, and `0x4675D2`, its exit): the engine walks the radar
+  and sonar units of the viewer's own block; here, the viewer's block and then the block of every
+  owner S shares with it, each bounded to the unit array (`unit_block`). The visitor `0x467840` only
+  sets bits and skips the viewed player's own units, so the blocks' order does not matter. The list
+  is one pass's (`s_rp`), and two passes never overlap: the players phase runs it on the game thread
+  in play and once on the loader before the game thread's first step, and the replay calls it on
+  the game thread between steps.
+- **Loop 3's jammers** (`0x4675F5`): the engine jams with every jammer whose owner is not the viewer,
+  clearing bit 8 or 9 and setting bit 10 of every unit in range; here, an owner S shares with the
+  viewer is skipped as the viewer's own is (decision 4). Loop 3 still runs after all of loop 2.
+- **The minimap's dots** (`0x466E6F`, in `0x466DC0`): with bits 8 and 9 clear the engine dots only
+  the viewed player's own units; here, an ally's too. Loop 1 gives every allied unit bits 8 and 9,
+  so this site decides only for an allied unit an enemy jams on both kinds.
+
+AI seats keep targeting by the viewed player's bit 8 (`0x40AB3F..0x40AB5C`, decision 10), which now
+holds the allies' contacts. **The sensor view** (`tagpu_rangeown.c`, [range rings](range-rings.html))
+draws the coverage of the viewed player and of every owner `tagpu_allysight_contacts` names — the
+owners whose radar the pass walks for the viewer.
+
 ## The hooks
 
 | site | what the module does there |
@@ -97,6 +128,10 @@ and it is not closed here: the lock keeps one walk at a time and W consistent th
 | the rebuild `0x4816A0` | empties the temporary records (the refill wipes their stamps, which the engine would later subtract from counters that no longer hold them) and fills W of every record the refill will refill with the mode's base, then the engine's rebuild |
 | the players init `0x464990` | sizes W to the level's counters and sets each eligible record's own bit; a level whose records' counters differ in length gets no W and stays stock |
 | the players phase's call `0x49555F` | on the owner's machine, S from the records and the migration, before the phase |
+| the radar pass's share test `0x4674BA` | bits 8–9 for a unit whose owner S shares with the viewer |
+| the radar pass's emitter loop, head `0x46750E` and exit `0x4675D2` | walks the viewer's block, then each shared owner's |
+| the radar pass's jammer test `0x4675F5` | skips the jammers of an owner S shares with the viewer |
+| the minimap's dot test `0x466E6F` | dots an allied unit whose bits 8 and 9 are clear |
 | the destructor's call `0x486845` | the removal only when the unit holds a stamp: under the ray fan the destructor removes unconditionally, and a unit whose height byte is 0 holds none (the replay's `book_stamp` rule) |
 
 ## On a puppet host
@@ -106,7 +141,10 @@ and it is not closed here: the lock keeps one walk at a time and W consistent th
 recording's S, and `tagpu_allysight_restored` migrates the counters to it under the lock, which is
 held from `_restore_begin` over the write. A seek stamps and removes under the host's S (R3–R8b)
 before R12, and the migration then moves them to the recording's; R14a's temporary records are
-made after it. `ally_share` (the players phase) refuses to act on a puppet.
+made after it. `ally_share` (the players phase) refuses to act on a puppet. `ally_radar` runs: in the
+recording's viewed record `contacts_put` overwrites bits 8–10 from the image after the pass, in any
+other view the pass's bits stand, and no simulation reads them on a puppet host
+(`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*).
 
 W is `SIM_REBUILT`: never recorded, rebuilt on every host by the stamps, carried in a dump after
 each record's counters (`RK_SIGHTW`, only for the records S keeps), where `tarec compare-dumps`
@@ -127,8 +165,11 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
 
 ## Gaps
 
-- Radar and sonar contacts, allied jammers, allied minimap dots, the sensor view on S and allied
-  cloaked or submerged units are not shared yet.
+- Allied cloaked or submerged units are not shown yet.
+- A one-way alliance cannot be made from the skirmish keys (ally groups are symmetric), so the
+  both-ways rule's one-way case has not been run.
+- No scenario has an allied unit an enemy jams on both radar and sonar, so the minimap's dot site
+  is installed but its effect is not measured.
 - A mid-game alliance change has no scripted path (the ALLIES panel, `0x447235` / `0x447F8E`); the
   migration it runs is the one every allied game runs at its first players phase, with live units.
 - The network load's leave racing the loader is the engine's race, not closed here.

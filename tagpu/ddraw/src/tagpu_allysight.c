@@ -170,13 +170,33 @@ static uint32_t rd32(const char* p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint16_t rd16(const char* p) { uint16_t v; memcpy(&v, p, 2); return v; }
 static char* rdptr(const char* p) { char* v; memcpy(&v, p, 4); return v; }
 
-/* The record a sight record names at +0, as an index, or NO_OWNER when the pointer is not
-   exactly one of records 0..10: a value read from engine memory is data until bounded. */
-static unsigned owner_of(char* ta, const unsigned char* rec)
+/* A player record pointer as its index, or NO_OWNER when it is not exactly one of records
+   0..10: a value read from engine memory is data until bounded. */
+static unsigned rec_index(char* ta, const char* p)
 {
-    size_t d = (size_t)(rdptr((const char*)rec) - (ta + OFF_PLAYERS));
+    size_t d = (size_t)(p - (ta + OFF_PLAYERS));
     if (d % PL_STRIDE || d / PL_STRIDE > PLAYERS) return NO_OWNER;
     return (unsigned)(d / PL_STRIDE);
+}
+
+/* The record a sight record names at +0, as an index (rec_index) */
+static unsigned owner_of(char* ta, const unsigned char* rec)
+{
+    return rec_index(ta, rdptr((const char*)rec));
+}
+
+/* Record r's unit block [+0x67, +0x6B], its first and last unit inclusive, when it holds a unit
+   and both ends lie inside the unit array [main+0x14357, main+0x1435B] on its stride: data until
+   bounded. The unit array's setup is the fields' only writer (0x4858BD, 0x4858E0, at the level's
+   load), so a bounded block stays bounded for the level. */
+static int unit_block(char* ta, const char* r, char** first, char** last)
+{
+    char* begin = rdptr(ta + OFF_UNITS);
+    char* end = rdptr(ta + OFF_UNITS_LAST);
+    *first = rdptr(r + PL_FIRST);
+    *last = rdptr(r + PL_LAST);
+    return begin && *first >= begin && *last <= end && *first <= *last &&
+           (size_t)(*first - begin) % U_STRIDE == 0 && (size_t)(*last - begin) % U_STRIDE == 0;
 }
 
 /* MEMORY: record t's counters exist at the level's common length, so a cell offset W bounds is
@@ -407,25 +427,18 @@ static void __stdcall rebuild_hook(unsigned arg)
 /* ---- the migration ------------------------------------------------------------------------- */
 
 /* Every unit of o's block that holds a stamp, walked through the engine's own record builder
-   0x482090 into `add` and out of `rem`. THE BOUND: the block's first and last unit inside the unit
-   array and on its stride (data until bounded); a unit lives in its owner's block for its whole
-   life (+0x96 set per slot at level load, 0x485887, 0x485902; a capture makes a new unit,
-   0x488570), and one whose +0x96 names another record is left alone and counted. A unit holds a
-   stamp when it lives (+0xA6 != 0, the rebuild's own test, 0x481796) and its stamp byte says so:
-   the ray fan's height non-zero, the circle's index below the table's count (the replay's
-   book_stamp rule). Only under LosType bit 1: without it nothing stamps (the emitter's test
-   0x48267B, the rebuild's 0x481808). */
+   0x482090 into `add` and out of `rem`. THE BOUND: unit_block; a unit lives in its owner's block
+   for its whole life (+0x96 set per slot at level load, 0x485887, 0x485902; a capture makes a new
+   unit, 0x488570), and one whose +0x96 names another record is left alone and counted. A unit
+   holds a stamp when it lives (+0xA6 != 0, the rebuild's own test, 0x481796) and its stamp byte
+   says so: the ray fan's height non-zero, the circle's index below the table's count (the
+   replay's book_stamp rule). Only under LosType bit 1: without it nothing stamps (the emitter's
+   test 0x48267B, the rebuild's 0x481808). */
 static void migrate_units(char* ta, char* ro, unsigned add, unsigned rem, uint16_t los)
 {
-    char* first = rdptr(ro + PL_FIRST);
-    char* last = rdptr(ro + PL_LAST);
-    char* begin = rdptr(ta + OFF_UNITS);
-    char* end = rdptr(ta + OFF_UNITS_LAST);
+    char *first, *last, *u;
     unsigned count = 0;
-    char* u;
-    if (!begin || first < begin || last > end || first > last ||
-        (size_t)(first - begin) % U_STRIDE || (size_t)(last - begin) % U_STRIDE)
-        return;
+    if (!unit_block(ta, ro, &first, &last)) return;
     if (!(los & LOS_FAN)) {
         const char* table = rdptr(ta + OFF_CIRCLES);
         if (!table) return;
@@ -731,6 +744,8 @@ static unsigned char* stub_circle(void)
     return s;
 }
 
+#define SITE_MAX 33                               /* the longest site, the radar pass's share test */
+
 static void site_bytes(const Site* s, unsigned char* b)
 {
     unsigned rel = (unsigned)(size_t)s->to - (s->va + 5);
@@ -739,11 +754,45 @@ static void site_bytes(const Site* s, unsigned char* b)
     memset(b + 5, 0x90, (size_t)(s->n - 5));
 }
 
+/* The first site of `site` that does not hold its retail bytes (a call: its retail target), or
+   n when all do */
+static unsigned sites_unmatched(const Site* site, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        int ok = site[i].was ? !memcmp((const void*)(size_t)site[i].va, site[i].was, site[i].n)
+                             : tagpu_detour_redirect_ok(site[i].va, site[i].from);
+        if (!ok) break;
+    }
+    return i;
+}
+
+/* Every site written, or none: the ones written are put back when a later write fails. Returns
+   n, or the site whose write failed. Called only once sites_unmatched has passed them all. */
+static unsigned sites_land(const Site* site, unsigned n)
+{
+    unsigned char was[10][SITE_MAX];
+    unsigned i, written;
+    for (i = 0; i < n; i++) memcpy(was[i], (const void*)(size_t)site[i].va, site[i].n);
+    for (written = 0; written < n; written++) {
+        unsigned char b[SITE_MAX];
+        site_bytes(&site[written], b);
+        if (!tagpu_detour_write(site[written].va, b, site[written].n)) break;
+    }
+    if (written < n)
+        for (i = 0; i < written; i++) tagpu_detour_write(site[i].va, was[i], site[i].n);
+    return written;
+}
+
+/* the radar pass's sites, all-or-nothing, after these */
+static void radar_init(void);
+
 /* Every site byte-matched against the retail bytes before any is written, none written unless all
    match (no other module writes any of them: hook-map.md), every stub built before any lands, and
    the ones written put back when a later write fails. No branch lands inside a replaced range but
    at its first byte (DISASSEMBLED: 0x48258C -> 0x482580), and no pointer to any of the hooked
-   functions is in the image. At DllMain, before the engine runs. */
+   functions is in the image. At DllMain, before the engine runs. The radar pass's sites install
+   after these, whole or not at all, and only when these are in: they read S. */
 void tagpu_allysight_init(void)
 {
     Site site[10] = {
@@ -760,18 +809,12 @@ void tagpu_allysight_init(void)
     };
     const unsigned nsite = sizeof site / sizeof site[0];
     unsigned char* stub[7] = { 0 };
-    unsigned char was[10][9];
-    unsigned i, k, written = 0;
+    unsigned i, k;
 
-    for (i = 0; i < nsite; i++) {
-        int ok = site[i].was ? !memcmp((const void*)(size_t)site[i].va, site[i].was, site[i].n)
-                             : tagpu_detour_redirect_ok(site[i].va, site[i].from);
-        if (!ok) {
-            tagpu_logf("allysight: NOT installed: 0x%06X does not hold the retail bytes; allies "
-                       "share nothing and the sight counters are the engine's", site[i].va);
-            return;
-        }
-        memcpy(was[i], (const void*)(size_t)site[i].va, site[i].n);
+    if ((i = sites_unmatched(site, nsite)) < nsite) {
+        tagpu_logf("allysight: NOT installed: 0x%06X does not hold the retail bytes; allies "
+                   "share nothing and the sight counters are the engine's", site[i].va);
+        return;
     }
     stub[0] = trampoline(VA_STAMP, STAMP_WAS, 9);
     stub[1] = trampoline(VA_MAPPED, MAPPED_WAS, 5);
@@ -795,24 +838,18 @@ void tagpu_allysight_init(void)
     site[3].to = stub[5];
     site[4].to = stub[6];
     InitializeCriticalSection(&s_lock);
-    for (i = 0; i < nsite; i++) {
-        unsigned char b[9];
-        site_bytes(&site[i], b);
-        if (!tagpu_detour_write(site[i].va, b, site[i].n)) break;
-        written++;
-    }
-    if (written < nsite) {
-        for (i = 0; i < written; i++) tagpu_detour_write(site[i].va, was[i], site[i].n);
+    if ((i = sites_land(site, nsite)) < nsite) {
         for (k = 0; k < 7; k++) tagpu_detour_stub_free(stub[k]);
         tagpu_logf("allysight: NOT installed: 0x%06X could not be written (the earlier sites put "
                    "back); allies share nothing and the sight counters are the engine's",
-                   site[written].va);
+                   site[i].va);
         return;
     }
     s_on = 1;
     tagpu_log("allysight: installed: the stamp 0x482270 and its three cell sites, the removal "
               "0x481D50, the explored map's stamp 0x481930, the rebuild 0x4816A0, the players init "
               "0x464990, the players phase's call 0x49555F and the destructor's removal 0x486845");
+    radar_init();
 }
 
 SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied tenseat");
@@ -861,3 +898,285 @@ static void __cdecl players_phase(void)
     }
     E_PlayersPhase();
 }
+
+SIM_FEATURE(ally_radar, SIM_PUPPET_RUNS, "battle-allied contact-waves");
+
+/* THE RADAR PASS 0x467440, no argument, plain `ret` (0x467836; DISASSEMBLED 0x467440..0x467836):
+   the viewed record's contacts, +0x110 bits 8-10 of every unit, in five loops over the unit array.
+   Its one engine call is 0x46556D in the players phase 0x464F80; the replay calls it too
+   (tagpu_replay.c). The record it runs for, the viewer, is the viewed one: `ebp`, made from the
+   byte at main+0x2A43 (0x46745B..0x467490). Allies share contacts at three of its loops:
+   - loop 1 (0x46749F..0x46750C) gives a unit bits 8-9 when its owner is the viewer, or when the
+     owner's row toward the viewer is non-zero AND the owner's PlayerInfo has ShareRadar (+0x97 &
+     0x40, 0x4674BA..0x4674D9): here, when S shares the owner with the viewer instead (both rows,
+     ShareRadar not read: the module note's decisions 1 and 5). The watcher test after it,
+     0x4674DB..0x4674EB, is the engine's;
+   - loop 2 (0x46750E..0x4675CC) walks each radar and sonar unit of the viewer's own block
+     [+0x67, +0x6B] through the bucket walk 0x47E890 with the visitor 0x467840: here, of the
+     viewer's block and then of every block S shares with it. The visitor only sets bits 8 and 9
+     and skips the viewed player's own units (0x467865..0x467871), so the blocks' order does not
+     change what it writes;
+   - loop 3 (0x4675EC..0x46766C) walks every jammer of an owner other than the viewer, and its
+     visitors 0x467960 and 0x467980 clear bit 8 or 9 and set bit 10 of every unit in range with no
+     owner test: here, an owner S shares with the viewer is skipped as the viewer's own is. It
+     still runs after the whole of loop 2.
+   AI seats target by the viewed record's bits (0x40AB3F..0x40AB5C, the module note's decision 10),
+   which now hold the allies' contacts.
+   ON A PUPPET the pass runs as it does live: in the recording's viewed record contacts_put
+   overwrites bits 8-10 from the image after it, in any other view the pass's bits stand, and no
+   simulation reads them on a puppet host (tagpu_replay.c, THE RECORDED VIEW'S CONTACTS). */
+
+static int s_radarOn;
+SIM_VAR(s_radarOn, SIM_INSTALL);
+
+/* Loop 2's block list, written at the loop's head by radar_blocks and read by its stub until the
+   loop ends; one pass at a time: the players phase runs it on the game thread in play and once on
+   the loader during a load (0x497C10), before the game thread's first step (bit 1 of
+   main+0x38D75, set 0x497C5F, polled 0x498342), and the replay calls it on the game thread between
+   steps. */
+static struct {
+    char* viewer;                                 /* the record the pass runs for              */
+    char* rec[PLAYERS];                           /* the records whose blocks loop 2 walks      */
+    unsigned n, next;
+} s_rp;
+SIM_VAR(s_rp, SIM_TRANSIENT);
+
+int tagpu_allysight_contacts(unsigned owner, unsigned viewer)
+{
+    return s_radarOn && tagpu_allysight_shares(owner, viewer);
+}
+
+/* Loops 1 and 3: whether S shares the owner byte (unit +0xFF) with the record the pass runs for.
+   The record is the engine's own pointer, turned into an index exactly or refused; the owner byte
+   is bounded inside tagpu_allysight_shares. */
+static int __cdecl radar_shares(unsigned owner, char* viewer)
+{
+    return tagpu_allysight_shares(owner, rec_index(ta_main(), viewer));
+}
+
+/* Loop 2's head: the viewer's own block first, as the engine walks it, then the block of every
+   owner S shares with the viewer, each bounded by unit_block. A viewer that is not one of records
+   0..9 walks its own block alone, as stock. At most PLAYERS entries: tagpu_allysight_shares
+   refuses the viewer itself. */
+static void __cdecl radar_blocks(char* viewer)
+{
+    char* ta = ta_main();
+    unsigned v = rec_index(ta, viewer), o;
+    s_rp.viewer = viewer;
+    s_rp.rec[0] = viewer;
+    s_rp.n = 1;
+    s_rp.next = 0;
+    if (v >= PLAYERS) return;
+    for (o = 0; o < PLAYERS; o++) {
+        char *r, *first, *last;
+        if (!tagpu_allysight_shares(o, v)) continue;
+        r = prec(ta, o);
+        if (unit_block(ta, r, &first, &last)) s_rp.rec[s_rp.n++] = r;
+    }
+}
+
+#define VA_RP_SHARE    0x004674BAu
+#define VA_RP_BLOCKS   0x0046750Eu
+#define VA_RP_EXIT     0x004675D2u
+#define VA_RP_JAM      0x004675F5u
+#define VA_MM_DOT      0x00466E6Fu
+
+/* mov ecx,[eax-0x7A]; xor ebx,ebx; mov bl,[ebp+0x146]; cmp byte [ebx+ecx+0x108],0; je 0x4674DB;
+   mov ecx,[ecx+0x27]; test byte [ecx+0x97],0x40; jne 0x4674F4: loop 1's share test, eax the
+   unit's +0x110, dl the viewer's index. After either exit eax, edx, edi and ebp are live (the
+   loop's store at 0x4674F9, the next unit's owner test at 0x4674B4, loop 2's 0x4675D2); ebx and
+   ecx are rewritten (the test's own `xor ebx,ebx`; 0x4674E1, 0x4674ED, 0x4674F4) */
+static const unsigned char RP_SHARE_WAS[33] = {
+    0x8B, 0x48, 0x86, 0x33, 0xDB, 0x8A, 0x9D, 0x46, 0x01, 0x00, 0x00, 0x80, 0xBC, 0x0B, 0x08, 0x01,
+    0x00, 0x00, 0x00, 0x74, 0x0C, 0x8B, 0x49, 0x27, 0xF6, 0x81, 0x97, 0x00, 0x00, 0x00, 0x40, 0x75,
+    0x19 };
+/* mov esi,[ebp+0x67]; mov eax,[ebp+0x6B]; cmp esi,eax; ja 0x4675D2: loop 2's head over the
+   viewer's block. eax, ecx and edx are dead here (0x46751C..0x467544 load what the body uses) */
+static const unsigned char RP_BLOCKS_WAS[14] = {
+    0x8B, 0x75, 0x67, 0x8B, 0x45, 0x6B, 0x3B, 0xF0, 0x0F, 0x87, 0xB6, 0x00, 0x00, 0x00 };
+/* cmp edi,[esp+0x10]; ja 0x46782F: loop 2's exit, which only its back edge falls into and only
+   0x467516, inside the head's site, jumps to */
+static const unsigned char RP_EXIT_WAS[10] = {
+    0x3B, 0x7C, 0x24, 0x10, 0x0F, 0x87, 0x53, 0x02, 0x00, 0x00 };
+/* mov al,[esi+0x6D]; mov cl,[ebp+0x146]; cmp al,cl; je 0x46765A: loop 3's skip of the viewer's
+   own jammer, esi the unit's +0x92. eax, ecx and edx are rewritten on both exits (0x467608,
+   0x46761B, 0x46761F; 0x46765A, 0x467664) */
+static const unsigned char RP_JAM_WAS[13] = {
+    0x8A, 0x46, 0x6D, 0x8A, 0x8D, 0x46, 0x01, 0x00, 0x00, 0x3A, 0xC1, 0x74, 0x58 };
+/* mov dl,[ebx+0xFF]; mov al,[esi+0x2A43]; cmp dl,al; jne 0x46718C: the minimap's unit dots
+   (0x466DC0's unit loop, ebx the unit, esi main): with bits 8 and 9 clear, a dot only for the
+   viewed player's own unit. eax, ecx and edx are rewritten after 0x466E83 (0x466E83, 0x466E87,
+   0x466E91) and at 0x46718C */
+static const unsigned char MM_DOT_WAS[20] = {
+    0x8A, 0x93, 0xFF, 0x00, 0x00, 0x00, 0x8A, 0x86, 0x43, 0x2A, 0x00, 0x00, 0x3A, 0xD0, 0x0F, 0x85,
+    0x09, 0x03, 0x00, 0x00 };
+
+static unsigned char* emit_rel(unsigned char* p, unsigned char op, unsigned target)
+{
+    *p++ = op;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* emit_jcc(unsigned char* p, unsigned char cc, unsigned target)
+{
+    *p++ = 0x0F;
+    *p++ = cc;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* emit_abs(unsigned char* p, const void* a)
+{
+    unsigned v = (unsigned)(size_t)a;
+    memcpy(p, &v, 4);
+    return p + 4;
+}
+
+/* push eax; push edx; push ebp; movzx ecx,byte [eax-0x11]; push ecx; call radar_shares;
+   add esp,8; test eax,eax; pop edx; pop eax; jnz 0x4674F4 (bits 8-9); jmp 0x4674DB (the
+   watcher test) */
+static unsigned char* stub_rp_share(void)
+{
+    unsigned char *s = tagpu_detour_stub(), *p = s;
+    if (!s) return NULL;
+    *p++ = 0x50; *p++ = 0x52; *p++ = 0x55;
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x48; *p++ = 0xEF;
+    *p++ = 0x51;
+    p = emit_rel(p, 0xE8, (unsigned)(size_t)radar_shares);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x5A; *p++ = 0x58;
+    p = emit_jcc(p, 0x85, 0x004674F4u);
+    emit_rel(p, 0xE9, 0x004674DBu);
+    return s;
+}
+
+/* push ebp; call radar_blocks; add esp,4
+   .next: mov eax,[s_rp.next]; cmp eax,[s_rp.n]; jae .done; inc dword [s_rp.next];
+          mov ebp,[s_rp.rec+eax*4]; mov esi,[ebp+0x67]; mov eax,[ebp+0x6B]; cmp esi,eax; ja .next;
+          jmp 0x46751C (the body; its back edge reads [ebp+0x6B], 0x4675C1)
+   .done: mov ebp,[s_rp.viewer] (loop 3 reads [ebp+0x146]); cmp edi,[esp+0x10]; ja 0x46782F;
+          jmp 0x4675DC
+   The body's stack slots ([esp+0x14], [esp+0x20..0x34]) are untouched: nothing stays pushed
+   across them. `next` is returned through *nextAt for the exit's site. */
+static unsigned char* stub_rp_blocks(unsigned char** nextAt)
+{
+    unsigned char *s = tagpu_detour_stub(), *p = s, *next, *jdone, *jnext;
+    if (!s) return NULL;
+    *p++ = 0x55;
+    p = emit_rel(p, 0xE8, (unsigned)(size_t)radar_blocks);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    next = p;
+    *p++ = 0xA1; p = emit_abs(p, &s_rp.next);
+    *p++ = 0x3B; *p++ = 0x05; p = emit_abs(p, &s_rp.n);
+    *p++ = 0x73; jdone = p++;
+    *p++ = 0xFF; *p++ = 0x05; p = emit_abs(p, &s_rp.next);
+    *p++ = 0x8B; *p++ = 0x2C; *p++ = 0x85; p = emit_abs(p, s_rp.rec);
+    *p++ = 0x8B; *p++ = 0x75; *p++ = 0x67;
+    *p++ = 0x8B; *p++ = 0x45; *p++ = 0x6B;
+    *p++ = 0x3B; *p++ = 0xF0;
+    *p++ = 0x77; jnext = p++;
+    *jnext = (unsigned char)(next - p);
+    p = emit_rel(p, 0xE9, 0x0046751Cu);
+    *jdone = (unsigned char)(p - (jdone + 1));
+    *p++ = 0x8B; *p++ = 0x2D; p = emit_abs(p, &s_rp.viewer);
+    *p++ = 0x3B; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x10;
+    p = emit_jcc(p, 0x87, 0x0046782Fu);
+    emit_rel(p, 0xE9, 0x004675DCu);
+    *nextAt = next;
+    return s;
+}
+
+/* movzx eax,byte [esi+0x6D]; movzx ecx,byte [ebp+0x146]; cmp eax,ecx; je 0x46765A (the viewer's
+   own, as stock); push ebp; push eax; call radar_shares; add esp,8; test eax,eax; jnz 0x46765A;
+   jmp 0x467602. ebx and edi hold the visitors' tables (0x4675E2, 0x4675E7) and are kept by the
+   call */
+static unsigned char* stub_rp_jam(void)
+{
+    unsigned char *s = tagpu_detour_stub(), *p = s;
+    if (!s) return NULL;
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x46; *p++ = 0x6D;
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x8D; *p++ = 0x46; *p++ = 0x01; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0x3B; *p++ = 0xC1;
+    p = emit_jcc(p, 0x84, 0x0046765Au);
+    *p++ = 0x55; *p++ = 0x50;
+    p = emit_rel(p, 0xE8, (unsigned)(size_t)radar_shares);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;
+    *p++ = 0x85; *p++ = 0xC0;
+    p = emit_jcc(p, 0x85, 0x0046765Au);
+    emit_rel(p, 0xE9, 0x00467602u);
+    return s;
+}
+
+/* movzx edx,byte [ebx+0xFF]; movzx eax,byte [esi+0x2A43]; cmp edx,eax; je 0x466E83 (the dot);
+   push eax; push edx; call tagpu_allysight_shares; add esp,8; test eax,eax; jnz 0x466E83;
+   jmp 0x46718C (the next unit) */
+static unsigned char* stub_mm_dot(void)
+{
+    unsigned char *s = tagpu_detour_stub(), *p = s;
+    if (!s) return NULL;
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x93; *p++ = 0xFF; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x86; *p++ = 0x43; *p++ = 0x2A; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0x3B; *p++ = 0xD0;
+    p = emit_jcc(p, 0x84, 0x00466E83u);
+    *p++ = 0x50; *p++ = 0x52;
+    p = emit_rel(p, 0xE8, (unsigned)(size_t)tagpu_allysight_shares);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;
+    *p++ = 0x85; *p++ = 0xC0;
+    p = emit_jcc(p, 0x85, 0x00466E83u);
+    emit_rel(p, 0xE9, 0x0046718Cu);
+    return s;
+}
+
+/* The radar pass's four sites and the minimap's, byte-matched, all or none. No branch lands
+   inside a replaced range but at its first byte (DISASSEMBLED: 0x467497 -> 0x46750E, 0x467516 ->
+   0x4675D2, both inside or at the first byte; 0x4674CD -> 0x4674DB, the share test's own exit,
+   past its range; 0x466E62 and 0x466E6D -> 0x466E83, past the dot's), and the radar pass has one
+   caller, 0x46556D. */
+static void radar_init(void)
+{
+    Site site[5] = {
+        { VA_RP_SHARE,  RP_SHARE_WAS,  0, 33, 0xE9, NULL },
+        { VA_RP_BLOCKS, RP_BLOCKS_WAS, 0, 14, 0xE9, NULL },
+        { VA_RP_EXIT,   RP_EXIT_WAS,   0, 10, 0xE9, NULL },
+        { VA_RP_JAM,    RP_JAM_WAS,    0, 13, 0xE9, NULL },
+        { VA_MM_DOT,    MM_DOT_WAS,    0, 20, 0xE9, NULL },
+    };
+    const unsigned nsite = sizeof site / sizeof site[0];
+    unsigned char* stub[4];
+    unsigned char* next = NULL;
+    unsigned i, k;
+
+    if ((i = sites_unmatched(site, nsite)) < nsite) {
+        tagpu_logf("allysight: radar NOT installed: 0x%06X does not hold the retail bytes; allies "
+                   "share sight but not contacts, and allied jammers jam", site[i].va);
+        return;
+    }
+    stub[0] = stub_rp_share();
+    stub[1] = stub_rp_blocks(&next);
+    stub[2] = stub_rp_jam();
+    stub[3] = stub_mm_dot();
+    for (k = 0; k < 4; k++)
+        if (!stub[k]) {
+            for (k = 0; k < 4; k++) tagpu_detour_stub_free(stub[k]);
+            tagpu_log("allysight: radar NOT installed: no stub memory");
+            return;
+        }
+    site[0].to = stub[0];
+    site[1].to = stub[1];
+    site[2].to = next;
+    site[3].to = stub[2];
+    site[4].to = stub[3];
+    if ((i = sites_land(site, nsite)) < nsite) {
+        for (k = 0; k < 4; k++) tagpu_detour_stub_free(stub[k]);
+        tagpu_logf("allysight: radar NOT installed: 0x%06X could not be written (the earlier sites "
+                   "put back)", site[i].va);
+        return;
+    }
+    s_radarOn = 1;
+    tagpu_log("allysight: radar installed: the radar pass's share test 0x4674BA, its emitter "
+              "loop's head 0x46750E and exit 0x4675D2, its jammer test 0x4675F5 and the minimap's "
+              "dot test 0x466E6F");
+}
+

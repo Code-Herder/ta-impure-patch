@@ -292,12 +292,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x48AAC0), installed whole or not at all. */
         tagpu_puppet_init();
 
-        /* tagpu: allied sight (tagpu_allysight.h): allies share their sight, their death vision
-           and their explored map, and the sight counters never wrap. Prologue detours on the
-           stamp 0x482270, the removal 0x481D50, the explored map's stamp 0x481930, the sight
-           rebuild 0x4816A0 and the players init 0x464990, three call stubs in the stamp's body
-           and redirects of the calls 0x49555F and 0x486845: byte-matched, all-or-nothing,
-           disjoint from every detour above. */
+        /* tagpu: allied sight (tagpu_allysight.h): allies share their sight, their death vision,
+           their explored map and their radar and sonar contacts, their jammers spare each other,
+           and the sight counters never wrap.
+           Prologue detours on the stamp 0x482270, the removal 0x481D50, the explored map's stamp
+           0x481930, the sight rebuild 0x4816A0 and the players init 0x464990, three call stubs
+           in the stamp's body and redirects of the calls 0x49555F and 0x486845; then the radar
+           pass's four sites with the minimap's dot test, each set byte-matched and
+           all-or-nothing, disjoint from every detour above. */
         tagpu_allysight_init();
 
         /* tagpu: the COB script-call oracle. No-op unless

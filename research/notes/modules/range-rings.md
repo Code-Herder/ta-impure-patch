@@ -57,17 +57,17 @@ whatever `ranges` says. The fill runs while any of `ranges`, `rangesensor` and `
 (and the lane draws, *The lane*), and sets the header's `TAGPU_PK_RG_SVIEW` while `sensorview` is.
 
 **Allied**, for the rings (`allied`): the viewed player itself, or an owner whose byte in the
-viewed player's alliance row `+0x108 + owner` is 1. **For the sensors the alliance must hold both
-ways** (`ally_both`): that byte, and the owner's own row toward the viewed player, `+0x108 +
-viewer` of the owner's record (the owner bounded below ten first, since it indexes the player
-array). The rows are one-way, and the radar pass shares contacts by the **owner's** row toward the
-viewer (`0x4674BA..0x4674C5`) and then the owner's ShareRadar bit, PlayerInfo `+0x97` bit `0x40`
-(`0x4674D2`); the viewer's row alone would draw the coverage of a player who allies nobody back.
-The ShareRadar bit is not read: an ally's coverage shows whether or not it shares radar.
+viewed player's alliance row `+0x108 + owner` is 1. **For the sensors, the owners whose contacts the
+radar pass gives the viewed player** (`tagpu_allysight_contacts`, [allied sharing](allied-sharing.html),
+*Contacts*): the viewed player itself, and every owner allied with it both ways — each record's
+row byte toward the other non-zero, the snapshot S the radar pass itself answers by, which walks
+those owners' radar and sonar units for the viewed player and skips their jammers. The rows are
+one-way, so the viewer's row alone would draw the coverage of a player who allies nobody back. The
+ShareRadar bit is not read, by the pass or by the view.
 
 **The sensor layer** (`TAGPU_PK_RL_SENSOR`, drawn first, under everything below):
 
-- **the view**, under `sensorview`, always: every unit of the viewed player **and of its allies both ways**
+- **the view**, under `sensorview`, always: every unit of the viewed player **and of the owners it shares contacts with**
   — alive and not dying (`unit_at`) — in each of the four kinds whose distance, a signed word, is
   above 0: radar def `+0x204`, sonar `+0x206`, radar jam `+0x20A`, sonar jam `+0x20C` (classes
   `RC_RADAR` .. `RC_SONARJAM`). A unit **activated** (`+0x10E` bit 0) is published plain; a radar
