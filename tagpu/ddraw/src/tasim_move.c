@@ -106,7 +106,7 @@ WIKIRECT tasim_feat_rect(const WIKIFEAT* f)
 
 /* every body but u's into s->obs: the units' in creation order, then the blocking features', then
    the claims in their claimants' order; their count, or -1 when the scratch cannot grow. It holds
-   one more, the site go() adds. */
+   one more, the site tasim_go adds. */
 static int bodies(WIKISIM* s, const WIKIUNIT* u)
 {
     int i, n = 0;

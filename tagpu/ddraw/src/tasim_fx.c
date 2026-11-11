@@ -287,7 +287,7 @@ void tasim_notice_active(WIKISIM* s, WIKIUNIT* u)
 /* THE CONSUMER 0x47F680, once a tick after its work: entry 0 leaves the queue, with sound only a
    gap after the last reply, which it then is; with sound and a variant to pick (0x47FD70's count
    gate), the reply is made and the kind's next time written. BOUND: the queue's type is a def index
-   notice() took from a unit, below WIKI_MAX_DEFS, and its kind is below WIKI_SND_KINDS. */
+   tasim_notice took from a unit, below WIKI_MAX_DEFS, and its kind is below WIKI_SND_KINDS. */
 void tasim_sound_tick(WIKISIM* s)
 {
     WIKISNDQ e;

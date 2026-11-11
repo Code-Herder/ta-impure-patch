@@ -1,6 +1,7 @@
 /* wikitest.c -- the C half of the wiki's parity check, for tools/wiki/simparity.mjs: the real
-   tagpu_wikidata.c and tagpu_wikisim.c, compiled natively (or for Windows, run under Wine), write
-   what they see as JSON lines, and simparity.mjs compares them with sim.js's, field by field.
+   tagpu_wikidata.c and tagpu_wikisim.c over the core's tasim_*.c, compiled natively (or for
+   Windows, run under Wine), write what they see as JSON lines, and simparity.mjs compares them
+   with sim.js's, field by field.
 
    `wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]` loads PAK, an archive of art/wiki/
    (tools/hudpak.py --set wiki), as the DLL loads WIKIPAK, plays every demo of every entry to its

@@ -35,8 +35,8 @@
    through the same emitter; the expiry 0x482130 removes it once its tick + 60 is below GameTime
    (0x482153..0x48215E), so the last tick drawn with it is tick + WIKI_SIGHT_SPAN, a step being one
    tick. A death of `seat` with g <= tick + WIKI_SIGHT_SPAN stamps as its unit did; the list holds
-   only the deaths the engine's add keeps, at most WIKI_PLAYERS_DEATHS live (kill states the
-   rule). BOUND: every index is checked against the grid,
+   only the deaths the engine's add keeps, at most WIKI_PLAYERS_DEATHS live (tasim_world.c's tasim_kill
+   states the rule). BOUND: every index is checked against the grid,
    the view's type count and the table's cells before it is read. */
 static int sight_asr5(int v) { return v >= 0 ? v / 32 : -((-v + 31) / 32); }
 

@@ -36,6 +36,7 @@ void tasim_splice_orders(WIKIUNIT* u, int i, int n)
     u->norder -= n;
 }
 
+/* a build order has started once its building stands at its site */
 int tasim_started(const WIKISIM* s, const WIKIORDER* o) { return tasim_structure_at(s, o->type, o->ox, o->oz) != NULL; }
 
 /* leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it */

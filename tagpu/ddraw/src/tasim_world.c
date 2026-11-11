@@ -10,7 +10,7 @@
 #include <string.h>
 #include "tasim.h"
 
-/* a unit joins the world, appended in the room new_unit made for it. With the sidebar it carries
+/* a unit joins the world, appended in the room tasim_new_unit made for it. With the sidebar it carries
    its page state: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set and page
    1; any other unit has neither. */
 static WIKIUNIT* enter(WIKISIM* s, WIKIUNIT* u)
@@ -192,7 +192,7 @@ XZ tasim_centre(const WIKISIM* s, int t, int ox, int oz)
 }
 
 /* the unit leaves the list and its memory goes; the sidebar's shown unit goes with it, which
-   route() would make so on this tick's end anyway */
+   tagpu_wikisim.c's route() would make so on this tick's end anyway */
 void tasim_remove_unit(WIKISIM* s, WIKIUNIT* u)
 {
     int i, k = 0;
@@ -249,7 +249,7 @@ static void corpse(WIKISIM* s, const WIKIUNIT* u)
     f->reclaimable = fd->reclaimable;
 }
 
-/* A KILL, the game script's {at, kill}, fed before its tick's drop_work, COB slice and advance:
+/* A KILL, the game script's {at, kill}, fed before its tick's tasim_drop_work, COB slice and tasim_advance:
    sim.js's `kill`, which gives the engine's facts with their addresses. Its script goes first,
    through the host's own removal; a finished unit leaves its wreck and makes its death sound; a
    commander counts as its seat's loss; a builder whose running build is the unfinished structure
@@ -272,8 +272,8 @@ static void corpse(WIKISIM* s, const WIKIUNIT* u)
    already has WIKI_PLAYERS_DEATHS deaths live is not recorded, whatever the script or a fork part
    kills; a players entry's data rule keeps its own script inside that bound (tagpu_wikidata.h).
    THE INVARIANT, an ordering: between two ticks the only references to a WIKIUNIT are s->unit[] and
-   s->shown -- advance clears every job pointer by the tick's end, and orders, the spray and the
-   sounds name units by id -- and a kill runs in feed, between advances, so remove_unit clearing
+   s->shown -- tasim_advance clears every job pointer by the tick's end, and orders, the spray and the
+   sounds name units by id -- and a kill runs in feed, between advances, so tasim_remove_unit clearing
    both leaves nothing that can read the freed unit. The COB handle goes before the unit, and the
    host never gives a handle twice. */
 void tasim_kill(WIKISIM* s, const char* id, int by)
