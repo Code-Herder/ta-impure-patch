@@ -150,11 +150,12 @@ function defenseRings(T) {
 // BAR's sensor display on the engine's coverage rule (the radar pass 0x467440):
 // flat circles on x/z, no terrain blocking, no radar cells.
 //   * THE VIEW, always on: every own and allied emitter. Radar and sonar are
-//     gui_sensor_ranges_radar.lua / _sonar.lua: a dashed line centred on each
-//     circle, clipped by every circle of its kind, so only the outer half of the
-//     stroke outside the union shows. Jammers are
+//     gui_sensor_ranges_radar.lua / _sonar.lua's colours on the outline of each
+//     kind's union: a dashed band just outside it. Jammers are
 //     gui_sensor_ranges_jammer_preview.lua's always-shown allied layer: the
-//     union filled, a dashed band along the inside of its edge.
+//     union filled, a dashed band just inside its outline. The outline is the
+//     circles' uncovered arcs chained into loops (see `loops`), dashed along
+//     each loop (see DASH).
 //   * THE PREVIEW of a building being placed: radar is
 //     gui_sensor_ranges_radar_preview.lua without its terrain raycast -- the new
 //     disc's sheet with rings travelling outward, the existing coverage filled
@@ -235,28 +236,24 @@ void main() {
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
-layout(location=1) in vec2 aCentre; // the point on the circle this one is beside, canvas px
-layout(location=2) in float aAcross;// px from the circle, -0.5 .. width + 0.5
-layout(location=3) in float aArc;   // along the circle on the map, in zoom-1 px
-layout(location=4) in float aVis;
-layout(location=5) in float aW;     // the band's width, px
-layout(location=6) in float aS0;    // the circle's level-0 dash spacing, zoom-1 px
-layout(location=7) in float aTop;   // its coarsest level (4..8 dashes round it)
+layout(location=1) in float aAcross;// px from the path, -0.5 .. width + 0.5
+layout(location=2) in float aArc;   // along the path on the map, in zoom-1 px
+layout(location=3) in float aVis;
+layout(location=4) in float aW;     // the band's width, px
+layout(location=5) in float aS0;    // the path's level-0 dash spacing, zoom-1 px
+layout(location=6) in float aTop;   // its coarsest level (4..8 dashes along it)
 uniform vec2 uCanvas;
-out vec2 vCentre; out float vAcross; out float vArc; out float vVis;
+out float vAcross; out float vArc; out float vVis;
 flat out float vW; flat out float vS0; flat out float vTop;
 void main() {
-  vCentre = aCentre; vAcross = aAcross; vArc = aArc; vVis = aVis; vW = aW; vS0 = aS0; vTop = aTop;
+  vAcross = aAcross; vArc = aArc; vVis = aVis; vW = aW; vS0 = aS0; vTop = aTop;
   gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
 }`;
 const SLINE_FS = `#version 300 es
 precision highp float;
 precision highp int;
-in vec2 vCentre; in float vAcross; in float vArc; in float vVis;
+in float vAcross; in float vArc; in float vVis;
 flat in float vW; flat in float vS0; flat in float vTop;
-uniform sampler2D uMask;
-uniform vec2 uCanvas;
-uniform int uMaskBit;        // -1: no clip
 uniform vec3 uCol;
 uniform float uA;
 uniform int uMode;           // 0 dashes over nothing, 1 dashes over the gap's opacity, 2 solid
@@ -285,10 +282,6 @@ float dashes() {
   return cover * uOp[clamp(lv - uFine, 0, ${DASH_SPAN})];
 }
 void main() {
-  // cut where the point on the circle the band is beside lies inside another
-  // disc: the band keeps its full width up to a junction and stops square there
-  if (uMaskBit >= 0 &&
-      texelFetch(uMask, ivec2(vCentre.x, uCanvas.y - vCentre.y), 0)[uMaskBit] > 0.5) discard;
   float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0) * uA * vVis;
   if (uMode == 0) a *= dashes();
   else if (uMode == 1) a *= mix(uGap, 1.0, dashes());
@@ -568,7 +561,7 @@ function create(ctx) {
   const FU = U(fillProg, ["uMask", "uCol"]);
   const PU = U(ptProg, ["uCanvas", "uSize"]);
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol"]);
-  const LSU = U(slineProg, ["uCanvas", "uMask", "uMaskBit", "uCol", "uA", "uMode", "uGap", "uShift",
+  const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uMode", "uGap", "uShift",
                             "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
   const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP"]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
@@ -610,11 +603,11 @@ function create(ctx) {
   const svao = gl.createVertexArray(), svbo = gl.createBuffer();
   gl.bindVertexArray(svao);
   gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
-  // sensor line layout: x, y, centre x, y, across, arc, vis, width, s0, top = 10 floats
-  for (const [loc, n, off] of [[0, 2, 0], [1, 2, 8], [2, 1, 16], [3, 1, 20], [4, 1, 24], [5, 1, 28],
-                               [6, 1, 32], [7, 1, 36]]) {
+  // sensor line layout: x, y, across, along, vis, width, s0, top = 8 floats
+  for (const [loc, n, off] of [[0, 2, 0], [1, 1, 8], [2, 1, 12], [3, 1, 16], [4, 1, 20], [5, 1, 24],
+                               [6, 1, 28]]) {
     gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 40, off);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 32, off);
   }
   gl.bindVertexArray(null);
   const fvao = gl.createVertexArray(), fvbo = gl.createBuffer();
@@ -894,7 +887,7 @@ function create(ctx) {
 
   // ---- sensors (see the tables at the top): one pass a kind. The mask's
   // channels: R the new disc's fill, G the existing coverage's fill (both cut
-  // to the scroll extent, and to water for a water kind), B what clips lines.
+  // to the scroll extent, and to water for a water kind).
   // Sonar finds only targets at or below sea level (0x4678E6), so its fills
   // are cut to water a 16-wu height cell at a time and its lines per vertex.
   const waterCells = new Map();
@@ -976,8 +969,6 @@ function create(ctx) {
     }
     return out;
   };
-  // the whole disc (what clips lines)
-  const fan = (rg) => pushMArr(memo(rg, "fan", () => fanTris(rg.scr, rg.c)));
   // a fill region: the disc inside the scroll extent, or its water cells
   function region(rg, water, proj) {
     pushMArr(memo(rg, "region", () => {
@@ -1035,27 +1026,169 @@ function create(ctx) {
     gl.uniform4f(SU.uCol, rgb[0] * a, rgb[1] * a, rgb[2] * a, a);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  // a circle's band as quads: x, y, the point on the circle, across (px),
-  // along (zoom-1 px), vis, width, s0, top
+  // a path's band as quads: x, y, across (px), along (zoom-1 px), vis, width, s0, top
   let sBuf = new Float32Array(1 << 16), sN = 0;
-  const pushS = (x, y, cx, cy, across, arc, vis, w, s0, top) => {
-    if (sN + 10 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
-    sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = cx; sBuf[sN++] = cy; sBuf[sN++] = across;
-    sBuf[sN++] = arc; sBuf[sN++] = vis; sBuf[sN++] = w; sBuf[sN++] = s0; sBuf[sN++] = top;
+  const pushS = (x, y, across, arc, vis, w, s0, top) => {
+    if (sN + 8 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
+    sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = across; sBuf[sN++] = arc;
+    sBuf[sN++] = vis; sBuf[sN++] = w; sBuf[sN++] = s0; sBuf[sN++] = top;
   };
-  // a circle's dash lattice for a level-0 spacing near `space` (zoom-1 px):
-  // its coarsest level `top` puts 4..8 dashes round it, and s0 divides the
-  // circle's length on the map evenly at every level
-  function lattice(rg, space, zoom) {
-    const L = rg.along[rg.n] / zoom;
+  // ---- THE OUTLINE OF A UNION, as paths. Every line here follows the merged
+  // edge of one kind's discs, not each circle: a circle's arcs that no other
+  // disc covers, chained at the points where the circles cross into closed
+  // loops, so a loop's dashes run on through a junction as along any curve.
+  // Flat circles on x/z (the coverage rule), each point then laid on the
+  // ground; a point is at angle a at (x + r sin a, z + r cos a), and every
+  // arc runs the same way round, so where one ends the next one starts.
+  const TAU = Math.PI * 2;
+  const segsOf = (r) => (r > 1500 ? 1024 : 512);
+  // the arcs of circle i no other disc covers: [{ i, a0, a1 }], a1 > a0
+  function openArcs(circs, i) {
+    const ci = circs[i], cov = [];
+    for (let j = 0; j < circs.length; j++) {
+      if (j === i) continue;
+      const cj = circs[j], dx = cj.u.x - ci.u.x, dz = cj.u.z - ci.u.z, d = Math.hypot(dx, dz);
+      if (d >= ci.r + cj.r) continue;
+      if (d + ci.r <= cj.r) {                        // inside j (of two equal ones, the later)
+        if (d < 1e-6 && ci.r === cj.r && j > i) continue;
+        return [];
+      }
+      if (d + cj.r <= ci.r) continue;                // j inside this one
+      const th = Math.atan2(dx, dz);
+      const al = Math.acos(Math.max(-1, Math.min(1, (ci.r * ci.r + d * d - cj.r * cj.r) / (2 * ci.r * d))));
+      let lo = ((th - al) % TAU + TAU) % TAU, hi = lo + 2 * al;
+      if (hi > TAU) { cov.push([lo, TAU], [0, hi - TAU]); } else cov.push([lo, hi]);
+    }
+    if (!cov.length) return [{ i, a0: 0, a1: TAU, whole: true }];
+    cov.sort((p, q) => p[0] - q[0]);
+    const m = [cov[0].slice()];
+    for (const c of cov.slice(1)) {
+      const last = m[m.length - 1];
+      if (c[0] <= last[1]) last[1] = Math.max(last[1], c[1]); else m.push(c.slice());
+    }
+    if (m.length === 1 && m[0][0] <= 0 && m[0][1] >= TAU) return [];
+    const arcs = [];
+    for (let k = 0; k < m.length; k++) {
+      const a0 = m[k][1], a1 = k + 1 < m.length ? m[k + 1][0] : m[0][0] + TAU;
+      if (a1 - a0 > 1e-6) arcs.push({ i, a0, a1 });
+    }
+    return arcs;
+  }
+  // the arcs of circle i that other discs DO cover (the preview's own edge
+  // inside existing coverage)
+  function coveredArcs(circs, i) {
+    const open = openArcs(circs, i);
+    if (open.length === 1 && open[0].whole) return [];
+    if (!open.length) return [{ i, a0: 0, a1: TAU, whole: true }];
+    const out = [];
+    for (let k = 0; k < open.length; k++) {
+      const a0 = open[k].a1, a1 = k + 1 < open.length ? open[k + 1].a0 : open[0].a0 + TAU;
+      if (a1 - a0 > 1e-6) out.push({ i, a0, a1 });
+    }
+    return out;
+  }
+  const arcPoint = (c, a) => [c.u.x + Math.sin(a) * c.r, c.u.z + Math.cos(a) * c.r];
+  // the union's edge as closed loops of arcs
+  function loops(circs) {
+    const arcs = [];
+    circs.forEach((_, i) => arcs.push(...openArcs(circs, i)));
+    const used = new Set(), out = [];
+    for (let s = 0; s < arcs.length; s++) {
+      if (used.has(s)) continue;
+      const loop = [];
+      for (let k = s; k >= 0 && !used.has(k);) {
+        used.add(k); loop.push(arcs[k]);
+        if (arcs[k].whole) break;
+        // the next arc: the one starting where this one ends
+        const [ex, ez] = arcPoint(circs[arcs[k].i], arcs[k].a1);
+        let best = -1, bd = Infinity;
+        for (let q = 0; q < arcs.length; q++) {
+          if (arcs[q].i === arcs[k].i || arcs[q].whole) continue;
+          const [sx, sz] = arcPoint(circs[arcs[q].i], arcs[q].a0);
+          const dd = Math.hypot(sx - ex, sz - ez);
+          if (dd < bd) { bd = dd; best = q; }
+        }
+        k = bd < 1 ? best : -1;
+      }
+      out.push({ arcs: loop, closed: loop.length === 1 ? !!loop[0].whole : true });
+    }
+    return out;
+  }
+  // a chain of arcs as a screen path: points, whether a line shows at each,
+  // the distance along it on screen, and each point's normal away from its
+  // arc's centre (the mitre of the two segments, scaled to keep the width)
+  function makePath(circs, chain, closed, water, proj) {
+    const xs = [], zs = [], owner = [];
+    chain.forEach((arc, k) => {
+      const c = circs[arc.i], m = Math.max(2, Math.ceil((arc.a1 - arc.a0) / TAU * segsOf(c.r)));
+      for (let t = k ? 1 : 0; t <= m; t++) {
+        const a = arc.a0 + (arc.a1 - arc.a0) * t / m;
+        const [x, z] = arcPoint(c, a);
+        xs.push(x); zs.push(z); owner.push(arc.i);
+      }
+    });
+    if (closed) { xs.pop(); zs.pop(); owner.pop(); }
+    const n = xs.length, scr = new Float32Array(n * 2), vis = new Float32Array(n);
+    for (let k = 0; k < n; k++) {
+      const x = xs[k], z = zs[k], q = proj([x, surface(x, z), z]);
+      scr[k * 2] = q[0]; scr[k * 2 + 1] = q[1];
+      const inMap = x >= 0 && z >= 0 && x <= MAPW && z <= MAPH;
+      vis[k] = inMap && !(water && ground(x, z) > SEA) ? 1 : 0;
+    }
+    const segs = closed ? n : n - 1, along = new Float32Array(segs + 1);
+    for (let k = 0; k < segs; k++) {
+      const j = (k + 1) % n;
+      along[k + 1] = along[k] + Math.hypot(scr[j * 2] - scr[k * 2], scr[j * 2 + 1] - scr[k * 2 + 1]);
+    }
+    const nrm = new Float32Array(n * 2);
+    const dir = (from, to) => {
+      const dx = scr[to * 2] - scr[from * 2], dy = scr[to * 2 + 1] - scr[from * 2 + 1], l = Math.hypot(dx, dy) || 1;
+      return [dx / l, dy / l];
+    };
+    for (let k = 0; k < n; k++) {
+      const p = closed ? (k + n - 1) % n : Math.max(0, k - 1), q = closed ? (k + 1) % n : Math.min(n - 1, k + 1);
+      const d1 = dir(p === k ? k : p, p === k ? q : k), d2 = dir(q === k ? p : k, q === k ? k : q);
+      let tx = d1[0] + d2[0], ty = d1[1] + d2[1];
+      const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+      let nx = -ty, ny = tx;
+      const c = circs[owner[k]], cs = proj([c.u.x, surface(c.u.x, c.u.z), c.u.z]);
+      if (nx * (scr[k * 2] - cs[0]) + ny * (scr[k * 2 + 1] - cs[1]) < 0) { nx = -nx; ny = -ny; }
+      const scale = 1 / Math.max(0.35, Math.abs(-d1[1] * nx + d1[0] * ny));
+      nrm[k * 2] = nx * scale; nrm[k * 2 + 1] = ny * scale;
+    }
+    return { n, scr, vis, along, nrm, closed, memo: new Map() };
+  }
+  // one kind's outline paths (closed loops), and with `ownCovered` also the
+  // first circle's arcs inside the others (open), cached while the circles
+  // and the view hold still
+  const pathCache = new Map();
+  function outline(circs, water, proj, ownCovered) {
+    const key = circs.map((c) => `${c.u.x},${c.u.z},${c.r}`).join(";") +
+                `|${water ? 1 : 0}|${ownCovered ? 1 : 0}|${viewKey(proj)}`;
+    let v = pathCache.get(key);
+    if (v) return v;
+    v = loops(circs).map((l) => makePath(circs, l.arcs, l.closed, water, proj));
+    if (ownCovered)
+      for (const arc of coveredArcs(circs, 0))
+        v.push(makePath(circs, [arc], !!arc.whole, water, proj));
+    pathCache.set(key, v);
+    if (pathCache.size > 64) pathCache.delete(pathCache.keys().next().value);
+    return v;
+  }
+
+  // a path's dash lattice for a level-0 spacing near `space` (zoom-1 px): its
+  // coarsest level `top` puts 4..8 dashes along it, and s0 divides its length
+  // on the map evenly at every level, so a loop's pattern closes
+  function lattice(path, space, zoom) {
+    const L = path.along[path.along.length - 1] / zoom;
     const top = Math.max(0, Math.floor(Math.log2(L / (space * 4))));
     const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
     return { s0: L / (nTop * 2 ** top), top };
   }
-  // a band `width` px wide along the circle, outside it (side 1) or inside (-1)
-  function sline(rg, width, side, space, zoom) {
-    const arr = memo(rg, `line${width},${side},${space}`, () => {
-      const s0 = sN; buildLine(rg, width, side, space ? lattice(rg, space, zoom) : { s0: 1, top: 0 }, zoom);
+  // a band `width` px wide along a path, outside its circles (side 1) or inside (-1)
+  function sline(path, width, side, space, zoom) {
+    const arr = memo(path, `line${width},${side},${space}`, () => {
+      const s0 = sN; buildLine(path, width, side, space ? lattice(path, space, zoom) : { s0: 1, top: 0 }, zoom);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1063,29 +1196,19 @@ function create(ctx) {
     }
     sBuf.set(arr, sN); sN += arr.length;
   }
-  // the quads between consecutive vertices, from the circle out to `width`
-  // on `side`, each vertex offset along the mitre of its two segments:
-  // neighbouring quads share their edge, so no pixel is drawn twice and the
-  // position along the circle runs on unbroken
-  function buildLine(rg, width, side, lat, zoom) {
-    const { n, scr, vis, c } = rg, s0 = lat.s0, top = lat.top;
-    const off = new Float32Array(n * 2);          // the unit normal away from the band's far side
-    for (let i = 0; i < n; i++) {
-      const p = (i + n - 1) % n, q = (i + 1) % n;
-      const tx = scr[q * 2] - scr[p * 2], ty = scr[q * 2 + 1] - scr[p * 2 + 1];
-      const tl = Math.hypot(tx, ty) || 1;
-      let nx = -ty / tl, ny = tx / tl;
-      if ((nx * (scr[i * 2] - c[0]) + ny * (scr[i * 2 + 1] - c[1])) * side < 0) { nx = -nx; ny = -ny; }
-      off[i * 2] = nx; off[i * 2 + 1] = ny;
-    }
+  // the quads between consecutive points, from the path out to `width` on
+  // `side`: neighbouring quads share their edge, so no pixel is drawn twice
+  // and the position along the path runs on unbroken
+  function buildLine(path, width, side, lat, zoom) {
+    const { n, scr, vis, nrm, along, closed } = path, s0 = lat.s0, top = lat.top;
     const lo = -0.5, hi = width + 0.5;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
       const j = (i + 1) % n;
       if (!vis[i] && !vis[j]) continue;
       const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
-      const nx0 = off[i * 2], ny0 = off[i * 2 + 1], nx1 = off[j * 2], ny1 = off[j * 2 + 1];
-      const a0 = rg.along[i] / zoom, a1 = rg.along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
-      const P = (x, y, nx, ny, d, a, v) => pushS(x + nx * d, y + ny * d, x, y, d, a, v, width, s0, top);
+      const nx0 = nrm[i * 2] * side, ny0 = nrm[i * 2 + 1] * side, nx1 = nrm[j * 2] * side, ny1 = nrm[j * 2 + 1] * side;
+      const a0 = along[i] / zoom, a1 = along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
+      const P = (x, y, nx, ny, d, a, v) => pushS(x + nx * d, y + ny * d, d, a, v, width, s0, top);
       P(x0, y0, nx0, ny0, lo, a0, v0); P(x0, y0, nx0, ny0, hi, a0, v0); P(x1, y1, nx1, ny1, hi, a1, v1);
       P(x1, y1, nx1, ny1, hi, a1, v1); P(x0, y0, nx0, ny0, lo, a0, v0); P(x1, y1, nx1, ny1, lo, a1, v1);
     }
@@ -1117,15 +1240,12 @@ function create(ctx) {
     lod.t = t;
   }
   const uOpArr = new Float32Array(DASH_SPAN + 1);
-  // mode 0 dashes, 1 dashes over the gap's opacity, 2 solid; clipped where
-  // channel `clip` is set (-1: not clipped); `dash` the DASH row, `sign` the
-  // direction the dashes run
-  function slineDraw(rgb, a, mode, clip, zoom, dash, sign, gap) {
+  // mode 0 dashes, 1 dashes over the gap's opacity, 2 solid; `dash` the DASH
+  // row, `sign` the direction the dashes run
+  function slineDraw(rgb, a, mode, zoom, dash, sign, gap) {
     if (!sN) return;
     gl.useProgram(slineProg);
     gl.uniform2f(LSU.uCanvas, GW, GH);
-    gl.uniform1i(LSU.uMask, TEX_UNIT);
-    gl.uniform1i(LSU.uMaskBit, clip);
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(LSU.uA, a);
     gl.uniform1i(LSU.uMode, mode);
@@ -1145,7 +1265,7 @@ function create(ctx) {
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, sN / 10);
+    gl.drawArrays(gl.TRIANGLES, 0, sN / 8);
     gl.bindVertexArray(null);
     sN = 0;
   }
@@ -1153,30 +1273,19 @@ function create(ctx) {
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
 
-  // what cuts the bands (B): every disc a pixel short of its circle, so a
-  // circle's own points are outside its own disc and inside any other
-  const cutDiscs = (rings, proj, zoom) => {
-    for (const rg of rings) fan(circle(rg.u, Math.max(1, rg.r - 1 / zoom), false, proj));
-    maskFlush(2);
-  };
-  // THE VIEW's radar and sonar lines: each circle's band outside it, as wide
-  // as the visible outer half of BAR's stroke, where its circle is outside
-  // every other disc -- the outline of the union
+  // THE VIEW's radar and sonar lines: a band outside the union's outline, as
+  // wide as the visible outer half of BAR's stroke
   function drawLines(kind, proj, zoom, t) {
     const list = emitters(kind);
     if (!list.length) return;
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
-    const rings = list.map((u) => circle(u, radiusOf(u, kind), water, proj));
-    maskBegin();
-    cutDiscs(rings, proj, zoom);
-    maskEnd();
+    const paths = outline(list.map((u) => ({ u, r: radiusOf(u, kind) })), water, proj, false);
     const ls = (GH + 500) / 1300;
-    for (const rg of rings) sline(rg, LINE_W * ls / 2, 1, DASH.line.space * ls, zoom);
-    slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, 2, zoom, "line", -1);
+    for (const path of paths) sline(path, LINE_W * ls / 2, 1, DASH.line.space * ls, zoom);
+    slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
-  // placed): the union filled, a dashed band along the inside of its edge,
-  // each circle's where its circle is outside every other disc.
+  // placed): the union filled, a dashed band along the inside of its outline.
   function drawJammers(kind, ghost, proj, zoom, t) {
     const water = WATER_KIND[kind];
     const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
@@ -1193,13 +1302,13 @@ function create(ctx) {
       for (const it of items) if (it.isNew === isNew) region(it.rg, water, proj);
       maskFlush(isNew ? 0 : 1);
     }
-    cutDiscs(items.map((it) => it.rg), proj, zoom);
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
     fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
     const ls = (GH + 500) / 1300;
-    for (const it of items) sline(it.rg, wpx, -1, DASH.jam.space * ls, zoom);
-    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, zoom, "jam", 1, JAMMER.gapRel);
+    for (const path of outline(items.map((it) => ({ u: it.u, r: it.r })), water, proj, false))
+      sline(path, wpx, -1, DASH.jam.space * ls, zoom);
+    slineDraw(JAMMER.outline, JAMMER.dashA, 1, zoom, "jam", 1, JAMMER.gapRel);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
   // duller where the new disc does not reach, the new disc's sheet with rings
@@ -1214,7 +1323,6 @@ function create(ctx) {
     region(g, water, proj); maskFlush(0);
     for (const rg of old) region(rg, water, proj);
     maskFlush(1);
-    cutDiscs([g, ...old], proj, zoom);
     maskEnd();
     fillWhere(P.allied, P.a * P.alliedRel, 1, 0);
     // the sheet: the new disc's fan, world x/z per vertex for the rings
@@ -1243,10 +1351,9 @@ function create(ctx) {
     gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
     gl.bindVertexArray(null);
     // the outline: the new disc's own edge whole, the others' where they bound the union
-    sline(g, wpx, -1, 0, zoom);
-    slineDraw(P.outline, P.outlineA, 2, -1, zoom);
-    for (const rg of old) sline(rg, wpx, -1, 0, zoom);
-    slineDraw(P.outline, P.outlineA, 2, 2, zoom);
+    for (const path of outline([g, ...old].map((rg) => ({ u: rg.u, r: rg.r })), water, proj, true))
+      sline(path, wpx, -1, 0, zoom);
+    slineDraw(P.outline, P.outlineA, 2, zoom);
   }
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
   // lines, the preview's sheets
