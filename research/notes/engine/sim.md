@@ -36,12 +36,16 @@ the measured runs and what they mean for the design are in the
   Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
   `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
-  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group [INFERRED: filled from the
-  skirmish key `Player<N>AllyGroup`; the field itself was not read] — seats with equal groups start
-  allied: the skirmish keys `Player<N>AllyGroup` 1, 2 and 1 for seats 0, 1 and 2 gave the player
-  records' alliance rows (PlayerInfo `+0x108`, [units](units.html)) of records 0 and 2 a 1 for each
-  other and none for record 1 (MEASURED 2026-11-11, `scenarios/sensor-view.json`; every seat's key
-  held 5 before it was written, and what 5 means is not established) — `+0xC` metal, `+0x10` energy,
+  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group: the settings load reads the
+  skirmish key `Player%dAllyGroup` (format at `0x5043C4`, pushed at `0x430D03`) into `+8`, and 5
+  when the key is absent (`0x430D3C`); the seat fill's tests `0x47A863..0x47A872`, in its loop to
+  `0x47A87E`, mark two seats allied (to `0x47A8CC`) when their groups are equal, the other seat's controller `+0` is not 0 and
+  the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11). The scenario format writes
+  it as `setup.players[].ally_group` ([scenario format](../scenario-format.md)). Groups 1, 2 and 1
+  for seats 0, 1 and 2 gave the player records' alliance rows (PlayerInfo `+0x108`,
+  [units](units.html)) `01 00 01`, `00 01 00` and `01 00 01`, and a later load with no groups each
+  record's own byte only (MEASURED 2026-11-11, `scenarios/sensor-view.json` then
+  `scenarios/sensor-preview.json` on one instance) — `+0xC` metal, `+0x10` energy,
   `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
   branch (`0x4973C1..0x497457`) copies `+0x108` into `ActiveCommanderDeath` `main+0x37EF6` and bit 0
   of `+0x10C`, `+0x110` and `+0x114` into bits 0, 1 and 2 of the LosType word `main+0x14281`, the

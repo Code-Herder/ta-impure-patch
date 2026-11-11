@@ -445,9 +445,9 @@ layers' counts, the instances and draws. The scenarios:
   preview. Player 2 (Arm AI), the ally: the radar tower `arad` (6900, 12650), overlapping `rad2`'s
   so the two merge, and the sonar station `ason` in the water. Player 1 (Core AI), the enemy: the
   radar tower `crad` and the mobile radar jammer `spec` (CORSPEC), whose coverage is never drawn.
-  **The alliance is not part of the scenario format**: it is the skirmish key `Player<N>AllyGroup`
-  in the instance's registry store, written before the load — seats with equal groups start allied
-  ([sim](../engine/sim.html), the skirmish settings' `+8`).
+  The file declares the alliance: seats 0 and 2 in `ally_group` 1, seat 1 in 2 — seats with
+  equal groups start allied ([scenario format](../scenario-format.md); [sim](../engine/sim.html),
+  the skirmish settings' `+8`).
 - `scenarios/sensor-preview.json` — Two Continents with true LOS: the site (6750, 11900) on the
   eastern hill, an Arm radar tower switched on when built (`radA`), a second one to switch off
   with its button (`radOff`), an air plant (`ap`) that emits its 500 of radar only while a build
@@ -467,9 +467,8 @@ floor, 0.0802 on 1792×1016): the heartbeat read `atk=2/0 sel=1 inst=8 draws=7` 
 weapon's faint inner one.
 
 **MEASURED 2026-11-11** on `scenarios/sensor-view.json` (the reference setup, Vulkan, 1920×1080,
-true LOS), with `Player0AllyGroup` 1, `Player2AllyGroup` 1 and `Player1AllyGroup` 2 in the
-instance's registry store (every seat read 5 before): the alliance rows `+0x108` read record 0
-`01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …`. `+0x10E` bit 0 of the spawned sensor
+true LOS), with groups 1, 2 and 1 for seats 0, 1 and 2 in the instance's registry store: the
+alliance rows `+0x108` read record 0 `01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …`. `+0x10E` bit 0 of the spawned sensor
 units: `rad`, `rad2`, `arad`, `ason`, `seer`, `jam`, `sjam`, `scram`, `crad` and `spec` 1; `peep`
 (an ARMPEEP on the ground) and `ck` 0. The heartbeat over the scene: `rings=11 sensor=10 paths=5
 pts=3150 … inst=8 draws=8`; placing an ARMRAD, `rings=14 sensor=11 paths=7 pts=4323`; *Sensor

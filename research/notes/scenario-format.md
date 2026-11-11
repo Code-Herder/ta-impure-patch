@@ -161,6 +161,22 @@ unit names by scanning the live definition table. This design follows its recipe
   ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
   refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
   instance's registry store.
+- **A player's keys** are `slot` (required), `controller` (`human`, `ai`, `off`; `ai` when
+  absent), `side` (`arm`, `core`), `color` (0..9), `metal` and `energy` (the starting resources, a
+  launch-time setting: see below) and `ally_group` (0..4). They compile to `--player`'s six fields
+  in that order, `N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`.
+- **`ally_group`: seats with the same group start allied.** It is the skirmish key
+  `Player<N>AllyGroup`, which the settings load reads into the settings entry's `+8`, 5 when the key
+  is absent, and the seat fill allies two seats whose groups are equal when the other seat's
+  controller is not 0 and the group is not 5, so **5 is "no group"** (DISASSEMBLED 2026-11-11:
+  `0x430D03`, `0x430D3C`, `0x47A863..0x47A872`; [the simulation step](engine/sim.md), *The skirmish
+  settings*). A scenario names 0..4, and **a declared player without a group is written as 5**,
+  never left alone: the registry store persists across loads, so a seat left alone would inherit
+  the previous scenario's alliance. A slot the scenario does not declare keeps whatever group it
+  had, which matters only if a later launch seats it without declaring it. MEASURED 2026-11-11 on
+  one instance: `scenarios/sensor-view.json`'s groups 1, 2, 1 gave the player records' alliance
+  rows (`+0x108`) `01 00 01`, `00 01 00`, `01 00 01`; `scenarios/sensor-preview.json` loaded next,
+  with no groups, gave each record its own byte only.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -909,7 +925,8 @@ line reading `Wreckage M:564` and `Rocko: Under Attack`. The `shootall` A/B is *
 - **Skirmish registry state is sticky, by design.** What a run does not name it inherits
   from the run before — that is TA's own model (the setup screen remembers), and it is
   already true of `side` and `color`. A scenario that wants a specific figure has to say
-  so; `load --json` reports the exact `--player` flags it launched with, in
+  so. The ally group is the exception: a declared player always writes one, 5 when the
+  scenario names none, because an inherited alliance changes what every seat sees; `load --json` reports the exact `--player` flags it launched with, in
   `loaded.players`, so the answer is never a guess.
 - **"From nothing" includes the instance.** `scenario load dojoD one-unit` on a name that
   had never existed cloned the prefix, mirrored the gamedir, launched, drove the shell and

@@ -1,0 +1,54 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `battle-allied` fixture: replay-battle-truelos.json (true line of sight with mapping, the fixture types +los mid-game) with seats 0 and 2 (Arm) in ally group 1 and seats 1 and 3 (Core) in group 2, so both sides hold an alliance from the first players phase. It carries the allied sight and radar sharing's test group: two allied pairs under true LOS, their explored map, the viewed seat's death vision into its ally and the radar pass with allies.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": false,
+  "los": "true",
+  "mapping": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 10000,
+    "energy": 10000,
+    "ally_group": 1
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "metal": 10000,
+    "energy": 10000,
+    "ally_group": 2
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "metal": 10000,
+    "energy": 10000,
+    "ally_group": 1
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3,
+    "metal": 10000,
+    "energy": 10000,
+    "ally_group": 2
+   }
+  ]
+ }
+}
