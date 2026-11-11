@@ -373,7 +373,7 @@ the far corner that plus the def's `+0x94` and `+0x96` `<< 20` [INFERRED: Footpr
 FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answers
 (`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
 both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
-corner). The wiki's stage, whose ground is 0, sprays from the same box (`tagpu_wikisim.c`
+corner). The wiki's stage, whose ground is 0, sprays from the same box (`tasim_fx.c`
 `spray_feature`, sim.js `sprayFeature`).
 
 **The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of

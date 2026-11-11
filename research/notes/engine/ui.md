@@ -926,7 +926,7 @@ that is not G does not count.
   retail has G only inside its yard (4 × 4 with 4 G cells in Mayhem, ProTA, Twilight and
   Escalation; TA Zero 5 × 5 with 9), retail's all 16 cells.
 - **The wiki's rule**: a geothermal plant needs a vent under a G cell (`sim.js` `siteOk`,
-  `tagpu_wikisim.c`), and the vent it anchors to is the one under a G cell, as Impure's
+  `tasim_world.c` `tasim_site_ok`), and the vent it anchors to is the one under a G cell, as Impure's
   `geo_anchor` (`tagpu_resource.c`) reads it.
 
 **The type-0 clicks** (the table above, its type-0 column).

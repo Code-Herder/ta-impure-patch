@@ -72,7 +72,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`), built from the widgets of `tagpu_uikit.c` (the browser's rounding, wrapped text, scrolling panels, rows, buttons, badges, the hit map) |
 | The kit in the mockup | `tools/uikit/uikit.js` and `uikit.css`: loading a kit, painting its parts on the page's `[data-part]` boxes, setting the layout's numbers and text roles as CSS. `wiki.js` calls them |
 | The layout check, C against the mockup | `python3 tools/wiki/wikilaycheck.py`, with `tools/wiki/wikilaycheck.c` |
-| The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
+| The simulation in the DLL | the wiki's front end `tagpu/ddraw/src/tagpu_wikisim.c` (the entry points, the UI it emulates, scripted input, selection, the scene and the casting) over the shared simulation core, `tagpu/ddraw/src/tasim_*.c` and `tasim.h` ([the shared core](impai/shared-core.html)) |
 | A game entry's replay, frame and bars | the replay layer `replay.js` / `tagpu/ddraw/src/tagpu_wikireplay.c`, a live entry's rewind, a takeover entry's Take over and a players entry's camera, Sight, switches and samples included, its fork rules the recorder's own `tagpu/ddraw/inc/tagpu_recrules.h`; the frame (the frame's views, the frame record, the stage HUD's state, the cursor, Leave's question, Try it's presses) `frame.js` / `tagpu_wikiframe.c`; the two bars in the mod's art `bar.js` / `tagpu_wikibar.c` ([below](#the-game-frame-on-the-stage-the-replay-entries)) |
 | Their checks, C against the mockup | `node tools/wiki/barcheck.mjs` (with `tagpu/ddraw/tests/wikibartest.c`), `node tools/wiki/framecheck.mjs` (with `tagpu/ddraw/tests/wikiframetest.c`); `simparity.mjs`'s game and replay passes; `node tools/wiki/castcheck.mjs` (the castings' sight figures and sight tables); `wikilaycheck.py`'s theatre cases; `python3 tagpu/ddraw/tests/huddrawtest.py` (`HOP_TRI` and the chart slots); in the game `wiki_regression.py <instance> watch`, `rewind`, `takeover` and `players` and `mods`' steps w6, w7 and w8 |
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine] [--shard K/N]`, with `tagpu/ddraw/tests/wikitest.c`; `--shard` plays every Nth context from the Kth, the cases on shard 1 alone; `--hash` prints each demo's final state hash from `sim.js` |
@@ -93,8 +93,8 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
-| The nano spray | the particles in both simulations (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
-| The sound | the events in both simulations (`tagpu_wikisim.c` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
+| The nano spray | the particles in both simulations (`tasim_fx.c`, `tagpu_wikisim.h` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
+| The sound | the events in both simulations (`tasim_fx.c`, `tagpu_wikisim.h` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
 | The sound's checks | `python3 tagpu/ddraw/tests/wavtest.py` (the WAV parser on hostile files, and against `gfx.py` `wav_pcm` on every pack WAV); `assetcheck.py`'s `sound` element; `simparity.mjs` (hash item 10) and `simcheck.mjs`'s sound rule |
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
@@ -2615,8 +2615,10 @@ layout breaking any of them is refused whole and no index read out of it address
 
 ## The simulation's contract
 
-`sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` the DLL's: a port of `sim.js`
-function for function, under its names in C's spelling (`siteOk` is `site_ok`). They agree tick
+`sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` over the shared simulation core
+(`tasim_*.c`, [the shared core](impai/shared-core.html)) the DLL's: a port of `sim.js` function for
+function, under its names in C's spelling (`siteOk` is `tasim_site_ok`, the core's prefix on a
+function its files share). They agree tick
 for tick on the same inputs, and `node tools/wiki/simparity.mjs` checks it: it plays every demo of
 every entry through both and compares every field of the view, every unit's orders and the state
 hash on every tick, then replays `simcheck.mjs`'s rule cases (the rules no demo shows) through the
@@ -2656,7 +2658,7 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
-  compiles `tagpu_wikisim.c`, and `tagpu_wikidata.c`, which normalises the scenes' facings, for
+  compiles `tagpu_wikisim.c` and the core's `tasim_*.c`, and `tagpu_wikidata.c`, which normalises the scenes' facings, for
   SSE2 (`-msse2 -mfpmath=sse`, the stack realigned, as the game's threads align it to 4 bytes), so
   the wiki's simulation needs an SSE2 processor: built for x87, whose intermediates keep 80 bits,
   1196 of the 9298 frames differ from `sim.js` in a last bit (MEASURED 2026-10-25), and 1804 of
@@ -2850,7 +2852,7 @@ and `sound`, null without a source: `next` (each kind's next time), `last`, `que
 The owner's request of 2026-10-28: units do not walk over each other or through builders. The
 owner chose a rule of the wiki's own over a port of the engine's mover and pathfinder (`0x43DD20`,
 `0x40E9E0`, unmapped), and that a unit whose place is taken stops close by rather than pushing.
-`sim.js` *MOVEMENT* and `tagpu_wikisim.c` *MOVEMENT* are the rule, function for function.
+`sim.js` *MOVEMENT* and `tasim_move.c` *MOVEMENT* are the rule, function for function.
 
 - **Bodies.** A mobile unit's body is its footprint's box about its centre (`fx × 8` either side,
   so ARMCK is 32 × 32); a structure's is its footprint, finished or a nanoframe; and a builder
@@ -2919,7 +2921,7 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
 Each unit runs its own COB script, on our own VM, in both simulations
 ([the COB plan](ingame-wiki-cob-plan.html), *The wiki host*, which has the engine's calls and the
 addresses behind them). The host is one engine-free C file, `tagpu_wikicob.c`, on `tagpu_cobvm.c`
-under Impure's rules: `tagpu_wikisim.c` calls it in-process and `sim.js` through the mockup's
+under Impure's rules: the DLL's simulation (`tasim_cob.c` and its callers) calls it in-process and `sim.js` through the mockup's
 server, so the two simulations implement only *when* they call it, and the host's state hash, which
 both fold into theirs, holds them to the same calls.
 

@@ -189,7 +189,7 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   `+0x18A` (the FBI keys `0x50383C` and `0x50382C`, stored at `0x42C10F` and `0x42C133`) times the
   step's increment (`0x41BB36..0x41BB5C`), and the step applies its progress only on a grant
   (`test eax,eax; je` at `0x41BC65..0x41BC67`) [DISASSEMBLED 2026-10-31]. The in-game wiki's game
-  mode charges a build so (`tagpu_wikisim.c` `econ_request`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
+  mode charges a build so (`tasim_econ.c` `tasim_econ_request`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
   (`0x41BDB7`). `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
   `+0x98` when both suffice, adds to the requested `+0x04`/`+0x1C` only and returns 1, else 0
   with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
@@ -274,7 +274,7 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
 
 ### The nano particle: its boxes, its two bursts, its step, its dot [DISASSEMBLED 2026-10-28]
 
-What the in-game wiki's spray repeats (`tagpu_wikisim.c` *THE NANO SPRAY*, [the COB
+What the in-game wiki's spray repeats (`tasim_fx.c`, `tagpu_wikisim.h` *THE NANO SPRAY*, [the COB
 plan](../ingame-wiki-cob-plan.html), *The spray*). DISASSEMBLED on `pristine/TotalA.exe.pristine`
 (`objdump -d -M intel`); caller counts are a scan of `.text` for direct `call`/`jmp` to the
 target. The particle object is `effects.md` §7.2's; this is its nano class, vtable `0x4FD5B8`,
@@ -372,7 +372,7 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   (`0x43DFB0`); the root's own offset and position are then added unturned; z is negated at
   `0x43E00A`. `0x4B7173` returns at `0x4B717B` for a zero angle and stores both results with
   `fistp` in the FPU's current rounding mode, to the nearest by default (`0x4B71A0`, `0x4B71A2`).
-- **What the wiki repeats and where it differs** (`tagpu_wikisim.c`, `sim.js`): the boxes, the
+- **What the wiki repeats and where it differs** (`tasim_fx.c`, `sim.js`): the boxes, the
   cut, the five-a-burst spawn, the steps, the 0-step rule, the step, the end, the colour and its
   cycle, the two bursts and their order, and the reclaim's two-tick cadence, all in int32 as the
   engine's. It draws from its own generator, never `0x4E4870` (decision 11 of the COB plan); its

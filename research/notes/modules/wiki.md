@@ -212,7 +212,10 @@ rewrites some of them in `DllMain` (Mayhem's `guiM`, ProTA's `guiP`; the engine 
 sidebar*, *The folder names a mod renames*). **No new engine hook, patch or detour**: the sidebar
 is drawn from those files alone, and its rules are the engine's repeated in `tagpu_wikisim.c`. The rules the loader repeats: [engine map](../exe-reverse-engineering.html), *How the engine
 resolves a path, a unit's files and a model's textures*. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
-on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
+on the game thread that TA's simulation never reads, and every wiki file is `presentation`. Its code is the
+wiki's front end `tagpu_wikisim.c` -- the entry points, the UI it emulates, the scripted input, the selection,
+the scene and the casting, and the copies of the placement, snap and sweep rules -- over the shared simulation
+core, `tasim_*.c` ([the shared core](../impai/shared-core.html)), engine-free like it and compiled on SSE2 with it.
 
 ### 2.12d The wiki's stage in 3D: the world passes compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tagpu_wikiscene.c`, `tagpu_scene_wiki.h`, `tools/scene-check.sh`; every Vulkan level with the wiki open)
 
