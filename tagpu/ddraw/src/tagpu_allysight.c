@@ -1,3 +1,15 @@
+#include "tagpu_simreg.h"
+SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle tenseat");
+/* The feature line stands second: the replay gate gives a line above a file's first SIM_FEATURE
+   no feature, so only the include it needs precedes it. */
+#include <windows.h>
+#include <stdint.h>
+#include <string.h>
+#include "tagpu_allysight.h"
+#include "tagpu_detour.h"
+#include "tagpu_log.h"
+#include "tagpu_puppet.h"
+
 /* tagpu_allysight.c -- allies share their sight, their death vision and their explored map, and
    the engine's sight counters never wrap (research/notes/modules/allied-sharing.md).
 
@@ -29,9 +41,9 @@
    0x486845) and the temporary records' expiry's (0x482161) -- and those two calls are gated on
    the same byte here (destructor_sight, eye_expire), as are the migration's walks (migrate_units,
    migrate_eyes). So under the ray fan every removal subtracts exactly what its stamp added. Under
-   the circle emitter (LosType bit 1) the removal at 0x48275D runs whenever the record's cell or
-   byte changed, with no stamp test, and whether a record can reach it unstamped is not
-   established; one that did would under-count, never wrap, W stopping at zero.
+   the circle emitter (LosType bit 1 without bit 2) the removal at 0x48275D runs whenever the
+   record's cell or byte changed, with no stamp test, and whether a record can reach it unstamped
+   is not established; one that did would under-count, never wrap, W stopping at zero.
 
    THE REMOVAL IS THE STAMP'S WALK WITH THE SIGN REVERSED. The stamp 0x482270 and the removal
    0x481D50 walk identically (DISASSEMBLED: 0x481D50..0x481D88 is 0x482270..0x4822A8 byte for byte,
@@ -54,17 +66,6 @@
 
    THREADS: the hooks run on whichever thread calls the engine's functions -- the game thread in
    play, the loader thread during a load (players_init_hook and the loader's stamps). */
-
-#include <windows.h>
-#include <stdint.h>
-#include <string.h>
-#include "tagpu_allysight.h"
-#include "tagpu_detour.h"
-#include "tagpu_log.h"
-#include "tagpu_puppet.h"
-#include "tagpu_simreg.h"
-
-SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle tenseat");
 
 /* the engine's main block and the fields this file reads or writes (DISASSEMBLED, the uses cited
    where each is read) */
