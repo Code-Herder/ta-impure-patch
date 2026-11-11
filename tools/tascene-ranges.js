@@ -152,16 +152,16 @@ function defenseRings(T) {
 //   * THE VIEW, always on: every own and allied emitter. Radar and sonar are
 //     gui_sensor_ranges_radar.lua / _sonar.lua's colours on the outline of each
 //     kind's union: a dashed band just outside it. Jammers are
-//     gui_sensor_ranges_jammer_preview.lua's always-shown allied layer: the
-//     union filled, a dashed band just inside its outline. The outline is the
+//     gui_sensor_ranges_jammer_preview.lua's always-shown allied layer's
+//     outline, unfilled: a dashed band just inside the union. The outline is the
 //     circles' uncovered arcs chained into loops (see `loops`), dashed along
 //     each loop (see DASH).
 //   * THE PREVIEW of a building being placed: radar is
 //     gui_sensor_ranges_radar_preview.lua without its terrain raycast -- the new
 //     disc's sheet with rings travelling outward, the existing coverage filled
 //     duller, an outline along the new disc's edge and the union's. Sonar takes
-//     that structure in the sonar colours; a jammer's disc joins the jammer
-//     layer in the brighter sheet colour.
+//     that structure in the sonar colours; a jammer's circle joins the jammer
+//     layer's outline.
 const SENSOR_KINDS = ["radar", "sonar", "radarjam", "sonarjam"];
 const WATER_KIND = { radar: false, sonar: true, radarjam: false, sonarjam: true };
 // sensor_ranges_los.vert/.frag.glsl with the radar and sonar defines
@@ -186,9 +186,9 @@ const DASH = {
   jam:  { len: 5, space: 11, speed: 6 },
 };
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
-// gui_sensor_ranges_jammer_preview.lua shaderConfig
-const JAMMER = { allied: [0.62, 0.35, 0.33], sheet: [0.90, 0.22, 0.20], a: 0.17, alliedRel: 0.85,
-                 outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
+// gui_sensor_ranges_jammer_preview.lua shaderConfig's outline (its fills are
+// not drawn)
+const JAMMER = { outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
                  w: 1.2, wElmo: 0.89 };   // band width: px at 1080p + elmos
 // gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
 const PREVIEW = {
@@ -1254,6 +1254,8 @@ function create(ctx) {
   // row, `sign` the direction the dashes run
   function slineDraw(rgb, a, mode, zoom, dash, sign, gap) {
     if (!sN) return;
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(slineProg);
     gl.uniform2f(LSU.uCanvas, GW, GH);
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
@@ -1294,32 +1296,14 @@ function create(ctx) {
     slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
-  // placed): a dashed band along the inside of the union's outline, and the
-  // union inside the band filled.
-  function drawJammers(kind, ghost, proj, zoom, t) {
+  // placed): a dashed band along the inside of the union's outline, no fill
+  function drawJammers(kind, ghost, proj, zoom) {
     const water = WATER_KIND[kind];
-    const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
-    if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind))
-      list.push({ u: ghost, isNew: true });
+    const list = settings.view ? emitters(kind) : [];
+    if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind)) list.push(ghost);
     if (!list.length) return;
-    // the fill stops where the band starts: each disc short of its circle
-    // by the band's width, so the band lies on the bare ground outside it
-    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, wE = wpx / zoom;
-    const items = list.map((e) => {
-      const r = types[e.u.type][kind];
-      return { ...e, r, rg: circle(e.u, Math.max(1, r - wE), water, proj) };
-    });
-    maskBegin();
-    for (const isNew of [true, false]) {
-      for (const it of items) if (it.isNew === isNew) region(it.rg);
-      maskFlush(isNew ? 0 : 1);
-    }
-    maskEnd();
-    const sea = water ? [proj, zoom] : null;
-    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0, sea);
-    fillWhere(JAMMER.sheet, JAMMER.a, 0, -1, sea);
-    const ls = (GH + 500) / 1300;
-    for (const path of outline(items.map((it) => ({ u: it.u, r: it.r })), water, proj, false))
+    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, ls = (GH + 500) / 1300;
+    for (const path of outline(list.map((u) => ({ u, r: types[u.type][kind] })), water, proj, false))
       sline(path, wpx, -1, DASH.jam.space * ls, zoom);
     slineDraw(JAMMER.outline, JAMMER.dashA, 1, zoom, "jam", 1, JAMMER.gapRel);
   }
@@ -1375,7 +1359,7 @@ function create(ctx) {
     const t = clock();
     lodStep(zoom, t);
     const placed = ghost && settings.sensor ? sensorKinds(types[ghost.type]) : [];
-    for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom, t);
+    for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom);
     if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, zoom, t);
     for (const kind of ["radar", "sonar"]) if (placed.includes(kind)) drawPreview(kind, ghost, proj, zoom, t);
   }
