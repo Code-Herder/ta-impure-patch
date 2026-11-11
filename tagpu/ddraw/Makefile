@@ -272,6 +272,11 @@ $(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -min
 # stage. tools/wiki/framecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikiframe, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE ROLE CLASSIFIER (src/tasim_roles.h) compares speeds, values and ranges against percentiles
+# in double, so it computes on SSE2: an 80-bit intermediate can put a unit on the other side of a
+# threshold from the native build `tasim_run roles` (tools/tasim/native.py) classifies with.
+$(addprefix src/tasim_roles, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE WIKI'S SCENE (src/tagpu_wikiscene.h) stages a nanoframe by truncating a single-precision
 # product (tagpu_nanostage.h, `nano * 255.0f`) as the mockup's scene.js truncates Math.fround's,
 # so it computes on SSE2 too: an 80-bit product can land on the other side of a whole number.
