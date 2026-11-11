@@ -1732,7 +1732,11 @@ compares the unit's owner byte `+0xFF` with the viewed player `main+0x2A43` and 
 once when they match; only another owner's unit reaches the call at `0x48BC56`, and a 0 there
 leaves it out of the list (`0x48BC5D`) ([units](units.html), *The draw's unit list*). The
 function's own first tests, before any point [DISASSEMBLED 2026-11-09]: a unit whose owner record
-`+0x96` is the `player` argument is visible (`0x465AD4`); one with `+0x10E` bit 2 is not
+`+0x96` is the `player` argument is visible (`0x465AD4`; under Impure's allied sharing also one whose
+owner the snapshot S shares with `player`, the owner test `0x465ACE..0x465AD8` — its `jne` at `0x465AD7`
+the only branch into `0x465ACF..0x465AE7`, the visible exit `0x465AD9` and the cloak test `0x465AE8`
+its two targets, eax, ecx and edx rewritten past the latter (`0x465AFD`, `0x465B09`, `0x465B1B`)
+before the box test at `0x465B5C` — answering for both, [allied sharing](../modules/allied-sharing.html)); one with `+0x10E` bit 2 is not
 (`0x465AE8`); and **one whose model is wholly under water is not, unless it is a sonar contact**
 — the first point's y, the altitude `+0x6E` plus the def's `+0x16E` (the model's top, [weapons](weapons.html),
 *The target box*), below the sea level byte `main+0x1427F` << 16 returns 0 when `+0x110` bit 9,

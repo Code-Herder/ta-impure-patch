@@ -5,9 +5,9 @@ death vision of their units and their explored map, in skirmish and in network g
 seats as with human ones: a unit acquires and fires at what only an ally sees, the fog and the
 minimap fog open where an ally sees, and the cull draws what an ally sees. They share their radar
 and sonar contacts: an ally's radar and sonar mark enemies on your radar picture, an ally's jammers
-do not jam you, and an ally's units keep their dot on the minimap. The engine's one-byte sight
-counters never wrap: a cell under more than 255 stamps reads 255, not 0. Allied cloaked or
-submerged units are not shown yet (*Gaps*).
+do not jam you, and an ally's units keep their dot on the minimap. An ally's cloaked or submerged
+units stay in sight. The engine's one-byte sight counters never wrap: a cell under more than 255
+stamps reads 255, not 0.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
@@ -117,6 +117,23 @@ holds the allies' contacts. **The sensor view** (`tagpu_rangeown.c`, [range ring
 draws the coverage of the viewed player and of every owner `tagpu_allysight_contacts` names — the
 owners whose radar the pass walks for the viewer.
 
+## Visibility
+
+`UnitInPlayerLOS 0x465AC0(player, unit)` answers 1 at once for the player's own unit; for any other
+it answers 0 for a cloaked unit (`+0x10E` bit 2) and for one wholly under water that is not a sonar
+contact (`+0x110` bit 9), and otherwise tests four points of the unit's box against the player's
+sight. Its owner test (`0x465ACE`, `ally_visible`) also passes an owner S shares with the player,
+so an ally's units are visible as the player's own are (decision 8): cloaked, submerged and jammed
+on sonar alike. Loop 1 of the radar pass already gives every allied unit bit 9, and a unit's own
+stamp covers its cell in its owner's counters, which S shares, so the site decides chiefly for an
+ally's unit that is cloaked, or submerged while an enemy jams its sonar.
+
+**Targeting does not change.** The acquisition skips an owner its seat's row allies (`0x40AB05`)
+before it calls `0x465AC0` (`0x40AB11`), and S requires that row, so it never reaches the new
+branch. The other callers draw or describe: the order sprites `0x439761`, the unit panel `0x46AF3D`
+and `0x46B5B4`, COB's `EMIT_SFX` test for the viewed player `0x480EE5`, HotUnits `0x48BC56`,
+`0x494396`, and Impure's own (the frame packet, the order markers, the rings, the icons).
+
 ## The hooks
 
 | site | what the module does there |
@@ -132,6 +149,7 @@ owners whose radar the pass walks for the viewer.
 | the radar pass's emitter loop, head `0x46750E` and exit `0x4675D2` | walks the viewer's block, then each shared owner's |
 | the radar pass's jammer test `0x4675F5` | skips the jammers of an owner S shares with the viewer |
 | the minimap's dot test `0x466E6F` | dots an allied unit whose bits 8 and 9 are clear |
+| `UnitInPlayerLOS`'s owner test `0x465ACE` | 1 for a unit whose owner S shares with the player |
 | the destructor's call `0x486845` | the removal only when the unit holds a stamp: under the ray fan the destructor removes unconditionally, and a unit whose height byte is 0 holds none (the replay's `book_stamp` rule) |
 
 ## On a puppet host
@@ -144,7 +162,8 @@ before R12, and the migration then moves them to the recording's; R14a's tempora
 made after it. `ally_share` (the players phase) refuses to act on a puppet. `ally_radar` runs: in the
 recording's viewed record `contacts_put` overwrites bits 8–10 from the image after the pass, in any
 other view the pass's bits stand, and no simulation reads them on a puppet host
-(`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*).
+(`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*). `ally_visible` runs: its answer follows S, which the
+recording writes.
 
 W is `SIM_REBUILT`: never recorded, rebuilt on every host by the stamps, carried in a dump after
 each record's counters (`RK_SIGHTW`, only for the records S keeps), where `tarec compare-dumps`
@@ -165,7 +184,8 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
 
 ## Gaps
 
-- Allied cloaked or submerged units are not shown yet.
+- The cloaked case has not been run: the scenario format cannot cloak a unit, and no `tacli` order
+  reaches another seat's cloak.
 - A one-way alliance cannot be made from the skirmish keys (ally groups are symmetric), so the
   both-ways rule's one-way case has not been run.
 - No scenario has an allied unit an enemy jams on both radar and sonar, so the minimap's dot site

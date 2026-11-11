@@ -278,7 +278,8 @@ Under `mod=` the mount's filter (`mount_filtered`, `tagpu_modload.c`) reads the 
 ### Allied sight (`tagpu_allysight.c`)
 
 Always on, no arm file ([allied sharing](allied-sharing.html)). The sites come in sets — the ten
-of shared sight, then the five of shared contacts, which install only once the first set is in.
+of shared sight, then the five of shared contacts and the one of visibility, which install only once
+the first set is in.
 Each set is byte-matched against the retail bytes before any of it is written, none of it is written
 unless all match, and the sites written are put back when a later write fails; written at attach,
 before the engine runs.
@@ -299,6 +300,7 @@ before the engine runs.
 | `0x46750E` | the radar pass's loop 2 head over the viewer's block, `mov esi,[ebp+0x67]; mov eax,[ebp+0x6B]; cmp; ja 0x4675D2` | `tagpu_allysight.c` | `jmp` + 9 NOP to a stub: `radar_blocks(viewer)` fills the block list, then each block in turn enters the engine's body at `0x46751C` |
 | `0x4675D2` | the radar pass's loop 2 exit, `cmp edi,[esp+0x10]; ja 0x46782F` | `tagpu_allysight.c` | `jmp` + 5 NOP to the same stub's next-block step; after the last block it restores `ebp` to the viewer and runs the exit's test |
 | `0x4675F5` | the radar pass's loop 3 test of the jammer's owner against the viewer, `mov al,[esi+0x6D]; mov cl,[ebp+0x146]; cmp; je 0x46765A` | `tagpu_allysight.c` | `jmp` + 8 NOP to a stub: the viewer's own or an owner S shares with it → `0x46765A` (skipped), else `0x467602` |
+| `0x465ACE` | `UnitInPlayerLOS 0x465AC0`'s owner test, `mov eax,[ebx+0x96]; cmp eax,esi; push edi; jne 0x465AE8` | `tagpu_allysight.c` | `jmp` + 6 NOP to a stub: `push edi` (the engine's, on both paths), then the player's own or an owner S shares with it (`los_ally`, both record pointers turned into indices exactly) → `0x465AD9` (1), else `0x465AE8` |
 | `0x466E6F` | the minimap's dot test, `0x466DC0`: the owner byte `+0xFF` against `main+0x2A43`, `jne 0x46718C` | `tagpu_allysight.c` | `jmp` + 15 NOP to a stub: the viewed player's own or an owner S shares with it → `0x466E83` (the dot), else `0x46718C` |
 
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)

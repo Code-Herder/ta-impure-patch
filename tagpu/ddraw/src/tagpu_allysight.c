@@ -784,15 +784,17 @@ static unsigned sites_land(const Site* site, unsigned n)
     return written;
 }
 
-/* the radar pass's sites, all-or-nothing, after these */
+/* the radar pass's sites and UnitInPlayerLOS's, each landing's all-or-nothing, after this one's */
 static void radar_init(void);
+static void visible_init(void);
 
 /* Every site byte-matched against the retail bytes before any is written, none written unless all
    match (no other module writes any of them: hook-map.md), every stub built before any lands, and
    the ones written put back when a later write fails. No branch lands inside a replaced range but
    at its first byte (DISASSEMBLED: 0x48258C -> 0x482580), and no pointer to any of the hooked
-   functions is in the image. At DllMain, before the engine runs. The radar pass's sites install
-   after these, whole or not at all, and only when these are in: they read S. */
+   functions is in the image. At DllMain, before the engine runs. The radar pass's and
+   UnitInPlayerLOS's sites install after these, each set whole or not at all, and only when these
+   are in: both read S. */
 void tagpu_allysight_init(void)
 {
     Site site[10] = {
@@ -850,6 +852,7 @@ void tagpu_allysight_init(void)
               "0x481D50, the explored map's stamp 0x481930, the rebuild 0x4816A0, the players init "
               "0x464990, the players phase's call 0x49555F and the destructor's removal 0x486845");
     radar_init();
+    visible_init();
 }
 
 SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied tenseat");
@@ -1180,3 +1183,80 @@ static void radar_init(void)
               "dot test 0x466E6F");
 }
 
+SIM_FEATURE(ally_visible, SIM_PUPPET_RUNS, "battle-allied");
+
+/* UnitInPlayerLOS 0x465AC0(player, unit), stdcall `ret 8` (DISASSEMBLED 0x465AC0..0x465E1E):
+   1 for the player's own unit (0x465ACE..0x465AD9); else 0 for a cloaked unit (+0x10E bit 2,
+   0x465AE8) and for one under the sea (+0x110 bit 9 clear and its top below the sea level,
+   0x465B30..0x465B59); else whether one of four points of its box is in the player's sight
+   (0x465B5C..). Here an owner S shares with the player passes as the player's own does, so an
+   allied cloaked or submerged unit stays visible (the module note's decision 8).
+   IT DOES NOT CHANGE TARGETING: the acquisition skips an owner its seat's row allies (0x40AB05)
+   before it calls 0x465AC0 (0x40AB11), and S requires that row, so the acquisition never reaches
+   the new branch. The other callers draw or describe: the order sprites 0x439761, the unit panel
+   0x46AF3D and 0x46B5B4, COB's EMIT_SFX test for the viewed player 0x480EE5, HotUnits 0x48BC56,
+   0x494396, and ours (the frame packet, the order markers, the rings, the icons). */
+
+static int s_visOn;
+SIM_VAR(s_visOn, SIM_INSTALL);
+
+#define VA_LOS_OWNER   0x00465ACEu
+
+/* mov eax,[ebx+0x96]; cmp eax,esi; push edi; jne 0x465AE8: the owner record against the player
+   record, ebx the unit and esi the player. eax, ecx and edx are rewritten past either exit
+   (0x465AD9; 0x465AFD, 0x465B09, 0x465B1B) */
+static const unsigned char LOS_OWNER_WAS[11] = {
+    0x8B, 0x83, 0x96, 0x00, 0x00, 0x00, 0x3B, 0xC6, 0x57, 0x75, 0x0F };
+
+/* Whether S shares the unit's owner record with the player record, both the engine's pointers
+   turned into indices exactly or refused. */
+static int __cdecl los_ally(char* owner, char* player)
+{
+    char* ta = ta_main();
+    return ta && tagpu_allysight_shares(rec_index(ta, owner), rec_index(ta, player));
+}
+
+/* push edi (the stock push, before either exit); mov eax,[ebx+0x96]; cmp eax,esi; je 0x465AD9;
+   push esi; push eax; call los_ally; add esp,8; test eax,eax; jnz 0x465AD9; jmp 0x465AE8 */
+static unsigned char* stub_los(void)
+{
+    unsigned char *s = tagpu_detour_stub(), *p = s;
+    if (!s) return NULL;
+    *p++ = 0x57;
+    *p++ = 0x8B; *p++ = 0x83; *p++ = 0x96; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0x3B; *p++ = 0xC6;
+    p = emit_jcc(p, 0x84, 0x00465AD9u);
+    *p++ = 0x56; *p++ = 0x50;
+    p = emit_rel(p, 0xE8, (unsigned)(size_t)los_ally);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;
+    *p++ = 0x85; *p++ = 0xC0;
+    p = emit_jcc(p, 0x85, 0x00465AD9u);
+    emit_rel(p, 0xE9, 0x00465AE8u);
+    return s;
+}
+
+/* The owner test's site, byte-matched. Only 0x465AD7, inside the range, branches into
+   0x465ACE..0x465AE8 (DISASSEMBLED); the line-of-sight shear's sites (tagpu_patches.c) lie past
+   0x465B5C. */
+static void visible_init(void)
+{
+    Site site[1] = { { VA_LOS_OWNER, LOS_OWNER_WAS, 0, 11, 0xE9, NULL } };
+    unsigned char* stub;
+    if (sites_unmatched(site, 1) < 1) {
+        tagpu_log("allysight: visibility NOT installed: 0x465ACE does not hold the retail bytes; "
+                  "allied cloaked and submerged units stay hidden");
+        return;
+    }
+    if (!(stub = stub_los())) {
+        tagpu_log("allysight: visibility NOT installed: no stub memory");
+        return;
+    }
+    site[0].to = stub;
+    if (sites_land(site, 1) < 1) {
+        tagpu_detour_stub_free(stub);
+        tagpu_log("allysight: visibility NOT installed: 0x465ACE could not be written");
+        return;
+    }
+    s_visOn = 1;
+    tagpu_log("allysight: visibility installed: UnitInPlayerLOS's owner test 0x465ACE");
+}
