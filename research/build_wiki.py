@@ -219,16 +219,30 @@ PAGES = [
     ("compat/setups",             "Setups & outcomes",         "Compatibility"),
     ("compat/identify",           "Identifying a setup",       "Compatibility"),
     ("compat/suite",              "The compat suite",          "Compatibility"),
+
+    ("impai/overview",            "Overview & where to read",  "ImpAI & tasim"),
+    ("impai/decisions",           "Decisions",                 "ImpAI & tasim", "The plan"),
+    ("impai/landings",            "Landings",                  "ImpAI & tasim", "The plan"),
+    ("impai/player",              "For the player: button, levels", "ImpAI & tasim", "ImpAI"),
+    ("impai/bar",                 "The bar",                   "ImpAI & tasim", "ImpAI"),
+    ("impai/brain",               "The brain",                 "ImpAI & tasim", "ImpAI"),
+    ("impai/engine-seam",         "Entering the game",         "ImpAI & tasim", "ImpAI"),
+    ("impai/shared-core",         "Layers & modules",          "ImpAI & tasim", "Shared core"),
+    ("impai/sim-js",              "Retiring sim.js",           "ImpAI & tasim", "Shared core"),
+    ("impai/tasim",               "Scope & coverage",          "ImpAI & tasim", "tasim"),
+    ("impai/calibration",         "Calibration bands",         "ImpAI & tasim", "tasim"),
+    ("impai/testing",             "Testing ladder",            "ImpAI & tasim", "tasim"),
 ]
 
 # A folder of notes is a section of its own: research/notes/<folder>/<name>.md is the slug
 # "<folder>/<name>" and renders to site/<folder>/<name>.html, so a relative link between
 # notes is the same path in the repo and on the site. A note added to the folder is listed
 # in its section without being registered in PAGES; register it to choose its label and order.
-FOLDERS = {"engine": "Engine map", "modules": "Modules", "tadr-port": "TADR port", "compat": "Compatibility"}
+FOLDERS = {"engine": "Engine map", "modules": "Modules", "tadr-port": "TADR port", "compat": "Compatibility",
+           "impai": "ImpAI & tasim"}
 
 SECTION_ORDER = ["Overview", "Renderer", "Modules", "Tooling", "Mechanism", "Engine map", "TADR port", "Projects",
-                 "Compatibility", "Reference", "Survey"]
+                 "Compatibility", "ImpAI & tasim", "Reference", "Survey"]
 SECTION_BLURB = {
     "Overview": "Where the project stands, and the gotchas that cost time",
     "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
@@ -239,6 +253,7 @@ SECTION_BLURB = {
     "TADR port": "Bringing TADR's engine features into our stack — the rules, then one plan per feature group",
     "Projects": "The mods and patches, one page each",
     "Compatibility": "Impure beside the mods, TADR and the Patch Loader players already have — the routes, what each setup does, and the suite every release runs",
+    "ImpAI & tasim": "The planned skirmish AI, ImpAI, and tasim, the headless simulation that tests it, on one simulation core shared with the wiki and the game",
     "Survey": "Discovery passes and comparisons",
     "Reference": "Asset formats and the stock engine's external surfaces",
 }
