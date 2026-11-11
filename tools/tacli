@@ -4891,7 +4891,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
 
     _scn_keys(doc, label, required=("format",),
               optional=("description", "seed", "on_error", "setup", "groups",
-                        "units", "features", "camera", "source"))
+                        "units", "features", "camera", "source", "calib"))
     if doc["format"] != SCN_FORMAT:
         die(f"{label}: format {doc['format']!r} is not {SCN_FORMAT!r}")
 
@@ -4904,6 +4904,11 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
             "setup": _scn_setup(doc, label),
             "groups": [], "units": [], "features": [], "camera": None,
             "warnings": warnings}
+
+    # The calibration runner's block (tools/tasim/calibref.py validates what it says); the
+    # wire never carries it.
+    if doc.get("calib") is not None and not isinstance(doc["calib"], dict):
+        die(f"{label}: calib: expected an object, got {_scn_kind(doc['calib'])}")
 
     # `on_error: "skip"` reaches layer 2 as "warn, do not refuse" — see _scn_type.
     lenient = warnings if norm["on_error"] == "skip" else None

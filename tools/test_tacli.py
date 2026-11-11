@@ -1278,6 +1278,12 @@ class ScenarioCalibrationKeys(unittest.TestCase):
         with refuses(self):
             compile_doc(scn(setup={"objective": "armed"}))
 
+    def test_a_calib_block_compiles_and_never_reaches_the_wire(self):
+        lines = self.wire(scn(calib={"kind": ["winrate"], "metrics": ["winner"]}))
+        self.assertFalse(any("calib" in l for l in lines[1:]))
+        with refuses(self):
+            compile_doc(scn(calib=["winrate"]))
+
     def test_ai_off_and_storage_on_the_player_line(self):
         lines = self.wire(scn(setup={"players": self.players(
             ai="off", storage={"metal": 1000000, "energy": 5000.5})}))

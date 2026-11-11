@@ -1,0 +1,53 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The units clause probe (calib.py engine --probe-pause): two opposed raiders that attack each other until one side has none, so the pause lands on the units clause before its limit.",
+ "units": [
+  {
+   "id": "a",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    8100,
+    3912
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "target": "b"
+    }
+   ]
+  },
+  {
+   "id": "b",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    8500,
+    3912
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "target": "a"
+    }
+   ]
+  }
+ ],
+ "calib": {
+  "kind": [
+   "winrate"
+  ],
+  "metrics": [
+   "winner"
+  ],
+  "runs": 1,
+  "limit": 3000,
+  "end_units": {
+   "0": 0,
+   "1": 0
+  },
+  "area": "probe/pause"
+ }
+}
