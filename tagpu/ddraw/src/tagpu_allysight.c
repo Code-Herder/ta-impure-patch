@@ -28,7 +28,10 @@
    fan), and the two that test nothing, 0x482090's (0x482104, whose one call is the destructor's
    0x486845) and the temporary records' expiry's (0x482161) -- and those two calls are gated on
    the same byte here (destructor_sight, eye_expire), as are the migration's walks (migrate_units,
-   migrate_eyes). So every removal subtracts exactly what its stamp added.
+   migrate_eyes). So under the ray fan every removal subtracts exactly what its stamp added. Under
+   the circle emitter (LosType bit 1) the removal at 0x48275D runs whenever the record's cell or
+   byte changed, with no stamp test, and whether a record can reach it unstamped is not
+   established; one that did would under-count, never wrap, W stopping at zero.
 
    THE REMOVAL IS THE STAMP'S WALK WITH THE SIGN REVERSED. The stamp 0x482270 and the removal
    0x481D50 walk identically (DISASSEMBLED: 0x481D50..0x481D88 is 0x482270..0x4822A8 byte for byte,
