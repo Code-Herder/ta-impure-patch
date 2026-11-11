@@ -1,0 +1,169 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The sensor view (tagpu_rangeown.c, tagpu_range.c: the own and allied radar, sonar and jammer coverage as BAR draws it) on Two Continents' eastern shore, with true line of sight. Player 0 (Arm) has radar towers `rad` (5300, 12300) and `rad2` (6100, 12900), a mobile radar `seer`, a radar plane `peep`, a mobile radar jammer `jam`, a sonar jammer ship `sjam`, a sonar jammer `scram` in the water, the commander and a construction kbot `ck` for the placement preview. Player 2 (Arm AI) is the ally to be: its radar tower `arad` (6900, 12650) overlaps `rad2`'s so the two merge into one outline, and its sonar station `ason` (7650, 11850) stands in the water. Player 1 (Core AI) has a radar tower `crad` (4800, 11400) and a mobile radar `spec`, whose coverage is never drawn, and its commander far north. The alliance is not part of the scenario format: it is the skirmish key's Player<N>AllyGroup, set before the load.",
+ "seed": 20261111,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "clear_existing": true,
+  "los": "true",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   }
+  ]
+ },
+ "camera": {
+  "at": [
+   6000,
+   11900
+  ]
+ },
+ "units": [
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    6500,
+    12450
+   ]
+  },
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    6300,
+    12300
+   ]
+  },
+  {
+   "id": "rad",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    5300,
+    12300
+   ]
+  },
+  {
+   "id": "arad",
+   "type": "ARMRAD",
+   "owner": 2,
+   "pos": [
+    6900,
+    12650
+   ]
+  },
+  {
+   "id": "ason",
+   "type": "ARMSONAR",
+   "owner": 2,
+   "pos": [
+    7650,
+    11850
+   ]
+  },
+  {
+   "id": "seer",
+   "type": "ARMSEER",
+   "owner": 0,
+   "pos": [
+    6250,
+    11700
+   ]
+  },
+  {
+   "id": "peep",
+   "type": "ARMPEEP",
+   "owner": 0,
+   "pos": [
+    6750,
+    11600
+   ]
+  },
+  {
+   "id": "jam",
+   "type": "ARMJAM",
+   "owner": 0,
+   "pos": [
+    6450,
+    11650
+   ]
+  },
+  {
+   "id": "sjam",
+   "type": "ARMSJAM",
+   "owner": 0,
+   "pos": [
+    7850,
+    12650
+   ]
+  },
+  {
+   "id": "scram",
+   "type": "ARMSCRAM",
+   "owner": 0,
+   "pos": [
+    7750,
+    12250
+   ]
+  },
+  {
+   "id": "crad",
+   "type": "CORRAD",
+   "owner": 1,
+   "pos": [
+    4800,
+    11400
+   ]
+  },
+  {
+   "id": "spec",
+   "type": "CORSPEC",
+   "owner": 1,
+   "pos": [
+    5400,
+    11050
+   ]
+  },
+  {
+   "id": "rad2",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    6100,
+    12900
+   ]
+  },
+  {
+   "id": "ccom",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    3000,
+    2500
+   ]
+  }
+ ]
+}
