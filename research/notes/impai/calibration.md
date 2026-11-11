@@ -4,14 +4,14 @@ How tasim is judged against the real game. tasim cannot be closer to the engine 
 
 ## Why the engine has a spread
 
-The same scenario played twice in TA does not come out the same. Weapon spread draws from the CRT's `rand`, and the game thread's draw path draws from that same stream every frame, so the number of frames drawn between ticks changes every shot ([Sim step and clock](../engine/sim.html), *The meteor shower and the CRT rand*). Where the batches fall changes what units see as well (*The batch is part of the result*, same page).
+The same scenario does not come out the same twice. Each run is perturbed (start positions jittered, first orders staggered, sides swapped), weapon spread draws the simulation's random stream (`0x4B6C30`, called at `0x49D727` and `0x49D733`, DISASSEMBLED), whose state carries on from run to run, and where the step's batches fall changes what units see (*The batch is part of the result*, [Sim step and clock](../engine/sim.html)). The engine's spread is the spread of a metric over those perturbed runs.
 
 ## Three kinds of metric
 
 | Kind | Examples | Rule |
 |---|---|---|
 | **Exact** | build time at a given build power; cost drawn per tick; an extractor's income on a given metal; weapon range, reload, damage per hit; sight radius; storage | match exactly, one run each, compared tick by tick against the recorder's dump. No chance is involved, so any difference is a tasim bug |
-| **Win rate** | which side wins a duel or a brawl | tasim's and the engine's win rates differ by no more than two standard errors of the difference (about ±0.14 at 50 runs a side on an even fight, ±0.10 at 100) |
+| **Win rate** | which side wins a duel or a brawl | tasim's and the engine's win rates differ by no more than two standard errors of the difference (about ±0.20 at 50 runs a side on an even fight, ±0.14 at 100) |
 | **Distribution** | time to kill; the winner's remaining value; travel time A→B with collisions; the income curve of an opening | tasim's median inside the engine's 10th–90th percentile, and tasim's spread (P90 − P10) between half and double the engine's |
 
 **ImpAI's fight predictor** is held to its decisions: on decisive fights (the engine's win rate above 80 % or below 20 %), its engage-or-retreat call agrees with the engine's majority at least 90 % of the time. Close fights are left out, because no predictor can call a coin flip.
