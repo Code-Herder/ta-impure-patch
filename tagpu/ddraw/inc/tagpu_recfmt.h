@@ -410,6 +410,11 @@ enum RecKind {
                           (0x406B9F) -- a playing makes both there (tagpu_replay.c, ev_place). A
                           skirmish stream's only, in one that holds its cells; a footprint event of
                           THE CONTEST ORDER; in RCS_OTHER                                         */
+    RK_SIGHTW,         /* dump only: u8 the player record, u8 0, u16 0, u32 the first cell, then at
+                          most REC_IMAGE_CHUNK / 4 of the record's wide sight counters from there,
+                          u32 each (tagpu_allysight.h): after the record's RK_SIGHT, for each record
+                          whose counters allied sight keeps, its counters whole in order; for every
+                          cell the record's RK_SIGHT byte is min(W, 255)                          */
     RK_KINDS
 };
 
@@ -426,8 +431,9 @@ _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
                RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
 _Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_EV_TURN == 60 &&
-               RK_EV_LINK == 61 && RK_EV_PLACE == 62 && RK_KINDS == 63,
-               "the slice's, the query's, the yard's, the key's, the link's and the place's kinds");
+               RK_EV_LINK == 61 && RK_EV_PLACE == 62 && RK_SIGHTW == 63 && RK_KINDS == 64,
+               "the slice's, the query's, the yard's, the key's, the link's, the place's and the wide "
+               "sight's kinds");
 
 /* RK_EV_QUERY's query: the script's name and the values its arguments point to going in, as the
    engine's calls pass them, an argument it passes NULL marked - (the engine map, *The owner's COB
@@ -839,7 +845,8 @@ enum RecBlockKind {
                           snapshot that carries more wreck records than differ reads the same.
                           A dump is one of these, stored, with every cell and no base -- its
                           RK_WRECK per record that is not all zero, read over a zero pool -- and
-                          the players' sight counters (RK_SIGHT) and the two images whole
+                          the players' sight counters (RK_SIGHT, and RK_SIGHTW where allied
+                          sight keeps them wide) and the two images whole
                           (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */

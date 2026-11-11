@@ -533,12 +533,24 @@ class RewindPolicy(unittest.TestCase):
             self.assertEqual(self.compare(key, True)[0], 1)
         self.assertEqual(self.compare((0x480B57, 0, 0), True, puppet=True)[0], 1)
 
+    def test_the_sight_byte_is_the_wide_counter_capped(self):
+        from types import SimpleNamespace
+        w = SimpleNamespace(sight={0: bytearray([0, 255, 3]), 1: bytearray([7])},
+                            sightw={0: [0, 300, 3]})
+        self.assertEqual(tarec.sight_wide_faults(w), [])
+        w.sightw[0][2] = 4
+        faults = tarec.sight_wide_faults(w)
+        self.assertEqual(len(faults), 1)
+        self.assertIn("first 2: byte 3, W 4", faults[0])
+        w.sightw[1] = [7, 7]
+        self.assertIn("2 cells, its byte counters 1", tarec.sight_wide_faults(w)[1])
+
     def test_seated_sight_remains_exact(self):
         from types import SimpleNamespace
         def world():
             return SimpleNamespace(lists={}, players=[bytearray(tarec.REC_PLAYER_IMAGE)
                 for _ in range(tarec.REC_PLAYERS)], sight={0: bytearray(b"a"), 4: bytearray(b"b")},
-                ctl=[], view=[0, 0], units={})
+                sightw={4: [98]}, ctl=[], view=[0, 0], units={})
         a, b = world(), world()
         b.sight[0] = bytearray(b"c")
         b.sight.pop(4)
@@ -546,6 +558,7 @@ class RewindPolicy(unittest.TestCase):
         tarec.fork_view(a, b, h, h)
         self.assertNotIn(4, a.sight)
         self.assertNotIn(4, b.sight)
+        self.assertNotIn(4, a.sightw)
         self.assertNotEqual(a.sight[0], b.sight[0])
 
 

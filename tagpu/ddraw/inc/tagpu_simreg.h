@@ -34,6 +34,13 @@
                     pages, site tables, TLS indices, levers. Hashed after install; a change
                     in a game fails the harness by name. Locks are INSTALL and left out of
                     that hash (SIM_LOCK).
+     SIM_REBUILT    the simulation reads it and it changes during a game, but the code that
+                    builds it live builds it again on every host from the engine's own events:
+                    not recorded and not restored; a dump carries it, so the harness compares
+                    it. A loosening the owner approved for one table only, the wide sight
+                    counters of tagpu_allysight.c, which the sight stamps build and whose u8
+                    twins the engine keeps (demo-recorder-completeness.md, the classes and
+                    *Decisions taken*); any other use is the owner's decision again.
 
    THE KEY says what a row index means, so a takeover can move rows with their units. A field
    whose VALUE is an address or an identity is named in the row's layout (SimField): a table
@@ -42,7 +49,7 @@
 #include <stddef.h>
 
 typedef enum SimClass { SIM_STATE, SIM_CONTENT, SIM_TRANSIENT, SIM_PRIVATE, SIM_INSTALL,
-                        SIM_CLASSES } SimClass;
+                        SIM_REBUILT, SIM_CLASSES } SimClass;
 
 /* what a row index, or an identity field's value, names */
 typedef enum SimId {

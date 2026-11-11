@@ -393,7 +393,7 @@ static const SimDesc* sim_twin(const SimDesc* const* p, const SimDesc* const* at
 void tagpu_simreg_attach(void)
 {
     static const char* const cname[SIM_CLASSES] = { "state", "content", "transient", "private",
-                                                    "install" };
+                                                    "install", "rebuilt" };
     const SimDesc* const* first = sim_opaque(&simreg_first) + 1;
     const SimDesc* const* end   = sim_opaque(&simreg_last);
     const SimDesc* const* p;

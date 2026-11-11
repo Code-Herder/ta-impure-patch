@@ -106,6 +106,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
+#include "tagpu_allysight.h"
 #include "tagpu_refuse.h"
 #include "tagpu_replay.h"
 #include "tagpu_zoom.h"
@@ -4204,7 +4205,10 @@ static void dump_globals_proj(const Level* L, const char* name)
 }
 
 /* Each player record's sight counters whole, as RK_SIGHT records, for `tarec compare-dumps`: what
-   a seek's sight reset and refill rest on, and no other record carries them.
+   a seek's sight reset and refill rest on, and no other record carries them. After each, the
+   record's wide counters as RK_SIGHTW records when allied sight keeps them (tagpu_allysight.h):
+   SIM_REBUILT, so a dump is where the harness compares them, and where u8 = min(W, 255) is
+   checked.
    THE BOUND: read within the block the player init allocated at the size it stored beside it
    (+0x88 at 0x464866, the block at 0x46487B, NULL when the allocation failed).
    THE LIFETIME: the level's teardown 0x464A00 frees every record's block and stores NULL and 0
@@ -4213,7 +4217,8 @@ static void dump_globals_proj(const Level* L, const char* name)
    is freed under the read. */
 static void dump_sight(const char* ta)
 {
-    unsigned p, off;
+    unsigned p, off, cells;
+    const uint32_t* wide;
     for (p = 0; p < REC_PLAYERS; p++) {
         const char* rec = ta + OFF_PLAYERS + (size_t)p * PL_STRIDE;
         const unsigned char* cnt = *(const unsigned char* const*)(rec + PL_SIGHT);
@@ -4226,6 +4231,16 @@ static void dump_sight(const char* ta)
             pre[1] = pre[2] = pre[3] = 0;
             memcpy(pre + 4, &off, 4);
             dump_rec(RK_SIGHT, pre, 8, cnt + off, n);
+        }
+        wide = tagpu_allysight_wide(p, &cells);
+        if (!wide) continue;
+        for (off = 0; off < cells; off += REC_IMAGE_CHUNK / 4) {
+            unsigned char pre[8];
+            unsigned n = cells - off < REC_IMAGE_CHUNK / 4 ? cells - off : REC_IMAGE_CHUNK / 4;
+            pre[0] = (unsigned char)p;
+            pre[1] = pre[2] = pre[3] = 0;
+            memcpy(pre + 4, &off, 4);
+            dump_rec(RK_SIGHTW, pre, 8, wide + off, n * 4);
         }
     }
 }
