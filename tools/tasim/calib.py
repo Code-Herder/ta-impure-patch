@@ -5,6 +5,9 @@
                     [--mode reload|fresh] [--out DIR] [--dll PATH] [--runs-per-launch N]
     calib.py engine --probe-pause                 the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings]
+    calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT]
+    calib.py selftest [--only GLOB] [--against REF]
+    calib.py stale [--since REV] [--json] [--catalogue FILE]
 
 What it measures and why each piece is the way it is: research/notes/modules/tasim-calibration.md,
 and research/notes/impai/calibration.md for the rules. The engine phase holds the machine's run lock
@@ -271,6 +274,69 @@ def cmd_refs(a):
     return 2 if failed else 0
 
 
+def cmd_check(a):
+    import check
+    try:
+        rows, errors = check.check(check.env_tasim(a.tasim), a.only, a.require_fresh, a.j)
+    except (check.CouldNotCheck, calibref.CalibError) as e:
+        print(f"calib check: could not run: {e}")
+        return 2
+    print(check.report_text(rows))
+    for e in errors:
+        print(f"could not run: {e}")
+    if a.json:
+        Path(a.json).write_text(json.dumps(check.score_json(rows), indent=1) + "\n")
+    for r in rows:
+        if r["verdict"] == "out":
+            print(f"OUT: {r['id']} {r['metric']} margin {check.fmt_margin(r)}")
+    return check.exit_code(rows, errors)
+
+
+def cmd_selftest(a):
+    import check
+    try:
+        lines, rates, errors = check.selftest(a.only, a.against)
+    except (check.CouldNotCheck, calibref.CalibError) as e:
+        print(f"calib selftest: could not run: {e}")
+        return 2
+    print("\n".join(lines))
+    for rule, (rate, n) in rates.items():
+        if n:
+            print(f"false-alarm rate, {rule}: {rate:.3f} of {n}")
+    for e in errors:
+        print(f"could not run: {e}")
+    return 2 if errors else 0
+
+
+def cmd_stale(a):
+    import check
+    try:
+        refs = check.load_refs()
+        cat = json.loads(Path(a.catalogue).read_text()) if a.catalogue else None
+        stale = {}
+        for sid, (_p, ref) in sorted(refs.items()):
+            why = check.stale_reasons(ref, since=a.since, catalogue=cat)
+            if why:
+                stale[sid] = why
+    except (check.CouldNotCheck, calibref.CalibError, OSError) as e:
+        print(json.dumps({"error": str(e)}) if a.json else f"calib stale: could not run: {e}")
+        return 2
+    except Exception as e:                                   # noqa: BLE001 -- tareplay's git
+        if type(e).__name__ != "CouldNotRun":
+            raise
+        print(json.dumps({"error": str(e)}) if a.json else f"calib stale: could not run: {e}")
+        return 2
+    if a.json:
+        print(json.dumps({"references": len(refs), "stale": stale,
+                          "install": "checked" if cat else "unchecked"}))
+    else:
+        for sid, why in stale.items():
+            print(f"{sid}: stale: {'; '.join(why)}")
+        print(f"{len(stale)} of {len(refs)} references stale"
+              + ("" if cat else " (the install's fingerprint unchecked: --catalogue)"))
+    return 0
+
+
 def main(argv=None):
     import engrun
     p = argparse.ArgumentParser(prog="calib.py", description=__doc__.strip().splitlines()[0])
@@ -293,6 +359,22 @@ def main(argv=None):
     rb.add_argument("--j", type=int, default=8, help="processes")
     rb.add_argument("--keep-recordings", action="store_true")
     rb.set_defaults(func=cmd_refs)
+    c = sub.add_parser("check", help="grade tasim against the references")
+    c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")
+    c.add_argument("--only", help="a glob on the scenario file")
+    c.add_argument("--require-fresh", action="store_true")
+    c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
+    c.add_argument("--j", type=int, default=8)
+    c.set_defaults(func=cmd_check)
+    st = sub.add_parser("selftest", help="split-half, seat effect, exact self-consistency")
+    st.add_argument("--only")
+    st.add_argument("--against", help="a reference to grade against (reload against fresh)")
+    st.set_defaults(func=cmd_selftest)
+    sl = sub.add_parser("stale", help="the references the code made stale")
+    sl.add_argument("--since", help="count only what changed since this revision")
+    sl.add_argument("--json", action="store_true")
+    sl.add_argument("--catalogue", help="a live `tacli units --json` to check the install against")
+    sl.set_defaults(func=cmd_stale)
     a = p.parse_args(argv)
     return a.func(a)
 

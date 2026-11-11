@@ -4676,6 +4676,25 @@ def multiplayer_group(build, dll, out, keep):
     return reach, []
 
 
+def calibration_stale(base):
+    """The calibration references this landing made stale (tools/tasim/calib.py stale): counted
+    and reported, never re-measured here -- a re-measure is hours, `calib.py engine --stale`, on
+    the owner's schedule. None when the count could not be taken, which is said."""
+    r = subprocess.run([sys.executable, str(TREE / "tools" / "tasim" / "calib.py"), "stale",
+                        "--since", base, "--json"], capture_output=True, text=True, timeout=300)
+    try:
+        got = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        got = {"error": last(r.stdout + r.stderr) or f"exit {r.returncode}"}
+    if r.returncode or "error" in got:
+        say(f"calibration: the stale count could not be taken: {got.get('error')}")
+        return None
+    n = len(got["stale"])
+    say(f"calibration: {n} reference{'s' if n != 1 else ''} made stale by this landing"
+        + "".join(f"\n  {sid}: {'; '.join(why)}" for sid, why in sorted(got["stale"].items())))
+    return n
+
+
 def cmd_landing(args):
     base = args.base
     if args.check:
@@ -4699,6 +4718,7 @@ def cmd_landing(args):
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
         f"functions; {len(regions)} file-scope regions")
+    stale = calibration_stale(base) if gated_any else 0
     status = 0
     run = None
     if fx or multiplayer:
@@ -4760,6 +4780,7 @@ def cmd_landing(args):
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
                 f"multiplayer={','.join(MP_GAMES) if multiplayer else '-'} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
+                f"calibration_stale={'-' if stale is None else stale} "
                 f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
