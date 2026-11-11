@@ -40,9 +40,8 @@
    each distinct game at the refresh ticks (forkCases); the release sweep plays each live entry's games with Back to
    now's release after every tick up to the script's last input, each to its end, through sim.js and wikitest
    `sweep`, in two contexts. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
-   against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
-   recording is
-   replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
+   against sim.js with every call recorded as the C host's requests (tests/wikihost.c; `create` and `play` with the
+   layout and the context each was given), the session is replayed through wikitest `trace`, and every answer the case read (each view, with the state hash after it, orders, done)
    is compared. For each demo and case it names the first differing tick or call and field. It compares the build
    trip's and the replay layer's constants, and the recorder's rules (tagpu_recrules.h, which the wiki and the recorder
    share) through wikitest `rules` against replay.js's twins, the refresh grid against tools/replay/tarec.py's is_refresh
@@ -241,8 +240,9 @@ function rec(key, h) {
   if (PLAYED.has(key)) { dupKeys++; console.log(`DIFFER record -- the key ${key} is made twice`); }
   PLAYED.set(key, h);
 }
-const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_wikireplay.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
+const SRCS = ['tests/wikihost.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikireplay.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c',
+  'src/tagpu_sweepgeo.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c',
+  'src/tagpu_hudlay.c'];
 
 /* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
 function fnv() {
@@ -439,7 +439,7 @@ function stateHash(sim, v) {
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
-/* A PLAYERS GAME'S SIGHT at the tick the sim stands at, as wikitest's sight_out prints it: per seat of the game, its
+/* A PLAYERS GAME'S SIGHT at the tick the sim stands at, as tests/wikihost.c's wh_sight_out prints it: per seat of the game, its
    lit grid (sim.js sightLit over the layout's table S) as its FNV-1a 32 and its lit blocks' count, and its contacts
    (sightContacts) as a string of 0 and 1 in the view's unit order. The view `v` must still hold its map. */
 function sightOut(sim, v, S) {
@@ -461,6 +461,7 @@ const SCRIPTS = scripts(PACKS);
    or neither (tagpu_wiki.c scripts_now) */
 const SOUNDS = sounds(PACKS);
 const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
+const PACK_DIRS = PACKS.map(d => path.relative(ROOT, d));
 let host = null;
 const HOST = () => (host ??= cobHost());
 
@@ -478,7 +479,7 @@ function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
     const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
-      'src/tagpu_wikireplay.c'];
+      'src/tagpu_wikireplay.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
     sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
@@ -487,12 +488,12 @@ function build(tmp) {
     const env = { ...process.env };
     env.WINEPREFIX ??= path.join(path.resolve(ROOT, common), '..', 'wineprefix');
     env.WINEDEBUG ??= '-all';
-    return (args) => run('wine', [exe, ...args], { cwd: tmp, env });
+    return (args, o = {}) => run('wine', [exe, ...args], { cwd: tmp, env, ...o });
   }
   const exe = path.join(tmp, 'wikitest-native');
   run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, ...SRCS, '-lm'], { cwd: DDRAW });
-  return (args) => run(exe, args, { cwd: tmp });
+  return (args, o = {}) => run(exe, args, { cwd: tmp, ...o });
 }
 
 /* the first difference between the C answer `c` and sim.js's `j`, as a path and the two values; null when equal */
@@ -513,6 +514,54 @@ function diff(c, j, at) {
   return null;
 }
 const show = v => { const s = JSON.stringify(v); return s.length > 160 ? `${s.slice(0, 157)}...` : s; };
+
+/* A RECORDED SESSION: the requests a case's calls make of the C host (tests/wikihost.c), written ahead with the
+   handles the host gives -- each object or sim made takes the next integer from 1, the gfx packs once a session -- and
+   each value the case read beside the request whose answer holds it. `run` plays the requests through `wikitest
+   trace` and returns the C's values, in the order read; a sim's tick, done, side and iface are read from the last
+   answer that carried them, as the drop-in keeps them. */
+function session() {
+  const reqs = [], reads = [];
+  let n = 0, packs = null;
+  const send = r => { reqs.push(JSON.stringify(r)); return reqs.length - 1; };
+  const made = r => { send(r); return ++n; };
+  return {
+    reads,
+    /* a sim of `entry` made from `demo` as sim.js's create, play or game makes it (`play` try, demo, game or stall),
+       with sim.js's context: its castings sent, its scripts (`cob`) and sounds (`snd`) the gfx packs' */
+    create(entry, demo, layout, ctx, play) {
+      const e = made({ op: 'entry', json: { ...entry, demos: [demo || {}] } });
+      const l = layout == null ? null : made({ op: 'layout', json: layout });
+      const c = ctx && ctx.casting ? made({ op: 'casting', json: ctx.casting }) : null;
+      const r = ctx && ctx.rival ? made({ op: 'casting', json: ctx.rival }) : null;
+      if (ctx && (ctx.cob || ctx.snd) && packs === null) packs = made({ op: 'packs', dirs: PACK_DIRS });
+      return made({ op: 'new', entry: e, play, layout: l, ...(ctx ? { ctx: { side: ctx.side ?? 0, iface: ctx.iface ?? 1, casting: c, rival: r,
+        packs: ctx.cob || ctx.snd ? packs : null, scripts: !!ctx.cob, sounds: !!ctx.snd } } : {}) });
+    },
+    send,
+    // a value the case read: `what` of the answer to request `i`, or of the sim's last state (`i` -1)
+    read(i, sim, what, v) { reads.push({ i: i < 0 ? reqs.length - 1 : i, sim, what, v }); return v; },
+    // the C's values of every read, after playing the requests through `host` (wikitest's runner)
+    run(host, file) {
+      fs.writeFileSync(file, reqs.join('\n') + '\n');
+      const ans = lines(host(['trace', file], { cwd: ROOT })).map(l => JSON.parse(l));
+      const st = new Map(), out = [];
+      let k = 0;
+      for (let i = 0; i < reqs.length; i++) {
+        const q = JSON.parse(reqs[i]), a = ans[i];
+        if (a && q.op === 'new' && !a.error) st.set(a.sim, { tick: a.tick, done: a.done, side: a.side, iface: a.iface });
+        else if (a && !a.error && ['step', 'input', 'fork', 'release'].includes(q.op) && st.has(q.sim)) Object.assign(st.get(q.sim), { tick: a.tick, done: a.done });
+        for (; k < reads.length && reads[k].i === i; k++) {
+          const r = reads[k];
+          out.push(!a ? '(no answer)' : r.what === 'fork' ? (a.error ? 'refused' : 'ok') : a.error ? `error ${a.error}`
+            : r.what === 'view' || r.what === 'orders' ? a : r.what === 'hash' ? a.hash : r.what === 'fed' ? a.fed
+            : st.has(r.sim) ? st.get(r.sim)[r.what] : `(no sim ${r.sim})`);
+        }
+      }
+      return out;
+    },
+  };
+}
 const lines = out => out.split(/\r?\n/).filter(l => l.length);
 /* A FRAME VIEW (frame.js view) in the shape of the game's state dump of a players frame (tagpu_wiki.c view_json): the eye
    and the viewport, the cursors, the clicks with their ages, the units drawn with their overlay selection (owner 255
@@ -2327,43 +2376,39 @@ try {
   }
 
   /* ---- THE FORK PASS and THE COLUMN PASS (forkCases, columnCases): each case played on sim.js with every call
-     recorded and replayed through wikitest `trace`, every answer compared; a case's own claims are sim.js's alone and
+     recorded as a host session (session()) and replayed through wikitest `trace`, every answer compared; a case's own claims are sim.js's alone and
      fail it by its verdict. Case k plays on shard k % N + 1. ---- */
   {
     const all = [...forkCases(), ...columnCases(), ...seatCases()];
     all.forEach((c, k) => {
       if (k % SHARDS !== SHARD - 1) return;
-      const ops = [], expected = [], hashAt = [];
-      let made = 0, verdict;
+      const S = session(), hashAt = [];
+      let verdict;
       // a game simulation whose every call is recorded, as the rule cases' record() records a demo's
       const G = (entry, demo, mode) => {
-        const sim = WikiSim.game(entry, demo, c.layout, c.ctx, mode), n = made++;
-        ops.push(JSON.stringify({ op: 'create', sim: n, scripted: mode === 'stall' ? 3 : 2, layout: c.layout ?? null, ctx: c.ctx }),
-          JSON.stringify({ ...entry, demos: [demo] }));
-        const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: n })); expected.push(v); return v; };
+        const sim = WikiSim.game(entry, demo, c.layout, c.ctx, mode), h = S.create(entry, demo, c.layout, c.ctx, mode === 'stall' ? 'stall' : 'game');
         return {
-          step() { ops.push(JSON.stringify({ op: 'step', sim: n })); sim.step(); },
+          step() { S.send({ op: 'step', sim: h }); sim.step(); },
           // the view as `seat` sees it, and the state hash (seat 0's, with item 13)
           view(seat = 0) {
-            const v = ask({ op: 'view', ...(seat ? { seat } : {}) }, sim.view(seat));
-            ask({ op: 'hash' }, stateHash(sim, sim.view()));
-            hashAt.push(expected.length - 1);
+            const v = S.read(S.send({ op: 'view', sim: h, map: true, ...(seat ? { seat } : {}) }), h, 'view', sim.view(seat));
+            hashAt.push(S.reads.length);
+            S.read(S.send({ op: 'hash', sim: h }), h, 'hash', stateHash(sim, sim.view()));
             return v;
           },
           fork(R, inputs, fmode, seat = 0) {
             let r = 'ok';
             try { sim.fork(R, inputs, fmode, seat); } catch (e) { r = 'refused'; }
-            return ask({ op: 'fork', R, inputs, mode: fmode, ...(seat ? { seat } : {}) }, r);
+            return S.read(S.send({ op: 'fork', sim: h, R, inputs, mode: fmode, ...(seat ? { seat } : {}) }), h, 'fork', r);
           },
-          release(seat = 0) { ops.push(JSON.stringify({ op: 'release', sim: n, ...(seat ? { seat } : {}) })); sim.release(seat); },
-          get fed() { return ask({ op: 'fed' }, sim.gameNow().fed); },
-          fedOf(seat) { return ask({ op: 'fed', seat }, sim.gameNow(seat).fed); },
+          release(seat = 0) { S.send({ op: 'release', sim: h, ...(seat ? { seat } : {}) }); sim.release(seat); },
+          get fed() { return S.read(S.send({ op: 'now', sim: h }), h, 'fed', sim.gameNow().fed); },
+          fedOf(seat) { return S.read(S.send({ op: 'now', sim: h, seat }), h, 'fed', sim.gameNow(seat).fed); },
           get tick() { return sim.tick; },
         };
       };
       try { verdict = c.run(G); } catch (e) { verdict = `FAIL threw ${e.message}`; }
-      fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
-      const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
+      const expected = S.reads.map(r => r.v), got = S.run(wikitest, path.join(tmp, 'trace.jsonl'));
       let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
       for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
       cases++;
@@ -2415,42 +2460,37 @@ try {
     /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
     const { ENTRY_RULES } = await import('./simcheck.mjs');
     const { create, play } = WikiSim;
-    /* a case may hold several sims at once (one made, another made, the first asked): each call names its sim by the
-       order it was made in, which wikitest's trace keeps apart */
-    let ops, expected, made, hashAt;
-    const record = (make, scripted) => (entry, demo, layout, ctx) => {
-      const sim = make(entry, demo, layout, ctx), k = made++;
-      // a context's script source is wikitest's COB file, named by `cob: true`
-      const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined, snd: ctx.snd ? true : undefined } : null;
-      ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: c }), JSON.stringify({ ...entry, demos: [demo || {}] }));
-      const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
+    /* a case may hold several sims at once (one made, another made, the first asked): each request names its sim by
+       the handle the host gives it */
+    let S, hashAt;
+    const record = (make, play) => (entry, demo, layout, ctx) => {
+      const sim = make(entry, demo, layout, ctx), h = S.create(entry, demo, layout, ctx, play);
       return {
-        input(ev) { ops.push(JSON.stringify({ op: 'input', sim: k, ev })); sim.input(ev); },
-        step() { ops.push(JSON.stringify({ op: 'step', sim: k })); sim.step(); },
+        input(ev) { S.send({ op: 'input', sim: h, ev }); sim.input(ev); },
+        step() { S.send({ op: 'step', sim: h }); sim.step(); },
         view: () => {
-          const v = ask({ op: 'view' }, sim.view());
-          ask({ op: 'hash' }, stateHash(sim, sim.view()));
-          hashAt.push(expected.length - 1);
+          const v = S.read(S.send({ op: 'view', sim: h, map: true }), h, 'view', sim.view());
+          hashAt.push(S.reads.length);
+          S.read(S.send({ op: 'hash', sim: h }), h, 'hash', stateHash(sim, sim.view()));
           return v;
         },
-        orders: id => ask({ op: 'orders', id }, sim.orders(id)),
-        get done() { return ask({ op: 'done' }, sim.done); },
-        get side() { return ask({ op: 'side' }, sim.side); },
-        get iface() { return ask({ op: 'iface' }, sim.iface); },
-        get tick() { return ask({ op: 'tick' }, sim.tick); },
+        orders: id => S.read(S.send({ op: 'orders', sim: h, id }), h, 'orders', sim.orders(id)),
+        get done() { return S.read(-1, h, 'done', sim.done); },
+        get side() { return S.read(-1, h, 'side', sim.side); },
+        get iface() { return S.read(-1, h, 'iface', sim.iface); },
+        get tick() { return S.read(-1, h, 'tick', sim.tick); },
         get log() { return sim.log; },
       };
     };
-    WikiSim.create = record(create, 0);
-    WikiSim.play = record(play, 1);
+    WikiSim.create = record(create, 'try');
+    WikiSim.play = record(play, 'demo');
     for (const id of ids) {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
       for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
-        ops = []; expected = []; made = 0; hashAt = [];
+        S = session(); hashAt = [];
         let verdict;
         try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
-        fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
-        const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
+        const expected = S.reads.map(r => r.v), got = S.run(wikitest, path.join(tmp, 'trace.jsonl'));
         let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
         for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
         cases++;

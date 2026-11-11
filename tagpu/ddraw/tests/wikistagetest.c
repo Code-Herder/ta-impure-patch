@@ -62,25 +62,6 @@
 #include "tagpu_wikiframe.h"
 #include "wikicobfile.h"
 
-static char* slurp(const char* path, size_t* n)
-{
-    FILE* f = fopen(path, "rb");
-    char* p;
-    long len;
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len < 0 || !(p = (char*)malloc((size_t)len + 1)) || fread(p, 1, (size_t)len, f) != (size_t)len) {
-        fclose(f);
-        return NULL;
-    }
-    fclose(f);
-    p[len] = 0;
-    *n = (size_t)len;
-    return p;
-}
-
 typedef struct { stbtt_fontinfo f; unsigned char* ttf; float spacing; int upper; } FACE;   /* the face reads ttf */
 
 static double measure(void* ctx, double size, const char* s)
@@ -309,7 +290,8 @@ static int ops(char** a, const char* cob)
 {
     static WIKISTAGEVIEW v, vf;
     static WIKISTAGEOPS o;
-    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC, NULL, NULL };
+    static COBFILES files;
+    WIKISIMCTX ctx = { 0, NULL, 1, NULL, NULL, NULL };
     char err[256];
     size_t n;
     char* pak = slurp(a[0], &n);
@@ -322,7 +304,9 @@ static int ops(char** a, const char* cob)
     int16_t emblem[2], btn[5];
     int i, j, k;
     if (!pak) { fprintf(stderr, "wikistagetest: cannot read %s\n", a[0]); return 2; }
-    if (cob && !cob_load(cob)) return 2;
+    cob_init(&files);
+    ctx.cob = &files.cob;
+    if (cob && !cob_load(&files, cob)) return 2;
     if (!face(&f, a[1], a[2], a[3])) return 2;
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
         fprintf(stderr, "wikistagetest: %s\n", err);
@@ -401,7 +385,7 @@ static int ops(char** a, const char* cob)
     free(sd);
     free(pak);
     free(f.ttf);
-    cob_free();
+    cob_free(&files);
     return 0;
 }
 

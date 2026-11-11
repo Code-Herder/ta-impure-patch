@@ -193,6 +193,9 @@ enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL =
    one of sim.js's UNTILS: no seek is pending (tagpu_wikireplay.h). WIKI_UNTIL_MAX bounds its max,
    in ticks. */
 enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_UNTIL_SEEKED = 4 };
+/* a demo's wait states by name, WIKI_UNTIL_IDLE..WIKI_UNTIL_BUILT from index 0: the names an entry
+   writes and the view reports */
+#define WIKI_UNTIL_STRINGS { "idle", "arrived", "built" }
 #define WIKI_UNTIL_MAX 3600
 
 /* THE HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its order;
@@ -658,6 +661,10 @@ int tagpu_wikidata_sight_table(const WIKISIGHT* t, int sight);
    stored. A cast that fails it is left unbound (tagpu_wikisim.c bind), an entry's own type refuses
    the game (tagpu_wikisim_init), as sim.js's sightFits */
 int tagpu_wikidata_sight_ok(const WIKISIGHT* t, int sight);
+/* A layout's `sight` member alone into `t`, read and held to its bounds as the layout's reader does
+   (absent or null: none, numtables 0); 1, or 0 with a message in `err`. The wiki's host reads a
+   table it is given apart from its layout with it. */
+int tagpu_wikidata_sight(const TJV* v, WIKISIGHT* t, char* err, size_t errn);
 
 typedef struct WIKILAYOUT {
     int         format, width, height;

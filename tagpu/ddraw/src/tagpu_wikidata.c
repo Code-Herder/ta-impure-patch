@@ -1991,6 +1991,12 @@ static int lay_sight(const TJV* v, WIKISIGHT* t)
     return 1;
 }
 
+int tagpu_wikidata_sight(const TJV* v, WIKISIGHT* t, char* err, size_t errn)
+{
+    if (!lay_sight(v, t)) return lay_no(err, errn, "the sight table is not {numtables, tables}", NULL);
+    return sight_check(t, err, errn);
+}
+
 static int lay_read(const TJV* root, WIKILAYOUT* L, char* err, size_t errn)
 {
     const TJV *c, *g, *screens = tj_get(root, "screens"), *sides = tj_get(root, "sides");
