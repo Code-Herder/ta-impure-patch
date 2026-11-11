@@ -173,7 +173,6 @@ static unsigned s_hMirrorSerial;
 
 int tagpu_terr_key(void) { return s_key; }
 
-
 int tagpu_terr_armed(unsigned frame_counter)
 {
     int was;
@@ -1524,14 +1523,15 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pubHave = s_cols > 0 && s_rows > 0 && s_tileMap;
 }
 
-/* Hand it over, ONCE (tagpu_terr.h). */
-int tagpu_terr_heights(const unsigned char** grid, int* w, int* h, unsigned* serial)
+/* The height grid for another reader on this thread (tagpu_terr.h). */
+int tagpu_terr_heights(unsigned level, const unsigned char** grid, int* w, int* h, unsigned* serial)
 {
-    if (!s_hMirror || s_hW <= 0 || s_hH <= 0) return 0;
+    if (!s_hMirror || s_hW <= 0 || s_hH <= 0 || s_hLevel != level) return 0;
     *grid = s_hMirror; *w = s_hW; *h = s_hH; *serial = s_hMirrorSerial;
     return 1;
 }
 
+/* Hand it over, ONCE (tagpu_terr.h). */
 int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 {
     if (!s_pubHave || !out) return 0;

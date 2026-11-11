@@ -56,12 +56,18 @@ none (below).
 whatever `ranges` says. The fill runs while any of `ranges`, `rangesensor` and `sensorview` is on
 (and the lane draws, *The lane*), and sets the header's `TAGPU_PK_RG_SVIEW` while `sensorview` is.
 
-**Allied** is one rule for the rings and the sensors (`allied`): the viewed player itself, or an
-owner whose byte in the viewed player's alliance row `+0x108 + owner` is 1.
+**Allied**, for the rings (`allied`): the viewed player itself, or an owner whose byte in the
+viewed player's alliance row `+0x108 + owner` is 1. **For the sensors the alliance must hold both
+ways** (`ally_both`): that byte, and the owner's own row toward the viewed player, `+0x108 +
+viewer` of the owner's record (the owner bounded below ten first, since it indexes the player
+array). The rows are one-way, and the radar pass shares contacts by the **owner's** row toward the
+viewer (`0x4674BA..0x4674C5`) and then the owner's ShareRadar bit, PlayerInfo `+0x97` bit `0x40`
+(`0x4674D2`); the viewer's row alone would draw the coverage of a player who allies nobody back.
+The ShareRadar bit is not read: an ally's coverage shows whether or not it shares radar.
 
 **The sensor layer** (`TAGPU_PK_RL_SENSOR`, drawn first, under everything below):
 
-- **the view**, under `sensorview`, always: every unit of the viewed player **and of its allies**
+- **the view**, under `sensorview`, always: every unit of the viewed player **and of its allies both ways**
   — alive and not dying (`unit_at`) — in each of the four kinds whose distance, a signed word, is
   above 0: radar def `+0x204`, sonar `+0x206`, radar jam `+0x20A`, sonar jam `+0x20C` (classes
   `RC_RADAR` .. `RC_SONARJAM`). A unit **activated** (`+0x10E` bit 0) is published plain; a radar
@@ -200,8 +206,8 @@ dimming. Every width, dash and speed is BAR's px of a screen times its `lineScal
 (screen height in device px + 500) / 1300, so they hold on screen at every zoom.
 
 **The outline of a kind is its union's, as paths.** `open_arcs` finds each circle's arcs that no
-other disc of the kind covers (a circle inside another has none; of two identical ones the later
-is kept); `outline` chains them into closed loops — the next arc is the one of another circle
+other disc of the kind covers (a circle inside another has none; of two identical ones the earlier
+is kept, so the preview's own circle, first, keeps its arcs); `outline` chains them into closed loops — the next arc is the one of another circle
 starting within 1 world px of where this one ends — so the dashes run on through a junction as
 along any curve; `make_path` lays each loop on the ground as points (`TAGPU_RGPT`, 32 bytes): a
 circle's 512 points a turn, 1024 past a radius of 1500, at least two an arc. A point carries its
@@ -262,8 +268,10 @@ jammers are not animated. The scale is kept per unit slot and kind on the game's
 packet's tick plus the fraction of the next one since it started, a visual weight that never
 reaches an index — so a paused game holds it. A slot not drawn on the frame before starts over,
 growing from nothing if it is on, except when the whole layer is starting — the first frame, a new
-level, a jump in the game's time of more than 30 ticks or backwards, or the frame after one with no
-sensor records — when every circle is at its end at once.
+level, another viewed player (the header's `viewer`: a replay's perspective switched, paused or
+not), a jump in the game's time of more than 30 ticks or backwards, or the frame after one with no
+sensor records (a frame with no ring records at all counts) — when every circle is at its end at
+once.
 
 **The draw order** within the layer: the jammers' fills and bands, the view's radar and sonar
 dashes, then the preview's sheet, fill and outline; the weapon rings over all of it. **A sonar
@@ -272,7 +280,9 @@ kind shows over water only**, since the pass contacts a sonar target only at or 
 to the scroll extent**, the map's own edge, and a path's points past it do not show.
 
 **The caps**: 512 circles an outline, 4096 arcs an outline, 256 paths and 65 536 points a frame
-(`TAGPU_RG_MAXPT`). Past them some outlines are not drawn, and the log says so once (`range: the
+(`TAGPU_RG_MAXPT`). Past the circle cap the kind is not drawn at all (a union of only some of its
+circles would draw edges inside the coverage); past the others some outlines are not drawn. Either
+way the log says so once (`range: the
 sensor outlines are past …`). The draw list holds 512 draws (`TAGPU_RG_MAXDRAW`), a path one each;
 a draw past it is dropped without a log line.
 

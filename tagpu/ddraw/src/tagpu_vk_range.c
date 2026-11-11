@@ -587,8 +587,11 @@ static int draws_ok(const TAGPU_VKPASS* d)
             for (j = 0; !bad && j < g->count; j++) {
                 const TAGPU_RGINST* t = &s_h.inst[g->first + j];
                 float f = t->c[0];
-                if (t->c[1] != (float)g->nseg || f < 0.0f || f != (float)(int)f ||
-                    (int)f + g->nseg + 1 > s_h.npts || s_instPath[g->first + j] == 2)
+                /* f is bounded below npts (at most TAGPU_RG_MAXPT, exact in a
+                   float) before it is converted, so the sum cannot overflow */
+                if (t->c[1] != (float)g->nseg || !(f >= 0.0f && f < (float)s_h.npts) ||
+                    f != (float)(int)f || (int)f + g->nseg + 1 > s_h.npts ||
+                    s_instPath[g->first + j] == 2)
                     bad = 1;
                 else s_instPath[g->first + j] = 1;
             }

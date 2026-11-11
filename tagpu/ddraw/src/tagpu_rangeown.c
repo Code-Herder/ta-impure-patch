@@ -154,6 +154,21 @@ static int allied(const World* w, int owner)
     return *(const unsigned char*)(w->player + PL_ALLY + owner) == 1;
 }
 
+/* whose sensor coverage the view draws: the viewed player's, and that of a
+   player allied BOTH WAYS. The rows are one-way, and the radar pass reads the
+   owner's row toward the viewer (0x4674BA..0x4674C5), so the viewer's row
+   alone would draw the coverage of a player who allies nobody back -- an
+   enemy, to the engine. The owner indexes the player array, so it is bounded
+   to the engine's ten records first. */
+static int ally_both(const World* w, int owner)
+{
+    const char* rec;
+    if (owner == (int)w->viewer) return 1;
+    if (owner < 0 || owner >= PLAYER_COUNT || !allied(w, owner)) return 0;
+    rec = w->ta + OFF_PLAYERS + owner * PLAYER_STRIDE;
+    return *(const unsigned char*)(rec + PL_ALLY + w->viewer) == 1;
+}
+
 /* what the engine shows the viewed player: its own units, and every other one
    UnitInPlayerLOS passes -- the test HotUnits takes (0x48BC42..0x48BC56) */
 static int shown(const World* w, char* u)
@@ -574,7 +589,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             char* def;
             int32_t pos[3];
             int k, on;
-            if (!u || !allied(&w, owner_of(u)) || !(def = unit_def(&w, u))) continue;
+            if (!u || !ally_both(&w, owner_of(u)) || !(def = unit_def(&w, u))) continue;
             on = (*(const unsigned char*)(u + U_ACTIVATION) & UA_ON) != 0;
             unit_pos(u, pos);
             for (k = 0; k < 4; k++) {
@@ -587,6 +602,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
     }
     if (!s.n) return 0;
 
+    h->viewer = (uint8_t)w.viewer;
     h->nsel = (uint16_t)nsel;
     h->nbuild = (uint16_t)(nbuild > 0xFFFF ? 0xFFFF : nbuild);
     h->grav = (float)g / 65536.0f;

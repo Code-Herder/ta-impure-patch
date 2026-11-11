@@ -34,7 +34,7 @@ reshaped to theirs. The module states how each is built: [range rings](modules/r
 
 | Branch | Decision |
 |---|---|
-| When it shows | **Always**, not only in placement: the coverage of the viewed player **and its allies** (TA's alliance, the viewed record's row `+0x108`). |
+| When it shows | **Always**, not only in placement: the coverage of the viewed player **and its allies** (TA's alliance, held both ways: the viewed record's row `+0x108` toward the owner and the owner's toward the viewed player — the radar pass shares by the owner's row; its ShareRadar bit is not required). |
 | Kinds | **All four**: radar, sonar, radar jam and sonar jam, one union a kind — two water jammers of different kinds are two outlines. |
 | Whose | **No line-of-sight test for an ally's unit**, and **never an enemy's coverage**, its jammers included. |
 | Which units | **Moving and flying units count** as structures do; what counts is the engine's activation, `+0x10E` bit 0 — a radar switched off emits nothing, a factory emits while it produces. |

@@ -14,11 +14,13 @@
      (`rangeally`, `rangeenemy`), and those of the building being placed, which
      also light every allied ring of its classes;
    - per unit type and side, the rings alt+. and alt+, leave on;
-   - the radar, sonar and jammer coverage of the viewed player and its allies,
-     always, under `sensorview`: every unit of theirs alive, not dying and
-     activated -- the radar pass 0x467440's emitter test for radar and sonar;
-     the jammers act in the other players' passes. An enemy's coverage is
-     never published;
+   - the radar, sonar and jammer coverage of the viewed player and of every
+     player allied with it both ways, always, under `sensorview`: every unit
+     of theirs alive, not dying and activated -- the radar pass 0x467440's
+     emitter test for radar and sonar; the jammers act in the other players'
+     passes. A radar or sonar unit alive but switched off is published too,
+     flagged TAGPU_PK_RF_OFF, so the render thread can shrink its circle away.
+     An enemy's coverage is never published;
    - while a building is placed whose type will emit once built (it switches on
      when built or the player can switch it on), its radar, sonar and jammer
      coverage, with the existing coverage of the same kinds, under

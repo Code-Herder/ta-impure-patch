@@ -452,7 +452,9 @@ typedef struct TAGPU_PK_FORMDOT {
    its last value, and refuses records without their header. */
 typedef struct TAGPU_PK_RANGE {
     uint8_t  flags;          /* TAGPU_PK_RG_*                                  */
-    uint8_t  pad;
+    uint8_t  viewer;         /* the viewed player: a change restarts the
+                                sensors' grow and shrink (tagpu_range.c),
+                                compared, never an index                       */
     uint16_t nsel;           /* the selected units whose rings show (BAR's
                                 inner-ring dimming counts them)                */
     uint16_t nbuild;         /* the builders whose build rings show            */

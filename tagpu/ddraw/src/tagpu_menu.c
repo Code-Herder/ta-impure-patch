@@ -3669,7 +3669,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 24 rows */
+    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 25 rows */
     static char gui[24576];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel

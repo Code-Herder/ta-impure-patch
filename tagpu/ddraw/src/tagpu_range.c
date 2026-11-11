@@ -359,7 +359,7 @@ static int open_arcs(const SCIRC* c, int n, int i, SARC* out, int max)
         d = sqrt(dx * dx + dz * dz);
         if (d >= c[i].r + c[j].r) continue;
         if (d + c[i].r <= c[j].r) {
-            /* inside j; of two equal ones, the later is the one kept */
+            /* inside j; of two equal ones, the earlier is the one kept */
             if (d < 1e-6 && c[i].r == c[j].r && j > i) continue;
             return 0;
         }
@@ -529,6 +529,7 @@ static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nc
 static SARC          s_arcs[ARC_MAX];
 static SARC          s_chain[ARC_MAX];
 static unsigned char s_used[ARC_MAX];
+static double        s_arcStart[ARC_MAX][2];
 
 /* One kind's union as closed loops of arcs, each a path; with `own` also
    the first circle's arcs inside the others, as open paths. */
@@ -541,6 +542,9 @@ static void outline(const GROUND* G, const SCIRC* c, int n, int water, int own, 
         na += got;
     }
     memset(s_used, 0, (size_t)na);
+    /* each arc's start, once: the chaining compares every arc's against
+       every end, so computing it there costs na^2 sines */
+    for (s = 0; s < na; s++) arc_point(&c[s_arcs[s].i], s_arcs[s].a0, &s_arcStart[s][0], &s_arcStart[s][1]);
     for (s = 0; s < na; s++) {
         int k = s, nch = 0;
         if (s_used[s]) continue;
@@ -553,10 +557,9 @@ static void outline(const GROUND* G, const SCIRC* c, int n, int water, int own, 
             /* the next arc: the one of another circle starting where this one ends */
             arc_point(&c[s_arcs[k].i], s_arcs[k].a1, &ex, &ez);
             for (q = 0; q < na; q++) {
-                double sx, sz, dd;
+                double dd;
                 if (s_arcs[q].i == s_arcs[k].i || s_arcs[q].whole) continue;
-                arc_point(&c[s_arcs[q].i], s_arcs[q].a0, &sx, &sz);
-                dd = hypot(sx - ex, sz - ez);
+                dd = hypot(s_arcStart[q][0] - ex, s_arcStart[q][1] - ez);
                 if (dd < bd) { bd = dd; best = q; }
             }
             k = bd < 1.0 ? best : -1;
@@ -573,7 +576,7 @@ static void outline(const GROUND* G, const SCIRC* c, int n, int water, int own, 
 /* the circles one outline is made of: the kind's records, the placed
    building's first when `ghost` is 1 (the preview), without it when 0 (the
    view's radar and sonar), with it or alone when 2 (the jammers, alone while
-   the view is off) */
+   the view is off); 0 past SC_MAX */
 static int circles(const RITEM* const* L, int n, int kind, int ghost, int view, SCIRC* out)
 {
     int k, m = 0, pass;
@@ -583,7 +586,9 @@ static int circles(const RITEM* const* L, int n, int kind, int ghost, int view, 
             if (it->sensor != kind || it->isNew != (pass == 0)) continue;
             if (it->isNew && !ghost) continue;
             if (!it->isNew && ghost == 2 && !view) continue;
-            if (m >= SC_MAX) { s_pathCut = 1; return m; }
+            /* a union of only some of the circles would draw edges inside
+               the coverage: past the cap the kind is not drawn */
+            if (m >= SC_MAX) { s_pathCut = 1; return 0; }
             out[m].x = it->x; out[m].z = it->z; out[m].r = it->range;
             m++;
         }
@@ -681,13 +686,15 @@ static void dash_step(double zoom, double ls, double devPx, double dTicks)
    since the publisher first saw it, a visual weight that never reaches an
    index -- so a paused game holds it. A slot not drawn on the frame before
    starts over: switched on it grows, unless the whole layer is starting --
-   the first frame, a new level, a jump in the game's time (a load, a seek),
-   or the frame after one with no sensors -- when it is at its end at once. */
+   the first frame, a new level, another viewed player (a replay's
+   perspective), a jump in the game's time (a load, a seek), or the frame
+   after one with no sensors -- when it is at its end at once. */
 #define ANIM_TICKS 15.0
 typedef struct { double t0; float s0; unsigned seen; unsigned char on; } SANIM;
 static SANIM    s_anim[TAGPU_PK_DESIGN_SLOTS][2];
-static unsigned s_animFrame;            /* counts frames with sensors, from 1 */
+static unsigned s_animFrame;            /* counts the frames with ring records, from 1 */
 static unsigned s_animLevel;
+static unsigned s_animViewer;
 static double   s_animT;
 
 static double game_ticks(const TAGPU_PACKET* pk)
@@ -874,15 +881,16 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
 
     s_have = 0;
     s_ninst = 0; s_ndraw = 0;
-    if (!h || !r || !pk->in_game) return;
+    if (!h || !r || !pk->in_game) { s_sensorLast = 0; return; }
     n = pk->n_ring;
     for (L = 0; L <= TAGPU_PK_RL_LAST; L++) nl[L] = 0;
     t = game_ticks(pk);
     dTicks = t - s_animT;
-    fresh = s_animFrame == 0 || pk->level_gen != s_animLevel || dTicks < -0.01 || dTicks > 30.0 ||
-            !s_sensorLast;
+    fresh = s_animFrame == 0 || pk->level_gen != s_animLevel || h->viewer != s_animViewer ||
+            dTicks < -0.01 || dTicks > 30.0 || !s_sensorLast;
     s_animFrame++;
     s_animLevel = pk->level_gen;
+    s_animViewer = h->viewer;
     s_animT = t;
     for (k = 0; k < n; k++) {
         const TAGPU_PK_RING* e = &r[k];
@@ -939,7 +947,7 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
            buffer holds until the next frame's gather); with none there is
            nothing to lay them on, and the Vulkan pass draws no rings then */
         GROUND G;
-        if (tagpu_terr_heights(&G.g, &G.w, &G.h, &G.serial)) {
+        if (tagpu_terr_heights(pk->level_gen, &G.g, &G.w, &G.h, &G.serial)) {
             G.sea = (float)pk->sea_level;
             G.mapW = (float)pk->map_pxw; G.mapH = (float)pk->map_pxh;
             draw_sensors(layer[TAGPU_PK_RL_SENSOR], nl[TAGPU_PK_RL_SENSOR], &G,
@@ -947,7 +955,7 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
             s_npathDrawn = s_npaths;
         } else if (!s_saidNoGround) {
             s_saidNoGround = 1;
-            tagpu_logf("range: no height grid on this thread - the sensors are not drawn");
+            tagpu_logf("range: no height grid of this level on this thread - the sensors are not drawn");
         }
         if (s_pathCut && !s_saidPathCut) {
             s_saidPathCut = 1;
