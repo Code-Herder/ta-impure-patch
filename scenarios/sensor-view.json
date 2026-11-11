@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The sensor view (tagpu_rangeown.c, tagpu_range.c: the own and allied radar, sonar and jammer coverage as BAR draws it) on Two Continents' eastern shore, with true line of sight. Player 0 (Arm) has radar towers `rad` (5300, 12300) and `rad2` (6100, 12900), a mobile radar `seer`, a radar plane `peep`, a mobile radar jammer `jam`, a sonar jammer ship `sjam`, a sonar jammer `scram` in the water, the commander and a construction kbot `ck` for the placement preview. Player 2 (Arm AI) is the ally to be: its radar tower `arad` (6900, 12650) overlaps `rad2`'s so the two merge into one outline, and its sonar station `ason` (7650, 11850) stands in the water. Player 1 (Core AI) has a radar tower `crad` (4800, 11400) and a mobile radar `spec`, whose coverage is never drawn, and its commander far north. The alliance is not part of the scenario format: it is the skirmish key's Player<N>AllyGroup, set before the load.",
+ "description": "The sensor view (tagpu_rangeown.c, tagpu_range.c: the own and allied radar, sonar and jammer coverage as BAR draws it) on Two Continents' eastern shore, with true line of sight. Player 0 (Arm) has radar towers `rad` (5300, 12300) and `rad2` (6100, 12650), a mobile radar `seer`, a radar plane `peep`, a mobile radar jammer `jam`, a radar jammer ship `sjam` and a sonar jamming sub `scram` in the water, the commander and a construction kbot `ck` for the placement preview. Player 2 (Arm AI) is the ally to be: its radar tower `arad` (6900, 12650) overlaps `rad2`'s so the two merge into one outline, and its sonar station `ason` (7650, 11850) stands in the water. Player 1 (Core AI) has a radar tower `crad` (4800, 11400) and a mobile radar jammer `spec`, whose coverage is never drawn, and its commander far north. The alliance is not part of the scenario format: it is the skirmish key's Player<N>AllyGroup in the instance's registry store, set before the load -- Player0AllyGroup=1, Player2AllyGroup=1, Player1AllyGroup=2 allied records 0 and 2 and not 1 (MEASURED 2026-11-11, the +0x108 bytes of the player records).",
  "seed": 20261111,
  "on_error": "abort",
  "setup": {
@@ -153,7 +153,7 @@
    "owner": 0,
    "pos": [
     6100,
-    12900
+    12650
    ]
   },
   {
