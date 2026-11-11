@@ -220,8 +220,8 @@ void main() {
   if (m[uIn] < 0.5 || (uOut >= 0 && m[uOut] > 0.5)) discard;
   o = uCol;
 }`;
-// a sensor line: BAR's moving stipple (sensor_ranges_los.frag.glsl), the
-// jammer's dashes, or solid
+// a sensor line: the radar and sonar dashes (BAR's moving stipple,
+// sensor_ranges_los.frag.glsl, made hard-edged), the jammer's dashes, or solid
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
@@ -244,7 +244,7 @@ uniform sampler2D uMask;
 uniform int uMaskBit;        // -1: no clip
 uniform vec3 uCol;
 uniform float uA;
-uniform int uMode;           // 0 stipple, 1 jammer dashes, 2 solid
+uniform int uMode;           // 0 radar and sonar dashes, 1 jammer dashes, 2 solid
 uniform float uShift;        // px the pattern has moved
 out vec4 o;
 const float PI = 3.14159265;
@@ -255,10 +255,12 @@ void main() {
   float ph = 2.0 * PI * (vArc + uShift) / vPer;
   float ppp = fwidth(ph);                  // phase per pixel along the line
   if (uMode == 0) {
-    // a positive half-wave peaking at 3x, its mean 3/pi once a period is
-    // under ~4 px; the line thins towards the dash length when dashes are short
-    a *= mix(max(3.0 * sin(ph), 0.0), 0.9549297, smoothstep(1.5, 3.0, ppp));
-    a *= clamp(max(PI / ppp, 2.0) + 0.5 - px, 0.0, 1.0);
+    // hard-edged dashes, half a period on, antialiased over a pixel, at twice
+    // the mean of BAR's soft stipple (a half-wave peaking at 3x, mean 3/pi),
+    // so the line is as bright on average; even once a period is under ~4 px
+    float s = sin(ph);
+    float on = clamp(s / max(fwidth(s), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+    a *= mix(on * 2.0, 1.0, smoothstep(1.5, 3.0, ppp)) * 0.9549297;
   } else if (uMode == 1) {
     float s = sin(ph);
     float on = clamp(s / max(fwidth(s), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
@@ -598,7 +600,8 @@ function create(ctx) {
   let lineBuf = new Float32Array(1 << 16), lineN = 0;
   const pushV = (x, y, e, c, half) => {
     if (lineN + 8 > lineBuf.length) { const g = new Float32Array(lineBuf.length * 2); g.set(lineBuf); lineBuf = g; }
-    lineBuf.set([x, y, e, c[0], c[1], c[2], c[3], half], lineN); lineN += 8;
+    lineBuf[lineN++] = x; lineBuf[lineN++] = y; lineBuf[lineN++] = e; lineBuf[lineN++] = c[0];
+    lineBuf[lineN++] = c[1]; lineBuf[lineN++] = c[2]; lineBuf[lineN++] = c[3]; lineBuf[lineN++] = half;
   };
   let maskBuf = new Float32Array(1 << 16), maskN = 0;
   const pushM = (x, y) => {
@@ -737,20 +740,25 @@ function create(ctx) {
   // one widget's group: mask, fill, outer outline, inner rings
   function drawLayer(list, kind, proj, camDist, selCount, builderCount, vp) {
     if (!list.length) return;
+    const vk = viewKey(proj);
     const items = list.map((e) => {
       const st = styleOf(kind, e.ring);
       const shape = ringShape(e.u, e.ring, st.segs);
-      const scr = new Float32Array(shape.nseg * 2), oob = new Float32Array(shape.nseg);
-      for (let i = 0; i < shape.nseg; i++) {
-        const x = shape.pts[i * 3], y = shape.pts[i * 3 + 1], z = shape.pts[i * 3 + 2];
-        const [sx, sy] = proj([x, y, z]);
-        scr[i * 2] = sx; scr[i * 2 + 1] = sy;
-        // out-of-map vertices fade over 50 wu
-        const inb = Math.min(x, z, MAPW - x, MAPH - z);
-        oob[i] = 1 - Math.min(1, Math.max(0, inb * -0.02));
+      // the projection, kept on the cached shape while the view holds still
+      if (shape.vk !== vk) {
+        const scr = new Float32Array(shape.nseg * 2), oob = new Float32Array(shape.nseg);
+        for (let i = 0; i < shape.nseg; i++) {
+          const x = shape.pts[i * 3], y = shape.pts[i * 3 + 1], z = shape.pts[i * 3 + 2];
+          const [sx, sy] = proj([x, y, z]);
+          scr[i * 2] = sx; scr[i * 2 + 1] = sy;
+          // out-of-map vertices fade over 50 wu
+          const inb = Math.min(x, z, MAPW - x, MAPH - z);
+          oob[i] = 1 - Math.min(1, Math.max(0, inb * -0.02));
+        }
+        Object.assign(shape, { vk, scr, oob });
       }
       const [cx, cy] = proj([e.u.x, unitAlt(e.u), e.u.z]);
-      return { e, st, scr, oob, c: [cx, cy] };
+      return { e, st, scr: shape.scr, oob: shape.oob, c: [cx, cy] };
     });
     const merged = items.filter((it) => it.st.bit >= 0);
 
@@ -838,6 +846,7 @@ function create(ctx) {
 
   // a closed screen-space polyline as quads, each segment extended by half a
   // width at both ends so the joints close
+  const c0 = [0, 0, 0, 0], c1 = [0, 0, 0, 0];
   function polyline(scr, oob, width, col, alpha, dash) {
     const n = scr.length / 2, half = width / 2 + 0.5;
     for (let i = 0; i < n; i++) {
@@ -849,7 +858,8 @@ function create(ctx) {
       const ux = dx / len, uy = dy / len, nx = -uy * half, ny = ux * half;
       const ex = ux * width / 2, ey = uy * width / 2;
       x0 -= ex; y0 -= ey; x1 += ex; y1 += ey;
-      const c0 = [col[0], col[1], col[2], alpha * oob[i]], c1 = [col[0], col[1], col[2], alpha * oob[j]];
+      c0[0] = c1[0] = col[0]; c0[1] = c1[1] = col[1]; c0[2] = c1[2] = col[2];
+      c0[3] = alpha * oob[i]; c1[3] = alpha * oob[j];
       pushV(x0 + nx, y0 + ny, 1, c0, half); pushV(x0 - nx, y0 - ny, -1, c0, half); pushV(x1 + nx, y1 + ny, 1, c1, half);
       pushV(x1 + nx, y1 + ny, 1, c1, half); pushV(x0 - nx, y0 - ny, -1, c0, half); pushV(x1 - nx, y1 - ny, -1, c1, half);
     }
@@ -880,8 +890,22 @@ function create(ctx) {
     return c;
   }
   // a circle on the ground: its screen points, the same points pulled inside
-  // the scroll extent (the fills), and per vertex whether a line shows there
+  // the scroll extent (the fills), and per vertex whether a line shows there.
+  // Cached with what is built from it for as long as the view does not move:
+  // an animation frame only moves the pattern, and rebuilding every circle
+  // each frame stalled the page in collections.
+  const circleCache = new Map();
+  const viewKey = (proj) => { const o = proj([0, 0, 0]), e = proj([1, 0, 0]); return `${o[0]},${o[1]},${e[0] - o[0]}`; };
   function circle(u, r, water, proj) {
+    const key = `${u.x},${u.z},${r},${water ? 1 : 0}|${viewKey(proj)}`;
+    const hit = circleCache.get(key);
+    if (hit) return hit;
+    const rg = makeCircle(u, r, water, proj);
+    circleCache.set(key, rg);
+    if (circleCache.size > 512) circleCache.delete(circleCache.keys().next().value);
+    return rg;
+  }
+  function makeCircle(u, r, water, proj) {
     const n = r > 1500 ? 1024 : 512;
     const scr = new Float32Array(n * 2), clamp = new Float32Array(n * 2), vis = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -904,26 +928,44 @@ function create(ctx) {
       along[i + 1] = along[i] + Math.hypot(scr[j * 2] - scr[i * 2], scr[j * 2 + 1] - scr[i * 2 + 1]);
     }
     const c = proj([u.x, surface(u.x, u.z), u.z]);
-    return { u, r, n, scr, clamp, vis, c, along };
+    return { u, r, n, scr, clamp, vis, c, along, memo: new Map() };
   }
-  const fan = (pts, c) => {
-    const n = pts.length / 2;
+  const memo = (rg, key, build) => {
+    let v = rg.memo.get(key);
+    if (!v) { v = build(); rg.memo.set(key, v); }
+    return v;
+  };
+  const pushMArr = (arr) => {
+    if (maskN + arr.length > maskBuf.length) {
+      const g = new Float32Array(Math.max(maskBuf.length * 2, maskN + arr.length)); g.set(maskBuf); maskBuf = g;
+    }
+    maskBuf.set(arr, maskN); maskN += arr.length;
+  };
+  const fanTris = (pts, c) => {
+    const n = pts.length / 2, out = new Float32Array(n * 6);
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      pushM(c[0], c[1]); pushM(pts[i * 2], pts[i * 2 + 1]); pushM(pts[j * 2], pts[j * 2 + 1]);
+      out.set([c[0], c[1], pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]], i * 6);
     }
+    return out;
   };
+  // the whole disc (what clips lines)
+  const fan = (rg) => pushMArr(memo(rg, "fan", () => fanTris(rg.scr, rg.c)));
   // a fill region: the disc inside the scroll extent, or its water cells
   function region(rg, water, proj) {
-    if (!water) { fan(rg.clamp, rg.c); return; }
-    const cells = waterCellsOf(rg.u.x, rg.u.z, rg.r);
-    for (let k = 0; k < cells.length; k += 2) {
-      const x = cells[k], z = cells[k + 1];
-      const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
-      const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
-      pushM(p00[0], p00[1]); pushM(p10[0], p10[1]); pushM(p11[0], p11[1]);
-      pushM(p00[0], p00[1]); pushM(p11[0], p11[1]); pushM(p01[0], p01[1]);
-    }
+    pushMArr(memo(rg, "region", () => {
+      if (!water) return fanTris(rg.clamp, rg.c);
+      const cells = waterCellsOf(rg.u.x, rg.u.z, rg.r), out = new Float32Array(cells.length * 6);
+      for (let k = 0, o = 0; k < cells.length; k += 2) {
+        const x = cells[k], z = cells[k + 1];
+        const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
+        const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
+        out.set([p00[0], p00[1], p10[0], p10[1], p11[0], p11[1],
+                 p00[0], p00[1], p11[0], p11[1], p01[0], p01[1]], o);
+        o += 12;
+      }
+      return out;
+    }));
   }
   function maskBegin() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
@@ -974,6 +1016,16 @@ function create(ctx) {
     sBuf[sN++] = vis; sBuf[sN++] = half; sBuf[sN++] = per;
   };
   function sline(rg, width, per) {
+    const arr = memo(rg, `line${width},${per}`, () => {
+      const s0 = sN; buildLine(rg, width, per);
+      const out = sBuf.slice(s0, sN); sN = s0; return out;
+    });
+    if (sN + arr.length > sBuf.length) {
+      const g = new Float32Array(Math.max(sBuf.length * 2, sN + arr.length)); g.set(sBuf); sBuf = g;
+    }
+    sBuf.set(arr, sN); sN += arr.length;
+  }
+  function buildLine(rg, width, per) {
     const { n, scr, vis } = rg, half = width / 2 + 0.5;
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
@@ -991,7 +1043,7 @@ function create(ctx) {
       pushS(x1 - nx, y1 - ny, -1, a1, vis[j], half, per);
     }
   }
-  // mode 0 BAR's moving stipple, 1 the jammer's dashes, 2 solid; clipped where
+  // mode 0 the radar and sonar dashes, 1 the jammer's, 2 solid; clipped where
   // channel `clip` is set (-1: not clipped); `shift` px the pattern has moved
   function slineDraw(rgb, a, mode, clip, shift) {
     if (!sN) return;
@@ -1028,7 +1080,7 @@ function create(ctx) {
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
     const rings = list.map((u) => circle(u, radiusOf(u, kind), water, proj));
     maskBegin();
-    for (const rg of rings) fan(rg.scr, rg.c);
+    for (const rg of rings) fan(rg);
     maskFlush(2);
     maskEnd();
     const w = LINE_W * (GH + 500) / 1300, px = w * STIPPLE.periodW;
@@ -1057,7 +1109,7 @@ function create(ctx) {
       for (const it of items) if (it.isNew === isNew) region(it.rg, water, proj);
       maskFlush(isNew ? 0 : 1);
     }
-    for (const it of items) if (it.core) fan(it.core.scr, it.core.c);
+    for (const it of items) if (it.core) fan(it.core);
     maskFlush(2);
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
@@ -1079,20 +1131,22 @@ function create(ctx) {
     region(g, water, proj); maskFlush(0);
     for (const rg of old) region(rg, water, proj);
     maskFlush(1);
-    for (const rg of [g, ...old]) if (rg.r > wE) { const k = circle(rg.u, rg.r - wE, false, proj); fan(k.scr, k.c); }
+    for (const rg of [g, ...old]) if (rg.r > wE) fan(circle(rg.u, rg.r - wE, false, proj));
     maskFlush(2);
     maskEnd();
     fillWhere(P.allied, P.a * P.alliedRel, 1, 0);
     // the sheet: the new disc's fan, world x/z per vertex for the rings
-    const pts = [];
-    const n = g.n;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      const ai = (i / n) * Math.PI * 2, aj = (j / n) * Math.PI * 2;
-      pts.push(g.c[0], g.c[1], 0, 0,
-               g.scr[i * 2], g.scr[i * 2 + 1], Math.sin(ai) * g.r, Math.cos(ai) * g.r,
-               g.scr[j * 2], g.scr[j * 2 + 1], Math.sin(aj) * g.r, Math.cos(aj) * g.r);
-    }
+    const pts = memo(g, "sheet", () => {
+      const n = g.n, out = new Float32Array(n * 12);
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const ai = (i / n) * Math.PI * 2, aj = (j / n) * Math.PI * 2;
+        out.set([g.c[0], g.c[1], 0, 0,
+                 g.scr[i * 2], g.scr[i * 2 + 1], Math.sin(ai) * g.r, Math.cos(ai) * g.r,
+                 g.scr[j * 2], g.scr[j * 2 + 1], Math.sin(aj) * g.r, Math.cos(aj) * g.r], i * 12);
+      }
+      return out;
+    });
     gl.useProgram(pulseProg);
     gl.uniform2f(PSU.uCanvas, GW, GH);
     gl.uniform1i(PSU.uMask, TEX_UNIT);
@@ -1103,7 +1157,7 @@ function create(ctx) {
     gl.uniform4f(PSU.uP, PULSE.spacing, PULSE.speed, PULSE.power, PULSE.strength);
     gl.bindVertexArray(fvao);
     gl.bindBuffer(gl.ARRAY_BUFFER, fvbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
     gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
     gl.bindVertexArray(null);
     // the outline: the new disc's own edge whole, the others' where they bound the union
