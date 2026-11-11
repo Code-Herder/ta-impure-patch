@@ -235,23 +235,27 @@ void main() {
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
-layout(location=1) in float aEdge;  // -1..1 across the line
-layout(location=2) in float aArc;   // along the circle on the map, in zoom-1 px
-layout(location=3) in float aVis;
-layout(location=4) in float aHalf;  // half width in px (including the AA rim)
-layout(location=5) in float aS0;    // the circle's level-0 dash spacing, zoom-1 px
-layout(location=6) in float aTop;   // its coarsest level (4..8 dashes round it)
+layout(location=1) in vec2 aCentre; // the point on the circle this one is beside, canvas px
+layout(location=2) in float aAcross;// px from the circle, -0.5 .. width + 0.5
+layout(location=3) in float aArc;   // along the circle on the map, in zoom-1 px
+layout(location=4) in float aVis;
+layout(location=5) in float aW;     // the band's width, px
+layout(location=6) in float aS0;    // the circle's level-0 dash spacing, zoom-1 px
+layout(location=7) in float aTop;   // its coarsest level (4..8 dashes round it)
 uniform vec2 uCanvas;
-out float vEdge; out float vArc; out float vVis; out float vHalf; flat out float vS0; flat out float vTop;
+out vec2 vCentre; out float vAcross; out float vArc; out float vVis;
+flat out float vW; flat out float vS0; flat out float vTop;
 void main() {
-  vEdge = aEdge; vArc = aArc; vVis = aVis; vHalf = aHalf; vS0 = aS0; vTop = aTop;
+  vCentre = aCentre; vAcross = aAcross; vArc = aArc; vVis = aVis; vW = aW; vS0 = aS0; vTop = aTop;
   gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
 }`;
 const SLINE_FS = `#version 300 es
 precision highp float;
 precision highp int;
-in float vEdge; in float vArc; in float vVis; in float vHalf; flat in float vS0; flat in float vTop;
+in vec2 vCentre; in float vAcross; in float vArc; in float vVis;
+flat in float vW; flat in float vS0; flat in float vTop;
 uniform sampler2D uMask;
+uniform vec2 uCanvas;
 uniform int uMaskBit;        // -1: no clip
 uniform vec3 uCol;
 uniform float uA;
@@ -281,9 +285,11 @@ float dashes() {
   return cover * uOp[clamp(lv - uFine, 0, ${DASH_SPAN})];
 }
 void main() {
-  if (uMaskBit >= 0 && texelFetch(uMask, ivec2(gl_FragCoord.xy), 0)[uMaskBit] > 0.5) discard;
-  float px = abs(vEdge) * vHalf;
-  float a = clamp(vHalf - px, 0.0, 1.0) * uA * vVis;
+  // cut where the point on the circle the band is beside lies inside another
+  // disc: the band keeps its full width up to a junction and stops square there
+  if (uMaskBit >= 0 &&
+      texelFetch(uMask, ivec2(vCentre.x, uCanvas.y - vCentre.y), 0)[uMaskBit] > 0.5) discard;
+  float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0) * uA * vVis;
   if (uMode == 0) a *= dashes();
   else if (uMode == 1) a *= mix(uGap, 1.0, dashes());
   if (a <= 0.0) discard;
@@ -604,10 +610,11 @@ function create(ctx) {
   const svao = gl.createVertexArray(), svbo = gl.createBuffer();
   gl.bindVertexArray(svao);
   gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
-  // sensor line layout: x, y, edge, arc, vis, half, s0, top = 8 floats
-  for (const [loc, n, off] of [[0, 2, 0], [1, 1, 8], [2, 1, 12], [3, 1, 16], [4, 1, 20], [5, 1, 24], [6, 1, 28]]) {
+  // sensor line layout: x, y, centre x, y, across, arc, vis, width, s0, top = 10 floats
+  for (const [loc, n, off] of [[0, 2, 0], [1, 2, 8], [2, 1, 16], [3, 1, 20], [4, 1, 24], [5, 1, 28],
+                               [6, 1, 32], [7, 1, 36]]) {
     gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 32, off);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 40, off);
   }
   gl.bindVertexArray(null);
   const fvao = gl.createVertexArray(), fvbo = gl.createBuffer();
@@ -1028,12 +1035,13 @@ function create(ctx) {
     gl.uniform4f(SU.uCol, rgb[0] * a, rgb[1] * a, rgb[2] * a, a);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  // a circle's line as quads: x, y, edge, along (zoom-1 px), vis, half, s0, top
+  // a circle's band as quads: x, y, the point on the circle, across (px),
+  // along (zoom-1 px), vis, width, s0, top
   let sBuf = new Float32Array(1 << 16), sN = 0;
-  const pushS = (x, y, e, arc, vis, half, s0, top) => {
-    if (sN + 8 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
-    sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = e; sBuf[sN++] = arc;
-    sBuf[sN++] = vis; sBuf[sN++] = half; sBuf[sN++] = s0; sBuf[sN++] = top;
+  const pushS = (x, y, cx, cy, across, arc, vis, w, s0, top) => {
+    if (sN + 10 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
+    sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = cx; sBuf[sN++] = cy; sBuf[sN++] = across;
+    sBuf[sN++] = arc; sBuf[sN++] = vis; sBuf[sN++] = w; sBuf[sN++] = s0; sBuf[sN++] = top;
   };
   // a circle's dash lattice for a level-0 spacing near `space` (zoom-1 px):
   // its coarsest level `top` puts 4..8 dashes round it, and s0 divides the
@@ -1044,9 +1052,10 @@ function create(ctx) {
     const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
     return { s0: L / (nTop * 2 ** top), top };
   }
-  function sline(rg, width, space, zoom) {
-    const arr = memo(rg, `line${width},${space}`, () => {
-      const s0 = sN; buildLine(rg, width, space ? lattice(rg, space, zoom) : { s0: 1, top: 0 }, zoom);
+  // a band `width` px wide along the circle, outside it (side 1) or inside (-1)
+  function sline(rg, width, side, space, zoom) {
+    const arr = memo(rg, `line${width},${side},${space}`, () => {
+      const s0 = sN; buildLine(rg, width, side, space ? lattice(rg, space, zoom) : { s0: 1, top: 0 }, zoom);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1054,28 +1063,31 @@ function create(ctx) {
     }
     sBuf.set(arr, sN); sN += arr.length;
   }
-  // the quads between consecutive vertices, each vertex offset along the
-  // mitre of its two segments: neighbouring quads share their edge, so no
-  // pixel is drawn twice and the position along the circle runs on unbroken
-  function buildLine(rg, width, lat, zoom) {
-    const { n, scr, vis } = rg, half = width / 2 + 0.5, s0 = lat.s0, top = lat.top;
-    const off = new Float32Array(n * 2);
+  // the quads between consecutive vertices, from the circle out to `width`
+  // on `side`, each vertex offset along the mitre of its two segments:
+  // neighbouring quads share their edge, so no pixel is drawn twice and the
+  // position along the circle runs on unbroken
+  function buildLine(rg, width, side, lat, zoom) {
+    const { n, scr, vis, c } = rg, s0 = lat.s0, top = lat.top;
+    const off = new Float32Array(n * 2);          // the unit normal away from the band's far side
     for (let i = 0; i < n; i++) {
       const p = (i + n - 1) % n, q = (i + 1) % n;
       const tx = scr[q * 2] - scr[p * 2], ty = scr[q * 2 + 1] - scr[p * 2 + 1];
       const tl = Math.hypot(tx, ty) || 1;
-      off[i * 2] = -ty / tl * half; off[i * 2 + 1] = tx / tl * half;
+      let nx = -ty / tl, ny = tx / tl;
+      if ((nx * (scr[i * 2] - c[0]) + ny * (scr[i * 2 + 1] - c[1])) * side < 0) { nx = -nx; ny = -ny; }
+      off[i * 2] = nx; off[i * 2 + 1] = ny;
     }
+    const lo = -0.5, hi = width + 0.5;
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
       if (!vis[i] && !vis[j]) continue;
       const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
       const nx0 = off[i * 2], ny0 = off[i * 2 + 1], nx1 = off[j * 2], ny1 = off[j * 2 + 1];
-      const a0 = rg.along[i] / zoom, a1 = rg.along[i + 1] / zoom;
-      pushS(x0 + nx0, y0 + ny0, 1, a0, vis[i], half, s0, top); pushS(x0 - nx0, y0 - ny0, -1, a0, vis[i], half, s0, top);
-      pushS(x1 + nx1, y1 + ny1, 1, a1, vis[j], half, s0, top);
-      pushS(x1 + nx1, y1 + ny1, 1, a1, vis[j], half, s0, top); pushS(x0 - nx0, y0 - ny0, -1, a0, vis[i], half, s0, top);
-      pushS(x1 - nx1, y1 - ny1, -1, a1, vis[j], half, s0, top);
+      const a0 = rg.along[i] / zoom, a1 = rg.along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
+      const P = (x, y, nx, ny, d, a, v) => pushS(x + nx * d, y + ny * d, x, y, d, a, v, width, s0, top);
+      P(x0, y0, nx0, ny0, lo, a0, v0); P(x0, y0, nx0, ny0, hi, a0, v0); P(x1, y1, nx1, ny1, hi, a1, v1);
+      P(x1, y1, nx1, ny1, hi, a1, v1); P(x0, y0, nx0, ny0, lo, a0, v0); P(x1, y1, nx1, ny1, lo, a1, v1);
     }
   }
   // THE DASH LEVEL (see DASH): the zoom's octave, held DASH_HYST past a
@@ -1133,7 +1145,7 @@ function create(ctx) {
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, sN / 8);
+    gl.drawArrays(gl.TRIANGLES, 0, sN / 10);
     gl.bindVertexArray(null);
     sN = 0;
   }
@@ -1141,50 +1153,52 @@ function create(ctx) {
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
 
-  // THE VIEW's radar and sonar lines: the discs into B, then each circle's
-  // line where B is not set -- the outer half of the stroke, outside the union
+  // what cuts the bands (B): every disc a pixel short of its circle, so a
+  // circle's own points are outside its own disc and inside any other
+  const cutDiscs = (rings, proj, zoom) => {
+    for (const rg of rings) fan(circle(rg.u, Math.max(1, rg.r - 1 / zoom), false, proj));
+    maskFlush(2);
+  };
+  // THE VIEW's radar and sonar lines: each circle's band outside it, as wide
+  // as the visible outer half of BAR's stroke, where its circle is outside
+  // every other disc -- the outline of the union
   function drawLines(kind, proj, zoom, t) {
     const list = emitters(kind);
     if (!list.length) return;
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
     const rings = list.map((u) => circle(u, radiusOf(u, kind), water, proj));
     maskBegin();
-    for (const rg of rings) fan(rg);
-    maskFlush(2);
+    cutDiscs(rings, proj, zoom);
     maskEnd();
     const ls = (GH + 500) / 1300;
-    for (const rg of rings) sline(rg, LINE_W * ls, DASH.line.space * ls, zoom);
+    for (const rg of rings) sline(rg, LINE_W * ls / 2, 1, DASH.line.space * ls, zoom);
     slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, 2, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
-  // placed): the union filled, a dashed band along the inside of its edge. The
-  // band of a circle is clipped where it lies more than its width inside the
-  // union -- by the union of the discs shrunk by that width (B).
+  // placed): the union filled, a dashed band along the inside of its edge,
+  // each circle's where its circle is outside every other disc.
   function drawJammers(kind, ghost, proj, zoom, t) {
     const water = WATER_KIND[kind];
     const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
     if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind))
       list.push({ u: ghost, isNew: true });
     if (!list.length) return;
-    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, wE = wpx / zoom;
+    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom;
     const items = list.map((e) => {
       const r = types[e.u.type][kind];
-      return { ...e, r, rg: circle(e.u, r, water, proj),
-               band: circle(e.u, Math.max(1, r - wE / 2), water, proj),
-               core: r > wE ? circle(e.u, r - wE, false, proj) : null };
+      return { ...e, r, rg: circle(e.u, r, water, proj) };
     });
     maskBegin();
     for (const isNew of [true, false]) {
       for (const it of items) if (it.isNew === isNew) region(it.rg, water, proj);
       maskFlush(isNew ? 0 : 1);
     }
-    for (const it of items) if (it.core) fan(it.core);
-    maskFlush(2);
+    cutDiscs(items.map((it) => it.rg), proj, zoom);
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
     fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
     const ls = (GH + 500) / 1300;
-    for (const it of items) sline(it.band, wpx, DASH.jam.space * ls, zoom);
+    for (const it of items) sline(it.rg, wpx, -1, DASH.jam.space * ls, zoom);
     slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, zoom, "jam", 1, JAMMER.gapRel);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
@@ -1193,15 +1207,14 @@ function create(ctx) {
   // coverage too) and along the union's outer edge
   function drawPreview(kind, ghost, proj, zoom, t) {
     const P = PREVIEW[kind], water = WATER_KIND[kind];
-    const wpx = PULSE.w * GH / 1080, wE = wpx / zoom;
+    const wpx = PULSE.w * GH / 1080;
     const g = circle(ghost, radiusOf(ghost, kind), water, proj);
     const old = emitters(kind).map((u) => circle(u, radiusOf(u, kind), water, proj));
     maskBegin();
     region(g, water, proj); maskFlush(0);
     for (const rg of old) region(rg, water, proj);
     maskFlush(1);
-    for (const rg of [g, ...old]) if (rg.r > wE) fan(circle(rg.u, rg.r - wE, false, proj));
-    maskFlush(2);
+    cutDiscs([g, ...old], proj, zoom);
     maskEnd();
     fillWhere(P.allied, P.a * P.alliedRel, 1, 0);
     // the sheet: the new disc's fan, world x/z per vertex for the rings
@@ -1230,9 +1243,9 @@ function create(ctx) {
     gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
     gl.bindVertexArray(null);
     // the outline: the new disc's own edge whole, the others' where they bound the union
-    sline(circle(ghost, Math.max(1, g.r - wE / 2), water, proj), wpx, 0, zoom);
+    sline(g, wpx, -1, 0, zoom);
     slineDraw(P.outline, P.outlineA, 2, -1, zoom);
-    for (const rg of old) sline(circle(rg.u, Math.max(1, rg.r - wE / 2), water, proj), wpx, 0, zoom);
+    for (const rg of old) sline(rg, wpx, -1, 0, zoom);
     slineDraw(P.outline, P.outlineA, 2, 2, zoom);
   }
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
