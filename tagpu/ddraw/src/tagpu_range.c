@@ -606,11 +606,10 @@ static float lod_op(int j)
 /* THIS FRAME'S LEVEL AND MOTION. The level is the zoom's octave, held until
    the zoom is DASH_HYST past it; each level's opacity walks to 1 at the level
    and coarser and 0 finer at 1 / DASH_FADE_MS a millisecond. The dashes move
-   their speed on screen, so speed / zoom on the map; the preview's rings
-   their speed on the map. THE TWO CLOCKS ARE BAR'S: the radar and sonar
-   lines advance with the game (`dTicks`, a tick a thirtieth of a second at
-   normal speed), so they stop on pause and run faster at a higher speed; the
-   jammers' dashes and the preview's rings with the wall clock. A step back in
+   their speed on screen, so speed / zoom on the map. THE TWO CLOCKS ARE
+   BAR'S: the radar and sonar lines advance with the game (`dTicks`, a tick a
+   thirtieth of a second at normal speed), so they stop on pause and run
+   faster at a higher speed; the jammers' dashes with the wall clock. A step back in
    time, or of more than a second (a load, a stall, a seek), moves nothing
    and ends a fade at once. */
 static void dash_step(double zoom, double ls, double devPx, double dTicks)
