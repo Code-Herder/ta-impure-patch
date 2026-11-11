@@ -55,7 +55,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_simreg.h"
 
-SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-los forest-circle tenseat");
+SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle tenseat");
 
 /* the engine's main block and the fields this file reads or writes (DISASSEMBLED, the uses cited
    where each is read) */
@@ -815,7 +815,7 @@ void tagpu_allysight_init(void)
               "0x464990, the players phase's call 0x49555F and the destructor's removal 0x486845");
 }
 
-SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "tenseat");
+SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied tenseat");
 
 /* S from the records: each eligible owner shares with every eligible record whose row byte
    toward it, and its own toward that record, are both non-zero: TA's ShareRadar and ShareLOS bits
