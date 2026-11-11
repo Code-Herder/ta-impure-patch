@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The demo recorder's `battle-allied` fixture: replay-battle-truelos.json (true line of sight with mapping, the fixture types +los mid-game) with seats 0 and 2 (Arm) in ally group 1 and seats 1 and 3 (Core) in group 2, so both sides hold an alliance from the first players phase. It carries the allied sight and radar sharing's test group: two allied pairs under true LOS, their explored map, the viewed seat's death vision into its ally and the radar pass with allies.",
+ "description": "The demo recorder's `battle-allied` and `stock-battle-allied` test groups: replay-battle-truelos.json (true line of sight with mapping) with seats 0 and 2 (Arm) in ally group 1 and seats 1 and 3 (Core) in group 2, so both sides hold an alliance from the first players phase. It carries the allied sight and radar sharing's test group: two allied pairs under true LOS, their explored map, the viewed seat's death vision into its ally and the radar pass with allies. The test groups type +los at 1900 (line of sight off), +lostype at 2400 (LosType bit 2 off, nothing stamps yet) and +los at 2700: line of sight without the ray fan (LosType bit 1 set, bit 2 clear), the one setting that stamps through the circle emitter, which none of the SKIRMISH screen's three choices makes (Circular is LosType 8, bit 1 clear).",
  "setup": {
   "map": "Town & Country",
   "res": "1024x768",

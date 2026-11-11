@@ -63,7 +63,16 @@
   "battle-allied": {
    "load": "replay-battle-allied.json",
    "los": "file",
-   "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"]],
+   "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"],
+             [2400, "type", "+lostype"], [2700, "type", "+los"]],
+   "end": 3810
+  },
+  "stock-battle-allied": {
+   "load": "replay-battle-allied.json",
+   "los": "file",
+   "dll": "stock",
+   "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"],
+             [2400, "type", "+lostype"], [2700, "type", "+los"]],
    "end": 3810
   },
   "carry-links": {

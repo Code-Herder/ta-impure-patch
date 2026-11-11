@@ -1,5 +1,5 @@
 #include "tagpu_simreg.h"
-SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle tenseat");
+SIM_FEATURE(ally_sight, SIM_PUPPET_RUNS, "battle-allied battle-los forest-circle stock-battle-allied tenseat");
 /* The feature line stands second: the replay gate gives a line above a file's first SIM_FEATURE
    no feature, so only the include it needs precedes it. */
 #include <windows.h>
@@ -924,7 +924,7 @@ void tagpu_allysight_init(void)
     visible_init();
 }
 
-SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied tenseat");
+SIM_FEATURE(ally_share, SIM_PUPPET_OWNER, "battle-allied stock-battle-allied tenseat");
 
 /* S from the records: each eligible owner shares with every eligible record whose row byte
    toward it, and its own toward that record, are both non-zero: TA's ShareRadar and ShareLOS bits
@@ -971,7 +971,7 @@ static void __cdecl players_phase(void)
     E_PlayersPhase();
 }
 
-SIM_FEATURE(ally_radar, SIM_PUPPET_RUNS, "battle-allied contact-waves");
+SIM_FEATURE(ally_radar, SIM_PUPPET_RUNS, "battle-allied contact-waves stock-battle-allied");
 
 /* THE RADAR PASS 0x467440, no argument, plain `ret` (0x467836; DISASSEMBLED 0x467440..0x467836):
    the viewed record's contacts, +0x110 bits 8-10 of every unit, in five loops over the unit array.

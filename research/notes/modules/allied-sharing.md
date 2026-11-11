@@ -217,7 +217,9 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
   phase's, which walks the units (no temporary record exists before the first death: the add
   `0x482910` has one engine call, the destructor's `0x486748`) and backfills only what the load's
   stamps explored.
-- Exact removal is established for the ray fan only. The circle emitter (LosType bit 1) removes at
+- Exact removal is established for the ray fan only. The circle emitter (LosType bit 1 without
+  bit 2: none of the SKIRMISH screen's choices makes it, Circular clearing both bits, so the allied
+  test groups type `+lostype` and then `+los` to play under it) removes at
   `0x48275D` whenever the record's cell or byte changed, with no stamp test (DISASSEMBLED
   `0x48272E..0x48277A`); whether a record can reach it without a stamp is not established. One that
   did would under-count its cells, never wrap them: W stops at zero.
