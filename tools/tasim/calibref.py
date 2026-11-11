@@ -175,6 +175,42 @@ def arena(path: Path = ARENA) -> dict:
     return cfg
 
 
+ROLES_H = TREE / "tagpu" / "ddraw" / "src" / "tasim_roles.h"
+
+
+def exchange_rate() -> float:
+    """R, the energy a unit of metal is worth: the one named constant TASIM_ROLES_R of
+    tasim_roles.h, which the role classifier uses too, read here rather than copied."""
+    import re
+    try:
+        m = re.search(r"#define\s+TASIM_ROLES_R\s+([0-9.]+)", ROLES_H.read_text())
+    except OSError as e:
+        raise CalibError(f"{ROLES_H}: {e}")
+    if not m:
+        raise CalibError(f"{ROLES_H}: no TASIM_ROLES_R")
+    return float(m.group(1))
+
+
+def install_fingerprint(catalogue: dict, types) -> str:
+    """sha256 of the catalogue's key and CRC of every type used, its weapons' and feature defs'
+    fingerprints: what the engine loaded, which a reference is only valid against."""
+    by = {u["name"].upper(): [u["key"], u["crc_all"]] for u in catalogue["units"]}
+    doc = {"types": {t: by.get(t) for t in sorted(types)},
+           "weapons": catalogue.get("weapons"), "feature_defs": catalogue.get("feature_defs")}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
+
+
+def resolve_commit(build: str) -> str:
+    """The full commit of a DLL's build name; a dirty build names none."""
+    if build.endswith("-dirty"):
+        raise CalibError(f"the DLL was built from a dirty tree ({build})")
+    r = subprocess.run(["git", "-C", str(TREE), "rev-parse", "--verify", build + "^{commit}"],
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise CalibError(f"the DLL's build {build} is no commit of this repository")
+    return r.stdout.strip()
+
+
 def git_commit() -> str:
     r = subprocess.run(["git", "-C", str(TREE), "rev-parse", "HEAD"], capture_output=True,
                        text=True, check=True)

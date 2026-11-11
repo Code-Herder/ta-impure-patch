@@ -276,7 +276,9 @@ class Lane:
                "seed": record["seed"], "swap": record["swap"], "mode": mode,
                "perturbation": record,
                "wire_sha256": hashlib.sha256(wire.encode()).hexdigest(),
-               "t_apply": T, "apply": {"units": units, "delayed": res.get("delayed")},
+               "t_apply": T, "apply": {"units": units, "delayed": res.get("delayed"),
+                                       "features": [f["def"] for f in
+                                                    (res.get("features") or {}).values()]},
                "arm": {"limit": block["limit"], "units": [list(c) for c in clauses]},
                "t_end": Te, "end": end,
                "clear": {"t": Te, "cleared_slots": cleared.get("cleared_slots") or []},
