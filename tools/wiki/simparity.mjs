@@ -23,7 +23,7 @@
      scripts from the gfx packs), else sim.js's default. Builds nothing.
 
    It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
-   real sources, and plays every demo of every entry the tree names through both, comparing every field of the view,
+   real sources (tools/wiki/wikibuild.mjs), and plays every demo of every entry the tree names through both, comparing every field of the view,
    every unit's orders and the state hash on every tick; the map, which nothing writes once the scene is laid out, on
    the first and the last tick. It plays them with the sidebar of art/wiki/side/fixture.json, the layout the wiki
    falls back to, with fixture-tall.json's 768-row column, and with none (both C sides read the layouts out of the
@@ -95,7 +95,7 @@ import { createRequire } from 'node:module';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
-import { TASIM_SRCS } from './tasimsrcs.mjs';
+import { build as hostBuild } from './wikibuild.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -103,7 +103,6 @@ const WikiReplay = require('./mockup/replay.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiText = require('./mockup/text.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
-const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
 const WINE = process.argv.includes('--wine');
@@ -240,9 +239,6 @@ function rec(key, h) {
   if (PLAYED.has(key)) { dupKeys++; console.log(`DIFFER record -- the key ${key} is made twice`); }
   PLAYED.set(key, h);
 }
-const SRCS = ['tests/wikihost.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikireplay.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c',
-  'src/tagpu_sweepgeo.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c',
-  'src/tagpu_hudlay.c'];
 
 /* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
 function fnv() {
@@ -474,25 +470,18 @@ function run(cmd, args, opts = {}) {
   return r.stdout;
 }
 
-/* the C side built into `tmp`, this process's own: shards build at once, so none links over a program another runs */
+/* the C side, wikitest, built by tools/wiki/wikibuild.mjs (its `asan` target natively, `wine` with --wine) and run in
+   `tmp`, this process's own folder */
 function build(tmp) {
   if (WINE) {
-    // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
-      'src/tagpu_wikireplay.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c'];
-    const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
-    const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
-    sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
-    run(cc, [...flags, '-static', '-o', exe, 'tests/wikitest.c', ...objs, ...SRCS.filter(src => !sse.includes(src))], { cwd: DDRAW });
+    const exe = hostBuild('wine');
     const common = run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim();
     const env = { ...process.env };
     env.WINEPREFIX ??= path.join(path.resolve(ROOT, common), '..', 'wineprefix');
     env.WINEDEBUG ??= '-all';
     return (args, o = {}) => run('wine', [exe, ...args], { cwd: tmp, env, ...o });
   }
-  const exe = path.join(tmp, 'wikitest-native');
-  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
-    '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, ...SRCS, '-lm'], { cwd: DDRAW });
+  const exe = hostBuild('asan');
   return (args, o = {}) => run(exe, args, { cwd: tmp, ...o });
 }
 
