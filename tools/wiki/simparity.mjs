@@ -66,11 +66,32 @@
    By default the C side is built natively with gcc, AddressSanitizer and UndefinedBehaviorSanitizer. --wine builds it
    with the DLL's own compiler and flags (i686-w64-mingw32-gcc, the simulation and the loader on SSE2 as the Makefile
    compiles them)
-   and runs it under Wine (WINEPREFIX: the main checkout's wineprefix/), which checks the arithmetic the game runs. */
+   and runs it under Wine (WINEPREFIX: the main checkout's wineprefix/), which checks the arithmetic the game runs.
+
+   usage: node tools/wiki/simparity.mjs [--wine] -j N [--record DIR | --against DIR]
+     -j N runs the N shards of --shard K/N at once, each its own process, and gives the worst exit of them.
+
+   THE RECORD (--record DIR) keeps the state hash of every tick of every play, the C side's once the tick compared equal,
+   so that a later tree can be held to it with no second simulation beside it (--against DIR). Each shard writes
+   DIR/shard-K-of-N.jsonl.gz: a header line {"header": {"commit", "gfx": the digest of every scene.json and .cob under
+   tools/wiki/mockup/gfx/, "contexts": the demo pass's context labels}}, then one line a play, {"key", "h": its hashes}
+   or {"key", "refused": true}. A key is `pass|context|entry/demo|variant`:
+     demos|CTX|E/D|play          the demo, each tick's tagpu_wikisim_hash from tick 0
+     game|CTX|E/D|game, stall, starved, econoff     the game pass's four plays
+     replay|CTX|E/D|replay       each demo tick's [tagpu_wikireplay_hash, the game's hash or null]
+     replay|CTX|E/D|trace, playerstrace, livetrace, tktrace1, tktrace2     the press traces, likewise
+     sweep|CTX|E/D|sweep R       the release sweep's game released after R, its hash at its end
+     case|-|-|NAME               a fork, column or seat case: its hash answers in call order
+     rule|-|E|WHAT               a simcheck rule case: its hash answers in call order
+   A run that differs anywhere writes nothing. --against DIR plays as usual and also holds every key it makes to the
+   record: each must be there with the same hashes (the first differing index named), and under -j every recorded key
+   must be made. A record of other gfx packs is refused before anything plays. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
@@ -87,11 +108,138 @@ const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
 const WINE = process.argv.includes('--wine');
+const argOf = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
+const RECORD = argOf('--record'), AGAINST = argOf('--against');
+// a record's shard files, and the keys a shard made for its parent's whole-run check (-j, below)
+const shardFile = (dir, k, n) => path.join(dir, `shard-${k}-of-${n}.jsonl.gz`);
+const KEYS_OUT = process.env.SIMPARITY_KEYS;
+
+/* THE GFX DIGEST: what the record's hashes rest on besides the tree, every scene.json and script the packs hold */
+function gfxDigest() {
+  const dir = path.join(ROOT, 'tools/wiki/mockup/gfx'), lines = [];
+  const walk = d => {
+    for (const f of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const p = path.join(d, f.name);
+      if (f.isDirectory()) walk(p);
+      else if (f.name === 'scene.json' || f.name.endsWith('.cob'))
+        lines.push(`${path.relative(dir, p)} ${crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}`);
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
+}
+
+/* a record's files read whole: {header, plays: Map key -> hashes or 'refused'} */
+function readRecord(dir) {
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => /^shard-\d+-of-\d+\.jsonl\.gz$/.test(f)).sort() : [];
+  if (!files.length) throw new Error(`${dir} holds no record`);
+  let header = null;
+  const plays = new Map();
+  for (const f of files)
+    for (const l of zlib.gunzipSync(fs.readFileSync(path.join(dir, f))).toString('utf8').split('\n')) {
+      if (!l) continue;
+      const o = JSON.parse(l);
+      if (o.header) {
+        if (header && header.gfx !== o.header.gfx) throw new Error(`${dir}: ${f} was recorded on other gfx packs than its siblings`);
+        header ??= o.header;
+      } else plays.set(o.key, o.refused ? 'refused' : o.h);
+    }
+  return { header, plays };
+}
+
+/* the plays `got` (key -> hashes) held to the record's: each problem a line; with `whole`, a recorded key not made too */
+function holdTo(record, got, whole) {
+  const out = [];
+  const show1 = v => JSON.stringify(v);
+  for (const [k, h] of got) {
+    if (!record.plays.has(k)) { out.push(`${k}: not in the record`); continue; }
+    const r = record.plays.get(k);
+    if (r === 'refused' || h === 'refused') { if (r !== h) out.push(`${k}: the record ${r === 'refused' ? 'refused it' : 'played it'}, this run ${h === 'refused' ? 'refused it' : 'played it'}`); continue; }
+    const n = Math.min(r.length, h.length);
+    let i = 0;
+    while (i < n && JSON.stringify(r[i]) === JSON.stringify(h[i])) i++;
+    if (i < n) out.push(`${k}: first differs at [${i}]: the record ${show1(r[i])}, this run ${show1(h[i])}`);
+    else if (r.length !== h.length) out.push(`${k}: the record holds ${r.length} hashes, this run ${h.length}`);
+  }
+  if (whole) for (const k of record.plays.keys()) if (!got.has(k)) out.push(`${k}: recorded, not made by this run`);
+  return out;
+}
+
+/* a record's header, from its first shard file alone */
+function recordHeader(dir) {
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => /^shard-\d+-of-\d+\.jsonl\.gz$/.test(f)).sort() : [];
+  if (!files.length) return null;
+  const l = zlib.gunzipSync(fs.readFileSync(path.join(dir, files[0]))).toString('utf8').split('\n', 1)[0];
+  return JSON.parse(l).header ?? null;
+}
+const GFX_DIGEST = RECORD || AGAINST ? gfxDigest() : null;
+if (AGAINST) {
+  const h = recordHeader(AGAINST);
+  if (!h) { console.error(`simparity: ${AGAINST} holds no record`); process.exit(2); }
+  if (h.gfx !== GFX_DIGEST) {
+    console.error(`simparity: ${AGAINST} was recorded on other gfx packs (${h.gfx.slice(0, 12)}, these ${GFX_DIGEST.slice(0, 12)}): the record is void`);
+    process.exit(2);
+  }
+}
+if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
+
+/* -j N: the shards of --shard K/N at once, each its own process; their outputs in shard order as each ends, and the
+   worst exit (2 over 1 over 0). With --against each shard writes the plays it made (SIMPARITY_KEYS), and the whole
+   run is held to the record here, so a recorded key no shard made fails it. */
+if (argOf('-j') !== undefined) {
+  const N = Number(argOf('-j'));
+  if (!(Number.isInteger(N) && N >= 1)) { console.error(`simparity: -j ${argOf('-j')} is not a count`); process.exit(2); }
+  const strip = new Set(['-j', '--shard']);
+  const base = [];
+  for (let i = 2; i < process.argv.length; i++) { if (strip.has(process.argv[i])) i++; else base.push(process.argv[i]); }
+  const tmpKeys = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-keys-'));
+  // a record is one run's: an earlier run's shards, of another N, would mix into it
+  if (RECORD) for (const f of fs.readdirSync(RECORD)) if (/^shard-\d+-of-\d+\.jsonl\.gz$/.test(f)) fs.rmSync(path.join(RECORD, f));
+  const t0 = Date.now();
+  const outs = new Array(N), codes = new Array(N);
+  await Promise.all(Array.from({ length: N }, (_, i) => new Promise(done => {
+    const env = { ...process.env, ...(AGAINST ? { SIMPARITY_KEYS: path.join(tmpKeys, `keys-${i + 1}.jsonl.gz`) } : {}) };
+    const p = spawn(process.execPath, [new URL(import.meta.url).pathname, ...base, '--shard', `${i + 1}/${N}`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout.on('data', d => { out += d; });
+    p.stderr.on('data', d => { out += d; });
+    p.on('close', code => { outs[i] = out; codes[i] = code ?? 2; done(); });
+  })));
+  outs.forEach(o => process.stdout.write(o));
+  let code = codes.includes(2) ? 2 : codes.includes(1) ? 1 : 0;
+  if (AGAINST && code !== 2) {
+    const got = new Map();
+    for (let i = 1; i <= N; i++) {
+      const f = path.join(tmpKeys, `keys-${i}.jsonl.gz`);
+      if (!fs.existsSync(f)) continue;
+      for (const l of zlib.gunzipSync(fs.readFileSync(f)).toString('utf8').split('\n')) if (l) { const o = JSON.parse(l); got.set(o.key, o.refused ? 'refused' : o.h); }
+    }
+    const bad = holdTo(readRecord(AGAINST), got, true);
+    for (const l of bad.slice(0, 50)) console.log(`DIFFER against -- ${l}`);
+    if (bad.length > 50) console.log(`DIFFER against -- and ${bad.length - 50} more`);
+    console.log(bad.length ? `simparity against ${AGAINST}: ${bad.length} of the record's plays differ or are missing`
+      : `simparity against ${AGAINST}: all ${got.size} plays equal to the record, every recorded key made`);
+    if (bad.length && code === 0) code = 1;
+  }
+  if (RECORD && code !== 0) for (let i = 1; i <= N; i++) fs.rmSync(shardFile(RECORD, i, N), { force: true });
+  fs.rmSync(tmpKeys, { recursive: true, force: true });
+  console.log(`simparity -j ${N}: ${codes.filter(c => c === 0).length} of ${N} shards passed, ${((Date.now() - t0) / 1000).toFixed(0)} s wall`);
+  process.exit(code);
+}
+
 const SHARD_ARG = process.argv.includes('--shard') ? process.argv[process.argv.indexOf('--shard') + 1] : '1/1';
 const [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(SHARD_ARG) || []).slice(1).map(Number);
 if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
   console.error(`simparity: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
   process.exit(2);
+}
+/* THE PLAYS THIS SHARD MADE, for the record (THE RECORD above): key -> hashes, or 'refused'; a key made twice is a
+   scheme that names two plays alike, which would hide one of them */
+const PLAYED = new Map();
+let dupKeys = 0;
+function rec(key, h) {
+  if (PLAYED.has(key)) { dupKeys++; console.log(`DIFFER record -- the key ${key} is made twice`); }
+  PLAYED.set(key, h);
 }
 const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_wikireplay.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
@@ -474,6 +622,10 @@ const RIVALS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fi
 const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
   .filter(([, e]) => e.frame === 'game');
+/* THE DEMO PASS'S CONTEXTS, in the order the shards deal them: the units' scripts off and on, each sidebar layout, each
+   casting of casting-fixture.json or none, each Interface Type */
+const CONTEXTS = COBS.flatMap(cob => ['fixture', 'fixture-tall', null].flatMap(side => [null, ...Object.keys(CASTINGS)].flatMap(cname =>
+  [1, 0].map(iface => ({ cob, side, cname, iface, named: `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}` })))));
 // the games the game pass and the replay pass play: the entries and the takeover fixture
 const PLAYS = [...GAMES, ['players-fixture', playersFixture()], ['players-scratch', playersScratch()], ['takeover-fixture', takeoverFixture()]];
 const WIKI_SEAT_MIN = 200;
@@ -1993,17 +2145,17 @@ try {
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
-  let context = 0;
-  for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
-    if (context++ % SHARDS !== SHARD - 1) continue;
-    const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;
+  for (const [context, { cob, side, cname, iface, named }] of CONTEXTS.entries()) {
+    if (context % SHARDS !== SHARD - 1) continue;
+    const layout = side && SIDE(side);
     const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null,
                   snd: cob ? soundSource(PACKS) : null };
     let cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
     let at = 0;
     /* one demo through sim.js (`make`) against the C sim's lines from `at` on, which it consumes; with `sight` (a
-       players game's: the layout's sight table, null for none) each tick's sight too (sightOut) */
-    const compare = (id, demo, make, named, sight) => {
+       players game's: the layout's sight table, null for none) each tick's sight too (sightOut); kept under `key` once
+       equal (THE RECORD) */
+    const compare = (id, demo, make, named, sight, key) => {
       {
         let sim, why = null;
         try { sim = make(); } catch (e) { why = e.message; }
@@ -2013,7 +2165,7 @@ try {
           const same = c && c.entry === id && c.demo === demo.id && 'refused' in c && why !== null;
           if (c && c.entry === id && c.demo === demo.id) at++;
           demos++;
-          if (same) console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`);
+          if (same) { rec(key, 'refused'); console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`); }
           else {
             failed++;
             differ++;
@@ -2023,13 +2175,15 @@ try {
           return null;
         }
         let first = null, ticks = 0;
+        const hs = [];
         for (;;) {
           const v = sim.view(), h = stateHash(sim, v), sv = sight === undefined ? undefined : sightOut(sim, v, sight);
           if (!(sim.tick === 0 || sim.done)) delete v.map;
           const j = { entry: id, demo: demo.id, t: sim.tick, h, v, o: Object.fromEntries(v.units.map(u => [u.id, sim.orders(u.id)])),
             ...(sv ? { s: sv } : {}) };
           if (at >= cout.length) { first = { t: sim.tick, at: '(the C sim ended early)', c: null, j: null }; break; }
-          const d = diff(JSON.parse(cout[at++]), j, '');
+          const cl = JSON.parse(cout[at++]), d = diff(cl, j, '');
+          hs.push(cl.h);
           if (d && !first) first = { t: sim.tick, ...d };
           ticks++;
           if (sim.done) break;
@@ -2041,13 +2195,13 @@ try {
           differ++;
           console.log(`DIFFER ${id}/${demo.id} (${named}) at tick ${first.t}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
           while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-        } else console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} ticks`);
+        } else { rec(key, hs); console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} ticks`); }
         return sim;
       }
     };
     for (const id of ids) {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-      for (const demo of entry.demos) compare(id, demo, () => WikiSim.play(entry, demo, layout, ctx), named);
+      for (const demo of entry.demos) compare(id, demo, () => WikiSim.play(entry, demo, layout, ctx), named, undefined, `demos|${named}|${id}/${demo.id}|play`);
     }
     if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}) the C sim played ${cout.length - at} frames more`); }
 
@@ -2065,10 +2219,10 @@ try {
       }) };
       const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
         [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
-      const plays = [[entry, 'refuse', 2, '', cname], [cut, 'stall', 3, ' stall', cname], [cut, 'refuse', 2, ' starved', cname]];
+      const plays = [[entry, 'refuse', 2, '', cname, 'game'], [cut, 'stall', 3, ' stall', cname, 'stall'], [cut, 'refuse', 2, ' starved', cname, 'starved']];
       // with the identity casting, also every cast's economy outside the game's bounds: both leave each cast unbound
-      if (cname === 'identity') plays.push([entry, 'refuse', 2, ' economy off', 'identity-econoff']);
-      for (const [e, mode, scripted, tag, cfile] of plays) {
+      if (cname === 'identity') plays.push([entry, 'refuse', 2, ' economy off', 'identity-econoff', 'econoff']);
+      for (const [e, mode, scripted, tag, cfile, variant] of plays) {
         const pctx = cfile === 'identity-econoff' ? { ...gctx, casting: ECON_OFF } : gctx;
         fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(e));
         cout = lines(wikitest(['game', 'wiki.bin', 'game.json', side || '-', cfile ? `casting-${cfile}.json` : '-',
@@ -2076,7 +2230,7 @@ try {
         at = 0;
         for (const demo of e.demos) {
           const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, pctx, mode), `${named}, game${tag}`,
-            e.players === true ? (layout && layout.sight) || null : undefined);
+            e.players === true ? (layout && layout.sight) || null : undefined, `game|${named}|${id}/${demo.id}|${variant}`);
           // the cut game in refuse mode ends starved, unless the context locked it first
           if (tag === ' starved' && sim && sim.view().locked === null && !sim.view().game.starved) {
             failed++;
@@ -2099,14 +2253,14 @@ try {
     /* one replay against the C lines from `at` on, which it consumes; `presses` for Try it, else the viewer's script;
        with `sight` (a players entry's: the layout's sight table, null for none) the shown game's sight each demo tick
        too (sightOut), taken while the view still holds the map it reads */
-    const compareReplay = (id, demo, make, named, presses, sight) => {
+    const compareReplay = (id, demo, make, named, presses, sight, key) => {
       let R, why = null;
       try { R = make(); } catch (e) { why = e.message; }
       if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
         const c = at < cout.length ? JSON.parse(cout[at]) : null;
         if (c && c.entry === id && c.demo === demo.id) at++;
         demos++;
-        if (c && 'refused' in c && why !== null) console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`);
+        if (c && 'refused' in c && why !== null) { rec(key, 'refused'); console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`); }
         else {
           failed++;
           differ++;
@@ -2117,6 +2271,7 @@ try {
         return;
       }
       let first = null, ticks = 0;
+      const hs = [];
       for (;;) {
         const rv = R.view(), last = rv.done || (presses && R.tick >= presses.end), g = R.game;
         const v = g ? g.view() : null, sv = v && sight !== undefined ? sightOut(g, v, sight) : undefined;
@@ -2124,7 +2279,8 @@ try {
         const j = { entry: id, demo: demo.id, t: R.tick, h: replayHash(R), r: rv, gh: g ? stateHash(g, g.view()) : null, v,
           o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null, ...(sv ? { s: sv } : {}) };
         if (at >= cout.length) { first = { t: R.tick, at: '(the C replay ended early)', c: null, j: null }; break; }
-        const d = diff(JSON.parse(cout[at++]), j, '');
+        const cl = JSON.parse(cout[at++]), d = diff(cl, j, '');
+        hs.push([cl.h, cl.gh]);
         if (d && !first) first = { t: R.tick, ...d };
         ticks++;
         if (last) break;
@@ -2142,7 +2298,7 @@ try {
         differ++;
         console.log(`DIFFER ${id}/${demo.id} (${named}) at demo tick ${first.t}: ${first.at}: C ${show(first.c)}, replay.js ${show(first.j)}`);
         while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-      } else console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} demo ticks`);
+      } else { rec(key, hs); console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} demo ticks`); }
     };
     for (const [id, entry] of PLAYS) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
@@ -2151,18 +2307,20 @@ try {
       cout = lines(wikitest(['replay', ...args]));
       at = 0;
       const sight = entry.players === true ? (layout && layout.sight) || null : undefined;
-      for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null, sight);
+      for (const demo of entry.demos)
+        compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null, sight, `replay|${named}|${id}/${demo.id}|replay`);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
       // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE; a takeover entry's its
       // TAKEOVER_TRACES, on its last demo
-      const traces = entry.takeover ? TAKEOVER_TRACES.map(t => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }])
-        : [[entry.live ? LIVE_TRACE : entry.players ? PLAYERS_TRACE : TRACE, entry]];
-      for (const [trace, te] of traces) {
+      const traces = entry.takeover ? TAKEOVER_TRACES.map((t, k) => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }, `tktrace${k + 1}`])
+        : [[entry.live ? LIVE_TRACE : entry.players ? PLAYERS_TRACE : TRACE, entry, entry.live ? 'livetrace' : entry.players ? 'playerstrace' : 'trace']];
+      for (const [trace, te, variant] of traces) {
         fs.writeFileSync(path.join(tmp, 'presses.json'), JSON.stringify(trace));
         fs.writeFileSync(path.join(tmp, 'pressgame.json'), JSON.stringify(te));
         cout = lines(wikitest(['replaytrace', ...args.map(a => a === 'game.json' ? 'pressgame.json' : a), 'presses.json']));
         at = 0;
-        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace, sight);
+        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace, sight,
+          `replay|${named}|${id}/${te.demos[0].id}|${variant}`);
         if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
       }
     }
@@ -2175,7 +2333,7 @@ try {
     const all = [...forkCases(), ...columnCases(), ...seatCases()];
     all.forEach((c, k) => {
       if (k % SHARDS !== SHARD - 1) return;
-      const ops = [], expected = [];
+      const ops = [], expected = [], hashAt = [];
       let made = 0, verdict;
       // a game simulation whose every call is recorded, as the rule cases' record() records a demo's
       const G = (entry, demo, mode) => {
@@ -2189,6 +2347,7 @@ try {
           view(seat = 0) {
             const v = ask({ op: 'view', ...(seat ? { seat } : {}) }, sim.view(seat));
             ask({ op: 'hash' }, stateHash(sim, sim.view()));
+            hashAt.push(expected.length - 1);
             return v;
           },
           fork(R, inputs, fmode, seat = 0) {
@@ -2210,7 +2369,7 @@ try {
       cases++;
       if (first) { failed++; console.log(`DIFFER ${c.name}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
       else if (String(verdict).startsWith('FAIL')) { failed++; console.log(`DIFFER ${c.name}: both alike, but sim.js's claim failed: ${verdict}`); }
-      else console.log(`equal  ${c.name}: ${expected.length} answers (${verdict})`);
+      else { rec(`case|-|-|${c.name}`, hashAt.map(i => got[i])); console.log(`equal  ${c.name}: ${expected.length} answers (${verdict})`); }
     });
   }
 
@@ -2226,6 +2385,7 @@ try {
       const cout = lines(wikitest(['sweep', 'wiki.bin', 'game.json', 'fixture', cname ? `casting-${cname}.json` : '-',
         cname ? `rival-${cname}.json` : '-', String(iface), '-']));
       let at = 0, n = 0, first = null;
+      const hs = [];
       for (const demo of entry.demos) {
         const last = Math.max(0, ...demo.game.inputs.map(e => e.at));
         for (let r = 0; r <= last; r++, n++) {
@@ -2237,15 +2397,17 @@ try {
           const j = { entry: id, demo: demo.id, r, t: sim.tick, stopped: v.locked !== null || v.game.starved || v.game.badKill || v.stalled,
             h: stateHash(sim, v) };
           sim.free();
-          const d = at < cout.length ? diff(JSON.parse(cout[at]), j, '') : { at: '(the C sweep ended early)', c: null, j: null };
+          const cl = at < cout.length ? JSON.parse(cout[at]) : null;
+          const d = cl ? diff(cl, j, '') : { at: '(the C sweep ended early)', c: null, j: null };
           at++;
+          if (cl) hs.push([`sweep|${named}|${id}/${demo.id}|sweep ${r}`, [cl.h]]);
           if (d && !first) first = { demo: demo.id, r, ...d };
         }
       }
       if (!first && at !== cout.length) first = { demo: '', r: '', at: `the C sweep printed ${cout.length - at} lines more`, c: null, j: null };
       cases++;
       if (first) { failed++; console.log(`DIFFER release sweep -- ${id} (${named}) ${first.demo} released after ${first.r}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
-      else console.log(`equal  release sweep -- ${id} (${named}): ${n} releases, each game's end alike`);
+      else { for (const [k, h] of hs) rec(k, h); console.log(`equal  release sweep -- ${id} (${named}): ${n} releases, each game's end alike`); }
     }
   });
 
@@ -2255,7 +2417,7 @@ try {
     const { create, play } = WikiSim;
     /* a case may hold several sims at once (one made, another made, the first asked): each call names its sim by the
        order it was made in, which wikitest's trace keeps apart */
-    let ops, expected, made;
+    let ops, expected, made, hashAt;
     const record = (make, scripted) => (entry, demo, layout, ctx) => {
       const sim = make(entry, demo, layout, ctx), k = made++;
       // a context's script source is wikitest's COB file, named by `cob: true`
@@ -2268,6 +2430,7 @@ try {
         view: () => {
           const v = ask({ op: 'view' }, sim.view());
           ask({ op: 'hash' }, stateHash(sim, sim.view()));
+          hashAt.push(expected.length - 1);
           return v;
         },
         orders: id => ask({ op: 'orders', id }, sim.orders(id)),
@@ -2283,7 +2446,7 @@ try {
     for (const id of ids) {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
       for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
-        ops = []; expected = []; made = 0;
+        ops = []; expected = []; made = 0; hashAt = [];
         let verdict;
         try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
         fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
@@ -2294,7 +2457,10 @@ try {
         if (first) {
           failed++;
           console.log(`DIFFER rule -- ${what}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
-        } else console.log(`equal  rule -- ${what}: ${expected.length} answers (sim.js's verdict: ${verdict})`);
+        } else {
+          rec(`rule|-|${id}|${what}`, hashAt.map(i => got[i]));
+          console.log(`equal  rule -- ${what}: ${expected.length} answers (sim.js's verdict: ${verdict})`);
+        }
       }
     }
     Object.assign(WikiSim, { create, play });
@@ -2484,7 +2650,25 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
   fs.rmSync(tmp, { recursive: true, force: true });
   if (host) host.close();
 }
+if (process.exitCode !== 2 && (RECORD || AGAINST)) {
+  const body = [...PLAYED].map(([key, h]) => JSON.stringify(h === 'refused' ? { key, refused: true } : { key, h }) + '\n').join('');
+  if (RECORD && !failed && !dupKeys) {
+    const commit = run('git', ['rev-parse', 'HEAD'], { cwd: ROOT }).trim();
+    const header = { commit, gfx: GFX_DIGEST, contexts: CONTEXTS.map(c => c.named) };
+    fs.writeFileSync(shardFile(RECORD, SHARD, SHARDS), zlib.gzipSync(JSON.stringify({ header }) + '\n' + body, { level: 9 }));
+    console.log(`record ${shardFile(RECORD, SHARD, SHARDS)}: ${PLAYED.size} plays`);
+  }
+  if (AGAINST && KEYS_OUT) fs.writeFileSync(KEYS_OUT, zlib.gzipSync(body));
+  else if (AGAINST) {
+    // a shard run by hand holds only the plays it made; a run of every play (no --shard) holds the whole record
+    const bad = holdTo(readRecord(AGAINST), PLAYED, SHARDS === 1);
+    for (const l of bad) console.log(`DIFFER against -- ${l}`);
+    if (bad.length) failed++;
+    else console.log(`equal  against ${AGAINST}: ${PLAYED.size} plays`);
+  }
+}
 if (process.exitCode !== 2) {
+  if (dupKeys) failed++;
   const variant = WINE ? 'i686 under Wine' : 'native';
   if (SHARDS > 1) process.stdout.write(`shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', its demo plays alone' : ''}: `);
   console.log(failed ? `${differ} of ${demos} demo plays, ${failed - differ - bad - refuseBad - dataBad} of ${cases} rule cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read back and ${bad} of ${malformed} malformed-data cases differ (C sim: ${variant})`
