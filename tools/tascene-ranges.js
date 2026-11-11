@@ -8,7 +8,8 @@
 //     placed (which also lights every allied ring of its class), and the enemy's
 //     and ally's defenses by class. Per class a merged union outline, a faint
 //     fill (attack only) and faint per-unit inner rings, BAR's colours, widths,
-//     camera fades and mouse highlight.
+//     camera fades (defense only: TA's zoom reaches past BAR's camera, so the
+//     attack widget takes none) and mouse highlight.
 //   * The REACH is TA's: a target is in range when its horizontal distance is
 //     at most `range` (can-aim 0x49AA80, can-engage 0x49ABB0), and a ballistic
 //     weapon must also pass the engine's solver 0x49A890. The ring stops, in
@@ -21,20 +22,20 @@
 "use strict";
 
 // ---------------------------------------------------------------- BAR's tables
-// gui_attackrange_gl4.lua colorConfig (l.84-182): colour, fade (start, end,
-// startAlpha, endAlpha) by camera distance in elmos, outer/inner widths in px.
+// gui_attackrange_gl4.lua colorConfig (l.84-182): colour, outer/inner widths
+// in px; BAR's camera fades are not taken (tagpu_range.c's header).
 const ATTACK = {
-  ground: { c: [1.0, 0.22, 0.05, 0.60], fade: [4000, 6000, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  nano:   { c: [0.24, 1.0, 0.2, 0.60],  fade: [2000, 4000, 1, 0], w: [3.0, 2.0], dim: 0.05 },
-  AA:     { c: [0.8, 0.44, 2.0, 0.40],  fade: [2000, 5000, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  cannon: { c: [1.0, 0.22, 0.05, 0.60], fade: [5000, 8500, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  lrpc:   { c: [1.0, 0.22, 0.05, 0.60], fade: [5000, 1000, 1, 0.5], w: [2.0, 0], dim: 0.75 },
+  ground: { c: [1.0, 0.22, 0.05, 0.60], w: [3.0, 1.8], dim: 0.75 },
+  nano:   { c: [0.24, 1.0, 0.2, 0.60],  w: [3.0, 2.0], dim: 0.05 },
+  AA:     { c: [0.8, 0.44, 2.0, 0.40],  w: [3.0, 1.8], dim: 0.75 },
+  cannon: { c: [1.0, 0.22, 0.05, 0.60], w: [3.0, 1.8], dim: 0.75 },
+  lrpc:   { c: [1.0, 0.22, 0.05, 0.60], w: [2.0, 0], dim: 0.75 },
 };
 const ATTACK_SUB = {           // sub-styles replace the colour (l.312-326)
   water: [0.32, 0.48, 1.0, 0.30],
   emp:   [0.72, 0.72, 1.0, 0.60],
 };
-const ATTACK_ALPHA = { outer: 0.75, inner: 0.12, fill: 0.12, outerFadeOffset: 2500 };
+const ATTACK_ALPHA = { outer: 0.75, inner: 0.12, fill: 0.12 };
 // mask channels: ground and cannon share one union, lrpc is never merged
 const ATTACK_BIT = { ground: 0, cannon: 0, nano: 1, AA: 2 };
 
@@ -759,27 +760,30 @@ function create(ctx) {
       const s = ATTACK[ring.cls];
       let c = s.c;
       if (ring.sub && ATTACK_SUB[ring.sub]) c = ATTACK_SUB[ring.sub];
-      return { c, fade: s.fade, w: s.w, dim: s.dim, outerA: ATTACK_ALPHA.outer,
-               innerA: ATTACK_ALPHA.inner, fadeOff: ATTACK_ALPHA.outerFadeOffset,
+      return { c, fade: null, w: s.w, dim: s.dim, outerA: ATTACK_ALPHA.outer,
+               innerA: ATTACK_ALPHA.inner,
                bit: ring.cls in ATTACK_BIT ? ATTACK_BIT[ring.cls] : -1,
                dgun: ring.sub === "dgun", mouseMul: 1.0,
                segs: ring.cls === "AA" || ring.cls === "lrpc" ? 1024 : 128 };
     }
     const s = DEFENSE[ring.cls];
     return { c: ring.water ? DEFENSE_WATER : s.c, fade: s.fade, w: s.w, dim: 0,
-             outerA: s.a[0], innerA: s.a[1], fadeOff: 0,
+             outerA: s.a[0], innerA: s.a[1],
              bit: ring.cls in DEFENSE_BIT ? DEFENSE_BIT[ring.cls] : -1, dgun: false,
              mouseMul: 5.0, segs: ring.cls === "nuke" || ring.cls === "lrpc" ? 1024 : 128 };
   }
 
   // the BAR vertex shader's alpha (weapon_range_rings_unified_gl4.vert.glsl
-  // l.312-437): fade by camera distance, mouse proximity, inner dimming
-  function ringAlpha(st, e, camDist, outer, selCount, builderCount) {
-    const [fs, fe, sa, ea] = st.fade;
-    const off = outer ? st.fadeOff : 0;
+  // l.312-437): fade by camera distance (defense only), mouse proximity,
+  // inner dimming
+  function cameraFade(fadeRow, camDist) {
+    const [fs, fe, sa, ea] = fadeRow;
     const lo = Math.min(ea, sa), hi = Math.max(ea, sa);
-    let fade = (fe + off + (st.dgun ? 1000 : 0) - camDist) / (fe - fs);
-    fade = Math.min(hi, Math.max(lo, fade));
+    return Math.min(hi, Math.max(lo, (fe - camDist) / (fe - fs)));
+  }
+
+  function ringAlpha(st, e, camDist, outer, selCount, builderCount) {
+    const fade = st.fade ? cameraFade(st.fade, camDist) : 1;
     let hl = 0;
     if (mouse) {
       const d = Math.hypot(e.u.x - mouse[0], e.u.z - mouse[1]);

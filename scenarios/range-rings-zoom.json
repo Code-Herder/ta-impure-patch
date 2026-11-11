@@ -1,0 +1,21 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The attack rings at every zoom: one ARM Panther (ARMLATNK, two weapons of different reach) alone on Two Continents' eastern land, with a Commander each so neither side has lost. Select the Panther and zoom out to the floor: its rings stay drawn at every level.",
+ "seed": 20261111,
+ "setup": {
+  "map": "Two Continents",
+  "res": "1920x1080",
+  "clear_existing": true,
+  "switches": { "shootall": false, "noshake": true },
+  "players": [
+   { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+   { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+  ]
+ },
+ "units": [
+  { "id": "panther", "type": "ARMLATNK", "owner": 0, "pos": [7200, 6900], "stance": "hold" },
+  { "id": "armcom", "type": "ARMCOM", "owner": 0, "pos": [6900, 6500], "stance": "hold" },
+  { "id": "corcom", "type": "CORCOM", "owner": 1, "pos": [9500, 3990], "stance": "hold" }
+ ],
+ "camera": { "at": [7200, 6900] }
+}

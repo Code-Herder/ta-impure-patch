@@ -177,13 +177,17 @@ are tacli key tokens (`tagpu_input.c`), so `alt+period` drives it.
 
 BAR's tables, ported from `gui_attackrange_gl4.lua` (the attack widget) and
 `gui_defenserange_gl4.lua` (the defense widget): per class a colour, an outer and an inner width
-in screen pixels, an outer and an inner alpha, a camera-distance fade and the segment count (128,
-or 1024 for AA, lrpc and nuke). The attack widget draws a faint fill (0.12 of the colour's alpha
+in screen pixels, an outer and an inner alpha, a camera-distance fade (the defense widget's only)
+and the segment count (128, or 1024 for AA, lrpc and nuke). The attack widget draws a faint fill (0.12 of the colour's alpha
 times the inner alpha); the defense widget none.
 
 - **The camera distance** BAR's fades read is the view's height in world px over 2 tan(22.5°)
   (`camDist = (vh / zoom) / 0.82842712`): the distance at which BAR's 45° camera shows as much
-  ground. An attack ring's outer line fades 2500 later than its inner one.
+  ground. **Only the defense widget fades by it.** The attack widget — the selected units, the unit
+  under the cursor, the builders' build range — keeps its full alpha at every zoom: TA's zoom
+  reaches distances BAR's camera does not (the floor shows the whole map, and a 4K view at zoom 1
+  shows twice the ground of a 1080-high one), and BAR's attack fades would hide a 4K view's
+  inner rings below zoom 0.42 and every attack ring below 0.3.
 - **The mouse highlight**: a smoothstep from 48 to 64 world px between the pointer's world point
   and the ring's centre, five times as strong on a defense ring.
 - **The inner rings dim** by the selection's size: `dim·0.1·n` with n the selected units shown
@@ -453,6 +457,14 @@ layers' counts, the instances and draws. The scenarios:
   site.
 - `scenarios/tascene-ranges.json` — the browser lab's fixture, with a radar tower among the
   defenses.
+- `scenarios/range-rings-zoom.json` — one ARM Panther (ARMLATNK, two weapons of different reach)
+  on Two Continents at 1920×1080: select it and write zoom levels down to the floor.
+
+**MEASURED 2026-11-11** on `scenarios/range-rings-zoom.json` (the reference setup, Vulkan,
+`--defaults`), the Panther selected, `tagpu_zoom.txt` at 1.0, 0.6, 0.4, 0.25 and 1/64 (taken at the
+floor, 0.0802 on 1792×1016): the heartbeat read `atk=2/0 sel=1 inst=8 draws=7` at every level,
+`camDist` 1226 to 15295; the window at the floor showed both rings, the outer line and the shorter
+weapon's faint inner one.
 
 **MEASURED 2026-11-11** on `scenarios/sensor-view.json` (the reference setup, Vulkan, 1920×1080,
 true LOS), with `Player0AllyGroup` 1, `Player2AllyGroup` 1 and `Player1AllyGroup` 2 in the
@@ -488,9 +500,8 @@ against the engine**: with the finished radar at the site (`+0x10E` 1), `+0x110`
 
 ## What is not closed
 
-- **The fades are BAR's distances, untested past 1024×768**: at that size TA's zoom range never
-  reaches the distances where BAR fades the inner rings; a larger screen fades them at low zoom,
-  which has not been seen live.
+- **The defense fades are BAR's distances**: a large screen at low zoom reaches the distances
+  where BAR fades the defense rings; how that reads in play has not been judged.
 - **The replay viewer's default view draws nothing**: with full visibility and no perspective
   it shows no rings and no sensors (measured, *How it is checked*); why the fill publishes nothing
   there is not established. With a perspective the sensors follow the viewed player and its

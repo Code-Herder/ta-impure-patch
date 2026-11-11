@@ -10,6 +10,13 @@
    and the inner rings dimmed by how many rings are shown. tools/tascene-ranges.js
    is the browser reference this file was ported from and draws the same frame.
 
+   ONE DEPARTURE: the attack widget takes no camera fade. TA's zoom reaches
+   distances BAR's camera does not -- the floor shows the whole map, and a 4K
+   view at zoom 1 already shows twice the ground of a 1080-high one -- so on
+   a 4K view BAR's fades hid a selected unit's rings below zoom 0.3 and its
+   inner rings below 0.42.
+   The defense widget keeps them: it shows every defense of a class at once.
+
    THE CAMERA DISTANCE BAR's fades read is the distance at which its 45-degree
    camera shows as much ground as this view does: the view's height in world
    px over 2 tan(22.5 deg). */
@@ -29,7 +36,8 @@
 
 typedef struct {
     float c[4];          /* colour; the alpha is BAR's colour alpha           */
-    float fade[4];       /* start, end, start alpha, end alpha (elmos)        */
+    float fade[4];       /* start, end, start alpha, end alpha (elmos); the
+                            defense widget's only                             */
     float w[2];          /* outer, inner width, screen px                     */
     float a[2];          /* outer, inner alpha                                */
     float dim;           /* the inner rings' dimming, 0 = none                */
@@ -37,18 +45,18 @@ typedef struct {
     int   segs;
 } RSTYLE;
 
-/* the attack widget: ground and cannon share one union, lrpc is never merged */
+/* the attack widget: ground and cannon share one union, lrpc is never merged;
+   no camera fade (the header) */
 static const RSTYLE ATK[5] = {
-    /* ground */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 4000, 6000, 1, 0 },   { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 0, 128 },
-    /* nano   */ { { 0.24f, 1.0f, 0.2f, 0.60f },  { 2000, 4000, 1, 0 },   { 3, 2.0f }, { 0.75f, 0.12f }, 0.05f, 1, 128 },
-    /* AA     */ { { 0.8f, 0.44f, 2.0f, 0.40f },  { 2000, 5000, 1, 0 },   { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 2, 1024 },
-    /* cannon */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 5000, 8500, 1, 0 },   { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 0, 128 },
-    /* lrpc   */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 5000, 1000, 1, 0.5f },{ 2, 0 },    { 0.75f, 0.12f }, 0.75f, -1, 1024 },
+    /* ground */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 0 }, { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 0, 128 },
+    /* nano   */ { { 0.24f, 1.0f, 0.2f, 0.60f },  { 0 }, { 3, 2.0f }, { 0.75f, 0.12f }, 0.05f, 1, 128 },
+    /* AA     */ { { 0.8f, 0.44f, 2.0f, 0.40f },  { 0 }, { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 2, 1024 },
+    /* cannon */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 0 }, { 3, 1.8f }, { 0.75f, 0.12f }, 0.75f, 0, 128 },
+    /* lrpc   */ { { 1.0f, 0.22f, 0.05f, 0.60f }, { 0 }, { 2, 0 },    { 0.75f, 0.12f }, 0.75f, -1, 1024 },
 };
 static const float ATK_WATER[4] = { 0.32f, 0.48f, 1.0f, 0.30f };
 static const float ATK_EMP[4]   = { 0.72f, 0.72f, 1.0f, 0.60f };
 #define ATK_FILL       0.12f
-#define ATK_FADE_OFF   2500.0f   /* the outer ring fades this much later      */
 
 /* the defense widget: no fill, the cursor highlight five times as strong */
 static const RSTYLE DEF[5] = {
@@ -174,17 +182,21 @@ static int style_index(int cls, int attack)
     }
 }
 
+/* BAR's camera fade, the defense widget's */
+static float camera_fade(const RSTYLE* st, float camDist)
+{
+    float fs = st->fade[0], fe = st->fade[1], sa = st->fade[2], ea = st->fade[3];
+    float lo = ea < sa ? ea : sa, hi = ea < sa ? sa : ea;
+    return clampf((fe - camDist) / (fe - fs), lo, hi);
+}
+
 /* BAR's vertex-stage alpha */
 static float ring_alpha(const RITEM* it, float camDist, int outer, const TAGPU_PK_RANGE* h,
                         int selCount, int builderCount)
 {
     const RSTYLE* st = it->st;
-    float fs = st->fade[0], fe = st->fade[1], sa = st->fade[2], ea = st->fade[3];
-    float off = (outer && it->attack) ? ATK_FADE_OFF : 0.0f;
-    float lo = ea < sa ? ea : sa, hi = ea < sa ? sa : ea;
-    float fade = (fe + off + (it->dgun ? 1000.0f : 0.0f) - camDist) / (fe - fs);
+    float fade = it->attack ? 1.0f : camera_fade(st, camDist);
     float hl = 0.0f, a;
-    fade = clampf(fade, lo, hi);
     if (h->flags & TAGPU_PK_RG_MOUSE) {
         float dx = it->x - (float)h->mouse[0], dz = it->z - (float)h->mouse[2];
         float t = clampf((sqrtf(dx * dx + dz * dz) - 48.0f) / 16.0f, 0.0f, 1.0f);

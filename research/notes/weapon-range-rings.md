@@ -13,7 +13,7 @@ weapon record and the ballistic reach `0x49A890`), `tascene-design.md` (the lab)
 |---|---|
 | When rings show | **BAR's four cases, as BAR shows them:** the selected units (up to 358), the unit under the cursor (ally or enemy), a defense while it is placed (its ring at the snapped cursor, and every allied defense ring of its class lit so the coverage merges), and the defenses of the enemy and of allies by class. Builders show their build range while a build command is active. |
 | Weapons per unit | One ring per weapon, coloured by class (ground, AA, cannon, lrpc, build range; water, paralyzer and D-gun styles). **Identical rings collapse** (same class, style, range and ballistics) — BAR draws one per weapon, which differs only in the faint inner ring doubling. |
-| The look | **BAR exactly:** per class a faint merged fill (attack rings only), a merged outline of the union (3 px attack, 5 px defense), faint 1.8 px per-unit inner rings dimmed by the selection size; BAR's colours, camera-distance fades, map-edge fade and mouse-proximity highlight; rings on the water surface. No arc wedges: TA weapon data has no turret arc. |
+| The look | **BAR exactly:** per class a faint merged fill (attack rings only), a merged outline of the union (3 px attack, 5 px defense), faint 1.8 px per-unit inner rings dimmed by the selection size; BAR's colours, map-edge fade and mouse-proximity highlight; BAR's camera-distance fades on the defense rings only — **the attack rings never fade by zoom** (owner, 2026-11-11: TA's zoom reaches past BAR's camera, and on a 4K view the fades hid a selected unit's rings below zoom 0.3); rings on the water surface. No arc wedges: TA weapon data has no turret arc. |
 | Defense set | **Derived from data, not BAR's hand list:** a unit that cannot move (`BMcode=0`) with a weapon. Class: an interceptor is `nuke` at its `coverage`, `toairweapon` is `air`, otherwise the attack rule. Defaults as BAR: enemies ground, air, nuke, cannon; allies nuke only. |
 | Fogged enemies | **Only what the engine shows:** a ring for an enemy structure the game currently draws for the player; no memory of defenses once out of sight (BAR keeps them until seen dead). |
 | Controls | **All of BAR's:** alt+. / alt+, cycle a per-unit-type on/off bitmap over that type's rings (one unit selected; ally and enemy kept apart), "shift only", "cursor range", the defense classes for allies and enemies. Stored in `impure.cfg` (`ranges`, `rangeshift`, `rangecursor`, `sensorview`, `rangesensor`, `rangeally`, `rangeenemy`, `rangetoggle`). As built, every key but `rangetoggle` is a row of the in-game Visuals panel, which became two columns for them (the front-end screen's columns are full, so it has none). |
@@ -105,8 +105,8 @@ was measured in game: [range rings](modules/range-rings.html), *How it is checke
 ## Gaps still open
 
 - **GDI draws no rings.**
-- **The fades at larger screens**: at 1024×768 TA's zoom range never reaches BAR's fade
-  distances; a larger screen fades the inner rings at low zoom, which has not been seen live.
+- **The defense fades at larger screens**: a large screen at low zoom reaches the distances where
+  BAR fades the defense rings; how that reads in play has not been judged.
 - **The replay viewer's display**: its default view (full visibility, no perspective) draws no
   rings and no sensors; with a perspective the sensors follow it, and the weapon rings' look has
   not been verified.
