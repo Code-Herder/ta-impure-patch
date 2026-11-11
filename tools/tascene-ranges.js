@@ -221,16 +221,33 @@ function sensorRadius(T, kind, alt) {
 }
 
 // ---------------------------------------------------------------- GL
+// THE WATER TEST, per pixel: the point this pixel shows at sea level, and the
+// ground there (GetPosHeight's bilinear over the 16-wu height grid) at or
+// below it. Sonar finds only targets at or below sea level (0x4678E6), so a
+// water kind's fills keep only these pixels.
+const AT_SEA = `
+uniform sampler2D uHeight;   // the height grid, R8, one texel a 16-wu corner
+uniform vec2 uGrid;          // its columns and rows
+uniform vec3 uView;          // where world (0, 0, 0) lands on the canvas, and the zoom
+uniform float uSea, uCanvasH;
+uniform int uWater;          // 1: water only
+bool atSea() {
+  vec2 s = vec2(gl_FragCoord.x, uCanvasH - gl_FragCoord.y);
+  vec2 w = vec2((s.x - uView.x) / uView.z, (s.y - uView.y) / uView.z + uSea * 0.5);
+  return texture(uHeight, (w / 16.0 + 0.5) / uGrid).r * 255.0 <= uSea;
+}`;
 // a flat colour where one mask channel is set and another is not
 const SFILL_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uMask;
 uniform int uIn, uOut;       // uOut -1: no exclusion
 uniform vec4 uCol;           // premultiplied
+${AT_SEA}
 out vec4 o;
 void main() {
   vec4 m = texelFetch(uMask, ivec2(gl_FragCoord.xy), 0);
   if (m[uIn] < 0.5 || (uOut >= 0 && m[uOut] > 0.5)) discard;
+  if (uWater == 1 && !atSea()) discard;
   o = uCol;
 }`;
 // a sensor line: dashed (the DASH lattice above) or solid
@@ -308,9 +325,11 @@ uniform sampler2D uMask;
 uniform float uTime, uAlpha;
 uniform vec3 uSheet, uPulse;
 uniform vec4 uP;             // spacing, speed, power, strength
+${AT_SEA}
 out vec4 o;
 void main() {
   if (texelFetch(uMask, ivec2(gl_FragCoord.xy), 0).r < 0.5) discard;
+  if (uWater == 1 && !atSea()) discard;
   float ph = fract((length(vOff) - uTime * uP.y) / uP.x);
   float glow = clamp(pow(0.5 + 0.5 * cos(ph * 6.2831853), uP.z) * uP.w, 0.0, 1.0);
   float a = min(uAlpha * (1.0 + glow), 1.0);
@@ -561,10 +580,11 @@ function create(ctx) {
   const MU = U(maskProg, ["uCanvas"]);
   const FU = U(fillProg, ["uMask", "uCol"]);
   const PU = U(ptProg, ["uCanvas", "uSize"]);
-  const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol"]);
+  const SEA_U = ["uHeight", "uGrid", "uView", "uSea", "uCanvasH", "uWater"];
+  const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol", ...SEA_U]);
   const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uMode", "uGap", "uShift",
                             "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
-  const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP"]);
+  const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP", ...SEA_U]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
   // 10-19, 14 being the height map the Classic++ light reads)
   const TEX_UNIT = 20;
@@ -575,6 +595,27 @@ function create(ctx) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
+  // the height grid the water test reads, on the next free unit
+  const HEIGHT_UNIT = 21;
+  const heightTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + HEIGHT_UNIT);
+  gl.bindTexture(gl.TEXTURE_2D, heightTex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W16, H16, 0, gl.RED, gl.UNSIGNED_BYTE, heightBuf);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+    gl.texParameteri(gl.TEXTURE_2D, k, v);
+  gl.activeTexture(gl.TEXTURE0);
+  const seaUniforms = (u, water, proj, zoom) => {
+    const o = proj([0, 0, 0]);
+    gl.uniform1i(u.uHeight, HEIGHT_UNIT);
+    gl.uniform2f(u.uGrid, W16, H16);
+    gl.uniform3f(u.uView, o[0], o[1], zoom);
+    gl.uniform1f(u.uSea, SEA);
+    gl.uniform1f(u.uCanvasH, GH);
+    gl.uniform1i(u.uWater, water ? 1 : 0);
+  };
   const maskFBO = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, maskTex, 0);
@@ -887,29 +928,9 @@ function create(ctx) {
   }
 
   // ---- sensors (see the tables at the top): one pass a kind. The mask's
-  // channels: R the new disc's fill, G the existing coverage's fill (both cut
-  // to the scroll extent, and to water for a water kind).
-  // Sonar finds only targets at or below sea level (0x4678E6), so its fills
-  // are cut to water a 16-wu height cell at a time and its lines per vertex.
-  const waterCells = new Map();
-  function waterCellsOf(x0, z0, r) {
-    const key = `${x0},${z0},${r}`;
-    let c = waterCells.get(key);
-    if (c) return c;
-    c = [];
-    const r2 = r * r;
-    for (let z = Math.floor((z0 - r) / 16) * 16; z < z0 + r; z += 16)
-      for (let x = Math.floor((x0 - r) / 16) * 16; x < x0 + r; x += 16) {
-        const cx = x + 8, cz = z + 8;
-        if ((cx - x0) ** 2 + (cz - z0) ** 2 > r2) continue;
-        if (x < 0 || z < 0 || x + 16 > MAPW || z + 16 > MAPH) continue;
-        if (ground(cx, cz) > SEA) continue;
-        c.push(x, z);
-      }
-    waterCells.set(key, c);
-    if (waterCells.size > 256) waterCells.delete(waterCells.keys().next().value);
-    return c;
-  }
+  // channels: R the new disc's fill, G the existing coverage's fill, both cut
+  // to the scroll extent. A water kind's fills are cut to water per pixel by
+  // the fill shaders (AT_SEA), its lines per vertex.
   // a circle on the ground: its screen points, the same points pulled inside
   // the scroll extent (the fills), and per vertex whether a line shows there.
   // Cached with what is built from it for as long as the view does not move:
@@ -970,22 +991,8 @@ function create(ctx) {
     }
     return out;
   };
-  // a fill region: the disc inside the scroll extent, or its water cells
-  function region(rg, water, proj) {
-    pushMArr(memo(rg, "region", () => {
-      if (!water) return fanTris(rg.clamp, rg.c);
-      const cells = waterCellsOf(rg.u.x, rg.u.z, rg.r), out = new Float32Array(cells.length * 6);
-      for (let k = 0, o = 0; k < cells.length; k += 2) {
-        const x = cells[k], z = cells[k + 1];
-        const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
-        const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
-        out.set([p00[0], p00[1], p10[0], p10[1], p11[0], p11[1],
-                 p00[0], p00[1], p11[0], p11[1], p01[0], p01[1]], o);
-        o += 12;
-      }
-      return out;
-    }));
-  }
+  // a fill region: the disc inside the scroll extent
+  const region = (rg) => pushMArr(memo(rg, "region", () => fanTris(rg.clamp, rg.c)));
   function maskBegin() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
     gl.disable(gl.SCISSOR_TEST);
@@ -1018,9 +1025,11 @@ function create(ctx) {
     gl.bindTexture(gl.TEXTURE_2D, maskTex);
     gl.activeTexture(gl.TEXTURE0);
   }
-  // a flat colour where channel `inCh` is set and `outCh` is not
-  function fillWhere(rgb, a, inCh, outCh) {
+  // a flat colour where channel `inCh` is set and `outCh` is not, and over
+  // water only with `sea` = [proj, zoom] (a water kind)
+  function fillWhere(rgb, a, inCh, outCh, sea) {
     gl.useProgram(sfillProg);
+    seaUniforms(SU, !!sea, sea ? sea[0] : (p) => [0, 0], sea ? sea[1] : 1);
     gl.uniform1i(SU.uMask, TEX_UNIT);
     gl.uniform1i(SU.uIn, inCh);
     gl.uniform1i(SU.uOut, outCh);
@@ -1302,12 +1311,13 @@ function create(ctx) {
     });
     maskBegin();
     for (const isNew of [true, false]) {
-      for (const it of items) if (it.isNew === isNew) region(it.rg, water, proj);
+      for (const it of items) if (it.isNew === isNew) region(it.rg);
       maskFlush(isNew ? 0 : 1);
     }
     maskEnd();
-    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
-    fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
+    const sea = water ? [proj, zoom] : null;
+    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0, sea);
+    fillWhere(JAMMER.sheet, JAMMER.a, 0, -1, sea);
     const ls = (GH + 500) / 1300;
     for (const path of outline(items.map((it) => ({ u: it.u, r: it.r })), water, proj, false))
       sline(path, wpx, -1, DASH.jam.space * ls, zoom);
@@ -1323,11 +1333,11 @@ function create(ctx) {
     const g = circle(ghost, radiusOf(ghost, kind), water, proj);
     const old = emitters(kind).map((u) => circle(u, radiusOf(u, kind), water, proj));
     maskBegin();
-    region(g, water, proj); maskFlush(0);
-    for (const rg of old) region(rg, water, proj);
+    region(g); maskFlush(0);
+    for (const rg of old) region(rg);
     maskFlush(1);
     maskEnd();
-    fillWhere(P.allied, P.a * P.alliedRel, 1, 0);
+    fillWhere(P.allied, P.a * P.alliedRel, 1, 0, water ? [proj, zoom] : null);
     // the sheet: the new disc's fan, world x/z per vertex for the rings
     const pts = memo(g, "sheet", () => {
       const n = g.n, out = new Float32Array(n * 12);
@@ -1341,6 +1351,7 @@ function create(ctx) {
       return out;
     });
     gl.useProgram(pulseProg);
+    seaUniforms(PSU, water, proj, zoom);
     gl.uniform2f(PSU.uCanvas, GW, GH);
     gl.uniform1i(PSU.uMask, TEX_UNIT);
     gl.uniform1f(PSU.uTime, t);
