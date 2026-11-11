@@ -244,7 +244,7 @@ void main() {
   if (uWater == 1 && !atSea()) discard;
   o = uCol;
 }`;
-// a sensor line: dashed (the DASH lattice above) or solid
+// a sensor line, dashed on the DASH lattice above
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
@@ -1211,17 +1211,15 @@ function create(ctx) {
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(LSU.uA, a);
     gl.uniform1f(LSU.uZoom, zoom);
-    {
-      const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
-      let fine = lod.k;
-      while (fine > lod.k - DASH_SPAN && op(fine - 1) > 0.004) fine--;
-      for (let i = 0; i <= DASH_SPAN; i++) uOpArr[i] = op(fine + i);
-      gl.uniform1f(LSU.uShift, sign * lod.shift[dash]);
-      gl.uniform1f(LSU.uDash, DASH[dash].len * (GH + 500) / 1300);
-      gl.uniform1i(LSU.uFine, fine);
-      gl.uniform1i(LSU.uLevel, lod.k);
-      gl.uniform1fv(LSU.uOp, uOpArr);
-    }
+    const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
+    let fine = lod.k;
+    while (fine > lod.k - DASH_SPAN && op(fine - 1) > 0.004) fine--;
+    for (let i = 0; i <= DASH_SPAN; i++) uOpArr[i] = op(fine + i);
+    gl.uniform1f(LSU.uShift, sign * lod.shift[dash]);
+    gl.uniform1f(LSU.uDash, DASH[dash].len * (GH + 500) / 1300);
+    gl.uniform1i(LSU.uFine, fine);
+    gl.uniform1i(LSU.uLevel, lod.k);
+    gl.uniform1fv(LSU.uOp, uOpArr);
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);

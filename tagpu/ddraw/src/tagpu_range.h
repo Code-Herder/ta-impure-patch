@@ -32,8 +32,8 @@
    grid the terrain pass mirrors on this thread (tagpu_terr_heights). Each
    loop is a PATH of points (TAGPU_RGPT) and one SLINE instance, drawn as a
    band along it -- dashed on a lattice pinned to the map whose dashes keep
-   their length on screen (`dash` in tagpu_range.c), or solid. The sensor
-   fills are discs as the rings' are. Design and look:
+   their length on screen (`dash` in tagpu_range.c). The jammers' fills
+   are discs as the rings' are. Design and look:
    research/notes/weapon-range-rings.md, *Sensor view*. */
 
 #include "tagpu_fx.h"           /* TAGPU_FXVIEW */
