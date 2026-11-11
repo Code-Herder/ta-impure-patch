@@ -27,6 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -37,7 +38,7 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const PACK = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const TOL = 1 / 64;
-const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
+const SRCS = ['src/tagpu_wikiscene.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikireplay.c', 'src/tagpu_hudlay.c'];
 
