@@ -8,7 +8,8 @@
 //     placed (which also lights every allied ring of its class), and the enemy's
 //     and ally's defenses by class. Per class a merged union outline, a faint
 //     fill (attack only) and faint per-unit inner rings, BAR's colours, widths,
-//     camera fades and mouse highlight.
+//     camera fades (defense only: TA's zoom reaches past BAR's camera, so the
+//     attack widget takes none) and mouse highlight.
 //   * The REACH is TA's: a target is in range when its horizontal distance is
 //     at most `range` (can-aim 0x49AA80, can-engage 0x49ABB0), and a ballistic
 //     weapon must also pass the engine's solver 0x49A890. The ring stops, in
@@ -21,20 +22,20 @@
 "use strict";
 
 // ---------------------------------------------------------------- BAR's tables
-// gui_attackrange_gl4.lua colorConfig (l.84-182): colour, fade (start, end,
-// startAlpha, endAlpha) by camera distance in elmos, outer/inner widths in px.
+// gui_attackrange_gl4.lua colorConfig (l.84-182): colour, outer/inner widths
+// in px; BAR's camera fades are not taken (tagpu_range.c's header).
 const ATTACK = {
-  ground: { c: [1.0, 0.22, 0.05, 0.60], fade: [4000, 6000, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  nano:   { c: [0.24, 1.0, 0.2, 0.60],  fade: [2000, 4000, 1, 0], w: [3.0, 2.0], dim: 0.05 },
-  AA:     { c: [0.8, 0.44, 2.0, 0.40],  fade: [2000, 5000, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  cannon: { c: [1.0, 0.22, 0.05, 0.60], fade: [5000, 8500, 1, 0], w: [3.0, 1.8], dim: 0.75 },
-  lrpc:   { c: [1.0, 0.22, 0.05, 0.60], fade: [5000, 1000, 1, 0.5], w: [2.0, 0], dim: 0.75 },
+  ground: { c: [1.0, 0.22, 0.05, 0.60], w: [3.0, 1.8], dim: 0.75 },
+  nano:   { c: [0.24, 1.0, 0.2, 0.60],  w: [3.0, 2.0], dim: 0.05 },
+  AA:     { c: [0.8, 0.44, 2.0, 0.40],  w: [3.0, 1.8], dim: 0.75 },
+  cannon: { c: [1.0, 0.22, 0.05, 0.60], w: [3.0, 1.8], dim: 0.75 },
+  lrpc:   { c: [1.0, 0.22, 0.05, 0.60], w: [2.0, 0], dim: 0.75 },
 };
 const ATTACK_SUB = {           // sub-styles replace the colour (l.312-326)
   water: [0.32, 0.48, 1.0, 0.30],
   emp:   [0.72, 0.72, 1.0, 0.60],
 };
-const ATTACK_ALPHA = { outer: 0.75, inner: 0.12, fill: 0.12, outerFadeOffset: 2500 };
+const ATTACK_ALPHA = { outer: 0.75, inner: 0.12, fill: 0.12 };
 // mask channels: ground and cannon share one union, lrpc is never merged
 const ATTACK_BIT = { ground: 0, cannon: 0, nano: 1, AA: 2 };
 
@@ -156,12 +157,10 @@ function defenseRings(T) {
 //     dashed band just inside the union's outline, the union inside it
 //     filled. The outline is the circles' uncovered arcs chained into loops
 //     (see `loops`), dashed along each loop (see DASH).
-//   * THE PREVIEW of a building being placed: radar is
-//     gui_sensor_ranges_radar_preview.lua without its terrain raycast -- the new
-//     disc's sheet with rings travelling outward, the existing coverage filled
-//     duller, an outline along the new disc's edge and the union's. Sonar takes
-//     that structure in the sonar colours; a jammer's disc joins the jammer
-//     layer in the brighter sheet colour.
+//   * THE PREVIEW of a building being placed is not BAR's: the building's disc
+//     joins its kinds' unions in the view's look -- with the view on or off --
+//     and the arcs it adds to the outline draw brighter (NEW_GAIN), so the
+//     outline shows the coverage the building would give.
 const SENSOR_KINDS = ["radar", "sonar", "radarjam", "sonarjam"];
 const WATER_KIND = { radar: false, sonar: true, radarjam: false, sonarjam: true };
 // sensor_ranges_los.vert/.frag.glsl with the radar and sonar defines
@@ -187,17 +186,12 @@ const DASH = {
 };
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
 // gui_sensor_ranges_jammer_preview.lua shaderConfig
-const JAMMER = { allied: [0.62, 0.35, 0.33], sheet: [0.90, 0.22, 0.20], a: 0.17, alliedRel: 0.85,
+const JAMMER = { allied: [0.62, 0.35, 0.33], a: 0.17, alliedRel: 0.85,
                  outline: [1.0, 0.32, 0.22], dashA: 0.8,
                  w: 1.2, wElmo: 0.89 };   // band width: px at 1080p + elmos
-// gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
-const PREVIEW = {
-  radar: { sheet: [0.22, 0.85, 0.50], a: 0.2, pulse: [0.55, 1.0, 0.70], allied: [0.35, 0.62, 0.50],
-           alliedRel: 0.55, outline: [0.45, 1.0, 0.57], outlineA: 0.4 },
-  sonar: { sheet: [0.40, 0.60, 0.85], a: 0.2, pulse: [0.70, 0.85, 1.0], allied: [0.35, 0.48, 0.62],
-           alliedRel: 0.55, outline: [0.50, 0.70, 0.90], outlineA: 0.45 },
-};
-const PULSE = { spacing: 180, speed: 85, power: 4.5, strength: 0.8, w: 2 };   // w: outline px at 1080p
+// the arcs a building being placed adds to an outline: the band's alpha
+// times this, at most 1
+const NEW_GAIN = 2.5;
 
 // a type's sensors that will emit once built: a value above 0 on a def that
 // switches on when built or that the player can switch on
@@ -250,7 +244,7 @@ void main() {
   if (uWater == 1 && !atSea()) discard;
   o = uCol;
 }`;
-// a sensor line: dashed (the DASH lattice above) or solid
+// a sensor line, dashed on the DASH lattice above
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
@@ -274,7 +268,6 @@ in float vAcross; in float vArc; in float vVis;
 flat in float vW; flat in float vS0; flat in float vTop;
 uniform vec3 uCol;
 uniform float uA;
-uniform int uMode;           // 0 dashes, 2 solid
 uniform float uShift;        // zoom-1 px the dashes have moved along
 uniform float uZoom;
 uniform float uDash;         // a dash's length, px
@@ -300,38 +293,9 @@ float dashes() {
 }
 void main() {
   float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0) * uA * vVis;
-  if (uMode == 0) a *= dashes();
+  a *= dashes();
   if (a <= 0.0) discard;
   o = vec4(uCol * a, a);
-}`;
-// the preview's sheet: the new disc's fan, rings travelling outward
-// (sensor_ranges_radar_preview.frag.glsl sheetGlow, the symmetric bell)
-const PULSE_VS = `#version 300 es
-precision highp float;
-layout(location=0) in vec2 aPos;    // canvas px
-layout(location=1) in vec2 aOff;    // world x/z from the centre
-uniform vec2 uCanvas;
-out vec2 vOff;
-void main() {
-  vOff = aOff;
-  gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
-}`;
-const PULSE_FS = `#version 300 es
-precision highp float;
-in vec2 vOff;
-uniform sampler2D uMask;
-uniform float uTime, uAlpha;
-uniform vec3 uSheet, uPulse;
-uniform vec4 uP;             // spacing, speed, power, strength
-${AT_SEA}
-out vec4 o;
-void main() {
-  if (texelFetch(uMask, ivec2(gl_FragCoord.xy), 0).r < 0.5) discard;
-  if (uWater == 1 && !atSea()) discard;
-  float ph = fract((length(vOff) - uTime * uP.y) / uP.x);
-  float glow = clamp(pow(0.5 + 0.5 * cos(ph * 6.2831853), uP.z) * uP.w, 0.0, 1.0);
-  float a = min(uAlpha * (1.0 + glow), 1.0);
-  o = vec4(mix(uSheet, uPulse, glow) * a, a);
 }`;
 const LINE_VS = `#version 300 es
 precision highp float;
@@ -572,7 +536,6 @@ function create(ctx) {
   const ptProg = compile(gl, PT_VS, PT_FS, "range reach");
   const sfillProg = compile(gl, FILL_VS, SFILL_FS, "sensor fill");
   const slineProg = compile(gl, SLINE_VS, SLINE_FS, "sensor lines");
-  const pulseProg = compile(gl, PULSE_VS, PULSE_FS, "sensor sheet");
   const U = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const LU = U(lineProg, ["uCanvas", "uMask", "uMaskBit"]);
   const MU = U(maskProg, ["uCanvas"]);
@@ -580,9 +543,8 @@ function create(ctx) {
   const PU = U(ptProg, ["uCanvas", "uSize"]);
   const SEA_U = ["uHeight", "uGrid", "uView", "uSea", "uCanvasH", "uWater"];
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol", ...SEA_U]);
-  const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uMode", "uShift",
+  const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uShift",
                             "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
-  const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP", ...SEA_U]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
   // 10-19, 14 being the height map the Classic++ light reads)
   const TEX_UNIT = 20;
@@ -759,27 +721,30 @@ function create(ctx) {
       const s = ATTACK[ring.cls];
       let c = s.c;
       if (ring.sub && ATTACK_SUB[ring.sub]) c = ATTACK_SUB[ring.sub];
-      return { c, fade: s.fade, w: s.w, dim: s.dim, outerA: ATTACK_ALPHA.outer,
-               innerA: ATTACK_ALPHA.inner, fadeOff: ATTACK_ALPHA.outerFadeOffset,
+      return { c, fade: null, w: s.w, dim: s.dim, outerA: ATTACK_ALPHA.outer,
+               innerA: ATTACK_ALPHA.inner,
                bit: ring.cls in ATTACK_BIT ? ATTACK_BIT[ring.cls] : -1,
                dgun: ring.sub === "dgun", mouseMul: 1.0,
                segs: ring.cls === "AA" || ring.cls === "lrpc" ? 1024 : 128 };
     }
     const s = DEFENSE[ring.cls];
     return { c: ring.water ? DEFENSE_WATER : s.c, fade: s.fade, w: s.w, dim: 0,
-             outerA: s.a[0], innerA: s.a[1], fadeOff: 0,
+             outerA: s.a[0], innerA: s.a[1],
              bit: ring.cls in DEFENSE_BIT ? DEFENSE_BIT[ring.cls] : -1, dgun: false,
              mouseMul: 5.0, segs: ring.cls === "nuke" || ring.cls === "lrpc" ? 1024 : 128 };
   }
 
   // the BAR vertex shader's alpha (weapon_range_rings_unified_gl4.vert.glsl
-  // l.312-437): fade by camera distance, mouse proximity, inner dimming
-  function ringAlpha(st, e, camDist, outer, selCount, builderCount) {
-    const [fs, fe, sa, ea] = st.fade;
-    const off = outer ? st.fadeOff : 0;
+  // l.312-437): fade by camera distance (defense only), mouse proximity,
+  // inner dimming
+  function cameraFade(fadeRow, camDist) {
+    const [fs, fe, sa, ea] = fadeRow;
     const lo = Math.min(ea, sa), hi = Math.max(ea, sa);
-    let fade = (fe + off + (st.dgun ? 1000 : 0) - camDist) / (fe - fs);
-    fade = Math.min(hi, Math.max(lo, fade));
+    return Math.min(hi, Math.max(lo, (fe - camDist) / (fe - fs)));
+  }
+
+  function ringAlpha(st, e, camDist, outer, selCount, builderCount) {
+    const fade = st.fade ? cameraFade(st.fade, camDist) : 1;
     let hl = 0;
     if (mouse) {
       const d = Math.hypot(e.u.x - mouse[0], e.u.z - mouse[1]);
@@ -1082,19 +1047,6 @@ function create(ctx) {
     }
     return arcs;
   }
-  // the arcs of circle i that other discs DO cover (the preview's own edge
-  // inside existing coverage)
-  function coveredArcs(circs, i) {
-    const open = openArcs(circs, i);
-    if (open.length === 1 && open[0].whole) return [];
-    if (!open.length) return [{ i, a0: 0, a1: TAU, whole: true }];
-    const out = [];
-    for (let k = 0; k < open.length; k++) {
-      const a0 = open[k].a1, a1 = k + 1 < open.length ? open[k + 1].a0 : open[0].a0 + TAU;
-      if (a1 - a0 > 1e-6) out.push({ i, a0, a1 });
-    }
-    return out;
-  }
   const arcPoint = (c, a) => [c.u.x + Math.sin(a) * c.r, c.u.z + Math.cos(a) * c.r];
   // the union's edge as closed loops of arcs
   function loops(circs) {
@@ -1125,7 +1077,7 @@ function create(ctx) {
   // a chain of arcs as a screen path: points, whether a line shows at each,
   // the distance along it on screen, and each point's normal away from its
   // arc's centre (the mitre of the two segments, scaled to keep the width)
-  function makePath(circs, chain, closed, water, proj) {
+  function makePath(circs, chain, closed, water, proj, newFirst) {
     const xs = [], zs = [], owner = [];
     chain.forEach((arc, k) => {
       const c = circs[arc.i], m = Math.max(2, Math.ceil((arc.a1 - arc.a0) / TAU * segsOf(c.r)));
@@ -1135,6 +1087,9 @@ function create(ctx) {
         xs.push(x); zs.push(z); owner.push(arc.i);
       }
     });
+    // a segment lies on the arc of the point it ends at (a closed path's last
+    // one ends at the point popped as the first again)
+    const segNew = owner.slice(1).map((o) => (newFirst && o === 0 ? 1 : 0));
     if (closed) { xs.pop(); zs.pop(); owner.pop(); }
     const n = xs.length, scr = new Float32Array(n * 2), vis = new Float32Array(n);
     for (let k = 0; k < n; k++) {
@@ -1164,21 +1119,17 @@ function create(ctx) {
       const scale = 1 / Math.max(0.35, Math.abs(-d1[1] * nx + d1[0] * ny));
       nrm[k * 2] = nx * scale; nrm[k * 2 + 1] = ny * scale;
     }
-    return { n, scr, vis, along, nrm, closed, memo: new Map() };
+    return { n, scr, vis, along, nrm, closed, segNew, memo: new Map() };
   }
-  // one kind's outline paths (closed loops), and with `ownCovered` also the
-  // first circle's arcs inside the others (open), cached while the circles
-  // and the view hold still
+  // one kind's outline paths (closed loops), circle 0's segments marked new
+  // when `newFirst`, cached while the circles and the view hold still
   const pathCache = new Map();
-  function outline(circs, water, proj, ownCovered) {
+  function outline(circs, water, proj, newFirst) {
     const key = circs.map((c) => `${c.u.x},${c.u.z},${c.r}`).join(";") +
-                `|${water ? 1 : 0}|${ownCovered ? 1 : 0}|${viewKey(proj)}`;
+                `|${water ? 1 : 0}|${newFirst ? 1 : 0}|${viewKey(proj)}`;
     let v = pathCache.get(key);
     if (v) return v;
-    v = loops(circs).map((l) => makePath(circs, l.arcs, l.closed, water, proj));
-    if (ownCovered)
-      for (const arc of coveredArcs(circs, 0))
-        v.push(makePath(circs, [arc], !!arc.whole, water, proj));
+    v = loops(circs).map((l) => makePath(circs, l.arcs, l.closed, water, proj, newFirst));
     pathCache.set(key, v);
     if (pathCache.size > 64) pathCache.delete(pathCache.keys().next().value);
     return v;
@@ -1193,10 +1144,12 @@ function create(ctx) {
     const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
     return { s0: L / (nTop * 2 ** top), top };
   }
-  // a band `width` px wide along a path, outside its circles (side 1) or inside (-1)
-  function sline(path, width, side, space, zoom) {
-    const arr = memo(path, `line${width},${side},${space}`, () => {
-      const s0 = sN; buildLine(path, width, side, space ? lattice(path, space, zoom) : { s0: 1, top: 0 }, zoom);
+  // a band `width` px wide along a path, outside its circles (side 1) or
+  // inside (-1): the segments a building being placed adds when `fresh` is 1,
+  // the others when 0
+  function sline(path, width, side, space, zoom, fresh) {
+    const arr = memo(path, `line${width},${side},${space},${fresh}`, () => {
+      const s0 = sN; buildLine(path, width, side, lattice(path, space, zoom), zoom, fresh);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1207,12 +1160,12 @@ function create(ctx) {
   // the quads between consecutive points, from the path out to `width` on
   // `side`: neighbouring quads share their edge, so no pixel is drawn twice
   // and the position along the path runs on unbroken
-  function buildLine(path, width, side, lat, zoom) {
-    const { n, scr, vis, nrm, along, closed } = path, s0 = lat.s0, top = lat.top;
+  function buildLine(path, width, side, lat, zoom, fresh) {
+    const { n, scr, vis, nrm, along, closed, segNew } = path, s0 = lat.s0, top = lat.top;
     const lo = -0.5, hi = width + 0.5;
     for (let i = 0; i < (closed ? n : n - 1); i++) {
       const j = (i + 1) % n;
-      if (!vis[i] && !vis[j]) continue;
+      if ((!vis[i] && !vis[j]) || segNew[i] !== fresh) continue;
       const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
       const nx0 = nrm[i * 2] * side, ny0 = nrm[i * 2 + 1] * side, nx1 = nrm[j * 2] * side, ny1 = nrm[j * 2 + 1] * side;
       const a0 = along[i] / zoom, a1 = along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
@@ -1248,9 +1201,8 @@ function create(ctx) {
     lod.t = t;
   }
   const uOpArr = new Float32Array(DASH_SPAN + 1);
-  // mode 0 dashes, 2 solid; `dash` the DASH row, `sign` the direction the
-  // dashes run
-  function slineDraw(rgb, a, mode, zoom, dash, sign) {
+  // `dash` the DASH row, `sign` the direction the dashes run
+  function slineDraw(rgb, a, zoom, dash, sign) {
     if (!sN) return;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -1258,19 +1210,16 @@ function create(ctx) {
     gl.uniform2f(LSU.uCanvas, GW, GH);
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(LSU.uA, a);
-    gl.uniform1i(LSU.uMode, mode);
     gl.uniform1f(LSU.uZoom, zoom);
-    if (dash) {
-      const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
-      let fine = lod.k;
-      while (fine > lod.k - DASH_SPAN && op(fine - 1) > 0.004) fine--;
-      for (let i = 0; i <= DASH_SPAN; i++) uOpArr[i] = op(fine + i);
-      gl.uniform1f(LSU.uShift, sign * lod.shift[dash]);
-      gl.uniform1f(LSU.uDash, DASH[dash].len * (GH + 500) / 1300);
-      gl.uniform1i(LSU.uFine, fine);
-      gl.uniform1i(LSU.uLevel, lod.k);
-      gl.uniform1fv(LSU.uOp, uOpArr);
-    }
+    const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
+    let fine = lod.k;
+    while (fine > lod.k - DASH_SPAN && op(fine - 1) > 0.004) fine--;
+    for (let i = 0; i <= DASH_SPAN; i++) uOpArr[i] = op(fine + i);
+    gl.uniform1f(LSU.uShift, sign * lod.shift[dash]);
+    gl.uniform1f(LSU.uDash, DASH[dash].len * (GH + 500) / 1300);
+    gl.uniform1i(LSU.uFine, fine);
+    gl.uniform1i(LSU.uLevel, lod.k);
+    gl.uniform1fv(LSU.uOp, uOpArr);
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
@@ -1282,102 +1231,57 @@ function create(ctx) {
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
 
-  // THE VIEW's radar and sonar lines: a dashed band just outside the union's outline
-  function drawLines(kind, proj, zoom, t) {
-    const list = emitters(kind);
-    if (!list.length) return;
-    const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
-    const paths = outline(list.map((u) => ({ u, r: radiusOf(u, kind) })), water, proj, false);
-    const ls = (GH + 500) / 1300;
-    for (const path of paths) sline(path, DASH.line.w * ls, 1, DASH.line.space * ls, zoom);
-    slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, zoom, "line", -1);
+  // a kind's circles, the placed building's first: the own and allied
+  // emitters, under the view; the building being placed when it adds the kind
+  function sensorCircles(kind, ghost) {
+    const fresh = !!(ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind));
+    if (!settings.view && !fresh) return { circs: [], fresh };
+    const circs = emitters(kind).map((u) => ({ u, r: radiusOf(u, kind) }));
+    if (fresh) circs.unshift({ u: ghost, r: radiusOf(ghost, kind) });
+    return { circs, fresh };
   }
-  // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
-  // placed): a dashed band along the inside of the union's outline, and the
-  // union inside the band filled -- the placed jammer's disc in the brighter
-  // sheet colour
+  // a band along every path, the existing segments at `a` and the ones the
+  // building being placed adds at a x NEW_GAIN
+  function bands(paths, width, side, space, zoom, rgb, a, dash, sign) {
+    for (const fresh of [0, 1]) {
+      for (const path of paths) sline(path, width, side, space, zoom, fresh);
+      slineDraw(rgb, fresh ? Math.min(1, a * NEW_GAIN) : a, zoom, dash, sign);
+    }
+  }
+
+  // THE RADAR AND SONAR LINES: a dashed band just outside the union's outline
+  function drawLines(kind, ghost, proj, zoom) {
+    const { circs, fresh } = sensorCircles(kind, ghost);
+    if (!circs.length) return;
+    const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
+    const ls = (GH + 500) / 1300;
+    bands(outline(circs, water, proj, fresh), DASH.line.w * ls, 1, DASH.line.space * ls, zoom,
+          st.c, Math.min(1, st.a * DASH.line.gain), "line", -1);
+  }
+  // THE JAMMER LAYER: a dashed band along the inside of the union's outline,
+  // and the union inside the band filled
   function drawJammers(kind, ghost, proj, zoom) {
+    const { circs, fresh } = sensorCircles(kind, ghost);
+    if (!circs.length) return;
     const water = WATER_KIND[kind];
-    const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
-    if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind))
-      list.push({ u: ghost, isNew: true });
-    if (!list.length) return;
     // the fill stops where the band starts: each disc short of its circle
     // by the band's width, so the band lies on the bare ground outside it
     const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, wE = wpx / zoom;
-    const items = list.map((e) => {
-      const r = types[e.u.type][kind];
-      return { ...e, r, rg: circle(e.u, Math.max(1, r - wE), water, proj) };
-    });
     maskBegin();
-    for (const isNew of [true, false]) {
-      for (const it of items) if (it.isNew === isNew) region(it.rg);
-      maskFlush(isNew ? 0 : 1);
-    }
+    for (const c of circs) region(circle(c.u, Math.max(1, c.r - wE), water, proj));
+    maskFlush(0);
     maskEnd();
-    const sea = water ? [proj, zoom] : null;
-    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0, sea);
-    fillWhere(JAMMER.sheet, JAMMER.a, 0, -1, sea);
+    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 0, -1, water ? [proj, zoom] : null);
     const ls = (GH + 500) / 1300;
-    for (const path of outline(items.map((it) => ({ u: it.u, r: it.r })), water, proj, false))
-      sline(path, wpx, -1, DASH.jam.space * ls, zoom);
-    slineDraw(JAMMER.outline, JAMMER.dashA, 0, zoom, "jam", 1);
-  }
-  // THE PREVIEW of a radar or sonar building: the existing coverage filled
-  // duller where the new disc does not reach, the new disc's sheet with rings
-  // travelling outward, an outline along the new disc's edge (inside existing
-  // coverage too) and along the union's outer edge
-  function drawPreview(kind, ghost, proj, zoom, t) {
-    const P = PREVIEW[kind], water = WATER_KIND[kind];
-    const wpx = PULSE.w * GH / 1080;
-    const g = circle(ghost, radiusOf(ghost, kind), water, proj);
-    const old = emitters(kind).map((u) => circle(u, radiusOf(u, kind), water, proj));
-    maskBegin();
-    region(g); maskFlush(0);
-    for (const rg of old) region(rg);
-    maskFlush(1);
-    maskEnd();
-    fillWhere(P.allied, P.a * P.alliedRel, 1, 0, water ? [proj, zoom] : null);
-    // the sheet: the new disc's fan, world x/z per vertex for the rings
-    const pts = memo(g, "sheet", () => {
-      const n = g.n, out = new Float32Array(n * 12);
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n;
-        const ai = (i / n) * Math.PI * 2, aj = (j / n) * Math.PI * 2;
-        out.set([g.c[0], g.c[1], 0, 0,
-                 g.scr[i * 2], g.scr[i * 2 + 1], Math.sin(ai) * g.r, Math.cos(ai) * g.r,
-                 g.scr[j * 2], g.scr[j * 2 + 1], Math.sin(aj) * g.r, Math.cos(aj) * g.r], i * 12);
-      }
-      return out;
-    });
-    gl.useProgram(pulseProg);
-    seaUniforms(PSU, water, proj, zoom);
-    gl.uniform2f(PSU.uCanvas, GW, GH);
-    gl.uniform1i(PSU.uMask, TEX_UNIT);
-    gl.uniform1f(PSU.uTime, t);
-    gl.uniform3f(PSU.uSheet, ...P.sheet);
-    gl.uniform3f(PSU.uPulse, ...P.pulse);
-    gl.uniform1f(PSU.uAlpha, P.a);
-    gl.uniform4f(PSU.uP, PULSE.spacing, PULSE.speed, PULSE.power, PULSE.strength);
-    gl.bindVertexArray(fvao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, fvbo);
-    gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
-    gl.bindVertexArray(null);
-    // the outline: the new disc's own edge whole, the others' where they bound the union
-    for (const path of outline([g, ...old].map((rg) => ({ u: rg.u, r: rg.r })), water, proj, true))
-      sline(path, wpx, -1, 0, zoom);
-    slineDraw(P.outline, P.outlineA, 2, zoom);
+    bands(outline(circs, water, proj, fresh), wpx, -1, DASH.jam.space * ls, zoom,
+          JAMMER.outline, JAMMER.dashA, "jam", 1);
   }
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
-  // lines, the preview's sheets
+  // lines
   function drawSensors(ghost, proj, zoom) {
-    const t = clock();
-    lodStep(zoom, t);
-    const placed = ghost && settings.sensor ? sensorKinds(types[ghost.type]) : [];
+    lodStep(zoom, clock());
     for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom);
-    if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, zoom, t);
-    for (const kind of ["radar", "sonar"]) if (placed.includes(kind)) drawPreview(kind, ghost, proj, zoom, t);
+    for (const kind of ["radar", "sonar"]) drawLines(kind, ghost, proj, zoom);
   }
 
   // lab marks: the selection, the hovered unit, placed defenses and the ghost
@@ -1586,7 +1490,7 @@ function create(ctx) {
 
   return { draw, onMove, onClick, onBox, onKey, onPanel, rows,
            get placing() { return placing; }, get shiftHeld() { return shift; },
-           // the sensor layers move: the view's dashes, the preview's rings
+           // the sensor layers move: their dashes
            get animating() { return settings.view || (!!placing && settings.sensor); } };
 }
 
