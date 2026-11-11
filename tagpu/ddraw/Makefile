@@ -243,7 +243,9 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_modpak.bin
 # THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
 # needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
 # otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the
-# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation,
+# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation --
+# its front end src/tagpu_wikisim.c and the shared simulation core, every src/tasim_*.c (src/tasim.h;
+# tools/wiki/tasimsrcs.mjs gives the checks the same files) --
 # and the loader that normalises the scenes' facings for it (src/tagpu_wikidata.h), compute on
 # SSE2 instead (MEASURED 2026-10-26, the loader's x / sqrt(x*x + z*z) over 3720 facings: built for
 # x87, 1804 differ from sim.js in a bit; built so, none). The reclaim sweep's split
@@ -258,7 +260,8 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_modpak.bin
 # checks the build under Wine.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
 $(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)) \
-$(addprefix src/tagpu_wikireplay, $(ALLEXTS)): \
+$(addprefix src/tagpu_wikireplay, $(ALLEXTS)) \
+$(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js

@@ -75,6 +75,7 @@ import { createRequire } from 'node:module';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -328,7 +329,7 @@ function run(cmd, args, opts = {}) {
 function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
+    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
       'src/tagpu_wikireplay.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
@@ -342,7 +343,7 @@ function build(tmp) {
   }
   const exe = path.join(tmp, 'wikitest-native');
   run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
-    '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...SRCS, '-lm'], { cwd: DDRAW });
+    '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, ...SRCS, '-lm'], { cwd: DDRAW });
   return (args) => run(exe, args, { cwd: tmp });
 }
 

@@ -85,6 +85,7 @@ import { spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { createRequire } from 'node:module';
 import { cobHost, scripts } from './cobhost.mjs';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -100,7 +101,7 @@ if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
   console.error(`stagecheck: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
   process.exit(2);
 }
-const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
+const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
   'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c', 'src/tagpu_wikireplay.c',
   'src/tagpu_hudlay.c'];

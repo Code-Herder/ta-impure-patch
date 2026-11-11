@@ -12,8 +12,14 @@
    tools/wiki/simparity.mjs plays every demo of every entry, with the fixture's sidebar, the tall
    fixture's and none, with each casting of tools/wiki/casting-fixture.json and none, at both
    Interface Types, and simcheck.mjs's rule cases through both, and compares every field of the
-   view and every unit's orders, tick by tick. The DLL compiles this file for SSE2 (Makefile, THE WIKI'S SIMULATION) so
-   that no intermediate keeps x87's extra precision.
+   view and every unit's orders, tick by tick. The DLL compiles tagpu_wikisim.c and the core's tasim_*.c for SSE2
+   (Makefile, THE WIKI'S SIMULATION) so that no intermediate keeps x87's extra precision.
+
+   ONE SIMULATION, TWO PARTS: the shared simulation core, the tasim_*.c files over tasim.h
+   (research/notes/impai/shared-core.md), holds the world, the orders, movement, the economy, the
+   work, sight, the units' scripts and the spray and sound; tagpu_wikisim.c is the wiki's front end
+   over it, the UI emulation, scripted input, selection, the scene and the casting, and these entry
+   points. Both keep this header's contract and share the one WIKISIM.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
    address: where sim.js mirrors the rule code of tagpu_resource.c or tagpu_place.c, this file
@@ -267,7 +273,7 @@ typedef struct {
     int    height, blocking, reclaimable;
 } WIKIFEAT;
 
-/* a rect in world units; the movement's bodies (tagpu_wikisim.c, MOVEMENT) */
+/* a rect in world units; the movement's bodies (tasim_move.c, MOVEMENT) */
 typedef struct { double x0, z0, x1, z1; } WIKIRECT;
 
 /* A UNIT'S ECONOMY LEDGER, a game simulation's: produced, requested, granted and debt per resource,
@@ -281,7 +287,7 @@ typedef struct { double eP, eR, eG, eD, mP, mR, mG, mD; } WIKILEDGER;
    (+0x9C, +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units alive, a nanoframe
    included (+0x144); lost, the commanders lost (+0x106); out, the count gone from above 0 to 0;
    cmd_lost, a commander lost (+0x149 bit 0 cleared: the base storage stops counting); kills and
-   losses, the units it killed and lost (+0xFC, +0xFE; tagpu_wikisim.c kill) */
+   losses, the units it killed and lost (+0xFC, +0xFE; tasim_world.c tasim_kill) */
 typedef struct {
     double m, e, bm, be, mmax, emax, mi, mo, ei, eo, wm, we;
     int    units, lost, out, cmd_lost, kills, losses;
@@ -293,9 +299,9 @@ typedef struct {
 #define WIKI_CLICKS 64
 typedef struct { int tick, seat; double x, z; } WIKICLICK;
 
-/* A DEATH in a game (tagpu_wikisim.c kill), for the replay's death vision: the tick the kill was
+/* A DEATH in a game (tasim_world.c tasim_kill), for the replay's death vision: the tick the kill was
    fed on, the unit's owner, its type (an index of the entry's types) and its place. Only a death
-   the engine's temporary sight record add keeps is one (kill states the rule). */
+   the engine's temporary sight record add keeps is one (tasim_kill states the rule). */
 typedef struct { int tick, owner, type; double x, z; } WIKIDEATH;
 
 /* a game view's seat's cursor: its map cursor, `on` once it has moved and while it is over the map */
@@ -319,7 +325,7 @@ typedef struct WIKIUNIT {
     int              ox, oz;            /* a structure's first footprint cell; unused for a mobile unit */
     int              norder, corder;
     WIKIORDER*       order;
-    /* one tick's work (advance): the structure it worked on and how, and on a structure the work
+    /* one tick's work (tasim_advance): the structure it worked on and how, and on a structure the work
        credited to it */
     struct WIKIUNIT* job;
     int              job_how, worked;
@@ -334,7 +340,7 @@ typedef struct WIKIUNIT {
     int              work_serial, stanced;
     char             job_id[WIKI_ID_MAX];
     int              stepped, moving;
-    /* movement (tagpu_wikisim.c, MOVEMENT): whether it stepped on the last tick; whether this
+    /* movement (tasim_move.c, MOVEMENT): whether it stepped on the last tick; whether this
        tick's step turned off its line, and whether it stepped off a structure or a claim instead
        of its orders; its leg -- the node it walks to, and the serial of the order and the kind of
        target it was planned for -- when `leg` */
@@ -748,7 +754,7 @@ typedef struct {
     int              trips;         /* a scripted demo with the sidebar: a build is its trip */
     int              ltype[WIKI_MAX_DEFS];  /* each entry type's index in lay->type, or -1 */
     int              screen;        /* the routed screen, an index < lay->nscreen */
-    WIKIUNIT*        shown;         /* main+0x37E9C; remove_unit clears it with its unit */
+    WIKIUNIT*        shown;         /* main+0x37E9C; tasim_remove_unit clears it with its unit */
     int              cap, cap_key;  /* the gadget of `screen` a press captured (-1 none), and the
                                        button that pressed it */
     int              locked;        /* the type the demo stopped on (the first lock wins), or -1 */
@@ -760,7 +766,7 @@ typedef struct {
                                        clock an input reads                                    */
 
     /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
-       sized for any list since push_order holds every list to PLACE_LIST_CAP; the view's arrays */
+       sized for any list since tasim_push_order holds every list to PLACE_LIST_CAP; the view's arrays */
     uint32_t*        mark;
     uint32_t         gen;
     int*             todo;
@@ -947,11 +953,11 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 /* THE LIT GRID of `seat` in a game's view `v` at the shown tick `g`, over the layout's sight table
    `t` (NULL or numtables 0: none), into `out`, (v->w >> 1) x (v->h >> 1) bytes row-major; their
    count, or 0 when the grid would pass WIKI_SIGHT_GRID. The rule, the engine's stamp reduced to
-   the stage, is tagpu_wikisim.c's comment; sim.js sightLit is its twin. Without a table every
+   the stage, is tasim_sight.c's comment; sim.js sightLit is its twin. Without a table every
    block is 1 (Sight lights every block). Pure: it reads `v` and `t` only. */
 #define WIKI_SIGHT_GRID  ((WIKI_MAP_MAX / 2) * (WIKI_MAP_MAX / 2))
 #define WIKI_SIGHT_SPAN  60      /* a death at tick d lights its seat's grid through d + 60: the
-                                    temporary sight record's expiry (tagpu_wikisim.c) */
+                                    temporary sight record's expiry (tasim_sight.c) */
 int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out);
 
 /* THE ARMY VALUE of `seat` in a game simulation (sim.js's gameNow army, which states the game's
@@ -961,7 +967,7 @@ float tagpu_wikisim_army(const WIKISIM* s, int seat);
 
 /* THE CONTACTS of `seat` in a game's view `v`, over its lit grid `lit` (tagpu_wikisim_sight_lit's
    for the same view): per view unit, index-aligned with v->unit, 1 when the radar pass would mark
-   it, else 0, into `out` (v->nunit bytes). The rule is tagpu_wikisim.c's comment; sim.js
+   it, else 0, into `out` (v->nunit bytes). The rule is tasim_sight.c's comment; sim.js
    sightContacts is its twin. Pure. */
 void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uint8_t* out);
 

@@ -74,6 +74,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -491,7 +492,7 @@ try {
     exe = path.join(tmp, 'wikiframetest');
     run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', `-I${path.join(ROOT, 'tools/hudart')}`, '-O1', '-g',
       '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-o', exe, 'tests/wikiframetest.c', 'src/tagpu_wikiframe.c',
-      'src/tagpu_wikireplay.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
+      'src/tagpu_wikireplay.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
       'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c',
       'src/tagpu_hudlay.c', 'src/tagpu_hudtext.c', 'src/tagpu_huddraw.c', 'src/tagpu_wikistage.c',
       path.join(ROOT, 'tools/hudart/hudstatejson.c'), '-lm'], { cwd: DDRAW });

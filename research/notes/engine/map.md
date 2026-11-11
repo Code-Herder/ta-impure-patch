@@ -1996,7 +1996,7 @@ moved together. "Past its time" is `+0x1C` below GameTime, unsigned (`0x482153..
 keeps it): a record made at GameTime d is removed by the first expiry with GameTime ≥ d + 61, so the
 last GameTime drawn with it is the last step end at or below d + 60 -- d + 60 itself when a step is
 one tick, up to one step earlier otherwise. The in-game wiki's death vision copies the cap, the list's
-owner rule and this boundary (`tagpu_wikisim.c` `kill` and `tagpu_wikisim_sight_lit`; its players
+owner rule and this boundary (`tasim_world.c` `tasim_kill` and `tasim_sight.c` `tagpu_wikisim_sight_lit`; its players
 entry's data rule keeps a script under the cap: at most 20 kills of one seat within any 62 ticks).
 
 - **The stamp and its removal read the stored words**: `0x482270` at `0x4822CD`/`0x4822D0`,
