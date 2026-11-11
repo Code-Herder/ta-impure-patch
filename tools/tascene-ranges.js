@@ -168,15 +168,26 @@ const SENSOR_LINE = {
   radar: { c: [0.0, 1.0, 0.0], a: 0.16 },
   sonar: { c: [0.5, 0.7, 0.9], a: 0.17 },
 };
-// BAR's dashes are fixed on the ground (a 7.54-elmo period moving 7.2 elmos/s,
-// with the game frame); TA zooms where BAR's camera moves, so the period is
-// held on screen instead: 1.7 line widths, one period every 1.05 s
-const STIPPLE = { periodW: 1.7, speed: 0.955 };     // x line width; periods per second
+// THE DASHES (radar, sonar and the jammer's band) are the waypoint dots'
+// level of detail (tascene-view.html ordspace=lod) on a circle. Every dash is
+// the same length on screen at every zoom; where they stand is pinned to the
+// map, on a lattice of levels -- level j a dash every s0 x 2^j along the
+// circle, each level every other dash of the one below. The zoom picks the
+// level (its octave, held LOD_HYST past a boundary), so the spacing on screen
+// stays within about a factor of two; a level change fades the dashes it
+// drops or adds over DASH_FADE ms and moves none. s0 is a circle's own: its
+// length on the map divided evenly, so every level closes round the circle.
+// The dashes move along at a constant speed on screen.
 const LINE_W = 4.5;                 // px x lineScale, lineScale = (vsy + 500) / 1300
+const DASH = {                      // x lineScale: dash length and level-0 spacing, px; speed px/s
+  line: { len: 7, space: 22, speed: 9, gain: 2.5 },    // gain: the dash's opacity x the kind's
+  jam:  { len: 5, space: 11, speed: 6 },
+};
+const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
 // gui_sensor_ranges_jammer_preview.lua shaderConfig
 const JAMMER = { allied: [0.62, 0.35, 0.33], sheet: [0.90, 0.22, 0.20], a: 0.17, alliedRel: 0.85,
                  outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
-                 w: 1.2, wElmo: 0.89, dash: 8, speed: 0.75 };   // px at 1080p + elmos; px x lineScale, periods/s
+                 w: 1.2, wElmo: 0.89 };   // band width: px at 1080p + elmos
 // gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
 const PREVIEW = {
   radar: { sheet: [0.22, 0.85, 0.50], a: 0.2, pulse: [0.55, 1.0, 0.70], allied: [0.35, 0.62, 0.50],
@@ -220,53 +231,61 @@ void main() {
   if (m[uIn] < 0.5 || (uOut >= 0 && m[uOut] > 0.5)) discard;
   o = uCol;
 }`;
-// a sensor line: the radar and sonar dashes (BAR's moving stipple,
-// sensor_ranges_los.frag.glsl, made hard-edged), the jammer's dashes, or solid
+// a sensor line: dashed (the DASH lattice above) or solid
 const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
 layout(location=1) in float aEdge;  // -1..1 across the line
-layout(location=2) in float aArc;   // px along the circle on screen
+layout(location=2) in float aArc;   // along the circle on the map, in zoom-1 px
 layout(location=3) in float aVis;
 layout(location=4) in float aHalf;  // half width in px (including the AA rim)
-layout(location=5) in float aPer;   // the pattern's period in px
+layout(location=5) in float aS0;    // the circle's level-0 dash spacing, zoom-1 px
+layout(location=6) in float aTop;   // its coarsest level (4..8 dashes round it)
 uniform vec2 uCanvas;
-out float vEdge; out float vArc; out float vVis; out float vHalf; out float vPer;
+out float vEdge; out float vArc; out float vVis; out float vHalf; flat out float vS0; flat out float vTop;
 void main() {
-  vEdge = aEdge; vArc = aArc; vVis = aVis; vHalf = aHalf; vPer = aPer;
+  vEdge = aEdge; vArc = aArc; vVis = aVis; vHalf = aHalf; vS0 = aS0; vTop = aTop;
   gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
 }`;
 const SLINE_FS = `#version 300 es
 precision highp float;
 precision highp int;
-in float vEdge; in float vArc; in float vVis; in float vHalf; in float vPer;
+in float vEdge; in float vArc; in float vVis; in float vHalf; flat in float vS0; flat in float vTop;
 uniform sampler2D uMask;
 uniform int uMaskBit;        // -1: no clip
 uniform vec3 uCol;
 uniform float uA;
-uniform int uMode;           // 0 radar and sonar dashes, 1 jammer dashes, 2 solid
-uniform float uShift;        // px the pattern has moved
+uniform int uMode;           // 0 dashes over nothing, 1 dashes over the gap's opacity, 2 solid
+uniform float uGap;          // mode 1: the gap's opacity, x uA
+uniform float uShift;        // zoom-1 px the dashes have moved along
+uniform float uZoom;
+uniform float uDash;         // a dash's length, px
+uniform int uFine, uLevel;   // the finest level drawn; the zoom's level
+uniform float uOp[${DASH_SPAN + 1}];  // opacity of levels uFine .. uFine + ${DASH_SPAN}
 out vec4 o;
-const float PI = 3.14159265;
+// a dash's cover at this fragment, times its level's opacity
+float dashes() {
+  // a circle whose coarsest level is finer than the zoom's draws that level whole
+  int top = int(vTop + 0.5), f = top < uLevel ? top : uFine;
+  float s = vS0 * exp2(float(f));
+  float u = (vArc + uShift) / s, n = floor(u + 0.5);
+  float d = abs(u - n) * s * uZoom;                    // px from the dash's centre
+  float cover = clamp(uDash * 0.5 - d + 0.5, 0.0, 1.0);
+  if (cover <= 0.0) return 0.0;
+  if (top < uLevel) return cover;
+  // the dash's level: the coarsest its index belongs to
+  float per = exp2(float(top - f));
+  int m = int(n - per * floor(n / per) + 0.5), lv = f;
+  if (m == 0) lv = top;
+  else for (int k = 0; k < 16 && (m & 1) == 0; k++) { m >>= 1; lv++; }
+  return cover * uOp[clamp(lv - uFine, 0, ${DASH_SPAN})];
+}
 void main() {
   if (uMaskBit >= 0 && texelFetch(uMask, ivec2(gl_FragCoord.xy), 0)[uMaskBit] > 0.5) discard;
   float px = abs(vEdge) * vHalf;
   float a = clamp(vHalf - px, 0.0, 1.0) * uA * vVis;
-  float ph = 2.0 * PI * (vArc + uShift) / vPer;
-  float ppp = fwidth(ph);                  // phase per pixel along the line
-  if (uMode == 0) {
-    // hard-edged dashes, half a period on, antialiased over a pixel, at twice
-    // the mean of BAR's soft stipple (a half-wave peaking at 3x, mean 3/pi),
-    // so the line is as bright on average; even once a period is under ~4 px
-    float s = sin(ph);
-    float on = clamp(s / max(fwidth(s), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
-    a *= mix(on * 2.0, 1.0, smoothstep(1.5, 3.0, ppp)) * 0.9549297;
-  } else if (uMode == 1) {
-    float s = sin(ph);
-    float on = clamp(s / max(fwidth(s), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
-    on = mix(on, 0.5, smoothstep(1.5, 3.0, ppp));
-    a *= mix(${JAMMER.gapRel.toFixed(3)}, 1.0, on);
-  }
+  if (uMode == 0) a *= dashes();
+  else if (uMode == 1) a *= mix(uGap, 1.0, dashes());
   if (a <= 0.0) discard;
   o = vec4(uCol * a, a);
 }`;
@@ -543,7 +562,8 @@ function create(ctx) {
   const FU = U(fillProg, ["uMask", "uCol"]);
   const PU = U(ptProg, ["uCanvas", "uSize"]);
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol"]);
-  const LSU = U(slineProg, ["uCanvas", "uMask", "uMaskBit", "uCol", "uA", "uMode", "uShift"]);
+  const LSU = U(slineProg, ["uCanvas", "uMask", "uMaskBit", "uCol", "uA", "uMode", "uGap", "uShift",
+                            "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
   const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP"]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
   // 10-19, 14 being the height map the Classic++ light reads)
@@ -584,10 +604,10 @@ function create(ctx) {
   const svao = gl.createVertexArray(), svbo = gl.createBuffer();
   gl.bindVertexArray(svao);
   gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
-  // sensor line layout: x, y, edge, arc, vis, half, period = 7 floats
-  for (const [loc, n, off] of [[0, 2, 0], [1, 1, 8], [2, 1, 12], [3, 1, 16], [4, 1, 20], [5, 1, 24]]) {
+  // sensor line layout: x, y, edge, arc, vis, half, s0, top = 8 floats
+  for (const [loc, n, off] of [[0, 2, 0], [1, 1, 8], [2, 1, 12], [3, 1, 16], [4, 1, 20], [5, 1, 24], [6, 1, 28]]) {
     gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 28, off);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 32, off);
   }
   gl.bindVertexArray(null);
   const fvao = gl.createVertexArray(), fvbo = gl.createBuffer();
@@ -1008,16 +1028,25 @@ function create(ctx) {
     gl.uniform4f(SU.uCol, rgb[0] * a, rgb[1] * a, rgb[2] * a, a);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  // a circle's line as quads: x, y, edge, along (px), vis, half, period (px)
+  // a circle's line as quads: x, y, edge, along (zoom-1 px), vis, half, s0, top
   let sBuf = new Float32Array(1 << 16), sN = 0;
-  const pushS = (x, y, e, arc, vis, half, per) => {
-    if (sN + 7 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
+  const pushS = (x, y, e, arc, vis, half, s0, top) => {
+    if (sN + 8 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
     sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = e; sBuf[sN++] = arc;
-    sBuf[sN++] = vis; sBuf[sN++] = half; sBuf[sN++] = per;
+    sBuf[sN++] = vis; sBuf[sN++] = half; sBuf[sN++] = s0; sBuf[sN++] = top;
   };
-  function sline(rg, width, per) {
-    const arr = memo(rg, `line${width},${per}`, () => {
-      const s0 = sN; buildLine(rg, width, per);
+  // a circle's dash lattice for a level-0 spacing near `space` (zoom-1 px):
+  // its coarsest level `top` puts 4..8 dashes round it, and s0 divides the
+  // circle's length on the map evenly at every level
+  function lattice(rg, space, zoom) {
+    const L = rg.along[rg.n] / zoom;
+    const top = Math.max(0, Math.floor(Math.log2(L / (space * 4))));
+    const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
+    return { s0: L / (nTop * 2 ** top), top };
+  }
+  function sline(rg, width, space, zoom) {
+    const arr = memo(rg, `line${width},${space}`, () => {
+      const s0 = sN; buildLine(rg, width, space ? lattice(rg, space, zoom) : { s0: 1, top: 0 }, zoom);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1025,27 +1054,61 @@ function create(ctx) {
     }
     sBuf.set(arr, sN); sN += arr.length;
   }
-  function buildLine(rg, width, per) {
-    const { n, scr, vis } = rg, half = width / 2 + 0.5;
+  // the quads between consecutive vertices, each vertex offset along the
+  // mitre of its two segments: neighbouring quads share their edge, so no
+  // pixel is drawn twice and the position along the circle runs on unbroken
+  function buildLine(rg, width, lat, zoom) {
+    const { n, scr, vis } = rg, half = width / 2 + 0.5, s0 = lat.s0, top = lat.top;
+    const off = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      const p = (i + n - 1) % n, q = (i + 1) % n;
+      const tx = scr[q * 2] - scr[p * 2], ty = scr[q * 2 + 1] - scr[p * 2 + 1];
+      const tl = Math.hypot(tx, ty) || 1;
+      off[i * 2] = -ty / tl * half; off[i * 2 + 1] = tx / tl * half;
+    }
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
       if (!vis[i] && !vis[j]) continue;
-      let x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
-      const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
-      if (len < 1e-4) continue;
-      const ux = dx / len, uy = dy / len, nx = -uy * half, ny = ux * half;
-      const ex = ux * width / 2, ey = uy * width / 2;
-      x0 -= ex; y0 -= ey; x1 += ex; y1 += ey;
-      const a0 = rg.along[i], a1 = rg.along[i + 1];
-      pushS(x0 + nx, y0 + ny, 1, a0, vis[i], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
-      pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per);
-      pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
-      pushS(x1 - nx, y1 - ny, -1, a1, vis[j], half, per);
+      const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
+      const nx0 = off[i * 2], ny0 = off[i * 2 + 1], nx1 = off[j * 2], ny1 = off[j * 2 + 1];
+      const a0 = rg.along[i] / zoom, a1 = rg.along[i + 1] / zoom;
+      pushS(x0 + nx0, y0 + ny0, 1, a0, vis[i], half, s0, top); pushS(x0 - nx0, y0 - ny0, -1, a0, vis[i], half, s0, top);
+      pushS(x1 + nx1, y1 + ny1, 1, a1, vis[j], half, s0, top);
+      pushS(x1 + nx1, y1 + ny1, 1, a1, vis[j], half, s0, top); pushS(x0 - nx0, y0 - ny0, -1, a0, vis[i], half, s0, top);
+      pushS(x1 - nx1, y1 - ny1, -1, a1, vis[j], half, s0, top);
     }
   }
-  // mode 0 the radar and sonar dashes, 1 the jammer's, 2 solid; clipped where
-  // channel `clip` is set (-1: not clipped); `shift` px the pattern has moved
-  function slineDraw(rgb, a, mode, clip, shift) {
+  // THE DASH LEVEL (see DASH): the zoom's octave, held DASH_HYST past a
+  // boundary; each level's opacity walks toward 1 at the level and coarser, 0
+  // finer, at 1 / DASH_FADE per ms. Each pattern's position along the circle
+  // advances at its speed on screen, so by speed / zoom on the map. A held
+  // clock (rrtime=) lands on the targets and the position at once.
+  const lod = { k: undefined, op: {}, t: undefined, shift: {} };
+  function lodStep(zoom, t) {
+    const lv = -Math.log2(zoom);
+    if (lod.k === undefined) lod.k = Math.round(lv);
+    while (lv > lod.k + DASH_HYST) lod.k++;
+    while (lv < lod.k - DASH_HYST) lod.k--;
+    const dt = heldTime != null || lod.t === undefined ? Infinity : (t - lod.t) * 1000;
+    const rate = dt / DASH_FADE, old = lod.op;
+    lod.op = {};
+    for (let j = lod.k - DASH_SPAN; j <= lod.k + DASH_SPAN; j++) {
+      const want = j >= lod.k ? 1 : 0, cur = j in old ? old[j] : want;
+      lod.op[j] = want > cur ? Math.min(want, cur + rate) : Math.max(want, cur - rate);
+    }
+    const ls = (GH + 500) / 1300;
+    for (const [k, d] of Object.entries(DASH)) {
+      lod.shift[k] = heldTime != null || lod.t === undefined
+        ? t * d.speed * ls / zoom
+        : lod.shift[k] + (t - lod.t) * d.speed * ls / zoom;
+    }
+    lod.t = t;
+  }
+  const uOpArr = new Float32Array(DASH_SPAN + 1);
+  // mode 0 dashes, 1 dashes over the gap's opacity, 2 solid; clipped where
+  // channel `clip` is set (-1: not clipped); `dash` the DASH row, `sign` the
+  // direction the dashes run
+  function slineDraw(rgb, a, mode, clip, zoom, dash, sign, gap) {
     if (!sN) return;
     gl.useProgram(slineProg);
     gl.uniform2f(LSU.uCanvas, GW, GH);
@@ -1054,20 +1117,26 @@ function create(ctx) {
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(LSU.uA, a);
     gl.uniform1i(LSU.uMode, mode);
-    gl.uniform1f(LSU.uShift, shift);
+    gl.uniform1f(LSU.uGap, gap || 0);
+    gl.uniform1f(LSU.uZoom, zoom);
+    if (dash) {
+      const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
+      let fine = lod.k;
+      while (fine > lod.k - DASH_SPAN && op(fine - 1) > 0.004) fine--;
+      for (let i = 0; i <= DASH_SPAN; i++) uOpArr[i] = op(fine + i);
+      gl.uniform1f(LSU.uShift, sign * lod.shift[dash]);
+      gl.uniform1f(LSU.uDash, DASH[dash].len * (GH + 500) / 1300);
+      gl.uniform1i(LSU.uFine, fine);
+      gl.uniform1i(LSU.uLevel, lod.k);
+      gl.uniform1fv(LSU.uOp, uOpArr);
+    }
     gl.bindVertexArray(svao);
     gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
     gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, sN / 7);
+    gl.drawArrays(gl.TRIANGLES, 0, sN / 8);
     gl.bindVertexArray(null);
     sN = 0;
   }
-  // a circle's pattern period in screen px: about `px`, a whole number of
-  // periods round the circle so the pattern closes
-  const periodOf = (rg, px) => {
-    const L = rg.along[rg.n];
-    return L / Math.max(1, Math.round(L / px));
-  };
   // the own and allied units that emit a kind now
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
@@ -1083,9 +1152,9 @@ function create(ctx) {
     for (const rg of rings) fan(rg);
     maskFlush(2);
     maskEnd();
-    const w = LINE_W * (GH + 500) / 1300, px = w * STIPPLE.periodW;
-    for (const rg of rings) sline(rg, w, periodOf(rg, px));
-    slineDraw(st.c, st.a, 0, 2, -t * STIPPLE.speed * px);
+    const ls = (GH + 500) / 1300;
+    for (const rg of rings) sline(rg, LINE_W * ls, DASH.line.space * ls, zoom);
+    slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, 2, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
   // placed): the union filled, a dashed band along the inside of its edge. The
@@ -1114,9 +1183,9 @@ function create(ctx) {
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
     fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
-    const px = JAMMER.dash * (GH + 500) / 1300;
-    for (const it of items) sline(it.band, wpx, periodOf(it.band, px));
-    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed * px);
+    const ls = (GH + 500) / 1300;
+    for (const it of items) sline(it.band, wpx, DASH.jam.space * ls, zoom);
+    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, zoom, "jam", 1, JAMMER.gapRel);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
   // duller where the new disc does not reach, the new disc's sheet with rings
@@ -1161,15 +1230,16 @@ function create(ctx) {
     gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
     gl.bindVertexArray(null);
     // the outline: the new disc's own edge whole, the others' where they bound the union
-    sline(circle(ghost, Math.max(1, g.r - wE / 2), water, proj), wpx, 1);
-    slineDraw(P.outline, P.outlineA, 2, -1, 0);
-    for (const rg of old) sline(circle(rg.u, Math.max(1, rg.r - wE / 2), water, proj), wpx, 1);
-    slineDraw(P.outline, P.outlineA, 2, 2, 0);
+    sline(circle(ghost, Math.max(1, g.r - wE / 2), water, proj), wpx, 0, zoom);
+    slineDraw(P.outline, P.outlineA, 2, -1, zoom);
+    for (const rg of old) sline(circle(rg.u, Math.max(1, rg.r - wE / 2), water, proj), wpx, 0, zoom);
+    slineDraw(P.outline, P.outlineA, 2, 2, zoom);
   }
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
   // lines, the preview's sheets
   function drawSensors(ghost, proj, zoom) {
     const t = clock();
+    lodStep(zoom, t);
     const placed = ghost && settings.sensor ? sensorKinds(types[ghost.type]) : [];
     for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom, t);
     if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, zoom, t);
