@@ -576,9 +576,13 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             char* def;
             int32_t pos[3];
             int k, on, owner;
-            /* the coverage of exactly the owners whose contacts the radar pass gives the
-               viewed player: its own, and those allied sharing hands it (tagpu_allysight.h,
-               which bounds the owner byte below ten) */
+            /* the coverage of exactly the owners whose radar and sonar the radar pass walks
+               for the viewed player: its own, and those allied sharing adds
+               (tagpu_allysight_contacts, which bounds the owner byte below ten). Without the
+               radar pass's sites that is the viewer's own alone, as in stock TA: its pass
+               walks only the viewer's emitters (0x46750E), and the ShareRadar test of its
+               loop 1 (0x4674BA) gives the viewer an ally's own units, never the contacts an
+               ally's radar makes, so no allied coverage is drawn. */
             if (!u) continue;
             owner = owner_of(u);
             if ((owner != (int)w.viewer && !tagpu_allysight_contacts((unsigned)owner, w.viewer)) ||

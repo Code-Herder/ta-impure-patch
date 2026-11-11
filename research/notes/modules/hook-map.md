@@ -277,7 +277,7 @@ Under `mod=` the mount's filter (`mount_filtered`, `tagpu_modload.c`) reads the 
 
 ### Allied sight (`tagpu_allysight.c`)
 
-Always on, no arm file ([allied sharing](allied-sharing.html)). The sites come in sets — the ten
+Always on, no arm file ([allied sharing](allied-sharing.html)). The sites come in sets — the eleven
 of shared sight, then the five of shared contacts and the one of visibility, which install only once
 the first set is in.
 Each set is byte-matched against the retail bytes before any of it is written, none of it is written
@@ -296,6 +296,7 @@ before the engine runs.
 | `0x464990` | the level's players init, plain `ret` (`56 57 33 F6 BF 0A 00 00 00`), called by address from the replay's redirect at `0x4919C8` | `tagpu_allysight.c` | `jmp players_init_hook` + 4 NOP; trampoline = the 9 bytes + `jmp 0x464999` |
 | `0x49555F` | `call 0x464F80`, the step's players phase (`E8 1C FA FC FF`); the loader's `0x497C10` stays stock | `tagpu_allysight.c` | rel32 redirect to `players_phase`, which calls `0x464F80` |
 | `0x486845` | `call 0x482090`, the destructor's sight removal (`E8 46 B8 FF FF`) | `tagpu_allysight.c` | rel32 redirect to `destructor_sight`: skipped under the ray fan for a unit whose height byte `+0xF8` is 0 |
+| `0x482161` | `call 0x481D50`, the temporary sight records' expiry's removal in `0x482130` (`E8 EA FB FF FF`) | `tagpu_allysight.c` | rel32 redirect to `eye_expire`: skipped under the ray fan for a record whose byte `+0xB` is 0, which holds no stamp |
 | `0x4674BA` | the radar pass's loop 1 share test, 33 bytes to `0x4674DB`: the owner's row toward the viewer and its ShareRadar bit (PlayerInfo `+0x97 & 0x40`) | `tagpu_allysight.c` | `jmp` + 28 NOP to a stub: `radar_shares(owner byte, viewer record)` → `0x4674F4` (bits 8–9) or `0x4674DB` (the engine's watcher test); eax and edx kept |
 | `0x46750E` | the radar pass's loop 2 head over the viewer's block, `mov esi,[ebp+0x67]; mov eax,[ebp+0x6B]; cmp; ja 0x4675D2` | `tagpu_allysight.c` | `jmp` + 9 NOP to a stub: `radar_blocks(viewer)` fills the block list, then each block in turn enters the engine's body at `0x46751C` |
 | `0x4675D2` | the radar pass's loop 2 exit, `cmp edi,[esp+0x10]; ja 0x46782F` | `tagpu_allysight.c` | `jmp` + 5 NOP to the same stub's next-block step; after the last block it restores `ebp` to the viewer and runs the exit's test |

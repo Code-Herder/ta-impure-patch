@@ -5945,9 +5945,12 @@ static int sight_records_drop(char* ta)
    0x4816A0(0) otherwise. Under true LOS 0x4816A0 re-stamps the live units in-line, at the
    positions the host holds, iteration T's: where the recording machine's command found them,
    between the same two steps [INFERRED: a typed command runs between two ticks' unit passes].
-   One departure from the command: the temporary sight records are dropped first
+   The temporary sight records are dropped first, through the engine's expiry in the old mode
    (sight_records_drop), at the cost of at most 2 s of the viewed seat's death vision, under a
-   seat's view only. V's counters and map bit then go back (sight_fill), as at the first step. */
+   seat's view only; the command ends with none as well: with allied sight installed its 0x4816A0
+   empties their count main+0x14277 before the refill (tagpu_allysight.c, rebuild_hook), so this
+   reaches that hook with a count of 0. V's counters and map bit then go back (sight_fill), as at
+   the first step. */
 static void los_react(char* ta, const RecWorld* W)
 {
     const ReplayGlobalSlot* g = &tagpu_replay_globals[0];

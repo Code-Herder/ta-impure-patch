@@ -1994,8 +1994,15 @@ added, and a replay's Sight change drops every record and makes the newly viewed
 ([recorder.md](recorder.md), *The temporary sight records*, R14a), the bound is the viewed seat's in
 effect. The expiry `0x482130` (its one call `0x495688`, once a call of the step `0x495490`, after its tick
 loop) removes every record past its time through `0x481D50`
-(`0x482161`), then compacts the table (`0x4821BF..0x48222D`): each kept record is copied down with
-its pointers re-aimed at its new place, the stored words (`0x482220`) and the byte (`0x48222D`)
+(`0x482161`, `push esi; call`, `E8 EA FB FF FF`; no branch lands inside it), whether or not the
+record holds a stamp (DISASSEMBLED): under the ray fan the add zeroes the record's byte `+0xB`
+(`0x4829DE`) and the emitter `0x4825B0` returns with it still 0 and nothing stamped when the
+record's words already name the new cell and the byte is within 5 of the new height
+(`0x48261F..0x48262E`) -- words at `+0x20` that the add points `+4` at without writing
+(`0x482955..0x482958`), so a reused slot's -- or when the cell is past the grid
+(`0x482661`, `0x482669`); stock then subtracts a stamp it never made. Allied sight gates the call
+on the byte ([hook map](../modules/hook-map.html), *Allied sight*). Then it compacts the table
+(`0x4821BF..0x48222D`): each kept record is copied down with its pointers re-aimed at its new place, the stored words (`0x482220`) and the byte (`0x48222D`)
 moved together. "Past its time" is `+0x1C` below GameTime, unsigned (`0x482153..0x48215E`, `jae`
 keeps it): a record made at GameTime d is removed by the first expiry with GameTime ≥ d + 61, so the
 last GameTime drawn with it is the last step end at or below d + 60 -- d + 60 itself when a step is

@@ -22,7 +22,13 @@
    W zero, no stamp alive yet), the step's players phase on the owner's machine, and the replay's
    table write on a puppet host -- each followed, under s_lock, by migrate() before any further
    stamp; and valid() does not change within a level (the counters are allocated by the player
-   init and freed by the teardown only). So every removal subtracts exactly what its stamp added.
+   init and freed by the teardown only). And under the ray fan a record is removed only while it
+   holds a stamp: the removal 0x481D50 has four engine calls (DISASSEMBLED) -- the fan emitter's,
+   which tests the record's byte first (0x482634), the circle emitter's (0x48275D, never under the
+   fan), and the two that test nothing, 0x482090's (0x482104, whose one call is the destructor's
+   0x486845) and the temporary records' expiry's (0x482161) -- and those two calls are gated on
+   the same byte here (destructor_sight, eye_expire), as are the migration's walks (migrate_units,
+   migrate_eyes). So every removal subtracts exactly what its stamp added.
 
    THE REMOVAL IS THE STAMP'S WALK WITH THE SIGN REVERSED. The stamp 0x482270 and the removal
    0x481D50 walk identically (DISASSEMBLED: 0x481D50..0x481D88 is 0x482270..0x4822A8 byte for byte,
@@ -105,6 +111,8 @@ typedef void (__stdcall* PFN_MapCopy)(int from, int to);
 /* 0x482090(unit): builds the unit's sight record and calls the removal 0x481D50, stdcall `ret 4`
    (DISASSEMBLED 0x482090..0x48210C) */
 #define E_SightRemove ((PFN_Unit)0x00482090u)
+/* 0x481D50(rec): the removal, which jumps to remove_hook once installed */
+#define E_Remove ((PFN_Rec)0x00481D50u)
 /* 0x464F80(): the players phase, plain `ret` (0x465602) */
 #define E_PlayersPhase ((PFN_Void)0x00464F80u)
 /* 0x485420(from, to): every explored-map entry that has bit `from` gains bit `to`, stdcall
@@ -461,9 +469,25 @@ static void migrate_units(char* ta, char* ro, unsigned add, unsigned rem, uint16
     }
 }
 
-/* Each temporary sight record of o's, walked directly: a record is the stamp's own form (+0 the
-   owner, +4 its words, +0xC its byte; the add 0x482A8E stamps it as it is). Its count is the
-   engine's, bounded 0..20 with the block non-NULL. */
+/* Whether a temporary sight record holds a stamp. Under the ray fan the add 0x482910 zeroes the
+   record's byte (0x4829DE) and stamps only through the emitter 0x4825B0 (0x4829F4), which returns
+   without stamping when the record's words already name the new cell and the byte is within 5 of
+   the new height (0x48261F..0x48262E) -- words that, in a reused slot, are the last record's
+   (the add points +4 at +0x20 and does not write it, 0x482955..0x482958) -- or when the cell is
+   past the grid (0x482661, 0x482669); both leave the byte 0. A byte of 0 is the emitter's own test
+   for no stamp (0x482634): the replay's book_stamp rule. In the circle mode the add always stamps
+   (0x482A8E), and the walk refuses a shape the table has not (circle_ok). The byte is the record's
+   own +0xB: +0xC points there as the add (0x482974, 0x48297B) and the expiry's compaction
+   (0x4821F3, 0x4821FA) write it. */
+static int eye_stamped(uint16_t los, const unsigned char* e)
+{
+    return !(los & LOS_FAN) || e[0xB] != 0;
+}
+
+/* Each temporary sight record of o's that holds a stamp, walked directly: a record is the stamp's
+   own form (+0 the owner, +4 its words, +0xC its byte; the add 0x482A8E stamps it as it is). Its
+   count is the engine's, bounded 0..20 with the block non-NULL. Which records hold a stamp:
+   eye_stamped. */
 static void migrate_eyes(char* ta, char* ro, unsigned add, unsigned rem)
 {
     int32_t n = (int32_t)rd32(ta + OFF_NEYES), i;
@@ -471,7 +495,7 @@ static void migrate_eyes(char* ta, char* ro, unsigned add, unsigned rem)
     if (n <= 0 || n > EYE_MAX || !eyes) return;
     for (i = 0; i < n; i++) {
         unsigned char* e = (unsigned char*)eyes + (size_t)i * EYE_STRIDE;
-        if (rdptr((const char*)e) != ro) continue;
+        if (rdptr((const char*)e) != ro || !eye_stamped(rd16(ta + OFF_LOSTYPE), e)) continue;
         if (add) walk(ta, e, +1, add);
         if (rem) walk(ta, e, -1, rem);
     }
@@ -481,29 +505,32 @@ static void migrate_eyes(char* ta, char* ro, unsigned add, unsigned rem)
    owner whose sharing changed, under s_lock. An own bit gained adopts the owner's bytes into W
    (mid-level [INFERRED] unreachable: at the level's init own bits are set directly); an own bit
    lost leaves the owner's bytes as they are (a leaver has no unit left: its kill-all runs first,
-   0x452E17 before 0x452E67). `backfill`, on the owner's machine only: each target gained receives
-   every explored bit the owner has through the engine's own copier; the target's own iteration
-   copies the other way. */
+   0x452E17 before 0x452E67). Every adoption runs before any walk: a walk of another owner into a
+   record writes min(W, 255) into its bytes, so a record's W has to hold its bytes before the first
+   walk that reaches it, whichever owner's iteration comes first. `backfill`, on the owner's
+   machine only: each target gained receives every explored bit the owner has through the engine's
+   own copier; the target's own iteration copies the other way. */
 static void migrate(char* ta, const uint16_t from[PLAYERS], const uint16_t to[PLAYERS],
                     int backfill)
 {
     unsigned vm = validmask(ta), o, r;
     uint16_t los = rd16(ta + OFF_LOSTYPE);
     for (o = 0; o < PLAYERS; o++) {
+        const unsigned char* g;
+        uint32_t* w;
+        unsigned i;
+        if (!(vm >> o & 1) || !(to[o] >> o & 1) || (from[o] >> o & 1)) continue;
+        g = (const unsigned char*)rdptr(prec(ta, o) + PL_SIGHT);
+        w = s_wide + (size_t)o * s_cells;
+        for (i = 0; i < s_cells; i++) w[i] = g[i];
+    }
+    for (o = 0; o < PLAYERS; o++) {
         unsigned add, rem;
         char* ro;
         if (from[o] == to[o] || !(vm >> o & 1)) continue;
-        add = to[o] & ~from[o] & vm;
-        rem = from[o] & ~to[o] & vm;
+        add = to[o] & ~from[o] & vm & ~(1u << o);
+        rem = from[o] & ~to[o] & vm & ~(1u << o);
         ro = prec(ta, o);
-        if (add >> o & 1) {
-            const unsigned char* g = (const unsigned char*)rdptr(ro + PL_SIGHT);
-            uint32_t* w = s_wide + (size_t)o * s_cells;
-            unsigned i;
-            for (i = 0; i < s_cells; i++) w[i] = g[i];
-            add &= ~(1u << o);
-        }
-        rem &= ~(1u << o);
         if (add | rem) {
             if (los & LOS_TRUE) migrate_units(ta, ro, add, rem, los);
             migrate_eyes(ta, ro, add, rem);
@@ -594,11 +621,34 @@ void tagpu_allysight_restore_begin(void)
     memcpy(s_before, s_share, sizeof s_before);
 }
 
+/* A recording's S is data until it is a share set, the form share_compute makes: a record in the
+   set has its own bit and counters of the level's length (valid); a record outside it has an
+   empty entry and appears in no other; and the set is symmetric. An invalid recorded set is
+   repaired by intersection, never by adding: a record whose own bit is clear or whose counters are
+   not valid leaves the set, and a pair stays only when both entries name each other. So the
+   repair can make allies share less than the recording says, never more, and a record W keeps is
+   one the recording kept. */
+static void share_repair(char* ta, uint16_t s[PLAYERS])
+{
+    uint16_t was[PLAYERS];
+    unsigned in = 0, o;
+    memcpy(was, s, sizeof was);
+    for (o = 0; o < PLAYERS; o++)
+        if ((was[o] >> o & 1) && valid(ta, o)) in |= 1u << o;
+    for (o = 0; o < PLAYERS; o++) {
+        unsigned m = 0, r;
+        if (in >> o & 1)
+            for (r = 0; r < PLAYERS; r++)
+                if ((in >> r & 1) && (was[o] >> r & 1) && (was[r] >> o & 1)) m |= 1u << r;
+        s[o] = (uint16_t)m;
+    }
+}
+
 unsigned tagpu_allysight_restored(void)
 {
-    unsigned o, moved = 0;
+    unsigned moved = 0;
     if (!s_on) return 0;
-    for (o = 0; o < PLAYERS; o++) s_share[o] &= 0x3FF;    /* a recording's value is data */
+    share_repair(ta_main(), s_share);
     if (memcmp(s_before, s_share, sizeof s_share)) {
         migrate(ta_main(), s_before, s_share, 0);
         moved = 1;
@@ -616,6 +666,15 @@ unsigned tagpu_allysight_restored(void)
 static void __stdcall destructor_sight(char* unit)
 {
     if (!(rd16(ta_main() + OFF_LOSTYPE) & LOS_FAN) || unit[U_SIGHTB]) E_SightRemove(unit);
+}
+
+/* The temporary records' expiry 0x482130, its removal call at 0x482161 (`push esi; call
+   0x481D50`, esi the record), which it makes for every record past its time whether or not the
+   record holds a stamp. The removal runs only when it does (eye_stamped). ebx and esi, which the
+   expiry's loop keeps across the call (0x482177, 0x482178), are callee-saved here. */
+static void __stdcall eye_expire(unsigned char* eye)
+{
+    if (eye_stamped(rd16(ta_main() + OFF_LOSTYPE), eye)) E_Remove(eye);
 }
 
 /* ---- queries ------------------------------------------------------------------------------- */
@@ -649,6 +708,7 @@ static void __cdecl players_phase(void);
 #define VA_PINIT       0x00464990u
 #define VA_PHASE_CALL  0x0049555Fu
 #define VA_DTOR_CALL   0x00486845u
+#define VA_EXPIRE_CALL 0x00482161u
 
 /* sub esp,0x38; mov ecx,[0x511DE8] -- both the stamp's and the removal's first two instructions */
 static const unsigned char STAMP_WAS[9]   = { 0x83, 0xEC, 0x38, 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 };
@@ -670,6 +730,7 @@ static const unsigned char REBUILD_WAS[7] = { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC
 static const unsigned char PINIT_WAS[9]   = { 0x56, 0x57, 0x33, 0xF6, 0xBF, 0x0A, 0x00, 0x00, 0x00 };
 #define PHASE_FROM     0x00464F80u                /* call 0x464F80, E8 1C FA FC FF             */
 #define DTOR_FROM      0x00482090u                /* call 0x482090, E8 46 B8 FF FF             */
+#define EXPIRE_FROM    0x00481D50u                /* call 0x481D50, E8 EA FB FF FF             */
 
 typedef struct Site {
     unsigned va;
@@ -745,6 +806,7 @@ static unsigned char* stub_circle(void)
 }
 
 #define SITE_MAX 33                               /* the longest site, the radar pass's share test */
+#define SITES_MAX 11                              /* the largest set, tagpu_allysight_init's     */
 
 static void site_bytes(const Site* s, unsigned char* b)
 {
@@ -771,8 +833,9 @@ static unsigned sites_unmatched(const Site* site, unsigned n)
    n, or the site whose write failed. Called only once sites_unmatched has passed them all. */
 static unsigned sites_land(const Site* site, unsigned n)
 {
-    unsigned char was[10][SITE_MAX];
+    unsigned char was[SITES_MAX][SITE_MAX];
     unsigned i, written;
+    if (n > SITES_MAX) return 0;
     for (i = 0; i < n; i++) memcpy(was[i], (const void*)(size_t)site[i].va, site[i].n);
     for (written = 0; written < n; written++) {
         unsigned char b[SITE_MAX];
@@ -797,7 +860,7 @@ static void visible_init(void);
    are in: both read S. */
 void tagpu_allysight_init(void)
 {
-    Site site[10] = {
+    Site site[SITES_MAX] = {
         { VA_STAMP,      STAMP_WAS,   0,          9, 0xE9, (const void*)stamp_hook },
         { VA_REMOVE,     STAMP_WAS,   0,          9, 0xE9, (const void*)remove_hook },
         { VA_CENTER,     CENTER_WAS,  0,          6, 0xE8, NULL },
@@ -808,6 +871,7 @@ void tagpu_allysight_init(void)
         { VA_PINIT,      PINIT_WAS,   0,          9, 0xE9, (const void*)players_init_hook },
         { VA_PHASE_CALL, NULL,        PHASE_FROM, 5, 0xE8, (const void*)players_phase },
         { VA_DTOR_CALL,  NULL,        DTOR_FROM,  5, 0xE8, (const void*)destructor_sight },
+        { VA_EXPIRE_CALL, NULL,      EXPIRE_FROM, 5, 0xE8, (const void*)eye_expire },
     };
     const unsigned nsite = sizeof site / sizeof site[0];
     unsigned char* stub[7] = { 0 };
@@ -850,7 +914,8 @@ void tagpu_allysight_init(void)
     s_on = 1;
     tagpu_log("allysight: installed: the stamp 0x482270 and its three cell sites, the removal "
               "0x481D50, the explored map's stamp 0x481930, the rebuild 0x4816A0, the players init "
-              "0x464990, the players phase's call 0x49555F and the destructor's removal 0x486845");
+              "0x464990, the players phase's call 0x49555F, the destructor's removal 0x486845 "
+              "and the temporary records' expiry's removal 0x482161");
     radar_init();
     visible_init();
 }
@@ -1191,11 +1256,16 @@ SIM_FEATURE(ally_visible, SIM_PUPPET_RUNS, "battle-allied");
    0x465B30..0x465B59); else whether one of four points of its box is in the player's sight
    (0x465B5C..). Here an owner S shares with the player passes as the player's own does, so an
    allied cloaked or submerged unit stays visible (the module note's decision 8).
-   IT DOES NOT CHANGE TARGETING: the acquisition skips an owner its seat's row allies (0x40AB05)
-   before it calls 0x465AC0 (0x40AB11), and S requires that row, so the acquisition never reaches
-   the new branch. The other callers draw or describe: the order sprites 0x439761, the unit panel
-   0x46AF3D and 0x46B5B4, COB's EMIT_SFX test for the viewed player 0x480EE5, HotUnits 0x48BC56,
-   0x494396, and ours (the frame packet, the order markers, the rings, the icons). */
+   IT DOES NOT CHANGE TARGETING, by construction of los_ally: the acquisition calls 0x465AC0
+   (0x40AB11) only when its seat's row byte toward the owner's map bit is zero (`cmp byte
+   [eax+ebp+0x108],0; jne 0x40AB6A` at 0x40AB05, eax the seat's record and the call's player, ebp
+   the owner's +0x146), and los_ally passes only when that same live byte is non-zero. S alone
+   would not do: S is recomputed at the players phase (0x49555F), the rows have writers earlier in
+   the step (0x452A2D, 0x452ADB, 0x447225, 0x447F7E) and the unit tick 0x48AD30 runs before the
+   phase (0x4954ED), so for one tick after an alliance breaks S still names the former ally. The
+   other callers draw or describe: the order sprites 0x439761, the unit panel 0x46AF3D and
+   0x46B5B4, COB's EMIT_SFX test for the viewed player 0x480EE5, HotUnits 0x48BC56, 0x494396, and
+   ours (the frame packet, the order markers, the rings, the icons). */
 
 static int s_visOn;
 SIM_VAR(s_visOn, SIM_INSTALL);
@@ -1208,12 +1278,21 @@ SIM_VAR(s_visOn, SIM_INSTALL);
 static const unsigned char LOS_OWNER_WAS[11] = {
     0x8B, 0x83, 0x96, 0x00, 0x00, 0x00, 0x3B, 0xC6, 0x57, 0x75, 0x0F };
 
-/* Whether S shares the unit's owner record with the player record, both the engine's pointers
-   turned into indices exactly or refused. */
+/* Whether S shares the unit's owner record with the player record, and both live row bytes say
+   allied now: the player's toward the owner's map bit, the byte 0x40AB05 tests, and the owner's
+   toward the player's. Both records are the engine's pointers turned into indices exactly or
+   refused, and each map bit is bounded below PLAYERS before it indexes a row. */
 static int __cdecl los_ally(char* owner, char* player)
 {
     char* ta = ta_main();
-    return ta && tagpu_allysight_shares(rec_index(ta, owner), rec_index(ta, player));
+    unsigned o, p, obit, pbit;
+    if (!ta) return 0;
+    o = rec_index(ta, owner);
+    p = rec_index(ta, player);
+    if (!tagpu_allysight_shares(o, p)) return 0;
+    obit = (unsigned char)owner[PL_MAPBIT];
+    pbit = (unsigned char)player[PL_MAPBIT];
+    return obit < PLAYERS && pbit < PLAYERS && player[PL_ALLY + obit] && owner[PL_ALLY + pbit];
 }
 
 /* push edi (the stock push, before either exit); mov eax,[ebx+0x96]; cmp eax,esi; je 0x465AD9;

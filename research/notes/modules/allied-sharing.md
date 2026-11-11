@@ -67,6 +67,11 @@ followed under the lock by a migration of the counters to the new S before any f
 2. the step's players phase, its call at `0x49555F`, on the owner's machine only;
 3. the replay's table write, on a puppet host: S is recorded, so the recording is its writer there.
 
+And under the ray fan a record is removed only while it holds a stamp, a non-zero byte (the fan
+emitter's own test, `0x482634`): the removal's two engine calls that test nothing, the destructor's
+(`0x482104`, through `0x482090` from `0x486845`) and the temporary records' expiry's (`0x482161`),
+are gated on that byte, as the migration's walks are.
+
 **The removal is the stamp's walk with the sign reversed.** `0x481D50` and `0x482270` walk
 identically (DISASSEMBLED: their first 0x38 bytes match, the rest differs in `dec` for `inc`, the
 order of two loads in the circle loop and the jump displacements), and the walk reads only the
@@ -78,9 +83,11 @@ owner S does not keep and W and the targets' bytes otherwise.
 **The migration** (`migrate`): for an owner whose S changed, each of its live units holding a stamp
 (the block `[+0x67, +0x6B]` bounded to the unit array; `+0xA6 != 0`; under the ray fan a non-zero
 height byte `+0xF8`, in the circle mode `+0xF8` below the table's count) is walked through the
-engine's record builder `0x482090` into the receivers gained and out of those lost, and so is each of
-its temporary sight records. On the owner's machine every receiver gained also takes the owner's
-explored map through the engine's copier `0x485420`.
+engine's record builder `0x482090` into the receivers gained and out of those lost, and so is each
+of its temporary sight records that holds a stamp (under the ray fan a non-zero byte `+0xB`). Every
+record whose own bit is gained adopts its bytes into W first, before any walk, since a walk of
+another owner into a record writes `min(W, 255)` into its bytes. On the owner's machine every
+receiver gained also takes the owner's explored map through the engine's copier `0x485420`.
 
 **The lock.** `s_lock`, a recursive leaf lock, guards S, W and the walk in progress. It exists
 because the stamps run on the loader thread during a load, and a network load's leave can run its
@@ -128,11 +135,18 @@ on sonar alike. Loop 1 of the radar pass already gives every allied unit bit 9, 
 stamp covers its cell in its owner's counters, which S shares, so the site decides chiefly for an
 ally's unit that is cloaked, or submerged while an enemy jams its sonar.
 
-**Targeting does not change.** The acquisition skips an owner its seat's row allies (`0x40AB05`)
-before it calls `0x465AC0` (`0x40AB11`), and S requires that row, so it never reaches the new
-branch. The other callers draw or describe: the order sprites `0x439761`, the unit panel `0x46AF3D`
-and `0x46B5B4`, COB's `EMIT_SFX` test for the viewed player `0x480EE5`, HotUnits `0x48BC56`,
-`0x494396`, and Impure's own (the frame packet, the order markers, the rings, the icons).
+**Targeting does not change.** The acquisition calls `0x465AC0` (`0x40AB11`) only when its seat's
+row byte toward the owner's map bit `+0x146` is zero (`0x40AB05`, the seat's record being the call's
+player). The owner test passes for another owner only when S shares the two records *and* both live
+row bytes are non-zero — the player's toward the owner's map bit, the very byte `0x40AB05` tests,
+and the owner's toward the player's — so the acquisition never reaches the new branch, by
+construction. S alone would not do: S is recomputed at the players phase (`0x49555F`), the rows have
+writers earlier in the step (`0x452A2D`, `0x452ADB`, `0x447225`, `0x447F7E`) and the unit tick
+`0x48AD30` runs before the phase (`0x4954ED`), so for one tick after an alliance breaks S still
+names the former ally. The other callers draw or describe: the order sprites `0x439761`, the unit
+panel `0x46AF3D` and `0x46B5B4`, COB's `EMIT_SFX` test for the viewed player `0x480EE5`, HotUnits
+`0x48BC56`, `0x494396`, and Impure's own (the frame packet, the order markers, the rings, the
+icons).
 
 ## The hooks
 
@@ -151,23 +165,29 @@ and `0x46B5B4`, COB's `EMIT_SFX` test for the viewed player `0x480EE5`, HotUnits
 | the minimap's dot test `0x466E6F` | dots an allied unit whose bits 8 and 9 are clear |
 | `UnitInPlayerLOS`'s owner test `0x465ACE` | 1 for a unit whose owner S shares with the player |
 | the destructor's call `0x486845` | the removal only when the unit holds a stamp: under the ray fan the destructor removes unconditionally, and a unit whose height byte is 0 holds none (the replay's `book_stamp` rule) |
+| the temporary records' expiry's call `0x482161` | the removal only when the record holds a stamp: under the ray fan the add `0x482910` zeroes the record's byte `+0xB` and stamps only through the emitter, which leaves it 0 and stamps nothing when the reused slot's stale words name the new cell (`0x48261F..0x48262E`) or the cell is past the grid; the expiry removes every record past its time |
 
 ## On a puppet host
 
 `ally_sight` runs on a puppet: the host's stamps build W as the recording machine's did. S is
 `SIM_STATE`: at every capture point, frame visit and seek the replay's table write puts the
 recording's S, and `tagpu_allysight_restored` migrates the counters to it under the lock, which is
-held from `_restore_begin` over the write. A seek stamps and removes under the host's S (R3–R8b)
-before R12, and the migration then moves them to the recording's; R14a's temporary records are
-made after it. `ally_share` (the players phase) refuses to act on a puppet. `ally_radar` runs: in the
-recording's viewed record `contacts_put` overwrites bits 8–10 from the image after the pass, in any
-other view the pass's bits stand, and no simulation reads them on a puppet host
-(`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*). `ally_visible` runs: its answer follows S, which the
-recording writes.
+held from `_restore_begin` over the write. The recorded S is data until it is a share set of the
+form the players phase makes — a record in the set has its own bit and counters of the level's
+length, a record outside it appears in no entry, and every pair is named both ways — and an invalid
+one is repaired by intersection, never by adding (`share_repair`): a record without its own bit or
+valid counters leaves the set, and a pair stays only when both entries name each other. A seek
+stamps and removes under the host's S (R3–R8b) before R12, and the migration then moves them to the
+recording's; R14a's temporary records are made after it. `ally_share` (the players phase) refuses to
+act on a puppet. `ally_radar` runs: in the recording's viewed record `contacts_put` overwrites bits
+8–10 from the image after the pass, in any other view the pass's bits stand, and no simulation reads
+them on a puppet host (`tagpu_replay.c`, *THE RECORDED VIEW'S CONTACTS*). `ally_visible` runs: its
+answer follows S, which the recording writes.
 
-W is `SIM_REBUILT`: never recorded, rebuilt on every host by the stamps, carried in a dump after
-each record's counters (`RK_SIGHTW`, only for the records S keeps), where `tarec compare-dumps`
-compares it between the two dumps and checks `u8 = min(W, 255)` in each.
+W is `SIM_REBUILT`, the one declaration the class may have (the link's `sim-state-check.sh` and the
+registry's attach refuse any other by name): never recorded, rebuilt on every host by the stamps,
+carried in a dump after each record's counters (`RK_SIGHTW`, only for the records S keeps), where
+`tarec compare-dumps` compares it between the two dumps and checks `u8 = min(W, 255)` in each.
 
 ## The readers
 
@@ -192,6 +212,11 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
   is installed but its effect is not measured.
 - A mid-game alliance change has no scripted path (the ALLIES panel, `0x447235` / `0x447F8E`); the
   migration it runs is the one every allied game runs at its first players phase, with live units.
+  No test group exercises the migration of temporary sight records or a mid-game backfill of the
+  explored map through `0x485420`: an allied test group's one migration is the first players
+  phase's, which walks the units (no temporary record exists before the first death: the add
+  `0x482910` has one engine call, the destructor's `0x486748`) and backfills only what the load's
+  stamps explored.
 - The network load's leave racing the loader is the engine's race, not closed here.
 - A remote human ally's machine never makes your death vision (decision 7).
 - The install is all-or-nothing but not fail-closed: a machine whose exe does not match runs stock,
