@@ -268,11 +268,14 @@ static int defense_rings(const char* def, RDEF* out)
    counted by the same test although the pass's jammer loop
    0x4675EC..0x46766C walks every OTHER owner's activated jammers
    (0x4675F5..0x467600), so a player's own jam only the other players'
-   passes. An enemy's coverage is never drawn. Activation is the engine's
-   state, not the type's: a radar switched off emits nothing, and a factory
-   emits while its build order runs (BuildingBuild 0x402640 sets it at
-   0x4027AE). The coverage is a plain 2D circle -- no terrain hides anything
-   (0x47E890's test is dx^2 + dz^2). */
+   passes. An enemy's coverage is never drawn, and an ally's needs no line
+   of sight. Activation is the engine's state, not the type's: a radar
+   switched off emits nothing, and a factory emits while its build order runs
+   (BuildingBuild 0x402640 sets it at 0x4027AE). A radar or sonar unit that is
+   alive and switched off is published too, flagged OFF, so the render thread
+   can shrink its circle away rather than drop it, BAR's animation. The
+   coverage is a plain 2D circle -- no terrain hides anything (0x47E890's test
+   is dx^2 + dz^2). */
 static const unsigned SENSOR_OFF[4] = { UD_RADAR, UD_SONAR, UD_RADARJAM, UD_SONARJAM };
 static const uint8_t  SENSOR_CLS[4] = { TAGPU_PK_RC_RADAR, TAGPU_PK_RC_SONAR,
                                         TAGPU_PK_RC_RADARJAM, TAGPU_PK_RC_SONARJAM };
@@ -392,7 +395,8 @@ static void unit_pos(const char* u, int32_t pos[3])
     pos[2] = rdi32(u + U_YFIX) >> 16;
 }
 
-static void emit_sensor(Sink* s, unsigned slot, const int32_t pos[3], int k, int radius, int isNew)
+static void emit_sensor(Sink* s, unsigned slot, const int32_t pos[3], int k, int radius,
+                        unsigned flags)
 {
     RDEF r;
     unsigned before = s->n;
@@ -401,7 +405,7 @@ static void emit_sensor(Sink* s, unsigned slot, const int32_t pos[3], int k, int
     r.style = TAGPU_PK_RS_NONE;
     r.range = (uint16_t)radius;
     emit(s, slot, pos, &r, TAGPU_PK_RL_SENSOR);
-    if (isNew && s->n > before) s->out[before].flags |= TAGPU_PK_RF_NEW;
+    if (s->n > before) s->out[before].flags |= (uint8_t)flags;
 }
 
 /* a unit's attack rings into its layer, the per-type choice applied */
@@ -509,7 +513,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
                 int rad = sensor_radius(ghostDef, k, ghost[1]);
                 if (!rad) continue;
                 sensorKinds |= 1 << k;
-                emit_sensor(&s, 0, ghost, k, rad, 1);
+                emit_sensor(&s, 0, ghost, k, rad, TAGPU_PK_RF_NEW);
             }
     }
     for (i = 1; on && i < w.nslots; i++) {
@@ -569,15 +573,15 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             char* u = unit_at(&w, i);
             char* def;
             int32_t pos[3];
-            int k;
-            if (!u || !allied(&w, owner_of(u))) continue;
-            if (!(*(const unsigned char*)(u + U_ACTIVATION) & UA_ON)) continue;
-            if (!(def = unit_def(&w, u)) || !shown(&w, u)) continue;
+            int k, on;
+            if (!u || !allied(&w, owner_of(u)) || !(def = unit_def(&w, u))) continue;
+            on = (*(const unsigned char*)(u + U_ACTIVATION) & UA_ON) != 0;
             unit_pos(u, pos);
             for (k = 0; k < 4; k++) {
                 int rad;
-                if (!(emitKinds & (1 << k))) continue;
-                if ((rad = sensor_radius(def, k, pos[1])) != 0) emit_sensor(&s, i, pos, k, rad, 0);
+                if (!(emitKinds & (1 << k)) || (!on && k >= 2)) continue;
+                if ((rad = sensor_radius(def, k, pos[1])) != 0)
+                    emit_sensor(&s, i, pos, k, rad, on ? 0u : TAGPU_PK_RF_OFF);
             }
         }
     }

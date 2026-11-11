@@ -514,6 +514,10 @@ enum {
                                         placed; every other sensor ring is
                                         the existing coverage of the viewed
                                         player and its allies              */
+#define TAGPU_PK_RF_OFF       0x04u  /* a radar or sonar sensor ring whose unit
+                                        is alive and switched off: drawn
+                                        shrinking to nothing, as BAR's
+                                        widgets show a radar going off      */
 
 #define TAGPU_PK_MAX_RING    4096u
 #define TAGPU_PK_RING_RMAX   32767   /* world px                             */

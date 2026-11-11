@@ -149,6 +149,7 @@ static int          s_ninst, s_ndraw;
 static TAGPU_RGHAND s_pub;
 static int          s_have;
 static int          s_npathDrawn;      /* this frame's paths, for the heartbeat */
+static int          s_sensorLast;      /* the last frame had sensor rings      */
 static int          s_saidNoGround, s_saidPathCut;
 
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -628,9 +629,13 @@ static float lod_op(int j)
    the zoom is DASH_HYST past it; each level's opacity walks to 1 at the level
    and coarser and 0 finer at 1 / DASH_FADE_MS a millisecond. The dashes move
    their speed on screen, so speed / zoom on the map; the preview's rings
-   their speed on the map. A step back in time, or of more than a second (a
-   load, a stall), moves nothing and ends a fade at once. */
-static void dash_step(double zoom, double ls, double devPx)
+   their speed on the map. THE TWO CLOCKS ARE BAR'S: the radar and sonar
+   lines advance with the game (`dTicks`, a tick a thirtieth of a second at
+   normal speed), so they stop on pause and run faster at a higher speed; the
+   jammers' dashes and the preview's rings with the wall clock. A step back in
+   time, or of more than a second (a load, a stall, a seek), moves nothing
+   and ends a fade at once. */
+static void dash_step(double zoom, double ls, double devPx, double dTicks)
 {
     float old[2 * DASH_SPAN + 1];
     LARGE_INTEGER now, hz;
@@ -662,9 +667,65 @@ static void dash_step(double zoom, double ls, double devPx)
         float cur = (oj >= 0 && oj <= 2 * DASH_SPAN) ? old[oj] : want;
         s_lodOp[j] = want > cur ? (float)fmin(want, cur + rate) : (float)fmax(want, cur - rate);
     }
+    if (!(dTicks >= 0.0 && dTicks <= 30.0)) dTicks = 0.0;
     for (row = 0; row < 2; row++)
-        s_shift[row] += dt * DASH[row].speed * ls / devPx / zoom;
+        s_shift[row] += (row == DR_LINE ? dTicks / 30.0 : dt) * DASH[row].speed * ls / devPx / zoom;
     s_pulse = fmod(s_pulse + dt * PULSE_SPEED, PULSE_SPACING);
+}
+
+/* ---- a radar or sonar going on and off ----------------------------------
+   BAR's widgets grow a radar's circle from nothing over 15 game frames when
+   it switches on, and shrink it away over 15 when it switches off; a unit
+   that is gone is dropped at once. The scale is kept per unit slot and kind,
+   on the game's clock -- the packet's tick and the fraction of the next one
+   since the publisher first saw it, a visual weight that never reaches an
+   index -- so a paused game holds it. A slot not drawn on the frame before
+   starts over: switched on it grows, unless the whole layer is starting --
+   the first frame, a new level, a jump in the game's time (a load, a seek),
+   or the frame after one with no sensors -- when it is at its end at once. */
+#define ANIM_TICKS 15.0
+typedef struct { double t0; float s0; unsigned seen; unsigned char on; } SANIM;
+static SANIM    s_anim[TAGPU_PK_DESIGN_SLOTS][2];
+static unsigned s_animFrame;            /* counts frames with sensors, from 1 */
+static unsigned s_animLevel;
+static double   s_animT;
+
+static double game_ticks(const TAGPU_PACKET* pk)
+{
+    LARGE_INTEGER now, hz;
+    LONGLONG t0 = ((LONGLONG)(unsigned)pk->tick_start_hi << 32) | (LONGLONG)(unsigned)pk->tick_start_lo;
+    double frac = 0.0;
+    if (t0 && pk->game_speed > 0) {
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&hz);
+        if (hz.QuadPart > 0)
+            frac = (double)(now.QuadPart - t0) / (double)hz.QuadPart * 3.0 * pk->game_speed;
+        if (!(frac >= 0.0)) frac = 0.0;
+        if (frac > 1.0) frac = 1.0;
+    }
+    return (double)pk->tick + frac;
+}
+
+static float anim_at(const SANIM* a, double t)
+{
+    double s = a->on ? a->s0 + (t - a->t0) / ANIM_TICKS : a->s0 - (t - a->t0) / ANIM_TICKS;
+    return (float)(s < 0.0 ? 0.0 : s > 1.0 ? 1.0 : s);
+}
+
+/* this frame's scale of slot `slot`'s kind `kind` (0 radar, 1 sonar) */
+static float anim_scale(unsigned slot, int kind, int on, double t, int fresh)
+{
+    SANIM* a;
+    if (slot == 0 || slot >= TAGPU_PK_DESIGN_SLOTS || kind < 0 || kind > 1) return on ? 1.0f : 0.0f;
+    a = &s_anim[slot][kind];
+    if (fresh || (a->seen != s_animFrame && a->seen + 1 != s_animFrame)) {
+        a->on = (unsigned char)on; a->t0 = t;
+        a->s0 = fresh && on ? 1.0f : 0.0f;
+    } else if (a->on != on) {
+        a->s0 = anim_at(a, t); a->t0 = t; a->on = (unsigned char)on;
+    }
+    a->seen = s_animFrame;
+    return anim_at(a, t);
 }
 
 /* a sensor disc: its kind's fill, the sheet with the travelling rings when
@@ -807,14 +868,22 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
     float ss = v->ss > 0 ? (float)v->ss : 1.0f;
     float devPx = v->devPx >= 0.25f && v->devPx <= 16.0f ? v->devPx : 1.0f;
     float camDist = ((float)v->vh / zoom) / FOV_SPAN;
-    unsigned k, n;
-    int L;
+    unsigned k, n, nsens = 0;
+    int L, fresh;
+    double t, dTicks;
 
     s_have = 0;
     s_ninst = 0; s_ndraw = 0;
     if (!h || !r || !pk->in_game) return;
     n = pk->n_ring;
     for (L = 0; L <= TAGPU_PK_RL_LAST; L++) nl[L] = 0;
+    t = game_ticks(pk);
+    dTicks = t - s_animT;
+    fresh = s_animFrame == 0 || pk->level_gen != s_animLevel || dTicks < -0.01 || dTicks > 30.0 ||
+            !s_sensorLast;
+    s_animFrame++;
+    s_animLevel = pk->level_gen;
+    s_animT = t;
     for (k = 0; k < n; k++) {
         const TAGPU_PK_RING* e = &r[k];
         RITEM* it = &s_items[k];
@@ -836,6 +905,10 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
             if (e->cls < TAGPU_PK_RC_RADAR) continue;
             it->sensor = e->cls - TAGPU_PK_RC_RADAR;
             it->isNew = (e->flags & TAGPU_PK_RF_NEW) != 0;
+            nsens++;
+            if (!it->isNew && it->sensor <= SK_SONAR)
+                it->range *= anim_scale(e->slot, it->sensor, !(e->flags & TAGPU_PK_RF_OFF), t, fresh);
+            if (it->range < 1.0f) continue;
             layer[e->layer][nl[e->layer]++] = it;
             continue;
         }
@@ -857,8 +930,9 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
     }
     /* the dashes' level and motion every frame, so a fade or a march
        resumes where it was when the sensors come back */
-    dash_step(zoom, ((float)v->gh * devPx + 500.0f) / 1300.0f, devPx);
+    dash_step(zoom, ((float)v->gh * devPx + 500.0f) / 1300.0f, devPx, fresh ? 0.0 : dTicks);
     s_npathDrawn = 0;
+    s_sensorLast = nsens > 0;   /* a circle shrunk to nothing still counts */
     if (nl[TAGPU_PK_RL_SENSOR]) {
         /* THE SENSORS ARE LAID ON THE GROUND THE TERRAIN PASS MIRRORS on this
            thread, earlier in this frame (tagpu_terr_heights says why the
