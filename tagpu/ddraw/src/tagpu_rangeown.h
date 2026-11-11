@@ -24,8 +24,9 @@
      coverage, with the existing coverage of the same kinds, under
      `rangesensor`.
    The weapon rings are under `ranges`; the sensors are not.
-   An enemy or allied unit counts only while the engine shows it to the viewed
-   player (UnitInPlayerLOS 0x465AC0, the test HotUnits takes).
+   For a weapon ring, an enemy or allied unit counts only while the engine
+   shows it to the viewed player (UnitInPlayerLOS 0x465AC0, the test HotUnits
+   takes); an ally's sensor coverage takes no such test.
 
    ALL OF IT ON THE GAME THREAD, inside the engine's in-play draw: every engine
    field is resolved to a number in the record, so the render thread reads

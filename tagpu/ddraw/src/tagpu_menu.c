@@ -401,7 +401,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "ranges-2"
+#define UFO_STAMP  "sensors-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
