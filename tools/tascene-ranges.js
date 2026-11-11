@@ -226,10 +226,10 @@ const SLINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;    // canvas px
 layout(location=1) in float aEdge;  // -1..1 across the line
-layout(location=2) in float aArc;   // elmos along the circle
+layout(location=2) in float aArc;   // px along the circle on screen
 layout(location=3) in float aVis;
 layout(location=4) in float aHalf;  // half width in px (including the AA rim)
-layout(location=5) in float aPer;   // the pattern's period in elmos
+layout(location=5) in float aPer;   // the pattern's period in px
 uniform vec2 uCanvas;
 out float vEdge; out float vArc; out float vVis; out float vHalf; out float vPer;
 void main() {
@@ -245,7 +245,7 @@ uniform int uMaskBit;        // -1: no clip
 uniform vec3 uCol;
 uniform float uA;
 uniform int uMode;           // 0 stipple, 1 jammer dashes, 2 solid
-uniform float uShift;        // elmos the pattern has moved
+uniform float uShift;        // px the pattern has moved
 out vec4 o;
 const float PI = 3.14159265;
 void main() {
@@ -895,8 +895,16 @@ function create(ctx) {
       const inMap = x >= 0 && z >= 0 && x <= MAPW && z <= MAPH;
       vis[i] = inMap && !(water && ground(x, z) > SEA) ? 1 : 0;
     }
+    // the distance along the circle ON SCREEN to each vertex: the pattern is
+    // laid out on it, so a dash is as long and moves as fast over a slope
+    // facing the camera (stretched by the view's h/2 lift) as on the flat
+    const along = new Float32Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      along[i + 1] = along[i] + Math.hypot(scr[j * 2] - scr[i * 2], scr[j * 2 + 1] - scr[i * 2 + 1]);
+    }
     const c = proj([u.x, surface(u.x, u.z), u.z]);
-    return { u, r, n, scr, clamp, vis, c, len: (2 * Math.PI * r) / n };
+    return { u, r, n, scr, clamp, vis, c, along };
   }
   const fan = (pts, c) => {
     const n = pts.length / 2;
@@ -958,7 +966,7 @@ function create(ctx) {
     gl.uniform4f(SU.uCol, rgb[0] * a, rgb[1] * a, rgb[2] * a, a);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  // a circle's line as quads: x, y, edge, arc (elmos), vis, half, period
+  // a circle's line as quads: x, y, edge, along (px), vis, half, period (px)
   let sBuf = new Float32Array(1 << 16), sN = 0;
   const pushS = (x, y, e, arc, vis, half, per) => {
     if (sN + 7 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
@@ -976,7 +984,7 @@ function create(ctx) {
       const ux = dx / len, uy = dy / len, nx = -uy * half, ny = ux * half;
       const ex = ux * width / 2, ey = uy * width / 2;
       x0 -= ex; y0 -= ey; x1 += ex; y1 += ey;
-      const a0 = i * rg.len, a1 = (i + 1) * rg.len;
+      const a0 = rg.along[i], a1 = rg.along[i + 1];
       pushS(x0 + nx, y0 + ny, 1, a0, vis[i], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
       pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per);
       pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
@@ -984,7 +992,7 @@ function create(ctx) {
     }
   }
   // mode 0 BAR's moving stipple, 1 the jammer's dashes, 2 solid; clipped where
-  // channel `clip` is set (-1: not clipped); `shift` elmos the pattern has moved
+  // channel `clip` is set (-1: not clipped); `shift` px the pattern has moved
   function slineDraw(rgb, a, mode, clip, shift) {
     if (!sN) return;
     gl.useProgram(slineProg);
@@ -1002,11 +1010,11 @@ function create(ctx) {
     gl.bindVertexArray(null);
     sN = 0;
   }
-  // a circle's pattern period in elmos: `px` on screen, a whole number of
+  // a circle's pattern period in screen px: about `px`, a whole number of
   // periods round the circle so the pattern closes
-  const periodOf = (rg, px, zoom) => {
-    const C = 2 * Math.PI * rg.r;
-    return C / Math.max(1, Math.round(C * zoom / px));
+  const periodOf = (rg, px) => {
+    const L = rg.along[rg.n];
+    return L / Math.max(1, Math.round(L / px));
   };
   // the own and allied units that emit a kind now
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
@@ -1024,8 +1032,8 @@ function create(ctx) {
     maskFlush(2);
     maskEnd();
     const w = LINE_W * (GH + 500) / 1300, px = w * STIPPLE.periodW;
-    for (const rg of rings) sline(rg, w, periodOf(rg, px, zoom));
-    slineDraw(st.c, st.a, 0, 2, -t * STIPPLE.speed * px / zoom);
+    for (const rg of rings) sline(rg, w, periodOf(rg, px));
+    slineDraw(st.c, st.a, 0, 2, -t * STIPPLE.speed * px);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
   // placed): the union filled, a dashed band along the inside of its edge. The
@@ -1055,8 +1063,8 @@ function create(ctx) {
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
     fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
     const px = JAMMER.dash * (GH + 500) / 1300;
-    for (const it of items) sline(it.band, wpx, periodOf(it.band, px, zoom));
-    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed * px / zoom);
+    for (const it of items) sline(it.band, wpx, periodOf(it.band, px));
+    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed * px);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
   // duller where the new disc does not reach, the new disc's sheet with rings
