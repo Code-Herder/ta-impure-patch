@@ -69,19 +69,17 @@ static const RSTYLE DEF[5] = {
 static const float DEF_WATER[4] = { 0.48f, 0.67f, 1.0f, 0.30f };
 
 /* THE SENSORS, BAR's sensor widgets on the engine's coverage rule, as
-   tools/tascene-ranges.js draws them (its DASH, SENSOR_LINE, JAMMER, PREVIEW
-   and PULSE tables are these):
+   tools/tascene-ranges.js draws them (its DASH, SENSOR_LINE and JAMMER
+   tables are these):
    - THE VIEW, under `sensorview`: radar and sonar as
      gui_sensor_ranges_radar.lua / _sonar.lua's colours on a dashed band just
      outside each kind's union; the jammers as
      gui_sensor_ranges_jammer_preview.lua's always-shown layer, a dashed band
      just inside the union and the union inside the band filled;
-   - THE PREVIEW of a building being placed: radar as
-     gui_sensor_ranges_radar_preview.lua without its terrain raycast -- the
-     new disc's sheet with rings travelling outward, the existing coverage
-     filled duller, an outline along the new disc's edge and the union's --
-     and sonar the same in the sonar colours; a jammer's disc joins the jammer
-     layer in the brighter sheet colour.
+   - THE PREVIEW of a building being placed is not BAR's: the building's disc
+     joins its kinds' unions in the view's look -- whether the view is on or
+     not -- and the arcs it adds to the outline draw brighter (`NEW_GAIN`),
+     so the outline shows the coverage the building would give.
    Every width, dash and speed is BAR's px of a screen scaled by its
    lineScale, (screen height + 500) / 1300, so they hold on screen at every
    zoom; the device's px reach the game frame through `devPx`. */
@@ -111,30 +109,16 @@ static const DASHROW DASH[2] = {
 /* gui_sensor_ranges_jammer_preview.lua shaderConfig; the band is `JAM_W` px
    of a 1080-high screen plus `JAM_W_ELMO` world px */
 static const float JAM_ALLIED[3] = { 0.62f, 0.35f, 0.33f };
-static const float JAM_SHEET[3]  = { 0.90f, 0.22f, 0.20f };
 static const float JAM_OUTLINE[4] = { 1.0f, 0.32f, 0.22f, 0.8f };
 #define JAM_A          0.17f
 #define JAM_ALLIED_REL 0.85f
 #define JAM_W          1.2f
 #define JAM_W_ELMO     0.89f
-/* gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar
-   line's colours */
-typedef struct { float sheet[3], a, pulse[3], allied[3], alliedRel, outline[4]; } PSTYLE;
-static const PSTYLE PREV[2] = {
-    { { 0.22f, 0.85f, 0.50f }, 0.2f, { 0.55f, 1.0f, 0.70f }, { 0.35f, 0.62f, 0.50f }, 0.55f,
-      { 0.45f, 1.0f, 0.57f, 0.40f } },
-    { { 0.40f, 0.60f, 0.85f }, 0.2f, { 0.70f, 0.85f, 1.0f }, { 0.35f, 0.48f, 0.62f }, 0.55f,
-      { 0.50f, 0.70f, 0.90f, 0.45f } },
-};
-/* the rings travelling outward: spacing and speed in world px, the glow's
-   power and strength; the outline `PULSE_W` px of a 1080-high screen */
-#define PULSE_SPACING  180.0
-#define PULSE_SPEED     85.0
-#define PULSE_POWER      4.5f
-#define PULSE_STRENGTH   0.8f
-#define PULSE_W          2.0f
-/* a sensor disc: the finer of the two counts tagpu_vk_range.c carries, for a
-   coverage circle of up to 2880 px (ARMARAD) */
+/* the arcs a building being placed adds to an outline: its band's alpha
+   times this, at most 1 (radar 0.40 and sonar 0.425 reach 1.0) */
+#define NEW_GAIN       2.5f
+/* a jammer disc: the finer of the two counts tagpu_vk_range.c carries, for a
+   coverage circle of up to 2880 px (ARMARAD's radar, the largest sensor) */
 #define SENSOR_SEGS 1024
 typedef char range_lodn_is_the_span[(DASH_SPAN + 1 == TAGPU_RG_LODN) ? 1 : -1];
 
@@ -315,7 +299,7 @@ static void draw_layer(const RITEM* const* L, int n, float devPx, float ss)
 typedef struct { double x, z, r; } SCIRC;
 typedef struct { int i; double a0, a1; int whole; } SARC;
 /* a path: its points in s_pts, and what draws it */
-enum { PS_VIEW = 0, PS_JAM, PS_PREV };
+enum { PS_VIEW = 0, PS_JAM };
 typedef struct { int first, nseg; float len; unsigned char set, kind; } SPATH;
 
 /* the ground the points are laid on: the height grid, one byte a 16-px
@@ -351,7 +335,6 @@ static float surface_at(const GROUND* G, double x, double z)
 static int segs_of(double r) { return r > 1500.0 ? 1024 : 512; }
 
 static double s_cov[2 * SC_MAX][2];
-static SARC   s_tmpArc[2 * SC_MAX + 2];
 
 static int cov_cmp(const void* a, const void* b)
 {
@@ -415,28 +398,6 @@ static int open_arcs(const SCIRC* c, int n, int i, SARC* out, int max)
     return no;
 }
 
-/* the arcs of circle i that other discs DO cover: the preview's own edge
-   inside the existing coverage */
-static int covered_arcs(const SCIRC* c, int n, int i, SARC* out, int max)
-{
-    int no = open_arcs(c, n, i, s_tmpArc, 2 * SC_MAX + 2), k, nout = 0;
-    if (no < 0) return -1;
-    if (no == 1 && s_tmpArc[0].whole) return 0;
-    if (no == 0) {
-        if (max < 1) return -1;
-        out[0].i = i; out[0].a0 = 0.0; out[0].a1 = TAU; out[0].whole = 1;
-        return 1;
-    }
-    for (k = 0; k < no; k++) {
-        double a0 = s_tmpArc[k].a1, a1 = k + 1 < no ? s_tmpArc[k + 1].a0 : s_tmpArc[0].a0 + TAU;
-        if (a1 - a0 <= 1e-6) continue;
-        if (nout >= max) return -1;
-        out[nout].i = i; out[nout].a0 = a0; out[nout].a1 = a1; out[nout].whole = 0;
-        nout++;
-    }
-    return nout;
-}
-
 static void arc_point(const SCIRC* c, double a, double* x, double* z)
 {
     *x = c->x + sin(a) * c->r;
@@ -460,11 +421,16 @@ static int        s_owner[TAGPU_RG_MAXPT];
 /* A chain of arcs as a path into s_pts: each point's place on the ground,
    the distance along the path on the screen at zoom 1 (game px: x, and z
    less half the altitude -- the projection's own lift, so a slope facing the
-   camera stretches the dashes exactly as it stretches the ground), and the
+   camera stretches the dashes exactly as it stretches the ground), the
    band's direction there: the mitre of the two segments, away from the
-   point's own circle, scaled to keep the band's width. */
+   point's own circle, scaled to keep the band's width -- and whether the
+   segment that starts there lies on circle 0 when `newFirst` says circle 0
+   is a building being placed. A segment lies on the arc of the point it
+   ends at: an arc after the first starts at the previous one's last point,
+   and a closed path's last segment ends at the point dropped as the first
+   again, still in s_owner. */
 static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nch, int closed,
-                      int water, int set, int kind)
+                      int water, int set, int kind, int newFirst)
 {
     int k, t, n = 0, segs, first = s_npts, room = TAGPU_RG_MAXPT - s_npts;
     double along = 0.0;
@@ -484,6 +450,7 @@ static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nc
     }
     if (closed) n--;                   /* the last point is the first again */
     if (n < 2) return;
+    segs = closed ? n : n - 1;
     for (k = 0; k < n; k++) {
         TAGPU_RGPT* q = &s_pts[first + k];
         double x = s_px[k], z = s_pz[k];
@@ -492,9 +459,8 @@ static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nc
         s_sx[k] = (float)x; s_sy[k] = (float)(z - alt * 0.5);
         q->p[0] = (float)x; q->p[1] = (float)z; q->p[2] = alt;
         q->n[2] = inMap && !(water && ground_at(G, x, z) > G->sea) ? 1.0f : 0.0f;
-        q->n[3] = 0.0f;
+        q->n[3] = newFirst && k < segs && s_owner[k + 1] == 0 ? 1.0f : 0.0f;
     }
-    segs = closed ? n : n - 1;
     s_pts[first].p[3] = 0.0f;
     for (k = 0; k < segs; k++) {
         int j = (k + 1) % n;
@@ -543,9 +509,10 @@ static SARC          s_chain[ARC_MAX];
 static unsigned char s_used[ARC_MAX];
 static double        s_arcStart[ARC_MAX][2];
 
-/* One kind's union as closed loops of arcs, each a path; with `own` also
-   the first circle's arcs inside the others, as open paths. */
-static void outline(const GROUND* G, const SCIRC* c, int n, int water, int own, int set, int kind)
+/* One kind's union as closed loops of arcs, each a path; circle 0's arcs
+   marked new when `newFirst`. */
+static void outline(const GROUND* G, const SCIRC* c, int n, int water, int newFirst, int set,
+                    int kind)
 {
     int i, na = 0, s;
     for (i = 0; i < n; i++) {
@@ -576,31 +543,24 @@ static void outline(const GROUND* G, const SCIRC* c, int n, int water, int own, 
             }
             k = bd < 1.0 ? best : -1;
         }
-        make_path(G, c, s_chain, nch, s_chain[0].whole || k == s, water, set, kind);
-    }
-    if (own) {
-        int no = covered_arcs(c, n, 0, s_arcs, ARC_MAX);
-        if (no < 0) { s_pathCut = 1; return; }
-        for (i = 0; i < no; i++) make_path(G, c, &s_arcs[i], 1, s_arcs[i].whole, water, set, kind);
+        make_path(G, c, s_chain, nch, s_chain[0].whole || k == s, water, set, kind, newFirst);
     }
 }
 
 /* the circles one outline is made of: the kind's records, the placed
-   building's first when `ghost` is 1 (the preview), without it when 0 (the
-   view's radar and sonar), with it or alone when 2 (the jammers, alone while
-   the view is off); 0 past SC_MAX */
-static int circles(const RITEM* const* L, int n, int kind, int ghost, int view, SCIRC* out)
+   building's first when there is one -- `*newFirst` says so; 0 past SC_MAX */
+static int circles(const RITEM* const* L, int n, int kind, int* newFirst, SCIRC* out)
 {
     int k, m = 0, pass;
+    *newFirst = 0;
     for (pass = 0; pass < 2; pass++)
         for (k = 0; k < n; k++) {
             const RITEM* it = L[k];
             if (it->sensor != kind || it->isNew != (pass == 0)) continue;
-            if (it->isNew && !ghost) continue;
-            if (!it->isNew && ghost == 2 && !view) continue;
             /* a union of only some of the circles would draw edges inside
                the coverage: past the cap the kind is not drawn */
             if (m >= SC_MAX) { s_pathCut = 1; return 0; }
+            if (it->isNew && m == 0) *newFirst = 1;
             out[m].x = it->x; out[m].z = it->z; out[m].r = it->range;
             m++;
         }
@@ -612,21 +572,22 @@ static float  s_key[2][8 + 5 * TAGPU_PK_MAX_RING];
 static int    s_keyN[2];
 static int    s_keyCur;
 
+/* a kind is drawn under the view, and while a building that adds it is
+   placed */
+static int kind_shown(int kind, int view, int newMask)
+{
+    return view || (newMask & (1 << kind));
+}
+
 static void build_paths(const GROUND* G, const RITEM* const* L, int n, int view, int newMask)
 {
     static SCIRC c[SC_MAX];
-    int kind, m;
+    int kind, m, newFirst;
     s_npts = 0; s_npaths = 0; s_pathCut = 0;
-    for (kind = SK_RADARJAM; kind <= SK_SONARJAM; kind++)
-        if ((m = circles(L, n, kind, 2, view, c)) > 0)
-            outline(G, c, m, SK_WATER[kind], 0, PS_JAM, kind);
-    if (view)
-        for (kind = SK_RADAR; kind <= SK_SONAR; kind++)
-            if ((m = circles(L, n, kind, 0, view, c)) > 0)
-                outline(G, c, m, SK_WATER[kind], 0, PS_VIEW, kind);
-    for (kind = SK_RADAR; kind <= SK_SONAR; kind++)
-        if ((newMask & (1 << kind)) && (m = circles(L, n, kind, 1, view, c)) > 0)
-            outline(G, c, m, SK_WATER[kind], 1, PS_PREV, kind);
+    for (kind = 0; kind < SK_N; kind++)
+        if (kind_shown(kind, view, newMask) && (m = circles(L, n, kind, &newFirst, c)) > 0)
+            outline(G, c, m, SK_WATER[kind], newFirst,
+                    kind >= SK_RADARJAM ? PS_JAM : PS_VIEW, kind);
     s_ptSerial++;
 }
 
@@ -634,7 +595,7 @@ static void build_paths(const GROUND* G, const RITEM* const* L, int n, int view,
 static int      s_lodHave, s_lodK;
 static float    s_lodOp[2 * DASH_SPAN + 1];
 static LONGLONG s_lodQpc;
-static double   s_shift[2], s_pulse;
+static double   s_shift[2];
 
 static float lod_op(int j)
 {
@@ -687,7 +648,6 @@ static void dash_step(double zoom, double ls, double devPx, double dTicks)
     if (!(dTicks >= 0.0 && dTicks <= 30.0)) dTicks = 0.0;
     for (row = 0; row < 2; row++)
         s_shift[row] += (row == DR_LINE ? dTicks / 30.0 : dt) * DASH[row].speed * ls / devPx / zoom;
-    s_pulse = fmod(s_pulse + dt * PULSE_SPEED, PULSE_SPACING);
 }
 
 /* ---- a radar or sonar going on and off ----------------------------------
@@ -747,17 +707,16 @@ static float anim_scale(unsigned slot, int kind, int on, double t, int fresh)
     return anim_at(a, t);
 }
 
-/* a sensor disc: its kind's fill, the sheet with the travelling rings when
-   `pulse`; the kind tagpu_range_glsl.inc reads is 2, + 1 water only, + 2 the
-   rings */
-static int put_sdisc(const RITEM* it, float r, float alt, const float rgb[3], float a, int pulse)
+/* a jammer disc: its fill; the kind tagpu_range_glsl.inc reads is 2, + 1
+   water only */
+static int put_sdisc(const RITEM* it, float r, float alt, const float rgb[3], float a)
 {
     TAGPU_RGINST* o;
     if (s_ninst >= TAGPU_RG_MAXINST) return 0;
     o = &s_inst[s_ninst++];
     o->c[0] = it->x; o->c[1] = it->z; o->c[2] = alt; o->c[3] = r;
     o->b[0] = 0.0f; o->b[1] = 0.0f;
-    o->b[2] = 2.0f + (SK_WATER[it->sensor] ? 1.0f : 0.0f) + (pulse ? 2.0f : 0.0f);
+    o->b[2] = 2.0f + (SK_WATER[it->sensor] ? 1.0f : 0.0f);
     o->b[3] = 1.0f;
     o->col[0] = rgb[0]; o->col[1] = rgb[1]; o->col[2] = rgb[2]; o->col[3] = a;
     o->w[0] = 0.0f; o->w[1] = (float)SENSOR_SEGS; o->w[2] = 0.0f; o->w[3] = 0.0f;
@@ -766,30 +725,28 @@ static int put_sdisc(const RITEM* it, float r, float alt, const float rgb[3], fl
 
 /* a path's band: `side` 1 outside its circles, -1 inside; dashed on `row`'s
    lattice -- its coarsest level puts 4..8 dashes along it, and s0 divides its
-   length evenly, so the pattern closes round a loop -- or solid when `row`
-   is -1 */
+   length evenly, so the pattern closes round a loop. The segments a building
+   being placed adds (their start point's n[3]) take `col`'s alpha times
+   NEW_GAIN, at most 1. */
 static void put_spath(const SPATH* p, float side, float width, int row, const float col[4],
                       float space, float dashLen)
 {
     TAGPU_RGINST* o;
     int first = s_ninst;
-    double L = p->len, s0 = 1.0, top = 0.0, shift = 0.0;
+    double L = p->len, s0, top, shift, nTop;
     if (L < 1.0 || s_ninst >= TAGPU_RG_MAXINST) return;
-    if (row >= 0) {
-        double nTop;
-        top = floor(log2(L / (space * 4.0)));
-        if (top < 0.0) top = 0.0;
-        nTop = floor(L / (space * pow(2.0, top)) + 0.5);
-        if (nTop < 1.0) nTop = 1.0;
-        s0 = L / (nTop * pow(2.0, top));
-        shift = fmod(DASH[row].sign * s_shift[row], L);
-        if (shift < 0.0) shift += L;
-    }
+    top = floor(log2(L / (space * 4.0)));
+    if (top < 0.0) top = 0.0;
+    nTop = floor(L / (space * pow(2.0, top)) + 0.5);
+    if (nTop < 1.0) nTop = 1.0;
+    s0 = L / (nTop * pow(2.0, top));
+    shift = fmod(DASH[row].sign * s_shift[row], L);
+    if (shift < 0.0) shift += L;
     o = &s_inst[s_ninst++];
     o->c[0] = (float)p->first; o->c[1] = (float)p->nseg; o->c[2] = side; o->c[3] = width;
-    o->b[0] = (float)s0; o->b[1] = (float)top; o->b[2] = row >= 0 ? 0.0f : 2.0f; o->b[3] = (float)shift;
+    o->b[0] = (float)s0; o->b[1] = (float)top; o->b[2] = 0.0f; o->b[3] = (float)shift;
     memcpy(o->col, col, sizeof o->col);
-    o->w[0] = dashLen; o->w[1] = 0.0f; o->w[2] = 0.0f; o->w[3] = 0.0f;
+    o->w[0] = dashLen; o->w[1] = fminf(col[3] * NEW_GAIN, 1.0f); o->w[2] = 0.0f; o->w[3] = 0.0f;
     put_draw(TAGPU_RG_SLINE, 0, first, p->nseg);
 }
 
@@ -802,18 +759,17 @@ static void put_paths(int set, int kind, float side, float width, int row, const
             put_spath(&s_paths[k], side, width, row, col, space, dashLen);
 }
 
-/* THE SENSOR LAYER, in its draw order: the jammers' fills and bands, the
-   view's radar and sonar lines, then the preview's sheet, fill and outline
-   -- one stencil bit a kind, so a kind's discs claim each pixel once (the
-   disc pipeline's NOT_EQUAL + REPLACE) and the placed building's, drawn
-   first, take their own ground before the existing coverage's fill. */
+/* THE SENSOR LAYER, in its draw order: the jammers' fills and bands, then
+   the radar and sonar lines -- one stencil bit a jammer kind, so a kind's
+   discs claim each pixel once (the disc pipeline's NOT_EQUAL + REPLACE). A
+   kind is drawn under the view, and while a building that adds it is placed
+   (`kind_shown`); the building's disc is one of its kind's like any other. */
 static void draw_sensors(const RITEM* const* L, int n, const GROUND* G, int view,
                          float zoom, float devPx, float gh)
 {
     float hDev = gh * devPx, ls = (hDev + 500.0f) / 1300.0f;
     float wLine = DASH[DR_LINE].w * ls / devPx;
     float wJam = JAM_W * hDev / 1080.0f / devPx + JAM_W_ELMO * zoom, wE = wJam / zoom;
-    float wPrev = PULSE_W * hDev / 1080.0f / devPx;
     float space[2], dashLen[2];
     int kind, k, first, newMask = 0, cur;
 
@@ -842,37 +798,21 @@ static void draw_sensors(const RITEM* const* L, int n, const GROUND* G, int view
 
     put_draw(TAGPU_RG_CLEAR, 0, 0, 0);
     for (kind = SK_RADARJAM; kind <= SK_SONARJAM; kind++) {
+        if (!kind_shown(kind, view, newMask)) continue;
         /* the fill stops where the band starts: each disc short of its circle
            by the band's width */
         first = s_ninst;
         for (k = 0; k < n; k++)
-            if (L[k]->sensor == kind && L[k]->isNew)
+            if (L[k]->sensor == kind)
                 put_sdisc(L[k], fmaxf(1.0f, L[k]->range - wE), surface_at(G, L[k]->x, L[k]->z),
-                          JAM_SHEET, JAM_A, 0);
-        for (k = 0; view && k < n; k++)
-            if (L[k]->sensor == kind && !L[k]->isNew)
-                put_sdisc(L[k], fmaxf(1.0f, L[k]->range - wE), surface_at(G, L[k]->x, L[k]->z),
-                          JAM_ALLIED, JAM_A * JAM_ALLIED_REL, 0);
+                          JAM_ALLIED, JAM_A * JAM_ALLIED_REL);
         put_draw(TAGPU_RG_DISC, 1 << kind, first, SENSOR_SEGS);
         put_paths(PS_JAM, kind, -1.0f, wJam, DR_JAM, JAM_OUTLINE, space[DR_JAM], dashLen[DR_JAM]);
     }
-    for (kind = SK_RADAR; view && kind <= SK_SONAR; kind++)
-        put_paths(PS_VIEW, kind, 1.0f, wLine, DR_LINE, VIEW_COL[kind], space[DR_LINE],
-                  dashLen[DR_LINE]);
-    for (kind = SK_RADAR; kind <= SK_SONAR; kind++) {
-        const PSTYLE* P = &PREV[kind];
-        if (!(newMask & (1 << kind))) continue;
-        first = s_ninst;
-        for (k = 0; k < n; k++)
-            if (L[k]->sensor == kind && L[k]->isNew)
-                put_sdisc(L[k], L[k]->range, surface_at(G, L[k]->x, L[k]->z), P->sheet, P->a, 1);
-        for (k = 0; k < n; k++)
-            if (L[k]->sensor == kind && !L[k]->isNew)
-                put_sdisc(L[k], L[k]->range, surface_at(G, L[k]->x, L[k]->z), P->allied,
-                          P->a * P->alliedRel, 0);
-        put_draw(TAGPU_RG_DISC, 1 << kind, first, SENSOR_SEGS);
-        put_paths(PS_PREV, kind, -1.0f, wPrev, -1, P->outline, 1.0f, 0.0f);
-    }
+    for (kind = SK_RADAR; kind <= SK_SONAR; kind++)
+        if (kind_shown(kind, view, newMask))
+            put_paths(PS_VIEW, kind, 1.0f, wLine, DR_LINE, VIEW_COL[kind], space[DR_LINE],
+                      dashLen[DR_LINE]);
 }
 
 void tagpu_range_render(const TAGPU_FXVIEW* v)
@@ -1006,11 +946,6 @@ void tagpu_range_render(const TAGPU_FXVIEW* v)
         s_pub.lodFine = fine; s_pub.lodLevel = s_lodK;
         for (i = 0; i < TAGPU_RG_LODN; i++) s_pub.lodOp[i] = lod_op(fine + i);
     }
-    s_pub.pulse[0] = (float)PULSE_SPACING; s_pub.pulse[1] = (float)s_pulse;
-    s_pub.pulse[2] = PULSE_POWER;          s_pub.pulse[3] = PULSE_STRENGTH;
-    memcpy(s_pub.pulseCol[0], PREV[SK_RADAR].pulse, 3 * sizeof(float));
-    memcpy(s_pub.pulseCol[1], PREV[SK_SONAR].pulse, 3 * sizeof(float));
-    s_pub.pulseCol[0][3] = s_pub.pulseCol[1][3] = 1.0f;
     s_have = 1;
 }
 

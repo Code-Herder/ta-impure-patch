@@ -76,7 +76,7 @@ DFNS(DECL)
 #undef DECL
 
 /* the vertex stages' std140 block, as tagpu_range.spv.h prints it */
-#define VS_SZ      160
+#define VS_SZ      112
 #define VS_GAME      0
 #define VS_ZOOM      8
 #define VS_ZOOMC    16
@@ -86,8 +86,6 @@ DFNS(DECL)
 #define VS_SEA      44
 #define VS_LODOP    48
 #define VS_LODLV    96
-#define VS_PULSE   112
-#define VS_PULSECOL 128
 
 /* the reach pass's push constants, tagpu_range_comp.h's PC in std430 */
 #define PC_SZ       32
@@ -816,11 +814,6 @@ int tagpu_vk_range_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     put_f(u, VS_SEA, s_h.sea);
     for (i = 0; i < TAGPU_RG_LODN; i++) put_f(u, VS_LODOP + 4 * i, s_h.lodOp[i]);
     put_f(u, VS_LODLV, (float)s_h.lodFine); put_f(u, VS_LODLV + 4, (float)s_h.lodLevel);
-    for (i = 0; i < 4; i++) {
-        put_f(u, VS_PULSE + 4 * i, s_h.pulse[i]);
-        put_f(u, VS_PULSECOL + 4 * i, s_h.pulseCol[0][i]);
-        put_f(u, VS_PULSECOL + 16 + 4 * i, s_h.pulseCol[1][i]);
-    }
 
     memset(&bu, 0, sizeof bu); memset(&br, 0, sizeof br); memset(&bj, 0, sizeof bj);
     memset(&bp, 0, sizeof bp);

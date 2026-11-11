@@ -41,9 +41,10 @@
 /* 64 B, one per ring and pass: what the vertex stage reads per instance.
    An SLINE instance is a path instead: c = first point, segments, side (1
    outside its circles, -1 inside), the band's width in game px; b = the
-   lattice's level-0 spacing (zoom-1 game px), its coarsest level, the mode
-   (0 dashed, 2 solid), how far the dashes have moved (zoom-1 game px);
-   col as a ring's; w = a dash's length in game px, 0, 0, 0. */
+   lattice's level-0 spacing (zoom-1 game px), its coarsest level, 0, how
+   far the dashes have moved (zoom-1 game px); col as a ring's; w = a dash's
+   length in game px, the alpha of the segments a building being placed adds
+   (TAGPU_RGPT n[3]), 0, 0. */
 typedef struct TAGPU_RGINST {
     float c[4];   /* the centre: world x, world z, the shooter's altitude, range */
     float b[4];   /* velocity (world px a tick), minbarrelangle (radians),
@@ -72,7 +73,8 @@ enum {
 typedef struct TAGPU_RGPT {
     float p[4];   /* world x, world z, altitude, along                        */
     float n[4];   /* direction x, y, 1 where the band shows (on the map, and
-                     over water for a water kind), 0                          */
+                     over water for a water kind), 1 when the segment from
+                     this point to the next is a building being placed's   */
 } TAGPU_RGPT;
 
 typedef struct TAGPU_RGDRAW {
@@ -111,10 +113,6 @@ typedef struct TAGPU_RGHAND {
        zoom's, and the opacity of each from the finest up */
     int   lodFine, lodLevel;
     float lodOp[TAGPU_RG_LODN];
-    /* the preview's travelling rings: spacing (world px), how far they have
-       travelled, the glow's power and strength; their colour by kind */
-    float pulse[4];
-    float pulseCol[2][4];           /* radar, sonar                              */
 } TAGPU_RGHAND;
 
 /* Render thread, once per frame, after the marker gather: this frame's

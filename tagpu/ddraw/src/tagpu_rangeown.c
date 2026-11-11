@@ -521,8 +521,8 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             overrideBits |= def_class_bit(r[k].cls);
             emit(&s, 0, ghost, &r[k], TAGPU_PK_RL_DEF_ALLY);
         }
-        /* its sensors, before every other sensor ring: the draw lays the new
-           ring's sheet first, and the existing coverage fills only around it */
+        /* its sensors: the draw merges each into its kind's union and
+           brightens the arcs it adds */
         if (sensor && will_emit(ghostDef))
             for (k = 0; k < 4; k++) {
                 int rad = sensor_radius(ghostDef, k, ghost[1]);
