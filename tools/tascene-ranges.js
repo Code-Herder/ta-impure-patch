@@ -1285,17 +1285,20 @@ function create(ctx) {
     slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
-  // placed): the union filled, a dashed band along the inside of its outline.
+  // placed): a dashed band along the inside of the union's outline, and the
+  // union inside the band filled.
   function drawJammers(kind, ghost, proj, zoom, t) {
     const water = WATER_KIND[kind];
     const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
     if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind))
       list.push({ u: ghost, isNew: true });
     if (!list.length) return;
-    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom;
+    // the fill stops where the band starts: each disc short of its circle
+    // by the band's width, so the band lies on the bare ground outside it
+    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, wE = wpx / zoom;
     const items = list.map((e) => {
       const r = types[e.u.type][kind];
-      return { ...e, r, rg: circle(e.u, r, water, proj) };
+      return { ...e, r, rg: circle(e.u, Math.max(1, r - wE), water, proj) };
     });
     maskBegin();
     for (const isNew of [true, false]) {
