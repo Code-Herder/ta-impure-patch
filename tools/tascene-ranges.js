@@ -181,7 +181,7 @@ const SENSOR_LINE = {
 // The dashes move along at a constant speed on screen.
 const LINE_W = 4.5;                 // px x lineScale, lineScale = (vsy + 500) / 1300
 const DASH = {                      // x lineScale: dash length and level-0 spacing, px; speed px/s
-  line: { len: 7, space: 22, speed: 9, gain: 2.5 },    // gain: the dash's opacity x the kind's
+  line: { len: 4, space: 11, speed: 9, gain: 2.5 },    // gain: the dash's opacity x the kind's
   jam:  { len: 5, space: 11, speed: 6 },
 };
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
