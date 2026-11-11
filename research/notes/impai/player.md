@@ -38,7 +38,7 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
 - **Allies:** two allied ImpAI seats, or ImpAI allied with a player, are separate brains. They share only what the game shares with allies (line of sight and radar) and take no orders from the player.
 - **Recordings:** the recording's header names each seat's AI and level, and a replay takes the per-seat choice from it. On a replay puppet ImpAI does not run, because the recorder is the only writer. A takeover or rewind resumes ImpAI's `SIM_STATE` at that tick.
 - **Saved games:** on load, ImpAI rebuilds its view from the world: its maps are derived, and its tasks are reassigned. It forgets only what it scouted and no longer sees. The save format does not change.
-- **Network games** come last (A4). An ImpAI seat runs on the peer that hosts it, as stock AI seats do.
+- **Network games** come last (A4). As with stock AI seats, an ImpAI seat is chosen and run on the peer that adds it in the battle room, which can be the host or a joiner; the other peers see its units through the owner's unit stream and never run it. Across peers a seat is referenced by its DirectPlay ID or its unit block, never by its row, which can differ from peer to peer.
 - **Mods:** every setup of the compatibility suite where Impure runs a game. One tuning table serves every mod, through roles derived from the units' data. A mod passes when ImpAI never stalls in it and no key its units use is unmodelled ([tasim: scope](tasim.html)).
 - **Cost:** at most 1 ms per ImpAI seat per simulation tick, worst case, on the reference setup, measured on a ten-seat stress scenario. Work that does not fit is spread across ticks by a fixed schedule, never by a clock.
 

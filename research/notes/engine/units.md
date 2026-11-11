@@ -825,10 +825,10 @@ of the table after the generic state store `0x490B3D`). Its flags are the word `
 
 | bit | set | cleared | meaning |
 |---|---|---|---|
-| 0 (`1`) | `0x49832D`, the first call | `0x49847E` (with `+0x38D6F..+0x38D76`) | the load has started |
-| 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
+| 0 (`1`) | `0x49832D`, the first call | `0x498480` (the dword `+0x38D73..+0x38D76`; `0x49847E` zeroes `+0x38D6F..+0x38D72` beside it) | the load has started |
+| 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x498480` | the loader is done: set from that store until the end of the in-play entry's one call, so through the level's first in-game frame and first tick, clear for the rest of play |
 | 2 (`4`) | `0x4975CA`, the loader after the level init, in a network game only (`0x435100` = 3 at `0x4975AB..0x4975B3`; any other type goes to `0x4978DA`) | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
-| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time, on the same network-only path as bit 2 |
+| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x498480` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time, on the same network-only path as bit 2 |
 
 **Who passes the barrier last** [MEASURED 2026-09-26, three peers, Town & Country]. A peer frozen
 (SIGSTOP) at the barrier with bit 2 set holds every other peer at bit 2 too (`0x0005` on both
@@ -846,7 +846,7 @@ the body `0x497180`). **Every call** then tests bit 1
 (`0x498342..0x49834D`): clear, it is the loading frame `0x4984DD` — per-player `0x453320`, the pump
 `0x453D40` at `0x49852E`, the barrier above; set, it is **the in-play entry** — `0x467D70`, the
 frame function `0x496790` at `0x49842F`, `0x4C2870`, state 6 at `0x498445`, the next state function
-`0x499200` at `0x498455`, and the flag word zeroed at `0x49847E`.
+`0x499200` at `0x498455`, and the flag word zeroed at `0x498480` (`ecx` = 0 from `0x498469`, `edx` = `main+0x38D6F`). That store is the only one that clears bits 0, 1 and 3 [DISASSEMBLED: every write with the displacement `0x38D75`, and every store that could overlap it]; `0x497F40` runs again only when the next level installs it, from a zero word.
 
 **Up to five ticks run before state 6.** The frame function `0x496790` first moves its profile
 counters (`main+0x38D85..`) and reads the clock (`0x4B6560`); in a network game (`main+0x2A44`

@@ -181,21 +181,39 @@ credit); the rows name the stores, not their meanings.
 **Difficulty-dependent, but not a handicap: the AI profile.** The profile command `plan`
 (`0x406C90`, registered with `weight` `0x406DB0` and `limit` `0x406E40` at `0x406F00..0x406F2E`)
 sets the gate `0x501774` when one of its arguments is `any` or names the current difficulty
-(`easy` 0, `medium` 1, `hard` 2: `0x406CE6..0x406D75`); `weight` and `limit` apply only while the
-gate is set (`0x406DB0`, `0x406E40`), and `limit` only to type-2 records (`0x406EA8`). So **the stock
-AI's profile can depend on difficulty**; whether the shipped `ai\*.txt` use `plan` sections was not
-checked. `0x40C3DF` only prints `EASY`/`MEDIUM`/`HARD` into an AI debug dump. The other readers are
+(`easy` 0, `medium` 1, `hard` 2: `0x406CE6..0x406D75`; `any` is compared at the first argument
+only, and a `plan` with no word closes the gate); `weight` and `limit` apply only while the gate is
+set (`0x406DB0`, `0x406E40`), `weight` to every seat with an AI object, humans included
+(`0x406E0A..0x406E27`), and `limit` only to type-2 records (`0x406EA8`). The profile load `0x4648E0`
+does not reset the gate before the file; the per-type texts `0x409F80`/`0x40A040` set it at their
+start (`0x406DA0`) and run after the file, and its initial value is 1, so lines before a file's
+first `plan` apply under whatever gate the previous parse left [INFERRED from the order]. **Every
+shipped profile the engine opens has three sections, `plan easy`, `plan medium`, `plan hard`**, with
+no `any` (MEASURED by reading the retail archives in memory through `tools/wiki/tavfs.py`, nothing
+extracted: the nine `ai\*.txt` of `rev31.gp3` and `krogoth.txt` of `ccdata.ccx`, about 810 `limit`
+and 90 `weight` lines a file; `krogoth.txt` alone has two `weight` lines before its first `plan`).
+**So the stock AI's build weights and limits differ with the Difficulty in every shipped profile**,
+on Hard too, where the handicap does not apply. The profile is parsed at the level load, so it uses
+the Difficulty in force then. `0x40C3DF` only prints `EASY`/`MEDIUM`/`HARD` into an AI debug dump. The other readers are
 the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game writers), `0x42FB47`
 (the registry load), the cycles' own reads (`0x41EE9A`, `0x47B93F`), and the labels `0x4368E3`,
 `0x45F53B`, `0x477431..0x47848E` and `0x47BC26..0x47BC88` — 38 reads and 18 writes in all.
 
 **Who writes it**: the SKIRMISH screen ([the GUI](ui.html)); the registry load (`0x42FB2E`,
 `0x42FB3C`); the post-game screen's own `Difficulty` cycle (`0x41EEBB..0x41EF1B`, which writes the
-settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`); the campaign screens
-(`0x477D26..0x477D62`); a saved game's load (its `Difficulty` key, `0x4926DF..0x492701`); an
-unidentified three-way switch (`0x426A66`, `0x426A80`, `0x426A9B`); and **`0x448A0B`, which stores 2
-right after `0x430F00`** in the network setup [INFERRED: the battle room], so **a network game's AI
-plays unscaled**. No console command writes it; it changes during play only through a restart.
+settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`, a skirmish or a campaign only: a
+network game's restart sets nothing); the campaign screens (`0x477D26..0x477D62`); a saved game's
+load (its `Difficulty` key, `0x4926DF..0x492701`; a save is a campaign or a skirmish); and
+**`0x448A0B`, which stores 2 right after the settings save `0x430F00`**, at the end of the START
+action of the battle room's handler `0x447B10` ([network](network.html), *A computer seat in a
+network game*), which only the host can press. **So the host of a network game plays at Hard and
+every other peer at the value it already held** — its registry's (default Medium, `0x42F9C0`) or its
+last choice; each peer runs the handicap sites against its own value, which matters only on the
+peer that runs the seat. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
+`0x4913F6` at start-up, `0x4273E8`, `0x47BB52`). The switch at `0x426A66`, `0x426A80`, `0x426A9B` is in
+`0x4269D0`, a key handler (0–9 warp to a campaign mission through `Warp.ini`, A/C the local side,
+E/M/H the Difficulty) that nothing calls and no pointer names [the purpose INFERRED from its strings]:
+dead code. No console command writes the Difficulty; it changes during play only through a restart.
 
 ### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
 
@@ -693,7 +711,8 @@ of the 22 with an immediate only those five and SetState `0x490B30`'s case 5 (`0
 table `0x490C14`) store `0x497F40`, and SetState's eleven callers hand it 1, 2 or 7. The load state
 moves on only once the loader thread `0x497C90` has set its done bit, `main+0x38D75` bit 1
 (tested at `0x498342`, set at `0x497C62`, `0x497180`'s last store before it returns and the thread
-ends). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
+ends; cleared with the whole word at `0x498480` at the end of the same call, after the level's first
+in-game frame, [units](units.html) the load flags). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
 `0x467D70` (`0x498386` is the only jump in), before the frame function's first run at `0x49842F`
 and before the in-play state `0x499200` is installed at `0x498455` (SetState's case 6, never handed
 6).

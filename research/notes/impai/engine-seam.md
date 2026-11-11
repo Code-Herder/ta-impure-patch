@@ -15,6 +15,8 @@ From [Orders and the AI](../engine/orders.html), *The AI object, its lifecycle a
 1. `rec = *(obj+0)`. **Bound**: `rec` must be one of the ten player records, `main+0x1B63 + i·0x14B` with i below 10, checked by exact division. Otherwise it calls stock `0x408C40` unchanged.
 2. When `[rec]` ≠ 0, `rec+0x73` = 2 and the `SIM_STATE` table marks slot i as ImpAI, it runs the brain and then the stock weapon scan `0x4089A0(obj, 1)`, by address, so the extra-weapons port still scans. Otherwise it calls `0x408C40`, which the recorder's observer still sees.
 
+**In a network game** the seat's tick runs only on the peer that added it, where its record is type 2; on every other peer the record is type 3 with no AI object, so `0x465031` never reaches the wrapper there. The choice of ImpAI or OTA AI is therefore made and run on the adding peer, which can be a joiner. Orders never cross the wire; the owner streams their results from the AI's own DirectPlay ID. A seat's row index can differ between peers, so a reference to an ImpAI seat across peers goes by its DirectPlay ID or its unit block, never by row ([network](../engine/network.html), *A computer seat in a network game*).
+
 **Why it is safe by construction:**
 
 - **A bound**: the record is one of the ten, by arithmetic, never by a probe.
@@ -37,19 +39,18 @@ From [Orders and the AI](../engine/orders.html), *Calling the order roots from t
 
 From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](../engine/sim.html), *Difficulty and the AI handicap* (DISASSEMBLED):
 
-- **Difficulty is one global**, `main+0x37EEE` (0 Easy, 1 Medium, 2 Hard), set by the `SKIRMISH.GUI` gadget `Difficulty` together with the settings' `+0x228` and kept in the registry as `SkirmishDifficulty`. A network game sets it to 2 (`0x448A0B`).
+- **Difficulty is one global**, `main+0x37EEE` (0 Easy, 1 Medium, 2 Hard), set by the `SKIRMISH.GUI` gadget `Difficulty` together with the settings' `+0x228` and kept in the registry as `SkirmishDifficulty`. In a network game the battle room's START sets it to 2 on the host only (`0x448A0B`); every other peer keeps its own value.
 - **It scales type-2 players' resources at seventeen sites**: the economy pass's eight incomes, the build-cancel refund, the unbuild refund, the reclaim payout's energy and metal, both transfers, the Deathmatch respawn's energy and metal grants, and the credit for a reclaimed unit. Easy × 0.5, Medium × 0.7, and **Hard applies no scaling at any site**. Each site tests the record for type 2 with one instruction pair while the record is in a register.
 - **A seat's controller** is the record's byte `+0x73` (1 human, 2 AI, 3 remote), written at the seat's activation by `0x464290` from the skirmish entry and in play through `0x463C60`.
-- **The AI profile depends on difficulty**: the profile command `plan` gates the `weight` and `limit` lines by `easy`, `medium`, `hard` or `any`. The profile is `ai\<aiprofile>.txt` (the map's key) or `ai\default.txt`, loaded by `0x4648E0`. Whether the shipped profiles use `plan` was not checked.
+- **The AI profile depends on difficulty**: the profile command `plan` gates the `weight` and `limit` lines by `easy`, `medium`, `hard` or `any`, and every shipped profile has a `plan easy`, a `plan medium` and a `plan hard` section, so OTA AI's build weights and limits change with the Difficulty even on Hard. The profile is `ai\<aiprofile>.txt` (the map's key) or `ai\default.txt`, loaded by `0x4648E0`.
 
 **The handicap exemption (A1):** each of the seventeen type tests (`cmp byte [rec+0x73],2` and its `jne`, 5 to 10 bytes) becomes a 5-byte `jmp` to a stub of its own, byte-matched at attach and all-or-none. The stub finds the slot from `rec` by the seam's bound and, for an ImpAI seat, jumps to the unscaled branch; otherwise it runs the original compare and branch. The stub calls no C, because one or two values are live on the x87 stack at every site. The table it reads is written only at the level init, before the first tick, and from the recording on a replay. Writing `main+0x37EEE` around calls instead is rejected: the sites are reached from the economy pass, transfers (including the network's), reclaim, building and unit death, and no one bracket covers them.
 
 ## Not documented yet
 
-- **Who reads each key** in the [key inventory](../engine/keys.html): which UnitDef and weapon-record fields the simulation consumes, and how. The inventory lists what the parsers read; the readers are open.
-- **The stock AI's helpers**: its build choice, site choice, base point and the count it compares with 5 (`0x40BDB0`, `0x40BFE0`, `0x40BA80`, `0x40C230`), the force planners' rebalance `0x407560`, `0x464AD0`, and the per-seat acquisition record `0x5119C0[seat]` — which of them draw the simulation RNG, and whether any tests sight.
-- **Loose ends**: where the loader's done bit `main+0x38D75` bit 1 is cleared again; what `0x426A66`'s three-way switch of the Difficulty is; that `0x448A0B` is the battle room's setup and whether anything else sets a network game's Difficulty; where a new unit's standing states (`+0x110` bits 18–21) are first written, and whether from `standingmoveorder` / `standingfireorder`; whether the shipped `ai\*.txt` use `plan`.
-- **Network games (A4)**: which peer runs a computer seat's tick, what that seat's record looks like on the host and on a client, and how its orders reach the other peers.
+- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `maxvelocity`, `bankscale`, `transportcapacity`, the weapon's velocities, `burst`, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit.
+- **Network games (A4)**: which caller of the join `0x450A10` activates a battle-room AI on its own peer; the meaning of the add-AI path's three tests; what happens to a departed peer's AI seats on the peers that remain ([network](../engine/network.html), *A computer seat in a network game*).
+- Whether anything outside the load state can switch the state slot away mid-load, leaving the load flags set.
 
 ## Constraints from the repository
 

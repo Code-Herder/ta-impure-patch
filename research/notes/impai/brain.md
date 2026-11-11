@@ -33,6 +33,16 @@ BARb (CircuitAI) is read for its design only. It is GPL v2 and Impure is MIT, so
 - It decides engage, hold or retreat for every squad, which targets are worth attacking, and when an attack wave is big enough.
 - Calibrated against the engine: it must agree with the engine's majority on at least 90 % of decisive fights ([calibration](calibration.html)).
 
+## What it has to beat
+
+What the stock AI does, from the engine map ([orders](../engine/orders.html), *The stock AI's helpers*; DISASSEMBLED, not measured):
+
+- **It builds by a weighted random pick.** Each type on a builder's list gets a score from storage, income and per-type ratings scaled by the profile's weights, and one is drawn in proportion to its score. It builds nothing while stored energy is below 50 or metal below 25.
+- **It builds on unseen ground.** Sites are random points on a per-seat lattice around its base, tested with no sight or explored-map check; its metal spots are every metal cell on the map.
+- **It attacks with six or more armed units, every 300 ticks, at the enemy unit nearest its force**, chosen from every enemy on the map: its target picker has no sight, radar or explored-map test. Three or fewer regroup at the base.
+- **Its commander stops building at five builders** (the seat's complete units with a build list, factories included) and roams the base instead; a hit commander drops its orders and pauses for 30 to 329 ticks.
+- **Its weights and limits change with the Difficulty** through the profile's `plan` sections, and on Easy and Medium the engine cuts its resources to 50 % and 70 %.
+
 ## Levels
 
 A level is one row of parameters for this same brain: reaction delay, order rate, micro, judgement noise, aggression and scouting ([ImpAI for the player](player.html)).

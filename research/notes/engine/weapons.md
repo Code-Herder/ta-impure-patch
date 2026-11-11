@@ -496,6 +496,36 @@ here. The bits the rest of this page tests agree: bit 23 `burnblow` (`0x49CECC`)
 turret's aim path and bit 4 `vlaunch` (`0x49E010`), bit 16 the water path and bit 17 the air test
 of `0x49ABB0`.
 
+**Who reads each bit** [DISASSEMBLED 2026-11-11, every instruction with displacement `0x111` whose
+base traces to a weapon record]: 0 `lineofsight` — the projectile tick `0x49B720`, `0x49D0C0`, the
+turret fire handler `0x49D580`, the fire-handler choice `0x49E010`, AutoAim `0x49E1A0`; 1
+`ballistic` — `0x49D0C0`, the `0x0D` receiver `0x49D270`, `0x49D580`, AutoAim; 3 `beamweapon` —
+`0x49B720`; 4 `vlaunch` — `0x49E010`; 5 `meteor` — the meteor setup `0x437CD0`, `0x49D270`; 6
+`noradar` — only the minimap dots `0x466DC0`; 7 `paralyzer` — the AI weapon scan `0x4089A0`, the AI's
+`0x40B7B0`, the damage for a target `0x499CD0`; 8 `dropped` — `0x4089A0`, the cursor resolver
+`0x43E490`, the action resolver `0x43F0E0`, `0x49E010`; 9 `startsmoke` — the fire paths `0x49C9C0`,
+`0x49CC20`, `0x49CDE0`; 10 `endsmoke` — the projectile hit `0x499EB0`; 11 `soundtrigger`, 13
+`tracks`, 18 `smoketrail`, 24 `twophase` — `0x49B720`; 14 `unitsonly` — area damage `0x49A120`,
+`0x49B090`; 15 `groundbounce` — `0x49B090`; 16 `waterweapon` — the action resolver, the range test
+`0x49AA80`, can-engage `0x49ABB0`, `0x49B090`, `0x49B720`; 17 `toairweapon` — the two resolvers; 19
+`turret` — `0x49E010`, AutoAim; 20 `selfprop` — `0x49B720`, `0x49D0C0`, `0x49D580`, `0x49E010`; 21
+`propeller` — `0x49B720`, the projectile draw `0x49BE60`; 22 `noexplode` — `0x499EB0`; 23 `burnblow` —
+`0x49B520`, `0x49CDE0`; 25 `cruise` — `0x48A1E0`, the guidance `0x49B3E0`; 26 `commandfire` — Guard
+`0x406300`, the AI's on-damage handler `0x406F80`, `0x4089A0`, VTOL_Follow `0x40FBE0`, AutoAim; 27
+`noautorange` — the fire paths `0x49C920`, `0x49C9C0`, `0x49CC20`; 28 `stockpile` — the build menu
+`0x41AA00`, AutoAim; 29 `targetable` — the minimap dots, `0x49D120`; 30 `interceptor` — the AI's
+`0x408920` and `0x4089A0`, the minimap dots, area damage, every fire handler. **Bits 2
+`shellweapon` and 12 `guidance` have no reader.** The base of each read was traced by script and the
+multi-bit loads by hand; a read just after a jump table embedded in `.text` could be missed.
+
+**`accuracy` `+0x104` and the tolerances `+0x106`/`+0x108` have one reader each.** Only the turret
+fire handler `0x49D580` reads `accuracy` (`0x49D6D7`): with h = (HP `unit+0x108` << 11) ÷ def
+`+0x1FA` and k = `unit+0xB8` ÷ 12 [INFERRED: veterancy], the spread is (accuracy − h + 0x800) ÷ k
+when k > 1, and a non-zero spread s adds `rand(s) − s/2` from the simulation RNG to the aim
+(`0x49D727`, `0x49D733`). Only the aim test `0x49D880` (callers `0x49D681`, `0x49DA65`) reads the
+tolerances: a 0 `tolerance` stands for 2000 while the shooter moves (`unit+0x110 & 0xC`) and 150
+otherwise (`0x49D889..0x49D8B2`), and a 0 `pitchtolerance` for the tolerance.
+
 **The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes and a slot from the wire
 unbounded.** It indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5
 (`0x49D2A6`) scales the `u16` shooter at `+0x21` (`0x49D329..0x49D34A`) and the `u16` target at

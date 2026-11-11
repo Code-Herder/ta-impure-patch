@@ -519,8 +519,8 @@ and the harness refuses AI activity observation.
 
 **The object** at record `+0x74`, `0x3D` bytes, constructed by `0x408CB0` (`thiscall(obj, rec)`,
 `ret 4`): `+0` the record, `+4` the record's `+0x146` byte, `+5` the group assignment's countdown
-(30), `+9` and `+0xD` zeroed (`+0xD` is a GameTime the builder planner waits for,
-`0x40817D..0x40818B`), `+0x11..+0x38` ten planner slots, `+0x39` the weapon scan's cursor
+(30), `+9` and `+0xD` zeroed (`+0xD` is a GameTime the builder planner's commander waits for,
+`0x40817D..0x40818B`; its one writer is the on-damage handler `0x406F80`, below), `+0x11..+0x38` ten planner slots, `+0x39` the weapon scan's cursor
 (`0x408CBB..0x408CDD`). Each planner is a small object: `+0` its vtable {tick, destructor}, `+4`
 the AI object, `+8` its group, `[rec+0x78] + 0x20·g` (the group table `0x480190` allocates, ten
 `0x20`-byte groups), `+0xC` the GameTime it is next due, `+0x10` the record's `+0x146` byte.
@@ -546,7 +546,7 @@ reached from `0x465031` runs for a puppet.
 | Slot | Group | Object, vtable | Tick, period | What the tick does |
 |---|---|---|---|---|
 | `+0x11` | 0 | none (NULL) | — | — |
-| `+0x15` | 1, structures | `0x14` B, `0x4FC9B0` | `0x4086D0`, every 30 | each structure (`+0x110` bits 29 and 28, not 14): a `makesmetal` def (`+0x22D`) is switched through `0x48B090(unit, 1, on)` by comparing twice its record's metal with its energy, and `0x464AD0` with `rand(5)` [INFERRED: the metal maker's on/off]; a CANBUILD def (`+0x152`) with no order picks a type through `0x40BDB0(seat, unit)` and queues it with `0x419B00(name, unit, 1)` (`0x408620..0x40865E`, `0x408781..0x4087C4`) |
+| `+0x15` | 1, structures | `0x14` B, `0x4FC9B0` | `0x4086D0`, every 30 | each complete structure (`+0x110` bits 29 and 28, not 14): a metal maker (`+0x22D`) is switched **off** through `0x48B090(unit, 1, 0)` when twice the stored metal `rec+0x98` is at least the stored energy `rec+0x8C`, left alone when the net energy `0x464AD0(rec)` is not above 0, and otherwise switched **on** when `0x4B6C30(5)` is not 0 (`0x40871E..0x40877F`); a factory (a build list, `+0x152`) with no order queues one unit of the type `0x40BDB0(seat, unit)` picks, through `0x419B00(name, unit, 1)` (`0x408781..0x4087C4`). `0x408620` and `0x408670` are uncalled copies of these two |
 | `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; at three units or fewer it moves (mode 2) to the centroid of group 5, 1 or 4, the base; at six or more, or while attacking, it attacks (mode 3) the unit the target picker names, all through the group order `0x480460` |
 | `+0x1D` | 3, armed mobile | `0x18` B, `0x4FC990`; `+0x14` 2 | `0x4079F0`, every 150 | moves group 3 (mode 2) to group 2's centroid |
 | `+0x21` | 4, builders | `0x14` B, `0x4FC9A8` | `0x408100`, every 90 | the builder planner, below |
@@ -582,6 +582,113 @@ the aircraft planner (`0x407B74`).
 `0x4086A5` among others), so a seat whose planners do not run draws a different stream from one
 whose do.
 
+#### The stock AI's helpers: the base, the build choice, the build site and the scan [DISASSEMBLED 2026-11-11]
+
+The planners' `seat` is the AI object's `+4`, the record's `+0x146`; the helpers use it both as the
+index of the acquisition record `acq` = `0x5119C0[seat]` and as the record's index
+(`main+0x1B63 + seat·0x14B`). Float constants were read from `.rdata`.
+
+**The acquisition record** (`0x10D` bytes, constructor `0x409160`; made by `0x40B320`, freed by
+`0x40B390`, [recorder](recorder.html) *The takeover*) is the stock AI's world model:
+
+| Offset | What | Written by | Read by |
+|---|---|---|---|
+| `+0` / `+4` | the record / the seat | the constructor | |
+| `+0x05` vector | **enemy units the seat sees** | the scan `0x40AA40` | `0x40AD80`, the roamer's threat sum `0x40B1C0` |
+| `+0x15` vector | enemy units with unit `+0x110` bit 8 — the **viewed** player's radar contact, not this seat's | the scan | `0x40AD80` |
+| `+0x25` vector | own complete air pads (`builder` and `isairbase`, activated) | the scan | `0x40B530` |
+| `+0x35..+0x3D` | **the base point**, 16.16 | the scan (`0x40AD02..0x40AD0B`) | `0x40BA80`, `0x40BFE0` |
+| `+0x4D` vector | **the metal spots**, `{u16 x, u16 z, f32 metal}` | `0x40A7B0` | the spot search `0x40A260` |
+| `+0x69 + 3·type` | three signed bytes per type: t0 general, t1 metal, t2 energy | the rating `0x409730` | the score `0x40BB00` |
+| `+0x75` | **own complete units with a build list** (`+0x156` ≠ 0) | the scan | `0x40C230` |
+| `+0x79` | 1 = owns an activated `istargetingupgrade` unit | the scan | `0x40AD80` |
+| `+0x81` | per type: own complete count | the scan | the rating, the score |
+| `+0x91` | per type: the value score v | the rating | the rating, `0x40B1C0` |
+| `+0xA1` | per type: base weight, 40 for `bmcode` 0 plus 20 for a build list | `0x409470` | the scan |
+| `+0xB1` | per type: the profile's weight percent, default 100 | `0x409470`, `weight` `0x409DC0` | the score |
+| `+0xC1` / `+0xE1` | per type: weight / limit locked by a `weight` / `limit` naming the exact unit | `0x409DC0` / `0x409E90` | |
+| `+0xD1` | per type: the build limit, −1 for none | `0x409470`, `limit` `0x409E90` | `0x409F20` |
+| `+0xED` | GameTime of the last scan | the tick | the tick `0x40B2C0` |
+| `+0xF1..+0x105` | the build lattice: eight draws of the simulation RNG at creation (`0x40A150`) | | the general search `0x40A5D0` |
+| `+0x109` | the site-search radius | `0x40BFE0` | `0x40BFE0` |
+
+**The tick `0x40B2C0(i)`** (one caller, `0x465037` in the players phase, for every record that has
+an acquisition record, humans included) runs the scan once 30 ticks have passed, then draws
+`0x4B6C30(30)` (`0x40B301`) and on 0 re-runs the rating `0x409730`, about every 900 ticks. **The
+scan `0x40AA40`** walks every live, not dying unit slot: a **non-allied** unit goes into `+0x05`
+when `UnitInPlayerLOS 0x465AC0(rec, unit)` passes and it is not `+0x110` bit 15, and into `+0x15`
+when it has `+0x110` bit 8; an **own** complete unit counts into `+0x81`, `+0x75`, `+0x25`, `+0x79`
+and the base. Allies' units are ignored. **The base point** is the centroid of the own complete
+units weighted by `+0xA1`, so of structures and builders only; with none it is (0, 0, 0), the map's
+corner. `0x40BA80(seat, out)` copies it (callers: the builder and aircraft planners).
+
+**The build choice `0x40BDB0(seat, builder)`** (stdcall, `ret 8`, a type or 0) walks the builder's
+build list; for each type with a score w = `0x40BB00(seat, type)` above 0 it adds w to a running
+total and takes the type when `0x4B6C30(total)` < w (`0x40BDE7..0x40BE06`): **a weighted random
+pick, each type in proportion to its score**, one draw of the simulation RNG per scored entry. A
+pick of another side than the builder's returns 0 (`0x40BE5A..0x40BE8B`). Callers: the builder
+planner (`0x4081A7`), the structure planner (`0x408797`) and the uncalled `0x408620`.
+
+**The score `0x40BB00(seat, type)`** (stdcall, `ret 8`) is 0 while the stored energy `rec+0x8C` is
+below 50 or the stored metal `rec+0x98` below 25 (`0x40BB2A`, `0x40BB51`), for a `downloadable` type
+in a campaign, or past the type's limit (`0x409F20`: the type below `UNITINFOCount`, and the own
+count below `+0xD1` unless that is −1). Otherwise an energy need E = (min(energy storage, 1000) −
+stored) × 0.125, plus 20 when the net energy is below 1, plus 100 when the income is below 50 or 10
+below 200; a metal need M = (min(metal storage, 500) − stored) × 0.25, plus 20 when the net metal is
+below 1, plus 100 when the income is below 3 or 20 below 5. Metal is served first: Mw = clamp(M, 0,
+100), Ew = clamp(E − Mw, 0, 100), Ow = max(0, 100 − Mw − Ew), and the score is (Ow·t0 + Mw·t1 +
+Ew·t2) × `+0xB1` ÷ 10000 (`0x40BBB6..0x40BDA5`).
+
+**The rating `0x409730`** (no RNG) sets per type: v (1, or 11 for an extractor, +10 for a metal
+maker, +10 for an energy producer, plus cost terms; plus 1, or 11 for `canattack`, and per weapon
+with an ID range ÷ 100 + damage ÷ 40 + 5; clamped to ±100); t0 (1, or 21 for `canattack`; +30 for a
+builder while fewer than 3 are owned, +50 an energy producer, +50 an extractor, +25 a metal maker,
++40 `canfly`, +15 sonar, +5 radar, plus `energymake` up to 30; × 4 when none is owned, × 2 when one;
+× 3 when def `+0x1C0` ≥ 0; + v/2 when the record's live count is above half the per-player limit; 0
+for a transport, a feature, or a wind generator on a map whose maximum wind is below half the
+nominal; at most 100); t2 = clamp(−0.0025 × energy cost − 5 × `0x488F30(def)`, 0, 100); t1 =
+clamp(100 for an extractor + 25 for a metal maker − 0.02 × metal cost, 0, 100). [The signs of v's
+cost terms rest on objdump's `fsubp` operand order.] The profile (`ai\*.txt` and the FBI's
+`ai_weight`) only scales `+0xB1` and sets `+0xD1`; `weight` applies to every seat with an AI object,
+`limit` to type-2 seats only.
+
+**The build site `0x40BFE0(seat, pos, def, site)`** (stdcall, `ret 0x10`, 1 on success): the radius
+`+0x109` grows by 160 a call, up to the map's larger dimension, while searches fail, and is reset to
+0 on success (`0x40BFF8..0x40C01E`, `0x40C1E3`). The centre is the base point, or the point that far
+from the builder towards the base. An extractor draws `0x4B6C30(255)` (`0x40C155`) and, when the
+map's `SurfaceMetal` is below the draw, takes the **spot search** `0x40A260` (the metal spots within
+4·r cells, nearest first, the richest accepted one; no RNG); otherwise the **general search**
+`0x40A5D0`: up to 30 tries (`0x40A77A`), each a random distance and angle (`0x40A673`, `0x40A682`)
+snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four draws a try,
+accepted by the site test and refused when the site's metal is above twice the background
+[INFERRED intent: spots are kept for extractors]. The site is the footprint centre `(2·cell + foot)
+<< 19`; its y is not written. **The site tests pass player 0, so they read no sight and no explored
+map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
+level from `0x4649ED`) is every metal feature cell on the map.
+
+**The builder count `0x40C230(seat)`** returns `+0x75`, the seat's complete units with a build list
+— commander, constructors and factories alike. The commander (the CanCapture unit) builds while it
+is below 5 and roams once it reaches 5 (`0x408169`, `0x40830E`). **A hit commander stops
+building**: the on-damage handler `0x406F80` (caller `0x489DA2`) sets the AI object's `+0xD` to
+GameTime + 30 + `0x4B6C30(300)` and purges the commander's orders through `0x439EB0(unit, 0)`
+(`0x406FC9..0x406FEE`).
+
+**The force planners' rebalance `0x407560(src, cap)`** (thiscall, `ret 8`; one caller `0x407804`)
+takes the first unit of group `src` into an empty group, sends a unit back to `src` while it is
+farther than √(cap·n) from the group's centroid, then takes in every `src` unit within that
+distance (`0x407560..0x4077CF`): √(20000·n) for group 2, √(50000·n) for group 6. No RNG, no sight.
+The attack rule (three units or fewer: regroup at the base; six or more, or more than three while
+already attacking: attack the target picker's unit) runs every 300 ticks.
+
+**RNG and sight, in one place.** The helpers that draw the simulation RNG: the build choice (one
+per scored entry), the build site (one for an extractor, four a try), the acquisition record (eight
+at creation, one every 30 ticks for every seat that has one, humans included), the metal maker, the
+builder's idle roam (`0x4083A9`, `0x4084CA`), the hit commander (`0x406FCE`) and `0x40B7B0`'s weapon
+re-find (`0x40B8A2`, `0x40B9D8`). The base point, the score, the rating, the builder count, the
+rebalance, the scan and the spot search draw none. Only the scan reads other players' units through
+sight (`0x465AC0`), plus the viewed player's radar bit; the target picker reads every enemy with no
+test, and the site tests no sight at all.
+
 #### The group order `0x480460`, and the standing states
 
 **`0x480460(rec, group, mode, shift, target, pos*, p1, p2)`**, stdcall, `ret 0x20`: walks the
@@ -600,7 +707,12 @@ and, for states 0 and 1, clears every weapon slot's target (`0x403129..0x40313A`
 The player's buttons issue them through `0x48CF30`, which requires def `+0x245` bit 0
 (`mobilestandorders`) for the move order and bit 1 (`firestandorders`) for the fire order
 (`0x48D0B7..0x48D10B`). The stock AI does not issue them; its group assignment writes the bits
-directly (above).
+directly (above). **A new unit's states come from its def**: the spawn initialiser `0x485A40`
+writes bits 18–19 from def `+0x241` bits 0–1 (`standingmoveorder`, `0x485C8A..0x485C9D`) and bits
+20–21 from bits 2–3 (`standingfireorder`, `0x485CA3..0x485CB6`), both 2 by default; its three
+callers (the create `0x485F50`, `CreateFromNetwork 0x4861D0` and `0x485E90`) write neither
+before. A unit being built then takes its builder's states (BuildingBuild `0x40294D..0x40298C`,
+GetBuilt `0x402E82..0x402EC2`) [which unit is the builder in each, from [units](units.html)].
 
 #### Calling the order roots from the AI's tick [DISASSEMBLED 2026-11-11]
 
@@ -624,7 +736,7 @@ correct by construction, and which roots fit an AI:
 - **Thread.** The players phase runs on the game thread every step and **once on the loader
   thread** at the end of a level load (`0x497C10`), before the loader's done bit
   `main+0x38D75` bit 1 is set (`0x497C62`), which the game thread waits for before its first tick
-  ([sim](sim.html)): single-writer by that ordering. Where the bit is cleared again was not traced.
+  ([sim](sim.html)): single-writer by that ordering. The bit is a one-frame flag: the in-play entry clears the whole word at `0x498480` after the level's first in-game frame ([units](units.html), the load flags), so it marks the order of that first frame and cannot gate "loaded" during play.
 
 **Which root for which order:**
 
