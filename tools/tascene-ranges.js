@@ -147,29 +147,53 @@ function defenseRings(T) {
 }
 
 // ---------------------------------------------------------------- sensors
-// The placement preview of a sensor building, on the engine's coverage rule
-// (the radar pass 0x467440): a flat circle on x/z, no terrain. BAR's look,
-// gui_sensor_ranges_radar_preview.lua (l.42-82) for radar and
-// gui_sensor_ranges_jammer_preview.lua (l.98-135) for the jammers; sonar
-// takes the radar preview's structure in gui_sensor_ranges_sonar.lua's colour.
-//   outline: the union outline of the new ring and the existing coverage
-//   sheet:   the fill under the new ring
-//   muted:   the fill of the existing coverage alone, at mutedRel of the sheet
-const SENSOR = {
-  radar:    { outline: [0.45, 1.0, 0.57, 0.40], sheet: [0.22, 0.85, 0.50, 0.20],
-              muted: [0.35, 0.62, 0.50], mutedRel: 0.55, w: 2.0, dash: false, water: false },
-  sonar:    { outline: [0.50, 0.70, 0.90, 0.45], sheet: [0.40, 0.60, 0.85, 0.20],
-              muted: [0.35, 0.48, 0.62], mutedRel: 0.55, w: 2.0, dash: false, water: true },
-  radarjam: { outline: [1.0, 0.32, 0.22, 0.80], sheet: [0.90, 0.22, 0.20, 0.17],
-              muted: [0.55, 0.25, 0.45], mutedRel: 0.55, w: 2.0, dash: true, water: false },
-  sonarjam: { outline: [1.0, 0.32, 0.22, 0.80], sheet: [0.90, 0.22, 0.20, 0.17],
-              muted: [0.55, 0.25, 0.45], mutedRel: 0.55, w: 2.0, dash: true, water: true },
-};
+// BAR's sensor display on the engine's coverage rule (the radar pass 0x467440):
+// flat circles on x/z, no terrain blocking, no radar cells.
+//   * THE VIEW, always on: every own and allied emitter. Radar and sonar are
+//     gui_sensor_ranges_radar.lua / _sonar.lua: a dashed line centred on each
+//     circle, clipped by every circle of its kind, so only the outer half of the
+//     stroke outside the union shows. Jammers are
+//     gui_sensor_ranges_jammer_preview.lua's always-shown allied layer: the
+//     union filled, a dashed band along the inside of its edge.
+//   * THE PREVIEW of a building being placed: radar is
+//     gui_sensor_ranges_radar_preview.lua without its terrain raycast -- the new
+//     disc's sheet with rings travelling outward, the existing coverage filled
+//     duller, an outline along the new disc's edge and the union's. Sonar takes
+//     that structure in the sonar colours; a jammer's disc joins the jammer
+//     layer in the brighter sheet colour.
 const SENSOR_KINDS = ["radar", "sonar", "radarjam", "sonarjam"];
-// a type's sensors that will emit: a value above 0 on a def that switches on
-// when built or that the player can switch on (Q1 of the 2026-11-09 grill)
+const WATER_KIND = { radar: false, sonar: true, radarjam: false, sonarjam: true };
+// sensor_ranges_los.vert/.frag.glsl with the radar and sonar defines
+const SENSOR_LINE = {
+  radar: { c: [0.0, 1.0, 0.0], a: 0.16 },
+  sonar: { c: [0.5, 0.7, 0.9], a: 0.17 },
+};
+const STIPPLE = { period: 2 * Math.PI / 0.8331, speed: 0.2 / 0.8331 };   // elmos; elmos per game frame
+const LINE_W = 4.5;                 // px x lineScale, lineScale = (vsy + 500) / 1300
+// gui_sensor_ranges_jammer_preview.lua shaderConfig
+const JAMMER = { allied: [0.62, 0.35, 0.33], sheet: [0.90, 0.22, 0.20], a: 0.17, alliedRel: 0.85,
+                 outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
+                 w: 1.2, wElmo: 0.89, dash: 8, speed: 6 };   // px at 1080p + elmos; dash period, elmos/s
+// gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
+const PREVIEW = {
+  radar: { sheet: [0.22, 0.85, 0.50], a: 0.2, pulse: [0.55, 1.0, 0.70], allied: [0.35, 0.62, 0.50],
+           alliedRel: 0.55, outline: [0.45, 1.0, 0.57], outlineA: 0.4 },
+  sonar: { sheet: [0.40, 0.60, 0.85], a: 0.2, pulse: [0.70, 0.85, 1.0], allied: [0.35, 0.48, 0.62],
+           alliedRel: 0.55, outline: [0.50, 0.70, 0.90], outlineA: 0.45 },
+};
+const PULSE = { spacing: 180, speed: 85, power: 4.5, strength: 0.8, w: 2 };   // w: outline px at 1080p
+
+// a type's sensors that will emit once built: a value above 0 on a def that
+// switches on when built or that the player can switch on
 function sensorKinds(T) {
   if (!T || !(T.awb || T.onoff)) return [];
+  return SENSOR_KINDS.filter((k) => (T[k] || 0) > 0);
+}
+// LAB ONLY: what an existing unit emits. The DLL reads the unit's activation
+// (+0x10E bit 0); the lab has no such state and counts by type -- what will
+// emit once built, and aircraft, which the engine switches on in flight.
+function emitsNow(T) {
+  if (!T || !(T.awb || T.onoff || T.canfly)) return [];
   return SENSOR_KINDS.filter((k) => (T[k] || 0) > 0);
 }
 // the radius the engine tests: radar is (RadarDistance + 2 * altitude)^2, but
@@ -181,15 +205,92 @@ function sensorRadius(T, kind, alt) {
 }
 
 // ---------------------------------------------------------------- GL
+// a flat colour where one mask channel is set and another is not
 const SFILL_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uMask;
-uniform vec4 uSheet;         // premultiplied: under the new ring
-uniform vec4 uMuted;         // premultiplied: the existing coverage alone
+uniform int uIn, uOut;       // uOut -1: no exclusion
+uniform vec4 uCol;           // premultiplied
 out vec4 o;
 void main() {
   vec4 m = texelFetch(uMask, ivec2(gl_FragCoord.xy), 0);
-  o = m.r > 0.5 ? uSheet : (m.g > 0.5 ? uMuted : vec4(0.0));
+  if (m[uIn] < 0.5 || (uOut >= 0 && m[uOut] > 0.5)) discard;
+  o = uCol;
+}`;
+// a sensor line: BAR's moving stipple (sensor_ranges_los.frag.glsl), the
+// jammer's dashes, or solid
+const SLINE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;    // canvas px
+layout(location=1) in float aEdge;  // -1..1 across the line
+layout(location=2) in float aArc;   // elmos along the circle
+layout(location=3) in float aVis;
+layout(location=4) in float aHalf;  // half width in px (including the AA rim)
+layout(location=5) in float aPer;   // the pattern's period in elmos
+uniform vec2 uCanvas;
+out float vEdge; out float vArc; out float vVis; out float vHalf; out float vPer;
+void main() {
+  vEdge = aEdge; vArc = aArc; vVis = aVis; vHalf = aHalf; vPer = aPer;
+  gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
+}`;
+const SLINE_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in float vEdge; in float vArc; in float vVis; in float vHalf; in float vPer;
+uniform sampler2D uMask;
+uniform int uMaskBit;        // -1: no clip
+uniform vec3 uCol;
+uniform float uA;
+uniform int uMode;           // 0 stipple, 1 jammer dashes, 2 solid
+uniform float uShift;        // elmos the pattern has moved
+out vec4 o;
+const float PI = 3.14159265;
+void main() {
+  if (uMaskBit >= 0 && texelFetch(uMask, ivec2(gl_FragCoord.xy), 0)[uMaskBit] > 0.5) discard;
+  float px = abs(vEdge) * vHalf;
+  float a = clamp(vHalf - px, 0.0, 1.0) * uA * vVis;
+  float ph = 2.0 * PI * (vArc + uShift) / vPer;
+  float ppp = fwidth(ph);                  // phase per pixel along the line
+  if (uMode == 0) {
+    // a positive half-wave peaking at 3x, its mean 3/pi once a period is
+    // under ~4 px; the line thins towards the dash length when dashes are short
+    a *= mix(max(3.0 * sin(ph), 0.0), 0.9549297, smoothstep(1.5, 3.0, ppp));
+    a *= clamp(max(PI / ppp, 2.0) + 0.5 - px, 0.0, 1.0);
+  } else if (uMode == 1) {
+    float s = sin(ph);
+    float on = clamp(s / max(fwidth(s), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+    on = mix(on, 0.5, smoothstep(1.5, 3.0, ppp));
+    a *= mix(${JAMMER.gapRel.toFixed(3)}, 1.0, on);
+  }
+  if (a <= 0.0) discard;
+  o = vec4(uCol * a, a);
+}`;
+// the preview's sheet: the new disc's fan, rings travelling outward
+// (sensor_ranges_radar_preview.frag.glsl sheetGlow, the symmetric bell)
+const PULSE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;    // canvas px
+layout(location=1) in vec2 aOff;    // world x/z from the centre
+uniform vec2 uCanvas;
+out vec2 vOff;
+void main() {
+  vOff = aOff;
+  gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
+}`;
+const PULSE_FS = `#version 300 es
+precision highp float;
+in vec2 vOff;
+uniform sampler2D uMask;
+uniform float uTime, uAlpha;
+uniform vec3 uSheet, uPulse;
+uniform vec4 uP;             // spacing, speed, power, strength
+out vec4 o;
+void main() {
+  if (texelFetch(uMask, ivec2(gl_FragCoord.xy), 0).r < 0.5) discard;
+  float ph = fract((length(vOff) - uTime * uP.y) / uP.x);
+  float glow = clamp(pow(0.5 + 0.5 * cos(ph * 6.2831853), uP.z) * uP.w, 0.0, 1.0);
+  float a = min(uAlpha * (1.0 + glow), 1.0);
+  o = vec4(mix(uSheet, uPulse, glow) * a, a);
 }`;
 const LINE_VS = `#version 300 es
 precision highp float;
@@ -320,8 +421,15 @@ function create(ctx) {
     const T = types[u.type];
     return T && T.canfly ? ground(u.x, u.z) + u.agl : surface(u.x, u.z);
   };
+  // the lab's teams: owner 0 is the player; rrallies=<owner>,... names its
+  // allies (default 2, the fixture's allied player)
   const ME = 0;
-  const isAlly = (u) => u.owner === ME;
+  const ALLIES = new Set([ME, ...((ctx.query && ctx.query.get("rrallies")) ?? "2")
+                                 .split(",").filter(Boolean).map(Number)]);
+  const isAlly = (u) => ALLIES.has(u.owner);
+  // the clock the animations run on, seconds; rrtime=<s> holds it (a shot)
+  const heldTime = ctx.query && ctx.query.get("rrtime");
+  const clock = () => (heldTime != null ? +heldTime : performance.now() / 1000);
 
   // ---- ring shapes in world space, cached (the scene is static)
   const shapeCache = new Map();
@@ -376,7 +484,8 @@ function create(ctx) {
     ally: { ...DEFENSE_DEFAULT.ally }, enemy: { ...DEFENSE_DEFAULT.enemy },
     toggles: {},          // type -> { ally: [bool…], enemy: [bool…] } (alt+. / alt+,)
     reach: false,         // lab only: paint the engine's reachable cells
-    sensor: true,         // the sensor rings while a sensor building is placed
+    view: true,           // the sensor view: every own and allied emitter, always
+    sensor: true,         // the sensor preview while a sensor building is placed
   };
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || "null");
@@ -404,6 +513,7 @@ function create(ctx) {
     if (Q.get("rrreach") === "1") settings.reach = true;
     if (Q.get("rrshift") === "1") shift = true;
     if (Q.get("rrsensor") === "0") settings.sensor = false;
+    if (Q.get("rrview") === "0") settings.view = false;
     if (Q.get("rrdef") === "0")
       for (const side of ["ally", "enemy"]) for (const c of DEFENSE_CLASSES) settings[side][c] = false;
   }
@@ -420,12 +530,16 @@ function create(ctx) {
   const fillProg = compile(gl, FILL_VS, FILL_FS, "range fill");
   const ptProg = compile(gl, PT_VS, PT_FS, "range reach");
   const sfillProg = compile(gl, FILL_VS, SFILL_FS, "sensor fill");
+  const slineProg = compile(gl, SLINE_VS, SLINE_FS, "sensor lines");
+  const pulseProg = compile(gl, PULSE_VS, PULSE_FS, "sensor sheet");
   const U = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const LU = U(lineProg, ["uCanvas", "uMask", "uMaskBit"]);
   const MU = U(maskProg, ["uCanvas"]);
   const FU = U(fillProg, ["uMask", "uCol"]);
   const PU = U(ptProg, ["uCanvas", "uSize"]);
-  const SU = U(sfillProg, ["uMask", "uSheet", "uMuted"]);
+  const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol"]);
+  const LSU = U(slineProg, ["uCanvas", "uMask", "uMaskBit", "uCol", "uA", "uMode", "uShift"]);
+  const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP"]);
   const TEX_UNIT = 14;
   const maskTex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
@@ -458,6 +572,22 @@ function create(ctx) {
   gl.bindBuffer(gl.ARRAY_BUFFER, pvbo);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 24, 0);
   gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 24, 8);
+  gl.bindVertexArray(null);
+
+  const svao = gl.createVertexArray(), svbo = gl.createBuffer();
+  gl.bindVertexArray(svao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
+  // sensor line layout: x, y, edge, arc, vis, half, period = 7 floats
+  for (const [loc, n, off] of [[0, 2, 0], [1, 1, 8], [2, 1, 12], [3, 1, 16], [4, 1, 20], [5, 1, 24]]) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 28, off);
+  }
+  gl.bindVertexArray(null);
+  const fvao = gl.createVertexArray(), fvbo = gl.createBuffer();
+  gl.bindVertexArray(fvao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fvbo);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
   gl.bindVertexArray(null);
 
   let lineBuf = new Float32Array(1 << 16), lineN = 0;
@@ -513,11 +643,12 @@ function create(ctx) {
     // also turns on every allied ring of its class
     let ghost = null;
     const override = new Set();
-    if (settings.on && placing && mouse) {
+    if (placing && mouse) {
       const T = types[placing];
       ghost = { id: "ghost", type: placing, owner: ME, x: snap(mouse[0], T.foot[0]),
                 z: snap(mouse[1], T.foot[1]), agl: 0 };
-      for (const ring of defenseRings(T)) { override.add(ring.cls); defense.ally.push({ u: ghost, ring, mode: "ghost" }); }
+      if (settings.on)
+        for (const ring of defenseRings(T)) { override.add(ring.cls); defense.ally.push({ u: ghost, ring, mode: "ghost" }); }
     }
     if (settings.on) {
       for (const u of units) {
@@ -538,8 +669,8 @@ function create(ctx) {
 
     if (settings.reach) drawReach(proj, ids);
 
-    // the sensor layer is under the weapon rings: larger and fainter
-    if (settings.on) drawSensors(ghost, proj);
+    // the sensor layers are under the weapon rings, and do not follow them
+    drawSensors(ghost, proj, zoom);
 
     // the defense widget's layer is under the attack widget's (layer -100 vs -99)
     for (const side of ["ally", "enemy"])
@@ -719,11 +850,11 @@ function create(ctx) {
     }
   }
 
-  // ---- the sensor rings of a building being placed (one pass a sensor kind):
-  // the new ring and every own unit that emits that sensor, merged into one
-  // outline; the sheet under the new ring, the muted fill under the rest.
-  // Sonar finds only targets at or below sea level (0x4678E6), so its fill and
-  // outline are cut to water, a 16-wu height cell at a time.
+  // ---- sensors (see the tables at the top): one pass a kind. The mask's
+  // channels: R the new disc's fill, G the existing coverage's fill (both cut
+  // to the scroll extent, and to water for a water kind), B what clips lines.
+  // Sonar finds only targets at or below sea level (0x4678E6), so its fills
+  // are cut to water a 16-wu height cell at a time and its lines per vertex.
   const waterCells = new Map();
   function waterCellsOf(x0, z0, r) {
     const key = `${x0},${z0},${r}`;
@@ -740,118 +871,237 @@ function create(ctx) {
         c.push(x, z);
       }
     waterCells.set(key, c);
-    if (waterCells.size > 64) waterCells.delete(waterCells.keys().next().value);
+    if (waterCells.size > 256) waterCells.delete(waterCells.keys().next().value);
     return c;
   }
-  function drawSensors(ghost, proj) {
-    if (!settings.sensor || !ghost) return;
-    for (const kind of sensorKinds(types[ghost.type])) {
-      const st = SENSOR[kind];
-      const list = [{ u: ghost, isNew: true }];
-      for (const u of units)
-        if (isAlly(u) && sensorKinds(types[u.type]).includes(kind)) list.push({ u, isNew: false });
-      const items = list.map((e) => {
-        const T = types[e.u.type], alt = unitAlt(e.u);
-        const r = sensorRadius(T, kind, alt), nseg = r > 1500 ? 1024 : 512;
-        const scr = new Float32Array(nseg * 2), vis = new Float32Array(nseg);
-        const disc = new Float32Array(nseg * 2);   // the disc cut to the scroll extent
-        for (let i = 0; i < nseg; i++) {
-          const a = (i / nseg) * Math.PI * 2;
-          const x = e.u.x + Math.sin(a) * r, z = e.u.z + Math.cos(a) * r;
-          const [sx, sy] = proj([x, surface(x, z), z]);
-          scr[i * 2] = sx; scr[i * 2 + 1] = sy;
-          const cx = Math.min(MAPW, Math.max(0, x)), cz = Math.min(MAPH, Math.max(0, z));
-          const [dx, dy] = proj([cx, surface(cx, cz), cz]);
-          disc[i * 2] = dx; disc[i * 2 + 1] = dy;
-          const inb = Math.min(x, z, MAPW - x, MAPH - z);
-          vis[i] = (1 - Math.min(1, Math.max(0, inb * -0.02))) * (st.water && ground(x, z) > SEA ? 0 : 1);
-        }
-        const [cx, cy] = proj([e.u.x, alt, e.u.z]);
-        return { ...e, r, scr, vis, disc, c: [cx, cy] };
-      });
-
-      // the mask: R the new ring's fill, G the existing coverage's fill (both
-      // cut to water for sonar), A the union of the whole discs, which the
-      // outline is clipped by
-      gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
-      gl.disable(gl.SCISSOR_TEST);
-      gl.colorMask(true, true, true, true);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.disable(gl.BLEND);
-      gl.useProgram(maskProg);
-      gl.uniform2f(MU.uCanvas, GW, GH);
-      gl.bindVertexArray(mvao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, mvbo);
-      const flush = (r, g, a) => {
-        if (!maskN) return;
-        gl.colorMask(r, g, false, a);
-        gl.bufferData(gl.ARRAY_BUFFER, maskBuf.subarray(0, maskN), gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.TRIANGLES, 0, maskN / 2);
-      };
-      for (const isNew of [true, false]) {
-        maskN = 0;
-        for (const it of items) {
-          if (it.isNew !== isNew) continue;
-          const n = it.disc.length / 2;
-          for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            pushM(it.c[0], it.c[1]);
-            pushM(it.disc[i * 2], it.disc[i * 2 + 1]);
-            pushM(it.disc[j * 2], it.disc[j * 2 + 1]);
-          }
-        }
-        flush(!st.water && isNew, !st.water && !isNew, true);
-        if (!st.water) continue;
-        maskN = 0;
-        for (const it of items) {
-          if (it.isNew !== isNew) continue;
-          const cells = waterCellsOf(it.u.x, it.u.z, it.r);
-          for (let k = 0; k < cells.length; k += 2) {
-            const x = cells[k], z = cells[k + 1];
-            const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
-            const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
-            pushM(p00[0], p00[1]); pushM(p10[0], p10[1]); pushM(p11[0], p11[1]);
-            pushM(p00[0], p00[1]); pushM(p11[0], p11[1]); pushM(p01[0], p01[1]);
-          }
-        }
-        flush(isNew, !isNew, false);
-      }
-      gl.colorMask(true, true, true, true);
-      gl.bindVertexArray(null);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.enable(gl.SCISSOR_TEST);
-
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
-      gl.bindTexture(gl.TEXTURE_2D, maskTex);
-      gl.activeTexture(gl.TEXTURE0);
-
-      // the fill
-      const sa = st.sheet[3], ma = st.sheet[3] * st.mutedRel;
-      gl.useProgram(sfillProg);
-      gl.uniform1i(SU.uMask, TEX_UNIT);
-      gl.uniform4f(SU.uSheet, st.sheet[0] * sa, st.sheet[1] * sa, st.sheet[2] * sa, sa);
-      gl.uniform4f(SU.uMuted, st.muted[0] * ma, st.muted[1] * ma, st.muted[2] * ma, ma);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-      // the union outline: each ring's line survives only outside the union
-      lineN = 0;
-      for (const it of items)
-        polyline(it.scr, it.vis, st.w, st.outline, st.outline[3], st.dash ? 6 : 0);
-      if (lineN) {
-        gl.useProgram(lineProg);
-        gl.uniform2f(LU.uCanvas, GW, GH);
-        gl.uniform1i(LU.uMask, TEX_UNIT);
-        gl.uniform1i(LU.uMaskBit, 3);
-        gl.bindVertexArray(vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, lineBuf.subarray(0, lineN), gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.TRIANGLES, 0, lineN / 8);
-        gl.bindVertexArray(null);
-      }
+  // a circle on the ground: its screen points, the same points pulled inside
+  // the scroll extent (the fills), and per vertex whether a line shows there
+  function circle(u, r, water, proj) {
+    const n = r > 1500 ? 1024 : 512;
+    const scr = new Float32Array(n * 2), clamp = new Float32Array(n * 2), vis = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const x = u.x + Math.sin(a) * r, z = u.z + Math.cos(a) * r;
+      const p = proj([x, surface(x, z), z]);
+      scr[i * 2] = p[0]; scr[i * 2 + 1] = p[1];
+      const cx = Math.min(MAPW, Math.max(0, x)), cz = Math.min(MAPH, Math.max(0, z));
+      const q = proj([cx, surface(cx, cz), cz]);
+      clamp[i * 2] = q[0]; clamp[i * 2 + 1] = q[1];
+      const inMap = x >= 0 && z >= 0 && x <= MAPW && z <= MAPH;
+      vis[i] = inMap && !(water && ground(x, z) > SEA) ? 1 : 0;
     }
+    const c = proj([u.x, surface(u.x, u.z), u.z]);
+    return { u, r, n, scr, clamp, vis, c, len: (2 * Math.PI * r) / n };
+  }
+  const fan = (pts, c) => {
+    const n = pts.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      pushM(c[0], c[1]); pushM(pts[i * 2], pts[i * 2 + 1]); pushM(pts[j * 2], pts[j * 2 + 1]);
+    }
+  };
+  // a fill region: the disc inside the scroll extent, or its water cells
+  function region(rg, water, proj) {
+    if (!water) { fan(rg.clamp, rg.c); return; }
+    const cells = waterCellsOf(rg.u.x, rg.u.z, rg.r);
+    for (let k = 0; k < cells.length; k += 2) {
+      const x = cells[k], z = cells[k + 1];
+      const p00 = proj([x, SEA, z]), p10 = proj([x + 16, SEA, z]);
+      const p01 = proj([x, SEA, z + 16]), p11 = proj([x + 16, SEA, z + 16]);
+      pushM(p00[0], p00[1]); pushM(p10[0], p10[1]); pushM(p11[0], p11[1]);
+      pushM(p00[0], p00[1]); pushM(p11[0], p11[1]); pushM(p01[0], p01[1]);
+    }
+  }
+  function maskBegin() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, maskFBO);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.colorMask(true, true, true, true);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.BLEND);
+    gl.useProgram(maskProg);
+    gl.uniform2f(MU.uCanvas, GW, GH);
+    gl.bindVertexArray(mvao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mvbo);
+    maskN = 0;
+  }
+  function maskFlush(ch) {          // the triangles pushed since the last flush into one channel
+    if (maskN) {
+      gl.colorMask(ch === 0, ch === 1, ch === 2, ch === 3);
+      gl.bufferData(gl.ARRAY_BUFFER, maskBuf.subarray(0, maskN), gl.DYNAMIC_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, maskN / 2);
+    }
+    maskN = 0;
+  }
+  function maskEnd() {
+    gl.colorMask(true, true, true, true);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, maskTex);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+  // a flat colour where channel `inCh` is set and `outCh` is not
+  function fillWhere(rgb, a, inCh, outCh) {
+    gl.useProgram(sfillProg);
+    gl.uniform1i(SU.uMask, TEX_UNIT);
+    gl.uniform1i(SU.uIn, inCh);
+    gl.uniform1i(SU.uOut, outCh);
+    gl.uniform4f(SU.uCol, rgb[0] * a, rgb[1] * a, rgb[2] * a, a);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  // a circle's line as quads: x, y, edge, arc (elmos), vis, half, period
+  let sBuf = new Float32Array(1 << 16), sN = 0;
+  const pushS = (x, y, e, arc, vis, half, per) => {
+    if (sN + 7 > sBuf.length) { const g = new Float32Array(sBuf.length * 2); g.set(sBuf); sBuf = g; }
+    sBuf[sN++] = x; sBuf[sN++] = y; sBuf[sN++] = e; sBuf[sN++] = arc;
+    sBuf[sN++] = vis; sBuf[sN++] = half; sBuf[sN++] = per;
+  };
+  function sline(rg, width, per) {
+    const { n, scr, vis } = rg, half = width / 2 + 0.5;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      if (!vis[i] && !vis[j]) continue;
+      let x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
+      const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+      if (len < 1e-4) continue;
+      const ux = dx / len, uy = dy / len, nx = -uy * half, ny = ux * half;
+      const ex = ux * width / 2, ey = uy * width / 2;
+      x0 -= ex; y0 -= ey; x1 += ex; y1 += ey;
+      const a0 = i * rg.len, a1 = (i + 1) * rg.len;
+      pushS(x0 + nx, y0 + ny, 1, a0, vis[i], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
+      pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per);
+      pushS(x1 + nx, y1 + ny, 1, a1, vis[j], half, per); pushS(x0 - nx, y0 - ny, -1, a0, vis[i], half, per);
+      pushS(x1 - nx, y1 - ny, -1, a1, vis[j], half, per);
+    }
+  }
+  // mode 0 BAR's moving stipple, 1 the jammer's dashes, 2 solid; clipped where
+  // channel `clip` is set (-1: not clipped); `shift` elmos the pattern has moved
+  function slineDraw(rgb, a, mode, clip, shift) {
+    if (!sN) return;
+    gl.useProgram(slineProg);
+    gl.uniform2f(LSU.uCanvas, GW, GH);
+    gl.uniform1i(LSU.uMask, TEX_UNIT);
+    gl.uniform1i(LSU.uMaskBit, clip);
+    gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
+    gl.uniform1f(LSU.uA, a);
+    gl.uniform1i(LSU.uMode, mode);
+    gl.uniform1f(LSU.uShift, shift);
+    gl.bindVertexArray(svao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, svbo);
+    gl.bufferData(gl.ARRAY_BUFFER, sBuf.subarray(0, sN), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, sN / 7);
+    gl.bindVertexArray(null);
+    sN = 0;
+  }
+  // the own and allied units that emit a kind now
+  const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
+  const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
+
+  // THE VIEW's radar and sonar lines: the discs into B, then each circle's
+  // line where B is not set -- the outer half of the stroke, outside the union
+  function drawLines(kind, proj, frame) {
+    const list = emitters(kind);
+    if (!list.length) return;
+    const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
+    const rings = list.map((u) => circle(u, radiusOf(u, kind), water, proj));
+    maskBegin();
+    for (const rg of rings) fan(rg.scr, rg.c);
+    maskFlush(2);
+    maskEnd();
+    for (const rg of rings) sline(rg, LINE_W * (GH + 500) / 1300, STIPPLE.period);
+    slineDraw(st.c, st.a, 0, 2, -frame * STIPPLE.speed);
+  }
+  // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
+  // placed): the union filled, a dashed band along the inside of its edge. The
+  // band of a circle is clipped where it lies more than its width inside the
+  // union -- by the union of the discs shrunk by that width (B).
+  function drawJammers(kind, ghost, proj, zoom, t) {
+    const water = WATER_KIND[kind];
+    const list = settings.view ? emitters(kind).map((u) => ({ u, isNew: false })) : [];
+    if (ghost && settings.sensor && sensorKinds(types[ghost.type]).includes(kind))
+      list.push({ u: ghost, isNew: true });
+    if (!list.length) return;
+    const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, wE = wpx / zoom;
+    const items = list.map((e) => {
+      const r = types[e.u.type][kind];
+      return { ...e, r, rg: circle(e.u, r, water, proj),
+               band: circle(e.u, Math.max(1, r - wE / 2), water, proj),
+               core: r > wE ? circle(e.u, r - wE, false, proj) : null };
+    });
+    maskBegin();
+    for (const isNew of [true, false]) {
+      for (const it of items) if (it.isNew === isNew) region(it.rg, water, proj);
+      maskFlush(isNew ? 0 : 1);
+    }
+    for (const it of items) if (it.core) fan(it.core.scr, it.core.c);
+    maskFlush(2);
+    maskEnd();
+    fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
+    fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
+    for (const it of items) {
+      const C = 2 * Math.PI * it.band.r;
+      sline(it.band, wpx, C / Math.max(1, Math.round(C / JAMMER.dash)));
+    }
+    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed);
+  }
+  // THE PREVIEW of a radar or sonar building: the existing coverage filled
+  // duller where the new disc does not reach, the new disc's sheet with rings
+  // travelling outward, an outline along the new disc's edge (inside existing
+  // coverage too) and along the union's outer edge
+  function drawPreview(kind, ghost, proj, zoom, t) {
+    const P = PREVIEW[kind], water = WATER_KIND[kind];
+    const wpx = PULSE.w * GH / 1080, wE = wpx / zoom;
+    const g = circle(ghost, radiusOf(ghost, kind), water, proj);
+    const old = emitters(kind).map((u) => circle(u, radiusOf(u, kind), water, proj));
+    maskBegin();
+    region(g, water, proj); maskFlush(0);
+    for (const rg of old) region(rg, water, proj);
+    maskFlush(1);
+    for (const rg of [g, ...old]) if (rg.r > wE) { const k = circle(rg.u, rg.r - wE, false, proj); fan(k.scr, k.c); }
+    maskFlush(2);
+    maskEnd();
+    fillWhere(P.allied, P.a * P.alliedRel, 1, 0);
+    // the sheet: the new disc's fan, world x/z per vertex for the rings
+    const pts = [];
+    const n = g.n;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const ai = (i / n) * Math.PI * 2, aj = (j / n) * Math.PI * 2;
+      pts.push(g.c[0], g.c[1], 0, 0,
+               g.scr[i * 2], g.scr[i * 2 + 1], Math.sin(ai) * g.r, Math.cos(ai) * g.r,
+               g.scr[j * 2], g.scr[j * 2 + 1], Math.sin(aj) * g.r, Math.cos(aj) * g.r);
+    }
+    gl.useProgram(pulseProg);
+    gl.uniform2f(PSU.uCanvas, GW, GH);
+    gl.uniform1i(PSU.uMask, TEX_UNIT);
+    gl.uniform1f(PSU.uTime, t);
+    gl.uniform3f(PSU.uSheet, ...P.sheet);
+    gl.uniform3f(PSU.uPulse, ...P.pulse);
+    gl.uniform1f(PSU.uAlpha, P.a);
+    gl.uniform4f(PSU.uP, PULSE.spacing, PULSE.speed, PULSE.power, PULSE.strength);
+    gl.bindVertexArray(fvao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, fvbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, pts.length / 4);
+    gl.bindVertexArray(null);
+    // the outline: the new disc's own edge whole, the others' where they bound the union
+    sline(circle(ghost, Math.max(1, g.r - wE / 2), water, proj), wpx, 1);
+    slineDraw(P.outline, P.outlineA, 2, -1, 0);
+    for (const rg of old) sline(circle(rg.u, Math.max(1, rg.r - wE / 2), water, proj), wpx, 1);
+    slineDraw(P.outline, P.outlineA, 2, 2, 0);
+  }
+  // every sensor layer, bottom to top: the jammer layers, the radar and sonar
+  // lines, the preview's sheets
+  function drawSensors(ghost, proj, zoom) {
+    const t = clock(), frame = Math.floor(t * 30);
+    const placed = ghost && settings.sensor ? sensorKinds(types[ghost.type]) : [];
+    for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom, t);
+    if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, frame);
+    for (const kind of ["radar", "sonar"]) if (placed.includes(kind)) drawPreview(kind, ghost, proj, zoom, t);
   }
 
   // lab marks: the selection, the hovered unit, placed defenses and the ghost
@@ -1032,7 +1282,7 @@ function create(ctx) {
       `<div class="row modes"><span>range rings</span>${b("on", settings.on, "on")}` +
       `${b("shiftOnly", settings.shiftOnly, "shift only")}${b("cursorRange", settings.cursorRange, "cursor range")}` +
       `<span>enemy defenses</span>${cls("enemy")}<span>ally defenses</span>${cls("ally")}` +
-      `${b("sensor", settings.sensor, "sensor rings")}` +
+      `<span>sensors</span>${b("view", settings.view, "sensor ranges")}${b("sensor", settings.sensor, "sensor preview")}` +
       `<span>lab</span>${b("reach", settings.reach, "reach cells")}</div>`,
       `<div class="row modes"><span>place</span>` +
       armedStructures().map(([k, T]) => `<button data-rrplace="${k}" class="${placing === k ? "on" : ""}">${T.name}</button>`).join("") +
@@ -1059,7 +1309,9 @@ function create(ctx) {
   }
 
   return { draw, onMove, onClick, onBox, onKey, onPanel, rows,
-           get placing() { return placing; }, get shiftHeld() { return shift; } };
+           get placing() { return placing; }, get shiftHeld() { return shift; },
+           // the sensor layers move: the view's dashes, the preview's rings
+           get animating() { return settings.view || (!!placing && settings.sensor); } };
 }
 
 window.TRanges = { create, solverAccepts, attackRings, defenseRings };

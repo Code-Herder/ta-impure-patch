@@ -3063,6 +3063,14 @@ async function main() {
       };
       requestAnimationFrame(tick);
     }
+    // the range-ring lab's sensor layers move too (their dashes and rings)
+    if (RR && !SHOT) {
+      const rrTick = () => {
+        if (!raf && !contextLost && RR.animating) present();
+        requestAnimationFrame(rrTick);
+      };
+      requestAnimationFrame(rrTick);
+    }
   }
 
   draw();

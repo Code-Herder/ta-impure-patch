@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The range-ring lab fixture (tascene-view.html, RANGE RINGS): an ARM base on Two Continents' eastern hill and shore, with two Guardians (one on the hilltop, one on the flat) so the ballistic reach can be compared, a Big Bertha, Hammers, an LLT pair, a Defender, a Commander and a construction kbot, an anti-nuke, a radar tower, a torpedo launcher and a Crusader at sea; and CORE defenses to the north-west (Punisher, Gaat Gun, Pulverizer, Intimidator, anti-nuke, torpedo launcher) with two A.K.s to hover.",
+ "description": "The range-ring lab fixture (tascene-view.html, RANGE RINGS): an ARM base on Two Continents' eastern hill and shore, with two Guardians (one on the hilltop, one on the flat) so the ballistic reach can be compared, a Big Bertha, Hammers, an LLT pair, a Defender, a Commander and a construction kbot, an anti-nuke, a radar tower, a torpedo launcher and a Crusader at sea; and CORE defenses to the north-west (Punisher, Gaat Gun, Pulverizer, Intimidator, anti-nuke, torpedo launcher) with two A.K.s to hover. For the sensor view: an allied ARM player (owner 2, the lab's default ally) with a radar tower overlapping ours and a sonar station at sea; our own Seer, Peeper in flight, Jammer, Escort and Fibber at sea; and a CORE radar tower and Spectre, which the view never draws.",
  "seed": 20261109,
  "on_error": "abort",
  "setup": {
@@ -23,6 +23,12 @@
     "controller": "ai",
     "side": "core",
     "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
    }
   ]
  },
@@ -238,6 +244,87 @@
    "pos": [
     5860,
     11250
+   ]
+  },
+  {
+   "id": "arad",
+   "type": "ARMRAD",
+   "owner": 2,
+   "pos": [
+    6900,
+    12650
+   ]
+  },
+  {
+   "id": "ason",
+   "type": "ARMSONAR",
+   "owner": 2,
+   "pos": [
+    7650,
+    11850
+   ]
+  },
+  {
+   "id": "seer",
+   "type": "ARMSEER",
+   "owner": 0,
+   "pos": [
+    6250,
+    11700
+   ]
+  },
+  {
+   "id": "peep",
+   "type": "ARMPEEP",
+   "owner": 0,
+   "pos": [
+    6750,
+    11600
+   ]
+  },
+  {
+   "id": "jam",
+   "type": "ARMJAM",
+   "owner": 0,
+   "pos": [
+    6450,
+    11650
+   ]
+  },
+  {
+   "id": "sjam",
+   "type": "ARMSJAM",
+   "owner": 0,
+   "pos": [
+    7850,
+    12650
+   ]
+  },
+  {
+   "id": "scram",
+   "type": "ARMSCRAM",
+   "owner": 0,
+   "pos": [
+    7750,
+    12250
+   ]
+  },
+  {
+   "id": "crad",
+   "type": "CORRAD",
+   "owner": 1,
+   "pos": [
+    4800,
+    11400
+   ]
+  },
+  {
+   "id": "spec",
+   "type": "CORSPEC",
+   "owner": 1,
+   "pos": [
+    5400,
+    11050
    ]
   }
  ]
