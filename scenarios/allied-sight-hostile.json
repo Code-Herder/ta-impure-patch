@@ -1,0 +1,267 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The control of allied-sight.json: the same seats and units with no ally groups, so seats 0, 1 and 2 are all enemies and each zone shows what stock does without the alliance. Z1 only the ally sees: seat 0's Guardian `g0` (300, 7000), range 1250, and the Core solar collector `t1` 800 from it, beyond every seat-0 unit's sight (sight saturates at 256 wu under true LOS); seat 2's solar collector `v2` sees `t1` from 140. Seat 0 has no targeting facility anywhere, so its radar picture never aims a weapon (0x40ABED). Z2 the mirror: seat 2's Guardian `g2` (3850, 7100), the Core solar `t2` 800 from it, seat 0's solar `v0` seeing it from 140. Z3 radar: the Core solar `e3` (7000, 6300) inside seat 2's radar tower `rad3` (1440) only. Z4 jammer: the Core solar `e4` (9700, 4600) inside seat 0's radar tower `rad4` and 300 from seat 2's mobile jammer `jam4` (400), beyond its sight. Z5 minimap dot: seat 2's solar `a5` (6600, 7600) 300 from the Core jammer `spec5` (490), outside seat 0's sight. Z6 visibility: seat 2's spy `spy6` (the runner cloaks it: the format cannot) and submarine `sub6` in the channel's deep water, 157 and 180 from seat 0's construction kbot `eye6` (2330, 6660). Z7 death vision: seat 0's construction kbot `bait` (9650, 7650) 150 from the Core light laser tower `tur7`, beside the Core solars `e7a` and `e7b`, which no other unit sees. Z8 explored: seat 2's Flea `flea` crosses the southern island from (4700, 10800) to (6900, 12400), ground no seat-0 unit sees. The commanders stand apart: seat 0's `com` on the south-western islet, seat 1's `ccom` on the northern island; seat 2 has none. No two zones are within 600 wu, no Guardian reaches another zone and no radar tower covers another zone's Core unit (checked against each type's FBI sightdistance, radardistance, radardistancejam and weapon range, and against the map's heights for land and for the submarine's depth).",
+ "seed": 20261111,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "clear_existing": true,
+  "los": "true",
+  "mapping": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   }
+  ]
+ },
+ "camera": {
+  "at": [
+   900,
+   7000
+  ]
+ },
+ "units": [
+  {
+   "id": "g0",
+   "type": "ARMGUARD",
+   "owner": 0,
+   "pos": [
+    300,
+    7000
+   ]
+  },
+  {
+   "id": "t1",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    1100,
+    7000
+   ]
+  },
+  {
+   "id": "v2",
+   "type": "ARMSOLAR",
+   "owner": 2,
+   "pos": [
+    1240,
+    7000
+   ]
+  },
+  {
+   "id": "g2",
+   "type": "ARMGUARD",
+   "owner": 2,
+   "pos": [
+    3850,
+    7100
+   ]
+  },
+  {
+   "id": "t2",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    4650,
+    7100
+   ]
+  },
+  {
+   "id": "v0",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    4790,
+    7100
+   ]
+  },
+  {
+   "id": "rad3",
+   "type": "ARMRAD",
+   "owner": 2,
+   "pos": [
+    7000,
+    5300
+   ]
+  },
+  {
+   "id": "e3",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    7000,
+    6300
+   ]
+  },
+  {
+   "id": "rad4",
+   "type": "ARMRAD",
+   "owner": 0,
+   "pos": [
+    9700,
+    4000
+   ]
+  },
+  {
+   "id": "e4",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    9700,
+    4600
+   ]
+  },
+  {
+   "id": "jam4",
+   "type": "ARMJAM",
+   "owner": 2,
+   "pos": [
+    9700,
+    4900
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "a5",
+   "type": "ARMSOLAR",
+   "owner": 2,
+   "pos": [
+    6600,
+    7600
+   ]
+  },
+  {
+   "id": "spec5",
+   "type": "CORSPEC",
+   "owner": 1,
+   "pos": [
+    6900,
+    7600
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "eye6",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    2330,
+    6660
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "sub6",
+   "type": "ARMSUB",
+   "owner": 2,
+   "pos": [
+    2510,
+    6660
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "spy6",
+   "type": "ARMSPY",
+   "owner": 2,
+   "pos": [
+    2260,
+    6800
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "tur7",
+   "type": "CORLLT",
+   "owner": 1,
+   "pos": [
+    9800,
+    7650
+   ]
+  },
+  {
+   "id": "bait",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    9650,
+    7650
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "e7a",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    9700,
+    7520
+   ]
+  },
+  {
+   "id": "e7b",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    9750,
+    7790
+   ]
+  },
+  {
+   "id": "flea",
+   "type": "ARMFLEA",
+   "owner": 2,
+   "pos": [
+    4700,
+    10800
+   ],
+   "stance": "hold",
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      6900,
+      12400
+     ]
+    }
+   ]
+  },
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    1700,
+    12600
+   ]
+  },
+  {
+   "id": "ccom",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    1500,
+    1500
+   ]
+  }
+ ]
+}
