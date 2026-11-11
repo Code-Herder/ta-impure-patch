@@ -495,8 +495,8 @@ The owner's decisions:
   In a skirmish the alliances are the SKIRMISH screen's: the seat fill `0x47A760` marks allied
   every human or AI seat that shares an alliance group other than 5 (the store at `0x47A890`;
   [engine map](exe-reverse-engineering.md), *The seat fill*). The group is saved in the registry as
-  `Skirmish\Player<N>AllyGroup` ([command-line options](cmdline-options.md)) [INFERRED: the
-  registry value reaching the settings entry's `+8` is not traced].
+  `Skirmish\Player<N>AllyGroup` ([command-line options](cmdline-options.md)), which the settings
+  load reads into the settings entry's `+8` (`0x430D03`, DISASSEMBLED 2026-11-11).
 - **The rates** — a row's income and spending — read one decimal below 100 in magnitude and whole
   numbers from 100, rounded half up as JavaScript's `Math.round` rounds (`rate` and `js_round`,
   `tagpu_hudlay.c`; `rate`, `hud.js`). A resource bar whose storage is 0 is empty.

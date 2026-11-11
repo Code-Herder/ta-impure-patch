@@ -776,7 +776,7 @@ It then:
 
 **tacli `scenario load`:**
 
-1. Writes the instance's registry store: `SkirmishMap`, and `Skirmish\PlayerN{Controller,Side,Color,Metal,Energy}`. `AllyGroup` is not exposed.
+1. Writes the instance's registry store: `SkirmishMap`, and `Skirmish\PlayerN{Controller,Side,Color,Metal,Energy,AllyGroup}`; a declared player's `AllyGroup` is 5, no group, when the scenario names none.
 2. Clicks SINGLE → Skirmish → Start through `tacli ui` gadgets.
 3. Sets Mapping and LineOfSight by gadget stage. The registry does not decide them (MEASURED 2026-09-02, per tacli).
 4. Waits for `units: alive=N`.
