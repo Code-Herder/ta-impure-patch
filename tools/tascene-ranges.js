@@ -179,9 +179,10 @@ const SENSOR_LINE = {
 // drops or adds over DASH_FADE ms and moves none. s0 is a circle's own: its
 // length on the map divided evenly, so every level closes round the circle.
 // The dashes move along at a constant speed on screen.
-const LINE_W = 4.5;                 // px x lineScale, lineScale = (vsy + 500) / 1300
-const DASH = {                      // x lineScale: dash length and level-0 spacing, px; speed px/s
-  line: { len: 4, space: 11, speed: 9, gain: 2.5 },    // gain: the dash's opacity x the kind's
+// x lineScale, lineScale = (vsy + 500) / 1300 (BAR's): the band's width, the
+// dash length and level-0 spacing, px; speed px/s
+const DASH = {
+  line: { w: 1.5, len: 4, space: 11, speed: 9, gain: 2.5 },   // gain: the dash's opacity x the kind's
   jam:  { len: 5, space: 11, speed: 6 },
 };
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
@@ -1273,15 +1274,14 @@ function create(ctx) {
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
 
-  // THE VIEW's radar and sonar lines: a band outside the union's outline, as
-  // wide as the visible outer half of BAR's stroke
+  // THE VIEW's radar and sonar lines: a dashed band just outside the union's outline
   function drawLines(kind, proj, zoom, t) {
     const list = emitters(kind);
     if (!list.length) return;
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
     const paths = outline(list.map((u) => ({ u, r: radiusOf(u, kind) })), water, proj, false);
     const ls = (GH + 500) / 1300;
-    for (const path of paths) sline(path, LINE_W * ls / 2, 1, DASH.line.space * ls, zoom);
+    for (const path of paths) sline(path, DASH.line.w * ls, 1, DASH.line.space * ls, zoom);
     slineDraw(st.c, Math.min(1, st.a * DASH.line.gain), 0, zoom, "line", -1);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
