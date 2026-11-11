@@ -60,6 +60,12 @@
    "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"]],
    "end": 3810
   },
+  "battle-allied": {
+   "load": "replay-battle-allied.json",
+   "los": "file",
+   "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"]],
+   "end": 3810
+  },
   "carry-links": {
    "load": "replay-battle-load.json",
    "steps": [
