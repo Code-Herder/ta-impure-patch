@@ -168,12 +168,15 @@ const SENSOR_LINE = {
   radar: { c: [0.0, 1.0, 0.0], a: 0.16 },
   sonar: { c: [0.5, 0.7, 0.9], a: 0.17 },
 };
-const STIPPLE = { period: 2 * Math.PI / 0.8331, speed: 0.2 / 0.8331 };   // elmos; elmos per game frame
+// BAR's dashes are fixed on the ground (a 7.54-elmo period moving 7.2 elmos/s,
+// with the game frame); TA zooms where BAR's camera moves, so the period is
+// held on screen instead: 1.7 line widths, one period every 1.05 s
+const STIPPLE = { periodW: 1.7, speed: 0.955 };     // x line width; periods per second
 const LINE_W = 4.5;                 // px x lineScale, lineScale = (vsy + 500) / 1300
 // gui_sensor_ranges_jammer_preview.lua shaderConfig
 const JAMMER = { allied: [0.62, 0.35, 0.33], sheet: [0.90, 0.22, 0.20], a: 0.17, alliedRel: 0.85,
                  outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
-                 w: 1.2, wElmo: 0.89, dash: 8, speed: 6 };   // px at 1080p + elmos; dash period, elmos/s
+                 w: 1.2, wElmo: 0.89, dash: 8, speed: 0.75 };   // px at 1080p + elmos; px x lineScale, periods/s
 // gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
 const PREVIEW = {
   radar: { sheet: [0.22, 0.85, 0.50], a: 0.2, pulse: [0.55, 1.0, 0.70], allied: [0.35, 0.62, 0.50],
@@ -540,7 +543,9 @@ function create(ctx) {
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol"]);
   const LSU = U(slineProg, ["uCanvas", "uMask", "uMaskBit", "uCol", "uA", "uMode", "uShift"]);
   const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP"]);
-  const TEX_UNIT = 14;
+  // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
+  // 10-19, 14 being the height map the Classic++ light reads)
+  const TEX_UNIT = 20;
   const maskTex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + TEX_UNIT);
   gl.bindTexture(gl.TEXTURE_2D, maskTex);
@@ -997,13 +1002,19 @@ function create(ctx) {
     gl.bindVertexArray(null);
     sN = 0;
   }
+  // a circle's pattern period in elmos: `px` on screen, a whole number of
+  // periods round the circle so the pattern closes
+  const periodOf = (rg, px, zoom) => {
+    const C = 2 * Math.PI * rg.r;
+    return C / Math.max(1, Math.round(C * zoom / px));
+  };
   // the own and allied units that emit a kind now
   const emitters = (kind) => units.filter((u) => isAlly(u) && emitsNow(types[u.type]).includes(kind));
   const radiusOf = (u, kind) => sensorRadius(types[u.type], kind, unitAlt(u));
 
   // THE VIEW's radar and sonar lines: the discs into B, then each circle's
   // line where B is not set -- the outer half of the stroke, outside the union
-  function drawLines(kind, proj, frame) {
+  function drawLines(kind, proj, zoom, t) {
     const list = emitters(kind);
     if (!list.length) return;
     const st = SENSOR_LINE[kind], water = WATER_KIND[kind];
@@ -1012,8 +1023,9 @@ function create(ctx) {
     for (const rg of rings) fan(rg.scr, rg.c);
     maskFlush(2);
     maskEnd();
-    for (const rg of rings) sline(rg, LINE_W * (GH + 500) / 1300, STIPPLE.period);
-    slineDraw(st.c, st.a, 0, 2, -frame * STIPPLE.speed);
+    const w = LINE_W * (GH + 500) / 1300, px = w * STIPPLE.periodW;
+    for (const rg of rings) sline(rg, w, periodOf(rg, px, zoom));
+    slineDraw(st.c, st.a, 0, 2, -t * STIPPLE.speed * px / zoom);
   }
   // THE JAMMER LAYER, always on (and with the placed jammer's disc while one is
   // placed): the union filled, a dashed band along the inside of its edge. The
@@ -1042,11 +1054,9 @@ function create(ctx) {
     maskEnd();
     fillWhere(JAMMER.allied, JAMMER.a * JAMMER.alliedRel, 1, 0);
     fillWhere(JAMMER.sheet, JAMMER.a, 0, -1);
-    for (const it of items) {
-      const C = 2 * Math.PI * it.band.r;
-      sline(it.band, wpx, C / Math.max(1, Math.round(C / JAMMER.dash)));
-    }
-    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed);
+    const px = JAMMER.dash * (GH + 500) / 1300;
+    for (const it of items) sline(it.band, wpx, periodOf(it.band, px, zoom));
+    slineDraw(JAMMER.outline, JAMMER.dashA, 1, 2, t * JAMMER.speed * px / zoom);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
   // duller where the new disc does not reach, the new disc's sheet with rings
@@ -1097,10 +1107,10 @@ function create(ctx) {
   // every sensor layer, bottom to top: the jammer layers, the radar and sonar
   // lines, the preview's sheets
   function drawSensors(ghost, proj, zoom) {
-    const t = clock(), frame = Math.floor(t * 30);
+    const t = clock();
     const placed = ghost && settings.sensor ? sensorKinds(types[ghost.type]) : [];
     for (const kind of ["radarjam", "sonarjam"]) drawJammers(kind, ghost, proj, zoom, t);
-    if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, frame);
+    if (settings.view) for (const kind of ["radar", "sonar"]) drawLines(kind, proj, zoom, t);
     for (const kind of ["radar", "sonar"]) if (placed.includes(kind)) drawPreview(kind, ghost, proj, zoom, t);
   }
 
