@@ -188,7 +188,7 @@ const DASH = {
 const DASH_SPAN = 8, DASH_HYST = 0.65, DASH_FADE = 300;   // levels kept, hysteresis, ms
 // gui_sensor_ranges_jammer_preview.lua shaderConfig's outline (its fills are
 // not drawn)
-const JAMMER = { outline: [1.0, 0.32, 0.22], dashA: 0.8, gapRel: 0.3,
+const JAMMER = { outline: [1.0, 0.32, 0.22], dashA: 0.8,
                  w: 1.2, wElmo: 0.89 };   // band width: px at 1080p + elmos
 // gui_sensor_ranges_radar_preview.lua shaderConfig; sonar in the sonar line's colours
 const PREVIEW = {
@@ -274,8 +274,7 @@ in float vAcross; in float vArc; in float vVis;
 flat in float vW; flat in float vS0; flat in float vTop;
 uniform vec3 uCol;
 uniform float uA;
-uniform int uMode;           // 0 dashes over nothing, 1 dashes over the gap's opacity, 2 solid
-uniform float uGap;          // mode 1: the gap's opacity, x uA
+uniform int uMode;           // 0 dashes, 2 solid
 uniform float uShift;        // zoom-1 px the dashes have moved along
 uniform float uZoom;
 uniform float uDash;         // a dash's length, px
@@ -302,7 +301,6 @@ float dashes() {
 void main() {
   float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0) * uA * vVis;
   if (uMode == 0) a *= dashes();
-  else if (uMode == 1) a *= mix(uGap, 1.0, dashes());
   if (a <= 0.0) discard;
   o = vec4(uCol * a, a);
 }`;
@@ -582,7 +580,7 @@ function create(ctx) {
   const PU = U(ptProg, ["uCanvas", "uSize"]);
   const SEA_U = ["uHeight", "uGrid", "uView", "uSea", "uCanvasH", "uWater"];
   const SU = U(sfillProg, ["uMask", "uIn", "uOut", "uCol", ...SEA_U]);
-  const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uMode", "uGap", "uShift",
+  const LSU = U(slineProg, ["uCanvas", "uCol", "uA", "uMode", "uShift",
                             "uZoom", "uDash", "uFine", "uLevel", "uOp"]);
   const PSU = U(pulseProg, ["uCanvas", "uMask", "uTime", "uAlpha", "uSheet", "uPulse", "uP", ...SEA_U]);
   // the mask's texture unit: one the viewer binds nothing to (it holds 4 and
@@ -1250,9 +1248,9 @@ function create(ctx) {
     lod.t = t;
   }
   const uOpArr = new Float32Array(DASH_SPAN + 1);
-  // mode 0 dashes, 1 dashes over the gap's opacity, 2 solid; `dash` the DASH
-  // row, `sign` the direction the dashes run
-  function slineDraw(rgb, a, mode, zoom, dash, sign, gap) {
+  // mode 0 dashes, 2 solid; `dash` the DASH row, `sign` the direction the
+  // dashes run
+  function slineDraw(rgb, a, mode, zoom, dash, sign) {
     if (!sN) return;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -1261,7 +1259,6 @@ function create(ctx) {
     gl.uniform3f(LSU.uCol, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(LSU.uA, a);
     gl.uniform1i(LSU.uMode, mode);
-    gl.uniform1f(LSU.uGap, gap || 0);
     gl.uniform1f(LSU.uZoom, zoom);
     if (dash) {
       const op = (j) => (j in lod.op ? lod.op[j] : (j >= lod.k ? 1 : 0));
@@ -1305,7 +1302,7 @@ function create(ctx) {
     const wpx = JAMMER.w * GH / 1080 + JAMMER.wElmo * zoom, ls = (GH + 500) / 1300;
     for (const path of outline(list.map((u) => ({ u, r: types[u.type][kind] })), water, proj, false))
       sline(path, wpx, -1, DASH.jam.space * ls, zoom);
-    slineDraw(JAMMER.outline, JAMMER.dashA, 1, zoom, "jam", 1, JAMMER.gapRel);
+    slineDraw(JAMMER.outline, JAMMER.dashA, 0, zoom, "jam", 1);
   }
   // THE PREVIEW of a radar or sonar building: the existing coverage filled
   // duller where the new disc does not reach, the new disc's sheet with rings
