@@ -6,8 +6,9 @@ building being placed, and of the defenses by side and class, each class's rings
 outline of their union. Under them, and independent of them, BAR's sensor view: the radar, sonar and
 jammer coverage of the viewed player and its allies, always, as dashed outlines of each kind's union
 laid on the ground, by the engine's own emitter rule; and while a building that will emit is
-placed, BAR's sensor preview of its coverage over the existing coverage. The rings replace the
-engine's `ShowRanges` circles while they are on.
+placed, the sensor preview: its coverage merged into those outlines, the arcs it adds drawn
+brighter, whether or not the view is on. The rings replace the engine's `ShowRanges` circles while
+they are on.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
 
@@ -19,9 +20,9 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 |---|---|---|
 | `tagpu_rangeown.c/.h` | game | which rings show, of what class, around which unit, and which sensor coverage — the view's and the preview's; every engine field resolved to a number in the packet; the Alt+. / Alt+, keys |
 | `tagpu_packet.h`, `tagpu_packet.c`, `tagpu_packet_pub.c` (`fill_range`) | game / render | `TAGPU_PK_RANGE` (one 24-byte header) and `TAGPU_PK_RING` (32 bytes a ring, at most 4096, 128 KB) in the frame packet; the acquire's bounds |
-| `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight; the sensors' union outlines built as paths and laid on the ground, their dashes, fills and on/off animation; 64-byte instances, 32-byte path points (`TAGPU_RGPT`) and the draw list |
+| `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight; the sensors' union outlines built as paths and laid on the ground — the arcs a building being placed adds marked per segment — their dashes, the jammers' fills and the on/off animation; 64-byte instances, 32-byte path points (`TAGPU_RGPT`) and the draw list |
 | `tagpu_range_comp.h` → `inc/spirv/tagpu_range_comp.spv.h` | GPU | the reach, a compute pass: one workgroup a ring |
-| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a sensor disc's extent cut, water test and the preview's travelling rings); the sensor paths' own pair `SVS`/`SFS`, a band along a path, dashed or solid |
+| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a jammer disc's extent cut and water test); the sensor paths' own pair `SVS`/`SFS`, a dashed band along a path, the segments a building being placed adds at their own alpha |
 | `tagpu_vk_range.c/.h` | render | the Vulkan pass: the per-slot reach cache, the dispatch, the stencil union, the per-slot path buffer |
 | `tagpu_terr.c/.h` (`tagpu_terr_heights`) | render | hands the terrain pass's height mirror to a later reader on the render thread: the ground the sensor outlines are laid on |
 | `tagpu_weapons.c` (`tagpu_weapons_type_weapon`) | game | a unit type's weapon `idx` (weapon1..3, then the extra-weapons record), NULL past the type's count; reads only and builds nothing |
@@ -202,16 +203,17 @@ half a target pixel of rim each side.
 
 BAR's sensor widgets on the engine's coverage rule: the view is `gui_sensor_ranges_radar.lua` and
 `gui_sensor_ranges_sonar.lua` (their `sensor_ranges_los` shaders' colours) for radar and sonar and
-`gui_sensor_ranges_jammer_preview.lua`'s always-shown layer for the jammers; the preview is
-`gui_sensor_ranges_radar_preview.lua` without its terrain raycast, and sonar on its structure in
-the sonar colours. `tools/tascene-ranges.js`'s `DASH`, `SENSOR_LINE`, `JAMMER`, `PREVIEW` and
-`PULSE` are the same tables as `tagpu_range.c`'s. Sensors take no camera fade, highlight or
-dimming. Every width, dash and speed is BAR's px of a screen times its `lineScale`,
+`gui_sensor_ranges_jammer_preview.lua`'s always-shown layer for the jammers. The preview is not
+BAR's: the placed building's disc joins its kind's union in the view's look, and the arcs it adds
+to the outline draw brighter (*The preview*, below). `tools/tascene-ranges.js`'s `DASH`,
+`SENSOR_LINE`, `JAMMER` and `NEW_GAIN` are the same tables as `tagpu_range.c`'s, and its
+`sensorCircles`, `bands` and per-segment `segNew` draw the preview by the same rule. Sensors take
+no camera fade, highlight or dimming. Every width, dash and speed is BAR's px of a screen times its `lineScale`,
 (screen height in device px + 500) / 1300, so they hold on screen at every zoom.
 
 **The outline of a kind is its union's, as paths.** `open_arcs` finds each circle's arcs that no
 other disc of the kind covers (a circle inside another has none; of two identical ones the earlier
-is kept, so the preview's own circle, first, keeps its arcs); `outline` chains them into closed loops — the next arc is the one of another circle
+is kept, so the placed building's circle, circle 0 of its kind (`circles`), keeps its arcs); `outline` chains them into closed loops — the next arc is the one of another circle
 starting within 1 world px of where this one ends — so the dashes run on through a junction as
 along any curve; `make_path` lays each loop on the ground as points (`TAGPU_RGPT`, 32 bytes): a
 circle's 512 points a turn, 1024 past a radius of 1500, at least two an arc. A point carries its
@@ -219,8 +221,11 @@ world x and z, the surface altitude there (the sea's over water), its distance a
 the zoom-1 screen in game px (x, and z less half the altitude: the projection's own lift, so a
 slope stretches the dashes as it stretches the ground), the band's direction (the mitre of its
 two segments, pointing away from the point's own circle, lengthened to keep the band's width, at
-most 1/0.35), and whether it shows: on the map, inside the scroll extent, and for a sonar kind
-over water. **The ground is the terrain pass's height mirror**, read on the render thread through
+most 1/0.35), whether it shows: on the map, inside the scroll extent, and for a sonar kind
+over water — and whether the segment from it to the next point is new (`n[3]` 1): with the placed
+building as circle 0 of the kind (`make_path`'s `newFirst`), a segment lies on the arc of the point
+it **ends** at, since an arc after the first starts at the previous arc's last point, and a closed
+path's last segment ends at the first point again. **The ground is the terrain pass's height mirror**, read on the render thread through
 `tagpu_terr_heights` — one byte a 16-px corner, bilinear as `GetPosHeight 0x485070` blends, the
 nearest corner past the grid's last row and column. Its lifetime: the buffer is freed or replaced
 only by `build_height`, which only `tagpu_terr_gather` reaches, and `tagpu_range_render` runs later
@@ -241,29 +246,36 @@ or adds over 300 ms and moves none. Nine levels are drawn a frame. Radar and son
 long every 11 px at level 0, a band 1.5 px wide, moving 9 px a second on screen; the jammers'
 dashes 5 px every 11 px, moving 6 px a second the other way round. **The two clocks are BAR's**:
 the radar and sonar dashes advance with the game (`tick`, a thirtieth of a second at normal speed),
-so they stop on pause and run faster at a higher game speed; the jammers' dashes, the level fades
-and the preview's travelling rings run on the wall clock. A step back in time, or one of more than
+so they stop on pause and run faster at a higher game speed; the jammers' dashes and the level
+fades run on the wall clock. A step back in time, or one of more than
 a second (30 ticks on the game's clock), moves nothing.
 
 **The view.** Radar and sonar: a dashed band just **outside** each kind's union, radar green
 (0, 1, 0) and sonar light blue (0.5, 0.7, 0.9) at alpha 0.16 and 0.17 times the dash's gain of 2.5.
-The jammers: a **red fill** of the union — the placed jammer's (0.90, 0.22, 0.20), the existing
-ones' (0.62, 0.35, 0.33) at 0.85 of its alpha 0.17 — one stencil bit a kind, so an overlap fills
-once and the placed disc, drawn first, takes its own ground; each disc short of its circle by the
-band's width, so **the fill stops where the band starts**; and a dashed band just **inside** the
-union, (1.0, 0.32, 0.22) at alpha 0.8, 1.2 px of a 1080-high screen plus 0.89 world px wide. With
-`sensorview` off a placed jammer draws its own fill and band alone.
+The jammers: a **red fill** of the union, (0.62, 0.35, 0.33) at 0.85 of BAR's alpha 0.17 — one
+stencil bit a kind, so an overlap fills once; each disc short of its circle by the band's width,
+so **the fill stops where the band starts**; and a dashed band just **inside** the union, (1.0,
+0.32, 0.22) at alpha 0.8, 1.2 px of a 1080-high screen plus 0.89 world px wide. Only the jammers
+have discs: radar and sonar are their bands alone.
 
-**The preview**, per placed radar or sonar kind: the new disc's **sheet** (radar (0.22, 0.85,
-0.50), sonar (0.40, 0.60, 0.85), alpha 0.2) with **rings travelling outward** across it — a glow
-`pow(0.5 + 0.5·cos(2π(d − travelled)/180), 4.5) × 0.8` of the distance d from the centre that
-raises the alpha and turns the colour toward the pulse's (radar (0.55, 1.0, 0.70), sonar (0.70,
-0.85, 1.0)), travelling 85 world px a second; the existing coverage, where the new disc does not
-reach, in the **duller** colour (radar (0.35, 0.62, 0.50), sonar (0.35, 0.48, 0.62)) at 0.55 of
-the sheet's alpha; and a **solid outline**, 2 px of a 1080-high screen, just inside the union's
-edge (radar (0.45, 1.0, 0.57) at 0.40, sonar (0.50, 0.70, 0.90) at 0.45), plus the new disc's own
-arcs inside the existing coverage, as open paths. A placed jammer joins the jammer layer in the
-brighter sheet colour.
+**The preview** is the view's own outline with the placed building in it. While a building whose
+type will emit is placed (`rangesensor`, *Which rings show*), its disc is **circle 0 of each kind
+it adds** (`circles`), so the one outline drawn is the union of the existing own and allied
+coverage of that kind and the new disc, in the view's look — radar and sonar a dashed band
+outside the union, a jammer's disc filled in the same colour as the others and the dashed band
+inside. A kind is drawn while `sensorview` is on **or** the placed building adds it
+(`kind_shown`), so with the view off placing shows the merged outline of the building's kinds and
+nothing else, and idle shows nothing. **The arcs the new disc adds draw brighter**: each of their
+segments takes the band's alpha × `NEW_GAIN` 2.5, at most 1 — radar 0.40 and sonar 0.425 reach
+1.0, the jammer band 0.8 reaches 1.0 — in the same colour, with the same dashes moving the same
+way, so the dashes run on through the junction between a bright arc and a faint one. The `SLINE`
+instance carries that alpha in `w[1]`, and `SVS` takes it for a segment whose start point's `new`
+is set. **A site whose disc lies wholly inside the existing coverage adds no arc**, so the outline
+stays as it was and nothing is bright. The new disc's edge inside the existing coverage is not
+drawn, and the existing coverage keeps the view's look. Only the cursor's site previews: the other
+sites of a Shift-drag line do not. After the click the outline drops back to the existing coverage
+at once; the tower under construction is not activated (`+0x10E` bit 0), so its coverage draws
+nothing until it is finished and switches on, when it grows in by the animation below.
 
 **Going on and off.** A radar or sonar circle grows from nothing to its radius over 15 game ticks
 when its unit switches on and shrinks to nothing over 15 when it switches off (`TAGPU_PK_RF_OFF`),
@@ -277,11 +289,12 @@ not), a jump in the game's time of more than 30 ticks or backwards, or the frame
 sensor records (a frame with no ring records at all counts) — when every circle is at its end at
 once.
 
-**The draw order** within the layer: the jammers' fills and bands, the view's radar and sonar
-dashes, then the preview's sheet, fill and outline; the weapon rings over all of it. **A sonar
-kind shows over water only**, since the pass contacts a sonar target only at or below sea level
-(`0x4678E6`): its fill per pixel (*The pass*), its band per path point. **Every sensor disc is cut
-to the scroll extent**, the map's own edge, and a path's points past it do not show.
+**The draw order** within the layer: the jammers' fills and bands, then the radar and sonar
+dashes; the preview draws in its kind's place, being part of its outline; the weapon rings over
+all of it. **A water kind shows over water only** (sonar and sonar jam), since the pass contacts a
+sonar target only at or below sea level (`0x4678E6`): a disc's fill per pixel (*The pass*), a
+band per path point. **Every jammer disc is cut to the scroll extent**, the map's own edge, and a
+path's points past it do not show.
 
 **The caps**: 512 circles an outline, 4096 arcs an outline, 256 paths and 65 536 points a frame
 (`TAGPU_RG_MAXPT`). Past the circle cap the kind is not drawn at all (a union of only some of its
@@ -315,7 +328,7 @@ count come from the pass's own block allocator, and the shader refuses any write
 buffer's length; the march is bounded by the range (at most 4096 steps).
 
 **A ring's kind** is the job's third component: 0 a flat ring, 1 a ballistic one, 2 and up a
-sensor disc (+1 water only, +2 the preview's sheet, which carries the travelling rings). A sensor
+sensor disc, which only a jammer has (+1 water only: the sonar jammers). A sensor
 disc is a flat circle whose surface altitude is taken at the point held to the scroll extent (the
 push constant `mapext`), where its rim is drawn. The sensor paths take no reach: their points are
 laid by the render thread (*The sensors*).
@@ -355,15 +368,15 @@ block was written by an earlier submission.
 
 **The union is the stencil's**, BAR's fallback path, for the fills and the weapon rings. Five
 layers in order — the sensor layer, defense ally, defense enemy, attack ally, attack enemy. **The
-sensor layer** has one stencil bit a kind: clear the stencil; per jammer kind its discs (1024
-segments, each fan's rim held to the scroll extent) with `NOT_EQUAL` and `REPLACE`, the placed
-one's first, then the kind's paths; the radar and sonar paths; then per placed radar or sonar kind
-its discs, the new one's first, so the sheet takes its own ground and the duller fill only what is
-left, then its paths. A path is one `SLINE` draw (pipeline `sline`, `SVS`/`SFS`, no stencil): two
+sensor layer** has one stencil bit a jammer kind: clear the stencil; per jammer kind shown its
+discs (1024 segments, each fan's rim held to the scroll extent), a placed jammer's among them,
+with `NOT_EQUAL` and `REPLACE`, then the kind's paths; then the radar and sonar paths. A path is
+one `SLINE` draw (pipeline `sline`, `SVS`/`SFS`, no stencil), always dashed (`b[2]` 0): two
 triangles a segment between neighbouring points, each corner moved along the point's direction to
 the band's two edges, so neighbouring segments share their edges and no pixel is drawn twice; a
-one-target-pixel rim on both edges; in a dashed band the dash the fragment falls in, its level's
-opacity from the vertex block. A segment with neither end shown has no area. **A water disc's land
+one-target-pixel rim on both edges; the dash the fragment falls in, its level's opacity from the
+vertex block. A segment with neither end shown has no area; a segment whose start point is new
+takes the instance's `w[1]` as its alpha (*The preview*). **A water disc's land
 is transparent, not discarded**: the fragment reads the height grid (binding 40) bilinearly at the
 world point the pixel shows if the ground there is at sea level — exact over water, and a land
 pixel that maps onto water lies within (altitude − sea) / 2 px south of it. Each weapon layer with
@@ -372,9 +385,9 @@ each class's discs (a fan a ring) with `NOT_EQUAL` against its bit and `REPLACE`
 fill once a pixel; the outer bands with `NOT_EQUAL` and `KEEP`, so a ring's outline survives only
 outside every disc of its class; then the inner bands and the never-merged lrpc rings with no
 stencil. The bit and masks are dynamic state, so the disc, outer and line pipelines serve every
-class; with `sline` the pass has four. The vertex stages' block is 160 bytes: the view, the zoom,
-the scroll extent and the sea, the dash levels' opacities and the finest and zoom's level, and the
-travelling rings' spacing, distance travelled, power, strength and colours. The pass
+class; with `sline` the pass has four. The vertex stages' block is 112 bytes (`VS_SZ`): the
+view, the zoom, the scroll extent and the sea, the dash levels' opacities and the finest and
+zoom's level. The pass
 clears the stencil once more after its last draw. **A device with no stencil-carrying depth format
 draws no rings** (logged once); neither does a frame whose slot has no height grid bound.
 
@@ -422,7 +435,7 @@ are full ([settings](settings.html) §2.12).
 | `rangeshift` | `off` | the attack rings only while Shift is held |
 | `rangecursor` | `on` | the rings of the unit under the cursor |
 | `sensorview` | `on` | the sensor view: the radar, sonar and jammer coverage of the viewed player and its allies, always; independent of `ranges` |
-| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed; independent of `ranges` |
+| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed, merged into its kinds' outlines with the arcs it adds brighter, whether or not `sensorview` is on; independent of `ranges` |
 | `rangeally` | `nuke` | the allied defenses' classes: a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none` |
 | `rangeenemy` | `ground,air,nuke,cannon` | the enemy defenses' classes, the same spelling |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`, the Alt+. map; at most 64 types, `n` 1..16, each mask inside 2ⁿ − 1 |
@@ -472,18 +485,30 @@ instance's registry store (every seat read 5 before): the alliance rows `+0x108`
 `01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …`. `+0x10E` bit 0 of the spawned sensor
 units: `rad`, `rad2`, `arad`, `ason`, `seer`, `jam`, `sjam`, `scram`, `crad` and `spec` 1; `peep`
 (an ARMPEEP on the ground) and `ck` 0. The heartbeat over the scene: `rings=11 sensor=10 paths=5
-pts=3150 … inst=8 draws=8`; placing an ARMRAD, `rings=14 sensor=11 paths=7 pts=4323`; *Sensor
+pts=3150 … inst=8 draws=8`; placing an ARMRAD, `rings=14 sensor=11`; *Sensor
 ranges* Off, `rings=1 sensor=0 paths=0`. Pictures: the own and the allied radars merged into one
 outline, and no coverage around the Core radar `crad` or the Core jammer `spec`. **The clocks**:
 paused (tick 10521 held), a crop of a radar dash changed in 0 px over 1.5 s and one of a jammer
 dash in 668 px. **The animation**: `rad` switched off, its arc moved inward 47 px a tick at zoom
 0.5 — 96 world px a tick, 1440 / 15 — stepping once a tick with smooth motion (`tagpu_lerp.on`) off.
-**The preview**: its rings moved between two shots 0.3 s apart, and the sheet was gone after the
-cancel. **Range rings Off**: the sensor view still drawn, *Sensor ranges* and *Sensor preview*
+**Range rings Off**: the sensor view still drawn, *Sensor ranges* and *Sensor preview*
 `grayed 0`, the rings' options greyed. **The replay viewer**: `--perspective 0` drew player 0's and
 its ally's coverage as the live game does; `--perspective 1` only Core's (`sensor=4 paths=4`); the
 default viewer, with full visibility and no perspective, drew no rings and no sensors at all (the
 census's `range=0`).
+
+**MEASURED 2026-11-11, the preview**, on `scenarios/sensor-preview.json` (the reference setup,
+Vulkan, 1920×1080, `--defaults`), the commander selected and an ARMRAD armed from its build page 2.
+At zoom 0.5 with the pointer on the site (6750, 11900), the heartbeat read `rings=9 sensor=5
+paths=2`, and the outline grew to take in the new disc's circle with its arcs bright. At zoom 0.3
+with the pointer north of the coverage, the right-hand arc was bright above its crossing with the
+existing union and faint below it, the dashes continuous through the junction (a pixel read: green
+excess 250 on the new arc against 0 sampled on the old). After the click the outline was the
+existing coverage again, nothing bright and nothing at the tower under construction; finished and
+switched on, the tower read `sensor=5` and the outline took in its circle at the view's alpha.
+With `sensorview=off` (set in the stopped instance's `impure.cfg`, which is read at launch and has
+CRLF line endings): idle `sensor=0 paths=0`; placing `rings=8 sensor=4 paths=1 pts=693` and the
+same merged outline with bright new arcs; after a right-click cancel `sensor=0 paths=0`.
 
 **MEASURED 2026-11-10** on `scenarios/sensor-preview.json` (the reference setup, Vulkan), on the
 preview alone (a build with no sensor view), reading `+0x10E` live:
@@ -528,6 +553,12 @@ against the engine**: with the finished radar at the site (`+0x10E` 1), `+0x110`
 - **One union a kind**: two water jammers of different kinds — a radar jammer ship and a sonar
   jamming sub — draw as two outlines where they overlap, by design (the kinds jam different
   things).
+- **The jammers' and sonar's preview have not been seen in game**: no stock structure jams, so a
+  placed jammer's merged fill and bright band are the radar's path by construction and unrun;
+  placing a sonar station was not measured with the merged outline. The browser lab's preview is
+  syntax-checked only (`node --check`), not compared against the DLL.
+- **A Shift-drag line previews only the cursor's site**: the line's other sites add nothing to the
+  outline (the owner's choice, 2026-11-11).
 - **The browser lab draws the existing coverage by type**: `tools/tascene-ranges.js` has no
   activation state, so it counts every own and allied unit whose type will emit, and aircraft — a
   radar switched off, a factory not producing and a plane on the ground included.

@@ -841,7 +841,7 @@ install, so nothing is regenerated when they change.*
 | R 106 | **Attack rings** | Always \| Shift held | `rangeshift=`; greyed while Range rings is Off, as are *Cursor range* and the five class rows; in-game only |
 | R 130 | **Cursor range** | Off \| On | `rangecursor=`: the rings of the unit under the cursor; in-game only |
 | R 154 | **Sensor ranges** | Off \| On | `sensorview=`: the radar, sonar and jammer coverage of the viewed player and its allies, always ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
-| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, over the existing own and allied coverage ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
+| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, merged into the outline of the existing own and allied coverage of its kinds with the arcs it adds brighter, whether or not *Sensor ranges* is on ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
 | R 202..298 | **Ground / Air / Nuke / Cannon / LRPC defense** | None \| Enemy \| Allied \| Both | one row a defense class: stage bit 1 is the class's bit of `rangeenemy=`, bit 2 its bit of `rangeally=`; a click writes both masks whole from the five rows; in-game only |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
