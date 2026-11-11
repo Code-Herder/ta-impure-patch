@@ -2170,6 +2170,74 @@ On ground of one height every on-grid point of every ray is lit, at any model he
 the grid's southmost rows no tile reaches (a script of `0x482F15..0x483205` over flat maps, then
 M0-P1 above).
 
+### The sight walk's sites, the explored map's stamp, the rebuild and the copier [DISASSEMBLED 2026-11-11]
+
+Read for [allied sharing](../modules/allied-sharing.html), which writes every function here (the
+[hook map](../modules/hook-map.html), *Allied sight*).
+
+- **The stamp `0x482270`, stdcall `(rec)`, returns at `0x4824D6` (ray fan) and `0x48259E` (circle),
+  `ret 4`.** It reads the record's `+0`, `+4`, `+8` and `+0xC` only and never the counters: the
+  walk's inputs are the record, the sight grid `main+0x1428F` and the circle table `main+0x1485B`.
+  It marks the fog grid stale for the viewed record's own stamps (`0x482283..0x4822A1`: `and word
+  [main+0x14281],0xFFF7; or byte [main+0x142F1],4` when the owner's `+0x146` equals
+  `main+0x2A43`). Its cells: the owner's counters `[owner+0x7C] + row·[owner+0x80] + col`
+  (`0x482390..0x48239A` the own block, `0x48246C..0x48247D` a ray's, `0x482557..0x48256A` the
+  circle's); bounds: the column and row against the sight grid (`0x4822F8..0x482307`), a ray's point
+  likewise (`0x482423..0x482438`), the plot halves for the circle (`0x4822AE..0x4822CB`). With
+  LosType bit 2 clear the circle takes its shape from the table by the byte `[rec+0xC]` points at
+  (`0x4824D9..0x4824E8`) and reads the entry `0x4B7F30` returns without a NULL test (`0x4824F1`).
+  The three increments and what is live after each:
+  `0x48239C` `mov dl,[eax]; inc dl; mov [eax],dl` — ecx (its cx tested at `0x4823A9`), ebx, esi,
+  edi, ebp live; eax and edx rewritten (`0x4823A5`, `0x4823A2`), the flags by the test;
+  `0x48247F` `inc byte [edi+esi]; lea edx,[edi+esi]` — eax (`0x48248A`), ecx (`0x482485`), ebx,
+  esi live; edx rewritten at `0x482485`, the flags at `0x482487`;
+  `0x482580` `mov bl,[edx]; cmp bl,[ebp+8]; je +2; inc byte [ecx]` — the circle's inner loop head,
+  the only target of its back edge (`0x48258C`); the flags after are `dec esi`'s (`0x48258B`).
+  No branch in `.text` lands inside `0x482270..0x482279`, `0x48239C..0x4823A2`,
+  `0x48247F..0x482485` or `0x482580..0x482589` but at its first byte, and the image holds no pointer
+  to `0x482270`, `0x481D50`, `0x481930`, `0x4816A0` or `0x464990`.
+- **The removal `0x481D50`** returns at `0x481FB6` and `0x482082`. Its first `0x38` bytes are the
+  stamp's (`0x481D50..0x481D88` ≡ `0x482270..0x4822A8`); past them its decrements (`0x481E7E`,
+  `0x481F5F`, `0x48206B`) and the order of two loads in the circle loop (`0x48204C..0x48205C`
+  against `0x48256C..0x482578`) differ, computing the same cell. Its callers: `0x482104` (in
+  `0x482090`), `0x482161` (the expiry), `0x482644` and `0x48275D` (the emitter).
+- **`0x482090(unit)`**, stdcall `ret 4` (`0x48210C`): builds the unit's record on its stack
+  (`0x482093..0x4820FB`: owner `+0x96`, `+0x7A`'s address, the def's `+0x202` and `+0x170`,
+  `+0xF8`'s address, the position with y floored at the sea) and calls `0x481D50`. Its one caller
+  is the destructor at `0x486845`, under LosType bit 1 (`0x486838..0x486842`), whether or not the
+  unit holds a stamp; the destructor zeroes `+0xA6` later (`0x486DC7`) and clears `+0x110` bit 28
+  at `0x486DCE..0x486DD4`.
+- **The explored map's stamp `0x481930`**, stdcall `(rec)`, `ret 4` (`0x481D49`): reads `rec+0`
+  (for `+0x146`, `0x481940`, `0x48194B`), `+4` (`0x481979`), `+8` (`0x4819C9`, `0x481BC7`) and
+  `+0xC` (`0x481A74`), with the stored row re-tested at `0x4819B7`. It sets the record's bit only
+  where none of the bits it tests is set, by an xor (`0x481A53..0x481A67`, `0x481B61..0x481B75`,
+  `0x481CCC..0x481CE4`), and marks the redraw at `0x481D1D..0x481D3B` when the record it names is
+  the viewed one (`0x481D1B` reloads it).
+- **The rebuild `0x4816A0(arg)`**, stdcall `ret 4` (`0x48192B`); callers `0x4166B1`, `0x416D76`,
+  `0x416DA6`, `0x41755E`, `0x4654EF`, `0x4656CE`, `0x495B61`, `0x495E58`, `0x497AE5`. With arg
+  non-zero it fills the explored map (`0x4816AF..0x4816FB`). It refills records 0..9 whose `+0x00`
+  is non-zero (`0x48170C`), whose `+0x73` is 1, 2 or 3 (`0x481717..0x481728`) and whose `+0x146`
+  is not 10 (`0x48172A`) with `(~LosType >> 1) & 1` over `+0x88` bytes (`0x481734..0x481767`);
+  under LosType bit 1 (`0x481808`) it re-stamps every unit with `+0xA6` non-zero (`0x481796`) from
+  slot 1 — through the emitter under the ray fan (`0x481836`, with `+0xF8` zeroed first,
+  `0x48181A`), else directly through `0x482270` and `0x481930` (`0x4818DC`, `0x4818E6`) — then
+  clears LosType bit 3, sets `main+0x142F1` bit 2 and redraws the minimap (`0x48191A`,
+  `0x48191F`). It does not touch the temporary sight records (`main+0x14277`).
+- **The emitter `0x4825B0`** stamps only under LosType bit 1 (`shr cl,1; test cl,1`,
+  `0x48267B`).
+- **The copier `0x485420(from, to)`**, stdcall `ret 8` (`0x485490`): every explored-map entry of
+  `main+0x14273` with bit `from` gains bit `to` (`0x485460..0x48548A`; the arguments are map bits,
+  shifted at `0x48544B`, `0x485456`); no calls. Callers `0x4558B8`, `0x493695`.
+- **`0x4B7F30(table, idx)`** returns NULL for an index at or past the table's u16 count
+  (`0x4B7F44`); it reads the count before it tests the table for NULL.
+- **Leaves.** The stamp's callees `0x433500`, `0x433520`, `0x4335C0`, `0x4335E0`, `0x4339C0`,
+  `0x4339E0` and `0x4B7F30` make no call.
+- **The players phase `0x464F80`** returns with a plain `ret` (`0x465602`); its callers are the step
+  (`0x49555F`) and the loader (`0x497C10`).
+
+Every engine reader of the counters is a zero test; the list of the 22 is in the
+[allied sharing](../modules/allied-sharing.html) note, *The readers*.
+
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 
 [MEASURED 2026-09-09, this project — `objdump -d -M intel` of the pristine Steam build over
