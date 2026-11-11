@@ -115,7 +115,9 @@
 #define OFF_LOADFLAGS      0x38D75      /* u16: bit0 load started (0x49832A), bit1   */
                                         /* loader done (0x497C5F), bit2/bit3 the     */
                                         /* loader<->game handshake (0x4975C7,        */
-                                        /* 0x498576); nothing clears bit0/bit1       */
+                                        /* 0x498576); 0x498480 clears bits 0, 1 and  */
+                                        /* 3 after the first in-game frame, so bit1  */
+                                        /* means "loaded" for that one frame only    */
 #define OFF_EYE_X          0x1431F      /* i32 pair: the camera's eye                */
 #define OFF_EYE_Y          0x14323
 #define OFF_SCROLLTO_X     0x14327      /* i32 pair: MapXScrollingTo, the target     */
