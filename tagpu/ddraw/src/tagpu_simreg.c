@@ -350,6 +350,10 @@ static const char* sim_shape(const SimDesc* d)
                                                   return "has no row count";
     if ((d->flags & (SIMD_LOCK | SIMD_CODE | SIMD_GUARD)) && d->cls != SIM_INSTALL)
                                                   return "is a lock, code or guard that is not INSTALL";
+    /* REBUILT is the owner's loosening for one table (tagpu_simreg.h); sim-state-check.sh refuses
+       any other at the link, this any the text scan cannot see */
+    if (d->cls == SIM_REBUILT && strcmp(d->name, SIM_REBUILT_ONLY))
+        return "is REBUILT, which only " SIM_REBUILT_ONLY " may be";
     if (!d->layout) return NULL;
     for (f = d->layout; f->size; f++) {
         unsigned span = f->off + f->size + (f->repeat > 1 ? (unsigned)(f->repeat - 1) * f->step : 0);
