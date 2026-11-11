@@ -413,6 +413,10 @@ static struct {
     unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
+/* ... and its `or units <s> <= <n>` clauses, armed and cleared with it; game thread */
+#define PAUSE_UNITS_MAX 4
+static struct { unsigned char seat; unsigned short n; } s_pause_units[PAUSE_UNITS_MAX];
+static unsigned s_pause_nunits;
 static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T or THE LAUNCH'S
                                        HOLD, not by the player: the hold keeper keeps it set     */
 /* THE LAUNCH'S HOLD: the state, from tagpu_hold.on read once at attach; then the game thread's
@@ -9249,6 +9253,27 @@ static int u32_take(const char** p, unsigned* v)
     return 1;
 }
 
+/* `<T>` and 0..4 ` or units <s> <= <n>`, the whole of `p`, s below 10 and n at most 65535:
+   1 parsed, with the clauses in `seats`/`ns` and their count in *k */
+static int pause_words(const char* p, unsigned* T, unsigned char* seats, unsigned short* ns,
+                       unsigned* k)
+{
+    unsigned s, n;
+    *k = 0;
+    if (!u32_take(&p, T)) return 0;
+    while (*p) {
+        if (*k >= PAUSE_UNITS_MAX || strncmp(p, " or units ", 10)) return 0;
+        p += 10;
+        if (!u32_take(&p, &s) || s >= 10 || strncmp(p, " <= ", 4)) return 0;
+        p += 4;
+        if (!u32_take(&p, &n) || n > 65535) return 0;
+        seats[*k] = (unsigned char)s;
+        ns[*k] = (unsigned short)n;
+        (*k)++;
+    }
+    return 1;
+}
+
 /* `<P> at <T>[ difficulty <D>]`, the whole of `p`: 1 parsed, D -1 when absent */
 static int takeover_words(const char* p, unsigned* P, unsigned* T, int* D)
 {
@@ -9270,7 +9295,8 @@ static void turbo_on(void);
 static void turbo_off(void);
 static void pace_level_end(void);
 static const char* pacing_refusal(const char* ta);
-static void pause_at_arm(unsigned T);
+static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
+                         unsigned k);
 static void pause_resume(void);
 static void pause_at_visit(void);
 static void hold_visit(void);
@@ -9381,9 +9407,14 @@ static void trigger_read(void)
         turbo_off();
         return;
     }
-    if (!strncmp(line, "pause at ", 9) && u32_word(line + 9, &T)) {
-        pause_at_arm(T);
-        return;
+    if (!strncmp(line, "pause at ", 9)) {
+        unsigned char seats[PAUSE_UNITS_MAX];
+        unsigned short ns[PAUSE_UNITS_MAX];
+        unsigned k;
+        if (pause_words(line + 9, &T, seats, ns, &k)) {
+            pause_at_arm(T, seats, ns, k);
+            return;
+        }
     }
     if (!strcmp(line, "resume")) {
         pause_resume();
@@ -11979,12 +12010,23 @@ static int __cdecl rt_pace_guard(void* entry_esp)
    The bound above ends the batch at T; the frame visit after step T, on the same game thread,
    sets bit 0 of main+0x38A51, the bit the Pause key flips (0x4960AA..0x4960BC, DISASSEMBLED) and
    the frame callback tests at 0x496920 before the scheduler and the step. A GameTime a seek has
-   moved past is dropped with a line, never paused at. Nothing is paused without an armed T. */
-static void pause_at_arm(unsigned T)
+   moved past is dropped with a line, never paused at. Nothing is paused without an armed T.
+
+   `pause at <T> or units <s> <= <n> ...` also pauses at the first frame visit before T at which
+   one clause holds: seat s's live unit count, the u16 +0x144 of its record (incremented at
+   0x486187 and 0x486322, decremented in the destructor at 0x486DFC; DISASSEMBLED,
+   engine/units.md), is at most n. s is bounded below 10 at the parse, inside the ten records of
+   0x14B at main+0x1B63; the word is a value compared, never an index. With the turbo at k = 1 the
+   pause lands at the frame visit after the step in which the clause first held; a batch of more
+   steps ends where it ends, since no bound can end a batch on a condition. The clause is for
+   speed only: every measurement a test takes is read from the recording at its own tick. */
+static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
+                         unsigned k)
 {
     char* ta = ta_main();
     const char* why = pacing_refusal(ta);
-    unsigned now;
+    char clauses[PAUSE_UNITS_MAX * 32 + 1];
+    unsigned now, i, at = 0;
     if (why) {
         tagpu_logf("pause: at %u refused: %s", T, why);
         return;
@@ -11997,16 +12039,38 @@ static void pause_at_arm(unsigned T)
     if (s_pause_at)
         tagpu_logf("pause: at %u replaces the pause at %u", T, s_pause_at);
     s_pause_at = T;
-    tagpu_logf("pause: armed for GameTime %u", T);
+    s_pause_nunits = k;
+    clauses[0] = 0;
+    for (i = 0; i < k; i++) {
+        s_pause_units[i].seat = seats[i];
+        s_pause_units[i].n = ns[i];
+        at += (unsigned)snprintf(clauses + at, sizeof clauses - at, "%s units of seat %u <= %u",
+                                 i ? ", or" : " or", seats[i], ns[i]);
+    }
+    tagpu_logf("pause: armed for GameTime %u%s", T, clauses);
 }
 
 static void pause_at_visit(void)
 {
     char* ta = ta_main();
-    unsigned now;
+    unsigned now, i;
     if (!s_pause_at || !ta) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
-    if (now < s_pause_at) return;
+    if (now < s_pause_at) {
+        for (i = 0; i < s_pause_nunits; i++) {
+            unsigned s = s_pause_units[i].seat;
+            if (*(const unsigned short*)(player_rec(ta, s) + PL_LIVE) <= s_pause_units[i].n) {
+                *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+                s_pause_taken = 1;
+                tagpu_logf("pause: paused at GameTime %u (units of seat %u <= %u)", now, s,
+                           s_pause_units[i].n);
+                s_pause_at = 0;
+                s_pause_nunits = 0;
+                return;
+            }
+        }
+        return;
+    }
     if (now == s_pause_at) {
         *(unsigned short*)(ta + OFF_PAUSE) |= 1;
         s_pause_taken = 1;
@@ -12015,6 +12079,7 @@ static void pause_at_visit(void)
         tagpu_logf("pause: at %u not taken: the level is at GameTime %u", s_pause_at, now);
     }
     s_pause_at = 0;
+    s_pause_nunits = 0;
 }
 
 /* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs.
@@ -12126,6 +12191,7 @@ static void pace_level_end(void)
                    s_turbo.lagged, s_turbo.held);
     memset(&s_turbo, 0, sizeof s_turbo);
     s_pause_at = 0;
+    s_pause_nunits = 0;
     s_pause_taken = 0;
 }
 

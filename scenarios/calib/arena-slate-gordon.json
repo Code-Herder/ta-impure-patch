@@ -1,0 +1,41 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The calibration arena (tools/tasim/calib-arena.json): Slate Gordon, emptied -- no unit, no feature, the objective off and seat 1 an AI seat with its AI off -- so the level runs on with nothing in it. The launch setup and the first empty point of a calibration lane (tools/tasim/engrun.py).",
+ "setup": {
+  "map": "Slate Gordon",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "storage": {
+     "metal": 1000000,
+     "energy": 1000000
+    }
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "ai": "off",
+    "storage": {
+     "metal": 1000000,
+     "energy": 1000000
+    }
+   }
+  ]
+ },
+ "units": []
+}

@@ -668,7 +668,16 @@ swap `0x423710` (`0x423792`, `0x4237B1`); the spawn `0x423C50`'s footprint (`0x4
 which abandons the spawn on a refusal and keeps what it destroyed so far); the feature tick
 `0x424050` (`0x42442F`, `force` 0, when a burn's sequence ends); the clear of every feature
 `0x424840` (`0x42487A`), itself called only by the console command BurnAll `0x416390` (stored in
-the command table at `0x502040`). The demo recorder observes the entry
+the command table at `0x502040`) and by the scenario applier's `clear_features`
+(`tagpu_scenario.c`, at its tick visit `0x4969D2`, between two steps).
+
+**`0x424840`, the clear of every feature** [DISASSEMBLED 2026-11-11, `0x424840..0x42488D`]: no
+argument, a plain `ret` at `0x42488D`. It walks `main+0x14233 × main+0x14237` cells, stride `0xD`
+from `main+0x14287`, re-reading the main pointer after each call (`0x42487F`), and calls
+`0x4246B0(cell, 1)` (`0x424877..0x42487A`, no `add esp` after it: the callee's `ret 8`) on every
+cell whose def word `+8` is below `0xFFFB` or equal to `0xFFFE` (`0x424865..0x424875`). Force 1
+takes indestructible features and geothermal vents too. **It spawns no successor**: the successor
+comes only from the swap `0x423710`, which this path never calls. The demo recorder observes the entry
 ([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
 and the puppet gate refuses it from the level's first step outside the replay's own calls
 ([recorder.md](recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)).

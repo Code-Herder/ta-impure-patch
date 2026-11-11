@@ -4660,7 +4660,7 @@ def _scn_orders(node, where, default=None):
     orders = []
     for i, o in enumerate(_scn_list(node, "orders", where)):
         w = f"{where}.orders[{i}]"
-        _scn_keys(o, w, required=("cmd",), optional=("to", "target"))
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after"))
         raw = o["cmd"]
         cmd = raw.lower() if isinstance(raw, str) else raw
         if cmd in SCN_NO_ATTACK_MOVE:
@@ -4677,7 +4677,11 @@ def _scn_orders(node, where, default=None):
         elif (to is None) == (target is None):
             die(f"{w}: {cmd!r} needs exactly one of \"to\" (a coordinate) "
                 f"or \"target\" (an entity handle)")
-        orders.append({"cmd": cmd, "to": to, "target": target})
+        # `after`: the ticks the applier waits before it issues the order, under a watch
+        # that cancels it if its unit (or a unit target) dies first (tagpu_scenario.c,
+        # delayed orders). 0 is the order at the apply.
+        after = _scn_int(o, "after", w, 0, 255, 0)
+        orders.append({"cmd": cmd, "to": to, "target": target, "after": after})
     return orders
 
 
@@ -4732,6 +4736,7 @@ def _scn_entity_body(node, where, default=None):
 def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
+             "clear_features": False, "objective": None,
              "los": None, "mapping": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
@@ -4739,6 +4744,7 @@ def _scn_setup(doc, label):
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
+                                 "clear_features", "objective",
                                  "switches", "players", "los", "mapping"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
@@ -4752,6 +4758,11 @@ def _scn_setup(doc, label):
     # then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+    # Every feature of the level burned through the engine's own BurnAll walker, indestructible
+    # ones and geothermal vents included, after the unit clear and before the creates.
+    setup["clear_features"] = _scn_bool(node, "clear_features", w, False)
+    # The level's end test: "off" disarms it (a level with no units runs on), "on" re-arms it.
+    setup["objective"] = _scn_str(node, "objective", w, choices=("off", "on"))
     # Both default to None = "leave the screen as it is"; `mapping` then falls
     # back to SCN_MAPPING_DEFAULT.
     setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
@@ -4770,7 +4781,8 @@ def _scn_setup(doc, label):
     for i, p in enumerate(_scn_list(node, "players", w)):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
-                  optional=("controller", "side", "color", "metal", "energy"))
+                  optional=("controller", "side", "color", "metal", "energy", "ai",
+                            "storage"))
         slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
@@ -4783,8 +4795,31 @@ def _scn_setup(doc, label):
             "color": _scn_int(p, "color", pw, 0, 9),
             "metal": _scn_int(p, "metal", pw, 0, 1000000),
             "energy": _scn_int(p, "energy", pw, 0, 1000000),
+            # "off": the console's AI toggle on an AI seat at the apply; the seat's units
+            # keep their orders and no planner runs
+            "ai": _scn_str(p, "ai", pw, choices=("off",)),
+            "storage": _scn_storage(p, pw),
         })
     return setup
+
+
+def _scn_storage(p, where):
+    """A seat's base storage, {"metal": M, "energy": E}: the seat setup's own writes, which
+    the economy pass adds to the storage it recomputes, so a level set beside it survives
+    the pass's clamp. Both or neither, non-negative numbers."""
+    v = p.get("storage")
+    if v is None:
+        return None
+    w = f"{where}.storage"
+    _scn_keys(v, w, required=("metal", "energy"))
+    out = {}
+    for k in ("metal", "energy"):
+        x = v[k]
+        if (isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                or x < 0 or x > 1e30):
+            die(f"{w}.{k}: expected a number of 0 or more, got {x!r}")
+        out[k] = x
+    return out
 
 
 def _scn_names(catalogue, key):
@@ -4879,14 +4914,16 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
     # storage to hold it — say so once, where an author reads it, rather than
     # letting `apply` look like it worked.
     for p in norm["setup"]["players"]:
-        if (p["metal"] is not None or p["energy"] is not None) and not launching:
+        if ((p["metal"] is not None or p["energy"] is not None) and not launching
+                and p["storage"] is None):
             warnings.append(
                 f"setup.players slot {p['slot']}: metal/energy is a launch-time "
                 f"setting — `scenario load` writes Player{p['slot']}Metal/Energy and "
                 f"TA reads them as the starting level *and* the storage. `apply` "
                 f"cannot: in a running game the engine recomputes storage from the "
                 f"player's own units every tick and clamps the level to it, so the "
-                f"figure is gone within a second (the result reports what survived)")
+                f"figure is gone within a second (the result reports what survived); "
+                f"a \"storage\" beside it holds it")
 
     slots = {p["slot"] for p in norm["setup"]["players"]}
     # A slot with controller "off" gets no unit table from the engine, so the
@@ -5164,10 +5201,21 @@ def _scn_wire(exp) -> str:
     if setup["switches"]:
         lines.append("sw " + " ".join(f"{k}={int(bool(v))}"
                                       for k, v in sorted(setup["switches"].items())))
+    if setup.get("clear_features"):
+        lines.append("clearfeat 1")
+    if setup.get("objective"):
+        lines.append(f"objective {setup['objective']}")
     for p in setup["players"]:
+        keys = []
         if p["metal"] is not None or p["energy"] is not None:
-            lines.append(f"player {p['slot']} metal={_f(p['metal'])} "
-                         f"energy={_f(p['energy'])}")
+            keys += [f"metal={_f(p['metal'])}", f"energy={_f(p['energy'])}"]
+        if p.get("ai") == "off":
+            keys.append("ai=off")
+        if p.get("storage") is not None:
+            keys += [f"mstore={p['storage']['metal']!r}",
+                     f"estore={p['storage']['energy']!r}"]
+        if keys:
+            lines.append(f"player {p['slot']} " + " ".join(keys))
 
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
                  "<stance> <nano%> <kills>")
@@ -5185,14 +5233,15 @@ def _scn_wire(exp) -> str:
     fords = {f["id"]: i for i, f in enumerate(exp["features"])}
     for i, u in enumerate(exp["units"]):
         for o in u["orders"]:
+            after = f" after={o['after']}" if o.get("after") else ""
             if o["to"]:
-                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}")
+                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}{after}")
             elif o["target"] in ords:
-                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}{after}")
             elif o["target"] in fords:
-                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}{after}")
             else:
-                lines.append(f"order {i} {o['cmd']}")
+                lines.append(f"order {i} {o['cmd']}{after}")
     cam = exp["camera"]
     if cam:
         pin = int(bool(cam["pin"]))

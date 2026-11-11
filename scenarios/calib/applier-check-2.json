@@ -1,0 +1,29 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The calib-applier fixture at GameTime 60: the clear kills c before its order is due (cancelled as cleared) and the features go again; e is ordered after 5 ticks, issued at 65.",
+ "setup": {
+  "clear_existing": true,
+  "clear_features": true
+ },
+ "units": [
+  {
+   "id": "e",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2400,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      2400,
+      1400
+     ],
+     "after": 5
+    }
+   ]
+  }
+ ]
+}

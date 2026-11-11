@@ -119,7 +119,9 @@ the measured runs and what they mean for the design are in the
   0) and stores it at `main+0x391ED` (`0x435DFB`); `0x48DF90` has no other caller. `0x4904B0`
   (thiscall, `mov [ecx+0x88],0; ret`) disarms it; its callers are the `Kill` console command after
   it has killed every unit (`0x4164CD`, and `0x4164EF` on the command's other arm) and `0x488547`,
-  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives]. A
+  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives].
+  Impure's writers: the scenario applier's `objective: "off"` calls `0x4904B0` and `"on"` writes
+  `+0x88` = 1, the takeover's write, at its tick visit between two steps (`tagpu_scenario.c`). A
   skirmish reads the `.ota` in Start's branch (`0x47AF77`), before the seat fill, and its loader
   branch reads it no more; the network loader does (`0x4972D6`), as do the restart path (`0x499820`)
   and the saved-game loader (`0x4927A5`). **A disarm made in the seat fill therefore holds for the

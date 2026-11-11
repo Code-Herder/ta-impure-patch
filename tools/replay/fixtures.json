@@ -347,6 +347,15 @@
    "end": 1500,
    "content": {"run": ["tools/cob_ext_fixture.py", "{gamedir}"], "files": ["cobext.ufo"]}
   },
+  "calib-applier": {
+   "load": "calib/applier-check.json",
+   "sources": ["tagpu/ddraw/src/tagpu_scenario.c", "tagpu/ddraw/src/tagpu_cat.c",
+               "tools/tasim/applier_check.py"],
+   "steps": [[60, "apply", "calib/applier-check-2.json"],
+             [120, "run", ["tools/tasim/applier_check.py", "check", "{instance}"]],
+             [899, "apply", "calib/applier-check-end.json"]],
+   "end": 900
+  },
   "stock-teleport": {
    "load": "replay-teleport.json",
    "dll": "stock",

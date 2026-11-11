@@ -615,6 +615,8 @@ class Log:
     crash ends every wait at once (`alive`)."""
 
     ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
+    NAP_S = 0.4            # s between two reads of the log in a wait; the calibration runner,
+                           # which waits on one line per verb, reads it more often
 
     def __init__(self, w: Worker):
         self.w = w
@@ -670,7 +672,7 @@ class Log:
             start = len(self.lines)
             if time.time() >= end:
                 return None
-            nap(0.4)
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
@@ -689,7 +691,7 @@ class Log:
             if poll:
                 poll()
             stall.check()
-            nap(0.4)
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()

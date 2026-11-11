@@ -666,7 +666,12 @@ like `0x486053`), and otherwise the next slot is tried while it is at most `[pla
 (`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
 tried, and only when it lies inside the owner's block `[+0x67, +0x6B]` (`0x486026..0x486030`, NULL
 otherwise). All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
-index. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
+index (each push DIS 2026-11-11: `0x4028C5`, `0x403D36`, `0x4050D1`, `0x414072`, `0x417923`,
+`0x4653B2`, `0x487157`/`0x487161`, `0x48843B`, `0x4886D1`, `0x496FE1`, `0x497798`; the create reads
+the argument at `0x486002`). In Impure the scenario applier passes 0 and the replay's `make()` a
+recorded slot, only for a puppet seat (`tagpu_replay.c`, `owner_holds`), so in a single-player level
+with no puppet seat no create that runs in play asks for a slot, and Impure's slot hold, which moves
+only a take with no request, sees every one. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
 (`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
 limit, def `+0x15A` (`0x485FE4`). **Its callers and NULL**: the four factory and build callers
 (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order (`0x489690` takes
