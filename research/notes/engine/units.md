@@ -468,6 +468,10 @@ index `+0xA6` holds.
   taken from data (`0x4555A1`/`0x4555B0`, `0x48B50E`/`0x48B519`, `0x4887E0`/`0x4887F2`;
   the `0x11` receiver, the round robin and [INFERRED] the capture copy: [cob.md](cob.md), *COB on a puppet*). The other masks: 4 (cloak,
   `0x401872`), 8 (`0x4029B0`, `0x402B1B`), `0x10` (`0x402D23`, `0x402D82`), 2 (COB `0x480BEC`).
+  Impure reads bit 0 for the weapon range rings' sensor coverage (`tagpu_rangeown.c`), of the
+  viewed player's units and of its allies'. MEASURED 2026-11-11 (`scenarios/sensor-view.json`,
+  spawned by the scenario applier): ARMRAD, ARMSONAR, ARMSEER, ARMJAM, ARMSJAM, ARMSCRAM, CORRAD
+  and CORSPEC read 1; an ARMPEEP standing on the ground and an ARMCK 0.
   MEASURED 2026-11-10 (`scenarios/sensor-preview.json`): a skirmish commander and a finished ARMRAD
   read 1, an ARMRAD 0 after its on/off button, an idle ARMAP 0 and `0x09` while it produces.
 - **`+0x10F`** bits 0–3 (COB `0x480B7A`, `0x480B9E`, `0x480BD9`; YARD_OPEN `0x47DAF1`); **`+0x114`**
@@ -570,7 +574,7 @@ loader is `0x466050`.
 | `+0xFC`/`+0xFE` | kills, losses | the destructor `0x4868C1`, `0x486906`, `0x486A33`; the `0x28` receiver | the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`), as words |
 | `+0x100`/`+0x102` | −1 at init | `0x464817`, `0x46481E` | no reader found |
 | `+0x104`/`+0x106` | commander kills, losses, words | the destructor `0x486981`, `0x486996` (`incw [eax+0x106]` on the dead unit's owner record, unit `+0x96`), `0x486A8C` | the lead ranking in mode 2; the replay HUD's skull, `+0x106` above 0 (`tagpu_replay_players`). DIS |
-| `+0x108`/`+0x113`, 11 each | alliances and their mirror: byte j of `+0x108` is 1 when this record allies record j; the reset and the activation set the record's own byte, so a record always allies itself | `0x452960`, the lobby, the removal, dispatcher `0x454D2A`, the seat fill `0x47A760` (the store at `0x47A890`), the reset `0x4645B3`, the activation `0x464290` | the allied victory `0x490080`, the skirmish victory `0x490230`; the replay HUD's teams, which join two records when each one's row marks the other (`tagpu_hudstate.c`) |
+| `+0x108`/`+0x113`, 11 each | alliances and their mirror: byte j of `+0x108` is 1 when this record allies record j; the reset and the activation set the record's own byte, so a record always allies itself | `0x452960`, the lobby, the removal, dispatcher `0x454D2A`, the seat fill `0x47A760` (the store at `0x47A890`), the reset `0x4645B3`, the activation `0x464290` | the allied victory `0x490080`, the skirmish victory `0x490230`; the replay HUD's teams, which join two records when each one's row marks the other (`tagpu_hudstate.c`); the weapon range rings and the sensor view, which count an owner allied when the viewed record's byte `+0x108 + owner` is 1 (`tagpu_rangeown.c`, `allied`). MEASURED 2026-11-11 (`scenarios/sensor-view.json`, the skirmish's `Player0AllyGroup` 1, `Player2AllyGroup` 1, `Player1AllyGroup` 2): record 0 read `01 00 01 …`, record 1 `00 01 00 …`, record 2 `01 00 01 …` |
 | `+0x11E`/`+0x129`/`+0x134`, 11 each | the final-statistics handshake | `0x45591D`, `0x455930`, `0x45768A` | |
 | `+0x13F` | the lobby team, 5 for none | activation, reset, the lobby | lobby code only |
 | `+0x140`/`+0x144` | units created, alive (`+0x144` a word: `decw` at `0x486DFC`, `cmp bx` at `0x486E09`) | the creates, the destructor; `+0x144` is incremented at `0x486187` and `0x486322` only (`incw [main + p + 330p + 0x1CA7]`; every `0x1CA7`-based operand in `.text` searched, the rest reads) | "out" = none alive of some created; the replay HUD's units and its dimmed "out" row (`+0x144` = 0); its marker walker's defeats and its stats walker's units, from the recording's image (`tagpu_hudmarks.c`). DIS |

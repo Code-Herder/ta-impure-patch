@@ -16,14 +16,39 @@ weapon record and the ballistic reach `0x49A890`), `tascene-design.md` (the lab)
 | The look | **BAR exactly:** per class a faint merged fill (attack rings only), a merged outline of the union (3 px attack, 5 px defense), faint 1.8 px per-unit inner rings dimmed by the selection size; BAR's colours, camera-distance fades, map-edge fade and mouse-proximity highlight; rings on the water surface. No arc wedges: TA weapon data has no turret arc. |
 | Defense set | **Derived from data, not BAR's hand list:** a unit that cannot move (`BMcode=0`) with a weapon. Class: an interceptor is `nuke` at its `coverage`, `toairweapon` is `air`, otherwise the attack rule. Defaults as BAR: enemies ground, air, nuke, cannon; allies nuke only. |
 | Fogged enemies | **Only what the engine shows:** a ring for an enemy structure the game currently draws for the player; no memory of defenses once out of sight (BAR keeps them until seen dead). |
-| Controls | **All of BAR's:** alt+. / alt+, cycle a per-unit-type on/off bitmap over that type's rings (one unit selected; ally and enemy kept apart), "shift only", "cursor range", the defense classes for allies and enemies. Stored in `impure.cfg` (`ranges`, `rangeshift`, `rangecursor`, `rangesensor`, `rangeally`, `rangeenemy`, `rangetoggle`). As built, every key but `rangetoggle` is a row of the in-game Visuals panel, which became two columns for them (the front-end screen's columns are full, so it has none). |
+| Controls | **All of BAR's:** alt+. / alt+, cycle a per-unit-type on/off bitmap over that type's rings (one unit selected; ally and enemy kept apart), "shift only", "cursor range", the defense classes for allies and enemies. Stored in `impure.cfg` (`ranges`, `rangeshift`, `rangecursor`, `sensorview`, `rangesensor`, `rangeally`, `rangeenemy`, `rangetoggle`). As built, every key but `rangetoggle` is a row of the in-game Visuals panel, which became two columns for them (the front-end screen's columns are full, so it has none). |
 | The reach | **TA's engine rule, not BAR's formula.** See below. |
 | Ring edge | **The first point the engine refuses**, per direction: march outward on the height grid, then refine. Everything inside is in reach; a reachable valley beyond an unreachable crest is not drawn. |
 | Renderers | **Vulkan replaces the stock rings while the rings are on** (owner's decision 2026-11-09, reversing the interview's "deleted, no old mode"): `tagpu_order.c` draws the engine's `ShowRanges` set (`+showranges`, the labelled per-unit circles and the AoE/coverage circles at an order's target) only while `ranges` is off, so `ranges=off` brings it back as the engine draws it. The cloak and kamikaze circles of normal play are untouched. GDI keeps the stock engine behaviour and draws no rings. |
 | Compute | **The game thread decides, the GPU walks:** the game thread publishes one 32-byte record per ring (centre, altitude, range, velocity, minbarrel, class, layer, style) and the render thread reads no engine memory. The reach is **a compute pass**, one workgroup a ring and one invocation a direction, over the terrain pass's own height grid; the draw stages only read its result. **A per-slot cache** keeps a ring's walk while its inputs and the grid, sea and gravity are unchanged, so a structure is walked once and a moving unit every frame. (The first build walked the terrain in the vertex stage, per vertex, every frame.) |
-| Sensor preview | **BAR's sensor preview, placement only** (grill of 2026-11-09): while a building is placed whose type will emit once built — it switches on at completion (ActivateWhenBuilt) or the player can switch it on (onoffable) — its radar, sonar, radar-jam and sonar-jam coverage is drawn, per kind the sheet under the new ring, the viewed player's **existing** coverage of that kind as a muted fill, and one outline of their union; jammers dashed. **Existing coverage is the engine's emitter test**, not the type: the viewer's own units, alive, not dying and activated (`+0x10E` bit 0), with the kind's distance above 0 — so a radar switched off counts for nothing and a factory counts while it produces. For radar and sonar that is the radar pass's own test; for the jammers it is BAR's meaning, since the pass's jammer loop walks the other owners' jammers (`0x4675F5..0x467600`). **The radius is the radar pass's** (`0x467440`; radar capped by the bucket walk at max(radar, sonar)), a flat circle with no terrain. **Sonar is clipped to water**, where the pass finds sonar targets. **Under the weapon rings**, its own layer. **No preview on GDI**, as no rings. The setting `rangesensor` (on by default), the Visuals row *Sensor preview*. Allied coverage is not drawn: the engine's allied radars do not extend the viewer's. |
+| Sensor preview | **BAR's sensor preview, placement only** (grill of 2026-11-09): while a building is placed whose type will emit once built — it switches on at completion (ActivateWhenBuilt) or the player can switch it on (onoffable) — its radar, sonar, radar-jam and sonar-jam coverage is drawn over the **existing** coverage of that kind, in BAR's preview look (*Sensor view*, below). **Existing coverage is the engine's emitter test**, not the type: the units of the viewed player **and its allies**, alive, not dying and activated (`+0x10E` bit 0), with the kind's distance above 0 — so a radar switched off counts for nothing and a factory counts while it produces. For the viewer's own radar and sonar that is the radar pass's own test; for an ally's and for the jammers it is BAR's meaning, since the pass walks only the viewer's own emitters and its jammer loop the other owners' jammers (`0x4675F5..0x467600`). **The radius is the radar pass's** (`0x467440`; radar capped by the bucket walk at max(radar, sonar)), a flat circle with no terrain. **Sonar is clipped to water**, where the pass finds sonar targets. **Under the weapon rings**, its own layer. **No preview on GDI**, as no rings. The setting `rangesensor` (on by default), the Visuals row *Sensor preview*. |
 | Replays | Rings show in the replay viewer as BAR shows them to spectators. Presentation only: nothing enters the recording. |
 | Mockup | The tascene lab (`rings=1`), on a real map with real weapon data, interactive, running the same algorithm — the reference the DLL is compared against. |
+
+### Sensor view
+
+BAR's always-on sensor range widgets (`gui_sensor_ranges_radar.lua`, `_sonar.lua`,
+`gui_sensor_ranges_jammer_preview.lua`) on the engine's coverage rule, with the preview above
+reshaped to theirs. The module states how each is built: [range rings](modules/range-rings.html),
+*Which rings show* and *The sensors*.
+
+| Branch | Decision |
+|---|---|
+| When it shows | **Always**, not only in placement: the coverage of the viewed player **and its allies** (TA's alliance, the viewed record's row `+0x108`). |
+| Kinds | **All four**: radar, sonar, radar jam and sonar jam, one union a kind — two water jammers of different kinds are two outlines. |
+| Whose | **No line-of-sight test for an ally's unit**, and **never an enemy's coverage**, its jammers included. |
+| Which units | **Moving and flying units count** as structures do; what counts is the engine's activation, `+0x10E` bit 0 — a radar switched off emits nothing, a factory emits while it produces. |
+| Radius | **TA's exact radius**, the radar pass's (`0x467440`), a flat circle with **no rounding to cells**; **no minimum-range threshold**: every emitter with a distance above 0 draws. |
+| Radar and sonar | BAR's look: a **dashed band just outside the union** of each kind, radar green, sonar light blue, BAR's `sensor_ranges_los` colours; sonar over water only. |
+| Jammers | **BAR's jammer sheet plus a dashed band**: the union filled red, the placed jammer's brighter, the fill stopping where the dashed band just inside the union starts. |
+| Dashes | **Constant screen size, folding like the waypoint dots** (`tagpu_order.c`'s level of detail): a lattice pinned to the map whose dash length holds on screen and whose spacing halves or doubles by zoom octave with a fade. The owner chose this over porting BAR's shader. **Continuous through junctions**: a union's outline is one closed loop of arcs, dashed along its whole length. Radar and sonar dashes move with the game's clock, the jammers' with the wall clock, as BAR's. |
+| On and off | BAR's animation: a radar or sonar circle grows over 15 game ticks when its unit switches on and shrinks away when it switches off; a unit gone drops at once. |
+| Preview | **Reshaped to BAR's radar preview, placement only**: the new disc's sheet with rings travelling outward, the existing (own and allied) coverage filled duller, a solid outline of the union and of the new disc's edge inside the existing coverage. |
+| Settings | Key **`sensorview`** (on by default), the Visuals row **Sensor ranges**; it and *Sensor preview* are **independent of Range rings** and never grey with it. |
+| Replays | **Follow the viewed player and its allies**, as the live game. |
+| Renderers | **Nothing on GDI**, and nothing on a device with no stencil-carrying depth format, as the rings. |
+| Draw order | Jammer fills and bands, under the radar and sonar dashes, under the preview, **under the weapon rings**. |
+| Map edge | **Cut at the scroll extent**, the coverage the player can use. |
 
 ## The reach  [DISASSEMBLED 2026-11-09]
 
@@ -82,14 +107,19 @@ was measured in game: [range rings](modules/range-rings.html), *How it is checke
 - **GDI draws no rings.**
 - **The fades at larger screens**: at 1024×768 TA's zoom range never reaches BAR's fade
   distances; a larger screen fades the inner rings at low zoom, which has not been seen live.
-- **The replay viewer's display** of the rings has not been verified.
+- **The replay viewer's display**: its default view (full visibility, no perspective) draws no
+  rings and no sensors; with a perspective the sensors follow it, and the weapon rings' look has
+  not been verified.
 - **Fill rate at low zoom** with about a thousand discs.
 - **The ground at the grid's edge**: the walk takes the nearest cell on the height grid's last row
   and column, where `GetPosHeight 0x485070` answers −1, and interpolates in float where the engine
   truncates in integer steps.
-- **The sensor preview's jammer look** has not been seen in game: no stock structure jams.
 - **The lab draws existing sensor coverage by type**: `tools/tascene-ranges.js` has no activation
-  state, so a switched-off radar and an idle factory count there and not in the DLL.
+  state, so a switched-off radar, an idle factory and a grounded plane count there and not in the
+  DLL.
+- The sensor view's own gaps — the animation's tick steps with smooth motion off, a radar's
+  altitude bonus that no stock unit shows, the outline rebuilt every frame while an emitter
+  moves: [range rings](modules/range-rings.html), *What is not closed*.
 - The shooter's altitude is the unit's position (`+0x6A`), as can-engage uses; can-aim's `from`
   may be a weapon piece position — not established.
 - The water-weapon and above-sea gates of can-engage are not drawn: a non-water weapon's ring

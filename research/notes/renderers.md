@@ -782,40 +782,40 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*The panel has twenty-four rows in two columns: the nine below that are about the picture or its
-pacing, then fifteen that are not rendering options — Resource snapping, Quick mex/geo, Formation
-move, Mega map wheel, Mega map zoom in, Radar dots and the nine rows of the weapon range rings
-([settings](modules/settings.html) §2.12, [range rings](modules/range-rings.html)). The row table
-and every geometry number here are the current twenty-four.*
+*The panel has twenty-five rows in two columns: the nine below that are about the picture or its
+pacing, then sixteen that are not rendering options — Resource snapping, Quick mex/geo, Formation
+move, Mega map wheel, Mega map zoom in, Radar dots and the ten rows of the weapon range rings and
+the sensors ([settings](modules/settings.html) §2.12, [range rings](modules/range-rings.html)). The
+row table and every geometry number here are the current twenty-five.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Twenty-four gadgets, and everything else demoted to the cfg. (Six when the
+2. **Simplify.** Twenty-five gadgets, and everything else demoted to the cfg. (Six when the
    rules were set; the additions are the readout, a diagnostic rather than a render option, vsync,
-   the map edge and the fifteen rows that are not rendering options — see the row table.)
+   the map edge and the sixteen rows that are not rendering options — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−496, 32) 496×364` — right-aligned by `MARGIN = 16`, hanging from the
+panel `id=0` at `(w−16−496, 32) 496×388` — right-aligned by `MARGIN = 16`, hanging from the
 top bar's underside, over the world. Background gadget `id=12` naming its panel frame. **Two
 columns of `COL_W` 248** (`PANEL_W` = 2 × 248), the rows filling the left one first (`row_pos`):
-twenty-four `id=1` buttons at `x=128 w=108 h=18` within their column on a **24 px** pitch, each
-with an `id=5` label at `x=12 w=112` **on the same line**; the left column holds twelve rows and
+twenty-five `id=1` buttons at `x=128 w=108 h=18` within their column on a **24 px** pitch, each
+with an `id=5` label at `x=12 w=112` **on the same line**; the left column holds thirteen rows and
 the right twelve.
 
-*The height is **364**, and it is derived from the left column's row count, `COL_ROWS` =
-`(R_COUNT + 1) / 2` = 12: the last row's end at `34 + 24×11 + 18 = 316`, the bottom rule
-(`DIV_BOT`) 8 px under it at 324, and the panel ends 40 px under the rule, past the Resource
+*The height is **388**, and it is derived from the left column's row count, `COL_ROWS` =
+`(R_COUNT + 1) / 2` = 13: the last row's end at `34 + 24×12 + 18 = 340`, the bottom rule
+(`DIV_BOT`) 8 px under it at 348, and the panel ends 40 px under the rule, past the Resource
 profile caption and the bolts. `tagpu_menu.c` refuses at compile time a panel that would end past
-row 480 at 640×480 (`menu_panel_fits_480`; twelve rows a column end at 396, fifteen would end at
+row 480 at 640×480 (`menu_panel_fits_480`; thirteen rows a column end at 420, fifteen would end at
 468). **The width is sized by the side bar**, and a second compile-time check holds it:
 `menu_panel_clears_side`, `SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel ends at
 x 623 and never reaches the side bar at 0..127. The strip of the side bar between the minimap and
 the ORDERS buttons belongs to no GUI window: the engine draws it once a level and never again, so
 a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
 304-px columns: two labels stayed through the close, a select and a deselect, and the engine's
-own surface (`tacli shot`) showed them too. The generated `.GUI` is built in a 24 KB buffer (15 597
-bytes for the twenty-four rows, the log's `gui=15597`). **`tools/guipanel.py` is not the source of truth for these
+own surface (`tacli shot`) showed them too. The generated `.GUI` is built in a 24 KB buffer (16 190
+bytes for the twenty-five rows, the log's `rows=25 gui=16190` on 2026-11-11). **`tools/guipanel.py` is not the source of truth for these
 numbers** — it draws `W,H = 304,212` — and the panel is composed at runtime from the player's
 install, so nothing is regenerated when they change.*
 
@@ -834,13 +834,14 @@ install, so nothing is regenerated when they change.*
 | L 250 | **Resource snapping** | Off \| 1..8 | the snapping radius ([resource snapping](modules/resource-snapping.html)); held while resource input is not live or the mod's rules (`tagpu_profiles_policy`) give no manual radius |
 | L 274 | **Quick mex/geo** | Off \| On | Quick Build; held while resource input is not live or the mod's rules do not offer it |
 | L 298 | **Formation move** | Off \| On | `formation=` in the store (§2.10b); `tagpu_formation.on`/`.off` are its levers — a drag lays the selection out along a line ([formation](modules/formation.html)). Never greyed with the lane; in-game only |
-| R 34 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
-| R 58 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
-| R 82 | **Radar dots** | Zoomed out \| Always | `radardots=` in the store (§2.10b) — a radar contact's dot in the world view only where the strategic icons come in, or at every level ([strategic icons](modules/icons.html), *Radar dots*). Never greyed with the lane; in-game only |
-| R 106 | **Range rings** | Off \| On | `ranges=` in the store (§2.10b): the weapon range rings ([range rings](modules/range-rings.html)); Off brings the engine's `ShowRanges` circles back. Never greyed; in-game only |
-| R 130 | **Attack rings** | Always \| Shift held | `rangeshift=`; greyed while Range rings is Off, as are the seven rows under it; in-game only |
-| R 154 | **Cursor range** | Off \| On | `rangecursor=`: the rings of the unit under the cursor; in-game only |
-| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, over the player's existing coverage ([range rings](modules/range-rings.html)); in-game only |
+| L 322 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
+| R 34 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
+| R 58 | **Radar dots** | Zoomed out \| Always | `radardots=` in the store (§2.10b) — a radar contact's dot in the world view only where the strategic icons come in, or at every level ([strategic icons](modules/icons.html), *Radar dots*). Never greyed with the lane; in-game only |
+| R 82 | **Range rings** | Off \| On | `ranges=` in the store (§2.10b): the weapon range rings ([range rings](modules/range-rings.html)); Off brings the engine's `ShowRanges` circles back and leaves the sensors. Never greyed; in-game only |
+| R 106 | **Attack rings** | Always \| Shift held | `rangeshift=`; greyed while Range rings is Off, as are *Cursor range* and the five class rows; in-game only |
+| R 130 | **Cursor range** | Off \| On | `rangecursor=`: the rings of the unit under the cursor; in-game only |
+| R 154 | **Sensor ranges** | Off \| On | `sensorview=`: the radar, sonar and jammer coverage of the viewed player and its allies, always ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
+| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, over the existing own and allied coverage ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
 | R 202..298 | **Ground / Air / Nuke / Cannon / LRPC defense** | None \| Enemy \| Allied \| Both | one row a defense class: stage bit 1 is the class's bit of `rangeenemy=`, bit 2 its bit of `rangeally=`; a click writes both masks whole from the five rows; in-game only |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
@@ -888,7 +889,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 496×364 in a corner, covering ~23 % of a
+you would click, close, look, reopen; and the panel is 496×388 in a corner, covering ~24 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
@@ -1372,7 +1373,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `icondist` | 100 | 50, 75, 100, 150 or 200: the distance the icons take over at, percent of BAR's 3000 elmos; 200 = icons only from twice as far |
 | `iconfade` | 33 | 0, 33 or 67: the fade band, percent; 0 = BAR's hard switch, 67 = Recoil's own. 33 keeps 1× the stock frame on every frame up to about 2600 px tall. The three icon keys have no row ([settings](modules/settings.html) §2.12), are read live by both threads, and under `tagpu_defaults.off` take these defaults |
 | `formation` | `on` | `on` or `off` (`1`/`0` also read): formation move — a drag with the order button lays the selection out along the drawn line ([formation](modules/formation.html)). The in-game panel's *Formation move* row; read at each press, so a change applies from the next one. Its levers `tagpu_formation.on`/`.off` win over the key; under `tagpu_defaults.off` the store is ignored and the move is off |
-| `ranges`, `rangeshift`, `rangecursor`, `rangesensor` | `on`, `off`, `on`, `on` | `on` or `off` (`1`/`0` also read): the weapon range rings, the attack rings only under Shift, the rings of the unit under the cursor, the sensor preview while a building is placed ([range rings](modules/range-rings.html)). The in-game panel's *Range rings*, *Attack rings*, *Cursor range* and *Sensor preview* rows; read every frame by the game thread. `ranges=off` brings the engine's `ShowRanges` circles back |
+| `ranges`, `rangeshift`, `rangecursor`, `sensorview`, `rangesensor` | `on`, `off`, `on`, `on`, `on` | `on` or `off` (`1`/`0` also read): the weapon range rings, the attack rings only under Shift, the rings of the unit under the cursor, the own and allied sensor coverage always, the sensor preview while a building is placed ([range rings](modules/range-rings.html)). The in-game panel's *Range rings*, *Attack rings*, *Cursor range*, *Sensor ranges* and *Sensor preview* rows; read every frame by the game thread. `ranges=off` brings the engine's `ShowRanges` circles back; the two sensor keys are independent of it |
 | `rangeally`, `rangeenemy` | `nuke`, `ground,air,nuke,cannon` | the defense rings' classes per side, a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none`; a word that is not a class keeps the default. The in-game panel's five class rows (None / Enemy / Allied / Both), one a class, over both masks |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`: the range rings' per-type choice that Alt+. / Alt+, cycle, by unit name, `n` the type's ring count (1..16) and two bitmaps inside 2ⁿ − 1; at most 64 types, a type with every ring on both sides has no entry. No row |
 | `radardots` | `always` | `always` or `zoomed` (`1`/`0` also read): a radar contact's dot in the world view at every level, or only where the strategic icons come in, which keeps 1× stock ([strategic icons](modules/icons.html), *Radar dots*). The in-game panel's *Radar dots* row (Zoomed out / Always); read every frame by the render thread and every hover query by the game thread. Under `tagpu_defaults.off` the store is ignored and it reads `zoomed` |
