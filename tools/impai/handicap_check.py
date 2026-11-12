@@ -24,16 +24,25 @@ holds the Difficulty, records 1 and 2 are controller 2, the level init's line na
 the seat table marks record 2 and not record 1, and the eighteen handicap sites begin with E9
 (tagpu_impai.c).
 
-Then the rows the economy does not reach. The launch applies the `impai-handicap` test group's
-reclaims (impai-handicap-reclaim-1.json and -2.json: each seat reclaims a wreck and a radar tower
-of its own), and the human seat gives each computer seat 100 energy and 100 metal (`+give`, the
-console's Give, mask 1). Every handicap stub counts the type-2 records that take each of its exits
-(tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
-rows 11 and 12 (the reclaim payout), 13 and 14 (the transfers) and 17 (the reclaimed unit's
-credit) have each sent a record down both, at most RECLAIM_TICKS ticks. Seat 1 is the only
-unmarked type-2 record and seat 2 the only marked one, so a scaled count is OTA AI's and an
-exempt one ImpAI's; the economy rows 1 to 8 together must show both as well. All eighteen rows'
-counts are printed.
+Then the rows the economy does not reach. The human seat gives each computer seat 100 energy and
+100 metal (`+give`, the console's Give, mask 1). Every handicap stub counts the type-2 records that
+take each of its exits (tagpu_impai.c, s_diag.hits, at the address the attach line names); the
+level is advanced until rows 13 and 14 (the transfers) have each sent a record down both, at most
+RECLAIM_TICKS ticks. Seat 1 is the only unmarked type-2 record and seat 2 the only marked one, so a
+scaled count is OTA AI's and an exempt one ImpAI's; the economy rows 1 to 8 together must show both
+as well. All eighteen rows' counts are printed.
+
+Then the reclaims (rows 11 and 12, the payout; 17, the reclaimed unit's credit), which need a
+seat's own order to hold: impai-handicap-reclaims.json gives each computer seat a construction kbot
+beside a Dragon's Teeth feature and another beside a Dragon's Teeth unit of its own, each ordered to
+reclaim it. ImpAI's seat keeps its orders (no stock planner runs on it, and its brain tasks only an
+idle builder). OTA AI's builder planner 0x408100 orders every builder of its group 4 again every 90
+ticks (its due time GameTime + 90 at 0x40811B; engine/orders.md, The ten slots), so each reclaim is
+re-issued every REISSUE ticks (45) while its row lacks the seat: some re-issue then lands within 45
+ticks after a planner run and has at least 45 ticks before the next, and the feature's reclaim pays
+20 ticks after it starts (8 metal: the countdown 15 + (energy + metal) / 2, two a working call,
+0x404BBA..0x404C89); a unit's reclaim keeps its progress on the unit across re-issues. The level is
+advanced until rows 11, 12 and 17 have each sent a record down both, at most RECLAIM_TICKS ticks.
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
@@ -61,8 +70,15 @@ AT = 61                                 # two economy passes in, nothing built y
 RECLAIM_TICKS = 3600                    # the reclaims' bound: two minutes of simulation
 STEP = 150                              # ticks between two reads of the counts
 OTA, IMPAI = 1, 2                       # the scenario's records
-RECLAIMS = ("impai-handicap-reclaim-1.json", "impai-handicap-reclaim-2.json")
-REACHED = (11, 12, 13, 14, 17)          # the rows the reclaims and the gives are built to reach
+REACHED = (13, 14)                      # the rows the gives reach
+RECLAIMS = "impai-handicap-reclaims.json"
+RECLAIMED = (11, 12, 17)                # the rows a seat's own reclaim orders reach
+REISSUE = 45                            # ticks between two re-issues: half the builder planner's 90
+# the reclaims' kbots and targets as the scenario places them: (seat, the feature's kbot, the
+# feature's world point, the unit's kbot, the unit's world point)
+RECLAIM_PAIRS = ((OTA, (6880, 1632), (6880, 1680), (6944, 1632), (6944, 1680)),
+                 (IMPAI, (7104, 1632), (7104, 1680), (7168, 1632), (7168, 1680)))
+NEAR = 40                               # world units: a roster unit at a placed point
 ECONOMY = range(1, 9)
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
@@ -146,6 +162,7 @@ def run(api, instance, level, out):
             table, hits_at = (int(g, 16) for g in where.groups())
             marks = c.values(f"0x{table + OTA:08X}:1", f"0x{table + IMPAI:08X}:1")
             fails += rows_reached(c, instance, hits_at, out)
+            fails += reclaims_reached(c, instance, hits_at, out)
             fails += ai_command(c, table, out)
         finally:
             try:
@@ -191,12 +208,6 @@ def run(api, instance, level, out):
 def rows_reached(c, instance, hits_at, out):
     """The reclaims and the gives, then the level advanced until every REACHED row has sent a
     record down both exits; the list of failed checks."""
-    for name in RECLAIMS:
-        r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
-                            str(TREE / "scenarios" / name)], capture_output=True, text=True,
-                           timeout=300)
-        if r.returncode:
-            raise OSError(f"scenario apply {name}: {(r.stdout + r.stderr).strip()[-400:]}")
     for seat in (OTA, IMPAI):
         for what in ("energy", "metal"):
             c.type(f"+give {seat} 100 {what}")
@@ -214,6 +225,54 @@ def rows_reached(c, instance, hits_at, out):
     if not both(hits, ECONOMY):
         fails.append("the economy rows 1 to 8 did not send both seats down their exits")
     return fails
+
+
+def placed(roster, owner, kind, at):
+    """The engine index of the roster's `kind` of `owner` within NEAR of world point `at`."""
+    for u in roster:
+        if (u["owner"] == owner and u["type"].upper() == kind and u["engine_index"]
+                and abs(u["world"][0] - at[0]) <= NEAR and abs(u["world"][1] - at[1]) <= NEAR):
+            return u["engine_index"]
+    raise OSError(f"no {kind} of seat {owner} at {at} in the roster")
+
+
+def reissue(instance, *args):
+    """One reclaim order through the scenario applier, on the held level. A refusal is not a failure
+    of the check: the row's count decides, and the next re-issue tries again."""
+    subprocess.run([sys.executable, str(TACLI), "order", instance, "reclaim", *map(str, args)],
+                   capture_output=True, text=True, timeout=150)
+
+
+def reclaims_reached(c, instance, hits_at, out):
+    """The reclaims, re-issued every REISSUE ticks while a row lacks the seat's exit, until rows 11,
+    12 and 17 have each sent a record down both; the list of failed checks."""
+    r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
+                        str(TREE / "scenarios" / RECLAIMS)], capture_output=True, text=True,
+                       timeout=300)
+    if r.returncode:
+        raise OSError(f"scenario apply {RECLAIMS}: {(r.stdout + r.stderr).strip()[-400:]}")
+    roster = c.call("roster", "--json")["units"]
+    pairs = [(seat, placed(roster, seat, "CORCK", fk), fp, placed(roster, seat, "CORCK", uk),
+              placed(roster, seat, "CORDRAG", up)) for seat, fk, fp, uk, up in RECLAIM_PAIRS]
+    exit_of = {OTA: 0, IMPAI: 1}            # scaled for OTA AI's seat, exempt for ImpAI's
+    start = c.tick
+    hits = counts(c, hits_at)
+    while not all(both(hits, (r,)) for r in RECLAIMED) and c.tick - start < RECLAIM_TICKS:
+        for seat, fcons, fpos, ucons, drag in pairs:
+            k = exit_of[seat]
+            if not (hits[11][k] and hits[12][k]):
+                reissue(instance, "pos", fpos[0], fpos[1], "--unit", fcons, "--expect", "CORCK")
+            if not hits[17][k]:
+                reissue(instance, "unit", drag, "--unit", ucons, "--expect", "CORCK",
+                        "--expect-target", "CORDRAG")
+        c.advance(REISSUE)
+        hits = counts(c, hits_at)
+    out.append(f"  reclaim rows scaled/exempt at GameTime {c.tick}: "
+               + " ".join(f"{r}={hits[r][0]}/{hits[r][1]}" for r in RECLAIMED))
+    return [f"row {r} sent no {'OTA AI' if not s else 'ImpAI'} record down its "
+            f"{'scaled continuation' if not s else 'unscaled branch'} by GameTime {c.tick} "
+            f"(scaled {s}, exempt {e})"
+            for r, (s, e) in ((r, hits[r]) for r in RECLAIMED) if not (s and e)]
 
 
 def ai_command(c, table, out):
