@@ -25,17 +25,21 @@ the seat table marks record 2 and not record 1, and the eighteen handicap sites 
 (tagpu_impai.c).
 
 Then the rows that need more than the commanders. The launch applies the `impai-handicap` test
-group's economy structures (impai-handicap-economy.json: a solar collector, a wind generator and
-a metal extractor for each computer seat), and the human seat gives each computer
-seat 100 energy and 100 metal (`+give`, the console's Give, mask 1). Every handicap stub counts the
-type-2 records that take each of its exits (tagpu_impai.c, s_diag.hits, at the address the attach
-line names); the level is advanced until every row of REACHED -- the economy's 1, 2, 4, 7 and 8
-and the transfers' 13 and 14 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the
-only unmarked type-2 record and seat 2 the only marked one, so a scaled count is OTA AI's and an
-exempt one ImpAI's. All eighteen rows' counts are printed, and the rows this test does not reach
-are named: 11, 12 and 17 (the reclaims) are shown at A1b, when ImpAI owns its seat's orders and no
-stock planner replaces a reclaim order; the others need water, a game mode, an order of their
-own, or a metal maker the stock AI would not switch off.
+group's economy structures (impai-handicap-economy.json: a solar collector, a wind generator, a
+metal extractor, a metal maker and a tidal generator for each computer seat) and two Fleas for the
+human seat (impai-handicap-purge.json), orders each Flea to attack the computer seat's commander
+nearest it, and the human seat gives each computer seat 100 energy and 100 metal (`+give`, the
+console's Give, mask 1). Every handicap stub counts the type-2 records that take each of its exits
+(tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
+every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 and the purge's
+18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
+record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's.
+All eighteen rows' counts are printed, and the rows this test does not reach are named with their
+reason: 9, 10, 11, 12 and 17 (the refunds and the reclaims) are shown at A1b, when ImpAI owns its
+seat's orders and no stock planner replaces a scripted build, unbuild or reclaim; 6 needs a mobile
+unit with a negative EnergyUse, which no unit of the retail game has; 15 and 16 are the
+Deathmatch respawn, which a skirmish cannot select and which only ever creates the controlled
+player's commander.
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
@@ -49,6 +53,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -64,9 +69,14 @@ ROWS_TICKS = 900                        # the rows' bound: 30 economy passes
 STEP = 60                               # ticks between two reads of the counts: two passes
 OTA, IMPAI = 1, 2                       # the scenario's records
 STRUCTURES = "impai-handicap-economy.json"
-REACHED = (1, 2, 4, 7, 8, 13, 14)       # the rows the structures, commanders and gives reach
-AT_A1B = (11, 12, 17)                   # the reclaims: the stock AI replaces a scripted reclaim
-NOT_HERE = (3, 5, 6, 9, 10, 15, 16, 18) # makers, tide, a mobile producer, refunds, respawn, purge
+ATTACKERS = "impai-handicap-purge.json"
+ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_packet_pub.c)
+REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
+AT_A1B = (9, 10, 11, 12, 17)            # refunds and reclaims: the stock AI replaces the order
+NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse",
+            15: "the Deathmatch respawn: no skirmish selects it, and it creates only the "
+                "controlled player's commander",
+            16: "as 15"}
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
 REC = 0x1B63                            # record 0 in main; 0x14B a record (tagpu_engine.h)
@@ -191,14 +201,42 @@ def run(api, instance, level, out):
     return fails
 
 
-def rows_reached(c, instance, hits_at, out):
-    """The structures and the gives, then the level advanced until every REACHED row has sent a
-    record down both exits; the list of failed checks."""
+def apply(instance, name):
     r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
-                        str(TREE / "scenarios" / STRUCTURES)], capture_output=True, text=True,
+                        str(TREE / "scenarios" / name)], capture_output=True, text=True,
                        timeout=300)
     if r.returncode:
-        raise OSError(f"scenario apply {STRUCTURES}: {(r.stdout + r.stderr).strip()[-400:]}")
+        raise OSError(f"scenario apply {name}: {(r.stdout + r.stderr).strip()[-400:]}")
+
+
+def attack_commanders(c, out):
+    """Each Flea ordered to attack the CORE commander nearest it, once the roster lists both."""
+    deadline = time.monotonic() + ROSTER_S
+    while True:
+        units = c.call("roster", "--json")["units"]
+        fleas = [u for u in units if u["type"].upper() == "ARMFLEA"]
+        coms = [u for u in units if u["type"].upper() == "CORCOM"]
+        if len(fleas) == 2 and len(coms) == 2:
+            break
+        if time.monotonic() > deadline:
+            raise OSError(f"the roster lists {len(fleas)} Fleas and {len(coms)} CORE commanders "
+                          f"after {ROSTER_S} s, not 2 and 2")
+        time.sleep(1)
+    for f in fleas:
+        com = min(coms, key=lambda u: (u["world"][0] - f["world"][0]) ** 2
+                  + (u["world"][1] - f["world"][1]) ** 2)
+        c.call("order", "attack", "unit", com["engine_index"], "--unit", f["engine_index"],
+               "--expect", "ARMFLEA")
+        out.append(f"  Flea {f['engine_index']} attacks seat {com['owner']}'s commander "
+                   f"{com['engine_index']}")
+
+
+def rows_reached(c, instance, hits_at, out):
+    """The structures, the Fleas' attacks and the gives, then the level advanced until every
+    REACHED row has sent a record down both exits; the list of failed checks."""
+    apply(instance, STRUCTURES)
+    apply(instance, ATTACKERS)
+    attack_commanders(c, out)
     for seat in (OTA, IMPAI):
         for what in ("energy", "metal"):
             c.type(f"+give {seat} 100 {what}")
@@ -209,8 +247,8 @@ def rows_reached(c, instance, hits_at, out):
         hits = counts(c, hits_at)
     out.append(f"  rows scaled/exempt at GameTime {c.tick}: "
                + " ".join(f"{r}={s}/{e}" for r, (s, e) in hits.items()))
-    out.append(f"  rows {', '.join(map(str, AT_A1B))}: at A1b, when ImpAI owns its seat's orders; "
-               f"rows {', '.join(map(str, NOT_HERE))}: not reached by this test")
+    out.append(f"  rows {', '.join(map(str, AT_A1B))}: at A1b, when ImpAI owns its seat's orders")
+    out += [f"  row {r}: not reached, {why}" for r, why in NOT_HERE.items()]
     fails = [f"row {r} sent no {'OTA AI' if not s else 'ImpAI'} record down its "
              f"{'scaled continuation' if not s else 'unscaled branch'} by GameTime {c.tick} "
              f"(scaled {s}, exempt {e})"
