@@ -697,7 +697,14 @@ takes the first unit of group `src` into an empty group, sends a unit back to `s
 farther than √(cap·n) from the group's centroid, then takes in every `src` unit within that
 distance (`0x407560..0x4077CF`): √(20000·n) for group 2, √(50000·n) for group 6. No RNG, no sight.
 The attack rule (three units or fewer: regroup at the base; six or more, or more than three while
-already attacking: attack the target picker's unit) runs every 300 ticks.
+already attacking: attack the target picker's unit) runs every 300 ticks. **The base it regroups at
+is not the builder planner's base point**: it is **`0x407410(&out)`** (thiscall on a planner slot,
+`ret 4`) of the armed-structure slot `+0x25`, else the structure slot `+0x15`, else the builder
+slot `+0x21` (`0x407869..0x4078A3`), the first that holds a unit. `0x407410` averages its group's
+units' integer x, y and z words `+0x6C`, `+0x70`, `+0x74`, each sum divided by the count, and
+writes them as 16.16 values into `out` (`0x40743D..0x407493`); an empty group returns 0 and writes
+nothing (`0x40742B..0x40743A`). So a seat with no armed structure regroups at the plain mean of the
+positions of its group-1 structures [DISASSEMBLED 2026-11-12].
 
 **RNG and sight, in one place.** The helpers that draw the simulation RNG: the build choice (one
 per scored entry), the build site (one for an extractor, four a try), the acquisition record (eight

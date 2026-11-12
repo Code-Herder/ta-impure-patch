@@ -434,7 +434,7 @@
              [4200, "type", "+ai 2"], [4230, "type", "+ai 2"]],
    "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
    "end": 5400,
-   "takeover": {"player": "controlled", "checks": ["judge", "line", "ai", "fork"]}
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
   },
   "resource-mex": {
    "load": "resource-snapping.json",
