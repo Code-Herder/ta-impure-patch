@@ -546,8 +546,8 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 `0x40B2C0` loads `EAX` from its stack argument first (`0x40B2C0`) and `EDX`, `ECX` next
 (`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
-type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Under
-`tagpu_impai.on` Impure redirects this call to a wrapper that always calls the tick
+type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
+redirects this call to a wrapper that always calls the tick
 ([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
@@ -680,7 +680,17 @@ level from `0x4649ED`) is every metal feature cell on the map.
 is below 5 and roams once it reaches 5 (`0x408169`, `0x40830E`). **A hit commander stops
 building**: the on-damage handler `0x406F80` (caller `0x489DA2`) sets the AI object's `+0xD` to
 GameTime + 30 + `0x4B6C30(300)` and purges the commander's orders through `0x439EB0(unit, 0)`
-(`0x406FC9..0x406FEE`).
+(`0x406FC9..0x406FEE`), only for a victim whose def has `cancapture` (`+0x245` bit 12) and whose
+owner is an active type-2 record (the type test `0x406FC3`; [sim](sim.html), *Difficulty and the
+AI handicap*, which Impure exempts ImpAI's seats from). **`0x439EB0(unit, all)`** (`ret 8`; three
+callers: `0x406FF1` with 0, the controller `0x43BA97` with 1 for a handler result above 9, the unit
+destructor `0x4867A1` with 1): with 0 it walks `+0x5C` and removes every node whose `+0x42` lacks
+bit 4 (`0x439ED2..0x439ED8`), each unlinked, marked `0x10000` unless it was the head
+(`0x439EE0..0x439EE6`), destructed by `0x43A1F0` (`0x439EF3`) and freed (`0x439EF9`), the rule of
+`0x43ADC0`'s non-Shift wipe; `+0x60` is untouched (`0x439F0B..0x439F0D`); with 1 every node of
+both lists goes (`0x439F0F..0x439F71`). It creates nothing: an emptied commander gets its
+`Standby` default back from the controller's next run (DISASSEMBLED, scout I12 of the ImpAI
+plan).
 
 **The force planners' rebalance `0x407560(src, cap)`** (thiscall, `ret 8`; one caller `0x407804`)
 takes the first unit of group `src` into an empty group, sends a unit back to `src` while it is
