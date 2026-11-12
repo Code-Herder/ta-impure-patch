@@ -217,6 +217,8 @@ async function dropIn() {
     a.steps(5);
     const before = a.hash();
     swap.replace();
+    x = thrown(() => S.checkText(e));
+    check(!x, 'a call naming no sim, the first after the host is replaced, is made again on the new one', x && x.message);
     const b = S.create(e, d, null, null);       // made as `a` was, so it may carry `a`'s number in the new host
     b.steps(9);
     x = thrown(() => a.hash());

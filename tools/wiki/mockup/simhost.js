@@ -269,8 +269,7 @@ const WikiSim = (() => {
     if (!c || c.v !== v || c.seat !== seat) throw new Error('wiki sim: sightContacts takes the grid sightLit made of the same view and seat');
     return c.contacts.slice();
   }
-  const sighttable = (S, d) => S ? withHandles(() => pure({ op: 'sighttable', table: handle('table', S), distance: d }))
-    : pure({ op: 'sighttable', table: null, distance: d });
+  const sighttable = (S, d) => withHandles(() => pure({ op: 'sighttable', table: S ? handle('table', S) : null, distance: d }));
 
   const api = {
     create: (entry, demo, layout, ctx) => make(entry, demo, 'try', layout, ctx),
@@ -279,16 +278,16 @@ const WikiSim = (() => {
     // player plays)
     game: (entry, demo, layout, ctx, mode = 'refuse') => make(entry, demo, mode === 'stall' ? 'stall' : 'game', layout, ctx),
     // a layout's and a casting's refusal, thrown with the loader's words; the object back when it is read
-    checkLayout(L) { handle('layout', L); return L; },
-    checkCasting(C) { handle('casting', C); return C; },
+    checkLayout(L) { withHandles(() => handle('layout', L)); return L; },
+    checkCasting(C) { withHandles(() => handle('casting', C)); return C; },
     // a text entry's refusal (null: none), as tagpu_wikidata_entry's
-    checkText: entry => ask({ op: 'text', json: entry }).why,
+    checkText: entry => withHandles(() => ask({ op: 'text', json: entry })).why,
     // the scene a demo plays on (null: the first)
     sceneOf: (entry, demo) => entry.scenes[withHandles(() => pure({ op: 'scene', entry: entryOf(entry, demo) })).scene],
     // a players entry's seat's camera at a tick (tagpu_wikidata_seat_cam), null for a seat with none
     seatCam: (entry, demo, k, t) => withHandles(() => pure({ op: 'seatcam', entry: entryOf(entry, demo), seat: k, tick: t })).at,
     // the game frame's 4:3 bound on a game entry's map (tagpu_wikidata_frame_fits)
-    frameFits: (w, h) => pure({ op: 'fits', w, h }).fits,
+    frameFits: (w, h) => withHandles(() => pure({ op: 'fits', w, h })).fits,
     sightLit, sightContacts,
     // a layout's sight table's index for a sight distance, and its table (null: none)
     sightIndex: (S, d) => sighttable(S, d).idx,
