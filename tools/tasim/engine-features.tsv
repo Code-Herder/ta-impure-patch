@@ -1,0 +1,79 @@
+# engine-features.tsv -- every SIM_FEATURE of Impure's engine (tagpu/ddraw/src/*.c, the sim files of
+# thread-split.allow) and what tasim does with it, so that "tasim models the engine as Impure runs it"
+# (research/notes/impai/tasim.md) stays true as simulation fixes land. tools/tasim/featcheck.py, in the DLL's
+# build, refuses a feature with no row and a row naming no feature.
+#
+# name      the SIM_FEATURE's name
+# tasim     modelled  the core reproduces it now (`where` names the code)
+#           T1a..T1d, T2, T3, T4  the landing that models it (research/notes/impai/landings.md)
+#           outside   not a rule of the simulation tasim runs: the network, the recorder and replay, saved games,
+#                     the GUI and drawing, the installer (`where` says which)
+# where     the core code that models it, the landing's part that will, or why it is outside
+# evidence  the declaration and what its region does, read from the region's own comment at the line named
+name	tasim	where	evidence
+cob_trace	outside	a trace of the COB engine for diagnosis; SIM_PUPPET_INDEPENDENT	tagpu_cobtrace.c:62, the COB engine object and its records, traced
+keys_records	T2	the data keys' per-type records the weapon and veterancy keys read	tagpu_datakeys.c:20, the unit-key records
+keys_observers	T2	the loader observers that fill the data keys' records; tasim's loader reads the keys itself	tagpu_datakeys.c:191, the load's start, the FBI loader, the COB checksum and the FBI reader
+keys_ghost_mask	outside	the build ghost's piece mask, a drawing	tagpu_datakeys.c:537, the build ghost's piece mask
+keys_weapon	T2	the weapon keys (C2)	tagpu_datakeys.c:720, the weapon keys
+keys_nomapalert	outside	the silence of harmless weather: notifications, sounds and minimap blinks; the hit itself is stock	tagpu_datakeys.c:958, a weather hit is applied exactly as stock and says nothing
+keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c:1413, veterancy
+keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c:1704, transported explosions
+impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c:12, SIM_PUPPET_OWNER
+impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1047, the level init on the loader thread
+impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1172, the eighteen sites, rows 1-17 the resources, row 18 the commander purge
+patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c:30, write val at addr iff it holds expect
+sort_buffer_end	outside	DrawGameScreen's unit binning, a drawing	tagpu_patches.c:277, the sort buffer's end in 0x4697CF..0x469840
+feature_null_plot	T1a	the map's feature lookup off the grid; the core bounds every cell against W x H (P4)	tagpu_patches.c:395, a NULL plot handed to GetGridPosFeature 0x421E60
+terrain_window	outside	the terrain pass's window, a drawing	tagpu_patches.c:457, 0x483FA0 in DrawGameScreen
+feature_die_pool_full	T1c	the reclaim's feature death with the wreck pool full (the T1 plan, 8.7)	tagpu_patches.c:699, FeatureDie 0x423550 paid for and not removed
+reclaim_mark_anchor	T1c	the reclaim completion's anchored mark (the T1 plan, 8.7)	tagpu_patches.c:753, the completion 0x4237D0 tests the flags of the cell, not the anchor
+saved_features_border	outside	a saved game's features; tasim loads no saved game	tagpu_patches.c:815, LoadMap's border mask over a saved feature
+restore_record_owner	outside	a saved game's wreck records; tasim loads no saved game	tagpu_patches.c:998, the restore 0x424C00
+composite_scratch	outside	the composite draw context's scratch frame, a drawing	tagpu_patches.c:1139, ctx+0x10 made by 0x458180
+build_list	T1a	the build list of a large mod: the loader's build options	tagpu_patches.c:1630, three stock defects a large mod reaches
+download_records	T1a	the download menus' records: the loader's build options	tagpu_patches.c:1869, 0x42DCF0's 0xBD-byte record per download TDF
+oom_message	outside	the allocator's out-of-memory text	tagpu_patches.c:1982, the new handler 0x49E700
+sync_keys	outside	the network's unit sync	tagpu_patches.c:2037, def+0x13E matched between peers
+weapon_ids	T2	the raised weapon limit	tagpu_patches.c:2191, Weapons[256] at main+0x2CF3
+wire_bounds	outside	the network receivers' indices	tagpu_patches.c:2895, the unbounded 0x09/0x0B/0x0C indices
+victim_caps	T2	damage: the victim caps, flak, the map's edges	tagpu_patches.c:4009, landing B1
+stacked_air	T3	aircraft stacked in a grid cell	tagpu_patches.c:4290, a cell's two unit slots with aircraft
+step_phases	outside	the recorder's phase stubs around the projectile and explosion ticks	tagpu_patches.c:4656, stubs at 0x495513 and 0x495539
+script_slice	T1c	the unit tick's script slice, in the core's COB host	tagpu_patches.c:4708, the slice 0x48ADDF given to each unit the tick reaches
+killed_query	T2	the Killed script of a death	tagpu_patches.c:4788, Send_UnitDeath 0x4864B0 runs Killed as a query
+flak_divides	T2	the ballistic fire's divides	tagpu_patches.c:4850, 0x49CDE0
+last_cell	T1b	the grid stamp's last row and column, with the footprint stamp	tagpu_patches.c:4932, the stamp 0x47CC30 parks a unit off the map
+los_shear	T1d	the line-of-sight shear in UnitInPlayerLOS, with sight	tagpu_patches.c:5030, 0x465AC0
+projectile_view	outside	whether the local player sees a projectile, a drawing	tagpu_patches.c:5588, the projectile draw pass 0x49BE60
+los_local	outside	the copies of the sight read that decide only what this player is shown	tagpu_patches.c:5648, 27 local copies
+weapon_keys	T2	the weapon keys' sites (C2)	tagpu_patches.c:5863
+veterancy	T2	the veterancy sites (C3)	tagpu_patches.c:6021
+extra_weapons	T2	the 1..N weapons module's sites	tagpu_patches.c:6196
+reclaim_wrap	T1c	a unit reclaim's step with its product in 64 bits (B10; the T1 plan, 8.6)	tagpu_patches.c:6225, 0x438650
+b7_hits	T2	a hit's word, kill-outright, the radar's owner test, one meteor one hit	tagpu_patches.c:6344, landing B7
+stale_hits	T1b	the two-tick hold of a freed unit slot (the T1 plan, P1); the hits on the wire are outside	tagpu_patches.c:6576, landing B4
+ghost_commander	outside	creates refused during a network load and the dirty create's position	tagpu_patches.c:7403, landing B5
+transported	T3	transported explosions, with transports	tagpu_patches.c:8157, C4
+kill_counts	T2	kill counts across peers: the owner's build state at the create and the death	tagpu_patches.c:8664, landing B8
+built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagpu_patches.c:9198, the builder's finish, case 0x4555BA
+map_terrain	T1a	a map with no terrain, refused by the loader	tagpu_patches.c:9265, an .ota with no .tnt
+map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c:9367, BuildMinimapSurface's call at 0x46685F
+load_unpaused	outside	the pause bit across levels	tagpu_patches.c:9453, main+0x38A51 bit 0
+engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c:9521, the fixes' installer
+wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c:9749, landing B6
+yardmap	T1a	a yardmap parsed past its string: the loader's YardMap rule	tagpu_patches.c:10171, 0x42CF3E..0x42CF59
+save_order_fallback	outside	the saved-game loader's order fallback	tagpu_patches.c:10277, 0x43A420
+stockpile_bar	outside	the stockpile bar's divide in the bottom panel	tagpu_patches.c:10302, 0x439D20
+range_circle	outside	a range circle of radius 1, a drawing	tagpu_patches.c:10347, DrawRangeCircle 0x438EA0
+order_anyone	outside	an order mode with nobody to order, the GUI	tagpu_patches.c:10373, main+0x2CC3
+queued_site	outside	the build cursor's site test over queued sites, the GUI; the shared rules carry their own	tagpu_patches.c:10538, the build cursor 0x4197D0
+loader_defects	outside	the startup's DirectX dialog and other loader defects	tagpu_patches.c:10684
+apply_patches	outside	the installer of every fix	tagpu_patches.c:10710
+limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c:10854, TADR's EngineLimits and LimitCrack re-derived
+cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c:11053, cob_run_step and cob_allocated; tagpu_cobvm.c's header
+limits_sites	T1a	a mod with more unit types than the masks hold, refused at load	tagpu_patches.c:11856, the menu-time count 0x42AA65
+restore_invariants	outside	the replay's table write	tagpu_patches.c:12730, tagpu_replay.c tables_put
+puppet_host	outside	the replay's puppet host	tagpu_puppet.c:11
+weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c:22
+worldq	outside	the engine's WORLDQ view in the DLL; the core has its own, tasim_worldq.c	tagpu_worldq.c:17
