@@ -46,7 +46,10 @@ The files are `tagpu/ddraw/src/tasim_*.c` over one internal header, `tasim.h` (t
 | `tasim_sight.c` | `tagpu_wikisim_sight_lit` and `tagpu_wikisim_contacts` with their stamp |
 | `tasim_cob.c` | the binding to the COB host: `tasim_facts`, `tasim_cob_call` |
 | `tasim_fx.c` | the nano spray and the sound: `tasim_spray`, `tasim_spray_tick`, `tasim_sound_named`, `tasim_notice`, `tasim_notice_active`, `tasim_sound_tick`, `tasim_begin`, `tasim_cant_said`, `tasim_death_sound` |
+| `tasim_fixed.c` | the engine's arithmetic (`tasim_fixed.h`): the sine table built from its formula into a caller's `TS_SIN`, the turn lookups `ts_turn_x`/`ts_turn_z`, the heading's angle `ts_angle`, the rotator `ts_rotate`, `ts_ftol`, `ts_fistp`, the 64-bit helpers `ts_mul_shr` and `ts_shl_div`, the engine's `_hypot` emulated exactly (`ts_hypot`), and fdlibm's `ts_atan2`, `ts_sin` and `ts_cos`. Nothing calls it yet; the movement and the economy port onto it |
 | `tasim_worldq.c` | `tasim_worldq_open`: the core's `WORLDQ` over a `WIKISIM`, opened on one seat for one rule call ([the shared rules](#the-shared-rules)) |
+
+**The engine's numbers.** The core computes as the engine does, not as libm does: `tasim_fixed.c` carries its own atan2, sin and cos, so the three builds agree bit for bit (`tests/tasim_fixed_test.py` holds them to one digest), and it emulates the engine's `_hypot` rather than calling a hypot, because the engine's is not correctly rounded and lands one below an integer distance in about one integer-distance pair in ten ([cob](../engine/cob.html), `0x4FB440`). The test also runs the engine's own x87 sequences for `_hypot`, the angle `0x4B715A` and the rotator `0x4B7173` in the i686 build and requires the core's answers equal; the angle and the rotator are the residuals R1 and R2 of the T1 plan, a rounding tie the fdlibm routines could break otherwise than `fpatan` and `fsincos`, and none showed in 10⁶ calls of each.
 
 Where the core as built differs from the table above:
 
