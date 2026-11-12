@@ -7,7 +7,7 @@
        game's), from the Kth, and plays and measures only the sidebars those passes draw: the N shards together check
        what one run does. Each shard builds its C side in a temporary folder of its own.
 
-   For every demo of every entry, at tick 0, every 30th tick and its last, stage.js draws sim.js's view into a recording
+   For every demo of every entry, at tick 0, every 30th tick and its last, stage.js draws the host's view into a recording
    context, and a native build of tagpu_wikistage.c (tagpu/ddraw/tests/wikistagetest.c, over tagpu_wikisim.c's view
    copied by tagpu_wikistage_copy) builds the same view's ops; both on the same stage, at three sizes: the mockup's
    stage at 1920 x 1080 and at 1024 x 768 (MEASURED 2026-10-25 in the mockup, the canvas's size and its corner in the
@@ -75,8 +75,8 @@
    presentation and sidebar phase follow the game's tick.
 
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
-   more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
-   (cobhost.mjs), the C side from the same files (tests/wikicobfile.h) -- so the scripted poses and the nano spray's
+   more with the fixture's sidebar at the first size and the units' scripts -- the host reading them from the packs
+   (tests/wikicobfile.h), the C side from the same files -- so the scripted poses and the nano spray's
    dots are drawn and paired; without a pack that lane is left out, and the line says so. */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -84,7 +84,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { createRequire } from 'node:module';
-import { scripts } from './cobhost.mjs';
+import { scripts } from './gfxpacks.mjs';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
@@ -391,7 +391,7 @@ try {
     return f;
   };
 
-  /* ---- sim.js's frames, at the C side's ticks, for each sidebar: the fixture's, the tall fixture's, none ---- */
+  /* ---- the host's frames, at the C side's ticks, for each sidebar: the fixture's, the tall fixture's, none ---- */
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   const ids = [...new Set(tree.tree.flatMap(leaves))];

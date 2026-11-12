@@ -10,7 +10,7 @@
    fails the build and never reaches the player; a "}" on its own is plain text. Key names (Shift, Alt, Ctrl, Z, X) are
    literal in the text: nothing in an Impure game rebinds them. */
 const WikiText = (() => {
-  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar', 'commander'];   // sim.js's
+  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar', 'commander'];   // WIKI_CAST_* order
   /* each action's word, [interface type 0, type 1]. Type 0 orders with the left button and type 1 with the right; both
      select with the left button and cancel with the right, as the demos' actions resolve (decision 18), so only
      {order} follows the interface type. {select} and {cancel} read the same at both and exist so that no text spells a
@@ -20,7 +20,7 @@ const WikiText = (() => {
     select: ['click', 'click'], Select: ['Click', 'Click'],
     cancel: ['right-click', 'right-click'], Cancel: ['Right-click', 'Right-click'],
   };
-  /* TITLE_MAX: sim.js's, a display name and its terminator (31 code-page bytes at 3 UTF-8 bytes each, and 1). CAPTION_MAX:
+  /* TITLE_MAX: WIKI_TITLE_MAX, a display name and its terminator (31 code-page bytes at 3 UTF-8 bytes each, and 1). CAPTION_MAX:
      a caption filled and its terminator, the DLL's WIKI_CAPTION_MAX: the record's caption field, which checkEntry keeps
      every caption's fill within whatever the casting */
   const TITLE_MAX = 94, CAPTION_MAX = 512;

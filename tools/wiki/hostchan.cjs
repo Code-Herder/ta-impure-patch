@@ -11,7 +11,9 @@
 
    tee(targets) opens one channel per target and sends each request to all of them: the first's answer is the
    answer, and any other whose text differs is parsed and its first differing path recorded in `differences`
-   (never thrown), so a run lists every request that differs. */
+   (never thrown), so a run lists every request that differs. A request a build could not answer -- its host ended --
+   is recorded there too before it throws, so a caller that takes the throw for a refusal still finds it. The list is
+   the module's, every tee's in one, so that a check reads it without holding the tee the drop-in made. */
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,6 +22,7 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '../..');
 const open_ = [];
+const differences = [];
 
 process.on('exit', () => {
   for (const c of open_) c.close();
@@ -105,16 +108,23 @@ function firstDiff(a, b, at = '') {
 }
 
 function tee(targets) {
-  const chans = targets.map(open), differences = [];
+  const chans = targets.map(open);
+  const short = line => (line.length > 300 ? `${line.slice(0, 297)}...` : line);
   return {
     target: targets.join('+'),
     differences,
     request(line) {
-      for (const c of chans) c.send(line);
-      const got = chans.map(c => c.receive());
+      let got;
+      try {
+        for (const c of chans) c.send(line);
+        got = chans.map(c => c.receive());
+      } catch (e) {
+        differences.push({ request: short(line), dead: e.message });
+        throw e;
+      }
       for (let k = 1; k < got.length; k++)
         if (got[k] !== got[0])
-          differences.push({ request: line.length > 300 ? `${line.slice(0, 297)}...` : line, target: chans[k].target,
+          differences.push({ request: short(line), target: chans[k].target,
             ...firstDiff(JSON.parse(got[0]), JSON.parse(got[k])) });
       return got[0];
     },
@@ -122,4 +132,4 @@ function tee(targets) {
   };
 }
 
-module.exports = { open, tee, firstDiff };
+module.exports = { open, tee, firstDiff, differences };

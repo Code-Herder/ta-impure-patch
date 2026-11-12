@@ -1,6 +1,6 @@
 /* wiki.js -- the in-game wiki's mockup: the game frame and Impure's top bar, the wiki window with its tree, demo list and
-   entry, and the stage, where stage.js draws what sim.js's view() says. The content is art/wiki/ (tree.json,
-   entries/<id>.json) and the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
+   entry, and the stage, where stage.js draws what the simulation's view() says. The content is art/wiki/ (tree.json,
+   entries/<id>.json) and the behaviour is the simulation host's (simhost.js); this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
    specification the game copies. An entry with "frame": "game" plays its demos through replay.js on the whole game
    frame (frame.js), with the replay HUD (tools/hudart/mockup/hud.js) on it. */
 (async () => {
@@ -274,7 +274,7 @@ function render() { renderTree(); renderEntry(); controls(); syncURL(); }
    row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every node back in the
    normal page's order. ---- */
 function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
-/* a text entry (sim.js checkText): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
+/* a text entry (tagpu_wikidata_entry): a page entry with no demos, laid out with no stage (wiki.css #entry.text) */
 const isText = e => !!e && !e.frame && !(Array.isArray(e.demos) && e.demos.length);
 function arrange() {
   const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
@@ -374,7 +374,7 @@ function start() {
   controls(); syncURL();
 }
 /* a demo holds its last frame once done. A Try-it sim is never done but by a lock -- its scene holds a unit whose cast
-   the side leaves unbound (sim.js, decision 12) -- and then holds the same way: the frame under the entry's badge, no
+   the side leaves unbound (decision 12) -- and then holds the same way: the frame under the entry's badge, no
    tick and no input, as a demo stopped at a build the mod cannot reach does */
 const held = () => rep ? rep.view().done : !!sim && sim.done;
 function advance(dt) {
@@ -435,7 +435,7 @@ function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
-// the units' poses for the 3D stage (sim.js `poses`): one request to the COB host after each tick
+// the units' poses for the 3D stage (the drop-in's `poses`), kept beside the view the host answered
 function poses() {
   if (!sim) return null;
   try { return sim.poses(); } catch (x) { fail(x); return null; }

@@ -3,10 +3,10 @@
    usage: node tools/wiki/gen-buildshapes.mjs        then node tools/wiki/simcheck.mjs
 
    The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
-   "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
+   "What Impure does") played through the simulation host. A demo's cursor glides with a move every two ticks, so its inputs are
    generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
    unit files (each row's `from`); nothing of the game is copied. `canstop`, `canreclamate` and `activatewhenbuilt` are written only for the
-   types whose FBI sets them: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
+   types whose FBI sets them: the engine reads a missing key as 0, and so does the sim.
 
    Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
    for the cast, with its figures, and the authored type plays everywhere else. Text names units by cast tokens
@@ -17,7 +17,7 @@
    press that drops a drag); `lmb` stays for a press that is the left button in both types and none of the actions,
    placing an armed building and dragging a shape. research/notes/ingame-wiki.md, *The data format*.
 
-   No demo writes `sidebar`, so each takes sim.js's default, the owner's decision 2
+   No demo writes `sidebar`, so each takes the simulation's default, the owner's decision 2
    in research/notes/ingame-wiki.md: the sidebar is shown when the scene gives the player a mobile builder.
    ARMCK stands in this entry's one scene, so every demo here shows it. */
 import fs from 'node:fs';
@@ -69,15 +69,15 @@ function TL(start) {
     down(k) { inputs.push({ at: t, down: k }); return T; },
     up(k) { inputs.push({ at: t, up: k }); return T; },
     click(k) { T.down(k); t += 3; return T.up(k); },
-    /* a build input with the sidebar shown plays out as sim.js's trip: the glide to the button, through the pagers
+    /* a build input with the sidebar shown plays out as the simulation's trip: the glide to the button, through the pagers
        when they are needed, the press, the arm at t + TRIP_UP and the glide back to where the cursor stood. Nothing
-       but a caption may stand in its TRIP ticks (sim.js checkTrips), so the timeline moves past them; the trip ends
+       but a caption may stand in its TRIP ticks (tagpu_wikidata_trips), so the timeline moves past them; the trip ends
        with the cursor where it started, so `cur` still holds. Without the sidebar the build arms at once and the
        timeline is the same. A caption meant for the trip is given before the build, on its tick. */
     build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
     /* the demo's clock stops until as many buildings of the player's are finished in the demo as there have been
-       `built` waits, this one included, at most `max` ticks (sim.js UNTILS); the wait takes a tick of its own, after
+       `built` waits, this one included, at most `max` ticks (WIKI_UNTIL_*); the wait takes a tick of its own, after
        the last input's, which no other input shares */
     built(max) { t += 1; inputs.push({ at: t, until: 'built', max }); t += 1; return T; },
   };

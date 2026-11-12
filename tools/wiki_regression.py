@@ -128,8 +128,8 @@ try, on the same launch as sp:
        round to the building's page, then its button, each a press and a release inside. Paused,
        the dump's log of what the game gave its simulation holds the demo's presses and releases
        and the sidebar's in order, every move within a pixel of the point it was given at, and its
-       state hash equals sim.js fed the same logged inputs at the same ticks (`simparity.mjs
-       --try`); sim.js's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
+       state hash equals the host fed the same logged inputs at the same ticks (`simparity.mjs
+       --try`); the host's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
        reached and the building each button armed. With --shot, the presented frame is grabbed
        before `snap`'s click and before `line`'s first release, the line's sites on the stage;
   (t2c) on the sidebar, read back the same way: NEXT and PREV page the ARMCK, the ORDERS tab shows
@@ -229,7 +229,7 @@ from simparity's records of it, none written here:
        (.data/wiki-replay/m0p-shots, for the eye: different screens, so not measured);
   (p4) on Watching's Try it the Players set and Take over inert: each control drawn held (the press machine's
        press_held) and let go, the record unchanged and no players block; then Try it on demo jump's data through device
-       clicks, a row hovered by `dmove:` first: Jump on Bram's row and Ada's (the eye at sim.js seatCam's), Follow on
+       clicks, a row hovered by `dmove:` first: Jump on Bram's row and Ada's (the eye at the host's seatcam), Follow on
        Bram's with the replay playing (the eye on his camera) and again (Free cam: the eye stays), paused Sight on
        Bram, Ada and Bram again (the bar's rates each viewed seat's at once, OQ-D A; his side's top bar; the fog and
        the minimap pass) and again (the full map, the rates 0), each switch off and on, stats, a chip, the team split,
@@ -321,7 +321,7 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        is the chain stage == composer(pack, the wiki's state) and composer(pack, the engine's
        state) == the engine: one pack, one composer, the states apart only where the wiki sets
        them (decision 7 greys every order but STOP);
-  (b4) Build Lines demo 1 played in the player's context: where sim.js, replaying the dump's ctx,
+  (b4) Build Lines demo 1 played in the player's context: where the host, replaying the dump's ctx,
        locks it (a role with no unit, or a build the sidebar cannot reach) it holds at that tick with
        the "Turned off in this mod" badge above the stage; elsewhere it plays past it, no badge;
   (w6) Watching's first demo held at tick 150 (tagpu_wiki.shot): the game frame's two bars, each client pixel against
@@ -935,12 +935,12 @@ def simparity_hash(args):
 
 
 def simparity_hashes(layout, pack=None, scripts=False):
-    """sim.js's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
+    """The host's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
     sidebar layout file `layout` (tagpu_wiki.layout.json, the one the check played on and wrote: the running mod's,
     the fixture, or null and one side) at Interface Type 0 and 1, with that side's casting from the side pack `pack`
     when the layout is the mod's -- the check gives a casting on the mod's layout only -- and with `scripts` the
     units' scripts, from the packs gfx.py built from the same install, as the check runs them when its log says so.
-    Keyed as check_hashes keys the game's lines; REFUSED where sim.js refuses the demo."""
+    Keyed as check_hashes keys the game's lines; REFUSED where the host refuses the demo."""
     lay = json.loads(Path(layout).read_text())
     want = {}
     for k in range(len(lay["sides"]) if lay else 1):
@@ -954,13 +954,13 @@ def simparity_hashes(layout, pack=None, scripts=False):
 
 
 def check_against(got, want, what):
-    """The game's check equal to sim.js's, key for key: the same contexts played, each hash equal, and a demo
+    """The game's check equal to the host's, key for key: the same contexts played, each hash equal, and a demo
     refused on one side exactly when it is on the other. A difference fails naming its keys."""
     missing, extra = sorted(set(want) - set(got)), sorted(set(got) - set(want))
     differ = sorted(k for k in set(want) & set(got) if got[k] != want[k])
     assert not (missing or extra or differ), \
         f"{what} the game's check and simparity --hash differ: " + "; ".join(
-            f"{name} {', '.join(f'{k} (game {got.get(k)}, sim.js {want.get(k)})' for k in keys[:12])}"
+            f"{name} {', '.join(f'{k} (game {got.get(k)}, host {want.get(k)})' for k in keys[:12])}"
             f"{f' and {len(keys) - 12} more' if len(keys) > 12 else ''}"
             for name, keys in (("not played in the game:", missing), ("played only in the game:", extra),
                                ("differ:", differ)) if keys)
@@ -1158,7 +1158,7 @@ def demos(c, shots, res):
     print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1]}")
     layf = c.gamedir / "tagpu_wiki.layout.json"
     pack = pack_for_layout(layf) if "the mod's" in lay else None
-    # the check names both of its sources; simparity --hash --scripts gives sim.js both or neither, as the game's one 3D
+    # the check names both of its sources; simparity --hash --scripts gives the host both or neither, as the game's one 3D
     # load does, so a line that says otherwise, or does not say, is a failure rather than a guess
     src = re.search(r"the units' scripts are (on|off), their sounds (on|off)", lay)
     assert src, f"(d1) the check's line does not say whether the units' scripts and sounds are on: {lay}"
@@ -1277,8 +1277,8 @@ def stage_fit(d):
 
 
 def try_view(c, d, what):
-    """Try it yourself as the game played it, read back through sim.js: the dump's state hash must
-    equal simparity.mjs --try's -- sim.js fed the inputs the dump logged at the ticks it logged them
+    """Try it yourself as the game played it, read back through the host: the dump's state hash must
+    equal simparity.mjs --try's -- the host fed the inputs the dump logged at the ticks it logged them
     -- and then tools/wiki/sideview.mjs --dump's view describes the game's simulation: the routed
     screen, its page and gadget states, the armed mode, the selection's orders."""
     assert not d["try_cut"], f"{what}: the dump's log of Try it was cut ({d['try_cut']} inputs)"
@@ -1292,7 +1292,7 @@ def try_view(c, d, what):
             # kept for an offline replay: simparity.mjs --try <it>
             kept = c.gamedir / "tagpu_wiki.try.differ.json"
             kept.write_text(dumpf.read_text())
-            raise AssertionError(f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs "
+            raise AssertionError(f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, the host fed its inputs "
                                  f"{r.stdout.strip()}; the dump kept in {kept}")
         r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), "--dump", str(dumpf)], capture_output=True,
                            text=True, timeout=300)
@@ -1312,7 +1312,7 @@ def view_side(d, sv, what):
     assert isinstance(k, int) and 0 <= k < len(lay["sides"]), f"{what}: the dump's ctx names no side of the layout: {ctx}"
     if d["layout_src"] == "mod":
         assert k == d["engine_side"], f"{what}: the wiki plays side {k} on the mod's layout, the engine's is {d['engine_side']}"
-    assert sv and sv.get("index") == k, f"{what}: sim.js's replay shows side {sv and sv.get('index')}, the game side {k}: {sv}"
+    assert sv and sv.get("index") == k, f"{what}: the host's replay shows side {sv and sv.get('index')}, the game side {k}: {sv}"
     return lay["sides"][k]
 
 
@@ -1326,7 +1326,7 @@ def side_by_prefix(lay, prefix, what):
 
 def side_centre(lay, screen, i):
     """Gadget i of a layout screen: its centre in the stage's world units, where the build trip
-    presses it (sim.js centreOf)."""
+    presses it (tagpu_wikisim.c centre_of)."""
     s = lay["screens"][screen]
     gx, gy, gw, gh = s["gadgets"][i]["rect"]
     return -SIDE_W + gx + gw / 2, s["y"] + gy + gh / 2
@@ -1477,7 +1477,7 @@ def side_controls(c, d):
     d = c.dump()
     got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
     assert got[-len(st.want):] == st.want, f"(t2c) the game gave its simulation {got[-len(st.want):]}, the presses {st.want}"
-    print(f"wiki try: (t2c) on the sidebar: {'; '.join(steps)}; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
+    print(f"wiki try: (t2c) on the sidebar: {'; '.join(steps)}; tick {d['tick']}, hash {d['hash']} equal to the host's")
     return d
 
 
@@ -1514,7 +1514,7 @@ def one_cursor(c, d):
 
 def try_it(c, shot=None):
     """(t1)..(t5): Try it yourself driven by device input on the stage and its sidebar, its
-    simulation against sim.js fed what the game logged."""
+    simulation against the host fed what the game logged."""
     held_at(c, HELD_AT)
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(t1) the page was not drawn")
@@ -1556,7 +1556,7 @@ def try_it(c, shot=None):
         print(f"wiki try: (t2) {entry}/{demo} replayed through the stage: {len(d['try_log'])} inputs "
               f"({len(moves)} moves, every one within a pixel of its point), "
               + ", ".join(f"{T} armed on page {p} after {k} x {role.upper()}" for T, k, role, p in arms)
-              + f"; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
+              + f"; tick {d['tick']}, hash {d['hash']} equal to the host's")
         press(c, d, "play")
         d = wait_dump(c, lambda d: d["playing"], "(t2) play did not start Try it again")
 
@@ -1604,7 +1604,7 @@ def try_it(c, shot=None):
 
 STAGE3D_SHOTS = (("quickbuild", 1), ("quickbuild", 11), ("buildshapes", 1))
 STAGE3D_TICKS = (30, 180, 330)
-# (entry, demo, ticks): the mockup's sim (tools/wiki/mockup/sim.js) puts a nanoframe in Quick Build 3 at
+# (entry, demo, ticks): the wiki's simulation puts a nanoframe in Quick Build 3 at
 # 267..287, the reclaim in Quick Build 8 at 171..180 and the upgrade's nanoframe after it, the gesture's
 # ghosts in Build Lines 2 and 4 from tick 0, Quick Build 9's ARMCK walking toward +x at 164..233, and Reclaim 3's
 # field of wrecks (3D features through the unit pass) all nine standing at 300 and two of them reclaimed by 500
@@ -3181,7 +3181,7 @@ def takeover_t4(c):
     if math.hypot(goal[0] - c1["x"], goal[1] - c1["z"]) < 96:
         goal = (min(max(c1["x"] - 160, 48), mw - 48), min(max(c1["z"] - 96, 48), mh - 48))
     far = math.hypot(goal[0] - c1["x"], goal[1] - c1["z"])
-    # the move: a right press at Interface Type 1, a left click at type 0 (sim.js rightClick, leftClick)
+    # the move: a right press at Interface Type 1, a left click at type 0 (tagpu_wikisim.c right_click, left_click)
     c.keys(("drclick:%d,%d" if d["ctx"]["iface"] else "dclick:%d,%d") % frame_client(d, *goal))
     turbo(c, 8)
     try:
@@ -3300,7 +3300,7 @@ def pl_twin(expr):
 
 
 def pl_eye(d, demo, seat, g):
-    """The eye seat `seat`'s recorded camera at game tick g gives the drawn frame (frame.js eye): sim.js seatCam, less
+    """The eye seat `seat`'s recorded camera at game tick g gives the drawn frame (frame.js eye): the host's seatcam, less
     half the viewport, held to the map less the viewport, the viewport and the map the dump's"""
     cam = pl_twin(f"S.seatCam(E, E.demos.find(d => d.id === {json.dumps(demo)}), {seat}, {g})")
     assert cam, f"seat {seat} of {demo} has no recorded camera"
@@ -4250,7 +4250,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     import numpy as np
     from PIL import Image
     # (b2) the layout every demo starts on is the mod's, and the game plays every demo on it to
-    # the hash sim.js gives on the same file
+    # the hash the host gives on the same file
     start = c.mark()
     (gamedir / "tagpu_wiki.check").write_text("")
     line = wait_line(c, start, r"wiki check: \d+ demos played", "(b2) the check", 120)
@@ -4287,7 +4287,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     shot = out / f"stage-{entry}-d{demo}-t{tick}.window.png"
     window_grab(display, d, shot)
     comp = out / f"stage-{entry}-d{demo}-t{tick}.composed.png"
-    # the context the game's demo plays in, side, interface type and casting, for sim.js's play of it
+    # the context the game's demo plays in, side, interface type and casting, for the host's play of it
     ctxf = out / "stage-ctx.json"
     ctxf.write_text(json.dumps(d["ctx"]))
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
@@ -4325,7 +4325,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
           f"texels sampled; the minimap {'composed' if v['composed']['minimap'] else 'left to the whitebox'}")
     assert bad == 0, f"(b3) {bad} pixels of the stage's column differ from the composer (out: {out / 'sidebar.png'})"
 
-    # (b4) the demo played in the player's context: held at sim.js's lock with the badge where sim.js
+    # (b4) the demo played in the player's context: held at the host's lock with the badge where the host
     # locks it, playing on past its first build elsewhere
     entry, node, k, at = SIDE_LOCK
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
@@ -4353,11 +4353,11 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     red = int(np.all(np.abs(above - LOCK_RGB) <= 8, axis=2).sum())
     if v["locked"]:
         assert d["done"] and d2["done"] and d["tick"] == d2["tick"] == v["tick"] == at, \
-            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, done {d['done']}, not held at {at} (sim.js: {v})"
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, done {d['done']}, not held at {at} (host: {v})"
         assert red > 0, f"(b4) {entry} demo {k + 1} held at its lock, but no badge above the stage ({shot})"
     else:
         assert d2["tick"] > d["tick"] > at and not red, \
-            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, {red} badge pixels (sim.js: not locked)"
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, {red} badge pixels (host: not locked)"
     row["lock"] = {"locked": v["locked"], "ticks": [d["tick"], d2["tick"]], "badge_px": red}
     print(f"wiki mods: {row['setup']}: (b4) {entry} demo {k + 1} played: "
           + (f"held at its lock, tick {d['tick']} -> {d2['tick']} over 1.5 s, {v['locked']} out of reach, the badge "
@@ -4617,10 +4617,10 @@ def mods(names, shots):
     assert not bad, f"failed on {bad}"
 
 
-# the gate's shards of each simparity run (simparity.mjs --shard): its 48 contexts of demo plays, two to a process --
-# context k and k + 24, one played without the units' scripts (~87 s alone, ~20 s on the unbound casting) and one
-# with them (~190 s), so the shards cost alike (MEASURED 2026-11-03, native, an idle reference setup)
-SIMPARITY_SHARDS = 24
+# the gate's shards of the simparity run (simparity.mjs --shard): its work items, dealt longest first by the costs of
+# its last full run (build/simparity-costs.json), each shard keeping its three builds' hosts busy (simparity.mjs's
+# header, THE COST)
+SIMPARITY_SHARDS = 10
 # and of each simcheck run (simcheck.mjs --shard): the fixture's 16 contexts, 8 without the scripts then 8 with them,
 # four to a process, two of each kind
 SIMCHECK_SHARDS = 4
@@ -4632,10 +4632,11 @@ STAGECHECK_SHARDS = 4
 def offline_runs(shards=1, check_shards=1):
     """OFFLINE_CHECKS: every check of the wiki that plays no game, as (name, argv) -- the mockup's demos on the
     fixture, without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then
-    the DLL's code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and
-    under Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
+    the DLL's code against the mockup's and against itself: the simulation in its three builds, native, sanitized and
+    under Wine as the DLL is built (simparity), the text's fill natively and under Wine (textparity), the sidebar's
+    column (sidecheck), the stage's ops (stagecheck), the 3D scene
     (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
-    them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits each
+    them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits the
     simparity run, `check_shards` each simcheck run and stagecheck into that many processes, which together check what
     one does. The longest come first, as a pool starts the checks in this order."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
@@ -4647,10 +4648,8 @@ def offline_runs(shards=1, check_shards=1):
          for k in range(1, STAGECHECK_SHARDS + 1)]
     runs += checks if check_shards == 1 else [(f"{name} --shard {k}/{check_shards}", [*cmd, "--shard", f"{k}/{check_shards}"])
                                              for name, cmd in checks for k in range(1, check_shards + 1)]
-    for wine in ([], ["--wine"]):
-        runs += [(" ".join(["simparity", *wine]), [wiki / "simparity.mjs", *wine])] if shards == 1 else \
-            [(" ".join(["simparity", *wine, f"--shard {k}/{shards}"]), [wiki / "simparity.mjs", *wine, "--shard", f"{k}/{shards}"])
-             for k in range(1, shards + 1)]
+    runs += [("simparity", [wiki / "simparity.mjs"])] if shards == 1 else \
+        [(f"simparity --shard {k}/{shards}", [wiki / "simparity.mjs", "--shard", f"{k}/{shards}"]) for k in range(1, shards + 1)]
     runs += [("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
              ("sidecheck", [wiki / "sidecheck.mjs"]), ("scenecheck", [wiki / "scenecheck.mjs"])]
     runs = [(name, ["node", *cmd]) for name, cmd in runs]
@@ -4658,6 +4657,12 @@ def offline_runs(shards=1, check_shards=1):
     if not packs:
         print("wiki offline: no side pack present (tools/wiki/sidepacks.py builds them): the mods' runs are left out")
     return runs
+
+
+def under_wine(cmd):
+    """Whether an offline check runs a build under Wine: one given --wine, and simparity, whose three builds include
+    the Wine one"""
+    return "--wine" in map(str, cmd) or any(str(c).endswith("simparity.mjs") for c in cmd)
 
 
 def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
@@ -4863,7 +4868,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     try:
         # every instance made before the first lane starts (gate_instance), each game lane's on its own X server,
         # which an instance's display is pinned to when it is made
-        wine = gate_instance("wikigate-wine") if any("--wine" in map(str, c) for _, c in offline) else None
+        wine = gate_instance("wikigate-wine") if any(under_wine(c) for _, c in offline) else None
         wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
         made = []
         for m in modes:
@@ -4876,7 +4881,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
             made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
-        futs = [checks.submit(lane_offline, n, c, wenv if "--wine" in map(str, c) else env) for n, c in offline]
+        futs = [checks.submit(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline]
         futs += [games.submit(lane_mode, m, inst, xv) for m, inst, xv in made]
         futs += [games.submit(lane_setup, n) for n in setups]
         done = [f.result() for f in futs]

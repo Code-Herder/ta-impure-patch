@@ -1,9 +1,9 @@
 /* sound.js -- the in-game wiki mockup's sound: tagpu/ddraw/src/tagpu_wikisound.c's rules over WebAudio.
 
-   The sounds are the simulation's (sim.js, tagpu_wikisim.h THE SOUND): every event its view's ring holds past the last
+   The sounds are the simulation's (tagpu_wikisim.h THE SOUND): every event its view's ring holds past the last
    one played, after each frame's steps (`drain`, as tagpu_wiki.c's sound_drain), and the page's own buttons say the
    allsound name `Options` (`named`). The files are tools/wiki/gfx.py's: `<root>sounds.json` beside the stage packs
-   (gfx/ or gfx/side/<mod>/stage/) names each type's category and counts, which is the sim's sound source (`source`),
+   (gfx/ or gfx/side/<mod>/stage/) names each type's category and counts (`source`, which the death sound reads),
    each category's WAVs per kind and the button sounds'; the WAVs are copies from the player's install in the gitignored
    pack, served by tools/wiki/serve.py as files.
 
@@ -22,7 +22,7 @@ const WikiSound = (() => {
   const ROOTS = {};               // root -> { doc, clips: file -> AudioBuffer | 'loading' | null }
   let ac = null;
 
-  // the root's sounds.json, read once and synchronously, as cob.js asks the COB host: the sim takes its source from it
+  // the root's sounds.json, read once and synchronously: the WAVs the page plays for the host's events
   function root(dir) {
     if (!(dir in ROOTS)) {
       let doc = null;
@@ -36,7 +36,7 @@ const WikiSound = (() => {
     }
     return ROOTS[dir];
   }
-  // sim.js's ctx.snd: a type's {cat, count}, null for one the pack gives none
+  // a sound source: a type's {cat, count}, null for one the pack gives none
   function source(dir) {
     const d = root(dir).doc;
     return d && d.types ? { type: name => d.types[name] || null } : null;

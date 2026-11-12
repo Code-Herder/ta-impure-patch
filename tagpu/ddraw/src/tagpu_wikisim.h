@@ -1,18 +1,19 @@
 #ifndef TAGPU_WIKISIM_H
 #define TAGPU_WIKISIM_H
 /* tagpu_wikisim -- the in-game wiki's simplified simulation: a scene and its inputs in, a view of
-   the game out. A port of the mockup's tools/wiki/mockup/sim.js, function for function and under
-   its names; research/notes/ingame-wiki.md, "The simulation's contract", is the specification of
-   both. A demo is its scene and its inputs played through it, and Try it yourself is the same
+   the game out. This header, its files and research/notes/ingame-wiki.md, "The simulation's
+   contract", are its specification; the browser mockup runs this same C as a host process
+   (tests/wikihost.c, tools/wiki/mockup/simhost.js). A demo is its scene and its inputs played through it, and Try it yourself is the same
    simulation taking the player's inputs instead.
 
-   IT AGREES WITH sim.js BIT FOR BIT. Both visit units in creation order, use no clock and no
-   randomness, and compute on doubles with + - * / and sqrt only, each rounded once, plus trunc,
+   EVERY BUILD AGREES BIT FOR BIT. It visits units in creation order, uses no clock and no
+   randomness, and computes on doubles with + - * / and sqrt only, each rounded once, plus trunc,
    floor and comparisons, which are exact, so the same inputs give the same doubles.
    tools/wiki/simparity.mjs plays every demo of every entry, with the fixture's sidebar, the tall
    fixture's and none, with each casting of tools/wiki/casting-fixture.json and none, at both
-   Interface Types, and simcheck.mjs's rule cases through both, and compares every field of the
-   view and every unit's orders, tick by tick. The DLL compiles tagpu_wikisim.c and the core's tasim_*.c for SSE2
+   Interface Types, and simcheck.mjs's rule cases through the host's three builds (native, under
+   the sanitizers, and the DLL's i686 build under Wine) at once, and compares every answer --
+   every field of the view, every unit's orders and the state hash -- tick by tick. The DLL compiles tagpu_wikisim.c and the core's tasim_*.c for SSE2
    (Makefile, THE WIKI'S SIMULATION) so that no intermediate keeps x87's extra precision.
 
    ONE SIMULATION, TWO PARTS: the shared simulation core, the tasim_*.c files over tasim.h
@@ -22,8 +23,8 @@
    points. Both keep this header's contract and share the one WIKISIM.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
-   address: where sim.js mirrors the rule code of tagpu_resource.c or tagpu_place.c, this file
-   ports sim.js's version, and says which function each piece mirrors -- except what the game
+   address: where it mirrors the rule code of tagpu_resource.c or tagpu_place.c, which read the
+   engine, it says which function each piece mirrors -- except what the game
    keeps engine-free in tagpu_placegeo.c, the shapes and the take-off rule, which it calls
    directly as the game does. Every piece of its state lives in the WIKISIM its caller owns
    (and on the heap that WIKISIM owns), so it runs on whichever thread owns the wiki window;
@@ -31,7 +32,7 @@
    from must outlive it: it points into them. So must its sidebar layout and its context's
    casting, which it reads and never writes.
 
-   A SIM IS MADE FOR A CONTEXT, WIKISIMCTX (sim.js's ctx): the layout's side the player plays,
+   A SIM IS MADE FOR A CONTEXT, WIKISIMCTX: the layout's side the player plays,
    that side's casting (the mod's own type for each of the entry's casts, or none for the entry's
    own types) and the Interface Type. With a casting it plays the BOUND ENTRY, its own copy of
    the entry whose types are the casting's (tagpu_wikisim_init says how), and every type name it
@@ -52,8 +53,7 @@
 #define WIKI_CELL 16
 #define WIKI_TPS  30
 
-/* THE BUILD TRIP, sim.js's TRIP, TRIP_DOWN, TRIP_UP and TRIP_ROWS (tools/wiki/simparity.mjs
-   compares them). A scripted demo with the sidebar plays a `build` input at tick t as the cursor's
+/* THE BUILD TRIP (the host's `hello` gives these to the mockup). A scripted demo with the sidebar plays a `build` input at tick t as the cursor's
    trip to the button: it takes WIKI_TRIP ticks whatever the page, the pagers or the mod, the
    button goes down at t + WIKI_TRIP_DOWN and is released at t + WIKI_TRIP_UP, which is where it
    arms. Because the arm tick is fixed, the mode and everything else in the world are the same in
@@ -78,7 +78,7 @@
 
 typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
 
-/* THE PICK TRIP, sim.js's PICK, PICK_DOWN and PICK_UP: a scripted `pick` of a kind at tick t is
+/* THE PICK TRIP: a scripted `pick` of a kind at tick t is
    the glide to the popup's row of that kind, its press at t + WIKI_PICK_DOWN and release at
    t + WIKI_PICK_UP, and the glide back, WIKI_PICK ticks whatever the layout; the row is where the
    popup stands when the pick is fed. A `reclaim` is the build trip's to RECLAIM (WIKI_TRIP). */
@@ -108,8 +108,7 @@ typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
    never the host's RAND generator, whose state the scripts' hash carries.
 
    BOUNDED: at most WIKI_SPRAY_PARTS particles live and WIKI_SPRAY_BURSTS second bursts wait; a
-   particle or a burst past its bound is not made, and the view says so (part_cut). sim.js holds
-   the same bounds, so the two drop the same particles. */
+   particle or a burst past its bound is not made, and the view says so (part_cut). */
 #define WIKI_SPRAY_PARTS  1024
 #define WIKI_SPRAY_BURSTS 256
 
@@ -202,7 +201,7 @@ typedef struct {
    WAV (WIKISNDTYPE.death) when the viewed seat's fog at the cell is not black. */
 #define WIKI_SND_DEATH  WIKI_SND_KINDS
 /* the kind table 0x5086D8's priority (+4) and interval in seconds (+8) by kind, dumped from the
-   retail executable's .data; sim.js SND_PRIORITY and SND_INTERVAL are the same */
+   retail executable's .data */
 #define WIKI_SND_PRIORITIES { 0, 10, 9, 4, 4, 5, 3, 8, 3, 4, 3, 2, 7, 7, 7, 7, 4, 10, 10, 10, 10, 10, 10, 10 }
 #define WIKI_SND_INTERVALS  { 0, 0, 20, 2, 2, 1, 4, 1, 3, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 }
 
@@ -213,8 +212,7 @@ enum { WIKI_SND_SELECT = 1, WIKI_SND_ACTIVATE = 3, WIKI_SND_DEACTIVATE = 4, WIKI
 /* the allsound.tdf names the wiki plays, by index, and their spelling: the strings the engine's
    callers push to 0x47F1A0 (0x508D8C, 0x509660, 0x509650, 0x5026B8, 0x5027EC, 0x5027F8, 0x502850,
    0x50271C), and "Options" as the in-game menu's controls and tagpu_menu.c's play it. allsound.tdf's
-   names match without case (0x4F8A70). sim.js SND_NAMES and tools/wiki/gfx.py SND_NAMES spell the
-   same list. */
+   names match without case (0x4F8A70). tools/wiki/gfx.py SND_NAMES spells the same list. */
 enum { WIKI_SNDNAME_MULTI, WIKI_SNDNAME_OKTOBUILD, WIKI_SNDNAME_NOTOKTOBUILD, WIKI_SNDNAME_ADDBUILD,
        WIKI_SNDNAME_BUILDBUTTON, WIKI_SNDNAME_ORDERSBUTTON, WIKI_SNDNAME_NEXTBUILDMENU,
        WIKI_SNDNAME_IMMEDIATE, WIKI_SNDNAME_OPTIONS, WIKI_SNDNAME_SPECIAL, WIKI_NSNDNAME };
@@ -255,7 +253,7 @@ enum { WIKI_ORDER_MOVE, WIKI_ORDER_BUILD, WIKI_ORDER_RECLAIM, WIKI_ORDER_GUARD }
 typedef struct {
     int    k;                       /* WIKI_ORDER_* */
     int    serial;                  /* the sim's count of orders made when this one was, from 1:
-                                       sim.js's order object, whose identity a COB work rests on */
+                                       the order's identity, which a COB work rests on */
     int    type;                    /* BUILD: the building's type */
     int    ox, oz;                  /* BUILD: its footprint's first cell */
     double x, z;                    /* MOVE: where to; a feature's RECLAIM: its centre */
@@ -263,7 +261,7 @@ typedef struct {
     char   target[WIKI_ID_MAX];     /* RECLAIM, GUARD: the unit's id, or the feature's */
 } WIKIORDER;
 
-/* A FEATURE STANDING on the map, sim.js's feats: its id, its row of the entry's table and that
+/* A FEATURE STANDING on the map: its id, its row of the entry's table and that
    row's figures, its anchor cell and its centre */
 typedef struct {
     char   id[WIKI_ID_MAX];
@@ -282,10 +280,13 @@ typedef struct { double x0, z0, x1, z1; } WIKIRECT;
 typedef struct { double eP, eR, eG, eD, mP, mR, mG, mD; } WIKILEDGER;
 
 /* A SEAT'S ECONOMY, the engine's player record (0x401360, the economy pass): m, e stored (+0x98,
-   +0x8C); bm, be the base storage, the seat's settings (+0xE0, +0xDC); mmax, emax the storage
-   (+0xA8, +0xA4); mi, mo, ei, eo the last pass's income (produced) and spending (requested)
+   +0x8C); bm, be the base storage, the seat's settings (+0xE0, +0xDC), which the seat setup
+   0x496EE0 floors at 200 (0x496F64..0x496F97) and the level start 0x465E30 also stores as the
+   current (0x465EF5..0x465F1A); mmax, emax the storage (+0xA8, +0xA4), which the player init
+   zeroes (0x46478F, 0x464795) until the first pass (a seat's settings are WIKI_SEAT_MIN or more,
+   so the floor holds by data); mi, mo, ei, eo the last pass's income (produced) and spending (requested)
    (+0x9C, +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units alive, a nanoframe
-   included (+0x144); lost, the commanders lost (+0x106); out, the count gone from above 0 to 0;
+   included (+0x144, incremented at each create 0x486187, 0x486322); lost, the commanders lost (+0x106); out, the count gone from above 0 to 0;
    cmd_lost, a commander lost (+0x149 bit 0 cleared: the base storage stops counting); kills and
    losses, the units it killed and lost (+0xFC, +0xFE; tasim_world.c tasim_kill) */
 typedef struct {
@@ -393,13 +394,13 @@ typedef struct { int kind, type, ox, oz, ok; } WIKIHOVER;
    the packet's alone and writes no engine cursor (tagpu_resource.c); a building armed from the
    build menu, cursornormal again, because 0x499200 calls the build cursor 0x4197D0 instead of
    choosing one and the click on the menu installed cursornormal. */
-/* With reclaim armed it is cursorreclamate over the map, RECLAIM; sim.js's reclaimCursor says where
-   it is the arrow instead. */
+/* With reclaim armed it is cursorreclamate over the map, RECLAIM; tagpu_wikisim.c's cursor rule says
+   where it is the arrow instead. */
 enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD, WIKI_CURSOR_RECLAIM, WIKI_CURSOR_N };
 
-/* ---- the view: what the stage draws, sim.js's view() field for field ---- */
+/* ---- the view: what the stage draws; the host's `view` writes it field for field ---- */
 
-/* a feature standing, sim.js's view.feats: its id (the sim's), its row of the entry's table, its
+/* a feature standing, the view's feats: its id (the sim's), its row of the entry's table, its
    anchor cell, footprint and amounts, and whether its row names a model (a wreck) */
 typedef struct {
     const char* id;
@@ -408,7 +409,7 @@ typedef struct {
     int         wreck;
 } WIKIVFEAT;
 
-/* THE SWEEP as tagpu_sweep_fill publishes it, sim.js's view.reclaim: while reclaim is armed, the
+/* THE SWEEP as tagpu_sweep_fill publishes it, the view's reclaim: while reclaim is armed, the
    kind; during a drag past the threshold the ring (whole world units), its targets as indices into
    the view's feat in the ring's order, and the readout's counts and sums (a feature with metal is
    a wreck, one with energy alone a tree); otherwise the feature under the pointer the kind takes,
@@ -433,7 +434,7 @@ typedef struct {
     int         type, owner, fx, fz, selected;
     double      x, z, hx, hz, built, reclaimed;
     const char* label;
-    int         cant;   /* its first order's taken site has said cant (sim.js's sound.cant) */
+    int         cant;   /* its first order's taken site has said cant */
 } WIKIVUNIT;
 
 /* a ghost, a queued site or a gesture's site: a building's centre and footprint */
@@ -451,7 +452,7 @@ typedef struct {
     int    kind;                    /* WIKI_ORDER_* */
 } WIKIVLINE;
 
-/* The sidebar as the stage draws it, sim.js's view.side; by value and pointer-free, so a copy
+/* The sidebar as the stage draws it, the view's side; by value and pointer-free, so a copy
    holds across threads. */
 typedef struct {
     int              index;         /* the layout side it shows (WIKISIMCTX.side): its prefix and
@@ -467,7 +468,7 @@ typedef struct {
                                                minimap's high dot), "" for none */
 } WIKIVSIDE;
 
-/* What one input seat's state shows (sim.js's seatView, with the reclaim's armed, kind and ring):
+/* What one input seat's state shows (with the reclaim's armed, kind and ring):
    the view's ghost, gesture sites and shape, spacing, cursor, keys, drag and armed mode, as
    WIKIVIEW holds them for the seat it is viewed as */
 typedef struct {
@@ -572,16 +573,16 @@ typedef struct {
     int              ntype;
     const WIKIVTYPE* type;
     /* a game simulation's input seats (WIKISIM.nin) and its viewed seat; with more than one, seats
-       1..nin - 1's own parts, input[k - 1] for seat k (sim.js's view.inputs) */
+       1..nin - 1's own parts, input[k - 1] for seat k (the view's inputs) */
     int              nin, viewed;
     const WIKIVSEAT* input;
 } WIKIVIEW;
 
-/* The context a sim is made for, sim.js's ctx. tagpu_wikisim_init refuses an iface other than 0
+/* The context a sim is made for. tagpu_wikisim_init refuses an iface other than 0
    or 1 and, with a layout, a side that is not one of its sides. LIFETIME: `cast` must outlive the
    sim, which holds it (its bound types' titles point into it); in the DLL it lies inside the
    published WIKISIDE block, immutable and never freed. */
-/* Where a sim's unit scripts come from (sim.js's ctx.cob): for the type named `name`, its script
+/* Where a sim's unit scripts come from (the drop-in's ctx.packs): for the type named `name`, its script
    and its posed model's facts into `out` (borrowed until the call returns), 1; or 0 when it has
    none, which quarantines it. NULL in WIKISIMCTX: no host, every unit at rest and every gate open. */
 typedef struct WIKICOBSRC {
@@ -602,7 +603,7 @@ typedef struct {
 
 struct WIKISIMBOUND;
 
-/* A SEAT'S INPUT STATE, sim.js's IN[k] (ingame-wiki-replay-plan.md decision 16): its cursor, from the scene's; the shape the
+/* A SEAT'S INPUT STATE (ingame-wiki-replay-plan.md decision 16): its cursor, from the scene's; the shape the
    cursor shows and the tick its sequence began; the keys and buttons it holds, and where each
    button went down (OVER_*), which decides whether its release runs the map rules; the armed
    building (-1 none) and the drag; the placement gesture and its last evaluation; the spacing per
@@ -677,7 +678,7 @@ typedef struct {
     WIKIUNIT**       unit;          /* in creation order; a reclaimed one leaves the list */
     int              nunit, cunit, next_id;
 
-    /* THE INPUT SEATS (sim.js's IN, NIN, K): in[k] for k < nin, a game simulation's seats its game
+    /* THE INPUT SEATS: in[k] for k < nin, a game simulation's seats its game
        script or a fork part names (input_seats), 1 for any other; the acting seat, whose input
        state every input rule reads; and the viewed seat, whose units' notices play (0 until a fork
        takes over another seat, as the game's takeover makes the taken seat the viewed one,
@@ -693,7 +694,7 @@ typedef struct {
     int              nin, act, viewed;
     const char*      caption;       /* the demo's, no seat's */
 
-    /* the features standing, sim.js's feats, in the scene's order; the anchor cells of those
+    /* the features standing, in the scene's order; the anchor cells of those
        reclaimed, gone[2k], gone[2k + 1]; both at most WIKI_FEATS_MAX */
     WIKIFEAT*        feat;
     int              nfeat, ngone;
@@ -707,7 +708,7 @@ typedef struct {
     double           end;           /* the clock it is done on; never for Try it yourself */
     const char*      demo_id;       /* the demo's id, for a refused fork's message; it lives in the
                                        entry's document, which the caller keeps as long as the sim */
-    /* THE DEMO'S CLOCK (sim.js's clock): the tick its inputs, trips and end are written in. It runs
+    /* THE DEMO'S CLOCK: the tick its inputs, trips and end are written in. It runs
        with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
        from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
     int              clock, waiting, wait_from, wait_max, stalled;
@@ -744,7 +745,7 @@ typedef struct {
     int              snd_total;
     int              scene_serial;
 
-    /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
+    /* the sidebar; `lay` NULL: off for the sim's whole life */
     const WIKILAYOUT* lay;
     /* DZ: in the frame the column starts at the top bar's first row (stage.js drawFrame),
        WIKI_FRAME_BAR above the map; a page's column starts with the map. 0 on a page, so every
@@ -756,7 +757,8 @@ typedef struct {
     int              screen;        /* the routed screen, an index < lay->nscreen */
     WIKIUNIT*        shown;         /* main+0x37E9C; tasim_remove_unit clears it with its unit */
     int              cap, cap_key;  /* the gadget of `screen` a press captured (-1 none), and the
-                                       button that pressed it */
+                                       button that pressed it (gi+0x64, one slot, so a second
+                                       press takes it over) */
     int              locked;        /* the type the demo stopped on (the first lock wins), or -1 */
     /* the trip's generated inputs, fed before the script's of the same tick */
     WIKIINPUT        trip_in[WIKI_TRIP_EVENTS];
@@ -806,7 +808,7 @@ typedef struct {
     int              oom;           /* an allocation failed: the sim went on without what it could not add */
 } WIKISIM;
 
-/* sim.js's play (`scripted`: the demo's inputs are fed at their ticks and it is done at its end)
+/* A demo played (`scripted`: the demo's inputs are fed at their ticks and it is done at its end)
    or create (Try it yourself on the demo's scene: no script, never done). `d` may be NULL for the
    entry's scene alone.
 
@@ -818,15 +820,15 @@ typedef struct {
    demo's `sidebar` says so, by default (and always for create) when the scene gives the player a
    mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0).
 
-   THE FEATURES (sim.js's): the entry's scene's, then the demo's, each named by its id or f<k + 1>
+   THE FEATURES: the entry's scene's, then the demo's, each named by its id or f<k + 1>
    for the k-th, refused when its footprint leaves the scene's map, overlaps another feature or its
    id is taken. A blocking one stands in the way of a unit's walk, a scene unit's spread and a site;
    a scene structure overlapping any feature refuses the scene.
 
-   `ctx` is the context (WIKISIMCTX); NULL is sim.js's absent ctx: side 0, no casting, Interface
+   `ctx` is the context (WIKISIMCTX); NULL is the absent context: side 0, no casting, Interface
    Type 1, the interface the demos are authored in.
 
-   THE BOUND ENTRY, with a casting (sim.js's binder): every type of the entry names one of the
+   THE BOUND ENTRY, with a casting: every type of the entry names one of the
    ten casts and no two types of one side (a game entry's rival types, or the rest) one cast, or
    the sim is refused. Type i of a cast the casting binds becomes the casting's type under its
    name, with its title, footprint, figures (the economy's among them), canstop, activatewhenbuilt
@@ -838,7 +840,7 @@ typedef struct {
    to one name refuse the sim. The indices do not move, so the scene's units and the inputs'
    `build` name the same types as before; captions stay raw (the hash keeps them so).
 
-   THE DATA RULE OF THE RESOLVED SCRIPT (sim.js's resolve): a scripted demo's actions become their
+   THE DATA RULE OF THE RESOLVED SCRIPT: a scripted demo's actions become their
    buttons at `iface` (tagpu_wikidata_button) in the sim's own copy of its inputs, and a press of
    a mouse button already held, or a release of one not held, refuses the demo with its tick
    (tagpu_wikidata_buttons). The player's inputs to Try it are buttons already and are not
@@ -851,7 +853,7 @@ typedef struct {
    breaks the build trip's data rule (tagpu_wikidata_trips), or memory runs out; then `s` holds
    nothing to free. */
 /* `scripted`: TRY is Try it yourself, DEMO a demo's script, GAME a game entry's demo's game script
-   (sim.js's WikiSim.game) with its economy in refuse mode, GAME_STALL the same in stall mode
+   (the drop-in's WikiSim.game) with its economy in refuse mode, GAME_STALL the same in stall mode
    (research/notes/ingame-wiki-replay-plan.md, decision 18): refuse, an authored script, is done,
    `starved`, at the first pass that cannot pay a grant; stall, a seat the player plays, carries an
    unpaid grant as the unit's debt, which refuses its requests until a pass pays it. A game entry
@@ -870,7 +872,7 @@ void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev);
 /* One tick: the script's inputs of the next tick, then the units' work. */
 void tagpu_wikisim_step(WIKISIM* s);
 
-/* The view as `seat` sees it (sim.js's view(seat)): its cursor, ghost, gesture sites, queued
+/* The view as `seat` sees it (the drop-in's view(seat)): its cursor, ghost, gesture sites, queued
    sites, drag, order lines, sweep, keys, spacing, hover and cursor shape; a seat outside 0..nin - 1
    views as seat 0. The units' `selected` is every seat's flag (the hash's item 3), which a frame
    filters by owner. It and its arrays hold until the next call on `s`. tagpu_wikisim_view is
@@ -888,8 +890,8 @@ const unsigned char* tagpu_wikisim_model(const WIKISIM* s, int i, int* nprim);
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
 
 /* The state hash: 64-bit FNV-1a (offset basis 0xCBF29CE484222325, prime 0x100000001B3) over what
-   the view and tagpu_wikisim_orders show, so tools/wiki/simparity.mjs computes the same number
-   from sim.js's view() and orders() alone. It reads `s` and changes nothing, so it may be taken
+   the view and tagpu_wikisim_orders show (the host's `hash` op answers it, and every check compares
+   it). It reads `s` and changes nothing, so it may be taken
    at any point, the view taken or not. Fed in this order, an integer as 4 bytes little-endian
    (two's complement), a double as its 8 IEEE-754 bytes little-endian, a string as its byte
    length (an integer) and then its bytes, "" for none:
@@ -953,25 +955,23 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 /* THE LIT GRID of `seat` in a game's view `v` at the shown tick `g`, over the layout's sight table
    `t` (NULL or numtables 0: none), into `out`, (v->w >> 1) x (v->h >> 1) bytes row-major; their
    count, or 0 when the grid would pass WIKI_SIGHT_GRID. The rule, the engine's stamp reduced to
-   the stage, is tasim_sight.c's comment; sim.js sightLit is its twin. Without a table every
+   the stage, is tasim_sight.c's comment. Without a table every
    block is 1 (Sight lights every block). Pure: it reads `v` and `t` only. */
 #define WIKI_SIGHT_GRID  ((WIKI_MAP_MAX / 2) * (WIKI_MAP_MAX / 2))
 #define WIKI_SIGHT_SPAN  60      /* a death at tick d lights its seat's grid through d + 60: the
                                     temporary sight record's expiry (tasim_sight.c) */
 int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out);
 
-/* THE ARMY VALUE of `seat` in a game simulation (sim.js's gameNow army, which states the game's
-   rule): the metal cost of each of its live, finished units of a mobile type that is not its
+/* THE ARMY VALUE of `seat` in a game simulation (tasim_econ.c states the game's rule): the metal cost of each of its live, finished units of a mobile type that is not its
    commander, summed in f32 in the units' order; 0 for a seat it does not have. Pure. */
 float tagpu_wikisim_army(const WIKISIM* s, int seat);
 
 /* THE CONTACTS of `seat` in a game's view `v`, over its lit grid `lit` (tagpu_wikisim_sight_lit's
    for the same view): per view unit, index-aligned with v->unit, 1 when the radar pass would mark
-   it, else 0, into `out` (v->nunit bytes). The rule is tasim_sight.c's comment; sim.js
-   sightContacts is its twin. Pure. */
+   it, else 0, into `out` (v->nunit bytes). The rule is tasim_sight.c's comment. Pure. */
 void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uint8_t* out);
 
-/* THE FORK (sim.js's sim.fork; research/notes/ingame-wiki-replay-plan.md, decision 8): a game
+/* THE FORK (research/notes/ingame-wiki-replay-plan.md, decision 8): a game
    simulation's timeline handed over at R to `seat`, the world of R - 1 kept whole, and the `n`
    inputs at `in` (a fork's part, game inputs of any seat as the loader reads them, a kill's id in
    the entry's document) its script with the other seats' recorded inputs, its economy in
@@ -999,7 +999,7 @@ void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uin
    the old script's; `in` is only read. */
 int tagpu_wikisim_fork(WIKISIM* s, int R, int seat, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn);
 
-/* THE RELEASE (sim.js's sim.release), between two ticks: what the game's rebuild leaves of `seat`'s
+/* THE RELEASE, between two ticks: what the game's rebuild leaves of `seat`'s
    input after Back to now and in a fork (tagpu_wikisim.c says how that was measured): no key or
    button held, no drag, no placement or reclaim gesture, all let go without acting; nothing of the
    seat's selected and nothing armed; the spacing and the sweep's kind kept; every other seat's input

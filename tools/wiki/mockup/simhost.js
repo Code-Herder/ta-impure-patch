@@ -181,7 +181,10 @@ const WikiSim = (() => {
       // up to n ticks in one request (fewer once done): each tick's `each` values ("hash", "now" of `seat`)
       steps(n, each = [], seat = 0) { return change({ op: 'step', n, each, seat }).each; },
       fork(R, inputs, mode, seat = 0) { change({ op: 'fork', R, inputs, mode, seat }); },
-      view(seat = 0) {
+      // `map` true asks the host for the map again rather than the one the sim was made with: a check's, which holds
+      // the two equal
+      view(seat = 0, map = false) {
+        if (map) return ask({ op: 'view', sim: h, seat, map: true });
         asked.views.add(seat);
         const e = echo && echo.views[seat];
         return viewOf(e ? copy(e) : ask({ op: 'view', sim: h, seat }));

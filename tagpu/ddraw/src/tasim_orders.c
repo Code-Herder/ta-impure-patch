@@ -11,7 +11,7 @@
 #include "tasim.h"
 
 /* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
-   past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
+   past it is dropped. Every order a player's clicks add comes
    through here, so they cannot grow a list until realloc fails, and take_offs' scratch
    (WIKISIM's q and by) holds any list. 1 when the order went in; 0 when the list was full or
    memory ran out, which sets `oom`. */
@@ -55,7 +55,7 @@ void tasim_disarm(WIKISIM* s)
    Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
    tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
    armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
-   of its own type only. With the sidebar off as well as on, as sim.js's `arm`. */
+   of its own type only. With the sidebar off as well as on. */
 void tasim_arm(WIKISIM* s, int t)
 {
     if (ST(s).mode != t) ST(s).has_gesture = 0;

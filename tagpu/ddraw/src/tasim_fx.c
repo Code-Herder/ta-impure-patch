@@ -10,7 +10,7 @@
 #include <string.h>
 #include "tasim.h"
 
-/* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY), sim.js's spray functions ---- */
+/* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY) ---- */
 
 static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
 static int32_t sub32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (uint32_t)b); }
@@ -217,7 +217,7 @@ void tasim_spray_tick(WIKISIM* s, int t)
     s->nburst = k;
 }
 
-/* ---- THE SOUND (tagpu_wikisim.h), sim.js's sound functions ---- */
+/* ---- THE SOUND (tagpu_wikisim.h) ---- */
 
 static const unsigned char SND_PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
 static const unsigned char SND_INTERVAL[WIKI_SND_KINDS] = WIKI_SND_INTERVALS;
@@ -324,9 +324,15 @@ int tasim_cant_said(const WIKIUNIT* u)
     return u->norder && u->cant == u->order[0].serial;
 }
 
-/* THE DEATH SOUND of a finished unit killed, sim.js's `deathSound` (tagpu_wikisim.h,
-   WIKI_SND_DEATH): one event at once, for a unit of any seat, the cell under its centre held to
-   the map */
+/* THE DEATH SOUND of a finished unit killed (tagpu_wikisim.h, WIKI_SND_DEATH): the destructor
+   explodes it through 0x49B000, which impacts its ExplodeAs weapon (def+0x220) at the unit with no
+   victim through 0x499EB0, and on dry ground that plays the weapon's soundhit (+0xF6, 0x499FE9)
+   through 0x47F300 (0x499FF2), not sent on the network and gated by the viewed player's sight
+   (0x47F3E8..0x47F4A8), with no owner test (DISASSEMBLED, scout batch 2). One event, at once, for
+   a unit of any seat: the type's index as its name and the cell under its centre, held to the map,
+   as its variant; the gate is the player's (the viewer's sight is no state of the game's), and the
+   event is made whether or not the type has a WAV, so the state does not depend on the load beyond
+   the source being there. */
 void tasim_death_sound(WIKISIM* s, const WIKIUNIT* u)
 {
     int cx = (int)floor(u->x / CELL), cz = (int)floor(u->z / CELL);

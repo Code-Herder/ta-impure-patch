@@ -47,7 +47,7 @@
    glides, a takeover block's flags, picker, seat, counts, ticks and forks, indexed keys past their caps), the HUD
    built from each, and tagpu_huddraw_partition on synthetic batch lists with groups in lists 0, 3, 4 and 6.
 
-   THE IDLE SIDE. frame.js idleSide is a second copy of sim.js gadgetState(g, null, false), so it is pinned: for
+   THE IDLE SIDE. frame.js idleSide is a second copy of the simulation's gadget states with no unit shown, so it is pinned: for
    every layout side of the fixture layouts and of every pack present, idleSide's states equal those a fresh
    WikiSim.create reports on that side's MAIN2 after one step with nothing selected: the first tree entry's first
    demo with its selection and its inputs taken out. Every MAIN2 of the layouts present has no gadget (the engine's
@@ -295,10 +295,10 @@ function idleCheck(exe, tmp) {
         const M = { ...L, sides: L.sides.map((sd, j) => j === k ? { ...sd, main2: screen } : sd) };
         const js = WikiFrame.idleSide(M, k), at = `idle ${name} side ${k} with MAIN2 ${screen}`;
         let sim;
-        try { sim = idleSim(M, casting, k); } catch (e) { fail(`${at}: sim.js refused it: ${e.message}`); continue; }
+        try { sim = idleSim(M, casting, k); } catch (e) { fail(`${at}: the host refused it: ${e.message}`); continue; }
         tables++;
         if (!sim || sim.screen !== screen) fail(`${at}: the fresh sim shows ${sim ? sim.screen : 'a selection'}, not that MAIN2`);
-        else if (show(js.state) !== show(sim.state)) fail(`${at}: frame.js ${show(js.state)}, sim.js ${show(sim.state)}`);
+        else if (show(js.state) !== show(sim.state)) fail(`${at}: frame.js ${show(js.state)}, the host ${show(sim.state)}`);
       }
     const f = path.join(tmp, `layout${i}.json`);
     fs.writeFileSync(f, JSON.stringify(L));

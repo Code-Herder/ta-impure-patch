@@ -1,90 +1,95 @@
-/* simparity.mjs -- the in-game wiki's parity check: the DLL's simulation, tagpu/ddraw/src/tagpu_wikisim.c over
-   tagpu_wikidata.c's reading of the archive the DLL embeds, against the mockup's tools/wiki/mockup/sim.js, tick for
-   tick and field by field.
+/* simparity.mjs -- the in-game wiki's parity check: the DLL's simulation (tagpu/ddraw/src/tagpu_wikisim.c over
+   tasim_*.c, tagpu_wikidata.c's loader and tagpu_wikicob.c's COB host) in its three builds, play for play and request
+   for request, and its replay layer (tagpu_wikireplay.c) against the mockup's replay.js, tick for tick.
 
-   usage: node tools/wiki/simparity.mjs [--wine] [--shard K/N]
-     exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run;
-     --shard K/N (K from 1) plays only every Nth of the demos' contexts, from the Kth, and shard 1 alone the rule, refusal, data and malformed
-     cases: N processes, each building its own C side, check together what one does alone
+   usage: node tools/wiki/simparity.mjs [-j N | --shard K/N] [--record DIR | --against DIR]
+     exit 0 when the three builds answer every request alike, the replay layer agrees with replay.js and every
+     malformed case loads; 1 when one does not; 2 when a build cannot be made or run.
+     -j N runs the N shards of --shard K/N at once, each its own process, once the three builds are made (once:
+       tools/wiki/wikibuild.mjs caches them), and gives the worst exit of them; N defaults to a third of the processors,
+       a shard keeping three hosts busy. --shard K/N runs the work items dealt to shard K alone.
    usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1] [--scripts]
                                             [--frame ENTRY/DEMO@TICK[,...]]
-     prints `<entry>/<demo> <hash>` for every demo the tree names: sim.js's state hash on its last tick, 16 hex digits
-     (a game entry's demo: replay.js's replay played to its end, and the replay's hash, tagpu_wikireplay_hash's), the number
-     the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
-     default art/wiki/side/fixture.json; `null` for none) in the same context: side N (0 by default), Interface Type
-     0 or 1 (1 by default), and with --pack the casting of side N in DIR's side.json, whose layout is then the
-     default (tools/wiki/sidepacks.py writes the packs), and with --scripts the units' scripts, as the game's check
-     plays when its log says they are on: each type's from the first pack that holds it, DIR's stage packs first, then
-     the gfx packs under tools/wiki/mockup/gfx/. A demo sim.js refuses prints `refused` and why. Builds nothing.
+     prints `<entry>/<demo> <hash>` for every demo the tree names: the host's state hash on its last tick
+     (tagpu_wikisim_hash), 16 hex digits (a game entry's demo: replay.js's replay played to its end, and the replay's
+     hash, tagpu_wikireplay_hash's), the number the game's check must give for the same demo played to its end with the
+     same sidebar layout (by default art/wiki/side/fixture.json; `null` for none) in the same context: side N (0 by
+     default), Interface Type 0 or 1 (1 by default), and with --pack the casting of side N in DIR's side.json, whose
+     layout is then the default (tools/wiki/sidepacks.py writes the packs), and with --scripts the units' scripts and
+     sounds, as the game's check plays when its log says they are on: each type's from the first pack that holds it,
+     DIR's stage packs first, then the gfx packs under tools/wiki/mockup/gfx/. A demo the host refuses prints `refused`
+     and why. The `host` build alone.
    usage: node tools/wiki/simparity.mjs --try DUMP
-     prints sim.js's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
+     prints the host's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
      try), the number the dump's own hash must equal. The layout is the dump's `layout` when it records one, else the
      fixture, and the context its `ctx` (side, Interface Type, the casting written whole, and with `cob` the units'
-     scripts from the gfx packs), else sim.js's default. Builds nothing.
+     scripts and sounds from the gfx packs), else the host's default. The `host` build alone.
 
-   It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
-   real sources (tools/wiki/wikibuild.mjs), and plays every demo of every entry the tree names through both, comparing every field of the view,
-   every unit's orders and the state hash on every tick; the map, which nothing writes once the scene is laid out, on
-   the first and the last tick. It plays them with the sidebar of art/wiki/side/fixture.json, the layout the wiki
-   falls back to, with fixture-tall.json's 768-row column, and with none (both C sides read the layouts out of the
-   archive), each in simcheck.mjs's contexts: the entry's own types and each casting of tools/wiki/casting-fixture.json
-   (identity, shifted, unbound), each at Interface Type 1 and 0; a demo one side refuses in a context the other must
-   refuse too. In each context it then plays every game entry under art/wiki/entries/ (frame "game", named by the tree
-   or not) the same way, each distinct game script (demos sharing one play the same game) through WikiSim.game and
-   wikitest `game` with the fixture casting's rival beside it (casting-fixture.json `rivals`), and the stall case:
-   every seat cut to 200, in stall mode tick for tick and in refuse mode, where it must end starved; then every demo of
-   it as a replay, through replay.js and wikitest `replay`, demo tick by demo tick -- the replay's view and hash
-   (replayHash, tagpu_wikireplay_hash's twin, a live entry's rewind state and P's hash included), the game's view,
-   orders and hash -- and Try it yourself's press trace through replay.js's create and wikitest `replaytrace`: TRACE
-   on a replay entry, LIVE_TRACE (the live HUD's presses and the world's input) on a live one. The fork pass forks
-   each distinct game at the refresh ticks (forkCases); the release sweep plays each live entry's games with Back to
-   now's release after every tick up to the script's last input, each to its end, through sim.js and wikitest
-   `sweep`, in two contexts. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
-   against sim.js with every call recorded as the C host's requests (tests/wikihost.c; `create` and `play` with the
-   layout and the context each was given), the session is replayed through wikitest `trace`, and every answer the case read (each view, with the state hash after it, orders, done)
-   is compared. For each demo and case it names the first differing tick or call and field. It compares the build
-   trip's and the replay layer's constants, and the recorder's rules (tagpu_recrules.h, which the wiki and the recorder
-   share) through wikitest `rules` against replay.js's twins, the refresh grid against tools/replay/tarec.py's is_refresh
-   too. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
-   alike -- the demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each
-   interface type, a unit's G cells, every bound of the casting and of the layout on both sides of it, the binding of
-   an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side, and every
-   data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their kills, and their
-   viewer's scripts, made into replays) -- each made into a sim by text.js's checkEntry and sim.js and by the C readers
-   and init; and a text entry's data rule (sim.js checkText), loaded alone by each side's loader, whose refusals must
-   say the same words. Then the data read back: every casting of
-   tools/wiki/casting-fixture.json and of every pack present under tools/wiki/mockup/gfx/side/ (gitignored, built
-   by tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by tagpu_wikidata.c and
-   compared field by field with what sim.js's checkCasting and checkLayout accept, a refused casting by its message.
-   Last, wikitest's `malformed` cases load data the loader must survive -- a tree or an entry built wrong on
-   purpose -- and each must load as stated.
+   THE THREE BUILDS (tools/wiki/wikibuild.mjs): `host`, gcc -O2, the mockup's; `asan`, AddressSanitizer and
+   UndefinedBehaviorSanitizer; `wine`, the DLL's own compiler and SSE2 flags (i686-w64-mingw32-gcc) under Wine
+   (WINEPREFIX: the main checkout's wineprefix/), the arithmetic the game runs. Every play is made through the drop-in
+   (tools/wiki/mockup/simhost.js) on the tee of the three (tools/wiki/hostchan.cjs `tee`): each request goes to all
+   three, the host's answer is the one read, and any build whose answer differs in its text is recorded with the first
+   differing path, so a play differs where any request of it did. Each play reads the view, every unit's orders and
+   the state hash on every tick -- one request a tick, the drop-in's echo -- and the map when the sim is made and again
+   on its last tick, which nothing between them writes. The C replay layer's lines (wikitest `replay`, `replaytrace`)
+   and the recorder's rules and constants (`rules`, `constants`) are printed by each build, which must print them
+   alike, and compared with replay.js; `malformed` runs on `asan` and `wine`.
 
-   stateHash is tagpu_wikisim_hash's twin, fed from view() and orders() in the order and the encoding
-   tagpu_wikisim.h states.
+   WHAT IS PLAYED. Every demo of every entry the tree names, with the sidebar of art/wiki/side/fixture.json (the
+   layout the wiki falls back to), with fixture-tall.json's 768-row column and with none, each in simcheck.mjs's
+   contexts: the entry's own types and each casting of tools/wiki/casting-fixture.json (identity, shifted, unbound),
+   each at Interface Type 1 and 0, and each again with the units' scripts and sounds when the gfx packs under
+   tools/wiki/mockup/gfx/ (gitignored, built by tools/wiki/gfx.py) hold any. THE GAME PASS: in each context every
+   game entry under art/wiki/entries/ (frame "game", named by the tree or not) and the players and takeover fixtures,
+   each distinct game script once (demos sharing one play the same game), with the fixture casting's rival beside it
+   (casting-fixture.json `rivals`), and THE STALL CASE: every seat cut to 200, in stall mode and in refuse mode, where
+   it must end starved; with the identity casting, every cast's economy outside a game's bounds too, which must stop
+   it under the badge. THE REPLAY PASS: every demo of each as a replay through replay.js on the drop-in, demo tick by
+   demo tick against wikitest `replay` -- the replay's view and hash (replayHash, tagpu_wikireplay_hash's twin, a live
+   entry's rewind state and P's hash included), the game's view, orders and hash -- and Try it yourself's press trace
+   through replay.js's create against `replaytrace`: TRACE on a replay entry, LIVE_TRACE (the live HUD's presses and
+   the world's input) on a live one, PLAYERS_TRACE on a players one, TAKEOVER_TRACES on a takeover one. THE FORK,
+   COLUMN AND SEAT CASES (forkCases, columnCases, seatCases), whose claims are each case's verdict. THE RELEASE SWEEP:
+   each live entry's games with Back to now's release after every tick up to the script's last input, each to its
+   end, in two contexts. simcheck.mjs's RULE CASES, the rules no demo shows. The build trip's, the replay layer's and
+   the players entry's constants; the recorder's rules (tagpu_recrules.h, which the wiki and the recorder share)
+   against replay.js's twins, the refresh grid against tools/replay/tarec.py's is_refresh too. THE REFUSAL CASES:
+   data, castings, contexts and layouts each case wants accepted or refused -- the demo's `sidebar`, the build trip's
+   data rule, the text's tokens, the actions' data rule at each interface type, a unit's G cells, every bound of the
+   casting and of the layout on both sides of it, a scene its bound footprints do not fit, the context's interface type
+   and side, every data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their
+   kills, and their viewer's scripts, made into replays) and a text entry's (the loader alone, tagpu_wikidata_entry's
+   words) -- each held to its want, text.js's checkEntry refusing only what the loader refuses. THE DATA READ: every
+   casting of tools/wiki/casting-fixture.json and of every side pack present under tools/wiki/mockup/gfx/side/
+   (tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by each build's loader
+   alike. Last, wikitest's `malformed` cases: data the loader must survive, each loaded as stated.
 
-   By default the C side is built natively with gcc, AddressSanitizer and UndefinedBehaviorSanitizer. --wine builds it
-   with the DLL's own compiler and flags (i686-w64-mingw32-gcc, the simulation and the loader on SSE2 as the Makefile
-   compiles them)
-   and runs it under Wine (WINEPREFIX: the main checkout's wineprefix/), which checks the arithmetic the game runs.
+   THE WORK ITEMS. A run is a list of items, each named by a key: one context's demos, one game entry's game pass or
+   replay pass in one context, one fork, column or seat case, one live entry's sweep in one context, one entry's rule
+   cases, and the constants, the recorder's rules, the refusals, the data read and the malformed cases as one item
+   each. The shards share them longest first (the longest-processing-time rule: each to the shard with the least
+   cost dealt so far) by the seconds each took in the last full run, build/simparity-costs.json, which every full -j
+   run rewrites; with no such file they are dealt by index round robin. Every item runs in every full run: the costs
+   balance the shards and never drop a context, a play or a build.
 
-   usage: node tools/wiki/simparity.mjs [--wine] -j N [--record DIR | --against DIR]
-     -j N runs the N shards of --shard K/N at once, each its own process, and gives the worst exit of them.
-
-   THE RECORD (--record DIR) keeps the state hash of every tick of every play, the C side's once the tick compared equal,
-   so that a later tree can be held to it with no second simulation beside it (--against DIR). Each shard writes
-   DIR/shard-K-of-N.jsonl.gz: a header line {"header": {"commit", "gfx": the digest of every scene.json and .cob under
-   tools/wiki/mockup/gfx/, "contexts": the demo pass's context labels}}, then one line a play, {"key", "h": its hashes}
-   or {"key", "refused": true}. A key is `pass|context|entry/demo|variant`:
+   THE RECORD (--record DIR) keeps the state hash of every tick of every play, the host's once the three builds
+   answered alike, so that a later tree can be held to it (--against DIR). Each shard writes DIR/shard-K-of-N.jsonl.gz:
+   a header line {"header": {"commit", "gfx": the digest of every scene.json and .cob under tools/wiki/mockup/gfx/,
+   "contexts": the demo pass's context labels}}, then one line a play, {"key", "h": its hashes} or {"key", "refused":
+   true}. A key is `pass|context|entry/demo|variant`:
      demos|CTX|E/D|play          the demo, each tick's tagpu_wikisim_hash from tick 0
      game|CTX|E/D|game, stall, starved, econoff     the game pass's four plays
      replay|CTX|E/D|replay       each demo tick's [tagpu_wikireplay_hash, the game's hash or null]
      replay|CTX|E/D|trace, playerstrace, livetrace, tktrace1, tktrace2     the press traces, likewise
      sweep|CTX|E/D|sweep R       the release sweep's game released after R, its hash at its end
-     case|-|-|NAME               a fork, column or seat case: its hash answers in call order
-     rule|-|E|WHAT               a simcheck rule case: its hash answers in call order
-   A run that differs anywhere writes nothing. --against DIR plays as usual and also holds every key it makes to the
-   record: each must be there with the same hashes (the first differing index named), and under -j every recorded key
-   must be made. A record of other gfx packs is refused before anything plays. */
+     case|-|-|NAME               a fork, column or seat case: its hash after each view, in call order
+     rule|-|E|WHAT               a simcheck rule case: its hash after each view, in call order
+   A run that differs anywhere writes nothing. --against DIR also holds every key it makes to the record: each must be
+   there with the same hashes (the first differing index named), and under -j every recorded key must be made. A record
+   of other gfx packs is refused before anything plays.
+
+   What a run costs: THE COST, below. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -92,152 +97,33 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
+import { scripts, sounds } from './gfxpacks.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
 import { build as hostBuild } from './wikibuild.mjs';
 
 const require = createRequire(import.meta.url);
-/* THE HOST LEG: every sim simparity and replay.js make is a twin -- sim.js's and the drop-in's (mockup/simhost.js, on
-   the host builds WIKI_HOST_TEE names) side by side, every call made on both. What the caller reads is sim.js's;
-   every answer of the drop-in is compared with it, and a sim's first difference is kept: a view, orders, gameNow,
-   hash (against stateHash of sim.js's view), a refusal, and each tick's log as a multiset of {t, what, id, type, ox,
-   oz} for the kinds simcheck reads. HOST_DIFFS lists the sims that differ; the run fails on any. */
-const LOGGED = new Set(['started', 'finished', 'reclaimed', 'nocorpse']);
-const HOST_DIFFS = [];
-let hostSims = 0;
-function twin(J, H) {
-  // replay.js's walker asks for no sounds as the drop-in takes it (sounds false): sim.js's ctx then has no source
-  const ctxOf = c => c == null ? c : { side: c.side, iface: c.iface, casting: c.casting, rival: c.rival,
-    packs: c.cob || c.snd ? PACK_DIRS : null, scripts: !!c.cob, sounds: !!c.snd && c.sounds !== false };
-  const jctx = c => c && c.sounds === false ? { ...c, snd: null } : c;
-  const logs = (l, from) => l.slice(from).filter(e => LOGGED.has(e.what)).map(e => JSON.stringify(e, ['t', 'what', 'id', 'type', 'ox', 'oz'])).sort();
-  const mk = kind => (entry, demo, layout, ctx, mode) => {
-    const label = `${entry && entry.id}/${demo ? demo.id : '(try)'}`;
-    let j, h, jwhy = null, hwhy = null;
-    try { j = kind === 'game' ? J.game(entry, demo, layout, jctx(ctx), mode) : J[kind](entry, demo, layout, jctx(ctx)); } catch (e) { jwhy = e; }
-    try { h = kind === 'game' ? H.game(entry, demo, layout, ctxOf(ctx), mode) : H[kind](entry, demo, layout, ctxOf(ctx)); } catch (e) { hwhy = e; }
-    hostSims++;
-    if ((jwhy === null) !== (hwhy === null))
-      HOST_DIFFS.push(`${label}: made: host ${hwhy ? `refused (${hwhy.message})` : 'played'}, sim.js ${jwhy ? `refused (${jwhy.message})` : 'played'}`);
-    if (jwhy) throw jwhy;
-    if (hwhy) return j;
-    let first = null, jn = 0, hn = 0;
-    const check = (what, c, js) => {
-      if (first) return;
-      const d = diff(c, js, what);
-      if (d) { first = `at tick ${j.tick}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`; HOST_DIFFS.push(`${label}: ${first}`); }
-    };
-    const logStep = () => { check('log', logs(h.log, hn), logs(j.log, jn)); jn = j.log.length; hn = h.log.length; };
-    logStep();
-    const both = (name, f) => {
-      let jr, hr, je = null, he = null;
-      try { jr = f(j); } catch (e) { je = e; }
-      try { hr = f(h); } catch (e) { he = e; }
-      if ((je === null) !== (he === null)) check(`${name}()`, he ? `threw ${he.message}` : 'ok', je ? `threw ${je.message}` : 'ok');
-      if (je) throw je;
-      return [jr, hr];
-    };
-    const t = {
-      get tick() { return j.tick; }, get done() { return j.done; }, get side() { return j.side; }, get iface() { return j.iface; },
-      get game() { return j.game; }, get types() { return j.types; }, get log() { return j.log; },
-      input(ev) { both('input', s => s.input(ev)); },
-      release(seat) { both('release', s => s.release(seat)); },
-      step() {
-        both('step', s => s.step());
-        check('tick', h.tick, j.tick);
-        check('done', h.done, j.done);
-        logStep();
-      },
-      // the drop-in's batch, a tick at a time on both: each tick's hash and gameNow(seat) as `each` asks
-      steps(n, each = [], seat = 0) {
-        const out = [];
-        for (let i = 0; i < n && !j.done; i++) {
-          t.step();
-          if (each.length) out.push({ ...(each.includes('hash') ? { hash: h.hash() } : {}), ...(each.includes('now') ? { now: t.gameNow(seat) } : {}) });
-        }
-        return out;
-      },
-      view(seat) {
-        const [jv, hv] = both('view', s => s.view(seat));
-        check(`view(${seat ?? 0})`, hv, jv);
-        if ((seat ?? 0) === 0) check('hash', h.hash(), stateHash(j, j.view()));
-        return jv;
-      },
-      orders(id) { const [jo, ho] = both('orders', s => s.orders(id)); check(`orders(${id})`, ho, jo); return jo; },
-      poses() { return j.poses(); },
-      cobNotes() { const [jc, hc] = both('cobNotes', s => s.cobNotes()); check('cobNotes', hc, jc); return jc; },
-      free() { j.free(); h.free(); },
-    };
-    if (j.game) {
-      t.gameNow = seat => { const [jg, hg] = both('gameNow', s => s.gameNow(seat)); check(`gameNow(${seat ?? 0})`, hg, jg); return jg; };
-      t.fork = (R, inputs, mode, seat) => {
-        both('fork', s => s.fork(R, inputs, mode, seat));
-        check('fork done', h.done, j.done);
-        logStep();
-      };
-    }
-    return t;
-  };
-  const W = Object.create(J);
-  W.create = mk('create');
-  W.play = mk('play');
-  W.game = (entry, demo, layout, ctx, mode = 'refuse') => mk('game')(entry, demo, layout, ctx, mode);
-  // the module's functions: sim.js's answer, the drop-in's compared with it
-  const fn = (name, cmp = (a, b) => diff(b, a, name)) => (...args) => {
-    let jr, hr, je = null, he = null;
-    try { jr = J[name](...args); } catch (e) { je = e; }
-    try { hr = H[name](...args); } catch (e) { he = e; }
-    if ((je === null) !== (he === null)) HOST_DIFFS.push(`${name}: host ${he ? `threw (${he.message})` : 'answered'}, sim.js ${je ? `threw (${je.message})` : 'answered'}`);
-    else if (!je) { const d = cmp(jr, hr); if (d) HOST_DIFFS.push(`${name}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`); }
-    if (je) throw je;
-    return jr;
-  };
-  for (const name of ['sceneOf', 'seatCam', 'frameFits', 'sightIndex', 'sightTable']) W[name] = fn(name);
-  // the loader's words name the entry first ("wiki entry ID: "), the C's being the specification's
-  W.checkText = fn('checkText', (a, b) => (a === null) === (b === null) && (a === null || b.endsWith(`: ${a}`)) ? null
-    : { at: 'checkText', c: b, j: a });
-  W.checkLayout = fn('checkLayout', () => null);
-  W.checkCasting = fn('checkCasting', () => null);
-  // sightContacts reads the drop-in's own grid, kept beside sim.js's
-  const hostLit = new WeakMap();
-  W.sightLit = (v, S, seat, g) => {
-    const jl = J.sightLit(v, S, seat, g), hl = H.sightLit(v, S, seat, g), d = diff([...hl], [...jl], 'sightLit');
-    if (d) HOST_DIFFS.push(`sightLit: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`);
-    hostLit.set(jl, hl);
-    return jl;
-  };
-  W.sightContacts = (v, lit, seat) => {
-    const jc = J.sightContacts(v, lit, seat), hl = hostLit.get(lit);
-    if (hl) { const d = diff(H.sightContacts(v, hl, seat), jc, 'sightContacts'); if (d) HOST_DIFFS.push(`sightContacts: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`); }
-    return jc;
-  };
-  // the constants, compared once the run's report is due: LIVE_CONTROLS by membership (the host lists them in the HUD
-  // table's order), every other as written
-  W.compareConstants = () => {
-    for (const k of Object.keys(H)) {
-      if (typeof H[k] === 'function') continue;
-      const d = k === 'LIVE_CONTROLS' ? diff([...H[k]].sort(), [...J[k]].sort(), k) : diff(H[k], J[k], k);
-      if (d) HOST_DIFFS.push(`constant ${k}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`);
-    }
-  };
-  return W;
-}
-const WikiSim = twin(require('./mockup/sim.js'), require('./mockup/simhost.js'));
-// replay.js and frame.js take the module by require: they make their sims through the twin too
-require.cache[require.resolve('./mockup/simhost.js')].exports = WikiSim;
-const WikiReplay = require('./mockup/replay.js');
-const WikiFrame = require('./mockup/frame.js');
-const WikiText = require('./mockup/text.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
-const WINE = process.argv.includes('--wine');
 const argOf = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
 const RECORD = argOf('--record'), AGAINST = argOf('--against');
-// a record's shard files, and the keys a shard made for its parent's whole-run check (-j, below)
+const TARGETS = ['host', 'asan', 'wine'];
+// the parity's plays go to the three builds; --hash and --try are the game's comparisons, the host's answer alone
+const PARITY = !process.argv.includes('--hash') && !process.argv.includes('--try');
+if (PARITY) process.env.WIKI_HOST_TEE = TARGETS.join(',');
+// a record's shard files, and what a shard hands its parent (-j, below): the keys it made and each item's seconds
 const shardFile = (dir, k, n) => path.join(dir, `shard-${k}-of-${n}.jsonl.gz`);
-const KEYS_OUT = process.env.SIMPARITY_KEYS;
+const KEYS_OUT = process.env.SIMPARITY_KEYS, COSTS_OUT = process.env.SIMPARITY_COSTS_OUT;
+const COSTS = path.join(ROOT, 'build/simparity-costs.json');
+
+class CannotRun extends Error {}
+function run(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { maxBuffer: 1 << 30, encoding: 'utf8', ...opts });
+  if (r.error || r.status !== 0)
+    throw new CannotRun(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ` (${r.status})`}\n${r.stderr || ''}`);
+  return r.stdout;
+}
 
 /* THE GFX DIGEST: what the record's hashes rest on besides the tree, every scene.json and script the packs hold */
 function gfxDigest() {
@@ -308,22 +194,35 @@ if (AGAINST) {
 }
 if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
 
-/* -j N: the shards of --shard K/N at once, each its own process; their outputs in shard order as each ends, and the
-   worst exit (2 over 1 over 0). With --against each shard writes the plays it made (SIMPARITY_KEYS), and the whole
-   run is held to the record here, so a recorded key no shard made fails it. */
-if (argOf('-j') !== undefined) {
-  const N = Number(argOf('-j'));
+/* -j N: the shards of --shard K/N at once, each its own process, once the three builds are made; their outputs in
+   shard order as each ends, and the worst exit (2 over 1 over 0). The parent reads the costs once and hands every shard
+   the same table (SIMPARITY_DEAL), so all deal the items alike whatever writes the cost file meanwhile; each shard hands
+   back its items' seconds (SIMPARITY_COSTS_OUT), which become the cost file once every shard has run. With --against
+   each shard writes the plays it made (SIMPARITY_KEYS), and the whole run is held to the record here, so a recorded
+   key no shard made fails it.
+
+   THE COST (MEASURED 2026-11-11, the reference setup, 32 threads): -j 10, the three builds at once, 5928 plays, 509
+   cases, 955 refusal cases, 27 castings and layouts and 21 malformed-data cases: 990 s wall, under a load average of
+   50 to 63 from other work, against the record of every play's hashes. The two-language check this replaced took
+   477 s natively and 465 s under Wine, each at -j 24, one after the other. */
+if (PARITY && !process.argv.includes('--shard')) {
+  const N = argOf('-j') === undefined ? Math.max(1, Math.floor(os.availableParallelism() / 3)) : Number(argOf('-j'));
   if (!(Number.isInteger(N) && N >= 1)) { console.error(`simparity: -j ${argOf('-j')} is not a count`); process.exit(2); }
-  const strip = new Set(['-j', '--shard']);
   const base = [];
-  for (let i = 2; i < process.argv.length; i++) { if (strip.has(process.argv[i])) i++; else base.push(process.argv[i]); }
-  const tmpKeys = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-keys-'));
+  for (let i = 2; i < process.argv.length; i++) { if (process.argv[i] === '-j') i++; else base.push(process.argv[i]); }
+  try { for (const t of TARGETS) hostBuild(t); } catch (e) { console.error(`simparity: ${e.message}`); process.exit(2); }
+  const side = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-run-'));
+  let costs = null;
+  try { costs = JSON.parse(fs.readFileSync(COSTS, 'utf8')); } catch (e) { costs = null; }
+  const deal = path.join(side, 'deal.json');
+  fs.writeFileSync(deal, JSON.stringify(costs));
   // a record is one run's: an earlier run's shards, of another N, would mix into it
   if (RECORD) for (const f of fs.readdirSync(RECORD)) if (/^shard-\d+-of-\d+\.jsonl\.gz$/.test(f)) fs.rmSync(path.join(RECORD, f));
   const t0 = Date.now();
   const outs = new Array(N), codes = new Array(N);
   await Promise.all(Array.from({ length: N }, (_, i) => new Promise(done => {
-    const env = { ...process.env, ...(AGAINST ? { SIMPARITY_KEYS: path.join(tmpKeys, `keys-${i + 1}.jsonl.gz`) } : {}) };
+    const env = { ...process.env, SIMPARITY_DEAL: deal, SIMPARITY_COSTS_OUT: path.join(side, `costs-${i + 1}.json`),
+      ...(AGAINST ? { SIMPARITY_KEYS: path.join(side, `keys-${i + 1}.jsonl.gz`) } : {}) };
     const p = spawn(process.execPath, [new URL(import.meta.url).pathname, ...base, '--shard', `${i + 1}/${N}`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     p.stdout.on('data', d => { out += d; });
@@ -335,7 +234,7 @@ if (argOf('-j') !== undefined) {
   if (AGAINST && code !== 2) {
     const got = new Map();
     for (let i = 1; i <= N; i++) {
-      const f = path.join(tmpKeys, `keys-${i}.jsonl.gz`);
+      const f = path.join(side, `keys-${i}.jsonl.gz`);
       if (!fs.existsSync(f)) continue;
       for (const l of zlib.gunzipSync(fs.readFileSync(f)).toString('utf8').split('\n')) if (l) { const o = JSON.parse(l); got.set(o.key, o.refused ? 'refused' : o.h); }
     }
@@ -346,8 +245,17 @@ if (argOf('-j') !== undefined) {
       : `simparity against ${AGAINST}: all ${got.size} plays equal to the record, every recorded key made`);
     if (bad.length && code === 0) code = 1;
   }
+  // THE COSTS of this run, once every shard ran all its items: the next run's deal
+  if (code !== 2) {
+    const all = {};
+    for (let i = 1; i <= N; i++) Object.assign(all, JSON.parse(fs.readFileSync(path.join(side, `costs-${i}.json`), 'utf8')));
+    fs.mkdirSync(path.dirname(COSTS), { recursive: true });
+    const tmpCosts = `${COSTS}.${process.pid}`;
+    fs.writeFileSync(tmpCosts, JSON.stringify(all, null, 0));
+    fs.renameSync(tmpCosts, COSTS);
+  }
   if (RECORD && code !== 0) for (let i = 1; i <= N; i++) fs.rmSync(shardFile(RECORD, i, N), { force: true });
-  fs.rmSync(tmpKeys, { recursive: true, force: true });
+  fs.rmSync(side, { recursive: true, force: true });
   console.log(`simparity -j ${N}: ${codes.filter(c => c === 0).length} of ${N} shards passed, ${((Date.now() - t0) / 1000).toFixed(0)} s wall`);
   process.exit(code);
 }
@@ -358,6 +266,15 @@ if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
   console.error(`simparity: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
   process.exit(2);
 }
+
+/* the simulation through the drop-in, replay.js and frame.js over it, and the tee's record of every request whose
+   builds answered apart */
+const WikiSim = require('./mockup/simhost.js');
+const TEE = require('./hostchan.cjs');
+const WikiReplay = require('./mockup/replay.js');
+const WikiFrame = require('./mockup/frame.js');
+const WikiText = require('./mockup/text.js');
+
 /* THE PLAYS THIS SHARD MADE, for the record (THE RECORD above): key -> hashes, or 'refused'; a key made twice is a
    scheme that names two plays alike, which would hide one of them */
 const PLAYED = new Map();
@@ -367,7 +284,8 @@ function rec(key, h) {
   PLAYED.set(key, h);
 }
 
-/* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
+/* ---- 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed: the replay's hash ---- */
+const utf8 = new TextEncoder();
 function fnv() {
   let hi = 0xcbf29ce4, lo = 0x84222325;
   // h = (h ^ b) * (2^40 + 0x1b3) mod 2^64
@@ -382,8 +300,8 @@ function fnv() {
   return { byte, int, str, hex: () => hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
 }
 /* THE REPLAY'S HASH, tagpu_wikireplay_hash's twin over replay.js's view, in tagpu_wikireplay.h's order; the game's
-   state hash as its low and its high 32 bits; then a live replay's block, the past simulation's state hash last. A
-   trip from the game is WIKI_REPLAY_AT_GAME, -2. */
+   state hash (the host's) as its low and its high 32 bits; then a live replay's block, the past simulation's state hash
+   last. A trip from the game is WIKI_REPLAY_AT_GAME, -2. */
 const f32 = new DataView(new ArrayBuffer(4)), f32bits = x => { f32.setFloat32(0, x, true); return f32.getUint32(0, true); };
 function replayHash(R) {
   const v = R.view(), g = v.game, h = fnv(), ctl = c => c === WikiReplay.AT_GAME ? -2 : WikiReplay.CONTROLS.indexOf(c);
@@ -401,7 +319,7 @@ function replayHash(R) {
   h.int(v.toast ? WikiReplay.TOASTS.indexOf(v.toast.kind) : -1); h.int(v.toast ? v.toast.at : 0); h.int(v.toast ? v.toast.value : 0);
   b(v.question); b(v.question && v.question.wasPaused); b(v.left);
   h.int(v.walked); h.int(v.marks.length); for (const m of v.marks) for (const x of m) h.int(x);
-  const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
+  const gh = R.game ? R.game.hash() : '0000000000000000';
   h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
   if (v.live) liveHash(R, v, h);
   if (v.players) playersHash(R, v.players, h);
@@ -437,134 +355,13 @@ function liveHash(R, v, h) {
   for (const t of L.timelines) { h.int(t.id); h.int(t.parent); h.int(t.R); h.int(t.last); b(t.live); h.int(t.used); h.int(t.mode === 'stall' ? 1 : 0); h.int(t.nlog); }
   h.int(v.toast ? v.toast.evict : -1); h.int(L.back); b(L.full);
   h.int(f32bits(L.bar.be)); h.int(f32bits(L.bar.bm)); for (const x of L.bar.rates) h.int(f32bits(x)); h.int(L.bar.dt);
-  const ph = R.past ? stateHash(R.past, R.past.view()) : '0000000000000000';
+  const ph = R.past ? R.past.hash() : '0000000000000000';
   h.int(parseInt(ph.slice(8), 16)); h.int(parseInt(ph.slice(0, 8), 16));
 }
-const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];          // WIKI_KEY_* order
-const ORDER = { move: 0, build: 1, reclaim: 2, guard: 3 };                   // WIKI_ORDER_*
-const SHAPE = { line: 1, axis: 2, rect: 3, hollow: 4, ring: 5 };             // PLACE_*, PLACE_NONE 0
-const STATE = { place: 0, refused: 1, remove: 2 };                           // WIKI_SITE_*
-const utf8 = new TextEncoder(), f64 = new DataView(new ArrayBuffer(8));
-function stateHash(sim, v) {
-  let hi = 0xcbf29ce4, lo = 0x84222325;
-  // h = (h ^ b) * (2^40 + 0x1b3) mod 2^64
-  const byte = b => {
-    lo = (lo ^ b) >>> 0;
-    const t0 = (lo & 0xffff) * 0x1b3, t1 = (lo >>> 16) * 0x1b3 + (t0 >>> 16);
-    hi = (Math.imul(hi, 0x1b3) + (t1 >>> 16) + (lo << 8)) >>> 0;
-    lo = (((t1 & 0xffff) << 16) | (t0 & 0xffff)) >>> 0;
-  };
-  const int = n => { for (let k = 0; k < 4; k++) byte((n >>> (8 * k)) & 255); };
-  const dbl = x => { f64.setFloat64(0, x, true); for (let k = 0; k < 8; k++) byte(f64.getUint8(k)); };
-  const str = s => { const b = utf8.encode(s || ''); int(b.length); for (const c of b) byte(c); };
-  int(sim.tick); int(sim.done ? 1 : 0); int(sim.side); int(sim.iface);
-  const m = v.map;
-  int(m.w); int(m.h); dbl(m.surfaceMetal);
-  for (const x of m.metal) dbl(x);
-  for (const x of m.fog) int(x);
-  int(m.vents.length); for (const p of m.vents) { dbl(p.x); dbl(p.z); }
-  int(v.units.length);
-  for (const u of v.units) {
-    str(u.id); str(u.type); int(u.owner); dbl(u.x); dbl(u.z); dbl(u.hx); dbl(u.hz); int(u.selected ? 1 : 0); dbl(u.built); dbl(u.reclaimed);
-    str(u.label);
-    const os = sim.orders(u.id);
-    int(os.length);
-    for (const o of os) {
-      int(ORDER[o.k]);
-      if (o.k === 'move') { dbl(o.x); dbl(o.z); }
-      else if (o.k === 'build') { str(o.type); int(o.ox); int(o.oz); }
-      else if (o.k === 'reclaim') { str(o.feat ?? o.target); int(o.feat !== undefined ? 1 : 0); if (o.feat !== undefined) { dbl(o.x); dbl(o.z); } }
-      else str(o.target);
-    }
-  }
-  int(v.ghost ? 1 : 0);
-  if (v.ghost) { str(v.ghost.type); dbl(v.ghost.x); dbl(v.ghost.z); int(v.ghost.ok ? 1 : 0); }
-  int(v.shape ? SHAPE[v.shape] : 0); int(v.sites.length);
-  for (const s of v.sites) { dbl(s.x); dbl(s.z); int(STATE[s.state]); }
-  dbl(v.cursor.x); dbl(v.cursor.z);
-  for (const k of KEYS) int(v.keys.includes(k) ? 1 : 0);
-  str(v.mode.startsWith('build:') ? v.mode.slice('build:'.length) : '');
-  int(v.spacing ?? -1);
-  int(v.drag ? 1 : 0); if (v.drag) { dbl(v.drag.x0); dbl(v.drag.z0); }
-  str(v.caption);
-  int(v.side ? 1 : 0);
-  if (v.side) {
-    const d = v.side;
-    int(d.h); str(d.screen); str(d.unit); int(d.page); int(d.state.length); for (const x of d.state) int(x); str(d.under);
-  }
-  str(v.locked);
-  int(v.clock); int(v.waiting ? WikiSim.UNTILS.indexOf(v.waiting) + 1 : 0); int(v.stalled ? 1 : 0);
-  int(v.cob ? 1 : 0);
-  if (v.cob) for (const half of [v.cob[1], v.cob[0]]) for (let k = 0; k < 4; k++) byte((half >>> (8 * k)) & 255);
-  int(v.parts.length);
-  for (const p of v.parts) for (const w of p) int(w);
-  int(v.partsCut ? 1 : 0);
-  int(v.bursts.length);
-  for (const e of v.bursts) for (const w of e) int(w);
-  int(v.sound ? 1 : 0);
-  if (v.sound) {
-    const d = v.sound;
-    for (const x of d.next) int(x);
-    int(d.last); int(d.queue.length);
-    for (const [kind, tick, unit, type, prio] of d.queue) { int(kind); int(tick); str(unit); str(type); int(prio); }
-    int(d.total);
-    for (const e of d.events) for (const w of e) int(w);
-    for (const c of d.cant) int(c);
-  }
-  int(v.feats.length);
-  for (const f of v.feats) { str(f.id); str(f.name); int(f.ox); int(f.oz); }
-  int(v.gone.length);
-  for (const [x, z] of v.gone) { int(x); int(z); }
-  int(v.reclaim ? 1 : 0);
-  if (v.reclaim) {
-    int(WikiSim.KINDS.indexOf(v.reclaim.kind));
-    int(v.reclaim.ring ? 1 : 0);
-    if (v.reclaim.ring) { int(v.reclaim.ring.x); int(v.reclaim.ring.z); int(v.reclaim.ring.r); }
-  }
-  // 12. a game's own part (tagpu_wikisim.h), only in a game
-  if (sim.game) {
-    const g = v.game;
-    int(g.seats.length);
-    for (const z of g.seats) {
-      int(z.units); int(z.lost); int(z.out ? 1 : 0); int(z.cmdLost ? 1 : 0);
-      for (const n of ['m', 'mmax', 'mi', 'mo', 'wm', 'e', 'emax', 'ei', 'eo', 'we']) dbl(z[n]);
-      int(z.kills); int(z.losses);
-    }
-    int(g.mode === 'stall' ? 1 : 0); int(g.starved ? 1 : 0); int(g.badKill ? 1 : 0); int(g.nkill);
-    for (const L of g.ledgers) for (const x of L) dbl(x);
-  }
-  // 13. a game's input seats beyond seat 0 (tagpu_wikisim.h), only in a game with more than one
-  if (sim.game && v.nin > 1) {
-    int(v.nin); int(v.viewed);
-    for (const q of v.inputs) {
-      int(q.ghost ? 1 : 0);
-      if (q.ghost) { str(q.ghost.type); dbl(q.ghost.x); dbl(q.ghost.z); int(q.ghost.ok ? 1 : 0); }
-      int(q.shape ? SHAPE[q.shape] : 0); int(q.sites.length);
-      for (const s of q.sites) { dbl(s.x); dbl(s.z); int(STATE[s.state]); }
-      dbl(q.cursor.x); dbl(q.cursor.z);
-      for (const k of KEYS) int(q.keys.includes(k) ? 1 : 0);
-      str(q.mode.startsWith('build:') ? q.mode.slice('build:'.length) : '');
-      int(q.spacing ?? -1);
-      int(q.drag ? 1 : 0); if (q.drag) { dbl(q.drag.x0); dbl(q.drag.z0); }
-      int(q.reclaim ? 1 : 0);
-      if (q.reclaim) {
-        int(WikiSim.KINDS.indexOf(q.reclaim.kind));
-        int(q.reclaim.ring ? 1 : 0);
-        if (q.reclaim.ring) { int(q.reclaim.ring.x); int(q.reclaim.ring.z); int(q.reclaim.ring.r); }
-      }
-    }
-  }
-  // 14. a game's deaths (tagpu_wikisim.h), only in a game
-  if (sim.game) {
-    int(v.game.deaths.length);
-    for (const d of v.game.deaths) { int(d.tick); int(d.owner); dbl(d.x); dbl(d.z); str(d.type); }
-  }
-  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
-}
 
-/* A PLAYERS GAME'S SIGHT at the tick the sim stands at, as tests/wikihost.c's wh_sight_out prints it: per seat of the game, its
-   lit grid (sim.js sightLit over the layout's table S) as its FNV-1a 32 and its lit blocks' count, and its contacts
-   (sightContacts) as a string of 0 and 1 in the view's unit order. The view `v` must still hold its map. */
+/* A PLAYERS GAME'S SIGHT at the tick the sim stands at, as tests/wikihost.c's wh_sight_out prints it: per seat of the game,
+   its lit grid (the host's sightLit over the layout's table S) as its FNV-1a 32 and its lit blocks' count, and its
+   contacts (sightContacts) as a string of 0 and 1 in the view's unit order. The view `v` must hold its map. */
 function sightOut(sim, v, S) {
   return v.game.seats.map((_, k) => {
     const lit = WikiSim.sightLit(v, S, k, sim.tick);
@@ -574,45 +371,19 @@ function sightOut(sim, v, S) {
   });
 }
 
-/* THE UNITS' SCRIPTS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read from the
-   game), each type's script from the first that holds it. sim.js asks them of serve.py's host through cobhost.mjs and
-   wikitest reads the same files; without a pack the demos play without scripts only. */
+/* THE UNITS' SCRIPTS AND SOUNDS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read
+   from the game), each type's from the first that holds it. The host reads the packs themselves (ctx.packs); the C
+   replay layer's runs read the same facts from one cob.json (tests/wikicobfile.h cob_load). Without a pack the demos
+   play without them only. The game's sim has both from its one 3D load or neither (tagpu_wiki.c scripts_now). */
 const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
 const SCRIPTS = scripts(PACKS);
-/* THE UNITS' SOUNDS, from the same packs, given wherever the scripts are: the game's sim has both from its one 3D load
-   or neither (tagpu_wiki.c scripts_now) */
 const SOUNDS = sounds(PACKS);
 const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
 const PACK_DIRS = PACKS.map(d => path.relative(ROOT, d));
-let host = null;
-const HOST = () => (host ??= cobHost());
 
-class CannotRun extends Error {}
-
-function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { maxBuffer: 1 << 30, encoding: 'utf8', ...opts });
-  if (r.error || r.status !== 0)
-    throw new CannotRun(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ` (${r.status})`}\n${r.stderr || ''}`);
-  return r.stdout;
-}
-
-/* the C side, wikitest, built by tools/wiki/wikibuild.mjs (its `asan` target natively, `wine` with --wine) and run in
-   `tmp`, this process's own folder */
-function build(tmp) {
-  if (WINE) {
-    const exe = hostBuild('wine');
-    const common = run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim();
-    const env = { ...process.env };
-    env.WINEPREFIX ??= path.join(path.resolve(ROOT, common), '..', 'wineprefix');
-    env.WINEDEBUG ??= '-all';
-    return (args, o = {}) => run('wine', [exe, ...args], { cwd: tmp, env, ...o });
-  }
-  const exe = hostBuild('asan');
-  return (args, o = {}) => run(exe, args, { cwd: tmp, ...o });
-}
-
-/* the first difference between the C answer `c` and sim.js's `j`, as a path and the two values; null when equal */
+/* the first difference between the C replay layer's answer `c` and replay.js's `j`, as a path and the two values; null
+   when equal */
 function diff(c, j, at) {
   if (typeof c === 'number' && typeof j === 'number') return c === j ? null : { at, c, j };
   if (c === null || j === null || typeof c !== 'object' || typeof j !== 'object') return c === j ? null : { at, c, j };
@@ -630,54 +401,6 @@ function diff(c, j, at) {
   return null;
 }
 const show = v => { const s = JSON.stringify(v); return s.length > 160 ? `${s.slice(0, 157)}...` : s; };
-
-/* A RECORDED SESSION: the requests a case's calls make of the C host (tests/wikihost.c), written ahead with the
-   handles the host gives -- each object or sim made takes the next integer from 1, the gfx packs once a session -- and
-   each value the case read beside the request whose answer holds it. `run` plays the requests through `wikitest
-   trace` and returns the C's values, in the order read; a sim's tick, done, side and iface are read from the last
-   answer that carried them, as the drop-in keeps them. */
-function session() {
-  const reqs = [], reads = [];
-  let n = 0, packs = null;
-  const send = r => { reqs.push(JSON.stringify(r)); return reqs.length - 1; };
-  const made = r => { send(r); return ++n; };
-  return {
-    reads,
-    /* a sim of `entry` made from `demo` as sim.js's create, play or game makes it (`play` try, demo, game or stall),
-       with sim.js's context: its castings sent, its scripts (`cob`) and sounds (`snd`) the gfx packs' */
-    create(entry, demo, layout, ctx, play) {
-      const e = made({ op: 'entry', json: { ...entry, demos: [demo || {}] } });
-      const l = layout == null ? null : made({ op: 'layout', json: layout });
-      const c = ctx && ctx.casting ? made({ op: 'casting', json: ctx.casting }) : null;
-      const r = ctx && ctx.rival ? made({ op: 'casting', json: ctx.rival }) : null;
-      if (ctx && (ctx.cob || ctx.snd) && packs === null) packs = made({ op: 'packs', dirs: PACK_DIRS });
-      return made({ op: 'new', entry: e, play, layout: l, ...(ctx ? { ctx: { side: ctx.side ?? 0, iface: ctx.iface ?? 1, casting: c, rival: r,
-        packs: ctx.cob || ctx.snd ? packs : null, scripts: !!ctx.cob, sounds: !!ctx.snd } } : {}) });
-    },
-    send,
-    // a value the case read: `what` of the answer to request `i`, or of the sim's last state (`i` -1)
-    read(i, sim, what, v) { reads.push({ i: i < 0 ? reqs.length - 1 : i, sim, what, v }); return v; },
-    // the C's values of every read, after playing the requests through `host` (wikitest's runner)
-    run(host, file) {
-      fs.writeFileSync(file, reqs.join('\n') + '\n');
-      const ans = lines(host(['trace', file], { cwd: ROOT })).map(l => JSON.parse(l));
-      const st = new Map(), out = [];
-      let k = 0;
-      for (let i = 0; i < reqs.length; i++) {
-        const q = JSON.parse(reqs[i]), a = ans[i];
-        if (a && q.op === 'new' && !a.error) st.set(a.sim, { tick: a.tick, done: a.done, side: a.side, iface: a.iface });
-        else if (a && !a.error && ['step', 'input', 'fork', 'release'].includes(q.op) && st.has(q.sim)) Object.assign(st.get(q.sim), { tick: a.tick, done: a.done });
-        for (; k < reads.length && reads[k].i === i; k++) {
-          const r = reads[k];
-          out.push(!a ? '(no answer)' : r.what === 'fork' ? (a.error ? 'refused' : 'ok') : a.error ? `error ${a.error}`
-            : r.what === 'view' || r.what === 'orders' ? a : r.what === 'hash' ? a.hash : r.what === 'fed' ? a.fed
-            : st.has(r.sim) ? st.get(r.sim)[r.what] : `(no sim ${r.sim})`);
-        }
-      }
-      return out;
-    },
-  };
-}
 const lines = out => out.split(/\r?\n/).filter(l => l.length);
 /* A FRAME VIEW (frame.js view) in the shape of the game's state dump of a players frame (tagpu_wiki.c view_json): the eye
    and the viewport, the cursors, the clicks with their ages, the units drawn with their overlay selection (owner 255
@@ -699,11 +422,10 @@ if (process.argv.includes('--hash')) {
   const layout = !file ? (pack ? pack.layout : FIXTURE) : file === 'null' ? null : JSON.parse(fs.readFileSync(file, 'utf8'));
   const side = Number(arg('--side') ?? 0), iface = Number(arg('--iface') ?? 1);
   const stages = dir && fs.existsSync(path.join(dir, 'stage')) ? fs.readdirSync(path.join(dir, 'stage')).sort().map(d => path.join(dir, 'stage', d)) : [];
-  const cob = process.argv.includes('--scripts') ? HOST().forPacks([...stages, ...PACKS]) : null;
-  const snd = cob ? soundSource([...stages, ...PACKS]) : null;
   // the opponent's casting: the first layout side other than the player's, as the DLL's context gives it
   const rival = pack ? pack.casting[pack.layout.sides.findIndex((x, j) => j !== side)] ?? null : null;
-  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob, snd, rival };
+  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, rival,
+    packs: process.argv.includes('--scripts') ? [...stages, ...PACKS].map(d => path.relative(ROOT, path.resolve(d))) : null };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   /* --frame: a game entry's demo ticks at which its replay's hash and frame record are printed as well, `frame
@@ -744,19 +466,18 @@ if (process.argv.includes('--hash')) {
       }
       let sim;
       try { sim = WikiSim.play(entry, demo, layout, ctx); } catch (e) { console.log(`${id}/${demo.id} refused ${e.message}`); continue; }
-      while (!sim.done) sim.step();
-      console.log(`${id}/${demo.id} ${stateHash(sim, sim.view())}`);
+      while (!sim.done) sim.steps(4096);
+      console.log(`${id}/${demo.id} ${sim.hash()}`);
     }
   }
   // the last line: a reader that does not see it has not been given the whole answer
   console.log('end');
-  if (host) host.close();
   process.exit(0);
 }
 
 /* --try FILE: Try it yourself as the game played it. FILE is the wiki's state dump (tagpu_wiki.json): the entry, the
    demo whose scene Try it took, the tick, and `try_log`, every input the game thread gave its simulation with the
-   tick it was given at. sim.js's create() on the same scene is fed the same inputs at the same ticks and stepped to
+   tick it was given at. The host's create() on the same scene is fed the same inputs at the same ticks and stepped to
    the dump's tick; its state hash is printed, the number the dump's `hash` must equal. */
 const tryAt = process.argv.indexOf('--try');
 if (tryAt >= 0) {
@@ -764,22 +485,20 @@ if (tryAt >= 0) {
   const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${dump.entry}.json`), 'utf8'));
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) { console.error(`simparity --try: no demo ${dump.entry}/${dump.demo}`); process.exit(2); }
-  const ctx = dump.ctx ? { ...dump.ctx, cob: dump.ctx.cob ? HOST().forPacks(PACKS) : null,
-                           snd: dump.ctx.cob ? soundSource(PACKS) : null } : undefined;
+  const ctx = dump.ctx ? { ...dump.ctx, packs: dump.ctx.cob ? PACK_DIRS : null } : undefined;
   const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE, ctx);
   for (const [t, kind, a, b] of dump.try_log) {
-    while (sim.tick < t) sim.step();
+    while (sim.tick < t && !sim.done) sim.steps(Math.min(4096, t - sim.tick));
     sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });
   }
-  while (sim.tick < dump.tick) sim.step();
-  console.log(stateHash(sim, sim.view()));
-  if (host) host.close();
+  while (sim.tick < dump.tick && !sim.done) sim.steps(Math.min(4096, dump.tick - sim.tick));
+  console.log(sim.hash());
   process.exit(0);
 }
 
 /* ---- the refusal cases: each a scripted flag, a layout, a context (side, interface type and casting) and an entry
-   whose first demo the sim is made from; both sides must accept it or refuse it alike, and as `want` says
-   (tests/wikitest.c refuse_case). ---- */
+   whose first demo the sim is made from; every build must accept it or refuse it alike, and as `want`
+   says. ---- */
 const CASTINGS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).castings;
 // the opponent's casting beside each fixture casting: the fixture layout has one side, so the rival is given apart
 const RIVALS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).rivals;
@@ -826,7 +545,7 @@ const PLAYERS_TRACE = { end: 230, presses: [[5, 'jump', 0], [40, 'jump', 0], [45
    before any fork (the world takes none); inside the opening's first build trip, the open, rew, a track press
    forward and Play from here on the same tick, while that seek is pending (ignored), fwd near now (Back to now, its
    release logged on the original: it drops the rest of the trip, so the solar is never armed, and the script's next
-   build selects its own builder on its tick, sim.js THE LIVE DATA RULE); the open, a track press, Play from here
+   build selects its own builder on its tick, tagpu_wikidata.c THE LIVE DATA RULE); the open, a track press, Play from here
    twice (the snap to 301, then fork 1 in stall mode); in fork 1 a click on the builder, a click on the column's
    solar button (DZ: its row less the bar), a placement, the button again and a Shift-drag line; armed again, Shift held across the open (its up logged into L), moves
    over the world while open (logged, the ghost follows) and a click there (ignored), Back to now from the open (a
@@ -947,7 +666,7 @@ function refusalCases(entry) {
   demo('side 5 with no layout is not read', 'accepted', {}, 1, { side: 5, layout: null });
   demo('side 1 of a two-side layout', 'accepted', {}, 1,
     { side: 1, layout: (L => { L.sides.push({ ...clone(L.sides[0]), name: 'CORE', types: {} }); return L; })(clone(FIXTURE)) });
-  // the binding (sim.js binder): every unit one cast, no cast twice, no two units bound to one type
+  // the binding (tagpu_wikisim.c THE BOUND ENTRY): every unit one cast, no cast twice, no two units bound to one type
   bind('a unit with no cast, bound', 'refused', e => { delete e.units.ARMPW.cast; }, () => {});
   bind('a unit with no cast, no casting', 'accepted', e => { delete e.units.ARMPW.cast; }, () => {}, false);
   bind('a unit with an unknown cast, bound', 'refused', e => { e.units.ARMPW.cast = 'dance'; }, () => {});
@@ -964,7 +683,7 @@ function refusalCases(entry) {
   bind('a bound footprint over a structure placed before it', 'refused', mex2, C => { C.casts.mex.footprint = [5, 5]; });
   bind('a bound footprint that still fits', 'accepted', () => {}, C => { C.casts.mex.footprint = [4, 4]; });
   bind('an unbound scene unit locks, never refuses', 'accepted', () => {}, C => { C.casts.geo = null; });
-  // the scenes (sim.js sceneOf): a demo on the one its `on` names, the first by default, every map the first one's size
+  // the scenes (tagpu_wikidata_entry): a demo on the one its `on` names, the first by default, every map the first one's size
   const scn = (name, want, edit, d = {}) => { const e = clone(entry); edit(e);
     cases.push({ name, want, scripted: 1, layout: FIXTURE, ...CTX, entry: { ...e, demos: [{ ...base, ...d }] } }); };
   const first = e => Object.values(e.scenes)[0], second = e => { e.scenes.two = clone(first(e)); };
@@ -1006,14 +725,14 @@ function refusalCases(entry) {
   text('a caption at the bound by an entry name past 93 bytes', 'accepted', e => { e.units.ARMCK.name = '\u00e9'.repeat(51); caption(seven + 'x'.repeat(21))(e); });
   text('a caption past the bound by an entry name past 93 bytes', 'refused', e => { e.units.ARMCK.name = '\u00e9'.repeat(51); caption(seven + 'x'.repeat(22))(e); });
   text('a long text that is no caption', 'accepted', e => { e.text = [seven.repeat(4)]; });
-  // a unit's G cells, sim.js's checkG
+  // a unit's G cells, tagpu_wikidata.c's G-cell rows
   text('a G cell inside the footprint', 'accepted', e => { e.units.ARMGEO.g = [[0, 0], [3, 3]]; });
   text('a G cell off the footprint', 'refused', e => { e.units.ARMGEO.g = [[4, 0]]; });
   text('no G cell with vent', 'refused', e => { e.units.ARMGEO.g = []; });
   text('a G cell without vent', 'refused', e => { e.units.ARMMEX.g = [[0, 0]]; });
   text('no G cell without vent', 'accepted', e => { e.units.ARMMEX.g = []; });
   text('a G cell not two integers', 'refused', e => { e.units.ARMGEO.g = [[0.5, 0]]; });
-  // the reclaim entry's data (sim.js checkFeature, the scene's features and kind, the reclaim and pick inputs and trips)
+  // the reclaim entry's data (tagpu_wikidata.c scene_feat, the scene's features and kind, the reclaim and pick inputs and trips)
   const ROCK = { footprint: [2, 2], metal: 50, height: 20, blocking: true, reclaimable: true };
   const feats = (f, placed) => e => { e.features = f; first(e).features = placed; };
   scn('a feature placed', 'accepted', feats({ rock: ROCK }, [{ name: 'rock', at: [2, 24] }]));
@@ -1047,7 +766,7 @@ function refusalCases(entry) {
   demo('an input inside a pick trip', 'refused', { inputs: [{ at: 5, pick: 'all' }, { at: 5 + WikiSim.PICK - 1, move: [1, 1] }], end: 200 });
   demo('an input on a pick trip\'s last tick', 'accepted', { inputs: [{ at: 5, pick: 'all' }, { at: 5 + WikiSim.PICK, move: [1, 1] }], end: 200 });
   demo('a pick with the left button held', 'refused', { inputs: [{ at: 1, down: 'lmb' }, { at: 5, pick: 'energy' }], end: 200 });
-  // the casting's reader, sim.js's checkCasting; each edit leaves the entry's own types bound to themselves
+  // the casting's reader, tagpu_wikidata_casting; each edit leaves the entry's own types bound to themselves
   const tower = f => C => f(C.casts.tower, C);
   cast('the identity casting', 'accepted', () => {});
   cast('the unbound casting', 'accepted', C => { Object.assign(C, clone(CASTINGS.unbound[0])); });
@@ -1235,7 +954,7 @@ function refusalCases(entry) {
   return cases;
 }
 
-/* ---- THE GAME ENTRY'S REFUSALS (sim.js checkGame, the C loader's game rules and tagpu_wikisim_init's): each case the
+/* ---- THE GAME ENTRY'S REFUSALS (the loader's game rules, tagpu_wikidata.c game, and tagpu_wikisim_init's): each case the
    game entry `game` (art/wiki/entries/watching.json) or the page entry `page` edited, its first demo played as a
    game (scripted 2, WIKI_PLAY_GAME; 3 its stall mode) or as a demo (1) ---- */
 function gameRefusalCases(game, page) {
@@ -1324,7 +1043,7 @@ function gameRefusalCases(game, page) {
   g('an owner past the seats', 'refused', (e, d, sc) => { sc.units[3].owner = 2; });
   g('a demo unit\'s owner past the seats', 'refused', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 2, at: [300, 60] }] }; });
   g('a demo unit of seat 1', 'accepted', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 1, at: [300, 60] }] }; });
-  /* THE SCENE'S SELECTION is of the input seats' units (sim.js make, tagpu_wikisim_init): the script gives seat 1 no
+  /* THE SCENE'S SELECTION is of the input seats' units (tagpu_wikisim_init): the script gives seat 1 no
      input, so a unit of seat 1 selected by the scene or by the demo's scene is refused, and accepted once seat 1 has
      one */
   const seat1 = sc => sc.units.find(u => (u.owner ?? 0) === 1).id;
@@ -1360,7 +1079,7 @@ function gameRefusalCases(game, page) {
   // the game script's inputs
   g('a caption', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, caption: 'x' }); });
   g('a wait', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, until: 'idle', max: 60 }); });
-  /* THE SEAT RULE (sim.js checkGame, tagpu_wikidata.c seat_ok): a seat of the scene's two, and 0 alone unless the
+  /* THE SEAT RULE (tagpu_wikidata.c seat_ok): a seat of the scene's two, and 0 alone unless the
      game's sidebar is false; then each seat's own hand (resolve, tagpu_wikidata_buttons) */
   g('seat 1', 'accepted', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 1, move: [10, 10] }); });
   for (const v of [2, 4, -1, 1.5, '0', null])
@@ -1407,7 +1126,7 @@ function gameRefusalCases(game, page) {
   g('a kill inside a trip', 'refused', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 20, kill: 'c1' }]; });
   g('a kill after a trip', 'accepted', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 10 + T, kill: 'c1' }]; });
 
-  /* THE VIEWER'S SCRIPT (sim.js checkViewer, the C loader's viewer_input and viewer_order), each case played as a
+  /* THE VIEWER'S SCRIPT (the loader's viewer_input and viewer_order), each case played as a
      replay (tagpu_wikireplay_init, WikiReplay.play): the demo's inputs replaced by `inputs` */
   const R = (name, want, inputs, edit = () => {}) => g(`viewer: ${name}`, want, (e, d, sc, G) => { d.inputs = inputs; edit(e, d, sc, G); });
   const last = () => cases[cases.length - 1];
@@ -1457,7 +1176,7 @@ function gameRefusalCases(game, page) {
   replay('a demo with no end', 'accepted', [], (e, d) => { delete d.end; });
   for (const c of ['rewind', 'live_play', 'live_now']) replay(`a replay demo pressing ${c}`, 'refused', [{ at: 10, hud: c }]);
 
-  /* A LIVE ENTRY (sim.js checkGame's live rule, checkViewer's two sets, the fork parts' rules, THE LIVE DATA RULE;
+  /* A LIVE ENTRY (the loader's live rule, the viewer's two sets, the fork parts' rules, THE LIVE DATA RULE;
      tagpu_wikidata.c's entry, viewer_input, forks and live_orders): played as a game, which checks the viewer's script
      and the parts too. The game script turned live has each build and each reclaim after a click on the commander's
      place on its tick, as the live rule asks. */
@@ -1575,7 +1294,7 @@ function gameRefusalCases(game, page) {
   return cases;
 }
 
-/* ---- A TEXT ENTRY'S REFUSALS (sim.js checkText, tagpu_wikidata_entry's text branch): the text entry as authored, and
+/* ---- A TEXT ENTRY'S REFUSALS (tagpu_wikidata_entry's text branch): the text entry as authored, and
    edited to carry what only a stage reads or a `demos` that is not a list. No demo is played: each side's loader
    alone (`loader`), wiki.js's checkEntry and checkText against tagpu_wikidata_entry, and a refusal's words alike ---- */
 function textRefusalCases() {
@@ -1594,7 +1313,7 @@ function textRefusalCases() {
   return cases;
 }
 
-/* ---- THE TAKEOVER ENTRY'S REFUSALS (sim.js checkGame's takeover rules, kept forks and a part's seat; checkViewer's
+/* ---- THE TAKEOVER ENTRY'S REFUSALS (the loader's takeover rules, kept forks and a part's seat; the viewer's
    Take over set; the C loader's entry, game, forks, kept and viewer_input): each case the takeover fixture `tk`, or the
    page entry `page`, edited, its first demo (or the one an edit keeps) played as a game, or as a replay where only
    the viewer's script is at stake ---- */
@@ -1737,13 +1456,13 @@ function takeoverRefusalCases(tk, page) {
    with a synthetic one (a box select, a build armed and placed, a kill), in both modes, then played AFTER ticks; in
    two contexts. Then THE HANDOFF, a fork taken while the recorded seat holds Shift and the left button in a
    placement gesture, and the same let go by the release alone (Back to now's); a fork of a fork; and the refusals a part or a call can meet at run time. Each case's claims are
-   sim.js's alone (its verdict); the trace makes C answer every call alike. ---- */
+   its verdict, and the three builds answer every call alike. ---- */
 function forkCases() {
   const FORK_AT = [2, 301, 601, 901, 1201], AFTER = 300;
   const A = ['fixture, own types, type 1', FIXTURE, { side: 0, iface: 1, casting: null, rival: null }];
   const CTXS = [A, ['fixture, shifted, type 0', FIXTURE, { side: 0, iface: 0, casting: CASTINGS.shifted[0], rival: RIVALS.shifted }]];
   /* the synthetic part: a box over the builder, ARMSOLAR armed and placed, the rival commander killed; it plays on a
-     game with the sidebar too: nothing stands in the build's trip (sim.js TRIP, 90 ticks), and the builder has the
+     game with the sidebar too: nothing stands in the build's trip (WIKI_TRIP, 90 ticks), and the builder has the
      solar on its page in every layout (the fixture's column has no page for the commander) */
   const synthetic = R => [{ at: R, move: [120, 315] }, { at: R + 1, down: 'select' }, { at: R + 3, move: [160, 345] },
     { at: R + 6, up: 'select' }, { at: R + 10, build: 'ARMSOLAR' }, { at: R + 102, seat: 0, move: [300, 420] },
@@ -1775,8 +1494,8 @@ function forkCases() {
               } });
       /* THE HANDOFF: Shift and the left button held in a placement gesture across R - 1; the fork lets go of both
          without placing, and seat 0's selection and the armed building go. The gesture arms its building straight, so it
-         plays on a game without the sidebar, whose builds take no trip through the column (sim.js TRIP). The release is
-         the taken seat's alone (sim.js THE RELEASE), so a unit another seat's recorded click selected stays selected */
+         plays on a game without the sidebar, whose builds take no trip through the column (WIKI_TRIP). The release is
+         the taken seat's alone (tagpu_wikisim_release), so a unit another seat's recorded click selected stays selected */
       const R = 601, held = JSON.parse(JSON.stringify(demo));
       if (!demo.game.sidebar) {
         // the commander picked where it stands on the build's tick, as a live entry's build needs (THE LIVE DATA RULE)
@@ -1843,13 +1562,13 @@ function forkCases() {
 
 /* ---- THE COLUMN PASS (rewind-spec.md section 12.1): DZ's arithmetic. A game with the sidebar forced on, its first
    scene builder of seat 0 selected, a build trip to every type it builds, each after a click on the builder on its
-   tick (sim.js THE LIVE DATA RULE), and each must arm (the trip lands on the drawn gadget only when centreOf and
+   tick (tagpu_wikidata.c THE LIVE DATA RULE), and each must arm (the trip lands on the drawn gadget only when centreOf and
    inside agree on DZ), then a click at the centre of every gadget of the builder's pages taken in world z, the
    column's row minus FRAME_BAR, and two clicks over the minimap's rows; with the fixture's column and the tall one,
    at both Interface Types. ---- */
 function columnCases() {
   const cases = [], T = WikiSim.TRIP, BAR = 32;
-  // a takeover or a players entry's game has no column: its sidebar is false (sim.js checkGame)
+  // a takeover or a players entry's game has no column: its sidebar is false (tagpu_wikidata.c game)
   for (const [id, whole] of GAMES.filter(([, e]) => !e.takeover && !e.players)) {
     const scene = Object.values(whole.scenes)[0];
     for (const [ln, layout] of [['fixture', FIXTURE], ['fixture-tall', SIDE('fixture-tall')]]) {
@@ -1858,7 +1577,7 @@ function columnCases() {
       if (!u) continue;
       const builds = whole.units[u.type].builds, inputs = [];
       let t = 10;
-      // each build after a click on the builder on its tick, as a live entry's build needs (sim.js THE LIVE DATA RULE)
+      // each build after a click on the builder on its tick, as a live entry's build needs (tagpu_wikidata.c THE LIVE DATA RULE)
       const arms = builds.map(b => {
         inputs.push({ at: t, move: u.at }, { at: t, down: 'select' }, { at: t, up: 'select' }, { at: t, build: b },
           { at: t + T, down: 'cancel' }, { at: t + T + 2, up: 'cancel' });
@@ -1903,7 +1622,7 @@ function columnCases() {
    nothing more after an empty part, the other seat exactly its recorded inputs of those ticks, b0's recorded kill
    never lands, and the fork views the seat taken. At 601 seat 1 holds the left button across R - 1 while seat 0 is
    taken: carried, its release at 605 resolved from the button held. Then the release of seat 1 alone between two
-   ticks, and the seated fork's refusals. In the fork pass's two contexts; each case's claims are sim.js's. ---- */
+   ticks, and the seated fork's refusals. In the fork pass's two contexts; each case's claims are its verdict. ---- */
 function seatCases() {
   const FORK_AT = [2, 301, 601, 901, 1201], AFTER = 300, END = 1600;
   const A = ['fixture, own types, type 1', FIXTURE, { side: 0, iface: 1, casting: null, rival: null }];
@@ -2019,7 +1738,7 @@ function seatCases() {
     const want = ['refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'ok'];
     return got.join() === want.join() ? 'every refusal refused' : `FAIL ${got.join()} for ${want.join()}`;
   } });
-  /* THE DEATH VISION'S BOUND (sim.js kill, tagpu_wikisim.c kill): 24 more of Bram's units, killed 20 on tick 50, 2 on
+  /* THE DEATH VISION'S BOUND (tasim_world.c tasim_kill): 24 more of Bram's units, killed 20 on tick 50, 2 on
      60, 1 on 111 and 1 on 112, by a script no players rule holds (a replay entry's) and by a fork part; the engine's
      add keeps the first 20, refuses the three while they are live (a death of tick d is live at an add on t while
      d + 61 >= t) and keeps the last */
@@ -2049,8 +1768,7 @@ function seatCases() {
   return cases;
 }
 
-/* ---- the data read back: what sim.js accepts of a casting or a layout, in wikitest's `data` shapes ---- */
-/* THE PLAYERS ENTRY'S DATA RULES (tagpu_wikidata.c and sim.js checkGame, checkViewer): the players fixture's first demo
+/* THE PLAYERS ENTRY'S DATA RULES (tagpu_wikidata.c game, viewer_input, viewer_order): the players fixture's first demo
    edited, each rule both ways; `replay` cases play it as a replay, so that the viewer's script is read too */
 function playersRefusalCases(pf, page) {
   const clone = v => JSON.parse(JSON.stringify(v));
@@ -2237,37 +1955,8 @@ function playersRefusalCases(pf, page) {
   return cases;
 }
 
-function castingOut(C) {
-  try { WikiSim.checkCasting(C); } catch (e) { return { ok: false, why: e.message }; }
-  const casts = WikiSim.CASTS.map(c => {
-    const k = C.casts[c];
-    if (!k) return null;
-    const [fx, fz] = k.footprint, g = new Array(16).fill(0);
-    // sim.js's gCell: the `g` it lists, or every cell of a `vent` type with none
-    if (k.g) for (const [dx, dz] of k.g) g[dz] |= 1 << dx;
-    else if (k.vent) for (let dz = 0; dz < fz; dz++) g[dz] = (1 << fx) - 1;
-    const o = { type: k.type, title: k.title, fx, fz };
-    for (const n of ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake', 'buildCostMetal',
-      'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage', 'energyUse']) o[n] = k[n] ?? 0;
-    const f = k.corpse;
-    return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, activatewhenbuilt: (k.activatewhenbuilt & 1) === 1 ? 1 : 0,
-      canreclamate: (k.canreclamate & 1) === 1 ? 1 : 0, sightDistance: k.sightDistance ?? 0, radarDistance: k.radarDistance ?? 0,
-      sonarDistance: k.sonarDistance ?? 0, modelHeight: k.modelHeight ?? 0,
-      vent: k.vent ? 1 : 0, g,
-      builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0),
-      // WIKIFEATDEF: an absent figure 0, an absent flag false, no object ""
-      corpse: f ? { name: f.name, fx: f.footprint[0], fz: f.footprint[1], metal: f.metal ?? 0, energy: f.energy ?? 0,
-        height: f.height ?? 0, blocking: f.blocking ? 1 : 0, reclaimable: f.reclaimable ? 1 : 0, object: f.object ?? '' } : null };
-  });
-  return { ok: true, casts };
-}
-function layoutOut(L) {
-  try { WikiSim.checkLayout(L); } catch (e) { return { ok: false, why: e.message }; }
-  return { ok: true, height: L.height, screens: Object.keys(L.screens),
-    sides: L.sides.map(s => ({ name: s.name, prefix: s.prefix, main2: s.main2, gen: s.gen,
-      types: Object.fromEntries(Object.entries(s.types).map(([t, T]) => [t, { pages: T.pages, orders: T.orders }])) })),
-    sight: L.sight ?? null };
-}
+/* ---- THE DATA READ: every casting of the fixture and of each side pack present, and every layout of art/wiki/side/ and
+   of those packs ---- */
 function dataItems() {
   const items = [];
   for (const [name, list] of Object.entries(CASTINGS))
@@ -2286,416 +1975,393 @@ function dataItems() {
   return items;
 }
 
+/* ---- THE C RUNS: wikitest's own modes, the replay layer's and the rules', in `tmp`, this process's own folder ---- */
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-'));
-let failed = 0, demos = 0, cases = 0, differ = 0, malformed = 0, bad = 0, refusals = 0, refuseBad = 0, datas = 0, dataBad = 0;
-try {
-  const wikitest = build(tmp);
-  run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), path.join(tmp, 'wiki.bin')]);
+const WINE_ENV = (() => {
+  const env = { ...process.env };
+  env.WINEPREFIX ??= path.join(path.resolve(ROOT, run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim()), '..', 'wineprefix');
+  env.WINEDEBUG ??= '-all';
+  return env;
+})();
+let EXES = null;
+function wikitest(target, args) {
+  EXES ??= Object.fromEntries(TARGETS.map(t => [t, hostBuild(t)]));
+  return target === 'wine' ? run('wine', [EXES.wine, ...args], { cwd: tmp, env: WINE_ENV }) : run(EXES[target], args, { cwd: tmp });
+}
+/* wikitest `args` on each of `builds`: the first build's lines, once every other printed the same; a build that printed
+   otherwise is a difference, its first differing line named */
+function everyBuild(args, builds = TARGETS) {
+  const outs = builds.map(t => lines(wikitest(t, args)));
+  for (let k = 1; k < outs.length; k++) {
+    const a = outs[0], b = outs[k];
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    if (i < a.length || i < b.length)
+      return { out: a, differs: `wikitest ${args[0]}: ${builds[k]} line ${i + 1}: ${show(b[i] ?? '(none)')}, ${builds[0]} ${show(a[i] ?? '(none)')}` };
+  }
+  return { out: outs[0], differs: null };
+}
 
-  /* ---- every demo, tick by tick, with each layout ---- */
-  const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
-  const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
-  const ids = [...new Set(tree.tree.flatMap(leaves))];
+/* THE TEE'S DIFFERENCES since `from` (an index of hostchan's list): the first, as a line */
+const teeSince = from => {
+  const d = TEE.differences;
+  if (d.length <= from) return null;
+  const x = d[from];
+  const n = `${d.length - from} request${d.length - from > 1 ? 's' : ''} apart; the first: ${x.request}`;
+  return x.dead ? `a build could not answer: ${x.dead} (${n})` : `${x.target} answered otherwise at ${x.at}: ${show(x.b)}, host ${show(x.a)} (${n})`;
+};
+
+let failed = 0, plays = 0, playBad = 0, cases = 0, caseBad = 0, refusals = 0, refuseBad = 0, datas = 0, dataBad = 0, malformed = 0, bad = 0;
+const differ = line => { console.log(`DIFFER ${line}`); return false; };
+
+/* ONE PLAY of a sim made by `make`, every tick read: the view, every unit's orders and the state hash, and with `sight`
+   (a players game's: the layout's sight table, null for none) the sight of each seat (sightOut); the map once more on
+   the last tick. The builds must answer it alike, and a refused sim be refused by every build; it is kept under `key`
+   (THE RECORD). `after(sim)`, given the played sim, names a claim of the play's own that failed. Returns whether it
+   passed. */
+function play(label, make, key, sight, after) {
+  const d0 = TEE.differences.length;
+  let sim, why = null;
+  plays++;
+  try { sim = make(); } catch (e) { why = e.message; }
+  if (why !== null) {
+    const d = teeSince(d0);
+    if (d) { playBad++; return differ(`${label}: refused (${why}), and ${d}`); }
+    rec(key, 'refused');
+    console.log(`equal  ${label}: refused by every build (${why})`);
+    return true;
+  }
+  const map0 = JSON.stringify(sim.view().map), hs = [];
+  let ticks = 0, own = null;
+  for (;;) {
+    const v = sim.view();
+    for (const u of v.units) sim.orders(u.id);
+    hs.push(sim.hash());
+    if (sight !== undefined) sightOut(sim, v, sight);
+    ticks++;
+    if (sim.done) break;
+    sim.step();
+  }
+  const mapEnd = JSON.stringify(sim.view(0, true).map);
+  if (after) own = after(sim);
+  sim.free();
+  const d = teeSince(d0);
+  if (d || mapEnd !== map0 || own) {
+    playBad++;
+    return differ(`${label}: ${d || (mapEnd !== map0 ? 'the map on the last tick is not the map the sim was made with' : own)}`);
+  }
+  rec(key, hs);
+  console.log(`equal  ${label}: ${ticks} ticks`);
+  return true;
+}
+
+/* ---- THE CONTEXTS' FILES for the C replay layer: the castings, the rivals, the identity casting with every bound
+   cast's economy outside a game's bounds, and the scripts' and sounds' facts as one cob.json ---- */
+const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
+const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
+const ids = [...new Set(tree.tree.flatMap(leaves))];
+const ENTRY = id => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
+// the identity casting with every bound cast's economy outside a game's bounds (tagpu_wikidata.c econ_fits): a game leaves each unbound
+const ECON_OFF = { ...CASTINGS.identity[0], casts: Object.fromEntries(Object.entries(CASTINGS.identity[0].casts).map(([c, k]) =>
+  [c, k && { ...k, metalStorage: -1, energyUse: 1e7 }])) };
+let filesMade = false;
+function cFiles() {
+  if (filesMade) return;
+  filesMade = true;
+  run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), path.join(tmp, 'wiki.bin')]);
   for (const name of Object.keys(CASTINGS)) {
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
     fs.writeFileSync(path.join(tmp, `rival-${name}.json`), JSON.stringify(RIVALS[name]));
   }
-  // the identity casting with every bound cast's economy outside a game's bounds (sim.js econFits): a game leaves each unbound
-  const ECON_OFF = { ...CASTINGS.identity[0], casts: Object.fromEntries(Object.entries(CASTINGS.identity[0].casts).map(([c, k]) =>
-    [c, k && { ...k, metalStorage: -1, energyUse: 1e7 }])) };
-  fs.writeFileSync(path.join(tmp, 'casting-identity-econoff.json'), JSON.stringify(ECON_OFF));
   fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries([...new Set([...Object.keys(SCRIPTS), ...Object.keys(SOUNDS)])].map(n => {
     const t = SCRIPTS[n];
     return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
-  if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
-  for (const [context, { cob, side, cname, iface, named }] of CONTEXTS.entries()) {
-    if (context % SHARDS !== SHARD - 1) continue;
-    const layout = side && SIDE(side);
-    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null,
-                  snd: cob ? soundSource(PACKS) : null };
-    let cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
-    let at = 0;
-    /* one demo through sim.js (`make`) against the C sim's lines from `at` on, which it consumes; with `sight` (a
-       players game's: the layout's sight table, null for none) each tick's sight too (sightOut); kept under `key` once
-       equal (THE RECORD) */
-    const compare = (id, demo, make, named, sight, key) => {
-      {
-        let sim, why = null;
-        try { sim = make(); } catch (e) { why = e.message; }
-        // a demo refused in this context: the C side must refuse it too, in one line
-        if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
-          const c = at < cout.length ? JSON.parse(cout[at]) : null;
-          const same = c && c.entry === id && c.demo === demo.id && 'refused' in c && why !== null;
-          if (c && c.entry === id && c.demo === demo.id) at++;
-          demos++;
-          if (same) { rec(key, 'refused'); console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`); }
-          else {
-            failed++;
-            differ++;
-            console.log(`DIFFER ${id}/${demo.id} (${named}): C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, sim.js ${why !== null ? `refused (${why})` : 'played'}`);
-            while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-          }
-          return null;
-        }
-        let first = null, ticks = 0;
-        const hs = [];
-        for (;;) {
-          const v = sim.view(), h = stateHash(sim, v), sv = sight === undefined ? undefined : sightOut(sim, v, sight);
-          if (!(sim.tick === 0 || sim.done)) delete v.map;
-          const j = { entry: id, demo: demo.id, t: sim.tick, h, v, o: Object.fromEntries(v.units.map(u => [u.id, sim.orders(u.id)])),
-            ...(sv ? { s: sv } : {}) };
-          if (at >= cout.length) { first = { t: sim.tick, at: '(the C sim ended early)', c: null, j: null }; break; }
-          const cl = JSON.parse(cout[at++]), d = diff(cl, j, '');
-          hs.push(cl.h);
-          if (d && !first) first = { t: sim.tick, ...d };
-          ticks++;
-          if (sim.done) break;
-          sim.step();
-        }
-        demos++;
-        if (first) {
-          failed++;
-          differ++;
-          console.log(`DIFFER ${id}/${demo.id} (${named}) at tick ${first.t}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
-          while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-        } else { rec(key, hs); console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} ticks`); }
-        return sim;
-      }
-    };
-    for (const id of ids) {
-      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-      for (const demo of entry.demos) compare(id, demo, () => WikiSim.play(entry, demo, layout, ctx), named, undefined, `demos|${named}|${id}/${demo.id}|play`);
-    }
-    if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}) the C sim played ${cout.length - at} frames more`); }
+}
+// a context's ctx as the drop-in takes it: its castings and, with the scripts, the gfx packs
+const ctxOf = ({ cob, cname, iface }, rival) => ({ side: 0, casting: cname ? CASTINGS[cname][0] : null, iface,
+  rival: rival && cname ? RIVALS[cname] : null, packs: cob ? PACK_DIRS : null });
 
-    /* ---- THE GAME PASS: every game entry under art/wiki/entries/, named by the tree or not, each demo's game script
-       as WikiSim.game and wikitest `game` play it, in this context with the opponent's casting beside it; then THE
-       STALL CASE, every seat's settings cut to SEAT_MIN so that the builds run dry: in stall mode tick for tick, and in
-       refuse mode, which must end starved on the same pass in both ---- */
-    const gctx = { ...ctx, rival: cname ? RIVALS[cname] : null };
-    for (const [id, whole] of PLAYS) {
-      /* each game once: demos that share their scene and their game script play the same game, tick for tick, in
-         both simulations, so the game pass plays the first of them (the replay pass below plays every demo) */
-      const games = new Set(), entry = { ...whole, demos: whole.demos.filter(d => {
-        const k = JSON.stringify([d.on ?? null, d.scene ?? null, d.game]);
-        return !games.has(k) && games.add(k);
-      }) };
-      const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
-        [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
-      const plays = [[entry, 'refuse', 2, '', cname, 'game'], [cut, 'stall', 3, ' stall', cname, 'stall'], [cut, 'refuse', 2, ' starved', cname, 'starved']];
-      // with the identity casting, also every cast's economy outside the game's bounds: both leave each cast unbound
-      if (cname === 'identity') plays.push([entry, 'refuse', 2, ' economy off', 'identity-econoff', 'econoff']);
-      for (const [e, mode, scripted, tag, cfile, variant] of plays) {
-        const pctx = cfile === 'identity-econoff' ? { ...gctx, casting: ECON_OFF } : gctx;
-        fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(e));
-        cout = lines(wikitest(['game', 'wiki.bin', 'game.json', side || '-', cfile ? `casting-${cfile}.json` : '-',
-          cname ? `rival-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-', String(scripted)]));
-        at = 0;
-        for (const demo of e.demos) {
-          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, pctx, mode), `${named}, game${tag}`,
-            e.players === true ? (layout && layout.sight) || null : undefined, `game|${named}|${id}/${demo.id}|${variant}`);
-          // the cut game in refuse mode ends starved, unless the context locked it first
-          if (tag === ' starved' && sim && sim.view().locked === null && !sim.view().game.starved) {
-            failed++;
-            differ++;
-            console.log(`DIFFER ${id}/${demo.id} (${named}, game${tag}): the game with every seat at ${WIKI_SEAT_MIN} did not starve`);
-          }
-          if (tag === ' economy off' && sim && sim.view().locked === null) {
-            failed++;
-            differ++;
-            console.log(`DIFFER ${id}/${demo.id} (${named}, game${tag}): the game did not stop under the badge`);
-          }
-        }
-        if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, game${tag}) the C sim played ${cout.length - at} frames more`); }
-      }
-    }
+/* ---- THE WORK ITEMS (the header's), each {key, run}, in a fixed order every shard builds alike ---- */
+const ITEMS = [];
+const item = (key, f) => ITEMS.push({ key, run: f });
 
-    /* ---- THE REPLAY PASS: every demo of every game entry through replay.js's play and wikitest `replay`, in this
-       context, demo tick by demo tick -- the replay's view and hash, the game's view, orders and hash; then THE PRESS
-       TRACE, Try it yourself (create) on the entry's first demo with TRACE's presses ---- */
-    /* one replay against the C lines from `at` on, which it consumes; `presses` for Try it, else the viewer's script;
-       with `sight` (a players entry's: the layout's sight table, null for none) the shown game's sight each demo tick
-       too (sightOut), taken while the view still holds the map it reads */
-    const compareReplay = (id, demo, make, named, presses, sight, key) => {
-      let R, why = null;
-      try { R = make(); } catch (e) { why = e.message; }
-      if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
-        const c = at < cout.length ? JSON.parse(cout[at]) : null;
-        if (c && c.entry === id && c.demo === demo.id) at++;
-        demos++;
-        if (c && 'refused' in c && why !== null) { rec(key, 'refused'); console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`); }
-        else {
-          failed++;
-          differ++;
-          console.log(`DIFFER ${id}/${demo.id} (${named}): C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, replay.js ${why !== null ? `refused (${why})` : 'played'}`);
-          while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-        }
-        if (R) R.free();
-        return;
-      }
-      let first = null, ticks = 0;
-      const hs = [];
-      for (;;) {
-        const rv = R.view(), last = rv.done || (presses && R.tick >= presses.end), g = R.game;
-        const v = g ? g.view() : null, sv = v && sight !== undefined ? sightOut(g, v, sight) : undefined;
-        if (v && !(R.tick === 0 || last)) delete v.map;
-        const j = { entry: id, demo: demo.id, t: R.tick, h: replayHash(R), r: rv, gh: g ? stateHash(g, g.view()) : null, v,
-          o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null, ...(sv ? { s: sv } : {}) };
-        if (at >= cout.length) { first = { t: R.tick, at: '(the C replay ended early)', c: null, j: null }; break; }
-        const cl = JSON.parse(cout[at++]), d = diff(cl, j, '');
-        hs.push([cl.h, cl.gh]);
-        if (d && !first) first = { t: R.tick, ...d };
-        ticks++;
-        if (last) break;
-        if (presses) for (const [t, c, x, z] of presses.presses) if (t === R.tick) {
-          if (c === 'move') R.input({ move: [x, z] });
-          else if (c === 'down' || c === 'up') R.input({ [c]: x });
-          else R.press(c, x);
-        }
-        R.step();
-      }
-      R.free();
-      demos++;
-      if (first) {
-        failed++;
-        differ++;
-        console.log(`DIFFER ${id}/${demo.id} (${named}) at demo tick ${first.t}: ${first.at}: C ${show(first.c)}, replay.js ${show(first.j)}`);
-        while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
-      } else { rec(key, hs); console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} demo ticks`); }
-    };
-    for (const [id, entry] of PLAYS) {
-      fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
-      const args = ['wiki.bin', 'game.json', side || '-', cname ? `casting-${cname}.json` : '-', cname ? `rival-${cname}.json` : '-',
-        String(iface), cob ? 'cob.json' : '-'];
-      cout = lines(wikitest(['replay', ...args]));
-      at = 0;
-      const sight = entry.players === true ? (layout && layout.sight) || null : undefined;
-      for (const demo of entry.demos)
-        compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null, sight, `replay|${named}|${id}/${demo.id}|replay`);
-      if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
-      // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE; a takeover entry's its
-      // TAKEOVER_TRACES, on its last demo
-      const traces = entry.takeover ? TAKEOVER_TRACES.map((t, k) => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }, `tktrace${k + 1}`])
-        : [[entry.live ? LIVE_TRACE : entry.players ? PLAYERS_TRACE : TRACE, entry, entry.live ? 'livetrace' : entry.players ? 'playerstrace' : 'trace']];
-      for (const [trace, te, variant] of traces) {
-        fs.writeFileSync(path.join(tmp, 'presses.json'), JSON.stringify(trace));
-        fs.writeFileSync(path.join(tmp, 'pressgame.json'), JSON.stringify(te));
-        cout = lines(wikitest(['replaytrace', ...args.map(a => a === 'game.json' ? 'pressgame.json' : a), 'presses.json']));
-        at = 0;
-        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace, sight,
-          `replay|${named}|${id}/${te.demos[0].id}|${variant}`);
-        if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
-      }
-    }
+/* THE DEMO PASS: every demo of the tree in one context */
+for (const c of CONTEXTS) item(`demos|${c.named}`, () => {
+  const layout = c.side && SIDE(c.side), ctx = ctxOf(c, false);
+  for (const id of ids) {
+    const entry = ENTRY(id);
+    for (const demo of entry.demos)
+      play(`${id}/${demo.id} (${c.named})`, () => WikiSim.play(entry, demo, layout, ctx), `demos|${c.named}|${id}/${demo.id}|play`);
   }
+});
 
-  /* ---- THE FORK PASS and THE COLUMN PASS (forkCases, columnCases): each case played on sim.js with every call
-     recorded as a host session (session()) and replayed through wikitest `trace`, every answer compared; a case's own claims are sim.js's alone and
-     fail it by its verdict. Case k plays on shard k % N + 1. ---- */
-  {
-    const all = [...forkCases(), ...columnCases(), ...seatCases()];
-    all.forEach((c, k) => {
-      if (k % SHARDS !== SHARD - 1) return;
-      const S = session(), hashAt = [];
-      let verdict;
-      // a game simulation whose every call is recorded, as the rule cases' record() records a demo's
-      const G = (entry, demo, mode) => {
-        const sim = WikiSim.game(entry, demo, c.layout, c.ctx, mode), h = S.create(entry, demo, c.layout, c.ctx, mode === 'stall' ? 'stall' : 'game');
-        return {
-          step() { S.send({ op: 'step', sim: h }); sim.step(); },
-          // the view as `seat` sees it, and the state hash (seat 0's, with item 13)
-          view(seat = 0) {
-            const v = S.read(S.send({ op: 'view', sim: h, map: true, ...(seat ? { seat } : {}) }), h, 'view', sim.view(seat));
-            hashAt.push(S.reads.length);
-            S.read(S.send({ op: 'hash', sim: h }), h, 'hash', stateHash(sim, sim.view()));
-            return v;
-          },
-          fork(R, inputs, fmode, seat = 0) {
-            let r = 'ok';
-            try { sim.fork(R, inputs, fmode, seat); } catch (e) { r = 'refused'; }
-            return S.read(S.send({ op: 'fork', sim: h, R, inputs, mode: fmode, ...(seat ? { seat } : {}) }), h, 'fork', r);
-          },
-          release(seat = 0) { S.send({ op: 'release', sim: h, ...(seat ? { seat } : {}) }); sim.release(seat); },
-          get fed() { return S.read(S.send({ op: 'now', sim: h }), h, 'fed', sim.gameNow().fed); },
-          fedOf(seat) { return S.read(S.send({ op: 'now', sim: h, seat }), h, 'fed', sim.gameNow(seat).fed); },
-          get tick() { return sim.tick; },
-        };
-      };
-      try { verdict = c.run(G); } catch (e) { verdict = `FAIL threw ${e.message}`; }
-      const expected = S.reads.map(r => r.v), got = S.run(wikitest, path.join(tmp, 'trace.jsonl'));
-      let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
-      for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
-      cases++;
-      if (first) { failed++; console.log(`DIFFER ${c.name}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
-      else if (String(verdict).startsWith('FAIL')) { failed++; console.log(`DIFFER ${c.name}: both alike, but sim.js's claim failed: ${verdict}`); }
-      else { rec(`case|-|-|${c.name}`, hashAt.map(i => got[i])); console.log(`equal  ${c.name}: ${expected.length} answers (${verdict})`); }
-    });
+/* THE GAME PASS: a game entry's games in one context, each distinct game once (demos that share their scene and their
+   game script play the same game; the replay pass plays every demo), then THE STALL CASE -- every seat's settings cut
+   to WIKI_SEAT_MIN so that the builds run dry: in stall mode, and in refuse mode, which must end starved -- and with the
+   identity casting every cast's economy outside the game's bounds, which must stop it under the badge */
+for (const c of CONTEXTS) for (const [id, whole] of PLAYS) item(`game|${c.named}|${id}`, () => {
+  const layout = c.side && SIDE(c.side), gctx = ctxOf(c, true);
+  const games = new Set(), entry = { ...whole, demos: whole.demos.filter(d => {
+    const k = JSON.stringify([d.on ?? null, d.scene ?? null, d.game]);
+    return !games.has(k) && games.add(k);
+  }) };
+  const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
+    [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
+  const variants = [[entry, 'refuse', '', 'game', gctx], [cut, 'stall', ' stall', 'stall', gctx], [cut, 'refuse', ' starved', 'starved', gctx]];
+  if (c.cname === 'identity') variants.push([entry, 'refuse', ' economy off', 'econoff', { ...gctx, casting: ECON_OFF }]);
+  for (const [e, mode, tag, variant, pctx] of variants)
+    for (const demo of e.demos) {
+      const sight = e.players === true ? (layout && layout.sight) || null : undefined;
+      // the cut game in refuse mode ends starved, unless the context locked it first; the economy off stops it
+      const after = tag === ' starved' ? s => { const v = s.view(); return v.locked === null && !v.game.starved ? `the game with every seat at ${WIKI_SEAT_MIN} did not starve` : null; }
+        : tag === ' economy off' ? s => (s.view().locked === null ? 'the game did not stop under the badge' : null) : null;
+      play(`${id}/${demo.id} (${c.named}, game${tag})`, () => WikiSim.game(e, demo, layout, pctx, mode), `game|${c.named}|${id}/${demo.id}|${variant}`, sight, after);
+    }
+});
+
+/* THE REPLAY PASS: a game entry's demos as replays in one context, through replay.js on the drop-in against the C
+   replay layer's lines (wikitest `replay`, every build alike), demo tick by demo tick -- the replay's view and hash,
+   the game's view, orders and hash; then THE PRESS TRACE, Try it yourself (create) with the entry's presses against
+   `replaytrace` */
+/* one replay against the C lines `cout` from `at.i` on, which it consumes; `presses` for Try it, else the viewer's
+   script; with `sight` (a players entry's: the layout's sight table, null for none) the shown game's sight each demo
+   tick too (sightOut), taken while the view still holds the map it reads */
+function compareReplay(cout, at, id, demo, make, named, presses, sight, key) {
+  const label = `${id}/${demo.id} (${named})`, d0 = TEE.differences.length;
+  let R, why = null;
+  plays++;
+  try { R = make(); } catch (e) { why = e.message; }
+  if (why !== null || (at.i < cout.length && 'refused' in JSON.parse(cout[at.i]))) {
+    const c = at.i < cout.length ? JSON.parse(cout[at.i]) : null;
+    if (c && c.entry === id && c.demo === demo.id) at.i++;
+    if (R) R.free();
+    const d = teeSince(d0);
+    if (c && 'refused' in c && why !== null && !d) { rec(key, 'refused'); console.log(`equal  ${label}: both refused (${why})`); return; }
+    playBad++;
+    differ(`${label}: C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, replay.js ${why !== null ? `refused (${why})` : 'played'}${d ? `; ${d}` : ''}`);
+    while (at.i < cout.length && JSON.parse(cout[at.i]).demo === demo.id && JSON.parse(cout[at.i]).entry === id) at.i++;
+    return;
   }
+  let first = null, ticks = 0;
+  const hs = [];
+  for (;;) {
+    const rv = R.view(), last = rv.done || (presses && R.tick >= presses.end), g = R.game;
+    const v = g ? g.view() : null, sv = v && sight !== undefined ? sightOut(g, v, sight) : undefined;
+    if (v && (R.tick === 0 || last)) v.map = g.view(0, true).map;
+    else if (v) delete v.map;
+    const j = { entry: id, demo: demo.id, t: R.tick, h: replayHash(R), r: rv, gh: g ? g.hash() : null, v,
+      o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null, ...(sv ? { s: sv } : {}) };
+    if (at.i >= cout.length) { first = { t: R.tick, at: '(the C replay ended early)', c: null, j: null }; break; }
+    const cl = JSON.parse(cout[at.i++]), d = diff(cl, j, '');
+    hs.push([cl.h, cl.gh]);
+    if (d && !first) first = { t: R.tick, ...d };
+    ticks++;
+    if (last) break;
+    if (presses) for (const [t, c, x, z] of presses.presses) if (t === R.tick) {
+      if (c === 'move') R.input({ move: [x, z] });
+      else if (c === 'down' || c === 'up') R.input({ [c]: x });
+      else R.press(c, x);
+    }
+    R.step();
+  }
+  R.free();
+  const d = teeSince(d0);
+  if (first || d) {
+    playBad++;
+    if (first) differ(`${label} at demo tick ${first.t}: ${first.at}: C ${show(first.c)}, replay.js ${show(first.j)}`);
+    else differ(`${label}: ${d}`);
+    while (at.i < cout.length && JSON.parse(cout[at.i]).demo === demo.id && JSON.parse(cout[at.i]).entry === id) at.i++;
+  } else { rec(key, hs); console.log(`equal  ${label}: ${ticks} demo ticks`); }
+}
+for (const c of CONTEXTS) for (const [id, entry] of PLAYS) item(`replay|${c.named}|${id}`, () => {
+  cFiles();
+  const { side, cname, iface, cob, named } = c, layout = side && SIDE(side), gctx = ctxOf(c, true);
+  const file = `game-${id}.json`;
+  fs.writeFileSync(path.join(tmp, file), JSON.stringify(entry));
+  const args = ['wiki.bin', file, side || '-', cname ? `casting-${cname}.json` : '-', cname ? `rival-${cname}.json` : '-',
+    String(iface), cob ? 'cob.json' : '-'];
+  const C = everyBuild(['replay', ...args]);
+  if (C.differs) { playBad++; differ(`${id} (${named}, replay): ${C.differs}`); }
+  const at = { i: 0 };
+  const sight = entry.players === true ? (layout && layout.sight) || null : undefined;
+  for (const demo of entry.demos)
+    compareReplay(C.out, at, id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null, sight, `replay|${named}|${id}/${demo.id}|replay`);
+  if (at.i !== C.out.length) { playBad++; differ(`(${named}, replay) the C replay of ${id} played ${C.out.length - at.i} frames more`); }
+  // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE; a takeover entry's its
+  // TAKEOVER_TRACES, on its last demo
+  const traces = entry.takeover ? TAKEOVER_TRACES.map((t, k) => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }, `tktrace${k + 1}`])
+    : [[entry.live ? LIVE_TRACE : entry.players ? PLAYERS_TRACE : TRACE, entry, entry.live ? 'livetrace' : entry.players ? 'playerstrace' : 'trace']];
+  for (const [trace, te, variant] of traces) {
+    fs.writeFileSync(path.join(tmp, `presses-${id}.json`), JSON.stringify(trace));
+    fs.writeFileSync(path.join(tmp, `pressgame-${id}.json`), JSON.stringify(te));
+    const T = everyBuild(['replaytrace', ...args.map(a => a === file ? `pressgame-${id}.json` : a), `presses-${id}.json`]);
+    if (T.differs) { playBad++; differ(`${id} (${named}, press trace): ${T.differs}`); }
+    const tat = { i: 0 };
+    compareReplay(T.out, tat, id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace, sight,
+      `replay|${named}|${id}/${te.demos[0].id}|${variant}`);
+    if (tat.i !== T.out.length) { playBad++; differ(`(${named}, press trace) the C replay of ${id} played ${T.out.length - tat.i} frames more`); }
+  }
+});
 
-  /* ---- THE RELEASE SWEEP (simcheck.mjs releaseSweep, wikitest sweep): each live entry's games with Back to now's
-     release after every tick up to the script's last input, then played on to the end, the hash and the stop compared
-     at each end; in the fork pass's two contexts, the last two shards. sim.js's own verdict, that no release stops a
-     game, is simcheck's. ---- */
-  [['fixture, own types, type 1', null, 1], ['fixture, shifted, type 0', 'shifted', 0]].forEach(([named, cname, iface], k) => {
-    if (SHARDS > 1 && SHARD !== SHARDS - k) return;
+/* THE FORK, COLUMN AND SEAT CASES (forkCases, columnCases, seatCases): each case's game through the drop-in, its hash
+   kept after each view; a case's claims are its own verdict */
+for (const c of [...forkCases(), ...columnCases(), ...seatCases()]) item(`case|${c.name}`, () => {
+  const d0 = TEE.differences.length, hashes = [];
+  let verdict;
+  // the case's game: each view (as `seat` sees it) followed by the state hash, which the record keeps
+  const G = (entry, demo, mode) => {
+    const sim = WikiSim.game(entry, demo, c.layout, c.ctx, mode);
+    return {
+      step() { sim.step(); },
+      view(seat = 0) { const v = sim.view(seat); hashes.push(sim.hash()); return v; },
+      fork(R, inputs, fmode, seat = 0) {
+        try { sim.fork(R, inputs, fmode, seat); return 'ok'; } catch (e) { return 'refused'; }
+      },
+      release(seat = 0) { sim.release(seat); },
+      get fed() { return sim.gameNow().fed; },
+      fedOf(seat) { return sim.gameNow(seat).fed; },
+      get tick() { return sim.tick; },
+    };
+  };
+  try { verdict = c.run(G); } catch (e) { verdict = `FAIL threw ${e.message}`; }
+  cases++;
+  const d = teeSince(d0);
+  if (d) { caseBad++; differ(`${c.name}: ${d}`); }
+  else if (String(verdict).startsWith('FAIL')) { caseBad++; differ(`${c.name}: the builds alike, but the case's claim failed: ${verdict}`); }
+  else { rec(`case|-|-|${c.name}`, hashes); console.log(`equal  ${c.name}: ${hashes.length} views (${verdict})`); }
+});
+
+/* THE RELEASE SWEEP (simcheck.mjs releaseSweep): a live entry's games with Back to now's release after every tick up to
+   the script's last input, then played on to the end, in the fork pass's two contexts; each end's hash kept. That no
+   release stops a game is simcheck's claim. */
+for (const [named, cname, iface] of [['fixture, own types, type 1', null, 1], ['fixture, shifted, type 0', 'shifted', 0]])
+  for (const [id, entry] of GAMES.filter(([, e]) => e.live)) item(`sweep|${named}|${id}`, () => {
     const ctx = { side: 0, iface, casting: cname ? CASTINGS[cname][0] : null, rival: cname ? RIVALS[cname] : null };
-    for (const [id, entry] of GAMES.filter(([, e]) => e.live)) {
-      fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
-      const cout = lines(wikitest(['sweep', 'wiki.bin', 'game.json', 'fixture', cname ? `casting-${cname}.json` : '-',
-        cname ? `rival-${cname}.json` : '-', String(iface), '-']));
-      let at = 0, n = 0, first = null;
-      const hs = [];
-      for (const demo of entry.demos) {
-        const last = Math.max(0, ...demo.game.inputs.map(e => e.at));
-        for (let r = 0; r <= last; r++, n++) {
-          const sim = WikiSim.game(entry, demo, FIXTURE, ctx, 'refuse');
-          while (sim.tick < r && !sim.done) sim.step();
-          sim.release();
-          while (!sim.done) sim.step();
-          const v = sim.view();
-          const j = { entry: id, demo: demo.id, r, t: sim.tick, stopped: v.locked !== null || v.game.starved || v.game.badKill || v.stalled,
-            h: stateHash(sim, v) };
-          sim.free();
-          const cl = at < cout.length ? JSON.parse(cout[at]) : null;
-          const d = cl ? diff(cl, j, '') : { at: '(the C sweep ended early)', c: null, j: null };
-          at++;
-          if (cl) hs.push([`sweep|${named}|${id}/${demo.id}|sweep ${r}`, [cl.h]]);
-          if (d && !first) first = { demo: demo.id, r, ...d };
-        }
+    const d0 = TEE.differences.length, hs = [];
+    let n = 0;
+    for (const demo of entry.demos) {
+      const last = Math.max(0, ...demo.game.inputs.map(e => e.at));
+      for (let r = 0; r <= last; r++, n++) {
+        const sim = WikiSim.game(entry, demo, FIXTURE, ctx, 'refuse');
+        while (sim.tick < r && !sim.done) sim.steps(Math.min(4096, r - sim.tick));
+        sim.release();
+        while (!sim.done) sim.steps(4096);
+        hs.push([`sweep|${named}|${id}/${demo.id}|sweep ${r}`, [sim.hash()]]);
+        sim.free();
       }
-      if (!first && at !== cout.length) first = { demo: '', r: '', at: `the C sweep printed ${cout.length - at} lines more`, c: null, j: null };
-      cases++;
-      if (first) { failed++; console.log(`DIFFER release sweep -- ${id} (${named}) ${first.demo} released after ${first.r}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
-      else { for (const [k, h] of hs) rec(k, h); console.log(`equal  release sweep -- ${id} (${named}): ${n} releases, each game's end alike`); }
     }
+    cases++;
+    const d = teeSince(d0);
+    if (d) { caseBad++; differ(`release sweep -- ${id} (${named}): ${d}`); }
+    else { for (const [k, h] of hs) rec(k, h); console.log(`equal  release sweep -- ${id} (${named}): ${n} releases, each game's end alike`); }
   });
 
-  if (SHARD === 1) {
-    /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
-    const { ENTRY_RULES } = await import('./simcheck.mjs');
-    const { create, play } = WikiSim;
-    /* a case may hold several sims at once (one made, another made, the first asked): each request names its sim by
-       the handle the host gives it */
-    let S, hashAt;
-    const record = (make, play) => (entry, demo, layout, ctx) => {
-      const sim = make(entry, demo, layout, ctx), h = S.create(entry, demo, layout, ctx, play);
-      return {
-        input(ev) { S.send({ op: 'input', sim: h, ev }); sim.input(ev); },
-        step() { S.send({ op: 'step', sim: h }); sim.step(); },
-        view: () => {
-          const v = S.read(S.send({ op: 'view', sim: h, map: true }), h, 'view', sim.view());
-          hashAt.push(S.reads.length);
-          S.read(S.send({ op: 'hash', sim: h }), h, 'hash', stateHash(sim, sim.view()));
-          return v;
-        },
-        orders: id => S.read(S.send({ op: 'orders', sim: h, id }), h, 'orders', sim.orders(id)),
-        get done() { return S.read(-1, h, 'done', sim.done); },
-        get side() { return S.read(-1, h, 'side', sim.side); },
-        get iface() { return S.read(-1, h, 'iface', sim.iface); },
-        get tick() { return S.read(-1, h, 'tick', sim.tick); },
-        get log() { return sim.log; },
-      };
-    };
-    WikiSim.create = record(create, 'try');
-    WikiSim.play = record(play, 'demo');
-    for (const id of ids) {
-      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-      for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
-        S = session(); hashAt = [];
-        let verdict;
-        try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
-        const expected = S.reads.map(r => r.v), got = S.run(wikitest, path.join(tmp, 'trace.jsonl'));
-        let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
-        for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
-        cases++;
-        if (first) {
-          failed++;
-          console.log(`DIFFER rule -- ${what}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
-        } else {
-          rec(`rule|-|${id}|${what}`, hashAt.map(i => got[i]));
-          console.log(`equal  rule -- ${what}: ${expected.length} answers (sim.js's verdict: ${verdict})`);
-        }
-      }
-    }
-    Object.assign(WikiSim, { create, play });
-
-    /* ---- the build trip's constants ---- */
-    {
-      const [cl, pl] = lines(wikitest(['constants']));
-      const c = JSON.parse(cl);
-      const W = WikiReplay;
-      const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
-        PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS,
-        REPLAY: { CONTROLS: W.CONTROLS, SPEEDS: W.SPEEDS, SPEED0: W.SPEED0, SEEK: W.SEEK, WALK: W.WALK, STEP: W.STEP, NEAR: W.NEAR,
-          BOOKS: W.BOOKS, MARKS: W.MARKS, FILL: W.FILL, HUD_DOWN: W.HUD_DOWN, HUD_UP: W.HUD_UP, DEATH: W.DEATH, DEFEAT: W.DEFEAT,
-          GAME_END_MAX: W.GAME_END_MAX } };
-      const d = diff(c, j, '');
+/* simcheck.mjs's RULE CASES, an entry's: each case's sims through the drop-in, the state hash kept after each view;
+   the case's verdict is simcheck's to judge, and is shown */
+for (const id of ids) item(`rule|${id}`, async () => {
+  const { ENTRY_RULES } = await import('./simcheck.mjs');
+  const entry = ENTRY(id), { create, play: demoPlay } = WikiSim;
+  let hashes;
+  const kept = make => (...a) => {
+    const sim = make(...a), view = sim.view;
+    sim.view = (...v) => { const r = view(...v); hashes.push(sim.hash()); return r; };
+    return sim;
+  };
+  WikiSim.create = kept(create);
+  WikiSim.play = kept(demoPlay);
+  try {
+    for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
+      const d0 = TEE.differences.length;
+      hashes = [];
+      let verdict;
+      try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
       cases++;
-      if (d) { failed++; console.log(`DIFFER the build trip's and the replay's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
-      else console.log(`equal  the build trip's and the replay's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows; seek ${c.REPLAY.SEEK}, walk ${c.REPLAY.WALK}, ${c.REPLAY.CONTROLS.length} controls`);
-      // a players entry's: the stats window's chips, the Players set, the deaths' bound and the sight table's bounds
-      const p = JSON.parse(pl), S = WikiSim;
-      const q = diff(p, { CHIPS: S.CHIPS, PLAYERS_CONTROLS: S.PLAYERS_CONTROLS, PLAYERS_DEATHS: S.PLAYERS_DEATHS,
-        PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_NUMTABLES: S.SIGHT_NUMTABLES, SIGHT_IDX: S.SIGHT_IDX,
-        SIGHT_REACH: S.SIGHT_REACH, SIGHT_CELLS: S.SIGHT_CELLS, STAT_MEASURES: W.MEASURES.length, STAT_MEASURE0: W.MEASURE0,
-        STAT_PTS: W.STAT_PTS, TOG_ALL: W.TOG_ALL, NOT_ASKED: W.NOT_ASKED, PASS: W.PASS }, '');
-      cases++;
-      if (q) { failed++; console.log(`DIFFER the players entry's constants: ${q.at}: C ${show(q.c)}, sim.js ${show(q.j)}`); }
-      else console.log(`equal  the players entry's constants: ${p.CHIPS.length} chips, ${p.PLAYERS_CONTROLS.length} controls, ` +
-        `${p.PLAYERS_DEATHS} deaths in ${p.PLAYERS_DEATH_SPAN} ticks, sight from ${p.SIGHT_MIN}`);
+      const d = teeSince(d0);
+      if (d) { caseBad++; differ(`rule -- ${what}: ${d}`); }
+      else { rec(`rule|-|${id}|${what}`, hashes); console.log(`equal  rule -- ${what}: ${hashes.length} views (verdict: ${verdict})`); }
     }
+  } finally { Object.assign(WikiSim, { create, play: demoPlay }); }
+});
 
-    /* ---- the recorder's rules: tagpu_recrules.h's own functions (wikitest `rules`) against replay.js's twins, and the
-       refresh grid against tools/replay/tarec.py's is_refresh, which the file checks use; `want` where a case's answer is
-       stated elsewhere: test_tareplay.py test_the_grid's, and the wiki's refresh points (rewind-spec §3.4) ---- */
-    {
-      const W = WikiReplay, T = W.REFRESH_TICKS;
-      const span = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
-      const grid = (f, iv) => [f, f + 1, ...span(1, Math.floor(2000 / iv)).map(k => k * iv + 1).filter(t => t > f + 1 && t <= 2000)];
-      const refresh = [
-        ...[[1, 500, 0], [2, 501, 500], [3, 502, 501], [3, 511, 501], [3, 512, 501], [5, 535, 511]].map((c, i) =>
-          ({ name: `test_the_grid ${c.join(',')} at 30`, args: [...c, 30], want: [1, 1, 0, 1, 1, 0][i] })),
-        { name: 'the third iteration on the grid', args: [3, T + 1, 2, T] },
-        { name: 'the third iteration before the grid', args: [3, T, 2, T] },
-        { name: 'the iteration after a refresh', args: [4, T + 2, T + 1, T] },
-        { name: 'interval 0: the third', args: [3, T + 1, 2, 0] },
-        { name: 'interval 0: the second', args: [2, T + 1, T, 0] },
-      ];
-      const walks = [
-        { name: 'test_the_grid\'s walk past gaps at 30', iv: 30, ticks: [1, 2, 3, 30, 31, 32, 60, 62, 91], want: [1, 2, 31, 62, 91] },
-        ...[1, 2, 300, 301, 302, 601].flatMap(f => [T, 30, 0].map(iv => ({
-          name: `a segment from ${f} to 2000 at ${iv}`, iv, ticks: span(f, 2000),
-          want: iv ? grid(f, iv) : [f, f + 1] }))),
-      ];
-      const evicts = [
-        { name: 'fewer than the limit live', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20]], selected: 2, want: { ok: 1, evict: null } },
-        { name: 'the limit live, the least recently used selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 1,
-          want: { ok: 1, evict: 2 } },
-        { name: 'the limit live, the least recently used not selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 3,
-          want: { ok: 1, evict: 1 } },
-        { name: 'the limit live with a tie, the earliest wins', rows: [[0, 1, 0], [1, 1, 30], [2, 1, 10], [3, 1, 10]], selected: 1,
-          want: { ok: 1, evict: 2 } },
-        { name: 'a tie whose earliest is selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 10], [3, 1, 30]], selected: 1, want: { ok: 1, evict: 2 } },
-        { name: 'more than the limit live: refused', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30], [4, 1, 40]], selected: 4,
-          want: { ok: 0, evict: null } },
-        { name: 'only the original and the selected', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, want: { ok: 1, evict: null } },
-        { name: 'only the original and the selected at limit 1: no candidate, refused', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, limit: 1,
-          want: { ok: 0, evict: null } },
-        { name: 'ids above 3 with deleted rows between', rows: [[0, 1, 0], [1, 0, 1], [2, 0, 2], [5, 1, 40], [6, 0, 3], [7, 1, 15], [9, 1, 25]],
-          selected: 9, want: { ok: 1, evict: 7 } },
-        { name: 'the original selected and the least recently used', rows: [[0, 1, 50], [1, 1, 30], [2, 1, 10], [3, 1, 20]], selected: 0,
-          want: { ok: 1, evict: 2 } },
-        { name: 'no rows', rows: [], selected: 0, want: { ok: 1, evict: null } },
-      ];
-      fs.writeFileSync(path.join(tmp, 'rules.txt'), [
-        ...refresh.map(c => `refresh ${c.args.join(' ')}`),
-        ...walks.map(c => `walk ${c.iv} ${c.ticks.join(' ')}`),
-        ...evicts.map(c => `evict ${c.selected} ${c.limit ?? W.FORK_LIMIT}${c.rows.map(r => ` ${r.join(':')}`).join('')}`),
-      ].join('\n') + '\n');
-      const got = lines(wikitest(['rules', 'rules.txt'])).map(l => JSON.parse(l));
-      const py = JSON.parse(run('python3', ['-I', '-c', `
+/* THE CONSTANTS: the build trip's and the replay layer's (wikitest `constants`, every build alike) against replay.js and
+   the host's hello; a players entry's: the stats window's chips, the Players set, the deaths' bound and the sight
+   table's bounds */
+item('constants', () => {
+  const C = everyBuild(['constants']);
+  cases += 2;
+  if (C.differs) { caseBad++; differ(C.differs); return; }
+  const [cl, pl] = C.out, c = JSON.parse(cl), W = WikiReplay, S = WikiSim;
+  const j = { TRIP: S.TRIP, TRIP_DOWN: S.TRIP_DOWN, TRIP_UP: S.TRIP_UP, PICK: S.PICK, PICK_DOWN: S.PICK_DOWN, PICK_UP: S.PICK_UP,
+    TRIP_ROWS: S.TRIP_ROWS,
+    REPLAY: { CONTROLS: W.CONTROLS, SPEEDS: W.SPEEDS, SPEED0: W.SPEED0, SEEK: W.SEEK, WALK: W.WALK, STEP: W.STEP, NEAR: W.NEAR,
+      BOOKS: W.BOOKS, MARKS: W.MARKS, FILL: W.FILL, HUD_DOWN: W.HUD_DOWN, HUD_UP: W.HUD_UP, DEATH: W.DEATH, DEFEAT: W.DEFEAT,
+      GAME_END_MAX: W.GAME_END_MAX } };
+  const d = diff(c, j, '');
+  if (d) { caseBad++; differ(`the build trip's and the replay's constants: ${d.at}: C ${show(d.c)}, host and replay.js ${show(d.j)}`); }
+  else console.log(`equal  the build trip's and the replay's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows; seek ${c.REPLAY.SEEK}, walk ${c.REPLAY.WALK}, ${c.REPLAY.CONTROLS.length} controls`);
+  const p = JSON.parse(pl);
+  const q = diff(p, { CHIPS: S.CHIPS, PLAYERS_CONTROLS: S.PLAYERS_CONTROLS, PLAYERS_DEATHS: S.PLAYERS_DEATHS,
+    PLAYERS_DEATH_SPAN: S.PLAYERS_DEATH_SPAN, SIGHT_MIN: S.SIGHT_MIN, SIGHT_NUMTABLES: S.SIGHT_NUMTABLES, SIGHT_IDX: S.SIGHT_IDX,
+    SIGHT_REACH: S.SIGHT_REACH, SIGHT_CELLS: S.SIGHT_CELLS, STAT_MEASURES: W.MEASURES.length, STAT_MEASURE0: W.MEASURE0,
+    STAT_PTS: W.STAT_PTS, TOG_ALL: W.TOG_ALL, NOT_ASKED: W.NOT_ASKED, PASS: W.PASS }, '');
+  if (q) { caseBad++; differ(`the players entry's constants: ${q.at}: C ${show(q.c)}, host and replay.js ${show(q.j)}`); }
+  else console.log(`equal  the players entry's constants: ${p.CHIPS.length} chips, ${p.PLAYERS_CONTROLS.length} controls, ` +
+    `${p.PLAYERS_DEATHS} deaths in ${p.PLAYERS_DEATH_SPAN} ticks, sight from ${p.SIGHT_MIN}`);
+});
+/* ---- the recorder's rules: tagpu_recrules.h's own functions (wikitest `rules`) against replay.js's twins, and the
+   refresh grid against tools/replay/tarec.py's is_refresh, which the file checks use; `want` where a case's answer is
+   stated elsewhere: test_tareplay.py test_the_grid's, and the wiki's refresh points (rewind-spec §3.4); every build
+   alike ---- */
+item('rules', () => {
+  const W = WikiReplay, T = W.REFRESH_TICKS;
+  const span = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  const grid = (f, iv) => [f, f + 1, ...span(1, Math.floor(2000 / iv)).map(k => k * iv + 1).filter(t => t > f + 1 && t <= 2000)];
+  const refresh = [
+    ...[[1, 500, 0], [2, 501, 500], [3, 502, 501], [3, 511, 501], [3, 512, 501], [5, 535, 511]].map((c, i) =>
+      ({ name: `test_the_grid ${c.join(',')} at 30`, args: [...c, 30], want: [1, 1, 0, 1, 1, 0][i] })),
+    { name: 'the third iteration on the grid', args: [3, T + 1, 2, T] },
+    { name: 'the third iteration before the grid', args: [3, T, 2, T] },
+    { name: 'the iteration after a refresh', args: [4, T + 2, T + 1, T] },
+    { name: 'interval 0: the third', args: [3, T + 1, 2, 0] },
+    { name: 'interval 0: the second', args: [2, T + 1, T, 0] },
+  ];
+  const walks = [
+    { name: 'test_the_grid\'s walk past gaps at 30', iv: 30, ticks: [1, 2, 3, 30, 31, 32, 60, 62, 91], want: [1, 2, 31, 62, 91] },
+    ...[1, 2, 300, 301, 302, 601].flatMap(f => [T, 30, 0].map(iv => ({
+      name: `a segment from ${f} to 2000 at ${iv}`, iv, ticks: span(f, 2000),
+      want: iv ? grid(f, iv) : [f, f + 1] }))),
+  ];
+  const evicts = [
+    { name: 'fewer than the limit live', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20]], selected: 2, want: { ok: 1, evict: null } },
+    { name: 'the limit live, the least recently used selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 1,
+      want: { ok: 1, evict: 2 } },
+    { name: 'the limit live, the least recently used not selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30]], selected: 3,
+      want: { ok: 1, evict: 1 } },
+    { name: 'the limit live with a tie, the earliest wins', rows: [[0, 1, 0], [1, 1, 30], [2, 1, 10], [3, 1, 10]], selected: 1,
+      want: { ok: 1, evict: 2 } },
+    { name: 'a tie whose earliest is selected', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 10], [3, 1, 30]], selected: 1, want: { ok: 1, evict: 2 } },
+    { name: 'more than the limit live: refused', rows: [[0, 1, 0], [1, 1, 10], [2, 1, 20], [3, 1, 30], [4, 1, 40]], selected: 4,
+      want: { ok: 0, evict: null } },
+    { name: 'only the original and the selected', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, want: { ok: 1, evict: null } },
+    { name: 'only the original and the selected at limit 1: no candidate, refused', rows: [[0, 1, 0], [1, 1, 10]], selected: 1, limit: 1,
+      want: { ok: 0, evict: null } },
+    { name: 'ids above 3 with deleted rows between', rows: [[0, 1, 0], [1, 0, 1], [2, 0, 2], [5, 1, 40], [6, 0, 3], [7, 1, 15], [9, 1, 25]],
+      selected: 9, want: { ok: 1, evict: 7 } },
+    { name: 'the original selected and the least recently used', rows: [[0, 1, 50], [1, 1, 30], [2, 1, 10], [3, 1, 20]], selected: 0,
+      want: { ok: 1, evict: 2 } },
+    { name: 'no rows', rows: [], selected: 0, want: { ok: 1, evict: null } },
+  ];
+  fs.writeFileSync(path.join(tmp, 'rules.txt'), [
+    ...refresh.map(c => `refresh ${c.args.join(' ')}`),
+    ...walks.map(c => `walk ${c.iv} ${c.ticks.join(' ')}`),
+    ...evicts.map(c => `evict ${c.selected} ${c.limit ?? W.FORK_LIMIT}${c.rows.map(r => ` ${r.join(':')}`).join('')}`),
+  ].join('\n') + '\n');
+  const C = everyBuild(['rules', 'rules.txt']);
+  if (C.differs) { cases++; caseBad++; differ(C.differs); return; }
+  const got = C.out.map(l => JSON.parse(l));
+  const py = JSON.parse(run('python3', ['-I', '-c', `
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import tarec
@@ -2712,103 +2378,126 @@ for kind, iv, a in cases:
     out.append(r)
 print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.RECR_TIMELINES, 'out': out}))
 `, path.join(ROOT, 'tools/replay')], { input: JSON.stringify([...refresh.map(c => ['refresh', c.args[3], c.args.slice(0, 3)]),
-        ...walks.map(c => ['walk', c.iv, c.ticks])]) }));
-      const judge = (name, answers) => {
-        const first = answers.find(([, v]) => v !== undefined && diff(v, answers[0][1], ''));
-        cases++;
-        if (first) {
-          failed++;
-          console.log(`DIFFER rules -- ${name}: ${answers.map(([who, v]) => `${who} ${show(v)}`).join(', ')}`);
-        } else console.log(`equal  rules -- ${name}: ${show(answers[0][1])}`);
-      };
-      judge('the constants', [['C', got[0]], ['replay.js', { REFRESH_TICKS: T, FORK_LIMIT: W.FORK_LIMIT, TIMELINES: W.TIMELINES }]]);
-      judge('the constants tarec.py holds', [['C', { REFRESH_TICKS: got[0].REFRESH_TICKS, TIMELINES: got[0].TIMELINES }],
-        ['tarec.py', { REFRESH_TICKS: py.REFRESH_TICKS, TIMELINES: py.TIMELINES }]]);
-      let at = 1;
-      refresh.forEach((c, i) => judge(`isRefresh: ${c.name}`, [['C', got[at++]], ['replay.js', W.isRefresh(...c.args) ? 1 : 0],
-        ['tarec.py', py.out[i]], ['wanted', c.want]]));
-      walks.forEach((c, i) => {
-        const j = [];
-        let prev = 0;
-        c.ticks.forEach((t, k) => { if (W.isRefresh(k + 1, t, prev, c.iv)) { j.push(t); prev = t; } });
-        judge(`the grid: ${c.name}`, [['C', got[at++]], ['replay.js', j], ['tarec.py', py.out[refresh.length + i]], ['wanted', c.want]]);
-      });
-      evicts.forEach(c => {
-        const j = W.forkEvict(c.rows.map(([id, live, used]) => ({ id, live, used })), c.selected, c.limit ?? W.FORK_LIMIT);
-        judge(`forkEvict: ${c.name}`, [['C', got[at++]], ['replay.js', { ok: j.ok ? 1 : 0, evict: j.evict }], ['wanted', c.want]]);
-      });
-    }
+    ...walks.map(c => ['walk', c.iv, c.ticks])]) }));
+  const judge = (name, answers) => {
+    const first = answers.find(([, v]) => v !== undefined && diff(v, answers[0][1], ''));
+    cases++;
+    if (first) {
+      caseBad++;
+      console.log(`DIFFER rules -- ${name}: ${answers.map(([who, v]) => `${who} ${show(v)}`).join(', ')}`);
+    } else console.log(`equal  rules -- ${name}: ${show(answers[0][1])}`);
+  };
+  judge('the constants', [['C', got[0]], ['replay.js', { REFRESH_TICKS: T, FORK_LIMIT: W.FORK_LIMIT, TIMELINES: W.TIMELINES }]]);
+  judge('the constants tarec.py holds', [['C', { REFRESH_TICKS: got[0].REFRESH_TICKS, TIMELINES: got[0].TIMELINES }],
+    ['tarec.py', { REFRESH_TICKS: py.REFRESH_TICKS, TIMELINES: py.TIMELINES }]]);
+  let at = 1;
+  refresh.forEach((c, i) => judge(`isRefresh: ${c.name}`, [['C', got[at++]], ['replay.js', W.isRefresh(...c.args) ? 1 : 0],
+    ['tarec.py', py.out[i]], ['wanted', c.want]]));
+  walks.forEach((c, i) => {
+    const j = [];
+    let prev = 0;
+    c.ticks.forEach((t, k) => { if (W.isRefresh(k + 1, t, prev, c.iv)) { j.push(t); prev = t; } });
+    judge(`the grid: ${c.name}`, [['C', got[at++]], ['replay.js', j], ['tarec.py', py.out[refresh.length + i]], ['wanted', c.want]]);
+  });
+  evicts.forEach(c => {
+    const j = W.forkEvict(c.rows.map(([id, live, used]) => ({ id, live, used })), c.selected, c.limit ?? W.FORK_LIMIT);
+    judge(`forkEvict: ${c.name}`, [['C', got[at++]], ['replay.js', { ok: j.ok ? 1 : 0, evict: j.evict }], ['wanted', c.want]]);
+  });
+});
 
-    /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
-    {
-      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
-      /* the game cases edit a replay entry's first demo: a sidebar-free game whose viewer presses the replay HUD, which
-         they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
-         plays, and a takeover or a players entry's data rules are their fixtures' cases */
-      const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover && !game.players).flatMap(([, game]) => gameRefusalCases(game, entry)),
-        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry),
-        ...textRefusalCases()];
-      fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
-        JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
-                         rival: c.rival ?? null, replay: !!c.replay, loader: !!c.loader }) + '\n' +
-        JSON.stringify(c.entry) + '\n').join(''));
-      const got = lines(wikitest(['refuse', 'refuse.jsonl']));
-      all.forEach((c, i) => {
-        let js = 'accepted', why = '';
-        try {
-          // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
-          const bad = WikiText.checkEntry(c.entry) || (c.loader ? WikiSim.checkText(c.entry) : null);
-          if (bad) throw new Error(bad);
-          const ctx = { side: c.side, casting: c.casting, iface: c.iface, rival: c.rival ?? null };
-          if (c.replay) WikiReplay.play(c.entry, c.entry.demos[0], c.layout, ctx).free();
-          else if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse');
-          // a loader case plays no demo: the loader's refusals above are the whole case
-          else if (!c.loader) (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx);
-        } catch (e) { js = 'refused'; why = e.message; }
-        const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
-        // a loader case's refusal says the same words on both sides: the C line ends with sim.js's message
-        const words = !c.loader || js !== 'refused' || (got[i] || '').endsWith(`: ${why}`);
-        refusals++;
-        if (cv === js && js === c.want && words) console.log(`equal  refusal -- ${c.name}: both ${js}`);
-        else { failed++; refuseBad++; console.log(`DIFFER refusal -- ${c.name}: C ${got[i] || '(none)'}; sim.js ${js}${why ? ` (${why})` : ''}; wanted ${c.want}`); }
-      });
-    }
-
-    /* ---- castings and layouts read back, field by field; a refused casting by its message ---- */
-    {
-      const items = dataItems();
-      fs.writeFileSync(path.join(tmp, 'data.jsonl'), items.map(it =>
-        JSON.stringify({ kind: it.kind, name: it.name }) + '\n' + JSON.stringify(it.v) + '\n').join(''));
-      const got = lines(wikitest(['data', 'data.jsonl']));
-      items.forEach((it, i) => {
-        const j = it.kind === 'casting' ? castingOut(it.v) : layoutOut(it.v), c = got[i] ? JSON.parse(got[i]) : null;
-        // a layout's refusals are worded by each side on its own; a casting's are sim.js's words
-        if (c && !c.ok && !j.ok && it.kind === 'layout') { c.why = j.why; }
-        const d = c ? diff(c, j, '') : { at: '(no answer)', c: null, j };
-        datas++;
-        if (d) { failed++; dataBad++; console.log(`DIFFER data -- ${it.name}: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
-        else console.log(`equal  data -- ${it.name}: ${j.ok ? 'read alike' : `both refused (${j.why})`}`);
-      });
-    }
-
-    /* ---- data the loader must survive, built by tests/wikitest.c's `malformed` ---- */
-    for (const l of lines(wikitest(['malformed']))) {
-      malformed++;
-      if (l.startsWith('ok ')) console.log(`equal  malformed -- ${l.slice(3)}`);
-      else { failed++; bad++; console.log(`DIFFER malformed -- ${l}`); }
+/* THE REFUSALS: each case accepted or refused as it wants, by every build alike; a loader case is the loader alone (a
+   text entry's words), and text.js's checkEntry, which wiki.js asks before any sim is made, refuses only what the case
+   wants refused */
+item('refusals', () => {
+  const entry = ENTRY('quickbuild');
+  /* the game cases edit a replay entry's first demo: a sidebar-free game whose viewer presses the replay HUD, which
+     they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo plays,
+     and a takeover or a players entry's data rules are their fixtures' cases */
+  const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover && !game.players).flatMap(([, game]) => gameRefusalCases(game, entry)),
+    ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry), ...playersRefusalCases(playersFixture(), entry),
+    ...textRefusalCases()];
+  for (const c of all) {
+    const d0 = TEE.differences.length;
+    let got = 'accepted', why = '';
+    try {
+      const ctx = { side: c.side, casting: c.casting, iface: c.iface, rival: c.rival ?? null };
+      if (c.loader) { const bad = WikiSim.checkText(c.entry); if (bad) throw new Error(bad); }
+      else if (c.replay) WikiReplay.play(c.entry, c.entry.demos[0], c.layout, ctx).free();
+      else if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse').free();
+      else (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx).free();
+    } catch (e) { got = 'refused'; why = e.message; }
+    const text = WikiText.checkEntry(c.entry), d = teeSince(d0);
+    refusals++;
+    if (got === c.want && !d && (!text || c.want === 'refused')) console.log(`equal  refusal -- ${c.name}: ${got} by every build`);
+    else {
+      refuseBad++;
+      differ(`refusal -- ${c.name}: ${got}${why ? ` (${why})` : ''}; wanted ${c.want}${text ? `; text.js refuses it (${text})` : ''}${d ? `; ${d}` : ''}`);
     }
   }
+});
+
+/* THE DATA READ: every casting and layout (dataItems) read by each build's loader alike, a refused one by its words */
+item('data', () => {
+  for (const it of dataItems()) {
+    const d0 = TEE.differences.length;
+    let why = null;
+    try { if (it.kind === 'casting') WikiSim.checkCasting(it.v); else WikiSim.checkLayout(it.v); } catch (e) { why = e.message; }
+    const d = teeSince(d0);
+    datas++;
+    if (d) { dataBad++; differ(`data -- ${it.name}: ${d}`); }
+    else console.log(`equal  data -- ${it.name}: ${why === null ? 'read alike' : `refused alike (${why})`}`);
+  }
+});
+
+/* THE MALFORMED DATA the loader must survive, built by tests/wikitest.c's `malformed`, on the sanitizers' build and the
+   game's */
+item('malformed', () => {
+  const C = everyBuild(['malformed'], ['asan', 'wine']);
+  if (C.differs) { malformed++; bad++; differ(`malformed -- ${C.differs}`); }
+  for (const l of C.out) {
+    malformed++;
+    if (l.startsWith('ok ')) console.log(`equal  malformed -- ${l.slice(3)}`);
+    else { bad++; differ(`malformed -- ${l}`); }
+  }
+});
+
+/* ---- THIS SHARD'S ITEMS, dealt longest first (the header's THE WORK ITEMS) and played in their order ---- */
+function dealt() {
+  let costs = null;
+  try { costs = JSON.parse(fs.readFileSync(process.env.SIMPARITY_DEAL || COSTS, 'utf8')); } catch (e) { costs = null; }
+  if (!costs) return ITEMS.filter((it, i) => i % SHARDS === SHARD - 1);
+  const known = ITEMS.map(it => costs[it.key]).filter(Number.isFinite);
+  const guess = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
+  const order = ITEMS.map((it, i) => [Number.isFinite(costs[it.key]) ? costs[it.key] : guess, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  const load = new Array(SHARDS).fill(0), mine = [];
+  for (const [c, i] of order) {
+    let k = 0;
+    for (let j = 1; j < SHARDS; j++) if (load[j] < load[k]) k = j;
+    load[k] += c;
+    if (k === SHARD - 1) mine.push(ITEMS[i]);
+  }
+  return mine;
+}
+const spent = {};
+try {
+  if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
+  for (const it of dealt()) {
+    const t0 = process.hrtime.bigint();
+    await it.run();
+    spent[it.key] = Number(process.hrtime.bigint() - t0) / 1e9;
+  }
 } catch (e) {
-  if (!(e instanceof CannotRun)) throw e;
+  if (!(e instanceof CannotRun) && !/^hostchan /.test(e.message)) throw e;
   console.error(`simparity: ${e.message}`);
   process.exitCode = 2;
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
-  if (host) host.close();
 }
+failed = playBad + caseBad + refuseBad + dataBad + bad + dupKeys;
+if (process.exitCode !== 2 && COSTS_OUT) fs.writeFileSync(COSTS_OUT, JSON.stringify(spent));
 if (process.exitCode !== 2 && (RECORD || AGAINST)) {
   const body = [...PLAYED].map(([key, h]) => JSON.stringify(h === 'refused' ? { key, refused: true } : { key, h }) + '\n').join('');
-  if (RECORD && !failed && !dupKeys) {
+  if (RECORD && !failed) {
     const commit = run('git', ['rev-parse', 'HEAD'], { cwd: ROOT }).trim();
     const header = { commit, gfx: GFX_DIGEST, contexts: CONTEXTS.map(c => c.named) };
     fs.writeFileSync(shardFile(RECORD, SHARD, SHARDS), zlib.gzipSync(JSON.stringify({ header }) + '\n' + body, { level: 9 }));
@@ -2816,23 +2505,16 @@ if (process.exitCode !== 2 && (RECORD || AGAINST)) {
   }
   if (AGAINST && KEYS_OUT) fs.writeFileSync(KEYS_OUT, zlib.gzipSync(body));
   else if (AGAINST) {
-    // a shard run by hand holds only the plays it made; a run of every play (no --shard) holds the whole record
-    const bad = holdTo(readRecord(AGAINST), PLAYED, SHARDS === 1);
-    for (const l of bad) console.log(`DIFFER against -- ${l}`);
-    if (bad.length) failed++;
+    // a shard run by hand holds only the plays it made; a run of every item (--shard 1/1) holds the whole record
+    const bad1 = holdTo(readRecord(AGAINST), PLAYED, SHARDS === 1);
+    for (const l of bad1) console.log(`DIFFER against -- ${l}`);
+    if (bad1.length) failed++;
     else console.log(`equal  against ${AGAINST}: ${PLAYED.size} plays`);
   }
 }
 if (process.exitCode !== 2) {
-  if (dupKeys) failed++;
-  WikiSim.compareConstants();
-  for (const l of HOST_DIFFS.slice(0, 40)) console.log(`DIFFER host leg -- ${l}`);
-  if (HOST_DIFFS.length > 40) console.log(`DIFFER host leg -- and ${HOST_DIFFS.length - 40} more`);
-  if (HOST_DIFFS.length) failed++;
-  else console.log(`equal  host leg: ${hostSims} sims through the drop-in (mockup/simhost.js), every answer as sim.js's`);
-  const variant = WINE ? 'i686 under Wine' : 'native';
-  if (SHARDS > 1) process.stdout.write(`shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', its demo plays alone' : ''}: `);
-  console.log(failed ? `${differ} of ${demos} demo plays, ${failed - differ - bad - refuseBad - dataBad - (HOST_DIFFS.length ? 1 : 0)} of ${cases} rule cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read back and ${bad} of ${malformed} malformed-data cases differ${HOST_DIFFS.length ? `, and the host leg in ${HOST_DIFFS.length} places` : ''} (C sim: ${variant})`
-    : `all ${demos} demo plays and ${cases} rule cases equal, tick for tick, all ${refusals} refusal cases alike, all ${datas} castings and layouts read alike and all ${malformed} malformed-data cases loaded (C sim: ${variant})`);
+  if (SHARDS > 1) process.stdout.write(`shard ${SHARD} of ${SHARDS}: `);
+  console.log(failed ? `${playBad} of ${plays} plays, ${caseBad} of ${cases} cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read and ${bad} of ${malformed} malformed-data cases differ (builds: ${TARGETS.join(', ')})`
+    : `all ${plays} plays and ${cases} cases alike, request for request, all ${refusals} refusal cases as wanted, all ${datas} castings and layouts read alike and all ${malformed} malformed-data cases loaded (builds: ${TARGETS.join(', ')})`);
   process.exitCode = failed ? 1 : 0;
 }

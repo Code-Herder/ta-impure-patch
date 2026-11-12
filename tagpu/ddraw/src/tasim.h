@@ -7,7 +7,7 @@
    THE CORE'S CONTRACT is tagpu_wikisim.h's, which it was carved out of: engine-free, Win32-free and without
    globals; every piece of state in the WIKISIM its caller owns; no clock and no randomness; doubles with each
    operation rounded once, so every tasim_*.c is compiled on SSE2 as tagpu_wikisim.c is (the Makefile's THE WIKI'S
-   SIMULATION) and agrees with tools/wiki/mockup/sim.js bit for bit. One WIKISIM is still the whole state, and the
+   SIMULATION), and every build agrees bit for bit. One WIKISIM is still the whole state, and the
    core reads the parts of it the front end keeps: the acting seat (ST) and the sidebar a unit's pages come from. */
 #include <math.h>
 #include <stddef.h>
@@ -23,7 +23,7 @@
 
 enum { HOW_BUILD, HOW_RECLAIM, HOW_FEATURE };
 
-/* sim.js's st: the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
+/* the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
    nin wherever it is set (seat_in bounds it), so the index is in range. */
 #define ST(s) ((s)->in[(s)->act])
 
@@ -60,7 +60,7 @@ static inline BOX tasim_box(const WIKISIM* s, int t, int ox, int oz)
     return b;
 }
 
-/* a world position in 16.16, truncated toward zero and held to the int32 range, as sim.js's fix16 */
+/* a world position in 16.16, truncated toward zero and held to the int32 range */
 static inline int32_t tasim_fix16(double v)
 {
     const double t = trunc(v * 65536.0);
@@ -120,7 +120,7 @@ void      tasim_arm(WIKISIM* s, int t);
 enum { GO_ARRIVED = 1, GO_STEPPED, GO_WAITING, GO_STUCK };
 enum { TARGET_POINT, TARGET_SITE, TARGET_UNIT };
 
-/* A TARGET, sim.js's toPoint, toSite and toUnit: the point aimed at; in range within `stop` of r,
+/* A TARGET, a point, a site or a unit: the point aimed at; in range within `stop` of r,
    or touching `body`, the target's own body; a straight walk ends `clip` short of the point; the
    planner's goal is within `plan` of r, or touching `body`; `serial` and `kind` name it for the
    leg */

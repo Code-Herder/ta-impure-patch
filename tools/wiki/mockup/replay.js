@@ -1,11 +1,11 @@
 /* replay.js -- the in-game wiki's replay layer: a game entry's demo (research/notes/ingame-wiki-replay-plan.md) played
    the way the replay HUD plays a recording. It holds the viewer's clock and the HUD's state, and owns the game
-   simulations; sim.js knows nothing of the HUD. tagpu/ddraw/src/tagpu_wikireplay.c is its twin, function for function
+   simulations; the simulation knows nothing of the HUD. tagpu/ddraw/src/tagpu_wikireplay.c is its twin, function for function
    and under its names: tools/wiki/simparity.mjs compares the two demo tick by demo tick, through the state hash of
    each and the replay's own (tagpu_wikireplay.h), and tools/wiki/simcheck.mjs checks every demo's claims.
 
    TWO CLOCKS (decision 4). The demo's game script is played by a game simulation (WikiSim.game) on game ticks; the
-   viewer's script, the demo's `inputs` (captions, the `seeked` wait and the HUD's presses, sim.js checkViewer), runs on
+   viewer's script, the demo's `inputs` (captions, the `seeked` wait and the HUD's presses, the loader's viewer_input), runs on
    demo ticks, one a step, and moves the game only through the HUD's controls: paused, a speed, a seek. Try it yourself
    (create) has no viewer's script: the player's presses come through press(), each acting at once.
 

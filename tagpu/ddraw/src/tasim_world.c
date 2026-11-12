@@ -83,7 +83,7 @@ WIKIUNIT* tasim_by_id(const WIKISIM* s, const char* id)
     return NULL;
 }
 
-/* the first structure of that type on that site; a mobile unit has no site (sim.js: its ox is undefined) */
+/* the first structure of that type on that site; a mobile unit has no site */
 WIKIUNIT* tasim_structure_at(const WIKISIM* s, int t, int ox, int oz)
 {
     int i;
@@ -94,7 +94,7 @@ WIKIUNIT* tasim_structure_at(const WIKISIM* s, int t, int ox, int oz)
     return NULL;
 }
 
-/* ---- THE FEATURES (research/notes/ingame-wiki-reclaim-plan.md), sim.js's: the entry's `features`
+/* ---- THE FEATURES (research/notes/ingame-wiki-reclaim-plan.md): the entry's `features`
    table names each by its TDF section, and a scene places one at its anchor cell, the footprint's
    top-left, as the TNT and LoadFeature 0x4224B0 place a map's. A blocking one stands in the way as
    a structure does; a reclaimable one is a reclaim's target, and goes when its reclaim pays out
@@ -145,8 +145,9 @@ void tasim_feat_remove(WIKISIM* s, WIKIFEAT* f)
     s->nfeat--;
 }
 
-/* THE ENGINE'S SITE TEST (0x47D2E0), simplified as sim.js simplifies it: the footprint inside the
-   map's placeable interior, cells 1 to w - 2 (tagpu_resource.c site_known's bound), clear of every
+/* THE ENGINE'S SITE TEST (0x47D2E0), simplified: the footprint inside the map's placeable
+   interior, cells 1 to w - 2 (tagpu_resource.c site_known's bound; [INFERRED] for the engine from
+   0x47D820, which answers 0 outside it), clear of every
    structure but `ignore` (an upgrade's old building), and for a geothermal plant a vent under one
    of its G cells: 0x47D2E0 refuses a yard holding G (0x47D80F) unless some G cell stands on a
    feature whose FeatureDef +0xFE has bit 0x20 (0x47D684..0x47D711, 0x47D75B..0x47D769),
@@ -157,7 +158,7 @@ int tasim_interior(const WIKISIM* s, int t, int ox, int oz)
     return ox >= 1 && oz >= 1 && ox + tasim_fpx(s, t) < s->W && oz + tasim_fpz(s, t) < s->H;
 }
 
-/* vent v lies under a G cell of type t's footprint at (ox, oz), sim.js's ventsUnderG */
+/* vent v lies under a G cell of type t's footprint at (ox, oz) */
 int tasim_vent_under_g(const WIKISIM* s, const PlaceCell* v, int t, int ox, int oz)
 {
     return v->cx >= ox && v->cx < ox + tasim_fpx(s, t) && v->cz >= oz && v->cz < oz + tasim_fpz(s, t) && tasim_g_cell(s, t, v->cx - ox, v->cz - oz);
@@ -204,8 +205,17 @@ void tasim_remove_unit(WIKISIM* s, WIKIUNIT* u)
     free(u);
 }
 
-/* THE WRECK of a finished unit killed, sim.js's `corpse`, which gives the engine's placement rules
-   (0x486360, 0x423C50) with their addresses. BOUND: a game's features array holds WIKI_FEATS_MAX
+/* THE WRECK of a finished unit killed (decision 3), as the destructor's corpse 0x486360(unit,
+   level, smoke) (called at 0x486D6F) spawns it through 0x423C50 at the unit's cell +0x76/+0x78
+   (research/notes/engine/map.md): a mobile unit's footprint cell by the engine's own rounding, a
+   structure's site. In 0x423C50's order: the anchor off the map, none (0x4863C1..0x4863CA); the
+   wreck's footprint past the map's far edge, none, equal accepted (0x423CEC..0x423CF8,
+   0x423D20..0x423D24); every standing feature with a cell under it, met row by row, destroyed
+   whole (FEATURES_Destroy 0x4246B0 from 0x423D3E..0x423D94) -- here it leaves the features
+   standing and its anchor joins `gone`, as a reclaimed one does, so no two features ever overlap;
+   units under it are not read, the wreck is put on top. The engine abandons a wreck at an
+   indestructible feature (FeatureDef +0xFF bit 1), which no entry's feature is [INFERRED]. The
+   wreck takes the unit's id, which no feature of the scene has (the loader's game rule). BOUND: a game's features array holds WIKI_FEATS_MAX
    (scene_feats), and the features standing plus those gone are the scene's plus one per wreck made,
    at most one a kill: the loader holds the scene's features and the game script's kills to
    WIKI_FEATS_MAX, and a fork refuses a part whose kills would pass it (tagpu_wikisim_fork). So
@@ -250,10 +260,15 @@ static void corpse(WIKISIM* s, const WIKIUNIT* u)
 }
 
 /* A KILL, the game script's {at, kill}, fed before its tick's tasim_drop_work, COB slice and tasim_advance:
-   sim.js's `kill`, which gives the engine's facts with their addresses. Its script goes first,
-   through the host's own removal; a finished unit leaves its wreck and makes its death sound; a
-   commander counts as its seat's loss; a builder whose running build is the unfinished structure
-   killed loses that order and says cant. THE KILLS AND THE LOSSES (PD6): the victim's seat loses it
+   decision 2. Its script goes first, through the host's own removal; a finished unit leaves its
+   wreck and makes its death sound; an unfinished one neither (Send_UnitDeath stores corpse type 0
+   when +0x104 != 0.0, 0x4865D2..0x4865E5, and the destructor then skips both the explosion,
+   0x486D2F..0x486D40, and the corpse, 0x486D55..0x486D5A). A commander counts as its seat's loss.
+   A builder whose running build is the unfinished structure killed loses that order and says
+   cant, as MobileBuild answers the destructor's death walk 0x489740 (event 8, 0x403A27) with
+   "Construction terminated" (0x5015A4 through 0x47F780) and result 8; its queued builds of the
+   site stay [INFERRED: only a running order holds the reference, linked at 0x403D64]. A building
+   it was making stays as it is; a guard of it and a reclaim of it end by their own rules. THE KILLS AND THE LOSSES (PD6): the victim's seat loses it
    whatever killed it (+0xFE, ungated at 0x4868C1); `by`, a seat of the game other than the
    victim's, counts a kill when the victim was finished (+0xFC, behind a killer, +0x104 == 0 and
    another player; engine/memory.md); a `by` that is no seat counts nothing. The death is recorded

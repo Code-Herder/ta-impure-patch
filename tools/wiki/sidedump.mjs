@@ -23,7 +23,7 @@
                       from the game's files, so never inside the repository)
 
    Without --live a gadget is drawn at rest, greyed where the layout says `grey`, and not drawn where it says
-   `hidden`. The state is set here and not by sim.js: a comparison with the game wants the engine's states, which the
+   `hidden`. The state is set here and not by the simulation: a comparison with the game wants the engine's states, which the
    wiki changes on purpose (decision 7 greys every order but STOP). The pixels are side.js's compose, through the
    pack's palette; a pixel compose leaves unpainted stays transparent in the PNG.
 

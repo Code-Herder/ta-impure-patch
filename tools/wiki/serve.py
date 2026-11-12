@@ -2,14 +2,16 @@
 """serve.py -- the in-game wiki mockup's server: the repository, the wiki's simulation host, and the COB host.
 
     python3 tools/wiki/serve.py [--bind ADDR] [--port N]     then http://127.0.0.1:8000/tools/wiki/mockup/
-    python3 tools/wiki/serve.py --stdio                       the host alone, one JSON request a line
+    python3 tools/wiki/serve.py --stdio                       the simulation host alone, one JSON request a line
 
 The repository is served as tools/hudart/serve.py serves it, every response marked `Cache-Control: no-cache`.
-`POST /cob` (and each line of --stdio) is one call on the in-game wiki's COB host, tagpu/ddraw/src/tagpu_wikicob.c,
-loaded through ctypes from the library tools/tacob builds (the core and the host, compiled on first use into a
-gitignored cache): the same C the DLL's wiki runs, so the mockup's units run their scripts exactly as the game's
-wiki runs them (research/notes/ingame-wiki-cob-plan.md, *The wiki host*). The page's sim.js calls it with
-synchronous requests; tools/wiki/cobhost.mjs gives node's checks the same calls over --stdio.
+`POST /sim` (and each line of --stdio) is one request of the wiki's simulation, below: the page plays every demo
+through it, and without this server the mockup has no simulation.
+
+`POST /cob` is one call on the in-game wiki's COB host, tagpu/ddraw/src/tagpu_wikicob.c, loaded through ctypes from the
+library tools/tacob builds (the core and the host, compiled on first use into a gitignored cache): the host alone, as
+tools/test_cobvm.py and tools/wiki/cobcorpus.py test it through `Host` and `bind` (research/notes/ingame-wiki-cob-plan.md,
+*The wiki host*). The simulation runs its units' scripts in its own process, the same C linked in.
 
 A request is a JSON object with `op`:
   new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, "tops": [...], ...state}: a host for the types,
@@ -28,7 +30,7 @@ A request is a JSON object with `op`:
   remove  {"world", "unit"} -> state
   models  {"world"} -> {"models": {unit: base64}}: each unit's posed model block as tagpu_wikicob_model gives it
           (its PrimitiveStructs in the posed order), a unit that runs no script left out; it changes nothing, so it
-          answers no state. The page asks once a drawn frame after a call (cob.js `model`).
+          answers no state.
   free    {"world"} -> {}
 `facts` is a list of [unit, owner, x, z, left, health] rows (tagpu_wikicob.h WIKICOBFACT; `left` a number the
 float32 holds exactly). The state every call answers is {"values": {unit: [the 21 values]}, "resting": [units],
@@ -38,8 +40,8 @@ An error answers {"error": why}.
 
 `POST /sim` is one request of the wiki's simulation host, tagpu/ddraw/tests/wikihost.c (`wikitest serve`, the C core
 the DLL's wiki runs, built by tools/wiki/wikibuild.mjs's `host` target), which states the protocol; the page's
-mockup/simhost.js makes its calls so. One child answers every request, one at a time, started on first use and again
-after it ends. The body must be `application/json` -- a page of another origin then needs a preflight this server never
+mockup/simhost.js makes its calls so, and --stdio relays each line of stdin to the same child. One child answers
+every request, one at a time, started on first use and again after it ends. The body must be `application/json` -- a page of another origin then needs a preflight this server never
 grants -- and a `packs` request names folders under tools/wiki/mockup/gfx/ only, as `pack_type` holds `/cob`'s.
 Python callers use SimRelay directly. The connection is HTTP/1.1, kept alive, with Nagle's algorithm off: a page asks
 once a drawn frame, synchronously, so each request's latency is the frame's."""
@@ -360,16 +362,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--bind", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--stdio", action="store_true", help="answer one JSON request a line on stdin")
+    ap.add_argument("--stdio", action="store_true", help="answer one simulation request a line on stdin")
     a = ap.parse_args()
-    host = Host()
     if a.stdio:
+        sim = SimRelay()
         for line in sys.stdin:
             if line.strip():
-                sys.stdout.write(json.dumps(host.answer(line)) + "\n")
+                sys.stdout.write(sim.answer(line).decode() + "\n")
                 sys.stdout.flush()
         return
-    Handler.host = host
+    Handler.host = Host()
     Handler.sim = SimRelay()
     ThreadingHTTPServer((a.bind, a.port), functools.partial(Handler, directory=str(ROOT))).serve_forever()
 

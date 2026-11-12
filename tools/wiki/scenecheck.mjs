@@ -13,10 +13,10 @@
      there -- each corner, the depth key, the mode and the anchor, within 1/64 of a unit -- in their order, both
      buckets. The gathers run as gfx.js runs them, through a recording stand-in for the WebGL context, so the code
      paired is the mockup's own and not a copy of it;
-   - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of sim.js's view against
+   - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of the host's view against
      tagpu_wikiscene_fog's source of tagpu_wikisim.c's view as the record carries it (tagpu_wikistage_copy),
      expanded by tagpu_fog_entry as the stage's passes expand it -- the grid's size, its origin and every byte;
-   - every demo's MODEL RECORDS at the same ticks: scene.js build of sim.js's view against tagpu_wikiscene_models of
+   - every demo's MODEL RECORDS at the same ticks: scene.js build of the host's view against tagpu_wikiscene_models of
      the record's view, the types the pack resolved handed to both -- each record's type, owner, ghost bit, shadow
      kind, slot, anchor, yaw, depth key and alpha within 1/64, and its nanoframe staging (on or off, the threshold,
      the three colours and the wire's) exactly, units then ghosts in order.

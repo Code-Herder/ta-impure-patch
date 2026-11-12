@@ -9,8 +9,8 @@
    one is read past and answered as an error. Handles are positive integers, never reused in a
    process. {"op": "batch", "calls": [...]} answers {"answers": [...]}, each call as alone.
 
-     hello                          {"version": 1, "constants": {...}}: the constants sim.js
-                                    exported, from the C headers, in its names
+     hello                          {"version": 1, "constants": {...}}: the constants the drop-in
+                                    exports, from the C headers, in its names
      entry {json}                   {"entry": h}: tagpu_wikidata_entry
      layout {json}                  {"layout": h}: tagpu_wikidata_layout_json
      casting {json}                 {"casting": h}: tagpu_wikidata_casting
@@ -35,10 +35,10 @@
      step {sim, n, each, seat}      {"tick", "done", "ran", "each": [...], "log"}: up to n (1..4096)
                                     ticks, fewer when the sim is done; each: per tick ran, an object
                                     of what `each` lists, "hash" and "now" (of `seat`, 0 absent)
-     view {sim, seat, map}          the view as sim.js's view(seat), its map only with map true
+     view {sim, seat, map}          the view as the drop-in's view(seat), its map only with map true
      orders {sim, id | all}         a unit's orders, or {id: orders} for every unit of the view
      hash {sim}                     {"hash": 16 hex digits}
-     now {sim, seat}                sim.js's gameNow(seat): a game's state between ticks
+     now {sim, seat}                the drop-in's gameNow(seat): a game's state between ticks
      poses {sim}                    per view unit its posed model as base64, or null: the units
                                     tagpu_wikistage_pose poses, as the DLL's stage draws them
      notes {sim}                    each type's quarantine note, "" for none
@@ -58,14 +58,14 @@
    A request's tree lives as long as a sim that took an input or a fork part from it: a caption or
    a kill id the sim keeps points into it (tagpu_wikidata_input).
 
-   THE LOG, sim.js's sim.log ({t, what, id, type, ox, oz}), which only tools/wiki/simcheck.mjs
+   THE LOG, the drop-in's sim.log ({t, what, id, type, ox, oz}), which only tools/wiki/simcheck.mjs
    reads, is the host's: after each mutating call it compares the sim's units and features with
    the last state it saw. A unit gone is `killed` when a kill input fed in that tick named it
    (then `corpse` when a feature of its id appeared, else `nocorpse` when it was finished and its
    type has a wreck), else `reclaimed`; a unit new is `started`, and `finished` once its built
    reaches 1; a feature gone is `reclaimed`, unless a wreck placed in that tick covers it (the
    wreck destroys the features under it, tasim_world.c corpse). `t` is the tick the step began on.
-   ox and oz are a structure's site, absent for a mobile unit, as sim.js's units carried them. */
+   ox and oz are a structure's site, absent for a mobile unit. */
 #include <stdlib.h>
 #include <string.h>
 #include "wikihost.h"
@@ -83,7 +83,7 @@
 #define WH_SIMS     64          /* sims alive at once */
 #define WH_STEP_MAX 4096        /* ticks one step request runs */
 
-/* ---- JSON out, in sim.js's shapes ---- */
+/* ---- JSON out, in the drop-in's shapes (tools/wiki/mockup/simhost.js) ---- */
 
 void wh_str(const char* s)
 {
@@ -136,7 +136,7 @@ void wh_orders(const WIKISIM* s, const char* id)
             wh_key("ox", 0); printf("%d", o[i].ox);
             wh_key("oz", 0); printf("%d", o[i].oz);
         } else if (o[i].k == WIKI_ORDER_RECLAIM && o[i].feat) {
-            /* sim.js's feature reclaim: {k, feat, x, z} */
+            /* a feature reclaim: {k, feat, x, z} */
             wh_key("feat", 0); wh_str(o[i].target);
             wh_key("x", 0); wh_num(o[i].x);
             wh_key("z", 0); wh_num(o[i].z);
@@ -151,7 +151,7 @@ static const char* const SHAPE[] = { NULL, "line", "axis", "rect", "hollow", "ri
 static const char* const CURSOR[] = { "arrow", "move", "build", "reclaim" };
 static const char* const UNTILS[] = WIKI_UNTIL_STRINGS;
 
-/* the armed mode as sim.js names it */
+/* the armed mode by its name */
 static void mode_out(const WIKISIM* s, int rmode, int mode)
 {
     if (rmode) wh_str("reclaim");
@@ -175,7 +175,7 @@ static void keys_out(const int* held)
     putchar(']');
 }
 
-/* an input seat's own parts, sim.js's view.inputs[k]: its seatView and its reclaim */
+/* an input seat's own parts, the view's inputs[k]: what its input shows and its reclaim */
 static void seat_out(const WIKISIM* s, const WIKIVSEAT* b)
 {
     int i;
@@ -226,7 +226,7 @@ static void seat_out(const WIKISIM* s, const WIKIVSEAT* b)
     putchar('}');
 }
 
-/* the map of a view, sim.js's view.map */
+/* the map of a view, the view's map */
 static void map_out(const WIKIVIEW* v)
 {
     int i;
@@ -469,7 +469,7 @@ void wh_view_as(WIKISIM* s, int map, int seat)
         for (i = 0; i < v->nunit; i++) printf("%s%d", i ? "," : "", v->unit[i].cant);
         fputs("]}", stdout);
     } else fputs("null", stdout);
-    /* a game's own part, sim.js's `game`, only in a game */
+    /* a game's own part, the view's `game`, only in a game */
     if (v->game) {
         wh_key("game", 0);
         putchar('{');
@@ -556,7 +556,7 @@ void wh_view_as(WIKISIM* s, int map, int seat)
         }
         fputs("]}", stdout);
     }
-    /* the input seats beyond seat 0, sim.js's nin, viewed and inputs, in a game with more than one */
+    /* the input seats beyond seat 0, the view's nin, viewed and inputs, in a game with more than one */
     if (v->game && v->nin > 1) {
         wh_key("nin", 0); printf("%d", v->nin);
         wh_key("viewed", 0); printf("%d", v->viewed);
@@ -854,7 +854,7 @@ static int num_int(const TJV* v, double dflt)
 }
 
 /* a call's `seat`: an integer as written, 0 when absent, and -1, which no sim holds, for a seat
-   that is no integer, as sim.js's own check refused it */
+   that is no integer, so the sim's own check refuses it */
 static int seat_arg(const TJV* v)
 {
     const double k = tj_num(tj_get(v, "seat"), 0);
@@ -1343,7 +1343,7 @@ static void op_fits(const TJV* v)
     putchar('}');
 }
 
-/* sim.js's gameNow(seat) of a game */
+/* the drop-in's gameNow(seat) of a game */
 static void now_out(HSIM* m, int seat)
 {
     const WIKISIM* s = &m->s;

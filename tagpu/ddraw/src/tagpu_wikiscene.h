@@ -12,8 +12,8 @@
    map's top left, the viewport the whole map and nothing past its edge. Those two gathers are
    tagpu_terr.c's and tagpu_feat.c's arithmetic as the lab ports it; where the lab and the game's
    feature pass part (the tall key's row base, below), this file takes the lab's, because the
-   mockup is what the game must match. tools/wiki/scenecheck.mjs plays every demo through sim.js
-   and scene.js and through tagpu_wikisim.c and this file, and pairs every cell, quad and fog
+   mockup is what the game must match. tools/wiki/scenecheck.mjs plays every demo through the
+   simulation host and through scene.js and this file, and pairs every cell, quad and fog
    entry.
 
    THE STAGE IS FLAT (the authoring tool takes flat tiles only, the plan's section 2), so every

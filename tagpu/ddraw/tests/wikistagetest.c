@@ -10,7 +10,7 @@
     WIKI CONFIG SIDE TOP RIGHT CFG [COB]`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
    sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none) and with COB the units'
-   scripts that file names (tests/wikicobfile.h), as sim.js plays with serve.py's host -- the nano
+   scripts that file names (tests/wikicobfile.h), as the mockup plays them through its simulation host -- the nano
    spray is drawn only then -- and at tick 0, every 30th
    tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the rect
    X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose

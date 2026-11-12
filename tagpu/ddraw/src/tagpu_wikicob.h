@@ -3,12 +3,12 @@
 /* tagpu_wikicob -- the in-game wiki's COB host: every unit's script run by tagpu_cobvm on the
    wiki's own world (research/notes/ingame-wiki-cob-plan.md, "The wiki host").
 
-   ONE HOST FOR BOTH SIMULATIONS. The DLL's simulation (tagpu_wikisim.c and the core's tasim_*.c)
-   calls this file in-process; the mockup's sim.js calls the same file through
-   tools/wiki/serve.py (ctypes); wikitest.c links it for the parity check. What the two
-   simulations implement each is only WHEN they call it -- the engine's calls for the actions the
-   wiki performs, at the same points of the same tick -- and tagpu_wikicob_hash, which both fold
-   into their state hash, holds them to that. Everything about a script itself is decided here:
+   ONE HOST. The wiki's simulation (tagpu_wikisim.c and the core's tasim_*.c) calls this file
+   in-process, in the DLL and in the mockup's simulation host (tests/wikihost.c, which wikitest
+   links); tools/wiki/serve.py's POST /cob runs it alone through ctypes, for tools/test_cobvm.py
+   and tools/wiki/cobcorpus.py. The simulation decides only WHEN it calls it -- the engine's calls
+   for the actions the wiki performs, at the engine's points of the tick -- and folds
+   tagpu_wikicob_hash into its state hash. Everything about a script itself is decided here:
    the program a type runs, each unit's four blocks, what GET answers, what a SET changes, the
    generator RAND draws from, a refusal and its quarantine.
 
