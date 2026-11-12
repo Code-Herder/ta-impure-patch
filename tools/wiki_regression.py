@@ -1034,21 +1034,26 @@ def mockup_shot(state, path, out=None):
         m.url, m.tick = None, None
         run("resize", str(gw + 34), str(gh + 900))
         run("goto", f"http://127.0.0.1:{m.httpd.server_address[1]}{url}")
-        # THE PAGE SETTLED: the fonts, the window, the mod's sidebar pack, and with the game look the demo's stage --
-        # WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each 'pending' only while a load it waits on is
-        # in flight, and every such load resolves or fails (WikiGfx.settled), so the wait has no deadline and its
-        # verdict no timing: a picture of a page still loading is never taken, and a load that failed is named. A page
-        # that never settles is a hang, which the gate's lane bound (GATE_LANE_S) ends. Each eval waits a slice inside
-        # the page (a playwright-cli call is a process, a second each) and says where it stands; the slice decides
-        # nothing
-        status = ("() => !(window.WikiPage && (WikiPage.sim() || WikiPage.replay())) || document.fonts.status !== 'loaded'"
-                  " || !document.querySelector('#win canvas.skin')"
-                  " || document.querySelector('#sidebar-note').textContent.startsWith('loading') ? 'pending' : "
-                  + ("WikiGfx.settled(WikiPage.stageId())" if game else "'ready'"))
+        # THE PAGE SETTLED (wiki.js settled): the content, the skin's kit, the mod's sidebar pack, the fonts, and with
+        # the game look the demo's stage -- WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each
+        # 'pending: <what>' only while a load it waits on is in flight. Every such load resolves or fails, and every
+        # state that cannot change by itself (a failed sim, a missing demo, a kit that did not load, a frame that
+        # threw) answers its reason instead, so the wait's verdict has no timing: a picture of a page still loading
+        # is never taken, and a failure is named. Each eval waits a slice inside the page (a playwright-cli call is a
+        # process, a second each) and says where it stands; the slice decides nothing. SETTLE_S only bounds a page
+        # that breaks that rule, failing with what it was still waiting for; it never passes a picture
+        status = ("() => window.WikiPageFailed ? `the page did not start: ${WikiPageFailed}`"
+                  " : !window.WikiPage ? 'pending: the page scripts and layout.json'"
+                  + (" : !window.WikiGfx ? 'gfx.js is not loaded'" if game else "")
+                  + " : WikiPage.settled()")
+        end = time.monotonic() + SETTLE_S
         while (ready := wl.result(run("eval", f"async () => {{ const s = {status}, t0 = performance.now();"
-                                              " while (s() === 'pending' && performance.now() - t0 < 10000)"
-                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) == "pending":
-            pass
+                                              " while (s().startsWith('pending') && performance.now() - t0 < 10000)"
+                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) \
+                and ready.startswith("pending"):
+            assert time.monotonic() < end, \
+                f"the mockup page was still {ready} after {SETTLE_S} s ({state['entry']}, demo {state['demo_n'] + 1}" \
+                f"{', game look' if game else ''}): a load that never resolved, which wiki.js settled() rules out"
         assert ready == "ready", f"the mockup page did not settle ({state['entry']}, " \
                                  f"demo {state['demo_n'] + 1}{', game look' if game else ''}): {ready}"
         m.url = url
@@ -1085,6 +1090,11 @@ def mockup_shot(state, path, out=None):
     return cursor_at
 
 
+SETTLE_S = 1200                          # mockup_shot: the page settles in 34..128 s alone (MEASURED 2026-11-11, the
+                                         # takeover lane's first picture); a page past this broke settled()'s rule
+PW_CALL_S = 600                          # MockupPage.run: a call's own wait in the page is at most a 10 s slice
+
+
 class MockupPage:
     """mockup_shot's page, one a process: its server, its playwright-cli browser and the page it has open, kept from
     one picture to the next so that a picture of the same demo needs no load, and one at a later tick no replay from
@@ -1114,17 +1124,28 @@ class MockupPage:
             launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
         cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
                                                "launchOptions": launch}}))
-        pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
-        self.run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=self.tmp)
+        self.pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
         self.run("open", "about:blank")
         self.closed = False
         atexit.register(self.close)
+
+    def run(self, *a):
+        """One playwright-cli call. PW_CALL_S only bounds a call that never returns -- a browser or a page whose main
+        thread is stuck -- and fails naming it; an answer of any kind is the caller's to judge."""
+        try:
+            return subprocess.run(self.pw + list(a), capture_output=True, text=True, cwd=self.tmp, timeout=PW_CALL_S)
+        except subprocess.TimeoutExpired:
+            raise AssertionError(f"playwright-cli {a[0]} did not return in {PW_CALL_S} s: the mockup's browser or its "
+                                 f"page is stuck") from None
 
     def close(self):
         if self.closed:
             return
         self.closed = True
-        self.run("close")
+        try:
+            self.run("close")
+        except AssertionError as e:
+            print(f"wiki: {e}")
         self.httpd.shutdown()
         shutil.rmtree(self.tmp, ignore_errors=True)
         if MockupPage.open_ is self:
