@@ -28,12 +28,13 @@ process.on('exit', () => {
   for (const c of open_) c.close();
 });
 
+/* the `wine` host's environment (wikibuild.mjs wineEnv: never the template prefix), its failure a hostchan error */
 function wineEnv() {
-  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8' });
-  const env = { ...process.env };
-  env.WINEPREFIX ??= path.join(path.resolve(ROOT, r.stdout.trim()), '..', 'wineprefix');
-  env.WINEDEBUG ??= '-all';
-  return env;
+  try {
+    return require('./wikibuild.mjs').wineEnv();
+  } catch (e) {
+    throw new Error(`hostchan wine: ${e.message}`);
+  }
 }
 
 /* the channel to one host of `target`, its working folder the repository's root (the packs' paths are relative to it) */

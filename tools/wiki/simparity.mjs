@@ -27,7 +27,7 @@
 
    THE THREE BUILDS (tools/wiki/wikibuild.mjs): `host`, gcc -O2, the mockup's; `asan`, AddressSanitizer and
    UndefinedBehaviorSanitizer; `wine`, the DLL's own compiler and SSE2 flags (i686-w64-mingw32-gcc) under Wine
-   (WINEPREFIX: the main checkout's wineprefix/), the arithmetic the game runs. Every play is made through the drop-in
+   (the prefix tools/wiki/wineprefix.py gives, never the template's), the arithmetic the game runs. Every play is made through the drop-in
    (tools/wiki/mockup/simhost.js) on the tee of the three (tools/wiki/hostchan.cjs `tee`): each request goes to all
    three, the host's answer is the one read, and any build whose answer differs in its text is recorded with the first
    differing path, so a play differs where any request of it did. Each play reads the view, every unit's orders and
@@ -100,7 +100,7 @@ import { createRequire } from 'node:module';
 import { scripts, sounds } from './gfxpacks.mjs';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
-import { build as hostBuild } from './wikibuild.mjs';
+import { build as hostBuild, wineEnv } from './wikibuild.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = new URL('../../', import.meta.url).pathname;
@@ -112,6 +112,12 @@ const TARGETS = ['host', 'asan', 'wine'];
 // the parity's plays go to the three builds; --hash and --try are the game's comparisons, the host's answer alone
 const PARITY = !process.argv.includes('--hash') && !process.argv.includes('--try');
 if (PARITY) process.env.WIKI_HOST_TEE = TARGETS.join(',');
+/* the `wine` build's prefix (wikibuild.mjs wineEnv), settled before the first request reaches the tee, which a
+   module's load already sends: one it refuses is a check that cannot run. Put in this process's environment, so
+   -j's shards check it and none makes one. */
+if (PARITY) {
+  try { process.env.WINEPREFIX = wineEnv().WINEPREFIX; } catch (e) { console.error(`simparity: ${e.message}`); process.exit(2); }
+}
 // a record's shard files, and what a shard hands its parent (-j, below): the keys it made and each item's seconds
 const shardFile = (dir, k, n) => path.join(dir, `shard-${k}-of-${n}.jsonl.gz`);
 const KEYS_OUT = process.env.SIMPARITY_KEYS, COSTS_OUT = process.env.SIMPARITY_COSTS_OUT;
@@ -1977,16 +1983,12 @@ function dataItems() {
 
 /* ---- THE C RUNS: wikitest's own modes, the replay layer's and the rules', in `tmp`, this process's own folder ---- */
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-'));
-const WINE_ENV = (() => {
-  const env = { ...process.env };
-  env.WINEPREFIX ??= path.join(path.resolve(ROOT, run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim()), '..', 'wineprefix');
-  env.WINEDEBUG ??= '-all';
-  return env;
-})();
+/* the `wine` build's environment, asked for the first time a wine run needs it: a host-only run (--hash) makes no prefix */
+const WINE_ENV = () => { try { return wineEnv(); } catch (e) { throw new CannotRun(e.message); } };
 let EXES = null;
 function wikitest(target, args) {
   EXES ??= Object.fromEntries(TARGETS.map(t => [t, hostBuild(t)]));
-  return target === 'wine' ? run('wine', [EXES.wine, ...args], { cwd: tmp, env: WINE_ENV }) : run(EXES[target], args, { cwd: tmp });
+  return target === 'wine' ? run('wine', [EXES.wine, ...args], { cwd: tmp, env: WINE_ENV() }) : run(EXES[target], args, { cwd: tmp });
 }
 /* wikitest `args` on each of `builds`: the first build's lines, once every other printed the same; a build that printed
    otherwise is a difference, its first differing line named */

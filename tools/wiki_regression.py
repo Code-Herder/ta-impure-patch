@@ -4725,58 +4725,19 @@ def under_wine(cmd):
 
 
 def git_dir():
-    """This worktree's own git directory (the main checkout's `.git`, a linked worktree's `.git/worktrees/<name>`):
-    what lives there goes with the worktree, and no other worktree reaches it."""
+    """This worktree's own git directory (the main checkout's `.git`, a linked worktree's `.git/worktrees/<name>`),
+    which no other worktree reaches."""
     return Path(subprocess.run(["git", "-C", str(TREE), "rev-parse", "--absolute-git-dir"], capture_output=True,
                                text=True, check=True).stdout.strip())
 
 
-WINEBOOT_S = 600                # a hang bound, deciding nothing: wineboot -i made a prefix in 23 s (MEASURED 2026-11-11)
-WINESERVER_S = 120              # and on `wineserver -w`, as tacli bounds it (WINESERVER_HANG_S)
-
-
 def wine_prefix():
-    """The Wine prefix the offline checks' Wine builds run in (textparity --wine, simparity's `wine` build):
-    `wikigate-wine` in this worktree's git directory, made by `wineboot -i` the first time and kept.
-    THE INVARIANT: it shares no file with any other prefix. Wine makes every file of it from its own install and reads
-    no other prefix, so no Wine process of the checks writes through to the hive inode the template prefix shares
-    with every tacli clone (tacli clone_prefix), and no other prefix's wineserver writes into it -- which is also why
-    making it needs no lock. It is made in a folder named by this process and renamed into place only once
-    wineboot's server has exited, so a prefix found at the name is whole; two processes making it at once both
-    finish, and the one whose rename comes second discards its own.
-    The checks need nothing else of a prefix: their programs are i686 console programs linked -static by the DLL's
-    compiler (tools/wiki/wikibuild.mjs, textparity.mjs), run with no game file, no DirectPlay and no registry key of
-    tacli's. Several of them at once share the prefix's one wineserver, as in any prefix."""
-    final = git_dir() / "wikigate-wine"
-    if final.is_dir():
-        return final
-    for old in final.parent.glob("wikigate-wine.making-*"):
-        pid = old.name.rsplit("-", 1)[1]
-        if pid.isdigit() and not Path(f"/proc/{pid}").exists():
-            shutil.rmtree(old, ignore_errors=True)          # a maker that died part-way: its folder is never used
-    making = final.with_name(f"wikigate-wine.making-{os.getpid()}")
-    shutil.rmtree(making, ignore_errors=True)
-    # no display, so nothing it does can open a window on the desktop; Mono and Gecko declined, whose installers
-    # would otherwise be offered: the checks' programs use neither
-    env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
-    env.update(WINEPREFIX=str(making), WINEDEBUG="-all", WINEDLLOVERRIDES="mscoree,mshtml=")
-    print(f"wiki offline: making the checks' Wine prefix {final} (wineboot -i)", flush=True)
-    t0 = time.monotonic()
-    try:
-        subprocess.run(["wineboot", "-i"], env=env, check=True, timeout=WINEBOOT_S, capture_output=True)
-        # its server writes the hives when it exits: the prefix is whole once no server of it lives
-        subprocess.run(["wineserver", "-w"], env=env, check=True, timeout=WINESERVER_S)
-        try:
-            making.rename(final)
-        except OSError:
-            if not final.is_dir():
-                raise
-            shutil.rmtree(making, ignore_errors=True)       # another process's prefix took the name first
-    except BaseException:
-        shutil.rmtree(making, ignore_errors=True)
-        raise
-    print(f"wiki offline: the Wine prefix made in {time.monotonic() - t0:.0f} s", flush=True)
-    return final
+    """The prefix the offline checks' Wine builds run in (textparity --wine, simparity's `wine` build): the
+    repository's one `wikigate-wine`, which shares no file with any other prefix, made the first time
+    (tools/wiki/wineprefix.py, THE INVARIANT)."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import wineprefix
+    return wineprefix.ensure(TREE)
 
 
 def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):

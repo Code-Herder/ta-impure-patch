@@ -100,6 +100,20 @@ export function build(name) {
   return out;
 }
 
+/* the environment the `wine` target runs in: WINEPREFIX the prefix tools/wiki/wineprefix.py gives -- $WINEPREFIX
+   checked against the template's shared hives, else the repository's own prefix, made the first time (its
+   THE INVARIANT) -- and Wine's debug output off. Asked once a process; throws, saying why, when it cannot be had. */
+let wineEnvOnce = null;
+export function wineEnv() {
+  if (wineEnvOnce) return wineEnvOnce;
+  const r = spawnSync('python3', [path.join(ROOT, 'tools/wiki/wineprefix.py')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (r.error || r.status !== 0)
+    throw new Error(`wikibuild: no Wine prefix: ${r.error ? r.error.message : (r.stderr || '').trim()}`);
+  if (r.stderr) process.stderr.write(r.stderr);
+  wineEnvOnce = { ...process.env, WINEPREFIX: r.stdout.trim(), WINEDEBUG: process.env.WINEDEBUG ?? '-all' };
+  return wineEnvOnce;
+}
+
 // run as a program (by any path to this file, a link included), not imported
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)) {
   const [a, b, c] = process.argv.slice(2);
