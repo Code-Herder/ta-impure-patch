@@ -4,20 +4,31 @@
 
    open(target) builds the target through wikibuild.mjs (host, asan or wine), makes two FIFOs in a private folder,
    opens both read-write -- so neither open waits for the other end -- and starts the host behind a shell that writes
-   one line when it ends: `{"error": "the host exited N", "dead": true}`. A host that dies mid-request therefore
-   answers that line instead of leaving the read waiting, and the channel refuses every request after it. The host
-   and its shell are one process group, killed when this process exits; the host also ends by itself on the end of
-   its input, which this process's exit closes. Linux only, as every wiki check is.
+   THE DEAD MARKER when it ends: `{"error":"the host exited N","dead":true}` and a newline, with no newline before
+   it. A host that dies mid-request therefore answers with the marker instead of leaving the read waiting, and the
+   channel refuses every request after it. A host that dies mid-answer has left part of a line in the answer FIFO
+   (its stdout, a pipe, is fully buffered, and an abort or an exit flushes what the buffer held), and the marker
+   lands at that line's end: so any line that ENDS in the marker is the host's death, never an answer. No answer
+   ends so: the host's own "error" member opens an error answer and is never followed by `"dead":true`, and every
+   quote inside a string it writes is escaped, so no string of an answer can spell the marker either.
+   The host and its shell are one process group, killed when this process exits; the host also ends by itself on
+   the end of its input, which this process's exit closes. Linux only, as every wiki check is.
 
-   tee(targets) opens one channel per target and sends each request to all of them: the first's answer is the
-   answer, and any other whose text differs is parsed and its first differing path recorded in `differences`
-   (never thrown), so a run lists every request that differs. A request a build could not answer -- its host ended --
-   is recorded there too before it throws, so a caller that takes the throw for a refusal still finds it. The list is
-   the module's, every tee's in one, so that a check reads it without holding the tee the drop-in made. */
+   THE INSTANCE (tests/wikihost.c): each host is started with an id of 128 random bits, `instance`, which its hello
+   answers and the drop-in stamps on every call, so a handle is only ever read by the host that gave it.
+
+   tee(targets) opens one channel per target, all with one instance id (the builds must answer alike, ids
+   included), and sends each request to all of them: the first's answer is the answer, and any other whose text
+   differs is recorded in `differences` with its first differing path, or whole when either answer is no JSON
+   (never thrown), so a run lists every request that differs. A request a build could not answer -- its host
+   ended -- is recorded there too before it throws, so a caller that takes the throw for a refusal still finds it.
+   The list is the module's, every tee's in one, so that a check reads it without holding the tee the drop-in
+   made. */
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -37,8 +48,14 @@ function wineEnv() {
   }
 }
 
-/* the channel to one host of `target`, its working folder the repository's root (the packs' paths are relative to it) */
-function open(target) {
+// a host's instance id: 128 bits from the operating system's generator, drawn for each host started
+const newInstance = () => crypto.randomBytes(16).toString('hex');
+// THE DEAD MARKER at a line's end, the host's exit in it
+const DEAD = /\{"error":"(the host exited -?\d+)","dead":true\}$/;
+
+/* the channel to one host of `target`, its working folder the repository's root (the packs' paths are relative to
+   it), its instance id `instance` */
+function open(target, instance = newInstance()) {
   const { build } = require('./wikibuild.mjs');
   const exe = build(target);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wikihost-'));
@@ -48,13 +65,14 @@ function open(target) {
   const wfd = fs.openSync(req, 'r+'), rfd = fs.openSync(ans, 'r+');
   const argv = target === 'wine' ? ['wine', exe] : [exe];
   // the shell waits for the host and then answers for it; `1<>` opens the answer FIFO without waiting for a reader
-  const p = spawn('sh', ['-c', 'r=$1 a=$2; shift 2; "$@" serve <"$r" >"$a"; printf \'{"error":"the host exited %s","dead":true}\\n\' "$?" 1<>"$a"',
-    'wikihost', req, ans, ...argv],{ cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], detached: true, env: target === 'wine' ? wineEnv() : process.env });
+  const p = spawn('sh', ['-c', 'r=$1 a=$2 i=$3; shift 3; "$@" serve --instance "$i" <"$r" >"$a"; printf \'{"error":"the host exited %s","dead":true}\\n\' "$?" 1<>"$a"',
+    'wikihost', req, ans, instance, ...argv], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], detached: true, env: target === 'wine' ? wineEnv() : process.env });
   p.unref();
   const buf = Buffer.alloc(1 << 16);
   let rest = Buffer.alloc(0), dead = null, closed = false;
   const chan = {
     target,
+    instance,
     pid: p.pid,                     // the wrapping shell's, whose child the host is
     /* the request line `line` (no newline in it) written; its answer is receive()'s */
     send(line) {
@@ -76,8 +94,9 @@ function open(target) {
       }
       const all = Buffer.concat(chunks), got = all.toString('utf8', 0, nl);
       rest = all.subarray(nl + 1);
-      if (got.startsWith('{"error":"the host exited') && got.endsWith('"dead":true}')) {
-        dead = JSON.parse(got).error;
+      const m = DEAD.exec(got);
+      if (m) {
+        dead = m[1];
         throw new Error(`hostchan ${target}: ${dead}`);
       }
       return got;
@@ -108,11 +127,15 @@ function firstDiff(a, b, at = '') {
   return null;
 }
 
+// an answer parsed, or its text when it is no JSON (a string, so it differs from any parsed object)
+const parsed = t => { try { return JSON.parse(t); } catch (e) { return t; } };
+
 function tee(targets) {
-  const chans = targets.map(open);
+  const instance = newInstance(), chans = targets.map(t => open(t, instance));
   const short = line => (line.length > 300 ? `${line.slice(0, 297)}...` : line);
   return {
     target: targets.join('+'),
+    instance,
     differences,
     request(line) {
       let got;
@@ -126,7 +149,7 @@ function tee(targets) {
       for (let k = 1; k < got.length; k++)
         if (got[k] !== got[0])
           differences.push({ request: short(line), target: chans[k].target,
-            ...firstDiff(JSON.parse(got[0]), JSON.parse(got[k])) });
+            ...(firstDiff(parsed(got[0]), parsed(got[k])) || { at: '(the answer)', a: got[0], b: got[k] }) });
       return got[0];
     },
     close() { for (const c of chans) c.close(); },

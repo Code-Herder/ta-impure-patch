@@ -12,7 +12,14 @@
    named by a handle after that: a WeakMap from the object to its handle, then a Map from its JSON text, so a re-made
    replay's game and a frame's per-tick camera send nothing. An object passed here is treated as unchanged afterwards;
    SIMHOST_NOCACHE=1 (node) keys by the text alone, which a check uses to show the difference is none. The host keeps
-   a least-recently-used table of each kind, so a handle it no longer holds is sent again.
+   a least-recently-used table of each kind, packs sets included, so a handle it no longer holds is sent again.
+
+   THE INSTANCE (tests/wikihost.c). Every call is stamped with the id of the host its handles came from: an object's
+   and a pure answer's with the current host's, a sim's with the host that made it. A host refuses a call of another
+   id before it reads a handle, so no handle is ever read by a host that did not give it -- serve.py starts a new host
+   after one ends, numbering from 1 again. The refusal names the host that answered; when that is a new one, every
+   kept handle and answer is dropped and the call made again from scratch, so its objects are sent anew, and a sim
+   of the ended host throws at each call from then on.
 
    THE ECHO. The queries made between a sim's last two changes -- its views by seat, every unit's orders, its hash,
    its gameNow by seat, its poses -- ride on the next change's answer (`want`), and until the change after it they
@@ -21,7 +28,9 @@
 
    THE QUEUE. input and release answer nothing a caller reads, so they wait for the next request and go with it in
    one batch; an input the host refuses throws at that next call, the one place this differs from a call that throws
-   where it is made. A sim the caller drops is freed the same way once the garbage collector has seen it go. */
+   where it is made. A sim the caller drops is freed the same way once the garbage collector has seen it go, and a
+   free's answer is no one's: a free of a sim the host no longer holds is not an error to throw into an unrelated
+   call. */
 const WikiSim = (() => {
   const NODE = typeof window === 'undefined';
   const PoseRef = () => typeof WikiPose !== 'undefined' ? WikiPose : require('./pose.js');
@@ -46,34 +55,59 @@ const WikiSim = (() => {
     return chan;
   }
 
-  // the calls waiting for the next request, each with what takes its answer
-  let queue = [];
-  const freed = typeof FinalizationRegistry !== 'undefined' ? new FinalizationRegistry(h => queue.push({ req: { op: 'free', sim: h }, take: () => {} })) : null;
-  /* one request line out, its answer line back. serve.py starts a host that has exited afresh at the next request,
-     and a new process numbers its handles from 1 again, so the exit's answer drops every handle and every answer kept
-     here: a kept handle would otherwise name another object in the new host */
-  function send(line) {
-    const t = channel().request(line);
-    if (t.startsWith('{"error": "the host exited') || t.startsWith('{"error":"the host exited')) {
-      for (const k in held) held[k] = [new WeakMap(), new Map()];
-      packsOf.clear(); pureKept.clear();
+  /* THE INSTANCE: `inst` the id of the current host, from its hello, and K its constants; null until asked, and again
+     once a refusal has shown that host gone */
+  let inst = null, K = null;
+  function hello() {
+    if (inst === null) {
+      const a = JSON.parse(channel().request('{"op":"hello"}'));
+      if (a.error) throw new Error(a.error);
+      inst = a.instance;
+      K = a.constants;
     }
-    return t;
+    return inst;
   }
-  /* one request, answered; the queue goes first in one batch, and the first queued call the host refused throws */
+  // a call refused because the host that gave its handles has ended, and a new host now answers
+  class HostChanged extends Error {}
+  /* a refusal for another host, which names the host that answered: when that is not the current one, every handle
+     and answer kept is dropped (they name nothing in the new host); true when it was */
+  function refused(a) {
+    if (a.host === inst) return false;
+    for (const k in held) held[k] = [new WeakMap(), new Map()];
+    packsOf.clear();
+    pureKept.clear();
+    inst = null;
+    return true;
+  }
+
+  /* the calls waiting for the next request, each with what takes its answer; `quiet` for a free, whose answer no one
+     reads */
+  let queue = [];
+  const freed = typeof FinalizationRegistry !== 'undefined'
+    ? new FinalizationRegistry(({ h, at }) => queue.push({ req: { op: 'free', sim: h, in: at }, take: () => {}, quiet: true })) : null;
+  /* one request, answered, stamped with the current host's id unless it names its own; the queue goes first in one
+     batch, and the first queued call the host refused throws, a free's answer and a refusal for another host aside
+     (the call's sim is of an ended host, and its own next call says so) */
   function ask(req) {
+    const r = req.in === undefined ? { ...req, in: hello() } : req;
     let a;
     if (queue.length) {
       const q = queue;
       queue = [];
-      const got = JSON.parse(send(JSON.stringify({ op: 'batch', calls: [...q.map(c => c.req), req] })));
+      const got = JSON.parse(channel().request(JSON.stringify({ op: 'batch', calls: [...q.map(c => c.req), r] })));
       if (got.error) throw new Error(got.error);
       const all = got.answers;
       let err = null;
-      q.forEach((c, i) => { if (all[i] && all[i].error) err ??= all[i].error; else c.take(all[i]); });
+      q.forEach((c, i) => {
+        const x = all[i];
+        if (x && x.host !== undefined) refused(x);
+        else if (x && x.error) { if (!c.quiet) err ??= x.error; }
+        else c.take(x);
+      });
       a = all[all.length - 1];
-      if (err !== null) throw new Error(err);
-    } else a = JSON.parse(send(JSON.stringify(req)));
+      if (err !== null && !(a && a.host !== undefined)) throw new Error(err);
+    } else a = JSON.parse(channel().request(JSON.stringify(r)));
+    if (a && a.host !== undefined && refused(a)) throw new HostChanged(a.error);
     if (a && a.error) throw new Error(a.error);
     return a;
   }
@@ -93,17 +127,18 @@ const WikiSim = (() => {
     return h;
   }
   function forget(kind, h) {
-    const [, byText] = held[kind];
+    const byText = kind === 'packs' ? packsOf : held[kind][1];
     for (const [k, v] of byText) if (v === h) byText.delete(k);
-    held[kind][0] = new WeakMap();
+    if (kind !== 'packs') held[kind][0] = new WeakMap();
   }
-  /* `f` with handles that may be gone from the host's tables: a "no <kind> N" refusal forgets N and runs `f` again */
+  /* `f` with handles that may be gone from the host's tables: a "no <kind> N" refusal forgets N, and a new host's
+     refusal has dropped every handle already; either way `f` runs again and sends what it needs anew */
   function withHandles(f) {
     for (let n = 0; ; n++) {
       try { return f(); } catch (e) {
-        const m = /^no (entry|layout|casting|table) (\d+)$/.exec(e.message);
-        if (!m || n > 8) throw e;
-        forget(m[1], +m[2]);
+        const m = /^no (entry|layout|casting|table|packs) (\d+)$/.exec(e.message);
+        if (!(m || e instanceof HostChanged) || n > 8) throw e;
+        if (m) forget(m[1], +m[2]);
       }
     }
   }
@@ -126,22 +161,20 @@ const WikiSim = (() => {
   }
 
   /* THE PURE ANSWERS: an op that reads no sim (sight, sighttable, scene, seatcam, fits) answers one request text alike
-     -- a handle names one object for the host's life, never reused -- so the last PURE_KEEP answers are kept by their
-     request's text, and a frame drawn again over the same tick asks nothing */
+     -- a handle names one object for its host's life, never reused, and the text carries the host's id -- so the last
+     PURE_KEEP answers are kept by their request's text, and a frame drawn again over the same tick asks nothing */
   const PURE_KEEP = 64, pureKept = new Map();
   function pure(req) {
-    const k = JSON.stringify(req);
+    const r = { ...req, in: hello() }, k = JSON.stringify(r);
     let a = pureKept.get(k);
     if (a === undefined) {
-      a = ask(req);
+      a = ask(r);
       pureKept.set(k, a);
       if (pureKept.size > PURE_KEEP) pureKept.delete(pureKept.keys().next().value);
     }
     return a;
   }
-
-  let K = null;
-  const hello = () => K ??= ask({ op: 'hello' }).constants;
+  const constants = () => { hello(); return K; };
 
   const b64 = s => NODE ? new Uint8Array(Buffer.from(s, 'base64')) : Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const copy = v => v === undefined ? v : JSON.parse(JSON.stringify(v));
@@ -155,7 +188,9 @@ const WikiSim = (() => {
       ctx: c && { side: c.side, iface: c.iface, casting: c.casting ? handle('casting', c.casting) : null,
         rival: c.rival ? handle('casting', c.rival) : null, packs: c.packs && c.packs.length ? packs(c.packs) : null,
         scripts: c.scripts !== false, sounds: c.sounds !== false } }));
-    const h = made.sim, map = Object.freeze(made.map);
+    // its host is the one that answered `new`: the current one, since nothing refused the call
+    const h = made.sim, at = inst, map = Object.freeze(made.map);
+    const own = req => ask({ ...req, sim: h, in: at });
     let asked = { views: new Set(), orders: false, hash: false, now: new Set(), poses: false }, echo = null;
     const sim = { tick: made.tick, done: made.done, side: made.side, iface: made.iface, game: made.game, types: made.types,
       nin: made.nin, log: [...made.log] };
@@ -171,8 +206,8 @@ const WikiSim = (() => {
       fresh();
       return a;
     };
-    const change = req => took(ask({ ...req, sim: h, want: want() }));
-    const queued = req => { echo = null; queue.push({ req: { ...req, sim: h }, take: a => { sim.tick = a.tick; sim.done = a.done; for (const e of a.log || []) sim.log.push(e); } }); };
+    const change = req => took(own({ ...req, want: want() }));
+    const queued = req => { echo = null; queue.push({ req: { ...req, sim: h, in: at }, take: a => { sim.tick = a.tick; sim.done = a.done; for (const e of a.log || []) sim.log.push(e); } }); };
     const viewOf = v => { v.map = map; return v; };
     Object.assign(sim, {
       input(ev) { queued({ op: 'input', ev }); },
@@ -184,34 +219,34 @@ const WikiSim = (() => {
       // `map` true asks the host for the map again rather than the one the sim was made with: a check's, which holds
       // the two equal
       view(seat = 0, map = false) {
-        if (map) return ask({ op: 'view', sim: h, seat, map: true });
+        if (map) return own({ op: 'view', seat, map: true });
         asked.views.add(seat);
         const e = echo && echo.views[seat];
-        return viewOf(e ? copy(e) : ask({ op: 'view', sim: h, seat }));
+        return viewOf(e ? copy(e) : own({ op: 'view', seat }));
       },
       orders(id) {
         asked.orders = true;
         if (echo && echo.orders) return copy(echo.orders[id] ?? null);
-        return ask({ op: 'orders', sim: h, id });
+        return own({ op: 'orders', id });
       },
       hash() {
         asked.hash = true;
-        return echo && echo.hash ? echo.hash : ask({ op: 'hash', sim: h }).hash;
+        return echo && echo.hash ? echo.hash : own({ op: 'hash' }).hash;
       },
       poses() {
         asked.poses = true;
-        const p = echo && echo.poses ? echo.poses : ask({ op: 'poses', sim: h });
+        const p = echo && echo.poses ? echo.poses : own({ op: 'poses' });
         return p.map(s => s ? PoseRef().parse(b64(s)) : null);
       },
-      cobNotes() { return ask({ op: 'notes', sim: h }); },
-      free() { freed && freed.unregister(sim); queue.push({ req: { op: 'free', sim: h }, take: () => {} }); },
+      cobNotes() { return own({ op: 'notes' }); },
+      free() { freed && freed.unregister(sim); queue.push({ req: { op: 'free', sim: h, in: at }, take: () => {}, quiet: true }); },
     });
     if (sim.game) sim.gameNow = (seat = 0) => {
       asked.now.add(seat);
       const e = echo && echo.now[seat];
-      return e ? copy(e) : ask({ op: 'now', sim: h, seat });
+      return e ? copy(e) : own({ op: 'now', seat });
     };
-    if (freed) freed.register(sim, h, sim);
+    if (freed) freed.register(sim, { h, at }, sim);
     return sim;
   }
 
@@ -234,8 +269,7 @@ const WikiSim = (() => {
     if (!c || c.v !== v || c.seat !== seat) throw new Error('wiki sim: sightContacts takes the grid sightLit made of the same view and seat');
     return c.contacts.slice();
   }
-  const sighttable = (S, d) => S ? withHandles(() => pure({ op: 'sighttable', table: handle('table', S), distance: d }))
-    : pure({ op: 'sighttable', table: null, distance: d });
+  const sighttable = (S, d) => withHandles(() => pure({ op: 'sighttable', table: S ? handle('table', S) : null, distance: d }));
 
   const api = {
     create: (entry, demo, layout, ctx) => make(entry, demo, 'try', layout, ctx),
@@ -244,16 +278,16 @@ const WikiSim = (() => {
     // player plays)
     game: (entry, demo, layout, ctx, mode = 'refuse') => make(entry, demo, mode === 'stall' ? 'stall' : 'game', layout, ctx),
     // a layout's and a casting's refusal, thrown with the loader's words; the object back when it is read
-    checkLayout(L) { handle('layout', L); return L; },
-    checkCasting(C) { handle('casting', C); return C; },
+    checkLayout(L) { withHandles(() => handle('layout', L)); return L; },
+    checkCasting(C) { withHandles(() => handle('casting', C)); return C; },
     // a text entry's refusal (null: none), as tagpu_wikidata_entry's
-    checkText: entry => ask({ op: 'text', json: entry }).why,
+    checkText: entry => withHandles(() => ask({ op: 'text', json: entry })).why,
     // the scene a demo plays on (null: the first)
     sceneOf: (entry, demo) => entry.scenes[withHandles(() => pure({ op: 'scene', entry: entryOf(entry, demo) })).scene],
     // a players entry's seat's camera at a tick (tagpu_wikidata_seat_cam), null for a seat with none
     seatCam: (entry, demo, k, t) => withHandles(() => pure({ op: 'seatcam', entry: entryOf(entry, demo), seat: k, tick: t })).at,
     // the game frame's 4:3 bound on a game entry's map (tagpu_wikidata_frame_fits)
-    frameFits: (w, h) => pure({ op: 'fits', w, h }).fits,
+    frameFits: (w, h) => withHandles(() => pure({ op: 'fits', w, h })).fits,
     sightLit, sightContacts,
     // a layout's sight table's index for a sight distance, and its table (null: none)
     sightIndex: (S, d) => sighttable(S, d).idx,
@@ -264,7 +298,7 @@ const WikiSim = (() => {
     'CASTS', 'HUD_CONTROLS', 'REPLAY_CONTROLS', 'LIVE_CONTROLS', 'TAKEOVER_CONTROLS', 'PLAYERS_CONTROLS', 'CHIPS', 'SND_DEATH',
     'SEATS', 'GAME_KILLS', 'GAME_END_MAX', 'FEATS_MAX', 'HUD_DOWN', 'HUD_UP', 'PLAYERS_DEATHS', 'PLAYERS_DEATH_SPAN', 'SIGHT_MIN',
     'SIGHT_NUMTABLES', 'SIGHT_IDX', 'SIGHT_REACH', 'SIGHT_CELLS', 'SIGHT_SPAN', 'DEMO_FORKS', 'TIMELINES'])
-    Object.defineProperty(api, k, { enumerable: true, get: () => hello()[k] });
+    Object.defineProperty(api, k, { enumerable: true, get: () => constants()[k] });
   return api;
 })();
 if (typeof module !== 'undefined') module.exports = WikiSim;

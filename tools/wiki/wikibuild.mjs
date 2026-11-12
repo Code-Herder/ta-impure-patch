@@ -3,16 +3,22 @@
 
      host   the mockup's host (tools/wiki/serve.py's /sim, the node checks through hostchan.cjs): gcc -O2. No -march,
             so no FMA, and -std=c99 keeps -ffp-contract=off: the doubles round as the DLL's SSE2 build rounds them.
-     asan   the same under AddressSanitizer and UBSan, every finding fatal.
-     wine   i686 as the DLL is built, the simulation's sources on SSE2 as the Makefile compiles them, run under Wine.
-            __USE_MINGW_ANSI_STDIO makes its %.17g print as glibc's does (msvcrt writes three exponent digits), so
-            the three builds' answers compare as text; it touches this test program only.
+     asan   the same under AddressSanitizer and UBSan, every finding fatal, a double converted to an integer it
+            does not fit included (float-cast-overflow, which -fsanitize=undefined leaves out).
+     wine   the DLL's own compiler, i686-w64-mingw32-gcc, at its default -march as `make` runs it, the simulation's
+            sources on SSE2 as the Makefile compiles them, run under Wine. __USE_MINGW_ANSI_STDIO makes its %.17g
+            print as glibc's does (msvcrt writes three exponent digits), so the three builds' answers compare as text;
+            it touches this test program only.
 
-   build(target) returns the executable's path, built once per content: build/wikihost/<sha256 of the target, its
-   flags and every source and header it can read>/wikitest[.exe]. A build compiles into a temporary of its own and
-   publishes it by rename, under an flock(1) on build/wikihost/<target>.lock, so processes started together (the
-   shards, serve.py, the node checks) build each target once and never run a half-written file; a builder that dies
-   releases the lock with its process. CLI: `node tools/wiki/wikibuild.mjs host|asan|wine` prints the path and says on
+   build(target) returns the executable's path, built once per content: build/wikihost/<digest>/wikitest[.exe], the
+   digest a sha256 of what decides the executable -- the target's compiler, flags and sources, the SSE2 sources and
+   flags, the compiler's --version, this file, and the bytes of every source and of every header the compiler names
+   for them (-MM, the repository's own: the system's go with the compiler's version). A build compiles into a
+   temporary of its own and publishes it by rename, under an flock(1) on build/wikihost/<target>.lock, so processes
+   started together (the shards, serve.py, the node checks) build each target once and never run a half-written file;
+   a builder that dies releases the lock with its process. The builder takes the digest again once it has compiled
+   and publishes nothing when it differs: a file edited during the compile could otherwise sit under a digest of
+   content it was not built from. CLI: `node tools/wiki/wikibuild.mjs host|asan|wine` prints the path and says on
    stderr when it compiled. */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,31 +44,39 @@ const SSE_FLAGS = ['-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2'];
 const TARGETS = {
   host: { cc: 'gcc', flags: ['-std=c99', '-O2', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc'], libs: ['-lm'], exe: 'wikitest' },
   asan: { cc: 'gcc', flags: ['-std=c99', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-fsanitize=address,undefined',
-    '-fno-sanitize-recover=all'], libs: ['-lm'], exe: 'wikitest' },
+    '-fsanitize=float-cast-overflow', '-fno-sanitize-recover=all'], libs: ['-lm'], exe: 'wikitest' },
   wine: { cc: 'i686-w64-mingw32-gcc', flags: ['-std=c99', '-O2', '-Wall', '-Iinc', '-Isrc', '-D__USE_MINGW_ANSI_STDIO=1'], libs: ['-static'],
     exe: 'wikitest.exe', sse: true },
 };
 
-/* every file a build reads: the listed sources and every header of src/, inc/ and tests/ */
-function inputs() {
-  const hs = ['src', 'inc', 'tests'].flatMap(d => fs.readdirSync(path.join(DDRAW, d), { recursive: true })
-    .filter(f => /\.h$/.test(f)).map(f => `${d}/${f}`));
-  return [...SOURCES, ...hs.sort()];
+function run(cmd, args) {
+  const r = spawnSync(cmd, args, { cwd: DDRAW, encoding: 'utf8', maxBuffer: 1 << 26 });
+  if (r.error || r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ''}\n${r.stderr || ''}`);
+  return r.stdout;
+}
+
+/* every file a build of `name` reads: the sources, and the headers the compiler names for them with the flags each is
+   compiled with (-MM: the repository's own headers, which a source may include under one flag and not another) */
+function inputs(name) {
+  const t = TARGETS[name];
+  const groups = t.sse ? [[SOURCES.filter(s => !SSE.has(s)), []], [[...SSE], SSE_FLAGS]] : [[SOURCES, []]];
+  const files = new Set(SOURCES);
+  for (const [srcs, extra] of groups)
+    for (const w of run(t.cc, [...t.flags, ...extra, '-MM', ...srcs]).replace(/\\\n/g, ' ').split(/\s+/))
+      if (w && !w.endsWith(':')) files.add(path.normalize(w));
+  return [...files].sort();
 }
 
 function digest(name) {
   const t = TARGETS[name], h = crypto.createHash('sha256');
-  h.update(JSON.stringify([name, t]));
-  for (const f of inputs()) h.update(`${f}\0`).update(fs.readFileSync(path.join(DDRAW, f))).update('\0');
+  h.update(JSON.stringify([name, t, SOURCES, t.sse ? [[...SSE], SSE_FLAGS] : null, run(t.cc, ['--version'])]));
+  h.update(fs.readFileSync(new URL(import.meta.url)));
+  for (const f of inputs(name)) h.update(`${f}\0`).update(fs.readFileSync(path.join(DDRAW, f))).update('\0');
   return h.digest('hex');
 }
 
-function run(cmd, args) {
-  const r = spawnSync(cmd, args, { cwd: DDRAW, encoding: 'utf8', maxBuffer: 1 << 26 });
-  if (r.error || r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ''}\n${r.stderr || ''}`);
-}
-
-/* compile `name` into `out` through a temporary of this process's own; the caller holds the lock */
+/* compile `name` into `out`, whose folder is named by the digest the caller took, through a temporary of this
+   process's own, published only when the digest taken after compiling is still that one; the caller holds the lock */
 function compile(name, out) {
   const t = TARGETS[name], tmp = `${out}.${process.pid}.tmp`;
   fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -79,6 +93,8 @@ function compile(name, out) {
       run(t.cc, [...t.flags, '-o', tmp, ...SOURCES.filter(s => !SSE.has(s)), ...objs, ...t.libs]);
       fs.rmSync(objdir, { recursive: true, force: true });
     } else run(t.cc, [...t.flags, '-o', tmp, ...SOURCES, ...t.libs]);
+    if (digest(name) !== path.basename(path.dirname(out)))
+      throw new Error(`wikibuild: ${name}'s sources changed while it compiled; nothing is kept, build again`);
     fs.renameSync(tmp, out);
   } catch (e) {
     fs.rmSync(tmp, { force: true });

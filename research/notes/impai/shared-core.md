@@ -32,7 +32,7 @@ The core keeps `tagpu_wikisim.c`'s discipline: no globals, all state in a struct
 
 ### The core as built
 
-The files are `tagpu/ddraw/src/tasim_*.c` over one internal header, `tasim.h` (the shared vocabulary -- `CELL`, `XZ`, `BOX`, `TARGET` -- the small helpers every module reads, `static inline`, and each module's functions), with `tasim_defs.h` for the definitions. The state is still the one `WIKISIM` of `tagpu_wikisim.h`, unchanged, and the public API is still `tagpu_wikisim_*`. Every function moved whole: its body is the one it had in `tagpu_wikisim.c`, with a shared function's name prefixed `tasim_` and nothing else changed, as `simparity.mjs` proved against `sim.js` natively and under Wine before S2 retired it.
+The files are `tagpu/ddraw/src/tasim_*.c` over one internal header, `tasim.h` (the shared vocabulary -- `CELL`, `XZ`, `BOX`, `TARGET` -- the small helpers every module reads, `static inline`, and each module's functions), with `tasim_defs.h` for the definitions. The state is still the one `WIKISIM` of `tagpu_wikisim.h`, unchanged, and the public API is still `tagpu_wikisim_*`. Every function moved whole: its body is the one it had in `tagpu_wikisim.c`, with a shared function's name prefixed `tasim_` and nothing else changed, as `simparity.mjs` proved against `sim.js` natively and under Wine before S2 retired it. Today `simparity.mjs` holds the core's three builds -- native, under AddressSanitizer, and i686 under Wine -- to one another play for play, through the wiki's simulation host (`tagpu/ddraw/tests/wikihost.c`).
 
 | File | Holds |
 |---|---|

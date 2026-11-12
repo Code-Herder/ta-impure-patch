@@ -23,7 +23,11 @@ void wh_hash(const WIKISIM* s);
    (tools/wiki/simparity.mjs sightOut), over the layout's table `t` (NULL none) */
 void wh_sight_out(WIKISIM* s, const WIKISIGHT* t);
 
-/* The request loop over `in` to its end: one answer line on stdout a request line, flushed. 0. */
-int wikihost_serve(FILE* in);
+#define WH_INSTANCE_MAX 64      /* an instance id's characters */
+
+/* The request loop over `in` to its end: one answer line on stdout a request line, flushed. Its
+   instance id `instance` (NULL: "") and its packs' root `packs_root` (NULL: none), wikihost.c's
+   THE INSTANCE and THE PACKS' ROOT. 0. */
+int wikihost_serve(FILE* in, const char* instance, const char* packs_root);
 
 #endif

@@ -24,9 +24,10 @@
    tagpu_wikireplay_input: [tick, "move", x, z], [tick, "down", key] or [tick, "up", key], a key by
    its WIKI_KEY_* name (key_of).
 
-   `wikitest serve` is the simulation host (tests/wikihost.c states its protocol): JSON requests on
-   stdin, one answer line each on stdout. `wikitest trace FILE` is the same loop reading FILE, so a
-   recorded session replays through any build.
+   `wikitest serve [--instance ID] [--packs-root DIR]` is the simulation host (tests/wikihost.c
+   states its protocol, THE INSTANCE and THE PACKS' ROOT among it): JSON requests on stdin, one
+   answer line each on stdout. `wikitest trace FILE` is the same loop reading FILE, with neither,
+   so a recorded session replays through any build.
 
    `wikitest constants` prints the build trip's constants and the replay layer's as one JSON line, in
    the host's and replay.js's names.
@@ -893,6 +894,28 @@ done:
     return rc;
 }
 
+/* `serve [--instance ID] [--packs-root DIR]`: an instance of 1..WH_INSTANCE_MAX letters, digits,
+   '-' or '_' (it is printed into JSON as it is); the root needs realpath, which the Windows build
+   has not, so that build refuses one rather than check nothing */
+static int serve(int argc, char** argv)
+{
+    const char *instance = NULL, *root = NULL;
+    int i;
+    for (i = 2; i + 1 < argc; i += 2)
+        if (!strcmp(argv[i], "--instance") && !instance) instance = argv[i + 1];
+        else if (!strcmp(argv[i], "--packs-root") && !root) root = argv[i + 1];
+        else break;
+    if (i != argc || (instance && (!instance[0] || strlen(instance) > WH_INSTANCE_MAX
+                                   || strspn(instance, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_") != strlen(instance)))) {
+        fprintf(stderr, "usage: wikitest serve [--instance ID] [--packs-root DIR], ID 1..%d of [0-9A-Za-z_-]\n", WH_INSTANCE_MAX);
+        return 2;
+    }
+#ifdef _WIN32
+    if (root) { fputs("wikitest: --packs-root needs realpath, which the Windows build has not\n", stderr); return 2; }
+#endif
+    return wikihost_serve(stdin, instance, root);
+}
+
 int main(int argc, char** argv)
 {
     int rc;
@@ -912,11 +935,11 @@ int main(int argc, char** argv)
         _setmode(_fileno(stdout), _O_BINARY);
     }
 #endif
-    if (argc == 2 && !strcmp(argv[1], "serve")) return wikihost_serve(stdin);
+    if (argc >= 2 && !strcmp(argv[1], "serve")) return serve(argc, argv);
     if (argc == 3 && !strcmp(argv[1], "trace")) {
         FILE* f = fopen(argv[2], "rb");
         if (!f) { fprintf(stderr, "wikitest: cannot read %s\n", argv[2]); return 2; }
-        rc = wikihost_serve(f);
+        rc = wikihost_serve(f, NULL, NULL);
         fclose(f);
         return rc;
     }
@@ -927,7 +950,7 @@ int main(int argc, char** argv)
     if (argc == 4 && !strcmp(argv[1], "worldq")) return worldq(argv[2], argv[3]);
     fprintf(stderr, "usage: wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
-            " | wikitest serve | wikitest trace FILE"
+            " | wikitest serve [--instance ID] [--packs-root DIR] | wikitest trace FILE"
             " | wikitest constants | wikitest rules FILE"
             " | wikitest malformed | wikitest sightcost PAK N | wikitest worldq PAK ENTRY\n");
     return 2;
