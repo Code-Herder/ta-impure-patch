@@ -236,7 +236,28 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   (`0x46470C..0x464715`), and the players phase, after GameTime's increment, runs the record's
   30-tick block only once GameTime has reached it, adding 30 (`0x46507D..0x465092`, `ja` past the
   whole block), so the pass runs on the first phase after the level's init and every 30 ticks after
-  it, every seat on the same tick in record order, after the units' tick. It sums the six current floats of every unit with `+0x110` bit 28 and
+  it, every seat on the same tick in record order, after the units' tick. **A seat with no live
+  unit that has ever had one gets no pass**: the call at `0x46555A` is skipped while the live-unit
+  word `+0x144` is 0 and the created-units dword `+0x140` is not (`0x465525..0x465537`), and also
+  for an inactive record (`[rec]` 0), a record of type 3, a record whose `+0x146` is 10, and once the game-over bit 2 of
+  `main+0x3923B` is set or the word `main+0x39239` is not negative (`0x465508..0x465557`;
+  DISASSEMBLED 2026-11-12). The deadline still advances, so such a seat keeps the rates and storage
+  maxima of its last pass with units. Those fields' readers outside the pass: the rates only
+  through the getters `0x464AB0` (energy income), `0x464AC0` (energy expense), `0x464AD0` (their
+  difference), `0x464AF0`, `0x464B00`, `0x464B10` (metal's), called by the stock AI's planners
+  (`0x408691`, `0x40874A`, `0x40BC53..0x40BCC5`) and the resource bar's refresh
+  (`0x468F8D..0x468FB4`); the maxima by RepairPatrol `0x405980` and VTOL_RepairPatrol `0x4152F0`
+  through the unit's owner record `[unit+0x96]` -- the stored level against 0.2 × the maximum
+  (`0x4059EA..0x4059FC`, `0x405B1E..0x405B39`, `0x405BA8..0x405BBA`, `0x415483..0x415495`,
+  `0x41565C..0x415678`, `0x4156AD..0x4156C1`) and the level plus a feature's yield against the
+  maximum (`0x405C7D..0x405C98`, `0x405CC4..0x405CDF`, `0x4156FC..0x415711`, `0x41573D..0x415752`)
+  -- by the AI score (`0x40BBB6`, `0x40BBD4`), the share sliders (`0x4193A6`, `0x419466`), the
+  `0x28` send and receiver (`0x457486`, `0x457490`, `0x4575F8`, `0x457601`), the auto-share, which
+  bounds a transfer by the recipient's room (`0x457E32`, `0x457F50`; network only), and the bars
+  (`0x468F14`, `0x468F32`, `0x4690B5..0x46950B`). Outside a network game none of them writes a
+  level (DISASSEMBLED
+  2026-11-12, every float and dword access at `+0xA4`/`+0xA8` and every float access at
+  `+0x90..+0xA0` of `.text` read). It sums the six current floats of every unit with `+0x110` bit 28 and
   of the `+0xEC` record (`0x401877..0x40193D`), pays the debts first and then the granted from
   current plus production, keeping the fraction paid of each (`0x401A4D..0x401AB1`), and then
   settles every such unit (the loop `0x401B3D..0x401BAC`, the arithmetic `0x401B42..0x401B99`):

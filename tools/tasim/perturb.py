@@ -19,6 +19,16 @@ side. An exact scenario is never perturbed: every index is the file as written.
 
 The simulation RNG and the wind are not perturbed: both are random from launch to launch and the
 reference records them as each run's exogenous inputs.
+
+THE FACING. Every unit of a wire names its facing: the scenario's, or 0 (the heading 0x8000) where
+it names none. The create draws a structure's heading from the simulation RNG, 0x8000 - BuildAngle/2
++ rand(BuildAngle) with BuildAngle the def's word +0x210 (0x485BD6..0x485C06; a mobile unit's is
+then overwritten with that word, 0x4860BB..0x4860ED), so a structure without a facing faces where
+the launch's random stream says, and its turret's first aim, which turns from that heading, takes
+longer or shorter (MEASURED 2026-11-12, the exact scenario's ARMLLT: headings 0x6E49 and 0x7054
+fired first at t = 16, 0x61D0 at t = 18, and every later shot kept the offset). The applier writes
+a named facing after the create (tagpu_scenario.c dress_unit), so the heading is the wire's in
+every run, fresh or reload.
 """
 
 import copy
@@ -89,6 +99,13 @@ def perturb(exp: dict, index: int, values: dict, seed: int, exact: bool = False)
     return out, {"seed": seed, "swap": swap, "jitter": jitter, "after": drawn}
 
 
+def name_facings(exp: dict) -> None:
+    """THE FACING: 0 for every unit whose scenario names none."""
+    for u in exp["units"]:
+        if u.get("facing") is None:
+            u["facing"] = 0
+
+
 def empty_point_setup(exp: dict, doc: dict, arena_scn: dict) -> None:
     """The setup every run's wire carries: the units cleared, the features cleared unless the
     scenario says it needs the map's (then it plays fresh), the arena's engine switches, and the
@@ -127,6 +144,7 @@ def run_wire(path, index: int, values: dict, arena_cfg: dict):
     block = calibref.calib_block(doc, Path(path).name, arena_cfg)
     _adoc, arena_exp = compile_scenario(TREE / arena_cfg["scenario"])
     empty_point_setup(exp, doc, arena_exp)
+    name_facings(exp)
     exact = "exact" in block["kind"]
     seed = run_seed(calibref.sha256_file(path), index)
     exp2, record = perturb(exp, index, values, seed, exact)

@@ -39,6 +39,10 @@
 #define PL_TYPE       0x73         /* char My_PlayerType (0 = empty slot)         */
 #define PL_ENERGY     0x8C         /* float fCurrentEnergy  (PlayerRes + 0x00)    */
 #define PL_METAL      0x98         /* float fCurrentMetal   (PlayerRes + 0x0C)    */
+#define PL_EINCOME    0x90         /* float energy income, expense, metal income  */
+#define PL_EEXPENSE   0x94         /*   and expense: the last economy pass's sums */
+#define PL_MINCOME    0x9C         /*   (0x4019C6, 0x4019DD, 0x401A05, 0x401A2D)  */
+#define PL_MEXPENSE   0xA0
 #define PL_MAXENERGY  0xA4         /* float fMaxEnergyStorage                     */
 #define PL_MAXMETAL   0xA8         /* float fMaxMetalStorage                      */
 #define PL_FIRSTUNIT  0x67         /* UnitStruct* first/last of this player's     */
@@ -80,6 +84,8 @@
 #define OFF_UDEFS     0x1439B      /* UnitDefStruct*, stride 0x249                */
 #define UD_STRIDE     0x249
 #define UD_NAME       0x20         /* char UnitName[0x20]  "ARMPW"                */
+#define UD_ESTORE     0x1E2        /* float energystorage, and                    */
+#define UD_MSTORE     0x1E6        /* float metalstorage (engine/keys.md)         */
 
 #define OFF_LIMIT     0x37EEA      /* u16 ActualUnitLimit                         */
 #define OFF_PERPLAYER 0x37EEC      /* u16 MaxUnitNumberPerPlayer                  */
@@ -258,6 +264,8 @@ static float    g_pl_mstore[10], g_pl_estore[10];
 static int      g_pl_got_metal[10], g_pl_got_energy[10];
 static int      g_pl_ai_done[10];
 static float    g_pl_got_mstore[10], g_pl_got_estore[10];
+static int      g_pass_reset;                     /* the seats' pass results may be
+                                                     reset (reset_pass_results)    */
 static int      g_clearfeat;                      /* `clearfeat 1`                */
 static int      g_objective;                      /* `objective`: -1 none, 0 off, 1 on */
 static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
@@ -1238,14 +1246,6 @@ static int unit_type_index(char* ta, const char* name)
     return -1;
 }
 
-/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
-   -- write engine state no other machine sees: in a network game the peers would not see
-   the objective, the controller or the delayed orders, and on a puppet the recorder alone
-   writes the state the recording carries. So each is refused there, as an error naming the
-   key, which the wire's onerror then handles like any other. The rest of a seat's tests
-   are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
-   10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
-   controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
 /* The level's objective, or NULL. LIFETIME: two places free it, both on the game thread and
    neither inside the tick's visit (DISASSEMBLED): the `.ota` reader 0x435DA0, which frees the
    old one as it makes the next at a level's setup, and the gaming state's destructor
@@ -1263,6 +1263,14 @@ static char* level_objective(char* ta)
     return readable(obj, OBJ_ARMED + 4) ? obj : 0;
 }
 
+/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
+   -- write engine state no other machine sees: in a network game the peers would not see
+   the objective, the controller or the delayed orders, and on a puppet the recorder alone
+   writes the state the recording carries. So each is refused there, as an error naming the
+   key, which the wire's onerror then handles like any other. The rest of a seat's tests
+   are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
+   10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
+   controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
 static int resolve_setup(char* ta)
 {
     const char* why = 0;
@@ -1272,6 +1280,9 @@ static int resolve_setup(char* ta)
         why = "a network game: the other peers would not see it";
     else if (tagpu_puppet_on())
         why = "a puppet: the recorder is the only writer of the recording's state";
+
+    /* asked by no key, so withheld without an error where the keys are refused */
+    g_pass_reset = !why;
 
     if (why)
     {
@@ -1597,8 +1608,9 @@ static void clear_snapshot(char* ta)
    cannot use the key. FEATURES_Destroy 0x4246B0 frees each record, sets the cell empty and
    refreshes pathing (0x440A40); it spawns no successor, which comes only from the swap
    0x423710 (engine/map.md). The recorder sees each destroy as a root FR_DESTROY
-   (tagpu_recfmt.h). It runs after the unit clear: a wreck a death in the clear spawned is
-   burned with the rest. */
+   (tagpu_recfmt.h). It runs after the unit clear, whose kills leave no wreck (UNITS_KillUnit
+   mode 0, clear_snapshot): the wrecks it burns are the ones combat left, in a calibration lane
+   the previous run's. */
 static void clear_features(void)
 {
     FEATURES_BurnAll();
@@ -2272,6 +2284,17 @@ static void delay_watch(void)
     if (!g_ndelay || !(ta = ta_base()))
         return;
 
+    /* On a puppet the recorder is the only writer of the state the recording carries, so an
+       order still pending when the level became one is never issued. */
+    if (tagpu_puppet_on())
+    {
+        scnlogf("scenario: delayed orders: the level is a puppet; %d pending cancelled", g_ndelay);
+        g_dl.skipped += g_ndelay;
+        g_ndelay = 0;
+        delay_report();
+        return;
+    }
+
     now = *(int*)(ta + OFF_GAMETIME);
 
     if (delay_drop_other_level() || now == g_dl_last)
@@ -2539,6 +2562,103 @@ static void resolve_camera(void)
    the situation is reproducible: switches first (units must spawn under the
    rules the file asked for), the players and the objective, then the clear (units,
    then features), then entities, then orders. */
+/* THE SEATS' PASS RESULTS. The economy pass 0x401360 rewrites a seat's rates and storage maxima
+   at every pass: it zeroes the maxima (0x40137D, 0x401383), adds the energystorage and
+   metalstorage of every unit of the seat's block that is alive (+0x110 bit 28) and finished
+   (+0x104 == 0.0; 0x4013AC..0x4013B4, 0x4016C5..0x4016D6, 0x40179B..0x4017C5), then the base
+   storages while +0x149 bit 0 is set (0x401941, 0x401988..0x4019AA), and writes the four rates
+   as its sums without reading them (0x4019C6, 0x4019DD, 0x401A05, 0x401A2D). But the players
+   phase calls it only for a seat with a live unit or one that never had any (0x465525..0x465537):
+   a seat emptied by a clear keeps the rates and maxima of its last pass with units until a unit
+   of its own lives through the next (DISASSEMBLED, engine/weapons.md). So this resets them at
+   every apply, after the creates, to values the apply alone decides:
+   - the rates to 0, the record's init value (0x464712, 0x464771..0x464789): their readers before
+     the seat's next pass are the stock AI's planners (0x408691, 0x40874A, 0x40BC53..0x40BCC5),
+     which run for a type-2 seat only, and the resource bar (0x468F8D..0x468FB4);
+   - the maxima to what that pass would compute from the seat's units after the apply, summed in
+     its order, with a pending death (+0x110 bit 14) left out because the reaper takes it in the
+     next step's units phase, before that pass: so a seat with units reads the same maxima before
+     its first pass as after it unless a unit is finished or lost on the way, and a seat with
+     none, which gets no pass in the whole run, keeps its base storage. Their readers before
+     that pass decide on them -- RepairPatrol 0x405980 and VTOL_RepairPatrol 0x4152F0 compare
+     the stored level with 0.2 x the maximum and a feature's yield with the room left
+     (0x4059EA..0x4059FC, 0x405C7D..0x405CDF, 0x415483..0x415495, 0x4156FC..0x415752;
+     engine/weapons.md lists every site) -- and outside a network game nothing clamps a level
+     to them but the pass itself, against the maxima it recomputes (0x401AB3..0x401B27). A
+     maximum below a level the wire sets is raised to it, as apply_players raises the maxima it
+     finds, so the stored level never reads above its maximum.
+   Withheld in a network game and on a puppet, as the calibration keys are (resolve_setup):
+   every peer runs these readers. BOUNDED: the seat's block is used only inside the unit array
+   (its end the last slot, inclusive) and on a stride boundary, and a unit's def is taken by its
+   type word below UNITINFOCount, which for a live unit names the def +0x92 points at
+   (engine/units.md, the +0x92 row). */
+static void reset_pass_results(char* ta)
+{
+    char*    beg   = *(char**)(ta + OFF_BEGIN);
+    char*    end   = *(char**)(ta + OFF_END);
+    char*    defs  = *(char**)(ta + OFF_UDEFS);
+    unsigned count = *(unsigned*)(ta + OFF_UCOUNT);
+    int      i;
+
+    if (!g_pass_reset)
+        return;
+
+    for (i = 0; i < g_npl; i++)
+    {
+        char* pl = player_at(ta, g_pl_slot[i]);
+        char* first;
+        char* last;
+        char* u;
+        float emax = 0.0f, mmax = 0.0f;
+
+        /* a free record or an inactive one gets no economy pass (0x465508..0x465523) and
+           owns no units to sum */
+        if (!pl || !*(int*)(pl + PL_ACTIVE) || *(unsigned char*)(pl + PL_SELF) == 10)
+            continue;
+
+        first = *(char**)(pl + PL_FIRSTUNIT);
+        last  = *(char**)(pl + PL_LASTUNIT);
+
+        if (defs && count <= 16384u && readable(beg, UNIT_STRIDE) && end >= beg &&
+            first >= beg && last <= end && first <= last &&
+            (size_t)(first - beg) % UNIT_STRIDE == 0 && (size_t)(last - beg) % UNIT_STRIDE == 0)
+        {
+            for (u = first; u <= last; u += UNIT_STRIDE)
+            {
+                unsigned       st = *(unsigned*)(u + U_STATE);
+                unsigned short t  = *(unsigned short*)(u + U_TYPEWORD);
+                char*          d;
+
+                if ((st & (0x10000000u | U_DYING)) != 0x10000000u ||
+                    *(float*)(u + U_NANOFRAME) != 0.0f || t >= count)
+                    continue;
+
+                d = defs + (size_t)t * UD_STRIDE;
+                mmax += *(float*)(d + UD_MSTORE);
+                emax += *(float*)(d + UD_ESTORE);
+            }
+        }
+
+        if (*(unsigned char*)(pl + PL_BASEFLAG) & 1)
+        {
+            emax += *(float*)(pl + PL_BASESTORE_E);
+            mmax += *(float*)(pl + PL_BASESTORE_M);
+        }
+
+        if (g_pl_energy[i] != SCN_UNSET && emax < *(float*)(pl + PL_ENERGY))
+            emax = *(float*)(pl + PL_ENERGY);
+        if (g_pl_metal[i] != SCN_UNSET && mmax < *(float*)(pl + PL_METAL))
+            mmax = *(float*)(pl + PL_METAL);
+
+        *(float*)(pl + PL_EINCOME)   = 0.0f;
+        *(float*)(pl + PL_EEXPENSE)  = 0.0f;
+        *(float*)(pl + PL_MINCOME)   = 0.0f;
+        *(float*)(pl + PL_MEXPENSE)  = 0.0f;
+        *(float*)(pl + PL_MAXENERGY) = emax;
+        *(float*)(pl + PL_MAXMETAL)  = mmax;
+    }
+}
+
 static void apply_now(void)
 {
     char* ta = ta_base();
@@ -2595,6 +2715,7 @@ static void apply_now(void)
         clear_features();
 
     create_units();
+    reset_pass_results(ta);
     create_features();
     issue_orders();
     resolve_camera();

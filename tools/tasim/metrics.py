@@ -238,7 +238,9 @@ def exact_series(lines, family: str):
                 first[tgt] = t
         return sorted(first.items())
     if family == "storage":
-        return out[1:2] if len(out) > 1 else out
+        # a seat row comes at t = 0 (the applied state) and at each economy pass after it
+        # (engtrace.Run.images), so the rows past t = 0 are the passes' storage
+        return [row for row in out if row[0] > 0]
     if family == "sight":
         sight = lines[0].get("sight")
         if sight is None:

@@ -16,8 +16,10 @@ HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
+import calib  # noqa: E402
 import calibref  # noqa: E402
 import check  # noqa: E402
+import metrics  # noqa: E402
 import perturb  # noqa: E402
 
 FX = 1 << 16
@@ -68,6 +70,22 @@ class Rules(unittest.TestCase):
     def test_exact_has_no_tolerance(self):
         self.assertEqual(check.rule_exact([[1, "a", 300, 150]], [[1, "a", 300, 150]]), (True, None))
         ok, diff = check.rule_exact([[1, "a", 300, 150]], [[1, "a", 300, 150.0001]])
+        self.assertFalse(ok)
+        self.assertEqual(diff[0], 0)
+
+    def test_storage_compares_the_passes_not_the_applied_row(self):
+        """Two traces that agree at t = 0 (the applied state) and differ at the first economy
+        pass differ in the storage family."""
+        head = {"schema": "ta-calib-trace/1", "limit": 100, "units": {}}
+        p = lambda emax: [0.0] * 4 + [emax, 500.0, 0.0, 0.0]     # noqa: E731
+        a = [head, {"t": 0, "p": {"A": p(1000.0), "B": p(1000.0)}},
+             {"t": 29, "p": {"A": p(1100.0), "B": p(1000.0)}}]
+        b = [head, {"t": 0, "p": {"A": p(1000.0), "B": p(1000.0)}},
+             {"t": 29, "p": {"A": p(1000.0), "B": p(1000.0)}}]
+        self.assertEqual(metrics.exact_series(a, "storage"),
+                         [[29, "A", 1100.0, 500.0], [29, "B", 1000.0, 500.0]])
+        ok, diff = check.rule_exact(metrics.exact_series(a, "storage"),
+                                    metrics.exact_series(b, "storage"))
         self.assertFalse(ok)
         self.assertEqual(diff[0], 0)
 
@@ -163,6 +181,22 @@ class ExitCodes(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("perturbation differs", errors[0])
 
+    def test_a_trace_the_metrics_cannot_read_is_2(self):
+        broken = [{"schema": "ta-calib-trace/1", "limit": 5400, "source": "tasim"}]
+        self.table({"by_seed": {k: dict(v, trace=broken) for k, v in self.by_seed.items()}})
+        rc, _rows, errors = self.run_check()
+        self.assertEqual(rc, 2)
+        self.assertIn(self.sid, errors[0])
+
+    def test_a_stale_out_stays_out(self):
+        row = {"verdict": "out"}
+        check.mark_stale(row, ["perturb.py changed"])
+        self.assertEqual((row["verdict"], row["stale"]), ("out", True))
+        self.assertEqual(check.exit_code([row], []), 1)
+        row = {"verdict": "in"}
+        check.mark_stale(row, ["perturb.py changed"])
+        self.assertEqual(row["verdict"], "stale")
+
     def test_a_dirty_reference_could_not_run(self):
         self.ref["engine"]["build"] += "-dirty"
         self.write_ref()
@@ -174,6 +208,65 @@ class ExitCodes(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("could not run: no reference matches", said)
 
+
+
+class RunIndices(unittest.TestCase):
+    """The refs build takes a scenario only with exactly its run indices."""
+
+    def test_a_full_set_is_taken(self):
+        self.assertIsNone(calib.indices_problem({"kind": ["winrate"], "runs": 50}, list(range(50))))
+
+    def test_40_of_50_is_refused(self):
+        got = [i for i in range(50) if i % 5]
+        why = calib.indices_problem({"kind": ["winrate"], "runs": 50}, got)
+        self.assertIn("10 missing", why)
+        self.assertIn("0..49", why)
+
+    def test_a_run_played_twice_is_refused(self):
+        why = calib.indices_problem({"kind": ["winrate"], "runs": 3}, [0, 1, 1, 2])
+        self.assertIn("appears twice", why)
+
+    def test_an_exact_scenario_needs_its_fresh_run(self):
+        self.assertIsNone(calib.indices_problem({"kind": ["exact"], "runs": 2}, [0, 1, 2]))
+        self.assertIn("1 missing ([2])",
+                      calib.indices_problem({"kind": ["exact"], "runs": 2}, [0, 1]))
+
+    def test_self_consistency_without_the_fresh_run_could_not_run(self):
+        line = [{"schema": "ta-calib-trace/1"}]
+        ref = {"scenario": {"calib": {"metrics": ["damage"]}}}
+        saved = check.engine_traces
+        try:
+            check.engine_traces = lambda _ref, _p: {0: line, 1: line}
+            self.assertIn("could not run", check.self_consistency(ref, None))
+            check.engine_traces = lambda _ref, _p: {0: line, 1: line, 2: line}
+            self.assertIsNone(check.self_consistency(ref, None))
+        finally:
+            check.engine_traces = saved
+
+
+class Facing(unittest.TestCase):
+    """THE FACING (perturb.py): every unit of a wire names its facing."""
+
+    def test_a_unit_without_a_facing_gets_0(self):
+        exact = TREE / "scenarios" / "calib" / "exact-damage-armllt.json"
+        exp, _rec, wire, _c = perturb.run_wire(exact, 2, VALUES, calibref.arena())
+        self.assertEqual([u["facing"] for u in exp["units"]], [0, 0])
+        units = [ln.split() for ln in wire.splitlines() if ln.startswith("unit ")]
+        self.assertEqual([u[7] for u in units], ["0", "0"])    # unit i type owner x y height facing
+
+    def test_a_named_facing_is_kept(self):
+        exp, _rec, _wire, _c = perturb.run_wire(DUEL, 0, VALUES, calibref.arena())
+        self.assertEqual([u["facing"] for u in exp["units"]], [90, 270])
+
+
+class CalibBlock(unittest.TestCase):
+
+    def test_clear_features_false_is_refused(self):
+        doc = json.loads(DUEL.read_text())
+        doc.setdefault("setup", {})["clear_features"] = False
+        with self.assertRaises(calibref.CalibError) as e:
+            calibref.calib_block(doc, "x.json")
+        self.assertIn("clear_features", str(e.exception))
 
 
 class EmptyPoint(unittest.TestCase):

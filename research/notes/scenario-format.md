@@ -196,11 +196,19 @@ unit names by scanning the live definition table. This design follows its recipe
     base storage when a unit of its side's commander type dies (`0x486518`), so the applier
     writes it after the apply's own clear; a later apply whose clear kills a commander states the
     storage again.
+  - **Every apply resets each listed active seat's economy-pass results** after its creates, asked by
+    no key: income and expense to 0, and the storage maxima to what the next economy pass would
+    compute from the seat's alive, finished units and its base storage (raised to a level the
+    wire sets). The pass skips a seat with no live unit that has had one (`0x465525..0x465537`),
+    so without the reset a seat emptied by a clear would carry the previous level's values into
+    the next. Withheld in a network game and on a puppet, without an error (the calibration
+    note, [tasim calibration](modules/tasim-calibration.md), *The seat's rates*).
   - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
     apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
     as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
     target's cell changes first (a unit whose death is pending, `+0x110` bit 14, counts as dead), if
-    a later apply's clear kills it, if the level changes, or, fail-closed, if GameTime
+    a later apply's clear kills it, if the level changes or becomes a puppet (whose state only
+    the recorder writes), or, fail-closed, if GameTime
     advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
     frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
     log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped
