@@ -603,7 +603,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             break;
         case RT_PLAYER: {
             RecSeat* s;
-            if (n < 16 + REC_INFO_BYTES || p[0] >= REC_PLAYERS || h->nseats >= REC_PLAYERS) {
+            if (n < 16 + REC_INFO_BYTES || p[0] >= REC_PLAYERS || h->nseats >= REC_PLAYERS ||
+                p[15] > 1) {
                 snprintf(why, cap, "a malformed seat in the header");
                 return 0;
             }
@@ -618,6 +619,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             s->side = p[2];
             s->logo = p[3];
             memcpy(s->ally, p + 4, 11);
+            s->ai = p[15];
             memcpy(s->info, p + 16, REC_INFO_BYTES);
             s->has_info = 0;
             for (i = 0; i < REC_INFO_BYTES; i++)

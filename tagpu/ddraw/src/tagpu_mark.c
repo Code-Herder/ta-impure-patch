@@ -1388,6 +1388,113 @@ static void gather_overlay(const TAGPU_FXVIEW* v)
     }
 }
 
+/* ---- IMPAI'S DEBUG OVERLAY ---------------------------------------------
+   One ImpAI seat's knowledge out of the packet's PK_IMPAI table (tagpu_impai.c, THE OVERLAY, builds it on
+   the game thread from ImpAI's recorded state), drawn over the world with the fog off, after the sweep:
+   a cell of the chosen map layer as a filled square centred in its 256-px cell whose side grows with its
+   shade; each row as a small square in its class's colour -- own blue, line of sight red, an ally's
+   shared radar cyan, radar or sonar yellow, a ghost grey; a metal patch as a ring; and a readout line.
+   The colours are the standard palette's system entries 248..254 (MEASURED from PALETTE.PAL: 248 grey
+   808080, 249 red, 250 green, 251 yellow, 252 blue, 254 cyan). Projected as the engine projects, as the
+   replay's overlays are. Reads only the packet.
+
+   BOUND: the acquire holds every item's kind, shade, side and point (tagpu_packet.c); an item whose
+   anchor lies more than IM_REACH screen px outside the zoom's effective rect makes no vertex, and the
+   buckets hold every item of the table's cap. */
+#define IM_REACH   32
+#define IM_SEG     16
+#define MAXIMQ     ((int)TAGPU_PK_MAX_IMPAI * QUADV)
+#define MAXIML     (256 * IM_SEG)
+#define MAXIMX     (64 * QUADV)
+static float s_imq[MAXIMQ * MVST];
+static float s_iml[MAXIML * MVST];
+static float s_imx[MAXIMX * MVST];
+static int   s_nimq, s_niml, s_nimx;
+
+static const unsigned char IM_LAYER_COL[TAGPU_PK_IL_LAST + 1] = { 249, 254, 252, 250, 251, 247 };
+static const unsigned char IM_REACH_COL[6] = { 249, 250, 251, 252, 253, 254 };
+
+static void im_quad(double x0, double y0, double x1, double y1, int col, float wx, float wz)
+{
+    const float c = (float)col / 255.0f;
+    if (s_nimq + QUADV > MAXIMQ) return;
+    put_ord(s_imq, s_nimq + 0, (float)x0, (float)y0, wx, wz, c);
+    put_ord(s_imq, s_nimq + 1, (float)x1, (float)y0, wx, wz, c);
+    put_ord(s_imq, s_nimq + 2, (float)x0, (float)y1, wx, wz, c);
+    put_ord(s_imq, s_nimq + 3, (float)x1, (float)y0, wx, wz, c);
+    put_ord(s_imq, s_nimq + 4, (float)x1, (float)y1, wx, wz, c);
+    put_ord(s_imq, s_nimq + 5, (float)x0, (float)y1, wx, wz, c);
+    s_nimq += QUADV;
+}
+
+static int im_seen(const TAGPU_FXVIEW* v, double x, double y, double reach)
+{
+    return x >= v->evpL - reach && x <= v->evpL + v->evw + reach &&
+           y >= v->evpT - reach && y <= v->evpT + v->evh + reach;
+}
+
+static void gather_impai(const TAGPU_FXVIEW* v)
+{
+    static const char* const LAYER[TAGPU_PK_IL_LAST + 1] = {
+        "GROUND", "AIR", "WATER", "INFLUENCE", "PRESENCE", "REACH" };
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_IMPAIHDR* h = pk ? tagpu_pk_impaihdr(pk) : NULL;
+    const TAGPU_PK_IMPAI* it = h ? tagpu_pk_impai(pk) : NULL;
+    const double reach = IM_REACH * s_px;
+    char text[80];
+    unsigned i;
+    int k;
+    float gx;
+    s_nimq = s_niml = s_nimx = 0;
+    if (!h) return;
+    for (i = 0; i < pk->n_impai; i++) {
+        const TAGPU_PK_IMPAI* e = &it[i];
+        const double px = (double)e->x - v->eyeX + v->vpL;
+        const double py = (double)e->z - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
+        if (e->kind == TAGPU_PK_IM_CELL) {
+            const double side = (double)e->size * 32.0, s = side * ((e->level & 0x7Fu) + 1) / 16.0;
+            int col = IM_LAYER_COL[h->layer];
+            if (h->layer == TAGPU_PK_IL_INFLUENCE && (e->level & TAGPU_PK_IM_NEG)) col = 249;
+            if (h->layer == TAGPU_PK_IL_REACH) col = IM_REACH_COL[(e->level & 0x7Fu) % 6u];
+            if (!im_seen(v, px + side / 2.0, py + side / 2.0, side + reach)) continue;
+            im_quad(px + (side - s) / 2.0, py + (side - s) / 2.0, px + (side + s) / 2.0, py + (side + s) / 2.0,
+                    col, (float)e->x, (float)e->z);
+        } else if (e->kind == TAGPU_PK_IM_CLUSTER) {
+            const double r = (double)e->size * 16.0 + 8.0;
+            if (!im_seen(v, px, py, r + reach)) continue;
+            for (k = 0; k < IM_SEG && s_niml < MAXIML; k++) {
+                const double a0 = 6.283185307179586 * k / IM_SEG, a1 = 6.283185307179586 * (k + 1) / IM_SEG;
+                if (put_line(s_iml + (size_t)s_niml * MVST, px + r * cos(a0), py + r * sin(a0),
+                             px + r * cos(a1), py + r * sin(a1), NULL, (float)e->x, (float)e->z, 250.0f / 255.0f,
+                             0.0f))
+                    s_niml++;
+            }
+        } else {
+            const int col = e->kind == TAGPU_PK_IM_OWN ? 252 : e->kind == TAGPU_PK_IM_GHOST ? 248
+                          : (e->level & 0x02u) ? 249 : (e->level & 0x04u) ? 254 : 251;
+            const double half = 2.0 * s_px;
+            if (!im_seen(v, px, py, reach)) continue;
+            im_quad(px - half, py - half, px + half, py + half, col, (float)e->x, (float)e->z);
+        }
+    }
+    if (h->radar_age == 0xFFFFFFFFu)
+        _snprintf(text, sizeof text, "IMPAI SEAT %u - %s - NO RADAR PASS YET", (unsigned)h->seat, LAYER[h->layer]);
+    else
+        _snprintf(text, sizeof text, "IMPAI SEAT %u - %s - RADAR AGE %u", (unsigned)h->seat, LAYER[h->layer],
+                  (unsigned)h->radar_age);
+    text[sizeof text - 1] = 0;
+    gx = (float)(v->evpL + 8.0 * s_px);
+    for (k = 0; text[k]; k++) {
+        char one[2];
+        int ax, ay, w, hh, yoff;
+        one[0] = text[k]; one[1] = 0;
+        if (s_nimx + QUADV > MAXIMX) break;
+        if (!tagpu_text_place(one, &ax, &ay, &w, &hh, &yoff)) continue;
+        gx = text_quad(s_imx, s_nimx, gx, (float)(v->evpT + 40.0 * s_px), ax, ay, w, hh, yoff, 255, 0.0f, 0.0f);
+        s_nimx += QUADV;
+    }
+}
+
 /* Grow one of the two unit-scaled buckets to `need` vertices. Grow only,
    doubling; 0 leaves the bucket and its capacity as they were. */
 static int grow_verts(float** p, unsigned* cap, unsigned need)
@@ -1444,6 +1551,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
     s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
     s_cForm = 0;
+    s_nimq = s_niml = s_nimx = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -1487,6 +1595,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        while that layer is not ours (tagpu_markown.c, hook 9) */
     s_cForm = tagpu_mark_cursor_ours() ? tagpu_order_formation_gather(v) : 0;
     if (s_armed == 1 && !s_passive) gather_sweep(v);
+    if (s_armed == 1 && !s_passive) gather_impai(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
@@ -1720,7 +1829,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, iconBase, ovtBase, ovlBase, placeBase, swBase;
+    int total, textBase = 0, selBase = 0, iconBase, ovtBase, ovlBase, placeBase, swBase, imBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1741,7 +1850,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
 
     if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 && s_nicon == 0 &&
         s_norda == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0 &&
-        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0) return;
+        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0 &&
+        s_nimq == 0 && s_niml == 0 && s_nimx == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1782,6 +1892,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nswc) mk_push(s_swc, s_nswc);
     if (s_nswq) mk_push(s_swq, s_nswq);
     if (s_nswx) mk_push(s_swx, s_nswx);
+    imBase = swBase + s_nswk + s_nswc + s_nswq + s_nswx;
+    if (s_nimq) mk_push(s_imq, s_nimq);
+    if (s_niml) mk_push(s_iml, s_niml);
+    if (s_nimx) mk_push(s_imx, s_nimx);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1852,6 +1966,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nswc) mk_draw(swBase + s_nswk, s_nswc, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
     if (s_nswq) mk_draw(swBase + s_nswk + s_nswc, s_nswq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     if (s_nswx) mk_draw(swBase + s_nswk + s_nswc + s_nswq, s_nswx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
+    /* ImpAI's overlay, a test lever's: its cells and points, its patch rings, its readout */
+    if (s_nimq) mk_draw(imBase, s_nimq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_niml) mk_draw(imBase + s_nimq, s_niml, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nimx) mk_draw(imBase + s_nimq + s_niml, s_nimx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
     /* the replay's overlays, over everything and with the fog off: the click rings, then the
        cursor arrows' fills, then their outlines */
     if (s_novlRing) mk_draw(ovlBase, s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);

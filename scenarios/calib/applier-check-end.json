@@ -1,0 +1,8 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The calib-applier fixture at GameTime 899: the objective armed again, so replay-end.json can end the level.",
+ "setup": {
+  "clear_existing": false,
+  "objective": "on"
+ }
+}

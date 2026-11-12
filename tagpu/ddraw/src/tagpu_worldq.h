@@ -7,6 +7,7 @@
    level's teardown, which runs there too. */
 #include <stdint.h>
 #include "worldq.h"
+#include "tasim_roles.h"
 
 /* the site test a placement is judged by: stdcall (def, cell, ignore, player record), `ret 0x10` */
 typedef int (__stdcall* WqSiteFn)(const void* def, unsigned cell, unsigned ignore, const void* player);
@@ -49,5 +50,28 @@ int      tagpu_worldq_def_kind(const void* def);
    any bound fails (in play, the map, the defs, the unit array and the seat's block; the seat below 10 and
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
+
+/* The line-of-sight rule `observe` applies, alone, for ImpAI's self-check against the engine's own
+   0x465AC0: 1 when the seat's sight shows the live unit at `slot`, 0 when not, -1 for no live unit or no
+   sight grid; *under is 1 for a unit whose top is below the sea, which the rule never shows. The caller
+   tests ownership first, as 0x465AC0 does. */
+int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under);
+
+/* The engine's pathing map of movement class `mclass` at cell (cx, cz), as the passable op answers it, with
+   no seat: 0 blocked, off the map or for a class the level has not, 1 bad, 3 good. On the loader thread
+   after the level's class maps are built (0x4918E3: from the level init on), or on the game thread. */
+int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz);
+/* the level has movement class `mclass` (its record names one) */
+int tagpu_worldq_class_exists(unsigned mclass);
+
+/* THE ROLE TABLE'S ENGINE FILLER: the unit types the level loaded, as the role classifier's input
+   (tasim_roles.h), from the def array, the weapon records and the category map the level load wrote. On the
+   LOADER thread at the level init, inside PLAYERS 0x4919C8, after the unit-data load 0x42D2E0 (0x4918CA) has
+   loaded every weapon, def and category: tagpu_impai.c is its one caller.
+   tagpu_worldq_role_count: the level's UNITINFOCount, 0 when the def array or its count is not usable.
+   tagpu_worldq_role_in: in[0..n) for the n role_count answered; 0, or -1 with nothing promised when a bound
+   fails. */
+int tagpu_worldq_role_count(void);
+int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n);
 
 #endif

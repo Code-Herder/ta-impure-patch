@@ -158,6 +158,8 @@ static const Key s_key[TS_NKEYS] = {
     { "sensorview",  O_ONOFF, N(O_ONOFF), 1 },
     { "rangeally",   NULL,    0,          TS_RC_NUKE },
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
+    /* no seat ImpAI's: every computer seat plays OTA AI, the stock AI */
+    { "seatai",      NULL,    0,          0 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -227,6 +229,7 @@ static int valid(TagpuSetting k, int v)
     if (k == TS_MONITOR) return v == -1 || (v >= 0 && v < s_monCount);
     if (k == TS_RESOLUTION) return res_ok(v);
     if (k == TS_RANGEALLY || k == TS_RANGEENEMY) return v >= 0 && v <= TS_RC_ALL;
+    if (k == TS_SEATAI) return v >= 0 && v < 1024;
     for (i = 0; i < s_key[k].nopts; i++)
         if (s_key[k].opts[i].value == v) return 1;
     return 0;
@@ -284,6 +287,11 @@ int tagpu_settings_placement(TagpuSetting key, int* out)
     return 1;
 }
 
+int tagpu_settings_seatai(void)
+{
+    return s_attached ? read_val(TS_SEATAI) : 0;
+}
+
 long tagpu_settings_gen(void) { return (long)s_gen; }
 
 void tagpu_settings_set(TagpuSetting key, int value)
@@ -331,6 +339,18 @@ static int serialise(char* b, int cap)
             for (c = 0; c < 5; c++) {
                 if (!(v & (1 << c))) continue;
                 k = _snprintf(b + at, cap - at, "%s%s", n++ ? "," : "", RC_NAME[c]);
+                if (k < 0 || k >= cap - at) return -1;
+                at += k;
+            }
+            k = _snprintf(b + at, cap - at, "%s\r\n", n ? "" : "none");
+        } else if (i == TS_SEATAI) {
+            int v = read_val(TS_SEATAI), c, n = 0;
+            k = _snprintf(b + at, cap - at, "seatai=");
+            if (k < 0 || k >= cap - at) return -1;
+            at += k;
+            for (c = 0; c < 10; c++) {
+                if (!(v & (1 << c))) continue;
+                k = _snprintf(b + at, cap - at, "%s%d", n++ ? "," : "", c);
                 if (k < 0 || k >= cap - at) return -1;
                 at += k;
             }
@@ -610,6 +630,25 @@ static int parse_rclass(const char* v)
     return m;
 }
 
+/* `none`, or seats 0-9 separated by commas (`1,3`), into a bit per seat; -1 for anything else */
+static int parse_seats(const char* v)
+{
+    char b[64];
+    char* w;
+    char* e;
+    int m = 0;
+    lstrcpynA(b, v, sizeof b);
+    if (!lstrcmpiA(trim(b), "none")) return 0;
+    for (w = b; w; w = e) {
+        e = strchr(w, ',');
+        if (e) *e++ = 0;
+        w = trim(w);
+        if (w[0] < '0' || w[0] > '9' || w[1]) return -1;
+        m |= 1 << (w[0] - '0');
+    }
+    return m;
+}
+
 /* `NAME:n:ally:enemy,...`, skipped entry by entry as the spacing's are */
 static void parse_rtoggle(char* v)
 {
@@ -699,6 +738,15 @@ static void parse_line(char* line)
         if (m >= 0) s_val[t] = m;
         else slog("%s=%s is not a list of ground, air, nuke, cannon, lrpc or none - "
                   "the default stands", s_key[t].name, v);
+        return;
+    }
+    if (!lstrcmpiA(k, "seatai")) {
+        int m = parse_seats(v);
+        if (m >= 0) s_val[TS_SEATAI] = m;
+        else {
+            s_val[TS_SEATAI] = 0;
+            slog("seatai: %s not understood - no seat plays ImpAI", v);
+        }
         return;
     }
     if (!lstrcmpiA(k, "reclaimkind")) {
@@ -958,7 +1006,7 @@ void tagpu_settings_attach(void)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED but for display, vsync and window (" MASTER_OFF
+                   s_ignored ? " IGNORED but for display, vsync, window and seatai (" MASTER_OFF
                                " present: every other setting is the lever's or the compiled "
                                "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {
@@ -969,7 +1017,7 @@ void tagpu_settings_attach(void)
             int v = read_val(TS_RESOLUTION);
             k = v ? _snprintf(b + at, sizeof b - at, " resolution=%dx%d", TS_RES_W(v), TS_RES_H(v))
                   : _snprintf(b + at, sizeof b - at, " resolution=native");
-        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY)
+        } else if (i == TS_RANGEALLY || i == TS_RANGEENEMY || i == TS_SEATAI)
             k = _snprintf(b + at, sizeof b - at, " %s=0x%x", s_key[i].name,
                           (unsigned)read_val((TagpuSetting)i));
         else

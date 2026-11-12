@@ -19,6 +19,10 @@
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* 1 once tagpu_replay_init put every one of its play sites in, the level init's PLAYERS call
+   0x4919C8 among them: from then on every level's load calls tagpu_replay_level_players, which
+   runs ImpAI's level init (tagpu_impai.h). DllMain's attach writes it; read after. */
+int tagpu_replay_level_init_in(void);
 /* The test pacing's levers (tagpu_replay.c), each honoured only in a test launch
    (tagpu_regstore_active) -- configurations no player runs -- and refused with a line otherwise.
    DllMain's attach, before tagpu_simreg_attach closes the lever list, so every recording's header

@@ -711,12 +711,13 @@ def write_title(inst: Instance, label: str) -> str:
 # What a launch writes into a gamedir that a player's install does not have.
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
-# The store keys an ordinary launch writes: the placement (write_placement) and
-# the size (ensure_store). A player's menu writes the same keys, so the store
+# The store keys an ordinary launch writes: the placement (write_placement),
+# the size (ensure_store) and the seats ImpAI plays (write_seatai, `none` unless the launch
+# names seats). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "vsync", "resolution")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai")
 
 
 def _split_store(inst: Instance):
@@ -824,6 +825,26 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
             if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync", "maxfps")]
     keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}", f"vsync={vsync}"]
     path.write_text("\n".join(keep) + "\n")
+
+
+def write_seatai(inst: Instance, seats) -> None:
+    """The store's `seatai`: the computer seats ImpAI plays (tagpu_impai.c reads it at every
+    level init, under tagpu_defaults.off too), `none` for no seat (an empty list or None). Every
+    harness launch writes it, so no launch plays an earlier launch's seats."""
+    _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
+
+
+def write_harness_store(inst: Instance, meta, window, args) -> None:
+    """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
+    or missing (ensure_store), the placement, and the seats ImpAI plays -- `none` unless this
+    launch names some (a scenario's `impai` seats)."""
+    # The size goes into the store when it is asked for on THIS launch, or when
+    # the store has none yet; a recorded --res rewritten every launch would undo
+    # the player's pick (ensure_store).
+    ensure_store(inst, tuple(args.res) if args.res else None,
+                 default_res=tuple(meta["res"]))
+    write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
+    write_seatai(inst, getattr(args, "seatai", None))
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
@@ -2059,12 +2080,7 @@ def _launch(args) -> dict:
         terrown_note = _ensure_terrown_for_terr(inst)
         markown_note = _ensure_markown_for_mark(inst)
         defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-        # The size goes into the store when it is asked for on THIS launch, or when
-        # the store has none yet; a recorded --res rewritten every launch would undo
-        # the player's pick (ensure_store).
-        ensure_store(inst, tuple(args.res) if args.res else None,
-                     default_res=tuple(meta["res"]))
-        write_placement(inst, meta["tile"], win, vsync=meta.get("vsync", "on"))
+        write_harness_store(inst, meta, win, args)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -4483,7 +4499,11 @@ SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
 SCN_LOS = {"permanent": 0, "true": 1, "circular": 2}
 
 SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
-SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
+# `impai` is a computer seat to the engine (controller 2) that ImpAI plays: the launch writes
+# the store's `seatai` (tagpu_impai.c reads it at the level init); `ai` is OTA AI, the stock AI.
+SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2, "impai": 2}
+# The SKIRMISH screen's Difficulty gadget stages, as main+0x37EEE holds them (engine/ui.md)
+SCN_DIFFICULTY = {"easy": 0, "medium": 1, "hard": 2}
 
 SCN_PATTERNS = ("grid", "line", "random")
 SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
@@ -4660,7 +4680,7 @@ def _scn_orders(node, where, default=None):
     orders = []
     for i, o in enumerate(_scn_list(node, "orders", where)):
         w = f"{where}.orders[{i}]"
-        _scn_keys(o, w, required=("cmd",), optional=("to", "target"))
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after"))
         raw = o["cmd"]
         cmd = raw.lower() if isinstance(raw, str) else raw
         if cmd in SCN_NO_ATTACK_MOVE:
@@ -4677,7 +4697,11 @@ def _scn_orders(node, where, default=None):
         elif (to is None) == (target is None):
             die(f"{w}: {cmd!r} needs exactly one of \"to\" (a coordinate) "
                 f"or \"target\" (an entity handle)")
-        orders.append({"cmd": cmd, "to": to, "target": target})
+        # `after`: the ticks the applier waits before it issues the order, under a watch
+        # that cancels it if its unit (or a unit target) dies first (tagpu_scenario.c,
+        # delayed orders). 0 is the order at the apply.
+        after = _scn_int(o, "after", w, 0, 255, 0)
+        orders.append({"cmd": cmd, "to": to, "target": target, "after": after})
     return orders
 
 
@@ -4732,14 +4756,16 @@ def _scn_entity_body(node, where, default=None):
 def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
-             "los": None, "mapping": None,
+             "clear_features": False, "objective": None,
+             "los": None, "mapping": None, "difficulty": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
-                                 "switches", "players", "los", "mapping"))
+                                 "clear_features", "objective", "switches", "players",
+                                 "los", "mapping", "difficulty"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -4752,10 +4778,17 @@ def _scn_setup(doc, label):
     # then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+    # Every feature of the level burned through the engine's own BurnAll walker, indestructible
+    # ones and geothermal vents included, after the unit clear and before the creates.
+    setup["clear_features"] = _scn_bool(node, "clear_features", w, False)
+    # The level's end test: "off" disarms it (a level with no units runs on), "on" re-arms it.
+    setup["objective"] = _scn_str(node, "objective", w, choices=("off", "on"))
     # Both default to None = "leave the screen as it is"; `mapping` then falls
     # back to SCN_MAPPING_DEFAULT.
     setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
     setup["mapping"] = _scn_bool(node, "mapping", w)
+    # None leaves the screen's own Difficulty, the player's remembered SkirmishDifficulty
+    setup["difficulty"] = _scn_str(node, "difficulty", w, choices=SCN_DIFFICULTY)
 
     switches = node.get("switches")
     if switches is not None:
@@ -4770,7 +4803,8 @@ def _scn_setup(doc, label):
     for i, p in enumerate(_scn_list(node, "players", w)):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
-                  optional=("controller", "side", "color", "metal", "energy"))
+                  optional=("controller", "side", "color", "metal", "energy", "ai",
+                            "storage"))
         slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
@@ -4783,8 +4817,31 @@ def _scn_setup(doc, label):
             "color": _scn_int(p, "color", pw, 0, 9),
             "metal": _scn_int(p, "metal", pw, 0, 1000000),
             "energy": _scn_int(p, "energy", pw, 0, 1000000),
+            # "off": the console's AI toggle on an AI seat at the apply; the seat's units
+            # keep their orders and no planner runs
+            "ai": _scn_str(p, "ai", pw, choices=("off",)),
+            "storage": _scn_storage(p, pw),
         })
     return setup
+
+
+def _scn_storage(p, where):
+    """A seat's base storage, {"metal": M, "energy": E}: the seat setup's own writes, which
+    the economy pass adds to the storage it recomputes, so a level set beside it survives
+    the pass's clamp. Both or neither, non-negative numbers."""
+    v = p.get("storage")
+    if v is None:
+        return None
+    w = f"{where}.storage"
+    _scn_keys(v, w, required=("metal", "energy"))
+    out = {}
+    for k in ("metal", "energy"):
+        x = v[k]
+        if (isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                or x < 0 or x > 1e30):
+            die(f"{w}.{k}: expected a number of 0 or more, got {x!r}")
+        out[k] = x
+    return out
 
 
 def _scn_names(catalogue, key):
@@ -4856,7 +4913,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
 
     _scn_keys(doc, label, required=("format",),
               optional=("description", "seed", "on_error", "setup", "groups",
-                        "units", "features", "camera", "source"))
+                        "units", "features", "camera", "source", "calib"))
     if doc["format"] != SCN_FORMAT:
         die(f"{label}: format {doc['format']!r} is not {SCN_FORMAT!r}")
 
@@ -4870,6 +4927,11 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
             "groups": [], "units": [], "features": [], "camera": None,
             "warnings": warnings}
 
+    # The calibration runner's block (tools/tasim/calibref.py validates what it says); the
+    # wire never carries it.
+    if doc.get("calib") is not None and not isinstance(doc["calib"], dict):
+        die(f"{label}: calib: expected an object, got {_scn_kind(doc['calib'])}")
+
     # `on_error: "skip"` reaches layer 2 as "warn, do not refuse" — see _scn_type.
     lenient = warnings if norm["on_error"] == "skip" else None
 
@@ -4879,14 +4941,16 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
     # storage to hold it — say so once, where an author reads it, rather than
     # letting `apply` look like it worked.
     for p in norm["setup"]["players"]:
-        if (p["metal"] is not None or p["energy"] is not None) and not launching:
+        if ((p["metal"] is not None or p["energy"] is not None) and not launching
+                and p["storage"] is None):
             warnings.append(
                 f"setup.players slot {p['slot']}: metal/energy is a launch-time "
                 f"setting — `scenario load` writes Player{p['slot']}Metal/Energy and "
                 f"TA reads them as the starting level *and* the storage. `apply` "
                 f"cannot: in a running game the engine recomputes storage from the "
                 f"player's own units every tick and clamps the level to it, so the "
-                f"figure is gone within a second (the result reports what survived)")
+                f"figure is gone within a second (the result reports what survived); "
+                f"a \"storage\" beside it holds it")
 
     slots = {p["slot"] for p in norm["setup"]["players"]}
     # A slot with controller "off" gets no unit table from the engine, so the
@@ -5164,10 +5228,21 @@ def _scn_wire(exp) -> str:
     if setup["switches"]:
         lines.append("sw " + " ".join(f"{k}={int(bool(v))}"
                                       for k, v in sorted(setup["switches"].items())))
+    if setup.get("clear_features"):
+        lines.append("clearfeat 1")
+    if setup.get("objective"):
+        lines.append(f"objective {setup['objective']}")
     for p in setup["players"]:
+        keys = []
         if p["metal"] is not None or p["energy"] is not None:
-            lines.append(f"player {p['slot']} metal={_f(p['metal'])} "
-                         f"energy={_f(p['energy'])}")
+            keys += [f"metal={_f(p['metal'])}", f"energy={_f(p['energy'])}"]
+        if p.get("ai") == "off":
+            keys.append("ai=off")
+        if p.get("storage") is not None:
+            keys += [f"mstore={p['storage']['metal']!r}",
+                     f"estore={p['storage']['energy']!r}"]
+        if keys:
+            lines.append(f"player {p['slot']} " + " ".join(keys))
 
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
                  "<stance> <nano%> <kills>")
@@ -5185,14 +5260,15 @@ def _scn_wire(exp) -> str:
     fords = {f["id"]: i for i, f in enumerate(exp["features"])}
     for i, u in enumerate(exp["units"]):
         for o in u["orders"]:
+            after = f" after={o['after']}" if o.get("after") else ""
             if o["to"]:
-                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}")
+                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}{after}")
             elif o["target"] in ords:
-                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}{after}")
             elif o["target"] in fords:
-                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}")
+                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}{after}")
             else:
-                lines.append(f"order {i} {o['cmd']}")
+                lines.append(f"order {i} {o['cmd']}{after}")
     cam = exp["camera"]
     if cam:
         pin = int(bool(cam["pin"]))
@@ -5644,6 +5720,26 @@ def _scn_set_toggle(inst: Instance, gadget: str, want: int, names, label: str) -
     return f"{label} {names[was]} -> {names[g.get('stage')]}"
 
 
+# main+0x37EEE, the Difficulty the SKIRMISH gadget writes (engine/sim.md, Difficulty and the AI
+# handicap): a dword, 0 Easy, 1 Medium, 2 Hard
+SCN_DIFFICULTY_PEEK = "*0x511DE8+0x37EEE:4"
+SCN_DIFFICULTY_NAMES = ("easy", "medium", "hard")
+
+
+def _scn_set_difficulty(inst: Instance, want: int) -> str:
+    """The SKIRMISH Difficulty gadget to `want`, then the engine's own value read back: the click
+    handler (0x47B939..0x47B9C6) steps main+0x37EEE 0 -> 1 -> 2 -> 0, and the gadget's stage is
+    only the label's [INFERRED, engine/ui.md], so a gadget that does not behave as a stage of that
+    value dies here rather than in a game played at the wrong Difficulty."""
+    said = _scn_set_toggle(inst, "Difficulty", want, SCN_DIFFICULTY_NAMES, "difficulty")
+    rows = _peek(inst, [SCN_DIFFICULTY_PEEK], 10.0)
+    got = _peek_uint(rows[0] if rows else None)
+    if got != want:
+        die(f"difficulty: the gadget reads {SCN_DIFFICULTY_NAMES[want]} but main+0x37EEE holds "
+            f"{got} -- the SKIRMISH screen's Difficulty gadget did not set the engine's value")
+    return said
+
+
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
     """Wait for the fork to answer a gadget walk at all.
 
@@ -5746,6 +5842,7 @@ def cmd_scenario_load(args):
         los = SCN_LOS[setup["los"]]
     # Explicit players override the saved seat count as well as their controllers.
     seats = max((p["slot"] + 1 for p in setup["players"]), default=0)
+    impai = [p["slot"] for p in setup["players"] if p["controller"] == "impai"]
     launched = (_remote_launch if inst.remote else _launch)(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         vsync=args.vsync,
@@ -5754,11 +5851,13 @@ def cmd_scenario_load(args):
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=los, mapping=mapping, arg=[],
-        timeout=args.launch_timeout, no_restore_pointer=False))
+        timeout=args.launch_timeout, no_restore_pointer=False, seatai=impai))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
             f"(tacli stop {args.name} --hard)")
     lres = launched.get("res")
+    steps.append("ImpAI plays seat" + ("s " if len(impai) > 1 else " ")
+                 + ",".join(map(str, impai)) if impai else "no seat plays ImpAI")
     steps.append("launched" + (f" {lres[0]}x{lres[1]}" if lres else "")
                  + (" on the remote machine" if launched.get("remote") else "")
                  + (f", map {wanted_map!r}" if wanted_map else "")
@@ -5794,6 +5893,8 @@ def cmd_scenario_load(args):
             if los is not None:
                 steps.append(_scn_set_toggle(inst, "LineOfSight", los,
                                              SCN_LOS_NAMES, "line of sight"))
+            if setup["difficulty"] is not None:
+                steps.append(_scn_set_difficulty(inst, SCN_DIFFICULTY[setup["difficulty"]]))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
@@ -6034,22 +6135,44 @@ def _replay_playing(inst: Instance):
     return None, "no level of this run has played a recording"
 
 
+def dump_written_rx(name: str) -> str:
+    """The recorder's line for dump `name` written (tagpu_recorder.c, dump_write). A dump taken
+    now -- `dump <name> now`, a rewind's -- says `frame dump <name> at GameTime <frame> (iteration
+    <tick>)`; one armed for a GameTime says `dump <name> at GameTime <tick>`. Both go on `-> <path>
+    (<n> bytes of records)`. Groups: `t` the GameTime, `iteration` (a frame dump's), `path`,
+    `bytes`. The one pattern every caller waits on (tareplay, the calibration runner);
+    tools/test_tacli.py renders the recorder's own format strings against it."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump {n} at GameTime (?P<t>-?\d+)"
+            rf"(?: \(iteration (?P<iteration>-?\d+)\))? -> (?P<path>.*?) "
+            rf"\((?P<bytes>\d+) bytes of records\)")
+
+
+def dump_refused_rx(name: str) -> str:
+    """The recorder's line for dump `name` that will not be written: refused, not taken, out of
+    memory, unwritable, or a name it does not take. A line that says what a dump leaves out
+    (`dump <name>: the level has no ...: the dump leaves it out`) is neither this nor written."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump(?: {n}(?: refused: | at GameTime -?\d+ refused: "
+            rf"| for GameTime -?\d+ not taken: |: no memory |: cannot write )"
+            rf"|: a name of |: the name ).*")
+
+
 def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
     """Waits for the seek's arrival or refusal and, with a dump, for the dump's line; returns
     what they say. The arrival comes at the frame visit that runs the seek, paused or not; the
     dump comes at the capture point of T, which a paused playback reaches at its first step after
     the pause. On a `held` launch (THE LAUNCH'S HOLD) it returns at the arrival: the dump is armed
     for T and taken once the caller resumes the level (`dump_pending`)."""
-    n, d = re.escape(name), re.escape(dump or "")
+    n = re.escape(name)
     arrive_rx = re.compile(rf"replay: {n}: at GameTime {T}, sought from GameTime (\d+) in (\d+) ms "
                            rf"\(read (\d+), rebuild (\d+)\); units (\d+) killed, (\d+) made, "
                            rf"(\d+) refused")
     wrote_rx = re.compile(rf"replay: {n}: the seek to {T} wrote: .*")
     refuse_rx = re.compile(rf"replay: (?:{n}: )?seek to {T} refused: (.*)"
                            rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
-    dump_rx = re.compile(rf"recorder: dump {d} at GameTime (-?\d+) -> (.*) \(\d+ bytes of records\)")
-    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write "
-                             rf"| at GameTime \d+ refused: | for GameTime \d+ not taken: ).*")
+    dump_rx = re.compile(dump_written_rx(dump or ""))
+    dump_bad_rx = re.compile(dump_refused_rx(dump or ""))
     res = {"arrived": False}
     deadline = time.time() + timeout
     pending = first
@@ -6074,7 +6197,7 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
                 continue
             m = dump_rx.search(line)
             if m:
-                res["dump_at"], res["dump"] = int(m.group(1)), m.group(2)
+                res["dump_at"], res["dump"] = int(m["t"]), m["path"]
                 continue
             m = dump_bad_rx.search(line)
             if m:
@@ -6310,7 +6433,7 @@ def cmd_rewind(args):
                 "now": "(?:closed, nothing moved|returned to now)", "fork": "forked at GameTime",
                 "close": "(?:closed, nothing moved|returned to now)"}[args.action]
     done_rx = re.compile(r"rewind: " + expected)
-    dump_rx = re.compile(rf"recorder: frame dump {re.escape(args.dump or '')} at GameTime (\d+)")
+    dump_rx = re.compile(dump_written_rx(args.dump or ""))
     result = {"name": args.name, "action": args.action, "done": False}
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
@@ -6324,7 +6447,7 @@ def cmd_rewind(args):
             match = dump_rx.search(line)
             if match:
                 result.update(dump=str(inst.gamedir / "replays" / f"dump-{args.dump}.bin"),
-                              dump_at=int(match[1]))
+                              dump_at=int(match["t"]))
         if result["done"] and (not args.dump or "dump" in result):
             out(result, args.json, human=result["detail"] +
                 (f"; dump at GameTime {result['dump_at']}: {result['dump']}" if args.dump else ""))
@@ -6416,7 +6539,7 @@ def cmd_replay_takeover(args):
         # takeover's seek, which sets GameTime to T - 1, and takes it at the fork's capture point
         # of G (tagpu_recorder.c, tagpu_rec_dump_arm)
         armed_rx = re.compile(rf"recorder: dump {re.escape(args.dump)} armed for GameTime "
-                              rf"{args.dump_at}|recorder: dump {re.escape(args.dump)}.* refused.*")
+                              rf"{args.dump_at}|" + dump_refused_rx(args.dump))
         trigger(f"dump {args.dump} at {args.dump_at}")
         deadline, got_line, pending, read = time.time() + 30, None, rest, []
         while got_line is None and time.time() < deadline:
@@ -6429,7 +6552,7 @@ def cmd_replay_takeover(args):
             time.sleep(0.1)
         # what the takeover's wait reads next: every line after the verdict, the hold's among them
         rest = read + pending
-        if got_line is None or "refused" in got_line:
+        if got_line is None or " armed for GameTime " not in got_line:
             res.update(taken=False, dump_refused=got_line or "no answer in 30 s")
             out(res, args.json, human=f"{name}: on {args.name}, not taken over: dump "
                                       f"{args.dump}: {res['dump_refused']}")
@@ -6976,6 +7099,7 @@ def _remote_launch(args) -> dict:
     # it lacks is the DLL's default, on
     if getattr(args, "vsync", None) is not None:
         _store_set(inst, "vsync", args.vsync)
+    write_seatai(inst, getattr(args, "seatai", None))
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)

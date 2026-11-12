@@ -18,7 +18,10 @@
 enum { CORE_ACT_MOVE = 1, CORE_ACT_BUILD, CORE_ACT_RECLAIM, CORE_ACT_GUARD, CORE_ACT_VTOL_BUILD,
        CORE_ACT_VTOL_RECLAIM, CORE_ACT_RESURRECT };
 
-typedef struct WQ_CORE { WIKISIM* s; int seat; } WQ_CORE;
+/* `lit` and `con`, NULL from the open, are the seat's sight that observe, block_lit and radar_step answer from,
+   the caller's for the call: its lit grid (tagpu_wikisim_sight_lit, (W >> 1) x (H >> 1) bytes) and its contacts
+   (tagpu_wikisim_contacts, one byte a unit in slot order). */
+typedef struct WQ_CORE { WIKISIM* s; int seat; const uint8_t* lit; const uint8_t* con; } WQ_CORE;
 
 /* Opens seat `seat`'s view of `s` into `out` over `ctx`, both the caller's for one call; 0 for a seat out
    of 0..WIKI_SEATS-1. */

@@ -406,10 +406,14 @@ def header(payload):
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
         elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
-            if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
+            if (len(b) < 16+0xB9 or b[0] >= 10 or b[15] > 1
+                    or any(p["index"] == b[0] for p in h["players"])):
                 raise Unreadable("malformed or duplicate seat in the header")
+            # byte 15: 1 when ImpAI played the seat, 0 for OTA AI, a human, or a recording made
+            # before the seat choice (tagpu_recfmt.h, RT_PLAYER)
             h["players"].append({"index": b[0], "controller": b[1], "side": b[2], "logo": b[3],
-                                 "alliances": bytes(b[4:15]), "info": bytes(b[16:16 + 0xB9]),
+                                 "alliances": bytes(b[4:15]), "ai": b[15],
+                                 "info": bytes(b[16:16 + 0xB9]),
                                  "name": b[16 + 0xB9:].decode("latin-1")})
         elif tag == RT_LEVER:
             nf = struct.unpack_from("<H", b, 2)[0]
@@ -1978,7 +1982,7 @@ def cmd_info(path):
     print(f"  globals list {h.get('globals', '')[:12]}, a projectile pool of "
           f"{h.get('projectiles')} records")
     for p in h["players"]:
-        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, "
+        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, ai={p['ai']}, "
               f"side {p['side']}, logo {p['logo']}, alliances {p['alliances'].hex()}")
     for lv in h["levers"]:
         print(f"  lever {lv['file']}: {'set' if lv['set'] else 'absent'}"

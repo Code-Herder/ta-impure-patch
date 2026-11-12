@@ -1,6 +1,6 @@
 # Entering the game
 
-Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam is built and observes; the exemption and the button are designs.
+Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI observes, and the button is a design (A1b).
 
 ## The seam: the call at `0x465031`
 
@@ -13,20 +13,9 @@ From [Orders and the AI](../engine/orders.html), *The AI object, its lifecycle a
 
 **ImpAI retargets the call at `0x465031`**, not the entry of `0x408C40`: that entry's five bytes are the recorder's AI activity observer, and `0x4089A0`'s entry is the extra-weapons module's acquisition detour ([the hook map](../modules/hook-map.html)). A call-site redirect composes with both.
 
-### As built: the stock AI plays, ImpAI observes (`tagpu_impai.c`)
+### As built (A1a)
 
-- **The lever.** `tagpu_impai.on`, read once at attach: `ai` (every record whose controller is 2 at the level's start) or a list of record indexes such as `1,2`; `tacli arm <inst> impai.on=1,2` writes it. Any other text logs `impai: tagpu_impai.on: <text> not understood` and installs nothing. With no lever the site stays stock.
-- **The install.** `tagpu_detour_redirect` checks `E8` and the rel32 reaching `0x408C40`, then rewrites the rel32 at `0x465032`. A mismatch logs `impai: seam 0x465031 not stock (<five bytes>)` and installs nothing; success logs `impai: seam 0x465031 in, seats <text>`.
-- **The wrapper** is `__fastcall(obj, edx)`: ECX arrives as its first argument and it pops nothing, so the site's stack is unchanged, and `EBX`, `ESI`, `EDI` and `EBP`, which the players phase uses after the call (`0x465036` `push esi`, `0x46506A` `cmp bl,…`), are callee-saved. It counts the turn of an ImpAI seat and then **always calls `0x408C40`**: the stock AI plays every seat, and the recorder's observer still sees each call.
-- **Which turns count**, all of these:
-  - **the game thread** (`GetCurrentThreadId()` against `g_ddraw.gui_thread_id`), which excludes the loader thread's one players phase by thread identity;
-  - **the bound**: `rec = *(obj+0)` lies at `main+0x1B63 + i·0x14B`, `i` below 10, by range and exact division, before anything is read through it;
-  - the record is seated with controller 2, the test `0x408C40` makes before it plans;
-  - the seat table marks record `i`, and `i` is not a puppet seat.
-- **The seat table** `s_seat[10]` is `SIM_STATE`, keyed by player record. The level init writes it, called from `tagpu_replay_level_players` right after the engine's players init `0x464990`, on the loader thread inside the `PLAYERS` call `0x4919C8`. On a live level it clears the table and marks each lever seat whose record is seated with controller 2, logging `impai: seats 1,2 (lever) of 4 records`; a record with controller 3 (a network game) marks none and logs why. **On a puppet level it writes nothing**: the recording restores the table, and the recorder is its only writer there.
-- **Why a game-thread turn sees the whole table.** The level init runs before the loader's last store `0x497C62`, and the game thread runs no step until it has read that store's bit (`0x498342`), the ordering `tagpu_replay.c`'s *THE VIEWER'S BUFFERS* rests on. No per-call test of the load flags is made: the bit is clear for the rest of play.
-- **The level end.** The teardown's entry (`tagpu_reclaim.c`, `reclaim_teardown_pre`, beside the recorder's level end) logs `impai: calls seat=<i> n=<turns> gametime=<GameTime>` for each marked seat. The counts are `SIM_PRIVATE`. With `tagpu_reclaim.off` the teardown wrap is not installed and no line is written.
-- **The replay feature** is `SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")`: the two test groups play four records on Core Prime Industrial Area (the human seat idle, stock AIs on 1–3, ImpAI observing 1 and 2) under true and permanent line of sight, the lever written by `tools/impai_fixture.py`.
+The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command, what a seat knows, the threat table, the overlay, the cost and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the stock AI plays every seat; the call at `0x465031` reaches a wrapper that runs an ImpAI seat's observation (its line of sight, its radar pass, its patch scan) and then always calls `0x408C40`; the level init, on the loader thread inside `0x4919C8`, also builds the content ImpAI reads -- each movement class's reach labels from the pathing maps `0x440940` built at `0x4918E3`, and the per-type threat table from the defs, weapons and categories the unit-data load `0x42D2E0` left at `0x4918CA`; the overlay is filled on the game thread from ImpAI's declared state, so a puppet draws what the live game drew; the eighteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
 
 ### When ImpAI plays (A1)
 
@@ -38,7 +27,7 @@ When ImpAI plays a seat, the wrapper runs the brain and then the stock weapon sc
 
 - **A bound**: the record is one of the ten, by arithmetic, never by a probe.
 - **An ordering**: the players phase runs after the unit tick `0x48AD30` has returned, so no order list is being walked when a root links or wipes nodes. The one call on the loader thread is refused by thread identity, and the seat table it would read is ordered before every game-thread call by the loader's last store `0x497C62`, which the game thread waits for before its first step ([sim](../engine/sim.html)).
-- **A lifetime**: the wrapper is entered only from `0x465031`, guarded by `+0x74` ≠ 0, and the AI object exists from `0x464700` to `0x464A00`. ImpAI's per-seat state is keyed by the record and lives in the same window: made at the level init (after `0x464990`), dropped at the teardown.
+- **A lifetime**: the wrapper is entered only from `0x465031`, guarded by `+0x74` ≠ 0, and the AI object exists from `0x464700` to `0x464A00`. ImpAI's per-seat state is keyed by the record and lives in the same window: made at the level init (after `0x464990`) and cleared at the level end, in the teardown's entry.
 
 ## The order roots
 
@@ -61,11 +50,11 @@ From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](..
 - **A seat's controller** is the record's byte `+0x73` (1 human, 2 AI, 3 remote), written at the seat's activation by `0x464290` from the skirmish entry and in play through `0x463C60`.
 - **The AI profile depends on difficulty**: the profile command `plan` gates the `weight` and `limit` lines by `easy`, `medium`, `hard` or `any`, and every shipped profile has a `plan easy`, a `plan medium` and a `plan hard` section, so OTA AI's build weights and limits change with the Difficulty even on Hard. The profile is `ai\<aiprofile>.txt` (the map's key) or `ai\default.txt`, loaded by `0x4648E0`.
 
-**The handicap exemption (A1):** each of the seventeen type tests (`cmp byte [rec+0x73],2` and its `jne`, 5 to 10 bytes) becomes a 5-byte `jmp` to a stub of its own, byte-matched at attach and all-or-none. The stub finds the slot from `rec` by the seam's bound and, for an ImpAI seat, jumps to the unscaled branch; otherwise it runs the original compare and branch. The stub calls no C, because one or two values are live on the x87 stack at every site. The table it reads is written only at the level init, before the first tick, and from the recording on a replay. Writing `main+0x37EEE` around calls instead is rejected: the sites are reached from the economy pass, transfers (including the network's), reclaim, building and unit death, and no one bracket covers them.
+**The handicap exemption** is built: [ImpAI in the engine](../modules/impai.html), *The handicap exemption*.
 
 ## Not documented yet
 
-- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `maxvelocity`, `bankscale`, `transportcapacity`, the weapon's velocities, `burst`, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit.
+- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `bankscale`, the weapon's velocities, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit. ImpAI's threat table reads `maxvelocity` `+0x192`, `transportcapacity` `+0x22B` and `burst` `+0xEA` as the loader stores them; which engine code reads them in play is not traced.
 - **Network games (A4)**: which caller of the join `0x450A10` activates a battle-room AI on its own peer; the meaning of the add-AI path's three tests; what happens to a departed peer's AI seats on the peers that remain ([network](../engine/network.html), *A computer seat in a network game*).
 - Whether anything outside the load state can switch the state slot away mid-load, leaving the load flags set.
 

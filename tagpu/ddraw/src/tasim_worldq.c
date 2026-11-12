@@ -1,5 +1,6 @@
 /* tasim_worldq.c -- worldq.h over the shared simulation core (tasim_worldq.h). research/notes/impai/shared-core.md,
    tasim_worldq. Each op reads or changes the WIKISIM its open was given and nothing else; no globals. */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "tasim.h"
@@ -388,10 +389,82 @@ static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 
 static int wq_gametime(const WORLDQ* q) { return ctx_of(q)->s->tick; }
 
+/* ---- what a seat sees, from the sight the caller computed (tasim_sight.c) into the open's lit and con ---- */
+
+static int asr5(int v) { return v >> 5; }
+
+/* the 32-px block of a unit's centre, unsheared at the stage's altitude 0, as tagpu_wikisim_contacts reads it */
+static void block_at(const WIKISIM* s, const WIKIUNIT* u, int* bx, int* bz)
+{
+    *bx = asr5((int)floor(u->x));
+    *bz = asr5((int)floor(u->z));
+    (void)s;
+}
+
+static int lit_at(const WQ_CORE* c, int bx, int bz)
+{
+    const int gw = c->s->W >> 1, gh = c->s->H >> 1;
+    return c->lit && bx >= 0 && bz >= 0 && bx < gw && bz < gh && c->lit[bz * gw + bx] != 0;
+}
+
+/* The stage shares nothing between seats, has no sea and nothing flies, so a unit is OWN, LOS when its block is
+   lit, or the CONTACT the caller vouches for: the engine's classes as they reduce on it. */
+static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
+{
+    const WQ_CORE* c = ctx_of(q);
+    const WIKIUNIT* u = any_unit(c->s, slot);
+    const int gw = c->s->W >> 1, gh = c->s->H >> 1;
+    int bx, bz;
+    memset(out, 0, sizeof *out);
+    if (!u || u->owner < 0 || u->owner >= WIKI_SEATS || gw < 1 || gh < 1) return 0;
+    block_at(c->s, u, &bx, &bz);
+    if (u->owner == q->seat) out->seen = WQ_SEEN_OWN;
+    else if (lit_at(c, bx, bz)) out->seen = WQ_SEEN_LOS;
+    else if (contact) out->seen = WQ_SEEN_CONTACT;
+    else return 0;
+    out->owner = out->seen == WQ_SEEN_CONTACT ? 0xFF : (uint8_t)u->owner;
+    out->type = out->seen == WQ_SEEN_CONTACT ? (uint16_t)WQ_NONE : (uint16_t)(u->type + 1);
+    out->bx = (uint16_t)(bx < 0 ? 0 : bx >= gw ? gw - 1 : bx);
+    out->bz = (uint16_t)(bz < 0 ? 0 : bz >= gh ? gh - 1 : bz);
+    out->layer = WQ_LAYER_SURFACE;
+    return out->seen;
+}
+
+static int wq_block_lit(const WORLDQ* q, int bx, int bz) { return lit_at(ctx_of(q), bx, bz); }
+
+/* The whole pass at once from the caller's contacts (tagpu_wikisim_contacts, one byte a unit in slot order):
+   the seat's own units kept, as loop 1 keeps them, and every contact a radar and sonar one, the stage's
+   altitude 0 being the sea level, where both tests hold together. One visit a unit. */
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget)
+{
+    const WQ_CORE* c = ctx_of(q);
+    const int n = c->s->nunit + 1;
+    int slot;
+    if (nbytes < (int)WQ_RADAR_BYTES(n)) return 0;
+    memset(bits, 0, WQ_RADAR_BYTES(n));
+    for (slot = 1; slot < n; slot++) {
+        const WIKIUNIT* u = c->s->unit[slot - 1];
+        (*budget)--;
+        if (u->owner == q->seat) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
+        else if (c->con && c->con[slot - 1]) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR);
+    }
+    st->stage = WQ_RS_IDLE;
+    st->cursor = 0;
+    st->start = (uint32_t)c->s->tick;
+    return 1;
+}
+
+/* The stage is flat and dry: its one class, 0, is good on every cell of the map. */
+static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+{
+    const WIKISIM* s = ctx_of(q)->s;
+    return mclass == 0 && cx >= 0 && cz >= 0 && cx < s->W && cz < s->H ? 3 : 0;
+}
+
 static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
-    wq_can, wq_action, wq_order, wq_economy, wq_gametime,
+    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 
 int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, WIKISIM* s, int seat)
@@ -400,6 +473,7 @@ int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, WIKISIM* s, int seat)
     if (seat < 0 || seat >= WIKI_SEATS) return 0;
     ctx->s = s;
     ctx->seat = seat;
+    ctx->lit = ctx->con = NULL;
     out->ops = &OPS;
     out->self = ctx;
     out->seat = seat;
