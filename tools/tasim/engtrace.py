@@ -91,6 +91,10 @@ EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_wi
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
 
 
+def as_f32(x):
+    return struct.unpack("<f", struct.pack("<f", float(x)))[0]
+
+
 def f32(b, at):
     return struct.unpack_from("<f", b, at)[0]
 
@@ -344,7 +348,9 @@ class Run:
             st = p["storage"]
             got = (f32(img, PL_BASE_M), f32(img, PL_BASE_E), img[PL_BASEFLAG] & 1,
                    f32(img, PL_M), f32(img, PL_E))
-            exp = (st["metal"], st["energy"], 1, float(p["metal"]), float(p["energy"]))
+            # the engine stores each as an f32, so the wire's number is compared as one
+            exp = (as_f32(st["metal"]), as_f32(st["energy"]), 1, as_f32(p["metal"]),
+                   as_f32(p["energy"]))
             if got != exp:
                 self.fail("R4", f"seat {p['slot']}: storage, flag and levels {got}, the wire's {exp}")
                 return
@@ -391,6 +397,8 @@ class Run:
             self.ok("R5")
         bad = []
         g0, g1 = base.empty["globals"], self.empty["globals"]
+        if not g0 or not g1 or len(g0) != len(g1):
+            bad.append(f"the globals image ({len(g0)} bytes in run 0, {len(g1)} here)")
         for i in range(min(len(g0), len(g1)) // 4):
             if g0[4 * i:4 * i + 4] != g1[4 * i:4 * i + 4]:
                 name = names.get(i, f"dword {i}")

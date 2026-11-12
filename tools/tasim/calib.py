@@ -190,6 +190,29 @@ def failure_tally(bad, n_runs):
     return "\n".join(out)
 
 
+def indices_problem(block: dict, indices: list):
+    """Why a scenario's run indices cannot make a reference, or None. An exact scenario's are
+    exactly 0 and 1 (reload) and 2 (fresh, engrun.jobs_of); another's are exactly 0..n-1 with n at
+    least the block's `runs`, so a lane that lost runs, or a run played twice, is refused rather
+    than graded as a smaller or a lopsided set (the swap alternates with the index)."""
+    if "exact" in block["kind"]:
+        want = [0, 1, 2]
+    else:
+        want = list(range(max(len(indices), block["runs"] or 0)))
+    if indices == want:
+        return None
+    got, need = set(indices), set(want)
+    parts = []
+    if need - got:
+        miss = sorted(need - got)
+        parts.append(f"{len(miss)} missing ({miss[:10]}{' ...' if len(miss) > 10 else ''})")
+    if len(got) != len(indices):
+        parts.append("an index appears twice")
+    if got - need:
+        parts.append(f"unexpected {sorted(got - need)[:10]}")
+    return f"run indices are not exactly {want[0]}..{want[-1]}: " + ", ".join(parts)
+
+
 def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
     """Every lane-launch under runs_dir through _lane_job in a pool of j: (the lanes, the jobs)."""
     from multiprocessing import Pool
@@ -240,8 +263,9 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
             continue
         block = items[0][1]["block"]
         indices = sorted(r["row"]["index"] for _g, r in items)
-        if len(set(indices)) != len(indices):
-            failed[sid] = f"a run index appears twice: {indices}"
+        why = indices_problem(block, indices)
+        if why:
+            failed[sid] = why
             continue
         types = sorted({u["type"].upper() for u in perturb.compile_scenario(path)[1]["units"]})
         key = g0["head"]["setup_key"]

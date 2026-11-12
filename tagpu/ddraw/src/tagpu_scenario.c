@@ -1246,14 +1246,6 @@ static int unit_type_index(char* ta, const char* name)
     return -1;
 }
 
-/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
-   -- write engine state no other machine sees: in a network game the peers would not see
-   the objective, the controller or the delayed orders, and on a puppet the recorder alone
-   writes the state the recording carries. So each is refused there, as an error naming the
-   key, which the wire's onerror then handles like any other. The rest of a seat's tests
-   are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
-   10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
-   controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
 /* The level's objective, or NULL. LIFETIME: two places free it, both on the game thread and
    neither inside the tick's visit (DISASSEMBLED): the `.ota` reader 0x435DA0, which frees the
    old one as it makes the next at a level's setup, and the gaming state's destructor
@@ -1271,6 +1263,14 @@ static char* level_objective(char* ta)
     return readable(obj, OBJ_ARMED + 4) ? obj : 0;
 }
 
+/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
+   -- write engine state no other machine sees: in a network game the peers would not see
+   the objective, the controller or the delayed orders, and on a puppet the recorder alone
+   writes the state the recording carries. So each is refused there, as an error naming the
+   key, which the wire's onerror then handles like any other. The rest of a seat's tests
+   are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
+   10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
+   controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
 static int resolve_setup(char* ta)
 {
     const char* why = 0;
@@ -1608,8 +1608,9 @@ static void clear_snapshot(char* ta)
    cannot use the key. FEATURES_Destroy 0x4246B0 frees each record, sets the cell empty and
    refreshes pathing (0x440A40); it spawns no successor, which comes only from the swap
    0x423710 (engine/map.md). The recorder sees each destroy as a root FR_DESTROY
-   (tagpu_recfmt.h). It runs after the unit clear: a wreck a death in the clear spawned is
-   burned with the rest. */
+   (tagpu_recfmt.h). It runs after the unit clear, whose kills leave no wreck (UNITS_KillUnit
+   mode 0, clear_snapshot): the wrecks it burns are the ones combat left, in a calibration lane
+   the previous run's. */
 static void clear_features(void)
 {
     FEATURES_BurnAll();
@@ -2283,6 +2284,17 @@ static void delay_watch(void)
     if (!g_ndelay || !(ta = ta_base()))
         return;
 
+    /* On a puppet the recorder is the only writer of the state the recording carries, so an
+       order still pending when the level became one is never issued. */
+    if (tagpu_puppet_on())
+    {
+        scnlogf("scenario: delayed orders: the level is a puppet; %d pending cancelled", g_ndelay);
+        g_dl.skipped += g_ndelay;
+        g_ndelay = 0;
+        delay_report();
+        return;
+    }
+
     now = *(int*)(ta + OFF_GAMETIME);
 
     if (delay_drop_other_level() || now == g_dl_last)
@@ -2599,7 +2611,9 @@ static void reset_pass_results(char* ta)
         char* u;
         float emax = 0.0f, mmax = 0.0f;
 
-        if (!pl)
+        /* a free record or an inactive one gets no economy pass (0x465508..0x465523) and
+           owns no units to sum */
+        if (!pl || !*(int*)(pl + PL_ACTIVE) || *(unsigned char*)(pl + PL_SELF) == 10)
             continue;
 
         first = *(char**)(pl + PL_FIRSTUNIT);

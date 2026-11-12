@@ -244,7 +244,6 @@ def check(tasim, only=None, require_fresh=False, j=8):
             if why and require_fresh:
                 errors.append(f"{sid}: stale ({'; '.join(why)})")
                 continue
-            block = ref["scenario"]["calib"]
             values = {t: dict(v) for t, v in ref["values"]["types"].items()}
             try:
                 with ThreadPoolExecutor(j) as ex:
@@ -254,26 +253,46 @@ def check(tasim, only=None, require_fresh=False, j=8):
                 errors.append(str(e))
                 continue
             area = ref["scenario"]["calib"]["area"]
-            stale = "stale" if why else None
-            if "exact" in block["kind"]:
-                eng = engine_traces(ref, p)
-                for fam in block["metrics"]:
-                    for run, (lines, _o) in zip(ref["runs"], played):
-                        ok, diff = rule_exact(metrics.exact_series(eng[run["index"]], fam),
-                                              metrics.exact_series(lines, fam))
-                        rows.append({"id": sid, "area": area, "metric": fam, "kind": "exact",
-                                     "run": run["index"],
-                                     "verdict": stale or ("in" if ok else "out"),
-                                     "margin": diff, "engine": None, "tasim": None})
+            try:
+                got = grade_scenario(ref, p, played)
+            except (metrics.TraceError, KeyError, ValueError) as e:
+                # a trace the metrics cannot read is a run that could not be graded
+                errors.append(f"{sid}: {type(e).__name__}: {e}")
                 continue
-            R = ref["values"]["R"]
-            t_runs = [metrics.compute(lines, block, values, R) for lines, _o in played]
-            for row in grade_runs(block, [r["metrics"] for r in ref["runs"]], t_runs):
+            for row in got:
                 row.update({"id": sid, "area": area})
-                if stale:
-                    row["verdict"] = "stale"
+                mark_stale(row, why)
                 rows.append(row)
     return rows, errors
+
+
+def grade_scenario(ref, path, played):
+    """Every row of one scenario: an exact scenario's per run and family, another's per metric."""
+    block = ref["scenario"]["calib"]
+    if "exact" in block["kind"]:
+        eng = engine_traces(ref, path)
+        rows = []
+        for fam in block["metrics"]:
+            for run, (lines, _o) in zip(ref["runs"], played):
+                ok, diff = rule_exact(metrics.exact_series(eng[run["index"]], fam),
+                                      metrics.exact_series(lines, fam))
+                rows.append({"metric": fam, "kind": "exact", "run": run["index"],
+                             "verdict": "in" if ok else "out", "margin": diff,
+                             "engine": None, "tasim": None})
+        return rows
+    values = {t: dict(v) for t, v in ref["values"]["types"].items()}
+    R = ref["values"]["R"]
+    t_runs = [metrics.compute(lines, block, values, R) for lines, _o in played]
+    return grade_runs(block, [r["metrics"] for r in ref["runs"]], t_runs)
+
+
+def mark_stale(row, why):
+    """A stale reference's row says so, and an OUT stays OUT beside it: staleness never hides a
+    failure, and an in-band row of a stale reference does not count as in."""
+    if why:
+        row["stale"] = True
+        if row["verdict"] == "in":
+            row["verdict"] = "stale"
 
 
 def area_of(area: str) -> str:
@@ -311,8 +330,10 @@ def report_text(rows, predictor=None):
         out.append(f"area {area:<48} in band {n_in}/{len(rs)}")
         out.append(f"  {'scenario':<32} {'metric':<22} {'engine':<21} {'tasim':<21} margin")
         for r in rs:
+            verdict = r["verdict"].upper() + (" (stale)" if r.get("stale") and
+                                              r["verdict"] != "stale" else "")
             out.append(f"  {r['id'][:32]:<32} {r['metric']:<22} {fmt_side(r, 'engine'):<21} "
-                       f"{fmt_side(r, 'tasim'):<21} {fmt_margin(r)}  {r['verdict'].upper()}")
+                       f"{fmt_side(r, 'tasim'):<21} {fmt_margin(r)}  {verdict}")
     if predictor:
         out.append(f"predictor: {predictor}")
     return "\n".join(out)
@@ -353,10 +374,12 @@ def seat_effect(ref):
 
 def self_consistency(ref, path):
     """An exact scenario: runs 0 and 1 (reload) and 2 (fresh) give the same series for each of
-    its metrics."""
+    its metrics. All three must be there: without the fresh run 2 the reload is never compared
+    with a fresh launch."""
     eng = engine_traces(ref, path)
-    if 0 not in eng:
-        return "not exact: no run 0 in the reference"
+    missing = sorted({0, 1, 2} - set(eng))
+    if missing:
+        return f"could not run: the reference has no engine trace for run(s) {missing}"
     for fam in ref["scenario"]["calib"]["metrics"]:
         base = metrics.exact_series(eng[0], fam)
         for k in sorted(eng):

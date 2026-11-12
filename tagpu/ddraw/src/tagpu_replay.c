@@ -8229,9 +8229,11 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
      where the forced 0x491D70(1) would pop that screen without clearing its bits and stall single
      player;
    - the objective armed, the exact inverse of E_Disarm (0x4904B0), which writes only +0x88. The
-     objective is made at the level's setup (0x435DA0) and only the next setup frees it, and the
-     end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D, 0x46586F), so
-     none sees the half-built world. */
+     objective is made at the level's setup (0x435DA0), and freed either by the next setup or by
+     the gaming state's destructor 0x434FF0, which frees and nulls main+0x391ED (0x43500E,
+     0x43501C) at a game-mode change (called at 0x434AD6 and 0x434BCF), neither inside this
+     visit; and the end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D,
+     0x46586F), so none sees the half-built world. */
 static void tk_live(char* ta, unsigned P)
 {
     LARGE_INTEGER a, b;

@@ -189,6 +189,29 @@ class TraceAndChecks(unittest.TestCase):
         r1.compare_run0(r0, {}, {}, False)
         self.assertEqual(r1.checks["R4"], "ok")
 
+    def test_R6_fails_an_empty_or_mismatched_globals_image(self):
+        r0, r1 = duel(False), duel(False)
+        r0.empty["globals"], r1.empty["globals"] = bytes(8), b""
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertIn("the globals image", r1.checks["R6"])
+        r1.empty["globals"] = bytes(12)
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertIn("8 bytes in run 0, 12 here", r1.checks["R6"])
+
+    def test_R4_compares_the_wires_levels_as_f32(self):
+        """0.1 is not an f32: the engine stores the nearest one, which must match."""
+        players = [player_img() for _ in range(10)]
+        exp = scenario(False)
+        for p in exp["setup"]["players"]:
+            p["storage"] = {"metal": 0.1, "energy": STORE["energy"]}
+        img = bytearray(players[0])
+        struct.pack_into("<f", img, engtrace.PL_BASE_M, 0.1)
+        players[0] = players[1] = bytes(img)
+        run = engtrace.Run(duel(False).row, exp, BLOCK, VALUES, IDS)
+        run.after_apply({2: unit_img(100, 200, 300), 3: unit_img(400, 200, 250)}, players,
+                        {"feature_defs": []})
+        self.assertNotIn("R4", run.checks)
+
     def test_R6_names_a_global_outside_the_advancing_set(self):
         r0, r1 = duel(False), duel(False)
         g0 = bytes(8)

@@ -150,7 +150,7 @@ pass compares an outcome: two fresh launches of the exact scenario, same wire, r
 the run at all.
 
 So **the scenario applier resets them at every apply**, after its creates, on the game thread
-inside the apply, for each seat the scenario names (`reset_pass_results`, `tagpu_scenario.c`): the
+inside the apply, for each active seat the scenario names (`reset_pass_results`, `tagpu_scenario.c`): the
 rates to 0, the record init's value, and the maxima to what the next pass would compute from the
 seat's units after the apply (every alive, finished unit's `energystorage`/`metalstorage`, a
 pending death left out, then the base storage while `+0x149` bit 0 is set), raised to a level the
@@ -209,7 +209,7 @@ plays it. A unit made during a run is `built:<n>`.
 | `survivors` | the winner's HV(t_e)/HV(0); a draw takes side A's |
 | `income.<res>@c` | a side's produced(c) − produced(0), c a multiple of 1800 |
 | `travel.first/median/last` | the tick each mover first comes within 16·(fp + 1)·⌈√n⌉ of its destination; censored at the limit |
-| exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage`, `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
+| exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage` (each side's maxima at every economy pass after t = 0), `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
 
 ## Perturbations
 

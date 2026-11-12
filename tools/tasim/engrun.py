@@ -284,7 +284,8 @@ class Lane:
                 raise CouldNotRun(f"{path.name} run {index}: no delayed-order line in {R.ACK_S} s")
             got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
             report = dict(zip(("issued", "of", "cancelled", "deaths", "cleared", "skipped"), got_d))
-            if report["skipped"] or report["of"] != delayed:
+            if report["skipped"] or report["of"] != delayed or \
+                    report["issued"] + report["cancelled"] != report["of"]:
                 raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
         if dump:
             R.wait_dumps(self.log, [dump])
@@ -360,7 +361,7 @@ def jobs_of(scenarios, runs, mode, arena_cfg, only=None):
         doc = json.loads(path.read_text())
         block = calibref.calib_block(doc, path.name, arena_cfg)
         n = runs or block["runs"]
-        fresh = mode == "fresh" or (doc.get("setup") or {}).get("clear_features") is False
+        fresh = mode == "fresh"
         indices = list(only) if only is not None else list(range(n))
         if "exact" in block["kind"] and mode != "fresh" and only is None:
             out.append((setup_key(block, arena_cfg, False), path, block, [0, 1], "reload"))
