@@ -30,6 +30,14 @@
 #define UD_FOOTY     0x14C
 #define UD_CANBUILD  0x156        /* the build list, non-NULL for a type that builds
                                      (tagpu_order.c, the claimed build sites) */
+#define UD_COSTE     0x186        /* float buildcostenergy                 */
+#define UD_COSTM     0x18A        /* float buildcostmetal                  */
+#define UD_BUILDTIME 0x1EA        /* dword buildtime                       */
+#define UD_MAXDAMAGE 0x1FA        /* dword maxdamage                       */
+#define UD_WORKER    0x1FE        /* word workertime                       */
+#define UD_BMCODE    0x22F        /* byte bmcode, 0 = a building
+                                     (the FBI parser 0x42BF40's stores;
+                                     engine/keys.md, DISASSEMBLED)        */
 #define UD_BITS2     0x245        /* u32 of FBI boolean bits                  */
 #define UD_COMMANDER 0x40000u     /* `commander`: 0x42CB7D reads it, shl 0x12, 0x42CBAB stores
                                      it (DISASSEMBLED 2026-09-28)                  */
@@ -327,10 +335,17 @@ static void write_units(const TAGPU_FRAME* f)
         jfield_str(out, "display", rec + UD_DISPLAY, 0x20);
         jfield_str(out, "desc", rec + UD_DESC, 0x40);
         jfield_str(out, "side", rec + UD_SIDE, 8);
-        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s,\"key\":\"0x%08X\",\"crc_all\":\"0x%08X\"}",
+        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s,\"key\":\"0x%08X\",\"crc_all\":\"0x%08X\"",
                 *(short*)(rec + UD_FOOTX), *(short*)(rec + UD_FOOTY),
                 *(void* const*)(rec + UD_CANBUILD) ? "true" : "false",
                 *(const unsigned*)(rec + UD_KEY), *(const unsigned*)(rec + UD_CRC_ALL));
+        /* the values the engine loaded, which the calibration runner reads rather than the FBI
+           files: %.9g prints a float exactly */
+        fprintf(out, ",\"cost\":[%.9g,%.9g],\"maxdamage\":%u,\"buildtime\":%u,"
+                     "\"workertime\":%u,\"bmcode\":%u}",
+                (double)*(const float*)(rec + UD_COSTM), (double)*(const float*)(rec + UD_COSTE),
+                *(const unsigned*)(rec + UD_MAXDAMAGE), *(const unsigned*)(rec + UD_BUILDTIME),
+                *(const unsigned short*)(rec + UD_WORKER), *(const unsigned char*)(rec + UD_BMCODE));
         emitted++;
     }
 

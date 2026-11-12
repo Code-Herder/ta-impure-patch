@@ -1,0 +1,58 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The calib-applier fixture at GameTime 60: the clear kills c before its order is due (cancelled as cleared) and the features go again; e is ordered after 5 ticks, issued at 65. The clear also kills seat 1's commander, whose death clears the seat's base storage bit (0x486518), so both seats state their storage again: the applier writes it after its clear. Both state their levels again too, and seat 1 gets f, a construction kbot (unarmed, making more energy than it uses, 50 of each storage) 2000 world units from e: the commander's D-gun spent seat 1's energy, and from here no seat spends, so the check holds every level to 5000 past the economy pass at 61, which would clamp a level to its seat's units' storage were the base storage not in force.",
+ "setup": {
+  "clear_existing": true,
+  "clear_features": true,
+  "players": [
+   {
+    "slot": 0,
+    "metal": 5000,
+    "energy": 5000,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   },
+   {
+    "slot": 1,
+    "metal": 5000,
+    "energy": 5000,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "e",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2400,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      2400,
+      1400
+     ],
+     "after": 5
+    }
+   ]
+  },
+  {
+   "id": "f",
+   "type": "CORCK",
+   "owner": 1,
+   "pos": [
+    400,
+    1100
+   ]
+  }
+ ]
+}

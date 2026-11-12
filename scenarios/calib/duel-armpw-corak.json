@@ -1,0 +1,47 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A hand-written calibration duel: one ARMPW against one CORAK, 400 world units apart on the arena axis, each attacking the other; ends when a side has no unit or at 5400 ticks.",
+ "units": [
+  {
+   "id": "a",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [4800, 1184],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "target": "b"
+    }
+   ]
+  },
+  {
+   "id": "b",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [5200, 1184],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "target": "a"
+    }
+   ]
+  }
+ ],
+ "calib": {
+  "kind": ["winrate", "distribution"],
+  "metrics": ["winner", "ttk", "survivors"],
+  "runs": 50,
+  "limit": 5400,
+  "end_units": {
+   "0": 0,
+   "1": 0
+  },
+  "area": "duel/land/t1/raider-raider",
+  "place": {
+   "a": [0, 0, "a"],
+   "b": [400, 0, "b"]
+  }
+ }
+}

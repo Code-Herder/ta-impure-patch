@@ -1,0 +1,7 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A calibration run's end: every unit cleared on the paused frame, the cleared slots reported (tools/tasim/engrun.py).",
+ "setup": {
+  "clear_existing": true
+ }
+}

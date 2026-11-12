@@ -1,0 +1,123 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The calib-applier fixture (tools/replay/fixtures.json): every calibration key of the applier at the launch hold -- the objective off, seat 1 an AI seat with its AI off, base storage on both seats, the features cleared -- and three delayed orders: a is issued at GameTime 8, d dies to the D-gun before its order is due, c is cleared by applier-check-2.json at 60 before its order is due.",
+ "seed": 20261111,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "ai": "off",
+    "metal": 5000,
+    "energy": 5000,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "a",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2400,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      2400,
+      1400
+     ],
+     "after": 7
+    }
+   ]
+  },
+  {
+   "id": "d",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2600,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      2600,
+      1400
+     ],
+     "after": 90
+    }
+   ]
+  },
+  {
+   "id": "com",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    2700,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "blast",
+     "target": "d"
+    }
+   ]
+  },
+  {
+   "id": "c",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2300,
+    1100
+   ],
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      2300,
+      1400
+     ],
+     "after": 200
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   2500,
+   1200
+  ]
+ }
+}

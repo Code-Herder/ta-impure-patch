@@ -231,7 +231,7 @@ Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 | Field | What | Published by the load | Freed / nulled by the teardown |
 | --- | --- | --- | --- |
 | `main+0x14351` | the unit array's **slot count**, `u16` = `10·[main+0x37EE6] + 1` (the name is <span class="pill pill-warn">INFERRED</span>; the arithmetic is not) | `0x4854EF`, **before** `begin` | untouched |
-| `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` at `0x4855D6` | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
+| `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` (`lea` at `0x4855CF`, stored at `0x4855D6`): the last slot itself, so the engine's walks end with `jbe` (`0x401F12`, `0x48BD38`) and a walk runs while `u <= end` [DISASSEMBLED 2026-11-11] | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
 | `main+0x14233` / `+0x14237` | map W / H in 16-px tiles | `LoadMap`, through `ebp = main+0x141FB` (`0x483627`): `[ebp+0x38]` at `0x483881`, `[ebp+0x3C]` at `0x483892` — **before every pointer below** | untouched; stale until the next load |
 | `main+0x1428B` | `TILE_MAP` | `[ebp+0x90]` at `0x483969` (`ebp = main+0x141FB`), the block `MEM_Alloc 0x4D83B0` returned at `0x483962` for `(pxH/32)·(pxW/32)·2` bytes; filled by the one `rep movs` at `0x48397D`/`0x483984` straight after, from the TNT's tile-index data. **Never written again**: no other store to the pointer or through it in the exe, so the map is immutable from LoadMap to the teardown (below). Readers: the minimap build `0x466780` (`0x4668EB`, load time) and the terrain pass `0x483FA0` (`0x4840A6`, `0x4841A9`, `0x4841D6`, `0x484345`) | `0x483DD0`: `MEM_Free 0x4D85A0` at `0x483E9A` (loaded at `0x483E93`), nulled at `0x483EED` |
 | `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
@@ -668,7 +668,16 @@ swap `0x423710` (`0x423792`, `0x4237B1`); the spawn `0x423C50`'s footprint (`0x4
 which abandons the spawn on a refusal and keeps what it destroyed so far); the feature tick
 `0x424050` (`0x42442F`, `force` 0, when a burn's sequence ends); the clear of every feature
 `0x424840` (`0x42487A`), itself called only by the console command BurnAll `0x416390` (stored in
-the command table at `0x502040`). The demo recorder observes the entry
+the command table at `0x502040`) and by the scenario applier's `clear_features`
+(`tagpu_scenario.c`, at its tick visit `0x4969D2`, between two steps).
+
+**`0x424840`, the clear of every feature** [DISASSEMBLED 2026-11-11, `0x424840..0x42488D`]: no
+argument, a plain `ret` at `0x42488D`. It walks `main+0x14233 × main+0x14237` cells, stride `0xD`
+from `main+0x14287`, re-reading the main pointer after each call (`0x42487F`), and calls
+`0x4246B0(cell, 1)` (`0x424877..0x42487A`, no `add esp` after it: the callee's `ret 8`) on every
+cell whose def word `+8` is below `0xFFFB` or equal to `0xFFFE` (read at `0x424865`, tested at `0x424869..0x424875`). Force 1
+takes indestructible features and geothermal vents too. **It spawns no successor**: the successor
+comes only from the swap `0x423710`, which this path never calls. The demo recorder observes the entry
 ([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
 and the puppet gate refuses it from the level's first step outside the replay's own calls
 ([recorder.md](recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)).

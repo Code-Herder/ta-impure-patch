@@ -1190,7 +1190,19 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
 ### The meteor shower on two peers
 
 - **The shower** `0x437DE0` runs from the sim tick `0x495594` on every peer, with no host test; the
-  map's OTA arms it through `0x437D40` at `0x4367F9`. Each stone is spawned at `0x49DF7D` (a call of
+  map's OTA arms it through `0x437D40` at `0x4367F9`.
+- **The switch** `meteoron` `0x51232C` [DISASSEMBLED 2026-11-11]: `0x437D40` sets it and `0x437D50`
+  clears it; the save's load writes it (`0x438278`). The `.ota` reader calls `0x437D40` only when
+  `MeteorWeapon` is not empty (`0x43675A`) and `MeteorRadius` (an int, `0x43676A`) and
+  `MeteorDensity`, `MeteorDuration` and `MeteorInterval` (floats, `0x436780`, `0x436796`,
+  `0x4367AC`) are all non-zero (`0x4367B9..0x4367EE`); otherwise it calls `0x437D50` (`0x436800`)
+  after `0x438320` fills the configuration [INFERRED: a default one]. `+meteor`'s handler
+  `0x417760` calls `0x437D40` or `0x437D50` by `0x4B73E0(1, 0)` when its `+0xD0` is above 1 and
+  the forced shower `0x438070` otherwise [INFERRED: `+0xD0` the argument count]. The shower tick
+  schedules every shower whatever the switch says -- the active flag `0x512318` set, the end, the
+  points drawn from `rand` (`0x437E07..0x437EF0`) -- and then clears the active flag when the
+  switch is 0 (`0x437EF5..0x437EFE`); stones fall only while it is set (`0x437F0A`). A shower
+  already active runs to its end `0x51231C` (`0x43804F..0x43805F`) whatever the switch says. Each stone is spawned at `0x49DF7D` (a call of
   the projectile init `0x49C740` with no attacker) and broadcast as a `0x0D` (`0x49DFF6`); the
   receiver `0x49D270` (from the dispatcher at `0x455433`) builds it again in its meteor branch,
   `0x49D307`, also with no attacker.
@@ -1257,7 +1269,7 @@ every publish of that tick.
 
 | array | where | how many, and who says so |
 | --- | --- | --- |
-| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
+| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed. **Read by the calibration runner's settle** (`tools/tasim/engrun.py`): an empty point waits on a held frame until the count is 0, so no shot of one run lands in the next |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn words @0x10/0x12/0x14, x @0x16, alt @0x1A, y @0x1E, rotated vertices @0x22}` — the words reach `0x4B6CC0` reversed, as `{w14, w12, w10}` (*The effects models*, below) | the slot count is the address range |
 | the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |

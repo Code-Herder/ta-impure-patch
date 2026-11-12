@@ -126,7 +126,14 @@ the measured runs and what they mean for the design are in the
   0) and stores it at `main+0x391ED` (`0x435DFB`); `0x48DF90` has no other caller. `0x4904B0`
   (thiscall, `mov [ecx+0x88],0; ret`) disarms it; its callers are the `Kill` console command after
   it has killed every unit (`0x4164CD`, and `0x4164EF` on the command's other arm) and `0x488547`,
-  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives]. A
+  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives].
+  Impure's writers: the scenario applier's `objective: "off"` calls `0x4904B0` and `"on"` writes
+  `+0x88` = 1, the takeover's write, at its tick visit between two steps (`tagpu_scenario.c`).
+  **The objective's frees** [DISASSEMBLED 2026-11-11]: besides the `.ota` reader's, the gaming
+  state's destructor `0x434FF0` destroys it (`0x48DFB0` at `0x435008`), frees it (`0x4B4F20` at
+  `0x43500E`) and nulls `main+0x391ED` (`0x43501C`); it is called from the mode setter `0x434AB0`
+  (`0x434AD6`) and from `0x434B90` (`0x434BCF`), at a game-mode change on the game thread, never
+  inside a tick's visit. A
   skirmish reads the `.ota` in Start's branch (`0x47AF77`), before the seat fill, and its loader
   branch reads it no more; the network loader does (`0x4972D6`), as do the restart path (`0x499820`)
   and the saved-game loader (`0x4927A5`). **A disarm made in the seat fill therefore holds for the
@@ -911,7 +918,9 @@ and the setter are in *The speeds* above, the step's iteration in
   in 1,328 unit fields; two pairs at a fixed batch (k = 2, then k = 1) differed only in the meteor
   shower's two points (next bullet); speed 20 against k = 2 differed in 1,272 and 1,383 unit fields.
 - **The meteor shower and the CRT `rand`.** The meteor tick `0x437DE0` draws the CRT's `rand`
-  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`;
+  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`
+  -- the first four at every shower it schedules, with the switch `0x51232C` on or off, the last
+  two per stone ([weapons.md](weapons.md), *The switch*);
   the forced shower `0x438070` (one caller, `0x41778A`) draws it too (`0x4380AD`, `0x4380CE`) and
   writes `0x512334` (`0x4380FB`). On
   the game thread the draw path draws from the same per-thread stream every frame (static call
