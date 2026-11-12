@@ -219,6 +219,18 @@ with the first four bytes of sha256("<scenario sha256>:<index>"): a mobile unit'
 seats. An exact scenario is never perturbed. A reference records each run's perturbation and its
 wire's sha256, and the checker refuses one that `perturb.py` no longer makes.
 
+**Every unit's facing is in the wire**: the scenario's, or 0 (heading `0x8000`) where it names
+none, and the applier writes it after the create. The create draws a structure's heading from the
+simulation RNG, `0x8000` − BuildAngle/2 + rand(BuildAngle), BuildAngle the def's word `+0x210`
+(`0x485BD6..0x485C06`; a mobile unit's is then overwritten with that word, `0x4860BB..0x4860ED`),
+so without it a structure faces where the launch's random stream says and its turret's first aim
+turns further or less. MEASURED on the exact scenario at `5c28bdea`: the ARMLLT at headings
+`0x6E49` and `0x7054` (reload runs 0 and 1) fired first at t = 16, at `0x61D0` (fresh run 2) at
+t = 18, every later shot and decrement two ticks behind; the three runs' images differed after the
+apply only in the two units' heading `+0x66`, the hover phase `+0xAA` (also drawn at the create,
+`0x485D22`) and the tower's weapon fields `+0x14..+0x1B`. So the self-test's fresh-against-reload failure was the
+random stream, not the reload.
+
 ## References
 
 Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`), because they carry the

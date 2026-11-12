@@ -244,6 +244,21 @@ class RunIndices(unittest.TestCase):
             check.engine_traces = saved
 
 
+class Facing(unittest.TestCase):
+    """THE FACING (perturb.py): every unit of a wire names its facing."""
+
+    def test_a_unit_without_a_facing_gets_0(self):
+        exact = TREE / "scenarios" / "calib" / "exact-damage-armllt.json"
+        exp, _rec, wire, _c = perturb.run_wire(exact, 2, VALUES, calibref.arena())
+        self.assertEqual([u["facing"] for u in exp["units"]], [0, 0])
+        units = [ln.split() for ln in wire.splitlines() if ln.startswith("unit ")]
+        self.assertEqual([u[7] for u in units], ["0", "0"])    # unit i type owner x y height facing
+
+    def test_a_named_facing_is_kept(self):
+        exp, _rec, _wire, _c = perturb.run_wire(DUEL, 0, VALUES, calibref.arena())
+        self.assertEqual([u["facing"] for u in exp["units"]], [90, 270])
+
+
 class CalibBlock(unittest.TestCase):
 
     def test_clear_features_false_is_refused(self):
