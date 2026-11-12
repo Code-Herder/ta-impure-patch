@@ -215,7 +215,10 @@ resolves a path, a unit's files and a model's textures*. Nothing the recording c
 on the game thread that TA's simulation never reads, and every wiki file is `presentation`. Its code is the
 wiki's front end `tagpu_wikisim.c` -- the entry points, the UI it emulates, the scripted input, the selection,
 the scene and the casting, and the copies of the placement, snap and sweep rules -- over the shared simulation
-core, `tasim_*.c` ([the shared core](../impai/shared-core.html)), engine-free like it and compiled on SSE2 with it.
+core, `tasim_*.c` ([the shared core](../impai/shared-core.html)), engine-free like it and compiled on SSE2 with it. The same
+files, built as `wikitest serve` (`tests/wikihost.c`), are the mockup's simulation and the parity check's
+three builds ([the in-game wiki](../ingame-wiki.html), *The simulation's contract*): the mockup has no simulation of
+its own.
 
 ### 2.12d The wiki's stage in 3D: the world passes compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tagpu_wikiscene.c`, `tagpu_scene_wiki.h`, `tools/scene-check.sh`; every Vulkan level with the wiki open)
 

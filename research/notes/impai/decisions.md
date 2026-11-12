@@ -37,7 +37,7 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 ## Code
 
 - **One shared C core** carved out of `tagpu_wikisim.c`, over a second simulation beside the wiki's.
-- **`sim.js` is retired**: the mockup calls the C core through `serve.py`, as `cob.js` already does. This was chosen over keeping two languages in parity.
+- **`sim.js` is retired**: the mockup calls the C core through `serve.py`, as `cob.js` then did for the COB host alone. This was chosen over keeping two languages in parity.
 - **The wiki inherits every fidelity change**, over keeping a simple mode for it.
 - **No C++**: the core, the rules and the brain are C, and the harness is a C driver plus Python, over a C++ harness.
 - **BARb / CircuitAI is inspiration only**, over porting it: it is GPL v2 and Impure is MIT. No code is copied or translated.

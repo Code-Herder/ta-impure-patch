@@ -864,8 +864,8 @@ The in-game wiki plays its demos with the player's own side's units and in the p
 Interface Type ([the in-game wiki](../ingame-wiki.html), *The per-mod tutorials*). Two of the facts
 below are read live, by `tagpu_packet_pub.c` (`wiki_side`, `wiki_iface`) at every packet fill, on
 the game thread, in game. The rest are rules the wiki repeats from the mod's files on the asset
-loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its two simulations
-(`tagpu_wikisim.c`, `tools/wiki/mockup/sim.js`), which call none of these functions.
+loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its simulation
+(`tagpu_wikisim.c` over `tasim_*.c`), which calls none of these functions.
 Disassembled from `pristine/TotalA.exe.pristine` (`objdump -d -M intel`). The live rows were
 MEASURED 2026-10-28 under Wine through `tacli peek`, on scripted skirmishes under retail, TA Zero
 alpha 5, Total Mayhem 11.3.0 and Twilight 2.0b98 and on two Impure replays.
@@ -976,8 +976,7 @@ that is not G does not count.
 - **MEASURED offline** over the six compatibility setups' FBIs: every geothermal plant outside
   retail has G only inside its yard (4 × 4 with 4 G cells in Mayhem, ProTA, Twilight and
   Escalation; TA Zero 5 × 5 with 9), retail's all 16 cells.
-- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`sim.js` `siteOk`,
-  `tasim_world.c` `tasim_site_ok`), and the vent it anchors to is the one under a G cell, as Impure's
+- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`tasim_world.c` `tasim_site_ok`), and the vent it anchors to is the one under a G cell, as Impure's
   `geo_anchor` (`tagpu_resource.c`) reads it.
 
 **The type-0 clicks** (the table above, its type-0 column).
@@ -1026,7 +1025,7 @@ that is not G does not count.
   `main+0x2CDF` 0. A Ctrl + right press kept the selection, and `main+0x2CC7` held the mouse
   record's point (292, 644), but `main+0x2CDF` read 0 after the press, after the release with Ctrl
   held and after Ctrl's release, in two runs; why it was never seen at 1 is not established.
-- **The wiki's rows** (`sim.js` `leftClick`, `rightPress0`; `tagpu_wikisim.c` the same): a type-0
+- **The wiki's rows** (`tagpu_wikisim.c` `left_click`, `right_press0`): a type-0
   left click on the map with nothing armed is Quick Build's choice first, else over a unit of the
   player's the assist (an unfinished building, a builder selected) or a select, else a move of the
   selected mobile units, at the release; a right press deselects, and with Ctrl does nothing.

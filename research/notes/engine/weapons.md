@@ -372,7 +372,7 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   (`0x43DFB0`); the root's own offset and position are then added unturned; z is negated at
   `0x43E00A`. `0x4B7173` returns at `0x4B717B` for a zero angle and stores both results with
   `fistp` in the FPU's current rounding mode, to the nearest by default (`0x4B71A0`, `0x4B71A2`).
-- **What the wiki repeats and where it differs** (`tasim_fx.c`, `sim.js`): the boxes, the
+- **What the wiki repeats and where it differs** (`tasim_fx.c`): the boxes, the
   cut, the five-a-burst spawn, the steps, the 0-step rule, the step, the end, the colour and its
   cycle, the two bursts and their order, and the reclaim's two-tick cadence, all in int32 as the
   engine's. It draws from its own generator, never `0x4E4870` (decision 11 of the COB plan); its
