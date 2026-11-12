@@ -126,9 +126,14 @@ Sweep**; in Camera, **Mega map and strategic icons**, a text entry
   or swapping the running game out for a practice scene and back, were considered and declined
   (2026-10-25): the simplified simulation is enough, and the mockup, which runs the same C, is
   then exact. It calls the real shapes, `tagpu_placegeo.c`'s `place_shape` and `place_ring`,
-  which read nothing but their arguments. The snap scorer, the best-fit choice and the gesture's
-  rules are its own (`tagpu_wikisim.c`, `tasim_*.c`), each naming the function of
-  `tagpu_resource.c` or `tagpu_place.c` it mirrors, because those read the engine.
+  which read nothing but their arguments, and the game's own rules: the snap scorer and Quick
+  Build's choice (`tasim_snap.c`), the placement gesture's (`tasim_place.c`) and the reclaim
+  sweep's (`tasim_sweep.c`), which the front end (`tagpu_wikisim.c`) calls through the core's
+  `WORLDQ` (`tasim_worldq.c`) as the game's UI (`tagpu_resource.c`, `tagpu_place.c`,
+  `tagpu_sweep.c`) calls them through the engine's (`tagpu_worldq.c`). What the front end keeps
+  of its own is the input around them -- the cursor site, the press and the release, the keys, the
+  sweep's popup -- each naming the function of `tagpu_resource.c`, `tagpu_place.c` or
+  `tagpu_sweep.c` it mirrors.
 
 ### Content is data
 
@@ -2756,9 +2761,12 @@ host process and ask it through one JSON protocol, so there is one simulation an
 - **Engine-free, and owned by its caller.** It reads no engine memory and names no engine address,
   so `thread-split.allow` has no line for it. Every piece of its state lives in the `WIKISIM` its
   caller owns and on the heap it owns, so a later landing runs it on whichever thread owns the
-  window. The shapes and the take-off rule (`place_take_offs_one`) are `tagpu_placegeo.c`'s own,
-  called as the game calls them; where the simulation mirrors anything else of `tagpu_resource.c`
-  or `tagpu_place.c`, it names the function it mirrors above each.
+  window. The shapes and the take-off rule (`place_take_offs_one`) are `tagpu_placegeo.c`'s, and
+  the resource, placement and sweep rules `tasim_snap.c`'s, `tasim_place.c`'s and
+  `tasim_sweep.c`'s, all called as the game calls them, the rules through the core's `WORLDQ`
+  where the game's go through the engine's; where the front end mirrors the input around them in
+  `tagpu_resource.c`, `tagpu_place.c` or `tagpu_sweep.c`, it names the function it mirrors above
+  each.
   The take-off rule compares 16.16 positions, as the game's order nodes hold them; the C converts
   its doubles exactly, and clamps an order position to ±8192 world units, which changes no answer
   because a site the rule compares is never refused and so lies inside the map (a
@@ -2798,9 +2806,10 @@ host process and ask it through one JSON protocol, so there is one simulation an
   call that changes a sim, `wikihost.c` compares its units and features with the last state it saw
   and logs the difference (`wikihost.c`'s header states the rule). The DLL keeps no log.
 
-**What it implements, from the feature's own rules** (`resource-snapping.md`), following
-`tagpu_resource.c` function for function (`site`, `snapped_site`, `distinct`, `same_plan`,
-`find_cancel`, `queued`, `quick_choice`, `plans_block`, `site_known`, `fits`). "The order click" is
+**What it implements, from the feature's own rules** (`resource-snapping.md`): the game's rule
+itself, `tasim_snap.c` (`tasim_snap_snapped`, `tasim_snap_quick`, `tasim_snap_commit`), called
+through the core's `WORLDQ` with the input `tagpu_resource.c` gives it in the game (`quick_choice`'s
+gates, the raw point, Shift). "The order click" is
 the right click at Interface Type 1 and the left click at type 0 (*The two interface types in the
 simulations*, above):
 
@@ -2830,13 +2839,11 @@ simulations*, above):
 - **Orders**: the order click with nothing to build is a move, or the assist over an unfinished
   building of the player's.
 
-**The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
-`toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
-`tagpu_place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
-`remove_toggled`, as they stand on the wiki branch, which carries the take-off fix
-`34b1b586` that `main` does not have yet). The wiki's simulation calls `tagpu_placegeo.c`'s
-`place_shape` and `place_ring` and its take-off rule; it calls all
-three:
+**The placement gesture**: the game's rule itself, `tasim_place.c` (`tasim_place_builders`,
+`tasim_place_snapshot`, `tasim_place_classify`, `tasim_place_queued_at`, `tasim_place_commit`),
+called through the core's `WORLDQ` with `tagpu_placegeo.c`'s `place_shape`, `place_ring` and
+take-off rule; the front end mirrors `tagpu_place.c`'s input around it (the cursor site,
+`ring_target`, `evaluate`, `tagpu_place_button` as the press and the release):
 
 - **The cursor site** is the build cursor's (`0x4197D0`): a footprint of f cells centred on world x
   starts at cell floor((x − 8f + 8) / 16), half up, after manual snapping for a resource building.
@@ -3325,12 +3332,14 @@ of the function it imitates; the code cites each address where it applies it.
 - **The drawn icons must be in the kit as cut.** `fit.py --set wiki` rewrites `art/wiki/kit/` from
   `art/wiki-full/kit/` and drops parts that are not there, so `tools/wiki/cursors.sh` is run on
   `art/wiki-full/kit` and the fit carries its icons over.
-- **The resource rules are copies.** The simulation calls the game's shapes and take-off rule
-  (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture mirror
-  `tagpu_resource.c` and `tagpu_place.c` rather than calling them, because those read the engine.
-  Nothing holds the copies to the game's code, so a change there is followed by hand in
-  `tagpu_wikisim.c` and the core (the plan's `rulecheck.py` would notice it; it is not built;
-  S3 of [the shared core](impai/shared-core.html) moves the game's rules into the core).
+- **The resource, placement and sweep rules are the game's.** The front end calls
+  `tasim_snap.c`, `tasim_place.c` and `tasim_sweep.c` through the core's `WORLDQ`
+  (`tasim_worldq.c`), and the game's UI calls the same functions through the engine's
+  (`tagpu_worldq.c`), so a change to a rule reaches both ([the shared core](impai/shared-core.html)).
+  What is still mirrored is the input around them -- the cursor site, the press and the release,
+  the keys, the sweep's popup -- which `tagpu_wikisim.c` follows from `tagpu_resource.c`,
+  `tagpu_place.c` and `tagpu_sweep.c` by hand, each function naming the one it mirrors; nothing
+  checks that copy against the game's.
 - **No build gate runs the parity checks.** They need node, gcc, the i686 MinGW compiler and Wine; `make`
   compiles and links the simulation and the stage but runs neither check. The game's own build is
   checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal

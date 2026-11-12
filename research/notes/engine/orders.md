@@ -829,7 +829,7 @@ DISASSEMBLED: manual dispatch `0x419670` (sole direct caller `0x498F98`) reads t
 `main+0x2CC4`, point `+0x2CAA` and definition footprint
 `+0x14A/+0x14C`. Its `0x4196D8..0x419714` conversion reconstructs each order coordinate
 as `(2 * footprint_origin + footprint_size) << 19`, passed through `0x43AFC0` at `0x4197A9`.
-`tagpu_resource.c:position` uses that same center: even footprint axes place at `cx * 16`
+`tasim_snap.c`'s `tasim_snap_position` uses that same center: even footprint axes place at `cx * 16`
 world units, odd axes at `(cx + 0.5) * 16`. Thus an even axis's actual center differs by
 eight world units from the candidate-cell center used for the tie. No metric change is implied.
 

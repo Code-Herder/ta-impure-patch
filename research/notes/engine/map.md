@@ -1756,8 +1756,10 @@ the shear is the same in every mode:
   `main+0x14273`, a `u16` a cell and a bit a player. **The bit it tests is the viewed player's**,
   `1 << main+0x2A43` (the byte read at `0x4080E0`, the test `0x4080EA..0x4080F4`), whatever `player` is: the argument supplies only the
   grid's size, `+0x80` and `+0x84`, so `0x408090` answers for the viewed player alone
-  [DISASSEMBLED 2026-11-11]. `tagpu_worldq.c`'s mapped test calls it only for the viewed seat for
-  that reason; the fourth goes to an inline copy of it,
+  [DISASSEMBLED 2026-11-11]. `tagpu_worldq.c`'s mapped test calls it only for the viewed seat and
+  the controlled one (`main+0x2A42`), whose reclaim the resolver's mode 12 judges by the same bit
+  (*orders.md*, *The order resolver's reclaim case*), and answers unmapped for any other; the fourth
+  goes to an inline copy of it,
   `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses.
 
 The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
