@@ -485,6 +485,20 @@ rewind or watch where its entry says so (`procs`); a `cost` test group plays rec
 pass with the code. "Lane" elsewhere, in the recording codec (`tagpu_reclanes.h`) and the
 renderer, is unrelated, and so is a "fixture" that means a synthetic test input (a C unit test's).
 
+A sim file's **feature** is every line from one `SIM_FEATURE` to the next; its **prelude** is the
+lines above its first: the header comment and the includes, `tagpu_simreg.h` among them, which
+defines the macro and so cannot follow it. A prelude holds only comments, preprocessor lines and
+blanks. The link's `features --check` refuses a function or a `SIM_` declaration there, and the
+landing tier refuses any other changed line there as `UNFEATURED <file>:<line>`. A changed prelude
+line is treated as a changed header the file includes: it selects the test groups of every feature
+of the file, and on each build that compiles a function of the file, one of the file's functions
+must have run (`UNCOVERED <file>:prelude`; a changed header, `UNCOVERED <file>:headers`). That is
+not a loosening: an `#include` or a `#define` of the prelude can change any line of the file, so
+the file's whole set of test groups answers for it, where before the tier refused every prelude
+line and a new sim file could not pass at all. The landing note's `features=` names such a
+region `<file>:prelude` or `<file>:headers`, with no space, since the note is read by splitting on
+spaces.
+
 ### What it runs
 
 `tools/replay/tareplay.py` runs test groups in parallel, as the compatibility suite runs games:
@@ -924,7 +938,9 @@ cannot see an address recorded as a value; the scan looks for one instead.
   same dumps must hold 0 at every site.
 - No emission without its `QueryNanoPiece`; zero self-verification corrections (`tarec.py check`).
 - **UNCOVERED.** The landing tier fails `UNCOVERED <file>:<function>` for a changed function none
-  of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none
+  of the fixtures it ran reached, on the coverage build, and `UNCOVERED <file>:prelude` or
+  `<file>:headers` for a changed prelude line or included header when no function of the file
+  ran on a build that compiles one ([Terms](#terms)); the broad tier fails it for a feature none
   of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
   changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
   The landing tier's reach includes **the two-player game**, on each build, whenever the recorder

@@ -4550,17 +4550,37 @@ def changed_lines(path, base):
 
 def landing_plan(base):
     """What the landing must reach: (fixtures, functions {(src, fn): (feature, builds)}, regions
-    {feature: ([(src, fn)...], builds)} for file-scope lines, problems, why, gated) -- `builds`
-    the builds that compile the changed lines (tafeat.builds), each of which must reach them;
-    `gated` whether any changed path is gated at all."""
+    {key: ([(src, fn)...], builds, what)}, problems, why, gated) -- `builds` the builds that compile
+    the changed lines (tafeat.builds), each of which must reach the function or one of the region's
+    functions; `gated` whether any changed path is gated at all.
+
+    A region is a feature's changed file-scope lines, keyed by the feature's name, or a whole sim
+    file, keyed `<file>:prelude` when a line above its first SIM_FEATURE changed and
+    `<file>:headers` when a header it includes did. A whole file selects every feature of it and
+    asks for one of its functions on each build that has one. No key holds a space: the note's
+    `features=` is read by splitting on spaces."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
     funcs, regions = {}, {}
-    for path in sorted(whole):              # a header it includes changed: every feature of it
+
+    def whole_file(rel, text, key, bs, what):
+        """Every feature of `rel`, and a function of it reached on each build of `bs` that
+        compiles one (a test program's functions are in no build)."""
         for f in feats:
-            if f["file"] == path[len(DD):]:
-                fx |= set(f["fixtures"])
+            if f["file"] == rel:
+                fx.update(f["fixtures"])
+        fns = tafeat.functions(text)
+        bl = tafeat.builds(text)
+        if fns:
+            bs = bs & frozenset().union(*(bl[f[1]] for f in fns))
+        if not bs:
+            return
+        if "stock" in bs:
+            fx.add(STOCK_FIXTURE)
+        old = regions.get(key, ([(rel, f[0]) for f in fns], frozenset(), what))
+        regions[key] = (old[0], old[1] | bs, what)
+
     for path in sorted(by_region | by_function):
         if not (TREE / path).exists():
             continue
@@ -4568,6 +4588,8 @@ def landing_plan(base):
         text = (TREE / path).read_text()
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
+        quiet = tafeat.comment_or_directive_lines(text)
+        prelude = frozenset()
         for ln in sorted(changed_lines(path, base)):
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
@@ -4578,7 +4600,12 @@ def landing_plan(base):
             if path in by_region:
                 feat = tafeat.feature_at(feats, rel, ln)
                 if not feat:
-                    problems.append(f"UNFEATURED {path}:{ln}")
+                    if ln in quiet:
+                        prelude |= b
+                    else:
+                        problems.append(f"UNFEATURED {path}:{ln}: above the file's first "
+                                        f"SIM_FEATURE, where only a comment, a preprocessor line "
+                                        f"or a blank may stand")
                     continue
                 fx |= set(feat["fixtures"])
                 if fn:
@@ -4587,12 +4614,50 @@ def landing_plan(base):
                 else:
                     old = regions.get(feat["name"], ([(rel, f[0]) for f in fns
                                                       if feat["line"] <= f[1] <= feat["end"]],
-                                                     frozenset()))
-                    regions[feat["name"]] = (old[0], old[1] | b)
+                                                     frozenset(), "a changed file-scope line, and "
+                                                     "no function of its region"))
+                    regions[feat["name"]] = (old[0], old[1] | b, old[2])
             elif fn:
                 old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))
                 funcs[(rel, fn[0])] = (old[0], old[1] | b)
+        if prelude:
+            whole_file(rel, text, f"{rel}:prelude", prelude,
+                       "a changed line above its first SIM_FEATURE, and no function of the file")
+    for path in sorted(whole):
+        if (TREE / path).exists():
+            whole_file(path[len(DD):], (TREE / path).read_text(), f"{path[len(DD):]}:headers",
+                       tafeat.BOTH, "a changed header it includes, and no function of the file")
     return fx, funcs, regions, problems, why, bool(fx or by_region or by_function or whole)
+
+
+def reached_by_build(per, fixes):
+    """{build: {(source, function)}} from {test group: what it reached}: each group's reach counts
+    on the build its entry names -- `"dll": "stock"` the stock-limits build, else the default --
+    since a line only the stock-limits build compiles is reached only by a group that ran it, and
+    a line only the default build compiles only by one that did not."""
+    return {b: set().union(*(v for n, v in per.items()
+                             if (fixes[n].get("dll") == "stock") == (b == "stock")))
+            for b in ("raised", "stock")}
+
+
+def uncovered(funcs, regions, got, fx, multiplayer):
+    """(problems, reached, total): each changed function and each region of landing_plan not
+    reached on every build it names, by name, against `got` (reached_by_build)."""
+    def reached(keys, bs):
+        return all(any(k in got[b] for k in keys) for b in bs)
+    problems = []
+    for (src, fn), (feat, bs) in sorted(funcs.items()):
+        if not reached([(src, fn)], bs):
+            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
+                            f"fixtures {' '.join(sorted(fx)) or 'none'}"
+                            f"{'; and the two-player game' if multiplayer else ''})")
+    for key, (fns, bs, what) in sorted(regions.items()):
+        if not reached(fns, bs):
+            problems.append(f"UNCOVERED {key}: {what} ran in the build{'s' if len(bs) > 1 else ''} "
+                            f"{'+'.join(sorted(bs))}")
+    k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
+        1 for fns, bs, _ in regions.values() if reached(fns, bs))
+    return problems, k, len(funcs) + len(regions)
 
 
 # One DirectPlay port per game; the games run one after the other inside the gate's run lock.
@@ -4716,7 +4781,7 @@ def cmd_landing(args):
         print("tareplay landing: nothing gated changed")
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
-        f"functions; {len(regions)} file-scope regions")
+        f"functions; {len(regions)} regions")
     stale = calibration_stale(base) if gated_any else 0
     status = 0
     run = None
@@ -4736,13 +4801,9 @@ def cmd_landing(args):
         status = report(run)
         if STOP.is_set():
             return status or 2
-    # reach per build: a line only the stock-limits build compiles is reached only by a fixture
-    # that ran that build, and a line only the default build compiles only by one that did not
     per, unread = reached_of(run) if run else ({}, [])
     problems += unread
-    got = {b: set().union(set(), *(v for n, v in per.items()
-                                   if (run.fx[n]["fix"].get("dll") == "stock") == (b == "stock")))
-           for b in ("raised", "stock")}
+    got = reached_by_build(per, {n: run.fx[n]["fix"] for n in per})
     # after the test groups, alone on the machine under the gate's run lock
     for b, d in (mp_dlls.items() if run else ()):
         if STOP.is_set():
@@ -4753,24 +4814,11 @@ def cmd_landing(args):
     if STOP.is_set():
         return status or 2
 
-    def reached(keys, bs):
-        return all(any(k in got[b] for k in keys) for b in bs)
-    for (src, fn), (feat, bs) in sorted(funcs.items()):
-        if not reached([(src, fn)], bs):
-            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
-                            f"fixtures {' '.join(sorted(fx)) or 'none'}"
-                            f"{'; and the two-player game' if multiplayer else ''})")
-    for feat, (fns, bs) in sorted(regions.items()):
-        if not reached(fns, bs):
-            problems.append(f"UNCOVERED {feat}: a changed file-scope line, and no function of its "
-                            f"region ran in the build{'s' if len(bs) > 1 else ''} "
-                            f"{'+'.join(sorted(bs))}")
+    missed, k, total = uncovered(funcs, regions, got, fx, multiplayer)
+    problems += missed
     for p in problems:
         print(f"tareplay landing: {p}")
     J.note(problems=problems)
-    k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
-        1 for fns, bs in regions.values() if reached(fns, bs))
-    total = len(funcs) + len(regions)
     if status == 0 and not problems:
         sha = graded[:8]
         seeds = " ".join(f"{n}:{run.fx[n]['Ts'][0]}" for n in sorted(fx)) if run else ""
