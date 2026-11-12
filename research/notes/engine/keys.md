@@ -64,7 +64,7 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   named category's mask, and always in `ALL`, `0x42CC1F..0x42CC40`); `soundcategory` (`+0x20E`, the
   index of the matching sound category, else `atoi` of the value, 0 when absent,
   `0x42CC45..0x42CCB8`); `corpse` (`+0x1BC`, a feature index through `0x422E40`, `0xFFFF` when
-  absent); `movementclass` (→ `0x440420` → the class pointer `+0x1B6`); `weapon1`..`weapon3`
+  absent); `movementclass` (→ `0x440420` → the class pointer `+0x1B6`: one of the 32 records `0x512358 + 0x20·c`, or 0 when no class has the name, written `0x42CD29`; 0 with no key, `0x42CD0C`; `0x440420..0x440463`); `weapon1`..`weapon3`
   (→ `+0x1EE`, `+0x1F2`, `+0x1F6` through `0x49E5B0`, else the null record `main+0x2CF3`;
   [extra weapons](../extra-weapons.html) adds more), `explodeas` (→ `+0x220`) and `selfdestructas`
   (→ `+0x224`), weapon pointers by the same lookup; `YardMap` (→ `+0x14E`, a FootprintX × FootprintZ

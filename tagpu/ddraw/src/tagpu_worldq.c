@@ -633,8 +633,8 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 
 /* The seat's record, fixed at the open (its bound there): stored energy +0x8C and metal +0x98, the last pass's
    production +0x90 / +0x9C and requests +0x94 / +0xA0, the storage maxima +0xA4 / +0xA8, as the economy pass
-   0x401360 writes them once a pass, every seat on the same ticks (DISASSEMBLED 0x4019B0..0x401A49;
-   engine/sim.md, The economy pass). Floats; one not finite reads 0. */
+   0x401360 writes them once a pass, every seat on the same ticks (DISASSEMBLED: engine/network.md, the economy
+   pass 0x401360). Floats; one not finite reads 0. */
 static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 {
     const char* r = ctx_of(q)->rec;
