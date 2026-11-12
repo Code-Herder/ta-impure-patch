@@ -416,18 +416,12 @@
   },
   "impai-observe": {
    "load": "impai-observe.json", "los": "file",
-   "content": {"run": ["tools/impai_fixture.py", "{gamedir}", "1,2"],
-               "files": ["tagpu_impai.on"]},
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h",
-               "tools/impai_fixture.py"],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
    "end": 5400
   },
   "impai-observe-perm": {
    "load": "impai-observe-perm.json", "los": "file",
-   "content": {"run": ["tools/impai_fixture.py", "{gamedir}", "1,2"],
-               "files": ["tagpu_impai.on"]},
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h",
-               "tools/impai_fixture.py"],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
    "end": 5400
   },
   "resource-mex": {

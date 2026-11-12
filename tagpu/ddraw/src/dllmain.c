@@ -308,10 +308,6 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            before the registry closes its lever list for the same reason. */
         tagpu_rec_lever_init();
 
-        /* tagpu: ImpAI's lever (tagpu_impai.h), before the registry closes its lever list; the
-           seam itself installs after tagpu_replay_init, below. */
-        tagpu_impai_init();
-
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
            read, and closes the list: a lever or TLS index taken later is logged by name. */
@@ -349,12 +345,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            tagpu_replay.play asked for the level; the replay's step rides B2's stub. */
         tagpu_replay_init();
 
-        /* tagpu: ImpAI's seam (tagpu_impai.h). No-op unless "tagpu_impai.on" names seats and
-           replay's sites went in, the level init's PLAYERS call among them, which runs ImpAI's
-           level init; then the players phase's call of the stock AI tick, 0x465031, is
-           byte-matched and redirected to a wrapper that always calls the stock tick, so the
-           recorder's observer on that tick's entry 0x408C40 still runs. */
-        tagpu_impai_install();
+        /* tagpu: ImpAI's seam (tagpu_impai.h), only once replay's sites went in, the level
+           init's PLAYERS call among them, which runs ImpAI's level init: the players phase's
+           call of the stock AI tick, 0x465031, is byte-matched and redirected to a wrapper that
+           always calls the stock tick, so the recorder's observer on that tick's entry 0x408C40
+           still runs. */
+        tagpu_impai_init();
 
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport

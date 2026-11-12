@@ -15,6 +15,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_replay.h"
+#include "tagpu_settings.h"
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
@@ -25,7 +26,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 
 #define IMPAI_ON     0x01u
 
-/* Which records ImpAI observes, by record index. Every level starts from the table a fresh
+/* Which records ImpAI plays, by record index. Every level starts from the table a fresh
    process holds: the level init clears it on every level, live or puppet, on the loader thread
    before the level's first step, so no mark of an earlier level survives into this one. Then
    the level init marks a live level's seats; on a puppet level the recording is the only
@@ -35,14 +36,14 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
 
-/* the lever as read at install, and whether the seam is in */
+/* What went in at attach. `avail`: every site ImpAI needs is in, so a level may mark seats;
+   `why` says what kept it out. */
 static struct {
-    uint8_t  in;           /* 1 once 0x465031 reaches impai_ai_tick            */
-    uint8_t  read;         /* 1 when the lever named seats                     */
-    uint8_t  all_ai;       /* `ai`: every record whose controller is 2         */
-    uint16_t mask;         /* else bit i for record i                          */
-} s_lever;
-SIM_VAR(s_lever, SIM_INSTALL);
+    uint8_t in;            /* 1 once 0x465031 reaches impai_ai_tick            */
+    uint8_t avail;
+    char    why[80];
+} s_install;
+SIM_VAR(s_install, SIM_INSTALL);
 
 /* the wrapper's turns per seat this level, for the level-end line */
 static struct {
@@ -104,80 +105,64 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
     ((PFN_AiTick)(uintptr_t)VA_AI_TICK)(obj);
 }
 
-/* `ai`, or a comma-separated list of record indexes 0..9, its trailing blanks cut off in
-   place; 0 when the text is neither */
-static int lever_parse(char* t)
+/* On the game thread, in the teardown 0x491B60's entry; with tagpu_reclaim.off that wrap is not
+   installed and no line is written. */
+void tagpu_impai_level_end(void)
 {
-    size_t n = strlen(t);
-    unsigned mask = 0, k;
-    while (n && (t[n - 1] == ' ' || t[n - 1] == '\t' || t[n - 1] == '\r' || t[n - 1] == '\n')) n--;
-    t[n] = 0;
-    if (n == 2 && t[0] == 'a' && t[1] == 'i') {
-        s_lever.all_ai = 1;
-        return 1;
-    }
-    for (k = 0; k < n; k++) {
-        if (t[k] < '0' || t[k] > '9') return 0;
-        mask |= 1u << (t[k] - '0');
-        if (k + 1 < n && t[++k] != ',') return 0;
-        if (k + 1 == n && t[k] == ',') return 0;
-    }
-    if (!mask) return 0;
-    s_lever.mask = (uint16_t)mask;
-    return 1;
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    unsigned i, now;
+    if (!s_install.in || !ta) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if ((s_seat[i] & IMPAI_ON) || s_diag.calls[i])
+            tagpu_logf("impai: calls seat=%u n=%u gametime=%u", i, s_diag.calls[i], now);
 }
 
-void tagpu_impai_init(void)
-{
-    char text[64];
-    if (tagpu_sim_lever_read("tagpu_impai.on", text, sizeof text) < 0) return;
-    if (!lever_parse(text)) {
-        tagpu_logf("impai: tagpu_impai.on: %s not understood", text);
-        return;
-    }
-    s_lever.read = 1;
-}
-
-/* THE LEVEL INIT IS OURS FIRST. The seam goes in only once tagpu_replay_init has retargeted the
+/* THE LEVEL INIT IS OURS FIRST. Nothing goes in unless tagpu_replay_init has retargeted the
    level init's PLAYERS call 0x4919C8 to tagpu_replay_level_players, the only caller of
    tagpu_impai_level_init: so the seam is never in on a level whose seat table nobody cleared
    and wrote. */
-void tagpu_impai_install(void)
+void tagpu_impai_init(void)
 {
     const unsigned char* at = (const unsigned char*)(uintptr_t)VA_AI_CALL;
-    if (!s_lever.read) return;
     if (!tagpu_replay_level_init_in()) {
-        tagpu_logf("impai: seam 0x465031 left out: the level init 0x4919C8 is not retargeted "
-                   "(the log's `replay:` lines say why)");
+        lstrcpynA(s_install.why, "the level init 0x4919C8 is not retargeted (the log's `replay:` "
+                  "lines say why)", sizeof s_install.why);
+    } else if (!tagpu_detour_redirect_ok(VA_AI_CALL, VA_AI_TICK)) {
+        wsprintfA(s_install.why, "0x465031 not stock (%02X %02X %02X %02X %02X)", at[0], at[1],
+                  at[2], at[3], at[4]);
+    } else if (!tagpu_detour_redirect(VA_AI_CALL, VA_AI_TICK, (void*)impai_ai_tick)) {
+        lstrcpynA(s_install.why, "0x465031 could not be written", sizeof s_install.why);
+    } else {
+        s_install.in = s_install.avail = 1;
+        tagpu_logf("impai: seam 0x465031 in");
         return;
     }
-    if (!tagpu_detour_redirect_ok(VA_AI_CALL, VA_AI_TICK)) {
-        tagpu_logf("impai: seam 0x465031 not stock (%02X %02X %02X %02X %02X)", at[0], at[1],
-                   at[2], at[3], at[4]);
-        return;
-    }
-    if (!tagpu_detour_redirect(VA_AI_CALL, VA_AI_TICK, (void*)impai_ai_tick)) {
-        tagpu_logf("impai: seam 0x465031 could not be written");
-        return;
-    }
-    s_lever.in = 1;
-    tagpu_logf("impai: seam 0x465031 in, seats %s", s_lever.all_ai ? "ai" : "by the lever");
+    tagpu_logf("impai: unavailable: %s", s_install.why);
 }
+
+/* The level init's seat choice, the AI command and the header's accessor: what decides which
+   seats ImpAI plays. On a puppet the level init marks no seat, so the recording is the only
+   writer of the table there. */
+SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm");
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
    last store (0x497C62), which the game thread waits for before the level's first step: so the
    table is whole before any game-thread turn reads it (impai_seat_of, THE THREAD). It clears
    the table on every level (s_seat); on a puppet level it marks no seat: the recording restores
-   the table, and the recorder is the only writer of what a recording carries. */
+   the table, and the recorder is the only writer of what a recording carries.
+   THE SEAT CHOICE is impure.cfg's `seatai`, bit i for settings entry i, which is record i: the
+   seat fill 0x47A760 activates record i for entry i on every path that seats a skirmish
+   (engine/sim.md, Seating a level). */
 void tagpu_impai_level_init(void)
 {
     const char* ta;
     char list[2 * PLAYER_COUNT + 1];
-    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0;
+    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
-    if (tagpu_puppet_on() || !s_lever.in) return;
+    if (tagpu_puppet_on()) return;
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
     for (i = 0; i < PLAYER_COUNT; i++) {
@@ -186,32 +171,24 @@ void tagpu_impai_level_init(void)
         live++;
         if ((uint8_t)rec[PL_CONTROL] == CTRL_REMOTE && remote == PLAYER_COUNT) remote = i;
     }
-    /* A remote record means a network game, which ImpAI does not observe yet. */
+    /* A remote record means a network game, which ImpAI does not play yet. */
     if (remote < PLAYER_COUNT) {
         tagpu_logf("impai: seats none: record %u is remote, a network game", remote);
         return;
     }
+    if (!s_install.avail) {
+        tagpu_logf("impai: unavailable: %s", s_install.why);
+        return;
+    }
+    want = (unsigned)tagpu_settings_seatai();
     for (i = 0; i < PLAYER_COUNT; i++) {
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         if (!*(const uint32_t*)(rec + PL_ACTIVE) || (uint8_t)rec[PL_CONTROL] != CTRL_AI) continue;
-        if (!s_lever.all_ai && !(s_lever.mask & (1u << i))) continue;
+        if (!(want & (1u << i))) continue;
         s_seat[i] = IMPAI_ON;
         if (n) list[n++] = ',';
         list[n++] = (char)('0' + i);
     }
     list[n] = 0;
-    tagpu_logf("impai: seats %s (lever) of %u records", n ? list : "none", live);
-}
-
-/* On the game thread, in the teardown 0x491B60's entry; with tagpu_reclaim.off that wrap is not
-   installed and no line is written. */
-void tagpu_impai_level_end(void)
-{
-    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
-    unsigned i, now;
-    if (!s_lever.in || !ta) return;
-    now = *(const unsigned*)(ta + OFF_GAMETIME);
-    for (i = 0; i < PLAYER_COUNT; i++)
-        if ((s_seat[i] & IMPAI_ON) || s_diag.calls[i])
-            tagpu_logf("impai: calls seat=%u n=%u gametime=%u", i, s_diag.calls[i], now);
+    tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);
 }

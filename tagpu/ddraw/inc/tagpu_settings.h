@@ -19,6 +19,9 @@
    which `tagpu_settings_placement` and `tagpu_settings_window` answer
    under every launch: the store is the only thing that places a window or
    says how it presents, and tacli writes those keys before every launch.
+   The seats' AI choice is the other exception: `tagpu_settings_seatai`
+   answers, and its setter writes, under every launch, as the engine's own
+   SKIRMISH registry keys are honoured under every launch.
 
    THREADS. Every value a consumer reads is an aligned LONG, written by
    InterlockedExchange and BOUNDED against its key's own table on every read,
@@ -68,6 +71,9 @@ typedef enum {
                        coverage, always (tagpu_rangeown.c)                */
     TS_RANGEALLY,   /* TS_RC_* bits: the allied defenses' classes shown   */
     TS_RANGEENEMY,  /* TS_RC_* bits: the enemy defenses' classes shown    */
+    TS_SEATAI,      /* bit i: computer seat i plays ImpAI, else OTA AI (tagpu_impai.c);
+                       `seatai=1,3` or `none`. Answered under tagpu_defaults.off too:
+                       tagpu_settings_seatai, never tagpu_settings_get              */
     TS_NKEYS
 } TagpuSetting;
 
@@ -116,6 +122,14 @@ int  tagpu_settings_placement(TagpuSetting key, int* out);
 /* Any thread. Records the value (bounded: an invalid one is refused and
    logged) and marks the store for the next flush. */
 void tagpu_settings_set(TagpuSetting key, int value);
+
+/* The computer seats ImpAI plays, bit i for seat i (TS_SEATAI). A setup choice like the
+   SKIRMISH screen's own registry keys, which the engine honours under every launch: read and
+   written under tagpu_defaults.off too (research/notes/impai/player.md, The AI button). Any
+   thread; the level init reads it on the loader thread. The setter records a mask below 1024
+   and marks the store for the next flush, which writes it whatever tagpu_defaults.off says. */
+int  tagpu_settings_seatai(void);
+void tagpu_settings_seatai_set(int mask);
 
 /* Bumped after every set, for readers that cache what they derived. */
 long tagpu_settings_gen(void);
