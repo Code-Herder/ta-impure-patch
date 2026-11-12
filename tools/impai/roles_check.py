@@ -33,20 +33,25 @@ FLAG_NAMES = ("commander", "factory", "transport", "kamikaze", "antiweapons", "r
 
 
 def engine_roles(logs):
-    """{NAME: row} of the last level init's role lines; a `threat` line ends a level's block."""
-    levels, cur = [], {}
+    """{NAME: row} of the last level init's role lines; a `threat` line ends a level's block. The lines
+    come in type order, and a block's first is type 0, the engine's reserved type (`None`, which no FBI
+    defines and the one-type reload 0x42D1F0 skips: engine/memory.md), so it is left out."""
+    levels, cur, first = [], {}, True
     for path in logs:
         for ln in Path(path).read_text(errors="replace").splitlines():
             m = ROLE.search(ln)
-            if m:
+            if m and first:
+                first = False
+            elif m:
                 name, role, layer, value, dg, da, dw, rg, flags = m.groups()
                 cur[name.upper()] = {"name": name, "role": role, "layer": layer, "value": float(value),
                                      "dps_ground": float(dg), "dps_air": float(da),
                                      "range_ground": int(rg),
                                      "flags": sorted(FLAG_NAMES[k] for k in range(8) if int(flags, 16) >> k & 1)}
-            elif THREAT.search(ln) and cur:
-                levels.append(cur)
-                cur = {}
+            elif THREAT.search(ln):
+                if cur:
+                    levels.append(cur)
+                cur, first = {}, True
     if cur:
         levels.append(cur)
     return levels[-1] if levels else {}

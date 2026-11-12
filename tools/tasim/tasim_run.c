@@ -266,8 +266,10 @@ static void fill_unit(const Install* I, int i, TASIM_ROLE_IN* r)
                   flag(t, s, "antiweapons", TASIM_F241_ANTIWEAPONS);
     r->flags245 = flag(t, s, "canmove", TASIM_F245_CANMOVE) | flag(t, s, "commander", TASIM_F245_COMMANDER);
     r->bmcode = (uint8_t)tagpu_tdf_int(t, s, "bmcode", 0);
-    r->cost_energy = (float)fnum(t, s, "buildcostenergy", 0.0);
-    r->cost_metal = (float)fnum(t, s, "buildcostmetal", 0.0);
+    /* the engine reads both costs as integers and stores them as floats (engine/keys.md, Costs and
+       economy), so ARMPEEP's 40.28 metal costs 40 in the game */
+    r->cost_energy = (float)tagpu_tdf_int(t, s, "buildcostenergy", 0);
+    r->cost_metal = (float)tagpu_tdf_int(t, s, "buildcostmetal", 0);
     r->maxdamage = (uint32_t)tagpu_tdf_int(t, s, "maxdamage", 0);
     r->workertime = (uint16_t)tagpu_tdf_int(t, s, "workertime", 0);
     r->maxvelocity_fx = (int32_t)(fnum(t, s, "maxvelocity", 0.0) * 65536.0);

@@ -246,7 +246,7 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
   commander); 0 when no chain reaches it.
 
 `tasim_run roles` (`tools/tasim/tasim_run.c`) fills the input from the install's files with the
-engine's conversions (reloadtime × 30, speeds × 65536) and takes build options by the sidebar's page
+engine's conversions (reloadtime × 30, speeds × 65536, the build costs read as integers) and takes build options by the sidebar's page
 rule (`tagpu_buildmenu`) over the GUI pages and download entries; the engine's page count
 (`+0x22E`) is not read from a file, so the pages are those that exist or that an entry names
 [INFERRED]. On the retail install (2.0 s): land 20 defence, 15 assault, 22 raider, 10 artillery,
