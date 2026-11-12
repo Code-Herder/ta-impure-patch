@@ -98,7 +98,123 @@ import { playersFixture, playersScratch } from './players-fixture.mjs';
 import { build as hostBuild } from './wikibuild.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+/* THE HOST LEG: every sim simparity and replay.js make is a twin -- sim.js's and the drop-in's (mockup/simhost.js, on
+   the host builds WIKI_HOST_TEE names) side by side, every call made on both. What the caller reads is sim.js's;
+   every answer of the drop-in is compared with it, and a sim's first difference is kept: a view, orders, gameNow,
+   hash (against stateHash of sim.js's view), a refusal, and each tick's log as a multiset of {t, what, id, type, ox,
+   oz} for the kinds simcheck reads. HOST_DIFFS lists the sims that differ; the run fails on any. */
+const LOGGED = new Set(['started', 'finished', 'reclaimed', 'nocorpse']);
+const HOST_DIFFS = [];
+let hostSims = 0;
+function twin(J, H) {
+  const ctxOf = c => c == null ? c : { side: c.side, iface: c.iface, casting: c.casting, rival: c.rival,
+    packs: c.cob || c.snd ? PACK_DIRS : null, scripts: !!c.cob, sounds: !!c.snd };
+  const logs = (l, from) => l.slice(from).filter(e => LOGGED.has(e.what)).map(e => JSON.stringify(e, ['t', 'what', 'id', 'type', 'ox', 'oz'])).sort();
+  const mk = kind => (entry, demo, layout, ctx, mode) => {
+    const label = `${entry && entry.id}/${demo ? demo.id : '(try)'}`;
+    let j, h, jwhy = null, hwhy = null;
+    try { j = kind === 'game' ? J.game(entry, demo, layout, ctx, mode) : J[kind](entry, demo, layout, ctx); } catch (e) { jwhy = e; }
+    try { h = kind === 'game' ? H.game(entry, demo, layout, ctxOf(ctx), mode) : H[kind](entry, demo, layout, ctxOf(ctx)); } catch (e) { hwhy = e; }
+    hostSims++;
+    if ((jwhy === null) !== (hwhy === null))
+      HOST_DIFFS.push(`${label}: made: host ${hwhy ? `refused (${hwhy.message})` : 'played'}, sim.js ${jwhy ? `refused (${jwhy.message})` : 'played'}`);
+    if (jwhy) throw jwhy;
+    if (hwhy) return j;
+    let first = null, jn = 0, hn = 0;
+    const check = (what, c, js) => {
+      if (first) return;
+      const d = diff(c, js, what);
+      if (d) { first = `at tick ${j.tick}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`; HOST_DIFFS.push(`${label}: ${first}`); }
+    };
+    const logStep = () => { check('log', logs(h.log, hn), logs(j.log, jn)); jn = j.log.length; hn = h.log.length; };
+    logStep();
+    const both = (name, f) => {
+      let jr, hr, je = null, he = null;
+      try { jr = f(j); } catch (e) { je = e; }
+      try { hr = f(h); } catch (e) { he = e; }
+      if ((je === null) !== (he === null)) check(`${name}()`, he ? `threw ${he.message}` : 'ok', je ? `threw ${je.message}` : 'ok');
+      if (je) throw je;
+      return [jr, hr];
+    };
+    const t = {
+      get tick() { return j.tick; }, get done() { return j.done; }, get side() { return j.side; }, get iface() { return j.iface; },
+      get game() { return j.game; }, get types() { return j.types; }, get log() { return j.log; },
+      input(ev) { both('input', s => s.input(ev)); },
+      release(seat) { both('release', s => s.release(seat)); },
+      step() {
+        both('step', s => s.step());
+        check('tick', h.tick, j.tick);
+        check('done', h.done, j.done);
+        logStep();
+      },
+      view(seat) {
+        const [jv, hv] = both('view', s => s.view(seat));
+        check(`view(${seat ?? 0})`, hv, jv);
+        if ((seat ?? 0) === 0) check('hash', h.hash(), stateHash(j, j.view()));
+        return jv;
+      },
+      orders(id) { const [jo, ho] = both('orders', s => s.orders(id)); check(`orders(${id})`, ho, jo); return jo; },
+      poses() { return j.poses(); },
+      cobNotes() { const [jc, hc] = both('cobNotes', s => s.cobNotes()); check('cobNotes', hc, jc); return jc; },
+      free() { j.free(); h.free(); },
+    };
+    if (j.game) {
+      t.gameNow = seat => { const [jg, hg] = both('gameNow', s => s.gameNow(seat)); check(`gameNow(${seat ?? 0})`, hg, jg); return jg; };
+      t.fork = (R, inputs, mode, seat) => {
+        both('fork', s => s.fork(R, inputs, mode, seat));
+        check('fork done', h.done, j.done);
+        logStep();
+      };
+    }
+    return t;
+  };
+  const W = Object.create(J);
+  W.create = mk('create');
+  W.play = mk('play');
+  W.game = (entry, demo, layout, ctx, mode = 'refuse') => mk('game')(entry, demo, layout, ctx, mode);
+  // the module's functions: sim.js's answer, the drop-in's compared with it
+  const fn = (name, cmp = (a, b) => diff(b, a, name)) => (...args) => {
+    let jr, hr, je = null, he = null;
+    try { jr = J[name](...args); } catch (e) { je = e; }
+    try { hr = H[name](...args); } catch (e) { he = e; }
+    if ((je === null) !== (he === null)) HOST_DIFFS.push(`${name}: host ${he ? `threw (${he.message})` : 'answered'}, sim.js ${je ? `threw (${je.message})` : 'answered'}`);
+    else if (!je) { const d = cmp(jr, hr); if (d) HOST_DIFFS.push(`${name}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`); }
+    if (je) throw je;
+    return jr;
+  };
+  for (const name of ['sceneOf', 'seatCam', 'frameFits', 'sightIndex', 'sightTable']) W[name] = fn(name);
+  // the loader's words name the entry first ("wiki entry ID: "), the C's being the specification's
+  W.checkText = fn('checkText', (a, b) => (a === null) === (b === null) && (a === null || b.endsWith(`: ${a}`)) ? null
+    : { at: 'checkText', c: b, j: a });
+  W.checkLayout = fn('checkLayout', () => null);
+  W.checkCasting = fn('checkCasting', () => null);
+  // sightContacts reads the drop-in's own grid, kept beside sim.js's
+  const hostLit = new WeakMap();
+  W.sightLit = (v, S, seat, g) => {
+    const jl = J.sightLit(v, S, seat, g), hl = H.sightLit(v, S, seat, g), d = diff([...hl], [...jl], 'sightLit');
+    if (d) HOST_DIFFS.push(`sightLit: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`);
+    hostLit.set(jl, hl);
+    return jl;
+  };
+  W.sightContacts = (v, lit, seat) => {
+    const jc = J.sightContacts(v, lit, seat), hl = hostLit.get(lit);
+    if (hl) { const d = diff(H.sightContacts(v, hl, seat), jc, 'sightContacts'); if (d) HOST_DIFFS.push(`sightContacts: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`); }
+    return jc;
+  };
+  // the constants, compared once the run's report is due: LIVE_CONTROLS by membership (the host lists them in the HUD
+  // table's order), every other as written
+  W.compareConstants = () => {
+    for (const k of Object.keys(H)) {
+      if (typeof H[k] === 'function') continue;
+      const d = k === 'LIVE_CONTROLS' ? diff([...H[k]].sort(), [...J[k]].sort(), k) : diff(H[k], J[k], k);
+      if (d) HOST_DIFFS.push(`constant ${k}: ${d.at}: host ${show(d.c)}, sim.js ${show(d.j)}`);
+    }
+  };
+  return W;
+}
+const WikiSim = twin(require('./mockup/sim.js'), require('./mockup/simhost.js'));
+// replay.js and frame.js take the module by require: they make their sims through the twin too
+require.cache[require.resolve('./mockup/sim.js')].exports = WikiSim;
 const WikiReplay = require('./mockup/replay.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiText = require('./mockup/text.js');
@@ -2698,9 +2814,14 @@ if (process.exitCode !== 2 && (RECORD || AGAINST)) {
 }
 if (process.exitCode !== 2) {
   if (dupKeys) failed++;
+  WikiSim.compareConstants();
+  for (const l of HOST_DIFFS.slice(0, 40)) console.log(`DIFFER host leg -- ${l}`);
+  if (HOST_DIFFS.length > 40) console.log(`DIFFER host leg -- and ${HOST_DIFFS.length - 40} more`);
+  if (HOST_DIFFS.length) failed++;
+  else console.log(`equal  host leg: ${hostSims} sims through the drop-in (mockup/simhost.js), every answer as sim.js's`);
   const variant = WINE ? 'i686 under Wine' : 'native';
   if (SHARDS > 1) process.stdout.write(`shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', its demo plays alone' : ''}: `);
-  console.log(failed ? `${differ} of ${demos} demo plays, ${failed - differ - bad - refuseBad - dataBad} of ${cases} rule cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read back and ${bad} of ${malformed} malformed-data cases differ (C sim: ${variant})`
+  console.log(failed ? `${differ} of ${demos} demo plays, ${failed - differ - bad - refuseBad - dataBad - (HOST_DIFFS.length ? 1 : 0)} of ${cases} rule cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read back and ${bad} of ${malformed} malformed-data cases differ${HOST_DIFFS.length ? `, and the host leg in ${HOST_DIFFS.length} places` : ''} (C sim: ${variant})`
     : `all ${demos} demo plays and ${cases} rule cases equal, tick for tick, all ${refusals} refusal cases alike, all ${datas} castings and layouts read alike and all ${malformed} malformed-data cases loaded (C sim: ${variant})`);
   process.exitCode = failed ? 1 : 0;
 }
