@@ -10,6 +10,9 @@
 #include "tagpu_packet.h"
 #include "tagpu_puppet.h"
 #include "tagpu_simreg.h"
+#include "tagpu_addr.h"
+#include "tagpu_weapons.h"
+#include "tagpu_datakeys.h"
 
 SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic sweep-basic");
 
@@ -948,6 +951,225 @@ static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
 {
     (void)q;
     return mclass < 0 ? 0 : tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
+}
+
+/* ---- the role classifier's input (tagpu_worldq.h, THE ROLE TABLE'S ENGINE FILLER) ----
+
+   What it reads, each the level load's, on the loader thread inside PLAYERS 0x4919C8: the def array
+   main+0x1439B below UNITINFOCount main+0x1438F, the weapon records the defs point at, the weapons' [DAMAGE]
+   rows and the category map. THE LIFETIME: the unit-data load 0x42D2E0 (0x4918CA) wrote all of them on this
+   thread before this point -- the weapons through the parser 0x42E440, the defs and their bad-target masks
+   through the FBI reader 0x42BF40, the categories through 0x488E70 -- and only the teardown 0x491B60 frees
+   them, on the game thread, before it creates the next load's loader thread (0x4982CA). THE CATEGORY MAP is
+   written during a load only on this thread (the FBI reader, and the AI plan's `weight` and `limit` inside
+   the players init 0x464990, both before the level init), and in play only by game-thread code the in-game
+   frame reaches (the key switch 0x495E90, called at 0x496971 in 0x496790; the SHARE give 0x493673; the TALK
+   line 0x493E36; engine/units.md, Who inserts), none of which runs while the game thread waits on a load
+   [INFERRED for the two GUI handlers, as there]. The walk keeps no entry pointer past this call and never
+   calls the lookup 0x488C50, which inserts on a miss. THE BOUNDS: the def count 1..TAGPU_LIM_TYPES; a
+   weapon pointer a record of the weapon array (tagpu_limits_weapon_index above 0); a damage table and the
+   category map a whole number of 8-byte entries, at most DMG_MAX and CATMAP_MAX of them; every name compared
+   within its own cap; a mask bit only for a row below the count, which every mask holds (TAGPU_LIM_TYPES
+   bits under the raised limits, tagpu_patches.c). ptr_ok is a filter on values, not the argument. */
+#define VA_CATMAP_BEGIN 0x0051E6B4u    /* {char* name, u32* mask}: engine/units.md, The unit-category map */
+#define VA_CATMAP_END   0x0051E6B8u
+#define CATMAP_MAX      65536u
+#define CAT_NAME_MAX    64              /* a category name's bytes compared                              */
+#define D_NAME          0x20            /* char[32] unitname                                             */
+#define D_BADTGT        0x231           /* u32* x3: wpri_/wsec_/wspe_badTargetCategory's masks            */
+#define W_DMG           0x64            /* the [DAMAGE] rows: {+0x05 begin, +0x09 end} of {char*, i32}
+                                           (0x499CD0: 0x499CEA, 0x499CFF, 0x499D02, 0x499D6D)               */
+#define DMG_MAX         65536u
+/* the bits the classifier tests, which are all the file filler sets (tools/tasim/tasim_run.c) */
+#define ROLE_F241 (TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS | \
+                   TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS)
+#define ROLE_F245 (TASIM_F245_CANMOVE | TASIM_F245_COMMANDER)
+#define ROLE_WF   (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER | TASIM_WF_DROPPED | \
+                   TASIM_WF_WATER | TASIM_WF_TOAIR | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | \
+                   TASIM_WF_INTERCEPTOR)
+
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
+
+static int fold(int c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; }
+
+/* `a` equals `b` as _stricmp 0x4F8A70 compares them (an ASCII A-Z fold), each read to its NUL or `cap` */
+static int name_eq(const char* a, const char* b, int cap)
+{
+    int k;
+    for (k = 0; k < cap; k++) {
+        const int x = fold((unsigned char)a[k]), y = fold((unsigned char)b[k]);
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+    return 0;
+}
+
+/* `word` among the blank-separated words of `text`, read within `cap` bytes: the file filler's has_word */
+static int has_word(const char* text, const char* word, int cap)
+{
+    int k = 0;
+    while (k < cap && text[k]) {
+        int n = 0, j;
+        while (k < cap && (text[k] == ' ' || text[k] == '\t')) k++;
+        while (k + n < cap && text[k + n] && text[k + n] != ' ' && text[k + n] != '\t') n++;
+        for (j = 0; j < n && word[j] && fold((unsigned char)text[k + j]) == fold((unsigned char)word[j]); j++) {}
+        if (n && j == n && !word[j]) return 1;
+        k += n;
+    }
+    return 0;
+}
+
+typedef struct CATMAP { const char* begin; unsigned n; } CATMAP;
+
+static int catmap_open(CATMAP* m)
+{
+    const char* begin = *(const char* const*)(uintptr_t)VA_CATMAP_BEGIN;
+    const char* end = *(const char* const*)(uintptr_t)VA_CATMAP_END;
+    m->begin = begin;
+    m->n = 0;
+    if (begin == end) return 1;
+    if (!ptr_ok(begin) || !ptr_ok(end) || end < begin || (size_t)(end - begin) % 8 ||
+        (size_t)(end - begin) / 8 > CATMAP_MAX)
+        return 0;
+    m->n = (unsigned)((size_t)(end - begin) / 8);
+    return 1;
+}
+
+/* the mask of the category named `name`, or NULL */
+static const uint32_t* catmap_mask(const CATMAP* m, const char* name)
+{
+    unsigned k;
+    for (k = 0; k < m->n; k++) {
+        const char* n = *(const char* const*)(m->begin + (size_t)k * 8);
+        const uint32_t* mask = *(const uint32_t* const*)(m->begin + (size_t)k * 8 + 4);
+        if (ptr_ok(n) && ptr_ok(mask) && name_eq(n, name, CAT_NAME_MAX)) return mask;
+    }
+    return NULL;
+}
+
+/* the name of the category whose mask is `mask`, or NULL: the FBI reader stores a bad-target tag as the
+   mask the map holds under the tag's whole text (0x42C028..0x42C0A6) */
+static const char* catmap_name(const CATMAP* m, const void* mask)
+{
+    unsigned k;
+    if (!mask) return NULL;
+    for (k = 0; k < m->n; k++) {
+        const char* n = *(const char* const*)(m->begin + (size_t)k * 8);
+        if (*(const void* const*)(m->begin + (size_t)k * 8 + 4) == mask && ptr_ok(n)) return n;
+    }
+    return NULL;
+}
+
+/* weapon `w`'s damage against the type named `tname`: its [DAMAGE] row for the type, else its default, as
+   0x499CD0 takes them (the row's dword, the default's word zero-extended) */
+static int32_t damage_vs(const char* w, const char* tname, int32_t dflt)
+{
+    const char* t = *(const char* const*)(w + W_DMG);
+    const char *b, *e;
+    size_t k, n;
+    if (!t || !ptr_ok(t)) return dflt;
+    b = *(const char* const*)(t + 5);
+    e = *(const char* const*)(t + 9);
+    if (b == e || !ptr_ok(b) || !ptr_ok(e) || e < b || (size_t)(e - b) % 8 || (size_t)(e - b) / 8 > DMG_MAX)
+        return dflt;
+    n = (size_t)(e - b) / 8;
+    for (k = 0; k < n; k++) {
+        const char* name = *(const char* const*)(b + k * 8);
+        if (ptr_ok(name) && name_eq(name, tname, 33)) return *(const int32_t*)(b + k * 8 + 4);
+    }
+    return dflt;
+}
+
+int tagpu_worldq_role_count(void)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    unsigned n;
+    if (!ta || !*(const char* const*)(ta + D_BASE)) return 0;
+    n = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+    return n && n <= TAGPU_LIM_TYPES ? (int)n : 0;
+}
+
+/* THE FILLER: the file filler's keys from where the engine keeps them (engine/keys.md), every value
+   already the parsers' own conversion, so a plain copy. Weapons: slots 0 .. min(the type's count,
+   TASIM_ROLE_WEAPONS) - 1 through the extra-weapons module, weapon1..weapon10 as the file filler reads them;
+   a slot whose record is the no-weapon entry 0 stays empty, as the file filler leaves a name it finds no
+   section for. A weapon's air damage is the mean, over the types of category VTOL, of its damage against
+   each. */
+int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const char* defs;
+    const uint32_t* vtol;
+    uint16_t* air;
+    float* wair;                /* a weapon's air damage by its index, taken once: NAN until then */
+    CATMAP cat;
+    const int nw = tagpu_limits_weapon_slots();
+    int i, k, nair = 0;
+    if (n <= 0 || n != tagpu_worldq_role_count() || nw <= 0 || !catmap_open(&cat)) return -1;
+    defs = *(const char* const*)(ta + D_BASE);
+    air = (uint16_t*)tagpu_sim_scratch((size_t)n * sizeof *air);
+    wair = (float*)tagpu_sim_scratch((size_t)nw * sizeof *wair);
+    if (!air || !wair) {
+        tagpu_sim_scratch_free(wair);
+        tagpu_sim_scratch_free(air);
+        return -1;
+    }
+    for (i = 0; i < nw; i++) wair[i] = NAN;
+    if ((vtol = catmap_mask(&cat, "VTOL")) != NULL)
+        for (i = 0; i < n; i++)
+            if (vtol[(unsigned)i >> 5] >> ((unsigned)i & 31u) & 1u) air[nair++] = (uint16_t)i;
+    for (i = 0; i < n; i++) {
+        const char* d = defs + (size_t)i * D_STRIDE;
+        TASIM_ROLE_IN* r = &in[i];
+        memset(r, 0, sizeof *r);
+        memcpy(r->name, d + D_NAME, sizeof r->name - 1);
+        r->flags241 = *(const uint32_t*)(d + D_FLAGS) & ROLE_F241;
+        r->flags245 = *(const uint32_t*)(d + D_TAGS) & ROLE_F245;
+        r->bmcode = *(const uint8_t*)(d + 0x22F);
+        r->cost_energy = *(const float*)(d + 0x186);
+        r->cost_metal = *(const float*)(d + 0x18A);
+        r->maxdamage = *(const uint32_t*)(d + 0x1FA);
+        r->workertime = *(const uint16_t*)(d + 0x1FE);
+        r->maxvelocity_fx = *(const int32_t*)(d + 0x192);
+        r->sight = *(const uint16_t*)(d + 0x202);
+        r->radar = *(const uint16_t*)(d + 0x204);
+        r->jammer = *(const uint16_t*)(d + 0x20A);
+        r->minwaterdepth = *(const int16_t*)(d + 0x1C0);
+        r->maxwaterdepth = *(const int16_t*)(d + 0x1BE);
+        r->energyuse = *(const float*)(d + 0x1C6);
+        r->makesmetal = *(const uint8_t*)(d + 0x22D);
+        r->transportcapacity = *(const uint8_t*)(d + 0x22B);
+        for (k = 0; k < TASIM_ROLE_BADSLOTS; k++) {
+            const char* tag = catmap_name(&cat, *(const void* const*)(d + D_BADTGT + 4 * k));
+            r->slot_notair[k] = (uint8_t)(tag && has_word(tag, "NOTAIR", CAT_NAME_MAX));
+        }
+        for (k = 0; k < TASIM_ROLE_WEAPONS; k++) {
+            const char* w = tagpu_weapons_type_weapon(d, (unsigned)k);
+            TASIM_ROLE_WEAPON* o = &r->w[k];
+            int wi, j;
+            if (!w) break;
+            if ((wi = tagpu_limits_weapon_index(w)) <= 0 || wi >= nw) continue;
+            o->range = *(const int32_t*)(w + 0xDC);
+            o->reload_ticks = (float)*(const uint16_t*)(w + 0xE4);
+            o->burst = *(const uint16_t*)(w + 0xEA);
+            o->damage_default = *(const uint16_t*)(w + 0xD4);
+            if (isnan(wair[wi])) {
+                double sum = 0.0;
+                for (j = 0; j < nair; j++)
+                    sum += (double)damage_vs(w, defs + (size_t)air[j] * D_STRIDE + D_NAME, o->damage_default);
+                wair[wi] = nair ? (float)(sum / nair) : 0.0f;
+            }
+            o->damage_air = wair[wi];
+            o->energy_per_shot = *(const float*)(w + 0xC0);
+            o->metal_per_shot = *(const float*)(w + 0xC4);
+            o->flags = (*(const uint32_t*)(w + 0x111) & ROLE_WF) |
+                       ((tagpu_datakeys_wkey(w) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
+            r->nweapons = (uint16_t)(k + 1);
+        }
+    }
+    tagpu_sim_scratch_free(wair);
+    tagpu_sim_scratch_free(air);
+    return 0;
 }
 
 static const WORLDQ_OPS OPS = {

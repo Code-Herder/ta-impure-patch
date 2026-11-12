@@ -20,6 +20,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 #include "tagpu_settings.h"
 #include "tagpu_packet.h"           /* TAGPU_PK_DESIGN_SLOTS: the most unit slots a world has */
 #include "tagpu_worldq.h"
+#include "tagpu_limits.h"
 #include "impai.h"
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
@@ -398,6 +399,54 @@ static void impai_reach_build(void)
     tagpu_logf("impai: reach classes=%u blocks=%ux%u components=%u", n, s_reach_ix.bw, s_reach_ix.bh, comps);
 }
 
+/* THE THREAT TABLE (impai.h, IMPAI_THREAT), one row a unit type of the level: what the role classifier
+   (tasim_roles.c) makes of the type's def and weapons as the level load left them, the same rule the
+   calibration runner's `tasim_run roles` applies to the install's files. Content: a function of the level's
+   defs and weapons, rebuilt at every level init, live or puppet. */
+static IMPAI_THREAT s_threat_def[TAGPU_LIM_TYPES];
+static unsigned     s_threat_n;
+SIM_ROWS_LIVE(s_threat_def, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_threat_n, NULL);
+SIM_VAR(s_threat_n, SIM_CONTENT);
+
+/* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
+   ROLE TABLE'S ENGINE FILLER, has the ordering and the bounds): every type's classifier input from the
+   engine, the classification, and its rounding into s_threat_def. The classifier's -1 (no type is a
+   commander, so no tech level) leaves every figure the table takes defined (tasim_roles_classify writes the
+   tech level last); its -2 cannot arise, as the filler gives no build options. A level whose input cannot be
+   had has no threat table, and the maps then draw no threat or influence. Under the check lever every type's
+   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`. */
+static void impai_threat_build(void)
+{
+    const int n = tagpu_worldq_role_count();
+    TASIM_ROLE_IN* in = NULL;
+    TASIM_ROLE_OUT* out = NULL;
+    TASIM_ROLE_Q q;
+    void* work = NULL;
+    int rc = -3, i;
+    memset(s_threat_def, 0, sizeof s_threat_def);
+    s_threat_n = 0;
+    if (n > 0 && (in = (TASIM_ROLE_IN*)tagpu_sim_scratch((size_t)n * sizeof *in)) &&
+        (out = (TASIM_ROLE_OUT*)tagpu_sim_scratch((size_t)n * sizeof *out)) &&
+        (work = tagpu_sim_scratch(tasim_roles_work(n))) && tagpu_worldq_role_in(in, n) == 0)
+        rc = tasim_roles_classify(in, n, out, &q, work);
+    if (rc == 0 || rc == -1) {
+        impai_threat_from_roles(out, n, s_threat_def);
+        s_threat_n = (unsigned)n;
+        if (s_install.check)
+            for (i = 0; i < n; i++)
+                tagpu_logf("impai: role %s %s %s value=%.17g dps_ground=%.17g dps_air=%.17g dps_water=%.17g "
+                           "range_ground=%d flags=0x%02X", in[i].name, tasim_roles_name(out[i].role),
+                           tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
+                           out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags);
+        tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
+    } else {
+        tagpu_logf("impai: threat none: the role classifier's input could not be had (%d types, %d)", n, rc);
+    }
+    tagpu_sim_scratch_free(work);
+    tagpu_sim_scratch_free(out);
+    tagpu_sim_scratch_free(in);
+}
+
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no
    stack argument (ECX the AI object, 0x46502A) and expects a plain `ret` (0x408CA2, 0x408CAF).
    __fastcall takes ECX as its first argument and EDX as its second and pops nothing, so the
@@ -465,6 +514,7 @@ void tagpu_impai_level_init(void)
     memset(s_seat, 0, sizeof s_seat);
     impai_observe_clear();
     impai_reach_build();
+    impai_threat_build();
     if (tagpu_puppet_on()) return;
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;

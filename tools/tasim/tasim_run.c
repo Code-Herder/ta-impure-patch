@@ -11,7 +11,8 @@
    engine's parsers make (research/notes/engine/keys.md, the key inventory):
      - weapon: range (int, 0x7FFF when absent), reloadtime x 30 into a word (0x4FD250; truncated
        [INFERRED: the MSVC float-to-int rule]), burst, [DAMAGE] default and its rows (a unit name
-       each), energypershot, metalpershot, and the flag keys of +0x111;
+       each), energypershot, metalpershot, the flag keys of +0x111, and Impure's `nottoair` as the
+       weapon-key reader takes it (tagpu_datakeys.c: the integer's bit 0);
      - unit [UNITINFO]: the flag keys of +0x241/+0x245, bmcode, buildcostenergy/metal, maxdamage,
        workertime, maxvelocity x 65536 (0x4C4800's fx [INFERRED: truncated]), sightdistance,
        radardistance, radardistancejam, energyuse, makesmetal, transportcapacity,
@@ -231,7 +232,8 @@ static void fill_weapon(const Install* I, const TAGPU_TDF* t, int s, TASIM_ROLE_
                flag(t, s, "waterweapon", TASIM_WF_WATER) | flag(t, s, "toairweapon", TASIM_WF_TOAIR) |
                flag(t, s, "commandfire", TASIM_WF_COMMANDFIRE) |
                flag(t, s, "stockpile", TASIM_WF_STOCKPILE) |
-               flag(t, s, "interceptor", TASIM_WF_INTERCEPTOR);
+               flag(t, s, "interceptor", TASIM_WF_INTERCEPTOR) |
+               ((tagpu_tdf_int(t, s, "nottoair", 0) & 1) ? TASIM_WF_NOTTOAIR : 0u);
 }
 
 static int move_class(const Install* I, const char* name)
