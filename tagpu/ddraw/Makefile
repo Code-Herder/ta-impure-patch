@@ -265,6 +265,14 @@ $(addprefix src/tagpu_wikireplay, $(ALLEXTS)) \
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# IMPAI'S BRAIN (src/impai.h: its type information and its decisions, impai_tinfo.c, impai_brain.c,
+# impai_econ.c, impai_build.c) compares and sums single-precision gains, values and rates, so it computes on
+# SSE2 with the shared core: rounded once per operation, it decides in the DLL as tasim and the brain's own
+# test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by construction.
+IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c
+$(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
+    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
 # arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an
 # 80-bit intermediate can carry a value across a pixel edge stage.js does not cross.
