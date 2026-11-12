@@ -126,9 +126,12 @@ void tagpu_settings_set(TagpuSetting key, int value);
 /* The computer seats ImpAI plays, bit i for seat i (TS_SEATAI). A setup choice like the
    SKIRMISH screen's own registry keys, which the engine honours under every launch: read under
    tagpu_defaults.off too (research/notes/impai/player.md, The AI button). Any thread; the level
-   init reads it on the loader thread. Nothing in the DLL writes it: tacli and the player edit
-   impure.cfg. */
+   init reads it on the loader thread. The SKIRMISH screen's seat button writes it
+   (tagpu_settings_set_seatai); tacli and the player may edit impure.cfg too. */
 int  tagpu_settings_seatai(void);
+/* The seat button's write (tagpu_skirmish.c): the mask, bounded to ten seats, recorded for the next
+   flush under every launch, as it is read under every launch. Any thread. */
+void tagpu_settings_set_seatai(int mask);
 
 /* Bumped after every set, for readers that cache what they derived. */
 long tagpu_settings_gen(void);

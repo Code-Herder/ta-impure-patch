@@ -1108,6 +1108,8 @@ void tagpu_impai_level_init(void)
    record is seated, of controller 2 and marked, the seam's own test -- else 0. Game thread, at
    the header's capture after the level init, or a fork's after the takeover's restore, so it
    states the seats the game ran. */
+int tagpu_impai_available(void) { return s_install.avail; }
+
 unsigned tagpu_impai_seat_ai(unsigned i)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
