@@ -1,5 +1,6 @@
 #ifndef TAGPU_IMPAI_H
 #define TAGPU_IMPAI_H
+#include "tagpu_packet.h"
 /* tagpu_impai -- ImpAI's seam in the engine (research/notes/modules/impai.md).
 
    The players phase's call of the stock AI tick, 0x465031 `call 0x408C40`, is retargeted to a
@@ -7,6 +8,10 @@
    stock tick, so the stock AI still plays every seat. Which seats are ImpAI's is SIM_STATE,
    written at the level init. The eighteen Difficulty type tests skip those seats, and the
    console's `AI` takes a seat from ImpAI. */
+
+/* DllMain, before tagpu_simreg_attach closes the lever list: ImpAI's test levers -- the self-checks,
+   the overlay, the cost run's budgets. */
+void tagpu_impai_levers(void);
 
 /* DllMain, after tagpu_reclaim_init and tagpu_replay_init: when replay's sites are in -- among
    them the level init's PLAYERS call, the only caller of tagpu_impai_level_init -- and the
@@ -30,5 +35,11 @@ void tagpu_impai_level_end(void);
    an index past the ten): the recording header's RT_PLAYER byte 15 (tagpu_recorder.c,
    header_build). */
 unsigned tagpu_impai_seat_ai(unsigned i);
+
+/* THE OVERLAY's fill, from the frame packet's publisher on the GAME thread, inside the in-play draw:
+   while the test lever tagpu_impaiov.on names a seat that ImpAI plays or has knowledge for, its header
+   and at most `max` items into the publisher's buffers; 1 when the overlay shows, 0 when not. `*cut` is
+   set when items past `max` were left out. */
+int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut);
 
 #endif

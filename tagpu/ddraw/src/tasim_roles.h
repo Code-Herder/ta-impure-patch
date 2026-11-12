@@ -36,6 +36,10 @@
 #define TASIM_WF_COMMANDFIRE (1u << 26)
 #define TASIM_WF_STOCKPILE   (1u << 28)
 #define TASIM_WF_INTERCEPTOR (1u << 30)
+/* Impure's weapon key `nottoair` (tagpu_datakeys.c, TAGPU_WK_NOTTOAIR: the weapon refuses every flying
+   target), carried in bit 31, which the engine's weapon parser never writes into +0x111 (engine/weapons.md,
+   What the loader writes into the record) */
+#define TASIM_WF_NOTTOAIR    (1u << 31)
 
 /* the def's flag words: +0x241 and +0x245 */
 #define TASIM_F241_BUILDER    (1u << 6)

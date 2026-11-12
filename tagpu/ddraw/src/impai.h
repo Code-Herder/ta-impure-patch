@@ -74,9 +74,10 @@ typedef struct IMPAI_BUDGET {
 } IMPAI_BUDGET;
 
 /* What one tick did, against its bounds: `slots` the observe calls (the slice's, and a completed pass's
-   publish), `visits` the radar pass's, `cells` the patch scan's cells read, `flood` its floods' cells. */
+   publish), `visits` the radar pass's, `cells` the patch scan's cells read, `flood` its floods' cells;
+   `scans` 1 when the tick ended a patch scan's pass and published its patches. */
 typedef struct IMPAI_WORK {
-    uint32_t slots, visits, cells, flood;
+    uint32_t slots, visits, cells, flood, scans;
 } IMPAI_WORK;
 
 /* The tick's phase of a radar pass: a seat starts one when idle and gametime % 30 == impai_radar_phase(seat),

@@ -223,14 +223,17 @@ traces from a table, for the checker's tests.
 ## Roles
 
 `tasim_roles.c` classifies every unit type from its def's fields, the one implementation for the
-duel generator (through `tasim_run roles`) and for ImpAI's adapter (an A-landing). Pure: no globals,
+duel generator (through `tasim_run roles`) and for ImpAI's threat table, filled from the engine's
+loaded defs at every level init ([ImpAI in the engine](impai.html), *The threat table*). Pure: no globals,
 the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki's).
 
 - **Value** = metal + energy / R, R = `TASIM_ROLES_R` = 60, the retail metal maker's 60 energy for
   1 metal (owner's decision: one named constant; `roles` reports the mod's own maker as `r_maker`).
 - **Layer group**: air if it flies; sea if it neither hovers nor is amphibious and needs water; land.
 - **Anti-air slot**: its bad-target category (`wpri_`/`wsec_`/`wspe_badTargetCategory`, def
-  `+0x231/+0x235/+0x239`) is NOTAIR, or its weapon is a toairweapon; its damage is the weapon's
+  `+0x231/+0x235/+0x239`) is NOTAIR, or its weapon is a toairweapon -- unless the weapon carries
+  Impure's `nottoair` (`TASIM_WF_NOTTOAIR`), which the engine honours by never aiming it at an
+  aircraft, so it hurts none ([data keys](data-keys.html), the can-engage verdict `0x49ABB0`); its damage is the weapon's
   [DAMAGE] averaged over the aircraft types (category VTOL). Ground dps and range are the other
   regular slots' (regular: not commandfire, stockpile or interceptor).
 - **Thresholds**: percentiles (numpy's linear rule) over the layer group's mobile non-builders.
@@ -247,8 +250,11 @@ engine's conversions (reloadtime × 30, speeds × 65536) and takes build options
 rule (`tagpu_buildmenu`) over the GUI pages and download entries; the engine's page count
 (`+0x22E`) is not read from a file, so the pages are those that exist or that an entry names
 [INFERRED]. On the retail install (2.0 s): land 20 defence, 15 assault, 22 raider, 10 artillery,
-15 scout, 6 antiair, 35 builder, 63 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The adapter's
-parity test against the live def table belongs to the A-landing that adds it.
+15 scout, 6 antiair, 35 builder, 63 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The engine filler's
+parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (the check lever) against
+`tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
+against ground and air, ground range and the role flags, exactly; the tech level apart, which the
+engine filler leaves to the build options it does not read.
 
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's

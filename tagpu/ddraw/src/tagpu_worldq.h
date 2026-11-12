@@ -7,6 +7,7 @@
    level's teardown, which runs there too. */
 #include <stdint.h>
 #include "worldq.h"
+#include "tasim_roles.h"
 
 /* the site test a placement is judged by: stdcall (def, cell, ignore, player record), `ret 0x10` */
 typedef int (__stdcall* WqSiteFn)(const void* def, unsigned cell, unsigned ignore, const void* player);
@@ -74,5 +75,15 @@ int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under);
 int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz);
 /* the level has movement class `mclass` (its record names one) */
 int tagpu_worldq_class_exists(unsigned mclass);
+
+/* THE ROLE TABLE'S ENGINE FILLER: the unit types the level loaded, as the role classifier's input
+   (tasim_roles.h), from the def array, the weapon records and the category map the level load wrote. On the
+   LOADER thread at the level init, inside PLAYERS 0x4919C8, after the unit-data load 0x42D2E0 (0x4918CA) has
+   loaded every weapon, def and category: tagpu_impai.c is its one caller.
+   tagpu_worldq_role_count: the level's UNITINFOCount, 0 when the def array or its count is not usable.
+   tagpu_worldq_role_in: in[0..n) for the n role_count answered; 0, or -1 with nothing promised when a bound
+   fails. */
+int tagpu_worldq_role_count(void);
+int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n);
 
 #endif

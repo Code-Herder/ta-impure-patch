@@ -96,6 +96,7 @@
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
 #include "tagpu_rangeown.h"
+#include "tagpu_impai.h"
 #include "tagpu_formation.h"  /* the formation move's dots, copied in THIS draw */
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
@@ -3213,6 +3214,30 @@ static unsigned fill_range(TAGPU_PACKET* p, unsigned* cursor)
     return need;
 }
 
+/* IMPAI'S DEBUG OVERLAY, COPIED BY VALUE: tagpu_impai.c answers on this game thread from ImpAI's declared
+   state and content (tagpu_impai.h, THE OVERLAY). The header and at most TAGPU_PK_MAX_IMPAI items, the cap
+   the acquire checks again with every field; items cut by the cap or by the packet's room set the table's
+   bit, and the marker pass draws what arrived. */
+static TAGPU_PK_IMPAIHDR s_imHead;
+static TAGPU_PK_IMPAI    s_imItems[TAGPU_PK_MAX_IMPAI];
+
+static unsigned fill_impai(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned n = 0, need = *cursor, e;
+    int cut = 0;
+    if (!tagpu_impai_overlay(&s_imHead, s_imItems, TAGPU_PK_MAX_IMPAI, &n, &cut)) return need;
+    if (n > TAGPU_PK_MAX_IMPAI) n = TAGPU_PK_MAX_IMPAI;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_IMPAI;
+    e = append_table(p, cursor, &s_imHead, 1u, (unsigned)sizeof(TAGPU_PK_IMPAIHDR),
+                     &p->off_impaihdr, &p->n_impaihdr, TAGPU_PK_TRUNC_IMPAI);
+    if (e > need) need = e;
+    if (!p->n_impaihdr) return need;   /* no items without their header */
+    e = append_table(p, cursor, s_imItems, n, (unsigned)sizeof(TAGPU_PK_IMPAI),
+                     &p->off_impai, &p->n_impai, TAGPU_PK_TRUNC_IMPAI);
+    if (e > need) need = e;
+    return need;
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -3602,6 +3627,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the weapon range rings: 128 KB at most (4096 of 32 B) ---- */
     e = fill_range(p, &cursor);
+    if (e > need) need = e;
+    /* ---- ImpAI's debug overlay, under its test lever alone: 256 KB at most (16384 of 16 B) ---- */
+    e = fill_impai(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor, nplace);
