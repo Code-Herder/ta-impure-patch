@@ -36,10 +36,12 @@ page's controls and the demos playing on the stage.
                                                       setup of the compatibility suite, one game
                                                       a setup
     wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
-    wiki_regression.py - gate --shots DIR [-j N]      all of it at once under one hold of the run lock:
-                                                      the offline checks, each single-player mode on
-                                                      its own instance and X server, and each setup
-                                                      of mods, every lane a process (gate)
+    wiki_regression.py - gate --shots DIR [-j N]      all of it at once, every lane a process: the
+                                                      offline checks from the start, with no lock,
+                                                      and under one hold of the run lock, taken when
+                                                      it is free, each single-player mode on its own
+                                                      instance and X server and each setup of mods
+                                                      (gate)
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -4690,7 +4692,10 @@ def offline_runs(shards=1, check_shards=1):
     under Wine as the DLL is built (simparity), the text's fill natively and under Wine (textparity), the sidebar's
     column (sidecheck), the stage's ops (stagecheck), the 3D scene
     (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
-    them plays a game, and none writes what another reads: they run in any order, at once. `shards` splits the
+    them plays a game, and none writes what another reads: they run in any order, at once. None reads what a game
+    lane writes either -- they read the tree, art/, the packs and build/simparity-costs.json, and build their programs
+    in temporary folders or under names of their own in tagpu/ddraw/tests/, where a game lane writes its shots, its
+    instance, scratch files named by its pid and assetcheck's program -- so the gate starts them before its game lanes. `shards` splits the
     simparity run, `check_shards` each simcheck run and stagecheck into that many processes, which together check what
     one does. The longest come first, as a pool starts the checks in this order."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
@@ -4719,6 +4724,22 @@ def under_wine(cmd):
     return "--wine" in map(str, cmd) or any(str(c).endswith("simparity.mjs") for c in cmd)
 
 
+def git_dir():
+    """This worktree's own git directory (the main checkout's `.git`, a linked worktree's `.git/worktrees/<name>`),
+    which no other worktree reaches."""
+    return Path(subprocess.run(["git", "-C", str(TREE), "rev-parse", "--absolute-git-dir"], capture_output=True,
+                               text=True, check=True).stdout.strip())
+
+
+def wine_prefix():
+    """The prefix the offline checks' Wine builds run in (textparity --wine, simparity's `wine` build): the
+    repository's one `wikigate-wine`, which shares no file with any other prefix, made the first time
+    (tools/wiki/wineprefix.py, THE INVARIANT)."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import wineprefix
+    return wineprefix.ensure(TREE)
+
+
 def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
     which fails like one that differs. `popen` starts it and `done` lets it go: the gate's own (Lanes), which end
@@ -4744,8 +4765,11 @@ def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None
 
 
 def offline_checks():
-    """offline_runs one after another, each to its end whatever the one before said. Takes no lock."""
-    failed = [name for name, cmd in offline_runs() if offline_one(name, cmd)[0]]
+    """offline_runs one after another, each to its end whatever the one before said, the Wine ones in wine_prefix().
+    Takes no lock."""
+    runs = offline_runs()
+    wenv = {**os.environ, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in runs) else None
+    failed = [name for name, cmd in runs if offline_one(name, cmd, env=wenv if under_wine(cmd) else None)[0]]
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
@@ -4761,10 +4785,10 @@ GATE_VERDICT = re.compile(r"wiki regression (\w+: passed|FAILED)|wiki mods: \S+:
 
 
 class Lanes:
-    """Every process the gate starts, each in a session of its own, so the gate can end each with all it started.
-    THE LOCK'S LIFETIME: the lanes run under the gate's hold of the run lock (RUNLOCK_HELD, inherited), which the
-    kernel drops when the gate exits -- so the gate never exits while a lane runs: on any way out, a signal
-    included, it stops starting lanes and ends every live one before it returns."""
+    """Every process the gate starts, each in a session of its own, so the gate can end each with all it started: on
+    any way out, a signal included, it stops starting lanes and ends every live one before it returns. The run lock
+    does not rest on that: each game lane's process holds it itself (gate_lane), so it cannot go while one plays,
+    however the gate leaves."""
 
     def __init__(self):
         import threading
@@ -4822,11 +4846,13 @@ class Lanes:
                 p.wait()
 
 
-def gate_lane(lanes, cmd, log, env):
+def gate_lane(lanes, cmd, log, env, keep=()):
     """One lane's process to its end, everything it says into `log`: its exit code and its verdict line, the last
-    line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails."""
+    line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails.
+    `keep` are descriptors the process inherits: a game lane's is the run lock's (runlock.fileno), by which it holds
+    the lock until it exits, whatever the gate does meanwhile (runlock, A HOLD THAT ENDS BEFORE THE PROCESS)."""
     with open(log, "w") as f:
-        p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env)
+        p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env, pass_fds=keep)
         try:
             code = p.wait(timeout=GATE_LANE_S)
         except subprocess.TimeoutExpired:
@@ -4841,26 +4867,89 @@ def gate_lane(lanes, cmd, log, env):
 
 def gate_instance(name, *create):
     """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
-    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Made before any lane starts, so no
-    wineserver of the gate is writing the template's hives while they are copied."""
+    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every instance of the gate is made
+    private before Wine first runs in it, and the offline checks' prefix shares no file with the template
+    (wine_prefix), so no wineserver of the gate ever writes the template's hives and the gate's own lanes never tear
+    a copy it makes. Made under the run lock (gate), no other locked run's game writes them either; tacli's THE GAP,
+    a copy read while a wineserver of another, non-private instance rewrites the template's, stays open to a game
+    started outside every lock."""
     if tacli_api().Instance(name).exists:
         tacli("rm", name, "--force", timeout=120)
     tacli("create", name, "--private-registry", *create, timeout=300)
     return tacli_api().Instance(name)
 
 
+def gate_tree_hold():
+    """One gate a worktree: an exclusive flock(2) on `wikigate.lock` in this worktree's own git directory, waited for
+    while another gate of this worktree runs and held by this process until it exits (the returned file). The run
+    lock does not order two gates' offline lanes, and those of one worktree build into the same files
+    (tagpu/ddraw/tests/*.exe, build/simparity-costs.json)."""
+    import fcntl
+    path = git_dir() / "wikigate.lock"
+    f = open(path, "a+")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        t0 = time.monotonic()
+        print(f"wiki gate: another gate is running in this worktree ({path}); waiting for its end", flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+        print(f"wiki gate: the other gate ended after {time.monotonic() - t0:.0f} s", flush=True)
+    return f
+
+
+def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
+    """The gate's lanes in the order they need: every callable of `offline`, an offline lane each, submitted to the
+    `checks` pool at once; then, when `games` is given, the run lock taken -- waited for while another run holds it,
+    the log saying so -- and `games` called with its descriptor (runlock.fileno; None when the run this gate is part
+    of holds the lock already) for the game lanes' processes to inherit, returning the game lanes as callables,
+    submitted to `pool`. The lock is held from the first game lane's start to the last one's end and released then;
+    the offline lanes still running are waited for after it. Returns every lane's result, the offline lanes' first,
+    each in the order given.
+    On any way out by an exception `cleanup` runs first -- it ends every lane -- and the lock is released after it.
+    The game lanes hold the lock themselves (gate_lane), so a clean-up cut short cannot let another run's games in
+    beside one still playing. The gate's process holds the run lock by no other call, so a release is always this
+    hold's."""
+    t0 = time.monotonic()
+    off = [checks.submit(f) for f in offline]
+    played = []
+    try:
+        if games:
+            print(f"wiki gate: {len(off)} offline lanes started; the game lanes wait for the run lock "
+                  f"({runlock.lock_path(tree)})", flush=True)
+            took = runlock.hold(tree, what)
+            t1 = time.monotonic()
+            print(f"wiki gate: the run lock {'taken' if took else 'already held by the run this gate is part of'} "
+                  f"after {t1 - t0:.0f} s; the game lanes start", flush=True)
+            played = [f.result() for f in [pool.submit(g) for g in games(runlock.fileno())]]
+            runlock.release()
+            left = sum(not f.done() for f in off)
+            print(f"wiki gate: the game lanes ended after {time.monotonic() - t1:.0f} s; the run lock released"
+                  + (f", {left} offline lanes still running" if left else ""), flush=True)
+        return [f.result() for f in off] + played
+    except BaseException:
+        cleanup()
+        runlock.release()
+        raise
+
+
 def gate(shots, jobs, offline_jobs, modes, setups):
-    """Every part of the wiki's gate at once under one hold of the run lock: the offline checks on `offline_jobs`
-    workers, the Wine ones in a prefix of their own, and on `jobs` workers each game lane -- a mode on its own
-    instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
+    """Every part of the wiki's gate at once: the offline checks on `offline_jobs` workers from the start, the Wine
+    ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
+    own instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
     (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
-    would give and says the same verdict. The runs viewer shows one step a lane."""
+    would give and says the same verdict. The runs viewer shows one step a lane.
+    THE RUN LOCK covers the game lanes alone (gate_schedule). The offline checks play no game and read nothing a game
+    lane writes (offline_runs), so none waits for one: they start at once, and while another run holds the lock they
+    run beside that run's games as they run beside this gate's own. The game lanes' instances and X servers are made
+    under the lock: tacli's instances are one set for every worktree, and another gate's game lanes play on these
+    names until it lets the lock go."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
+    import functools
     import signal
     import tacompat
     import tarun
-    runlock.hold(TREE, f"wiki_regression gate (-j {jobs})")
+    tree_lock = gate_tree_hold()        # noqa: F841 -- held while this process lives
     shots.mkdir(parents=True, exist_ok=True)
     offline = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS) if offline_jobs else []
     items = [("offline", [{"id": n, "pool": "offline", "order": k} for k, (n, _) in enumerate(offline)]),
@@ -4891,11 +4980,11 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         J.finish("offline", name, verdict(code), line)
         return ("offline", name, code, line)
 
-    def lane_mode(mode, inst, xv):
+    def lane_mode(mode, inst, xv, genv, keep):
         J.start("game", mode)
         try:
             cmd = me + [inst.name, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
-            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", env)
+            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         finally:
@@ -4905,25 +4994,22 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return ("game", mode, code, line)
 
-    def lane_setup(name):
+    def lane_setup(name, genv, keep):
         J.start("mods", name)
         try:
-            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log", env)
+            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log",
+                                   genv, keep)
         except (Exception, SystemExit) as e:        # noqa: BLE001
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("mods", name, verdict(code), line)
         print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return ("mods", name, code, line)
 
-    t0 = time.monotonic()
-    old_term = signal.signal(signal.SIGTERM, on_term)
-    games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
-    checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
-    try:
-        # every instance made before the first lane starts (gate_instance), each game lane's on its own X server,
-        # which an instance's display is pinned to when it is made
-        wine = gate_instance("wikigate-wine") if any(under_wine(c) for _, c in offline) else None
-        wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
+    def game_lanes(fd):
+        """The game lanes, made once the run lock is held: each mode's X server and instance, the instance's display
+        pinned to its server when it is made. Their environment is taken now, RUNLOCK_HELD in it, so a lane's own
+        runlock.hold sees the lock its process holds through `fd`."""
+        genv, keep = dict(os.environ), (fd,) if fd is not None else ()
         made = []
         for m in modes:
             # held until the server is in `servers`, where the clean-up finds it: a signal between the two would
@@ -4935,22 +5021,36 @@ def gate(shots, jobs, offline_jobs, modes, setups):
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
             made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
-        futs = [checks.submit(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline]
-        futs += [games.submit(lane_mode, m, inst, xv) for m, inst, xv in made]
-        futs += [games.submit(lane_setup, n) for n in setups]
-        done = [f.result() for f in futs]
+        return [functools.partial(lane_mode, m, inst, xv, genv, keep) for m, inst, xv in made] + \
+            [functools.partial(lane_setup, n, genv, keep) for n in setups]
+
+    def ignore_signals():
+        # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes running past the gate,
+        # so both are ignored until it is done
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    def end_lanes():
+        ignore_signals()
+        lanes.end_all()
+
+    t0 = time.monotonic()
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.signal(signal.SIGTERM, on_term)
+    games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
+    checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
+    try:
+        wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline) else env
+        done = gate_schedule([functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline],
+                             game_lanes if modes or setups else None, checks, games,
+                             f"wiki_regression gate (-j {jobs})", end_lanes)
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
     except BaseException as e:
         state = "stopped" if isinstance(e, KeyboardInterrupt) else "unrun"
         raise
     finally:
-        # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes playing under a
-        # released lock, so both are ignored until it is done
-        old_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        if state in ("stopped", "unrun"):
-            lanes.end_all()
+        ignore_signals()
         games.shutdown(wait=True, cancel_futures=True)
         checks.shutdown(wait=True, cancel_futures=True)
         for xv in list(servers):

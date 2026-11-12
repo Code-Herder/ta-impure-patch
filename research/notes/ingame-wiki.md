@@ -89,7 +89,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The fixture's castings | `tools/wiki/casting-fixture.json`: `identity` (the entries' own types and figures), `shifted` (invented figures, a 3 × 3 builder and a 4 × 4 geothermal plant with four interior G cells), `unbound` (`identity` without the wall) |
 | The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
 | Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
-| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks and every game lane (each single-player mode on its own instance `wikigate-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
+| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks from the start with no lock, and every game lane (each single-player mode on its own instance `wikigate-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (the simulation at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
@@ -1235,7 +1235,8 @@ unless said).
 - **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
   `--null-layout` and `--pack` for each pack present), `simparity` (its three builds, the Wine one
   among them), `textparity` natively and `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and
-  `wikilaycheck.py --check-only`, one after another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
+  `wikilaycheck.py --check-only`, one after another, the Wine ones in the checks' own Wine prefix
+  (below). `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
 - **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
   game lanes leave, two to a lane, at one and a half a check and at least four (`--offline-jobs`;
   13 at `-j 6` on 32 threads: 20 took the load to 59 and starved the lanes' mockup page),
@@ -1248,19 +1249,45 @@ unless said).
   `units`, `cursor`, `watch` and `rewind` with `--launch` on its own instance `wikigate-<mode>`, made afresh on its
   own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
   command as a serial run, a process of the script, its log `DIR/<mode>.log` or
-  `DIR/mods-<setup>.log`. Every lane's prefix has registry hives of its own (`tacli create
-  --private-registry`; the mods lanes' `prepare_wine` already makes them so), and the checks that run a
-  Wine build (`textparity --wine` and every `simparity` shard) run in the prefix of an instance
-  `wikigate-wine` made the same way, because Wine rewrites
-  a hive in place and the template's is one inode with every clone's: lanes at once on the shared
-  one could tear it. All of them are made before the first lane starts. The gate owns its lanes'
-  processes and never exits while one runs: on any way out, Ctrl-C and SIGTERM included, it
-  starts no more and ends each live one (SIGINT, which runs its clean-up, then SIGKILL after
-  120 s), so the run lock it holds is never released under a lane still playing. No check in it is decided by the
+  `DIR/mods-<setup>.log`. **Only the game lanes take the run lock.** The offline checks play no
+  game and read nothing a game lane writes, so they start at once, with no lock; the gate then waits
+  for the run lock (the log says so, and `runlock:` names the holder), holds it from its first game
+  lane's start to its last one's end, so its games play together and no other run's among them, and
+  releases it with offline checks perhaps still running. While another run holds the lock the
+  offline checks run beside that run's games, as they run beside the gate's own once it has the
+  lock: `--offline-jobs` is the same either way, and the threads it counts on are those the games
+  of whichever run leave. Each game lane's process inherits the lock's descriptor and holds the
+  lock itself until it exits (`runlock.fileno`, `runlock.release`), so the lock cannot go while one
+  plays, however the gate ends. One gate runs in a worktree at a time (`wikigate.lock` in the
+  worktree's git directory), since one worktree's offline checks build into the same files.
+  Every game lane's prefix has registry hives of its own (`tacli create --private-registry`; the
+  mods lanes' `prepare_wine` already makes them so), because Wine rewrites a hive in place and the
+  template's is one inode with every clone's: lanes at once on the shared one could tear it. The
+  checks that run a Wine build (`textparity --wine`, and every `simparity` shard through its `wine`
+  build and `hostchan.cjs`) run in a prefix that shares no file with any other: `wikigate-wine` in
+  the repository's common git directory, one for every worktree, made by `wineboot -i` the first
+  time any of them needs it and never deleted. One program gives it, `tools/wiki/wineprefix.py`:
+  `wiki_regression.py` imports it, and the node checks ask it through `wikibuild.mjs`'s `wineEnv`,
+  run by the gate, by `- offline` or directly alike. Wine makes every file of the prefix from its own
+  install and reads no other prefix, so nothing the checks run writes through to the template's
+  hives, and making it needs no lock; it is made under a name of the making process and renamed into
+  place once its wineserver has exited, so a prefix found there is whole, and two makers at once both
+  finish with the second discarding its own. A `WINEPREFIX` given to them is checked instead: the
+  template itself, or a prefix whose hives are the template's inode (a clone made without
+  `--private-registry`), is refused and the check cannot run (exit 2). The checks need nothing more
+  of a prefix: their programs are i686 console programs linked `-static`, with no game file, no
+  DirectPlay and no registry key of tacli's, and several of them share its one wineserver. It took
+  17 to 23 s to make and holds 1.3 GB (MEASURED 2026-11-11, Wine 9.0). The
+  game lanes' instances and X servers are made under the lock, as their names are every
+  worktree's. The gate owns its lanes' processes and never exits while one runs: on any way out,
+  Ctrl-C and SIGTERM included, it starts no more and ends each live one (SIGINT, which runs its
+  clean-up, then SIGKILL after 120 s). No check in it is decided by the
   wall clock: the frames are counted at rest (`tagpu_wiki3d.count`), the demo's pace is judged on
   its own clock, its pauses land on their ticks (`tagpu_wiki.pause`), and a stage's cost is its
   work, its milliseconds only said. MEASURED 2026-10-30 at `-j 6` on the reference setup: the whole
   gate, 36 lanes, in 347 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
+  `tools/test_wiki_regression.py` checks the schedule on a throwaway lock with stand-in lanes, no
+  game run.
 
 ## The first entry: Quick Build: Resource Extractors
 
