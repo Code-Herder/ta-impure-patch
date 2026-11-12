@@ -24,10 +24,13 @@ SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-qu
 #define N_TARGET  0x16
 #define N_POS     0x22
 #define N_TYPE    0x36
+#define N_COUNT   0x3A
 #define N_FLAGS   0x42
 #define N_OWNED   0x52
 #define PL_CONTROL 0x73
 #define VA_SITE_CALL 0x004198C6u
+#define MC_BASE   0x00512358u       /* the 32 movement-class records (THE MOVEMENT CLASSES, below) */
+#define MC_STRIDE 0x20u
 
 typedef unsigned (__stdcall* SiteHeight)(void);
 typedef unsigned (__stdcall* BlockedHeight)(const void*, unsigned);
@@ -37,14 +40,17 @@ typedef void (__stdcall* RemoveOrder)(void*, const void*);
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 typedef int (__stdcall* GroundHeight)(const int*);
 typedef int (__stdcall* Mapped)(const void*, const int*);
+typedef void (__stdcall* Queue)(int, void*, int, int);
 
 /* the build cursor's site test, decoded once at attach */
 static WqSiteFn s_cursor_site;
 SIM_VAR(s_cursor_site, SIM_INSTALL);
 
 /* The action names 0x438760 is given, the engine's own strings in .rdata, in WQ_ACT_* order: the build
-   cursor's (0x419670) and the resolver's (0x440187, 0x43F694, 0x44004C). */
-static const uintptr_t ACT_NAME[WQ_ACTS] = { 0x00502654u, 0x00502640u, 0x005016C4u, 0x00501B68u, 0x005052F0u };
+   cursor's (0x419670), the resolver's (0x440187, 0x43F694, 0x44004C) and the build menu's queue call for a unit
+   with no mover, `BUILDINGBUILD` (0x419B76). */
+static const uintptr_t ACT_NAME[WQ_ACTS] = { 0x00502654u, 0x00502640u, 0x005016C4u, 0x00501B68u, 0x005052F0u,
+                                             0x00502684u };
 
 static WQ_ENGINE* ctx_of(const WORLDQ* q) { return (WQ_ENGINE*)q->self; }
 
@@ -69,6 +75,13 @@ static int footprint(const char* d, int* x, int* z)
 static const char* def_at(const WQ_ENGINE* c, int type)
 {
     return type > 0 && (unsigned)type < c->ndefs ? c->defs + (unsigned)type * D_STRIDE : NULL;
+}
+
+/* an engine float as data: one not finite reads 0 */
+static float finite_or_0(const char* p)
+{
+    float v = *(const float*)p;
+    return isfinite(v) ? v : 0;
 }
 
 /* An alive unit that is not excluded at `slot`, of any owner, or NULL. */
@@ -161,6 +174,35 @@ static int build_node(const WQ_ENGINE* c, const char* n)
         type && type < c->ndefs && *(int*)(n + N_POS) > 0 && *(int*)(n + N_POS + 8) > 0;
 }
 
+/* THE WIND'S MEAN. DISASSEMBLED 0x490C90..0x490D6B: each draw sets the speed main+0x37EDA = windmin +
+   0x4B6C30(windmax - windmin) (main+0x1425B, +0x1425F), and 0x4B6C30(n) answers state mod n, 0 for n < 2
+   (0x4B6C35): so the speed is uniform on [windmin, windmax - 1], or windmin alone. The ratio the economy pass
+   pays a windgenerator by (0x40156F) is speed / main+0x37EC8 (fidiv of the two dwords), stored at
+   main+0x37EDE and set to 1.0 when above it. Impure's wind fix draws by the same rules from its own stream
+   (engine/map.md, The wind). So the mean ratio is the mean of min(s, D) / D over that range, taken here
+   exactly: one sum of integers and one quotient, rounded once. Each speed is held to +-2^20 so the sums stay
+   well inside 64 bits, which no map's keys reach [INFERRED: the OTA values are integers of a few thousand],
+   and the answer to 0..1. A divisor not above 0 means no wind. */
+static float wind_mean(const char* ta)
+{
+    const int64_t LIM = 1 << 20;
+    int64_t lo = *(const int32_t*)(ta + 0x1425B), hi = *(const int32_t*)(ta + 0x1425F);
+    const int64_t d = *(const int32_t*)(ta + 0x37EC8);
+    int64_t a, b, n, sum;
+    double m;
+    if (d <= 0) return 0;
+    lo = lo < -LIM ? -LIM : lo > LIM ? LIM : lo;
+    hi = hi < -LIM ? -LIM : hi > LIM ? LIM : hi;
+    a = lo;
+    b = hi - lo >= 2 ? hi - 1 : lo;
+    n = b - a + 1;
+    if (b <= d) sum = (a + b) * n / 2;
+    else if (a >= d) sum = d * n;
+    else sum = (a + d) * (d - a + 1) / 2 + d * (b - d);
+    m = (double)sum / ((double)n * (double)d);
+    return m <= 0 ? 0.0f : m >= 1 ? 1.0f : (float)m;
+}
+
 /* ---- the ops ---- */
 
 static int wq_map(const WORLDQ* q, WQ_MAP* out)
@@ -172,6 +214,9 @@ static int wq_map(const WORLDQ* q, WQ_MAP* out)
     /* no bound of the engine's own [INFERRED: the placement and the sweep cap their appends
        themselves, below the recorder's 4096 nodes a list] */
     out->list_cap = 0;
+    out->wind_mean = wind_mean(c->ta);
+    out->tide = *(const float*)(c->ta + 0x14267);
+    if (!isfinite(out->tide)) out->tide = 0;
     return 1;
 }
 
@@ -211,6 +256,17 @@ static int wq_ground(const WORLDQ* q, const int32_t pos[3])
 
 static int wq_ndefs(const WORLDQ* q) { return (int)ctx_of(q)->ndefs; }
 
+/* The def's movement class: +0x1B6 holds what 0x440420 answered for its `movementclass` key, the address of
+   one of the 32 class records 0x512358 + 0x20 c, or 0 when it found none, and is 0 with no key (DISASSEMBLED
+   0x42CD0C..0x42CD29, 0x440420..0x440463): the record is then the unit's own, on the parser's stack, and no
+   pathing map is the type's. The value is data until it is one of the 32 by range and exact division. */
+static unsigned move_class(const char* d)
+{
+    uintptr_t p = *(const uintptr_t*)(d + 0x1B6);
+    if (p < MC_BASE || p >= MC_BASE + WQ_MCLASSES * MC_STRIDE || (p - MC_BASE) % MC_STRIDE) return WQ_MCLASS_NONE;
+    return (unsigned)((p - MC_BASE) / MC_STRIDE);
+}
+
 static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -235,6 +291,34 @@ static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
     if (tags & 0x400u) out->flags |= WQ_DF_RECLAIMER;
     if (d[0x22F]) out->flags |= WQ_DF_MOVER;
     memcpy(out->name, d + UD_NAME, WQ_NAME - 1);
+    out->mclass = (uint8_t)move_class(d);
+    return 1;
+}
+
+/* The economy keys the FBI parser 0x42BF40 stores in the def (engine/keys.md): the costs +0x186 energy and
+   +0x18A metal, buildtime dword +0x1EA, energymake +0x1C2, energyuse +0x1C6, metalmake +0x1CA, extractsmetal
+   +0x1CE, windgenerator +0x1D2, tidalgenerator +0x1D6, energystorage +0x1E2, metalstorage +0x1E6, makesmetal
+   byte +0x22D, minwaterdepth word +0x1C0, and the move class +0x22F, 0 for a type that stands where it is
+   built. Floats, each read as 0 when not finite. */
+static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
+{
+    const char* d = def_at(ctx_of(q), type);
+    memset(out, 0, sizeof *out);
+    if (!d) return 0;
+    out->cost_e = finite_or_0(d + 0x186);
+    out->cost_m = finite_or_0(d + 0x18A);
+    out->buildtime = *(const uint32_t*)(d + 0x1EA);
+    out->energymake = finite_or_0(d + 0x1C2);
+    out->energyuse = finite_or_0(d + 0x1C6);
+    out->metalmake = finite_or_0(d + 0x1CA);
+    out->extracts = finite_or_0(d + 0x1CE);
+    out->wind = finite_or_0(d + 0x1D2);
+    out->tidal = finite_or_0(d + 0x1D6);
+    out->estore = finite_or_0(d + 0x1E2);
+    out->mstore = finite_or_0(d + 0x1E6);
+    out->makesmetal = *(const uint8_t*)(d + 0x22D);
+    out->building = d[0x22F] == 0;
+    out->minwater = *(const int16_t*)(d + 0x1C0);
     return 1;
 }
 
@@ -387,12 +471,36 @@ static int wq_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     return 1;
 }
 
+/* 0x438760 writes the byte of an order name, 0 for a name it does not find (0x43880F, 0x438819); looked up
+   once a view, on first use: the descriptor array it searches is fixed for a level. The view's context is the
+   caller's, on its stack for the call (worldq.h, NEVER STORED), so the cache is written through it. */
+static int wq_action_of(WQ_ENGINE* c, int act)
+{
+    if (act < 0 || act >= WQ_ACTS) return -1;
+    if (!c->got[act]) {
+        c->act[act] = 0;
+        ((Action)0x00438760u)(&c->act[act], (const char*)ACT_NAME[act]);
+        c->got[act] = 1;
+    }
+    return c->act[act] ? c->act[act] : -1;
+}
+
+/* A factory's count node: BuildingBuild's own byte, whose node holds the type at +0x36 and the units still to
+   make at +0x3A, the one in progress included (0x43A116..0x43A119 store them, 0x43B10C adds to the count, the
+   handler 0x402640 decrements it at each completion, 0x402B34..0x402B39; engine/orders.md). 0 for any other
+   node. */
+static int32_t build_count(WQ_ENGINE* c, const char* n)
+{
+    const int a = wq_action_of(c, WQ_ACT_BUILDINGBUILD);
+    return a > 0 && (unsigned char)n[4] == (unsigned)a ? *(const int32_t*)(n + N_COUNT) : 0;
+}
+
 /* The unit's list, walked on the game thread, the one thread that links, unlinks and frees order nodes:
    bounded by `cap` and WQ_LIST_MAX, it stops at a node another unit owns. A target pointer becomes a slot by
    exact division against the unit array. */
 static int wq_orders(const WORLDQ* q, int slot, WQ_ORDER* out, int cap)
 {
-    const WQ_ENGINE* c = ctx_of(q);
+    WQ_ENGINE* c = ctx_of(q);
     const char *u = slot > 0 ? own_unit(c, (unsigned)slot) : NULL, *n;
     int k;
     if (!u) return -1;
@@ -412,8 +520,16 @@ static int wq_orders(const WORLDQ* q, int slot, WQ_ORDER* out, int cap)
             ? (uint16_t)((t - base) / UNIT_STRIDE) : (uint16_t)WQ_NONE;
         memcpy(o->pos, n + N_POS, sizeof o->pos);
         o->flags = *(const unsigned*)(n + N_FLAGS);
+        o->count = build_count(c, n);
     }
     return k;
+}
+
+/* the list's head, `orders` with room for one: the same walk, bound and copy */
+static int wq_head(const WORLDQ* q, int slot, WQ_ORDER* out)
+{
+    memset(out, 0, sizeof *out);
+    return wq_orders(q, slot, out, 1);
 }
 
 /* 0x43F0E0, stdcall (&index, mode, unit, target, pos), answers through its first argument a pointer to the
@@ -432,18 +548,33 @@ static int wq_can(const WORLDQ* q, int slot, int mode, int target_slot, const in
     return a && *a ? *a : -1;
 }
 
-/* 0x438760 writes the byte of an order name, 0 for a name it does not find (0x43880F, 0x438819); looked up
-   once a view, on first use: the descriptor array it searches is fixed for a level. */
-static int wq_action(const WORLDQ* q, int act)
+static int wq_action(const WORLDQ* q, int act) { return wq_action_of(ctx_of(q), act); }
+
+/* A FACTORY'S QUEUE. 0x43B0B0(action, unit, type, amount), stdcall `ret 0x10` (DISASSEMBLED 0x43B0B0..0x43B129),
+   the root the build menu's own queue call makes (0x419B8C, after resolving `BUILDINGBUILD` for a unit with no
+   mover, 0x419B6B..0x419B76): with amount > 0 it takes the list +0x5C for an action whose descriptor
+   (*0x512344 + 25 action, +0x11) lacks bit 0x40000 -- BuildingBuild's lacks it (scout I5, the descriptor
+   table) -- walks to its last node and adds the amount to that node's count +0x3A when its action +4 and type
+   +0x36 are these, else appends a new count node through 0x43ADC0(action, 1, unit, 0, 0, type, amount): with
+   Shift, so it never wipes the list. THE BOUNDS: the unit is re-derived as for every command (below); the type
+   is below the def count and in the unit's own build menu as the view's menu answers it for the seat; the
+   count is 1..WQ_QUEUE_MAX, never 0 or below, which would take the removal path 0x43B12C. A menu past
+   QUEUE_MENU types refuses the command rather than be searched in part [INFERRED: a builder's pages offer a
+   few dozen types; the most any retail one offers is far below it]. */
+#define QUEUE_MENU 1024
+static int queue(WQ_ENGINE* c, char* u, const WQ_CMD* cmd)
 {
-    WQ_ENGINE* c = ctx_of(q);
-    if (act < 0 || act >= WQ_ACTS) return -1;
-    if (!c->got[act]) {
-        c->act[act] = 0;
-        ((Action)0x00438760u)(&c->act[act], (const char*)ACT_NAME[act]);
-        c->got[act] = 1;
-    }
-    return c->act[act] ? c->act[act] : -1;
+    uint16_t menu[QUEUE_MENU];
+    int n, k, act;
+    const unsigned builder = def_id(c, u);
+    if (cmd->count < 1 || cmd->count > WQ_QUEUE_MAX || !def_at(c, cmd->type) || !builder || !c->menu ||
+        (act = wq_action_of(c, WQ_ACT_BUILDINGBUILD)) < 0)
+        return WQ_REFUSED;
+    n = c->menu(c->seat, builder, menu, QUEUE_MENU);
+    for (k = 0; k < n && menu[k] != cmd->type; k++) {}
+    if (k >= n) return WQ_REFUSED;
+    ((Queue)0x0043B0B0u)(act, u, cmd->type, cmd->count);
+    return WQ_OK;
 }
 
 /* ORDERS OUT. Every command names units by slot, and before each root call the slot is re-derived: below
@@ -462,7 +593,7 @@ static int wq_action(const WORLDQ* q, int act)
    0x43AFC0 allocate and free nodes. */
 static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 {
-    const WQ_ENGINE* c = ctx_of(q);
+    WQ_ENGINE* c = ctx_of(q);
     char *u = cmd->unit ? own_unit(c, cmd->unit) : NULL, *target = NULL;
     unsigned controller = *(const unsigned char*)(c->rec + PL_CONTROL);
     if (!u || (controller != 1 && controller != 2) || tagpu_puppet_seat((unsigned)c->seat)) return WQ_REFUSED;
@@ -489,14 +620,26 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
         ((RemoveOrder)0x00439F80u)(u, node);
         return WQ_OK;
     }
+    if (cmd->verb == WQ_CMD_QUEUE) return queue(c, u, cmd);
     return WQ_REFUSED;
 }
 
+/* The seat's record, fixed at the open (its bound there): stored energy +0x8C and metal +0x98, the last pass's
+   production +0x90 / +0x9C and requests +0x94 / +0xA0, the storage maxima +0xA4 / +0xA8, as the economy pass
+   0x401360 writes them once a pass, every seat on the same ticks (DISASSEMBLED 0x4019B0..0x401A49;
+   engine/sim.md, The economy pass). Floats; one not finite reads 0. */
 static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 {
-    (void)q;
-    memset(out, 0, sizeof *out);
-    return WQ_UNSUPPORTED;
+    const char* r = ctx_of(q)->rec;
+    out->energy = finite_or_0(r + 0x8C);
+    out->energy_in = finite_or_0(r + 0x90);
+    out->energy_out = finite_or_0(r + 0x94);
+    out->metal = finite_or_0(r + 0x98);
+    out->metal_in = finite_or_0(r + 0x9C);
+    out->metal_out = finite_or_0(r + 0xA0);
+    out->energy_max = finite_or_0(r + 0xA4);
+    out->metal_max = finite_or_0(r + 0xA8);
+    return WQ_OK;
 }
 
 static int wq_gametime(const WORLDQ* q) { return *(const int*)(ctx_of(q)->ta + OFF_GAMETIME); }
@@ -929,9 +1072,6 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
    already folded in at the cell its footprint starts at (0x440500). So a class whose W and H are the map's
    holds every cell of the map, and nothing else is read. The maps live from that load to the next, built on
    the loader thread and refreshed in play on the game thread (0x47E1F0), the two threads this is read on. */
-#define MC_BASE   0x00512358u
-#define MC_STRIDE 0x20u
-
 int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -961,8 +1101,8 @@ static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
 }
 
 static const WORLDQ_OPS OPS = {
-    wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
-    wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
+    wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
+    wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 

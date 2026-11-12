@@ -158,6 +158,31 @@ static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
     if (d->canreclamate) out->flags |= WQ_DF_RECLAIMER;
     if (tasim_mobile(s, t)) out->flags |= WQ_DF_MOVER;
     snprintf(out->name, sizeof out->name, "%s", d->name);
+    out->mclass = tasim_mobile(s, t) ? 0 : WQ_MCLASS_NONE;     /* the stage's one class (wq_passable) */
+    return 1;
+}
+
+/* The economy keys the entry's types carry: costs, build time, energy and metal made, extraction, storage. The
+   core has no energy use, wind, tide or metal maker, and no water, so those read 0. */
+static float econ_key(double v) { return v > 0 && v < 3.0e38 ? (float)v : 0; }
+
+static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
+{
+    const WIKISIM* s = ctx_of(q)->s;
+    const int t = entry_type(s, type);
+    const WIKIDEF* d;
+    memset(out, 0, sizeof *out);
+    if (t < 0) return 0;
+    d = tasim_def(s, t);
+    out->cost_m = econ_key(d->build_cost_metal);
+    out->cost_e = econ_key(d->build_cost_energy);
+    out->buildtime = d->build_time > 0 && d->build_time < 4294967295.0 ? (uint32_t)d->build_time : 0;
+    out->energymake = econ_key(d->energy_make);
+    out->metalmake = econ_key(d->metal_make);
+    out->extracts = econ_key(d->extracts);
+    out->estore = econ_key(d->energy_storage);
+    out->mstore = econ_key(d->metal_storage);
+    out->building = !tasim_mobile(s, t);
     return 1;
 }
 
@@ -273,6 +298,12 @@ static int wq_orders(const WORLDQ* q, int slot, WQ_ORDER* out, int cap)
     return j;
 }
 
+static int wq_head(const WORLDQ* q, int slot, WQ_ORDER* out)
+{
+    memset(out, 0, sizeof *out);
+    return wq_orders(q, slot, out, 1);
+}
+
 /* The resolver's two modes the rules ask. Reclaim (12): a unit that can reclaim, of a live unit other than
    itself, or with no target of a reclaimable feature at the point on explored ground. Guard (7): another live
    unit of the seat's. */
@@ -296,7 +327,7 @@ static int wq_can(const WORLDQ* q, int slot, int mode, int target_slot, const in
 static int wq_action(const WORLDQ* q, int act)
 {
     static const int BYTE[WQ_ACTS] = { CORE_ACT_BUILD, CORE_ACT_VTOL_BUILD, CORE_ACT_RECLAIM, CORE_ACT_VTOL_RECLAIM,
-                                       CORE_ACT_RESURRECT };
+                                       CORE_ACT_RESURRECT, -1 };
     (void)q;
     return act >= 0 && act < WQ_ACTS ? BYTE[act] : -1;
 }
@@ -343,7 +374,8 @@ static int make_order(const WIKISIM* s, const WQ_CMD* cmd, const WIKIUNIT* targe
 /* NEW is 0x43ADC0's: without Shift the list is replaced (no core order survives a replace), then the order is
    appended. CLICK is 0x43AFC0's: with Shift the first order of the same action within 16 world units on both
    axes (place_within) is taken off instead of one added. REMOVE takes off the order at `expect`'s place when it
-   is still the one `orders` copied. Every append is tasim_push_order's, bounded by PLACE_LIST_CAP. */
+   is still the one `orders` copied. Every append is tasim_push_order's, bounded by PLACE_LIST_CAP. The core
+   keeps no factory queue, so QUEUE is refused. */
 static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 {
     WIKISIM* s = ctx_of(q)->s;
@@ -462,8 +494,8 @@ static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
 }
 
 static const WORLDQ_OPS OPS = {
-    wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
-    wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
+    wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
+    wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 

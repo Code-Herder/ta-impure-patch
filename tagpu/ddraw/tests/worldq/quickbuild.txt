@@ -1026,5 +1026,5 @@ unit 5 type=3 index=5 owner=0 finished=1 pos=28835840,0,17301504 state=0x1000000
   can 3: reclaim=-1 guard=4
   can 4: reclaim=-1 guard=4
   can 5: reclaim=-1 guard=-1
-actions 2 5 3 6 7
+actions 2 5 3 6 7 -1
 economy -1
