@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """impai_check -- ImpAI's observation, judged from a game's log lines.
 
-    tools/impai/impai_check.py logs --los true|permanent [--puppet LOG ...] [--patches] <log> [<log> ...]
+    tools/impai/impai_check.py logs --los true|permanent [--puppet LOG]... [--patches] <log> [<log> ...]
 
 reads the `impai:` lines the DLL writes (tagpu/ddraw/src/tagpu_impai.c) from the logs given --
 tagpu.N.log files of one game, in any order -- and fails unless:
@@ -250,8 +250,8 @@ def main() -> int:
     lg = sub.add_parser("logs", help="judge one game's logs")
     lg.add_argument("--los", choices=("true", "permanent"), required=True,
                     help="the fixture's line-of-sight mode")
-    lg.add_argument("--puppet", nargs="+", type=Path, default=[],
-                    help="the logs of the same recording played on a puppet: judge (b)")
+    lg.add_argument("--puppet", action="append", type=Path, default=[],
+                    help="a log of the same recording played on a puppet, once a log: judge (b)")
     lg.add_argument("--patches", action="store_true", help="(e) requires a published patch")
     lg.add_argument("logs", nargs="+", type=Path)
     args = ap.parse_args()
