@@ -6,7 +6,7 @@
 The owner wants a wiki inside the game that explains Impure's own features with examples a player
 can watch and try. The decisions below came out of a design interview with the owner on
 2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries, runs the
-simplified simulation in C, equal to the mockup's tick for tick on every demo, lays the window out
+simplified simulation in C, which the mockup runs too (one simulation, three builds), lays the window out
 in C, equal to the mockup's boxes, lines and baselines, and builds the stage's picture as the
 replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane the game draws the
 wiki button and opens the window over the game, takes every input while it is open and pauses
@@ -28,7 +28,7 @@ mod: its units, their figures and their display names are that side's own, picke
 files by one rule that names no mod, and the demo plays, and its captions name, the buttons of the
 player's Interface Type ([below](#the-per-mod-tutorials)). The owner's decisions for the sidebar
 and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The
-units run their own COB scripts in both simulations, through one C host on our own COB VM: a
+units run their own COB scripts in the simulation, through one C host on our own COB VM: a
 builder works only once its script has taken its build stance, the Quick Build demos wait for
 the work to be done, the stage draws the poses the scripts set, in the game and in the mockup,
 and a builder at work sprays the engine's nano particles from the piece its script names; the
@@ -48,7 +48,7 @@ rules; it is built in both the mockup and the game, Try it yourself taking the w
 frame as well as its HUD. The third, **Take over a replay**, is a *takeover* game entry: a replay
 with the replay HUD's Take over -- the picker, the Forks bay and its lanes, Save as a replay,
 Delete, the fourth fork's eviction -- whose takeover turns the replay into Rewind's live game as
-the seat taken, any seat, each seat having its own cursor in both simulations; it is built in both
+the seat taken, any seat, each seat having its own cursor; it is built in both
 the mockup and the game. The fourth, **Players and the camera**, is a *players* game entry: a
 replay on a screen smaller than its map, with the replay HUD's players column -- Jump and Follow
 moving the camera to a seat's recorded view, Sight showing one seat's fog, sight and radar
@@ -61,7 +61,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
-| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `text.js`, `stage.js`; for a game entry also `replay.js`, `frame.js`, `bar.js` and `tools/hudart/mockup/hud.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
+| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `simhost.js`, `text.js`, `stage.js`; for a game entry also `replay.js`, `frame.js`, `bar.js` and `tools/hudart/mockup/hud.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
 | The stage's fallback cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
@@ -75,13 +75,14 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The simulation in the DLL | the wiki's front end `tagpu/ddraw/src/tagpu_wikisim.c` (the entry points, the UI it emulates, scripted input, selection, the scene and the casting) over the shared simulation core, `tagpu/ddraw/src/tasim_*.c` and `tasim.h` ([the shared core](impai/shared-core.html)) |
 | A game entry's replay, frame and bars | the replay layer `replay.js` / `tagpu/ddraw/src/tagpu_wikireplay.c`, a live entry's rewind, a takeover entry's Take over and a players entry's camera, Sight, switches and samples included, its fork rules the recorder's own `tagpu/ddraw/inc/tagpu_recrules.h`; the frame (the frame's views, the frame record, the stage HUD's state, the cursor, Leave's question, Try it's presses) `frame.js` / `tagpu_wikiframe.c`; the two bars in the mod's art `bar.js` / `tagpu_wikibar.c` ([below](#the-game-frame-on-the-stage-the-replay-entries)) |
 | Their checks, C against the mockup | `node tools/wiki/barcheck.mjs` (with `tagpu/ddraw/tests/wikibartest.c`), `node tools/wiki/framecheck.mjs` (with `tagpu/ddraw/tests/wikiframetest.c`); `simparity.mjs`'s game and replay passes; `node tools/wiki/castcheck.mjs` (the castings' sight figures and sight tables); `wikilaycheck.py`'s theatre cases; `python3 tagpu/ddraw/tests/huddrawtest.py` (`HOP_TRI` and the chart slots); in the game `wiki_regression.py <instance> watch`, `rewind`, `takeover` and `players` and `mods`' steps w6, w7 and w8 |
-| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine] [--shard K/N]`, with `tagpu/ddraw/tests/wikitest.c`; `--shard` plays every Nth context from the Kth, the cases on shard 1 alone; `--hash` prints each demo's final state hash from `sim.js` |
+| The simulation in the mockup | `tools/wiki/mockup/simhost.js`, the drop-in over the C host (`tagpu/ddraw/tests/wikihost.c`, `wikitest serve`), through `tools/wiki/serve.py`'s `POST /sim` in the page and `tools/wiki/hostchan.cjs` under node; the three builds from `tools/wiki/wikibuild.mjs` |
+| The parity check, the three builds and the replay layer | `node tools/wiki/simparity.mjs [-j N] [--shard K/N] [--record DIR] [--against DIR]`, with `tagpu/ddraw/tests/wikitest.c`; the work items dealt by `build/simparity-costs.json`; `--hash` prints each demo's final state hash from the host |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | The units' poses | in the DLL `tagpu_wikistage.c` `tagpu_wikistage_pose` (the pose pool, game thread) and `tagpu_wikiworld.c` `pose_compose` (render thread) over `tagpu_posemath.h`; in the mockup `tools/wiki/mockup/pose.js`; `tools/wiki/posecheck.py` holds `pose.js` to tacob's composition |
 | The sidebar's fallback layouts | `art/wiki/side/fixture.json` (480 rows) and `fixture-tall.json` (768 rows), synthetic |
-| The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); `sim.js` (the layout's check, the router, the buttons and the build trip); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
+| The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); the simulation (the layout's check, the router, the buttons and the build trip: `tagpu_wikidata.c`, `tagpu_wikisim.c`); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
 | The sidebar in the DLL | `tagpu_wikiasset.c` (`tagpu_wikiside_load`, the reading) over `tagpu_guifile.c` (the .GUI files by position); `tagpu_wikiside.c` (the composer); the router and the buttons in `tagpu_wikisim.c`, the column's ops in `tagpu_wikistage.c` |
 | Each side's casting, by the cast rule | `tools/wiki/gfx.py` (`side_casting`, into each pack's `side.json` by `tools/wiki/sidepacks.py`, which checks the stock identity); in the DLL `tagpu_wikiasset.c` (`tagpu_wikiside_load`) |
 | The castings' sight figures and the sight tables, checked | `node tools/wiki/castcheck.mjs` (the game frame's *The checks*: a players entry's) |
@@ -89,14 +90,14 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
 | Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
 | The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks and every game lane (each single-player mode on its own instance `wikigate-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
-| The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
+| The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (the simulation at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
-| The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
-| The nano spray | the particles in both simulations (`tasim_fx.c`, `tagpu_wikisim.h` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
-| The sound | the events in both simulations (`tasim_fx.c`, `tagpu_wikisim.h` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
+| The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the simulation calls in-process, in the DLL and in the mockup's host alike; the scripts read from the gfx packs (`tests/wikicobfile.h` `cob_packs`); `tools/wiki/serve.py`'s `POST /cob` serves the host alone, for `tools/test_cobvm.py` and `tools/wiki/cobcorpus.py` |
+| The nano spray | the particles in the simulation (`tasim_fx.c`, `tagpu_wikisim.h` *THE NANO SPRAY*), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
+| The sound | the events in the simulation (`tasim_fx.c`, `tagpu_wikisim.h` *THE SOUND*); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
 | The sound's checks | `python3 tagpu/ddraw/tests/wavtest.py` (the WAV parser on hostile files, and against `gfx.py` `wav_pcm` on every pack WAV); `assetcheck.py`'s `sound` element; `simparity.mjs` (hash item 10) and `simcheck.mjs`'s sound rule |
-| Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
+| Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, the simulation host at `POST /sim` (and the COB host alone at `POST /cob`); then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
 Eight entries. Under Quality of Life: in Building, **Quick Build: Resource Extractors** and
@@ -108,20 +109,26 @@ Sweep**; in Camera, **Mega map and strategic icons**, a text entry
 
 ## The decisions
 
-### The mockup is the specification
+### The mockup specifies the layout and the drawing; the C specifies the simulation
 
 - **A permanent browser mockup, maintained like the replay HUD's** (`tools/hudart/mockup/`). It is
   not a throwaway: it is where the wiki is designed and changed first.
-- **It is a 1:1 specification of the in-game wiki.** The DLL copies it: the same layout, the same
-  data, the same simplified simulation, the same drawing. Nothing goes into the game that the
-  mockup does not show. `tools/wiki/simparity.mjs` keeps the two simulations equal (*The
-  simulation's contract*, below), as `laycheck.py` keeps the HUD's layouts equal.
+- **It is the specification of the wiki's layout and drawing.** The DLL copies it: the same
+  layout, the same data, the same drawing. Nothing goes into the game that the mockup does not
+  show. **The simulation is the DLL's own C**, and the C core and its notes are its
+  specification: the mockup plays every demo through that C, run as a host process
+  (`tools/wiki/mockup/simhost.js`, *The simulation's contract*, below), so there is one
+  simulation and nothing to keep equal to it. The replay layer, the frame, the text and the
+  stage's drawing stay JavaScript twins of their C, which `simparity.mjs`, `framecheck.mjs`,
+  `textparity.mjs`, `stagecheck.mjs`, `sidecheck.mjs` and `scenecheck.mjs` hold equal, as
+  `laycheck.py` holds the HUD's layouts.
 - **Try it yourself is a simplified simulation in the game too.** A second hidden game instance,
   or swapping the running game out for a practice scene and back, were considered and declined
-  (2026-10-25): the simplified simulation is enough, and the mockup can then be exact. The DLL's
-  version calls the real shapes, `tagpu_placegeo.c`'s `place_shape` and `place_ring`, which read
-  nothing but their arguments. The snap scorer, the best-fit choice and the gesture's rules it
-  ports from `sim.js` instead, because `tagpu_resource.c` and `tagpu_place.c` read the engine.
+  (2026-10-25): the simplified simulation is enough, and the mockup, which runs the same C, is
+  then exact. It calls the real shapes, `tagpu_placegeo.c`'s `place_shape` and `place_ring`,
+  which read nothing but their arguments. The snap scorer, the best-fit choice and the gesture's
+  rules are its own (`tagpu_wikisim.c`, `tasim_*.c`), each naming the function of
+  `tagpu_resource.c` or `tagpu_place.c` it mirrors, because those read the engine.
 
 ### Content is data
 
@@ -243,7 +250,7 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
   the retail palette's green ramp (`0xA1..0xA7`), above the units, only where its fog cell is
   clear ([below](#the-units-scripts)).
 
-**How it is drawn.** `tools/wiki/mockup/stage.js` draws one view of `sim.js` into a 2D canvas; it
+**How it is drawn.** `tools/wiki/mockup/stage.js` draws one view of the simulation into a 2D canvas; it
 runs in the page, where `wiki.js` calls it, and under node. The DLL's `tagpu_wikistage.c` builds the
 same picture as the replay HUD's ops, and `tools/wiki/stagecheck.mjs` pairs the two call for op on
 every demo, so a change to the stage is made in `stage.js` first. Everything it draws has an op to
@@ -385,7 +392,7 @@ as stated except where a line says otherwise.
    2026-10-29: "extend map to fit the sidebar of the mod always"): downward, by whole 32-unit tiles,
    until it is at least as tall as the column, so no band lies under it. Retail's 480-row column
    keeps 40 × 30; every compatibility setup's 768-row one makes it 40 × 48. The rule is
-   `tagpu_wiki_map_rows` (`sim.js` *THE MAP*).
+   `tagpu_wiki_map_rows` (`tagpu_wikisim.c` *THE MAP*).
 10. **A scripted `build` with the sidebar plays out** as the cursor's trip to the button and back;
     every demo was re-timed once by hand, and the data's ticks are exactly what plays.
 11. **Build buttons the entry does not define are greyed.**
@@ -554,7 +561,7 @@ float32 step for step, and `gfx.js` culls the bodies' and the shadows' back face
 body pipeline does (`tagpu_vk_unit.c`), so a turned piece shows the face the game shows.
 
 **The nano spray.** In the game it is the engine's particles (`PK_PART` kind 5, drawn by
-`tagpu_fx.c`); on the stage it is the wiki's own particles, simulated in both simulations as the
+`tagpu_fx.c`); on the stage it is the wiki's own particles, simulated as the
 engine simulates them and drawn by the stage's ops, not by the 3D world passes: one 2 × 2
 game-pixel dot each, at the pixel the engine's leaf `0x473A00` puts it on, in the op range over
 the image, so above the units as the engine's layer 6 is. `stage.js` draws the same in both looks
@@ -566,7 +573,7 @@ Try it yourself is `wiki.js`'s, on the game thread (`tagpu_wiki.c`, *Try it your
 specification is the mockup's handlers, and [the plan](ingame-wiki-plan.html), landing 5, says
 where the plan's first version and the mockup differed.
 
-- **The simulation** is `sim.js` `create` on the selected demo's scene (`tagpu_wikisim_init` with no
+- **The simulation** is `tagpu_wikisim_init` on the selected demo's scene (the drop-in's `create`, with no
   timeline, its units running their scripts as a demo's do): never done, the controls' play and replay acting on it as on a demo. Its button swaps the
   stage between Try it and the demo; picking an entry or a demo leaves Try it.
 - **Input**, from the messages the window already takes while it is open, so the engine sees no
@@ -597,11 +604,11 @@ where the plan's first version and the mockup differed.
   (`cursor: none`) only in a frame that drew it. A demo draws its scripted cursor wherever the
   pointer is.
 - **The test**: `wiki_regression.py <instance> try --launch` gives `snap` and `line`'s inputs as
-  device input on the stage, compares the paused simulation's state hash with `sim.js` fed the
+  device input on the stage, compares the paused simulation's state hash with the host fed the
   inputs the game logged (`simparity.mjs --try`), and checks the releases on Back to demo and on
   close. A demo's `build` is armed as a player arms it: PREV or NEXT the nearer way round, then
   the building's button, each a release inside. It then pages, switches tabs and presses STOP on
-  the sidebar, and reads every step back from `sim.js` fed the logged inputs
+  the sidebar, and reads every step back from the host fed the logged inputs
   (`sideview.mjs --dump`). `wikilaycheck.py` holds Try it's page to the mockup's (three Try it
   cases).
 
@@ -711,7 +718,7 @@ press*](engine/ui.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-pr
 
 ### The rules
 
-`sim.js` and `tagpu_wikisim.c` hold them bit for bit. Every rule below is the engine's, cited in
+`tagpu_wikisim.c` and the core's `tasim_*.c` hold them. Every rule below is the engine's, cited in
 the code.
 
 - **Where the cursor is.** Left of x = 0 is the column. Then comes the map, closed at its far
@@ -878,18 +885,19 @@ with the engine):
 The offline checks were MEASURED 2026-10-28 on this tree, the game's on 2026-10-27, before each
 side had its own types.
 
-- **`simparity.mjs`** plays every demo through both simulations with the fixture's sidebar, with
-  `fixture-tall.json`'s 768-row column and with none, each in the eight contexts of *The
-  simulation's contract* (below), with the units' scripts and without: 1008 plays. It replays the
-  47 rule cases and the 180 refusal cases (the `sidebar` flag, the trip's data rule, every bound
-  of the layout on both sides of it, the context, the binding and the scene's fit), reads 24
-  castings and layouts back, then the 21 malformed-data cases, and compares the trip's constants.
-  All equal, natively and with `--wine`.
+- **`simparity.mjs`** plays every demo through the simulation's three builds at once with the
+  fixture's sidebar, with `fixture-tall.json`'s 768-row column and with none, each in the eight
+  contexts of *The simulation's contract* (below), with the units' scripts and without, then every
+  game, replay, fork, column and sweep case and the rule cases, the refusal cases (the `sidebar`
+  flag, the trip's data rule, every bound of the layout on both sides of it, the context, the
+  binding and the scene's fit), the castings and layouts read back, the malformed-data cases and
+  the trip's constants. MEASURED 2026-11-11: 5928 plays, 509 cases, 955 refusal cases, 27 castings
+  and layouts and 21 malformed-data cases alike in the three builds, and all 11 408 recorded plays
+  equal to the S2 record.
 - **`stagecheck.mjs`** pairs the stage's ops with `stage.js`'s calls, the `side` range and the
   greyed buttons' groups included: 6550 frames, the fixture at three sizes, the tall fixture at
   1920 × 1080, no sidebar at three sizes, and, when a gfx pack holds the units' scripts, the
-  fixture at the first size with them (`sim.js` through `serve.py`'s host, the C side from the same
-  files through `tests/wikicobfile.h`): 447 frames, the nano spray in 53 of them, 8325 particles.
+  fixture at the first size with them (the host reading the packs through `tests/wikicobfile.h`): 447 frames, the nano spray in 53 of them, 8325 particles.
   With a sidebar it draws the whitebox column, the game look's image with its minimap, and the
   image without it, over a stand-in image.
 - **`sidecheck.mjs`** compares the two composers byte for byte (with
@@ -922,7 +930,7 @@ side had its own types.
   places the building the demo left armed, the sidebar arms it again, and STOP disarms it and
   empties the orders. Input stands between two ticks, so the order STOP clears is the click's, by
   construction: the demo's own orders are worked off at a pace set by the tick wall time let Try
-  it reach, which under the gate's load once left none. Every step is read back from `sim.js` fed
+  it reach, which under the gate's load once left none. Every step is read back from the host fed
   the logged inputs, once its hash equals the game's (`sideview.mjs --dump`).
 - **Every mod in the game** (`wiki_regression.py all mods`) plays one game a compatibility setup
   on a private 2560 × 1440 display:
@@ -951,17 +959,17 @@ side had its own types.
   for the loader's answer and the 3D load's. After a demo's hash it logs each quarantined type's
   note (`<TYPE>'s script is quarantined - <note>`) and a demo a wait stopped (`stopped: a wait ran
   past its max`); `wiki_regression.py` passes `--scripts` to `simparity.mjs --hash` -- which gives
-  sim.js the units' scripts and their sounds together, as the game's one 3D load does -- when the
+  the simulation the units' scripts and their sounds together, as the game's one 3D load does -- when the
   log says both are on, and fails when the line does not say or says they differ.
 - The state dump `tagpu_wiki.json` gains three fields: `side_h`, the running simulation's
   column rows, 0 without one; `layout_src`, one of `"mod"`, `"fixture"`, `"none"`, or `""`
   with no simulation; and `layout`, the layout itself, which `simparity.mjs --try` and
   `sideview.mjs --dump` replay. Its `ctx` carries `cob`, whether the simulation runs its units'
   scripts, which `simparity.mjs --try` then takes from the gfx packs and `sideview.mjs --scripts
-  DIR` from a folder. `tools/wiki/sideview.mjs` plays `sim.js` to a dump's state and
+  DIR` from a folder. `tools/wiki/sideview.mjs` plays the simulation to a dump's state and
   prints its view (`--dump`), or plays a demo to a tick and composes its column (`--play
   --compose`).
-- Layout names are written as their UTF-8 bytes, as both readers count them.
+- Layout names are written as their UTF-8 bytes, as the loader counts them.
 
 ## The per-mod tutorials
 
@@ -1020,11 +1028,11 @@ engine's order.
   BuildCostEnergy, EnergyUse (signed), MetalMake, MetalStorage and EnergyStorage, each finite. Only
   a game reads them, so only a game holds them to the economy's bounds -- each at least 0 but
   EnergyUse, whose magnitude is below 10^7 -- and **leaves a cast outside them unbound**, stopping
-  under the badge as for any unbound cast (`tagpu_wikidata_cast_economy`, `sim.js` `econFits`);
+  under the badge as for any unbound cast (`tagpu_wikidata_cast_economy`);
   a page entry plays the same cast whatever its economy, so a mod's builder, extractor or solar
   with such a figure still plays Quick Build and the other page entries (`simcheck.mjs` plays every
   page demo and Watching with every cast's economy outside the bounds; `simparity.mjs` plays
-  that game in both simulations). And **its corpse**: the feature section
+  that game in the three builds). And **its corpse**: the feature section
   its FBI's `corpse` names, found as the 3D loader finds a feature and read into the features
   table's record, or none when the FBI names none, the section is missing or the record breaks a
   feature's bounds. A game binds a cast's corpse as its type's wreck (*A game*, below).
@@ -1096,8 +1104,7 @@ kbot builder); TA Zero's geothermal plants make no EnergyMake (Quick Build is of
 
 ### The two interface types in the simulations
 
-**The click window**, the same at both types (`sim.js` `CLICK_TIME`, `CLICK_BOX`;
-`tagpu_wikisim.c` the same): a left release on the map is a click when its press is under 25 ticks
+**The click window**, the same at both types (`tagpu_wikisim.c` `CLICK_TIME`, `CLICK_BOX`): a left release on the map is a click when its press is under 25 ticks
 old and the release point under 32 world units from the press point on each axis; any other release
 is a box. That is the engine's test at
 `0x4993E9..0x499441`: the press is stamped with the clock `0x4B6340` (MEASURED at 30 units a second,
@@ -1107,8 +1114,7 @@ which the stage draws the box only decide the drawing. Try it counts the window 
 ticks too, as every rule of the simulation is counted (it reads no clock), so at 2× it is half the
 engine's 833 ms, and on a paused stage a hold never runs out.
 
-Type 1 is the rows the stage played before. At type 0 (`sim.js` `leftClick`, `rightPress0`;
-`tagpu_wikisim.c` the same), with nothing armed on the map:
+Type 1 is the rows the stage played before. At type 0 (`tagpu_wikisim.c` `left_click`, `right_press0`), with nothing armed on the map:
 
 - **a left click** -- the release of a press that went down on the map, inside the click window --
   is Quick Build's choice first, exactly as type 1's right click gives it (Impure's gate is on the
@@ -1127,8 +1133,8 @@ unfinished building of the player's with no builder selected is selected.
 
 ### The bound entry: the casting's figures and G cells
 
-- **With a casting the simulation plays its own copy of the entry** (`sim.js` `binder`,
-  `tagpu_wikisim.c`): each def of a bound cast takes the casting's type, display name, footprint,
+- **With a casting the simulation plays its own copy of the entry** (`tagpu_wikisim.c`
+  *THE BOUND ENTRY*): each def of a bound cast takes the casting's type, display name, footprint,
   BuildTime, WorkerTime, BuildDistance, MaxVelocity, ExtractsMetal, EnergyMake, `canstop` and G
   cells, and a build list by cast (def j is on it when def j's cast is on the cast's menu). A def
   of an unbound cast keeps the authored one. Indices do not move, so the scene and the inputs name
@@ -1227,25 +1233,25 @@ unless said).
   at 1920 × 1080): `wiki check: 84 demos played, 0 did not start, in 89 ms`, the scripts on, all 84
   hashes equal `simparity.mjs --hash --scripts`.
 - **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
-  `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
-  `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and `wikilaycheck.py --check-only`, one after
-  another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
+  `--null-layout` and `--pack` for each pack present), `simparity` (its three builds, the Wine one
+  among them), `textparity` natively and `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and
+  `wikilaycheck.py --check-only`, one after another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
 - **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
   game lanes leave, two to a lane, at one and a half a check and at least four (`--offline-jobs`;
   13 at `-j 6` on 32 threads: 20 took the load to 59 and starved the lanes' mockup page),
   `stagecheck` first as four shards (`stagecheck.mjs --shard K/4`: every fourth of its 16 passes,
-  each shard playing and measuring only the sidebars its passes draw); each `simparity` run as 24 shards
-  (`simparity.mjs --shard K/24`: contexts K and K + 24 of its 48, one played without the units'
-  scripts and one with them, so the shards cost alike; the rule, refusal, data and malformed cases
-  on shard 1, each shard's C side built in a temporary folder of its own) and each `simcheck` run
+  each shard playing and measuring only the sidebars its passes draw); the `simparity` run as 10 shards
+  (`simparity.mjs --shard K/10`: its work items dealt longest first by the costs its last full run
+  wrote to `build/simparity-costs.json`, each shard keeping its three hosts busy) and each `simcheck` run
   as four (`simcheck.mjs --shard K/4`: every fourth context, the rule cases on shard 1), and,
   on `-j` workers (6 by default), each of `sp`, `page`, `demos`, `try`, `asset`, `stage3d`,
   `units`, `cursor`, `watch` and `rewind` with `--launch` on its own instance `wikigate-<mode>`, made afresh on its
   own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
   command as a serial run, a process of the script, its log `DIR/<mode>.log` or
   `DIR/mods-<setup>.log`. Every lane's prefix has registry hives of its own (`tacli create
-  --private-registry`; the mods lanes' `prepare_wine` already makes them so), and the two `--wine`
-  checks run in the prefix of an instance `wikigate-wine` made the same way, because Wine rewrites
+  --private-registry`; the mods lanes' `prepare_wine` already makes them so), and the checks that run a
+  Wine build (`textparity --wine` and every `simparity` shard) run in the prefix of an instance
+  `wikigate-wine` made the same way, because Wine rewrites
   a hive in place and the template's is one inode with every clone's: lanes at once on the shared
   one could tear it. All of them are made before the first lane starts. The gate owns its lanes'
   processes and never exits while one runs: on any way out, Ctrl-C and SIGTERM included, it
@@ -1400,9 +1406,8 @@ paragraphs and has no demos: the stage cannot show either.
 
 **The stage has no camera level.** Every frame of it is at zoom 1, the eye moves only in a players
 entry (*The frame*, below), the 2D ops' world transform has no level term, and the 3D stage
-renders the whole map at zoom 1 and composites it at the stage's fit. No wheel reaches either
-simulation: the wiki's `wheel()` scrolls the panel under the pointer, and `sim.js` has no wheel
-input.
+renders the whole map at zoom 1 and composites it at the stage's fit. No wheel reaches the
+simulation: the wiki's `wheel()` scrolls the panel under the pointer.
 
 **The icon rule shows no icon on any map the wiki holds.** `inc/tagpu_icon_rule.h` gives
 `d' ≈ (gh/z)/(4970·mult)`: a class turns into an icon only once the frame spans about 4970·mult
@@ -1427,9 +1432,9 @@ model; a demo cannot show what the rules would not do. The bound is the map's wo
 frame's game size, not the frame kind: maps of 250 to 500 cells would be needed.
 
 **What a stage would need (a gap, not built).** A page entry with a `screen` and a scene `camera`;
-a wheel input (`{ "at", "wheel", "mega" }`) in both simulations; the zoom's rule (the notch factor,
+a wheel input (`{ "at", "wheel", "mega" }`) in the simulation; the zoom's rule (the notch factor,
 the per-notch target, the anchor terms, the ease, the floor, the centre range) shared between
-`tagpu_zoom.c` and both simulations as a pure header, with simparity hashing the camera; every
+`tagpu_zoom.c` and the simulation as a pure header, with simparity hashing the camera; every
 stage op through the level; the minimap's camera box at 1/z; Try it's wheel over the stage; and the
 3D stage at a level. That shows the wheel gesture on a small map; it still shows no icon.
 
@@ -1678,8 +1683,7 @@ keeps Take over inert.
   the seat's recorded camera, **Follow** keeps it there (pressed again, Free cam; another seat's
   Follow replaces it), and nothing else moves it: the stage has no edge or key scroll and its
   minimap is not clickable. A seat's camera is the scene's `camera` and its `{camera, over}` glides,
-  interpolated as the recorder's `persp_sample` interpolates its samples (`tagpu_wikidata_seat_cam`,
-  `sim.js` `seatCam`); Jump and Follow on a seat with none toast "Camera was not recorded". A seek
+  interpolated as the recorder's `persp_sample` interpolates its samples (`tagpu_wikidata_seat_cam`); Jump and Follow on a seat with none toast "Camera was not recorded". A seek
   leaves the camera alone and a Follow goes on from the new tick.
 - **Each step's tail**, after the game's part, paused or not, at the shown tick (the held world's
   while a seek is pending): first the camera (Jump before Follow); then, with no seek pending, a
@@ -1781,7 +1785,7 @@ draws it.
       gets), and none of seat 0's cursor, ghost, sites, lines, drag, sweep, held keys or selection --
       the viewer is not seat 0; the column is the controlled seat's side's MAIN2 with nothing
       selected, whatever the game script's sidebar says, its gadgets in the states a fresh simulation
-      gives them (`tagpu_wikiframe_idle_side`, pinned against `sim.js` by `framecheck.mjs`).
+      gives them (`tagpu_wikiframe_idle_side`, pinned against the simulation's fresh states by `framecheck.mjs`).
     - `player`, a live entry's while the rewind is idle or open: **the player's own screen**, the live
       simulation's view as it made it -- seat 0's fog, column, selection, sites, lines and sweep --
       since the game's open keeps them all (MEASURED, the plan's *What the game's live rewind
@@ -2045,7 +2049,7 @@ draws it.
   the release alone; a fork of a fork; the run-time refusals), the column pass (DZ's arithmetic: a
   trip to every build and a click on every gadget with the sidebar forced on), the live replays'
   hashes demo tick by demo tick, LIVE_TRACE (a Try-it trace of every live press and of world input
-  in the forks, to an eviction), the release sweep's ends through `wikitest sweep`, and refusal
+  in the forks, to an eviction), the release sweep's ends played through the host, and refusal
   cases for `live`, the two control sets and every fork-part rule. `simcheck.mjs` plays each live
   demo in live mode in every context and checks its claims -- each seek shows the selected chain
   played straight to its tick, each fork starts on the world of its armed R − 1 with seat 0
@@ -2060,7 +2064,7 @@ draws it.
   entry's hash line unmoved; the takeover fixture (`tools/wiki/takeover-fixture.mjs`) and Take over's own
   demos through both twins, demo tick by demo tick; two Try-it press traces on the last demo, to a
   takeover at the limit; and the refusal cases of `takeover`, `kept`, a part's `seat` and the Take
-  over controls, accepted or refused alike by `sim.js` and the loader. `simcheck.mjs` checks every
+  over controls, accepted or refused by the loader. `simcheck.mjs` checks every
   takeover demo on the kept, switch, snap, takeover and walker claims, then, from the takeover, on
   Rewind's live claims as the seat taken, and TAKEOVER_CLAIMS each demo's own: the picker's R, its
   rows and the warning; the toasts; the timelines after each switch, deletion and takeover; the
@@ -2237,8 +2241,8 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **Text** -- the title, subtitle, paragraphs, demo titles and captions -- names units by cast
   tokens and buttons by `{order}`, `{select}` and `{cancel}` (above); any other `{…}` is refused.
 - **`{ "build": "ARMMEX" }`** arms a building (the manual placement mode). With the sidebar on it
-  is the cursor's trip to the button (*The rules*, above), and both simulations refuse to play a
-  demo that breaks the trip's data rule (`sim.js` `checkTrips`, `tagpu_wikidata_trips`): the build names a type; nothing but a caption stands in its trip,
+  is the cursor's trip to the button (*The rules*, above), and the loader refuses a
+  demo that breaks the trip's data rule (`tagpu_wikidata_trips`): the build names a type; nothing but a caption stands in its trip,
   the ticks (t, t + 90), nor after it in tick t; the demo lasts the whole trip; and the left button
   is up when it starts. Without the sidebar it arms at once, and `{ "build": null }` leaves the
   mode.
@@ -2251,9 +2255,8 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   **`"until": "built"`**, the demo's k-th such wait, holds once k buildings of the player's have
   been finished in the demo -- a count, so a building finished before the wait counts too, and a
   fast mod's builder never leaves a wait with nothing left to finish. The states are
-  `WIKI_UNTIL_IDLE` 1, `WIKI_UNTIL_ARRIVED` 2 and `WIKI_UNTIL_BUILT` 3, in `sim.js`'s `UNTILS`
-  order. A wait
-  carries no other key, and no other input shares its tick; both simulations refuse a demo that
+  `WIKI_UNTIL_IDLE` 1, `WIKI_UNTIL_ARRIVED` 2 and `WIKI_UNTIL_BUILT` 3. A wait
+  carries no other key, and no other input shares its tick; the loader refuses a demo that
   breaks either. Every later input, trip and the demo's `end` count the clock's ticks, which stand
   still during a wait (*The units' scripts*, below).
 - **A demo's `sidebar`**, a boolean, is optional: absent, the sidebar is shown when the scene gives
@@ -2270,9 +2273,9 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   it yourself starts from the demo's scene. A name is 1 to 16 of `a`–`z` and `0`–`9`, a letter
   first, and is the stage's: each scene has its own ground,
   `art/wiki/stage/<entry>.<scene>.json` (below). Every scene's map is the
-  first one's size, so the stage keeps one size from demo to demo; both simulations refuse an entry
+  first one's size, so the stage keeps one size from demo to demo; the loader refuses an entry
   that breaks a rule of this bullet, a demo `on` no scene of the entry, and an entry that is not
-  format 2 (`sim.js` `sceneOf`, `tagpu_wikidata_entry`).
+  format 2 (`tagpu_wikidata_entry`).
 - **A scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
   not, and optionally move orders and a `facing`), which are selected, its `features` and the
@@ -2281,12 +2284,12 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   (1 to 16 cells a side), `metal`, `energy` (0 to 10^7, 0 when absent), `height`, `blocking`,
   `reclaimable` and the TDF it was read from; **a scene's `features`** places them, each
   `{ "id", "name", "at": [cx, cz] }` at its anchor cell, at most 256; the simulation refuses one
-  off the map, on another feature or under a structure (`sim.js` `checkFeature` and the scene's
-  layout), and `stagemap.py check` refuses one on a deposit's patch, whose feature the stage
+  off the map, on another feature or under a structure (`tagpu_wikidata.c` `scene_feat` and the scene's
+  layout in `tagpu_wikisim_init`), and `stagemap.py check` refuses one on a deposit's patch, whose feature the stage
   draws there, and a demo that adds one, since the stage's ground is the scene's. A blocking
   feature is a body the units walk round and a site refuses.
 - **`{ "reclaim": true }`** arms reclaim through RECLAIM, the cursor's trip to the button as a
-  build's is (`sim.js` `planReclaim`, the ORDERS tab first when the page shown has no RECLAIM),
+  build's is (`tagpu_wikisim.c` `plan_reclaim`, the ORDERS tab first when the page shown has no RECLAIM),
   with the build trip's data rule; without the sidebar it arms at once. **`{ "pick": "metal" }`**
   clicks the popup's row of that kind, a trip of `PICK` 60 ticks there and back with its own data
   rule; without the sidebar it sets the kind at once. **`{ "down": "e" }`** presses E. `"facing": [x, z]` is
@@ -2295,14 +2298,14 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **A text entry** is a page entry whose `demos` is absent or an empty list: its page is its title,
   subtitle, badge and text and no stage ([*The page*](#the-page)). It carries no `frame`, `scenes`,
   `units`, `features` or `pace`, since the asset loader and the pack builders read every entry's
-  scenes and units; a `demos` present and not a list refuses any entry. Both readers refuse with the
-  same words (`sim.js` `checkText`, `tagpu_wikidata_entry`): `has demos that are not a list`,
+  scenes and units; a `demos` present and not a list refuses any entry. The loader refuses with these
+  words (`tagpu_wikidata_entry`): `has demos that are not a list`,
   `is a text entry with a frame`, `… with scenes`, `… with units`, `… with features`,
   `… with a pace`. The DLL's loader reads only a text entry's strings, so its `scenes`, `demo`, defs
   and features stay empty, and `nscene == 0` is the bound the stage-side readers test.
 - **A game entry**, `"frame": "game"` (any other value refuses the entry), is played as a replay
   of a small game on the theatre's whole game frame ([below](#the-game-frame-on-the-stage-the-replay-entries)).
-  Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`) refuse one that breaks
+  The loader (`tagpu_wikidata.c`) refuses one that breaks
   these rules:
     - **no `pace`**;
     - **every scene carries `seats`**: 1 to 4 (`WIKI_SEATS`) objects `{name, metal, energy}`, the
@@ -2340,9 +2343,9 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
     - **the first scene makes a frame the replay HUD fits**, 3 Wg ≥ 4 Hg (960 units): Wg is
       128 + 16 w and Hg is taken at its largest, the map grown beside the deepest column there can
       be (`WIKI_SIDE_ROWS`) and both bars, so the bound holds beside every layout's column
-      (`tagpu_wikidata_frame_fits`, `sim.js` `frameFits`; at 48 rows or fewer it needs 62 cells).
+      (`tagpu_wikidata_frame_fits`; at 48 rows or fewer it needs 62 cells).
       Watching's scene is 64 × 30;
-    - **the seat rule** (`tagpu_wikidata.c` `seat_ok`, `sim.js` `checkGame`): a game input's,
+    - **the seat rule** (`tagpu_wikidata.c` `seat_ok`): a game input's,
       a fork part's and a kept fork's `seat` is an integer, one of the scene's seats, and **a seat
       other than 0 only in a game whose `sidebar` is false**: the column -- its router, gadgets,
       capture and trips -- is seat 0's, and an absent sidebar may be on (an over-approximation;
@@ -2355,12 +2358,12 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   rewind ([above](#a-live-entry-the-rewind-on-a-live-skirmish)); `false` or none is a replay entry.
   `live` on any other entry, or as anything but a boolean, refuses the entry. A live demo's
   `game.inputs` are the original timeline's, seat 0's recorded play and the kills, fed live while
-  the rewind is idle. Both readers (`sim.js` `checkGame` and `checkViewer`, `tagpu_wikidata.c`)
-  refuse a live entry that breaks these rules:
+  the rewind is idle. The loader (`tagpu_wikidata.c`)
+  refuses a live entry that breaks these rules:
     - **the controls**: a live entry's viewer presses the live HUD's `rewind`, `rew`, `fwd`, `track`,
       `live_play` or `live_now` (`LIVE_CONTROLS`, `tagpu_wikidata_hud_presses`), a replay entry's
       the replay HUD's eight; a control of the other set is refused ("…no control a live demo
-      presses", "…a replay demo presses"). The enum, `sim.js` `HUD_CONTROLS` and `WIKI_HUD_*` in
+      presses", "…a replay demo presses"). The enum, `tagpu_wikidata.c`'s names and `WIKI_HUD_*` in
       one order: 0 `play`, 1 `speed`, 2 `rew`, 3 `fwd`, 4 `track`, 5 `bookmark`, 6 `leave`, 7
       `leave:no`, **8 `rewind`, 9 `live_play`, 10 `live_now`**, then the Take over set (below), 11 to
       17, then the Players set (below), 18 to 27; `WIKI_NHUD` is 28, and the player's alone in Try
@@ -2386,7 +2389,7 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
       by tick, then file order, and within one input its move, then its press, then its release --
       the click of its own seat that selects its builder or reclaimer: a move, then `select`
       pressed, then `select` released; and no input is a `pick`
-      (`tagpu_wikidata.c` `live_orders`, `sim.js` `checkLiveOrders`). The refusal names the demo,
+      (`tagpu_wikidata.c` `live_orders`). The refusal names the demo,
       the fork part and the tick. **Why**: the release can come between any two ticks, empties the
       selection an order is given from and disarms reclaim; it runs only between two ticks, so it
       cannot fall between a click and an order on one tick. A pick cannot share its reclaim's tick:
@@ -2397,8 +2400,8 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **A takeover entry**, `"takeover": true` on a game entry, plays its demos as a replay with the
   replay HUD's Take over ([above](#a-takeover-entry-take-over-a-replay)); `takeover` on any other
   entry, as anything but a boolean, or beside `"live": true` or `"players": true` refuses the entry
-  ("…is a replay, a live game, a takeover's replay or a players' replay, never two"). Both readers
-  refuse a takeover entry that breaks these rules:
+  ("…is a replay, a live game, a takeover's replay or a players' replay, never two"). The loader
+  refuses a takeover entry that breaks these rules:
     - **every demo's game has `"sidebar": false`** (the owner's answer QA: the column is seat 0's,
       and a takeover may take any seat), so a taken seat never meets a column that is not its own;
     - **the controls**: a takeover entry's viewer presses the replay HUD's, the live HUD's and the
@@ -2406,7 +2409,7 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
       integer, one of the scene's seats), 13 `lanes` (the Forks bay), 14 `lane`, 15 `main` (Back to
       main recording), 16 `export` (a lane's Save as a replay) and 17 `delete` (its Delete), `lane`,
       `export` and `delete` with `"fork"`, an integer 1 to `RECR_TIMELINES` − 1, and the others with
-      no key but `at` and `hud` (`tagpu_wikidata_hud_takeover`, `sim.js` `TAKEOVER_CONTROLS`). A
+      no key but `at` and `hud` (`tagpu_wikidata_hud_takeover`). A
       press of one on any other entry is refused. Which ones act depends on the mode at run time:
       the replay HUD's while watching, the live HUD's after the takeover;
     - **a demo's `kept`**, a takeover entry's demo's only: the forks the recording's file holds
@@ -2423,8 +2426,7 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **A players entry**, `"players": true` on a game entry, plays its demos as a replay with the
   replay HUD's players column and a camera ([above](#a-players-entry-players-and-the-camera));
   `players` on any other entry, or as anything but a boolean, refuses the entry, and so does it
-  beside `live` or `takeover`. Both readers (`sim.js` `checkGame`, `checkViewer` and
-  `checkCameras`, `tagpu_wikidata.c`) refuse a players entry that breaks these rules:
+  beside `live` or `takeover`. The loader (`tagpu_wikidata.c`) refuses a players entry that breaks these rules:
     - **`"screen": [sw, sh]`**, required on a players entry and refused on any other: the game
       screen its recordings were made on, two even integers 2 to 128 (whole 32-unit tiles), at most
       the map's size, with the map's rows at least the viewport's beside the deepest column, and the
@@ -2454,16 +2456,14 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
       authored script (*A game*, below; [map.md](engine/map.html), *The temporary sight records*);
     - **the sight floor**: every type the entry defines has `sightDistance` 32 or more, since the
       engine reads before its table at radius index 0 ([map.md](engine/map.html), *The sight table
-      and the stamp*). In a game over a layout's table (`tagpu_wikidata_sight_ok`, `sim.js`
-      `sightFits`), a cast a casting binds below 32 or at a radius index the table does not store is
+      and the stamp*). In a game over a layout's table (`tagpu_wikidata_sight_ok`), a cast a casting binds below 32 or at a radius index the table does not store is
       left unbound, and an entry's own type at an index the table does not store refuses the game;
       with no table nothing is refused and Sight lights every block;
     - **the controls**: a players entry's viewer presses the replay HUD's eight and the **Players
       set**: 18 `jump`, 19 `sight`, 20 `follow` (each with `"seat"`, one of the scene's), 21
       `cursors`, 22 `clicks`, 23 `selections`, 24 `chat`, 25 `stats`, 26 `close`, and 27 `chip` (with
       `"chip"`: `player`, `team`, or one of `art/hud/layout.json`'s window measures `metal`,
-      `energy`, `units`, `army`, `kills`, `losses`, `excess`) (`tagpu_wikidata_hud_players`, `sim.js`
-      `PLAYERS_CONTROLS`). A press of the set on any other entry is refused ("…a players' replay's
+      `energy`, `units`, `army`, `kills`, `losses`, `excess`) (`tagpu_wikidata_hud_players`). A press of the set on any other entry is refused ("…a players' replay's
       control").
 - **A type's sight figures**: an entry's unit may carry **`sightDistance`**, **`radarDistance`**
   and **`sonarDistance`** (the FBI's, def `+0x202`, `+0x204`, `+0x206`, each a signed word,
@@ -2557,8 +2557,8 @@ The stage's ground for one scene of an entry, by reference to the player's own f
 ### `art/wiki/side/<name>.json`: a sidebar layout
 
 The layout the simulation and the stage run on: a fixture here, or the running mod's, which the
-DLL's loader and `gfx.py --side-only` write in the same schema. `sim.js` `checkLayout` states it
-and checks it, and `tagpu_wikilayout_check` (`tagpu_wikidata.c`) holds the same bounds, so a
+DLL's loader and `gfx.py --side-only` write in the same schema. `tagpu_wikilayout_check` (`tagpu_wikidata.c`) states it
+and checks it, so a
 layout breaking any of them is refused whole and no index read out of it addresses past the
 `WIKILAYOUT` tables.
 
@@ -2618,34 +2618,60 @@ layout breaking any of them is refused whole and no index read out of it address
 
 ## The simulation's contract
 
-`sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` over the shared simulation core
-(`tasim_*.c`, [the shared core](impai/shared-core.html)) the DLL's: a port of `sim.js` function for
-function, under its names in C's spelling (`siteOk` is `tasim_site_ok`, the core's prefix on a
-function its files share). They agree tick
-for tick on the same inputs, and `node tools/wiki/simparity.mjs` checks it: it plays every demo of
-every entry through both and compares every field of the view, every unit's orders and the state
-hash on every tick, then replays `simcheck.mjs`'s rule cases (the rules no demo shows) through the
-C sim from a recording of their calls on `sim.js`, and compares every answer they read, the state
-hash after every view included. A rule case must finish with one sim before it makes the next: the
-recording replays one at a time. For each demo and case it names the first differing tick or call
-and field. Last, it loads data the loader must survive or refuse (`wikitest.c`'s `malformed`
-cases). Every demo plays with the fixture's sidebar, the 768-row fixture's and none, each in eight
-contexts: the entry's own types and the `identity`, `shifted` and `unbound` castings of
-`tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0, and each of those with the
-units' scripts and without when a gfx pack under `tools/wiki/mockup/gfx/` holds them (`wikitest`
-reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 55 rule cases equal, all
-180 refusal cases alike, 24 castings and layouts read back alike and all 21 malformed-data cases
-as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine`
-(the DLL's compiler and flags, run under Wine).
+**The specification is the C.** `tagpu/ddraw/src/tagpu_wikisim.c` over the shared simulation core
+(`tasim_*.c`, [the shared core](impai/shared-core.html)), the loader `tagpu_wikidata.c` and the
+COB host `tagpu_wikicob.c` are the wiki's simulation, and their headers and this section state
+it. The DLL runs it on the game thread; the mockup and the node checks run the same sources as a
+host process and ask it through one JSON protocol, so there is one simulation and no twin of it.
 
-- **The context.** `WikiSim.play(entry, demo, layout, ctx)` and `create`, and
-  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, rival, iface, cob, snd}`
-  (`rival`, the opponent's casting, read by a game entry's rival types only: *A game*, below): the
-  layout's side the player plays, that side's casting or none (the entry's own types), the
-  Interface Type, where the units' scripts come from or none (`ctx.cob`, a `WIKICOBSRC` in C,
-  read during init only; *The units' scripts*, below), and where their sounds come from or none
-  (`ctx.snd`, a `WIKISNDSRC`: a type's sounds.tdf category and variant counts, read during init
-  only; *The units' sounds*, below). An absent context (NULL in C) is side 0, no
+- **The host** is `tagpu/ddraw/tests/wikihost.c`, run as `wikitest serve`: one JSON request a line
+  in, exactly one answer line out, an error being an answer (`{"error": why}`). Its ops make and
+  play sims and read them back: `entry`, `layout`, `casting`, `packs` (the gfx packs the units'
+  scripts and sounds come from, read by `tests/wikicobfile.h`), `new`, `input`, `step` (up to 4096
+  ticks a request, with each tick's hash or `gameNow` when asked), `view`, `orders`, `hash`,
+  `now`, `poses`, `notes`, `fork`, `release`, `free`, the sight's `table`, `sight` and `sighttable`, the
+  loader's `text`, `scene`, `seatcam` and `fits`, the constants' `hello`, and `batch`.
+  `wikihost.c`'s header is the protocol; its handles are bounded (32 of each kind, 64 sims, the
+  least recently used freed past that). `wikitest trace FILE` plays a file of requests through
+  the same loop.
+- **The three builds** come from one recipe, `tools/wiki/wikibuild.mjs`, cached by a hash of its
+  sources and flags under `build/wikihost/`: `host` (gcc -O2, no `-march`, so no fused
+  multiply-add), the mockup's; `asan` (AddressSanitizer and UndefinedBehaviorSanitizer); and
+  `wine` (the DLL's `i686-w64-mingw32-gcc` with the Makefile's SSE2 flags, run under Wine), the
+  arithmetic the game runs.
+- **The drop-in**, `tools/wiki/mockup/simhost.js`, is the mockup's `WikiSim`: the page's calls
+  become synchronous `POST /sim` requests that `tools/wiki/serve.py` relays to one `host` child
+  (HTTP/1.1, kept alive, Nagle off), and node's become requests on
+  `tools/wiki/hostchan.cjs`'s FIFO channel (MEASURED 2026-11-11: 15.5 µs a round trip to `host`,
+  24.4 µs to `asan`; `/sim` kept alive 231 µs). Objects are sent once and named by handle after;
+  the queries made between a sim's last two changes ride on the next change's answer, so a page
+  that steps and draws makes one request a tick; `replay.js` runs its seeks and walks as batches
+  of ticks up to the next fork (`steps`).
+- **The parity** is one source in three builds. `node tools/wiki/simparity.mjs` plays every demo of
+  every entry, every game, replay, fork, column, seat and sweep case and `simcheck.mjs`'s rule
+  cases through the drop-in on `hostchan.cjs`'s tee of the three builds: every request goes to
+  all three, and any answer that differs in its text is a difference, its first differing field
+  named. Each play reads the view, every unit's orders and the state hash on every tick. The C
+  replay layer (`tagpu_wikireplay.c`) is still twinned by `replay.js`, and `simparity.mjs` compares
+  them demo tick by demo tick, with the recorder's rules and the constants. Every demo plays with
+  the fixture's sidebar, the 768-row fixture's and none, each in eight contexts: the entry's own
+  types and the `identity`, `shifted` and `unbound` castings of `tools/wiki/casting-fixture.json`,
+  each at Interface Type 1 and 0, and each of those with the units' scripts and sounds and
+  without when a gfx pack under `tools/wiki/mockup/gfx/` holds them. `--record DIR` keeps every
+  play's per-tick hashes and `--against DIR` holds a later tree to them; the S2 record
+  (`.data/impai/s2-baseline/`, 11 408 plays) was taken on the tree where `sim.js` and the C still
+  ran side by side and agreed, and the host's plays equal it.
+
+- **The context.** `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)` takes the layout's side the
+  player plays, that side's casting or none (the entry's own types), the opponent's casting
+  (`rival`, read by a game entry's rival types only: *A game*, below), the Interface Type, where
+  the units' scripts come from or none (`ctx->cob`, a `WIKICOBSRC`, read during init only; *The
+  units' scripts*, below), and where their sounds come from or none (`ctx->snd`, a `WIKISNDSRC`: a
+  type's sounds.tdf category and variant counts, read during init only; *The units' sounds*,
+  below). The drop-in's `WikiSim.play(entry, demo, layout, ctx)`, `create` and `game` take it as
+  `{side, casting, rival, iface, packs, scripts, sounds}`, `packs` the gfx pack folders the host
+  reads both sources from and `scripts` or `sounds` false to leave one out. An absent context
+  (NULL in C) is side 0, no
   casting, type 1, the interface the demos are authored in, and neither scripts nor sound. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
   lie in the published WIKISIDE block, immutable and never freed. The bound entry, the resolved
   script and the type-0 rows are [above](#the-per-mod-tutorials).
@@ -2659,13 +2685,15 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   type and priority), the events made and the last 32 of them (tick, kind, name, category,
   variant), or 0 alone without a source (item 10).
 
-- **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
-  randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
-  compiles `tagpu_wikisim.c` and the core's `tasim_*.c`, and `tagpu_wikidata.c`, which normalises the scenes' facings, for
-  SSE2 (`-msse2 -mfpmath=sse`, the stack realigned, as the game's threads align it to 4 bytes), so
-  the wiki's simulation needs an SSE2 processor: built for x87, whose intermediates keep 80 bits,
-  1196 of the 9298 frames differ from `sim.js` in a last bit (MEASURED 2026-10-25), and 1804 of
-  3720 facings normalised as the loader does (MEASURED 2026-10-26; none built for SSE2).
+- **Bit for bit, by construction, in every build.** The simulation visits units in creation order,
+  uses no clock and no randomness, and computes on doubles with + − × ÷ and sqrt only, each rounded
+  once, so the three builds agree to the bit. The DLL compiles `tagpu_wikisim.c` and the core's
+  `tasim_*.c`, and `tagpu_wikidata.c`, which normalises the scenes' facings, for SSE2 (`-msse2
+  -mfpmath=sse`, the stack realigned, as the game's threads align it to 4 bytes), so the wiki's
+  simulation needs an SSE2 processor: built for x87, whose intermediates keep 80 bits, 1196 of the
+  9298 frames differed in a last bit from the same simulation on doubles (MEASURED 2026-10-25), and
+  1804 of 3720 facings normalised as the loader does (MEASURED 2026-10-26; none built for SSE2).
+  The host builds take no `-march`, which would let gcc fuse a multiply and an add.
 - **The heading is a vector, not an angle.** Each unit faces along a unit vector `(hx, hz)`, which
   the view carries and the state hash takes after its position. An angle would need `atan2`,
   which no standard rounds correctly, so its last bit differs between C libraries and JavaScript
@@ -2687,8 +2715,8 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   so `thread-split.allow` has no line for it. Every piece of its state lives in the `WIKISIM` its
   caller owns and on the heap it owns, so a later landing runs it on whichever thread owns the
   window. The shapes and the take-off rule (`place_take_offs_one`) are `tagpu_placegeo.c`'s own,
-  called as the game calls them; where `sim.js` mirrors anything else of `tagpu_resource.c` or
-  `tagpu_place.c`, the C ports `sim.js`'s version and names the function it mirrors above each.
+  called as the game calls them; where the simulation mirrors anything else of `tagpu_resource.c`
+  or `tagpu_place.c`, it names the function it mirrors above each.
   The take-off rule compares 16.16 positions, as the game's order nodes hold them; the C converts
   its doubles exactly, and clamps an order position to ±8192 world units, which changes no answer
   because a site the rule compares is never refused and so lies inside the map (a
@@ -2698,35 +2726,35 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   gesture's commit, a Shift move, a Shift Quick Build, a Shift assist, a scene's own orders. A
   click's orders go in whole or not at all, so an upgrade's reclaim never goes in without its
   build. The loader refuses a map wider or taller than 128 cells (`WIKI_MAP_MAX`), which bounds
-  every per-cell array and the map a packet will carry by value. `sim.js` caps the same appends
-  in the same way, and `simcheck.mjs` checks it as a rule case. The planner's scratch is sized at
+  every per-cell array and the map a packet will carry by value. `simcheck.mjs` checks the cap as
+  a rule case. The planner's scratch is sized at
   init from the map: W × H bytes for the held cells, W × H nodes of state, cost and parent, and a
   heap of 8 × W × H + 4 entries -- a node is pushed once from a seed and at most once from each of
   its eight neighbours, since a neighbour relaxes it only when popped, once -- about 2.3 MB at
   128 × 128 and 0.2 MB on the 40 × 30 stage maps.
 - **Its calls** (`tagpu_wikisim.h`): `tagpu_wikisim_init` from an entry and a demo, scripted (the
-  demo plays, `sim.js`'s `play`) or not (Try it yourself on the demo's scene, `create`);
-  `tagpu_wikisim_input`; `tagpu_wikisim_step`, one tick; `tagpu_wikisim_view`, `sim.js`'s
-  `view()` field for field; `tagpu_wikisim_orders`; `tagpu_wikisim_hash`, a 64-bit FNV-1a over
+  demo plays, the drop-in's `play`) or not (Try it yourself on the demo's scene, `create`);
+  `tagpu_wikisim_input`; `tagpu_wikisim_step`, one tick; `tagpu_wikisim_view`, what the host's
+  `view` writes field for field; `tagpu_wikisim_orders`; `tagpu_wikisim_hash`, a 64-bit FNV-1a over
   what the view and the orders show, in the order and encoding the header states, so that the
   in-game check can compare one number per demo with `simparity.mjs --hash`. It reads the
   `WIKISIM` and changes nothing; the view's derived fields (queued sites, order lines, the cursor's
   shape, order numbers, footprints, the pace) follow from the hashed ones and are left out.
 - **The data** (`tagpu_wikidata.h`): the tree in preorder and each entry as C structs, read with
-  the DLL's JSON reader from `WIKIPAK`. Where `sim.js` would throw or read `undefined`, the loader
-  refuses the file instead: a unit type the entry does not define, a key it does not name, a
-  rectangle or a map size that is not an integer, a missing footprint, a BuildTime that is not
-  positive, a `facing` that is not two numbers or whose length is not a positive finite double
-  (zero, or a square that underflows or overflows: `sim.js`'s `facing()` throws on the same).
-  Every other absent figure reads as 0, which every rule treats as it treats `undefined`. It also
-  refuses a map larger than 128 × 128 cells, which `sim.js` would play.
-- **Where the C cannot throw.** A scene that selects a unit it does not have makes
-  `tagpu_wikisim_init` refuse it, where `sim.js` throws; an allocation that fails leaves out what
-  it would have added and sets `oom`. Cells beyond ±2²⁰ (positions far off any map) are held
-  there, and a gesture's cells to the int16 `place_shape` takes, where `sim.js` keeps the number;
-  every test refuses such a cell in both.
-- **Not ported:** `sim.log`, the construction events `simcheck.mjs`'s checks read. The view and
-  the orders carry the state they follow from, and the parity check compares those.
+  the DLL's JSON reader from `WIKIPAK`. The loader refuses a file it cannot read whole: a unit
+  type the entry does not define, a key it does not name, a rectangle or a map size that is not an
+  integer, a missing footprint, a BuildTime that is not positive, a `facing` that is not two
+  numbers or whose length is not a positive finite double (zero, or a square that underflows or
+  overflows). Every other absent figure reads as 0. It also refuses a map larger than 128 × 128
+  cells (`WIKI_MAP_MAX`).
+- **Refusals, not exceptions.** A scene that selects a unit it does not have makes
+  `tagpu_wikisim_init` refuse it; an allocation that fails leaves out what it would have added and
+  sets `oom`. Cells beyond ±2²⁰ (positions far off any map) are held there, and a gesture's cells
+  to the int16 `place_shape` takes; every test refuses such a cell.
+- **The construction log** that `simcheck.mjs`'s checks read (`sim.log`: `started`, `finished`,
+  `reclaimed`, `killed`, `corpse`, `nocorpse`) is the host's, not the simulation's: after every
+  call that changes a sim, `wikihost.c` compares its units and features with the last state it saw
+  and logs the difference (`wikihost.c`'s header states the rule). The DLL keeps no log.
 
 **What it implements, from the feature's own rules** (`resource-snapping.md`), following
 `tagpu_resource.c` function for function (`site`, `snapped_site`, `distinct`, `same_plan`,
@@ -2764,9 +2792,8 @@ simulations*, above):
 `toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
 `tagpu_place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
 `remove_toggled`, as they stand on the wiki branch, which carries the take-off fix
-`34b1b586` that `main` does not have yet). In `sim.js`, `tagpu_placegeo.c`'s `place_shape` and
-`place_ring` are ported line for line, integer arithmetic included (checked against the compiled C
-on 20,000 random cases, 2026-10-25: identical), and so is its take-off rule; the C sim calls all
+`34b1b586` that `main` does not have yet). The wiki's simulation calls `tagpu_placegeo.c`'s
+`place_shape` and `place_ring` and its take-off rule; it calls all
 three:
 
 - **The cursor site** is the build cursor's (`0x4197D0`): a footprint of f cells centred on world x
@@ -2837,7 +2864,7 @@ three:
 `node tools/wiki/gen-buildshapes.mjs` write `art/wiki/entries/<id>.json` (their cursor paths are
 hundreds of small moves), and `node tools/wiki/simcheck.mjs` plays every demo headless and checks
 its claim on the simulation's state, plus the rules no demo shows; `simparity.mjs` then holds the
-DLL's simulation to `sim.js` on the same demos and rules.
+simulation's three builds to one another on the same demos and rules.
 
 **What it draws** (its view): the cells, metal, vents and fog; the units with their selection,
 progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the queued sites; the order lines; the cursor, its shape and the tick the shape began;
@@ -2855,7 +2882,7 @@ and `sound`, null without a source: `next` (each kind's next time), `last`, `que
 The owner's request of 2026-10-28: units do not walk over each other or through builders. The
 owner chose a rule of the wiki's own over a port of the engine's mover and pathfinder (`0x43DD20`,
 `0x40E9E0`, unmapped), and that a unit whose place is taken stops close by rather than pushing.
-`sim.js` *MOVEMENT* and `tasim_move.c` *MOVEMENT* are the rule, function for function.
+`tasim_move.c` *MOVEMENT* is the rule.
 
 - **Bodies.** A mobile unit's body is its footprint's box about its centre (`fx × 8` either side,
   so ARMCK is 32 × 32); a structure's is its footprint, finished or a nanoframe; and a builder
@@ -2921,12 +2948,11 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
 
 ### The units' scripts
 
-Each unit runs its own COB script, on our own VM, in both simulations
+Each unit runs its own COB script, on our own VM, in the simulation
 ([the COB plan](ingame-wiki-cob-plan.html), *The wiki host*, which has the engine's calls and the
 addresses behind them). The host is one engine-free C file, `tagpu_wikicob.c`, on `tagpu_cobvm.c`
-under Impure's rules: the DLL's simulation (`tasim_cob.c` and its callers) calls it in-process and `sim.js` through the mockup's
-server, so the two simulations implement only *when* they call it, and the host's state hash, which
-both fold into theirs, holds them to the same calls.
+under Impure's rules: the wiki's simulation (`tasim_cob.c` and its callers) calls it in-process,
+in the DLL and in the mockup's host alike, and folds the host's state hash into its own.
 
 - **The tick**: the inputs, then every unit's script slice (`DoScriptsNow(1)`), then the units'
   work, then the engine's calls of each unit's turn, unit by unit in creation order -- the
@@ -2957,10 +2983,9 @@ both fold into theirs, holds them to the same calls.
   primitive's MOVE, TURN and flags) after the view's copy into the stage record's pose pool,
   `WIKISTAGEPIECE pose[WIKISTAGE_POSE]` (4096 primitives over all the units, `pose_at` and
   `pose_n` a unit; `tagpu_wikistage_pose`); a unit with more than `WIKISTAGE_PIECES` (256) or past
-  the pool draws at rest and sets `WIKISTAGE_TRUNC_POSE`. In the mockup `serve.py`'s `models` op
-  answers every unit's model block (`{"models": {unit: base64}}`, `tagpu_wikicob_model`'s
-  PrimitiveStructs in the posed order), `cob.js` `model(unit)` asks once after each call, and
-  `sim.js` `poses()` gives them aligned with `view().units`, null for a unit no script poses;
+  the pool draws at rest and sets `WIKISTAGE_TRUNC_POSE`. In the mockup the host's `poses` op
+  answers each view unit's primitives as `tagpu_wikistage_pose` gives the stage (base64, aligned
+  with `view().units`, null for a unit no script poses), and the drop-in's `poses()` parses them;
   `gfx.js` `frame(entry, v, tick, dir, poses)` draws them ([the COB plan](ingame-wiki-cob-plan.html),
   *Drawing*).
 - **The spray** is simulated, unlike the poses: a builder whose work is credited this tick asks
@@ -2971,17 +2996,16 @@ both fold into theirs, holds them to the same calls.
   state hash (item 9), bounded at 1024 live and 256 waiting bursts, drawn from the wiki's own
   stateless generator and never from the host's `rand`. The host answers the query and the
   piece's origin (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, from the model's shape the type
-  now carries: offsets, parents and the model's height); in the mockup `serve.py`'s `query` and
-  `origin` ops, `cob.js`'s `query`, `origin` and `top` (the heights `new` answers), and
-  `cobhost.mjs` carrying the shape from the pack, which `gfx.py` writes (`model_shape`) -- a pack
-  written before it gives every piece the unit's own point. In the DLL the page fill copies the
+  now carries: offsets, parents and the model's height, which the host reads from the pack's
+  `scene.json` as `gfx.py` writes it (`model_shape`) -- a pack written before it gives every piece
+  the unit's own point. In the DLL the page fill copies the
   particles into the stage record, `WIKISTAGEPART part[WIKISTAGE_PARTS]` (x, y, z, colour; the
   sim's 1024), and sets `WIKISTAGE_TRUNC_SPRAY` (`0x400`) when the simulation dropped one. Without
   the scripts nothing sprays ([the COB plan](ingame-wiki-cob-plan.html), *The spray*, which has
   the engine's addresses and the gaps).
-- **The page** asks `tools/wiki/serve.py` for its host; served without it, or with no gfx pack
-  built, it plays without the scripts and says why in the console, as it says a quarantined type's
-  note. Run the mockup with `serve.py`.
+- **The page** gives the host the gfx pack the stage draws from (`ctx.packs`); with no pack built
+  the units play at rest. A quarantined type's note goes to the console. Run the mockup with
+  `serve.py`: without it there is no simulation.
 - **What it costs**: the host's slice over a demo's units is about 70 µs; with the scripts the page
   cost the game thread at most 0.281 ms in a frame over 1253 frames, and *Queue several with
   Shift* plays 1054 ticks where it played 570 (MEASURED 2026-10-28).
@@ -2999,13 +3023,14 @@ addresses and the gaps).
   (`ordersbutton`, `buildbutton`, `addbuild`, `nextbuildmenu`, `immediateorders`, `oktobuild`,
   `notoktobuild`, `SelectMultipleUnits`). A reply's variant comes from the wiki's own stateless
   generator. The events, the cooldowns, the last reply's time and the queue are item 10 of the
-  state hash, so `simparity.mjs` holds them equal; an event is ids only (tick, kind, name,
+  state hash, so `simparity.mjs` holds the builds to them; an event is ids only (tick, kind, name,
   category, variant), with no position: the engine plays neither kind of sound at a point.
 - **The source** is the 3D load's, with the scripts, both or neither (`tagpu_wiki.c`
   `scripts_now`): each unit type's sounds.tdf category and its variant count per kind
-  (`WIKISNDTYPE`). In the mockup it is the pack's `sounds.json`, through `sound.js` `source` in the
-  page and `cobhost.mjs` `soundSource` under node; `tests/wikicobfile.h` reads a type's `"sound"`
-  for `wikitest`.
+  (`WIKISNDTYPE`). In the mockup it is the stage pack's `scene.json`, a mesh's `"sound"`, which the
+  host reads (`tests/wikicobfile.h` `cob_packs`) with the scripts; the page plays the WAVs its
+  stage root's `sounds.json` names. MEASURED 2026-11-11: the two agree, category and counts, for
+  all 615 types of the 63 stage packs.
 - **Played on the game thread** after each fill's steps (`tagpu_wiki.c` `sound_drain`), through
   `tagpu_wikisound.c`: the wiki's own DirectSound object and its clips' buffers, made off the game
   thread (on the 3D load's thread, or at an open once the settings no longer mute, on a thread of
@@ -3030,8 +3055,8 @@ addresses and the gaps).
 
 ### A game: seats, kills, wrecks and the economy
 
-A game entry's demo is played by a **game simulation**: `WikiSim.game(entry, demo, layout, ctx,
-mode)` in `sim.js`, `tagpu_wikisim_init(…, WIKI_PLAY_GAME or WIKI_PLAY_GAME_STALL, …)` in C, on the
+A game entry's demo is played by a **game simulation**: `tagpu_wikisim_init(…, WIKI_PLAY_GAME or
+WIKI_PLAY_GAME_STALL, …)` (the drop-in's `WikiSim.game(entry, demo, layout, ctx, mode)`), on the
 demo's game script and its `end`. A page entry plays only as a page demo and a game entry only as
 a game, so no page demo reaches a line of what follows and no page demo's hash moved when it was
 built. Every rule here is the engine's, DISASSEMBLED and written into the engine map in the entry
@@ -3094,7 +3119,7 @@ of the function it imitates; the code cites each address where it applies it.
   `death_wav`, `assetcheck.py` comparing the two) -- when the viewed seat's fog at that cell is not
   black, with no owner test: the engine's `0x47F300` gate ([units.md](engine/units.html), *The death
   explosion*). The type is the event's index into the simulation's own entry, bound to its
-  casting (`tagpu_wiki.c` `death_play`, `sound.js` `death`, `sim.js` `types`), and the cell is the
+  casting (`tagpu_wiki.c` `death_play`, `sound.js` `death`, the sim's `types`), and the cell is the
   view's one fog, the viewed seat's. It plays through the wiki's mixer under the named sound's
   settings and with no priority, speechfx or unitchat test, as `0x47F300` tests none, at the
   engine's −585 for a point inside the view: the stage shows its whole map. Sound Mode 3D's
@@ -3136,7 +3161,7 @@ of the function it imitates; the code cites each address where it applies it.
   players game has a column]. Each input seat's **`moved`** turns on at its first move, from which
   the game records its cursor. Neither is hashed: they decide nothing, and `simparity.mjs`
   compares the views, which carry them.
-- **A seat's lit grid** (`tagpu_wikisim_sight_lit`, `sim.js` `sightLit`): the engine's line of
+- **A seat's lit grid** (`tagpu_wikisim_sight_lit`, the host's `sight`): the engine's line of
   sight on the stage, one byte a 32-unit block on the (w / 2) × (h / 2) grid. Every live unit of the
   seat alone -- a nanoframe from its make; an ally shares no sight -- stamps as the engine's emitter
   does: the stage's ground and sea level are both 0, so the emit raises the altitude to 1 and the
@@ -3148,7 +3173,7 @@ of the function it imitates; the code cites each address where it applies it.
   boundary, a step being one tick). The counters wrap at 256 as the engine's do; `simcheck.mjs`
   holds every players demo under it (the entry's stamps bound a block by 22). The rule and its
   measurement: [map.md](engine/map.html), *The sight table and the stamp*.
-- **A seat's contacts** (`tagpu_wikisim_contacts`, `sim.js` `sightContacts`), the radar pass's bit
+- **A seat's contacts** (`tagpu_wikisim_contacts`, the host's `sight` with `contacts`), the radar pass's bit
   8 or 9 on another seat's unit: on a lit block, or with d² < max(radar, sonar)² of a live, finished
   unit of the seat whose type `activates` and has a radar or a sonar, d² = (dx·dx >> 32) +
   (dz·dz >> 32) on the 16.16 positions in 64 bits -- the engine's two tests at altitude 0, where the
@@ -3258,13 +3283,13 @@ of the function it imitates; the code cites each address where it applies it.
 - **The drawn icons must be in the kit as cut.** `fit.py --set wiki` rewrites `art/wiki/kit/` from
   `art/wiki-full/kit/` and drops parts that are not there, so `tools/wiki/cursors.sh` is run on
   `art/wiki-full/kit` and the fit carries its icons over.
-- **The resource rules are copies.** The C sim calls the game's shapes and take-off rule
-  (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture's port `sim.js`'s
-  mirrors of `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs`
-  holds the C to `sim.js`, and so `sim.js`'s take-off port to the game's function; nothing holds
-  the resource rules to the game's code, so a change there is followed by hand in `sim.js` and
-  `tagpu_wikisim.c` (the plan's `rulecheck.py` would notice it; it is not built).
-- **No build gate runs the parity checks.** They need node and gcc (and Wine for `--wine`); `make`
+- **The resource rules are copies.** The simulation calls the game's shapes and take-off rule
+  (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture mirror
+  `tagpu_resource.c` and `tagpu_place.c` rather than calling them, because those read the engine.
+  Nothing holds the copies to the game's code, so a change there is followed by hand in
+  `tagpu_wikisim.c` and the core (the plan's `rulecheck.py` would notice it; it is not built;
+  S3 of [the shared core](impai/shared-core.html) moves the game's rules into the core).
+- **No build gate runs the parity checks.** They need node, gcc, the i686 MinGW compiler and Wine; `make`
   compiles and links the simulation and the stage but runs neither check. The game's own build is
   checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal
   `simparity.mjs --hash`. `stagecheck.mjs` builds
@@ -3314,7 +3339,7 @@ of the function it imitates; the code cites each address where it applies it.
   byte was the recorded player's in both measured; that the replay always seats it so is
   [INFERRED].
 - **Type 0's untested rows.** An unfinished building of the player's clicked with no builder
-  selected is selected in both simulations [INFERRED: its cursor was not measured]; the engine's
+  selected is selected in the simulation [INFERRED: its cursor was not measured]; the engine's
   Ctrl + right press (`0x41CC60`, a view mode) is not modelled, and `main+0x2CDF` was never seen at
   1 in game; no scene has a unit of another player, so the engine's attack cursor over one never
   arises.
@@ -3378,11 +3403,11 @@ of the function it imitates; the code cites each address where it applies it.
 
 ## Open issues in the placement code
 
-Porting `tagpu_place.c` and `tagpu_placegeo.c` into `sim.js` turned up three behaviours of the
+Porting `tagpu_place.c` and `tagpu_placegeo.c` into the wiki's simulation turned up three behaviours of the
 game's placement worth stating; the first is the specified rule, kept, and the second is fixed. They were found by reading
 and porting the code (the port matches `tagpu_placegeo.c` on 20 000 random cases); none has been
 reproduced in game yet. The sim mirrors the code as it is, so the Build Lines entry's demos route
-round them; when the code changes, `sim.js` and the demos follow it.
+round them; when the code changes, `tagpu_wikisim.c` and the demos follow it.
 
 1. **A Shift+Ctrl line drag turns into a ring over a unit or a queued build — by design.**
    `evaluate()` asks `ring_target()` first on every evaluation while Shift and Ctrl are held, so a
@@ -3404,7 +3429,7 @@ round them; when the code changes, `sim.js` and the demos follow it.
    order; a site that takes one is yellow, every other site not red is appended, and the ring is
    unchanged. The same drag now previews 9 green and 10 to 12 yellow, and the release takes the
    three off and queues one at 9, from either end. The fix is on the branch
-   `worktree-agent-ac37d55e26a5e56f3` and reaches `main` with that branch's landing; `sim.js`
+   `worktree-agent-ac37d55e26a5e56f3` and reaches `main` with that branch's landing; the wiki's simulation
    already follows it, and `simcheck.mjs` checks this case as a rule.
 3. **A hollow rectangle is ordered from beside the press round to the press.** Its first site is
    the one next to the pressed corner and its last is the pressed corner itself. Nothing breaks;

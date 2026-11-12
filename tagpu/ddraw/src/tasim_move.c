@@ -4,14 +4,14 @@
 
    The planner's scratch and the bodies' are the WIKISIM's (tagpu_wikisim_init sizes the planner's for the map), so
    a walk allocates nothing per step but what tasim_grow adds once; no globals. Every distance is a double rounded
-   once per operation, the planner's ties broken by push order, so it walks where sim.js walks. */
+   once per operation, the planner's ties broken by push order, so every build walks the same path. */
 #include <math.h>
 #include <string.h>
 #include "tasim.h"
 
 #define FOLLOW  48
 
-/* ---- MOVEMENT, sim.js's (research/notes/ingame-wiki.md, *How units move*), which says why each
+/* ---- MOVEMENT (research/notes/ingame-wiki.md, *How units move*, which says why each
    rule is so. A mobile unit's body is its footprint's box about its centre, a structure's its
    footprint, and a builder within build distance of a site it has not started holds the site as a
    claim. Bodies overlap only with area in common. THE STEP RULE: a step may not make its unit
@@ -84,7 +84,7 @@ static double rect_gap(WIKIRECT a, WIKIRECT b)
     return sqrt(dx * dx + dz * dz);
 }
 
-/* the site u's first order claims, sim.js's claim: a build not started yet that u has reached --
+/* the site u's first order claims: a build not started yet that u has reached --
    its centre within build distance of the site, or its body within a step of it, which is how a
    builder whose BuildDistance is under its half width arrives (touching the site, or stopped short
    by the site refusing its step); unclaimed there, what stands on the site would never leave it.
@@ -279,7 +279,7 @@ static int clear(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
     return 1;
 }
 
-/* the planner's heap: by f, then by push, a total order, so it pops what sim.js's pops */
+/* the planner's heap: by f, then by push, a total order, so every build pops alike */
 static int heap_less(const WIKIHEAPNODE* a, const WIKIHEAPNODE* b) { return a->f < b->f || (a->f == b->f && a->seq < b->seq); }
 
 static void heap_push(WIKISIM* s, double f, int n)
@@ -321,7 +321,7 @@ static int heap_pop(WIKISIM* s)
     return top;
 }
 
-/* a planner node is free: no cell of it held and no mover's body over it (sim.js plan's free) */
+/* a planner node is free: no cell of it held and no mover's body over it */
 static int node_free(WIKISIM* s, int n, int NW, int fx, int fz, int nmover)
 {
     if (!s->known[n]) {
@@ -344,7 +344,7 @@ static double plan_h(double x, double z, const TARGET* t)
     return h > 0 ? h : 0;
 }
 
-/* THE PLANNER, sim.js's plan: A* over the map's cells, node (i, j) standing u's body on cells
+/* THE PLANNER: A* over the map's cells, node (i, j) standing u's body on cells
    i..i+fx-1, j..j+fz-1. The node to head for into (*wx, *wz), 1; or 0: no nearer place, or no
    scratch. Its bounds: W x H nodes, each pushed once from a seed and at most once from each of its
    eight neighbours, so the heap holds at most 8 x W x H + 4 (tagpu_wikisim_init sizes it). */

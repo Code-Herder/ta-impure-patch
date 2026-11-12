@@ -1,4 +1,5 @@
-/* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
+/* simcheck.mjs -- plays every demo of the wiki's entries through the wiki's simulation (the DLL's C core, run as a host
+   through tools/wiki/mockup/simhost.js), headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
    usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1]
@@ -9,7 +10,7 @@
        comparison with the entry's own types plays both inside it), so no claim spans two shards.
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
-   input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
+   input plays out as its trip through the sidebar (THE BUILD TRIP, tagpu_wikisim.h) and is checked as one; --null-layout plays them with
    no sidebar, where a `build` arms at once. Each demo plays in every context: the entry's own types and each casting
    of tools/wiki/casting-fixture.json (identity, shifted, unbound), each at Interface Type 1 and 0; --casting and
    --iface keep one of each. A demo is checked on its claims in every context, except where the casting leaves one of
@@ -18,10 +19,11 @@
    context themselves.
 
    THE UNITS' SCRIPTS: when gfx packs built by tools/wiki/gfx.py hold them (tools/wiki/mockup/gfx/, gitignored, read
-   from the game), every context is played again with them, through serve.py's host (cobhost.mjs), as the game's wiki
+   from the game), every context is played again with them, the host reading each type's script and sound category
+   from the packs (ctx.packs, the first pack naming a type), as the game's wiki
    plays its demos; --no-scripts keeps the plays without. Under --pack each type's script comes from the mod's own
    stage packs first (DIR/stage/, which sidepacks.py writes), then the gfx packs. Every play must end on its own end,
-   never stopped by a wait that ran past its max (sim.js UNTILS), and with scripts no type may be quarantined (the
+   never stopped by a wait that ran past its max (WIKI_UNTIL_*), and with scripts no type may be quarantined (the
    host's notes).
 
    --pack DIR plays the demos in a mod's pack instead (tools/wiki/sidepacks.py writes them to the gitignored
@@ -51,8 +53,8 @@
    planner reaches. Their tallies print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
-   WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
-   layout, and plays them through the DLL's sim that way.
+   WikiSim.play through the module object simhost.js exports; tools/wiki/simparity.mjs runs them on the host's
+   three builds at once.
 
    A demo is a scene and inputs, so a change to the rules, the figures or the map can quietly turn a demo into one
    that no longer shows its claim; this is what notices. The checks name the entry's deposits by their cell
@@ -60,8 +62,9 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
-const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
+import path from 'node:path';
+import { scripts, sounds, soundSource } from './gfxpacks.mjs';
+const WikiSim = createRequire(import.meta.url)('./mockup/simhost.js');
 const WikiReplay = createRequire(import.meta.url)('./mockup/replay.js');
 const WikiSound = createRequire(import.meta.url)('./mockup/sound.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
@@ -87,8 +90,10 @@ function contexts() {
   const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`) : [];
   const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
   if (!Object.keys(scripts(packs)).length) return mine(cs);
-  const host = cobHost();
-  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))]);
+  /* `packs` is what the host reads (repository-relative); `snd` is this check's own reading of the same packs' sound
+     categories, which the death claim (gameClaims) holds the played WAV to */
+  const dirs = packs.map(d => path.relative(ROOT, d));
+  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, packs: dirs, snd: soundSource(packs) } }))]);
 }
 function baseContexts() {
   if (PACK) {
@@ -127,7 +132,7 @@ const holds = (u, [cx, cz]) => covers(u, [cx, cz, 1, 1]) === 1;
 const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1] * 16 && z < (r[1] + r[3]) * 16;
 
 /* the type the context casts in place of the entry's unit `t`, and that type's footprint: the casting's for a bound
-   cast, else t's own (no casting, or the cast unbound), as sim.js binder renames them */
+   cast, else t's own (no casting, or the cast unbound), as the binding renames them */
 const castOf = (entry, casting, t) => casting && entry.units[t] ? casting.casts[entry.units[t].cast] : null;
 const typeIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.type : t; };
 const footprintIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.footprint : entry.units[t].footprint; };
@@ -152,7 +157,7 @@ const armedAt = (r, e) => e.at + (r.layout ? TRIP_UP : 0);
 // the ticks of the presses of k, an action or a button, in the data's order
 const presses = (demo, k) => demo.inputs.filter(e => e.down === k).map(e => e.at);
 /* the ticks the clicks of action k land on: an `order` lands at its press at type 1 and at its release at type 0
-   (sim.js leftClick); every other press acts on its press. A check reads the frame after it. */
+   (tagpu_wikisim.c left_click); every other press acts on its press. A check reads the frame after it. */
 const lands = (r, demo, k) => k !== 'order' || r.iface ? presses(demo, k)
   : presses(demo, k).map(t => demo.inputs.find(e => e.up === k && e.at >= t).at);
 const fresh = (v, type) => v.units.filter(u => u.type === type && !['mex', 'geo'].includes(u.id));
@@ -502,7 +507,7 @@ const RING_SELF_CHECK = JSON.stringify(ringOf(2, [20, 9, 5, 5])) === JSON.string
   JSON.stringify(ringOf(2, [10, 15, 5, 5])) === JSON.stringify(ring5(10, 15));
 if (!RING_SELF_CHECK) throw new Error('ringOf does not give ring5 on the 5 x 5 solar collector');
 /* the cells of a building of f x f centred at world (x, z): its first cell is 0x4197D0's rounding, floor((v - 8f + 8)
-   / 16), as sim.js `origin` places a scene unit and a build cursor's site. The scene's solar collector stands at
+   / 16), as the simulation places a scene unit and a build cursor's site. The scene's solar collector stands at
    (360, 184): cells 20..24 x 9..13 for stock's 5 x 5. */
 const cellsAt = (x, z, f) => [Math.floor((x - 8 * f + 8) / 16), Math.floor((z - 8 * f + 8) / 16), f, f];
 const solarOf = r => { const f = r.fp('ARMSOLAR')[0]; return cellsAt(360, 184, f); };
@@ -692,8 +697,8 @@ const BUILDSHAPES_RULES = {
   },
 };
 
-/* ---- the sidebar (research/notes/ingame-wiki.md, *The left sidebar on the stage*; sim.js "the sidebar's rules" and
-   "the build trip") ----
+/* ---- the sidebar (research/notes/ingame-wiki.md, *The left sidebar on the stage*; tagpu_wikisim.c's
+   sidebar rules and THE BUILD TRIP) ----
    Every build input of a demo played with a layout is a trip: it is never locked on the fixture, it arms its
    building on the release at t + TRIP_UP and not before, the cursor is back where it stood at t + TRIP, and it goes
    through the pages written here. A path is the page shown at the build's tick, then each pager press up to the
@@ -1050,10 +1055,10 @@ const SIDE_RULES = {
   },
 };
 
-/* ---- the context (sim.js `context`, `resolve`, `binder`; decisions 12-18): the Interface Type's rows, the resolved
+/* ---- the context (tagpu_wikisim_init's context, THE RESOLVED SCRIPT, THE BOUND ENTRY; decisions 12-18): the Interface Type's rows, the resolved
    script's data rule, G cells, locks for an unbound cast, and what a context or a casting is refused for. Each case
-   names its context. The type-0 rows were MEASURED in game on 2026-10-28 except two [INFERRED] ones (sim.js
-   `leftClick`), so these pin the sim to the engine's outcomes. */
+   names its context. The type-0 rows were MEASURED in game on 2026-10-28 except two [INFERRED] ones (tagpu_wikisim.c
+   left_click), so these pin the sim to the engine's outcomes. */
 const T0 = { side: 0, casting: null, iface: 0 }, T1 = { side: 0, casting: null, iface: 1 };
 const click = (s, at, b, mods = []) => { s.input({ move: at }); for (const k of mods) s.input({ down: k }); s.input({ down: b }); s.input({ up: b }); for (const k of mods) s.input({ up: k }); };
 const refuses = f => { try { f(); return false; } catch (e) { return e.message; } };
@@ -1100,7 +1105,7 @@ const CTX_RULES = {
     click(s, [200, 300], 'rmb');
     return kept && disarmed && selIds(s.view()) === '' && s.orders('ck').length === 0 && s.orders('pw').length === 0;
   },
-  /* the click window (sim.js CLICK_TIME, CLICK_BOX): a left release is a click when its press is under 25 ticks old
+  /* the click window (tagpu_wikisim.c CLICK_TIME, CLICK_BOX): a left release is a click when its press is under 25 ticks old
      and the release point under 32 world units from the press point on each axis, else a box, at both types. Every
      release lands beside ck's centre, on it, and every press on the same side of it, so a click there selects ck and
      a box from the press holds nothing and deselects */
@@ -1154,10 +1159,9 @@ const CTX_RULES = {
   'the bound entry renames every bound type, keeps the units\' order, and builds by cast'(entry) {
     const c = ident();
     for (const k of Object.values(c.casts)) k.type = `X${k.type}`;
-    const b = WikiSim.bindEntry(entry, c), demo = entry.demos.find(d => d.id === 'click');
+    const demo = entry.demos.find(d => d.id === 'click');
     const r = run(entry, demo, null, { ...T1, casting: c }), built = fresh(r.last.v, 'XARMMEX');
-    return same(Object.keys(b.units), Object.keys(entry.units).map(t => `X${t}`)) && same(b.units.XARMCK.builds, ['XARMMEX', 'XARMGEO']) &&
-      b.units.XARMCK.name === 'Construction KBot' && Object.values(b.scenes).every(g => g.units.every(u => u.type[0] === 'X')) &&
+    return same(r.sim.types, Object.keys(entry.units).map(t => `X${t}`)) && r.all[0].v.units.every(u => u.type[0] === 'X') &&
       built.length === 1 && built[0].built === 1 && !r.last.v.units.some(u => u.type === 'ARMMEX');
   },
 };
@@ -1354,11 +1358,12 @@ const GFX_PACKS = () => {
   const d = `${ROOT}tools/wiki/mockup/gfx`;
   return fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`).filter(x => fs.existsSync(`${x}/scene.json`)) : [];
 };
+// the context that takes the packs' sounds and none of their scripts
+const SOUNDS = () => ({ ...T1, packs: GFX_PACKS().map(d => path.relative(ROOT, d)), scripts: false });
 const SOUND_RULES = {
   'the player\'s clicks say select, SelectMultipleUnits, notoktobuild and oktobuild, one reply a second'(entry) {
-    const snd = soundSource(GFX_PACKS());
     if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
-    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, SOUNDS());
     const names = v => v.sound.events.map(([, k, n]) => (k ? `kind${k}` : WikiSim.SND_NAMES[n])).join(' ');
     const steps = n => { for (let i = 0; i < n; i++) { s.step(); s.view(); } };
     click(s, [304, 176], 'lmb');                                   // select ck: heard on the next tick's consumer
@@ -1378,9 +1383,8 @@ const SOUND_RULES = {
      0x403CDF), and a build order says no ok (MobileBuild never calls 0x438880): the Peewee stands on the site, the
      constructor says cant once while it steps off, then builds */
   'a builder whose site a unit stands on says cant once, no ok, and builds once it is clear'(entry) {
-    const snd = soundSource(GFX_PACKS());
     if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
-    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, SOUNDS());
     click(s, [304, 176], 'lmb');                                   // select ck
     for (let i = 0; i < 40; i++) s.step();
     s.input({ build: 'ARMMEX' });
@@ -1404,7 +1408,7 @@ export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES
 
 /* decision 12 for an unbound cast: the tick and the authored type a demo stops on in this casting -- tick 0 for a
    scene unit of an unbound cast, else the first `build` of one -- or null when it plays to its end */
-/* the casting `C` with every bound cast's economy outside a game's bounds (sim.js econFits), and with every bound cast
+/* the casting `C` with every bound cast's economy outside a game's bounds (tagpu_wikidata_cast_economy), and with every bound cast
    unbound: a page entry plays the first exactly as `C`, and a game stops on it where it stops on the second */
 const econOff = C => ({ ...C, casts: Object.fromEntries(Object.entries(C.casts).map(([c, k]) =>
   [c, k && { ...k, metalStorage: -1, energyUse: 1e7 }])) });
@@ -1421,7 +1425,7 @@ function expectedLock(entry, d, casting) {
    is "game", named by the tree or not, each demo's game script played by WikiSim.game in every context ---- */
 /* the cast record a game entry's unit `t` binds to: the rival casting's for a rival unit, else the casting's; in a
    players entry null for a cast whose sight is below the floor or whose radius index the layout's table does not store,
-   which the binder leaves unbound (sim.js sightFits). Every context plays on LAYOUT, whose table that is. */
+   which the binder leaves unbound (tagpu_wikidata_sight_ok). Every context plays on LAYOUT, whose table that is. */
 const gameCast = (entry, ctx, t) => {
   const u = entry.units[t], k = u && (u.rival ? ctx.casting && ctx.rival : ctx.casting), c = k ? k.casts[u.cast] : undefined;
   if (!c || entry.players !== true) return c;
@@ -1507,7 +1511,7 @@ function stallClaims(entry, d, layout, ctx, ok) {
   ok(r.last.v.game.starved, `in refuse mode the cut game ends starved (tick ${r.last.t})`);
 }
 
-/* THE RELEASE SWEEP, a live entry's game (rewind-spec.md section 5.2; sim.js THE RELEASE and THE LIVE DATA RULE):
+/* THE RELEASE SWEEP, a live entry's game (rewind-spec.md section 5.2; tagpu_wikisim_release and THE LIVE DATA RULE):
    Back to now's release between tick r and r + 1, for every r from 0 to the game script's last input, then the
    script played on to the game's end, which it must reach without a lock, a starved pass, a kill that found no unit
    or a stalled wait. The release drops the trip it cuts off, every build's builder and every reclaim's reclaimer is
@@ -1515,7 +1519,7 @@ function stallClaims(entry, d, layout, ctx, ok) {
    this plays every such cost out, the economy's included,
    rather than arguing it. Each r is a fresh game, so the sweep costs (last input + 1) games: about 2300 for the
    rewind entry's four distinct games, 20 s a context. It runs in every context without the units' scripts, which
-   reach the game only through a builder's INBUILDSTANCE gate (sim.js stance); with them a game costs about 75 times
+   reach the game only through a builder's INBUILDSTANCE gate; with them a game costs about 75 times
    as much (MEASURED 2026-11-01: 0.75 s against 10 ms, 2700 ticks), half an hour a context, so a starve that only the
    scripts' later start of work would bring is the one case the sweep does not play. */
 function releaseSweep(entry, d, layout, ctx, ok) {
@@ -1917,7 +1921,7 @@ function runTakeover(entry, d, layout, ctx) {
     live: { all: live, last, gv: gv && gv.v, go: gv && gv.o, ids, why, human: h, F: c => first.get(c) } };
 }
 /* the recorded script timeline `id` of `tl` plays from tick R on: the original's the game's inputs; a fork's its part,
-   then what it carries of its parent's from its own R (sim.js fork: every other seat's inputs, no kill) */
+   then what it carries of its parent's from its own R (tagpu_wikisim_fork: every other seat's inputs, no kill) */
 function scriptOf(d, tl, id, R) {
   const t = tl[id];
   if (t.parent < 0) return d.game.inputs.filter(e => e.at >= R);
@@ -1974,7 +1978,7 @@ function takeoverClaims(entry, d, layout, ctx, rr, ok) {
       const s = straight(entry, d, layout, ctx, f.tl, k.selected, k.pickR - 1, false);
       if (pbad) {}
       else if (f.game.tick !== k.pickR - 1 || !(f.W && sameWorld(s, rr.ids, f.W))) pbad = `the game at demo tick ${f.tick} is not its chain at ${k.pickR - 1}`;
-      else if (WikiSim.refreshAt(m.R, k.pickR) !== k.pickR || k.pickR === m.R || k.pickParent !== m.id)
+      else if (WikiReplay.refreshAt(m.R, k.pickR) !== k.pickR || k.pickR === m.R || k.pickParent !== m.id)
         pbad = `pickR ${k.pickR} is no refresh past the first of F${m.id} (from ${m.R}), or the parent ${k.pickParent} is not it`;
       else if (k.pickEvict !== (e.evict === null ? -1 : e.evict)) pbad = `the eviction ${k.pickEvict} is not forkEvict's ${e.evict}`;
       s.free();
@@ -2263,8 +2267,8 @@ function cameraClaim(entry, d, rr, ok) {
   }
   ok(!bad, `the camera is eye (0, 0) until a press acts, then the Jump's or the Follow's seat's at the shown tick${bad ? ` (not on ${bad})` : ''}`);
 }
-/* THE GOALS' CLAIM, a game's: every move order of its script goes to a place its unit's planner reaches (sim.js THE
-   PLANNER). On every tick the order stands, some node within a cell of the point stands the unit's body inside the map
+/* THE GOALS' CLAIM, a game's: every move order of its script goes to a place its unit's planner reaches (tasim_move.c
+   THE PLANNER). On every tick the order stands, some node within a cell of the point stands the unit's body inside the map
    and clear of every body but those it overlaps already -- units, walking or not, and features -- and joins the nodes
    the unit stands on through clear nodes, sides or corners with both sides clear. A goal no node reaches makes every
    leg's search expand the whole grid, the dearest tick a game has. A claim on a build site, which the planner also
@@ -2660,7 +2664,7 @@ for (const c of games.length ? contexts() : []) {
       } else {
         gameClaims(entry, d, c.ctx, r, ok, t.refused, t.deaths);
         stallClaims(entry, d, c.layout, c.ctx, ok);
-        if (entry.live && !c.ctx.cob) releaseSweep(entry, d, c.layout, c.ctx, ok);
+        if (entry.live && !c.ctx.packs) releaseSweep(entry, d, c.layout, c.ctx, ok);
         if (c.name === 'identity') {
           // a game leaves a cast whose economy is outside its bounds unbound: it stops where it stops on unbound casts
           const lk = gameLock(entry, d, { ...c.ctx, casting: castsOff(c.ctx.casting) });

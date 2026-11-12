@@ -1,4 +1,4 @@
-/* pose.js -- a unit's script pose on the wiki's stage: the posed model the COB host holds (cob.js `model`) composed over
+/* pose.js -- a unit's script pose on the wiki's stage: the posed model the simulation host answers (the drop-in's `poses`) composed over
    the type's piece table (tools/wiki/gfx.py writes it), and the pack's vertices carried through it. The arithmetic is
    tagpu/ddraw/src/tagpu_posemath.h's and tagpu_wikiworld.c `pose_compose`'s, in float32 step for step, so the mockup
    draws the pose the game's stage draws; tools/wiki/posecheck.py holds it equal to tools/tacob's composition, which

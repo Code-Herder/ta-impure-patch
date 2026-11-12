@@ -826,8 +826,8 @@ store `0x4994C7`) and stores the cursor's world point -- the words `main+0x2CAC`
 three from the current point (`0x49946A..0x49949B`). The release (`0x4993E9..0x499441`) compares
 `|+0x2C92 − +0x2C9E|` and `|+0x2C9A − +0x2CA6|` with 0x20: the world x and z of the press against
 the last point before the release, so the 32 are world units on each axis, and a cursor that
-wanders and comes back still clicks. DISASSEMBLED. The wiki's simulations take the same window
-(`sim.js` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
+wanders and comes back still clicks. DISASSEMBLED. The wiki's simulation takes the same window
+(`tagpu_wikisim.c` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
 
 **`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
 change test.** One call site, `0x4995B3`, which every left-button path above jumps to.

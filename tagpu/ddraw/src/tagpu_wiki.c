@@ -553,9 +553,9 @@ static void sim_free(void)
 
 /* ---- Try it yourself -------------------------------------------------------------------------
 
-   wiki.js's Try it yourself: the simulation made on the demo's scene with no script (sim.js
-   create), and the player's pointer over the stage, the left and right buttons pressed on it and
-   Shift, Alt, Ctrl and Alt+Z / Alt+X given to it as sim.js `input` -- here, on this thread, from
+   wiki.js's Try it yourself: the simulation made on the demo's scene with no script (the
+   drop-in's create), and the player's pointer over the stage, the left and right buttons pressed on it and
+   Shift, Alt, Ctrl and Alt+Z / Alt+X given to it as tagpu_wikisim_input -- here, on this thread, from
    the same messages the window takes while it is open. The engine is handed none of them: every
    one is taken by the capture above, Try it or not, so nothing here changes what the engine sees.
 
@@ -725,7 +725,7 @@ static void frame_fit(const TAGPU_CMD_WIKIHIT* h, WIKISTAGEFIT* f, int* Wg, int*
    is the stage itself, so no stage HUD control, no part of Leave's question and nothing of the page
    lies over it, and the point is on the column or the map. The map is the held view's, the size every
    simulation of the entry has. In world units as the game simulation takes them, the column's rows
-   starting at the top bar's first (sim.js DZ), given to the human seat (seat 0, or the seat a takeover
+   starting at the top bar's first, given to the human seat (seat 0, or the seat a takeover
    took). A watching frame takes none -- Watching's, and a takeover entry's before its takeover: its
    viewer plays no seat (live_try). */
 static int live_world(int cx, int cy, double* wx, double* wz)
@@ -957,7 +957,7 @@ static const WIKI3DSOUND* sound_of(void)
 }
 
 /* THE UNITS' SCRIPTS AND SOUNDS come from the one 3D load, both or neither, as simparity.mjs
-   gives sim.js both with --scripts; `*snd` may be NULL when only the scripts are asked */
+   --hash --scripts gives the host both; `*snd` may be NULL when only the scripts are asked */
 static int scripts_now(const WIKICOBSRC** src, const WIKISNDSRC** snd)
 {
     const WIKI3D* w = NULL;
@@ -1586,8 +1586,8 @@ static void page_fill(TAGPU_PK_WIKI* w)
 }
 
 /* a UTF-8 string -- a layout's name, a casting's type or title, a filled caption -- as a JSON
-   string: its bytes as they are, which is how the readers take them (sim.js counts a name's UTF-8
-   bytes against WIKI_SIDE_NAME and a title's against TITLE_MAX), the rest escaped */
+   string: its bytes as they are, which is how the loader takes them (it counts a name's UTF-8
+   bytes against WIKI_SIDE_NAME and a title's against WIKI_TITLE_MAX), the rest escaped */
 static void ustr(FILE* f, const char* s, size_t n)
 {
     size_t i;
@@ -1601,13 +1601,13 @@ static void ustr(FILE* f, const char* s, size_t n)
     fputc('"', f);
 }
 
-/* A layout as sim.js's schema writes it (research/notes/ingame-wiki.md,
+/* A layout as its schema writes it (research/notes/ingame-wiki.md,
    *art/wiki/side/<name>.json*): what tagpu_wikidata_layout reads back, and what simparity.mjs's
-   --layout and --try give sim.js. Screens by name, in their index order, which a JSON object
+   --layout and --try give the host. Screens by name, in their index order, which a JSON object
    keeps. */
 static void layout_json(FILE* f, const WIKILAYOUT* L)
 {
-    /* sim.js ROLES, by WIKI_ROLE_* */
+    /* the gadgets' roles, by WIKI_ROLE_* */
     static const char* const ROLE[WIKI_NROLES] = { "orders", "buildtab", "build", "prev", "next", "stop", "order" };
     int i, j, k, n;
     fprintf(f, "{\"format\":1,\"width\":%d,\"height\":%d,\"sides\":[", L->width, L->height);
@@ -2205,7 +2205,7 @@ static void jstr(FILE* f, const char* s, size_t n)
     fputc('"', f);
 }
 
-/* sim.js's name of a WIKI_KEY_*, "" for none */
+/* the data's name of a WIKI_KEY_*, "" for none */
 static const char* key_name(int k)
 {
     const char* s = tagpu_wikidata_key_name(k);
@@ -2213,7 +2213,7 @@ static const char* key_name(int k)
 }
 
 /* A casting as a pack's casting record writes it ({"casts": {...}}, tools/wiki/sidepacks.py): what
-   tagpu_wikidata_casting reads back and simparity.mjs --try gives sim.js. Each figure at 17
+   tagpu_wikidata_casting reads back and simparity.mjs --try gives the host. Each figure at 17
    significant digits, so the double read back is the one written. */
 static void casting_json(FILE* f, const WIKICASTING* c)
 {
@@ -2575,8 +2575,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         fprintf(f, ",\"frame_img\":[%d,%d,%d,%d],\"frame_clip\":[%d,%d,%d,%d]", s_hit.img[0], s_hit.img[1], s_hit.img[2],
                 s_hit.img[3], s_hit.clip[0], s_hit.clip[1], s_hit.clip[2], s_hit.clip[3]);
     }
-    /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
-       (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */
+    /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to the host
+       (null: none), and which one it is; and its context, the drop-in's ctx, the casting written whole */
     fprintf(f, ",\"layout_src\":\"%s\"", !demo_on() ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"
                : s_laySrc == WIKISTAGE_LAYOUT_FIXTURE ? "fixture" : "none");
     fprintf(f, ",\"engine_side\":%d,\"engine_iface\":%d", s_side, s_iface);

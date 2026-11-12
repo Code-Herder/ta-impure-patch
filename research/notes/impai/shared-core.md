@@ -1,6 +1,6 @@
 # Layers and modules
 
-One copy of the simulation and of the player-facing rules, shared by the in-game wiki, tasim, ImpAI and the game. Today the same rules are written three times: in `sim.js` (3,747 lines), in its C port -- the shared core `tasim_*.c` (S1 carved it out of `tagpu_wikisim.c`, which keeps the wiki's front end) -- and in the game's own `tagpu_resource.c`, `tagpu_place.c` and `tagpu_sweep.c`.
+One copy of the simulation and of the player-facing rules, shared by the in-game wiki, tasim, ImpAI and the game. Today the same rules are written twice: in the shared core `tasim_*.c` (S1 carved it out of `tagpu_wikisim.c`, which keeps the wiki's front end) and in the game's own `tagpu_resource.c`, `tagpu_place.c` and `tagpu_sweep.c`. The wiki's mockup plays the same C through a host process ([retiring sim.js](sim-js.html)), so it carries no copy of its own.
 
 ## The layers
 
@@ -50,13 +50,13 @@ The files are `tagpu/ddraw/src/tasim_*.c` over one internal header, `tasim.h` (t
 Where S1 differs from the table above:
 
 - **`tasim_defs` is the accessors only.** The loaders are still `tagpu_wikidata.c`'s, and the casting's binder (`bind`) is still the front end's: both move when the definitions grow past the wiki's.
-- **`tasim_cob` is the binding, not the host.** The host stays `tagpu_wikicob.c` under its own name, which `serve.py` and the checks build as they did.
+- **`tasim_cob` is the binding, not the host.** The host stays `tagpu_wikicob.c` under its own name, which the wiki's simulation host (`wikitest serve`) and `serve.py`'s `POST /cob` build with it.
 - **The state hash and the fork stay in the front end,** with the view and the other entry points: the hash's items read the input seats and the sidebar, and the fork rewrites the script, both the front end's.
 - **The spray and the sound are in the state hash** (`tagpu_wikisim.h`, items 9 and 10), as before the carve; taking them out is a change of behaviour, not S1's.
 - **The front end keeps the rules S3 moves:** `tagpu_wikisim.c`'s copies of `tagpu_resource.c` (the snap, Quick Build), `tagpu_place.c` (the placement gesture) and `tagpu_sweep.c` (the reclaim sweep). It also keeps the selection helpers (`is_builder`, `available`), `unit_at` and the grid's fog reads (`seen`, `flat`), which only the front end reads.
 - **The core reads one thing of the front end's** through the shared `WIKISIM`, the sidebar: its pages of a type (`tasim_npages`, by `enter`, since a unit's page state is set at its create), and its shown unit, which `tasim_remove_unit` clears with its unit. Nothing else: the acting seat's input state (`ST`) and arming a building (`arm`, `disarm`) are the front end's alone.
 
-The build lists take the core by its name: the Makefile compiles every `src/tasim_*.c` on SSE2 with `tagpu_wikisim.c`, `tools/wiki/tasimsrcs.mjs` lists them for `simparity`, `framecheck`, `scenecheck`, `stagecheck` and `sidecheck`, and `wikilaycheck.py` globs the same files.
+The build lists take the core by its name: the Makefile compiles every `src/tasim_*.c` on SSE2 with `tagpu_wikisim.c`, `tools/wiki/tasimsrcs.mjs` lists them for `wikibuild.mjs` (the simulation host's three builds), `framecheck`, `scenecheck`, `stagecheck` and `sidecheck`, and `wikilaycheck.py` globs the same files.
 
 ## The shared rules
 
@@ -76,4 +76,4 @@ The build lists take the core by its name: the Makefile compiles every `src/tasi
 
 ## The order
 
-S1 carves the core with no change in behaviour, while `sim.js` still exists so that `simparity.mjs` proves it. S2 retires `sim.js`. S3 moves the game's rules above `WORLDQ` ([landings](landings.html)).
+S1 carved the core with no change in behaviour while `sim.js` still existed, so that `simparity.mjs` proved it. S2 retired `sim.js`: the mockup and the node checks play the core through the host, and `simparity.mjs` holds the host, the sanitized build and the i686 build under Wine to one another. S3 moves the game's rules above `WORLDQ` ([landings](landings.html)).

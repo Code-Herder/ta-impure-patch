@@ -14,19 +14,19 @@
    does not define, a key it does not name, a rectangle or a map size that is not an integer, a
    missing footprint, a BuildTime that is not positive, a unit's facing that is not two numbers
    with a positive, finite length, a demo's `sidebar` that is not a boolean, a unit's `g` that
-   sim.js's checkG refuses, and a text token text.js's checkEntry refuses (tagpu_wikidata_entry).
-   Every other absent figure reads as 0, which every rule of sim.js treats as it treats
-   `undefined` (each one tests `> 0`). It also refuses what the mockup would play: a map wider or
+   is not a list of G cells inside the footprint, held by `vent` exactly when it is not empty, and a text token text.js's checkEntry refuses (tagpu_wikidata_entry).
+   Every other absent figure reads as 0, which every rule treats as absent (each one tests
+   `> 0`). It also refuses: a map wider or
    taller than WIKI_MAP_MAX, a type name that is empty or of WIKI_ID_MAX bytes or more, a type
    with G cells whose footprint passes WIKI_FP_MAX (its G rows hold 16 cells), a `canstop` that
    is neither a number nor a boolean, and a non-boolean `sidebar` on a demo only Try it yourself
-   would read. A unit's `cast` is read, not required: sim.js refuses a unit with no cast, or two
-   units of one cast, only where it binds the entry to a casting, so the loader leaves both to
-   the binding. The demo's build trips (tagpu_wikidata_trips) and the data rule of its resolved script
-   (tagpu_wikidata_buttons) are refused where sim.js refuses them, when a simulation starts.
+   would read. A unit's `cast` is read, not required: the simulation refuses a unit with no cast,
+   or two units of one cast, only where it binds the entry to a casting (tagpu_wikisim.c bind), so
+   the loader leaves both to the binding. The demo's build trips (tagpu_wikidata_trips) and the data rule of its resolved script
+   (tagpu_wikidata_buttons) are refused when a simulation starts (tagpu_wikisim_init).
 
-   IT NORMALISES A FACING AS sim.js's facing() DOES, bit for bit: the same + * / and sqrt, each
-   rounded once, which is why the DLL compiles this file for SSE2 as it compiles the simulation
+   IT NORMALISES A FACING bit for bit in every build: + * / and sqrt only, each rounded once,
+   which is why the DLL compiles this file for SSE2 as it compiles the simulation
    (Makefile, THE WIKI'S SIMULATION). */
 #include <stddef.h>
 #include <stdint.h>
@@ -42,25 +42,25 @@
    40 x 30. */
 #define WIKI_MAP_MAX  128
 
-/* sim.js's KEYS, in its order, which is the order the view lists the held ones in; then its
-   ACTIONS, in its order: what a demo's press does, which the interface type turns into a mouse
+/* THE KEYS, in the order the view lists the held ones in; then the
+   ACTIONS, in order: what a demo's press does, which the interface type turns into a mouse
    button (tagpu_wikidata_button). A simulation holds keys only: an index into its held[] is
    below WIKI_NKEYS, and an action reaches it resolved. */
 enum { WIKI_KEY_SHIFT, WIKI_KEY_ALT, WIKI_KEY_CTRL, WIKI_KEY_Z, WIKI_KEY_X, WIKI_KEY_E, WIKI_KEY_LMB, WIKI_KEY_RMB, WIKI_NKEYS,
        WIKI_ACT_SELECT = WIKI_NKEYS, WIKI_ACT_ORDER, WIKI_ACT_CANCEL, WIKI_NKEYNAMES };
 
-/* sim.js's CASTS, in its order: a unit's place in the demos, which a side's casting answers with
+/* THE CASTS, in order: a unit's place in the demos, which a side's casting answers with
    one of the mod's types (research/notes/ingame-wiki.md, the owner's decisions 13-15). The
    commander is last so that every earlier cast keeps its index and every casting's `builds` bit
    mask its meaning. */
 enum { WIKI_CAST_BUILDER, WIKI_CAST_ADVBUILDER, WIKI_CAST_MEX, WIKI_CAST_MOHO, WIKI_CAST_GEO,
        WIKI_CAST_WALKER, WIKI_CAST_TOWER, WIKI_CAST_WALL, WIKI_CAST_SOLAR, WIKI_CAST_COMMANDER, WIKI_NCAST };
-/* A footprint's side, each axis, in a casting, and the width of a G row's bit mask: sim.js's
+/* A footprint's side, each axis, in a casting, and the width of a G row's bit mask:
    FP_MAX. An entry's type with G cells is held to it too. */
 #define WIKI_FP_MAX    16
 /* A display name with its terminator: the engine's name is 31 code-page bytes (def+0x00 is 0x20
    bytes, DISASSEMBLED), and each Windows-1252 byte is at most 3 bytes of UTF-8 once converted
-   (U+20AC and U+2122 are the widest), so 31 x 3 + 1. sim.js's TITLE_MAX. */
+   (U+20AC and U+2122 are the widest), so 31 x 3 + 1. */
 #define WIKI_TITLE_MAX 94
 /* A caption filled, with its terminator: the stage record's and the page's caption fields. The
    loader refuses an entry one of whose captions could fill past it (text.js's CAPTION_MAX), so no
@@ -83,7 +83,9 @@ typedef struct {
     uint16_t    g[WIKI_FP_MAX];     /* row dz: bit dx set = footprint cell (dx, dz) is a G cell;
                                        the unit's `g`, or every cell when `vent` comes with none */
     int         canstop;            /* FBI canstop, def+0x245 bit 3: STOP is live for a selection
-                                       holding it */
+                                       holding it. The FBI reader 0x42BF40 stores the key's
+                                       `and 1` at 0x42C90B..0x42C936 with a default of 0, so a
+                                       type whose FBI has no canstop has none (DISASSEMBLED) */
     int         activate_when_built;/* FBI activatewhenbuilt, def+0x241 bit 18: a structure
                                        finished, or made whole, is switched on (0x41B9A6) */
     int         canreclamate;       /* FBI canreclamate, def+0x245 bit 0x400: RECLAIM is live for
@@ -93,7 +95,7 @@ typedef struct {
     uint64_t    builds;             /* bit i: its build list names type i of the entry */
 } WIKIDEF;
 
-/* A FEATURE of the entry's `features` table, sim.js's checkFeature: its TDF section's name and
+/* A FEATURE of the entry's `features` table: its TDF section's name and
    figures as tools/wiki/gen-reclaim.mjs reads them. footprint 1..WIKI_FEAT_FOOT cells (the reach
    tagpu_sweep.c's FOOT_MAX gives a feature's centre from its anchor); metal (FeatureDef +0xF0)
    and energy (+0xEC) at least 0 and below WIKI_FEAT_AMOUNT; height (+0xFA) 0..255; blocking, and
@@ -103,7 +105,7 @@ typedef struct {
 #define WIKI_FEAT_NAME   32
 #define WIKI_FEAT_FOOT   16
 #define WIKI_FEAT_AMOUNT 1e7
-/* the bound of a signed economy figure, a cast's energy_use: sim.js's ECON_MAX */
+/* the bound of a signed economy figure, a cast's energy_use */
 #define WIKI_ECON_MAX    1e7
 #define WIKI_FEAT_DEFS   64
 #define WIKI_FEATS_MAX   256
@@ -122,7 +124,7 @@ typedef struct {
     int    ox, oz;
 } WIKISCENEFEAT;
 
-/* THE RECLAIM SWEEP'S KINDS, sim.js's KINDS in its order (tagpu_sweep.h's SWEEP_METAL,
+/* THE RECLAIM SWEEP'S KINDS, in order (tagpu_sweep.h's SWEEP_METAL,
    SWEEP_ENERGY and SWEEP_ALL; the popup's rows top down) */
 enum { WIKI_KIND_METAL, WIKI_KIND_ENERGY, WIKI_KIND_ALL, WIKI_NKINDS };
 
@@ -145,8 +147,7 @@ typedef struct {
 
 /* A GAME ENTRY'S SEATS (research/notes/ingame-wiki-replay-plan.md): each one a player of the game,
    the seat being its index; its name (HUDSEAT's) 1..WIKI_SEAT_NAME - 1 bytes with no "{", and its
-   metal and energy, the skirmish's settings, integers WIKI_SEAT_MIN..WIKI_SEAT_MAX. sim.js's
-   SEATS, SEAT_NAME, SEAT_MIN, SEAT_MAX. */
+   metal and energy, the skirmish's settings, integers WIKI_SEAT_MIN..WIKI_SEAT_MAX. */
 #define WIKI_SEATS     4
 #define WIKI_SEAT_NAME 32
 #define WIKI_SEAT_MIN  200
@@ -186,16 +187,19 @@ typedef struct {
 enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32,
        WIKI_IN_KILL = 64, WIKI_IN_HUD = 128, WIKI_IN_CAMERA = 256 };
 
-/* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
+/* A DEMO'S WAIT: the state a wait holds the demo's clock for.
    IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
    player's holds a move order. BUILT, a demo's k-th such wait: k buildings of the player's have
-   been finished in the demo. SEEKED, a game entry's viewer's only wait (sim.js checkViewer), not
-   one of sim.js's UNTILS: no seek is pending (tagpu_wikireplay.h). WIKI_UNTIL_MAX bounds its max,
+   been finished in the demo. SEEKED, a game entry's viewer's only wait (tagpu_wikidata.c
+   viewer_input), not a demo's: no seek is pending (tagpu_wikireplay.h). WIKI_UNTIL_MAX bounds its max,
    in ticks. */
 enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_UNTIL_SEEKED = 4 };
+/* a demo's wait states by name, WIKI_UNTIL_IDLE..WIKI_UNTIL_BUILT from index 0: the names an entry
+   writes and the view reports */
+#define WIKI_UNTIL_STRINGS { "idle", "arrived", "built" }
 #define WIKI_UNTIL_MAX 3600
 
-/* THE HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its order;
+/* THE HUD'S CONTROLS a game entry's viewer's script presses (in this order;
    the game's keys, hud-in-game.md), WIKI_NHUD of them: the replay HUD's eight, then the live HUD's
    own three, then the replay HUD's Take over set (tagpu_hudinput.c pick_act and lane_act): Take
    over, a picker row, the Forks bay, a lane, Back to main recording, a lane's Save as a replay and
@@ -214,7 +218,7 @@ enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK
        WIKI_HUD_CLOSE, WIKI_HUD_CHIP, WIKI_NHUD,
        WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_HUD_FOLD, WIKI_NPRESS };
 
-/* THE STATS WINDOW'S CHIPS a `chip` press names (sim.js's CHIPS, in its order): the two splits, then
+/* THE STATS WINDOW'S CHIPS a `chip` press names, in order: the two splits, then
    art/hud/layout.json's window.measures keys in that file's order (tools/wiki/castcheck.mjs holds
    the list to the file) */
 enum { WIKI_CHIP_PLAYER, WIKI_CHIP_TEAM, WIKI_CHIP_METAL, WIKI_CHIP_ENERGY, WIKI_CHIP_UNITS, WIKI_CHIP_ARMY,
@@ -252,8 +256,7 @@ typedef struct {
    ticks. `end` an integer 1..WIKI_GAME_END_MAX; each input of a seat of the scene (decision 16:
    every seat acts through its own cursor), and of seat 0 alone unless the sidebar is false (THE
    SEAT RULE, tagpu_wikidata.c), neither caption nor wait, and at most WIKI_GAME_KILLS kills, each
-   of a unit of the merged scene by its explicit id, once, at or before the end. sim.js's
-   GAME_END_MAX, GAME_KILLS. */
+   of a unit of the merged scene by its explicit id, once, at or before the end. */
 #define WIKI_GAME_KILLS   64
 #define WIKI_GAME_END_MAX 5400
 /* A PLAYERS ENTRY'S DEATHS, its game script's kills: at most WIKI_PLAYERS_DEATHS units of one seat
@@ -277,14 +280,13 @@ typedef struct {
     int              has_sidebar, sidebar;
 } WIKIGAME;
 
-/* A LIVE OR TAKEOVER DEMO'S FORK PART (sim.js checkGame): the game inputs the viewer's fork of
+/* A LIVE OR TAKEOVER DEMO'S FORK PART (tagpu_wikidata.c game): the game inputs the viewer's fork of
    `id` goes on with, made at `from` with `parent` its parent timeline and played as `seat`. id
    1..RECR_TIMELINES - 1, the recorder's own bound on the timelines a recording holds
    (tagpu_recrules.h, ingame-wiki-replay-plan.md decision 9), no two parts of one id; from 2..the
    game's end; parent 0..id - 1; seat one of the scene's (THE SEAT RULE), 0 when absent; each
    input a game input of any seat at a tick from..end, a unit killed at most once in the part and
-   at most WIKI_GAME_KILLS kills. A demo holds at most WIKI_DEMO_FORKS. sim.js's TIMELINES and
-   DEMO_FORKS.
+   at most WIKI_GAME_KILLS kills. A demo holds at most WIKI_DEMO_FORKS.
    A TAKEOVER DEMO'S KEPT FORK, the same record with `end`: a fork the recording's file holds when
    the demo starts, as it was played. At most REC_FORK_LIMIT, id k + 1 at index k; parent
    0..id - 1; from a refresh of the parent's segment after its first (the original's 1, a kept
@@ -376,7 +378,7 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e);
    caption points into `v`'s tree, and `at` reads 0 when absent (a demo's inputs must carry it,
    one fed straight to the sim need not). 0 with a message in `err` when it is refused. */
 int  tagpu_wikidata_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
-/* The same for an input of a game script (sim.js checkGame's rules for one input): no caption and
+/* The same for an input of a game script (the game rules for one input): no caption and
    no wait, a `seat` an integer 0..WIKI_SEATS - 1 (the scene's seats and the sidebar bound it
    further where the demo is read), a kill {at, kill} alone, its id pointing into `v`'s tree. */
 int  tagpu_wikidata_game_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* err, size_t errn);
@@ -394,33 +396,33 @@ WIKIDATA* tagpu_wikidata_load_resource(char* err, size_t errn);
 /* A type of the entry by name, or -1. */
 int tagpu_wikidata_def(const WIKIENTRY* e, const char* name);
 
-/* sim.js's name of a key or an action: "shift", "alt", "ctrl", "z", "x", "e", "lmb", "rmb",
+/* The data's name of a key or an action: "shift", "alt", "ctrl", "z", "x", "e", "lmb", "rmb",
    "select", "order", "cancel"; NULL out of range. */
 const char* tagpu_wikidata_key_name(int key);
 
-/* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "commander"; NULL out of range. */
+/* The data's and text.js's name of a cast: "builder", "advbuilder", ... "commander"; NULL out of range. */
 const char* tagpu_wikidata_cast_name(int cast);
 
-/* sim.js's name of a sweep kind: "metal", "energy", "all"; NULL out of range. */
+/* The data's name of a sweep kind: "metal", "energy", "all"; NULL out of range. */
 const char* tagpu_wikidata_kind_name(int kind);
 
-/* sim.js's name of a replay HUD control: "play", "speed", ... "leave:no"; NULL out of range. And
+/* The data's name of a replay HUD control: "play", "speed", ... "leave:no"; NULL out of range. And
    the control of a name, or -1. */
 const char* tagpu_wikidata_hud_name(int hud);
 int         tagpu_wikidata_hud(const char* name);
-/* 1 when a demo of a live entry (`live` 1: sim.js's LIVE_CONTROLS) or of a replay entry (0: its
-   REPLAY_CONTROLS) presses control `hud`, else 0 */
+/* 1 when a demo of a live entry (`live` 1: the live set) or of a replay entry (0: the replay
+   HUD's eight) presses control `hud`, else 0 */
 int         tagpu_wikidata_hud_presses(int hud, int live);
-/* 1 when `hud` is one of the replay HUD's Take over set (sim.js's TAKEOVER_CONTROLS), else 0; a
+/* 1 when `hud` is one of the replay HUD's Take over set, else 0; a
    takeover entry's demo presses these and both sets above */
 int         tagpu_wikidata_hud_takeover(int hud);
-/* 1 when `hud` is one of the Players set (sim.js's PLAYERS_CONTROLS), else 0; a players entry's demo
+/* 1 when `hud` is one of the Players set, else 0; a players entry's demo
    presses these and the replay HUD's, and no other entry's presses one */
 int         tagpu_wikidata_hud_players(int hud);
-/* sim.js's name of a chip: "player", "team", "metal", ... "excess"; NULL out of range */
+/* The data's name of a chip: "player", "team", "metal", ... "excess"; NULL out of range */
 const char* tagpu_wikidata_chip_name(int chip);
 
-/* A SEAT'S CAMERA, sim.js's seatCam: the centre of seat `seat`'s view at game tick `t`, into *x, *z;
+/* A SEAT'S CAMERA (the host's `seatcam`): the centre of seat `seat`'s view at game tick `t`, into *x, *z;
    1, or 0 when the seat has no camera (its scene gives none: "Camera was not recorded"). The
    scene's `camera`, then each of the seat's camera inputs in file order: at tick t the last one
    with at <= t gives its point once t >= at + over, else each axis a + trunc((b - a) (t - at) /
@@ -430,7 +432,7 @@ const char* tagpu_wikidata_chip_name(int chip);
    `sc` is the demo's entry scene, `g` its game. */
 int         tagpu_wikidata_seat_cam(const WIKISCENE* sc, const WIKIGAME* g, int seat, int t, int* x, int* z);
 
-/* THE REFRESH WALK (sim.js refreshAt): the last GameTime up to T that the recorder's writer flags a
+/* THE REFRESH WALK (replay.js refreshAt is its twin): the last GameTime up to T that the recorder's writer flags a
    refresh (reclossy_is_refresh) in a segment whose first iteration is `first`, walked from it with
    the ordinal from 1; `first` itself when T is below first + 1. At most T - first + 1 steps. */
 int         tagpu_wikidata_refresh_at(int first, int T);
@@ -442,24 +444,24 @@ int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name);
    type `iface` (1 exactly when 1, else 0), or NULL when no button has that name. */
 const char* tagpu_wikidata_button_word(const char* s, size_t len, int iface);
 
-/* A key or an action as interface type `iface` presses it, sim.js's button(): select is the left
+/* A key or an action as interface type `iface` presses it: select is the left
    button at both types, cancel the right one at both, order the right one at type 1 and the left
    one at any other; a key comes back as given. */
 int tagpu_wikidata_button(int key, int iface);
 
-/* THE DATA RULE OF A RESOLVED SCRIPT, sim.js's resolve(): the demo's inputs in the simulation's
+/* THE DATA RULE OF A RESOLVED SCRIPT: the demo's inputs in the simulation's
    order (by tick, then file order), each action turned into its button at `iface`; a press of a
    mouse button the input's seat already holds, or a release of one it does not hold, refuses the
    demo with the input's tick and seat. Each seat has its own hand, from nothing, or with `held`
    from held[2 * seat] (the left button) and held[2 * seat + 1] (the right), WIKI_SEATS seats: the
    buttons a fork's carried seats hold when it takes over. Keys are not held to it: a key's second
    down is an auto-repeat. An input already resolved is its own button. 1 when it holds, else 0
-   with a message in `err`. sim.js asks it of every scripted demo. */
+   with a message in `err`. tagpu_wikisim_init asks it of every scripted demo. */
 int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, const int* held, char* err, size_t errn);
 
 /* ---- a casting: one side's answer to each cast, the side's record of a pack's `casting` list
    (gfx/side/<mod>/side.json, index-aligned with the layout's sides) or of
-   tools/wiki/casting-fixture.json. sim.js's checkCasting is its specification. Pointer-free and
+   tools/wiki/casting-fixture.json, read by tagpu_wikidata_casting. Pointer-free and
    bounded, like WIKILAYOUT: a producer fills it, and from then on nothing writes it. */
 typedef struct {
     int      bound;                 /* 0: the cast's value is null, the rule found no type */
@@ -504,20 +506,20 @@ typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
 
 /* 1 when a cast's economy is within the bounds a game's economy rests on: the build costs, the
    metal made and the storages >= 0 and the energy use of a magnitude below WIKI_ECON_MAX (a solar
-   collector's is negative); 0 leaves the cast unbound in a game (tagpu_wikisim.c bind, sim.js
-   binder) and in a game only */
+   collector's is negative); 0 leaves the cast unbound in a game (tagpu_wikisim.c bind) and in
+   a game only */
 int tagpu_wikidata_cast_economy(const WIKICASTDEF* k);
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
-   other key are read past) into `c`, held to every bound of sim.js's checkCasting: all ten casts
+   other key are read past) into `c`, held to every bound of a casting: all ten casts
    given, each null or a record whose type, title, footprint, figures, canstop, canreclamate,
    activatewhenbuilt, vent, g, builds and corpse hold. Beyond it, a cast named twice is refused (a
-   JSON object keeps one of them for sim.js). 1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
+   JSON object would keep one of them). 1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
 int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn);
 
 /* ---- the left sidebar's layout: the running mod's (tagpu_wikiasset.c reads it from the mod's
    .GUI files) or the fixture's (art/wiki/side/fixture.json, our own numbers, in WIKIPAK). The
-   same schema as sim.js's checkLayout, which is its specification; research/notes/
+   same schema, which tagpu_wikilayout_check states and checks; research/notes/
    ingame-wiki.md, *The left sidebar on the stage*, says what the sidebar is.
 
    Screens are referred to by their index in `screen`, never by a pointer, so a layout is one
@@ -534,7 +536,7 @@ int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn)
 #define WIKI_SIDE_ROWS     768
 #define WIKI_GROUND_ROWS   (WIKI_SIDE_ROWS / 16)  /* cells: every stage description's ground */
 
-/* THE MAP'S ROWS, sim.js THE MAP: a scene of `scene_rows` beside a column of `column_rows` (0 for
+/* THE MAP'S ROWS (tagpu_wikisim.c THE MAP): a scene of `scene_rows` beside a column of `column_rows` (0 for
    none) is grown downward by whole 32-unit tiles until it is at least as tall as the column, so no
    band lies under it. A column outside 1..WIKI_SIDE_ROWS grows nothing, so the rows are at most
    the larger of the scene's and WIKI_GROUND_ROWS. The game thread's simulation, the page's fit of
@@ -555,11 +557,11 @@ static inline int tagpu_wiki_map_rows(int scene_rows, int column_rows)
    the tallest column there can be (tagpu_wiki_map_rows with WIKI_SIDE_ROWS) and both bars, so the
    bound holds beside every layout's column whether the map grows or not. A map of at most
    WIKI_GROUND_ROWS rows needs w >= 62. tagpu_wikidata_entry refuses a game entry that fails it,
-   as sim.js checkGame does, so every frame the stage draws is at least 4:3 by construction. */
+   so every frame the stage draws is at least 4:3 by construction. */
 int tagpu_wikidata_frame_fits(int w, int h);
 /* THE SAME BOUND FOR A PLAYERS ENTRY, whose frame is its screen's (sw x sh cells): Wg = 128 + 16 sw,
    Hg = max(16 sh + 64, the deepest column's WIKI_SIDE_ROWS), 3 Wg >= 4 Hg. tagpu_wikidata_entry
-   takes it instead of the map's on a players entry, as sim.js checkGame does. */
+   takes it instead of the map's on a players entry. */
 int tagpu_wikidata_screen_fits(int sw, int sh);
 #define WIKI_SIDE_SCREENS  48
 #define WIKI_SIDE_GADGETS  64    /* a screen's gadgets, and the length of the view's states */
@@ -568,7 +570,7 @@ int tagpu_wikidata_screen_fits(int sw, int sh);
 #define WIKI_SIDE_SIDES    8
 #define WIKI_SIDE_NAME     32    /* a gadget, screen, side or unit name, with its terminator */
 
-/* sim.js's ROLES, in its order: how 0x41AA00 tells the buttons apart by name */
+/* THE ROLES, in order: how 0x41AA00 tells the buttons apart by name */
 enum { WIKI_ROLE_ORDERS, WIKI_ROLE_BUILDTAB, WIKI_ROLE_BUILD, WIKI_ROLE_PREV, WIKI_ROLE_NEXT,
        WIKI_ROLE_STOP, WIKI_ROLE_ORDER, WIKI_NROLES };
 
@@ -656,8 +658,12 @@ int tagpu_wikidata_sight_table(const WIKISIGHT* t, int sight);
 /* 1 when a type of `sight` plays in a players entry's game over table `t` (NULL: no layout): its
    sight at least WIKI_SIGHT_MIN (THE SIGHT FLOOR) and, when `t` holds a table, its radius index
    stored. A cast that fails it is left unbound (tagpu_wikisim.c bind), an entry's own type refuses
-   the game (tagpu_wikisim_init), as sim.js's sightFits */
+   the game (tagpu_wikisim_init) */
 int tagpu_wikidata_sight_ok(const WIKISIGHT* t, int sight);
+/* A layout's `sight` member alone into `t`, read and held to its bounds as the layout's reader does
+   (absent or null: none, numtables 0); 1, or 0 with a message in `err`. The wiki's host reads a
+   table it is given apart from its layout with it. */
+int tagpu_wikidata_sight(const TJV* v, WIKISIGHT* t, char* err, size_t errn);
 
 typedef struct WIKILAYOUT {
     int         format, width, height;
@@ -670,31 +676,31 @@ typedef struct WIKILAYOUT {
     WIKISIGHT   sight;
 } WIKILAYOUT;
 
-/* Every bound sim.js's checkLayout holds, over a filled layout: 1 when it holds them all, else 0
+/* Every bound of the layout's schema, over a filled layout: 1 when it holds them all, else 0
    with a message in `err`; a refused layout is not used at all (the fixture is). Every producer
    calls it before the layout is published, so a count or an index read out of a checked layout
    is in range by construction. */
 int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn);
 
-/* A layout from its JSON (sim.js's schema; a `note` key, or any other the schema does not name,
+/* A layout from its JSON (the schema above; a `note` key, or any other the schema does not name,
    is read past), into a heap block the caller frees with free(), checked by
    tagpu_wikilayout_check; NULL with a message in `err` when it is refused. The text form, the
    tree form (a member of a larger document), and a file of a WIKIPAK archive (`path`, e.g.
    "side/fixture-tall.json"). Every string is copied, so the layout outlives the text. Beyond
-   checkLayout's bounds it refuses two screens of one name, or two types of one name in one side,
-   which sim.js cannot be given (a JSON object keeps one of them). */
+   the schema's bounds it refuses two screens of one name, or two types of one name in one side
+   (a JSON object would keep one of them). */
 WIKILAYOUT* tagpu_wikidata_layout(const char* text, size_t len, char* err, size_t errn);
 WIKILAYOUT* tagpu_wikidata_layout_json(const TJV* v, char* err, size_t errn);
 WIKILAYOUT* tagpu_wikidata_layout_pak(const unsigned char* pak, size_t npak, const char* path, char* err, size_t errn);
 
-/* THE TRIPS' DATA RULE, sim.js's checkTrips, for a demo that plays with the sidebar: every
+/* THE TRIPS' DATA RULE, for a demo that plays with the sidebar: every
    `build` names a type, a `reclaim` and a `pick` are trips too; each carries no other input and
    finds the left button up; no input but a caption stands in its trip, the ticks (t, t + WIKI_TRIP)
    for a build or a reclaim and (t, t + WIKI_PICK) for a pick, nor after it within tick t; and the
    demo lasts the whole trip. The inputs are read in the simulation's order (by tick, then file
-   order), each action as its button at `iface`, as sim.js reads its resolved script. 1 when it
-   holds, else 0 with a message in `err`. tagpu_wikisim_init asks it exactly where sim.js throws:
-   a scripted demo whose sidebar is on. */
+   order), each action as its button at `iface`, as the resolved script reads. 1 when it
+   holds, else 0 with a message in `err`. tagpu_wikisim_init asks it of a scripted demo whose
+   sidebar is on. */
 int tagpu_wikidata_trips(const WIKIDEMO* d, int iface, char* err, size_t errn);
 
 #endif

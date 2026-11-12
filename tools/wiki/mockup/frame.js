@@ -56,7 +56,7 @@
    Runs in a page (the global WikiFrame) and under node (module.exports), as replay.js does. */
 const WikiFrame = (() => {
   const Replay = typeof WikiReplay !== 'undefined' ? WikiReplay : require('./replay.js');
-  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./sim.js');
+  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./simhost.js');
   const TICK = 30;                    // game ticks a second
   const SIDE_W = 128, BAR = 32;       // the engine's column width and bar height, game pixels
   const HUD_H = 720;                  // the HUD unit is the frame's height / 720 at 100 % (decision 21)
@@ -89,7 +89,7 @@ const WikiFrame = (() => {
   /* THE INDEXED CONTROLS of the Take over set and the Players set, as tagpu_hudlay.c keys them: a picker row `takeas:<row>` (a row is its
      seat: the record lists the seats in order), a lane's `lane:<k>`, `export:<k>` and `delete:<k>`, k its place in the
      record's fork list; and the Players set's: a hovered row's `jump:<seat>`, `sight:<seat>` and `follow:<seat>`, a
-     team header's `fold:<team>` and a stats chip's `chip:<name>`, whose n is its index in sim.js CHIPS (the replay's
+     team header's `fold:<team>` and a stats chip's `chip:<name>`, whose n is its index in WIKI_CHIP_* (the replay's
      press value). { act, n } for such a key, else null. LANE: the controls on a lane, which name a fork by its place. */
   const IX = { takeas: Sim.SEATS, lane: FORKS, export: FORKS, delete: FORKS, jump: Sim.SEATS, sight: Sim.SEATS,
     follow: Sim.SEATS, fold: Sim.SEATS };
@@ -113,13 +113,13 @@ const WikiFrame = (() => {
     return { Wg: SIDE_W + vw, Hg, mw, mh, vw, vh: Hg - 2 * BAR };
   }
   /* THE EYE of camera `cam` (a view centre, integers) on a frame of size() `sz`: the viewport's top left, held to the
-     map less the viewport, the engine's eye clamp 0x41C3C0 (THE EYE, the header). Integers: the camera is (sim.js
+     map less the viewport, the engine's eye clamp 0x41C3C0 (THE EYE, the header). Integers: the camera is (tagpu_wikidata_seat_cam,
      seatCam), and the viewport is whole cells wide and rows deep. */
   const eye = (cam, sz) => ({ x: clamp(cam.x - Math.trunc(sz.vw / 2), 0, Math.max(0, sz.mw - sz.vw)),
     z: clamp(cam.z - Math.trunc(sz.vh / 2), 0, Math.max(0, sz.mh - sz.vh)) });
 
   /* THE IDLE COLUMN of layout side `side`: its MAIN2 with nothing selected, which is what a watcher's screen shows
-     (R0: the viewer controls the spectator record, whose unit list is empty). Each gadget's state is sim.js
+     (R0: the viewer controls the spectator record, whose unit list is empty). Each gadget's state is the simulation's
      gadgetState(g, null, false)'s: hidden -1; the orders and build tabs, the build buttons, STOP and the orders 2 (greyed,
      nothing selected can use them); anything else 0. framecheck pins this second copy of that rule against a fresh
      sim's MAIN2. null when the layout has no such side. */
@@ -272,7 +272,7 @@ const WikiFrame = (() => {
     pickEvict: 0, fork: [] };
 
   /* A PLAYERS ENTRY'S SEATS for its records, from the demo's scene: each seat's team (its own index when the scene
-     gives none, a team of one) and whether its camera was recorded (a scene `camera`: sim.js seatCam is null without
+     gives none, a team of one) and whether its camera was recorded (a scene `camera`: the host's seatcam is null without
      one, the game's "Camera was not recorded") */
   function plSeats(entry, demo) {
     const names = Object.keys(entry.scenes || {}), on = demo && demo.on !== undefined ? demo.on : names[0];
@@ -516,7 +516,7 @@ const WikiFrame = (() => {
       frame: r(-gx, -gy, Wg, Hg) };
   }
 
-  // a point of a glide from a to b at step i of n: the curve of sim.js glideAt, in doubles, since it is a position
+  // a point of a glide from a to b at step i of n: the curve of tagpu_wikisim.c glide_at, in doubles, since it is a position
   const glide = (a, b, i, n) => i >= n ? b : a + (b - a) * i * i * (3 * n - 2 * i) / (n * n * n);
 
   /* SEAT 0'S CURSOR in HUD units, for record `rec` in the frame fitted as `fit` (stage.js fit) with its corner at the

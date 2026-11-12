@@ -362,7 +362,7 @@ void tasim_advance(WIKISIM* s)
         } else if ((o->k == WIKI_ORDER_RECLAIM || o->k == WIKI_ORDER_GUARD) && !tasim_by_id(s, o->target))
             tasim_shift_order(u);
     }
-    /* THE ENGINE'S CALLS OF THE UNIT'S TURN, sim.js's, unit by unit in creation order: its build
+    /* THE ENGINE'S CALLS OF THE UNIT'S TURN, unit by unit in creation order: its build
        calls, then its walk class. A builder's work is the structure it worked on this tick,
        waiting on its stance or not; when that changes StopBuilding goes for the old one (0x43A251,
        run-later, no argument: the order's destructor, in the same call as the build it finished)

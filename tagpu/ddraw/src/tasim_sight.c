@@ -3,7 +3,7 @@
    tasim_sight. Contract: tagpu_wikisim.h (tagpu_wikisim_sight_lit, tagpu_wikisim_contacts) and tasim.h.
 
    PURE: both read a view (WIKIVIEW) and the layout's sight table and write only the caller's array; no state, no
-   globals. sim.js sightLit and sightContacts are their twins. */
+   globals. */
 #include <math.h>
 #include <string.h>
 #include "tasim.h"

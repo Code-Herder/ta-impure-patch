@@ -1,4 +1,5 @@
-/* sideview.mjs -- what the mockup's simulation (tools/wiki/mockup/sim.js) shows at a state the game's wiki stands at,
+/* sideview.mjs -- what the wiki's simulation (the DLL's C core, through tools/wiki/mockup/simhost.js) shows at a state
+   the game's wiki stands at,
    for tools/wiki_regression.py: the sidebar's routed screen, page and gadget states, the armed mode and the selected
    units' orders, and optionally the column composed from a pack as the stage draws it (side.js, as wiki.js sideArt).
 
@@ -11,11 +12,11 @@
                     dump's must equal before this view describes the game
      --play         a scripted demo (DEMO counts from 1) on the layout FILE (tagpu_wiki.layout.json; `null` for none),
                     played to TICK or to its end, as tagpu_wiki.shot holds it
-     --ctx FILE     the context --play plays in, as the dump's `ctx` writes it ({side, iface, casting, cob}); sim.js's
-                    default (side 0, no casting, type 1) without it
+     --ctx FILE     the context --play plays in, as the dump's `ctx` writes it ({side, iface, casting, cob}); the
+                    simulation's default (side 0, no casting, type 1) without it
      --scripts DIR  where a context whose `cob` is true takes its units' scripts first: the stage packs of the side
                     pack DIR (--compose's DIR when this is absent), then the gfx packs under tools/wiki/mockup/gfx/,
-                    each type's from the first that holds it, run by serve.py's host (cobhost.mjs) as the game ran them
+                    each type's from the first that holds it, run by the simulation's host as the game ran them
      --compose DIR  the column through the pack in DIR (tools/wiki/sidepacks.py's gfx/side/<mod>/), with the entry's
                     minimap base, written to PNG at one pixel a game pixel (alpha 0 where nothing is painted)
 
@@ -27,10 +28,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
-import { cobHost } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiSide = require('./mockup/side.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 
@@ -40,14 +40,14 @@ const entryOf = id => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entri
 
 function fail(code, msg) { console.error(`sideview: ${msg}`); process.exit(code); }
 
-// the context with its scripts' source in place of the dump's `cob: true` (--scripts)
-let host = null;
+/* the context with its scripts' packs in place of the dump's `cob: true` (--scripts), repository-relative as the host
+   reads them; the sounds left out, which the sidebar does not show */
 function withScripts(ctx) {
   if (!ctx || !ctx.cob) return ctx;
   const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => path.join(d, x)) : [];
   const dir = opt('--scripts') || opt('--compose');
   const packs = [...(dir ? subdirs(path.join(dir, 'stage')) : []), ...subdirs(path.join(ROOT, 'tools/wiki/mockup/gfx'))];
-  return { ...ctx, cob: (host ??= cobHost()).forPacks(packs) };
+  return { ...ctx, packs: packs.map(d => path.relative(ROOT, d)), sounds: false };
 }
 
 let entry, sim, demo;
@@ -104,7 +104,6 @@ if (packDir) {
   fs.writeFileSync(opt('--out'), png(WikiSide.COL, c.h, rgba));
 }
 console.log(JSON.stringify(out));
-if (host) host.close();
 
 // a PNG of w x h RGBA bytes: one IDAT, every row filter 0
 function png(w, h, rgba) {

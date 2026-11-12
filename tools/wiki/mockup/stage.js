@@ -1,4 +1,4 @@
-/* stage.js -- the in-game wiki's stage: one view of sim.js drawn into a 2D canvas context, as the whitebox the game copies.
+/* stage.js -- the in-game wiki's stage: one view of the simulation drawn into a 2D canvas context, as the whitebox the game copies.
    tagpu/ddraw/src/tagpu_wikistage.c builds the same picture as the replay HUD's ops, and tools/wiki/stagecheck.mjs
    pairs this file's canvas calls with that file's ops, call for op, on every demo; a change to the stage is made here
    first and then there. research/notes/ingame-wiki.md, "The stage", says what each element shows.
@@ -11,7 +11,7 @@
    gfx=game one thing more is drawn, the stage's 3D image (gfx.js), which the game composites from its own world
    target between two op ranges (draw() below says which).
 
-   Runs in a page (the global WikiStage, which wiki.js calls) and under node (module.exports), as sim.js does. */
+   Runs in a page (the global WikiStage, which wiki.js calls) and under node (module.exports). */
 const WikiStage = (() => {
   // stand-ins for TA's player colours, by owner
   const TEAM = ['#2348e0', '#d32b00', '#f4f4f4', '#2f8a1b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018'];
@@ -38,7 +38,7 @@ const WikiStage = (() => {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // a device coordinate rounded to the pixel an edge is drawn on, as the game snaps a part's box (tagpu_hud_snap)
   const snap = v => Math.floor(v + 0.5 + 1 / 64);
-  // a view's fields, read defensively: sim.js owns the shape and the stage draws whatever it can find
+  // a view's fields, read defensively: the host owns the shape and the stage draws whatever it can find
   const pt = p => Array.isArray(p) ? { x: +p[0], z: +p[1] } : p ? { x: +p.x, z: +p.z } : null;
 
   /* THE GROUND'S SHADES of a view's map, by cell index: plain cells light, metal darker by how far it stands above
@@ -92,7 +92,7 @@ const WikiStage = (() => {
   }
 
   /* The column of view v (v.side: { h, screen, unit, page, state, under }) with `side` = { layout, art }: the layout
-     the sim ran on (sim.js, checkLayout), and art = { draw(g, rect), label(i), minimap } when the column is the
+     the sim ran on (tagpu_wikilayout_check), and art = { draw(g, rect), label(i), minimap } when the column is the
      game's image -- drawn whole into the column's rect snapped to device pixels, then the whitebox's minimap when
      the image has none (no base picture for this entry) and a whitebox button over every gadget whose picture is a
      label, label(i) giving that label's text ('' for the gadget's own name) or null for a picture -- or

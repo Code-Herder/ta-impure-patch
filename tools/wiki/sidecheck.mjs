@@ -4,7 +4,7 @@
    usage: node tools/wiki/sidecheck.mjs [--no-packs] [--js-only]
      exit 0 when every frame is equal, 1 when one differs, 2 when the C side cannot be built or run
 
-   For every demo of every entry, sim.js plays on a sidebar's layout and, at every sampled tick (every 30th and the
+   For every demo of every entry, the simulation host plays on a sidebar's layout and, at every sampled tick (every 30th and the
    last, every tick a gadget's state changes, every 10th while a unit is under the cursor), side.js composes the view's
    column -- palette indices, coverage, and the RGBA through the palette -- from that sidebar's art and the stage's
    minimap picture; a native build of tagpu_wikiside.c (tagpu/ddraw/tests/wikisidetest.c, over tagpu_wikisim.c's view
@@ -40,7 +40,7 @@ import { createRequire } from 'node:module';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiSide = require('./mockup/side.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
@@ -196,7 +196,7 @@ function firstDiff(js, c, per) {
   return null;
 }
 
-/* THE CONTEXTS a pack is played in, sim.js's ctx: every side k of its layout with that side's casting (none for a pack
+/* THE CONTEXTS a pack is played in, the drop-in's ctx: every side k of its layout with that side's casting (none for a pack
    without castings), at Interface Type 1 and 0 */
 function contexts(pack) {
   const L = pack.json.layout, casting = pack.json.casting;
@@ -267,7 +267,7 @@ try {
         let sim;
         try { sim = WikiSim.play(entry, demo, L, ctx); } catch (e) {
           const c = C && C.get(`${entry.id}/${demo.id}/0`);
-          if (C && (!c || c.h !== -1)) differ(`${at} ${entry.id}/${demo.id}`, `sim.js refuses it (${e.message}), the C side ${c ? 'plays it' : 'gives no frame'}`);
+          if (C && (!c || c.h !== -1)) differ(`${at} ${entry.id}/${demo.id}`, `the host refuses it (${e.message}), the C side ${c ? 'plays it' : 'gives no frame'}`);
           continue;
         }
         let prev = null;
@@ -279,7 +279,7 @@ try {
             st.frames++;
             nctx++;
             if (!c) differ(key, 'no C frame');
-            else if (!v.side) { if (c.h !== 0) differ(key, `no sidebar in sim.js's view, ${c.h} rows from the C side`); }
+            else if (!v.side) { if (c.h !== 0) differ(key, `no sidebar in the host's view, ${c.h} rows from the C side`); }
             else if (v.side.index !== k) differ(key, `the view shows side ${v.side.index}`);
             else {
               const sid = `${entry.id}.${typeof demo.on === 'string' ? demo.on : Object.keys(entry.scenes)[0]}`;

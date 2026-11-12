@@ -240,24 +240,25 @@ inc/tagpu_modpak.bin: ../../tools/hudpak.py ../../tools/modpack/modpack.py $(MOD
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_modpak.bin
 
-# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
-# needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
-# otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the
-# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation --
+# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees bit for bit in every build -- the DLL's, the
+# mockup's host and the sanitized one (tools/wiki/wikibuild.mjs) -- which needs every double rounded
+# once per operation. The x87 unit this build otherwise computes on keeps 80-bit intermediates
+# (MEASURED 2026-10-25: built for x87, 1196 of the 9298 frames of the demos differed in a last bit
+# from the same simulation on doubles; built so, none), so the simulation --
 # its front end src/tagpu_wikisim.c and the shared simulation core, every src/tasim_*.c (src/tasim.h;
 # tools/wiki/tasimsrcs.mjs gives the checks the same files) --
 # and the loader that normalises the scenes' facings for it (src/tagpu_wikidata.h), compute on
 # SSE2 instead (MEASURED 2026-10-26, the loader's x / sqrt(x*x + z*z) over 3720 facings: built for
-# x87, 1804 differ from sim.js in a bit; built so, none). The reclaim sweep's split
+# x87, 1804 differed in a bit; built so, none). The reclaim sweep's split
 # (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
 # double, so it computes on SSE2 with them. The units' scripts' host
-# (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
-# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The replay layer
+# (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup's simulation host
+# runs the same C built natively (tools/wiki/wikibuild.mjs), so it computes on SSE2 too. The replay layer
 # (src/tagpu_wikireplay.h) computes on integers, its one double the demo's end the clock is compared
 # with, exactly; it is the simulation's caller in the replay demos and builds with it. The game's
 # threads align the
-# stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
-# checks the build under Wine.
+# stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs checks
+# that build under Wine (tools/wiki/wikibuild.mjs wine) against the native ones.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
 $(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)) \
 $(addprefix src/tagpu_wikireplay, $(ALLEXTS)) \

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""serve.py -- the in-game wiki mockup's server: the repository, and the COB host behind the mockup's sim.js.
+"""serve.py -- the in-game wiki mockup's server: the repository, the wiki's simulation host, and the COB host.
 
     python3 tools/wiki/serve.py [--bind ADDR] [--port N]     then http://127.0.0.1:8000/tools/wiki/mockup/
-    python3 tools/wiki/serve.py --stdio                       the host alone, one JSON request a line
+    python3 tools/wiki/serve.py --stdio                       the simulation host alone, one JSON request a line
 
 The repository is served as tools/hudart/serve.py serves it, every response marked `Cache-Control: no-cache`.
-`POST /cob` (and each line of --stdio) is one call on the in-game wiki's COB host, tagpu/ddraw/src/tagpu_wikicob.c,
-loaded through ctypes from the library tools/tacob builds (the core and the host, compiled on first use into a
-gitignored cache): the same C the DLL's wiki runs, so the mockup's units run their scripts exactly as the game's
-wiki runs them (research/notes/ingame-wiki-cob-plan.md, *The wiki host*). The page's sim.js calls it with
-synchronous requests; tools/wiki/cobhost.mjs gives node's checks the same calls over --stdio.
+`POST /sim` (and each line of --stdio) is one request of the wiki's simulation, below: the page plays every demo
+through it, and without this server the mockup has no simulation.
+
+`POST /cob` is one call on the in-game wiki's COB host, tagpu/ddraw/src/tagpu_wikicob.c, loaded through ctypes from the
+library tools/tacob builds (the core and the host, compiled on first use into a gitignored cache): the host alone, as
+tools/test_cobvm.py and tools/wiki/cobcorpus.py test it through `Host` and `bind` (research/notes/ingame-wiki-cob-plan.md,
+*The wiki host*). The simulation runs its units' scripts in its own process, the same C linked in.
 
 A request is a JSON object with `op`:
   new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, "tops": [...], ...state}: a host for the types,
@@ -28,19 +30,28 @@ A request is a JSON object with `op`:
   remove  {"world", "unit"} -> state
   models  {"world"} -> {"models": {unit: base64}}: each unit's posed model block as tagpu_wikicob_model gives it
           (its PrimitiveStructs in the posed order), a unit that runs no script left out; it changes nothing, so it
-          answers no state. The page asks once a drawn frame after a call (cob.js `model`).
+          answers no state.
   free    {"world"} -> {}
 `facts` is a list of [unit, owner, x, z, left, health] rows (tagpu_wikicob.h WIKICOBFACT; `left` a number the
 float32 holds exactly). The state every call answers is {"values": {unit: [the 21 values]}, "resting": [units],
 "notes": [each type's quarantine note, "" for none], "hash": 16 hex digits (tagpu_wikicob_hash from the FNV-1a
 offset basis)}, every handle from 1 to the last.
-An error answers {"error": why}."""
+An error answers {"error": why}.
+
+`POST /sim` is one request of the wiki's simulation host, tagpu/ddraw/tests/wikihost.c (`wikitest serve`, the C core
+the DLL's wiki runs, built by tools/wiki/wikibuild.mjs's `host` target), which states the protocol; the page's
+mockup/simhost.js makes its calls so, and --stdio relays each line of stdin to the same child. One child answers
+every request, one at a time, started on first use and again after it ends. The body must be `application/json` -- a page of another origin then needs a preflight this server never
+grants -- and a `packs` request names folders under tools/wiki/mockup/gfx/ only, as `pack_type` holds `/cob`'s.
+Python callers use SimRelay directly. The connection is HTTP/1.1, kept alive, with Nagle's algorithm off: a page asks
+once a drawn frame, synchronously, so each request's latency is the frame's."""
 import argparse
 import base64
 import ctypes as C
 import functools
 import json
 import struct
+import subprocess
 import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -243,19 +254,84 @@ class Host:
             return {"error": str(e)}
 
 
+class SimRelay:
+    """The wiki's simulation host, one child process answering one request at a time: `answer(line)` is the answer
+    line to a request line, the host's own `{"error": ...}` included. A child that has ended answers that once and is
+    started again at the next request, holding nothing of the last one's handles."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+
+    def _start(self):
+        exe = subprocess.run(["node", str(ROOT / "tools/wiki/wikibuild.mjs"), "host"], cwd=ROOT, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        if not exe:
+            raise OSError("tools/wiki/wikibuild.mjs named no host")
+        self.proc = subprocess.Popen([exe, "serve"], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    @staticmethod
+    def _packs_ok(req):
+        """every `packs` call of the request names folders under the gfx tree alone"""
+        calls = req.get("calls", []) if isinstance(req, dict) and req.get("op") == "batch" else [req]
+        for c in calls if isinstance(calls, list) else []:
+            if isinstance(c, dict) and c.get("op") == "packs":
+                for d in c.get("dirs") or []:
+                    if not isinstance(d, str) or not (ROOT / d).resolve().is_relative_to(GFX):
+                        return False
+        return True
+
+    def answer(self, line):
+        if isinstance(line, str):
+            line = line.encode()
+        if b"\n" in line.strip() or b'"packs"' in line:
+            try:
+                req = json.loads(line)
+            except ValueError as e:
+                return json.dumps({"error": f"json: {e}"}).encode()
+            if not self._packs_ok(req):
+                return b'{"error":"a pack is not a folder under tools/wiki/mockup/gfx/"}'
+            line = json.dumps(req, separators=(",", ":")).encode()
+        with self.lock:
+            if self.proc is None or self.proc.poll() is not None:
+                self._start()
+            self.proc.stdin.write(line.strip() + b"\n")
+            self.proc.stdin.flush()
+            out = self.proc.stdout.readline()
+            if not out:
+                code = self.proc.wait()
+                self.proc = None
+                return json.dumps({"error": f"the host exited {code}"}).encode()
+            return out.rstrip(b"\n")
+
+
 class Handler(SimpleHTTPRequestHandler):
     host = None
+    sim = None
+    # a page asks the simulation once a drawn frame, synchronously: one kept-alive connection, each small request sent
+    # at once (MEASURED, the S2 spec's 0: HTTP/1.0 with Nagle on costs a new connection and a delayed ACK each time)
+    protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def do_POST(self):
-        if self.path != "/cob":
+        if self.path not in ("/cob", "/sim"):
             self.send_error(404)
             return
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        out = json.dumps(self.host.answer(body)).encode()
+        if self.path == "/sim":
+            if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                self.send_error(415, "a /sim request is application/json")
+                return
+            try:
+                out = self.sim.answer(body)
+            except (OSError, subprocess.CalledProcessError) as e:
+                out = json.dumps({"error": f"the simulation host cannot start: {e}"}).encode()
+        else:
+            out = json.dumps(self.host.answer(body)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
@@ -263,7 +339,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(out)
 
     def log_message(self, fmt, *args):
-        if not self.path.startswith("/cob"):
+        if not self.path.startswith(("/cob", "/sim")):
             super().log_message(fmt, *args)
 
 
@@ -273,9 +349,10 @@ class QuietHandler(Handler):
 
 
 def server(bind="127.0.0.1", port=0, quiet=False):
-    """The mockup's server -- the tree's files and /cob -- answering on a daemon thread, for a tool that drives the
-    page with the units' scripts (tools/wiki/stage3dcheck.py); port 0 takes a free one."""
+    """The mockup's server -- the tree's files, /sim and /cob -- answering on a daemon thread, for a tool that drives
+    the page (tools/wiki/stage3dcheck.py, tools/wiki_regression.py); port 0 takes a free one."""
     Handler.host = Host()
+    Handler.sim = SimRelay()
     httpd = ThreadingHTTPServer((bind, port), functools.partial(QuietHandler if quiet else Handler, directory=str(ROOT)))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
@@ -285,16 +362,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--bind", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--stdio", action="store_true", help="answer one JSON request a line on stdin")
+    ap.add_argument("--stdio", action="store_true", help="answer one simulation request a line on stdin")
     a = ap.parse_args()
-    host = Host()
     if a.stdio:
+        sim = SimRelay()
         for line in sys.stdin:
             if line.strip():
-                sys.stdout.write(json.dumps(host.answer(line)) + "\n")
+                sys.stdout.write(sim.answer(line).decode() + "\n")
                 sys.stdout.flush()
         return
-    Handler.host = host
+    Handler.host = Host()
+    Handler.sim = SimRelay()
     ThreadingHTTPServer((a.bind, a.port), functools.partial(Handler, directory=str(ROOT))).serve_forever()
 
 

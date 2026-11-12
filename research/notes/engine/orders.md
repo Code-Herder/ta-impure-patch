@@ -382,7 +382,7 @@ FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answ
 (`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
 both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
 corner). The wiki's stage, whose ground is 0, sprays from the same box (`tasim_fx.c`
-`spray_feature`, sim.js `sprayFeature`).
+`spray_feature`).
 
 **The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of
 the rect at `this+0x08..+0x14` -- `x` equal to `+0x08` or `+0x0C` with `z` in `[+0x10, +0x14]`,

@@ -17,7 +17,7 @@ static inline int tasim_fpz(const WIKISIM* s, int t) { return tasim_def(s, t)->f
 static inline int tasim_mobile(const WIKISIM* s, int t) { return tasim_def(s, t)->max_velocity > 0; }
 /* a resource building: a mex extracts metal, a geothermal plant needs a vent under a G cell of its yard */
 static inline int tasim_kind(const WIKISIM* s, int t) { return tasim_def(s, t)->extracts > 0 ? KIND_MEX : tasim_def(s, t)->vent ? KIND_GEO : KIND_NONE; }
-/* footprint cell (dx, dz) of type t is a G cell, sim.js's gCell: WIKIDEF.g holds the `g` a type
+/* footprint cell (dx, dz) of type t is a G cell: WIKIDEF.g holds the `g` a type
    lists, or every cell of a `vent` type with none. THE BOUND: the rows are WIKI_FP_MAX cells a
    side, and a type with G cells is held within them (the loader and the casting's reader refuse
    one past it), so a cell outside them is no G cell. */

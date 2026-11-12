@@ -4,8 +4,8 @@
    tasim_econ. Contract: tasim.h and tagpu_wikisim.h (tagpu_wikisim_army).
 
    A demo and Try it run none of the pass, so no state or hash of theirs can change by it. The ledgers and the seats'
-   economies are fields of the WIKISIM its caller owns (WIKIUNIT.led, WIKISIM.econ); no globals. The arithmetic is
-   sim.js's operation for operation, on SSE2 doubles, so the two agree to the bit. */
+   economies are fields of the WIKISIM its caller owns (WIKIUNIT.led, WIKISIM.econ); no globals. The arithmetic runs
+   on SSE2 doubles, each operation rounded once, so every build agrees to the bit. */
 #include <math.h>
 #include "tasim.h"
 
@@ -79,8 +79,32 @@ static void econ_settle(double* cur, double* waste, double P, double D, double G
     *waste += w;
 }
 
-/* THE PASS, 0x401360, on ticks 1, 30, 60, ...: sim.js's `pass`, which says it all with the
-   addresses; the arithmetic is sim.js's operation for operation, so the two agree to the bit */
+/* THE PASS, 0x401360, on ticks 1, 30, 60, ...: the level's init seeds the player's next pass +0xF0
+   with GameTime 0 (0x46470C..0x464715), and the players phase runs a record's pass when +0xF0 <=
+   GameTime and adds 30 (0x46507D..0x465092), after GameTime's increment; every seat on the same
+   tick, in seat order, after the units' work (research/notes/engine/sim.md, the players phase
+   follows the unit tick). Per unit of the seat in slot order (0x401375..0x4013A6; here in creation
+   order, below): a structure (+0x110 bit 29, 0x4013BA) that is active (+0x10E bit 0, 0x4013C5)
+   requests its EnergyUse (0x4013ED..0x401421) or, negative, produces it (0x401429..0x401478), and
+   an extractor whose energy was granted produces ExtractsMetal x its SetSpeed (0x401480..0x4014C8);
+   a mobile unit active or moving (0x401617..0x401622) requests or produces its EnergyUse
+   (0x401641..0x401668); a finished unit (+0x104 == 0.0, 0x4016C5..0x4016D6) produces its
+   EnergyMake and MetalMake (0x4016DC..0x401795) and adds its storages (0x40179B..0x4017C5). Then
+   the seat's sums: the storage with the base while the commander lives (0x401941,
+   0x401988..0x4019AA), income the produced and spending the REQUESTED (0x4019C6..0x401A2D); per
+   resource the debt paid first, then the grants, from what is stored plus produced
+   (0x401A4D..0x401AB1), and what passes the storage wasted (0x401AB3..0x401B27); and the settle
+   (0x401B3D..0x401BAC), each unit's unpaid share of its grants and its debt its new debt, the
+   rest of its ledger zeroed, the engine's fmul, fsubr and faddp in the engine's order.
+   WHERE THE WIKI DEPARTS: activation is a finished unit whose FBI says ActivateWhenBuilt, which the
+   engine sets at a completion (0x41B9A6) and at a finished create (0x48612F) [INFERRED: no cast
+   unit's script changes its own], and moving is the step this tick [INFERRED that it agrees with
+   the move-rate class +0x110 & 0xC]; the units are walked in creation order, where the engine
+   walks its slots, which the allocator reuses: the sums are the same terms added in another
+   order, so only their rounding can differ; MakesMetal, wind, tidal, cloak, the AI's scaling, the
+   transfers and the reclaim payouts are not modelled (no cast takes such a unit, no seat is an
+   AI, the owner left the payouts out). The ledger is the engine's f32 as a double, as every
+   figure here is. */
 void tasim_econ_pass(WIKISIM* s)
 {
     int k, i;
@@ -152,7 +176,7 @@ void tasim_econ_pass(WIKISIM* s)
    BMcode +0x22F is 1 and that is not a commander (+0x245 bit 0x40000) at its metal cost +0x18A,
    every other at 0, and sums the floats of its live, finished units in slot order; the wiki's
    mobile type is one with a max velocity, its commander the cast. The sum stays in f32 (SSE2,
-   the Makefile's THE WIKI'S SIMULATION), each add rounded as Math.fround rounds sim.js's. */
+   the Makefile's THE WIKI'S SIMULATION), each add rounded once to f32. */
 float tagpu_wikisim_army(const WIKISIM* s, int seat)
 {
     float a = 0;

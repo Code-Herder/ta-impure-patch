@@ -3,14 +3,14 @@
    every sampled frame's composed column, and sidecheck.mjs compares it byte for byte with
    side.js's.
 
-   `wikisidetest compose PAK DIR [CTX]` reads a sidebar's art from DIR -- layout.json (sim.js's
+   `wikisidetest compose PAK DIR [CTX]` reads a sidebar's art from DIR -- layout.json (the layout's
    schema), art.json (below), sheet.bin, pal.bin, and seen.bin and greyed.bin when present -- into
    a WIKISIDE, plays every demo of every entry in PAK (tools/hudpak.py --set wiki) on its layout in
    the context CTX names, and at every sampled tick (`sampled` below) copies the view of the entry
    the sim plays (tagpu_wikistage_copy over WIKISIM.entry, the bound entry with a casting, as
    tagpu_wiki.c copies it) and composes its column for the view's side over
    DIR/bases/<entry>.<scene>.bin, the minimap picture of the stage the demo plays on, when that
-   file exists. CTX is a JSON file, sim.js's ctx:
+   file exists. CTX is a JSON file, the drop-in's ctx:
    {"side": k, "iface": 0 | 1, "casting": a pack's casting record | null}; without it the sims are
    made with none (side 0, no casting, Interface Type 1). Per
    frame, to stdout: the key "<entry>/<demo>/<tick>" as a little-endian u16 length and its bytes,

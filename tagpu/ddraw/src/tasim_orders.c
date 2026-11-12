@@ -10,7 +10,7 @@
 #include "tasim.h"
 
 /* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
-   past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
+   past it is dropped. Every order a player's clicks add comes
    through here, so they cannot grow a list until realloc fails, and take_offs' scratch
    (WIKISIM's q and by) holds any list. 1 when the order went in; 0 when the list was full or
    memory ran out, which sets `oom`. */

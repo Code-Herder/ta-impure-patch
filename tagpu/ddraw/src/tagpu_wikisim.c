@@ -2,15 +2,13 @@
    over the shared simulation core (tasim.h, the tasim_*.c files), and what only the wiki has -- the
    UI the inputs go through (the cursor, the sidebar's gadgets and page router, what a press lands
    on, the click window), the scripted input (the build and pick trips, the glide, the demo's clock
-   and waits), the selection, the placement, snap and sweep rules as sim.js mirrors tagpu_place.c,
+   and waits), the selection, the placement, snap and sweep rules mirrored from tagpu_place.c,
    tagpu_resource.c and tagpu_sweep.c, the scene and the casting's binding, the view, the state hash
    and the fork. Contract: tagpu_wikisim.h.
 
-   The sections and the functions follow tools/wiki/mockup/sim.js in its order and under its names
-   in C's spelling (siteOk is tasim_site_ok: a function the core shares across its files carries
-   its prefix), so that a change to one is found in the other. Where a JS
-   value can be undefined, a C value that every comparison treats alike stands in for it: NaN for
-   a metal value read off the map, -1 for no vent and for no building armed. */
+   A function the core shares across its files carries its prefix (tasim_site_ok). Where a value
+   can be absent, a value that every comparison treats alike stands in for it: NaN for a metal
+   value read off the map, -1 for no vent and for no building armed. */
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -37,15 +35,15 @@
 /* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
    tagpu_placegeo.h's */
 #define PLACE_ORDER_BUDGET 4096
-/* sim.js's st: the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
+/* the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
    nin wherever it is set (seat_in bounds it), so the index is in range. */
 #define ST(s) ((s)->in[(s)->act])
 
-/* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
+/* The context a sim created with none plays in: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
    neither scripts nor sound. */
 static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL, NULL };
-/* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
+/* where the cursor is; NONE: a mouse button that has not gone down */
 enum { OVER_NONE, OVER_SIDE, OVER_MAP };
 
 static const WIKITRIPROW TRIP_ROWS[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
@@ -67,7 +65,7 @@ typedef char pick_fits[WIKI_PICK_DOWN + 2 + (WIKI_PICK - WIKI_PICK_UP) <= WIKI_T
 /* every tasim_push_order a sweep's split makes fits the list: its room is SWEEP_LIST_CAP less the list */
 #define SWEEP_LIST_CAP PLACE_LIST_CAP
 
-/* quickChoice's and site's answer, a candidate building: sim.js's `c` */
+/* the quick choice's and the site's answer, a candidate building */
 typedef struct {
     int    type, kind, ox, oz;
     char   target[WIKI_ID_MAX];     /* an upgrade: the building it replaces; "" otherwise */
@@ -78,7 +76,7 @@ typedef struct {
 
 static double sq(double v) { return v * v; }
 
-/* ---- tagpu_placegeo.c's shapes and take-off rule, called directly; sim.js ports each one ---- */
+/* ---- tagpu_placegeo.c's shapes and take-off rule, called directly ---- */
 
 /* the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up */
 static int origin(double v, int f) { return tasim_bound_cell(floor((v - 8 * f + 8) / CELL)); }
@@ -122,7 +120,7 @@ static int over(const WIKISIM* s)
     return s->lay && ST(s).cursor_x < 0 ? OVER_SIDE : OVER_MAP;
 }
 
-/* sim.js's Math.min(Math.max(v, 0), m): a v at or below 0, -0 included, gives +0 */
+/* v held to 0..m: a v at or below 0, -0 included, gives +0 */
 static double clamp_map(double v, double m) { return v > 0 ? (v < m ? v : m) : 0.0; }
 
 /* the cursor the map rules read: with the sidebar, clamped onto the map, so a drag released over
@@ -159,7 +157,7 @@ static uint64_t available(const WIKISIM* s)
     return ts;
 }
 
-/* the selected units of the player's that can reclaim, sim.js's reclaimers().length */
+/* the selected units of the player's that can reclaim */
 static int nreclaimers(const WIKISIM* s)
 {
     int i, n = 0;
@@ -167,7 +165,7 @@ static int nreclaimers(const WIKISIM* s)
     return n;
 }
 
-/* ---- the rules of tagpu_resource.c, as sim.js mirrors them. The metal a rule reads is -1 on
+/* ---- the rules of tagpu_resource.c, mirrored. The metal a rule reads is -1 on
    unexplored ground. ---- */
 
 /* mirrors tagpu_resource.c site_known: the interior, every footprint cell explored */
@@ -673,7 +671,7 @@ static void disarm(WIKISIM* s)
    Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
    tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
    armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
-   of its own type only. With the sidebar off as well as on, as sim.js's `arm`. */
+   of its own type only. With the sidebar off as well as on. */
 static void arm(WIKISIM* s, int t)
 {
     if (ST(s).mode != t) ST(s).has_gesture = 0;
@@ -692,7 +690,9 @@ static void arm(WIKISIM* s, int t)
 
    STOP is 0x419BE0's STOP branch (0x419CB6..0x419CF2, called from 0x41AA00 at 0x41ABCC),
    DISASSEMBLED: main+0x2CC3 = 1 (0x419CC2) replaces an armed build's mode 0x0E, so it disarms; it
-   clears main+0x2CC6 bit 3 and leaves bit 5, the Shift-placement bit (shift_placed); the order
+   clears main+0x2CC6 bit 3 (0x419CCE..0x419CD8) and leaves bit 5, the Shift-placement bit
+   (shift_placed), so a placement made earlier in this Shift hold still disarms when Shift is
+   released (0x4992D8); the order
    issuer 0x48CF30 then gives every selected unit of the controlled player the STOP order through
    0x43AFC0 (0x48D1F4), which replaces its orders, with no canstop test. Its effect with Shift held
    is not established; the orders are emptied either way [INFERRED]. The placement gesture ends
@@ -779,7 +779,7 @@ static void release_side(WIKISIM* s)
         act(s, &sc->gadget[i]);
 }
 
-/* the sidebar as the view shows it; `under` reads the cursor unclamped, as sim.js's view does */
+/* the sidebar as the view shows it; `under` reads the cursor unclamped */
 static void side_view(const WIKISIM* s, WIKIVSIDE* v)
 {
     const WIKISCREEN* sc = screen_of(s, s->screen);
@@ -800,8 +800,8 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
     if (under) snprintf(v->under, sizeof v->under, "%s", under->id);
 }
 
-/* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), sim.js's,
-   rule for rule over the sim's features. With reclaim armed a press on the map that travels
+/* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), rule for
+   rule over the sim's features. With reclaim armed a press on the map that travels
    RECL_DRAG or more is a ring round the press point; its release orders the selected reclaimers
    to take the features of the chosen kind it holds, split nearest-first between them
    (tagpu_sweepgeo.c, which the game's sweep calls too). A shorter press is stock's click. A popup
@@ -1475,7 +1475,7 @@ static WIKIHOVER hover(WIKISIM* s)
 
 /* the evaluation the stage shows, as tagpu_place.c's current() lets the packet have it: only while
    the building it was made for is still the one armed; NULL for none. With the sidebar off as
-   well as on, as sim.js's `placed`. */
+   well as on. */
 static const WIKIPLACE* placed_in(const WIKISEATIN* q)
 {
     return q->place.kind != PLACE_NONE && q->mode == q->place.type ? &q->place : NULL;
@@ -1484,7 +1484,7 @@ static const WIKIPLACE* placed_in(const WIKISEATIN* q)
 /* the acting seat's */
 static const WIKIPLACE* placed(const WIKISIM* s) { return placed_in(&ST(s)); }
 
-/* ---- the placement gesture, tagpu_place.c as sim.js mirrors it ---- */
+/* ---- the placement gesture, tagpu_place.c mirrored ---- */
 
 /* mirrors tagpu_place.c's cursor site: the build cursor's rectangle, snapped as the ghost is.
    PlaceCell holds int16, so the cell is held to its range. */
@@ -1526,7 +1526,7 @@ static int toggles(const WIKISIM* s, int t, const WIKISITE* w)
 }
 
 /* A world position as tagpu_place.c's order positions hold it, 16.16 fixed point, for the shared
-   take-off rule. Exact for every position that rule compares, so it answers as sim.js's doubles
+   take-off rule. Exact for every position that rule compares, so it answers as the doubles
    do: a footprint's centre is (cx + f/2) * 16, a multiple of 8, exact in 16.16 within the
    clamp. The clamp changes no answer: the rule only ever compares a site that is not refused --
    inside the map, so its centre lies within 0..WIKI_MAP_MAX * 16 = 2048 (the loader refuses a
@@ -1861,7 +1861,7 @@ static void right_click(WIKISIM* s, int shift)
 
 static void select_units(WIKISIM* s, int shift, int box);
 
-/* SELECTION (sim.js's): one flag per unit, the hash's item 3; the acting seat's selection is the
+/* SELECTION: one flag per unit, the hash's item 3; the acting seat's selection is the
    flagged units it owns, and every select and deselect of its input touches its own units alone,
    so an input of one seat never changes another's selection. That leaves a selected unit of a
    seat with no input state selected for good, which is why init refuses a scene that selects one. */
@@ -2003,8 +2003,7 @@ static void step_spacing(WIKISIM* s, int key)
 /* A scripted demo with the sidebar on plays a `build` out as its trip; Try it, and a demo without
    the sidebar, arm at once (the wiki never sends `build`, and the rule cases use it as their
    shortcut). */
-/* A CLICK ACTION of the acting seat, recorded before the action runs (WIKICLICK, sim.js's
-   clickAction): the left click's -- 0x4993C5..0x4993D0 and 0x499435..0x499441, here a placement at
+/* A CLICK ACTION of the acting seat, recorded before the action runs (WIKICLICK): the left click's -- 0x4993C5..0x4993D0 and 0x499435..0x499441, here a placement at
    a press, the sweep's press, the click branch of a release (select at type 1, left_click at type
    0) and a placement off the map (perspective-streams E6) -- and the right press's, 0x499100,
    every right press on the map: right_click, right_press0 and the cancel of an armed building or
@@ -2333,7 +2332,7 @@ const unsigned char* tagpu_wikisim_model(const WIKISIM* s, int i, int* nprim)
     return tagpu_wikicob_model(s->cob, s->unit[i]->cob, nprim);
 }
 
-/* what the acting seat's input shows (sim.js's seatView): the ghost, the gesture's sites (into
+/* what the acting seat's input shows: the ghost, the gesture's sites (into
    `site`, PLACE_MAX_SITES of room) and shape, the spacing, the cursor, the keys held, the drag, the
    armed mode, and the sweep's armed, kind and ring */
 static void seat_block(WIKISIM* s, WIKIVSEAT* b, WIKIVSITE* site)
@@ -2750,7 +2749,7 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
     fnv_int(&h, s->nunit);
     for (i = 0; i < s->nunit; i++) {
         const WIKIUNIT* u = s->unit[i];
-        /* sim.js's orders(id) answers the first unit of that id, so this does too */
+        /* the orders of an id are its first unit's */
         const WIKIUNIT* by = tasim_by_id(s, u->id);
         fnv_str(&h, u->id);
         fnv_str(&h, tasim_def(s, u->type)->name);
@@ -2999,7 +2998,7 @@ static WIKIRECT scene_rect(const WIKISIM* s, int t, double x, double z)
     return tasim_rect_of(s, t, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(s, t) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(s, t) / 2.0)));
 }
 
-/* the scene's units as sim.js's merge() lists them: the entry's, then the demo's (b, or NULL) */
+/* the scene's units, merged: the entry's, then the demo's (b, or NULL) */
 static int scene_n(const WIKISCENE* a, const WIKISCENE* b) { return a->nunit + (b ? b->nunit : 0); }
 static const WIKISCENEUNIT* scene_unit(const WIKISCENE* a, const WIKISCENE* b, int k)
 {
@@ -3024,7 +3023,7 @@ static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, 
     return 1;
 }
 
-/* A SCENE'S MOBILE UNIT STARTS CLEAR, sim.js's: at its authored centre, or the nearest centre a
+/* A SCENE'S MOBILE UNIT STARTS CLEAR: at its authored centre, or the nearest centre a
    whole number of cells away, at most SCENE_SPREAD either way, by distance, then z, then x, whose
    body is on the map and clear of the scene's structures and of the mobile units before it, the
    entry's and the demo's together; with none, where authored. Into spot[2k], spot[2k + 1],
@@ -3056,7 +3055,7 @@ static void scene_spots(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b
 /* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound
    footprint other than the authored one can overlap a structure placed before it or leave the
    placeable interior (cells 1 to w - 2, tasim_site_ok's bound); the demo is refused for that casting
-   rather than played broken, as sim.js refuses it. Mobile units never block. The entry's units,
+   rather than played broken. Mobile units never block. The entry's units,
    then the demo's (b, or NULL). 1, or 0 with the refusal in `err`, or -1 when memory ran out. */
 static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
 {
@@ -3102,7 +3101,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
     return 1;
 }
 
-/* THE SCENE'S FEATURES, sim.js's: the entry's scene's, then the demo's, each its table row at its
+/* THE SCENE'S FEATURES: the entry's scene's, then the demo's, each its table row at its
    anchor cell, named by its id or f<k + 1>; refused when it leaves the scene's map, overlaps a
    feature before it, or takes an id given before it. 1, or 0 with the refusal in `err`, or -1 when
    memory ran out. THE BOUND: at most WIKI_FEATS_MAX, the view's and the sweep's tables; each row
@@ -3161,7 +3160,7 @@ static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int k
     return 1;
 }
 
-/* the scene gives the player a mobile builder: sim.js builders() without the selection test, over
+/* the scene gives the player a mobile builder: a builder, without the selection test, over
    the types the sim plays */
 static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
 {
@@ -3180,7 +3179,7 @@ struct WIKISIMBOUND {
     WIKIFEATDEF feat[WIKI_FEAT_DEFS];
 };
 
-/* THE BOUND ENTRY, sim.js's binder, into s->bound and s->unbound (tagpu_wikisim.h says what it
+/* THE BOUND ENTRY, into s->bound and s->unbound (tagpu_wikisim.h says what it
    is). A game entry's rival type binds to `rk`, the rival casting, as the player's to `k`, and keeps
    its own definition, not unbound, when `rk` is NULL; in a game (`game`) each bound type takes its
    cast's wreck, put over the features table's row of its name or appended to it. THE BOUND on every
@@ -3300,7 +3299,7 @@ static int unbound_in_scene(const WIKISIM* s, const WIKISCENE* a, const WIKISCEN
     return -1;
 }
 
-/* THE RESOLVED SCRIPT, sim.js's resolve: the demo's inputs copied into the sim's own array with
+/* THE RESOLVED SCRIPT: the demo's inputs copied into the sim's own array with
    each action turned into its button at s->iface, then ordered by tick, file order breaking ties.
    tagpu_wikidata_buttons has held the copy to its data rule; s->script points into it. 0 when
    memory ran out. */
@@ -3321,7 +3320,7 @@ static int resolve(WIKISIM* s, const WIKIDEMO* d)
     return 1;
 }
 
-/* THE INPUT SEATS (sim.js's inputSeats) of the inputs `in`: 1 + the highest seat they name (a kill
+/* THE INPUT SEATS of the inputs `in`: 1 + the highest seat they name (a kill
    names none, and a camera input acts on no input state), at least `seats`; -1 when an input names
    a seat outside 0..WIKI_SEATS - 1, which the loader refuses (THE BOUND every index into WIKISIM.in
    rests on) */
@@ -3378,7 +3377,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
             return 0;
         }
     }
-    /* A GAME plays the demo's game script as sim.js's gameDemo makes it: its inputs, each with its
+    /* A GAME plays the demo's game script: its inputs, each with its
        seat, its end and its sidebar. `gd` lives only through init: resolve copies the inputs, and
        nothing below keeps `d`. */
     if (game) {
@@ -3392,10 +3391,10 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         d = &gd;
         for (i = 0; i < d->ninput; i++) kills += (d->input[i].has & WIKI_IN_KILL) != 0;
     }
-    /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
+    /* a layout is checked whole before any sim reads it; every index
        read out of it below is then in range */
     if (lay && !tagpu_wikilayout_check(lay, err, errn)) return 0;
-    /* THE CONTEXT, refused as sim.js's context() refuses it: an Interface Type other than 0 or 1
+    /* THE CONTEXT, refused: an Interface Type other than 0 or 1
        (the DLL maps the engine's int to these two before it starts a demo), and with a layout a
        side that is not one of its sides, which every read of lay->side[s->side] rests on */
     if (!ctx) ctx = &CTX_NONE;
@@ -3416,7 +3415,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     /* THE SIGHT TABLE a players game stamps with: a type of the bound entry whose radius index the
        layout's table does not store refuses the game -- an entry's own type, since bind left a
-       cast of one unbound -- as sim.js's make does */
+       cast of one unbound */
     if (game && e->players && lay)
         for (i = 0; i < s->entry->ndef; i++) {
             const WIKIDEF* t = &s->entry->def[i];
@@ -3532,7 +3531,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     if (!r) goto refused;
     /* the orders the scene gave its units, every serial up to here, say no ok */
     s->scene_serial = s->next_serial;
-    /* THE SCENE'S SELECTION is of the input seats' units alone (sim.js's): a deselect and a release
+    /* THE SCENE'S SELECTION is of the input seats' units alone: a deselect and a release
        clear only the acting seat's units (deselect, tagpu_wikisim_release), so a selected unit of a
        seat with no input state would stay selected for the whole simulation */
     for (i = 0; sel && i < sel->nselected; i++) {
@@ -3557,7 +3556,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         if (b && b->has_cursor) { s->in[k].cursor_x = b->cursor.x; s->in[k].cursor_z = b->cursor.z; }
         else if (a->has_cursor) { s->in[k].cursor_x = a->cursor.x; s->in[k].cursor_z = a->cursor.z; }
     if (scripted && d) {
-        /* the wait's data rule beyond the loader's (sim.js make): no other input shares its tick */
+        /* the wait's data rule beyond the loader's: no other input shares its tick */
         for (i = 0; i < d->ninput; i++) {
             if (!(d->input[i].has & WIKI_IN_UNTIL)) continue;
             for (k = 0; k < d->ninput; k++)
@@ -3608,7 +3607,7 @@ refused:
     return 0;
 }
 
-/* THE RELEASE, sim.js's sim.release: what the game's rebuild leaves of a seat's input after Back to
+/* THE RELEASE: what the game's rebuild leaves of a seat's input after Back to
    now and in a fork, MEASURED (wiki-replay m0-facts.md, 2026-11-01: a fork taken over at 1201 and a
    return to now, each from the commander selected and a building armed, came up with no unit
    selected, main+0x2CC3 back to 1 and the side's MAIN2 shown). The seat's held keys and buttons, a
@@ -3656,7 +3655,7 @@ void tagpu_wikisim_release(WIKISIM* s, int seat)
     s->act = 0;
 }
 
-/* THE FORK, sim.js's sim.fork; the contract and THE ORDERING are tagpu_wikisim.h's. Every refusal
+/* THE FORK; the contract and THE ORDERING are tagpu_wikisim.h's. Every refusal
    comes before the first write, so a refused fork leaves the sim as it was. The script's inputs
    not yet fed are split: the other seats' carried, the taken seat's and every kill dropped. The
    release (above) lets go of the taken seat alone, and with seat 0 drops the trips' recorded

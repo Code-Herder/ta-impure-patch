@@ -5,8 +5,8 @@
      exit 0 when every check holds, 1 when one fails, 2 when it cannot run (the stock pack is missing)
 
    THE FIXTURE'S TABLE. art/wiki/side/fixture.json and fixture-tall.json carry the stock game's sight table, which
-   tools/wiki/sidepacks.py writes from the stock pack: each must equal the stock pack's own and pass sim.js's
-   checkLayout. A layout stores only the tables its setup's types reach (tagpu_wikidata.h WIKISIGHT), so the stock
+   tools/wiki/sidepacks.py writes from the stock pack: each must equal the stock pack's own and pass the
+   layout check (tagpu_wikilayout_check). A layout stores only the tables its setup's types reach (tagpu_wikidata.h WIKISIGHT), so the stock
    table holds radius indices 3, 6, 7 and 8 -- ARMDRAG's 100, the 210 of ARMSOLAR and the stock structures, ARMCK's
    235 and the 290 of ARMCOM, CORAK's 275 among them -- and is held to the game as measured on those: TABLE8 to the
    scout's statistics of the stock file (332 point visits on 212 offsets, visited 1 / 2 / 3 / 5 / 7 times on 148 / 32 /
@@ -20,7 +20,7 @@
    NO LONGER CHECKED: the scout's TABLE1 (8 visits on 8 offsets) and TABLE4 (84 on 60), which no stock type reaches,
    so no layout stores them; nor its TABLE9, which numtables 9 never reaches.
 
-   THE STAMP. sim.js's sightLit on each of the four alone on a flat map lights exactly that set with those counts,
+   THE STAMP. The simulation's lit grid (tagpu_wikisim_sight_lit) on each of the four alone on a flat map lights exactly that set with those counts,
    centred on the sheared row (z - h / 2) >> 5, h = modelHeight + 1 (the stage's altitude, raised to the sea level + 1),
    and lights nothing within h / 2 of the north edge (0x4826A9).
 
@@ -28,12 +28,12 @@
    ARMCK 27, ARMSOLAR 38, CORAK 26.
 
    THE CASTINGS. Every pack present: each cast's sightDistance, radarDistance and sonarDistance integers of 16 bits
-   and modelHeight a byte (sim.js checkCasting); its sight table present and checkLayout's (every compat setup keeps
+   and modelHeight a byte (tagpu_wikidata_casting); its sight table present and the layout check's (every compat setup keeps
    one, MEASURED 2026-11-02), storing exactly the radius indices its castings' bound casts and the tree's players
    entries' own types reach, sight 32 or more (gfx.py `sight_table`), so every type a players game binds has its table.
    The line gives the tables and cells stored.
 
-   THE CHIPS. sim.js's CHIPS, the stats window's chips a `chip` press names, are the window's two splits and
+   THE CHIPS. The stats window's chips a `chip` press names, are the window's two splits and
    art/hud/layout.json's window.measures keys, in that order (tagpu_wikidata.h WIKI_CHIP_*, which simparity holds
    equal to CHIPS). */
 import fs from 'node:fs';
@@ -41,7 +41,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
 const FIXTURES = ['fixture.json', 'fixture-tall.json'].map(f => path.join(ROOT, 'art/wiki/side', f));
@@ -76,7 +76,7 @@ function run() {
   const sight = stock.layout.sight;
   if (!sight) throw new CannotRun('the stock pack has no sight table: rebuild it with tools/wiki/sidepacks.py stock');
 
-  // the fixtures' table is the stock pack's, and each fixture still a layout sim.js takes
+  // the fixtures' table is the stock pack's, and each fixture still a layout the host takes
   for (const f of FIXTURES) {
     const L = JSON.parse(fs.readFileSync(f, 'utf8'));
     let why = null;
@@ -120,7 +120,7 @@ function run() {
     say(!own && lit.length === n && same(histogram(lit), hist),
       `${t}: lights ${lit.length} blocks, counts ${JSON.stringify(histogram(lit))} (M0-P1: ${n}, ${JSON.stringify(hist)})`);
     say(k.modelHeight === height, `${t}: modelHeight ${k.modelHeight} (M0-P1: ${height})`);
-    // sim.js's stamp (sightLit) on the type alone on a flat 128 x 128 map: the same set and counts, on the sheared row
+    // the simulation's stamp (the host's sight) on the type alone on a flat 128 x 128 map: the same set and counts, on the sheared row
     const h = Math.min(255, k.modelHeight + 1), z = 1040 + (h >> 1), one = (zz) => ({ map: { w: 128, h: 128 },
       units: [{ owner: 0, type: t, x: 1040, z: zz, built: 1 }], game: { deaths: [], types: [{ name: t, sightDistance: k.sightDistance,
         radarDistance: 0, sonarDistance: 0, activates: false, modelHeight: k.modelHeight }] } });
@@ -131,7 +131,7 @@ function run() {
     say(WikiSim.sightLit(one((h >> 1) - 1), sight, 0, 0).every(b => b === 0), `${t}: sightLit within h / 2 of the north edge lights nothing`);
   }
 
-  // every pack's castings and table under sim.js's bounds, its table storing exactly the indices its types reach
+  // every pack's castings and table under the loader's bounds, its table storing exactly the indices its types reach
   const entrySights = playersSights();
   for (const mod of fs.readdirSync(PACKS).sort()) {
     const file = path.join(PACKS, mod, 'side.json');

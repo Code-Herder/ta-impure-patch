@@ -269,7 +269,7 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo);
 
 /* THE IDLE COLUMN of layout side `side`: its MAIN2 with nothing selected, a watcher's screen (R0:
    the viewer controls the spectator record, whose unit list is empty). Each gadget's state is
-   sim.js gadgetState(g, null, false)'s: hidden -1; the orders and build tabs, the build buttons,
+   the simulation's for no unit shown: hidden -1; the orders and build tabs, the build buttons,
    STOP and the orders 2 (greyed); anything else 0. framecheck pins this second copy of that rule
    against a fresh simulation's MAIN2. 1 into `out`, or 0 when the layout has no such side. */
 int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* out);
@@ -364,7 +364,7 @@ typedef struct { int x, y, w, h; } WIKIFRAMEBOX;
 typedef struct { WIKIFRAMEBOX panel, title, yes, no, frame; } WIKIFRAMEDLG;
 void tagpu_wikiframe_dialog(const WIKISTAGEFIT* fit, int Wg, int Hg, WIKIFRAMEDLG* out);
 
-/* A point of a glide from a to b at step i of n: the curve of sim.js glideAt in doubles, without
+/* A point of a glide from a to b at step i of n: the curve of tagpu_wikisim.c's glide_at in doubles, without
    its truncation, since it is a position on the screen and not simulation state. */
 double tagpu_wikiframe_glide(double a, double b, int i, int n);
 
