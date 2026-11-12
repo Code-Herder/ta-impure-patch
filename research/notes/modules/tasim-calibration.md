@@ -113,7 +113,7 @@ limit.
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
-| the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | no: no economy pass runs at an empty point (*The seat's rates*) | **open**: R4 refuses every reload run on them |
+| the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | by the apply, not by the settle: no economy pass runs at an empty point (*The seat's rates*) | the applier resets them at every apply to values the apply alone decides; R4 compares them |
 
 ## The per-run checks
 
@@ -125,7 +125,7 @@ makes the run unusable and the reference builder refuses its scenario.
 | R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
 | R2 | no projectile at the empty point |
 | R3 | after the apply the grid holds only the scenario's features |
-| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase; the storage, flag and levels equal the wire's |
+| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
 | R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's search budget `pfbudget` (`0x5119E8`), searches `pfsearches` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the budget every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
@@ -147,7 +147,28 @@ every later one; the exact scenario's energy maximum 1,000,000 after a launch's 
 1,000,100 after a reload's. No settle can reset them, and comparing them after the run's first
 pass compares an outcome: two fresh launches of the exact scenario, same wire, read energy expense
 20 and 10 after that pass. A seat with no unit in a scenario (the course's) never runs a pass in
-the run at all. How R4 treats them is open.
+the run at all.
+
+So **the scenario applier resets them at every apply**, after its creates, on the game thread
+inside the apply, for each seat the scenario names (`reset_pass_results`, `tagpu_scenario.c`): the
+rates to 0, the record init's value, and the maxima to what the next pass would compute from the
+seat's units after the apply (every alive, finished unit's `energystorage`/`metalstorage`, a
+pending death left out, then the base storage while `+0x149` bit 0 is set), raised to a level the
+wire sets. A seat with units reads the same maxima before its first pass as after it unless a unit
+is finished or lost on the way; a seat with none keeps rates 0 and its base storage for the whole
+run. Either way the values follow from the wire and the units it made, never from the previous
+run. The readers in between, established from the disassembly: the rates go only through the
+getters `0x464AB0..0x464B20`, called by the stock AI's planners (`0x408691`, `0x40874A`,
+`0x40BC53..0x40BCC5`, type 2 only) and the resource bar (`0x468F8D..0x468FB4`); the maxima are read
+by RepairPatrol `0x405980` and VTOL_RepairPatrol `0x4152F0`, which compare the stored level with
+0.2 × the maximum and a feature's yield with the room left, by the AI's score, the share sliders,
+the network's sends and the bars. Nothing clamps a level to them but the pass, against the maxima
+it recomputes (`0x401AB3..0x401B27`), so the reset never clamps the storage the scenario sets. The
+reset is withheld in a network game and on a puppet, where the calibration keys are refused.
+
+A run's `t = 0` seat row, the state after the apply, carries the reset values, so the `extractor`
+exact family's metal income at `t = 0` is 0 in every run, as tasim's must be: it starts from the
+applied state, before any pass.
 
 **How a refused scenario reads.** `calib.py refs build` prints, for each scenario it refuses, the
 number of failed runs, then each check with the runs it failed and under it every field it named
