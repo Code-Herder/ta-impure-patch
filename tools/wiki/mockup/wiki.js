@@ -142,7 +142,8 @@ async function loadFixtures() {
 /* a mod's pack, once: a sim started before it arrived restarts on it, and the page's text and side list follow it.
    The layout and the casting are one source: a casting list that is not index-aligned with the layout's
    sides, or one side's casting the sim's bounds refuse, refuses the pack whole, as a refused layout does. The mod's
-   stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack */
+   stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack. Whatever
+   fails on the way, the load or the checks after it, leaves the pack an error, never 'loading' (settled) */
 function loadPack(mod) {
   if (PACKS[mod] || mod === 'unknown') return;
   PACKS[mod] = 'loading';
@@ -157,7 +158,7 @@ function loadPack(mod) {
     p.stages = await fetch(`gfx/side/${mod}/stage/index.json`).then(r => r.ok ? r.json() : null, () => null)
       .then(j => j && j.entries ? j.entries : {}, () => ({}));
     PACKS[mod] = p;
-  }, x => { PACKS[mod] = { error: x.message }; }).then(() => {
+  }).catch(x => { PACKS[mod] = { error: x && x.message || String(x) }; }).then(() => {
     sideNote();
     if (mod !== S.mod) return;
     sideControl(); renderTree(); renderEntry();
@@ -840,19 +841,23 @@ const ROLE = {
 UIKit.layoutVars(frame, LAY);
 fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => UIKit.roleStyles(ROLE, LAY.roles, L.styles)).catch(x => console.error('wiki styles:', x));
 
-/* ---- the frame loop ---- */
-let last = 0;
+/* ---- the frame loop: the next frame asked for first, so a frame that throws does not end the loop -- the stage's
+   pack is asked for by a drawn frame, and a loop that ended would leave it unasked for good. The first error a frame
+   threw is kept for settled(), which names it ---- */
+let last = 0, frameErr = null;
 function loop(t) {
-  const dt = last ? Math.min(.25, (t - last) / 1000) : 0; last = t;
-  gameTick(dt);
-  if (S.open) {
-    frameDrag();
-    advance(dt);
-    const v = draw(); strip(v);
-    if (held() !== loop.held) { loop.held = held(); controls(); }
-  }
-  paintParts();                       // last, so a keycap or button made this frame shows its part in it
   requestAnimationFrame(loop);
+  try {
+    const dt = last ? Math.min(.25, (t - last) / 1000) : 0; last = t;
+    gameTick(dt);
+    if (S.open) {
+      frameDrag();
+      advance(dt);
+      const v = draw(); strip(v);
+      if (held() !== loop.held) { loop.held = held(); controls(); }
+    }
+    paintParts();                     // last, so a keycap or button made this frame shows its part in it
+  } catch (x) { if (!frameErr) frameErr = x && x.message || String(x); console.error('wiki frame:', x); }
 }
 
 /* ---- the controls strip ---- */
@@ -870,17 +875,58 @@ $('#iface').value = S.iface; $('#iface').onchange = e => { S.iface = +e.target.v
 window.addEventListener('resize', layout);
 
 applySkin(); layout(); renderTree(); renderEntry(); controls(); loadPack(S.mod); sideNote(); sideControl();
+// the content's arrival and the demo's start on it, which settled() waits for: done once, or failed with why
+let contentLoaded = false, startErr = null;
 Promise.all([load(), loadFixtures()]).then(() => {
   sideControl();
   if (S.entry && !(S.entry in ENT)) S.entry = null;
   if (S.open && !S.entry && TREE) S.entry = leaves(TREE.tree)[0] || null;
   const d = entry() && entry().demos; if (d && S.demo >= d.length) S.demo = 0;
   setOpen(S.open); start(); render();
-});
+}).catch(x => { startErr = x && x.message || String(x); console.error('wiki:', x); }).finally(() => { contentLoaded = true; });
 requestAnimationFrame(loop);
+
+/* THE PAGE SETTLED, what a scripted picture of it waits for (tools/wiki_regression.py mockup_shot): 'pending: <what>'
+   only while a load the page waits on is in flight -- the content, the skin's kit and its first paint, the mod's
+   sidebar pack, the fonts, and in the game look the stage's pack (gfx.js settled) -- each of which resolves or fails;
+   'ready' once the demo's simulation or replay runs on what arrived; otherwise why it never will. Every state that
+   cannot change by itself -- a demo whose sim failed (fail() leaves no sim and no replay), an entry or a demo that is
+   not there, a kit that did not load, a frame that threw -- answers its reason and never 'pending', so a waiter ends
+   on it. The stage's pack is asked for by the first frame drawn with a view (gfx.js frame), which every animation
+   frame draws while the sim or the replay runs. */
+function settled() {
+  if (!contentLoaded) return 'pending: the tree, its entries and the sidebar fixtures';
+  if (startErr) return `the page did not start the demo: ${startErr}`;
+  if (frameErr) return `a frame threw: ${frameErr}`;
+  if (treeErr) return `the tree did not load: ${treeErr}`;
+  if (S.entry && ENT[S.entry] && ENT[S.entry].error) return ENT[S.entry].error;
+  if (!demo()) return `no demo ${S.demo + 1} in entry ${S.entry}`;
+  // first, as the pack's arrival starts the demo again on its layout (loadPack)
+  if (S.sidebar === 'mod' && PACKS[S.mod] === 'loading') return `pending: the ${S.mod} sidebar pack`;
+  if (simErr) return `the demo failed: ${simErr}`;
+  if (!(sim || rep)) return 'the demo has no simulation and no replay';
+  if (S.skin !== 'whitebox') {
+    const K = KITS[S.skin];
+    if (K && K.error) return `the ${S.skin} kit did not load: ${K.error}`;
+    if (!K || K.loading) return `pending: the ${S.skin} kit`;
+    if (!$('#win canvas.skin')) return `pending: the ${S.skin} kit's first paint`;
+  }
+  if (document.fonts.status !== 'loaded') return 'pending: the fonts';
+  if (gameLook()) {
+    if (!window.WikiGfx) return 'gfx.js is not loaded';
+    const g = WikiGfx.settled(stageId());
+    return g === 'pending' ? `pending: the stage ${stageId()} in the game's graphics (${WikiGfx.state()})` : g;
+  }
+  return 'ready';
+}
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
 // and a frame:game entry's replay, its frame record, and the frame as drawn: its corner and the stage HUD's unit in canvas
 // pixels, its size in game pixels, Leave's question's rects, the viewer's cursor and the emblems' boxes, in canvas pixels
 window.WikiPage = { state: S, sim: () => sim, replay: () => rep, frame: () => FR && FR.rec, frameDrawn: () => FR && FR.hud,
-  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
-})();
+  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx, settled };
+})().catch(x => {
+  // the page's own start failed (layout.json, say): settled() will never be there to ask, so the failure is kept for a
+  // scripted check to read instead of waiting on it
+  window.WikiPageFailed = x && x.message || String(x);
+  console.error('wiki:', x);
+});

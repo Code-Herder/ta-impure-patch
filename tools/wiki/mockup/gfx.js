@@ -387,8 +387,9 @@ window.WikiGfx = (() => {
   }
   /* what a scripted check reads: whether an entry's stage has settled -- 'ready' once it is drawn in 3D, or failed and
      so whitebox, or with the graphics off or gfx/ absent, when nothing is coming; 'pending' while a fetch it waits on
-     is in flight; else why it never will be. Every fetch here resolves or fails, so a check may wait for anything but
-     'pending' with no deadline */
+     is in flight, and before any frame has asked for the stage (frame() is what asks); else why it never will be.
+     Every fetch here resolves or fails; that a frame asks is the page's to hold, and wiki.js settled() says why a page
+     draws none */
   const settled = entry => {
     if (mode !== 'game' || state === 'missing') return 'ready';
     if (state !== 'ready') return 'pending';

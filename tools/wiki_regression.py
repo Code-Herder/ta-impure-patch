@@ -132,9 +132,10 @@ try, on the same launch as sp:
        --try`); sim.js's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
        reached and the building each button armed. With --shot, the presented frame is grabbed
        before `snap`'s click and before `line`'s first release, the line's sites on the stage;
-  (t2c) on the sidebar, read back the same way: NEXT and PREV page the ARMCK, the ORDERS tab shows
-       the side's GEN and the BUILD tab its page again, and STOP disarms the building armed and
-       empties the orders;
+  (t2c) on the sidebar, with Try it paused, read back the same way: NEXT and PREV page the ARMCK, the
+       ORDERS tab shows the side's GEN and the BUILD tab its page again, a click on the map places the
+       building the demo left armed (one order, the building put away), the sidebar arms it again,
+       and STOP disarms it and empties the orders -- no tick runs between the placement and STOP;
   (t2b) exactly one cursor: the pointer over the sidebar's BUILD tab and over the stage's centre,
        one, on the stage; over the play control, off the stage, the player's alone (needs
        tools/wiki/gfx.py's pack, as cursor does);
@@ -1033,21 +1034,26 @@ def mockup_shot(state, path, out=None):
         m.url, m.tick = None, None
         run("resize", str(gw + 34), str(gh + 900))
         run("goto", f"http://127.0.0.1:{m.httpd.server_address[1]}{url}")
-        # THE PAGE SETTLED: the fonts, the window, the mod's sidebar pack, and with the game look the demo's stage --
-        # WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each 'pending' only while a load it waits on is
-        # in flight, and every such load resolves or fails (WikiGfx.settled), so the wait has no deadline and its
-        # verdict no timing: a picture of a page still loading is never taken, and a load that failed is named. A page
-        # that never settles is a hang, which the gate's lane bound (GATE_LANE_S) ends. Each eval waits a slice inside
-        # the page (a playwright-cli call is a process, a second each) and says where it stands; the slice decides
-        # nothing
-        status = ("() => !(window.WikiPage && (WikiPage.sim() || WikiPage.replay())) || document.fonts.status !== 'loaded'"
-                  " || !document.querySelector('#win canvas.skin')"
-                  " || document.querySelector('#sidebar-note').textContent.startsWith('loading') ? 'pending' : "
-                  + ("WikiGfx.settled(WikiPage.stageId())" if game else "'ready'"))
+        # THE PAGE SETTLED (wiki.js settled): the content, the skin's kit, the mod's sidebar pack, the fonts, and with
+        # the game look the demo's stage -- WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- each
+        # 'pending: <what>' only while a load it waits on is in flight. Every such load resolves or fails, and every
+        # state that cannot change by itself (a failed sim, a missing demo, a kit that did not load, a frame that
+        # threw) answers its reason instead, so the wait's verdict has no timing: a picture of a page still loading
+        # is never taken, and a failure is named. Each eval waits a slice inside the page (a playwright-cli call is a
+        # process, a second each) and says where it stands; the slice decides nothing. SETTLE_S only bounds a page
+        # that breaks that rule, failing with what it was still waiting for; it never passes a picture
+        status = ("() => window.WikiPageFailed ? `the page did not start: ${WikiPageFailed}`"
+                  " : !window.WikiPage ? 'pending: the page scripts and layout.json'"
+                  + (" : !window.WikiGfx ? 'gfx.js is not loaded'" if game else "")
+                  + " : WikiPage.settled()")
+        end = time.monotonic() + SETTLE_S
         while (ready := wl.result(run("eval", f"async () => {{ const s = {status}, t0 = performance.now();"
-                                              " while (s() === 'pending' && performance.now() - t0 < 10000)"
-                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) == "pending":
-            pass
+                                              " while (s().startsWith('pending') && performance.now() - t0 < 10000)"
+                                              " await new Promise(r => setTimeout(r, 50)); return s(); }").stdout)) \
+                and ready.startswith("pending"):
+            assert time.monotonic() < end, \
+                f"the mockup page was still {ready} after {SETTLE_S} s ({state['entry']}, demo {state['demo_n'] + 1}" \
+                f"{', game look' if game else ''}): a load that never resolved, which wiki.js settled() rules out"
         assert ready == "ready", f"the mockup page did not settle ({state['entry']}, " \
                                  f"demo {state['demo_n'] + 1}{', game look' if game else ''}): {ready}"
         m.url = url
@@ -1084,6 +1090,11 @@ def mockup_shot(state, path, out=None):
     return cursor_at
 
 
+SETTLE_S = 1200                          # mockup_shot: the page settles in 34..128 s alone (MEASURED 2026-11-11, the
+                                         # takeover lane's first picture); a page past this broke settled()'s rule
+PW_CALL_S = 600                          # MockupPage.run: a call's own wait in the page is at most a 10 s slice
+
+
 class MockupPage:
     """mockup_shot's page, one a process: its server, its playwright-cli browser and the page it has open, kept from
     one picture to the next so that a picture of the same demo needs no load, and one at a later tick no replay from
@@ -1113,17 +1124,28 @@ class MockupPage:
             launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
         cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
                                                "launchOptions": launch}}))
-        pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
-        self.run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=self.tmp)
+        self.pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
         self.run("open", "about:blank")
         self.closed = False
         atexit.register(self.close)
+
+    def run(self, *a):
+        """One playwright-cli call. PW_CALL_S only bounds a call that never returns -- a browser or a page whose main
+        thread is stuck -- and fails naming it; an answer of any kind is the caller's to judge."""
+        try:
+            return subprocess.run(self.pw + list(a), capture_output=True, text=True, cwd=self.tmp, timeout=PW_CALL_S)
+        except subprocess.TimeoutExpired:
+            raise AssertionError(f"playwright-cli {a[0]} did not return in {PW_CALL_S} s: the mockup's browser or its "
+                                 f"page is stuck") from None
 
     def close(self):
         if self.closed:
             return
         self.closed = True
-        self.run("close")
+        try:
+            self.run("close")
+        except AssertionError as e:
+            print(f"wiki: {e}")
         self.httpd.shutdown()
         shutil.rmtree(self.tmp, ignore_errors=True)
         if MockupPage.open_ is self:
@@ -1352,13 +1374,16 @@ class Stage:
     def client(self, x, z):
         return round(self.ox + x * self.s), round(self.oz + z * self.s)
 
-    def press(self, lay, screen, i):
-        x, z = side_centre(lay, screen, i)
+    def click(self, x, z):
+        """a left click at world point (x, z): a move there, the button down and up there"""
         at = self.client(x, z)
         self.c.keys("dmove:%d,%d" % at, "ddown:%d,%d" % at, "dup:%d,%d" % at)
         self.points.append((x, z))
         self.want += [["down", "lmb"], ["up", "lmb"]]
         return at
+
+    def press(self, lay, screen, i):
+        return self.click(*side_centre(lay, screen, i))
 
     def view(self, what):
         return try_view(self.c, self.c.dump(), what)
@@ -1440,11 +1465,25 @@ def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
     return st, arms
 
 
+T2C_SITE = (80, 288)                     # (t2c) the world point its placement clicks: where buildshapes/line starts the
+                                         # line it lets go of (Shift up before the button), so no build order of that
+                                         # Try it ever covers it, and mobile units never block a site (tasim_site_ok)
+
+
 def side_controls(c, d):
-    """(t2c) the sidebar's other controls, on the ARMCK the last demo left armed and ordered: NEXT
-    and PREV page it, ORDERS shows the side's GEN and BUILD its page again (tabs act on the press),
-    and STOP disarms and empties the orders; each read back from the simulation, whose hash equals
-    the game's at every read."""
+    """(t2c) the sidebar's other controls, on the ARMCK the last demo left selected and armed (its last inputs let go
+    of a line and keep the building armed): NEXT and PREV page it, ORDERS shows the side's GEN and BUILD its page
+    again (tabs act on the press); a click on the map places the armed building -- the ARMCK's one order, the
+    building put away -- and the sidebar arms it again; and STOP disarms and empties the orders. Each is read back
+    from the simulation, whose hash equals the game's at every read.
+
+    TRY IT IS PAUSED THROUGHOUT, through the page's play control, and its input stands between two ticks
+    (tagpu_wikisim_input), so no tick runs between the placement and STOP: the order STOP has to clear is the one the
+    click gave, there by construction, never one of the demo's that the ARMCK may or may not have worked off by the
+    tick wall time let Try it reach. The tick standing from the pause to STOP is checked."""
+    press(c, d, "play")
+    d = wait_dump(c, lambda d: not d["playing"], "(t2c) play did not pause Try it")
+    paused_at = d["tick"]
     st = Stage(c, d)
     lay = d["layout"]
     v = st.view("(t2c)")
@@ -1466,19 +1505,34 @@ def side_controls(c, d):
         v = st.view(f"(t2c) {role}")
         assert v["side"]["screen"] == want, f"(t2c) the {role} tab did not show {want}: {v['side']}"
         steps.append(f"{role} -> {want}")
+    assert v["mode"].startswith("build:") and v["selected"], \
+        f"(t2c) the demo left no building armed on a selection: mode {v['mode']}, selected {v['selected']}"
+    T = v["mode"].split(":", 1)[1]
+    st.click(*T2C_SITE)
+    v = st.view("(t2c) the placement")
+    placed = {u: [o["k"] for o in os] for u, os in v["orders"].items()}
+    assert v["mode"] == "contextual" and placed and all(k == ["build"] for k in placed.values()), \
+        f"(t2c) a click at {T2C_SITE} with {T} armed did not place it alone: mode {v['mode']}, orders {placed}"
+    steps.append(f"{T} placed at {T2C_SITE}: {placed}")
+    k, role, p = st.arm(T, "(t2c)")
+    steps.append(f"{T} armed again on page {p} after {k} x {role.upper()}")
+    v = st.view("(t2c) armed")
     before = {u: len(o) for u, o in v["orders"].items()}
-    assert v["mode"] != "contextual" and any(before.values()), \
-        f"(t2c) STOP needs a building armed and an order to clear: mode {v['mode']}, orders {before}"
-    st.press(lay, screen, side_gadget(lay, screen, lambda g: g["role"] == "stop", "(t2c)"))
+    assert v["mode"] == f"build:{T}" and before == {u: 1 for u in placed}, \
+        f"(t2c) STOP needs {T} armed and the placement's order: mode {v['mode']}, orders {before}"
+    st.press(lay, v["side"]["screen"], side_gadget(lay, v["side"]["screen"], lambda g: g["role"] == "stop", "(t2c)"))
     v = st.view("(t2c) STOP")
     assert v["mode"] == "contextual" and not any(v["orders"].values()), \
         f"(t2c) STOP left mode {v['mode']} and orders {v['orders']}"
     steps.append(f"STOP: {before} orders and the armed building -> none")
     d = c.dump()
+    assert d["tick"] == paused_at, f"(t2c) Try it ran from tick {paused_at} to {d['tick']} while paused"
     got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
     assert got[-len(st.want):] == st.want, f"(t2c) the game gave its simulation {got[-len(st.want):]}, the presses {st.want}"
-    print(f"wiki try: (t2c) on the sidebar: {'; '.join(steps)}; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
-    return d
+    print(f"wiki try: (t2c) on the sidebar, Try it paused at tick {d['tick']}: {'; '.join(steps)}; "
+          f"hash {d['hash']} equal to sim.js's")
+    press(c, d, "play")
+    return wait_dump(c, lambda d: d["playing"], "(t2c) play did not start Try it again")
 
 
 def one_cursor(c, d):
