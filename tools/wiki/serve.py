@@ -41,15 +41,18 @@ An error answers {"error": why}.
 `POST /sim` is one request of the wiki's simulation host, tagpu/ddraw/tests/wikihost.c (`wikitest serve`, the C core
 the DLL's wiki runs, built by tools/wiki/wikibuild.mjs's `host` target), which states the protocol; the page's
 mockup/simhost.js makes its calls so, and --stdio relays each line of stdin to the same child. One child answers
-every request, one at a time, started on first use and again after it ends. The body must be `application/json` -- a page of another origin then needs a preflight this server never
-grants -- and a `packs` request names folders under tools/wiki/mockup/gfx/ only, as `pack_type` holds `/cob`'s.
-Python callers use SimRelay directly. The connection is HTTP/1.1, kept alive, with Nagle's algorithm off: a page asks
-once a drawn frame, synchronously, so each request's latency is the frame's."""
+every request, one at a time, started on first use and again after it ends, each with an instance id of its own.
+The body must be `application/json` -- a page of another origin then needs a preflight this server never grants --
+one line of at most 16 MB, and its `packs` requests read files under tools/wiki/mockup/gfx/ only, which the host
+holds (`serve --packs-root`) as `pack_type` holds `/cob`'s. Python callers use SimRelay directly. The connection is
+HTTP/1.1, kept alive, with Nagle's algorithm off: a page asks once a drawn frame, synchronously, so each request's
+latency is the frame's."""
 import argparse
 import base64
 import ctypes as C
 import functools
 import json
+import secrets
 import struct
 import subprocess
 import sys
@@ -65,6 +68,7 @@ WORLDS_MAX = 64                     # the oldest world goes when a page never fr
 VALUES = 21                         # WIKICOB_VALUES
 PIECES = 256                        # WIKICOB_PIECES
 PRIM_BASE, PRIM_BYTES = 0x22, 0x36  # TAGPU_COBVM_PRIM_BASE, _PRIM_BYTES: TAGPU_COBVM_MODEL_BYTES(n)
+LINE_MAX = 1 << 24                  # a request body, bytes: the simulation host's WH_LINE_MAX (tests/wikihost.c)
 
 
 class Type(C.Structure):
@@ -257,7 +261,15 @@ class Host:
 class SimRelay:
     """The wiki's simulation host, one child process answering one request at a time: `answer(line)` is the answer
     line to a request line, the host's own `{"error": ...}` included. A child that has ended answers that once and is
-    started again at the next request, holding nothing of the last one's handles."""
+    started again at the next request, with an instance id of its own (wikihost.c, THE INSTANCE), so no call stamped
+    for the last one reads a handle in it.
+
+    ONE LINE IN, ONE LINE OUT, under the lock. The host answers every line it reads with one line, so the relay holds
+    the lock across exactly one write and one read, and refuses before taking it whatever would break the count: an
+    empty request, one holding a newline (two lines) or a NUL byte, one past the host's line. The bytes forwarded are
+    the request's own, its surrounding whitespace aside, so the host reads what the caller sent -- duplicate keys
+    included. A read that ends without its newline is the host's end mid-answer (its stdout is a pipe, fully
+    buffered, flushed by an abort or an exit), never an answer: the part is dropped and the exit answered."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -268,48 +280,49 @@ class SimRelay:
                              capture_output=True, text=True).stdout.strip()
         if not exe:
             raise OSError("tools/wiki/wikibuild.mjs named no host")
-        self.proc = subprocess.Popen([exe, "serve"], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        # the packs' root is the host's to hold (wikihost.c pack_at): it resolves every file a pack read opens, links
+        # included, where a check here would read the request through another parser than the host's
+        self.proc = subprocess.Popen([exe, "serve", "--instance", secrets.token_hex(16), "--packs-root", "tools/wiki/mockup/gfx"],
+                                     cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
-    @staticmethod
-    def _packs_ok(req):
-        """every `packs` call of the request names folders under the gfx tree alone"""
-        calls = req.get("calls", []) if isinstance(req, dict) and req.get("op") == "batch" else [req]
-        for c in calls if isinstance(calls, list) else []:
-            if isinstance(c, dict) and c.get("op") == "packs":
-                for d in c.get("dirs") or []:
-                    if not isinstance(d, str) or not (ROOT / d).resolve().is_relative_to(GFX):
-                        return False
-        return True
+    def _ended(self):
+        """the child's end, answered: it is killed should it still run with its stdout closed, and waited for"""
+        self.proc.kill()
+        code = self.proc.wait()
+        self.proc = None
+        return json.dumps({"error": f"the host exited {code}"}).encode()
 
     def answer(self, line):
         if isinstance(line, str):
             line = line.encode()
-        if b"\n" in line.strip() or b'"packs"' in line:
-            try:
-                req = json.loads(line)
-            except ValueError as e:
-                return json.dumps({"error": f"json: {e}"}).encode()
-            if not self._packs_ok(req):
-                return b'{"error":"a pack is not a folder under tools/wiki/mockup/gfx/"}'
-            line = json.dumps(req, separators=(",", ":")).encode()
+        line = line.strip()
+        if not line:
+            return b'{"error":"an empty request"}'
+        if len(line) > LINE_MAX:
+            return b'{"error":"the request line is longer than 16 MB"}'
+        if b"\n" in line or b"\0" in line:
+            return b'{"error":"a request is one line of JSON, without a newline or a NUL byte in it"}'
         with self.lock:
             if self.proc is None or self.proc.poll() is not None:
                 self._start()
-            self.proc.stdin.write(line.strip() + b"\n")
-            self.proc.stdin.flush()
+            try:
+                self.proc.stdin.write(line + b"\n")
+                self.proc.stdin.flush()
+            except BrokenPipeError:
+                return self._ended()
             out = self.proc.stdout.readline()
-            if not out:
-                code = self.proc.wait()
-                self.proc = None
-                return json.dumps({"error": f"the host exited {code}"}).encode()
-            return out.rstrip(b"\n")
+            if not out.endswith(b"\n"):
+                return self._ended()
+            return out[:-1]
 
 
 class Handler(SimpleHTTPRequestHandler):
     host = None
     sim = None
-    # a page asks the simulation once a drawn frame, synchronously: one kept-alive connection, each small request sent
-    # at once (MEASURED, the S2 spec's 0: HTTP/1.0 with Nagle on costs a new connection and a delayed ACK each time)
+    # A page asks the simulation once a drawn frame, synchronously, so a request's latency is the frame's: one
+    # kept-alive connection, each small request sent at once. MEASURED 2026-11-11 on the reference setup, a Python
+    # client relaying to a child: 2.0-2.7 ms a request on HTTP/1.0 (a new connection each), 0.36 ms on HTTP/1.1 kept
+    # alive with Nagle's algorithm off, and 42 ms on HTTP/1.1 with it on (the delayed-ACK stall).
     protocol_version = "HTTP/1.1"
     disable_nagle_algorithm = True
 
@@ -321,7 +334,16 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path not in ("/cob", "/sim"):
             self.send_error(404)
             return
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        # a body is read whole before it is answered, so its length is bounded before anything is read: the host's line
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            n = -1
+        if not 0 <= n <= LINE_MAX:
+            self.send_error(413 if n > LINE_MAX else 400, "a request body is 0..16 MB, its Content-Length given")
+            self.close_connection = True
+            return
+        body = self.rfile.read(n)
         if self.path == "/sim":
             if not (self.headers.get("Content-Type") or "").startswith("application/json"):
                 self.send_error(415, "a /sim request is application/json")
@@ -366,10 +388,10 @@ def main():
     a = ap.parse_args()
     if a.stdio:
         sim = SimRelay()
-        for line in sys.stdin:
-            if line.strip():
-                sys.stdout.write(sim.answer(line).decode() + "\n")
-                sys.stdout.flush()
+        # every line answered, an empty one included, as the host answers its own
+        for line in sys.stdin.buffer:
+            sys.stdout.buffer.write(sim.answer(line) + b"\n")
+            sys.stdout.buffer.flush()
         return
     Handler.host = Host()
     Handler.sim = SimRelay()

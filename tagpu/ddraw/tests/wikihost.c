@@ -5,12 +5,28 @@
    natively for the mockup, under AddressSanitizer, and i686 under Wine with the DLL's flags.
 
    THE PROTOCOL. One JSON object a line in, exactly one JSON line out, in order, always: an error
-   is an answer, {"error": why}, and the loop goes on. A line is at most WH_LINE_MAX bytes; a longer
-   one is read past and answered as an error. Handles are positive integers, never reused in a
-   process. {"op": "batch", "calls": [...]} answers {"answers": [...]}, each call as alone.
+   is an answer, {"error": why}, and the loop goes on. Every line read is answered: one past
+   WH_LINE_MAX bytes, one holding a NUL byte and an empty one each as an error, the first two read
+   past to their newline. Handles are positive integers, never reused in a process.
+   {"op": "batch", "calls": [...]} answers {"answers": [...]}, each call as alone.
 
-     hello                          {"version": 1, "constants": {...}}: the constants the drop-in
-                                    exports, from the C headers, in its names
+   THE INSTANCE. A handle names an object of one host process only, and a new process numbers
+   its handles from 1 again, so a handle kept across a host's end would name another object in
+   the next one. `serve --instance ID` gives the process an id, which `hello` answers; a call
+   carrying "in": ID is answered only by the host of that id, any other refusing it with
+   {"error", "host": its own id}, before the call's handles are read. The drop-in stamps every
+   call with the id of the host its handles came from (tools/wiki/mockup/simhost.js), so the
+   invariant is: no call names a handle in a host that did not give it. The id is drawn fresh
+   for each host started -- 128 random bits from the operating system's generator, by
+   tools/wiki/serve.py's SimRelay and tools/wiki/hostchan.cjs, the tee's builds sharing one, as
+   their handles must agree -- so two hosts share one with odds of 2^-128. A call without "in" is
+   answered by any host: a recorded trace, a test.
+
+   THE PACKS' ROOT. `serve --packs-root DIR` (tools/wiki/serve.py's relay, which a page drives)
+   reads a pack's files only under DIR, every one resolved before it is read (pack_at).
+
+     hello                          {"version": 1, "instance": id, "constants": {...}}: the
+                                    constants the drop-in exports, from the C headers, in its names
      entry {json}                   {"entry": h}: tagpu_wikidata_entry
      layout {json}                  {"layout": h}: tagpu_wikidata_layout_json
      casting {json}                 {"casting": h}: tagpu_wikidata_casting
@@ -24,7 +40,8 @@
                                     {"lit": base64, "contacts": [0|1, ...]}: the lit grid and
                                     contacts over a view of {w, h, units: [[x, z, owner, type,
                                     built]], deaths: [[tick, owner, x, z, type]], types: [[sight,
-                                    radar, sonar, activates, modelHeight]]}, types by index
+                                    radar, sonar, activates, modelHeight]]}, types by index;
+                                    no more units, deaths or types than a sim's view holds
      sighttable {table, distance}   {"idx", "table": {idx, cells} | null}
      fits {w, h}                    {"fits": bool}: tagpu_wikidata_frame_fits
      new {entry, play, layout, ctx} {"sim", "tick", "done", "side", "iface", "game", "nin",
@@ -44,7 +61,7 @@
      notes {sim}                    each type's quarantine note, "" for none
      fork {sim, R, inputs, mode, seat}   {"tick", "done"}: tagpu_wikisim_fork, its message an error
      release {sim, seat}            {"tick", "done"}
-     free {sim}                     {}
+     free {sim}                     {}, for a sim the host no longer holds too
 
    `want` on new, input, step, fork and release asks the state after the call on the same answer:
    {"view": [seats], "orders": true, "hash": true, "now": [seats], "poses": true} adds "views":
@@ -66,6 +83,10 @@
    reaches 1; a feature gone is `reclaimed`, unless a wreck placed in that tick covers it (the
    wreck destroys the features under it, tasim_world.c corpse). `t` is the tick the step began on.
    ox and oz are a structure's site, absent for a mobile unit. */
+#ifndef _WIN32
+#define _XOPEN_SOURCE 700           /* realpath, for THE PACKS' ROOT */
+#endif
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "wikihost.h"
@@ -76,12 +97,17 @@
 #include "tagpu_wikistage.h"
 #include "tagpu_wikicob.h"
 #include "tagpu_recrules.h"
+#include "tagpu_limits.h"
 #include "tasim.h"
 
 #define WH_LINE_MAX (1 << 24)   /* a request line, bytes: a whole entry and a fork part fit */
 #define WH_OBJS     32          /* each kind of handle's table */
 #define WH_SIMS     64          /* sims alive at once */
 #define WH_STEP_MAX 4096        /* ticks one step request runs */
+/* a sight view's units: no sim has a fixed count, so the bound is the game's own, WIKI_SEATS
+   players of TAGPU_LIM_UNITS each (tagpu_limits.h), which keeps the contacts' pass, a unit
+   against every unit, to 36 M visits */
+#define WH_SIGHT_UNITS (WIKI_SEATS * TAGPU_LIM_UNITS)
 
 /* ---- JSON out, in the drop-in's shapes (tools/wiki/mockup/simhost.js) ---- */
 
@@ -98,7 +124,14 @@ void wh_str(const char* s)
     putchar('"');
 }
 
-void wh_num(double v) { printf("%.17g", v); }
+/* JSON has no NaN and no infinity, and an answer is printed as it is made, so one cannot turn
+   into an error halfway: a value that is no finite number prints as null, as JSON.stringify
+   writes it */
+void wh_num(double v)
+{
+    if (isfinite(v)) printf("%.17g", v);
+    else fputs("null", stdout);
+}
 
 void wh_key(const char* k, int first)
 {
@@ -210,9 +243,14 @@ static void seat_out(const WIKISIM* s, const WIKIVSEAT* b)
     putchar('}');
     wh_key("keys", 0); keys_out(b->held);
     wh_key("drag", 0);
-    if (b->has_drag)
-        printf("{\"x0\":%.17g,\"z0\":%.17g,\"x1\":%.17g,\"z1\":%.17g}", b->drag_x0, b->drag_z0, b->drag_x1, b->drag_z1);
-    else fputs("null", stdout);
+    if (b->has_drag) {
+        putchar('{');
+        wh_key("x0", 1); wh_num(b->drag_x0);
+        wh_key("z0", 0); wh_num(b->drag_z0);
+        wh_key("x1", 0); wh_num(b->drag_x1);
+        wh_key("z1", 0); wh_num(b->drag_z1);
+        putchar('}');
+    } else fputs("null", stdout);
     wh_key("mode", 0); mode_out(s, b->rmode, b->mode);
     wh_key("reclaim", 0);
     if (b->rmode) {
@@ -743,6 +781,8 @@ static struct {
     HSIM*              sim[WH_SIMS];
     BUF                log;         /* this call's log entries, comma-separated */
     int                nlog;
+    char               instance[WH_INSTANCE_MAX + 1];   /* THE INSTANCE, "" none */
+    const char*        root;        /* THE PACKS' ROOT as given; NULL none */
 } H;
 
 static void obj_unref(HOBJ* o)
@@ -1014,6 +1054,7 @@ static void log_made(HSIM* m, const WIKIDEMO* d)
                            mob ? 0 : tasim_bound_cell(tasim_js_round(u->z / CELL - tasim_fpz(s, u->def) / 2.0)), u->built);
             }
     }
+    if (H.log.oom) log_oom();
 }
 
 /* ---- the answers ---- */
@@ -1061,7 +1102,9 @@ static void op_hello(void)
 {
     static const WIKITRIPROW rows[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
     int k;
-    printf("{\"version\":1,\"constants\":{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"PICK\":%d,\"PICK_DOWN\":%d,"
+    fputs("{\"version\":1,\"instance\":", stdout);
+    wh_str(H.instance);
+    printf(",\"constants\":{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"PICK\":%d,\"PICK_DOWN\":%d,"
            "\"PICK_UP\":%d,\"TRIP_ROWS\":[", WIKI_TRIP, WIKI_TRIP_DOWN, WIKI_TRIP_UP, WIKI_PICK, WIKI_PICK_DOWN, WIKI_PICK_UP);
     for (k = 0; k < WIKI_TRIP_NROWS; k++)
         printf("%s{\"glide\":%d,\"hold\":%d,\"gap\":%d,\"back\":%d,\"hover\":%d}", k ? "," : "", rows[k].glide,
@@ -1143,6 +1186,33 @@ static void op_table(const TJV* v)
     made(K_TABLE, t, free);
 }
 
+/* THE PACKS' ROOT (serve --packs-root DIR): every file a pack read opens is resolved first, links
+   and ".." included, and refused unless it lies under the resolved root, so a pack folder, a
+   scene.json or a script file that is a link out of the root (an instance's game folder links
+   into the game's install) reads nothing. The file is then read at the resolved path, so the
+   path checked is the path read. The root is resolved at each check too: one that does not
+   exist (no pack built yet) holds no file. Without a root every path is read as given. */
+static int pack_at(const char* path, char* out, size_t n)
+{
+#ifdef _WIN32
+    (void)path; (void)out; (void)n;
+    return -1;                      /* unreachable: wikitest refuses --packs-root on _WIN32 */
+#else
+    char *root, *real = NULL;
+    size_t k;
+    int r = 0;
+    if (!H.root) { snprintf(out, n, "%s", path); return 1; }
+    if ((root = realpath(H.root, NULL)) && (real = realpath(path, NULL))) {
+        k = strlen(root);
+        r = !strncmp(real, root, k) && (real[k] == '/' || root[k - 1] == '/') && strlen(real) < n ? 1 : -1;
+        if (r > 0) memcpy(out, real, strlen(real) + 1);
+    }
+    free(root);
+    free(real);
+    return r;
+#endif
+}
+
 /* a set of gfx packs, cached by its list: each a repository-relative folder, no "..", read once */
 static void op_packs(const TJV* v)
 {
@@ -1177,7 +1247,7 @@ static void op_packs(const TJV* v)
     }
     if (!(f = (COBFILES*)malloc(sizeof *f))) { free(key.p); error("out of memory"); return; }
     cob_init(f);
-    if (!cob_packs(f, list, n, err, sizeof err)) { packs_drop(f); free(key.p); error(err); return; }
+    if (!cob_packs(f, list, n, pack_at, err, sizeof err)) { packs_drop(f); free(key.p); error(err); return; }
     if (!(o = obj_add(K_PACKS, f))) { packs_drop(f); free(key.p); error("out of memory"); return; }
     o->key = key.p;
     printf("{\"packs\":%d}", o->h);
@@ -1253,6 +1323,12 @@ static void op_sight(const TJV* v)
     nu = tj_is(us, TJ_ARR) ? us->n : 0;
     nd = tj_is(ds, TJ_ARR) ? ds->n : 0;
     nt = tj_is(ts, TJ_ARR) ? ts->n : 0;
+    /* what a sim's view holds: its deaths in WIKISIM's death[WIKI_FEATS_MAX], its types an
+       entry's, and its units WH_SIGHT_UNITS */
+    if (nu > WH_SIGHT_UNITS || nd > WIKI_FEATS_MAX || nt > WIKI_MAX_DEFS) {
+        error("the view holds more units, deaths or types than a sim's view does");
+        return;
+    }
     memset(&w, 0, sizeof w);
     w.w = num_int(tj_get(view, "w"), 0);
     w.h = num_int(tj_get(view, "h"), 0);
@@ -1672,13 +1748,15 @@ static void op_release(const TJV* v)
     putchar('}');
 }
 
+/* Idempotent: a sim the process no longer holds -- freed already, or evicted from its table -- is
+   as freed as the call asks, so its free answers {} too. The drop-in frees from a finalizer as
+   well as by hand and cannot know which came first. */
 static void op_free(const TJV* v)
 {
     char err[64];
     HSIM* m = sim_get(v, err, sizeof err);
     int i;
-    if (!m) { error(err); return; }
-    for (i = 0; i < WH_SIMS; i++)
+    for (i = 0; m && i < WH_SIMS; i++)
         if (H.sim[i] == m) H.sim[i] = NULL;
     sim_free(m);
     fputs("{}", stdout);
@@ -1702,11 +1780,17 @@ static void op_batch(const TJV* v, HDOC* d)
 static void call(const TJV* v, HDOC* d)
 {
     const char* op = tj_str(tj_get(v, "op"), "");
+    const TJV* at = tj_get(v, "in");
     char why[96];
     H.nlog = 0;
     H.log.n = 0;
     if (!tj_is(v, TJ_OBJ)) error("a request is not an object");
-    else if (!strcmp(op, "hello")) op_hello();
+    else if (at && !(tj_is(at, TJ_STR) && !strcmp(at->str, H.instance))) {
+        /* THE INSTANCE: a call stamped for another host, whose handles name nothing here */
+        fputs("{\"error\":\"a call for another host: the host its handles came from has ended\",\"host\":", stdout);
+        wh_str(H.instance);
+        putchar('}');
+    } else if (!strcmp(op, "hello")) op_hello();
     else if (!strcmp(op, "entry")) op_entry(v);
     else if (!strcmp(op, "layout")) op_layout(v);
     else if (!strcmp(op, "casting")) op_casting(v);
@@ -1737,40 +1821,56 @@ static void call(const TJV* v, HDOC* d)
     }
 }
 
-/* one line of `in` into `*b`, its newline dropped: 1 a line, 0 at the end, -1 a line past
-   WH_LINE_MAX (read past to its newline) */
+enum { LINE_END, LINE_OK, LINE_LONG, LINE_NUL, LINE_OOM };
+
+/* One line of `in` into `*b`, its newline and a CR before it dropped, read a byte at a time and
+   counted, so a NUL in it is seen as the byte it is rather than ending the line early: LINE_OK,
+   LINE_END at the end of the input, or LINE_LONG past WH_LINE_MAX, LINE_NUL holding a NUL byte,
+   LINE_OOM past the memory, each of those three read past to its newline so that the next line
+   starts where the caller's next request does. */
 static int read_line(FILE* in, BUF* b)
 {
-    char chunk[65536];
-    int over = 0, any = 0;
+    int c, any = 0, why = LINE_OK;
     b->n = 0;
-    if (b->p) b->p[0] = 0;
-    while (fgets(chunk, sizeof chunk, in)) {
-        size_t n = strlen(chunk);
-        const int nl = n && chunk[n - 1] == '\n';
+    b->oom = 0;
+    while ((c = getc(in)) != EOF) {
         any = 1;
-        if (nl) n--;
-        if (!over && b->n + n > WH_LINE_MAX) over = 1;
-        if (!over) buf_put(b, chunk, n);
-        if (nl) break;
+        if (c == '\n') break;
+        if (why != LINE_OK) continue;
+        if (!c) why = LINE_NUL;
+        else if (b->n >= WH_LINE_MAX + 1) why = LINE_LONG;     /* +1: the CR dropped below */
+        else {
+            if (b->n + 1 >= b->cap) {
+                char ch = (char)c;
+                buf_put(b, &ch, 1);
+                if (b->oom) why = LINE_OOM;
+            } else b->p[b->n++] = (char)c;
+        }
     }
-    if (!any) return 0;
-    if (b->n && b->p[b->n - 1] == '\r') b->p[--b->n] = 0;
-    return over || b->oom ? -1 : 1;
+    if (!any) return LINE_END;
+    if (why != LINE_OK) return why;
+    if (b->n && b->p[b->n - 1] == '\r') b->n--;
+    if (b->n > WH_LINE_MAX) return LINE_LONG;
+    if (b->p) b->p[b->n] = 0;
+    return LINE_OK;
 }
 
-int wikihost_serve(FILE* in)
+int wikihost_serve(FILE* in, const char* instance, const char* packs_root)
 {
     BUF line = { NULL, 0, 0, 0 };
     int r, i, k;
-    while ((r = read_line(in, &line))) {
+    snprintf(H.instance, sizeof H.instance, "%s", instance ? instance : "");
+    H.root = packs_root;
+    while ((r = read_line(in, &line)) != LINE_END) {
         char err[256];
         HDOC* d;
         TJDOC* doc;
-        if (r < 0) {
-            line.oom = 0;
-            error("the request line is longer than 16 MB");
-        } else if (!line.n) continue;
+        /* every line read is answered, a refused one included: the caller reads one answer a line
+           it wrote, and a line left unanswered would leave it waiting for good */
+        if (r == LINE_LONG) error("the request line is longer than 16 MB");
+        else if (r == LINE_NUL) error("the request line holds a NUL byte");
+        else if (r == LINE_OOM) error("out of memory for the request line");
+        else if (!line.n) error("an empty request");
         else if (!(doc = tagpu_json_parse(line.p, line.n, err, sizeof err))) error(err);
         else if (!(d = (HDOC*)malloc(sizeof *d))) { tagpu_json_free(doc); error("out of memory"); }
         else {

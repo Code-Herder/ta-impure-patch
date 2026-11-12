@@ -345,12 +345,14 @@ let heard = 0;
 const soundRoot = () => { const d = stageDir() || ''; return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
 // a press on one of the page's controls: the engine's in-game menu controls say `Options` (tagpu_wiki.c button_sound)
 const buttonSound = () => { if (typeof WikiSound !== 'undefined') WikiSound.named(soundRoot(), 'Options'); };
-/* THE REPLAY'S LIFETIME (replay.js): it owns its simulations and their COB worlds, so it is freed whenever it is
-   dropped -- a new start, a failure -- and nothing keeps it after */
+/* THE SIMULATIONS' LIFETIME: the demo's sim and the replay (replay.js, which owns its simulations) are freed in the
+   host whenever they are dropped -- a new start, a failure -- and nothing keeps them after; a sim the page never
+   freed would hold a slot of the host's table until the table evicted it */
 function dropReplay() { if (rep) rep.free(); rep = null; }
-function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; dropReplay(); }
+function dropSim() { if (sim) sim.free(); sim = null; }
+function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); dropSim(); dropReplay(); }
 function start() {
-  sim = null; simErr = null; acc = 0; heard = 0; releaseAll(); dropReplay(); frameReset();
+  dropSim(); simErr = null; acc = 0; heard = 0; releaseAll(); dropReplay(); frameReset();
   const e = entry(), d = demo();
   if (!d) return;
   if (typeof WikiSim === 'undefined' || typeof WikiReplay === 'undefined') {

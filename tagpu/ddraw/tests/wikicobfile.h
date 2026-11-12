@@ -126,57 +126,77 @@ static COBFILE* cob_slot(COBFILES* f, const char* name)
     return &f->t[f->n++];
 }
 
+/* A pack's number held to [lo, hi] before it is converted: a double outside the target type's
+   range has no defined conversion, and a pack's JSON may hold any number (1e999 reads as an
+   infinity, tagpu_json.c's strtod). Inside the range it truncates toward zero, as the cast
+   alone would. */
+#define COB_I32 -2147483648.0, 2147483647.0
+static double cob_num(const TJV* v, double dflt, double lo, double hi)
+{
+    const double d = tj_num(v, dflt);
+    return !(d >= lo) ? lo : d > hi ? hi : d;
+}
+
 /* a sound {cat, count}: the simulation reads no clip, so `death` is none */
 static void cob_sound(COBFILE* c, const TJV* snd)
 {
     const TJV* e;
     int k;
     c->has_snd = 1;
-    c->snd.cat = (int)tj_num(tj_get(snd, "cat"), -1);
+    c->snd.cat = (int)cob_num(tj_get(snd, "cat"), -1, COB_I32);
     c->snd.death = -1;
     for (k = 0, e = tj_is(tj_get(snd, "count"), TJ_ARR) ? tj_get(snd, "count")->first : NULL; e && k < WIKI_SND_KINDS; e = e->next, k++)
-        c->snd.count[k] = (int32_t)tj_num(e, 0);
+        c->snd.count[k] = (int32_t)cob_num(e, 0, COB_I32);
 }
 
-/* the script at `path` and the model facts `s` carries ({visible, offset, parent, top}); 1, or 0
-   with why in `err` when the script cannot be read */
-static int cob_script(COBFILE* c, const char* path, const TJV* s, char* err, size_t errn)
+/* the script `name`, read at `path` (NULL: absent), and the model facts `s` carries ({visible,
+   offset, parent, top}); 1, or 0 with why in `err` when the script cannot be read */
+static int cob_script(COBFILE* c, const char* name, const char* path, const TJV* s, char* err, size_t errn)
 {
     const TJV *vis = tj_get(s, "visible"), *e, *w;
     int k = 0;
     for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next) k++;
     if (k > WIKICOB_PIECES) return 1;
-    if (!(c->cob = (unsigned char*)slurp(path, &c->ncob))) {
-        snprintf(err, errn, "cannot read %.200s", path);
+    if (!path || !(c->cob = (unsigned char*)slurp(path, &c->ncob))) {
+        snprintf(err, errn, "cannot read %.200s", name);
         return 0;
     }
-    for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next) c->visible[c->pieces++] = (unsigned char)tj_num(e, 0);
+    for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next) c->visible[c->pieces++] = (unsigned char)cob_num(e, 0, 0, 255);
     for (e = tj_is(tj_get(s, "offset"), TJ_ARR) ? tj_get(s, "offset")->first : NULL; e && c->noffset < WIKICOB_PIECES; e = e->next) {
         for (k = 0, w = tj_is(e, TJ_ARR) ? e->first : NULL; w && k < 3; w = w->next, k++)
-            c->offset[3 * c->noffset + k] = (int32_t)tj_num(w, 0);
+            c->offset[3 * c->noffset + k] = (int32_t)cob_num(w, 0, COB_I32);
         c->noffset++;
     }
     for (e = tj_is(tj_get(s, "parent"), TJ_ARR) ? tj_get(s, "parent")->first : NULL; e && c->nparent < WIKICOB_PIECES; e = e->next)
-        c->parent[c->nparent++] = (int16_t)tj_num(e, -1);
-    c->top = (int32_t)tj_num(tj_get(s, "top"), 0);
+        c->parent[c->nparent++] = (int16_t)cob_num(e, -1, -32768, 32767);
+    c->top = (int32_t)cob_num(tj_get(s, "top"), 0, COB_I32);
     return 1;
 }
+
+/* How cob_packs may read a file, asked before each read: 1 read `out`, the path as it may be
+   read; 0 the file is absent, read nothing; -1 refused, the file lies outside what the caller
+   allows. NULL reads every path as given. */
+typedef int (*COBPATH)(const char* path, char* out, size_t n);
 
 /* THE PACKS: each folder's scene.json, units.meshes[name], its `script` ({file, visible, offset,
    parent, top}, the file relative to the folder) and its `sound` ({cat, count}); a type's script
    from the first folder whose mesh has one, and its sound likewise, each on its own. A folder
-   without a scene.json holds nothing. 1, or 0 with why in `err`. */
-static inline int cob_packs(COBFILES* f, const char* const* dirs, int n, char* err, size_t errn)
+   without a scene.json holds nothing. Every file is read where `at` says (NULL: as named). 1, or
+   0 with why in `err`. */
+static inline int cob_packs(COBFILES* f, const char* const* dirs, int n, COBPATH at, char* err, size_t errn)
 {
     int i, ok = 1;
     for (i = 0; ok && i < n; i++) {
-        char path[1024];
+        char path[1024], real[4096];
         size_t len;
         char* text;
         TJDOC* doc;
         const TJV* m;
+        int r;
         snprintf(path, sizeof path, "%s/scene.json", dirs[i]);
-        if (!(text = slurp(path, &len))) continue;
+        r = at ? at(path, real, sizeof real) : (snprintf(real, sizeof real, "%s", path), 1);
+        if (r < 0) { snprintf(err, errn, "%.200s is outside the packs' root", path); return 0; }
+        if (!r || !(text = slurp(real, &len))) continue;
         if (!(doc = tagpu_json_parse(text, len, err, errn))) { free(text); return 0; }
         m = tj_get(tj_get(tagpu_json_root(doc), "units"), "meshes");
         for (m = tj_is(m, TJ_OBJ) ? m->first : NULL; ok && m; m = m->next) {
@@ -188,7 +208,9 @@ static inline int cob_packs(COBFILES* f, const char* const* dirs, int n, char* e
             if (tj_is(s, TJ_OBJ) && !c->cob && tj_is(tj_get(s, "file"), TJ_STR)) {
                 char cob[1024];
                 snprintf(cob, sizeof cob, "%s/%s", dirs[i], tj_get(s, "file")->str);
-                ok = cob_script(c, cob, s, err, errn);
+                r = at ? at(cob, real, sizeof real) : (snprintf(real, sizeof real, "%s", cob), 1);
+                if (r < 0) { snprintf(err, errn, "%.200s is outside the packs' root", cob); ok = 0; }
+                else ok = cob_script(c, cob, r ? real : NULL, s, err, errn);
             }
         }
         tagpu_json_free(doc);
@@ -219,7 +241,7 @@ static inline int cob_load(COBFILES* f, const char* path)
             break;
         }
         if (tj_is(snd, TJ_OBJ)) cob_sound(t, snd);
-        if (cob && !cob_script(t, cob->str, c, err, sizeof err)) {
+        if (cob && !cob_script(t, cob->str, cob->str, c, err, sizeof err)) {
             fprintf(stderr, "wiki tests: %s\n", err);
             ok = 0;
         }

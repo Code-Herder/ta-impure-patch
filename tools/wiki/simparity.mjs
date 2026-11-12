@@ -203,8 +203,7 @@ if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
 
    THE COST (MEASURED 2026-11-11, the reference setup, 32 threads): -j 10, the three builds at once, 5928 plays, 509
    cases, 955 refusal cases, 27 castings and layouts and 21 malformed-data cases: 990 s wall, under a load average of
-   50 to 63 from other work, against the record of every play's hashes. The two-language check this replaced took
-   477 s natively and 465 s under Wine, each at -j 24, one after the other. */
+   50 to 63 from other work, against the record of every play's hashes. */
 if (PARITY && !process.argv.includes('--shard')) {
   const N = argOf('-j') === undefined ? Math.max(1, Math.floor(os.availableParallelism() / 3)) : Number(argOf('-j'));
   if (!(Number.isInteger(N) && N >= 1)) { console.error(`simparity: -j ${argOf('-j')} is not a count`); process.exit(2); }
