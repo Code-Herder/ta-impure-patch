@@ -94,7 +94,8 @@ def probe_verdict(lane_dir: Path):
     if last[0] is None:
         return f"probe: paused at {run['t_end']} ({run['end']}), no combat death in the recording"
     return (f"probe: paused at GameTime {run['t_end']} ({run['end']}); the last combat death is in "
-            f"iteration {last[0]}, {run['t_end'] - last[0]} tick(s) before the pause")
+            f"the step that ended at GameTime {last[0]} (its iteration label), "
+            f"{run['t_end'] - last[0]} tick(s) before the pause")
 
 
 def cmd_engine(a):

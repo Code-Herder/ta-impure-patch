@@ -175,6 +175,35 @@ class ExitCodes(unittest.TestCase):
         self.assertIn("could not run: no reference matches", said)
 
 
+
+class EmptyPoint(unittest.TestCase):
+    def test_every_settle_is_past_the_last_deaths_sight_record(self):
+        """A record made at GameTime d is dropped from d + SIGHT_TTL + 1 on (engrun.py, THE EMPTY
+        POINT'S SIGHT); the settle's first hold after a clear at T_prev must be there or later."""
+        import engrun
+        for t_prev in range(0, 400):
+            T = engrun.aligned(t_prev + engrun.S_MIN)
+            self.assertGreaterEqual(T, t_prev + engrun.SIGHT_TTL + 1, t_prev)
+            self.assertEqual(T % 30, 1)
+        self.assertEqual(engrun.aligned(1 + engrun.S_MIN), 91)
+
+class ApplierSeats(unittest.TestCase):
+    """applier_check holds each seat to the last apply that named it."""
+
+    def test_the_economy_pass_after_an_apply(self):
+        import applier_check as A
+        self.assertEqual([A.next_pass(T) for T in (1, 30, 31, 60, 61)], [31, 31, 61, 61, 91])
+
+    def test_the_fixture_seats_come_from_the_step_at_60(self):
+        import applier_check as A
+        got = A.seat_states(A.applies(A.fixture()), 120)
+        self.assertEqual(sorted(got), [0, 1])
+        for s, (T, p, ai_off, blast) in got.items():
+            self.assertEqual((T, p["metal"], p["energy"], blast), (60, 5000, 5000, False), s)
+        self.assertEqual((got[0][2], got[1][2]), (False, True))
+        early = A.seat_states(A.applies(A.fixture()), 59)
+        self.assertEqual((early[1][0], early[1][3]), (1, True))
+
 def selftest_exit(only=None):
     """`calib.py selftest`'s exit code and what it printed."""
     import argparse

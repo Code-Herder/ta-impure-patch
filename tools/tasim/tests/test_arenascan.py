@@ -98,6 +98,34 @@ class Layout(unittest.TestCase):
 
 
 
+class RectangleReading(unittest.TestCase):
+    """The flat rectangle is [x, y, width, height] in world units, everywhere it is read."""
+
+    RECT = [4544, 384, 5584, 1600]
+
+    def test_the_arena_lays_out_inside_x_y_width_height(self):
+        f = A.arena_fields({"name": "m", "rect": self.RECT, "height": 85, "sealevel": 75})
+        self.assertEqual(f["a"], [4544 + A.MARGIN, 384 + 1600 // 2])
+        self.assertEqual(f["b"], [4544 + 5584 - A.MARGIN, 1184])
+        cfg = dict(f, flat={"rect": self.RECT})
+        self.assertTrue(A.calibref.in_flat(cfg, [4544, 384]))
+        self.assertTrue(A.calibref.in_flat(cfg, [4544 + 5584, 384 + 1600]))
+        self.assertFalse(A.calibref.in_flat(cfg, [4544, 384 + 1601]))
+
+    def test_duelgen_and_place_agree_with_it(self):
+        import duelgen
+        cfg = dict(A.arena_fields({"name": "m", "rect": self.RECT, "height": 85, "sealevel": 75}),
+                   flat={"rect": self.RECT})
+        unit = {"name": "U", "range_ground": 230, "shot_cost_per_tick": [0, 0]}
+        scn = {"setup": {"players": [{"storage": {"metal": 1e6, "energy": 1e6}}]}}
+        _name, doc = duelgen.duel(unit, unit, "raider", "assault", 1, "median", cfg, scn)
+        a, b = (u["pos"] for u in doc["units"])
+        self.assertEqual(a, [4800, 1184])
+        self.assertEqual(b, [4800 + 230 + duelgen.REACH, 1184])
+        placed = A.placed({"units": [{"id": "x", "pos": [0, 0]}],
+                           "calib": {"place": {"x": [390, 0, None]}}}, cfg, "t")
+        self.assertEqual(placed["units"][0]["pos"], b)
+
 ARENA_X = {"map": "m", "flat": {"rect": [1000, 2000, 5000, 1600]}, "axis": "x",
            "a": [1256, 2800], "b": [5744, 2800]}
 

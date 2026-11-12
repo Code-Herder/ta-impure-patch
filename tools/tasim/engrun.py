@@ -48,7 +48,17 @@ import perturb  # noqa: E402
 import tareplay as R  # noqa: E402
 from tareplay import CouldNotRun, Failed  # noqa: E402
 
-S_MIN, S_STEP, S_MAX = 60, 30, 1800
+# THE EMPTY POINT'S SIGHT. A death of a unit of the viewed seat under true LOS leaves a temporary
+# sight record (the destructor's 0x482910 at 0x486748) that stamps that seat's sight counters with
+# its expiry at the death's GameTime + 60 (0x4829C4); the expiry 0x482130, once a step after its
+# tick loop (0x495688), removes it only once GameTime is past that (an unsigned `jae` keeps it,
+# 0x48215C..0x48215E). So a record made at GameTime d is gone from the first held frame at
+# d + SIGHT_TTL + 1 on (DISASSEMBLED, engine/map.md *The temporary sight records*). Every death a
+# run causes is at or before its clear's GameTime T_prev, and the launch's own apply kills the
+# skirmish's commanders at its hold, so an empty point at T_prev + S_MIN or later holds no record
+# and its counters are zero.
+SIGHT_TTL = 60
+S_MIN, S_STEP, S_MAX = SIGHT_TTL + 1, 30, 1800
 PHASE = 30                      # the economy passes' period: an apply at 1 (mod 30) is at the
                                 # phase of the launch's first apply, GameTime 1
 PROJECTILES = "*0x511DE8+0x141F3:4"
@@ -206,8 +216,9 @@ class Lane:
         self.partial.flush()
 
     def settle(self):
-        """The empty point: held at T = 1 (mod 30), S_MIN on from the last run's end, with no
-        projectile left in flight. Returns (T, the settle's extra steps)."""
+        """The empty point: held at T = 1 (mod 30), S_MIN on from the last run's end -- past every
+        temporary sight record its deaths left (THE EMPTY POINT'S SIGHT) -- with no projectile
+        left in flight. Returns (T, the settle's extra steps)."""
         T, waits = aligned(self.T_prev + S_MIN), 0
         while True:
             if T > self.T_prev + S_MAX:

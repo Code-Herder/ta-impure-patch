@@ -72,8 +72,13 @@ lanes are threads under one run lock (`tools/runlock.py`).
 
 One run (`tools/tasim/engrun.py`, `Lane.run`):
 
-1. **Settle**: hold at the least T ≥ T_prev + 60 with T ≡ 1 (mod 30), raised by 30 while the
-   projectile count `main+0x141F3` is not 0, never past T_prev + 1800. Sixty ticks clear B4's slot
+1. **Settle**: hold at the least T ≥ T_prev + 61 with T ≡ 1 (mod 30), raised by 30 while the
+   projectile count `main+0x141F3` is not 0, never past T_prev + 1800. Sixty-one ticks drain every
+   temporary sight record: a death of a viewed-seat unit under true LOS leaves one in that seat's
+   sight counters (`0x482910` at `0x486748`), expiring at the death's GameTime + 60, and the expiry
+   `0x482130` removes it only from GameTime d + 61 on ([engine/map.md](../engine/map.md), *The
+   temporary sight records*). Every death of a run is at or before its clear's GameTime T_prev,
+   and the launch's apply kills the skirmish's commanders at its hold. They also clear B4's slot
    hold, which keeps a freed slot two ticks; the phase puts every seat's 30-tick economy pass at
    the tick of a fresh launch's.
 2. **Apply** the run's wire on the held frame (`tagpu_scenario.c`; the applier's tick site runs on
@@ -106,6 +111,7 @@ limit.
 | GameTime | no | the reload-against-fresh self-test is the evidence |
 | the simulation RNG `0x51FC88`, the wind | no | random from launch to launch too; each run records them as `exogenous` |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
+| temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
 
 ## The per-run checks
@@ -128,7 +134,15 @@ makes the run unusable and the reference builder refuses its scenario.
 last step's events and then writes the new tick's `RK_TICK` and images (`tagpu_rec_capture`), and
 an event goes into the ring when the engine makes it. So the apply's creates and the clear's
 deaths, made on the frames held after step T, come in iteration T after step T's events, and the
-images of T + 1 are the first to show them [from the source; C1's recordings are to confirm it].
+images of T + 1 are the first to show them. A recording confirms it: a probe lane's launch apply,
+on the hold at GameTime 1, put both starting commanders' deaths in iteration 1.
+
+**GameTime and iteration labels.** An event labelled iteration L was made in the step that ended at
+GameTime L, or on a frame held after it; the images of iteration L are the state at GameTime L − 1
+with those paused-frame events applied. A frame dump taken on a frame held at GameTime G is
+therefore labelled iteration G + 1 (`frame dump eN at GameTime 511 (iteration 512)`,
+`tagpu_rec_dump_now`), and the probe's verdict, "paused at GameTime 307 … the last combat death in
+the step that ended at GameTime 307", compares an event's label with a GameTime in the same unit.
 
 ## Metrics
 
@@ -254,8 +268,9 @@ on one line per verb.
 
 ## Gaps
 
-- The engine verifications are not run: the `calib-applier` fixture, the units clause's probe, the
-  duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on recordings, the exact scenario
-  (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a course, and their costs.
-- The iteration of the paused frame's events is read from the source, not yet from a recording.
+- The `calib-applier` fixture and the units clause's probe have passed, the fixture before its seat
+  check held seat 1 to the spec; the strict check, and the settle's 61 ticks against R7, are not
+  yet run. Not run at all: the duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on a full
+  lane, the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a
+  course, and their costs.
 - `tasim_run play` and `predict` are T1 and A2; `defs` does not exist yet.

@@ -9,9 +9,10 @@ engine and compared with what the fixture's scenarios ask for.
 
 - the objective disarmed: `[main+0x391ED]+0x88 == 0`;
 - seat 1's AI off: its record's `+0x73 == 1` and its PlayerInfo's `+0x94 == 1`;
-- both seats' base storage: `+0x149` bit 0 set and `+0xDC`/`+0xE0` equal to the scenario's, and
-  the levels `+0x8C`/`+0x98` and the maxima `+0xA4`/`+0xA8` at least that past GameTime 31, the
-  first economy pass;
+- both seats against the last apply that named them (the step at 60, which kills seat 1's
+  D-gun commander and states every seat's storage and levels again): `+0x149` bit 0 set and
+  `+0xDC`/`+0xE0` equal to the scenario's, and the levels `+0x8C`/`+0x98` and the maxima
+  `+0xA4`/`+0xA8` at least that past the first economy pass after it -- every seat, none excused;
 - the feature grid holds no feature the BurnAll walker would burn (a dump read with tarec);
 - the delayed orders' one report line, its counts computed from the fixture's scenarios and step
   GameTimes, never a literal;
@@ -53,7 +54,7 @@ OFF_GAMETIME = 0x38A47
 PL_TYPE, PL_INFO, INFO_TYPE = 0x73, 0x27, 0x94
 PL_ENERGY, PL_METAL, PL_MAXE, PL_MAXM = 0x8C, 0x98, 0xA4, 0xA8
 PL_BASEE, PL_BASEM, PL_BASEFLAG = 0xDC, 0xE0, 0x149
-FIRST_PASS = 31                 # a seat's first economy pass, the level's GameTime 1 plus 30
+PASS_EVERY = 30                 # the economy pass's period; it falls at GameTime 1 (mod 30)
 ACK_S = 60
 CELL, CELL_DEF = tarec.REC_CELL_BYTES, 8
 DUMP = "calibfeat"
@@ -143,14 +144,39 @@ def check_objective(instance, ta):
     return "objective off"
 
 
-def check_seats(instance, ta, exp, now):
+def next_pass(T):
+    """The first economy pass after an apply at GameTime T."""
+    return T + PASS_EVERY - (T - 1) % PASS_EVERY
+
+
+def seat_states(seq, now):
+    """{seat: (the GameTime of the last apply that named it by `now`, its player entry, whether
+    any apply turned its AI off, whether that last apply's scenario gives the seat a blast)}."""
+    out = {}
+    for T, exp in seq:
+        if T > now:
+            continue
+        for p in exp["setup"]["players"]:
+            ai_off = p.get("ai") == "off" or (p["slot"] in out and out[p["slot"]][2])
+            blast = any(o["cmd"] == "blast" for u in exp["units"] if u["owner"] == p["slot"]
+                        for o in u["orders"])
+            out[p["slot"]] = (T, p, ai_off, blast)
+    return out
+
+
+def check_seats(instance, ta, seq, now):
+    """Each seat against the last apply that named it: its AI off when one turned it off, and
+    its base storage, maxima and levels as that apply asked, past the economy pass after it. The
+    levels hold exactly that far only for a seat that spends nothing: the pass clamps each level
+    to the storage it recomputes, the units' own plus the base storage, so without the base
+    storage it would take the level down to the units' storage. A seat whose last apply has it
+    fire a D-gun spends energy, so the fixture's last apply gives no seat one."""
     lines = []
-    for p in exp["setup"]["players"]:
-        s = p["slot"]
+    for s, (T, p, ai_off, blast) in sorted(seat_states(seq, now).items()):
         rec = ta + OFF_PLAYERS + s * PL_STRIDE
         kind, info, flag = peek(instance, f"0x{rec + PL_TYPE:X}:1", f"0x{rec + PL_INFO:X}:4",
                                 f"0x{rec + PL_BASEFLAG:X}:1")
-        if p.get("ai") == "off":
+        if ai_off:
             itype, = peek(instance, f"0x{info + INFO_TYPE:X}:1")
             if kind != 1 or itype != 1:
                 raise Fail(f"seat {s}: controller {kind}, PlayerInfo {itype}: the AI is not off")
@@ -165,19 +191,18 @@ def check_seats(instance, ta, exp, now):
             raise Fail(f"seat {s}: +0x149 bit 0 is clear")
         if be != float(st["energy"]) or bm != float(st["metal"]):
             raise Fail(f"seat {s}: base storage {bm}/{be}, the scenario asks {st}")
-        if now <= FIRST_PASS:
-            raise CannotRun(f"the check runs at GameTime {now}, before the first economy pass")
+        if now <= next_pass(T):
+            raise CannotRun(f"the check runs at GameTime {now}, before the economy pass after "
+                            f"the apply at {T}")
         # the pass recomputes the maxima from the units plus the base storage: never under it
         if xm < st["metal"] or xe < st["energy"]:
             raise Fail(f"seat {s} at GameTime {now}: maxima {xm}/{xe} under the base storage {st}")
-        # A seat that spends nothing keeps its level through the pass's clamp, which without the
-        # base storage would take it to its units' own storage. A seat that fires a D-gun spends.
-        spends = any(o["cmd"] == "blast" for u in exp["units"] if u["owner"] == s
-                     for o in u["orders"])
-        if not spends and ((p["metal"] is not None and m < p["metal"])
-                           or (p["energy"] is not None and e < p["energy"])):
+        if blast:
+            raise CannotRun(f"seat {s}: the apply at {T} has it fire a D-gun, which spends: its "
+                            f"levels cannot be held to the apply's")
+        if (p["metal"] is not None and m < p["metal"]) or (p["energy"] is not None and e < p["energy"]):
             raise Fail(f"seat {s} at GameTime {now}: level {m}/{e}, asked {p['metal']}/"
-                       f"{p['energy']}: the clamp took it")
+                       f"{p['energy']} at {T}: the clamp took it")
         lines.append(f"seat {s} storage {bm:g}/{be:g}, level {m:g}/{e:g}")
     return "; ".join(lines)
 
@@ -252,7 +277,7 @@ def check(instance):
     seq = applies(fixture())
     ta, = peek(instance, f"0x{MAIN:X}:4")
     now, = peek(instance, f"0x{ta + OFF_GAMETIME:X}:4")
-    said = [check_objective(instance, ta), check_seats(instance, ta, seq[0][1], now),
+    said = [check_objective(instance, ta), check_seats(instance, ta, seq, now),
             check_features(instance, inst.gamedir), check_delays(inst.gamedir, seq, now),
             check_catalogue(instance)]
     print(f"applier_check at GameTime {now}: " + "; ".join(s for s in said if s))
