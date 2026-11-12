@@ -65,11 +65,29 @@ EMPTY_POINT_ADVANCING = {
     # random in both, recorded per run as exogenous.wind
     "windnext", "winddivisor", "windx", "windy", "windz", "windheading", "windspeed",
     "windratio", "windchanged",
+    # added by the owner's decision of 2026-11-12, each an engine schedule or counter that
+    # advances with time (replay-globals.tsv rows):
+    # the pathfinder's per-player search budget 0x5119E8 (40 bytes), its searches since the
+    # budget's last rewrite 0x511A10 (pfsearches, pfsearches+4) and its tick's calls modulo 150
+    # 0x511A38: the tick 0x40EB70 runs in every players phase and rewrites the budget every 150
+    # calls, and each search start counts
+    "pfbudget", "pfsearches", "pfcalls",
+    # moveclasses 0 and 5's passability watermarks, a GameTime (max(GameTime, 30) − 30) written
+    # at each search start 0x40E630 through 0x440AF0
+    "mcwatermark00", "mcwatermark05",
+    # the meteor shower's schedule: its tick 0x437DE0 schedules a shower at every interval and
+    # draws its points whatever the switch says (the arena's is off, so no stone falls):
+    # the next shower, its end and next strike (GameTimes) and its two points
+    "meteornext", "meteorend", "meteorstrike", "meteorp1", "meteorp2",
 }
-# B4's slot table (tagpu_patches.c, struct hit_tab and its three columns): births and frees
-# advance with every create; its only skirmish reader is the slot hold, which treats every slot
-# freed before the last tick alike (hit_held, hit_reusable)
-EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b")
+# The declared tables that advance:
+# - B4's slot table (tagpu_patches.c, struct hit_tab and its three columns): births and frees
+#   advance with every create; its only skirmish reader is the slot hold, which treats every slot
+#   freed before the last tick alike (hit_held, hit_reusable);
+# - the wind's generator state s_windState (tagpu_patches.c), advanced by the wind tick's draws
+#   once for each GameTime value; random from launch to launch as the wind rows above are
+#   (owner's decision of 2026-11-12)
+EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_windState\b")
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
 
 
@@ -113,6 +131,7 @@ class Run:
         self.made = 0
         self.last_u, self.last_l = {}, {}
         self.checks = {}
+        self.fields = {}                # check -> what each failure names, for the build's tally
         self.failed = None
         self.exogenous = None
         self.empty = None               # the empty point: what run 0 of the launch compares with
@@ -135,8 +154,9 @@ class Run:
     def line(self, t):
         return self.lines.setdefault(t, {"t": t})
 
-    def fail(self, name, why):
+    def fail(self, name, why, fields=None):
         self.checks[name] = why
+        self.fields.setdefault(name, []).extend(fields or [why])
         if self.failed is None:
             self.failed = f"{name}: {why}"
 
@@ -348,18 +368,17 @@ class Run:
         else:
             self.ok("R8")
 
-    def compare_run0(self, base, names, table_names, needs_mapped):
-        """R4..R6 against run 0 of the launch."""
-        if self.players_after is None or base.players_after is None:
+    def compare_run0(self, base, names, table_names, needs_mapped, seats_base=None):
+        """R4 against seats_base, the launch's first run of the same scenario and swap (THE SAME
+        SCENARIO AND SWAP, Lane.stream), and R5, R6 against base, run 0 of the launch."""
+        seats_base = seats_base or base
+        if self.players_after is None or seats_base.players_after is None:
             self.fail("R4", "no player images after the apply")
             return
-        if base is self:
-            for k in ("R4", "R5", "R6"):
-                self.ok(k)
-            return
-        d = phased_diff(base.players_after, self.players_after, base.t0, self.t0)
+        d = phased_diff(seats_base.players_after, self.players_after, seats_base.t0, self.t0)
         if d:
-            self.fail("R4", d)
+            self.fail("R4", "; ".join(d[:3]) + (f" (and {len(d) - 3} more)" if len(d) > 3 else ""),
+                      d)
         else:
             self.ok("R4")
         if base.empty["mapped"] != self.empty["mapped"]:
@@ -383,27 +402,34 @@ class Run:
             if base.empty["tables"].get(ix) != img and not EMPTY_POINT_ADVANCING_TABLES.search(nm):
                 bad.append(f"table {nm}")
         if bad:
-            self.fail("R6", "differs from run 0's empty point: " + ", ".join(sorted(set(bad))))
+            self.fail("R6", "differs from run 0's empty point: " + ", ".join(sorted(set(bad))),
+                      sorted(set(bad)))
         else:
             self.ok("R6")
 
 
 def phased_diff(a_imgs, b_imgs, ta, tb):
     """R4: the player images after two applies differ only where a reload may leave them: the
-    lifetime totals, and the GameTime deadlines, which must agree modulo 30 with each apply tick."""
+    lifetime totals, and the GameTime deadlines, which must agree modulo 30 with each apply tick.
+    Returns every difference, named by its aligned dword."""
+    out = []
+    skip = set()
+    for lo, hi in PL_LIFETIME:
+        skip.update(range(lo, hi))
+    for at in PL_PHASED:
+        skip.update(range(at, at + 4))
     for seat, (a, b) in enumerate(zip(a_imgs, b_imgs)):
-        skip = set()
-        for lo, hi in PL_LIFETIME:
-            skip.update(range(lo, hi))
         for at in PL_PHASED:
-            skip.update(range(at, at + 4))
             va, vb = struct.unpack_from("<i", a, at)[0], struct.unpack_from("<i", b, at)[0]
             if (va - ta) % 30 != (vb - tb) % 30:
-                return f"seat image {seat} +0x{at:X}: phase {(va - ta) % 30} against {(vb - tb) % 30}"
+                out.append(f"seat image {seat} +0x{at:X}: phase {(va - ta) % 30} against "
+                           f"{(vb - tb) % 30}")
+        seen = set()
         for k in range(len(a)):
-            if k not in skip and a[k] != b[k]:
-                return f"seat image {seat} differs at +0x{k:X}"
-    return None
+            if k not in skip and a[k] != b[k] and k & ~3 not in seen:
+                seen.add(k & ~3)
+                out.append(f"seat image {seat} differs at +0x{k & ~3:X}")
+    return out
 
 
 class Lane:
@@ -502,11 +528,19 @@ class Lane:
                 continue
             b0 = base.setdefault("launch", r)
             needs = any(o["cmd"] in MODE12 for u in r.exp["units"] for o in u["orders"])
-            r.compare_run0(b0, names, table_names, needs)
-            f = first_of.setdefault(r.row["scenario"], r)
+            # THE SAME SCENARIO AND SWAP. A run's slots (R1) and its seats' images after the apply
+            # (R4) are compared with the launch's first run of its scenario and swap: each player's
+            # units come from its own block of the unit array (the player record's +0x67..+0x6B,
+            # set at 0x4858BD and 0x4858E0; engine/units.md), so swapping the owners moves every
+            # unit to the other seat's block and its count +0x144 to the other seat's image, and
+            # another scenario creates other units. The empty point (R5, R6) holds no unit, so it
+            # is compared with run 0 of the launch.
+            f = first_of.setdefault((r.row["scenario"], r.swap), r)
+            r.compare_run0(b0, names, table_names, needs, f)
             if f is not r and [f.slot_of(h) for h in sorted(f.units)] != \
                     [r.slot_of(h) for h in sorted(r.units)]:
-                r.fail("R1", "its slots differ from the scenario's first run in this launch")
+                r.fail("R1", "its slots differ from the first run of its scenario and swap in "
+                             "this launch")
         return runs
 
     def sight_check(self):

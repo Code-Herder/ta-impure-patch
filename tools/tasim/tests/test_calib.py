@@ -159,8 +159,14 @@ class TraceAndChecks(unittest.TestCase):
 
     def test_R4_compares_deadlines_modulo_30_from_the_apply(self):
         a = [player_img(deadline=91)]
-        self.assertIsNone(engtrace.phased_diff(a, [player_img(deadline=181)], 61, 151))
-        self.assertIn("phase", engtrace.phased_diff(a, [player_img(deadline=182)], 61, 151))
+        self.assertEqual(engtrace.phased_diff(a, [player_img(deadline=181)], 61, 151), [])
+        self.assertIn("phase", engtrace.phased_diff(a, [player_img(deadline=182)], 61, 151)[0])
+
+    def test_R4_names_every_differing_field(self):
+        a, b = bytearray(player_img()), bytearray(player_img())
+        b[0x10], b[0x13], b[0x40] = 1, 1, 1
+        self.assertEqual(engtrace.phased_diff([bytes(a)], [bytes(b)], 61, 61),
+                         ["seat image 0 differs at +0x10", "seat image 0 differs at +0x40"])
 
     def test_R6_names_a_global_outside_the_advancing_set(self):
         r0, r1 = duel(False), duel(False)

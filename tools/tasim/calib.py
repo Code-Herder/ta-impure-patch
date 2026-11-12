@@ -135,11 +135,13 @@ def cmd_engine(a):
 
 
 def _lane_job(args):
-    """One lane-launch traced, checked and measured: a pool's job, so it returns plain data."""
+    """One lane-launch traced, checked and measured: a pool's job, so it returns plain data. The
+    traces of exact runs are kept, or of every run with `all_traces` (fake_tasim.py's table)."""
     import time
     import engtrace
     import metrics
-    lane_dir, arena_cfg, R = args
+    lane_dir, arena_cfg, R, *rest = args
+    all_traces = bool(rest and rest[0])
     t0 = time.monotonic()
     try:
         ln, runs = engtrace.lane(lane_dir, arena_cfg)
@@ -151,13 +153,13 @@ def _lane_job(args):
         lines = r.trace()
         ticks += r.t_end - r.t0
         res = {"row": r.row, "start_check": r.failed or "ok", "checks": r.checks,
-               "exogenous": r.exogenous, "block": r.block}
+               "failures": r.fields, "exogenous": r.exogenous, "block": r.block}
         if r.failed is None:
             try:
                 res["metrics"] = metrics.compute(lines, r.block, ln.values, R)
             except metrics.TraceError as e:
                 res["start_check"] = f"metrics: {e}"
-        if "exact" in r.block["kind"]:
+        if all_traces or "exact" in r.block["kind"]:
             if getattr(r, "sight", None) is not None:
                 lines[0]["sight"] = r.sight
             res["trace"] = lines
@@ -167,20 +169,46 @@ def _lane_job(args):
             "seconds": time.monotonic() - t0}
 
 
+def failure_tally(bad, n_runs):
+    """The failed runs of one scenario as a count per check and, under it, per field, each with
+    its first run: the whole picture, however many runs failed."""
+    from collections import Counter
+    checks, fields, first = Counter(), Counter(), {}
+    for r in bad:
+        got = r.get("failures") or {r["start_check"].split(":")[0]: [r["start_check"]]}
+        for name, what in got.items():
+            checks[name] += 1
+            for f in sorted(set(what)):
+                fields[name, f] += 1
+                first.setdefault((name, f), r["row"]["index"])
+    out = [f"{len(bad)} of {n_runs} runs failed a start check"]
+    for name in sorted(checks):
+        out.append(f"  {name}: {checks[name]} runs")
+        for (c, f), n in sorted(fields.items(), key=lambda kv: (-kv[1], kv[0][1])):
+            if c == name:
+                out.append(f"    {n:4d}  {f} (first: run {first[c, f]})")
+    return "\n".join(out)
+
+
+def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
+    """Every lane-launch under runs_dir through _lane_job in a pool of j: (the lanes, the jobs)."""
+    from multiprocessing import Pool
+    lanes = sorted(p.parent for p in runs_dir.glob("lane*/manifest.jsonl"))
+    if not lanes:
+        raise calibref.CalibError(f"no lane manifest under {runs_dir}")
+    arena_cfg, R = calibref.arena(), calibref.exchange_rate()
+    with Pool(max(1, min(j, len(lanes)))) as pool:
+        return lanes, pool.map(_lane_job, [(d, arena_cfg, R, all_traces) for d in lanes])
+
+
 def build_refs(runs_dir: Path, j: int, keep: bool):
     """Every lane-launch under runs_dir streamed once (a pool, no lock), checked R1..R8, and its
     runs merged by scenario into references. Returns (written, failed: {scenario: why})."""
     import datetime
     import hashlib
-    from multiprocessing import Pool
     import engrun
-    arena_cfg = calibref.arena()
     R = calibref.exchange_rate()
-    lanes = sorted(p.parent for p in runs_dir.glob("lane*/manifest.jsonl"))
-    if not lanes:
-        raise calibref.CalibError(f"no lane manifest under {runs_dir}")
-    with Pool(max(1, min(j, len(lanes)))) as pool:
-        got = pool.map(_lane_job, [(d, arena_cfg, R) for d in lanes])
+    lanes, got = lane_jobs(runs_dir, j)
     failed, by = {}, {}
     for g in got:
         if "error" in g:
@@ -195,10 +223,9 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
     for scn, items in sorted(by.items()):
         path = TREE / scn
         sid = calibref.scenario_id(path)
-        bad = [f"run {r['row']['index']}: {r['start_check']}" for _g, r in items
-               if r["start_check"] != "ok"]
+        bad = [r for _g, r in items if r["start_check"] != "ok"]
         if bad:
-            failed[sid] = "; ".join(bad[:5])
+            failed[sid] = failure_tally(bad, len(items))
             continue
         g0 = items[0][0]
         builds = {g["head"]["dll"]["build"] for g, _r in items}

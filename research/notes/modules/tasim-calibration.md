@@ -113,6 +113,7 @@ limit.
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
+| the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | no: no economy pass runs at an empty point (*The seat's rates*) | **open**: R4 refuses every reload run on them |
 
 ## The per-run checks
 
@@ -121,14 +122,37 @@ makes the run unusable and the reference builder refuses its scenario.
 
 | | Check |
 |---|---|
-| R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch |
+| R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
 | R2 | no projectile at the empty point |
 | R3 | after the apply the grid holds only the scenario's features |
-| R4 | each seat's image after the apply equals run 0's, but the lifetime totals and the deadlines' phase; the storage, flag and levels equal the wire's |
+| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase; the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG, the wind rows `main+0x37EC4..+0x37EE5`, B4's slot table. Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's search budget `pfbudget` (`0x5119E8`), searches `pfsearches` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the budget every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
+
+**The seat's rates.** The economy pass `0x401360` recomputes a seat's rates and storage maxima
+from its units at every pass: it zeroes the maxima before summing (`0x40137D`, `0x401383`) and writes
+income `+0x90`/`+0x9C` and expense `+0x94`/`+0xA0` as the pass's sums without reading what they
+held (`0x4019C6`, `0x4019DD`, `0x401A05`, `0x401A2D`, [weapons](../engine/weapons.md)); their
+other writers are the record's init, the level start, the network's `0x28` receiver, the
+transfers and a cheat ([units](../engine/units.md), the `+0x8C..+0xE0` row). The players phase calls
+the pass only for a record with a live unit or one that never had any: with the word `+0x144` at
+0 and the dword `+0x140` not, it jumps past the call (`0x465525..0x465537`; DISASSEMBLED
+2026-11-12). So no pass runs at an empty point, and a seat's rates and maxima there are those of
+the last pass that saw its units: the launch's starting commanders' for run 0, the previous run's
+for every later one. MEASURED in the C1 lanes on Cavedog Links CC: income 25.0/1.0 (seat 0) and
+12.5/0.5 (seat 1, the AI's ×0.5 while it was still type 2) after run 0's apply, 0.3/0.0 after
+every later one; the exact scenario's energy maximum 1,000,000 after a launch's first apply and
+1,000,100 after a reload's. No settle can reset them, and comparing them after the run's first
+pass compares an outcome: two fresh launches of the exact scenario, same wire, read energy expense
+20 and 10 after that pass. A seat with no unit in a scenario (the course's) never runs a pass in
+the run at all. How R4 treats them is open.
+
+**How a refused scenario reads.** `calib.py refs build` prints, for each scenario it refuses, the
+number of failed runs, then each check with the runs it failed and under it every field it named
+(R4 a seat's dword, R6 a global or table) with its count and first run, so one report shows every
+cause at once.
 
 **The iteration of an event made on a paused frame.** The recorder's capture point publishes the
 last step's events and then writes the new tick's `RK_TICK` and images (`tagpu_rec_capture`), and
@@ -218,7 +242,12 @@ tested nothing.
 `tasim_run play --setup F --wire F --run-seed S --exogenous F --limit L --end "0:0,1:0" --trace F
 --json` plays one run and writes its trace; one JSON object on stdout, exit 0 when it ran and 2
 when it could not. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
-traces from a table, for the checker's tests.
+traces from a table, for the checker's tests; without `TASIM_FAKE_TABLE` it exits 2.
+`fake_tasim.py table RUNS_DIR OUT.json` builds a table from an engine run's lane manifests, every
+run's engine trace under its seed (`perturb.run_seed`: the scenario's hash and the run's index), so
+`TASIM_FAKE_TABLE=OUT.json calib.py check --tasim tools/tasim/tests/fake_tasim.py` against the
+references built from the same directory grades every metric in: the checker's end-to-end test,
+with the engine standing in for tasim.
 
 ## Roles
 

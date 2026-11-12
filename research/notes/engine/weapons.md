@@ -236,7 +236,13 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   (`0x46470C..0x464715`), and the players phase, after GameTime's increment, runs the record's
   30-tick block only once GameTime has reached it, adding 30 (`0x46507D..0x465092`, `ja` past the
   whole block), so the pass runs on the first phase after the level's init and every 30 ticks after
-  it, every seat on the same tick in record order, after the units' tick. It sums the six current floats of every unit with `+0x110` bit 28 and
+  it, every seat on the same tick in record order, after the units' tick. **A seat with no live
+  unit that has ever had one gets no pass**: the call at `0x46555A` is skipped while the live-unit
+  word `+0x144` is 0 and the created-units dword `+0x140` is not (`0x465525..0x465537`), and also
+  for an inactive record (`[rec]` 0), a record of type 3, a record whose `+0x146` is 10, and once the game-over bit 2 of
+  `main+0x3923B` is set or the word `main+0x39239` is not negative (`0x465508..0x465557`;
+  DISASSEMBLED 2026-11-12). The deadline still advances, so such a seat keeps the rates and storage
+  maxima of its last pass with units. It sums the six current floats of every unit with `+0x110` bit 28 and
   of the `+0xEC` record (`0x401877..0x40193D`), pays the debts first and then the granted from
   current plus production, keeping the fraction paid of each (`0x401A4D..0x401AB1`), and then
   settles every such unit (the loop `0x401B3D..0x401BAC`, the arithmetic `0x401B42..0x401B99`):
