@@ -9,7 +9,7 @@
 /* ImpAI marks no seat on a puppet: the wrapper refuses a puppet seat, and on a puppet level the
    level init and the level end only clear the table, so between the two the recording is the
    only writer of the seat table. */
-SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm");
+SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm stock-impai-observe");
 
 #include "dd.h"                 /* g_ddraw.gui_thread_id: the game thread */
 #include "tagpu_engine.h"
@@ -842,7 +842,7 @@ void tagpu_impai_level_end(void)
 /* The level init's seat choice, the AI command and the header's accessor: what decides which
    seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
    AI command clears no mark, so between the two clears the recording is the only writer. */
-SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm");
+SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
