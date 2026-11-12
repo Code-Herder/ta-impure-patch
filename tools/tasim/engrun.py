@@ -149,8 +149,8 @@ class Lane:
         R.wait_paused(self.w, self.log, T)
 
     def dump_now(self, name: str) -> int:
-        R.arm(self.w, self.log, f"dump {name} now", rf"recorder: dump {name} at GameTime \d+",
-              rf"recorder: dump(:| {name}) .*(refused|please|not letters)", f"dump {name}")
+        R.arm(self.w, self.log, f"dump {name} now", R._CLI_API.dump_written_rx(name),
+              R._CLI_API.dump_refused_rx(name), f"dump {name}")
         return self.log.at
 
     # ---- a lane-launch ---------------------------------------------------------------------

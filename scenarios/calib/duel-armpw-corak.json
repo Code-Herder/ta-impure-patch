@@ -6,10 +6,7 @@
    "id": "a",
    "type": "ARMPW",
    "owner": 0,
-   "pos": [
-    8100,
-    3912
-   ],
+   "pos": [4800, 1184],
    "facing": 90,
    "orders": [
     {
@@ -22,10 +19,7 @@
    "id": "b",
    "type": "CORAK",
    "owner": 1,
-   "pos": [
-    8500,
-    3912
-   ],
+   "pos": [5200, 1184],
    "facing": 270,
    "orders": [
     {
@@ -36,21 +30,18 @@
   }
  ],
  "calib": {
-  "kind": [
-   "winrate",
-   "distribution"
-  ],
-  "metrics": [
-   "winner",
-   "ttk",
-   "survivors"
-  ],
+  "kind": ["winrate", "distribution"],
+  "metrics": ["winner", "ttk", "survivors"],
   "runs": 50,
   "limit": 5400,
   "end_units": {
    "0": 0,
    "1": 0
   },
-  "area": "duel/land/t1/raider-raider"
+  "area": "duel/land/t1/raider-raider",
+  "place": {
+   "a": [0, 0, "a"],
+   "b": [400, 0, "b"]
+  }
  }
 }

@@ -207,8 +207,9 @@ def check_features(instance, gamedir):
     tmp = trig.with_name(trig.name + ".tmp")
     tmp.write_text(f"dump {DUMP} now\n")
     tmp.replace(trig)
-    got = wait_line(cursor, rf"recorder: dump {DUMP}( at GameTime|: | refused)", f"dump {DUMP}")
-    if " at GameTime" not in got:
+    written = CLI.dump_written_rx(DUMP)
+    got = wait_line(cursor, f"{written}|{CLI.dump_refused_rx(DUMP)}", f"dump {DUMP}")
+    if not re.search(written, got):
         raise CannotRun(f"dump {DUMP}: {got.strip()}")
     path = rd / f"dump-{DUMP}.bin"
     _dh, world = tarec.dump_world(path, tarec.header_only(recs[-1]))

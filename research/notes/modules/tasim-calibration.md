@@ -17,7 +17,7 @@ the gate's plan note.*
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard | no |
 | `calib.py selftest [--against REF]` | split-half, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
-| `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived | no |
+| `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
 | `tools/tasim/native.py`, `native.py test`, `native.py roles` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` on the install | no |
 
@@ -52,6 +52,15 @@ at height 85 (sea level 75); the next is Moon Quartet at 2 592 long. The arena's
 off, and each seat's base storage at 1 000 000. Line of sight and mapping default to the
 skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and a reference is keyed by
 both.
+
+**No scenario carries a map's coordinates by hand.** duelgen places its duels and courses from
+the arena (`calibref.arena_point`, `arena_facing`); a tracked scenario (`duel-armpw-corak`,
+`exact-damage-armllt`, `probe-pause`, the lane's `end`) gives each unit `calib.place: [along,
+across, face]` -- world units from `a` toward `b` and off the axis, and the facing of side `a` or
+`b` -- and `arenascan.py place`, which `pick` runs too, writes its positions from it.
+`calib.py engine` refuses, before any lane, a tracked scenario whose positions are not its place
+on the configured arena, and any scenario (the lane's end among them) with a unit or a move target
+outside the flat rectangle (`calibref.check_positions`).
 
 ## The lane and its runs
 
@@ -185,7 +194,10 @@ malformed one, a stale one under `--require-fresh`, a tasim failure, a perturbat
 scoreboard groups by `calib.area` less its last part; `--json` writes `ta-calib-score/1`.
 **Self-tests**: H2 = {i mod 4 ∈ {2, 3}} graded against H1 with the false-alarm rate per rule
 (about 4.6 % expected for the win rate), the swapped runs against the unswapped (the seat effect),
-an exact scenario's runs 0, 1 and 2 (fresh) equal, and `--against` a fresh reference.
+an exact scenario's runs 0, 1 and 2 (fresh) equal, and `--against` a fresh reference. Exit 0 when
+every self-test ran, 2 when one reported an error (an exact scenario's runs differing among them)
+or there was nothing to test -- no reference, or none `--only` matches: a self-test of nothing
+tested nothing.
 
 ### The tasim_run interface
 

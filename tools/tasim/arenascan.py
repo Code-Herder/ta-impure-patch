@@ -4,6 +4,7 @@
     tools/tasim/arenascan.py scan [--gamedir DIR] [--top N] [--json]
     tools/tasim/arenascan.py pick [--gamedir DIR] [MAP]     # write the arena config and scenario
     tools/tasim/arenascan.py check [--gamedir DIR]          # the configured arena against the install
+    tools/tasim/arenascan.py place                          # the tracked scenarios laid out on it
 
 Every map the install resolves (tavfs: loose files first, then the archives in the engine's mount
 order, each path from the first source that holds it) is graded on what the arena needs:
@@ -29,6 +30,13 @@ and the map of its scenario; `check` re-derives the configured map's grade and f
 install no longer gives what the config says -- calib.py runs it before every `calib engine`, and
 every lane reads the switch itself at its launch (engrun.py). A map is named by its file stem, the
 spelling the skirmish list and `tacli scenario` match case-insensitively.
+
+A tracked calibration scenario is laid out on the arena, never in a map's coordinates: its
+`calib.place` gives each unit `[along, across, face]` -- world units from the arena's a toward b
+and off the axis, and "a" or "b" for the facing of that side (calibref.arena_facing) or null --
+and `place` (run by `pick` too) writes each unit's `pos` and `facing` from it. calib.py refuses a
+tracked scenario whose positions are not what its `place` gives, and any scenario with a unit or
+a move outside the flat rectangle (calibref.check_positions).
 """
 
 import argparse
@@ -218,6 +226,61 @@ def arena_fields(row):
             "axis": axis, "a": a, "b": b, "courses": courses}
 
 
+PLACED = TREE / "scenarios" / "calib"
+
+
+def placed(doc: dict, cfg: dict, label: str) -> dict:
+    """`doc` with every unit at the place its `calib.place` gives on the arena `cfg`."""
+    place = (doc.get("calib") or {}).get("place")
+    if not isinstance(place, dict):
+        raise calibref.CalibError(f"{label}: no calib.place")
+    fa, fb = calibref.arena_facing(cfg)
+    out = json.loads(json.dumps(doc))
+    for u in out.get("units") or []:
+        spec = place.get(u.get("id"))
+        if (not isinstance(spec, list) or len(spec) != 3 or not all(isinstance(v, int) for v in spec[:2])
+                or spec[2] not in ("a", "b", None)):
+            raise calibref.CalibError(f"{label}: unit {u.get('id')!r} has no calib.place "
+                                      f"[along, across, \"a\"|\"b\"|null]")
+        u["pos"] = calibref.arena_point(cfg, spec[0], spec[1])
+        if spec[2] is not None:
+            u["facing"] = fa if spec[2] == "a" else fb
+    return out
+
+
+def placed_scenarios():
+    """[(path, doc)] of every tracked calibration scenario that carries a calib.place."""
+    out = []
+    for p in sorted(PLACED.glob("*.json")):
+        doc = json.loads(p.read_text())
+        if isinstance(doc.get("calib"), dict) and "place" in doc["calib"]:
+            out.append((p, doc))
+    return out
+
+
+def place_all(cfg: dict) -> list:
+    """Writes every tracked placed scenario laid out on `cfg`; the paths it changed."""
+    changed = []
+    for p, doc in placed_scenarios():
+        new = placed(doc, cfg, p.name)
+        if new != doc:
+            p.write_text(dumps(new))
+            changed.append(p)
+    return changed
+
+
+def check_placed(cfg: dict) -> int:
+    """CalibError unless every tracked placed scenario holds the positions its place gives on
+    `cfg` (a scenario left from another arena); the count checked."""
+    n = 0
+    for p, doc in placed_scenarios():
+        if placed(doc, cfg, p.name) != doc:
+            raise calibref.CalibError(f"{p.name}: its positions are not its calib.place on "
+                                      f"{cfg['map']} (tools/tasim/arenascan.py place)")
+        n += 1
+    return n
+
+
 def check(cfg, vfs):
     """Raises calibref.CalibError unless the install still grades the configured map as the
     config says. Returns a one-line verdict."""
@@ -240,13 +303,15 @@ def check(cfg, vfs):
             f"(sea {row['sealevel']})")
 
 
+_FLAT_LIST = re.compile(r'\[\s*((?:-?[\d.]+|"[^"\n]*"|null|true|false)'
+                        r'(?:,\s*(?:-?[\d.]+|"[^"\n]*"|null|true|false))*)\s*\]')
+
+
 def dumps(doc) -> str:
-    """JSON with one key a line and every list of numbers on its own line, as the config is
-    read by people."""
-    text = json.dumps(doc, indent=1)
-    return re.sub(r"\[\s*([-\d.,\s]+?)\s*\]",
-                  lambda m: "[" + ", ".join(v.strip() for v in m.group(1).split(",")) + "]",
-                  text) + "\n"
+    """JSON with one key a line and every list of plain values on one line, as the config and
+    the scenarios are read by people."""
+    text = json.dumps(doc, indent=1, ensure_ascii=False)
+    return _FLAT_LIST.sub(lambda m: "[" + re.sub(r",\s+", ", ", m.group(1)) + "]", text) + "\n"
 
 
 def main(argv=None):
@@ -261,7 +326,13 @@ def main(argv=None):
     k.add_argument("map", nargs="?")
     c = sub.add_parser("check")
     c.add_argument("--gamedir")
+    sub.add_parser("place")
     a = p.parse_args(argv)
+    if a.cmd == "place":
+        changed = place_all(calibref.arena())
+        print(f"arenascan: {len(changed)} scenario(s) laid out again"
+              + "".join(f"\n  {q.relative_to(TREE)}" for q in changed))
+        return 0
     try:
         vfs = install(a.gamedir)
     except Exception as e:                                  # noqa: BLE001 -- any install trouble
@@ -296,8 +367,10 @@ def main(argv=None):
     scn_path = TREE / cfg["scenario"]
     scn = json.loads(scn_path.read_text())
     scn["setup"]["map"] = row["name"]
-    scn_path.write_text(json.dumps(scn, indent=1, ensure_ascii=False) + "\n")
-    print(f"arenascan: {path.name} and {scn_path.name} now name {row['name']}, flat {row['rect']}")
+    scn_path.write_text(dumps(scn))
+    changed = place_all(cfg)
+    print(f"arenascan: {path.name} and {scn_path.name} now name {row['name']}, flat {row['rect']}; "
+          f"{len(changed)} scenario(s) laid out again")
     return 0
 
 

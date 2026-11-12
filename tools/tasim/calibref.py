@@ -111,7 +111,7 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
     if not isinstance(node, dict):
         raise CalibError(f"{w}: the scenario has no calib block")
     known = ("kind", "metrics", "runs", "limit", "end_units", "area", "exact_family", "los",
-             "mapping")
+             "mapping", "place")
     for k in node:
         if k not in known:
             raise CalibError(f"{w}: unknown key {k!r} (allowed: {', '.join(known)})")
@@ -171,6 +171,39 @@ def arena(path: Path = ARENA) -> dict:
         if not (x <= px <= x + wd and y <= py <= y + ht):
             raise CalibError(f"{path}: {name} {cfg[name]} is outside the flat rectangle")
     return cfg
+
+
+def arena_point(cfg: dict, along, across=0) -> list:
+    """The point `along` world units from the arena's a toward b on its axis and `across` world
+    units off it (toward +y for an x axis, +x for a y axis)."""
+    ax, ay = cfg["a"]
+    return [ax + along, ay + across] if cfg["axis"] == "x" else [ax + across, ay + along]
+
+
+def arena_facing(cfg: dict) -> tuple:
+    """(side A's facing, side B's): A faces B along the axis and B faces A, in the scenario
+    format's degrees."""
+    return (90, 270) if cfg["axis"] == "x" else (0, 180)
+
+
+def in_flat(cfg: dict, p) -> bool:
+    x, y, w, h = cfg["flat"]["rect"]
+    return x <= p[0] <= x + w and y <= p[1] <= y + h
+
+
+def check_positions(doc: dict, cfg: dict, label: str):
+    """Every unit of the scenario, and every point an order sends one to, inside the arena's flat
+    rectangle, or CalibError naming the first that is not: a scenario laid out for another map
+    is refused before a lane plays it."""
+    for u in doc.get("units") or []:
+        if not in_flat(cfg, u["pos"]):
+            raise CalibError(f"{label}: unit {u.get('id', u['type'])} at {u['pos']} is outside "
+                             f"the arena's flat rectangle {cfg['flat']['rect']} ({cfg['map']})")
+        for o in u.get("orders") or []:
+            to = o.get("to")
+            if isinstance(to, list) and len(to) == 2 and not in_flat(cfg, to):
+                raise CalibError(f"{label}: unit {u.get('id', u['type'])}'s {o['cmd']} to {to} "
+                                 f"is outside the arena's flat rectangle {cfg['flat']['rect']}")
 
 
 ROLES_H = TREE / "tagpu" / "ddraw" / "src" / "tasim_roles.h"

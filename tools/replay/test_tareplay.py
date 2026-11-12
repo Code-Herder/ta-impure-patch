@@ -3195,7 +3195,8 @@ class PlayingEnd(unittest.TestCase):
         """W: an end line of the playing a seek replaced, before the seek's answer, is not the
         sought playing's"""
         seek = "replay: tenseat: at GameTime 331, sought from 200"
-        dump = "recorder: dump w331 at GameTime 331: 24 units"
+        dump = ("recorder: dump w331 at GameTime 331 -> replays\\dump-w331.bin (8962308 bytes of "
+                "records); 0 records with a body past 0xFFFF bytes not written")
         lines = [self.STOP, seek, dump]
         start = tareplay.after_line(lines, seek, 0)
         self.assertEqual(start, 2)

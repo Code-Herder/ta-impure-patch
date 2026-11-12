@@ -10,10 +10,12 @@
    "id": "keep_ai",
    "type": "CORFUS",
    "owner": 1,
-   "pos": [
-    9320,
-    3912
-   ]
+   "pos": [6020, 1184]
   }
- ]
+ ],
+ "calib": {
+  "place": {
+   "keep_ai": [1220, 0, null]
+  }
+ }
 }

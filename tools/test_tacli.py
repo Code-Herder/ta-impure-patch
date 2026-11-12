@@ -4153,5 +4153,76 @@ class PrefixLeftovers(unittest.TestCase):
         self.assertEqual(sorted(p["pid"] for p in tacli.prefix_processes(prefix)), sorted(pids))
 
 
+
+class DumpLines(unittest.TestCase):
+    """dump_written_rx and dump_refused_rx against the lines the recorder actually writes: every
+    tagpu_logf format of tagpu_recorder.c that names a dump, rendered with sample arguments. A
+    changed format fails here, not as a dump nobody saw in a game."""
+
+    SRC = Path(__file__).resolve().parents[1] / "tagpu" / "ddraw" / "src" / "tagpu_recorder.c"
+    CALL = re.compile(r'tagpu_logf\(((?:\s*"(?:[^"\\]|\\.)*")+)')
+    LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
+    CONV = re.compile(r"%(\.\*)?[-+ #0-9]*(?:l|ll|h)?([sdux])")
+
+    def formats(self):
+        text = self.SRC.read_text(encoding="latin-1")
+        out = []
+        for m in self.CALL.finditer(text):
+            fmt = "".join(self.LIT.findall(m.group(1)))
+            if re.match(r"recorder: (frame )?dump[ :]", fmt):
+                out.append(fmt)
+        return out
+
+    def render(self, fmt, name):
+        first = [True]
+
+        def arg(m):
+            if m.group(2) == "s" or m.group(1):
+                if first[0]:
+                    first[0] = False
+                    return name
+                return "replays\\dump-x.bin"
+            return "331"
+        return self.CONV.sub(arg, fmt.replace("%%", "%"))
+
+    def classify(self, fmt):
+        if " armed for GameTime " in fmt:
+            return "armed"
+        if "the dump leaves" in fmt:
+            return "note"
+        if "bytes of records" in fmt:
+            return "written"
+        return "refused"
+
+    def test_every_dump_format_is_classified_by_the_patterns(self):
+        fmts = self.formats()
+        kinds = {self.classify(f) for f in fmts}
+        self.assertEqual(kinds, {"armed", "note", "written", "refused"}, fmts)
+        written = re.compile(tacli.dump_written_rx("e0"))
+        refused = re.compile(tacli.dump_refused_rx("e0"))
+        for fmt in fmts:
+            line = self.render(fmt, "e0")
+            kind = self.classify(fmt)
+            self.assertEqual(bool(written.search(line)), kind == "written", line)
+            self.assertEqual(bool(refused.search(line)), kind == "refused", line)
+
+    def test_the_written_line_gives_its_gametime_and_path(self):
+        frame = ("recorder: frame dump calibfeat at GameTime 120 (iteration 121) -> "
+                 "replays\\dump-calibfeat.bin (8962308 bytes of records); 0 records with a body "
+                 "past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("calibfeat"), frame)
+        self.assertEqual((m["t"], m["iteration"], m["path"], m["bytes"]),
+                         ("120", "121", "replays\\dump-calibfeat.bin", "8962308"))
+        armed = ("recorder: dump w331 at GameTime 331 -> replays\\dump-w331.bin (100 bytes of "
+                 "records); 0 records with a body past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("w331"), armed)
+        self.assertEqual((m["t"], m["iteration"]), ("331", None))
+
+    def test_another_dumps_line_is_not_this_ones(self):
+        line = ("recorder: frame dump e01 at GameTime 5 (iteration 6) -> replays\\dump-e01.bin "
+                "(9 bytes of records); 0 records with a body past 0xFFFF bytes not written")
+        self.assertIsNone(re.search(tacli.dump_written_rx("e0"), line))
+
+
 if __name__ == "__main__":
     unittest.main()

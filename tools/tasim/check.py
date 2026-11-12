@@ -373,6 +373,9 @@ def selftest(only=None, against=None):
     """(the report's lines, the false-alarm rates per rule, could-not-run messages); writes each
     reference's `selftest`."""
     refs = load_refs(only)
+    if not refs:
+        # a self-test over nothing tested nothing: could not run, as `check` says
+        raise CouldNotCheck("no reference" + (f" matches {only}" if only else ""))
     lines, errors = [], []
     alarms = {"winrate": [0, 0], "distribution": [0, 0]}
     for sid, (p, ref) in sorted(refs.items()):

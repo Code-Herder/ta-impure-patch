@@ -169,6 +169,38 @@ class ExitCodes(unittest.TestCase):
         with self.assertRaises(check.CouldNotCheck):
             check.load_refs()
 
+    def test_a_selftest_that_matches_no_reference_could_not_run(self):
+        rc, said = selftest_exit(only="scenarios/nothing-*.json")
+        self.assertEqual(rc, 2)
+        self.assertIn("could not run: no reference matches", said)
+
+
+def selftest_exit(only=None):
+    """`calib.py selftest`'s exit code and what it printed."""
+    import argparse
+    import contextlib
+    import io
+    import calib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = calib.cmd_selftest(argparse.Namespace(only=only, against=None))
+    return rc, buf.getvalue()
+
+
+class SelfTestWithNoReference(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["TACALIB_DIR"] = self.tmp.name
+
+    def tearDown(self):
+        os.environ.pop("TACALIB_DIR", None)
+        self.tmp.cleanup()
+
+    def test_no_reference_could_not_run(self):
+        rc, said = selftest_exit()
+        self.assertEqual(rc, 2)
+        self.assertIn("calib selftest: could not run: no reference", said)
+
 
 def git(repo, *a):
     env = dict(os.environ, GIT_AUTHOR_NAME="calib-test", GIT_AUTHOR_EMAIL="calib-test",

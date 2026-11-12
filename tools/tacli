@@ -6088,22 +6088,44 @@ def _replay_playing(inst: Instance):
     return None, "no level of this run has played a recording"
 
 
+def dump_written_rx(name: str) -> str:
+    """The recorder's line for dump `name` written (tagpu_recorder.c, dump_write). A dump taken
+    now -- `dump <name> now`, a rewind's -- says `frame dump <name> at GameTime <frame> (iteration
+    <tick>)`; one armed for a GameTime says `dump <name> at GameTime <tick>`. Both go on `-> <path>
+    (<n> bytes of records)`. Groups: `t` the GameTime, `iteration` (a frame dump's), `path`,
+    `bytes`. The one pattern every caller waits on (tareplay, the calibration runner);
+    tools/test_tacli.py renders the recorder's own format strings against it."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump {n} at GameTime (?P<t>-?\d+)"
+            rf"(?: \(iteration (?P<iteration>-?\d+)\))? -> (?P<path>.*?) "
+            rf"\((?P<bytes>\d+) bytes of records\)")
+
+
+def dump_refused_rx(name: str) -> str:
+    """The recorder's line for dump `name` that will not be written: refused, not taken, out of
+    memory, unwritable, or a name it does not take. A line that says what a dump leaves out
+    (`dump <name>: the level has no ...: the dump leaves it out`) is neither this nor written."""
+    n = re.escape(name)
+    return (rf"recorder: (?:frame )?dump(?: {n}(?: refused: | at GameTime -?\d+ refused: "
+            rf"| for GameTime -?\d+ not taken: |: no memory |: cannot write )"
+            rf"|: a name of |: the name ).*")
+
+
 def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
     """Waits for the seek's arrival or refusal and, with a dump, for the dump's line; returns
     what they say. The arrival comes at the frame visit that runs the seek, paused or not; the
     dump comes at the capture point of T, which a paused playback reaches at its first step after
     the pause. On a `held` launch (THE LAUNCH'S HOLD) it returns at the arrival: the dump is armed
     for T and taken once the caller resumes the level (`dump_pending`)."""
-    n, d = re.escape(name), re.escape(dump or "")
+    n = re.escape(name)
     arrive_rx = re.compile(rf"replay: {n}: at GameTime {T}, sought from GameTime (\d+) in (\d+) ms "
                            rf"\(read (\d+), rebuild (\d+)\); units (\d+) killed, (\d+) made, "
                            rf"(\d+) refused")
     wrote_rx = re.compile(rf"replay: {n}: the seek to {T} wrote: .*")
     refuse_rx = re.compile(rf"replay: (?:{n}: )?seek to {T} refused: (.*)"
                            rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
-    dump_rx = re.compile(rf"recorder: dump {d} at GameTime (-?\d+) -> (.*) \(\d+ bytes of records\)")
-    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write "
-                             rf"| at GameTime \d+ refused: | for GameTime \d+ not taken: ).*")
+    dump_rx = re.compile(dump_written_rx(dump or ""))
+    dump_bad_rx = re.compile(dump_refused_rx(dump or ""))
     res = {"arrived": False}
     deadline = time.time() + timeout
     pending = first
@@ -6128,7 +6150,7 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
                 continue
             m = dump_rx.search(line)
             if m:
-                res["dump_at"], res["dump"] = int(m.group(1)), m.group(2)
+                res["dump_at"], res["dump"] = int(m["t"]), m["path"]
                 continue
             m = dump_bad_rx.search(line)
             if m:
@@ -6364,7 +6386,7 @@ def cmd_rewind(args):
                 "now": "(?:closed, nothing moved|returned to now)", "fork": "forked at GameTime",
                 "close": "(?:closed, nothing moved|returned to now)"}[args.action]
     done_rx = re.compile(r"rewind: " + expected)
-    dump_rx = re.compile(rf"recorder: frame dump {re.escape(args.dump or '')} at GameTime (\d+)")
+    dump_rx = re.compile(dump_written_rx(args.dump or ""))
     result = {"name": args.name, "action": args.action, "done": False}
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
@@ -6378,7 +6400,7 @@ def cmd_rewind(args):
             match = dump_rx.search(line)
             if match:
                 result.update(dump=str(inst.gamedir / "replays" / f"dump-{args.dump}.bin"),
-                              dump_at=int(match[1]))
+                              dump_at=int(match["t"]))
         if result["done"] and (not args.dump or "dump" in result):
             out(result, args.json, human=result["detail"] +
                 (f"; dump at GameTime {result['dump_at']}: {result['dump']}" if args.dump else ""))
@@ -6470,7 +6492,7 @@ def cmd_replay_takeover(args):
         # takeover's seek, which sets GameTime to T - 1, and takes it at the fork's capture point
         # of G (tagpu_recorder.c, tagpu_rec_dump_arm)
         armed_rx = re.compile(rf"recorder: dump {re.escape(args.dump)} armed for GameTime "
-                              rf"{args.dump_at}|recorder: dump {re.escape(args.dump)}.* refused.*")
+                              rf"{args.dump_at}|" + dump_refused_rx(args.dump))
         trigger(f"dump {args.dump} at {args.dump_at}")
         deadline, got_line, pending, read = time.time() + 30, None, rest, []
         while got_line is None and time.time() < deadline:
@@ -6483,7 +6505,7 @@ def cmd_replay_takeover(args):
             time.sleep(0.1)
         # what the takeover's wait reads next: every line after the verdict, the hold's among them
         rest = read + pending
-        if got_line is None or "refused" in got_line:
+        if got_line is None or " armed for GameTime " not in got_line:
             res.update(taken=False, dump_refused=got_line or "no answer in 30 s")
             out(res, args.json, human=f"{name}: on {args.name}, not taken over: dump "
                                       f"{args.dump}: {res['dump_refused']}")

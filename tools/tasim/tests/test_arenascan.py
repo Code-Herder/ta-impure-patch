@@ -97,5 +97,48 @@ class Layout(unittest.TestCase):
         self.assertEqual((f["axis"], f["a"][0], f["a"][1]), ("y", 800, A.MARGIN))
 
 
+
+ARENA_X = {"map": "m", "flat": {"rect": [1000, 2000, 5000, 1600]}, "axis": "x",
+           "a": [1256, 2800], "b": [5744, 2800]}
+
+
+class Placement(unittest.TestCase):
+    DOC = {"units": [{"id": "a", "type": "ARMPW", "owner": 0, "pos": [0, 0], "facing": 0,
+                      "orders": [{"cmd": "attack", "target": "b"}]},
+                     {"id": "b", "type": "CORAK", "owner": 1, "pos": [0, 0]}],
+           "calib": {"place": {"a": [0, 0, "a"], "b": [400, -32, "b"]}}}
+
+    def test_units_go_to_their_place_on_the_arena(self):
+        got = A.placed(self.DOC, ARENA_X, "t")
+        self.assertEqual([u["pos"] for u in got["units"]], [[1256, 2800], [1656, 2768]])
+        self.assertEqual([u.get("facing") for u in got["units"]], [90, 270])
+        arena_y = dict(ARENA_X, axis="y", a=[1800, 2256])
+        got = A.placed(self.DOC, arena_y, "t")
+        self.assertEqual([u["pos"] for u in got["units"]], [[1800, 2256], [1768, 2656]])
+        self.assertEqual([u.get("facing") for u in got["units"]], [0, 180])
+
+    def test_a_unit_with_no_place_is_refused(self):
+        doc = {"units": self.DOC["units"], "calib": {"place": {"a": [0, 0, "a"]}}}
+        with self.assertRaises(A.calibref.CalibError):
+            A.placed(doc, ARENA_X, "t")
+
+    def test_positions_off_the_flat_rectangle_are_refused(self):
+        A.calibref.check_positions(A.placed(self.DOC, ARENA_X, "t"), ARENA_X, "t")
+        slate = {"units": [{"id": "a", "type": "ARMPW", "owner": 0, "pos": [8100, 3912]}]}
+        with self.assertRaises(A.calibref.CalibError) as e:
+            A.calibref.check_positions(slate, ARENA_X, "slate")
+        self.assertIn("outside the arena's flat rectangle", str(e.exception))
+        away = {"units": [{"id": "a", "type": "ARMPW", "owner": 0, "pos": [1256, 2800],
+                           "orders": [{"cmd": "move", "to": [9000, 2800]}]}]}
+        with self.assertRaises(A.calibref.CalibError):
+            A.calibref.check_positions(away, ARENA_X, "away")
+
+    def test_the_tracked_scenarios_are_laid_out_on_the_configured_arena(self):
+        cfg = A.calibref.arena()
+        self.assertGreaterEqual(A.check_placed(cfg), 4)
+        for path, doc in A.placed_scenarios():
+            A.calibref.check_positions(doc, cfg, path.name)
+
+
 if __name__ == "__main__":
     unittest.main()

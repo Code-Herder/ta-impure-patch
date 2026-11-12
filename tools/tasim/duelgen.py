@@ -62,22 +62,6 @@ def pick(units, rank):
     return s[{"cheapest": 0, "median": (len(s) - 1) // 2, "dearest": len(s) - 1}[rank]]
 
 
-def at(arena, dist):
-    ax, ay = arena["a"]
-    return [ax + dist, ay] if arena["axis"] == "x" else [ax, ay + dist]
-
-
-def facing(arena):
-    """A faces B along the axis and B faces A (the scenario format's degrees, as the hand-written
-    duel scenarios/calib/duel-armpw-corak.json has them)."""
-    return (90, 270) if arena["axis"] == "x" else (0, 180)
-
-
-def in_rect(arena, p):
-    x, y, w, h = arena["flat"]["rect"]
-    return x <= p[0] <= x + w and y <= p[1] <= y + h
-
-
 def storage_ok(arena_scn, u):
     """The unit's per-shot costs over the limit fit in half of each seat's storage."""
     st = min(p["storage"][k] for p in arena_scn["setup"]["players"] for k in ("metal", "energy"))
@@ -89,13 +73,13 @@ def duel(u1, u2, r1, r2, t, rank, arena, arena_scn):
     if r1 == "defence":
         u1, u2, r1, r2 = u2, u1, r2, r1
     dist = (u2["range_ground"] if r2 == "defence" else max(u1["range_ground"], u2["range_ground"])) + REACH
-    a, b = list(arena["a"]), at(arena, dist)
-    if not in_rect(arena, b):
+    a, b = list(arena["a"]), calibref.arena_point(arena, dist)
+    if not calibref.in_flat(arena, b):
         raise GenError(f"{u1['name']} against {u2['name']}: {dist} world units leave the flat area")
     for u in (u1, u2):
         if not storage_ok(arena_scn, u):
             raise GenError(f"{u['name']}: its shots over {LIMIT} ticks spend more than half the storage")
-    fa, fb = facing(arena)
+    fa, fb = calibref.arena_facing(arena)
     name = f"duel-t{t}-{r1}-{r2}-{rank}"
     return name, {
         "format": "ta-scenario/1",
@@ -122,7 +106,7 @@ def course(cls, units, arena):
         row, col = divmod(k, 4)
         pos = [start[0] - row * step, start[1] + (col - 1.5) * step]
         out.append({"id": f"m{k}", "type": u["name"], "owner": 0, "pos": [round(pos[0]), round(pos[1])],
-                    "facing": facing(arena)[0], "orders": [{"cmd": "move", "to": list(end)}]})
+                    "facing": calibref.arena_facing(arena)[0], "orders": [{"cmd": "move", "to": list(end)}]})
     limit = math.ceil(length / u["speed"] * COURSE_LIMIT_FACTOR)
     return f"course-{cls}", {
         "format": "ta-scenario/1",

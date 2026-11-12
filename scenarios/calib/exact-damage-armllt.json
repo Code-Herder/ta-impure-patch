@@ -2,9 +2,34 @@
  "format": "ta-scenario/1",
  "description": "An exact calibration scenario: one light laser tower (a beam weapon, so no projectile flies) fires at an unarmed fusion plant 150 world units away, which it cannot kill in the limit. Every run must give the same HP decrements and shot ticks; tasim must give them too.",
  "units": [
-  {"id": "s", "type": "ARMLLT", "owner": 0, "pos": [9000, 3912], "orders": [{"cmd": "attack", "target": "t"}]},
-  {"id": "t", "type": "CORFUS", "owner": 1, "pos": [9150, 3912]}
+  {
+   "id": "s",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [5700, 1184],
+   "orders": [
+    {
+     "cmd": "attack",
+     "target": "t"
+    }
+   ]
+  },
+  {
+   "id": "t",
+   "type": "CORFUS",
+   "owner": 1,
+   "pos": [5850, 1184]
+  }
  ],
- "calib": {"kind": ["exact"], "metrics": ["damage", "reload"], "exact_family": "damage",
-           "limit": 900, "area": "exact/damage"}
+ "calib": {
+  "kind": ["exact"],
+  "metrics": ["damage", "reload"],
+  "exact_family": "damage",
+  "limit": 900,
+  "area": "exact/damage",
+  "place": {
+   "s": [900, 0, null],
+   "t": [1050, 0, null]
+  }
+ }
 }

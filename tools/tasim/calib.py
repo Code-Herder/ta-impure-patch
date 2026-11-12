@@ -53,6 +53,16 @@ def arena_check(cfg):
     return arenascan.check(cfg, vfs)
 
 
+def laid_out(cfg, paths):
+    """CalibError unless the tracked placed scenarios hold their places on this arena and every
+    scenario a lane will play -- these, and the lane's own end -- stays on its flat rectangle."""
+    import arenascan
+    import engrun
+    arenascan.check_placed(cfg)
+    for p in list(paths) + [engrun.END]:
+        calibref.check_positions(json.loads(Path(p).read_text()), cfg, Path(p).name)
+
+
 def the_dll(given):
     import tareplay as R
     dll, make = R.build_dll(False, False)
@@ -103,6 +113,7 @@ def cmd_engine(a):
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
         if not paths:
             raise calibref.CalibError("no scenario: --scenarios GLOB or --probe-pause")
+        laid_out(cfg, paths)
     except (calibref.CalibError, R.CouldNotRun) as e:
         print(f"calib engine: could not run: {e}")
         return 2
