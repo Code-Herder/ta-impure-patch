@@ -292,6 +292,14 @@ int tagpu_settings_seatai(void)
     return s_attached ? read_val(TS_SEATAI) : 0;
 }
 
+void tagpu_settings_set_seatai(int mask)
+{
+    if (!s_attached || mask < 0 || mask >= 1024 || (int)s_val[TS_SEATAI] == mask) return;
+    InterlockedExchange(&s_val[TS_SEATAI], mask);
+    InterlockedIncrement(&s_gen);
+    InterlockedIncrement(&s_dirty);
+}
+
 long tagpu_settings_gen(void) { return (long)s_gen; }
 
 void tagpu_settings_set(TagpuSetting key, int value)

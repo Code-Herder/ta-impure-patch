@@ -24,7 +24,8 @@ typedef struct WQ_ENGINE {
     char*     rec;                /* the seat's player record, main+0x1B63 + 0x14B * seat         */
     unsigned  first, last;        /* the seat's unit block, as slots                              */
     int       seat;
-    WqSiteFn  site;               /* 0x47D2E0, or the build cursor's call target at 0x4198C6      */
+    WqSiteFn  site;               /* 0x47D2E0, the build cursor's call target at 0x4198C6, or the
+                                     seat's own thunk (WQ_SITE_SEAT)                               */
     WqMenuFn  menu;               /* the build menu (tagpu_resource.c), or NULL for none          */
     uint8_t   act[WQ_ACTS];       /* the action bytes, looked up on first use (`got`)             */
     uint8_t   got[WQ_ACTS];
@@ -33,14 +34,25 @@ typedef struct WQ_ENGINE {
 /* WQ_SITE_ENGINE: the engine's site test 0x47D2E0, which Quick Build's fits asks.
    WQ_SITE_CURSOR: the target of the build cursor's own call at 0x4198C6 -- stock 0x47D2E0, the queued-site
    fix's build_site_test when tagpu_patches.c armed it, or a foreign patch's -- so a placement's site is
-   judged exactly as a single click there would be. */
-enum { WQ_SITE_ENGINE, WQ_SITE_CURSOR };
+   judged exactly as a single click there would be.
+   WQ_SITE_SEAT: 0x47D2E0 through ImpAI's thunk, whose return address the patch at 0x47D3D1 recognises, so the
+   site's centre is tested against the SEAT'S OWN mapped bit instead of the viewed player's (tagpu_impai.c, THE
+   SEAT'S OWN SITE TEST); the open refuses it while the thunk is not in. */
+enum { WQ_SITE_ENGINE, WQ_SITE_CURSOR, WQ_SITE_SEAT };
 
 /* DLL attach, after tagpu_patches.c has written its sites and before tagpu_place_init: decodes the call at
    0x4198C6 once. Its target is fixed from then on: nothing writes that call after attach. */
 void     tagpu_worldq_init(void);
 /* the build cursor's site test decoded at attach, NULL when 0x4198C6 was not a call */
 WqSiteFn tagpu_worldq_cursor_site(void);
+/* DLL attach, by tagpu_impai_init once the thunk and its patch at 0x47D3D1 are both written: WQ_SITE_SEAT's
+   target from then on. Nothing else writes it. */
+void     tagpu_worldq_seat_site_set(WqSiteFn thunk);
+
+/* The bit 0x47D2E0 tests at 0x47D3D1..0x47D3FA for a site of `type` at first cell (cx, cz), read in C with the
+   view's seat's own bit: 1 mapped, 0 not, -1 where the engine refuses before the read (the footprint off the
+   map, the block off the record's grid). ImpAI's self-check holds the thunk's answers to it. */
+int      tagpu_worldq_site_mapped(const WORLDQ* q, int type, int cx, int cz);
 
 /* the resource building a unit definition is, WQ_KIND_*: what WQ_DEF.kind answers, for a caller that holds
    the definition already (the build menu's log) */
@@ -48,8 +60,13 @@ int      tagpu_worldq_def_kind(const void* def);
 
 /* Opens seat `seat`'s view into `out` over `ctx`, both the caller's for one call; 0 and nothing opened when
    any bound fails (in play, the map, the defs, the unit array and the seat's block; the seat below 10 and
-   not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target. */
+   not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target or WQ_SITE_SEAT with no thunk. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
+/* Opens the level's content view: ndefs, def, def_econ and map answer as a seat's view does; no unit is live
+   in it (its slot count is 0), so every unit op answers nothing and site_ok, can, order and queue refuse.
+   It needs the map and the defs only, so the level init opens it on the LOADER thread inside 0x4919C8,
+   live or puppet (tagpu_impai.c, the type information). 0 when a bound fails. */
+int tagpu_worldq_open_content(WQ_ENGINE* ctx, WORLDQ* out);
 
 /* The line-of-sight rule `observe` applies, alone, for ImpAI's self-check against the engine's own
    0x465AC0: 1 when the seat's sight shows the live unit at `slot`, 0 when not, -1 for no live unit or no

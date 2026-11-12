@@ -126,7 +126,7 @@ through `0x49FD60(gui, name)`: `Start`, `PrevMenu`, `CommanderDeath`, `StartLoca
 
 **The seat's controller button is the gadget `Player<N>`** (`0x47B133..0x47B191`): it plays the
 sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`), whose one caller is
-`0x47B178`. The `Player` branch does not look at which mouse button was pressed.
+`0x47B178` (`E8 63 E6 FF FF`, after `push ebx`, the seat). The `Player` branch does not look at which mouse button was pressed.
 
 **The cycle `0x4797E0`** reads the seat's entry `+0x00` in the settings `[main+0x29A0]`
 (`0x47981D..0x47982D`) and writes the next value and the button's label:
@@ -137,11 +137,18 @@ sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`
   holds 1 (`0x479833..0x47985E`), else **0**, `Open`.
 
 So a seat cycles **Open → Computer → Player (when no seat is the player) → Open**. The label goes
-through the translator `0x4C5740` and `0x4A0BF0(gui, "Player<N>", text)` (the name formatted from
-`Player%d`, `0x5080E8`). An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
+through the translator `0x4C5740` (`stdcall(text)`, `ret 4`) and **`0x4A0BF0(gui, "Player<N>", text,
+0)`** — four arguments, `ret 0x10`: the `push 0` before the translator's own `push` stays on the
+stack as the setter's fourth (`0x479855..0x479889`, `0x4798C2..0x4798E8`) — on `gui = main+0x519`,
+the name formatted from `Player%d` (`0x5080E8`) [DISASSEMBLED 2026-11-12]. An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
 `Color<N>` through `0x4A0570(gui, name, 0)`; otherwise they are enabled and a colour shared with
 another seat is changed (`0x4799F9..0x479ADB`). The screen's init `0x47A0E0` writes the same three
-labels from `+0x00` (`0x47A1DF..0x47A23F`).
+labels from `+0x00` (`0x47A1DF..0x47A23F`), the Computer one by the call at **`0x47A1FC`** (`E8 EF 69
+02 00`, the branch `0x47A1DD..0x47A201` alone), each seat's name from its loop index `esi`.
+
+**Impure's change**: with ImpAI available, both calls are redirected (`tagpu_skirmish.c`) so a Computer
+seat takes two steps, `OTA AI` then `ImpAI`, the engine's value staying 2 and `impure.cfg`'s `seatai`
+bit saying which ([ImpAI in the engine](../modules/impai.html), *The seat choice*).
 
 **The other per-seat buttons** step the entry's other fields: `Side<N>` `+0x04` modulo the side
 count `main+0x37F39` (`0x47B1D3..0x47B1F6`); `Allies<N>` `+0x08` modulo 6 (`0x47B24E..0x47B271`;

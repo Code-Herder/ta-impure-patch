@@ -1,0 +1,421 @@
+/* impai_brain.c -- ImpAI's decision (impai.h, the brain): its entry, the census of the seat's units and the
+   checks of the jobs it gave them. The ladder and the factories are impai_econ.c's, the sites and the orders
+   impai_build.c's. Engine-free and without statics: everything it knows comes through the WORLDQ and its
+   arguments, everything it keeps is the caller's (IMPAI_BRAIN, IMPAI_JOB). */
+#include <string.h>
+#include "impai_brain.h"
+
+/* THE LEVEL ROW, one at A1 whatever the Difficulty (research/notes/impai/brain.md). Each field's limit is in
+   impai.h beside it; the values are the bench's to tune. */
+const IMPAI_LEVEL IMPAI_LEVEL_A1 = {
+    15,                 /* decide                                       */
+    2, 2, 1800,         /* open_mex, open_energy, open_t                */
+    2, 8.0f,            /* factory_max, factory_per_m                   */
+    8.0f,               /* e_per_m                                      */
+    4, 12, 3.0f,        /* cons_base, cons_max, cons_per_m              */
+    1024, 1536,         /* comm_r, base_r                               */
+    2,                  /* gap                                          */
+    2700, 5400,         /* job_timeout, fail_t                          */
+    32, 4, 32, 4, 4, 8, 8,  /* idle_max, assign_max, site_tests, snaps, queue_max, roots, job_checks */
+};
+
+int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
+{
+    return lv->decide && gametime % lv->decide == (7u * seat) % lv->decide;
+}
+
+/* the scratch's parts, each rounded up to 16 bytes */
+#define ALIGN16(n) (((n) + 15u) & ~(size_t)15u)
+#define MENU_BYTES   ALIGN16(WQ_TYPES_MAX * sizeof(uint16_t))
+#define RING_BYTES   ALIGN16(PLACE_MAX_SITES * sizeof(PlaceCell))
+#define GRID_CELLS   ((size_t)IMPAI_GRID_MAX * IMPAI_GRID_MAX)
+#define MAPS_BYTES   (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
+                      ALIGN16(GRID_CELLS * sizeof(uint16_t)) + ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t)))
+
+size_t impai_brain_scratch_bytes(void)
+{
+    return ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES;
+}
+
+void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
+{
+    unsigned i;
+    memset(st, 0, sizeof *st);
+    st->ax = st->az = IMPAI_NO_ANCHOR;
+    st->explorer = (uint16_t)WQ_NONE;
+    for (i = 0; i < njob; i++) {
+        memset(&job[i], 0, sizeof job[i]);
+        job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;
+    }
+}
+
+static void job_clear(IMPAI_JOB* j)
+{
+    memset(j, 0, sizeof *j);
+    j->type = j->build = j->target = (uint16_t)WQ_NONE;
+}
+
+/* ---- small rules the three files share ---- */
+
+uint32_t impai_isqrt(uint64_t v)
+{
+    uint64_t r = 0, bit = (uint64_t)1 << 62;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return (uint32_t)r;
+}
+
+/* the integer distance in px from a 16.16 position to a point in px */
+uint32_t impai_dist_px(const int32_t a[3], int32_t bx_px, int32_t bz_px)
+{
+    const int64_t dx = (int64_t)(a[0] >> 16) - bx_px, dz = (int64_t)(a[2] >> 16) - bz_px;
+    return impai_isqrt((uint64_t)(dx * dx + dz * dz));
+}
+
+/* a building of `type` whose first cell is (cx, cz) */
+IMPAI_RECT impai_rect_at(const IMPAI_DEC* d, int type, int cx, int cz)
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    IMPAI_RECT r;
+    r.x0 = (int16_t)cx;
+    r.z0 = (int16_t)cz;
+    r.x1 = (int16_t)(cx + (t->fx > 0 ? t->fx : 1) - 1);
+    r.z1 = (int16_t)(cz + (t->fz > 0 ? t->fz : 1) - 1);
+    return r;
+}
+
+/* The first cell of a footprint of f cells whose centre is at 16.16 coordinate p: a placed building stands at
+   (2 origin + f) << 19 (tagpu_placegeo.h), and an order's position is the same centre. */
+static int origin_of(int32_t p, int f)
+{
+    return ((p >> 19) - f) >> 1;
+}
+
+static IMPAI_RECT rect_of(const IMPAI_DEC* d, int type, const int32_t pos[3])
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    return impai_rect_at(d, type, origin_of(pos[0], t->fx > 0 ? t->fx : 1), origin_of(pos[2], t->fz > 0 ? t->fz : 1));
+}
+
+static int overlap(const IMPAI_RECT* a, const IMPAI_RECT* b)
+{
+    return a->x0 <= b->x1 && b->x0 <= a->x1 && a->z0 <= b->z1 && b->z0 <= a->z1;
+}
+
+static int inside(const IMPAI_RECT* r, int cx, int cz)
+{
+    return cx >= r->x0 && cx <= r->x1 && cz >= r->z0 && cz <= r->z1;
+}
+
+void impai_fail_add(IMPAI_DEC* d, int cx, int cz)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    IMPAI_FAIL* f = &st->fail[st->fail_next % IMPAI_FAILS];
+    f->cx = (int16_t)cx;
+    f->cz = (int16_t)cz;
+    f->until = d->now + d->in->lv->fail_t;
+    st->fail_next = (uint16_t)((st->fail_next + 1u) % IMPAI_FAILS);
+    if (st->nfail < IMPAI_FAILS) st->nfail++;
+    d->out->failed++;
+}
+
+/* a failed site or cell still avoided lies in r */
+int impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int i;
+    for (i = 0; i < st->nfail && i < IMPAI_FAILS; i++)
+        if (st->fail[i].until > d->now && inside(r, st->fail[i].cx, st->fail[i].cz)) return 1;
+    return 0;
+}
+
+int impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r)
+{
+    int i;
+    for (i = 0; i < d->nclaims; i++) if (overlap(&d->claims[i].r, r)) return 1;
+    return 0;
+}
+
+void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
+{
+    if (d->nclaims >= IMPAI_CLAIM_MAX) return;
+    d->claims[d->nclaims].type = (uint16_t)type;
+    d->claims[d->nclaims].r = *r;
+    d->nclaims++;
+}
+
+/* ---- 1. the census ---- */
+
+static void unit_ref(IMPAI_UNITREF* r, const WQ_UNIT* u)
+{
+    r->slot = u->slot;
+    r->type = u->type;
+    memcpy(r->pos, u->pos, sizeof r->pos);
+}
+
+/* THE IDLE TEST is the stock builder planner's (0x408100: engine/orders.md, The ten slots): no head, or a head
+   whose +0x42 has bit 0x4000 -- the unit's own idle behaviour (its FBI default order, or what the engine pushed
+   in front of it), which any real order replaces (scout I6: no descriptor carries the bit; the controller sets
+   it on the default order it makes, 0x43BA08, and 0x43ADC0 drops such a head). The stock factory planner's test
+   is the same list's emptiness (0x40878B); a factory with a defaultmissiontype holds a 0x4000 head when idle,
+   so the factory takes the general test too. */
+static int idle_head(int h, const WQ_ORDER* o)
+{
+    return h == 0 || (h == 1 && (o->flags & WQ_OF_DROP));
+}
+
+static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    IMPAI_JOB* job = &in->job[u->slot];
+    const IMPAI_TINFO* t;
+    const int type = u->type;
+    WQ_ORDER o;
+    int h, cat, building;
+    if (!type || (unsigned)type >= in->nti) {
+        job_clear(job);
+        return;
+    }
+    if (job->type != WQ_NONE && job->type != type) job_clear(job);
+    t = &in->ti[type];
+    cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
+    building = !(t->flags & IMPAI_TF_MOBILE);
+    d->count[cat]++;
+    if (u->finished) d->done[cat]++;
+    if (!d->lowest.slot) unit_ref(&d->lowest, u);
+    if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
+    if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
+    h = d->q->ops->head(d->q, u->slot, &o);
+    if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
+        /* a build order at the head is a claim on its site */
+        if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
+            const IMPAI_RECT r = rect_of(d, o.type, o.pos);
+            impai_claim_add(d, o.type, &r);
+            d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
+            if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
+        }
+        if (u->finished) {
+            IMPAI_UNITREF r;
+            const int idle = idle_head(h, &o);
+            unit_ref(&r, u);
+            if (idle && d->nidle < in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = r;
+            else if (!idle && job->kind == IMPAI_JOB_ASSIST && d->nhelpers < IMPAI_IDLE_CAP) d->helpers[d->nhelpers++] = r;
+            if (job->kind != IMPAI_JOB_NONE && d->njobbed < 2 * IMPAI_IDLE_CAP) {
+                d->jobbed_idle[d->njobbed] = (uint8_t)idle;
+                d->jobbed[d->njobbed++] = r;
+            }
+        }
+    }
+    if (cat == IMPAI_C_FACTORY && u->finished) {
+        IMPAI_UNITREF r;
+        unit_ref(&r, u);
+        if (idle_head(h, &o)) {
+            if (d->nfidle < IMPAI_IDLE_CAP) d->fidle[d->nfidle++] = r;
+        } else {
+            int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
+            if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
+            for (k = 0; k < n; k++)
+                if (d->olist[k].action == d->act_queue && d->olist[k].type < in->nti &&
+                    in->ti[d->olist[k].type].cat == IMPAI_C_CONS && d->olist[k].count > 0)
+                    d->queued_cons += d->olist[k].count;
+        }
+    }
+    if (building) {
+        const IMPAI_RECT r = rect_of(d, type, u->pos);
+        if (cat == IMPAI_C_MEX || cat == IMPAI_C_GEO) impai_claim_add(d, type, &r);
+        if (d->nstructs < IMPAI_STRUCT_MAX) {
+            IMPAI_STRUCT* s = &d->structs[d->nstructs++];
+            s->slot = u->slot; s->type = (uint16_t)type; s->r = r; s->cat = (uint8_t)cat; s->finished = u->finished;
+        }
+        if (!u->finished) {
+            if (d->nnano < IMPAI_NANO_MAX) unit_ref(&d->nano[d->nnano++], u);
+            if (cat == IMPAI_C_ENERGY) d->pe_extra += t->egain;
+        }
+    }
+}
+
+/* Over the seat's slot block in slot order, bounded by it. A slot whose unit is gone or of another type loses
+   its job. Returns the units counted. */
+static int census(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int first, last, slot, n = 0;
+    if (!d->q->ops->seat_units(d->q, &first, &last)) return 0;
+    if (first < 1) first = 1;
+    if (last >= (int)in->njob) last = (int)in->njob - 1;
+    for (slot = first; slot <= last; slot++) {
+        WQ_UNIT u;
+        if (!d->q->ops->unit(d->q, slot, &u)) {
+            if (in->job[slot].type != WQ_NONE) job_clear(&in->job[slot]);
+            continue;
+        }
+        n++;
+        census_unit(d, &u);
+    }
+    return n;
+}
+
+/* the base box: every building that is not an extractor or a plant within base_r of the anchor */
+static void base_box(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    const int32_t apos[3] = { (int32_t)((uint32_t)(st->ax * 16 + 8) << 16), 0, (int32_t)((uint32_t)(st->az * 16 + 8) << 16) };
+    int i;
+    for (i = 0; i < d->nstructs; i++) {
+        const IMPAI_STRUCT* s = &d->structs[i];
+        if (s->cat == IMPAI_C_MEX || s->cat == IMPAI_C_GEO ||
+            impai_dist_px(apos, (s->r.x0 + s->r.x1 + 1) * 8, (s->r.z0 + s->r.z1 + 1) * 8) > d->in->lv->base_r)
+            continue;
+        if (!d->has_bbox) { d->bbox = s->r; d->has_bbox = 1; continue; }
+        if (s->r.x0 < d->bbox.x0) d->bbox.x0 = s->r.x0;
+        if (s->r.z0 < d->bbox.z0) d->bbox.z0 = s->r.z0;
+        if (s->r.x1 > d->bbox.x1) d->bbox.x1 = s->r.x1;
+        if (s->r.z1 > d->bbox.z1) d->bbox.z1 = s->r.z1;
+    }
+}
+
+/* ---- 2. the job checks ---- */
+
+static const IMPAI_STRUCT* built_at(const IMPAI_DEC* d, int type, int cx, int cz, int unfinished_only)
+{
+    int i;
+    for (i = 0; i < d->nstructs; i++)
+        if (d->structs[i].type == type && inside(&d->structs[i].r, cx, cz) &&
+            (!unfinished_only || !d->structs[i].finished))
+            return &d->structs[i];
+    return NULL;
+}
+
+/* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
+   covers the site, else the site failed; a busy one older than job_timeout with no frame of it at the site is
+   stopped (one STOP a decision: resolver mode 10, then the order) and the site failed. An EXPLORE ends when its
+   cell is explored, or after job_timeout with the cell failed. */
+static void job_checks(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i, checks = 0;
+    for (i = 0; i < d->njobbed && checks < in->lv->job_checks; i++) {
+        const IMPAI_UNITREF* b = &d->jobbed[i];
+        IMPAI_JOB* j = &in->job[b->slot];
+        const uint32_t age = d->now - j->since;
+        if (j->kind == IMPAI_JOB_BUILD) {
+            if (d->jobbed_idle[i]) {
+                checks++;
+                if (!built_at(d, j->build, j->cx, j->cz, 0)) impai_fail_add(d, j->cx, j->cz);
+                job_clear(j);
+            } else if (age > in->lv->job_timeout) {
+                checks++;
+                if (!built_at(d, j->build, j->cx, j->cz, 1) && !d->stopped && d->roots < in->lv->roots) {
+                    WQ_CMD c;
+                    const int a = d->q->ops->can(d->q, b->slot, 10, (int)WQ_NONE, b->pos);
+                    d->stopped = 1;
+                    if (a > 0) {
+                        memset(&c, 0, sizeof c);
+                        c.verb = WQ_CMD_NEW;
+                        c.action = (uint8_t)a;
+                        c.unit = b->slot;
+                        c.target = (uint16_t)WQ_NONE;
+                        memcpy(c.pos, b->pos, sizeof c.pos);
+                        d->roots++;
+                        d->q->ops->order(d->q, &c);
+                    }
+                    impai_fail_add(d, j->cx, j->cz);
+                    job_clear(j);
+                }
+            }
+        } else if (j->kind == IMPAI_JOB_EXPLORE) {
+            checks++;
+            if (d->q->ops->explored(d->q, j->cx, j->cz)) job_clear(j);
+            else if (age > in->lv->job_timeout) {
+                impai_fail_add(d, j->cx, j->cz);
+                job_clear(j);
+            }
+        }
+    }
+}
+
+/* ---- 3. the economy ---- */
+
+static void economy(IMPAI_DEC* d)
+{
+    const IMPAI_LEVEL* lv = d->in->lv;
+    const WQ_ECON* e = &d->e;
+    const float fac = (float)d->count[IMPAI_C_FACTORY];
+    const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
+    d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
+    d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
+    d->pe_in = e->energy_in + d->pe_extra;
+    d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
+    d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
+        ((d->count[IMPAI_C_FACTORY] == 0 &&
+          ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
+         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max &&
+          e->metal_in >= lv->factory_per_m * fac && !d->e_stall && !d->m_stall));
+}
+
+/* ---- the entry ---- */
+
+/* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary */
+static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
+{
+    unsigned char* p = (unsigned char*)in->scratch;
+    IMPAI_DEC* d = (IMPAI_DEC*)p;
+    int k;
+    memset(d, 0, sizeof *d);
+    p += ALIGN16(sizeof *d);
+    d->menu = (uint16_t*)p; p += MENU_BYTES;
+    d->menu2 = (uint16_t*)p; p += MENU_BYTES;
+    d->ring = (PlaceCell*)p; p += RING_BYTES;
+    for (k = 0; k < IMPAI_THREATS; k++) { d->maps.threat[k] = (uint32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint32_t)); }
+    d->maps.influence = (int32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int32_t));
+    d->maps.presence = (uint16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint16_t));
+    d->maps.diff = (int32_t*)p;
+    return d;
+}
+
+int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
+{
+    IMPAI_DEC* d;
+    const WORLDQ* q = in->q;
+    IMPAI_BRAIN* st = in->st;
+    int k;
+    if (!q || !st || !in->job || !in->ti || !in->lv || !in->snap || !in->scratch ||
+        in->scratch_bytes < impai_brain_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
+        (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) || in->lv->idle_max > IMPAI_IDLE_CAP)
+        return -1;
+    memset(out, 0, sizeof *out);
+    d = carve(in);
+    d->in = in;
+    d->out = out;
+    d->q = q;
+    d->now = (uint32_t)q->ops->gametime(q);
+    q->ops->map(q, &d->m);
+    if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);
+    d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);
+    d->act_vtol_build = q->ops->action(q, WQ_ACT_VTOL_MOBILEBUILD);
+    d->act_queue = q->ops->action(q, WQ_ACT_BUILDINGBUILD);
+    if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
+    out->census = (uint16_t)census(d);
+    for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];
+    if (!d->lowest.slot) return 0;
+    if (st->ax == IMPAI_NO_ANCHOR) {
+        const IMPAI_UNITREF* a = d->commander.slot ? &d->commander : &d->lowest;
+        st->ax = (int16_t)(a->pos[0] >> 20);
+        st->az = (int16_t)(a->pos[2] >> 20);
+    }
+    if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
+    base_box(d);
+    job_checks(d);
+    economy(d);
+    impai_econ_assign(d);
+    impai_econ_factories(d);
+    out->sites = (uint16_t)d->sites;
+    out->snaps = (uint16_t)d->snaps;
+    out->roots = (uint16_t)d->roots;
+    out->queued = (uint16_t)d->queued;
+    return 0;
+}

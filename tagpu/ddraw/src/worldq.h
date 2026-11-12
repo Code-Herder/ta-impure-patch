@@ -15,8 +15,8 @@
    implementation's context on that same stack and dies with the call. Nothing stores one.
 
    ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders -- but for
-   the engine's site_ok, can and mapped_point, which test the viewed player's mapped bit whatever seat asks
-   (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
+   the engine's site_ok (outside the seat's own site test, WQ_SITE_SEAT), can and mapped_point, which test the
+   viewed player's mapped bit whatever seat asks (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
 
    DETERMINISM. No op reads a clock, the cursor or a random generator. Lists come in a fixed order: slots
    ascending, order nodes in list order, cells row-major. Arithmetic is integer, or the definitions' own floats
@@ -29,6 +29,8 @@
 #define WQ_TYPES_MAX 16384          /* the most unit types a world has, None's included */
 #define WQ_LIST_MAX  16384          /* the nodes any walk of an order list reads, at most */
 #define WQ_NONE      0xFFFFu        /* no slot, no type */
+#define WQ_MCLASSES  32             /* the engine's movement classes, 0x512358 .. 0x512758 */
+#define WQ_MCLASS_NONE 0xFFu
 
 enum { WQ_KIND_NONE, WQ_KIND_MEX, WQ_KIND_GEO };   /* a resource building: what it extracts */
 
@@ -46,6 +48,9 @@ typedef struct WQ_MAP {
     uint8_t sea;                /* the sea level byte                                                      */
     uint8_t lostype;            /* LosType: bit 1 = True line of sight                                     */
     int32_t list_cap;           /* the orders a unit's list takes, the world's own bound; 0 for none       */
+    float   wind_mean;          /* the wind ratio's mean over the map's draws, 0..1: what a windgenerator
+                                   earns a pass per unit of its key, on average                           */
+    float   tide;               /* the tide a tidalgenerator earns a pass per unit of its key             */
 } WQ_MAP;
 
 typedef struct WQ_DEF {
@@ -60,6 +65,8 @@ typedef struct WQ_DEF {
     uint16_t reach;             /* builddistance, world px                                                 */
     int32_t  speed;             /* maxvelocity, 16.16 world px a tick                                      */
     char     name[WQ_NAME];     /* unitname, NUL-ended                                                     */
+    uint8_t  mclass;            /* the movement class whose pathing map it travels by, 0..WQ_MCLASSES-1;
+                                   WQ_MCLASS_NONE for a type with none of the world's classes            */
 } WQ_DEF;
 
 typedef struct WQ_FEAT {
@@ -87,6 +94,8 @@ typedef struct WQ_ORDER {       /* a COPY of one order node: no pointer survives
     uint16_t target;            /* the target unit's slot, WQ_NONE when none or not a unit                 */
     int32_t  pos[3];            /* 16.16                                                                   */
     uint32_t flags;             /* the node's flag word (+0x42), WQ_OF_*                                   */
+    int32_t  count;             /* a factory's count node: the units still to make, the one in progress
+                                   included (+0x3A); 0 for any other order                                */
 } WQ_ORDER;
 
 /* WQ_ORDER.flags' bits that a rule reads, DISASSEMBLED in 0x43ADC0's replace and link (0x43AE02..0x43AF84) and
@@ -100,21 +109,42 @@ enum { WQ_OF_KEEP   = 1u << 2,  /* survives a replace                           
 enum { WQ_CMD_NEW = 1,          /* 0x43ADC0: no Shift replaces the list but its 0x4 nodes, then appends    */
        WQ_CMD_CLICK,            /* 0x43AFC0: Shift takes off the first same-action node within 16 world
                                    units instead of adding one; no Shift replaces as NEW does              */
-       WQ_CMD_REMOVE };         /* 0x439F80: exact removal of `expect`, found again by a fresh walk        */
+       WQ_CMD_REMOVE,           /* 0x439F80: exact removal of `expect`, found again by a fresh walk        */
+       WQ_CMD_QUEUE };          /* 0x43B0B0: a factory's queue gains `count` of `type`, appended          */
+#define WQ_QUEUE_MAX 5          /* the most units one QUEUE command adds                                   */
 typedef struct WQ_CMD {
     uint8_t  verb, action, shift;
     uint16_t unit, target;      /* slots; target WQ_NONE = none                                            */
     int32_t  pos[3];            /* 16.16                                                                   */
     uint16_t type;              /* build type or 0                                                         */
     WQ_ORDER expect;            /* REMOVE: the node as `orders` copied it                                  */
+    int16_t  count;             /* QUEUE: 1..WQ_QUEUE_MAX                                                  */
 } WQ_CMD;
 enum { WQ_OK = 1, WQ_REFUSED = 0, WQ_UNSUPPORTED = -1 };
 
 enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_RECLAIM,
-       WQ_ACT_RESURRECT, WQ_ACTS };
+       WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACTS };
 enum { WQ_CAN_GUARD = 7, WQ_CAN_RECLAIM = 12 };     /* the resolver's modes the rules ask */
 
-typedef struct WQ_ECON { float metal, energy, metal_max, energy_max; } WQ_ECON;
+/* A seat's economy: what it holds and can hold, then the rates of the last 30-tick pass. Every value is finite,
+   0 where the world's is not. */
+typedef struct WQ_ECON {
+    float metal, energy, metal_max, energy_max;
+    float metal_in, energy_in;  /* produced over the last pass                                             */
+    float metal_out, energy_out;/* requested over the last pass, refused requests included                 */
+} WQ_ECON;
+
+/* A unit type's economy keys, each float finite or 0. */
+typedef struct WQ_DEF_ECON {
+    float    cost_m, cost_e;
+    uint32_t buildtime;
+    float    energymake, energyuse, metalmake;
+    float    extracts, wind, tidal;   /* extractsmetal, windgenerator, tidalgenerator                    */
+    float    estore, mstore;          /* energystorage, metalstorage                                     */
+    uint8_t  makesmetal;
+    uint8_t  building;                /* a type with no move class: one that stands where it is built    */
+    int16_t  minwater;                /* minwaterdepth                                                   */
+} WQ_DEF_ECON;
 
 /* ---- what a seat sees (ImpAI: research/notes/modules/impai.md, What a seat knows) ---- */
 
@@ -177,6 +207,8 @@ typedef struct WORLDQ_OPS {
     int (*ndefs)(const WORLDQ*);
     /* type 1..ndefs-1; 0 for none */
     int (*def)(const WORLDQ*, int type, WQ_DEF* out);
+    /* the type's economy keys; 1, or 0 with out zeroed for a type that is none */
+    int (*def_econ)(const WORLDQ*, int type, WQ_DEF_ECON* out);
     /* the type's yard map, fx * fz bytes row-major; 0 when it has none or cap is short */
     int (*yard)(const WORLDQ*, int type, uint8_t* out, int cap);
     /* the types a builder type's build menu offers, ascending; their count, -1 when cap is short */
@@ -185,7 +217,7 @@ typedef struct WORLDQ_OPS {
        `ignore_slot` taken as gone (0 none); with `alt` the free site's altitude, 0..255. The engine's tests the
        VIEWED player's mapped bit at the site's centre whatever record it is given (0x47D2E0 reads
        1 << main[0x2A43] at 0x47D3D1..0x47D3FA, DISASSEMBLED), so for any other seat it answers by the
-       viewer's map, not the seat's */
+       viewer's map, not the seat's -- but in a WQ_SITE_SEAT view, which tests the seat's own bit */
     int (*site_ok)(const WORLDQ*, int type, int cx, int cz, int ignore_slot, int* alt);
     /* the altitude the build cursor gives a refused site */
     int (*blocked_alt)(const WORLDQ*, int type, int cx, int cz);
@@ -200,6 +232,8 @@ typedef struct WORLDQ_OPS {
     int (*unit)(const WORLDQ*, int slot, WQ_UNIT* out);
     /* the unit's orders in list order, at most `cap` (every walk is bounded); their count, -1 for no unit */
     int (*orders)(const WORLDQ*, int slot, WQ_ORDER* out, int cap);
+    /* the head of the unit's list, as `orders` copies it: 1, 0 for an empty list, -1 for no unit */
+    int (*head)(const WORLDQ*, int slot, WQ_ORDER* out);
     /* the resolver's action byte for the unit, mode WQ_CAN_* at `target_slot` (WQ_NONE: the point), -1 when
        it refuses. The engine's WQ_CAN_RECLAIM at a point tests the VIEWED player's mapped bit whatever the
        unit's owner (the resolver's mode 12, 1 << main[0x2A43] at 0x43F5E2..0x43F5F0, DISASSEMBLED), so for
@@ -208,7 +242,8 @@ typedef struct WORLDQ_OPS {
     /* WQ_ACT_* -> its action byte, -1 when the world has none */
     int (*action)(const WORLDQ*, int act);
     /* WQ_OK, or WQ_REFUSED without side effects: the unit is not the seat's, the target is no longer a
-       live unit, or a REMOVE's node is not found again */
+       live unit, a REMOVE's node is not found again, or a QUEUE names a type the unit's own build menu does
+       not offer or a count past 1..WQ_QUEUE_MAX */
     int (*order)(const WORLDQ*, const WQ_CMD* cmd);
     /* WQ_OK, or WQ_UNSUPPORTED where the world keeps no such figures */
     int (*economy)(const WORLDQ*, WQ_ECON* out);
@@ -228,7 +263,7 @@ typedef struct WORLDQ_OPS {
     int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
 } WORLDQ_OPS;
 
-#define WQ_MCLASSES 32              /* the engine's movement classes, 0x512358 .. 0x512758 */
+
 
 struct WORLDQ { const WORLDQ_OPS* ops; void* self; int seat; };
 

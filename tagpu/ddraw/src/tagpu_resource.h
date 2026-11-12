@@ -12,5 +12,11 @@ int tagpu_resource_quick_right(void);
 void tagpu_resource_mouse(void);
 void tagpu_resource_level_end(void);
 void tagpu_resource_packet(TAGPU_PACKET* packet);
+/* The types builder `id`'s build menu offers for `side`, ascending, as Quick Build reads it; at most `cap`.
+   Returns the count, or -1 when cap is short or the read's memory cannot be had. A side out of range reads
+   the builder's own pages only. Two callers, one on the game thread in play and one on the loader thread in
+   the level load (tagpu_resource.c, THE TWO THREADS). */
+int tagpu_buildmenu_types(const char* ta, const char* defs, unsigned ndefs, unsigned id, unsigned char side,
+                          uint16_t* out, unsigned cap);
 
 #endif

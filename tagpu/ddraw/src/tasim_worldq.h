@@ -11,7 +11,8 @@
    values held to 0..255 as the engine's bytes are.
 
    THE ACTIONS are the core's own bytes (CORE_ACT_*): a list holds move, build, reclaim and guard orders, and
-   the VTOL and resurrect actions exist so a rule that asks for them gets an answer no list ever holds. */
+   the VTOL and resurrect actions exist so a rule that asks for them gets an answer no list ever holds. The core
+   has no factory queue, so it has no BUILDINGBUILD byte. The map has no wind and no tide. */
 #include "worldq.h"
 #include "tagpu_wikisim.h"
 

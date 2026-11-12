@@ -43,6 +43,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
 #include "tagpu_impai.h"
+#include "tagpu_skirmish.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -356,6 +357,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            stock AI tick, 0x465031, is byte-matched and redirected to a wrapper that always calls
            the stock tick, so the recorder's observer on that tick's entry 0x408C40 still runs. */
         tagpu_impai_init();
+
+        /* tagpu: the SKIRMISH seat button's ImpAI step (tagpu_skirmish.h), after the seam, whose
+           availability it reads: two call-site redirects in the screen's handler and init. */
+        tagpu_skirmish_init();
 
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport
