@@ -1,0 +1,32 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI's handicap exemption (tagpu/ddraw/src/tagpu_impai.c; engine/sim.md, Difficulty and the AI handicap): an idle human seat and two CORE computer seats on Town & Country at Easy, seat 1 OTA AI and seat 2 ImpAI, so the launch writes `seatai=2` into the store. Both seats are the same side, so their commanders produce the same terms: at Easy OTA AI's income is half of ImpAI's. The `impai-handicap` test group and tools/impai/handicap_check.py load it; the group's reclaim steps apply impai-handicap-reclaim-1.json and -2.json.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": false,
+  "los": "true",
+  "mapping": true,
+  "difficulty": "easy",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "impai",
+    "side": "core",
+    "color": 2
+   }
+  ]
+ }
+}

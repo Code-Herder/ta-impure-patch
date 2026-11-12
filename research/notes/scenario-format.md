@@ -647,6 +647,20 @@ saved seat preset alone. Controller keys alone are insufficient: playback writes
 its recorded seat extent, which can be smaller than the next scenario's roster.
 With ten slots declared it seats ten (the seating rule under the schema's notes).
 
+**A player's `controller`** is `human`, `ai` (OTA AI, the stock AI), `impai` or `off`. `impai`
+is a computer seat to the engine, written to the registry as `ai` is (controller 2); what makes
+ImpAI play it is the store: `load` writes `seatai=<the impai slots>` into the instance's
+`impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat; every
+other tacli launch writes `seatai=none`, so a line an earlier launch left never seats ImpAI. The
+DLL reads the key at each level's init under every launch, `--defaults` included ([ImpAI in the
+engine](modules/impai.html)).
+
+**`setup.difficulty`**, `easy`, `medium` or `hard`, sets the SKIRMISH screen's `Difficulty`
+gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine's own value
+`main+0x37EEE` back; a value other than the one asked for stops the load. Omitted, the screen
+keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
+resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
+
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
 all 1428 units (715 resolution errors, including inactive slots 2/3). With count

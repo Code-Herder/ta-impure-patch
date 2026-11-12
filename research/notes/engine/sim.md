@@ -53,8 +53,15 @@ the measured runs and what they mean for the design are in the
   the restart path `0x4997A0`, which tears the level down and re-reads the map first, and
   `0x49757C` in the loader's saved-game path) walks settings entries 0 to `main+0x38D81` − 1, the
   SKIRMISH screen's seat count: 4 by default (`0x4307EA`; also stored at `0x4307CF` and
-  `0x4307DD`, and raised by the saved-game path to the number of controller-1/2 entries,
-  `0x497542..0x497576`). **That count is why a skirmish seats four players.** Controller 1 copies the
+  `0x4307DD`, and raised by the saved-game path to one past the **highest** entry of 0..9 whose
+  controller is 1 or 2, `0x497542..0x497576`, which equals their number only when they are
+  contiguous; it only widens the range and reorders nothing). Before it, on that path,
+  `0x465FB0(save)` (`0x497527`, loader thread) writes for i = 0..9 the save's `Player%i` /
+  `Controller` (`0x5073C4`, `0x5073B8`) into settings entry i `+0` (`0x46600C`) and record i
+  `+0x73` (`0x466010`), or 0 into both (`0x466015..0x46601B`); its loop steps the record by `0x14B`
+  and stops at `0xCEE` (`cmp edi,0xCEE` at `0x46602D`), ten records (`0x466023..0x466037`). **So every caller seats settings entry i
+  into record i** (DISASSEMBLED, scout I13 of the ImpAI plan): what `impure.cfg`'s per-seat
+  `seatai` relies on. **That count is why a skirmish seats four players.** Controller 1 copies the
   entry's colour and side into PlayerInfo `+0x96`/`+0x95`, calls `0x464290(seat, 1)` and stores the
   seat in `main+0x2A43` and `main+0x2A42` (`0x47A798..0x47A7DE`); controller 2 does the same with
   type 2 and leaves those two bytes; anything else calls `0x464290(seat, 0)`. Then a human or AI
@@ -154,29 +161,79 @@ unscaled. The constants are pairs of doubles, −0.7 then −0.5: `0x4FC480`, `0
 `0x4FD040`, `0x4FD540`, `0x4FD700` (each read from the image). Every type test's bytes and branch
 below were checked against the image.
 
-| # | Function: what is scaled | Record tested | Type test (address: bytes) | Difficulty read | The type test's branch (unscaled) |
-|---|---|---|---|---|---|
-| 1 | economy pass `0x401360`: a structure's negative EnergyUse (its production) → unit `+0xBC` | unit `+0xEC` in `eax` | `0x401435: 80 78 73 02 75 37` | `0x401441` | `0x401472` |
-| 2 | economy: an extractor's metal (unit `+0x58`) → unit `+0xD4` | same | `0x4014B2: 80 78 73 02 0F 85 83 00 00 00` | `0x4014C2` | `0x40153F` |
-| 3 | economy: `makesmetal` (def `+0x22D`) → `+0xD4` | same | `0x4014F3: 80 78 73 02 75 46` | `0x4014FE` | `0x40153F` |
-| 4 | economy: the wind `main+0x37EDE` × `windgenerator` (def `+0x1D2`) → `+0xBC` | same | `0x40157F: 80 78 73 02 75 26` | `0x401585` | `0x4015AB` |
-| 5 | economy: the tide `main+0x14267` × `tidalgenerator` (def `+0x1D6`) → `+0xBC` | same | `0x4015F3: 80 78 73 02 0F 85 B8 00 00 00` | `0x4015FD` | `0x4016B5` |
-| 6 | economy: a mobile unit's negative EnergyUse → `+0xBC` | same | `0x40167C: 80 78 73 02 75 33` | `0x401688` | `0x4016B5` |
-| 7 | economy: `energymake` (def `+0x1C2`) → `+0xBC` | same | `0x4016F2: 80 78 73 02 75 33` | `0x4016FE` | `0x40172B` |
-| 8 | economy: `metalmake` (def `+0x1CA`) → `+0xD4` | same | `0x401753: 80 78 73 02 75 36` | `0x40175E` | `0x40178F` |
-| 9 | BuildingBuild `0x402640`, event 2: the refund of the target's def `+0x18A` × (1 − target `+0x104`) → the builder's `+0xD4` | builder `+0xEC`, `eax` | `0x40269F: 80 78 73 02 75 38` | `0x4026AB` | `0x4026DD` |
-| 10 | the build step `0x41BA60` with a negative amount (unbuilding): the metal returned → the frame's `+0xD4` | frame `+0xEC`, `eax` | `0x41BBB1: 80 78 73 02 75 37` | `0x41BBBD` | `0x41BBEE` |
-| 11 | the reclaim payout `0x4237D0`: FeatureDef `+0xEC` energy → the reclaimer's `+0xBC` | reclaimer `+0xEC`, `eax` | `0x4238C4: 38 58 73 75 2E` (`cmp [eax+0x73],bl`, `bl` = 2) | `0x4238C9` | `0x4238F7` |
-| 12 | the reclaim payout: FeatureDef `+0xF0` metal → `+0xD4` | same | `0x423918: 38 58 73 75 38` | `0x423923` | `0x423955` |
-| 13 | the energy transfer `0x464B30` → the recipient | `[obj+0x30]`, `ecx` | `0x464C06: 80 79 73 02 75 32` | `0x464C0C` | `0x464C3E` |
-| 14 | the metal transfer `0x464C60` | same | `0x464D36: 80 79 73 02 75 34` | `0x464D3C` | `0x464D70` |
-| 15 | the Deathmatch respawn `0x4653D9`: PlayerInfo `+0xA1` × 100 energy → the new commander's `+0xBC` | the new unit's `+0xEC`, `eax` | `0x465437: 80 78 73 02 75 38` | `0x465443` | `0x465475` |
-| 16 | the respawn: PlayerInfo `+0xA3` × 100 metal → `+0xD4` | same | `0x4654A3: 80 78 73 02 75 38` | `0x4654AF` | `0x4654E1` |
-| 17 | unit death `0x486C9E..`, the kind nibble (argument `+0xA` & `0xF0`) `0x50` [INFERRED: a reclaimed unit]: (1 − victim `+0x104`) × the victim's def `+0x18A` → the killer's (`+0xF0`) `+0xD4` | killer `+0xEC`, `ecx` | `0x486CDA: 80 79 73 02 75 38` | `0x486CE6` | `0x486D18` |
+| # | Function: what is scaled | Record tested | Type test (address: bytes) | Difficulty read | The type test's branch (unscaled) | Scaled continuation (S) |
+|---|---|---|---|---|---|---|
+| 1 | economy pass `0x401360`: a structure's negative EnergyUse (its production) → unit `+0xBC` | unit `+0xEC` in `eax` | `0x401435: 80 78 73 02 75 37` | `0x401441` | `0x401472` | `0x40143B` |
+| 2 | economy: an extractor's metal (unit `+0x58`) → unit `+0xD4` | same | `0x4014B2: 80 78 73 02 0F 85 83 00 00 00` | `0x4014C2` | `0x40153F` | `0x4014BC` |
+| 3 | economy: `makesmetal` (def `+0x22D`) → `+0xD4` | same | `0x4014F3: 80 78 73 02 75 46` | `0x4014FE` | `0x40153F` | `0x4014F9` |
+| 4 | economy: the wind `main+0x37EDE` × `windgenerator` (def `+0x1D2`) → `+0xBC` | same | `0x40157F: 80 78 73 02 75 26` | `0x401585` | `0x4015AB` | `0x401585` |
+| 5 | economy: the tide `main+0x14267` × `tidalgenerator` (def `+0x1D6`) → `+0xBC` | same | `0x4015F3: 80 78 73 02 0F 85 B8 00 00 00` | `0x4015FD` | `0x4016B5` | `0x4015FD` |
+| 6 | economy: a mobile unit's negative EnergyUse → `+0xBC` | same | `0x40167C: 80 78 73 02 75 33` | `0x401688` | `0x4016B5` | `0x401682` |
+| 7 | economy: `energymake` (def `+0x1C2`) → `+0xBC` | same | `0x4016F2: 80 78 73 02 75 33` | `0x4016FE` | `0x40172B` | `0x4016F8` |
+| 8 | economy: `metalmake` (def `+0x1CA`) → `+0xD4` | same | `0x401753: 80 78 73 02 75 36` | `0x40175E` | `0x40178F` | `0x401759` |
+| 9 | BuildingBuild `0x402640`, event 2: the refund of the target's def `+0x18A` × (1 − target `+0x104`) → the builder's `+0xD4` | builder `+0xEC`, `eax` | `0x40269F: 80 78 73 02 75 38` | `0x4026AB` | `0x4026DD` | `0x4026A5` |
+| 10 | the build step `0x41BA60` with a negative amount (unbuilding): the metal returned → the frame's `+0xD4` | frame `+0xEC`, `eax` | `0x41BBB1: 80 78 73 02 75 37` | `0x41BBBD` | `0x41BBEE` | `0x41BBB7` |
+| 11 | the reclaim payout `0x4237D0`: FeatureDef `+0xEC` energy → the reclaimer's `+0xBC` | reclaimer `+0xEC`, `eax` | `0x4238C4: 38 58 73 75 2E` (`cmp [eax+0x73],bl`, `bl` = 2) | `0x4238C9` | `0x4238F7` | `0x4238C9` |
+| 12 | the reclaim payout: FeatureDef `+0xF0` metal → `+0xD4` | same | `0x423918: 38 58 73 75 38` | `0x423923` | `0x423955` | `0x42391D` |
+| 13 | the energy transfer `0x464B30` → the recipient | `[obj+0x30]`, `ecx` | `0x464C06: 80 79 73 02 75 32` | `0x464C0C` | `0x464C3E` | `0x464C0C` |
+| 14 | the metal transfer `0x464C60` | same | `0x464D36: 80 79 73 02 75 34` | `0x464D3C` | `0x464D70` | `0x464D3C` |
+| 15 | the Deathmatch respawn `0x4653D9`: PlayerInfo `+0xA1` × 100 energy → the new commander's `+0xBC` | the new unit's `+0xEC`, `eax` | `0x465437: 80 78 73 02 75 38` | `0x465443` | `0x465475` | `0x46543D` |
+| 16 | the respawn: PlayerInfo `+0xA3` × 100 metal → `+0xD4` | same | `0x4654A3: 80 78 73 02 75 38` | `0x4654AF` | `0x4654E1` | `0x4654A9` |
+| 17 | unit death `0x486C9E..`, the kind nibble (argument `+0xA` & `0xF0`) `0x50` [INFERRED: a reclaimed unit]: (1 − victim `+0x104`) × the victim's def `+0x18A` → the killer's (`+0xF0`) `+0xD4` | killer `+0xEC`, `ecx` | `0x486CDA: 80 79 73 02 75 38` | `0x486CE6` | `0x486D18` | `0x486CE0` |
 
 Sites 2 and 3 share one switch (`0x401504..0x40153A`). What each destination field means is the
 economy pass's ([network](network.html), the economy pass) and [memory](memory.html)'s (the kill
-credit); the rows name the stores, not their meanings.
+credit); the rows name the stores, not their meanings. The scaled continuation S is the
+instruction after the type test, `VA + length`. Rows 13 and 14 are reached from any player's
+`+give` chat line (the console row `Give`, `0x501D68`, runs at mask 1, so without cheats:
+`0x416BD0` → `0x464C60(controlled, seat, amount, 1)` at `0x416C5D..0x416C8D`), the network's
+case `0x16`, the auto-share `0x457D30` and the SHARE dialog `0x4934B0`, never the loader thread;
+row 17 runs only from the step's reaper or the network's case `0x0C`; rows 9 to 12 and row 18 sit
+in order handlers, so they are reachable wherever an order node is destroyed, the loader thread's
+saved-game, placed-unit and players-phase paths included, all after `PLAYERS` `0x4919C8` (scout I1
+of the ImpAI plan, DISASSEMBLED, function-level reachability).
+
+**The on-hit commander purge, `0x406FC3`, a row 18 for the stock AI only.** The on-damage handler
+`0x406F80` (one caller, `0x489DA2` in the hit apply `0x489CE0`) tests the victim's def `+0x245` bit
+12 (`test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
+key) and an owner record (`[esi+0x96]`) active and of type 2 (`0x406FBF..0x406FC7`, the type test
+`0x406FC3: 80 78 73 02 75 2D`, unscaled branch `0x406FF6`, S `0x406FC9`); it then draws
+`0x4B6C30(300)` (`0x406FCE`), stores GameTime + 30 + the draw at the AI object's `+0x0D`
+(`0x406FD3..0x406FEE`), which only the builder planner's commander wait reads (`0x408186`), and
+calls `0x439EB0(unit, 0)` (`0x406FF1`), which removes every order of the unit's `+0x5C` list
+whose `+0x42` lacks flag `0x4` ([orders](orders.html)). It reads no Difficulty: a hit OTA AI commander
+drops its orders and pauses its planners 30 to 329 ticks, drawing the simulation RNG; a human's does
+not.
+
+**Impure's exemption for ImpAI** (`tagpu_impai.c`, [ImpAI in the engine](../modules/impai.html)).
+Each of the eighteen type tests, rows 1 to 17 and `0x406FC3`, becomes a 5-byte `jmp` to a stub of
+its own (the rest of the site NOPs). The stub runs the site's own compare, copied from the site,
+and its `jne` to the unscaled branch; for a type-2 record it bounds the record to one of main's ten
+(offset below `0xCEE`, divisible by `0x14B`) and, when ImpAI's seat table marks it, jumps to the
+unscaled branch, else to S. It restores `EAX`, `ECX` and `EDX`, touches no x87 register and calls
+nothing. At every one of the 36 targets the flags are dead: the first instruction that touches them
+writes them or is a call (`0x401504: sub eax,ebx` behind the jumps at `0x4014C8`; `0x4016C5` passes
+`fcomp`/`fnstsw` before its `test ah,0x40`), and no direct branch of `.text` lands inside a site
+(DISASSEMBLED, the linear sweep, 49 473 direct branches). The stubs install at attach with the seam
+and the `AI` command's redirect, all or none ([the hook map](../modules/hook-map.html), *The AI
+seat*). An OTA AI seat keeps the stock handicap and the purge.
+
+**The other tests of the controller `+0x73` against 2** (the linear sweep, DISASSEMBLED; scout I4
+of the ImpAI plan): the AI tick `0x408C4C`; the activation `0x464332`; the battle-room row refresh
+`0x445A6F` (an active AI row's READY gadget cleared, `0x445A7A` [INFERRED]); the alliance set
+`0x452AB9`, where a local type-2 target reciprocates without being asked (`0x452ADB`), and its
+mirror `0x452A3A`; `0x457BAB`, which counts active type-2 records so that a peer can add an AI in the
+battle room only while it hosts none (`0x447D85`); the RIReport builder's `0x46C5CA` and `0x46C344`
+(no effect without `reporter.dll`); the unit-sync wait `0x46E052` (`bl` = 2, `0x46E029`) and
+`0x46E0F6` (`dl` = 2), which do not wait for a type-2 row's unit data; the profile reload
+`0x40A11C` and the profile load `0x46495B`, which gives only type-2 records the per-unit-type
+texts; the target query `0x40B7B0`, where a type-2 owner's units skip the `shootme` filter
+(`0x40B8DD..0x40B8F5`); the pump's system branch `0x453EDD`, which drops a system message to a
+type-2 row; the removal's local-AI path `0x4530B7`; the battle-room chat panel `0x449100`,
+`0x449770`; the pre-game `0x450575..0x4506F6`; and the AI debug dump's label `0x40C32A`. Not tests
+against 2, though listed so before: `0x450262` and `0x45328E` compare 3, `0x450508`, `0x450AD4`
+compare 4, and `0x457C9B` compares 3 (`0x457C80`, no caller). ImpAI's exemption touches none of
+them, so an ImpAI seat is a computer seat to each.
 
 **Difficulty-dependent, but not a handicap: the AI profile.** The profile command `plan`
 (`0x406C90`, registered with `weight` `0x406DB0` and `limit` `0x406E40` at `0x406F00..0x406F2E`)
