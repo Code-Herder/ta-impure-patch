@@ -1,0 +1,30 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The template of one game of ImpAI's economy bench (tools/impai/eco_bench.py, which fills in the map and the seat under test and writes the game's own copy): an idle human at StartPos1 allied with one CORE computer seat k at StartPos(k + 1), fixed starts, mapped, true line of sight, the level's end test off, OTA AI at Hard, commanders only. Seats between them are open. The bench reads seat k's TotalMetalProduced and TotalEnergyProduced at GameTime 17100 and 18000.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": false,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "ally": 1
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1,
+    "ally": 1
+   }
+  ]
+ }
+}
