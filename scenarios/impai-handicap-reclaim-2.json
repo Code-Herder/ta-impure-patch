@@ -1,0 +1,33 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-handicap` test group's second reclaim, applied to impai-handicap.json: impai-handicap-reclaim-1.json's pair for seat 2 (ImpAI), 160 wu east in the same dry, feature-free box, so the reclaim payout's two Difficulty sites run for an ImpAI seat and take the unscaled branch.",
+ "units": [
+  {
+   "id": "cons2",
+   "type": "CORCK",
+   "owner": 2,
+   "pos": [
+    7104,
+    1632
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "wreck2"
+    }
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "wreck2",
+   "type": "armcs_dead",
+   "pos": [
+    7104,
+    1760
+   ],
+   "facing": 0
+  }
+ ]
+}

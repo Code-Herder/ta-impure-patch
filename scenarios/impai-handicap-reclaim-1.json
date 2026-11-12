@@ -1,0 +1,33 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-handicap` test group's first reclaim, applied to impai-handicap.json: a CORE construction kbot of seat 1 (OTA AI) and a wreck beside it, which it is ordered to reclaim, so the reclaim payout's two Difficulty sites (0x4238C4 energy, 0x423918 metal) run for an OTA AI seat. The box round (7024, 1712) is dry, flat and holds no map feature (heights 80 to 85 against the sea's 75, read from the map's attribute grid), and lies far from the three seats' starts.",
+ "units": [
+  {
+   "id": "cons1",
+   "type": "CORCK",
+   "owner": 1,
+   "pos": [
+    6944,
+    1632
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "wreck1"
+    }
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "wreck1",
+   "type": "armcs_dead",
+   "pos": [
+    6944,
+    1760
+   ],
+   "facing": 0
+  }
+ ]
+}
