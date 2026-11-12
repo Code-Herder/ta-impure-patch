@@ -22,6 +22,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 #include "tagpu_worldq.h"
 #include "tagpu_limits.h"
 #include "impai.h"
+#include "tagpu_resource.h"       /* tagpu_buildmenu_types: the build menus */
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
@@ -576,6 +577,32 @@ static unsigned     s_threat_n;
 SIM_ROWS_LIVE(s_threat_def, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_threat_n, NULL);
 SIM_VAR(s_threat_n, SIM_CONTENT);
 
+/* THE TYPE INFORMATION (impai.h, IMPAI_TINFO), one row a unit type of the level: its category, gains and
+   value, from the same classification as the threat table, its def and economy keys and the map's wind and
+   tide (the content view, tagpu_worldq_open_content). Content, rebuilt beside the threat table at every
+   level init, live or puppet; no row when the classification cannot be had. */
+static IMPAI_TINFO s_tinfo[TAGPU_LIM_TYPES];
+static unsigned    s_tinfo_n;
+SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
+SIM_VAR(s_tinfo_n, SIM_CONTENT);
+
+static void impai_tinfo_fill(const TASIM_ROLE_OUT* roles, int n)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    unsigned k[IMPAI_CATS];
+    const int got = tagpu_worldq_open_content(&c, &q) ? impai_tinfo_build(&q, roles, n, s_tinfo, TAGPU_LIM_TYPES) : -1;
+    if (got <= 0) {
+        memset(s_tinfo, 0, sizeof s_tinfo);
+        tagpu_logf("impai: tinfo none: the content view could not be opened");
+        return;
+    }
+    s_tinfo_n = (unsigned)got;
+    impai_tinfo_count(s_tinfo, got, k);
+    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u", k[IMPAI_C_MEX], k[IMPAI_C_ENERGY],
+               k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS]);
+}
+
 /* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
    ROLE TABLE'S ENGINE FILLER, has the ordering and the bounds): every type's classifier input from the
    engine, the classification, and its rounding into s_threat_def. The classifier's -1 (no type is a
@@ -593,6 +620,8 @@ static void impai_threat_build(void)
     int rc = -3, i;
     memset(s_threat_def, 0, sizeof s_threat_def);
     s_threat_n = 0;
+    memset(s_tinfo, 0, sizeof s_tinfo);
+    s_tinfo_n = 0;
     if (n > 0 && (in = (TASIM_ROLE_IN*)tagpu_sim_scratch((size_t)n * sizeof *in)) &&
         (out = (TASIM_ROLE_OUT*)tagpu_sim_scratch((size_t)n * sizeof *out)) &&
         (work = tagpu_sim_scratch(tasim_roles_work(n))) && tagpu_worldq_role_in(in, n) == 0)
@@ -600,6 +629,7 @@ static void impai_threat_build(void)
     if (rc == 0 || rc == -1) {
         impai_threat_from_roles(out, n, s_threat_def);
         s_threat_n = (unsigned)n;
+        impai_tinfo_fill(out, n);
         if (s_install.check)
             for (i = 0; i < n; i++)
                 tagpu_logf("impai: role %s %s %s value=%.17g dps_ground=%.17g dps_air=%.17g dps_water=%.17g "
@@ -613,6 +643,109 @@ static void impai_threat_build(void)
     tagpu_sim_scratch_free(work);
     tagpu_sim_scratch_free(out);
     tagpu_sim_scratch_free(in);
+}
+
+/* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
+   gives orders to (a factory, a constructor, a commander), as Quick Build reads it (tagpu_buildmenu_types).
+   Sorted by (side, builder), each row's types ascending in the pool. Content: a function of the level's defs,
+   files and seats' sides, rebuilt at every level init -- on a live level from the sides of the seats s_seat
+   marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) -- all or
+   none: past either table the level has no menus, and a live level then marks no seat. */
+#define IMPAI_MENUS     2048u
+#define IMPAI_MENU_POOL 65536u
+#define SIDE_ROOM       5u          /* the engine's five side records (tagpu_resource.c, seat_side) */
+#define M_SIDES         0x37F39     /* u32: the sides this game loaded                              */
+typedef struct IMPAI_MENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_MENU;
+static IMPAI_MENU s_menu[IMPAI_MENUS];
+static uint16_t   s_menu_pool[IMPAI_MENU_POOL];
+static unsigned   s_nmenu, s_npool;
+SIM_VAR(s_menu, SIM_CONTENT);
+SIM_VAR(s_menu_pool, SIM_CONTENT);
+SIM_VAR(s_nmenu, SIM_CONTENT);
+SIM_VAR(s_npool, SIM_CONTENT);
+
+/* Record i's side as the page loader reads the controlled player's (0x41AD61..0x41AD66): PlayerInfo at
+   +0x27, its byte +0x95. PlayerInfo objects live for the process. BOUND: below the sides loaded and the five
+   records; 0xFF otherwise. */
+static unsigned char record_side(const char* ta, unsigned i)
+{
+    const unsigned char* info = *(const unsigned char* const*)(ta + OFF_PLAYERS + i * PLAYER_STRIDE + PL_INFO);
+    const unsigned sides = *(const unsigned*)(ta + M_SIDES);
+    if (i >= PLAYER_COUNT || !info) return 0xFF;
+    return info[0x95] < sides && info[0x95] < SIDE_ROOM ? info[0x95] : 0xFF;
+}
+
+/* Every menu of the sides in `sides` (bit s for side s), on the LOADER thread inside 0x4919C8 after the
+   type information: 1, or 0 with no menu when a table is past its size or a read refuses. */
+static int impai_menus_build(unsigned sides)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    WQ_DEF d;
+    unsigned s, t, builders, types;
+    LARGE_INTEGER t0, t1;
+    s_nmenu = s_npool = 0;
+    if (!sides) return 1;
+    if (!s_tinfo_n || !tagpu_worldq_open_content(&c, &q)) {
+        tagpu_logf("impai: menus none: no type information");
+        return 1;
+    }
+    for (s = 0; s < SIDE_ROOM; s++) {
+        if (!(sides >> s & 1u)) continue;
+        QueryPerformanceCounter(&t0);
+        builders = types = 0;
+        for (t = 1; t < s_tinfo_n && t < c.ndefs; t++) {
+            const uint8_t cat = s_tinfo[t].cat;
+            int n;
+            if (cat != IMPAI_C_FACTORY && cat != IMPAI_C_CONS && cat != IMPAI_C_COMMANDER) continue;
+            if (!q.ops->def(&q, (int)t, &d) || !(d.flags & WQ_DF_BUILDER)) continue;
+            if (s_nmenu == IMPAI_MENUS ||
+                (n = tagpu_buildmenu_types(c.ta, c.defs, c.ndefs, t, (unsigned char)s, s_menu_pool + s_npool,
+                                           IMPAI_MENU_POOL - s_npool)) < 0) {
+                tagpu_logf("impai: menus past their tables (side %u, builder %u: %u menus, %u types)", s, t,
+                           s_nmenu, s_npool);
+                s_nmenu = s_npool = 0;
+                return 0;
+            }
+            s_menu[s_nmenu].side = (uint8_t)s;
+            s_menu[s_nmenu].builder = (uint16_t)t;
+            s_menu[s_nmenu].n = (uint16_t)n;
+            s_menu[s_nmenu].at = s_npool;
+            s_nmenu++;
+            s_npool += (unsigned)n;
+            builders++;
+            types += (unsigned)n;
+        }
+        QueryPerformanceCounter(&t1);
+        tagpu_logf("impai: menus side=%u builders=%u types=%u ms=%.1f", s, builders, types,
+                   s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0);
+    }
+    return 1;
+}
+
+/* ImpAI's WqMenuFn: builder type `builder`'s menu for seat `seat`'s side, from the menus, copied. GAME
+   thread, in an ImpAI seat's turn; the table is whole before the first step (the level init's ordering).
+   BOUND: the side as record_side bounds it; a row's types lie inside the pool by construction, and are
+   checked against it as values. */
+int tagpu_impai_menu(int seat, unsigned builder, uint16_t* out, int cap)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    unsigned char side;
+    unsigned lo = 0, hi = s_nmenu;
+    uint32_t key;
+    if (!ta || seat < 0 || seat >= PLAYER_COUNT || (side = record_side(ta, (unsigned)seat)) == 0xFF) return 0;
+    key = (uint32_t)side << 16 | builder;
+    while (lo < hi) {
+        const unsigned mid = (lo + hi) / 2;
+        const uint32_t k = (uint32_t)s_menu[mid].side << 16 | s_menu[mid].builder;
+        if (k < key) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= s_nmenu || s_menu[lo].side != side || s_menu[lo].builder != builder) return 0;
+    if (s_menu[lo].at > s_npool || s_menu[lo].n > s_npool - s_menu[lo].at) return 0;
+    if (s_menu[lo].n > cap) return -1;
+    memcpy(out, s_menu_pool + s_menu[lo].at, (size_t)s_menu[lo].n * sizeof *out);
+    return s_menu[lo].n;
 }
 
 /* ---- THE OVERLAY (tagpu_impai.h, tagpu_impai_overlay): what one seat knows, for the marker pass ----
@@ -913,19 +1046,29 @@ SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-o
    the table, and the recorder is the only writer of what a recording carries.
    THE SEAT CHOICE is impure.cfg's `seatai`, bit i for settings entry i, which is record i: the
    seat fill 0x47A760 activates record i for entry i on every path that seats a skirmish
-   (engine/sim.md, Seating a level). */
+   (engine/sim.md, Seating a level).
+   THE CONTENT -- the reach labels, the threat table and type information, the menus -- is built here on
+   every level. The menus are the sides' that ImpAI plays: on a live level the marked seats', so a level whose
+   menus are past their tables marks none; on a puppet level the header's (tagpu_replay_seat_ai). */
 void tagpu_impai_level_init(void)
 {
     const char* ta;
     char list[2 * PLAYER_COUNT + 1];
-    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want;
+    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want, sides = 0;
+    unsigned char side;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
+    s_nmenu = s_npool = 0;
     s_ovc.built = 0;
     impai_observe_clear();
     impai_reach_build();
     impai_threat_build();
-    if (tagpu_puppet_on()) return;
+    if (tagpu_puppet_on()) {
+        for (i = 0; i < PLAYER_COUNT; i++)
+            if (tagpu_replay_seat_ai(i, &side) && side < SIDE_ROOM) sides |= 1u << side;
+        impai_menus_build(sides);
+        return;
+    }
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
     for (i = 0; i < PLAYER_COUNT; i++) {
@@ -949,8 +1092,13 @@ void tagpu_impai_level_init(void)
         if (!*(const uint32_t*)(rec + PL_ACTIVE) || (uint8_t)rec[PL_CONTROL] != CTRL_AI) continue;
         if (!(want & (1u << i))) continue;
         s_seat[i] = IMPAI_ON;
+        if ((side = record_side(ta, i)) != 0xFF) sides |= 1u << side;
         if (n) list[n++] = ',';
         list[n++] = (char)('0' + i);
+    }
+    if (!impai_menus_build(sides)) {
+        memset(s_seat, 0, sizeof s_seat);
+        n = 0;
     }
     list[n] = 0;
     tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);

@@ -1367,6 +1367,35 @@ static const WORLDQ_OPS OPS = {
    records below TAGPU_PK_DESIGN_SLOTS and the slot count main+0x14351 one more than it; the seat's block
    (record +0x67 .. +0x6B) inside the array on record boundaries. The input path cannot run while the loader
    owns any of it. */
+/* THE CONTENT VIEW. What its ops read at the level init: the map's size and sea level, the defs, and the
+   wind and tide, which the loader body 0x4917D0 sets before PLAYERS 0x4919C8 (DISASSEMBLED: it writes the
+   wind's divisor main+0x37EC8 at 0x4918ED and calls the wind step 0x490C40, which reads windmin and windmax,
+   at 0x491903). Record 0 stands for the seat, so the economy and explored reads stay inside the main block;
+   the slot count 0 refuses every unit (live_unit) and every site (wq_site_ok's ignore bound). */
+int tagpu_worldq_open_content(WQ_ENGINE* ctx, WORLDQ* out)
+{
+    char* state;
+    memset(ctx, 0, sizeof *ctx);
+    memset(out, 0, sizeof *out);
+    if (!(ctx->ta = *(char**)TA_MAIN_PP)) return 0;
+    ctx->w = *(int*)(ctx->ta + OFF_MAP_W16); ctx->h = *(int*)(ctx->ta + OFF_MAP_H16);
+    if (ctx->w < 2 || ctx->h < 2 || (ctx->w & 1) || (ctx->h & 1) || ctx->w > 0x7FFF || ctx->h > 0x7FFF ||
+        (unsigned)ctx->w > 0x7FFFFFFFu / FT_STRIDE / (unsigned)ctx->h) return 0;
+    ctx->ndefs = *(unsigned*)(ctx->ta + OFF_UDEFCOUNT);
+    if (!ctx->ndefs || ctx->ndefs > TAGPU_LIM_TYPES) return 0;
+    ctx->defs = *(char**)(ctx->ta + D_BASE);
+    ctx->grid = *(char**)(ctx->ta + OFF_FEATMAP);
+    state = *(char**)(ctx->ta + 0x391E9);
+    if (!ctx->defs || !ctx->grid || !state) return 0;
+    ctx->threshold = *(unsigned*)(state + 0xD30) > 255u ? 255 : (int)*(unsigned*)(state + 0xD30);
+    ctx->rec = ctx->ta + OFF_PLAYERS;
+    ctx->first = 1;
+    ctx->site = (WqSiteFn)0x0047D2E0u;
+    out->ops = &OPS;
+    out->self = ctx;
+    return 1;
+}
+
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu)
 {
     char *state, *end;

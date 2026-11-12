@@ -62,6 +62,11 @@ int      tagpu_worldq_def_kind(const void* def);
    any bound fails (in play, the map, the defs, the unit array and the seat's block; the seat below 10 and
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target or WQ_SITE_SEAT with no thunk. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
+/* Opens the level's content view: ndefs, def, def_econ and map answer as a seat's view does; no unit is live
+   in it (its slot count is 0), so every unit op answers nothing and site_ok, can, order and queue refuse.
+   It needs the map and the defs only, so the level init opens it on the LOADER thread inside 0x4919C8,
+   live or puppet (tagpu_impai.c, the type information). 0 when a bound fails. */
+int tagpu_worldq_open_content(WQ_ENGINE* ctx, WORLDQ* out);
 
 /* The line-of-sight rule `observe` applies, alone, for ImpAI's self-check against the engine's own
    0x465AC0: 1 when the seat's sight shows the live unit at `slot`, 0 when not, -1 for no live unit or no

@@ -239,19 +239,21 @@ static int page_file(const World* w, const char* d, unsigned page, unsigned char
     return 1;
 }
 
-static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
+/* The types builder `id`'s pages offer for `side` into out, ascending: the count, -1 when cap is short or the
+   read's memory cannot be had. `say` logs each page that cannot be read; `pages` and `read` count the pages
+   chosen and read. */
+static int menu_offers(const World* w, unsigned id, unsigned char side, uint16_t* out, unsigned cap, int say,
+                       unsigned* pages_out, unsigned* read_out)
 {
     const char* d = w->defs + id * D_STRIDE;
     unsigned char pages[TAGPU_BM_PAGES], *offered;
     TAGPU_BM_ENGINE eng;
     TAGPU_BM_ENTRY* entries;
-    LARGE_INTEGER t0, t1, hz;
-    unsigned np, nentries, p, t, read = 0, extractors = 0, geos = 0;
-    QueryPerformanceCounter(&t0);
+    unsigned np, nentries, p, t, read = 0, n = 0;
     np = tagpu_buildmenu_pages((*(const unsigned*)(d + D_FLAGS) & 0x80000000u) != 0,
                                *(const unsigned char*)(d + 0x22E), pages);
     entries = dl_entries(w, *(const unsigned short*)(d + 0x21E), &nentries);
-    if (!(offered = (unsigned char*)calloc(w->ndefs, 1))) { free(entries); return; }
+    if (!(offered = (unsigned char*)calloc(w->ndefs, 1))) { free(entries); return -1; }
     eng.type_of = bm_type_of; eng.armable = bm_armable; eng.ctx = (void*)w; eng.ndefs = w->ndefs;
     for (p = 0; p < np; p++) {
         char name[64], path[0x100 + 64], why[160];
@@ -268,19 +270,57 @@ static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
             else read++;
             free(blob);
         }
-        if (refused) tagpu_logf("resource: menu %.31s page %u: %s", d + 0x20, pages[p], refused);
+        if (refused && say) tagpu_logf("resource: menu %.31s page %u: %s", d + 0x20, pages[p], refused);
     }
     free(entries);
-    for (t = 1; t < w->ndefs; t++) if (offered[t]) m->n++;
-    if (m->n && (m->types = (unsigned short*)malloc(m->n * sizeof *m->types)) != NULL) {
-        unsigned k = 0;
-        for (t = 1; t < w->ndefs; t++) if (offered[t]) {
-            int kd = tagpu_worldq_def_kind(w->defs + t * D_STRIDE);
-            m->types[k++] = (unsigned short)t;
-            extractors += kd == WQ_KIND_MEX; geos += kd == WQ_KIND_GEO;
+    for (t = 1; t < w->ndefs; t++)
+        if (offered[t]) {
+            if (n == cap) { free(offered); return -1; }
+            out[n++] = (uint16_t)t;
         }
-    } else m->n = 0;
     free(offered);
+    if (pages_out) *pages_out = np;
+    if (read_out) *read_out = read;
+    return (int)n;
+}
+
+/* THE TWO THREADS. Quick Build calls this through build_menu on the GAME thread in play (the ordering
+   above); ImpAI's level init calls it on the LOADER thread inside PLAYERS (0x4919C8), where the loader body
+   0x4917D0 has already loaded the defs (0x42D2E0 at 0x4918CA) and the download records (0x42DCF0 at
+   0x4918CF) and itself calls this same file layer (0x4290F0, 0x4C2F60, 0x4BBC40, 0x488B10, GUI_Load
+   0x4AA8F0): the same thread and phase as the engine's own reads. The two never overlap: in play no loader
+   runs, and during the load the game thread is in the load state, where no Quick Build gate is reached.
+   BOUND: every bound the reader has -- page_bytes' 1 MiB, dl_entries' five entries, bm_type_of's type
+   below ndefs, the side below the sides loaded and the five records (else only a builder's own pages). */
+int tagpu_buildmenu_types(const char* ta, const char* defs, unsigned ndefs, unsigned id, unsigned char side,
+                          uint16_t* out, unsigned cap)
+{
+    World w;
+    const unsigned sides = ta ? *(const unsigned*)(ta + M_SIDES) : 0;
+    if (!ta || !defs || !ndefs || ndefs > TAGPU_LIM_TYPES || !id || id >= ndefs) return -1;
+    memset(&w, 0, sizeof w);
+    w.ta = (char*)ta;
+    w.defs = (char*)defs;
+    w.ndefs = ndefs;
+    w.player = -1;
+    return menu_offers(&w, id, side < sides && side < SIDE_ROOM ? side : 0xFF, out, cap, 0, NULL, NULL);
+}
+
+static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
+{
+    const char* d = w->defs + id * D_STRIDE;
+    LARGE_INTEGER t0, t1, hz;
+    unsigned np = 0, read = 0, k, extractors = 0, geos = 0;
+    int n;
+    QueryPerformanceCounter(&t0);
+    if (!(m->types = (unsigned short*)malloc(w->ndefs * sizeof *m->types))) return;
+    n = menu_offers(w, id, side, m->types, w->ndefs, 1, &np, &read);
+    m->n = (unsigned short)(n > 0 ? n : 0);
+    if (!m->n) { free(m->types); m->types = NULL; }
+    for (k = 0; k < m->n; k++) {
+        int kd = tagpu_worldq_def_kind(w->defs + m->types[k] * D_STRIDE);
+        extractors += kd == WQ_KIND_MEX; geos += kd == WQ_KIND_GEO;
+    }
     QueryPerformanceCounter(&t1);
     QueryPerformanceFrequency(&hz);
     tagpu_logf("resource: menu %.31s side=%d pages=%u read=%u offers=%u extractors=%u geos=%u ms=%.2f",

@@ -35,6 +35,9 @@ void tagpu_impai_level_end(void);
    an index past the ten): the recording header's RT_PLAYER byte 15 (tagpu_recorder.c,
    header_build). */
 unsigned tagpu_impai_seat_ai(unsigned i);
+/* ImpAI's WqMenuFn (tagpu_worldq.h): builder type `builder`'s build menu for seat `seat`'s side, from the
+   menus the level init read; the count, 0 when the side has none, -1 when cap is short. Game thread. */
+int tagpu_impai_menu(int seat, unsigned builder, uint16_t* out, int cap);
 
 /* THE OVERLAY's fill, from the frame packet's publisher on the GAME thread, inside the in-play draw:
    while the test lever tagpu_impaiov.on names a seat that ImpAI plays or has knowledge for, its header
