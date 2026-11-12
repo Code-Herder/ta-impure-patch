@@ -1474,9 +1474,11 @@ static void op_new(const TJV* v)
         error(err);
         return;
     }
-    /* sim.js's absent ctx is side 0, no casting, Interface Type 1 */
-    ctx.side = num_int(tj_get(cv, "side"), 0);
-    ctx.iface = num_int(tj_get(cv, "iface"), 1);
+    /* an absent or null ctx is side 0, no casting, Interface Type 1, the context the demos are authored in; a
+       ctx given names its own side and Interface Type, and one it leaves out is none, which
+       tagpu_wikisim_init refuses (a side only with a layout) */
+    ctx.side = tj_is(cv, TJ_OBJ) ? num_int(tj_get(cv, "side"), -1) : 0;
+    ctx.iface = tj_is(cv, TJ_OBJ) ? num_int(tj_get(cv, "iface"), -1) : 1;
     ctx.cast = cast ? cast->u.casting : NULL;
     ctx.rival = rival ? rival->u.casting : NULL;
     ctx.cob = packs && !tj_is(tj_get(cv, "scripts"), TJ_FALSE) ? &packs->u.packs->cob : NULL;
