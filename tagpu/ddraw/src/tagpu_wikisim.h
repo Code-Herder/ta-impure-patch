@@ -765,10 +765,11 @@ typedef struct {
                                        sim stands at, since every step feeds its tick: the
                                        clock an input reads                                    */
 
-    /* scratch: the snap rules' (tasim_snap.h), the placement gesture's (tasim_place.h), and the
-       selection both read, SNAP_UNITS_MAX slots; the view's arrays */
+    /* scratch: the snap rules' (tasim_snap.h), the placement gesture's (tasim_place.h), the reclaim
+       sweep's (tasim_sweep.h), and the selection they read, SNAP_UNITS_MAX slots; the view's arrays */
     struct SNAP_SCRATCH*  snap;
     struct PLACE_SCRATCH* place;
+    struct SWEEP_SCRATCH* sweep;
     uint16_t*        snap_builders;
     WIKIVIEW         view;
     WIKIVUNIT*       vunit;
