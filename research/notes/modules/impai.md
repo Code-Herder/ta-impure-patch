@@ -72,7 +72,7 @@ The test lever `tagpu_impaiov.on`, `<seat>[:<layer>]` with the layer `ground`, `
 
 ## The cost
 
-`QueryPerformanceCounter` around each turn's observation -- the view's open and the knowledge tick, not the self-checks nor the stock tick -- kept per seat as the largest, the sum and a log2 histogram of microseconds (`SIM_PRIVATE`); the level end logs `impai: cost seat=<i> ticks=<n> max_us=<n> mean_us=<x> p99_us=<n> slice=<n> visits=<n> nslots=<n>`, p99 the upper edge of its bucket. A measurement, never a verdict: the gate judges the counts of the `work` line. The test lever `tagpu_impai_budget.on` raises the slice to the design point's 15 001 slots and the radar pass to 10^6 visits a tick, to measure each loop's cost per unit of work. The measured figures and the budgets they set: [ImpAI for the player](../impai/player.html), *Cost*.
+`QueryPerformanceCounter` around each turn's observation -- the view's open and the knowledge tick, not the self-checks nor the stock tick -- kept per seat as the largest, the sum and a log2 histogram of microseconds (`SIM_PRIVATE`); the level end logs `impai: cost seat=<i> ticks=<n> max_us=<n> mean_us=<x> p99_us=<n> slice=<n> visits=<n> nslots=<n> hist=<edge>:<turns>,...`, p99 and each histogram bucket by its upper edge in microseconds. A measurement, never a verdict: the gate judges the counts of the `work` line. The test lever `tagpu_impai_budget.on` raises the slice to the design point's 15 001 slots and the radar pass to 10^6 visits a tick, to measure each loop's cost per unit of work. The measured figures and the budgets they set: [ImpAI for the player](../impai/player.html), *Cost*.
 
 ## The seat table
 

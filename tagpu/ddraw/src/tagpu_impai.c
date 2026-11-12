@@ -1,6 +1,7 @@
 /* tagpu_impai.c -- ImpAI's seam in the engine and its seat table (tagpu_impai.h). */
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "tagpu_impai.h"
 #include "tagpu_simreg.h"
@@ -409,13 +410,20 @@ static void impai_observe_end(unsigned now)
             /* p99: the upper edge of the bucket the 99th percentile turn falls in */
             const unsigned turns = s_obs.ticks[i] + s_obs.refused[i];
             unsigned k, below = 0, p99 = 0;
+            char hist[24 * 24] = "";   /* 24 buckets of at most 22 characters: never cut */
+            int at = 0;
             for (k = 0; k < 24u; k++) {
                 below += s_obs.cost_hist[i][k];
-                if ((double)below >= 0.99 * turns) { p99 = 2u << k; break; }
+                if (!p99 && (double)below >= 0.99 * turns) p99 = 2u << k;
+                /* each bucket as <upper edge in us>:<turns> */
+                if (s_obs.cost_hist[i][k] && at >= 0 && at < (int)sizeof hist)
+                    at += _snprintf(hist + at, sizeof hist - at, "%s%u:%u", at ? "," : "", 2u << k,
+                                    s_obs.cost_hist[i][k]);
             }
-            tagpu_logf("impai: cost seat=%u ticks=%u max_us=%u mean_us=%.1f p99_us=%u slice=%u visits=%u nslots=%u",
-                       i, turns, s_obs.cost_max[i], s_obs.cost_sum[i] / (turns ? turns : 1), p99,
-                       s_budget.obs_slice, s_budget.radar_visits, s_obs.nslots_max);
+            hist[sizeof hist - 1] = 0;
+            tagpu_logf("impai: cost seat=%u ticks=%u max_us=%u mean_us=%.1f p99_us=%u slice=%u visits=%u nslots=%u "
+                       "hist=%s", i, turns, s_obs.cost_max[i], s_obs.cost_sum[i] / (turns ? turns : 1), p99,
+                       s_budget.obs_slice, s_budget.radar_visits, s_obs.nslots_max, hist);
         }
     if (!s_install.check) return;
     for (i = 0; i < PLAYER_COUNT; i++)
