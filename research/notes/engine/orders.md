@@ -537,9 +537,17 @@ profile: it loads `ai\<aiprofile>.txt`, the map's OTA key `aiprofile` (`0x504B18
 `ai\default.txt` (`0x507308`, `0x46490C..0x464916`), then applies `0x409F80(i)` and `0x40A040(i)`
 (`0x46494E..0x464982`). The tick `0x408C40` is reached from one instruction only, `0x465031`
 (`call`, `E8 0A 3C FA FF`): no other call, no stored pointer to it, and no branch into the rel32
-bytes `0x465032..0x465035`. At that call `ECX` is the AI object (`0x46502A`), `EDI` the record and
-`ESI` the record's slot index, below 10. A puppet seat (active type 3) holds no object, so nothing
-reached from `0x465031` runs for a puppet.
+bytes `0x465032..0x465035`. The gate before it (`0x464FCE..0x46502F`): the record is seated
+(`[rec]` ≠ 0), its `+0x73` is 1, 2 or 3, its `+0x146` is not 10, and `+0x74` is set; the
+controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` is the AI object
+(`0x46502A`), `EDI` the record and `ESI` the record's index, the loop counter `BL` zero-extended
+(`0x464FAB..0x464FB5`); after it the phase reads `ESI` (`0x465036` `push esi`), `EDI`
+(`0x46503C`) and `BL` (`0x46506A`), and nothing reads `EAX`, `ECX` or `EDX` before writing it:
+`0x40B2C0` takes its one stack argument and loads all three first (`0x40B2C0..0x40B2D6`). The tick takes no
+stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
+type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Under
+`tagpu_impai.on` Impure redirects this call to a wrapper that always calls the tick
+([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
 

@@ -33,7 +33,7 @@ HOOKMAP = REPO / "research/notes/modules/hook-map.md"
 
 ADDR = r"0x0*4[0-9A-Fa-f]{5}"
 INSTALLER = re.compile(
-    r"\b(?:tagpu_detour_(?:write|leaf|leaf_call|gate|observe|land)|patch_bytes|VirtualProtect)"
+    r"\b(?:tagpu_detour_(?:write|leaf|leaf_call|gate|observe|land|redirect)|patch_bytes|VirtualProtect)"
     r"\s*\(\s*((?:[^,()]|\([^()]*\))+),")
 # a parameter declaration (`unsigned int addr`, `const char* s`): two words, no operator
 DECL = re.compile(r"\s*(?:const\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*[\s\*]+\**[A-Za-z_]\w*\s*(?:\[\w*\])?\s*$")

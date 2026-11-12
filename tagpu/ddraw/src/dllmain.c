@@ -41,6 +41,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
+#include "tagpu_impai.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -306,6 +307,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: the demo recorder's test lever tagpu_rec.decline (tagpu_recorder.h), read
            before the registry closes its lever list for the same reason. */
         tagpu_rec_lever_init();
+
+        /* tagpu: ImpAI's seam (tagpu_impai.h). No-op unless "tagpu_impai.on" names seats; then
+           the players phase's call of the stock AI tick, 0x465031, is byte-matched and redirected
+           to a wrapper that always calls the stock tick, so the recorder's observer on that
+           tick's entry 0x408C40 still runs. Before the registry closes its lever list. */
+        tagpu_impai_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
