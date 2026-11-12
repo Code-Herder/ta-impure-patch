@@ -10,7 +10,8 @@
    the build cursor 0x4197D0 (0x499241, mode 14 in the viewport) and then routes the click:
 
    - an after-observer on 0x4197D0 evaluates: the shape, each site judged by the engine's own site
-     test, the colours. It runs after the engine has written the cursor rectangle, the altitude
+     test, the colours -- the rules are tasim_place.c's, over the engine's WORLDQ
+     (tagpu_worldq.c). It runs after the engine has written the cursor rectangle, the altitude
      and bit 6 for this record, so the cursor site is the engine's (snapped by the resource
      module's before-observer when that applies).
    - the click routing's stub at 0x4993BF (tagpu_route.c) hands it the press and the release of
@@ -35,12 +36,12 @@
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
 #include "tagpu_worldq.h"
+#include "tasim_place.h"
 
 #define D_STRIDE 0x249u
 #define D_BASE   0x1439B
 #define D_FLAGS  0x241
 #define U_FLAGS  0x110
-#define U_ORDERS 0x5C
 #define M_RECORD 0x2C76      /* the six-dword mouse record the handler acts on */
 #define M_RECT   0x2C92      /* the build cursor: x0, altitude, z0, x1, altitude, z1 (world px) */
 #define M_POINT  0x2CAA      /* the world point, 16.16 */
@@ -51,57 +52,31 @@
 
 #define VA_CURSOR      0x004197D0u
 
-/* The caps. A commit makes at most PLACE_ORDER_BUDGET orders (sites x builders): the preview
-   cuts the shape to what would be ordered. A builder's list stops growing at PLACE_LIST_CAP
-   nodes (tagpu_placegeo.h, shared with the in-game wiki's simulation), below the 4096 nodes a
-   recorded list holds. LIST_WALK bounds every walk of a list. */
-#define PLACE_ORDER_BUDGET 4096u
-#define PLACE_PLANS        16384u
-#define LIST_WALK          16384u
 #define NOTE_LOGS          8u
 
 /* 0x4C1B80's ids (its table at 0x4C1C48 maps them onto GetAsyncKeyState, import 0x4FC350) */
 enum { KEY_SHIFT = 0xF9, KEY_CONTROL = 0xFA, KEY_MENU = 0xFB };
 
 typedef unsigned (__stdcall* SiteTest)(const void* def, unsigned cell, unsigned zero, const void* player);
-typedef unsigned (__stdcall* SiteHeight)(void);
-typedef unsigned (__stdcall* BlockedHeight)(const void* def, unsigned cell);
-typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
-typedef void (__stdcall* RemoveOrder)(void*, const void*);
-typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 typedef int (__stdcall* KeyDown)(int);
 typedef unsigned short (__stdcall* HoverUnit)(void);
 typedef void (__stdcall* Sound)(const char*, int);
 
-/* One evaluation's or one commit's view: the armed type, the site test's arguments and the
-   builder set, held as slot indices. */
+/* One evaluation's or one commit's view: the armed type and the site test's arguments, and for
+   the rules (tasim_place.c) the player's view opened with the build cursor's own site test and
+   the player's selected units, slots ascending. */
 typedef struct {
     TagpuWorld w;
     const char* def;
     unsigned type;
     int fx, fz;
     const char* player;
-    unsigned char ground, vtol;
-    unsigned nb;
-    uint16_t slot[TAGPU_LIM_UNITS];
-    unsigned char action[TAGPU_LIM_UNITS];
+    WQ_ENGINE e;
+    WORLDQ q;
+    PLACE_IN in;
 } Ctx;
-
-typedef struct { int16_t cx, cz; int32_t alt; uint8_t colour; } Site;
-
-/* A node of a builder's list, copied as values, in three arrays indexed alike so that one
-   builder's orders are a contiguous run the take-off rule (place_take_offs_one) reads as given:
-   s_order[p] holds the node's position and `match` (the builder's own build action, the nodes
-   the take-off rule reads), s_by[p] the site that takes it off (PLACE_NO_SITE: none), and
-   s_plan[p] the rest -- `build` for a placed build with a type (the nodes the ring target
-   reads), `b` the builder, `place` the node's position in its list, `held` its +0x42 bit
-   0x40000. */
-typedef struct {
-    uint16_t type, b, place;
-    uint8_t build, held;
-} Plan;
-_Static_assert(LIST_WALK <= PLACE_NO_SITE && PLACE_MAX_SITES < PLACE_NO_SITE &&
-               TAGPU_LIM_UNITS <= PLACE_NO_SITE, "a plan's builder, place and site fit its fields");
+_Static_assert(WQ_LIST_MAX <= PLACE_NO_SITE && PLACE_MAX_SITES < PLACE_NO_SITE &&
+               TAGPU_LIM_UNITS <= PLACE_BUILDERS_MAX, "a plan's place and site fit its fields, a seat's units the set");
 
 static int s_armed;
 
@@ -123,14 +98,14 @@ static struct {
     int cur_cx, cur_cz;        /* the engine's cursor site: the build rectangle / 16 */
     int shape;                 /* PLACE_NONE: the engine's own square stands */
     unsigned n;
-    Site site[PLACE_MAX_SITES];
+    PLACE_SITE site[PLACE_MAX_SITES];
 } s_eval;
 static struct { int active; uint16_t type; int16_t cx, cz; int stale[6]; } s_gesture;
 
-static Plan s_plan[PLACE_PLANS];
-static PlaceOrder s_order[PLACE_PLANS];
-static uint16_t s_by[PLACE_PLANS];
-static unsigned s_nplan;
+/* the rules' scratch and the selection they read: one evaluation's or commit's at a time, all on
+   this thread */
+static PLACE_SCRATCH s_ps;
+static uint16_t s_sel[PLACE_BUILDERS_MAX];
 
 static void* s_ret[4];
 static unsigned s_depth;
@@ -152,10 +127,6 @@ static int origin(int centre, int foot)
     return (int)((unsigned)centre - ((unsigned)foot << 19) + 0x80000u) >> 20;
 }
 
-/* The order position of a site: 0x419670's (0x419704..0x419717), wrapping as its `shl` does. */
-static int site_x(const Ctx* c, const Site* s) { return (int)((unsigned)(2 * s->cx + c->fx) << 19); }
-static int site_z(const Ctx* c, const Site* s) { return (int)((unsigned)(2 * s->cz + c->fz) << 19); }
-
 /* The cell word the site test takes: x in the low half, z in the high, each a signed 16-bit
    value the test bounds itself (0x47D302..0x47D352: x, z >= 1, x + fx < W, z + fz < H), as
    0x47D820 does (0x47D834..0x47D871). */
@@ -166,51 +137,16 @@ static unsigned cell_word(int cx, int cz)
 
 static int key_down(int id) { return ((KeyDown)0x004C1B80u)(id) != 0; }
 
-static int build_node(const TagpuWorld* w, const char* n)
+/* the build square's colour of a judged site: the GUI colour table's index */
+static uint8_t colour_of(const PLACE_SITE* s)
 {
-    const char* first = *(const char* const*)0x00512344u;
-    const char* last = *(const char* const*)0x00512348u;
-    uintptr_t bytes;
-    unsigned action = (unsigned char)n[4], type = *(unsigned short*)(n + 0x36);
-    if (!first || (uintptr_t)last < (uintptr_t)first) return 0;
-    bytes = (uintptr_t)last - (uintptr_t)first;
-    /* The loader's descriptor array is fixed for the level, stride 0x19. Capability bit 0 marks
-       a placed build (the one 0x438C00 draws a rectangle for), not a factory's count node. */
-    return bytes % 0x19u == 0 && action < bytes / 0x19u &&
-        (*(unsigned*)(first + action * 0x19u + 0x0C) & 1u) &&
-        type && type < w->ndefs && *(int*)(n + 0x22) > 0 && *(int*)(n + 0x2A) > 0;
+    return s->state == PLACE_SITE_FREE ? PLACE_OK : s->state == PLACE_SITE_TAKE ? PLACE_TOGGLE : PLACE_BLOCKED;
 }
 
-/* The build action 0x419670 gives the unit at `slot`, or 0 when it is not in the builder set.
-   The set is 0x419670's -- the player's block, selected (+0x110 bit 4), a builder def (+0x241
-   bit 6), VTOL_MOBILEBUILD when the def has +0x241 bit 11 (0x419755..0x41979F) -- narrowed to
-   units that are alive, not excluded and owned by the player, which 0x419670 does not test.
-   CANBUILD is not consulted: 0x419670 does not consult it either. */
-static unsigned char builder_action(const Ctx* c, unsigned slot)
-{
-    const char* u = tagpu_route_unit(&c->w, slot);
-    unsigned id, flags;
-    if (!u || *(unsigned char*)(u + U_OWNER) != c->w.player ||
-        !(*(unsigned*)(u + U_FLAGS) & 0x10u) || !(id = tagpu_route_def_id(&c->w, u))) return 0;
-    flags = *(unsigned*)(c->w.defs + id * D_STRIDE + D_FLAGS);
-    if (!(flags & 0x40u)) return 0;
-    return (flags & 0x800u) ? c->vtol : c->ground;
-}
-
-/* Builder `b` re-derived from its slot, or NULL when it no longer is one. Every root call is
-   preceded by this: a unit pointer is a fixed-array address, never a promise that the unit
-   still builds for us. */
-static char* live_builder(const Ctx* c, unsigned b)
-{
-    unsigned char a = builder_action(c, c->slot[b]);
-    return a && a == c->action[b] ? tagpu_route_unit(&c->w, c->slot[b]) : NULL;
-}
-
-/* The view of this record: mode 14, the armed type bounded by UNITINFOCount, its footprint,
-   and with `builders` the builder set and the two build actions -- 0x438760 writes a byte, 0
-   for a name it does not find (0x43880F, 0x438819), and is given the engine's own names at
-   0x502654 and 0x502640, as 0x419670 gives them. */
-static int context(Ctx* c, int builders)
+/* The view of this record: mode 14, the armed type bounded by UNITINFOCount, its footprint, and
+   with `rules` the player's WORLDQ, judged by the build cursor's own site test (WQ_SITE_CURSOR),
+   and the player's selected live units, of which tasim_place_builders takes the builders. */
+static int context(Ctx* c, int rules)
 {
     unsigned i;
     if (!tagpu_route_world(&c->w) || *(unsigned char*)(c->w.ta + M_MODE) != 14) return 0;
@@ -219,130 +155,27 @@ static int context(Ctx* c, int builders)
     c->def = c->w.defs + c->type * D_STRIDE;
     if (!footprint(c->def, &c->fx, &c->fz)) return 0;
     c->player = c->w.ta + 0x1B63 + c->w.player * 0x14B;
-    c->nb = 0;
-    if (!builders) return 1;
-    c->ground = c->vtol = 0;
-    ((Action)0x00438760u)(&c->ground, (const char*)0x00502654u);
-    ((Action)0x00438760u)(&c->vtol, (const char*)0x00502640u);
-    for (i = c->w.first; i <= c->w.last && c->nb < TAGPU_LIM_UNITS; i++) {
-        unsigned char a = builder_action(c, i);
-        if (!a) continue;
-        c->slot[c->nb] = (uint16_t)i; c->action[c->nb] = a; c->nb++;
+    if (!rules) return 1;
+    if (!tagpu_worldq_open(&c->e, &c->q, (int)c->w.player, WQ_SITE_CURSOR, NULL)) return 0;
+    memset(&c->in, 0, sizeof c->in);
+    c->in.type = (int)c->type;
+    for (i = c->w.first; i <= c->w.last && c->in.nselected < (int)PLACE_BUILDERS_MAX; i++) {
+        const char* u = tagpu_route_unit(&c->w, i);
+        if (u && *(const unsigned char*)(u + U_OWNER) == c->w.player && (*(const unsigned*)(u + U_FLAGS) & 0x10u))
+            s_sel[c->in.nselected++] = (uint16_t)i;
     }
+    c->in.selected = s_sel;
     return 1;
-}
-
-/* The builders' lists, copied as values, builder by builder and each in list order. Walked on
-   the game thread, the one thread that links, unlinks and frees order nodes; each walk is
-   bounded and stops at a node another unit owns. 0 when the table overflows: the caller then
-   refuses every site rather than order what it could not check. */
-static int snapshot(const Ctx* c)
-{
-    unsigned b;
-    s_nplan = 0;
-    for (b = 0; b < c->nb; b++) {
-        const char *u = tagpu_route_unit(&c->w, c->slot[b]), *n;
-        unsigned place;
-        if (!u) continue;
-        for (n = *(const char* const*)(u + U_ORDERS), place = 0; n && place < LIST_WALK;
-             n = *(const char* const*)(n + 0x4A), place++) {
-            int match, build;
-            Plan* p;
-            if (*(const char* const*)(n + 0x0E) != u) break;
-            match = (unsigned char)n[4] == c->action[b];
-            build = build_node(&c->w, n);
-            if (!match && !build) continue;
-            if (s_nplan >= PLACE_PLANS) return 0;
-            s_order[s_nplan].x = *(const int*)(n + 0x22);
-            s_order[s_nplan].z = *(const int*)(n + 0x2A);
-            s_order[s_nplan].match = (uint8_t)match;
-            s_by[s_nplan] = PLACE_NO_SITE;
-            p = &s_plan[s_nplan++];
-            p->type = build ? *(const unsigned short*)(n + 0x36) : 0;
-            p->b = (uint16_t)b;
-            p->place = (uint16_t)place;
-            p->build = (uint8_t)build;
-            p->held = (*(const unsigned*)(n + 0x42) & 0x40000u) != 0;
-        }
-    }
-    return 1;
-}
-
-/* The plans of builder `b` are s_plan[*first .. return): the snapshot keeps them contiguous and
-   in builder order, so a caller walking b upwards passes the previous end as `from`. */
-static unsigned plans_of(unsigned b, unsigned from, unsigned* first)
-{
-    unsigned end;
-    while (from < s_nplan && s_plan[from].b < b) from++;
-    for (end = from; end < s_nplan && s_plan[end].b == b; end++) {}
-    *first = from;
-    return end;
-}
-
-/* A site a stock Shift-click would toggle off instead of placing: some builder has a node of
-   its own build action within 16 world units of the site's order position (0x43AFC0's first
-   match; it compares no build type). */
-static int toggles(const Ctx* c, const Site* s)
-{
-    int x = site_x(c, s), z = site_z(c, s);
-    unsigned i;
-    for (i = 0; i < s_nplan; i++)
-        if (s_order[i].match && place_within(x, z, s_order[i].x, s_order[i].z)) return 1;
-    return 0;
-}
-
-/* THE TAKE-OFF RULE, the one place a site's action is decided: the preview's colours and the
-   commit's removals and appends are both read from what this leaves -- each plan's s_by and
-   each site's colour -- so for the same queues the preview shows what the release does. The
-   release judges again, against the queues as they stand at the release (commit), so a change
-   since the last drawn frame changes its result: a tick finishing or starting a queued build, a
-   builder dying or the selection changing (and with it the order budget), a nanoframe turning a
-   site red. A release over the side panel acts on a snapshot newer than any preview, since this
-   evaluation runs only from 0x4197D0, which the handler calls only with main+0x2CC6 bit 1 (the
-   cursor in the viewport, 0x499236..0x499241), while the route at 0x4993BF and the release reach
-   place_button wherever the cursor is.
-
-   A ring takes nothing off: a site a stock Shift-click would toggle is yellow, and left out.
-
-   Every other shape is TA's Shift-click per site, judged against each builder's queue as it
-   stood before the gesture: place_take_offs_one (tagpu_placegeo.h) per builder, over its run of
-   the snapshot, with the red sites refused. A site that takes an order off from some builder is
-   yellow. The in-game wiki's simulation calls the same function. */
-static void take_offs(const Ctx* c, Site* s, unsigned n, int ring)
-{
-    PlaceSitePos pos[PLACE_MAX_SITES];
-    uint8_t took[PLACE_MAX_SITES];
-    unsigned i, p, first, end, b;
-    for (p = 0; p < s_nplan; p++) s_by[p] = PLACE_NO_SITE;
-    if (ring) {
-        for (i = 0; i < n; i++)
-            if (s[i].colour != PLACE_BLOCKED && toggles(c, &s[i])) s[i].colour = PLACE_TOGGLE;
-        return;
-    }
-    /* a site turns only from green to yellow below, never to or from red, so the refused set
-       holds for every builder */
-    for (i = 0; i < n; i++) {
-        pos[i].x = site_x(c, &s[i]);
-        pos[i].z = site_z(c, &s[i]);
-        pos[i].refused = s[i].colour == PLACE_BLOCKED;
-    }
-    for (b = end = 0; b < c->nb; b++) {
-        end = plans_of(b, end, &first);
-        place_take_offs_one(s_order + first, end - first, pos, n, s_by + first, took);
-        for (i = 0; i < n; i++)
-            if (took[i]) s[i].colour = PLACE_TOGGLE;
-    }
 }
 
 /* The ring's target: the unit under the cursor (0x48CD80, the hover query the handler skips in
    mode 14; it answers the unit's +0xA8 and writes nothing but its own frame), else a builder's
-   queued build whose footprint holds the world point -- first in slot order, then list order.
-   Cells, never a pointer. */
+   queued build whose footprint holds the world point (tasim_place_queued_at). Cells, never a
+   pointer. */
 static int ring_target(const Ctx* c, int* tx, int* tz, int* tw, int* th)
 {
-    unsigned id = ((HoverUnit)0x0048CD80u)(), i;
+    unsigned id = ((HoverUnit)0x0048CD80u)();
     const char* u = id ? tagpu_route_unit(&c->w, id) : NULL;
-    int px, pz;
     if (u && *(const unsigned short*)(u + U_INDEX) == id) {
         unsigned d = tagpu_route_def_id(&c->w, u);
         if (d && footprint(c->w.defs + d * D_STRIDE, tw, th)) {
@@ -351,53 +184,22 @@ static int ring_target(const Ctx* c, int* tx, int* tz, int* tw, int* th)
             return 1;
         }
     }
-    px = *(const int*)(c->w.ta + M_POINT) >> 20;
-    pz = *(const int*)(c->w.ta + M_POINT + 8) >> 20;
-    for (i = 0; i < s_nplan; i++) {
-        int ox, oz;
-        if (!s_plan[i].build ||
-            !footprint(c->w.defs + s_plan[i].type * D_STRIDE, tw, th)) continue;
-        ox = origin(s_order[i].x, *tw); oz = origin(s_order[i].z, *th);
-        if (px >= ox && px < ox + *tw && pz >= oz && pz < oz + *th) {
-            *tx = ox; *tz = oz;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* THE RED TEST IS THE ENGINE'S OWN CALL SITE. s_test is the target of the call at 0x4198C6
-   (tagpu_worldq_cursor_site, decoded at attach),
-   the one the build cursor judges its site with (stock 0x47D2E0, queued_site's build_site_test
-   in tagpu_patches.c when that fix is armed, or a foreign patch's), called with the arguments
-   0x4198A0..0x4198C6 passes: (def, cell, 0, main + 0x1B63 + main[0x2A42] * 0x14B), stdcall,
-   `ret 0x10`. So a gesture's site is judged exactly as a single click there would be, whatever
-   is installed. queued_site's Shift exemption reads the live Shift, which every gesture holds.
-   The altitude is the build cursor's: 0x47C780 (the test's scratch 0x51E684) for a free site,
-   0x47D820 for a refused one (0x4198EC..0x419909). The test writes 0x51E684/0x51E688, which the
-   AI's 0x47C770 reads too, so both are put back as they were; no AI tick runs inside the mouse
-   handler. Then the take-off rule turns the sites that take a queued order off yellow
-   (take_offs). Returns the red count. */
-static unsigned classify(const Ctx* c, Site* s, unsigned n, int planned, int ring)
-{
-    unsigned scratch0 = *(unsigned*)0x0051E684u, scratch1 = *(unsigned*)0x0051E688u;
-    unsigned i, red = 0;
-    for (i = 0; i < n; i++) {
-        unsigned cell = cell_word(s[i].cx, s[i].cz);
-        int ok = s_test(c->def, cell, 0, c->player) & 1;
-        s[i].alt = ok ? (int)(((SiteHeight)0x0047C780u)() & 255)
-                      : (int)(((BlockedHeight)0x0047D820u)(c->def, cell) & 255);
-        s[i].colour = ok && planned ? PLACE_OK : PLACE_BLOCKED;
-        red += s[i].colour == PLACE_BLOCKED;
-    }
-    *(unsigned*)0x0051E684u = scratch0; *(unsigned*)0x0051E688u = scratch1;
-    take_offs(c, s, n, ring);
-    return red;
+    return tasim_place_queued_at(&c->q, *(const int*)(c->w.ta + M_POINT) >> 20,
+                                 *(const int*)(c->w.ta + M_POINT + 8) >> 20, tx, tz, tw, th, &s_ps);
 }
 
 /* THE SELF-CHECK: our verdict at the engine's cursor site against the engine's own (bit 6, just
    written by 0x4198D1..0x4198E1). They differ only if our cell or arguments are not the
-   engine's; the counter is the regression's oracle and changes nothing at run time. */
+   engine's; the counter is the regression's oracle and changes nothing at run time.
+   THE RED TEST IS THE ENGINE'S OWN CALL SITE. s_test is the target of the call at 0x4198C6
+   (tagpu_worldq_cursor_site, decoded at attach), the one the build cursor judges its site with
+   (stock 0x47D2E0, queued_site's build_site_test in tagpu_patches.c when that fix is armed, or a
+   foreign patch's), called with the arguments 0x4198A0..0x4198C6 passes: (def, cell, 0,
+   main + 0x1B63 + main[0x2A42] * 0x14B), stdcall, `ret 0x10` -- the test the rules' view is
+   opened with (WQ_SITE_CURSOR), so a gesture's site is judged exactly as a single click there
+   would be, whatever is installed. queued_site's Shift exemption reads the live Shift, which
+   every gesture holds. The test writes 0x51E684/0x51E688, which the AI's 0x47C770 reads too, so
+   both are put back as they were; no AI tick runs inside the mouse handler. */
 static void self_check(const Ctx* c)
 {
     unsigned scratch0 = *(unsigned*)0x0051E684u, scratch1 = *(unsigned*)0x0051E688u;
@@ -414,13 +216,6 @@ static void plans_overflowed(void)
 {
     if (s_cPlanCap++ < NOTE_LOGS)
         tagpu_logf("place: more than %u queued orders to check; every site refused", PLACE_PLANS);
-}
-
-/* at most PLACE_ORDER_BUDGET orders a commit: the shape is cut in its own order */
-static unsigned budget(unsigned n, unsigned builders)
-{
-    unsigned most = PLACE_ORDER_BUDGET / (builders ? builders : 1);
-    return n < most ? n : most;
 }
 
 static void end_gesture(void) { s_gesture.active = 0; }
@@ -500,8 +295,8 @@ static void evaluate(void)
 {
     Ctx c;
     PlaceCell cells[PLACE_MAX_SITES];
-    int tx, tz, tw, th, shift, ctrl, alt, planned;
-    unsigned n, i, k;
+    int tx, tz, tw, th, shift, ctrl, alt;
+    unsigned n, nb, i, k;
     s_eval.valid = 0; s_eval.n = 0; s_eval.shape = PLACE_NONE;
     if (!context(&c, 0)) { end_gesture(); return; }
     s_cEval++;
@@ -534,8 +329,8 @@ static void evaluate(void)
        gesture lives on, so that release is still consumed rather than placing on stock's path */
     if (!shift || (!ctrl && !s_gesture.active)) return;
     if (!context(&c, 1)) return;
-    planned = snapshot(&c);
-    if (!planned) plans_overflowed();
+    nb = tasim_place_builders(&c.q, &c.in, &s_ps);
+    if (!tasim_place_snapshot(&c.q, &s_ps)) plans_overflowed();
     if (shift && ctrl && ring_target(&c, &tx, &tz, &tw, &th)) {
         s_eval.shape = PLACE_RING;
         n = place_ring(c.fx, c.fz, tx, tz, tw, th, cells, PLACE_MAX_SITES);
@@ -547,95 +342,15 @@ static void evaluate(void)
         n = place_shape(s_eval.shape, c.fx, c.fz, spacing_of(c.def), from, to, cells,
                         PLACE_MAX_SITES);
     } else return;
-    n = budget(n, c.nb);
+    n = tasim_place_budget(n, nb);
     for (i = 0; i < n; i++) { s_eval.site[i].cx = cells[i].cx; s_eval.site[i].cz = cells[i].cz; }
-    classify(&c, s_eval.site, n, planned, s_eval.shape == PLACE_RING);
+    c.in.ring = s_eval.shape == PLACE_RING;
+    tasim_place_classify(&c.q, &c.in, s_eval.site, n, &s_ps);
     /* a ring leaves out the sites that would cancel a queued build */
     for (i = k = 0; i < n; i++)
-        if (s_eval.shape != PLACE_RING || s_eval.site[i].colour != PLACE_TOGGLE)
+        if (s_eval.shape != PLACE_RING || s_eval.site[i].state != PLACE_SITE_TAKE)
             s_eval.site[k++] = s_eval.site[i];
     s_eval.n = k;
-}
-
-/* PHASE 1, per builder: the orders the take-off rule gave a site (take_offs, plans s_plan[first
-   .. end) of builder `b`) are taken off, and each of those sites adds nothing for this builder.
-   No node on the +0x5C list carries 0x40000: the constructor is the one writer of that bit
-   (copied from the descriptor's +0x11, 0x43A18F..0x43A196; every other store into +0x42 ORs in
-   0x10000, 0x400000, 0x2000 or 0x8000), and both linkers put such a node on +0x60 (0x43A07D..
-   0x43A09D in 0x43A020, 0x43AEF0..0x43AF2B in 0x43ADC0). `held` is read from engine memory all
-   the same and bounds what is removed: an order carrying it is taken but not removed, as
-   0x43AFC0 would look for it in the +0x60 list and find nothing (0x43B034..0x43B058).
-   NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 runs the action's handler with
-   event 2 when the node's +6 bit 2 is set, starts the StopBuilding script (0x505104) when +0x42
-   bit 0x400000 is set, and for the head calls 0x489800(unit, 3), which resets the unit's three
-   slots and queues a COB start of TargetCleared (0x508D58, through 0x4B0A70) -- so every removal
-   walks the list afresh to the order's place. The orders go in descending place: a removal moves
-   none of the places still to come, and the head goes last. A node is removed only when it still
-   carries the order's action, position and flag -- `*stale` counts an order whose place holds
-   anything else (the queue changed inside this commit), which then stays queued. */
-static unsigned remove_taken(const Ctx* c, unsigned b, unsigned first, unsigned end,
-                             unsigned char* toggled, unsigned* stale)
-{
-    unsigned p, removed = 0;
-    for (p = first; p < end; p++)
-        if (s_by[p] != PLACE_NO_SITE) toggled[s_by[p]] = 1;
-    for (p = end; p-- > first;) {
-        const Plan* q = &s_plan[p];
-        const PlaceOrder* o = &s_order[p];
-        const char *u, *node;
-        unsigned place;
-        if (s_by[p] == PLACE_NO_SITE || q->held) continue;
-        if (!(u = live_builder(c, b))) break;
-        for (node = *(const char* const*)(u + U_ORDERS), place = 0;
-             node && place < q->place && *(const char* const*)(node + 0x0E) == u;
-             node = *(const char* const*)(node + 0x4A), place++) {}
-        if (!node || *(const char* const*)(node + 0x0E) != u ||
-            (unsigned char)node[4] != c->action[b] || *(const int*)(node + 0x22) != o->x ||
-            *(const int*)(node + 0x2A) != o->z || (*(const unsigned*)(node + 0x42) & 0x40000u)) {
-            ++*stale;
-            continue;
-        }
-        ((RemoveOrder)0x00439F80u)((void*)u, node);
-        removed++;
-    }
-    return removed;
-}
-
-static unsigned list_length(const char* u)
-{
-    const char* node;
-    unsigned steps = 0;
-    for (node = *(const char* const*)(u + U_ORDERS); node && steps < LIST_WALK;
-         node = *(const char* const*)(node + 0x4A)) {
-        if (*(const char* const*)(node + 0x0E) != u) break;
-        steps++;
-    }
-    return steps;
-}
-
-/* PHASE 2, per builder: the sites of `order` that are neither red nor toggled for it are
-   appended through the order constructor 0x43ADC0 with Shift (append, never replace), at the
-   position and altitude 0x419670 gives, while its list holds fewer than PLACE_LIST_CAP nodes --
-   counted once before, then one more per append; 0x43ADC0 only ever drops head nodes on the
-   way (0x4000), so the count never runs short. `*capped` is set when the cap stops it. */
-static unsigned append_sites(const Ctx* c, unsigned b, const Site* s, const uint16_t* order,
-                             unsigned count, const unsigned char* toggled, int* capped)
-{
-    const char* u = live_builder(c, b);
-    unsigned i, issued = 0, length;
-    if (!u) return 0;
-    length = list_length(u);
-    for (i = 0; i < count; i++) {
-        const Site* t = &s[order[i]];
-        int pos[3];
-        if (t->colour == PLACE_BLOCKED || toggled[order[i]]) continue;
-        if (length >= PLACE_LIST_CAP) { *capped = 1; break; }
-        if (!(u = live_builder(c, b))) break;
-        pos[0] = site_x(c, t); pos[1] = (int)((unsigned)t->alt << 16); pos[2] = site_z(c, t);
-        ((Order)0x0043ADC0u)(c->action[b], 1, (void*)u, NULL, pos, (int)c->type, 0);
-        issued++; length++;
-    }
-    return issued;
 }
 
 static const char* shape_name(int shape)
@@ -650,54 +365,39 @@ static const char* shape_name(int shape)
     }
 }
 
-/* The commit, TA's semantics: the gesture is the stock Shift-clicks of its sites, judged against
-   each builder's queue as it stood before the gesture. Two phases rather than N literal clicks,
-   because 0x43AFC0's inclusive 16 units would let a site toggle off the node the previous site
-   of the same gesture added (a line of 1x1 sites would alternate add and remove); here a site
-   only ever removes a node queued before the gesture. A ring removes nothing: its toggling sites
-   are left out. The sites are classified afresh -- the preview is never trusted -- inside the
-   in-play handler on the game thread, where the stock click calls its own root, and by the same
-   classify and take-off rule the preview's colours come from. */
+/* The commit, inside the in-play handler on the game thread, where the stock click calls its own
+   root: tasim_place_commit, the gesture's sites judged afresh -- the preview is never trusted --
+   by the same rule the preview's colours come from, then the stock click's sound and bit. */
 static void commit(void)
 {
     Ctx c;
-    Site s[PLACE_MAX_SITES];
+    PLACE_SITE s[PLACE_MAX_SITES];
     uint16_t order[PLACE_MAX_SITES];
-    unsigned char toggled[PLACE_MAX_SITES];
-    unsigned n, cut, red, b, i, first, end, issued = 0, removed = 0, stale = 0,
-             capped_builders = 0;
-    int planned, shape = s_eval.shape;
+    PLACE_COMMIT_RES r;
+    unsigned n, nb, cut, i;
+    int shape = s_eval.shape;
     if (!context(&c, 1) || c.type != s_eval.type) return;
-    n = budget(s_eval.n, c.nb);
+    nb = tasim_place_builders(&c.q, &c.in, &s_ps);
+    n = tasim_place_budget(s_eval.n, nb);
     cut = s_eval.n - n;
     for (i = 0; i < n; i++) {
         s[i].cx = s_eval.site[i].cx; s[i].cz = s_eval.site[i].cz;
         order[i] = (uint16_t)i;
     }
-    planned = snapshot(&c);
-    if (!planned) plans_overflowed();
-    red = classify(&c, s, n, planned, shape == PLACE_RING);
-    for (b = end = 0; b < c.nb; b++) {
-        int capped = 0;
-        memset(toggled, 0, sizeof toggled);
-        end = plans_of(b, end, &first);
-        if (shape == PLACE_RING) {
-            for (i = 0; i < n; i++) toggled[i] = s[i].colour == PLACE_TOGGLE;
-        } else removed += remove_taken(&c, b, first, end, toggled, &stale);
-        issued += append_sites(&c, b, s, order, n, toggled, &capped);
-        capped_builders += (unsigned)capped;
-    }
-    if (issued || removed) {
+    c.in.ring = shape == PLACE_RING;
+    tasim_place_commit(&c.q, &c.in, s, n, order, &r, &s_ps);
+    if (!r.planned) plans_overflowed();
+    if (r.issued || r.removed) {
         /* stock's "oktobuild" (0x498F9D..0x498FA4), once a gesture, and the Shift-placement bit
            0x498FB4 sets, so that releasing Shift disarms as after a Shift-click (0x4992D8) */
         ((Sound)0x0047F1A0u)((const char*)0x00509660u, 0);
         *(unsigned char*)(c.w.ta + M_REGION) |= 0x20;
     }
-    s_cCommit++; s_cIssued += issued; s_cRemoved += removed; s_cRed += red;
-    s_cTrunc += cut; s_cListCap += capped_builders;
+    s_cCommit++; s_cIssued += r.issued; s_cRemoved += r.removed; s_cRed += r.red;
+    s_cTrunc += cut; s_cListCap += r.capped_builders;
     tagpu_logf("place: commit shape=%s sites=%u red=%u builders=%u issued=%u removed=%u "
-               "split=0 trunc=%u listcap=%u stale=%u", shape_name(shape), n, red, c.nb, issued,
-               removed, cut, capped_builders, stale);
+               "split=0 trunc=%u listcap=%u stale=%u", shape_name(shape), n, r.red, nb, r.issued,
+               r.removed, cut, r.capped_builders, r.stale);
 }
 
 /* The main block while the evaluation still describes the cursor: in play, mode 14, the type
@@ -775,7 +475,7 @@ unsigned tagpu_place_sites(TagpuPlaceSite* out, unsigned max)
     unsigned i;
     if (!current()) return 0;
     for (i = 0; i < s_eval.n && i < max; i++) {
-        const Site* s = &s_eval.site[i];
+        const PLACE_SITE* s = &s_eval.site[i];
         out[i].rect[0] = 16 * s->cx;
         out[i].rect[1] = s->alt;
         out[i].rect[2] = 16 * s->cz;
@@ -783,7 +483,7 @@ unsigned tagpu_place_sites(TagpuPlaceSite* out, unsigned max)
         out[i].rect[4] = s->alt;
         out[i].rect[5] = 16 * (s->cz + s_eval.fz);
         out[i].type = s_eval.type;
-        out[i].colour = s->colour;
+        out[i].colour = colour_of(s);
         out[i].pad = 0;
     }
     return i;
@@ -806,7 +506,7 @@ unsigned tagpu_place_gdi_rects(const int engine[4], int out[][4], unsigned char*
     r = (const int*)(ta + M_RECT);
     gui = (const unsigned char*)ta + M_GUICOL;
     for (i = 0; i < s_eval.n && k < max; i++) {
-        const Site* s = &s_eval.site[i];
+        const PLACE_SITE* s = &s_eval.site[i];
         int64_t v[4];
         int j, inside = 1;
         v[0] = (int64_t)engine[0] + 16 * s->cx - r[0];
@@ -817,7 +517,7 @@ unsigned tagpu_place_gdi_rects(const int engine[4], int out[][4], unsigned char*
         for (j = 0; j < 4; j++) if (v[j] < -0x100000 || v[j] > 0x100000) inside = 0;
         if (!inside) continue;
         for (j = 0; j < 4; j++) out[k][j] = (int)v[j];
-        colour[k] = gui[s->colour];
+        colour[k] = gui[colour_of(s)];
         k++;
     }
     return k;

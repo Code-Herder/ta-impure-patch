@@ -2,8 +2,9 @@
    over the shared simulation core (tasim.h, the tasim_*.c files), and what only the wiki has -- the
    UI the inputs go through (the cursor, the sidebar's gadgets and page router, what a press lands
    on, the click window), the scripted input (the build and pick trips, the glide, the demo's clock
-   and waits), the selection, the placement and sweep rules as sim.js mirrors tagpu_place.c and
-   tagpu_sweep.c, Quick Build's and the snap's input to the game's own rules (tasim_snap.c), the scene and the casting's binding, the view, the state hash
+   and waits), the selection, the sweep rules as sim.js mirrors tagpu_sweep.c, the placement
+   gesture's, Quick Build's and the snap's input to the game's own rules (tasim_place.c,
+   tasim_snap.c), the scene and the casting's binding, the view, the state hash
    and the fork. Contract: tagpu_wikisim.h.
 
    The sections and the functions follow tools/wiki/mockup/sim.js in its order and under its names
@@ -18,6 +19,7 @@
 #include <string.h>
 #include "tagpu_sweepgeo.h"
 #include "tasim.h"
+#include "tasim_place.h"
 #include "tasim_snap.h"
 #include "tasim_worldq.h"
 
@@ -36,9 +38,6 @@
 #define CLICK_TIME 25
 #define CLICK_BOX  32
 #define SPACING 24
-/* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
-   tagpu_placegeo.h's */
-#define PLACE_ORDER_BUDGET 4096
 
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
@@ -68,7 +67,7 @@ typedef char pick_fits[WIKI_PICK_DOWN + 2 + (WIKI_PICK - WIKI_PICK_UP) <= WIKI_T
 
 static double sq(double v) { return v * v; }
 
-/* ---- tagpu_placegeo.c's shapes and take-off rule, called directly; sim.js ports each one ---- */
+/* ---- tagpu_placegeo.c's shapes, called directly, and its take-off rule through tasim_place.c; sim.js ports each one ---- */
 
 /* the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up */
 static int origin(double v, int f) { return tasim_bound_cell(floor((v - 8 * f + 8) / CELL)); }
@@ -1207,107 +1206,41 @@ static PlaceCell cursor_site(WIKISIM* s)
 static XZ site_centre(const WIKISIM* s, int t, const WIKISITE* w) { return tasim_centre(s, t, w->cx, w->cz); }
 static XZ order_at(const WIKISIM* s, const WIKIORDER* o) { return tasim_centre(s, o->type, o->ox, o->oz); }
 
-/* mirrors tagpu_place.c toggles: some selected builder has a build order within 16 world units of
-   the site; it compares no building type */
-static int toggles(const WIKISIM* s, int t, const WIKISITE* w)
+_Static_assert(PLACE_BUILDERS_MAX <= SNAP_UNITS_MAX, "the gesture's selection fits snap_builders");
+
+/* the gesture's rule input: the armed type, the shape's ring flag and the acting seat's selected
+   units in slot order (tasim_place.h), and the core's view of the acting seat */
+static int place_in(WIKISIM* s, int t, int ring, PLACE_IN* in, WQ_CORE* ctx, WORLDQ* q)
 {
-    const XZ at = site_centre(s, t, w);
-    int i, j;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (!is_builder(s, u)) continue;
-        for (j = 0; j < u->norder; j++)
-            if (u->order[j].k == WIKI_ORDER_BUILD && within(at, order_at(s, &u->order[j]))) return 1;
-    }
-    return 0;
+    int i;
+    memset(in, 0, sizeof *in);
+    in->type = t + 1;
+    in->ring = ring;
+    for (i = 0; i < s->nunit && i < 0xFFFE && in->nselected < (int)PLACE_BUILDERS_MAX; i++)
+        if (s->unit[i]->sel && s->unit[i]->owner == s->act) s->snap_builders[in->nselected++] = (uint16_t)(i + 1);
+    in->selected = s->snap_builders;
+    return tasim_worldq_open(ctx, q, s, s->act);
 }
 
-/* A world position as tagpu_place.c's order positions hold it, 16.16 fixed point, for the shared
-   take-off rule. Exact for every position that rule compares, so it answers as sim.js's doubles
-   do: a footprint's centre is (cx + f/2) * 16, a multiple of 8, exact in 16.16 within the
-   clamp. The clamp changes no answer: the rule only ever compares a site that is not refused --
-   inside the map, so its centre lies within 0..WIKI_MAP_MAX * 16 = 2048 (the loader refuses a
-   larger map) -- with an order, and an order clamped to +-8192 is still further than 16 from
-   every such site, as it was before the clamp. Within the clamp no difference reaches 2^31, so
-   place_within's wrapped compare never wraps. */
-_Static_assert(WIKI_MAP_MAX * WIKI_CELL + 16 < 8192
-               && (8192LL + WIKI_MAP_MAX * WIKI_CELL) * 65536 < 0x80000000LL,
-               "a clamped order lies beyond the reach of every site on the map, and no difference wraps");
-static int32_t fixed16(double v)
-{
-    return (int32_t)((v < -8192 ? -8192 : v > 8192 ? 8192 : v) * 65536);
-}
-
-/* mirrors tagpu_place.c take_offs for one builder: place_take_offs_one (tagpu_placegeo.h), the
-   game's own function, over the builder's queue as it stands -- its build orders are the ones
-   the rule reads -- and the sites, whose positions and refused flags `pos` holds. A site that
-   takes one becomes WIKI_SITE_REMOVE. Leaves in s->by the site that takes each order off
-   (PLACE_NO_SITE for none) and in `took` whether each site took one. */
-static void take_offs_one(WIKISIM* s, const PlaceSitePos* pos, WIKISITE* sites, int n, const WIKIUNIT* u, uint8_t* took)
-{
-    int i, j;
-    for (j = 0; j < u->norder; j++) {
-        const XZ q = order_at(s, &u->order[j]);
-        s->q[j].x = fixed16(q.x);
-        s->q[j].z = fixed16(q.z);
-        s->q[j].match = u->order[j].k == WIKI_ORDER_BUILD;
-    }
-    place_take_offs_one(s->q, (unsigned)u->norder, pos, (unsigned)n, s->by, took);
-    for (i = 0; i < n; i++)
-        if (took[i]) sites[i].state = WIKI_SITE_REMOVE;
-}
-
-/* the sites as the take-off rule reads them. A site turns only from WIKI_SITE_PLACE to
-   WIKI_SITE_REMOVE after this, never to or from refused, so `pos` holds for every builder. */
-static void site_positions(const WIKISIM* s, int t, const WIKISITE* sites, int n, PlaceSitePos* pos)
+/* the sites as the game's rule judges them (tasim_place_classify), in the wiki's states */
+static void wiki_sites(const PLACE_SITE* in, int n, WIKISITE* out)
 {
     int i;
     for (i = 0; i < n; i++) {
-        const XZ at = site_centre(s, t, &sites[i]);
-        pos[i].x = fixed16(at.x);
-        pos[i].z = fixed16(at.z);
-        pos[i].refused = sites[i].state == WIKI_SITE_REFUSED;
+        out[i].cx = in[i].cx;
+        out[i].cz = in[i].cz;
+        out[i].state = in[i].state == PLACE_SITE_FREE ? WIKI_SITE_PLACE
+                     : in[i].state == PLACE_SITE_TAKE ? WIKI_SITE_REMOVE : WIKI_SITE_REFUSED;
     }
-}
-
-/* mirrors tagpu_place.c take_offs over every selected builder, for the sites' states. A ring takes
-   nothing off: a site a Shift-click would toggle is WIKI_SITE_REMOVE, and left out. */
-static void take_offs(WIKISIM* s, int t, WIKISITE* sites, int n, int ring)
-{
-    PlaceSitePos pos[PLACE_MAX_SITES];
-    uint8_t took[PLACE_MAX_SITES];
-    int i;
-    if (ring) {
-        for (i = 0; i < n; i++)
-            if (sites[i].state != WIKI_SITE_REFUSED && toggles(s, t, &sites[i])) sites[i].state = WIKI_SITE_REMOVE;
-        return;
-    }
-    site_positions(s, t, sites, n, pos);
-    for (i = 0; i < s->nunit; i++)
-        if (is_builder(s, s->unit[i])) take_offs_one(s, pos, sites, n, s->unit[i], took);
-}
-
-/* mirrors tagpu_place.c classify: refused where the site test refuses, else WIKI_SITE_PLACE, and
-   then the take-off rule's WIKI_SITE_REMOVE */
-static void classify(WIKISIM* s, int t, const PlaceCell* cells, int n, int ring, WIKISITE* sites)
-{
-    int i;
-    for (i = 0; i < n; i++) {
-        sites[i].cx = cells[i].cx;
-        sites[i].cz = cells[i].cz;
-        sites[i].state = tasim_site_ok(s, t, cells[i].cx, cells[i].cz, NULL) ? WIKI_SITE_PLACE : WIKI_SITE_REFUSED;
-    }
-    take_offs(s, t, sites, n, ring);
 }
 
 /* mirrors tagpu_place.c ring_target: the unit under the cursor, any unit (0x48CD80), else a selected
-   builder's queued build whose footprint holds the cursor's cell, first in selection order then
-   queue order. As cells. */
-static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
+   builder's queued build whose footprint holds the cursor's cell (tasim_place_queued_at). As
+   cells. */
+static int ring_target(WIKISIM* s, const WORLDQ* q, int* tx, int* tz, int* tw, int* th)
 {
     const XZ m = map_cursor(s);
     const WIKIUNIT* u = unit_at(s, m.x, m.z);
-    int i, j, px, pz;
     if (u) {
         *tw = tasim_fpx(s, u->type);
         *th = tasim_fpz(s, u->type);
@@ -1315,24 +1248,7 @@ static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
         *tz = origin(u->z, *th);
         return 1;
     }
-    px = tasim_cell_of(m.x);
-    pz = tasim_cell_of(m.z);
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* b = s->unit[i];
-        if (!is_builder(s, b)) continue;
-        for (j = 0; j < b->norder; j++) {
-            const WIKIORDER* o = &b->order[j];
-            if (o->k != WIKI_ORDER_BUILD) continue;
-            if (px >= o->ox && px < o->ox + tasim_fpx(s, o->type) && pz >= o->oz && pz < o->oz + tasim_fpz(s, o->type)) {
-                *tx = o->ox;
-                *tz = o->oz;
-                *tw = tasim_fpx(s, o->type);
-                *th = tasim_fpz(s, o->type);
-                return 1;
-            }
-        }
-    }
-    return 0;
+    return tasim_place_queued_at(q, tasim_cell_of(m.x), tasim_cell_of(m.z), tx, tz, tw, th, s->place);
 }
 
 /* mirrors tagpu_place.c evaluate: the shape the cursor shows, with the modifiers read live. Nothing
@@ -1343,26 +1259,37 @@ static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
 static void evaluate(WIKISIM* s, WIKIPLACE* p)
 {
     PlaceCell cells[PLACE_MAX_SITES];
+    PLACE_SITE sites[PLACE_MAX_SITES];
+    PLACE_IN in;
+    WQ_CORE ctx;
+    WORLDQ q;
     const int shift = ST(s).held[WIKI_KEY_SHIFT], ctrl = ST(s).held[WIKI_KEY_CTRL], alt = ST(s).held[WIKI_KEY_ALT];
-    int t, fx, fz, tx, tz, tw, th, n, budget, builders, i, k;
+    int t, fx, fz, tx, tz, tw, th, n, i, k;
     p->kind = PLACE_NONE;
     p->n = 0;
     if (ST(s).mode < 0 || !shift || (!ctrl && !ST(s).has_gesture)) return;
     t = ST(s).mode;
     fx = tasim_fpx(s, t);
     fz = tasim_fpz(s, t);
-    if (ctrl && ring_target(s, &tx, &tz, &tw, &th)) {
+    if (!place_in(s, t, 0, &in, &ctx, &q)) return;
+    tasim_place_builders(&q, &in, s->place);
+    tasim_place_snapshot(&q, s->place);
+    if (ctrl && ring_target(s, &q, &tx, &tz, &tw, &th)) {
         p->kind = PLACE_RING;
         n = (int)place_ring(fx, fz, tx, tz, tw, th, cells, PLACE_MAX_SITES);
     } else if (ST(s).has_gesture) {
         p->kind = alt ? (ctrl ? PLACE_HOLLOW : PLACE_RECT) : (ctrl ? PLACE_AXIS : PLACE_LINE);
         n = (int)place_shape(p->kind, fx, fz, ST(s).spacing[t], ST(s).gesture, cursor_site(s), cells, PLACE_MAX_SITES);
     } else return;
-    builders = nbuilders(s);
-    budget = PLACE_ORDER_BUDGET / (builders ? builders : 1);
-    if (n > budget) n = budget;
+    n = (int)tasim_place_budget((unsigned)n, s->place->nb);
     p->type = t;
-    classify(s, t, cells, n, p->kind == PLACE_RING, p->site);
+    for (i = 0; i < n; i++) {
+        sites[i].cx = cells[i].cx;
+        sites[i].cz = cells[i].cz;
+    }
+    in.ring = p->kind == PLACE_RING;
+    tasim_place_classify(&q, &in, sites, (unsigned)n, s->place);
+    wiki_sites(sites, n, p->site);
     p->n = n;
     if (p->kind == PLACE_RING) {
         for (i = k = 0; i < n; i++)
@@ -1373,52 +1300,28 @@ static void evaluate(WIKISIM* s, WIKIPLACE* p)
 
 static void place_click(WIKISIM* s, int shift);
 
-/* mirrors tagpu_place.c commit (remove_taken and append_sites): the stock Shift-clicks of the sites,
-   judged against each builder's queue as it stood before the gesture, the sites classified afresh
-   by the same take-off rule the preview's colours come from. Per builder: the orders the rule gave
-   a site are taken off, and each of those sites adds nothing for that builder (a ring takes
-   nothing off, its removing sites skipped); the rest are appended in the shape's order while the
-   queue is shorter than PLACE_LIST_CAP. Every selected builder gets them, its build list not
-   consulted, as 0x419670 orders. A changed queue sets the Shift-placement bit, so releasing Shift
-   disarms. */
+/* tagpu_place.c's commit: tasim_place_commit over the evaluation's sites, judged afresh, and a
+   changed queue sets the Shift-placement bit, so releasing Shift disarms, and plays stock's
+   `oktobuild` once a gesture */
 static void commit(WIKISIM* s, const WIKIPLACE* p)
 {
-    PlaceCell cells[PLACE_MAX_SITES];
-    WIKISITE sites[PLACE_MAX_SITES];
-    PlaceSitePos pos[PLACE_MAX_SITES];
-    uint8_t took[PLACE_MAX_SITES];
-    const int t = p->type, ring = p->kind == PLACE_RING;
-    int i, j, b, changed = 0;
-    for (i = 0; i < p->n; i++) {
-        cells[i].cx = (int16_t)p->site[i].cx;
-        cells[i].cz = (int16_t)p->site[i].cz;
+    PLACE_SITE sites[PLACE_MAX_SITES];
+    uint16_t order[PLACE_MAX_SITES];
+    PLACE_IN in;
+    PLACE_COMMIT_RES r;
+    WQ_CORE ctx;
+    WORLDQ q;
+    unsigned n;
+    int i;
+    if (!place_in(s, p->type, p->kind == PLACE_RING, &in, &ctx, &q)) return;
+    n = tasim_place_budget((unsigned)p->n, tasim_place_builders(&q, &in, s->place));
+    for (i = 0; i < (int)n; i++) {
+        sites[i].cx = p->site[i].cx;
+        sites[i].cz = p->site[i].cz;
+        order[i] = (uint16_t)i;
     }
-    classify(s, t, cells, p->n, ring, sites);
-    site_positions(s, t, sites, p->n, pos);
-    for (b = 0; b < s->nunit; b++) {
-        WIKIUNIT* u = s->unit[b];
-        if (!is_builder(s, u)) continue;
-        if (!ring) take_offs_one(s, pos, sites, p->n, u, took);
-        for (i = 0; i < p->n; i++)
-            if (ring) took[i] = sites[i].state == WIKI_SITE_REMOVE;
-        for (j = ring ? 0 : u->norder; j-- > 0;)
-            if (s->by[j] != PLACE_NO_SITE) {
-                tasim_splice_orders(u, j, 1);
-                changed++;
-            }
-        for (i = 0; i < p->n; i++) {
-            WIKIORDER o;
-            if (sites[i].state == WIKI_SITE_REFUSED || took[i]) continue;
-            memset(&o, 0, sizeof o);
-            o.k = WIKI_ORDER_BUILD;
-            o.type = t;
-            o.ox = sites[i].cx;
-            o.oz = sites[i].cz;
-            if (tasim_push_order(s, u, &o)) changed++;
-        }
-    }
-    /* stock's `oktobuild`, once a gesture, as tagpu_place.c's commit plays it */
-    if (changed) {
+    tasim_place_commit(&q, &in, sites, n, order, &r, s->place);
+    if (r.issued || r.removed) {
         ST(s).shift_placed = 1;
         tasim_sound_named(s, WIKI_SNDNAME_OKTOBUILD);
     }
@@ -2604,6 +2507,7 @@ void tagpu_wikisim_free(WIKISIM* s)
     free(s->resolved);
     free(s->bound);
     free(s->snap);
+    free(s->place);
     free(s->snap_builders);
     free(s->obs);
     free(s->mover);
@@ -3115,7 +3019,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->demo_id = d ? d->id : NULL;
     s->next_id = 1;
     if (!(s->metal = (double*)malloc(cells * sizeof *s->metal)) || !(s->fog = (unsigned char*)calloc(cells, 1))
-        || !(s->snap = (SNAP_SCRATCH*)malloc(sizeof *s->snap))
+        || !(s->snap = (SNAP_SCRATCH*)malloc(sizeof *s->snap)) || !(s->place = (PLACE_SCRATCH*)malloc(sizeof *s->place))
         || !(s->snap_builders = (uint16_t*)malloc(SNAP_UNITS_MAX * sizeof *s->snap_builders))
         || !(s->occ = (unsigned char*)malloc(cells)) || !(s->known = (unsigned char*)malloc(cells))
         || !(s->shut = (unsigned char*)malloc(cells)) || !(s->pg = (double*)malloc(cells * sizeof *s->pg))
