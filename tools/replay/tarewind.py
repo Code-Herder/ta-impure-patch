@@ -479,7 +479,7 @@ def run(t, w, fx, out):
             log.read()
             start = len(log.lines)
             w.trigger(f"seek-frame {T1} dump q")
-            if not log.wait(r"recorder: frame dump q at GameTime", t.ACK_S, start):
+            if not log.wait(t._CLI_API.dump_written_rx("q"), t.ACK_S, start):
                 raise t.Failed("fresh seek: no atomic frame dump")
             if fx["cover"]:
                 t.cover_ask(w, log, "rewind-Q")

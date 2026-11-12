@@ -174,6 +174,41 @@ unit names by scanning the live definition table. This design follows its recipe
 - Per-player unit counts are checked after expansion: over `setup.unit_limit` is an
   **error**, over the default cap of 1500 with no limit set is a **warning** (the engine
   would silently drop the rest).
+- **The calibration keys** reset a level between runs of the calibration runner
+  ([the calibration runner](modules/tasim-calibration.html)). Each writes engine state no other
+  machine sees, so the applier refuses each in a network game and on a puppet, as an error
+  naming the key that `on_error` then handles:
+  - `setup.clear_features` (default `false`): every feature of the level burned through the
+    engine's own BurnAll walker `0x424840`, after the unit clear and before the creates. It
+    takes indestructible features and geothermal vents too, so a scenario that needs a vent
+    cannot use it. The result says `"features_cleared": true`.
+  - `setup.objective`: `"off"` disarms the level's end test (`0x4904B0`), so a level with no
+    units runs on; `"on"` arms it again (`+0x88 = 1`, the takeover's write). A level with no
+    objective is an error. The result says `"objective"`.
+  - `setup.players[].ai: "off"`: the console's AI toggle on an AI seat (`0x463C60(rec, 1)`): the
+    seat becomes type 1, its units keep their orders and no planner runs. Refused for a seat that
+    is not an active AI seat or is the controlled one. The result's `players[s].ai` says `"off"`.
+  - `setup.players[].storage: {"metal", "energy"}`: the seat's base storage, the seat setup's
+    own writes (`+0x149` bit 0, `+0xE0` metal, `+0xDC` energy, the maxima raised to at least
+    them). The economy pass adds it to the storage it recomputes, so a level set beside it
+    survives the pass's clamp. Both numbers, 0 or more; the result's `players[s].storage` reads
+    them back as `[metal, energy]`, or `null` when the apply wrote none. The engine ends a seat's
+    base storage when a unit of its side's commander type dies (`0x486518`), so the applier
+    writes it after the apply's own clear; a later apply whose clear kills a commander states the
+    storage again.
+  - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
+    apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
+    as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
+    target's cell changes first (a unit whose death is pending, `+0x110` bit 14, counts as dead), if
+    a later apply's clear kills it, if the level changes, or, fail-closed, if GameTime
+    advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
+    frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
+    log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped
+    S)`. The result's `delayed` is the number pending after the apply, and `cleared_slots` lists
+    the slots the apply's clear emptied.
+- **The top-level `calib` object** is the calibration runner's: the scenario's kinds, metrics,
+  runs, tick limit, end clauses and scoreboard area (`tools/tasim/calibref.py` validates it).
+  The compiler accepts it as an object and never writes it to the wire.
 
 ## Order vocabulary
 
@@ -184,6 +219,9 @@ fork's. Every number is TADR's button/order table's [`TA_MemoryStructures.pas:6-
 
 `stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
 `patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+
+Any order may carry `"after": n` (0–255): it is issued n ticks after the apply by the same path,
+or cancelled when its unit or target goes first ([the file](#the-file), the calibration keys).
 
 `stop` is the sidebar STOP button's own order: type 10 sends the mapper to `0x43F82C`, which looks
 up the script action `"STOP"` with no test of the unit [DISASSEMBLED], the action the button
@@ -527,14 +565,21 @@ v1 seed=20260901 clear=1 onerror=abort units=401 feats=1
 map Two Continents
 limit 500
 sw noshake=1 shootall=1
-player 1 metal=5000 energy=5000
+clearfeat 1
+objective off
+player 1 metal=5000 energy=5000 ai=off mstore=5000 estore=5000
 # unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills>
 unit 0 ARMPW 1 775 1098 - 90 - - - -
 feat 0 ARMCOM_DEAD 1700 1200 - 45
-order 0 attack pos 2400 1200
+order 0 attack pos 2400 1200 after=7
 cam feat 0 pin=0
 end
 ```
+
+The calibration keys ride on their own lines and columns: `clearfeat 1` and `objective off|on`
+when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
+both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line. The
+parser refuses an unknown `player` key and any column past an order's end.
 
 Three details the sketch above did not have. The map gets **its own line** — the rest of
 the line is the name — so a map with spaces needs no escaping. An order names its target
@@ -560,6 +605,7 @@ handles back before an agent sees it:
  "requested": {"units": 401, "features": 1, "orders": 400},
  "applied": 402, "failed": 0, "cleared": 2,
  "orders": {"issued": 400, "failed": 0},
+ "delayed": 0, "features_cleared": false, "cleared_slots": [1, 2],
  "map": {"name": "Two Continents", "world": [10752, 12800], "tiles": [672, 800]},
  "limit": {"total": 0, "per_player": 250, "array_slots": 2500},
  "switches": {"before": 12, "after": 1052, "bits": {"shootall": true, "noshake": true}},
@@ -646,6 +692,20 @@ before launch. The schema bounds slots to 0..9; an omitted roster leaves the
 saved seat preset alone. Controller keys alone are insufficient: playback writes
 its recorded seat extent, which can be smaller than the next scenario's roster.
 With ten slots declared it seats ten (the seating rule under the schema's notes).
+
+**A player's `controller`** is `human`, `ai` (OTA AI, the stock AI), `impai` or `off`. `impai`
+is a computer seat to the engine, written to the registry as `ai` is (controller 2); what makes
+ImpAI play it is the store: `load` writes `seatai=<the impai slots>` into the instance's
+`impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat; every
+other tacli launch writes `seatai=none`, so a line an earlier launch left never seats ImpAI. The
+DLL reads the key at each level's init under every launch, `--defaults` included ([ImpAI in the
+engine](modules/impai.html)).
+
+**`setup.difficulty`**, `easy`, `medium` or `hard`, sets the SKIRMISH screen's `Difficulty`
+gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine's own value
+`main+0x37EEE` back; a value other than the one asked for stops the load. Omitted, the screen
+keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
+resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
 
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
@@ -818,9 +878,8 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   in Python instead would mean renumbering ordinals and orphaning any order or camera that
   named it; the fork already re-checks every name, so per-entity best effort belongs
   exactly where it can be per-entity.
-- **`setup.players[].metal/energy` cannot be set from the apply point** — but they *can*
-  be set at launch, which phase D then found. The offsets are
-  right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
+- **`setup.players[].metal/energy` hold at the apply point only beside a `storage`.** The offsets
+  are right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
   `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, storage at `+0xA4`/`+0xA8`) and the write
   lands — the result's `players.wrote` shows the figure back. But TA's economy pass
   `0x401360`, which runs once every 30 ticks for each local player (`0x46507D..0x465092`,
@@ -835,11 +894,12 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   the bit but the saved-game loader (`0x466200`, which restores it) makes that storage at least
   200: the skirmish seat setup (`0x496F5D`), the network setup (`0x4977D8`), `0x496E90`
   (`0x496EA1`), whose callers are `0x465F42` and the Deathmatch respawn (`0x46540F`), and
-  `0x497080` (`0x497114`), which nothing calls. The applier still writes, and reports
-  `requested` / `wrote` / `now`; the compiler warns whenever a file asks, so `validate` says
-  it before anything runs; and the shipped example dropped the two keys rather than advertise
-  a knob the engine overrules. Setting resources for real is a launch-time problem — and
-  phase D solved it; see below.
+  `0x497080` (`0x497114`), which nothing calls. **The `storage` key is that base storage**: the
+  applier makes the seat setup's own writes (`0x496EE0`: the bit at `0x496F5D`, the floats at
+  `0x496F64..0x496F97`) before the level writes, so the pass adds it to the storage it
+  recomputes and a level at or below it survives the clamp. The compiler's warning fires only
+  for a level with no `storage` beside it. Launch-time resources still come from `scenario
+  load` (phase D, below).
 
 **D — `scenario load` end to end. BUILT 2026-09-01.** `cmd_scenario_load` composes the
 verbs that already worked: launch carrying `setup`'s launch half, the shell path by gadget

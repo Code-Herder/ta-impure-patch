@@ -612,7 +612,11 @@ already pending there, once the seek has rebuilt the level at T−1 — and a ta
 for later runs on the held frames and leaves the level held at T−1, so nothing a lane arms can
 pass before its answer. From there a lane
 acts at GameTimes: the trigger's `pause at <T>` sets the pause bit at the frame visit after step
-T (the same observer bounds the batch so the step stops at T exactly), `resume` clears it, and
+T (the same observer bounds the batch so the step stops at T exactly) — or, with up to four
+`or units <s> <= <n>` clauses (`pause at 3061 or units 1 <= 0 or units 0 <= 0`), at the first
+earlier frame visit where seat s's live count `+0x144` is at most n, logged `pause: paused at
+GameTime G (units of seat s <= n)`, which the calibration runner ends its duels on; the harness's
+own lanes never send a clause — `resume` clears it, and
 **the hold keeper** at the pause test `0x496920` puts the bit back before every test while a pause
 of the DLL's is taken, so neither the Pause key nor the in-game menu's OK lets a held level run.
 An L step — keys, a chat line, an order, a scenario — is given while the level is held at its T,
@@ -630,7 +634,8 @@ by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or
 an outcome. A peek the running game has not answered counts as no progress and nothing more: a
 seek's rebuild holds the game thread for one frame, and two fork crossings' seeks in the battle's X
 lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED 2026-10-12), so no
-shorter bound stands in for `STALL_S`.
+shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.4 s); the
+calibration runner, which waits on one line per verb, subclasses it at 0.02 s.
 
 **A seek's work, not its time.** Every seek logs its work line (`sk_work_log`): the iterations
 the reader read and where it built from, the blocks it decoded to get there, the image's units

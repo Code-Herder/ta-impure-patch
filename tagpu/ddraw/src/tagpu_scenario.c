@@ -19,6 +19,8 @@
 #include "tagpu_limits.h"   /* TAGPU_LIM_UNITS: the arena holds a full game */
 #include "tagpu_zoom.h"     /* tagpu_zoom_place_eye: the camera's range */
 #include "tagpu_patches.h"  /* tagpu_kill_hold: a create's messages wait for dress_unit */
+#include "tagpu_puppet.h"   /* tagpu_puppet_on: the recorder is the only writer on a puppet */
+#include "tagpu_packet_pub.h" /* tagpu_packet_pub_level_gen: the delayed orders' level */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -41,6 +43,15 @@
 #define PL_MAXMETAL   0xA8         /* float fMaxMetalStorage                      */
 #define PL_FIRSTUNIT  0x67         /* UnitStruct* first/last of this player's     */
 #define PL_LASTUNIT   0x6B         /* units, INCLUSIVE, stepping UNIT_STRIDE      */
+#define PL_BASESTORE_E 0xDC        /* float base energy storage, and              */
+#define PL_BASESTORE_M 0xE0        /* float base metal storage: the economy pass
+                                      0x401941 adds them to the storages it
+                                      recomputes while +0x149 bit 0 is set
+                                      (0x401988..0x4019AA, DISASSEMBLED)          */
+#define PL_SELF       0x146        /* u8 the record's own seat, 10 = a free record
+                                      (0x4646B4, 0x46434D)                        */
+#define PL_BASEFLAG   0x149        /* u8 bit 0: base storage in force (0x496F5D)  */
+#define PL_ALIVE      0x144        /* u16 the live unit count                     */
 
 #define OFF_MAPPXW    0x14223      /* int MapWidth  (world units)                 */
 #define OFF_MAPPXH    0x14227      /* int MapHeight                               */
@@ -49,11 +60,20 @@
 #define OFF_FMAP      0x14287      /* FeatureStruct* FeatureMap, stride 0x0D      */
 #define FM_STRIDE     0x0D
 #define FM_HEIGHT     0x04         /* unsigned char height                        */
+#define FM_DEF        0x08         /* u16 the cell's feature def word (engine/map.md) */
 
 #define OFF_WATCHED   0x2A42       /* u8 watched player id — whose selection it is */
+#define OFF_NETWORK   0x2A44       /* bit 0: a network game (the pump's test, 0x453D4B) */
+#define OFF_OBJECTIVE 0x391ED      /* the level's objective: level_objective   */
+#define OBJ_ARMED     0x88         /* u32: the end tests run while it is non-zero */
 
 #define OFF_BEGIN     0x14357      /* UnitStruct* BeginUnitsArray_p               */
-#define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p               */
+#define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p: the LAST slot
+                                      itself, begin + count*0x118 - 0x118 (stored at
+                                      0x4855CF..0x4855D6; the engine's own walks end
+                                      with jbe, 0x401F12, 0x48BD38), so a walk runs
+                                      while u <= end and holds (end - begin) / 0x118
+                                      + 1 slots (DISASSEMBLED)                     */
 #define UNIT_STRIDE   0x118
 
 #define OFF_UCOUNT    0x1438F      /* unsigned UNITINFOCount                      */
@@ -84,6 +104,8 @@
 #define U_NANOFRAME   0x104        /* float, fraction of the build REMAINING      */
 #define U_HEALTH      0x108        /* short                                       */
 #define U_KILLS       0xB8         /* u16                                         */
+#define U_TYPEWORD    0xA6         /* u16 the def index; 0 = a free slot (the
+                                      allocator's test at 0x486036)               */
 #define U_STATE       0x110        /* alive 0x10000000; 0x20 is written below for  */
                                    /* a nanoframe but the DRAW path never reads it */
                                    /* — under construction is +0x104 alone, and    */
@@ -126,6 +148,22 @@ typedef void  (__stdcall* PFN_ORDER)(int actionIndex, int shift, void* unit, voi
 #define SpawnFeatureOnMap ((PFN_SPAWNFEAT)  0x00423C50u)
 #define ScriptAction_Type2Index ((PFN_TYPE2INDEX) 0x0043F0E0u)
 #define ORDERS_NewMainOrder2Unit ((PFN_ORDER) 0x0043AFC0u)
+
+/* 0x424840, the BurnAll walker: no argument, a plain `ret` at 0x42488D. It walks the
+   main+0x14233 x main+0x14237 cells of the feature grid (stride 0xD from main+0x14287) and
+   calls FEATURES_Destroy 0x4246B0(cell, 1) -- stdcall, the call at 0x42487A has no `add esp`
+   after it -- on every cell whose def word +8 is below 0xFFFB or equal to 0xFFFE
+   (DISASSEMBLED 0x424840..0x42488D). Its one caller is the console's BurnAll 0x416390. */
+typedef void (__cdecl* PFN_BURNALL)(void);
+#define FEATURES_BurnAll ((PFN_BURNALL) 0x00424840u)
+/* 0x463C60, the controller setter: thiscall on a player record, `ret 4`. It stores the
+   argument at +0x73 and, unless it is 3, at PlayerInfo +0x94 through +0x27
+   (DISASSEMBLED 0x463C60..0x463C75). */
+typedef void (__thiscall* PFN_SETCONTROLLER)(void* player, unsigned type);
+#define PLAYER_SetController ((PFN_SETCONTROLLER) 0x00463C60u)
+/* 0x4904B0, the objective's disarm: `mov dword [ecx+0x88],0; ret` (thiscall) */
+typedef void (__thiscall* PFN_DISARM)(void* objective);
+#define OBJECTIVE_Disarm ((PFN_DISARM) 0x004904B0u)
 
 /* The tick site: `mov eax, ds:0x511DE8`, five position-independent bytes inside
    the straight-line block that 0x4969CB (TADR's GameTickHook address) enters. */
@@ -195,6 +233,8 @@ typedef struct {
     int  a, b;                                    /* pos x,y  or  ordinal in a   */
     int  tlive;                                   /* target `a` is an engine idx */
     char texp[SCN_NAMELEN];
+    int  after;                                   /* ticks to wait, 0 = at once,
+                                                     -1 = refused at resolve     */
 } scn_order;
 
 static scn_unit  g_units[SCN_MAX_UNITS];
@@ -211,8 +251,15 @@ static int      g_seed, g_clear, g_abort, g_limit;
 static char     g_map[128];
 static unsigned g_sw_set, g_sw_clr;               /* SoftwareDebugMode bit masks */
 static int      g_pl_slot[10], g_pl_metal[10], g_pl_energy[10], g_npl;
+static int      g_pl_aioff[10];                   /* `ai=off` on the player line  */
+static int      g_pl_hasstore[10];                /* `mstore=`/`estore=` given    */
+static float    g_pl_mstore[10], g_pl_estore[10];
 /* what the fields read back the instant after the write, still on the same tick */
 static int      g_pl_got_metal[10], g_pl_got_energy[10];
+static int      g_pl_ai_done[10];
+static float    g_pl_got_mstore[10], g_pl_got_estore[10];
+static int      g_clearfeat;                      /* `clearfeat 1`                */
+static int      g_objective;                      /* `objective`: -1 none, 0 off, 1 on */
 static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
 
 /* results filled by the apply pass */
@@ -221,6 +268,10 @@ static unsigned g_sw_before, g_sw_after;
 static int      g_gametime, g_cap, g_limit_live, g_perplayer_live;
 static int      g_cam_x, g_cam_y, g_cam_h, g_cam_have, g_eye_x, g_eye_y, g_eye_have;
 static int      g_probe_have, g_probe_pass[3], g_probe_stored[3];
+static int      g_feat_cleared, g_objective_done, g_delayed_result;
+/* the slots the clear emptied: a runner's survivors, each one's death image its state at the
+   end of the last step */
+static int      g_cleared_slot[SCN_MAX_CLEAR], g_ncleared_slots;
 
 /* live map extents, reloaded every apply */
 static int   map_w, map_h, fmap_x, fmap_y;
@@ -406,6 +457,37 @@ static int req(const char* t, int* out)
     return num(t, out) && *out != SCN_UNSET;
 }
 
+/* One storage column: a finite float, 0 or more. The engine's storages are floats, so the
+   value is stored as the float the seat setup would store. */
+static int storage_value(const char* t, float* out)
+{
+    char*  end;
+    double v;
+
+    if (!t || !*t)
+        return 0;
+
+    v = strtod(t, &end);
+
+    if (end == t || *end || !(v >= 0.0) || v > 3.0e38)
+        return 0;
+
+    *out = (float)v;
+    return 1;
+}
+
+/* `after=<n>`, the ticks an order waits: 0..255 */
+static int after_value(const char* t, int* out)
+{
+    int v;
+
+    if (!t || strncmp(t, "after=", 6) || !req(t + 6, &v) || v < 0 || v > 255)
+        return 0;
+
+    *out = v;
+    return 1;
+}
+
 /* `name=value` in the sw / player / cam lines. */
 static int kv(char* t, char** key, int* value)
 {
@@ -489,11 +571,25 @@ static int stance(const char* t, int* out)
 
 static void arena_reset(void)
 {
+    int i;
+
     g_nunits = g_nfeats = g_norders = g_nerrs = g_errdrop = 0;
     g_seed = 0; g_clear = 1; g_abort = 1; g_limit = SCN_UNSET;
     g_map[0] = 0;
     g_sw_set = g_sw_clr = 0;
     g_npl = 0;
+    for (i = 0; i < 10; i++)
+    {
+        g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
+        g_pl_got_mstore[i] = g_pl_got_estore[i] = -1.0f;
+        g_pl_ai_done[i] = 0;
+    }
+    g_clearfeat = 0;
+    g_objective = -1;
+    g_feat_cleared = 0;
+    g_objective_done = -1;
+    g_delayed_result = 0;
+    g_ncleared_slots = 0;
     g_cam_kind = TGT_NONE; g_cam_a = g_cam_b = 0; g_cam_pin = 0;
     g_applied = g_failed = g_cleared = g_ord_ok = g_ord_fail = 0;
     g_nclear = 0;
@@ -742,10 +838,30 @@ static int parse_wire(char* text)
             g_pl_slot[g_npl] = slot;
             g_pl_metal[g_npl] = SCN_UNSET;
             g_pl_energy[g_npl] = SCN_UNSET;
+            g_pl_aioff[g_npl] = 0;
+            g_pl_hasstore[g_npl] = 0;
+            g_pl_mstore[g_npl] = g_pl_estore[g_npl] = 0.0f;
             while ((t = tok(&cur)) != 0)
             {
                 char* k;
                 int   v;
+                if (!strcmp(t, "ai=off"))
+                {
+                    g_pl_aioff[g_npl] = 1;
+                    continue;
+                }
+                if (!strncmp(t, "mstore=", 7) || !strncmp(t, "estore=", 7))
+                {
+                    float* dst = t[0] == 'm' ? &g_pl_mstore[g_npl] : &g_pl_estore[g_npl];
+                    if (!storage_value(t + 7, dst))
+                    {
+                        scn_err("line %d: `%.32s` wants a finite storage of 0 or more",
+                                line, t);
+                        return 0;
+                    }
+                    g_pl_hasstore[g_npl] |= t[0] == 'm' ? 1 : 2;
+                    continue;
+                }
                 if (!kv(t, &k, &v))
                 {
                     scn_err("line %d: `%.32s` is not name=value", line, t);
@@ -759,7 +875,38 @@ static int parse_wire(char* text)
                     return 0;
                 }
             }
+            /* The seat setup writes both base storages together (0x496F64..0x496F97), and a
+               half-given pair would leave the other at whatever the last level set. */
+            if (g_pl_hasstore[g_npl] && g_pl_hasstore[g_npl] != 3)
+            {
+                scn_err("line %d: a player's storage wants both mstore= and estore=", line);
+                return 0;
+            }
             g_npl++;
+            continue;
+        }
+
+        if (!strcmp(verb, "clearfeat"))
+        {
+            int v;
+            if (!req(tok(&cur), &v) || (v != 0 && v != 1) || tok(&cur))
+            {
+                scn_err("line %d: clearfeat wants 0 or 1", line);
+                return 0;
+            }
+            g_clearfeat = v;
+            continue;
+        }
+
+        if (!strcmp(verb, "objective"))
+        {
+            char* t = tok(&cur);
+            if (!t || (strcmp(t, "off") && strcmp(t, "on")) || tok(&cur))
+            {
+                scn_err("line %d: objective wants off or on", line);
+                return 0;
+            }
+            g_objective = t[1] == 'n';
             continue;
         }
 
@@ -872,9 +1019,15 @@ static int parse_wire(char* text)
                 return 0;
             }
             kind = tok(&cur);
-            if (!kind)
+            if (!kind || !strncmp(kind, "after=", 6))
             {
                 o->kind = TGT_NONE;
+                if (kind && !after_value(kind, &o->after))
+                {
+                    scn_err("line %d: order %d `%.24s` wants after=0..255", line, o->uord,
+                            kind);
+                    return 0;
+                }
             }
             else if (!strcmp(kind, "pos"))
             {
@@ -909,6 +1062,20 @@ static int parse_wire(char* text)
             {
                 scn_err("line %d: order target must be pos/unit/feat, got `%.16s`",
                         line, kind);
+                return 0;
+            }
+            if (o->kind != TGT_NONE)
+            {
+                char* t = tok(&cur);
+                if (t && !after_value(t, &o->after))
+                {
+                    scn_err("line %d: order %d `%.24s` wants after=0..255", line, o->uord, t);
+                    return 0;
+                }
+            }
+            if (tok(&cur))
+            {
+                scn_err("line %d: order %d has a column past its end", line, o->uord);
                 return 0;
             }
             g_norders++;
@@ -1071,12 +1238,120 @@ static int unit_type_index(char* ta, const char* name)
     return -1;
 }
 
+/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
+   -- write engine state no other machine sees: in a network game the peers would not see
+   the objective, the controller or the delayed orders, and on a puppet the recorder alone
+   writes the state the recording carries. So each is refused there, as an error naming the
+   key, which the wire's onerror then handles like any other. The rest of a seat's tests
+   are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
+   10, +0x73 in 1..3; DISASSEMBLED), narrowed to an AI seat (type 2) and never the
+   controlled seat. Each refused key is dropped, so `onerror=skip` applies the rest. */
+/* The level's objective, or NULL. LIFETIME: two places free it, both on the game thread and
+   neither inside the tick's visit (DISASSEMBLED): the `.ota` reader 0x435DA0, which frees the
+   old one as it makes the next at a level's setup, and the gaming state's destructor
+   0x434FF0, which frees main+0x391ED (0x43500E) and nulls it (0x43501C), called from
+   SetGameMode 0x434AB0 (0x434AD6) and 0x434B90 (0x434BCF) at a game-mode change. So the
+   pointer read here, at the apply visit, is this level's own for the whole visit. */
+static char* level_objective(char* ta)
+{
+    char* obj;
+
+    if (!readable(ta + OFF_OBJECTIVE, 4))
+        return 0;
+
+    obj = *(char**)(ta + OFF_OBJECTIVE);
+    return readable(obj, OBJ_ARMED + 4) ? obj : 0;
+}
+
+static int resolve_setup(char* ta)
+{
+    const char* why = 0;
+    int         bad = 0, i;
+
+    if (ta[OFF_NETWORK] & 1)
+        why = "a network game: the other peers would not see it";
+    else if (tagpu_puppet_on())
+        why = "a puppet: the recorder is the only writer of the recording's state";
+
+    if (why)
+    {
+        if (g_clearfeat)
+        {
+            scn_err("clear_features refused: %s", why);
+            g_clearfeat = 0;
+            bad++;
+        }
+        if (g_objective >= 0)
+        {
+            scn_err("objective refused: %s", why);
+            g_objective = -1;
+            bad++;
+        }
+        for (i = 0; i < g_npl; i++)
+        {
+            if (g_pl_aioff[i])
+            {
+                scn_err("player %d: ai off refused: %s", g_pl_slot[i], why);
+                g_pl_aioff[i] = 0;
+                bad++;
+            }
+            if (g_pl_hasstore[i])
+            {
+                scn_err("player %d: storage refused: %s", g_pl_slot[i], why);
+                g_pl_hasstore[i] = 0;
+                bad++;
+            }
+        }
+        for (i = 0; i < g_norders; i++)
+            if (g_orders[i].after > 0)
+            {
+                scn_err("order %d: after refused: %s", i, why);
+                g_orders[i].after = -1;
+                bad++;
+            }
+        return bad;
+    }
+
+    if (g_objective >= 0 && !level_objective(ta))
+    {
+        scn_err("objective: no objective in this level");
+        g_objective = -1;
+        bad++;
+    }
+
+    for (i = 0; i < g_npl; i++)
+    {
+        int   s  = g_pl_slot[i];
+        char* pl = player_at(ta, s);
+
+        if ((g_pl_aioff[i] || g_pl_hasstore[i]) && (!pl || !*(int*)(pl + PL_ACTIVE)))
+        {
+            scn_err("player %d is not in this game: its ai and storage keys are dropped", s);
+            g_pl_aioff[i] = g_pl_hasstore[i] = 0;
+            bad++;
+            continue;
+        }
+
+        if (g_pl_aioff[i] &&
+            (*(unsigned char*)(pl + PL_SELF) == 10 || *(unsigned char*)(pl + PL_TYPE) != 2 ||
+             s == *(unsigned char*)(ta + OFF_WATCHED)))
+        {
+            scn_err("player %d: ai off refused: not an AI seat other than the controlled one "
+                    "(type %d)", s, *(unsigned char*)(pl + PL_TYPE));
+            g_pl_aioff[i] = 0;
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 /* Layer 3: resolve everything against the LIVE game before creating anything.
    The CLI already checked these names against a catalogue, but the file is on
    disk and can be stale — a mod reload, a different game, an edited wire. */
 static int resolve_all(char* ta)
 {
-    int bad = 0, i;
+    int bad = resolve_setup(ta), i;
 
     for (i = 0; i < g_nunits; i++)
     {
@@ -1163,11 +1438,11 @@ static int resolve_all(char* ta)
             if (g_units[i].ok && g_units[i].owner >= 0 && g_units[i].owner < 10)
                 want[g_units[i].owner]++;
 
-        if (!g_clear && readable(beg, UNIT_STRIDE) && end > beg &&
+        if (!g_clear && readable(beg, UNIT_STRIDE) && end >= beg &&
             (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
         {
             char* u;
-            for (u = beg; u + UNIT_STRIDE <= end; u += UNIT_STRIDE)
+            for (u = beg; u <= end; u += UNIT_STRIDE)
             {
                 int owner;
                 if (!readable(u, UNIT_STRIDE))
@@ -1266,13 +1541,13 @@ static void snapshot_existing(char* ta)
 
     g_nclear = 0;
 
-    if (!readable(beg, UNIT_STRIDE) || end <= beg)
+    if (!readable(beg, UNIT_STRIDE) || end < beg)
         return;
 
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000)
         return;
 
-    for (u = beg; u + UNIT_STRIDE <= end; u += UNIT_STRIDE)
+    for (u = beg; u <= end; u += UNIT_STRIDE)
     {
         if (!readable(u, UNIT_STRIDE))
             break;
@@ -1294,6 +1569,7 @@ static void snapshot_existing(char* ta)
 static void clear_snapshot(char* ta)
 {
     unsigned saved = *(unsigned*)(ta + OFF_CMDRDEATH);
+    char*    beg = *(char**)(ta + OFF_BEGIN);
     int      i;
 
     *(unsigned*)(ta + OFF_CMDRDEATH) = 0;
@@ -1305,11 +1581,48 @@ static void clear_snapshot(char* ta)
         if (!readable(u, UNIT_STRIDE) || !(*(unsigned*)(u + U_STATE) & 0x10000000u))
             continue;
 
+        /* snapshot_existing took u from the array on a stride boundary, so this is its slot */
+        g_cleared_slot[g_ncleared_slots++] = (int)((u - beg) / UNIT_STRIDE);
         UNITS_KillUnit(u, 0);
         g_cleared++;
     }
 
     *(unsigned*)(ta + OFF_CMDRDEATH) = saved;
+}
+
+/* `clearfeat 1`: every feature of the level goes, through the engine's own BurnAll walker
+   0x424840, the console command's (0x416390) -- on the game thread at the apply visit, where
+   the console command also runs it [INFERRED: the console handler's context]. Its force 1
+   removes indestructible features and geothermal vents too, so a scenario that needs a vent
+   cannot use the key. FEATURES_Destroy 0x4246B0 frees each record, sets the cell empty and
+   refreshes pathing (0x440A40); it spawns no successor, which comes only from the swap
+   0x423710 (engine/map.md). The recorder sees each destroy as a root FR_DESTROY
+   (tagpu_recfmt.h). It runs after the unit clear: a wreck a death in the clear spawned is
+   burned with the rest. */
+static void clear_features(void)
+{
+    FEATURES_BurnAll();
+    g_feat_cleared = 1;
+}
+
+/* `objective off|on`. off is the engine's own disarm 0x4904B0, on its exact inverse, the
+   takeover's write (tagpu_replay.c tk_live): +0x88 = 1. The end tests run only in a step's
+   players phase (0x4650C9, 0x4650E1, 0x46516D, 0x46586F; tagpu_replay.c over tk_live), so a
+   write here, between two steps, is never seen half-done. resolve_setup refused a NULL
+   objective, and level_objective's lifetime holds for the visit. */
+static void apply_objective(char* ta)
+{
+    char* obj = level_objective(ta);
+
+    if (g_objective < 0 || !obj)
+        return;
+
+    if (g_objective)
+        *(unsigned*)(obj + OBJ_ARMED) = 1;
+    else
+        OBJECTIVE_Disarm(obj);
+
+    g_objective_done = g_objective;
 }
 
 static void apply_switches(char* ta)
@@ -1321,26 +1634,36 @@ static void apply_switches(char* ta)
     g_sw_after = *sw;
 }
 
-/* Player resources are the one thing in the schema the apply point cannot make
-   stick. The write lands — the offsets are confirmed against a live read — but
-   TA's economy pass 0x401360, once every 30 ticks for each local player,
-   recomputes storage from the units a player owns and clamps current to it;
-   current itself is carried forward (plus production, less expense), not
-   refilled [DISASSEMBLED]. Measured 2026-09-01: asking for 4321 metal against 50
-   storage, and even for 12 against the same 50, both read 50 again. The clamp
-   explains the 4321 only; the 12 is open (scenario-format.md, phase C).
+/* Player resources. TA's economy pass 0x401360, once every 30 ticks for each local player,
+   recomputes storage from the units a player owns and clamps current to it; current itself
+   is carried forward (plus production, less expense), not refilled (0x401AB3..0x401B27,
+   DISASSEMBLED). Measured 2026-09-01: asking for 4321 metal against 50 storage, and even for
+   12 against the same 50, both read 50 again. The clamp explains the 4321 only; the 12 is
+   open (scenario-format.md, phase C).
 
-   So the write stays (it is free, and correct where the engine has no opinion),
-   and the result reports the read-back from the SAME tick beside a second read
-   taken when the file is written. Requested, wrote, and what survived: an agent
-   sees the clamp instead of believing a number. Setting resources for real is a
-   launch-time problem and belongs to `scenario load`. */
+   The storage keys make a level stick: they are the seat setup's own writes (0x496EE0: the
+   bit at 0x496F5D, the floats at 0x496F64..0x496F97; DISASSEMBLED, engine/sim.md) -- +0x149
+   bit 0 and the base storages +0xDC (energy) and +0xE0 (metal) -- which the economy pass
+   adds to the storages it recomputes (0x401941, 0x401988..0x4019AA). Its only other writers
+   are the level setups, the loader, the record's init 0x4647EF and the commander's death:
+   the kill 0x4864B0 compares the dying unit's type name with its side's commander name
+   (0x4F8A70 at 0x486501) and on a match clears its seat's bit 0 (0x486518; DISASSEMBLED,
+   engine/units.md). The apply's own clear kills through 0x4864B0, so apply_now runs this
+   AFTER the clear: a skirmish's starting commanders, or a commander a later apply clears,
+   would otherwise take the bit with them. The storage writes land before the level writes,
+   so a level at or below the base storage survives the clamp.
+
+   The result reports the read-back from the SAME tick beside a second read taken when the
+   file is written: requested, wrote, and what survived. */
 static void apply_players(char* ta)
 {
     int i;
 
     for (i = 0; i < 10; i++)
+    {
         g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
+        g_pl_ai_done[i] = 0;
+    }
 
     for (i = 0; i < g_npl; i++)
     {
@@ -1348,6 +1671,30 @@ static void apply_players(char* ta)
 
         if (!pl)
             continue;
+
+        if (g_pl_hasstore[i])
+        {
+            *(unsigned char*)(pl + PL_BASEFLAG) |= 1;
+            *(float*)(pl + PL_BASESTORE_E) = g_pl_estore[i];
+            *(float*)(pl + PL_BASESTORE_M) = g_pl_mstore[i];
+            if (*(float*)(pl + PL_MAXENERGY) < g_pl_estore[i])
+                *(float*)(pl + PL_MAXENERGY) = g_pl_estore[i];
+            if (*(float*)(pl + PL_MAXMETAL) < g_pl_mstore[i])
+                *(float*)(pl + PL_MAXMETAL) = g_pl_mstore[i];
+            g_pl_got_estore[i] = *(float*)(pl + PL_BASESTORE_E);
+            g_pl_got_mstore[i] = *(float*)(pl + PL_BASESTORE_M);
+        }
+
+        /* The console's AI toggle on an AI seat (0x4162FE): the setter with type 1. The
+           players phase runs the stock AI 0x408C40 only for an active record of type 2
+           (0x465031), so the seat's units keep their orders and no planner runs; the economy
+           pass still runs for type 1, and the difficulty handicap scales type 2 only
+           (engine/units.md, the +0x73 row). The recorder records it as RK_CONTROLLER. */
+        if (g_pl_aioff[i])
+        {
+            PLAYER_SetController(pl, 1);
+            g_pl_ai_done[i] = 1;
+        }
 
         if (g_pl_metal[i] != SCN_UNSET)
         {
@@ -1685,6 +2032,317 @@ static void live_pos(char* u, int* x, int* alt, int* y)
 
 #define SCN_MAX_SEL 512
 
+/* The one order path, for an order at the apply and for a delayed one at its due visit: the
+   action TA's mapper 0x43F0E0 gives the command for this unit, then ORDERS_NewMainOrder2Unit
+   without Shift. 0 when the unit cannot take the order. */
+static int issue_one(int cmd, char* unit, void* target, int* pos)
+{
+    int   index = -1;
+    char* resolved = ScriptAction_Type2Index(&index, (unsigned)cmd, unit, target, pos);
+
+    if (!resolved)
+        return 0;
+
+    ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, unit, target, pos, 0, 0);
+    return 1;
+}
+
+/* ---- delayed orders ----------------------------------------------------------------
+   An order with `after=n` is issued through issue_one at the visit whose GameTime is the
+   apply's plus n, if its subject (and a unit target) is still the unit it was and a
+   feature target's cell still holds the same def. The pending table is the tick's: only
+   apply_now and delay_watch, both on the tick detour, touch it.
+
+   THE INVARIANT, an ordering and a bound:
+   - the watch sees every tick boundary: GameTime advances by at most 1 between two of its
+     visits, or every entry is cancelled as `skipped`. That cancel is fail-closed, never a
+     retry; the game's own pacing can batch 1..5 steps a frame (0x4953EF..0x4953FE), so a
+     delayed order needs the test turbo at k = 1 or a game that steps once a frame;
+   - between two consecutive steps a watched slot cannot hold a new unit: B4's hold never
+     gives a slot freed in the current step to a create (tagpu_patches.c, hit_take and
+     hit_reusable), so a unit that died is seen dead or freed at the visit after its death,
+     before any reuse. A create that asks for a slot (0x485F50's eighth argument non-zero,
+     read at 0x486002) bypasses the hold, and no such create runs in a single-player level
+     that plays: every engine call reachable in play pushes 0 (the only non-zero request is
+     the saved-game restore 0x48718E, in the loader), this applier passes 0, and the
+     replay's make() passes a recorded slot only for a puppet seat, where resolve_setup
+     refuses `after=` (DISASSEMBLED; engine/network.md, *The allocator*);
+   - an apply's own clear frees slots between two steps, which the fallback (hit_reusable:
+     freed in an earlier tick) could hand out in the next step before the watch's next
+     look, so the apply cancels every entry its clear touched in the same visit
+     (delay_cancel_cleared);
+   - PRECONDITION: every death while entries are pending happens inside a step or at an
+     apply. A kill made between two steps by anything else -- a console command in the
+     message pump, say -- frees a slot the fallback may refill in the next step before the
+     watch looks, which neither of the two rules above covers. The calibration runner's
+     lanes kill only through steps and applies;
+   - the table belongs to the level it was filled in: each entry's level is the
+     publisher's level generation (tagpu_packet_pub_level_gen), and a look in another level
+     cancels every entry, as does GameTime moving by anything but 0 or 1;
+   - an entry keeps a slot index, never a pointer, and every look forms the address only
+     after bounding the slot by the array (watched_unit). The array is fixed for the level
+     (Mode B, research/notes/thread-safe-destruction.md), so a stale slot costs a cancelled
+     order and never a read outside it. */
+typedef struct {
+    int            cmd, kind;
+    int            pos[3];                /* the apply's position, 16.16 (TGT_POS, TGT_FEAT) */
+    int            due;                   /* the GameTime of the visit that issues it        */
+    int            slot;                  /* the subject's slot, type word and owner         */
+    unsigned short type;
+    unsigned char  owner;
+    int            tslot;                 /* TGT_UNIT: the same watch of the target          */
+    unsigned short ttype;
+    unsigned char  towner;
+    int            cell;                  /* TGT_FEAT: the cell and its def word             */
+    unsigned short cdef;
+} scn_delayed;
+
+static scn_delayed g_delay[SCN_MAX_ORDERS];
+static int         g_ndelay;
+static unsigned    g_dl_level;            /* the level generation the table was filled in */
+static int         g_dl_last;             /* the GameTime the watch last looked at */
+/* counted over every entry since the last report line; `deaths` holds a subject's death and a
+   target's (a unit gone, or a feature cell whose def changed) */
+static struct { int of, issued, deaths, cleared, skipped; } g_dl;
+
+#define SCN_SLOT_MAX 20000                /* snapshot_existing's own bound on the array */
+#define U_DYING      0x4000u              /* +0x110 bit 14: the death is pending (engine/units.md) */
+static unsigned char g_slotbits[SCN_SLOT_MAX / 8 + 1];
+
+/* The slot of a unit pointer the apply holds, or -1 when it is not a slot of the array. */
+static int slot_of(char* ta, char* u)
+{
+    char* beg = *(char**)(ta + OFF_BEGIN);
+    char* end = *(char**)(ta + OFF_END);
+
+    if (!u || u < beg || u > end || (size_t)(u - beg) % UNIT_STRIDE)
+        return -1;
+
+    return (int)((u - beg) / UNIT_STRIDE);
+}
+
+/* The unit in `slot` when it is still the unit the entry watched, else 0. BOUNDED: the slot
+   is tested against the array, whose end is the last slot itself, inclusive (0x4855D6),
+   before any address is formed. A unit whose death is pending (+0x110 bit 14, which the next
+   step's reaper turns into the death, 0x48AFB9..0x48AFD1) still has its alive bit; it is dead
+   here, so its order is counted under deaths and never issued. */
+static char* watched_unit(char* beg, char* end, int slot, unsigned short type,
+                          unsigned char owner)
+{
+    char* u;
+
+    if (!beg || slot < 0 || (size_t)slot > (size_t)(end - beg) / UNIT_STRIDE)
+        return 0;
+
+    u = beg + (size_t)slot * UNIT_STRIDE;
+
+    if ((*(unsigned*)(u + U_STATE) & (0x10000000u | U_DYING)) != 0x10000000u ||
+        *(unsigned short*)(u + U_TYPEWORD) != type || *(unsigned char*)(u + U_OWNER) != owner)
+        return 0;
+
+    return u;
+}
+
+/* The def word of feature cell `cell`, bounded by the live grid's own size. */
+static int feat_cell_def(char* ta, int cell, unsigned short* def)
+{
+    int   fx = *(int*)(ta + OFF_FMAPX);
+    int   fy = *(int*)(ta + OFF_FMAPY);
+    char* fm = *(char**)(ta + OFF_FMAP);
+    char* c;
+
+    if (!fm || fx <= 0 || fy <= 0 || cell < 0 || (long long)cell >= (long long)fx * fy)
+        return 0;
+
+    c = fm + (size_t)cell * FM_STRIDE;
+
+    if (!readable(c, FM_STRIDE))
+        return 0;
+
+    *def = *(unsigned short*)(c + FM_DEF);
+    return 1;
+}
+
+static void delay_report(void)
+{
+    scnlogf("scenario: delayed orders: issued %d of %d, cancelled %d (deaths %d, cleared %d, "
+            "skipped %d)", g_dl.issued, g_dl.of, g_dl.deaths + g_dl.cleared + g_dl.skipped,
+            g_dl.deaths, g_dl.cleared, g_dl.skipped);
+    memset(&g_dl, 0, sizeof g_dl);
+}
+
+/* Cancels every pending entry when the table was filled in another level than the live one,
+   and says so. Returns 1 when it did. */
+static int delay_drop_other_level(void)
+{
+    if (!g_ndelay || g_dl_level == tagpu_packet_pub_level_gen())
+        return 0;
+
+    scnlogf("scenario: delayed orders: the level changed; %d pending cancelled", g_ndelay);
+    g_dl.skipped += g_ndelay;
+    g_ndelay = 0;
+    delay_report();
+    return 1;
+}
+
+/* An entry for subject `u` of order `o`, due at the apply's GameTime plus its after. 0 when
+   the table is full. */
+static int delay_add(char* ta, const scn_order* o, char* u, char* target, const int* pos)
+{
+    scn_delayed* d;
+
+    delay_drop_other_level();
+
+    if (g_ndelay >= SCN_MAX_ORDERS)
+        return 0;
+
+    if (!g_ndelay)
+        g_dl_level = tagpu_packet_pub_level_gen();
+
+    d = &g_delay[g_ndelay];
+    memset(d, 0, sizeof *d);
+    d->cmd = o->cmd;
+    d->kind = o->kind;
+    memcpy(d->pos, pos, sizeof d->pos);
+    d->due = g_gametime + o->after;
+    d->slot = slot_of(ta, u);
+    d->type = *(unsigned short*)(u + U_TYPEWORD);
+    d->owner = *(unsigned char*)(u + U_OWNER);
+    d->tslot = d->cell = -1;
+
+    if (o->kind == TGT_UNIT && target)
+    {
+        d->tslot = slot_of(ta, target);
+        d->ttype = *(unsigned short*)(target + U_TYPEWORD);
+        d->towner = *(unsigned char*)(target + U_OWNER);
+    }
+    else if (o->kind == TGT_FEAT && fmap_x > 0)
+    {
+        d->cell = g_feats[o->a].ay / 16 * fmap_x + g_feats[o->a].ax / 16;
+        if (!feat_cell_def(ta, d->cell, &d->cdef))
+            d->cell = -1;
+    }
+
+    /* the watch looks at every visit from this one on; an entry with no slot to watch is
+       cancelled at its first look, never issued */
+    g_dl_last = g_gametime;
+    g_dl.of++;
+    g_ndelay++;
+    return 1;
+}
+
+/* Right after an apply's clear: cancel every entry whose subject or unit target the clear
+   killed (the invariant above). */
+static void delay_cancel_cleared(void)
+{
+    int i, n;
+
+    if (!g_ndelay || !g_ncleared_slots)
+        return;
+
+    for (i = 0; i < g_ncleared_slots; i++)
+        if (g_cleared_slot[i] >= 0 && g_cleared_slot[i] <= SCN_SLOT_MAX)
+            g_slotbits[g_cleared_slot[i] >> 3] |= (unsigned char)(1u << (g_cleared_slot[i] & 7));
+
+#define SLOT_HIT(s) ((s) >= 0 && (s) <= SCN_SLOT_MAX && (g_slotbits[(s) >> 3] & (1u << ((s) & 7))))
+    for (i = n = 0; i < g_ndelay; i++)
+    {
+        if (SLOT_HIT(g_delay[i].slot) || (g_delay[i].kind == TGT_UNIT && SLOT_HIT(g_delay[i].tslot)))
+        {
+            g_dl.cleared++;
+            continue;
+        }
+        g_delay[n++] = g_delay[i];
+    }
+#undef SLOT_HIT
+
+    g_ndelay = n;
+    memset(g_slotbits, 0, sizeof g_slotbits);
+}
+
+/* At every visit of the tick site while entries are pending, before any apply of the same
+   visit, so the apply's creates come after the watch has seen this tick's deaths. */
+static void delay_watch(void)
+{
+    char* ta;
+    char* beg;
+    char* end;
+    int   now, i, n;
+
+    if (!g_ndelay || !(ta = ta_base()))
+        return;
+
+    now = *(int*)(ta + OFF_GAMETIME);
+
+    if (delay_drop_other_level() || now == g_dl_last)
+        return;
+
+    if (now != g_dl_last + 1)
+    {
+        scnlogf("scenario: delayed orders: GameTime went from %d to %d between two visits; "
+                "%d pending cancelled", g_dl_last, now, g_ndelay);
+        g_dl.skipped += g_ndelay;
+        g_ndelay = 0;
+        delay_report();
+        return;
+    }
+
+    g_dl_last = now;
+    beg = *(char**)(ta + OFF_BEGIN);
+    end = *(char**)(ta + OFF_END);
+
+    if (!readable(beg, UNIT_STRIDE) || end < beg || !readable(end, UNIT_STRIDE))
+        beg = end = 0;
+
+    for (i = n = 0; i < g_ndelay; i++)
+    {
+        scn_delayed*   d = &g_delay[i];
+        char*          u = watched_unit(beg, end, d->slot, d->type, d->owner);
+        char*          t = 0;
+        unsigned short def;
+        int            pos[3];
+
+        if (u && d->kind == TGT_UNIT)
+            t = watched_unit(beg, end, d->tslot, d->ttype, d->towner);
+
+        if (!u || (d->kind == TGT_UNIT && !t) ||
+            (d->kind == TGT_FEAT &&
+             (d->cell < 0 || !feat_cell_def(ta, d->cell, &def) || def != d->cdef)))
+        {
+            g_dl.deaths++;
+            continue;
+        }
+
+        if (d->due > now)
+        {
+            g_delay[n++] = *d;
+            continue;
+        }
+
+        memcpy(pos, d->pos, sizeof pos);
+
+        if (t)
+        {
+            int x, alt, y;
+            live_pos(t, &x, &alt, &y);
+            pos[0] = x << 16;
+            pos[1] = alt << 16;
+            pos[2] = y << 16;
+        }
+
+        if (issue_one(d->cmd, u, t, pos))
+            g_dl.issued++;
+        else
+            scnlogf("scenario: delayed order at GameTime %d: slot %d cannot take cmd %d",
+                    now, d->slot, d->cmd);
+    }
+
+    g_ndelay = n;
+
+    if (!n)
+        delay_report();
+}
+
 static void issue_orders(void)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -1797,14 +2455,29 @@ static void issue_orders(void)
             havepos = 1;
         }
 
+        /* LATER ------------------------------------------------------------ */
+        if (o->after < 0)
+        {
+            g_ord_fail++;                    /* refused by resolve_setup, which said why */
+            continue;
+        }
+
+        if (o->after > 0)
+        {
+            for (s = 0; s < nsubj; s++)
+                if (!delay_add(ta, o, subj[s], (char*)target, pos))
+                {
+                    g_ord_fail++;
+                    scn_err("order %d: %d delayed orders are pending already", i,
+                            SCN_MAX_ORDERS);
+                }
+            continue;
+        }
+
         /* ISSUE ------------------------------------------------------------ */
         for (s = 0; s < nsubj; s++)
         {
-            int   index = -1;
-            char* resolved = ScriptAction_Type2Index(&index, (unsigned)o->cmd,
-                                                     subj[s], target, pos);
-
-            if (!resolved)
+            if (!issue_one(o->cmd, subj[s], target, pos))
             {
                 g_ord_fail++;
                 scn_err("order %d: this unit cannot take that order (%.20s, cmd %d)",
@@ -1812,8 +2485,6 @@ static void issue_orders(void)
                 continue;
             }
 
-            ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, subj[s],
-                                     target, pos, 0, 0);
             g_ord_ok++;
 
             /* Read the stored order position back once, in whole world units, so the
@@ -1866,7 +2537,8 @@ static void resolve_camera(void)
 
 /* The one visit. Everything the scenario asks for lands here, in this order, so
    the situation is reproducible: switches first (units must spawn under the
-   rules the file asked for), then the clear, then entities, then orders. */
+   rules the file asked for), the players and the objective, then the clear (units,
+   then features), then entities, then orders. */
 static void apply_now(void)
 {
     char* ta = ta_base();
@@ -1886,9 +2558,9 @@ static void apply_now(void)
     {
         char* beg = *(char**)(ta + OFF_BEGIN);
         char* end = *(char**)(ta + OFF_END);
-        if (readable(beg, UNIT_STRIDE) && end > beg &&
+        if (readable(beg, UNIT_STRIDE) && end >= beg &&
             (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
-            g_cap = (int)((end - beg) / UNIT_STRIDE);
+            g_cap = (int)((end - beg) / UNIT_STRIDE) + 1;
     }
 
     if (map_w <= 0 || map_h <= 0)
@@ -1907,18 +2579,30 @@ static void apply_now(void)
     }
 
     apply_switches(ta);
-    apply_players(ta);
+    apply_objective(ta);
 
     if (g_clear)
     {
         snapshot_existing(ta);
         clear_snapshot(ta);
+        delay_cancel_cleared();
     }
+
+    /* after the clear: its commander kills clear +0x149 bit 0 (apply_players) */
+    apply_players(ta);
+
+    if (g_clearfeat)
+        clear_features();
 
     create_units();
     create_features();
     issue_orders();
     resolve_camera();
+
+    g_delayed_result = g_ndelay;
+
+    if (!g_ndelay && g_dl.of)
+        delay_report();
 }
 
 /* --------------------------------------------------------------- the detour
@@ -1933,6 +2617,8 @@ static void apply_now(void)
 
 static void __cdecl scn_tick(void)
 {
+    delay_watch();
+
     if (InterlockedCompareExchange(&g_state, ST_APPLYING, ST_ARMED) != ST_ARMED)
         return;
 
@@ -2030,6 +2716,14 @@ static void write_result(void)
     fprintf(f, ",\"applied\":%d,\"failed\":%d,\"cleared\":%d", g_applied, g_failed,
             g_cleared);
     fprintf(f, ",\"orders\":{\"issued\":%d,\"failed\":%d}", g_ord_ok, g_ord_fail);
+    fprintf(f, ",\"delayed\":%d,\"features_cleared\":%s", g_delayed_result,
+            g_feat_cleared ? "true" : "false");
+    if (g_objective_done >= 0)
+        fprintf(f, ",\"objective\":\"%s\"", g_objective_done ? "on" : "off");
+    fprintf(f, ",\"cleared_slots\":[");
+    for (i = 0; i < g_ncleared_slots; i++)
+        fprintf(f, "%s%d", i ? "," : "", g_cleared_slot[i]);
+    fprintf(f, "]");
     fprintf(f, ",\"map\":{\"name\":");
     jstr(f, g_map, sizeof g_map);
     fprintf(f, ",\"world\":[%d,%d],\"tiles\":[%d,%d]}", map_w, map_h, fmap_x, fmap_y);
@@ -2092,6 +2786,13 @@ static void write_result(void)
             if (pl)
                 fprintf(f, ",\"now\":{\"metal\":%d,\"energy\":%d}",
                         (int)*(float*)(pl + PL_METAL), (int)*(float*)(pl + PL_ENERGY));
+            if (g_pl_hasstore[i] && g_pl_got_mstore[i] >= 0.0f)
+                fprintf(f, ",\"storage\":[%.9g,%.9g]", (double)g_pl_got_mstore[i],
+                        (double)g_pl_got_estore[i]);
+            else if (g_pl_hasstore[i])
+                fprintf(f, ",\"storage\":null");
+            if (g_pl_ai_done[i])
+                fprintf(f, ",\"ai\":\"off\"");
             fprintf(f, "}");
         }
         fprintf(f, "}");

@@ -57,6 +57,10 @@
    tests/worldq/quickbuild.txt holds the answers hand-checked against art/wiki/entries/quickbuild.json's first
    scene; `wikitest worldq wiki.bin quickbuild | diff - tests/worldq/quickbuild.txt` holds the core to them.
 
+   `wikitest impai PAK ENTRY LAYOUT` plays ImpAI's knowledge tick for every seat over the core's WORLDQ through
+   each demo of a game entry and prints its digests every 30 ticks (impai_test says what); the three builds
+   must print the same lines, and it exits 1 when the threat map differs from its cell-by-cell definition.
+
    `wikitest malformed` loads data the loader must survive -- each case an archive or an entry
    built here -- and prints one line per case, "ok <case>" or "FAILED <case>: why". The native
    build runs under AddressSanitizer, so a write past an allocation fails the run as well.
@@ -72,6 +76,7 @@
 #include "tagpu_wikireplay.h"
 #include "tagpu_recrules.h"
 #include "tasim_worldq.h"
+#include "impai.h"
 #include "wikihost.h"
 #include "wikicobfile.h"
 
@@ -916,6 +921,175 @@ static int serve(int argc, char** argv)
     return wikihost_serve(stdin, instance, root);
 }
 
+/* ---- impai: ImpAI's knowledge and maps on the core's WORLDQ, over a game entry's demos ---- */
+
+#define IMPAI_TEST_SLOTS 1024
+
+static int impai_test_pass(const void* ctx, int mclass, int cx, int cz)
+{
+    const WORLDQ* q = (const WORLDQ*)ctx;
+    return q->ops->passable(q, mclass, cx, cz);
+}
+
+/* The stage's casts carry no weapons, so the test's threat table is fixed by type: dps 16 (t + 1) on the
+   ground, 8 (t + 1) in the air and 4 (t + 1) on water, range 96 + 32 t px, and the value metal + energy / R
+   of the cast's costs. */
+static void impai_test_threat(const WIKIENTRY* e, IMPAI_THREAT* t, int n)
+{
+    int i;
+    memset(t, 0, (size_t)n * sizeof *t);
+    for (i = 1; i < n && i - 1 < e->ndef; i++) {
+        const WIKIDEF* d = &e->def[i - 1];
+        const double v = d->build_cost_metal + d->build_cost_energy / TASIM_ROLES_R;
+        t[i].dps_ground = (uint16_t)(16 * i);
+        t[i].dps_air = (uint16_t)(8 * i);
+        t[i].dps_water = (uint16_t)(4 * i);
+        t[i].range = (uint16_t)(96 + 32 * (i - 1));
+        t[i].value = v > 0 ? (uint32_t)(v + 0.5) : 0;
+    }
+}
+
+/* the threat map recomputed cell by cell from its definition; the count of cells that differ */
+static int impai_test_brute(const IMPAI_VIEW* v, const IMPAI_MAPS* m)
+{
+    int bad = 0, layer, gx, gz, i;
+    for (layer = 0; layer < IMPAI_THREATS; layer++)
+        for (gz = 0; gz < m->gh; gz++)
+            for (gx = 0; gx < m->gw; gx++) {
+                uint64_t sum = 0;
+                for (i = 1; i < v->nrows; i++) {
+                    const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
+                    const IMPAI_THREAT* t;
+                    long long dx, dz;
+                    if (!r->how || r->owner == 0xFF || r->owner == v->seat || (v->allies >> r->owner & 1u) ||
+                        r->type == WQ_NONE || r->type >= v->ntypes)
+                        continue;
+                    t = &v->threat[r->type];
+                    dx = (long long)gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2 - (r->bx * 32 + 16);
+                    dz = (long long)gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2 - (r->bz * 32 + 16);
+                    if (dx * dx + dz * dz <= (long long)t->range * t->range)
+                        sum += layer == IMPAI_THREAT_GROUND ? t->dps_ground : layer == IMPAI_THREAT_AIR ? t->dps_air : t->dps_water;
+                }
+                bad += (sum > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sum) != m->threat[layer][gz * m->gw + gx];
+            }
+    return bad;
+}
+
+/* `wikitest impai PAK ENTRY LAYOUT`: every demo of the game entry the file ENTRY holds played through the
+   replay layer, and on each game tick every seat's impai_know_tick over the core's WORLDQ with the seat's lit
+   grid and contacts (the layout's sight table); every 30 ticks one line a seat, {"demo", "t", "seat", "known":
+   impai_known_digest, "maps": impai_maps_digest, "rows": its non-empty rows, "clusters", "work": the period's
+   largest slots, visits, cells and flood, "brute": threat cells that differ from impai_test_brute}, then
+   the class-0 reach labels' digest of the stage. Exit 1 when any line's brute is not 0. */
+static int impai_test(const char* path, const char* entry, const char* layout)
+{
+    static IMPAI_ROW rows[IMPAI_TEST_SLOTS];
+    static uint8_t bits[WIKI_SEATS][WQ_RADAR_BYTES(IMPAI_TEST_SLOTS)];
+    static SNAP_PATCH clusters[WIKI_SEATS][IMPAI_CLUSTERS];
+    static uint8_t lit[WIKI_SIGHT_GRID];
+    static uint32_t threat[IMPAI_THREATS][IMPAI_GRID_MAX * IMPAI_GRID_MAX];
+    static int32_t influence[IMPAI_GRID_MAX * IMPAI_GRID_MAX], diff[(IMPAI_GRID_MAX + 1) * IMPAI_GRID_MAX];
+    static uint16_t presence[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
+    static const IMPAI_BUDGET budget = { 64, 256, 4, 2 * SNAP_PATCH_CAP };
+    char err[256];
+    GAMERUN g;
+    SNAP_SCRATCH* scr = (SNAP_SCRATCH*)calloc(1, sizeof *scr);
+    IMPAI_THREAT* tt = NULL;
+    int j, k, rc = 0;
+    if (!scr) return 2;
+    if (!run_open(&g, path, entry, layout, "-", "-", 1, 0)) { free(scr); return 2; }
+    tt = (IMPAI_THREAT*)calloc((size_t)g.e.ndef + 1, sizeof *tt);
+    if (!tt) { run_close(&g); free(scr); return 2; }
+    impai_test_threat(&g.e, tt, g.e.ndef + 1);
+    for (j = 0; j < g.e.ndemo; j++) {
+        WIKIREPLAY r;
+        IMPAI_SEAT st[WIKI_SEATS];
+        IMPAI_WORK most[WIKI_SEATS];
+        int last = -1;
+        if (!tagpu_wikireplay_init(&r, &g.e, &g.e.demo[j], WIKI_PLAY_DEMO, g.lay, &g.ctx, err, sizeof err)) {
+            refused_line(g.e.id, g.e.demo[j].id, err);
+            continue;
+        }
+        memset(rows, 0, sizeof rows);
+        memset(bits, 0, sizeof bits);
+        memset(clusters, 0, sizeof clusters);
+        memset(st, 0, sizeof st);
+        memset(most, 0, sizeof most);
+        while (!r.done) {
+            WIKISIM* s = tagpu_wikireplay_game(&r);
+            const WIKIVIEW* v;
+            uint8_t* con;
+            if (!s || s->tick == last) { tagpu_wikireplay_step(&r); continue; }
+            last = s->tick;
+            v = tagpu_wikisim_view(s);
+            if (v->nunit != s->nunit || s->nunit + 1 > IMPAI_TEST_SLOTS || !(con = (uint8_t*)malloc((size_t)v->nunit + 1))) {
+                fprintf(stderr, "wikitest: impai %s: %d units past the test's slots or its view's\n", g.e.demo[j].id, s->nunit);
+                rc = 2;
+                break;
+            }
+            for (k = 0; k < v->nseat && k < WIKI_SEATS; k++) {
+                const IMPAI_ARRAYS a = { rows, IMPAI_TEST_SLOTS, bits[k], (int)sizeof bits[k], clusters[k] };
+                WQ_CORE core;
+                WORLDQ q;
+                IMPAI_WORK w;
+                tagpu_wikisim_sight_lit(v, g.lay ? &g.lay->sight : NULL, k, s->tick, lit);
+                tagpu_wikisim_contacts(v, lit, k, con);
+                if (!tasim_worldq_open(&core, &q, s, k)) continue;
+                core.lit = lit;
+                core.con = con;
+                if (impai_know_tick(&q, &st[k], &a, &budget, scr, &w) < 0) {
+                    printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"refused\":true}\n", g.e.demo[j].id, s->tick, k);
+                    continue;
+                }
+                if (w.slots > most[k].slots) most[k].slots = w.slots;
+                if (w.visits > most[k].visits) most[k].visits = w.visits;
+                if (w.cells > most[k].cells) most[k].cells = w.cells;
+                if (w.flood > most[k].flood) most[k].flood = w.flood;
+                if (s->tick % 30 == 0) {
+                    IMPAI_MAPS m = { 0, 0, 0, { threat[0], threat[1], threat[2] }, influence, presence, diff };
+                    IMPAI_VIEW iv = { k, rows, s->nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->W, s->H };
+                    int i, used = 0, bad;
+                    impai_maps_build(&iv, &m);
+                    bad = impai_test_brute(&iv, &m);
+                    for (i = 1; i < s->nunit + 1; i++) used += rows[i].seat[k].how != 0;
+                    printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"known\":\"%016llx\",\"maps\":\"%016llx\",\"rows\":%d,"
+                           "\"clusters\":%u,\"work\":[%u,%u,%u,%u],\"brute\":%d}\n",
+                           g.e.demo[j].id, s->tick, k, (unsigned long long)impai_known_digest(&iv),
+                           (unsigned long long)impai_maps_digest(&m), used, st[k].nclusters, most[k].slots,
+                           most[k].visits, most[k].cells, most[k].flood, bad);
+                    if (bad) rc = 1;
+                    memset(&most[k], 0, sizeof most[k]);
+                }
+            }
+            free(con);
+            if (rc == 2) break;
+            tagpu_wikireplay_step(&r);
+        }
+        if (rc != 2) {
+            WIKISIM* s = tagpu_wikireplay_game(&r);
+            WQ_CORE core;
+            WORLDQ q;
+            if (s && tasim_worldq_open(&core, &q, s, 0)) {
+                static uint16_t labels[(WIKI_MAP_MAX / 2) * (WIKI_MAP_MAX / 2)];
+                const size_t nl = (size_t)(s->W / 2) * (size_t)(s->H / 2);
+                void* work = malloc(impai_reach_work(s->W, s->H));
+                uint64_t h = 0xCBF29CE484222325ull;
+                size_t i;
+                int comps = work ? impai_reach_label(impai_test_pass, &q, 0, s->W, s->H, labels, work) : -1;
+                for (i = 0; i < nl; i++) h = (h ^ (labels[i] & 0xFF)) * 0x100000001B3ull, h = (h ^ (labels[i] >> 8)) * 0x100000001B3ull;
+                printf("{\"demo\":\"%s\",\"reach\":\"%016llx\",\"components\":%d}\n", g.e.demo[j].id, (unsigned long long)h, comps);
+                free(work);
+            }
+        }
+        tagpu_wikireplay_free(&r);
+        if (rc == 2) break;
+    }
+    free(tt);
+    free(scr);
+    run_close(&g);
+    return rc;
+}
+
 int main(int argc, char** argv)
 {
     int rc;
@@ -948,10 +1122,11 @@ int main(int argc, char** argv)
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
     if (argc == 4 && !strcmp(argv[1], "sightcost")) return sightcost(argv[2], atoi(argv[3]));
     if (argc == 4 && !strcmp(argv[1], "worldq")) return worldq(argv[2], argv[3]);
+    if (argc == 5 && !strcmp(argv[1], "impai")) return impai_test(argv[2], argv[3], argv[4]);
     fprintf(stderr, "usage: wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
             " | wikitest serve [--instance ID] [--packs-root DIR] | wikitest trace FILE"
             " | wikitest constants | wikitest rules FILE"
-            " | wikitest malformed | wikitest sightcost PAK N | wikitest worldq PAK ENTRY\n");
+            " | wikitest malformed | wikitest sightcost PAK N | wikitest worldq PAK ENTRY | wikitest impai PAK ENTRY LAYOUT\n");
     return 2;
 }

@@ -615,6 +615,8 @@ class Log:
     crash ends every wait at once (`alive`)."""
 
     ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
+    NAP_S = 0.4            # s between two reads of the log in a wait; the calibration runner,
+                           # which waits on one line per verb, reads it more often
 
     def __init__(self, w: Worker):
         self.w = w
@@ -670,7 +672,7 @@ class Log:
             start = len(self.lines)
             if time.time() >= end:
                 return None
-            nap(0.4)
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
@@ -689,7 +691,7 @@ class Log:
             if poll:
                 poll()
             stall.check()
-            nap(0.4)
+            nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
@@ -901,7 +903,7 @@ def run_to(w, log, G, steps, poll=None):
 
 def arm_dump(w, log, name, T):
     arm(w, log, f"dump {name} at {T}", rf"recorder: dump {name} armed for GameTime {T}",
-        rf"recorder: dump(:| {name}) .*(refused|please|not letters)", f"dump {name} at {T}")
+        _CLI_API.dump_refused_rx(name), f"dump {name} at {T}")
 
 
 def cover_ask(w, log, name):
@@ -1001,13 +1003,13 @@ def wait_dumps(log, names, running=False, playing=None):
     (`running`), bounded by a stall alone, and on a playing begun at the log's line `playing` by
     its end as well (wait_playing); else already taken, each line a frame's answer."""
     for name in names:
-        rx = (rf"recorder: dump {name} (at GameTime|for GameTime \d+ not taken|refused)"
-              rf"|recorder: dump {name}: ")
+        written = _CLI_API.dump_written_rx(name)
+        rx = f"{written}|{_CLI_API.dump_refused_rx(name)}"
         if running and playing is not None:
             got = wait_playing(log, rx, f"dump {name}", playing)
         else:
             got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
-        if not got or "at GameTime" not in got or "not taken" in got:
+        if not got or not re.search(written, got):
             raise CouldNotRun(f"dump {name}: {got.strip() if got else f'not taken in {ACK_S} s'}")
 
 
@@ -1090,7 +1092,7 @@ def twin(w, log, fix):
     g1 = w.gametime()
     n = len(log.lines)
     w.trigger("dump ln1 now")
-    if not log.wait(r"recorder: frame dump ln1 at GameTime", ACK_S, n):
+    if not log.wait(_CLI_API.dump_written_rx("ln1"), ACK_S, n):
         raise CouldNotRun(f"the twin: frame dump ln1 not taken in {ACK_S} s")
     # Sample clicks, cursor positions and camera positions while the world is
     # paused: returning to the same eye or coordinate would hide these viewer
@@ -1144,7 +1146,7 @@ def twin(w, log, fix):
                   i * map_height // (len(NULL_VIEWS) - 2))
             n = len(log.lines)
             w.trigger(f"dump {name} now")
-            if not log.wait(rf"recorder: frame dump {name} at GameTime", ACK_S, n):
+            if not log.wait(_CLI_API.dump_written_rx(name), ACK_S, n):
                 raise CouldNotRun(f"the twin: frame dump {name} not taken")
             if w.gametime() != g1:
                 raise CouldNotRun("the twin: GameTime moved during the viewer samples")
@@ -1159,7 +1161,7 @@ def twin(w, log, fix):
             step(w, "run", command)
         n = len(log.lines)
         w.trigger(f"dump {name} now")
-        if not log.wait(rf"recorder: frame dump {name} at GameTime", ACK_S, n):
+        if not log.wait(_CLI_API.dump_written_rx(name), ACK_S, n):
             raise CouldNotRun("the twin: selection frame dump not taken")
         if w.gametime() != g1:
             raise CouldNotRun("the twin: GameTime moved during the selection view")
@@ -1191,7 +1193,7 @@ def twin(w, log, fix):
         raise CouldNotRun(f"the twin: the in-game menu did not open: {last(o)}")
     n = len(log.lines)
     w.trigger("dump ln2 now")
-    if not log.wait(r"recorder: frame dump ln2 at GameTime", ACK_S, n):
+    if not log.wait(_CLI_API.dump_written_rx("ln2"), ACK_S, n):
         raise CouldNotRun(f"the twin: frame dump ln2 not taken in {ACK_S} s")
     if w.gametime() != g1:
         raise CouldNotRun("the twin: GameTime moved between its dumps")
@@ -2534,9 +2536,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         return [m["t"] for m in d["state"]["markers"] if m["kind"] == "bookmark"]
 
     def dump_now(dname):
-        arm(w, log, f"dump {dname} now", rf"recorder: frame dump {dname} at GameTime",
-            rf"recorder: (frame )?dump(:| {dname}) .*(refused|please|not letters|cannot)",
-            f"dump {dname} now")
+        arm(w, log, f"dump {dname} now", _CLI_API.dump_written_rx(dname),
+            _CLI_API.dump_refused_rx(dname), f"dump {dname} now")
         return copies(f"X2 {dname}", w.gamedir / "replays" / f"dump-{dname}.bin")[0]
 
     # 2. the seek path, 5 -> 2: GameTime T5 + 1 is in 5's own segment, which 2's chain lacks
@@ -4674,6 +4675,25 @@ def multiplayer_group(build, dll, out, keep):
     return reach, []
 
 
+def calibration_stale(base):
+    """The calibration references this landing made stale (tools/tasim/calib.py stale): counted
+    and reported, never re-measured here -- a re-measure is hours, `calib.py engine --stale`, on
+    the owner's schedule. None when the count could not be taken, which is said."""
+    r = subprocess.run([sys.executable, str(TREE / "tools" / "tasim" / "calib.py"), "stale",
+                        "--since", base, "--json"], capture_output=True, text=True, timeout=300)
+    try:
+        got = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        got = {"error": last(r.stdout + r.stderr) or f"exit {r.returncode}"}
+    if r.returncode or "error" in got:
+        say(f"calibration: the stale count could not be taken: {got.get('error')}")
+        return None
+    n = len(got["stale"])
+    say(f"calibration: {n} reference{'s' if n != 1 else ''} made stale by this landing"
+        + "".join(f"\n  {sid}: {'; '.join(why)}" for sid, why in sorted(got["stale"].items())))
+    return n
+
+
 def cmd_landing(args):
     base = args.base
     if args.check:
@@ -4697,6 +4717,7 @@ def cmd_landing(args):
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
         f"functions; {len(regions)} file-scope regions")
+    stale = calibration_stale(base) if gated_any else 0
     status = 0
     run = None
     if fx or multiplayer:
@@ -4758,6 +4779,7 @@ def cmd_landing(args):
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
                 f"multiplayer={','.join(MP_GAMES) if multiplayer else '-'} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
+                f"calibration_stale={'-' if stale is None else stale} "
                 f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")

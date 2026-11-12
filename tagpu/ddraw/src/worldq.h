@@ -116,6 +116,49 @@ enum { WQ_CAN_GUARD = 7, WQ_CAN_RECLAIM = 12 };     /* the resolver's modes the 
 
 typedef struct WQ_ECON { float metal, energy, metal_max, energy_max; } WQ_ECON;
 
+/* ---- what a seat sees (ImpAI: research/notes/modules/impai.md, What a seat knows) ---- */
+
+/* observe's classes, the first that holds winning: the seat's own unit; one its line of sight shows (owner and
+   type known); one an ally's shared radar shows; one the seat's own radar pass found (position only) */
+enum { WQ_SEEN_NONE, WQ_SEEN_OWN, WQ_SEEN_LOS, WQ_SEEN_SHARED, WQ_SEEN_CONTACT };
+enum { WQ_LAYER_SURFACE, WQ_LAYER_AIR, WQ_LAYER_SUBMERGED };
+typedef struct WQ_OBS {
+    uint8_t  seen;              /* WQ_SEEN_*                                                               */
+    uint8_t  owner;             /* 0..9; 0xFF when not identified (SHARED, CONTACT)                        */
+    uint16_t type;              /* WQ_NONE when not identified                                             */
+    uint16_t bx, bz;            /* the 32-px block of the unit's position, held to the map                 */
+    uint8_t  layer;             /* WQ_LAYER_*                                                              */
+} WQ_OBS;
+
+/* A radar pass's answer, one nibble a slot (slot k: byte k / 2, the low nibble for an even k): the engine's
+   +0x110 bits 8 and 9 as the pass would leave them for the seat, whether a jammer reached the unit (bit 10),
+   and whether the pass's first loop kept the unit's bits (an own or shared unit), whose bit 10 the engine
+   does not clear. */
+#define WQ_RB_RADAR   0x1u
+#define WQ_RB_SONAR   0x2u
+#define WQ_RB_JAMMED  0x4u
+#define WQ_RB_KEPT    0x8u
+#define WQ_RADAR_BYTES(nslots) (((unsigned)(nslots) + 1u) / 2u)
+static inline unsigned wq_radar_bits(const uint8_t* bits, unsigned slot)
+{
+    return (unsigned)(bits[slot / 2] >> ((slot & 1u) * 4u)) & 0xFu;
+}
+static inline void wq_radar_set(uint8_t* bits, unsigned slot, unsigned v)
+{
+    const unsigned sh = (slot & 1u) * 4u;
+    bits[slot / 2] = (uint8_t)((bits[slot / 2] & ~(0xFu << sh)) | ((v & 0xFu) << sh));
+}
+
+/* A radar pass's progress: the CALLER's state, plain values, so a pass that spans calls can live in recorded
+   state. Stage 0 is idle: the next call starts a pass. */
+enum { WQ_RS_IDLE, WQ_RS_EMIT, WQ_RS_JAM };
+typedef struct WQ_RADAR {
+    uint8_t  stage;             /* WQ_RS_*                                                                 */
+    uint8_t  pad;
+    uint16_t cursor;            /* the next slot of the stage                                              */
+    uint32_t start;             /* the gametime the pass began                                             */
+} WQ_RADAR;
+
 typedef struct WORLDQ WORLDQ;
 typedef struct WORLDQ_OPS {
     int (*map)(const WORLDQ*, WQ_MAP* out);
@@ -170,7 +213,22 @@ typedef struct WORLDQ_OPS {
     /* WQ_OK, or WQ_UNSUPPORTED where the world keeps no such figures */
     int (*economy)(const WORLDQ*, WQ_ECON* out);
     int (*gametime)(const WORLDQ*);
+    /* What the seat may know of the unit at `slot`, the first class that holds: WQ_SEEN_OWN, _LOS, _SHARED,
+       or, when `contact` says the seat's own radar pass found the slot (radar_step's bits), _CONTACT; 0 for
+       none, out zeroed. Another player's unit reaches a rule through here alone */
+    int (*observe)(const WORLDQ*, int slot, int contact, WQ_OBS* out);
+    /* the seat sees 32-px block (bx, bz) now; 0 off the map */
+    int (*block_lit)(const WORLDQ*, int bx, int bz);
+    /* Advances the seat's radar pass in `st` while *budget is above 0, a whole emitter's or jammer's walk at a
+       time, and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
+       WQ_RADAR_BYTES(nslots) bytes. 1 when the pass is complete: `bits` holds its answer and `st` is idle */
+    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget);
+    /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
+       passable but bad, 3 good; 0 off the map and for a class the world does not have */
+    int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
 } WORLDQ_OPS;
+
+#define WQ_MCLASSES 32              /* the engine's movement classes, 0x512358 .. 0x512758 */
 
 struct WORLDQ { const WORLDQ_OPS* ops; void* self; int seat; };
 

@@ -1251,6 +1251,101 @@ class ScenarioWire(unittest.TestCase):
         self.assertEqual(self.wire(scn(units=[unit()]))[-1], "end")
 
 
+class ScenarioCalibrationKeys(unittest.TestCase):
+    """The keys the calibration runner resets a level with: clear_features, objective, a
+    seat's ai and storage, an order's after. Each is accepted with its exact wire line, and
+    a wrong value is refused."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def players(self, **kw):
+        p = {"slot": 1, "controller": "ai"}
+        p.update(kw)
+        return [{"slot": 0, "controller": "human"}, p]
+
+    def test_clear_features_writes_its_line_only_when_true(self):
+        self.assertIn("clearfeat 1", self.wire(scn(setup={"clear_features": True})))
+        self.assertFalse(any(l.startswith("clearfeat")
+                             for l in self.wire(scn(setup={"clear_features": False}))))
+
+    def test_objective_off_and_on(self):
+        self.assertIn("objective off", self.wire(scn(setup={"objective": "off"})))
+        self.assertIn("objective on", self.wire(scn(setup={"objective": "on"})))
+        self.assertFalse(any(l.startswith("objective") for l in self.wire(scn())))
+
+    def test_objective_refuses_another_word(self):
+        with refuses(self):
+            compile_doc(scn(setup={"objective": "armed"}))
+
+    def test_a_calib_block_compiles_and_never_reaches_the_wire(self):
+        lines = self.wire(scn(calib={"kind": ["winrate"], "metrics": ["winner"]}))
+        self.assertFalse(any("calib" in l for l in lines[1:]))
+        with refuses(self):
+            compile_doc(scn(calib=["winrate"]))
+
+    def test_ai_off_and_storage_on_the_player_line(self):
+        lines = self.wire(scn(setup={"players": self.players(
+            ai="off", storage={"metal": 1000000, "energy": 5000.5})}))
+        self.assertIn("player 1 ai=off mstore=1000000 estore=5000.5", lines)
+
+    def test_storage_rides_beside_the_level(self):
+        lines = self.wire(scn(setup={"players": self.players(
+            metal=500, storage={"metal": 5000, "energy": 5000})}))
+        self.assertIn("player 1 metal=500 energy=- mstore=5000 estore=5000", lines)
+
+    def test_storage_silences_the_launch_time_warning(self):
+        plain = compile_doc(scn(setup={"players": self.players(metal=500)}))
+        held = compile_doc(scn(setup={"players": self.players(
+            metal=500, storage={"metal": 5000, "energy": 5000})}))
+        self.assertTrue(any("launch-time" in w for w in plain["warnings"]))
+        self.assertFalse(any("launch-time" in w for w in held["warnings"]))
+
+    def test_ai_refuses_anything_but_off(self):
+        with refuses(self):
+            compile_doc(scn(setup={"players": self.players(ai="on")}))
+
+    def test_storage_wants_both_and_nothing_else(self):
+        for bad in ({"metal": 5}, {"metal": 5, "energy": 5, "fuel": 1},
+                    {"metal": -1, "energy": 5}, {"metal": "5", "energy": 5},
+                    {"metal": True, "energy": 5}, {"metal": float("inf"), "energy": 5}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(setup={"players": self.players(storage=bad)}))
+
+    def test_an_unknown_player_key_stays_fatal(self):
+        with refuses(self):
+            compile_doc(scn(setup={"players": self.players(aioff=True)}))
+
+    def test_after_rides_on_every_order_shape(self):
+        lines = self.wire(scn(
+            units=[unit(id="a", orders=[{"cmd": "move", "to": [2400, 1200], "after": 7},
+                                        {"cmd": "attack", "target": "b", "after": 1},
+                                        {"cmd": "reclaim", "target": "w", "after": 255},
+                                        {"cmd": "stop", "after": 3}]),
+                   unit(id="b", pos=[10, 10])],
+            features=[{"id": "w", "type": "TREE1", "pos": [20, 20]}]))
+        self.assertIn("order 0 move pos 2400 1200 after=7", lines)
+        self.assertIn("order 0 attack unit 1 after=1", lines)
+        self.assertIn("order 0 reclaim feat 0 after=255", lines)
+        self.assertIn("order 0 stop after=3", lines)
+
+    def test_after_zero_is_the_plain_order(self):
+        self.assertIn("order 0 move pos 2400 1200",
+                      self.wire(scn(units=[unit(orders=[{"cmd": "move", "to": [2400, 1200],
+                                                         "after": 0}])])))
+
+    def test_after_outside_a_byte_is_fatal(self):
+        for bad in (-1, 256, 1.5, "7"):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(orders=[{"cmd": "stop", "after": bad}])]))
+
+    def test_the_calibration_scenarios_compile(self):
+        for path in sorted((Path(__file__).resolve().parents[1] / "scenarios" / "calib")
+                           .glob("*.json")):
+            with self.subTest(path=path.name):
+                tacli._scn_wire(tacli._scn_compile(str(path)))
+
+
 class ScenarioResults(unittest.TestCase):
     """The fork answers by ordinal; the CLI puts the author's handles back."""
 
@@ -1327,6 +1422,18 @@ class LoadComposition(unittest.TestCase):
 
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
+
+    def test_an_impai_seat_is_a_computer_seat_to_the_engine(self):
+        # ImpAI is chosen by the store's seatai, never by the controller the registry holds
+        self.assertEqual(self.flags([{"slot": 2, "controller": "impai",
+                                      "side": "core"}]), ["2:2:1"])
+
+    def test_the_difficulty_is_a_word_and_absent_leaves_the_screen_alone(self):
+        self.assertEqual(tacli._scn_setup({"setup": {"difficulty": "easy"}}, "t")["difficulty"],
+                         "easy")
+        self.assertIsNone(tacli._scn_setup({"setup": {}}, "t")["difficulty"])
+        with refuses(self):
+            tacli._scn_setup({"setup": {"difficulty": "brutal"}}, "t")
 
     def launch_values(self, players):
         class BeforeLaunch(Exception):
@@ -1720,6 +1827,39 @@ class SettingsStore(unittest.TestCase):
     def test_vsync_is_a_harness_key(self):
         # a --shipped launch hands it to the player with the rest of the placement
         self.assertIn("vsync", tacli.HARNESS_KEYS)
+
+    def test_seatai_is_written_whole_and_none_for_no_seat(self):
+        # a scenario launch writes it every time, so a stale line never seats ImpAI
+        self.assertIn("seatai", tacli.HARNESS_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            cfg.write_text("gamma=12\nseatai=3\n")
+            tacli.write_seatai(inst, [2, 1])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=1,2"])
+            tacli.write_seatai(inst, [])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+            tacli.write_seatai(inst, None)
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+
+    def test_every_harness_launch_writes_seatai(self):
+        # a launch that names no seat replaces a stale choice with none; one that names seats
+        # writes them
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nseatai=2\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=[2]))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("seatai=2", lines)
+            self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
 
 
 # ----------------------------------------------------------- remote instances
@@ -4056,6 +4196,77 @@ class PrefixLeftovers(unittest.TestCase):
             self.addCleanup(p.kill)
             pids.append(p.pid)
         self.assertEqual(sorted(p["pid"] for p in tacli.prefix_processes(prefix)), sorted(pids))
+
+
+
+class DumpLines(unittest.TestCase):
+    """dump_written_rx and dump_refused_rx against the lines the recorder actually writes: every
+    tagpu_logf format of tagpu_recorder.c that names a dump, rendered with sample arguments. A
+    changed format fails here, not as a dump nobody saw in a game."""
+
+    SRC = Path(__file__).resolve().parents[1] / "tagpu" / "ddraw" / "src" / "tagpu_recorder.c"
+    CALL = re.compile(r'tagpu_logf\(((?:\s*"(?:[^"\\]|\\.)*")+)')
+    LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
+    CONV = re.compile(r"%(\.\*)?[-+ #0-9]*(?:l|ll|h)?([sdux])")
+
+    def formats(self):
+        text = self.SRC.read_text(encoding="latin-1")
+        out = []
+        for m in self.CALL.finditer(text):
+            fmt = "".join(self.LIT.findall(m.group(1)))
+            if re.match(r"recorder: (frame )?dump[ :]", fmt):
+                out.append(fmt)
+        return out
+
+    def render(self, fmt, name):
+        first = [True]
+
+        def arg(m):
+            if m.group(2) == "s" or m.group(1):
+                if first[0]:
+                    first[0] = False
+                    return name
+                return "replays\\dump-x.bin"
+            return "331"
+        return self.CONV.sub(arg, fmt.replace("%%", "%"))
+
+    def classify(self, fmt):
+        if " armed for GameTime " in fmt:
+            return "armed"
+        if "the dump leaves" in fmt:
+            return "note"
+        if "bytes of records" in fmt:
+            return "written"
+        return "refused"
+
+    def test_every_dump_format_is_classified_by_the_patterns(self):
+        fmts = self.formats()
+        kinds = {self.classify(f) for f in fmts}
+        self.assertEqual(kinds, {"armed", "note", "written", "refused"}, fmts)
+        written = re.compile(tacli.dump_written_rx("e0"))
+        refused = re.compile(tacli.dump_refused_rx("e0"))
+        for fmt in fmts:
+            line = self.render(fmt, "e0")
+            kind = self.classify(fmt)
+            self.assertEqual(bool(written.search(line)), kind == "written", line)
+            self.assertEqual(bool(refused.search(line)), kind == "refused", line)
+
+    def test_the_written_line_gives_its_gametime_and_path(self):
+        frame = ("recorder: frame dump calibfeat at GameTime 120 (iteration 121) -> "
+                 "replays\\dump-calibfeat.bin (8962308 bytes of records); 0 records with a body "
+                 "past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("calibfeat"), frame)
+        self.assertEqual((m["t"], m["iteration"], m["path"], m["bytes"]),
+                         ("120", "121", "replays\\dump-calibfeat.bin", "8962308"))
+        armed = ("recorder: dump w331 at GameTime 331 -> replays\\dump-w331.bin (100 bytes of "
+                 "records); 0 records with a body past 0xFFFF bytes not written")
+        m = re.search(tacli.dump_written_rx("w331"), armed)
+        self.assertEqual((m["t"], m["iteration"]), ("331", None))
+
+    def test_another_dumps_line_is_not_this_ones(self):
+        line = ("recorder: frame dump e01 at GameTime 5 (iteration 6) -> replays\\dump-e01.bin "
+                "(9 bytes of records); 0 records with a body past 0xFFFF bytes not written")
+        self.assertIsNone(re.search(tacli.dump_written_rx("e0"), line))
 
 
 if __name__ == "__main__":

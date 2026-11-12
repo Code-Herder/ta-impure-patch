@@ -50,4 +50,17 @@ int      tagpu_worldq_def_kind(const void* def);
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
 
+/* The line-of-sight rule `observe` applies, alone, for ImpAI's self-check against the engine's own
+   0x465AC0: 1 when the seat's sight shows the live unit at `slot`, 0 when not, -1 for no live unit or no
+   sight grid; *under is 1 for a unit whose top is below the sea, which the rule never shows. The caller
+   tests ownership first, as 0x465AC0 does. */
+int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under);
+
+/* The engine's pathing map of movement class `mclass` at cell (cx, cz), as the passable op answers it, with
+   no seat: 0 blocked, off the map or for a class the level has not, 1 bad, 3 good. On the loader thread
+   after the level's class maps are built (0x4918E3: from the level init on), or on the game thread. */
+int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz);
+/* the level has movement class `mclass` (its record names one) */
+int tagpu_worldq_class_exists(unsigned mclass);
+
 #endif

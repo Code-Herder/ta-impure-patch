@@ -108,6 +108,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_refuse.h"
 #include "tagpu_replay.h"
+#include "tagpu_impai.h"
 #include "tagpu_zoom.h"
 #include "crc32.h"
 #include "git.h"
@@ -2176,7 +2177,7 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         pl[2] = info ? info[0x95] : 0xFF;
         pl[3] = info ? info[0x96] : 0xFF;
         memcpy(pl + 4, rec + PL_ALLY, 11);
-        pl[15] = 0;
+        pl[15] = (unsigned char)tagpu_impai_seat_ai(i);
         if (info) memcpy(pl + 16, info, REC_INFO_BYTES);
         else memset(pl + 16, 0xFF, REC_INFO_BYTES);
         n = (unsigned)bounded_len(rec + PL_NAME, PL_NAMELEN);

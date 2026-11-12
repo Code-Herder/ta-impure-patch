@@ -501,10 +501,469 @@ static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 
 static int wq_gametime(const WORLDQ* q) { return *(const int*)(ctx_of(q)->ta + OFF_GAMETIME); }
 
+/* ---- what a seat sees: 0x465AC0's line of sight and 0x467440's radar pass, for any seat ---- */
+
+#define U_ALIVE    0x10000000u
+#define U_DYING    0x4000u
+#define D_LOS_X    0x15E        /* the line-of-sight box: its first point's offsets from the unit */
+#define D_LOS_Y    0x16E
+#define D_LOS_Z    0x166
+#define D_BOX_X    0x176        /* and the box's extents                                          */
+#define D_BOX_Y    0x17A
+#define D_BOX_Z    0x17E
+#define D_RADAR    0x204
+#define D_SONAR    0x206
+#define D_JAM_R    0x20A
+#define D_JAM_S    0x20C
+#define PL_LOS     0x7C         /* u8[] the line-of-sight counters, +0x80 x +0x84 blocks          */
+#define PL_LOS_W   0x80
+#define PL_LOS_H   0x84
+#define PL_ALLY    0x108        /* u8[11] byte j: this record allies record j                     */
+#define PL_MAPBIT  0x146        /* the record's bit in the mapped grid, its player index          */
+#define PI_SHARE   0x97         /* PlayerInfo: bit 0x40 ShareRadar                                */
+#define PI_WATCH   0x9B         /* PlayerInfo: bit 0x40 a watcher                                 */
+
+static int asr5(int v) { return v >> 5; }      /* `sar r,5`: GCC shifts a negative int arithmetically */
+static int hiword(int32_t v) { return (int16_t)((uint32_t)v >> 16); }   /* `movsx r,word [v+2]`          */
+
+/* The seat's sight: its record's line-of-sight counters and its bit of the mapped grid. The player init sizes
+   both grids from the map, +0x80 = W16 / 2 and +0x84 = H16 / 2 (0x46482B..0x46484F), and allocates the counters
+   that size; LoadMap allocates the mapped grid W16 x H16 / 4 u16. So the record's sizes are held to the map's
+   halves -- the open's even W and H -- before either grid is indexed by them. */
+typedef struct SIGHT {
+    const uint8_t*  los;
+    const uint16_t* mapped;
+    unsigned        w, h, bit;
+    int             truelos;    /* LosType bit 1 (main+0x14281): the counters; else the mapped grid  */
+} SIGHT;
+
+static int sight_of(const WQ_ENGINE* c, SIGHT* s)
+{
+    s->w = *(const unsigned*)(c->rec + PL_LOS_W);
+    s->h = *(const unsigned*)(c->rec + PL_LOS_H);
+    s->los = *(const uint8_t* const*)(c->rec + PL_LOS);
+    s->mapped = *(const uint16_t* const*)(c->ta + 0x14273);
+    s->bit = *(const unsigned char*)(c->rec + PL_MAPBIT);
+    s->truelos = (*(const unsigned char*)(c->ta + OFF_LOSTYPE) & 2) != 0;
+    if (s->w != (unsigned)c->w / 2 || s->h != (unsigned)c->h / 2) return 0;
+    return s->truelos ? s->los != NULL : s->mapped != NULL && s->bit < 16;
+}
+
+/* Where 0x465AC0 reads a point, and loop 5 of 0x467440 its unit's origin: col = x >> 5 and the row sheared by
+   the altitude, (z - (y >> 1)) >> 5, on the 16.16 values' high words (`movsx` and `sar`), each under an
+   unsigned bound on the record's sizes (0x465B6A..0x465B93 and the three copies; 0x408095..0x4080BF;
+   0x46776B..0x467790, 0x4677B1..0x4677D6; DISASSEMBLED). THE LIVE RULE, not the retail one: tagpu_patches.c's
+   fix_los_shear rewrites every one of these row tests (LOS_UNIT, LOS_MAPPED, LOS_VIEWMAP), so a point whose
+   sheared row is off the grid is read at its own row, z >> 5, when that one is on it. It installs with the
+   simulation fixes' table, and the self-check (tagpu_impai.c) holds this copy to the engine's answers. */
+static int sight_block(const SIGHT* s, int32_t x, int32_t y, int32_t z, unsigned* k)
+{
+    const int col = asr5(hiword(x));
+    int row = asr5(hiword(z) - (hiword(y) >> 1));
+    if ((unsigned)col >= s->w) return 0;
+    if ((unsigned)row >= s->h && (unsigned)(row = asr5(hiword(z))) >= s->h) return 0;
+    *k = (unsigned)row * s->w + (unsigned)col;
+    return 1;
+}
+
+/* The block's answer: under True line of sight the record's counters, as 0x465AC0 reads them for whatever
+   record it is given. Otherwise the mapped grid with THE SEAT'S OWN BIT, rec+0x146: 0x408090, the inline
+   copy at 0x465DE0 and loop 5 test the bit of the viewed player main[0x2A43] whatever record asks
+   (0x4080E0..0x4080F4, 0x465E00, 0x467743; DISASSEMBLED), so the engine has no per-seat answer in these modes.
+   The stamp 0x481930 writes every record's own bit (1 << rec+0x146, 0x481940..0x481951), so the seat's bit is
+   the seat's map, and for the viewed seat this is the engine's own answer. */
+static int sight_lit(const SIGHT* s, unsigned k)
+{
+    return s->truelos ? s->los[k] != 0 : (s->mapped[k] >> s->bit) & 1u;
+}
+
+/* A unit of any owner at `slot` with the alive bit, dying or not -- the line of sight and the radar pass test
+   bit 28 alone -- whose definition is one, or NULL. */
+static const char* seen_unit(const WQ_ENGINE* c, unsigned slot, const char** def)
+{
+    const char* u;
+    unsigned id;
+    if (!slot || slot >= c->nslots) return NULL;
+    u = c->units + slot * UNIT_STRIDE;
+    if (!(*(const unsigned*)(u + U_FLAGS) & U_ALIVE) || !(id = def_id(c, u))) return NULL;
+    *def = c->defs + id * D_STRIDE;
+    return u;
+}
+
+/* The unit's top is below the sea: y + def+0x16E < sea << 16, 0x465AC0's own test (0x465B41..0x465B4E). */
+static int submerged(const WQ_ENGINE* c, const char* u, const char* d)
+{
+    const int32_t top = (int32_t)((uint32_t)*(const int32_t*)(u + U_ZFIX) + (uint32_t)*(const int32_t*)(d + D_LOS_Y));
+    return top < (int32_t)((unsigned)*(const unsigned char*)(c->ta + OFF_SEALEVEL) << 16);
+}
+
+/* 0x465AC0(player, unit), stdcall `ret 8`, writes nothing (DISASSEMBLED 0x465AC0..0x465E1E), for the seat:
+     - its own unit (+0x96 is the record) is seen; the callers here test ownership first;
+     - a unit with +0x10E bit 2, cloaked, is not;
+     - a SUBMERGED unit -- its first point below the sea -- is seen by the engine only when +0x110 bit 9 is set,
+       which is the VIEWED player's sonar contact (loop 2 of 0x467440): for any other seat that bit is another
+       player's radar. So ImpAI never takes a submerged unit as seen; it reaches the seat as its own sonar
+       contact alone (radar_step);
+     - otherwise four points, the first that is seen deciding: P = (x + def+0x15E, y + def+0x16E,
+       z + def+0x166) (0x465AFD..0x465B3B), then x + def+0x176 (0x465BDB..0x465BED), then
+       y - def+0x17A and z + def+0x17E (0x465C73..0x465C90), then x - def+0x176 (0x465D19..0x465D31): 16.16
+       dwords added as the engine adds them, wrapping. */
+static int unit_los(const WQ_ENGINE* c, const SIGHT* s, const char* u, const char* d)
+{
+    uint32_t x, y, z;
+    unsigned k;
+    if (*(const unsigned char*)(u + U_CLOAKF) & 4u || submerged(c, u, d)) return 0;
+    x = (uint32_t)*(const int32_t*)(u + U_XFIX) + (uint32_t)*(const int32_t*)(d + D_LOS_X);
+    y = (uint32_t)*(const int32_t*)(u + U_ZFIX) + (uint32_t)*(const int32_t*)(d + D_LOS_Y);
+    z = (uint32_t)*(const int32_t*)(u + U_YFIX) + (uint32_t)*(const int32_t*)(d + D_LOS_Z);
+    if (sight_block(s, (int32_t)x, (int32_t)y, (int32_t)z, &k) && sight_lit(s, k)) return 1;
+    x += (uint32_t)*(const int32_t*)(d + D_BOX_X);
+    if (sight_block(s, (int32_t)x, (int32_t)y, (int32_t)z, &k) && sight_lit(s, k)) return 1;
+    z += (uint32_t)*(const int32_t*)(d + D_BOX_Z);
+    y -= (uint32_t)*(const int32_t*)(d + D_BOX_Y);
+    if (sight_block(s, (int32_t)x, (int32_t)y, (int32_t)z, &k) && sight_lit(s, k)) return 1;
+    x -= (uint32_t)*(const int32_t*)(d + D_BOX_X);
+    return sight_block(s, (int32_t)x, (int32_t)y, (int32_t)z, &k) && sight_lit(s, k);
+}
+
+/* A record's PlayerInfo, 0xB9 bytes the record's constructor allocates (0x463C14) and the reset keeps
+   (engine/units.md, the player record); the record is one of main's ten by its index. NULL for none. */
+static const unsigned char* player_info(const WQ_ENGINE* c, unsigned player)
+{
+    return player < PLAYER_COUNT
+        ? *(const unsigned char* const*)(c->ta + OFF_PLAYERS + player * PLAYER_STRIDE + PL_INFO) : NULL;
+}
+
+/* Loop 1's share test for the seat (0x4674BA..0x4674D9): the owner's record allies the seat's index rec+0x146
+   and the owner shares radar, PlayerInfo +0x97 bit 0x40. The engine reaches the owner's record through the
+   unit's +0x96; here through its owner byte, below 10; the alliance row has 11 bytes, so the seat's index is
+   bounded by it. In a skirmish ShareRadar cannot be set (every share command needs the network bit), so
+   this never holds there. */
+static int shares_radar(const WQ_ENGINE* c, unsigned owner)
+{
+    const unsigned char* info = player_info(c, owner);
+    const unsigned idx = *(const unsigned char*)(c->rec + PL_MAPBIT);
+    return info && idx < 11 && c->ta[OFF_PLAYERS + owner * PLAYER_STRIDE + PL_ALLY + idx] &&
+           (info[PI_SHARE] & 0x40u);
+}
+
+static void block_of(const WQ_ENGINE* c, const char* u, WQ_OBS* o)
+{
+    int bx = asr5(hiword(*(const int32_t*)(u + U_XFIX))), bz = asr5(hiword(*(const int32_t*)(u + U_YFIX)));
+    o->bx = (uint16_t)(bx < 0 ? 0 : bx >= c->w / 2 ? c->w / 2 - 1 : bx);
+    o->bz = (uint16_t)(bz < 0 ? 0 : bz >= c->h / 2 ? c->h / 2 - 1 : bz);
+}
+
+/* The layer: in the air when the type flies (def +0x241 bit 11) and the unit is airborne, +0x110 & 3 == 2 --
+   the engine's aircraft test 0x40F7FC..0x40F81D (DISASSEMBLED); under water as 0x465AC0 tests it. */
+static uint8_t layer_of(const WQ_ENGINE* c, const char* u, const char* d)
+{
+    if ((*(const unsigned*)(d + D_FLAGS) & 0x800u) && (*(const unsigned*)(u + U_FLAGS) & 3u) == 2u)
+        return WQ_LAYER_AIR;
+    return submerged(c, u, d) ? WQ_LAYER_SUBMERGED : WQ_LAYER_SURFACE;
+}
+
+static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
+{
+    const WQ_ENGINE* c = ctx_of(q);
+    const char *u, *d;
+    SIGHT s;
+    unsigned owner;
+    memset(out, 0, sizeof *out);
+    if (slot <= 0 || !(u = seen_unit(c, (unsigned)slot, &d))) return 0;
+    owner = *(const unsigned char*)(u + U_OWNER);
+    if (owner >= PLAYER_COUNT) return 0;
+    if (owner == (unsigned)c->seat) out->seen = WQ_SEEN_OWN;
+    else if (sight_of(c, &s) && unit_los(c, &s, u, d)) out->seen = WQ_SEEN_LOS;
+    else if (shares_radar(c, owner)) out->seen = WQ_SEEN_SHARED;
+    else if (contact) out->seen = WQ_SEEN_CONTACT;
+    else return 0;
+    if (out->seen <= WQ_SEEN_LOS) {
+        out->owner = (uint8_t)owner;
+        out->type = (uint16_t)def_id(c, u);
+    } else {
+        out->owner = 0xFF;
+        out->type = (uint16_t)WQ_NONE;
+    }
+    block_of(c, u, out);
+    out->layer = layer_of(c, u, d);
+    return out->seen;
+}
+
+static int wq_block_lit(const WORLDQ* q, int bx, int bz)
+{
+    SIGHT s;
+    if (!sight_of(ctx_of(q), &s) || bx < 0 || bz < 0 || (unsigned)bx >= s.w || (unsigned)bz >= s.h) return 0;
+    return sight_lit(&s, (unsigned)bz * s.w + (unsigned)bx);
+}
+
+int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under)
+{
+    const WQ_ENGINE* c = ctx_of(q);
+    const char *u, *d;
+    SIGHT s;
+    if (slot <= 0 || !(u = seen_unit(c, (unsigned)slot, &d)) || !sight_of(c, &s)) return -1;
+    *under = submerged(c, u, d);
+    return unit_los(c, &s, u, d);
+}
+
+/* THE RADAR PASS, 0x467440 (no argument, plain `ret`; DISASSEMBLED 0x467440..0x467836), for the seat. The
+   engine runs it for the viewed record alone, in that record's turn of the players phase (the call at
+   0x46556D, reached only when bl == main[0x2A43], 0x465565..0x46556B); for any other seat this copy is the
+   only answer. Its gate: the word main+0x2A3C at least 2 (0x46744D), else nothing runs. Its loops walk slot 1
+   to the array's end slot inclusive (0x467474, back edges `jbe`); loop 2 walks the viewer's block. For the
+   seat s, with idx = rec(s)+0x146:
+     1. every live unit (bit 28): the seat's own (owner byte == s), one whose owner's record allies idx and
+        shares radar, or every unit when the seat is a watcher (PlayerInfo +0x9B bit 0x40), gets bits 8 and 9
+        and keeps its bit 10; any other loses 8, 9 and 10 (0x46749F..0x46750C). Bit 12 is the engine's and is
+        not copied;
+     2. each emitter of the seat's block -- alive, not dying (bit 14), activated (+0x10E bit 0), with a radar
+        R = def+0x204 or a sonar S = def+0x206 -- walks its radius max(R, S) (signed words, 0x46757F) with the
+        visitor 0x467840 (0x46750E..0x4675CC): a target with a type (+0xA6), of another owner than s, not
+        stealthy (def +0x241 bit 8), gets bit 9 when y <= sea << 16 and d2 < S*S, and bit 8 when
+        y + def+0x16E >= sea << 16 and d2 < (R + 2 y_r)^2, y_r the emitter's altitude in whole pixels
+        (`movsx word [unit+0x70]`), the squares 32-bit `imul`s (0x467565..0x46757C, 0x4678E6..0x467940);
+     3. each live, activated unit whose owner is not idx (allies included) with a jammer walks def+0x20A with
+        0x467960 (bit 8 off, bit 10 on), then def+0x20C with 0x467980 (bit 9 off, bit 10 on), the visitors
+        testing nothing: the seat's own units are jammed too (0x4675EC..0x46766C; the vtables 0x4FD558 and
+        0x4FD554 read from .rdata);
+     4. (0x467680..0x4676FD, the shield bit 12) is the same for every viewer and is not copied;
+     5. every live unit without bit 8 and not cloaked (+0x10E bit 2) whose origin's block is lit gets bit 8
+        (0x46770D..0x46782F): one point, (x, y, z) itself, placed and read as sight_block and sight_lit place
+        and read -- the seat's own bit, not the viewed player's.
+   THE WALK is 0x47E890(pos, r16, visitor)'s (stdcall `ret 0xC`, 0x47E890..0x47EA36): the 128-px sort buckets
+   (x -+ r) >> 23 and (z -+ r) >> 23, each clamped into the grid, row by row, column by column, each chain from
+   its head +6 through the units' +0x8E, a unit visited when d2 = (dx dx >> 32) + (dz dz >> 32), 64-bit
+   products of the 16.16 differences, is at most (r r >> 32). It walks the engine's own chains rather than a
+   rebuilt index: a unit's bucket can lag its position by one (engine/map.md, the sort bucket), and a carried
+   unit is in none, so only the chains give the engine's answer. */
+typedef struct RADAR_RUN {
+    const WQ_ENGINE* c;
+    const char*  buckets;
+    unsigned     cols, rows;
+    int32_t      sea;
+    unsigned     seat, idx;
+    uint8_t*     bits;
+    int32_t*     budget;
+} RADAR_RUN;
+
+enum { VISIT_RADAR, VISIT_JAM_RADAR, VISIT_JAM_SONAR };
+
+/* The slot of a chain's unit pointer, 0 when it is not one: inside the array on a record boundary. */
+static unsigned chain_slot(const WQ_ENGINE* c, const char* p)
+{
+    uintptr_t off;
+    if ((uintptr_t)p < (uintptr_t)c->units) return 0;
+    off = (uintptr_t)p - (uintptr_t)c->units;
+    return off % UNIT_STRIDE || off / UNIT_STRIDE >= c->nslots ? 0 : (unsigned)(off / UNIT_STRIDE);
+}
+
+static int64_t sq32(int32_t d) { return ((int64_t)d * d) >> 32; }
+
+static int bucket_clamp(int v, unsigned n) { return (unsigned)v < n ? v : v < 0 ? 0 : (int)n - 1; }
+
+/* One walk: the emitter `e` with R, S and its altitude's square already formed (VISIT_RADAR), or a jammer.
+   Every chain node read costs one visit off the budget; a chain is followed for at most nslots nodes, so a
+   cycle the engine never makes still ends, and a walk reads each unit once (a unit is in one chain). */
+static void radar_walk(const RADAR_RUN* r, const char* e, int32_t r16, int kind, int32_t sonar2, int32_t radar2)
+{
+    const WQ_ENGINE* c = r->c;
+    const int32_t ex = *(const int32_t*)(e + U_XFIX), ez = *(const int32_t*)(e + U_YFIX);
+    const int32_t reach = (int32_t)sq32(r16);
+    const int x0 = bucket_clamp((int32_t)((uint32_t)ex - (uint32_t)r16) >> 23, r->cols);
+    const int x1 = bucket_clamp((int32_t)((uint32_t)ex + (uint32_t)r16) >> 23, r->cols);
+    const int z0 = bucket_clamp((int32_t)((uint32_t)ez - (uint32_t)r16) >> 23, r->rows);
+    const int z1 = bucket_clamp((int32_t)((uint32_t)ez + (uint32_t)r16) >> 23, r->rows);
+    int bx, bz;
+    for (bz = z0; bz <= z1; bz++) for (bx = x0; bx <= x1; bx++) {
+        const char* t = *(const char* const*)(r->buckets + ((size_t)bz * r->cols + (unsigned)bx) * 10u + 6u);
+        unsigned n;
+        for (n = 0; t && n < c->nslots; n++, t = *(const char* const*)(t + U_CARGONEXT)) {
+            const unsigned slot = chain_slot(c, t);
+            int32_t d2;
+            if (!slot) break;
+            (*r->budget)--;
+            d2 = (int32_t)(sq32((int32_t)((uint32_t)*(const int32_t*)(t + U_XFIX) - (uint32_t)ex)) +
+                           sq32((int32_t)((uint32_t)*(const int32_t*)(t + U_YFIX) - (uint32_t)ez)));
+            if (d2 > reach) continue;
+            if (kind == VISIT_RADAR) {
+                const unsigned id = def_id(c, t);
+                const char* d = c->defs + id * D_STRIDE;
+                const int32_t y = *(const int32_t*)(t + U_ZFIX);
+                unsigned v = wq_radar_bits(r->bits, slot);
+                if (!*(const unsigned short*)(t + U_MODELID) || *(const unsigned char*)(t + U_OWNER) == r->seat ||
+                    !id || (*(const unsigned*)(d + D_FLAGS) & 0x100u))
+                    continue;
+                if (y <= r->sea && d2 < sonar2) v |= WQ_RB_SONAR;
+                if ((int32_t)((uint32_t)y + (uint32_t)*(const int32_t*)(d + D_LOS_Y)) >= r->sea && d2 < radar2)
+                    v |= WQ_RB_RADAR;
+                wq_radar_set(r->bits, slot, v);
+            } else {
+                const unsigned v = wq_radar_bits(r->bits, slot);
+                wq_radar_set(r->bits, slot, (v & ~(kind == VISIT_JAM_RADAR ? WQ_RB_RADAR : WQ_RB_SONAR)) | WQ_RB_JAMMED);
+            }
+        }
+    }
+}
+
+/* the live unit at a slot for the pass's loops, and its definition: NULL when the slot holds none */
+static const char* pass_unit(const WQ_ENGINE* c, unsigned slot, const char** d)
+{
+    return seen_unit(c, slot, d);
+}
+
+static void radar_begin(const RADAR_RUN* r, WQ_RADAR* st)
+{
+    const WQ_ENGINE* c = r->c;
+    const unsigned char* mine = player_info(c, (unsigned)c->seat);
+    const int watcher = *(const uint32_t*)c->rec && mine && (mine[PI_WATCH] & 0x40u);
+    unsigned slot;
+    for (slot = 1; slot < c->nslots; slot++) {
+        const char *u, *d;
+        unsigned owner;
+        if (!(u = pass_unit(c, slot, &d))) continue;
+        owner = *(const unsigned char*)(u + U_OWNER);
+        if (owner == r->seat || (owner < PLAYER_COUNT && shares_radar(c, owner)) || watcher)
+            wq_radar_set(r->bits, slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
+    }
+    st->stage = WQ_RS_EMIT;
+    st->cursor = (uint16_t)c->first;
+    st->start = (uint32_t)*(const int*)(c->ta + OFF_GAMETIME);
+}
+
+static void radar_lit(const RADAR_RUN* r)
+{
+    const WQ_ENGINE* c = r->c;
+    SIGHT s;
+    unsigned slot, k;
+    if (!sight_of(c, &s)) return;
+    for (slot = 1; slot < c->nslots; slot++) {
+        const char *u, *d;
+        const unsigned v = wq_radar_bits(r->bits, slot);
+        if (!(u = pass_unit(c, slot, &d)) || (v & WQ_RB_RADAR) || (*(const unsigned char*)(u + U_CLOAKF) & 4u))
+            continue;
+        if (sight_block(&s, *(const int32_t*)(u + U_XFIX), *(const int32_t*)(u + U_ZFIX), *(const int32_t*)(u + U_YFIX), &k)
+            && sight_lit(&s, k))
+            wq_radar_set(r->bits, slot, v | WQ_RB_RADAR);
+    }
+}
+
+/* THE BUCKETS' BOUNDS: LoadMap sizes the grid main+0x142A3 columns x +0x142A7 rows and allocates
+   main+0x142AB buckets of 10 bytes, (cols x rows + 7) & ~7 (0x482C84..0x482CC5; engine/recorder.md), so a
+   grid of cols x rows within that count is inside the allocation. */
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget)
+{
+    const WQ_ENGINE* c = ctx_of(q);
+    RADAR_RUN r;
+    unsigned slot;
+    if (nbytes < (int)WQ_RADAR_BYTES(c->nslots)) return 0;
+    r.c = c;
+    r.buckets = *(const char* const*)(c->ta + 0x1429F);
+    r.cols = *(const unsigned*)(c->ta + 0x142A3);
+    r.rows = *(const unsigned*)(c->ta + 0x142A7);
+    r.sea = (int32_t)((unsigned)*(const unsigned char*)(c->ta + OFF_SEALEVEL) << 16);
+    r.seat = (unsigned)c->seat;
+    r.idx = *(const unsigned char*)(c->rec + PL_MAPBIT);
+    r.bits = bits;
+    r.budget = budget;
+    if (st->stage == WQ_RS_IDLE) {
+        memset(bits, 0, WQ_RADAR_BYTES(c->nslots));
+        if (*(const unsigned short*)(c->ta + 0x2A3C) < 2 || !r.buckets || !r.cols || !r.rows ||
+            r.cols > 0xFFFFu || r.rows > 0xFFFFu || r.cols * r.rows > *(const unsigned*)(c->ta + 0x142AB))
+            return 1;
+        radar_begin(&r, st);
+    } else if (!r.buckets || !r.cols || !r.rows || r.cols > 0xFFFFu || r.rows > 0xFFFFu ||
+               r.cols * r.rows > *(const unsigned*)(c->ta + 0x142AB)) {
+        st->stage = WQ_RS_IDLE;
+        return 1;
+    }
+    if (st->stage == WQ_RS_EMIT) {
+        for (slot = st->cursor; slot <= c->last && *budget > 0; slot++) {
+            const char* e = c->units + slot * UNIT_STRIDE;
+            const unsigned flags = *(const unsigned*)(e + U_FLAGS), id = def_id(c, e);
+            const char* d = c->defs + id * D_STRIDE;
+            int16_t R, S;
+            int32_t yr;
+            if (!(flags & U_ALIVE) || (flags & U_DYING) || !(*(const unsigned char*)(e + U_CLOAKF) & 1u) || !id)
+                continue;
+            R = *(const int16_t*)(d + D_RADAR);
+            S = *(const int16_t*)(d + D_SONAR);
+            if (!R && !S) continue;
+            yr = hiword(*(const int32_t*)(e + U_ZFIX));
+            radar_walk(&r, e, (int32_t)((uint32_t)(R > S ? R : S) << 16), VISIT_RADAR,
+                       (int32_t)((uint32_t)S * (uint32_t)S),
+                       (int32_t)((uint32_t)(R + 2 * yr) * (uint32_t)(R + 2 * yr)));
+        }
+        if (slot <= c->last) { st->cursor = (uint16_t)slot; return 0; }
+        st->stage = WQ_RS_JAM;
+        st->cursor = 1;
+    }
+    for (slot = st->cursor; slot < c->nslots && *budget > 0; slot++) {
+        const char* u = c->units + slot * UNIT_STRIDE;
+        const unsigned id = def_id(c, u);
+        const char* d = c->defs + id * D_STRIDE;
+        int16_t J;
+        if (!(*(const unsigned*)(u + U_FLAGS) & U_ALIVE) || *(const unsigned char*)(u + U_OWNER) == r.idx ||
+            !(*(const unsigned char*)(u + U_CLOAKF) & 1u) || !id)
+            continue;
+        if ((J = *(const int16_t*)(d + D_JAM_R)) != 0)
+            radar_walk(&r, u, (int32_t)((uint32_t)(int32_t)J << 16), VISIT_JAM_RADAR, 0, 0);
+        if ((J = *(const int16_t*)(d + D_JAM_S)) != 0)
+            radar_walk(&r, u, (int32_t)((uint32_t)(int32_t)J << 16), VISIT_JAM_SONAR, 0, 0);
+    }
+    if (slot < c->nslots) { st->cursor = (uint16_t)slot; return 0; }
+    radar_lit(&r);
+    st->stage = WQ_RS_IDLE;
+    st->cursor = 0;
+    return 1;
+}
+
+/* ---- the pathing maps ---- */
+
+/* THE MOVEMENT CLASSES, 32 records of 0x20 bytes at 0x512358 (engine/map.md, the pathing maps): +0x00 the
+   class name, nonzero for a class that exists; +0x10 and +0x14 its map's W and H; +0x18 the map. The level
+   loader's 0x440940 (called at 0x4918E3, before PLAYERS at 0x4919C8 in the same body) gives every existing
+   class W = main+0x14233 and H = main+0x14237 and allocates ((H + 15) >> 4) x W dwords (0x44097E..0x4409B8,
+   DISASSEMBLED), and the reader 0x40D7B0 takes cell (x, z) as dword (z >> 4) x W + x, bits 2 (z & 15)
+   (0x40D83E..0x40D85E): 0 blocked, 1 passable but bad, 3 good, with the class's footprint and a one-cell ring
+   already folded in at the cell its footprint starts at (0x440500). So a class whose W and H are the map's
+   holds every cell of the map, and nothing else is read. The maps live from that load to the next, built on
+   the loader thread and refreshed in play on the game thread (0x47E1F0), the two threads this is read on. */
+#define MC_BASE   0x00512358u
+#define MC_STRIDE 0x20u
+
+int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const char* mc;
+    const uint32_t* map;
+    int w, h;
+    if (!ta || mclass >= WQ_MCLASSES) return 0;
+    w = *(const int*)(ta + OFF_MAP_W16);
+    h = *(const int*)(ta + OFF_MAP_H16);
+    mc = (const char*)(uintptr_t)(MC_BASE + mclass * MC_STRIDE);
+    if (!*(const char* const*)mc || w <= 0 || h <= 0 || w > 0x7FFF || h > 0x7FFF ||
+        *(const unsigned*)(mc + 0x10) != (unsigned)w || *(const unsigned*)(mc + 0x14) != (unsigned)h ||
+        !(map = *(const uint32_t* const*)(mc + 0x18)) || cx < 0 || cz < 0 || cx >= w || cz >= h)
+        return 0;
+    return (int)((map[(size_t)(cz >> 4) * (unsigned)w + (unsigned)cx] >> (2u * ((unsigned)cz & 15u))) & 3u);
+}
+
+int tagpu_worldq_class_exists(unsigned mclass)
+{
+    return mclass < WQ_MCLASSES && *(const char* const*)(uintptr_t)(MC_BASE + mclass * MC_STRIDE) != NULL;
+}
+
+static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+{
+    (void)q;
+    return mclass < 0 ? 0 : tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
+}
+
 static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
-    wq_can, wq_action, wq_order, wq_economy, wq_gametime,
+    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 
 /* THE OPEN'S BOUNDS, each read value made data before it is an index: the map's W and H even and 2..0x7FFF,

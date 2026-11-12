@@ -347,6 +347,15 @@
    "end": 1500,
    "content": {"run": ["tools/cob_ext_fixture.py", "{gamedir}"], "files": ["cobext.ufo"]}
   },
+  "calib-applier": {
+   "load": "calib/applier-check.json",
+   "sources": ["tagpu/ddraw/src/tagpu_scenario.c", "tagpu/ddraw/src/tagpu_cat.c",
+               "tools/tasim/applier_check.py"],
+   "steps": [[60, "apply", "calib/applier-check-2.json"],
+             [120, "run", ["tools/tasim/applier_check.py", "check", "{instance}"]],
+             [899, "apply", "calib/applier-check-end.json"]],
+   "end": 900
+  },
   "stock-teleport": {
    "load": "replay-teleport.json",
    "dll": "stock",
@@ -416,19 +425,31 @@
   },
   "impai-observe": {
    "load": "impai-observe.json", "los": "file",
-   "content": {"run": ["tools/impai_fixture.py", "{gamedir}", "1,2"],
-               "files": ["tagpu_impai.on"]},
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h",
-               "tools/impai_fixture.py"],
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
    "end": 5400
   },
   "impai-observe-perm": {
    "load": "impai-observe-perm.json", "los": "file",
-   "content": {"run": ["tools/impai_fixture.py", "{gamedir}", "1,2"],
-               "files": ["tagpu_impai.on"]},
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h",
-               "tools/impai_fixture.py"],
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
    "end": 5400
+  },
+  "impai-handicap": {
+   "load": "impai-handicap.json", "los": "file",
+   "steps": [[300, "apply", "impai-handicap-reclaim-1.json"],
+             [330, "apply", "impai-handicap-reclaim-2.json"],
+             [360, "type", "+give 1 100 energy"], [360, "type", "+give 1 100 metal"],
+             [360, "type", "+give 2 100 energy"], [360, "type", "+give 2 100 metal"],
+             [4200, "run", ["tools/tacli", "switches", "{instance}", "cheats=on"]],
+             [4200, "type", "+ai 2"], [4230, "type", "+ai 2"]],
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
+   "end": 5400,
+   "takeover": {"player": "controlled", "checks": ["judge", "line", "ai", "fork"]}
   },
   "resource-mex": {
    "load": "resource-snapping.json",
