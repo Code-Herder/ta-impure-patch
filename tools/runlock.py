@@ -5,7 +5,9 @@ once oversubscribe it, every game runs slower, and the checks bounded in wall-cl
 fail for the load alone (MEASURED 2026-10-12: four gates at once took 34 min each against 11 alone,
 at a load average of 63-87, and failed two such checks). Every tool that plays games for a
 regression -- tareplay.py's game commands, tacompat.py's suites, recmp_play_test.py -- holds this
-lock for the whole run, so a second run waits for the first instead of sharing the CPU with it.
+lock while its games play, so a second run waits for the first instead of sharing the CPU with it.
+Most hold it for the whole run; wiki_regression.py's gate takes it only for its game lanes and runs
+its offline checks before and beside them (CLAUDE.md: builds and offline checks take no lock).
 
 THE LOCK is flock(2) on `tareplay.lock` in the repository's common git directory, the one every
 worktree and every scratch worktree of this repository shares. The kernel drops it when the holding
@@ -15,6 +17,12 @@ takes the same lock, which is how a script chain of games queues with the tools.
 A process inside a run that already holds it does not take it again: the holder exports
 RUNLOCK_HELD naming the file, which its children inherit, and a process whose ancestor is a
 `flock(1)` on the file holds it through that ancestor.
+
+A HOLD THAT ENDS BEFORE THE PROCESS: release() closes this process's descriptor of the lock. The
+lock belongs to the open file description, not to the descriptor, so a child started with
+fileno() in `pass_fds` holds it too, until it exits: the lock goes when the last of them closes it,
+and a release while such a child still plays cannot let another run in. Nothing here ever unlocks
+explicitly (LOCK_UN), which would drop it for those children as well.
 """
 
 import fcntl
@@ -63,12 +71,14 @@ def _holder(path: Path) -> str:
     return text or "a flock(1) chain or an older tool"
 
 
-def hold(tree: Path, what: str) -> None:
-    """Take the run lock for the rest of this process, waiting while another run holds it."""
+def hold(tree: Path, what: str) -> bool:
+    """Take the run lock until release() or the end of this process, waiting while another run
+    holds it. True when this call took it; False when this process holds it already, directly or
+    through RUNLOCK_HELD or a `flock(1)` ancestor."""
     global _held
     path = lock_path(tree)
     if _held is not None or os.environ.get(ENV) == str(path) or _ancestor_holds(path):
-        return
+        return False
     f = open(path, "a+")
     waited, said = 0.0, -SAY_S
     while True:
@@ -91,3 +101,22 @@ def hold(tree: Path, what: str) -> None:
     f.flush()
     _held = f
     os.environ[ENV] = str(path)
+    return True
+
+
+def fileno():
+    """The descriptor of the lock this process took, None when it took none: a child given it in
+    `pass_fds` holds the lock with this process until it exits (A HOLD THAT ENDS BEFORE THE PROCESS)."""
+    return _held.fileno() if _held is not None else None
+
+
+def release() -> None:
+    """End this process's hold: its descriptor closed and RUNLOCK_HELD taken out of its
+    environment, so the processes it starts from now on wait like any other run. The lock itself
+    goes once no child given fileno() still runs. Nothing when this process took no lock."""
+    global _held
+    if _held is None:
+        return
+    os.environ.pop(ENV, None)
+    _held.close()
+    _held = None
