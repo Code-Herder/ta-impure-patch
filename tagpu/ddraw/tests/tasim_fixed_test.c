@@ -9,6 +9,11 @@
                                  every answer within one ulp; the native build's alone, glibc being the reference
      tasim_fixed_test digest     one 64-bit FNV-1a digest of 10^6 calls of each helper on arguments from a fixed
                                  generator; the driver requires every build to print the same digest
+     tasim_fixed_test hypot      ts_hypot of each "a b" line on stdin, printed as the double's bits in hex, for a
+                                 model of _hypot to compare
+     tasim_fixed_test x87        (the i686 build only) ts_hypot against the engine's _hypot instruction sequence
+                                 run on the x87 itself, with its control word: every integer-distance pair
+                                 0 < a <= b < 3000 and 10^6 random pairs in each of three ranges; all must be equal
      tasim_fixed_test velocity   the ground velocity rule (0x43CC20, research/notes/engine/units.md *Ground
                                  velocity*) against "heading speed vx vz" lines on stdin, values the engine computed:
                                  vx = -turn_x(heading, speed), vz = -turn_z(heading, speed) */
@@ -98,7 +103,12 @@ static void rules(void)
     x = 1000, z = 0;
     ts_rotate(0, &x, &z);
     CHECK(x == 1000 && z == 0, "angle 0 leaves the point");
-    CHECK(ts_hypot(3.0, 4.0) == 5.0, "hypot");
+    CHECK(ts_hypot(3, 4) == 5.0 && ts_hypot(-5, 12) == 13.0 && ts_hypot(0, -7) == 7.0 && ts_hypot(0, 0) == 0.0,
+          "hypot's exact cases");
+    /* (20, 99) is 101 apart, and the engine's _hypot lands below it (tasim_fixed.h) */
+    CHECK(ts_ftol(ts_hypot(20, 99)) == 100 && ts_ftol(ts_hypot(20 << 16, 99 << 16)) == 101 * 65536 - 1,
+          "hypot's (20, 99) truncates to 100: %d", ts_ftol(ts_hypot(20, 99)));
+    CHECK(ts_hypot(INT32_MIN, 0) == 2147483648.0, "hypot at INT32_MIN");
     CHECK(isnan(ts_sin(1e7)) && ts_sin(1e5) == ts_sin(1e5), "the reduction's range");
 }
 
@@ -140,13 +150,133 @@ static int digest(void)
         feed_i(z);
         feed_i(ts_turn_x(&t, a, dx));
         feed_i(ts_turn_z(&t, a, dz));
-        feed_i(ts_ftol(ts_hypot((double)dx, (double)dz)));
+        feed_i(ts_ftol(ts_hypot(dx, dz)));
+        feed_d(ts_hypot(sx, sz));
         feed_d(ts_sin(a * 9.587379924285e-05));
         feed_d(ts_cos(a * 9.587379924285e-05));
     }
     printf("digest %016llx\n", (unsigned long long)fnv);
     return 0;
 }
+
+static int hypot_lines(void)
+{
+    long a, b;
+    while (scanf("%ld %ld", &a, &b) == 2) {
+        const double h = ts_hypot((int32_t)a, (int32_t)b);
+        uint64_t bits;
+        memcpy(&bits, &h, 8);
+        printf("%016llx\n", (unsigned long long)bits);
+    }
+    return 0;
+}
+
+#if defined(__i386__)
+/* 0x4FB480's sequence on the x87 (tasim_fixed.h, ts_hypot): the control word 0x133F, each fdiv, fmul, faddp and
+   fsqrt at the 64-bit precision, each result stored to a double; frexp and ldexp are exact */
+static double x87_hypot(int32_t a, int32_t b)
+{
+    double x = fabs((double)a), y = fabs((double)b);
+    double M = y > x ? y : x;
+    if (M == 0)
+        return 0.0;
+    unsigned short old, cw = 0x133F;
+    double xp, yp, s, q, r;
+    __asm__ __volatile__("fnstcw %0" : "=m"(old));
+    __asm__ __volatile__("fldcw %0" : : "m"(cw));
+    __asm__ __volatile__("fldl %1\n\tfdivl %2\n\tfstpl %0" : "=m"(xp) : "m"(x), "m"(M));
+    __asm__ __volatile__("fldl %1\n\tfdivl %2\n\tfstpl %0" : "=m"(yp) : "m"(y), "m"(M));
+    __asm__ __volatile__("fldl %1\n\tfmull %1\n\tfldl %2\n\tfmull %2\n\tfaddp\n\tfstpl %0"
+                         : "=m"(s) : "m"(xp), "m"(yp));
+    __asm__ __volatile__("fldl %1\n\tfsqrt\n\tfstpl %0" : "=m"(q) : "m"(s));
+    int e1, e2;
+    double m1 = frexp(q, &e1), m2 = frexp(M, &e2);
+    __asm__ __volatile__("fldl %1\n\tfmull %2\n\tfstpl %0" : "=m"(r) : "m"(m1), "m"(m2));
+    __asm__ __volatile__("fldcw %0" : : "m"(old));
+    return ldexp(r, e1 + e2);
+}
+
+static int x87(void)
+{
+    long n = 0, bad = 0, below = 0;
+    for (int64_t a = 1; a < 3000; ++a)
+        for (int64_t b = a; b < 3000; ++b) {
+            const int64_t c2 = a * a + b * b;
+            int64_t c = (int64_t)sqrt((double)c2);
+            while (c * c > c2)
+                --c;
+            while ((c + 1) * (c + 1) <= c2)
+                ++c;
+            if (c * c != c2)
+                continue;
+            ++n;
+            const double e = x87_hypot((int32_t)a, (int32_t)b), t = ts_hypot((int32_t)a, (int32_t)b);
+            below += ts_ftol(e) == c - 1;
+            if (memcmp(&e, &t, 8) && ++bad <= 10)
+                printf("FAIL (%d, %d): x87 %a, core %a\n", (int)a, (int)b, e, t);
+        }
+    printf("x87: %ld integer-distance pairs, %ld below their distance\n", n, below);
+    long total = n;
+    const uint32_t lim[3] = { 2048, 1u << 26, 0 };
+    for (int k = 0; k < 3; ++k)
+        for (int i = 0; i < 1000000; ++i, ++total) {
+            const int32_t a = lim[k] ? (int32_t)(next() % (2 * lim[k] + 1)) - (int32_t)lim[k] : (int32_t)next();
+            const int32_t b = lim[k] ? (int32_t)(next() % (2 * lim[k] + 1)) - (int32_t)lim[k] : (int32_t)next();
+            const double e = x87_hypot(a, b), t = ts_hypot(a, b);
+            if (memcmp(&e, &t, 8) && ++bad <= 10)
+                printf("FAIL (%d, %d): x87 %a, core %a\n", a, b, e, t);
+        }
+    printf("x87: %ld of %ld equal\n", total - bad, total);
+    return bad != 0;
+}
+
+/* 0x4B715A and 0x4B7173 on the x87 under the game's control word (0x027F: 53-bit precision, round to nearest), for
+   the residuals R1 and R2 (tasim_fixed.h): how often the core's fdlibm routines give another integer. Counted and
+   printed, never a failure: a difference is a tie case the owner decides on with its proof. */
+static int32_t x87_angle(int32_t dx, int32_t dz)
+{
+    static const double k = 10430.37835047;
+    unsigned short old, cw = 0x027F;
+    int32_t r;
+    __asm__ __volatile__("fnstcw %0" : "=m"(old));
+    __asm__ __volatile__("fldcw %0" : : "m"(cw));
+    __asm__ __volatile__("fildl %1\n\tfildl %2\n\tfpatan\n\tfmull %3\n\tfistpl %0"
+                         : "=m"(r) : "m"(dx), "m"(dz), "m"(k));
+    __asm__ __volatile__("fldcw %0" : : "m"(old));
+    return r;
+}
+
+static void x87_rotate(int16_t a, int32_t* p)
+{
+    static const double k = 9.587379924285e-05;
+    unsigned short old, cw = 0x027F;
+    if (a == 0)
+        return;
+    __asm__ __volatile__("fnstcw %0" : "=m"(old));
+    __asm__ __volatile__("fldcw %0" : : "m"(cw));
+    __asm__ __volatile__("fildl 4(%0)\n\tfildl (%0)\n\tfld %%st(1)\n\tfld %%st(1)\n\tfilds %1\n\tfmull %2\n\t"
+                         "fsincos\n\tfmul %%st, %%st(5)\n\tfmulp %%st, %%st(4)\n\tfmul %%st, %%st(2)\n\t"
+                         "fmulp %%st, %%st(1)\n\tfaddp %%st, %%st(3)\n\tfsubrp %%st, %%st(1)\n\t"
+                         "fistpl (%0)\n\tfistpl 4(%0)"
+                         : : "r"(p), "m"(a), "m"(k) : "memory");
+    __asm__ __volatile__("fldcw %0" : : "m"(old));
+}
+
+static void residuals(void)
+{
+    long angle = 0, rot = 0;
+    for (int i = 0; i < 1000000; ++i) {
+        const int32_t dx = (int32_t)(next() >> 40) - (1 << 23), dz = (int32_t)(next() >> 40) - (1 << 23);
+        angle += x87_angle(dx, dz) != ts_angle(dx, dz);
+        const int16_t a = (int16_t)next();
+        int32_t p[2] = { dx, dz }, x = dx, z = dz;
+        x87_rotate(a, p);
+        ts_rotate(a, &x, &z);
+        rot += p[0] != x || p[1] != z;
+    }
+    printf("x87: residuals of 1000000 calls each: angle %ld differ, rotate %ld differ\n", angle, rot);
+}
+#endif
 
 static int velocity(void)
 {
@@ -172,6 +302,14 @@ int main(int argc, char** argv)
         return libm();
     if (argc > 1 && !strcmp(argv[1], "digest"))
         return digest();
+    if (argc > 1 && !strcmp(argv[1], "hypot"))
+        return hypot_lines();
+#if defined(__i386__)
+    if (argc > 1 && !strcmp(argv[1], "x87")) {
+        residuals();
+        return x87();
+    }
+#endif
     if (argc > 1 && !strcmp(argv[1], "velocity"))
         return velocity();
     rules();

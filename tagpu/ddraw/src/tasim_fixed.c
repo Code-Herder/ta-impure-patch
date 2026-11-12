@@ -61,9 +61,190 @@ int32_t ts_ftol(double x)
     return (int32_t)(uint32_t)(uint64_t)(int64_t)x;
 }
 
-double ts_hypot(double x, double y)
+/* ---- _hypot, emulated (tasim_fixed.h) ----
+   Every intermediate is an exact integer times a power of two; a 128-bit integer (two uint64 halves, products
+   built from 32-bit pieces, since the i686 build has no 128-bit type) holds each exact value before it is rounded.
+   Scaling by a power of two changes no rounding (no value here comes near the subnormals), so each step keeps its
+   integer and the exponents are added where the result is built. */
+
+typedef struct { uint64_t hi, lo; } U128;
+
+static U128 mul64(uint64_t a, uint64_t b)
 {
-    return sqrt(x * x + y * y);
+    const uint64_t a0 = (uint32_t)a, a1 = a >> 32, b0 = (uint32_t)b, b1 = b >> 32;
+    const uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    const uint64_t mid = (p00 >> 32) + (uint32_t)p01 + (uint32_t)p10;
+    U128 r;
+    r.lo = (mid << 32) | (uint32_t)p00;
+    r.hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+    return r;
+}
+
+static U128 shl128(uint64_t v, int k)       /* v << k, 0 <= k < 128, v's bits not past bit 127 */
+{
+    U128 r;
+    if (k == 0) {
+        r.hi = 0;
+        r.lo = v;
+    } else if (k < 64) {
+        r.hi = v >> (64 - k);
+        r.lo = v << k;
+    } else {
+        r.hi = v << (k - 64);
+        r.lo = 0;
+    }
+    return r;
+}
+
+static int cmp128(U128 a, U128 b)
+{
+    if (a.hi != b.hi)
+        return a.hi < b.hi ? -1 : 1;
+    return a.lo < b.lo ? -1 : a.lo > b.lo;
+}
+
+static U128 sub128(U128 a, U128 b)          /* a - b, a >= b */
+{
+    U128 r;
+    r.lo = a.lo - b.lo;
+    r.hi = a.hi - b.hi - (a.lo < b.lo);
+    return r;
+}
+
+static int bitlen64(uint64_t v)
+{
+    int n = 0;
+    while (v) {
+        ++n;
+        v >>= 1;
+    }
+    return n;
+}
+
+/* v (and, with `sticky`, something more below its last bit) rounded to p <= 64 bits, nearest-even: the mantissa,
+   and the shift it was taken at (v ~ mant << shift). Each caller gives v more than p + 1 bits, so a sticky tail is
+   never dropped unseen. */
+static uint64_t round_bits(U128 v, int sticky, int p, int* shift)
+{
+    const int len = v.hi ? 64 + bitlen64(v.hi) : bitlen64(v.lo);
+    if (len <= p) {
+        *shift = 0;
+        return v.lo;
+    }
+    const int sh = len - p;
+    uint64_t mant, guard, rest;
+    if (sh >= 64) {
+        mant = v.hi >> (sh - 64);
+        guard = sh == 64 ? v.lo >> 63 : (v.hi >> (sh - 65)) & 1;
+        rest = sh == 64 ? (v.lo << 1) : ((sh - 65 ? v.hi << (128 - sh + 1) : 0) | v.lo);
+    } else {
+        mant = (v.lo >> sh) | (sh ? v.hi << (64 - sh) : 0);
+        guard = (v.lo >> (sh - 1)) & 1;
+        rest = sh > 1 ? v.lo << (65 - sh) : 0;
+    }
+    *shift = sh;
+    if (guard && (rest || sticky || (mant & 1))) {
+        ++mant;
+        if (p == 64 ? mant == 0 : mant >> p) {
+            mant = (uint64_t)1 << (p - 1);
+            ++*shift;
+        }
+    }
+    return mant;
+}
+
+/* rd53(rd64(v)): an x87 result at the 64-bit precision, then its fstp to a double */
+static uint64_t round_store(U128 v, int sticky, int* shift)
+{
+    int s64, s53;
+    const uint64_t m64 = round_bits(v, sticky, 64, &s64);
+    U128 w = { 0, m64 };
+    const uint64_t m53 = round_bits(w, 0, 53, &s53);
+    *shift = s64 + s53;
+    return m53;
+}
+
+static double pow2(int k)                   /* 2^k, -1022 <= k <= 1023 */
+{
+    const uint64_t b = (uint64_t)(k + 1023) << 52;
+    double d;
+    memcpy(&d, &b, sizeof d);
+    return d;
+}
+
+double ts_hypot(int32_t x, int32_t y)
+{
+    const uint64_t ax = x < 0 ? (uint64_t)-(int64_t)x : (uint64_t)x;
+    const uint64_t ay = y < 0 ? (uint64_t)-(int64_t)y : (uint64_t)y;
+    const uint64_t M = ay > ax ? ay : ax, n = ay > ax ? ax : ay;
+    if (M == 0)
+        return 0.0;
+    /* the smaller ratio r = n / M = R 2^er, R of 53 bits; the larger is exactly 1. n << 32 < 2^63 and each
+       remainder < M <= 2^31, so three 32-bit quotient digits give floor(n 2^96 / M), at least 65 bits since
+       n / M >= 2^-31 */
+    uint64_t S;                             /* s = S 2^f, s in [1, 2] */
+    int f;
+    if (n == 0 || n == M) {
+        S = (uint64_t)1 << 52;
+        f = n == 0 ? -52 : -51;
+    } else {
+        const uint64_t q1 = (n << 32) / M, r1 = (n << 32) % M;
+        const uint64_t q2 = (r1 << 32) / M, r2 = (r1 << 32) % M;
+        const uint64_t q3 = (r2 << 32) / M, r3 = (r2 << 32) % M;
+        U128 Q = { q1, (q2 << 32) | q3 };
+        int sr;
+        const uint64_t R = round_store(Q, r3 != 0, &sr);
+        const int er = sr - 96;
+        /* r^2 rounded to 64 bits: m2 2^e with m2 >= 2^63 and r^2 < 1, so e <= -64 */
+        int s2;
+        const uint64_t m2 = round_bits(mul64(R, R), 0, 64, &s2);
+        const int k = -(s2 + 2 * er);
+        if (k >= 128) {
+            /* r^2 < 2^-64, under half a 64-bit unit of 1: the sum rounds to 1 */
+            S = (uint64_t)1 << 52;
+            f = -52;
+        } else {
+            U128 sum = shl128(1, k);
+            sum.lo += m2;
+            sum.hi += sum.lo < m2;
+            int ss;
+            S = round_store(sum, 0, &ss);
+            f = ss - k;
+        }
+        while (S < (uint64_t)1 << 52) {     /* a mantissa of fewer bits than 53 when the sum was exact */
+            S <<= 1;
+            --f;
+        }
+    }
+    /* q = rd53(rd64(sqrt(s))). c = rd53(sqrt(s)) is IEEE sqrt's, and the two differ only where rd64 lands on the
+       53-bit midpoint mid next to c, on sqrt(s)'s side: then the store rounds that tie to even. sqrt(s) is never
+       exactly half a 64-bit unit from mid, nor exactly mid (either would make s a square of a 65- or 54-bit
+       number, wider than its 53 bits), so the test is strict both ways. With c = C 2^-52 (s in [1, 2], so c in
+       [1, 2)) and T = mid 2^63 = (2C + side) 2^10: rd64 gives mid iff |sqrt(s) 2^63 - T| < 1/2, which over the
+       integer W = s 2^126 is -T < W - T^2 <= T. */
+    const double s = (double)S * pow2(f);
+    const double c = sqrt(s);
+    uint64_t C = (uint64_t)(c * 4503599627370496.0);
+    const U128 s104 = shl128(S, f + 104), c2 = mul64(C, C);
+    const int side = cmp128(s104, c2);
+    if (side != 0) {
+        const uint64_t T = ((C << 1) + (uint64_t)(int64_t)side) << 10;
+        const U128 W = shl128(S, f + 126), T2 = mul64(T, T);
+        int at_mid;
+        if (cmp128(W, T2) >= 0) {
+            const U128 d = sub128(W, T2);
+            at_mid = d.hi == 0 && d.lo <= T;
+        } else {
+            const U128 d = sub128(T2, W);
+            at_mid = d.hi == 0 && d.lo < T;
+        }
+        if (at_mid && (C & 1))
+            C += (uint64_t)(int64_t)side;
+    }
+    /* r = rd53(rd64(mant(q) mant(M))) 2^(exp(q) + exp(M)) = rd53(rd64(C M)) 2^-52 */
+    int sp;
+    const uint64_t P = round_store(mul64(C, M), 0, &sp);
+    return (double)P * pow2(sp - 52);
 }
 
 /* ---- sin and cos (k_sin.c, k_cos.c, e_rem_pio2.c) ---- */

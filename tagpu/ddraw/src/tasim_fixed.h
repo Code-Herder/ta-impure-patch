@@ -9,7 +9,7 @@
    glibc, msvcrt and mingw, and the core is built three ways (the DLL's i686, the native host and the sanitized
    one), so tasim_fixed.c carries one implementation of each, on doubles rounded once per operation (SSE2; the
    Makefile's THE WIKI'S SIMULATION). Every build then agrees bit for bit; tests/tasim_fixed_test.c and
-   tools/wiki/simparity.mjs prove it. sqrt is the one libm call, and IEEE 754 requires it correctly rounded.
+   tools/wiki/simparity.mjs prove it. sqrt and floor are the libm calls, both exact by IEEE 754 in every library.
 
    THE SINE TABLE is the caller's (TS_SIN, filled by ts_sin_table), never a static: the core holds no globals, so
    a table built lazily behind a flag would be a race between two simulations on two threads. Its 512 entries are
@@ -80,21 +80,33 @@ int32_t ts_fistp(double x);
    the decimal literal 10430.37835047 and not 32768/pi, which is 249 ulp away; the core uses the literal.
    RESIDUAL R1: fpatan's result has a 64-bit significand, rounded to 53 bits by the fmul, and ts_atan2 is within one
    ulp of the true value, so the integer can differ from the engine's only where the scaled angle lies within about
-   2e-11 of a .5 tie [INFERRED from the error bound]; the exact movement families are where one would show. */
+   2e-11 of a .5 tie [INFERRED from the error bound]; the exact movement families are where one would show.
+   MEASURED 2026-11-12 against the instruction sequence on the reference setup's x87 (tests/tasim_fixed_test.c x87):
+   0 of 10^6 random calls differ. The angle runs no CRT code, so no wrapper changes its precision. */
 int32_t ts_angle(int32_t dx, int32_t dz);
 
 /* 0x4B7173, DISASSEMBLED 0x4B7176..0x4B71A2: nothing when the int16 angle is 0; else theta = a times the double at
    0x509EF8 (MEASURED 2026-11-12: 0x1.921fb54442c5ap-14, the decimal literal 9.587379924285e-05, not pi/32768,
    which is 0x1.921fb54442d18p-14), fsincos, and with the x87 stack traced
    x' = fistp(x cos - z sin), z' = fistp(z cos + x sin), each product and sum rounded to 53 bits.
-   RESIDUAL R2: fsincos against ts_sin/ts_cos at the fistp ties, the same argument as R1. */
+   RESIDUAL R2: fsincos against ts_sin/ts_cos at the fistp ties, the same argument as R1. MEASURED as R1 is: 0 of
+   10^6 random calls differ from the x87; the rotator too is inline x87, no CRT call. */
 void    ts_rotate(int16_t a, int32_t* x, int32_t* z);
 
-/* _hypot 0x4FB440 on two fild'ed int32 16.16 values (0x43CD98..0x43CDA7): sqrt(x^2 + y^2) in double. Below 2^26
-   both squares and their sum are exact and the result is correctly rounded; above, it is within one ulp, which
-   matters only where _ftol then meets an integer boundary (R1). Whether MSVC's _hypot is correctly rounded is not
-   yet read. */
-double  ts_hypot(double x, double y);
+/* _hypot 0x4FB440 on two fild'ed int32 values (the ground step's 0x43CD98..0x43CDA7 among its 39 call sites),
+   exactly as the engine computes it. DISASSEMBLED 0x4FB480..0x4FB6A8: MSVC's scaled hypot, its body run at a 64-bit
+   significand (_ctrlfp(0x133F) at 0x4FB487, round to nearest), every result stored to a double:
+     M = max(|x|, |y|), ties taking x; 0 when M is 0
+     x' = (double)rd64(|x| / M), y' = (double)rd64(|y| / M)          fdiv, fstp 0x4FB55F..0x4FB577
+     s  = (double)rd64(rd64(x' x') + rd64(y' y'))                     0x4FB57B..0x4FB58D
+     q  = (double)rd64(sqrt(s))                                        sqrt 0x4FB7B4 keeps the 64-bit precision
+     r  = (double)rd64(mant(q) mant(M)) times 2^(exp(q) + exp(M))     0x4EC380 twice, fmul 0x4FB5B0, 0x4EC250
+   It is not correctly rounded: on a model of this sequence 34 % of int pairs differ from sqrt(x^2 + y^2) by up to
+   two ulp, and of the 3686 pairs 0 < a <= b < 3000 whose distance is an integer c, 359 come out below c, so _ftol
+   gives c - 1 ((20, 99) is one); scaling by 2^16 keeps the pattern, so 16.16 distances inherit it. The core
+   therefore emulates the sequence in integer arithmetic, each 64-bit rounding and each store's 53-bit rounding
+   exact, never the x87: tests/tasim_fixed_test.c holds it to the x87 itself under the i686 build. */
+double  ts_hypot(int32_t x, int32_t y);
 
 /* The core's transcendentals, from fdlibm's algorithms and coefficients (e_atan2.c, s_atan.c, k_sin.c, k_cos.c,
    e_rem_pio2.c); each is within one ulp of the true value. ts_sin and ts_cos reduce their argument by fdlibm's

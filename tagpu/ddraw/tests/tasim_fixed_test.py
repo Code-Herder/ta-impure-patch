@@ -7,7 +7,8 @@ The core's engine arithmetic (src/tasim_fixed.h) must agree bit for bit in every
 self-test is built as the wiki's simulation host builds it (tools/wiki/wikibuild.mjs): `host`, gcc -O2; `asan`, the
 sanitizers; `wine`, the DLL's compiler i686-w64-mingw32-gcc on SSE2 as the Makefile compiles every src/tasim_*.c, run
 under Wine in the wiki checks' prefix (tools/wiki/wineprefix.py). Each build runs the rules; the host compares the
-transcendentals with glibc; every build prints the digest of 10^6 calls of each helper, and the three must be equal.
+transcendentals with glibc; the i686 build holds ts_hypot to the engine's _hypot sequence run on the x87 itself;
+every build prints the digest of 10^6 calls of each helper, and the three must be equal.
 With --velocity, FILE holds "heading speed vx vz" lines the engine computed (tools/tasim/velocity_triples.py writes
 them from a recording) and every build checks the ground velocity rule on them.
 
@@ -71,6 +72,10 @@ def main(argv):
             bad |= code != 0
             if name == "host":
                 code, out = run(name, exe, ["libm"])
+                print(f"{name}: {out.strip()}")
+                bad |= code != 0
+            if name == "wine":
+                code, out = run(name, exe, ["x87"])
                 print(f"{name}: {out.strip()}")
                 bad |= code != 0
             code, out = run(name, exe, ["digest"])
