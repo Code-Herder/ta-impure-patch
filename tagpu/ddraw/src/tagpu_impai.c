@@ -158,18 +158,30 @@ static struct {
 } s_reach_ix;
 SIM_VAR(s_reach_ix, SIM_CONTENT);
 
+/* What a turn did, for the cost's tail: the radar pass's publish, the patch scan's last row (its patches
+   published), a decision; PLAIN when none of them. */
+enum { TAIL_PUBLISH, TAIL_SCAN, TAIL_DECIDE, TAIL_PLAIN, TAIL_CLASSES };
+#define TAIL_US 1000u              /* a slow turn: the owner's bound, 1 ms a seat a tick */
+static const char* const TAIL_NAME[TAIL_CLASSES] = { "publish", "scan", "decide", "plain" };
+
 /* The level's work and the self-checks' counts, for the level-end lines and tools/impai_check.py. */
 static struct {
     unsigned ticks[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned slots_max[PLAYER_COUNT], visits_max[PLAYER_COUNT], nslots_max;
     unsigned cells_max[PLAYER_COUNT], flood_max[PLAYER_COUNT], map_w;
     unsigned scans[PLAYER_COUNT];             /* patch scan passes completed and published         */
-    /* THE COST, MEASURED: QueryPerformanceCounter around a turn's observation (the knowledge tick and its
-       view, not the self-checks nor the stock tick), each seat's largest, its sum and a log2 histogram of
-       microseconds, bucket k holding [2^k, 2^(k+1)) and bucket 0 [0, 2). A measurement for the cost line,
-       never a verdict: the gate judges the counts. */
+    /* THE COST, MEASURED: QueryPerformanceCounter around a turn (its observation and its decision, not the
+       self-checks nor the weapon scan), each seat's largest, its sum and a log2 histogram of microseconds,
+       bucket k holding [2^k, 2^(k+1)) and bucket 0 [0, 2). A measurement for the cost line, never a verdict:
+       the gate judges the counts.
+       THE TAIL, by what each turn did (TAIL_*): per class its turns, those of at least TAIL_US, its largest
+       and its sum, a turn counted in every class it belongs to; and the slowest turn's counts. A slow turn
+       that published nothing, scanned no last row and made no decision did only its slice and a bounded
+       radar step, so its time is not its work's: the OS's (preemption, a page fault). */
     unsigned cost_max[PLAYER_COUNT], cost_hist[PLAYER_COUNT][24];
     double   cost_sum[PLAYER_COUNT];
+    struct { unsigned turns, over, max; double sum; } tail[PLAYER_COUNT][TAIL_CLASSES];
+    struct { unsigned us, gametime, flags, slots, visits, cells, flood; } worst[PLAYER_COUNT];
     unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
@@ -302,7 +314,8 @@ static void impai_seat_view(int seat)
 static LARGE_INTEGER s_qpf;            /* the counter's frequency, taken at attach */
 SIM_VAR(s_qpf, SIM_INSTALL);
 
-static void cost_note(int seat, long long ticks)
+/* One turn's time: `flags` bit TAIL_* for each class the turn belongs to, `w` its observation's counts. */
+static void cost_note(int seat, long long ticks, unsigned flags, const IMPAI_WORK* w, unsigned gametime)
 {
     const double us = s_qpf.QuadPart > 0 ? (double)ticks * 1e6 / (double)s_qpf.QuadPart : 0.0;
     const unsigned u = us < 4e9 ? (unsigned)us : 0xFFFFFFFFu;
@@ -311,6 +324,23 @@ static void cost_note(int seat, long long ticks)
     s_obs.cost_hist[seat][k]++;
     s_obs.cost_sum[seat] += us;
     if (u > s_obs.cost_max[seat]) s_obs.cost_max[seat] = u;
+    if (!flags) flags = 1u << TAIL_PLAIN;
+    for (k = 0; k < TAIL_CLASSES; k++)
+        if (flags >> k & 1u) {
+            s_obs.tail[seat][k].turns++;
+            s_obs.tail[seat][k].over += u >= TAIL_US;
+            s_obs.tail[seat][k].sum += us;
+            if (u > s_obs.tail[seat][k].max) s_obs.tail[seat][k].max = u;
+        }
+    if (u >= s_obs.worst[seat].us) {
+        s_obs.worst[seat].us = u;
+        s_obs.worst[seat].gametime = gametime;
+        s_obs.worst[seat].flags = flags;
+        s_obs.worst[seat].slots = w->slots;
+        s_obs.worst[seat].visits = w->visits;
+        s_obs.worst[seat].cells = w->cells;
+        s_obs.worst[seat].flood = w->flood;
+    }
 }
 
 /* One ImpAI seat's observation, at its record's place in the players phase, after the step's unit tick,
@@ -501,6 +531,18 @@ static void impai_observe_end(unsigned now)
             tagpu_logf("impai: cost seat=%u ticks=%u max_us=%u mean_us=%.1f p99_us=%u slice=%u visits=%u nslots=%u "
                        "hist=%s", i, turns, s_obs.cost_max[i], s_obs.cost_sum[i] / (turns ? turns : 1), p99,
                        s_budget.obs_slice, s_budget.radar_visits, s_obs.nslots_max, hist);
+            /* each class as <name>=<turns of TAIL_US or more>/<turns>:<largest us>:<mean us> */
+            at = 0;
+            for (k = 0; k < TAIL_CLASSES; k++)
+                at += _snprintf(hist + at, sizeof hist - at, "%s%s=%u/%u:%u:%.1f", k ? " " : "", TAIL_NAME[k],
+                                s_obs.tail[i][k].over, s_obs.tail[i][k].turns, s_obs.tail[i][k].max,
+                                s_obs.tail[i][k].sum / (s_obs.tail[i][k].turns ? s_obs.tail[i][k].turns : 1));
+            hist[sizeof hist - 1] = 0;
+            tagpu_logf("impai: tail seat=%u over_us=%u %s worst_us=%u gametime=%u publish=%u scan=%u decide=%u "
+                       "slots=%u visits=%u cells=%u flood=%u", i, TAIL_US, hist, s_obs.worst[i].us,
+                       s_obs.worst[i].gametime, s_obs.worst[i].flags >> TAIL_PUBLISH & 1u,
+                       s_obs.worst[i].flags >> TAIL_SCAN & 1u, s_obs.worst[i].flags >> TAIL_DECIDE & 1u,
+                       s_obs.worst[i].slots, s_obs.worst[i].visits, s_obs.worst[i].cells, s_obs.worst[i].flood);
         }
     if (!s_install.check) return;
     for (i = 0; i < PLAYER_COUNT; i++)
@@ -1131,15 +1173,23 @@ static void impai_decide(int seat)
 static void impai_turn(int seat)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const unsigned now = *(const unsigned*)(ta + OFF_GAMETIME);
     IMPAI_WORK w;
     LARGE_INTEGER t0, t1;
+    unsigned flags = 0;
     s_diag.calls[seat]++;
     QueryPerformanceCounter(&t0);
-    impai_observe(seat, &s_turn_snap, &w);
-    if (impai_brain_due(*(const unsigned*)(ta + OFF_GAMETIME), (unsigned)seat, &IMPAI_LEVEL_A1))
+    if (impai_observe(seat, &s_turn_snap, &w) == 0) {
+        if (s_seatst[seat].radar.stage == WQ_RS_IDLE && s_seatst[seat].radar_done == now)
+            flags |= 1u << TAIL_PUBLISH;
+        if (w.scans) flags |= 1u << TAIL_SCAN;
+    }
+    if (impai_brain_due(now, (unsigned)seat, &IMPAI_LEVEL_A1)) {
         impai_decide(seat);
+        flags |= 1u << TAIL_DECIDE;
+    }
     QueryPerformanceCounter(&t1);
-    cost_note(seat, t1.QuadPart - t0.QuadPart);
+    cost_note(seat, t1.QuadPart - t0.QuadPart, flags, &w, now);
     impai_observe_checks(seat);
 }
 
