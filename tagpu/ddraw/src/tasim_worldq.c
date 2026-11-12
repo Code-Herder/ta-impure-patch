@@ -92,6 +92,7 @@ static int wq_map(const WORLDQ* q, WQ_MAP* out)
     out->w = s->W;
     out->h = s->H;
     out->threshold = byte_of(s->SM);
+    out->list_cap = PLACE_LIST_CAP;     /* tasim_push_order's */
     return 1;
 }
 

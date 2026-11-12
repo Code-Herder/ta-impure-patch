@@ -1,5 +1,5 @@
-/* tagpu_worldq.c -- worldq.h over the running engine (tagpu_worldq.h). Every read here was spread over
-   tagpu_resource.c, tagpu_place.c and tagpu_sweep.c before; each keeps the bound it had there. */
+/* tagpu_worldq.c -- worldq.h over the running engine (tagpu_worldq.h): every engine read and order the
+   resource, placement and sweep rules make, each bounded as stated beside it. */
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
@@ -111,6 +111,8 @@ static int kind(const char* d)
     return yard && memchr(yard, 0x8F, (size_t)fx * fz) ? WQ_KIND_GEO : 0;
 }
 
+int tagpu_worldq_def_kind(const void* def) { return kind((const char*)def); }
+
 /* ExtractsMetal for an extractor, EnergyMake otherwise; 0 when not finite or not above 0 */
 static float strength(const char* d, int k)
 {
@@ -167,6 +169,9 @@ static int wq_map(const WORLDQ* q, WQ_MAP* out)
     out->w = c->w; out->h = c->h; out->threshold = c->threshold;
     out->sea = *(const unsigned char*)(c->ta + 0x1427F);
     out->lostype = *(const unsigned char*)(c->ta + 0x14281);
+    /* no bound of the engine's own [INFERRED: the placement and the sweep cap their appends
+       themselves, below the recorder's 4096 nodes a list] */
+    out->list_cap = 0;
     return 1;
 }
 

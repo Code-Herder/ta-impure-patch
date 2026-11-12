@@ -2,8 +2,8 @@
    over the shared simulation core (tasim.h, the tasim_*.c files), and what only the wiki has -- the
    UI the inputs go through (the cursor, the sidebar's gadgets and page router, what a press lands
    on, the click window), the scripted input (the build and pick trips, the glide, the demo's clock
-   and waits), the selection, the placement, snap and sweep rules as sim.js mirrors tagpu_place.c,
-   tagpu_resource.c and tagpu_sweep.c, the scene and the casting's binding, the view, the state hash
+   and waits), the selection, the placement and sweep rules as sim.js mirrors tagpu_place.c and
+   tagpu_sweep.c, Quick Build's and the snap's input to the game's own rules (tasim_snap.c), the scene and the casting's binding, the view, the state hash
    and the fork. Contract: tagpu_wikisim.h.
 
    The sections and the functions follow tools/wiki/mockup/sim.js in its order and under its names
@@ -18,6 +18,8 @@
 #include <string.h>
 #include "tagpu_sweepgeo.h"
 #include "tasim.h"
+#include "tasim_snap.h"
+#include "tasim_worldq.h"
 
 #define RADIUS  3
 #define ARENA   64
@@ -64,15 +66,6 @@ typedef char pick_fits[WIKI_PICK_DOWN + 2 + (WIKI_PICK - WIKI_PICK_UP) <= WIKI_T
 /* every tasim_push_order a sweep's split makes fits the list: its room is SWEEP_LIST_CAP less the list */
 #define SWEEP_LIST_CAP PLACE_LIST_CAP
 
-/* quickChoice's and site's answer, a candidate building: sim.js's `c` */
-typedef struct {
-    int    type, kind, ox, oz;
-    char   target[WIKI_ID_MAX];     /* an upgrade: the building it replaces; "" otherwise */
-    int    anchored, has_anchor, ax, az;    /* distinct's answer, once asked */
-    double strength;
-    int    queued;
-} CHOICE;
-
 static double sq(double v) { return v * v; }
 
 /* ---- tagpu_placegeo.c's shapes and take-off rule, called directly; sim.js ports each one ---- */
@@ -85,8 +78,6 @@ static int within(XZ p, XZ q) { return fabs(p.x - q.x) <= 16 && fabs(p.z - q.z) 
 
 /* ---- definitions ---- */
 
-/* mirrors tagpu_resource.c strength: ExtractsMetal for a mex, EnergyMake otherwise */
-static double strength(const WIKISIM* s, int t) { return tasim_kind(s, t) == KIND_MEX ? tasim_def(s, t)->extracts : tasim_def(s, t)->energy_make; }
 /* FBI canreclamate, def+0x245 bit 0x400 (the FBI reader 0x42BF40 at 0x42C9EF..0x42CA1A): the
    resolver's first test for a reclaim (0x43F4FD) and what makes RECLAIM live (0x41B509..0x41B512) */
 static int is_reclaimer(const WIKISIM* s, const WIKIUNIT* u)
@@ -146,16 +137,6 @@ static int nbuilders(const WIKISIM* s)
     return n;
 }
 
-/* the types the selected builders' build lists offer, as a mask; read in definition order */
-static uint64_t available(const WIKISIM* s)
-{
-    uint64_t ts = 0;
-    int i;
-    for (i = 0; i < s->nunit; i++)
-        if (is_builder(s, s->unit[i])) ts |= tasim_def(s, s->unit[i]->type)->builds;
-    return ts;
-}
-
 /* the selected units of the player's that can reclaim, sim.js's reclaimers().length */
 static int nreclaimers(const WIKISIM* s)
 {
@@ -164,74 +145,12 @@ static int nreclaimers(const WIKISIM* s)
     return n;
 }
 
-/* ---- the rules of tagpu_resource.c, as sim.js mirrors them. The metal a rule reads is -1 on
-   unexplored ground. ---- */
-
-/* mirrors tagpu_resource.c site_known: the interior, every footprint cell explored */
-static int known(const WIKISIM* s, int t, int ox, int oz)
-{
-    int i, j;
-    if (!tasim_interior(s, t, ox, oz)) return 0;
-    for (j = oz; j < oz + tasim_fpz(s, t); j++)
-        for (i = ox; i < ox + tasim_fpx(s, t); i++)
-            if (!seen(s, i, j)) return 0;
-    return 1;
-}
-
-/* mirrors tagpu_resource.c fits: site_known, then the site test */
-static int fits(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* ignore)
-{
-    return known(s, t, ox, oz) && tasim_site_ok(s, t, ox, oz, ignore);
-}
-
-/* mirrors tagpu_resource.c plans_block: a plan's footprint over the site. Without Shift a click
-   replaces the queues of the selected builders it orders, so their plans do not block it. */
-static int plans_block(const WIKISIM* s, const CHOICE* c, int shift)
-{
-    BOX b = tasim_box(s, c->type, c->ox, c->oz);
-    int i, j, replaced = 0;
-    for (i = 0; !shift && i < s->nunit; i++)
-        if (is_builder(s, s->unit[i]) && tasim_can_build(s, s->unit[i], c->type)) replaced = 1;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (u->owner != s->act || (replaced && is_builder(s, u))) continue;
-        for (j = 0; j < u->norder; j++) {
-            const WIKIORDER* o = &u->order[j];
-            if (o->k == WIKI_ORDER_BUILD && tasim_overlap(b, tasim_box(s, o->type, o->ox, o->oz))) return 1;
-        }
-    }
-    return 0;
-}
-
-static double metal_at(const WIKISIM* s, int i, int j)
-{
-    int k = flat(s, i, j);
-    if (!seen(s, i, j)) return -1;
-    return k < 0 ? NAN : s->metal[k];
-}
-
-/* the cells of a footprint metal_at finds above SurfaceMetal. Inside the map it is four reads of
-   the sums init builds (WIKISIM.rich): Quick Build's hover asks it for every candidate of site()'s
-   search round every seat's cursor, on every tick a selected builder offers an extractor. Read
-   cell by cell it was 55 % of a players replay's time (MEASURED 2026-11-02, gprof over the five
-   players demos, native -O2). A footprint past an edge reads cell by cell, where flat() aliases
-   into the next row as JS indexes; site() never asks one. */
-static int coverage(const WIKISIM* s, int ox, int oz, int fx, int fz)
-{
-    int i, j, n = 0;
-    if (ox >= 0 && oz >= 0 && fx >= 0 && fz >= 0 && ox + fx <= s->W && oz + fz <= s->H) {
-        const int* R = s->rich;
-        const int w = s->W + 1;
-        return R[(oz + fz) * w + ox + fx] - R[oz * w + ox + fx] - R[(oz + fz) * w + ox] + R[oz * w + ox];
-    }
-    for (j = oz; j < oz + fz; j++)
-        for (i = ox; i < ox + fx; i++)
-            if (metal_at(s, i, j) > s->SM) n++;
-    return n;
-}
+/* ---- Quick Build and the build cursor's snap: the game's rules (tasim_snap.c) over the core's WORLDQ,
+   given the input tagpu_resource.c gives them ---- */
 
 /* WIKISIM.rich, once metal and fog are filled: rich[(j + 1)(W + 1) + i + 1] counts the cells of
-   columns 0..i and rows 0..j above SurfaceMetal as metal_at reads them */
+   columns 0..i and rows 0..j above SurfaceMetal, an unexplored cell's metal read as -1, as the core's
+   metal op reads it (tasim_worldq.c coverage) */
 static void rich_sums(WIKISIM* s)
 {
     const int w = s->W + 1;
@@ -241,266 +160,75 @@ static void rich_sums(WIKISIM* s)
         int row = 0;
         s->rich[(j + 1) * w] = 0;
         for (i = 0; i < s->W; i++) {
-            row += metal_at(s, i, j) > s->SM;
+            row += (seen(s, i, j) ? s->metal[j * s->W + i] : -1) > s->SM;
             s->rich[(j + 1) * w + i + 1] = s->rich[j * w + i + 1] + row;
         }
     }
 }
 
-static int distinct(WIKISIM* s, CHOICE* c);
-static int queued(WIKISIM* s, CHOICE* c);
+static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z);
 
-static void choice(CHOICE* c, int t, int k, int ox, int oz)
-{
-    memset(c, 0, sizeof *c);
-    c->type = t;
-    c->kind = k;
-    c->ox = ox;
-    c->oz = oz;
-}
-
-/* mirrors tagpu_resource.c site: candidates are centre cells within radius r of the seed's cell; a
-   footprint's origin is its centre minus half the footprint, rounded down. A mex scores its
-   coverage, a geothermal plant 1. The highest score wins and a tie goes to the centre nearest the
-   raw cursor by the (candidate + 0.5) metric, the first in scan order on an exact tie. `legal`
-   (Quick Build) skips a candidate the site test or a plan refuses unless it is the site of a
-   queued plan; without it a mex ignores occupancy and a geothermal plant takes the nearest site
-   that fits. */
-static int site(WIKISIM* s, int t, double sx, double sz, double rx, double rz, int r, int legal, int shift, CHOICE* out)
-{
-    const int fx = tasim_fpx(s, t), fz = tasim_fpz(s, t), k = tasim_kind(s, t), bx = tasim_cell_of(sx), bz = tasim_cell_of(sz);
-    double dist = INFINITY;
-    int dx, dz, best = 0, found = 0;
-    if (!k) return 0;
-    for (dz = -r; dz <= r; dz++)
-        for (dx = -r; dx <= r; dx++) {
-            const int cx = bx + dx, cz = bz + dz, ox = cx - (fx >> 1), oz = cz - (fz >> 1);
-            const double tx = cx - rx / CELL + 0.5, tz = cz - rz / CELL + 0.5, d = tx * tx + tz * tz;
-            int n;
-            if (ox < 0 || oz < 0 || ox + fx > s->W || oz + fz > s->H) continue;
-            n = k == KIND_MEX ? coverage(s, ox, oz, fx, fz) : 1;
-            if (!n || n < best || (n == best && d >= dist)) continue;
-            if (legal) {
-                const int taken = !fits(s, t, ox, oz, NULL);
-                CHOICE c;
-                choice(&c, t, k, ox, oz);
-                if (taken && !known(s, t, ox, oz)) continue;
-                if (taken || plans_block(s, &c, shift)) {
-                    if (k == KIND_MEX && !distinct(s, &c)) continue;
-                    if (!queued(s, &c)) continue;
-                }
-            } else if (k == KIND_GEO && !fits(s, t, ox, oz, NULL)) continue;
-            best = n;
-            dist = d;
-            found = 1;
-            choice(out, t, k, ox, oz);
-        }
-    return found;
-}
-
-/* mirrors tagpu_resource.c snapped_site: a mex winner away from the raw cell must win again in a
-   search of radius max(footprint) around itself without legality, the raw cursor still breaking
-   ties, or there is no snap */
-static int snapped_site(WIKISIM* s, int t, double rx, double rz, int legal, int shift, CHOICE* c)
-{
-    const int fx = tasim_fpx(s, t), fz = tasim_fpz(s, t);
-    CHOICE v;
-    if (!site(s, t, rx, rz, rx, rz, RADIUS, legal, shift, c)) return 0;
-    if (c->kind != KIND_MEX) return 1;
-    if (c->ox + (fx >> 1) != tasim_cell_of(rx) || c->oz + (fz >> 1) != tasim_cell_of(rz)) {
-        if (!site(s, t, (c->ox + fx / 2.0) * CELL, (c->oz + fz / 2.0) * CELL, rx, rz, fx > fz ? fx : fz, 0, shift, &v)
-            || v.ox != c->ox || v.oz != c->oz)
-            return 0;
-    }
-    return 1;
-}
-
-/* mirrors tagpu_resource.c distinct: from the first footprint cell above SurfaceMetal in scan
-   order, the eight-connected component of cells above it is a deposit when it is closed: it never
-   reaches the edge of the 129-cell arena around that cell, meets no unexplored neighbour, has an
-   explored background neighbour, and does not touch both opposite map edges on either axis. Its
-   anchor (the topmost, then leftmost, cell) identifies the deposit for same_plan. Asked once per
-   CHOICE: nothing it reads changes while one lives. */
-static int distinct(WIKISIM* s, CHOICE* c)
-{
-    const int fx = tasim_fpx(s, c->type), fz = tasim_fpz(s, c->type), W = s->W, H = s->H;
-    int i, j, sx = -1, sz = -1, head = 0, tail = 0, boundary = 0, edges = 0, ax, az;
-    if (c->anchored) return c->has_anchor;
-    c->anchored = 1;
-    for (j = c->oz; j < c->oz + fz && sx < 0; j++)
-        for (i = c->ox; i < c->ox + fx; i++)
-            if (metal_at(s, i, j) > s->SM) { sx = i; sz = j; break; }
-    if (sx < 0) return 0;
-    if (++s->gen == 0) {    /* the stamps wrapped: none may look current */
-        memset(s->mark, 0, (size_t)W * H * sizeof *s->mark);
-        s->gen = 1;
-    }
-    /* metal_at answered a number, so the start's flat index is in the array */
-    s->mark[flat(s, sx, sz)] = s->gen;
-    s->todo[tail++] = sx;
-    s->todo[tail++] = sz;
-    ax = sx;
-    az = sz;
-    while (head < tail) {
-        const int ci = s->todo[head], cj = s->todo[head + 1];
-        int dx, dz;
-        head += 2;
-        if (abs(ci - sx) == ARENA || abs(cj - sz) == ARENA) return 0;
-        if (ci == 0) edges |= 1;
-        if (ci == W - 1) edges |= 2;
-        if (cj == 0) edges |= 4;
-        if (cj == H - 1) edges |= 8;
-        for (dz = -1; dz <= 1; dz++)
-            for (dx = -1; dx <= 1; dx++) {
-                const int ni = ci + dx, nj = cj + dz;
-                int k;
-                if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
-                k = nj * W + ni;
-                if (s->mark[k] == s->gen) continue;
-                s->mark[k] = s->gen;
-                if (!seen(s, ni, nj)) return 0;
-                if (s->metal[k] <= s->SM) { boundary = 1; continue; }
-                /* every map cell enters once, after the start: the queue holds W * H + 1 cells */
-                s->todo[tail++] = ni;
-                s->todo[tail++] = nj;
-                if (nj < az || (nj == az && ni < ax)) { ax = ni; az = nj; }
-            }
-    }
-    if (!(boundary && (edges & 3) != 3 && (edges & 12) != 12)) return 0;
-    c->has_anchor = 1;
-    c->ax = ax;
-    c->az = az;
-    return 1;
-}
-
-/* mirrors tagpu_resource.c geo_anchor: the one explored vent under a G cell of the footprint, by
-   index (tagpu_resource.c tests yard & 0x80 alone); -1 when no G cell holds one or they hold
-   several cells of them */
-static int vent_anchor(const WIKISIM* s, int t, int ox, int oz)
-{
-    int i, first = -1;
-    for (i = 0; i < s->nvent; i++) {
-        const PlaceCell* v = &s->vent[i];
-        if (!tasim_vent_under_g(s, v, t, ox, oz) || !seen(s, v->cx, v->cz)) continue;
-        if (first < 0) first = i;
-        else if (v->cx != s->vent[first].cx || v->cz != s->vent[first].cz) return -1;
-    }
-    return first;
-}
-
-/* mirrors tagpu_resource.c same_plan: a build order is this choice's plan when it is of the same
-   kind and on the same vent, the same deposit (the same anchor), or for an upgrade within 16
-   world units of the same place on both axes. Its building type need not be the one offered now. */
-static int same_plan(WIKISIM* s, CHOICE* c, const WIKIORDER* o)
-{
-    CHOICE b;
-    if (tasim_kind(s, o->type) != c->kind) return 0;
-    if (c->kind == KIND_GEO) {
-        const int a = vent_anchor(s, c->type, c->ox, c->oz);
-        return a >= 0 && a == vent_anchor(s, o->type, o->ox, o->oz);
-    }
-    if (c->target[0]) {
-        const XZ p = tasim_centre(s, c->type, c->ox, c->oz), q = tasim_centre(s, o->type, o->ox, o->oz);
-        return fabs(p.x - q.x) <= 16 && fabs(p.z - q.z) <= 16;
-    }
-    choice(&b, o->type, tasim_kind(s, o->type), o->ox, o->oz);
-    return distinct(s, c) && distinct(s, &b) && c->ax == b.ax && c->az == b.az;
-}
-
-/* mirrors tagpu_resource.c find_cancel: a builder's first unstarted matching plan; for an upgrade
-   only a build that is not the head and follows the unstarted reclaim of the same building, which
-   goes with it. Answers the first order to remove and the count in `*n`, or -1. */
-static int find_cancel(WIKISIM* s, const WIKIUNIT* u, CHOICE* c, int* n)
+/* a unit's slot in the core's WORLDQ: its place in the list plus 1 (tasim_worldq.h) */
+static int slot_of(const WIKISIM* s, const WIKIUNIT* u)
 {
     int i;
-    for (i = 0; i < u->norder; i++) {
-        const WIKIORDER* o = &u->order[i];
-        const WIKIORDER* p = i > 0 ? &u->order[i - 1] : NULL;
-        const WIKIUNIT* g;
-        if (o->k != WIKI_ORDER_BUILD || tasim_started(s, o) || !same_plan(s, c, o)) continue;
-        if (!c->target[0]) { *n = 1; return i; }
-        if (p && p->k == WIKI_ORDER_RECLAIM && !strcmp(p->target, c->target) && (g = tasim_by_id(s, p->target))
-            && !(g->reclaimed > 0)) {
-            *n = 2;
-            return i - 1;
-        }
-    }
+    for (i = 0; i < s->nunit; i++)
+        if (s->unit[i] == u) return i + 1;
     return -1;
 }
 
-/* mirrors tagpu_resource.c queued: 0 no plan of the player's here, 1 a plan, 2 a plan a selected
-   builder can cancel. Each unit's first matching order decides for that unit. */
-static int queued(WIKISIM* s, CHOICE* c)
-{
-    int i, j, n, q = 0;
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        if (u->owner != s->act) continue;
-        for (j = 0; j < u->norder; j++) {
-            if (u->order[j].k != WIKI_ORDER_BUILD || !same_plan(s, c, &u->order[j])) continue;
-            q = 1;
-            if (u->sel && tasim_def(s, u->type)->worker_time > 0 && find_cancel(s, u, c, &n) >= 0) return 2;
-            break;
-        }
-    }
-    return q;
-}
-
-static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z);
-
-/* mirrors tagpu_resource.c quick_choice, the one answer the ghost, the cursor and a right-click all
-   use. Off in the build-menu mode and while Alt is held. Over a unit, it offers only an upgrade:
-   the unit must be a finished resource building the player owns, and the replacement, centred on
-   it, must have a strictly higher ExtractsMetal (or EnergyMake), fit once the old one is gone or
-   be queued there already. Over ground, each offered type gets snapped_site's legal search and a
-   mex a distinct deposit. Per kind the highest ExtractsMetal or EnergyMake that fits wins, the
-   first in definition order on a tie; between a mex and a geothermal plant, the one whose centre
-   is nearer the cursor. */
-static int quick_choice(WIKISIM* s, int shift, CHOICE* out)
+/* QUICK BUILD'S INPUT, as tagpu_resource.c reads the game's: the cursor's point in 16.16, the profile's
+   radius (RADIUS, retail's), the unit under the cursor of any owner and with none whether the feature there
+   is reclaimable, the acting seat's selected units in slot order -- the first SNAP_UNITS_MAX, a seat's most
+   in the game -- and Shift */
+static void quick_in(WIKISIM* s, int shift, SNAP_QUICK_IN* in)
 {
     const XZ m = map_cursor(s);
-    const double x = m.x, z = m.z;
-    const WIKIUNIT* target;
-    const uint64_t offered = available(s);
-    CHOICE best[3];
-    int t, desired = KIND_NONE, have[3] = { 0, 0, 0 };
-    double old = 0;
-    /* Quick Build offers in the contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate):
-       not with reclaim armed */
-    if (ST(s).mode >= 0 || ST(s).rmode || ST(s).held[WIKI_KEY_ALT]) return 0;
-    target = unit_at(s, x, z);
-    if (target) {
-        if (target->owner != s->act || tasim_mobile(s, target->type) || target->built < 1 || !(desired = tasim_kind(s, target->type)))
-            return 0;
-        old = strength(s, target->type);
+    const WIKIUNIT* u = unit_at(s, m.x, m.z);
+    int i;
+    memset(in, 0, sizeof *in);
+    in->raw[0] = tasim_fix16(m.x);
+    in->raw[2] = tasim_fix16(m.z);
+    in->radius = RADIUS;
+    in->target = u ? slot_of(s, u) : -1;
+    if (!u) {
+        const WIKIFEAT* f = tasim_feat_at(s, m.x, m.z);
+        in->feature_reclaimable = f && f->reclaimable;
     }
-    for (t = 0; t < s->entry->ndef; t++) {
-        const int k = tasim_kind(s, t), fx = tasim_fpx(s, t), fz = tasim_fpz(s, t);
-        const double value = strength(s, t);
-        CHOICE c;
-        if (!((offered >> t) & 1)) continue;
-        if (!k || (desired && k != desired) || value <= old || (have[k] && value <= best[k].strength)) continue;
-        if (target) {
-            choice(&c, t, k, tasim_bound_cell(trunc((floor(target->x) - fx * 8 + 8) / CELL)),
-                   tasim_bound_cell(trunc((floor(target->z) - fz * 8 + 8) / CELL)));
-            snprintf(c.target, sizeof c.target, "%s", target->id);
-            if (!fits(s, t, c.ox, c.oz, target) && (!known(s, t, c.ox, c.oz) || !queued(s, &c))) continue;
-        } else if (!snapped_site(s, t, x, z, 1, shift, &c) || (k == KIND_MEX && !distinct(s, &c))) continue;
-        c.strength = value;
-        c.queued = queued(s, &c);
-        if (!c.queued && plans_block(s, &c, shift)) continue;
-        best[k] = c;
-        have[k] = 1;
-    }
-    if (have[KIND_MEX]) *out = best[KIND_MEX];
-    else if (have[KIND_GEO]) *out = best[KIND_GEO];
-    else return 0;
-    if (have[KIND_MEX] && have[KIND_GEO]) {
-        const XZ g = tasim_centre(s, best[KIND_GEO].type, best[KIND_GEO].ox, best[KIND_GEO].oz);
-        const XZ m = tasim_centre(s, best[KIND_MEX].type, best[KIND_MEX].ox, best[KIND_MEX].oz);
-        if (sq(floor(g.x - x)) + sq(floor(g.z - z)) < sq(floor(m.x - x)) + sq(floor(m.z - z))) *out = best[KIND_GEO];
-    }
-    out->queued = queued(s, out);
+    for (i = 0; i < s->nunit && i < 0xFFFE && in->nbuilders < SNAP_UNITS_MAX; i++)
+        if (s->unit[i]->sel && s->unit[i]->owner == s->act) s->snap_builders[in->nbuilders++] = (uint16_t)(i + 1);
+    in->builders = s->snap_builders;
+    in->shift = shift;
+}
+
+/* Quick Build's one answer, the ghost's, the cursor's and a click's (tasim_snap_quick). It offers in the
+   contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate): not in the build-menu mode, not with
+   reclaim armed, and not while Alt is held. */
+static int quick_choice(WIKISIM* s, int shift, SNAP_QUICK_IN* in, SNAP_CHOICE* out)
+{
+    WQ_CORE ctx;
+    WORLDQ q;
+    if (ST(s).mode >= 0 || ST(s).rmode || ST(s).held[WIKI_KEY_ALT] || !tasim_worldq_open(&ctx, &q, s, s->act))
+        return 0;
+    quick_in(s, shift, in);
+    return tasim_snap_quick(&q, in, out, s->snap);
+}
+
+/* the build cursor's snap of entry type `t` at the cursor (tasim_snap_snapped, no legality): 1 with the
+   footprint's first cell */
+static int snapped_at(WIKISIM* s, int t, XZ m, int* cx, int* cz)
+{
+    WQ_CORE ctx;
+    WORLDQ q;
+    SNAP_CHOICE c;
+    int32_t raw[3];
+    raw[0] = tasim_fix16(m.x);
+    raw[1] = 0;
+    raw[2] = tasim_fix16(m.z);
+    if (!tasim_worldq_open(&ctx, &q, s, s->act) || !tasim_snap_snapped(&q, NULL, t + 1, raw, RADIUS, 0, &c, s->snap))
+        return 0;
+    *cx = c.x;
+    *cz = c.z;
     return 1;
 }
 
@@ -1407,24 +1135,26 @@ static WIKIHOVER map_hover(WIKISIM* s)
     const double x = m.x, z = m.z;
     const int shift = ST(s).held[WIKI_KEY_SHIFT];
     WIKIHOVER h;
-    CHOICE c;
+    SNAP_QUICK_IN in;
+    SNAP_CHOICE c;
     memset(&h, 0, sizeof h);
     evaluate(s, &ST(s).place);
     if (ST(s).mode >= 0) {
         const int t = ST(s).mode;
-        const int snapped = !ST(s).held[WIKI_KEY_ALT] && snapped_site(s, t, x, z, 0, shift, &c);
         h.kind = WIKI_HOVER_PLACE;
         h.type = t;
-        h.ox = snapped ? c.ox : origin(x, tasim_fpx(s, t));
-        h.oz = snapped ? c.oz : origin(z, tasim_fpz(s, t));
+        if (ST(s).held[WIKI_KEY_ALT] || !snapped_at(s, t, m, &h.ox, &h.oz)) {
+            h.ox = origin(x, tasim_fpx(s, t));
+            h.oz = origin(z, tasim_fpz(s, t));
+        }
         h.ok = tasim_site_ok(s, t, h.ox, h.oz, NULL);
         return h;
     }
-    if (quick_choice(s, shift, &c)) {
+    if (quick_choice(s, shift, &in, &c)) {
         h.kind = WIKI_HOVER_QUICK;
-        h.type = c.type;
-        h.ox = c.ox;
-        h.oz = c.oz;
+        h.type = c.type - 1;
+        h.ox = c.x;
+        h.oz = c.z;
         h.ok = 1;
         return h;
     }
@@ -1464,12 +1194,8 @@ static PlaceCell cursor_site(WIKISIM* s)
     const int t = ST(s).mode;
     const XZ m = map_cursor(s);
     PlaceCell p;
-    CHOICE c;
     int cx, cz;
-    if (!ST(s).held[WIKI_KEY_ALT] && snapped_site(s, t, m.x, m.z, 0, ST(s).held[WIKI_KEY_SHIFT], &c)) {
-        cx = c.ox;
-        cz = c.oz;
-    } else {
+    if (ST(s).held[WIKI_KEY_ALT] || !snapped_at(s, t, m, &cx, &cz)) {
         cx = origin(m.x, tasim_fpx(s, t));
         cz = origin(m.z, tasim_fpz(s, t));
     }
@@ -1723,51 +1449,6 @@ static void release(WIKISIM* s)
 
 /* ---- orders ---- */
 
-/* mirrors tagpu_resource.c click, a Quick Build click: the builders that can build it get the order (an upgrade's reclaim first),
-   the other selected builders guard them, shared out in turn, and units that cannot build keep
-   their orders. Shift appends, and never adds a Guard to a helper already guarding one of them. */
-static void quick_order(WIKISIM* s, const CHOICE* c, int shift)
-{
-    int i, j, k, ncap = 0, help = 0;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIORDER os[2];
-        if (!is_builder(s, u) || !tasim_can_build(s, u, c->type)) continue;
-        ncap++;
-        os[0] = tasim_order_target(WIKI_ORDER_RECLAIM, c->target);
-        os[1] = tasim_order_build(c->type, c->ox, c->oz);
-        if (c->target[0]) tasim_assign(s, u, os, 2, shift);
-        else tasim_assign(s, u, os + 1, 1, shift);
-    }
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        WIKIORDER g;
-        int guarding = 0, nth;
-        if (!is_builder(s, u) || tasim_can_build(s, u, c->type)) continue;
-        nth = help++;
-        for (j = 0; shift && j < u->norder && !guarding; j++)
-            for (k = 0; u->order[j].k == WIKI_ORDER_GUARD && k < s->nunit && !guarding; k++)
-                guarding = is_builder(s, s->unit[k]) && tasim_can_build(s, s->unit[k], c->type) && !strcmp(s->unit[k]->id, u->order[j].target);
-        if (guarding) continue;
-        /* the (nth % ncap)-th capable builder; quick_choice offers only what some builder can build */
-        for (j = 0, k = ncap ? nth % ncap : 0; j < s->nunit; j++)
-            if (is_builder(s, s->unit[j]) && tasim_can_build(s, s->unit[j], c->type) && k-- == 0) break;
-        if (j == s->nunit) continue;
-        g = tasim_order_target(WIKI_ORDER_GUARD, s->unit[j]->id);
-        tasim_assign(s, u, &g, 1, shift);
-    }
-}
-
-/* mirrors tagpu_resource.c unqueue: each selected builder loses the plan find_cancel names, and an upgrade's reclaim with it */
-static void unqueue(WIKISIM* s, CHOICE* c)
-{
-    int i, f, n;
-    for (i = 0; i < s->nunit; i++) {
-        WIKIUNIT* u = s->unit[i];
-        if (is_builder(s, u) && (f = find_cancel(s, u, c, &n)) >= 0) tasim_splice_orders(u, f, n);
-    }
-}
-
 /* a move: the selected mobile units to points SPACING apart across the cursor, in selection order */
 static void move_order(WIKISIM* s, int shift)
 {
@@ -1789,17 +1470,17 @@ static void move_order(WIKISIM* s, int shift)
 
 /* Quick Build's click, the same at both Interface Types: tagpu_resource.c gates the button that
    orders, the right press at type 1 (0x499100) and the left click at type 0 (0x498F70,
-   `(iface != 0) != right` in its gate). With a choice, a queued site is cancelled by Shift and a
-   plain click is consumed unchanged; otherwise the choice is ordered. 0: no choice, the click is
-   the game's own. */
+   `(iface != 0) != right` in its gate), and tasim_snap_commit decides it. 0: nothing ordered, the
+   click is the game's own. */
 static int quick_click(WIKISIM* s, int shift)
 {
-    CHOICE c;
-    if (!quick_choice(s, shift, &c)) return 0;
-    if (c.queued) {
-        if (shift && c.queued == 2) unqueue(s, &c);
-    } else quick_order(s, &c, shift);
-    return 1;
+    WQ_CORE ctx;
+    WORLDQ q;
+    SNAP_QUICK_IN in;
+    SNAP_CHOICE c;
+    SNAP_COMMIT_RES res;
+    if (!quick_choice(s, shift, &in, &c) || !tasim_worldq_open(&ctx, &q, s, s->act)) return 0;
+    return tasim_snap_commit(&q, &in, &c, &res, s->snap) != SNAP_NONE;
 }
 
 static int unfinished_own(const WIKISIM* s, const WIKIUNIT* u)
@@ -2922,8 +2603,8 @@ void tagpu_wikisim_free(WIKISIM* s)
     free((void*)s->script);
     free(s->resolved);
     free(s->bound);
-    free(s->mark);
-    free(s->todo);
+    free(s->snap);
+    free(s->snap_builders);
     free(s->obs);
     free(s->mover);
     free(s->occ);
@@ -3434,7 +3115,8 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->demo_id = d ? d->id : NULL;
     s->next_id = 1;
     if (!(s->metal = (double*)malloc(cells * sizeof *s->metal)) || !(s->fog = (unsigned char*)calloc(cells, 1))
-        || !(s->mark = (uint32_t*)calloc(cells, sizeof *s->mark)) || !(s->todo = (int*)malloc((cells + 1) * 2 * sizeof *s->todo))
+        || !(s->snap = (SNAP_SCRATCH*)malloc(sizeof *s->snap))
+        || !(s->snap_builders = (uint16_t*)malloc(SNAP_UNITS_MAX * sizeof *s->snap_builders))
         || !(s->occ = (unsigned char*)malloc(cells)) || !(s->known = (unsigned char*)malloc(cells))
         || !(s->shut = (unsigned char*)malloc(cells)) || !(s->pg = (double*)malloc(cells * sizeof *s->pg))
         || !(s->par = (int*)malloc(cells * sizeof *s->par))

@@ -765,11 +765,11 @@ typedef struct {
                                        sim stands at, since every step feeds its tick: the
                                        clock an input reads                                    */
 
-    /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
-       sized for any list since tasim_push_order holds every list to PLACE_LIST_CAP; the view's arrays */
-    uint32_t*        mark;
-    uint32_t         gen;
-    int*             todo;
+    /* scratch: the snap rules' (tasim_snap.h) and Quick Build's selection, SNAP_UNITS_MAX slots;
+       take_offs' one builder's orders and the site taking each off, sized for any list since
+       tasim_push_order holds every list to PLACE_LIST_CAP; the view's arrays */
+    struct SNAP_SCRATCH* snap;
+    uint16_t*        snap_builders;
     PlaceOrder       q[PLACE_LIST_CAP];
     uint16_t         by[PLACE_LIST_CAP];
     WIKIVIEW         view;

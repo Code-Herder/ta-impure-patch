@@ -44,6 +44,7 @@ typedef struct WQ_MAP {
     int32_t threshold;          /* the metal a cell needs above it to count, 0..255                        */
     uint8_t sea;                /* the sea level byte                                                      */
     uint8_t lostype;            /* LosType: bit 1 = True line of sight                                     */
+    int32_t list_cap;           /* the orders a unit's list takes, the world's own bound; 0 for none       */
 } WQ_MAP;
 
 typedef struct WQ_DEF {
@@ -84,9 +85,16 @@ typedef struct WQ_ORDER {       /* a COPY of one order node: no pointer survives
     uint16_t type;              /* build type, 0 none                                                      */
     uint16_t target;            /* the target unit's slot, WQ_NONE when none or not a unit                 */
     int32_t  pos[3];            /* 16.16                                                                   */
-    uint32_t flags;             /* the node's flag word: 0x4 survives a replace, 0x4000 a head the next
-                                   append drops, 0x40000 the node belongs on the second list               */
+    uint32_t flags;             /* the node's flag word (+0x42), WQ_OF_*                                   */
 } WQ_ORDER;
+
+/* WQ_ORDER.flags' bits that a rule reads, DISASSEMBLED in 0x43ADC0's replace and link (0x43AE02..0x43AF84) and
+   the node's destructor 0x43A1F0: engine/orders.md */
+enum { WQ_OF_KEEP   = 1u << 2,  /* survives a replace                                                     */
+       WQ_OF_DROP   = 1u << 14, /* a head the next append drops                                           */
+       WQ_OF_SECOND = 1u << 18, /* the node belongs on the second list (+0x60)                            */
+       WQ_OF_STOP   = 1u << 22  /* its destructor starts the StopBuilding script                          */
+};
 
 enum { WQ_CMD_NEW = 1,          /* 0x43ADC0: no Shift replaces the list but its 0x4 nodes, then appends    */
        WQ_CMD_CLICK,            /* 0x43AFC0: Shift takes off the first same-action node within 16 world

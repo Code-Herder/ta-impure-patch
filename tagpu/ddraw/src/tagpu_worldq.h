@@ -40,6 +40,10 @@ void     tagpu_worldq_init(void);
 /* the build cursor's site test decoded at attach, NULL when 0x4198C6 was not a call */
 WqSiteFn tagpu_worldq_cursor_site(void);
 
+/* the resource building a unit definition is, WQ_KIND_*: what WQ_DEF.kind answers, for a caller that holds
+   the definition already (the build menu's log) */
+int      tagpu_worldq_def_kind(const void* def);
+
 /* Opens seat `seat`'s view into `out` over `ctx`, both the caller's for one call; 0 and nothing opened when
    any bound fails (in play, the map, the defs, the unit array and the seat's block; the seat below 10 and
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target. */
