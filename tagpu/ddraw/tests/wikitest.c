@@ -48,6 +48,14 @@
    so every target takes the distance tests to all 128 radars, the pass's worst. Build it optimised for a figure that means
    anything.
 
+   `wikitest worldq PAK ENTRY` opens the shared core's WORLDQ (tasim_worldq.h) for seat 0 on the sim of the
+   entry's first demo as it is made, before its first tick, and prints every query's answer over the stage, in
+   text: the map, the explored and metal grids, each type's definition, yard and build options, the coverage
+   and the site test of each resource building at every first cell, the features, the units, their orders,
+   the resolver's answers between every two units of the seat, the actions and the economy.
+   tests/worldq/quickbuild.txt holds the answers hand-checked against art/wiki/entries/quickbuild.json's first
+   scene; `wikitest worldq wiki.bin quickbuild | diff - tests/worldq/quickbuild.txt` holds the core to them.
+
    `wikitest malformed` loads data the loader must survive -- each case an archive or an entry
    built here -- and prints one line per case, "ok <case>" or "FAILED <case>: why". The native
    build runs under AddressSanitizer, so a write past an allocation fails the run as well.
@@ -62,6 +70,7 @@
 #include "tagpu_wikisim.h"
 #include "tagpu_wikireplay.h"
 #include "tagpu_recrules.h"
+#include "tasim_worldq.h"
 #include "wikihost.h"
 #include "wikicobfile.h"
 
@@ -774,6 +783,116 @@ static int sightcost(const char* path, int n)
     return 0;
 }
 
+/* ---- worldq: the core's WORLDQ answers over one entry's first scene ---- */
+
+static void wq_grid(const WORLDQ* q, const WQ_MAP* m, const char* what, int (*cell)(const WORLDQ*, int, int, int), int arg)
+{
+    int x, z;
+    for (z = 0; z < m->h; z++) {
+        printf("%s %2d ", what, z);
+        for (x = 0; x < m->w; x++) putchar(cell(q, x, z, arg) ? '1' : '0');
+        putchar('\n');
+    }
+}
+
+static int wq_explored_at(const WORLDQ* q, int x, int z, int arg) { (void)arg; return q->ops->explored(q, x, z); }
+static int wq_site_at(const WORLDQ* q, int x, int z, int type) { return q->ops->site_ok(q, type, x, z, 0, NULL); }
+
+static void wq_order_out(const WQ_ORDER* o)
+{
+    printf("  order %u action=%u build=%u started=%u owned=%u type=%u target=%d pos=%d,%d,%d flags=0x%x\n", o->place,
+           o->action, o->build, o->started, o->owned, o->type, o->target == WQ_NONE ? -1 : (int)o->target, o->pos[0], o->pos[1],
+           o->pos[2], o->flags);
+}
+
+static int worldq(const char* path, const char* entry)
+{
+    static WQ_ORDER list[PLACE_LIST_CAP];
+    char err[256];
+    size_t n;
+    char* pak;
+    WIKIDATA* d;
+    WIKISIM s;
+    WIKISIMCTX ctx;
+    WQ_CORE core;
+    WORLDQ q;
+    WQ_MAP m;
+    WQ_DEF def;
+    WQ_FEAT f;
+    WQ_UNIT u, v;
+    WQ_ECON econ;
+    uint16_t opts[WIKI_MAX_DEFS];
+    uint8_t yard[WIKI_FP_MAX * WIKI_FP_MAX];
+    const WIKIENTRY* e = NULL;
+    int i, k, x, z, t, first, last, rc = 0;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.iface = 1;
+    if (!(pak = slurp(path, &n))) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
+    if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
+        fprintf(stderr, "wikitest: %s\n", err);
+        free(pak);
+        return 2;
+    }
+    for (i = 0; i < d->nentry && !e; i++)
+        if (!strcmp(d->entry[i].id, entry)) e = &d->entry[i];
+    if (!e || !e->ndemo || !tagpu_wikisim_init(&s, e, &e->demo[0], 1, NULL, &ctx, err, sizeof err)) {
+        fprintf(stderr, "wikitest: worldq %s: %s\n", entry, !e ? "no such entry" : !e->ndemo ? "no demo" : err);
+        rc = 2;
+        goto done;
+    }
+    tasim_worldq_open(&core, &q, &s, 0);
+    q.ops->map(&q, &m);
+    printf("map w=%d h=%d threshold=%d sea=%u lostype=%u ndefs=%d nslots=%d gametime=%d\n", m.w, m.h, m.threshold, m.sea,
+           m.lostype, q.ops->ndefs(&q), q.ops->nslots(&q), q.ops->gametime(&q));
+    wq_grid(&q, &m, "explored", wq_explored_at, 0);
+    for (z = 0; z < m.h; z++)
+        for (x = 0; x < m.w; x++)
+            if (q.ops->metal(&q, x, z) > 0) printf("metal %d,%d %d\n", x, z, q.ops->metal(&q, x, z));
+    for (t = 1; t < q.ops->ndefs(&q); t++) {
+        if (!q.ops->def(&q, t, &def)) { printf("def %d refused\n", t); continue; }
+        printf("def %d %s fx=%d fz=%d kind=%u flags=0x%x strength=%g workertime=%u reach=%u speed=%d", t, def.name, def.fx,
+               def.fz, def.kind, def.flags, def.strength, def.workertime, def.reach, def.speed);
+        k = q.ops->yard(&q, t, yard, (int)sizeof yard);
+        printf(" yard=");
+        for (i = 0; i < k; i++) printf("%02X", yard[i]);
+        k = q.ops->build_options(&q, t, opts, WIKI_MAX_DEFS);
+        printf(" options=");
+        for (i = 0; i < k; i++) printf("%s%u", i ? "," : "", opts[i]);
+        putchar('\n');
+        if (!def.kind) continue;
+        for (z = 0; z < m.h; z++)
+            for (x = 0; x < m.w; x++)
+                if (q.ops->coverage(&q, x, z, def.fx, def.fz)) printf("coverage %d %d,%d %d\n", t, x, z, q.ops->coverage(&q, x, z, def.fx, def.fz));
+        wq_grid(&q, &m, def.name, wq_site_at, t);
+    }
+    for (z = 0; z < m.h; z++)
+        for (x = 0; x < m.w; x++)
+            if (q.ops->feature(&q, x, z, &f))
+                printf("feature %d,%d anchor=%d,%d def=%d fx=%d fz=%d flags=0x%02x metal=%g energy=%g\n", x, z, f.ax, f.az,
+                       f.def == WQ_NONE ? -1 : (int)f.def, f.fx, f.fz, f.flags, f.metal, f.energy);
+    q.ops->seat_units(&q, &first, &last);
+    printf("seat units %d..%d\n", first, last);
+    for (i = 1; i < q.ops->nslots(&q); i++) {
+        if (!q.ops->unit(&q, i, &u)) { printf("unit %d -\n", i); continue; }
+        printf("unit %d type=%u index=%u owner=%u finished=%u pos=%d,%d,%d state=0x%x\n", i, u.type, u.index, u.owner,
+               u.finished, u.pos[0], u.pos[1], u.pos[2], u.state);
+        k = q.ops->orders(&q, i, list, PLACE_LIST_CAP);
+        for (x = 0; x < k; x++) wq_order_out(&list[x]);
+        for (k = 1; k < q.ops->nslots(&q); k++)
+            if (q.ops->unit(&q, k, &v))
+                printf("  can %d: reclaim=%d guard=%d\n", k, q.ops->can(&q, i, WQ_CAN_RECLAIM, k, u.pos),
+                       q.ops->can(&q, i, WQ_CAN_GUARD, k, u.pos));
+    }
+    printf("actions");
+    for (i = 0; i < WQ_ACTS; i++) printf(" %d", q.ops->action(&q, i));
+    printf("\neconomy %d\n", q.ops->economy(&q, &econ));
+    tagpu_wikisim_free(&s);
+done:
+    tagpu_wikidata_free(d);
+    free(pak);
+    return rc;
+}
+
 int main(int argc, char** argv)
 {
     int rc;
@@ -805,10 +924,11 @@ int main(int argc, char** argv)
     if (argc == 3 && !strcmp(argv[1], "rules")) return rules(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
     if (argc == 4 && !strcmp(argv[1], "sightcost")) return sightcost(argv[2], atoi(argv[3]));
+    if (argc == 4 && !strcmp(argv[1], "worldq")) return worldq(argv[2], argv[3]);
     fprintf(stderr, "usage: wikitest replay PAK ENTRY LAYOUT CASTING RIVAL IFACE COB"
             " | wikitest replaytrace PAK ENTRY LAYOUT CASTING RIVAL IFACE COB TRACE"
             " | wikitest serve | wikitest trace FILE"
             " | wikitest constants | wikitest rules FILE"
-            " | wikitest malformed | wikitest sightcost PAK N\n");
+            " | wikitest malformed | wikitest sightcost PAK N | wikitest worldq PAK ENTRY\n");
     return 2;
 }

@@ -292,7 +292,7 @@ void tasim_advance(WIKISIM* s)
                 continue;
             }
             if (!(st = tasim_new_unit(s, o->type, u->owner, 0, NULL, NULL))) continue;
-            tasim_place(s, st, o->ox, o->oz);
+            tasim_seat_unit(s, st, o->ox, o->oz);
             tasim_notice(s, u, WIKI_SND_BUILD);
         }
         credit(s, u, st, HOW_BUILD);
