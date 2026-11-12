@@ -543,7 +543,8 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 (`0x46502A`), `EDI` the record and `ESI` the record's index, the loop counter `BL` zero-extended
 (`0x464FAB..0x464FB5`); after it the phase reads `ESI` (`0x465036` `push esi`), `EDI`
 (`0x46503C`) and `BL` (`0x46506A`), and nothing reads `EAX`, `ECX` or `EDX` before writing it:
-`0x40B2C0` takes its one stack argument and loads all three first (`0x40B2C0..0x40B2D6`). The tick takes no
+`0x40B2C0` loads `EAX` from its stack argument first (`0x40B2C0`) and `EDX`, `ECX` next
+(`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
 type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Under
 `tagpu_impai.on` Impure redirects this call to a wrapper that always calls the tick

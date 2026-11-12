@@ -7,13 +7,17 @@
    stock tick, so the stock AI still plays every seat. Which seats are ImpAI's is SIM_STATE,
    written at the level init. */
 
-/* DllMain, before the registry closes its lever list: reads tagpu_impai.on and, when it names
-   seats, byte-matches and redirects the call at 0x465031. With no lever the site stays stock. */
+/* DllMain, before the registry closes its lever list: reads tagpu_impai.on. */
 void tagpu_impai_init(void);
 
+/* DllMain, after tagpu_replay_init: when the lever named seats and replay's sites are in --
+   among them the level init's PLAYERS call, the only caller of tagpu_impai_level_init --
+   byte-matches and redirects the call at 0x465031. Otherwise the site stays stock. */
+void tagpu_impai_install(void);
+
 /* The level init's (tagpu_replay.c, tagpu_replay_level_players), right after the engine's
-   players init 0x464990 on the LOADER thread: marks the lever's seats on a live level, and
-   writes nothing on a puppet level, whose seats the recording restores. */
+   players init 0x464990 on the LOADER thread: clears the seat table on every level, then marks
+   the lever's seats on a live level; a puppet level's seats the recording restores. */
 void tagpu_impai_level_init(void);
 
 /* The level's teardown (tagpu_reclaim.c, reclaim_teardown_pre), on the game thread: logs each

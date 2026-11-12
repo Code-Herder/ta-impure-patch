@@ -14,6 +14,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 #include "tagpu_puppet.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_replay.h"
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
@@ -24,15 +25,20 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 
 #define IMPAI_ON     0x01u
 
-/* Which records ImpAI observes, by record index: written only by the level init on a live level
-   (on the loader thread, before the level's first step) and, on a puppet level, by the
-   recording. */
+/* Which records ImpAI observes, by record index. Every level starts from the table a fresh
+   process holds: the level init clears it on every level, live or puppet, on the loader thread
+   before the level's first step, so no mark of an earlier level survives into this one. Then
+   the level init marks a live level's seats; on a puppet level the recording is the only
+   writer, its first restore running on the game thread at the level's first step, after the
+   clear (impai_seat_of, THE THREAD, gives the ordering). A recording that carries no row of
+   this table leaves it clear. */
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
 
 /* the lever as read at install, and whether the seam is in */
 static struct {
     uint8_t  in;           /* 1 once 0x465031 reaches impai_ai_tick            */
+    uint8_t  read;         /* 1 when the lever named seats                     */
     uint8_t  all_ai;       /* `ai`: every record whose controller is 2         */
     uint16_t mask;         /* else bit i for record i                          */
 } s_lever;
@@ -124,10 +130,25 @@ static int lever_parse(char* t)
 void tagpu_impai_init(void)
 {
     char text[64];
-    const unsigned char* at = (const unsigned char*)(uintptr_t)VA_AI_CALL;
     if (tagpu_sim_lever_read("tagpu_impai.on", text, sizeof text) < 0) return;
     if (!lever_parse(text)) {
         tagpu_logf("impai: tagpu_impai.on: %s not understood", text);
+        return;
+    }
+    s_lever.read = 1;
+}
+
+/* THE LEVEL INIT IS OURS FIRST. The seam goes in only once tagpu_replay_init has retargeted the
+   level init's PLAYERS call 0x4919C8 to tagpu_replay_level_players, the only caller of
+   tagpu_impai_level_init: so the seam is never in on a level whose seat table nobody cleared
+   and wrote. */
+void tagpu_impai_install(void)
+{
+    const unsigned char* at = (const unsigned char*)(uintptr_t)VA_AI_CALL;
+    if (!s_lever.read) return;
+    if (!tagpu_replay_level_init_in()) {
+        tagpu_logf("impai: seam 0x465031 left out: the level init 0x4919C8 is not retargeted "
+                   "(the log's `replay:` lines say why)");
         return;
     }
     if (!tagpu_detour_redirect_ok(VA_AI_CALL, VA_AI_TICK)) {
@@ -140,24 +161,23 @@ void tagpu_impai_init(void)
         return;
     }
     s_lever.in = 1;
-    tagpu_logf("impai: seam 0x465031 in, seats %s", text);
+    tagpu_logf("impai: seam 0x465031 in, seats %s", s_lever.all_ai ? "ai" : "by the lever");
 }
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
    last store (0x497C62), which the game thread waits for before the level's first step: so the
-   table is whole before any game-thread turn reads it (impai_seat_of, THE THREAD). On a puppet
-   level it writes no seat: the recording restores the table, and the recorder is the only
-   writer of what a recording carries. */
+   table is whole before any game-thread turn reads it (impai_seat_of, THE THREAD). It clears
+   the table on every level (s_seat); on a puppet level it marks no seat: the recording restores
+   the table, and the recorder is the only writer of what a recording carries. */
 void tagpu_impai_level_init(void)
 {
     const char* ta;
     char list[2 * PLAYER_COUNT + 1];
     unsigned i, live = 0, remote = PLAYER_COUNT, n = 0;
     memset(&s_diag, 0, sizeof s_diag);
-    if (tagpu_puppet_on()) return;
     memset(s_seat, 0, sizeof s_seat);
-    if (!s_lever.in) return;
+    if (tagpu_puppet_on() || !s_lever.in) return;
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
     for (i = 0; i < PLAYER_COUNT; i++) {

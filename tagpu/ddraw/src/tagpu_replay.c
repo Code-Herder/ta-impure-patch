@@ -11564,6 +11564,11 @@ static unsigned guard_fnv(const Guard* g)
     return h;
 }
 
+int tagpu_replay_level_init_in(void)
+{
+    return s_sitesIn;
+}
+
 int tagpu_replay_watch_ready(char* why, unsigned cap)
 {
     unsigned i;
