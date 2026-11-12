@@ -454,10 +454,17 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
     return 1;
 }
 
+/* The stage is flat and dry: its one class, 0, is good on every cell of the map. */
+static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+{
+    const WIKISIM* s = ctx_of(q)->s;
+    return mclass == 0 && cx >= 0 && cz >= 0 && cx < s->W && cz < s->H ? 3 : 0;
+}
+
 static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
-    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step,
+    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 
 int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, WIKISIM* s, int seat)

@@ -123,15 +123,37 @@ SIM_ROWS(s_seatst, SIM_STATE, SIM_ID_PLAYER, NULL);
 static uint8_t s_radar_bits[PLAYER_COUNT][WQ_RADAR_BYTES(TAGPU_PK_DESIGN_SLOTS)];
 SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
 
+/* each seat's metal patches (impai.h): the published set, then the scan in progress */
+static SNAP_PATCH s_cluster[PLAYER_COUNT][IMPAI_CLUSTERS];
+SIM_ROWS(s_cluster, SIM_STATE, SIM_ID_PLAYER, NULL);
+
 /* THE BUDGETS of one seat's tick, by count (impai.h): the loops are the budgets, so a tick past them is a
    bug in the code, and the level-end `work` lines show each tick's largest against its bound. */
 #define OBS_SLICE     2048u
 #define RADAR_VISITS  32768u
+#define CLU_ROWS      16u
+#define CLU_FLOOD     (2u * SNAP_PATCH_CAP)
+
+/* THE REACH LABELS of every movement class the level has (impai.h, impai_reach_label), class after class,
+   bw x bh 32-px blocks each, from the engine's own pathing maps at the level init. Content: a function of
+   the map and its features at PLAYERS, rebuilt on every level, live or puppet. */
+static uint16_t* s_reach;
+static unsigned  s_reach_n;
+SIM_HEAP(s_reach, SIM_CONTENT, SIM_ID_NONE, sizeof(uint16_t), s_reach_n, NULL);
+SIM_VAR(s_reach_n, SIM_CONTENT);
+/* where each class's labels start in s_reach (present: bit c), and the block grid */
+static struct {
+    uint32_t at[WQ_MCLASSES];
+    uint32_t present;
+    uint16_t bw, bh;
+} s_reach_ix;
+SIM_VAR(s_reach_ix, SIM_CONTENT);
 
 /* The level's work and the self-checks' counts, for the level-end lines and tools/impai_check.py. */
 static struct {
     unsigned ticks[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned slots_max[PLAYER_COUNT], visits_max[PLAYER_COUNT], nslots_max;
+    unsigned cells_max[PLAYER_COUNT], flood_max[PLAYER_COUNT], map_w;
     unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
@@ -193,21 +215,30 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
    the rest of the step. */
 static void impai_observe(int seat)
 {
-    static const IMPAI_BUDGET budget = { OBS_SLICE, RADAR_VISITS };
+    static const IMPAI_BUDGET budget = { OBS_SLICE, RADAR_VISITS, CLU_ROWS, CLU_FLOOD };
+    const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
+                                  (int)sizeof s_radar_bits[seat], s_cluster[seat] };
     WQ_ENGINE c;
     WORLDQ q;
     IMPAI_WORK w;
+    SNAP_SCRATCH* scr;
+    int rc = -1;
     s_diag.calls[seat]++;
-    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
-        impai_know_tick(&q, &s_seatst[seat], s_known, (int)(sizeof s_known / sizeof s_known[0]),
-                        s_radar_bits[seat], (int)sizeof s_radar_bits[seat], &budget, &w) < 0) {
+    /* the patch flood's arena, freed before return: nothing in it crosses a tick */
+    if ((scr = (SNAP_SCRATCH*)tagpu_sim_scratch(sizeof *scr)) && tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL))
+        rc = impai_know_tick(&q, &s_seatst[seat], &arrays, &budget, scr, &w);
+    tagpu_sim_scratch_free(scr);
+    if (rc < 0) {
         s_obs.refused[seat]++;
         return;
     }
     s_obs.ticks[seat]++;
     if (w.slots > s_obs.slots_max[seat]) s_obs.slots_max[seat] = w.slots;
     if (w.visits > s_obs.visits_max[seat]) s_obs.visits_max[seat] = w.visits;
+    if (w.cells > s_obs.cells_max[seat]) s_obs.cells_max[seat] = w.cells;
+    if (w.flood > s_obs.flood_max[seat]) s_obs.flood_max[seat] = w.flood;
     if (c.nslots > s_obs.nslots_max) s_obs.nslots_max = c.nslots;
+    if ((unsigned)c.w > s_obs.map_w) s_obs.map_w = (unsigned)c.w;
     if (s_install.check) check_los(&c, &q, seat);
 }
 
@@ -282,15 +313,18 @@ static void impai_check_install(void)
 
 /* The level's observation lines, at the level end: each seat's work against its bounds, and the checks'
    counts. The bound of `slots` is the slice plus a pass's publish, one observe a slot; of `visits` the
-   budget plus one walk past it, which reads each slot's unit once at most. */
+   budget plus one walk past it, which reads each slot's unit once at most; of `cells` the scan's rows across
+   the map; of `flood` its budget. */
 static void impai_observe_end(unsigned now)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++)
         if (s_obs.ticks[i] || s_obs.refused[i])
-            tagpu_logf("impai: work seat=%u ticks=%u refused=%u slots_max=%u/%u visits_max=%u/%u gametime=%u", i,
-                       s_obs.ticks[i], s_obs.refused[i], s_obs.slots_max[i], OBS_SLICE + s_obs.nslots_max,
-                       s_obs.visits_max[i], RADAR_VISITS + s_obs.nslots_max, now);
+            tagpu_logf("impai: work seat=%u ticks=%u refused=%u slots_max=%u/%u visits_max=%u/%u cells_max=%u/%u "
+                       "flood_max=%u/%u clusters=%u gametime=%u", i, s_obs.ticks[i], s_obs.refused[i],
+                       s_obs.slots_max[i], OBS_SLICE + s_obs.nslots_max, s_obs.visits_max[i],
+                       RADAR_VISITS + s_obs.nslots_max, s_obs.cells_max[i], CLU_ROWS * s_obs.map_w,
+                       s_obs.flood_max[i], CLU_FLOOD, s_seatst[i].nclusters, now);
     if (!s_install.check) return;
     for (i = 0; i < PLAYER_COUNT; i++)
         if (s_obs.ticks[i])
@@ -307,7 +341,61 @@ static void impai_observe_clear(void)
     memset(s_known, 0, sizeof s_known);
     memset(s_seatst, 0, sizeof s_seatst);
     memset(s_radar_bits, 0, sizeof s_radar_bits);
+    memset(s_cluster, 0, sizeof s_cluster);
     memset(&s_obs, 0, sizeof s_obs);
+}
+
+static int reach_pass(const void* ctx, int mclass, int cx, int cz)
+{
+    (void)ctx;
+    return tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
+}
+
+/* THE REACH BUILD, at the level init on the loader thread, after 0x440940 built the class maps at 0x4918E3
+   (tagpu_worldq_passable_at): the labels of every class the level has, into one block sized for them. The
+   previous level's block goes first, so no level's labels outlive it. BOUND: the map's W and H are the
+   engine's, each held to the coordinate limit (2048 cells); the labels take (W/2)(H/2) u16 a class. A level
+   whose block or BFS scratch cannot be had has no reach, said once in the log. */
+static void impai_reach_build(void)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    unsigned c, n = 0, comps = 0;
+    int w, h;
+    size_t blocks;
+    void* work;
+    if (s_reach) SIM_FREE(s_reach, s_reach);
+    s_reach = NULL;
+    s_reach_n = 0;
+    memset(&s_reach_ix, 0, sizeof s_reach_ix);
+    if (!ta) return;
+    w = *(const int*)(ta + OFF_MAP_W16);
+    h = *(const int*)(ta + OFF_MAP_H16);
+    if (w < 2 || h < 2 || w > 2048 || h > 2048) return;
+    blocks = (size_t)(w / 2) * (size_t)(h / 2);
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if (tagpu_worldq_class_exists(c)) {
+            s_reach_ix.present |= 1u << c;
+            n++;
+        }
+    if (!n) return;
+    work = tagpu_sim_scratch(impai_reach_work(w, h));
+    if (!work || !(s_reach = (uint16_t*)SIM_ALLOC(s_reach, n * blocks * sizeof(uint16_t)))) {
+        tagpu_sim_scratch_free(work);
+        s_reach_ix.present = 0;
+        tagpu_logf("impai: reach none: %u classes of %dx%d cells need memory not had", n, w, h);
+        return;
+    }
+    s_reach_ix.bw = (uint16_t)(w / 2);
+    s_reach_ix.bh = (uint16_t)(h / 2);
+    for (c = 0, n = 0; c < WQ_MCLASSES; c++) {
+        if (!(s_reach_ix.present >> c & 1u)) continue;
+        s_reach_ix.at[c] = (uint32_t)(n * blocks);
+        comps += (unsigned)impai_reach_label(reach_pass, NULL, (int)c, w, h, s_reach + n * blocks, work);
+        n++;
+    }
+    tagpu_sim_scratch_free(work);
+    s_reach_n = (unsigned)(n * blocks);
+    tagpu_logf("impai: reach classes=%u blocks=%ux%u components=%u", n, s_reach_ix.bw, s_reach_ix.bh, comps);
 }
 
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no
@@ -376,6 +464,7 @@ void tagpu_impai_level_init(void)
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
     impai_observe_clear();
+    impai_reach_build();
     if (tagpu_puppet_on()) return;
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;

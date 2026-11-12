@@ -55,4 +55,11 @@ int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn 
    tests ownership first, as 0x465AC0 does. */
 int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under);
 
+/* The engine's pathing map of movement class `mclass` at cell (cx, cz), as the passable op answers it, with
+   no seat: 0 blocked, off the map or for a class the level has not, 1 bad, 3 good. On the loader thread
+   after the level's class maps are built (0x4918E3: from the level init on), or on the game thread. */
+int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz);
+/* the level has movement class `mclass` (its record names one) */
+int tagpu_worldq_class_exists(unsigned mclass);
+
 #endif

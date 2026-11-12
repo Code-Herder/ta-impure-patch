@@ -102,6 +102,8 @@ typedef struct {
     int         tech;                   /* 0: no build chain from a commander reaches it        */
     double      value;                  /* metal + energy / R                                   */
     double      dps_ground, dps_air;    /* per tick                                             */
+    double      dps_water;              /* per tick, of the regular waterweapons (TASIM_WF_WATER)
+                                           apart from the anti-air ones; also in dps_ground     */
     int32_t     range_ground;
     double      speed;                  /* world units per tick                                 */
     uint32_t    flags;                  /* TASIM_RF_*                                           */

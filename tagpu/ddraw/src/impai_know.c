@@ -86,18 +86,52 @@ static void publish(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_ROW* rows, const uint
     }
 }
 
-int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_ROW* rows, int nrows, uint8_t* bits, int nbytes,
-                    const IMPAI_BUDGET* b, IMPAI_WORK* w)
+/* The patch scan: clu_rows map rows a tick through the game's own patch rule (tasim_snap_patches, which floods
+   only explored metal), into the pending half; at the last row the pending half becomes the published one.
+   A row whose floods need more than one tick's budget makes no progress, and is passed over with its patches
+   unreported, so the scan always advances; a full pending half ends the scan at once. */
+static void patch_scan(const WORLDQ* q, IMPAI_SEAT* st, SNAP_PATCH* clusters, const IMPAI_BUDGET* b,
+                       SNAP_SCRATCH* scr, IMPAI_WORK* w)
+{
+    WQ_MAP m;
+    uint32_t flood = b->clu_flood;
+    int z1, next, found;
+    if (!q->ops->map(q, &m) || m.w < 1 || m.h < 1) return;
+    if (st->clu_row >= m.h) st->clu_row = 0;
+    z1 = st->clu_row + (int)b->clu_rows < m.h ? st->clu_row + (int)b->clu_rows : m.h;
+    found = tasim_snap_patches(q, st->clu_row, z1, clusters + IMPAI_CLUSTERS_HALF + st->npending,
+                               IMPAI_CLUSTERS_HALF - st->npending, &flood, &next, scr);
+    w->flood = b->clu_flood - flood;
+    w->cells = (uint32_t)(z1 - st->clu_row) * (uint32_t)m.w;
+    st->npending = (uint16_t)(st->npending + found);
+    if (next <= st->clu_row) next = st->npending >= IMPAI_CLUSTERS_HALF ? m.h : st->clu_row + 1;
+    st->clu_row = (uint16_t)next;
+    if (st->clu_row >= m.h) {
+        if (st->nclusters != st->npending ||
+            memcmp(clusters, clusters + IMPAI_CLUSTERS_HALF, st->npending * sizeof *clusters)) {
+            memcpy(clusters, clusters + IMPAI_CLUSTERS_HALF, st->npending * sizeof *clusters);
+            memset(clusters + st->npending, 0, (IMPAI_CLUSTERS_HALF - st->npending) * sizeof *clusters);
+            st->nclusters = st->npending;
+            st->known_gen++;
+        }
+        memset(clusters + IMPAI_CLUSTERS_HALF, 0, IMPAI_CLUSTERS_HALF * sizeof *clusters);
+        st->npending = 0;
+        st->clu_row = 0;
+    }
+}
+
+int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, const IMPAI_BUDGET* b,
+                    SNAP_SCRATCH* scr, IMPAI_WORK* w)
 {
     const int n = q->ops->nslots(q), seat = q->seat;
     const unsigned now = (unsigned)q->ops->gametime(q);
     uint32_t i;
     memset(w, 0, sizeof *w);
-    if (n < 1 || n > nrows || nbytes < (int)WQ_RADAR_BYTES(n) || seat < 0 || seat >= WQ_SEATS) return -1;
+    if (n < 1 || n > a->nrows || a->nbytes < (int)WQ_RADAR_BYTES(n) || seat < 0 || seat >= WQ_SEATS) return -1;
     /* 1. the line-of-sight slice: up to obs_slice slots from the cursor, wrapping past the last */
     if (st->obs_cursor < 1 || st->obs_cursor >= n) st->obs_cursor = 1;
     for (i = 0; i < b->obs_slice && i + 1 < (uint32_t)n; i++) {
-        slice_slot(q, st, &rows[st->obs_cursor].seat[seat], st->obs_cursor);
+        slice_slot(q, st, &a->rows[st->obs_cursor].seat[seat], st->obs_cursor);
         w->slots++;
         st->obs_cursor = (uint16_t)(st->obs_cursor + 1 < n ? st->obs_cursor + 1 : 1);
     }
@@ -105,12 +139,14 @@ int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_ROW* rows, int nrows,
        answer grows staler under load while a tick's work stays bounded */
     if (st->radar.stage != WQ_RS_IDLE || now % 30u == (unsigned)impai_radar_phase(seat)) {
         int32_t budget = (int32_t)b->radar_visits;
-        const int done = q->ops->radar_step(q, &st->radar, bits, nbytes, &budget);
+        const int done = q->ops->radar_step(q, &st->radar, a->bits, a->nbytes, &budget);
         w->visits = (uint32_t)((int32_t)b->radar_visits - budget);
         if (done) {
-            publish(q, st, rows, bits, n, w);
+            publish(q, st, a->rows, a->bits, n, w);
             st->radar_done = now;
         }
     }
+    /* 3. the patch scan */
+    if (scr) patch_scan(q, st, a->clusters, b, scr, w);
     return 0;
 }

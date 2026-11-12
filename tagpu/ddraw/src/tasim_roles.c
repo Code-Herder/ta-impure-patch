@@ -112,7 +112,7 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
     if (u->flags241 & TASIM_F241_ANTIWEAPONS) o->flags |= TASIM_RF_ANTIWEAPONS;
     if (u->radar) o->flags |= TASIM_RF_RADAR;
     if (u->jammer) o->flags |= TASIM_RF_JAMMER;
-    o->dps_ground = o->dps_air = 0.0;
+    o->dps_ground = o->dps_air = o->dps_water = 0.0;
     o->range_ground = 0;
     for (k = 0; k < n; k++) {
         const TASIM_ROLE_WEAPON* w = &u->w[k];
@@ -125,6 +125,7 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
             continue;
         }
         o->dps_ground += dps((double)w->damage_default, w);
+        if (w->flags & TASIM_WF_WATER) o->dps_water += dps((double)w->damage_default, w);
         if (w->range > o->range_ground) o->range_ground = w->range;
         if (w->flags & (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH)) a.ground_arty = 1;
     }

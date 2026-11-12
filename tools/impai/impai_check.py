@@ -14,7 +14,8 @@ fails unless:
       the radar line at least RADAR_PASSES passes as well. A missing line fails: the lever
       tagpu_impai_check.on was not in place, or the level never ended;
   (c) every `impai: work` line is within its bounds, which the line states beside each count
-      (`slots_max=N/BOUND`, `visits_max=N/BOUND`), and its `refused` count is 0.
+      (`slots_max`, `visits_max`, `cells_max` and `flood_max`, each N/BOUND), and its `refused` count
+      is 0.
 
 The overlay's digests (b) and the cost lines (d) are not written yet; this judges what is.
 Exit 0 when every check passes, 1 when one fails, 2 when the logs cannot be read.
@@ -30,7 +31,8 @@ RADAR_PASSES = 50
 CHECK = re.compile(r"impai: check (los seat=(\d+)|los-local|radar passes=(\d+)) .*?evaluated=(\d+) mismatch=(\d+)")
 MISMATCH = re.compile(r"impai: check (los|radar) mismatch .*")
 WORK = re.compile(r"impai: work seat=(\d+) ticks=(\d+) refused=(\d+) slots_max=(\d+)/(\d+) "
-                  r"visits_max=(\d+)/(\d+)")
+                  r"visits_max=(\d+)/(\d+) cells_max=(\d+)/(\d+) flood_max=(\d+)/(\d+)")
+BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
 
 
 def judge(lines, los):
@@ -57,13 +59,12 @@ def judge(lines, los):
         m = WORK.search(ln)
         if m:
             seat, refused = int(m.group(1)), int(m.group(3))
-            slots, sbound, visits, vbound = (int(m.group(k)) for k in (4, 5, 6, 7))
             if refused:
                 fails.append(f"(c) seat {seat}: refused={refused}")
-            if slots > sbound:
-                fails.append(f"(c) seat {seat}: slots_max {slots} over its bound {sbound}")
-            if visits > vbound:
-                fails.append(f"(c) seat {seat}: visits_max {visits} over its bound {vbound}")
+            for k, name in enumerate(BOUNDED):
+                n, bound = int(m.group(4 + 2 * k)), int(m.group(5 + 2 * k))
+                if n > bound:
+                    fails.append(f"(c) seat {seat}: {name} {n} over its bound {bound}")
             notes.append(ln.strip())
     if radar is None:
         fails.append("(a) no `impai: check radar` line: the check lever was not in place")

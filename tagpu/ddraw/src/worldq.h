@@ -215,7 +215,12 @@ typedef struct WORLDQ_OPS {
        time, and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
        WQ_RADAR_BYTES(nslots) bytes. 1 when the pass is complete: `bits` holds its answer and `st` is idle */
     int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget);
+    /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
+       passable but bad, 3 good; 0 off the map and for a class the world does not have */
+    int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
 } WORLDQ_OPS;
+
+#define WQ_MCLASSES 32              /* the engine's movement classes, 0x512358 .. 0x512758 */
 
 struct WORLDQ { const WORLDQ_OPS* ops; void* self; int seat; };
 

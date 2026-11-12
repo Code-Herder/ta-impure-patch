@@ -908,10 +908,52 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
     return 1;
 }
 
+/* ---- the pathing maps ---- */
+
+/* THE MOVEMENT CLASSES, 32 records of 0x20 bytes at 0x512358 (engine/map.md, the pathing maps): +0x00 the
+   class name, nonzero for a class that exists; +0x10 and +0x14 its map's W and H; +0x18 the map. The level
+   loader's 0x440940 (called at 0x4918E3, before PLAYERS at 0x4919C8 in the same body) gives every existing
+   class W = main+0x14233 and H = main+0x14237 and allocates ((H + 15) >> 4) x W dwords (0x44097E..0x4409B8,
+   DISASSEMBLED), and the reader 0x40D7B0 takes cell (x, z) as dword (z >> 4) x W + x, bits 2 (z & 15)
+   (0x40D83E..0x40D85E): 0 blocked, 1 passable but bad, 3 good, with the class's footprint and a one-cell ring
+   already folded in at the cell its footprint starts at (0x440500). So a class whose W and H are the map's
+   holds every cell of the map, and nothing else is read. The maps live from that load to the next, built on
+   the loader thread and refreshed in play on the game thread (0x47E1F0), the two threads this is read on. */
+#define MC_BASE   0x00512358u
+#define MC_STRIDE 0x20u
+
+int tagpu_worldq_passable_at(unsigned mclass, int cx, int cz)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const char* mc;
+    const uint32_t* map;
+    int w, h;
+    if (!ta || mclass >= WQ_MCLASSES) return 0;
+    w = *(const int*)(ta + OFF_MAP_W16);
+    h = *(const int*)(ta + OFF_MAP_H16);
+    mc = (const char*)(uintptr_t)(MC_BASE + mclass * MC_STRIDE);
+    if (!*(const char* const*)mc || w <= 0 || h <= 0 || w > 0x7FFF || h > 0x7FFF ||
+        *(const unsigned*)(mc + 0x10) != (unsigned)w || *(const unsigned*)(mc + 0x14) != (unsigned)h ||
+        !(map = *(const uint32_t* const*)(mc + 0x18)) || cx < 0 || cz < 0 || cx >= w || cz >= h)
+        return 0;
+    return (int)((map[(size_t)(cz >> 4) * (unsigned)w + (unsigned)cx] >> (2u * ((unsigned)cz & 15u))) & 3u);
+}
+
+int tagpu_worldq_class_exists(unsigned mclass)
+{
+    return mclass < WQ_MCLASSES && *(const char* const*)(uintptr_t)(MC_BASE + mclass * MC_STRIDE) != NULL;
+}
+
+static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+{
+    (void)q;
+    return mclass < 0 ? 0 : tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
+}
+
 static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders,
-    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step,
+    wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 
 /* THE OPEN'S BOUNDS, each read value made data before it is an index: the map's W and H even and 2..0x7FFF,

@@ -24,12 +24,13 @@ const ROOT = path.resolve(new URL('../..', import.meta.url).pathname);
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const CACHE = path.join(ROOT, 'build/wikihost');
 
-/* the simulation (its front end and the core), the loader, the replay layer, the COB host, and the stage with what
+/* the simulation (its front end and the core), the loader, the replay layer, the COB host, ImpAI's engine-free half
+   (wikitest impai), and the stage with what
    it draws through (tagpu_wikistage_pose for the `poses` op) */
 export const SOURCES = ['tests/wikitest.c', 'tests/wikihost.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c',
   'src/tagpu_wikireplay.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c', 'src/tagpu_hudlay.c', 'src/tagpu_json.c',
   'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c',
-  'src/tagpu_cob_safe.c'];
+  'src/tagpu_cob_safe.c', 'src/impai_know.c', 'src/impai_maps.c'];
 /* the sources the Makefile compiles on SSE2 (its CFLAGS += -msse2 lines) */
 const SSE = new Set(['src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikireplay.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikiframe.c']);
