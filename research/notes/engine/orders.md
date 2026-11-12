@@ -441,8 +441,12 @@ contains a similar assignment/planner loop without the controller gate;
 nothing calls it (no `call`, no stored pointer to it).
 
 `0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`
-with argument 1 for AI, and at `0x408CA7` with 0 otherwise. These are its only
-direct callers. It scans weapon targets and invokes target setters/resetters
+with argument 1 for AI (`push 1` at `0x408C96`, the AI object in ECX at `0x408C98`), and at `0x408CA7`
+with 0 otherwise; it is `thiscall` and pops its one argument (`ret 4` at `0x408BDF`; DISASSEMBLED
+2026-11-12). These are its only
+direct callers in the image; Impure's ImpAI wrapper calls it by address, with 1, for a seat ImpAI
+plays, in place of `0x408C40` ([ImpAI in the engine](../modules/impai.html), *The seam and the
+wrapper*). It scans weapon targets and invokes target setters/resetters
 `0x48A0A0`, `0x48A060`, `0x48A0F0`, with queries `0x49D120`, `0x48A190` and
 `0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
 `0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit `main+0x37EE6`),

@@ -707,6 +707,18 @@ gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine
 keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
 resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
 
+**`setup.starts`**, `fixed` or `random`, sets the SKIRMISH screen's `StartLocation` gadget before
+Start. The stage is found by the engine's own value, not the gadget's label: after each stage the
+load reads the settings block's `+0x118` (`[main+0x29A0]+0x118`, the choice the loader reads at
+`0x49790E`), nonzero for fixed, and stops when no stage gives the value asked for. With fixed
+starts seat i takes the map's `StartPos(i+1)` ([sim](engine/sim.html), *Seating a level*).
+Omitted, the screen keeps its own choice.
+
+**A player's `ally`**, 0 to 5, is the skirmish key's `Player<N>AllyGroup`, written before the
+launch as `--player`'s seventh field: seats of one group start allied (MEASURED 2026-11-11, the
+records' `+0x108` bytes; every seat read 5 before one was written, and what 5 means is not
+established). Omitted, the key is left as it is.
+
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
 all 1428 units (715 resolution errors, including inactive slots 2/3). With count

@@ -1,6 +1,6 @@
 # Entering the game
 
-Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI observes, and the button is a design (A1b).
+Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI plays its seats' economy and the seat button chooses it (A1b).
 
 ## The seam: the call at `0x465031`
 

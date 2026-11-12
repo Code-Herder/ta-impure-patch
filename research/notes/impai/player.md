@@ -7,7 +7,7 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
 - **The seat's button is the `SKIRMISH.GUI` gadget `Player<N>`.** Stock cycles it Open → Computer → Player → Open, Player only while no other seat is the player ([the GUI](../engine/ui.html), *The SKIRMISH screen's handler*). ImpAI splits the Computer step in two: **Open → ImpAI → OTA AI → Player → Open**. Until A2 the Computer step offers OTA AI first, **Open → OTA AI → ImpAI → Player → Open**; at A2 the order flips, so ImpAI is the first computer step. Player is skipped, as in stock, while another seat holds it.
 - **OTA AI is the stock AI and keeps its stock behaviour**, including that its target picker sees every enemy unit on the map (no sight, radar or explored-map test). A seat that plays OTA AI runs the stock code untouched.
 - **OTA AI is the default**: `seatai`'s default is `none`. **The default becomes ImpAI** at A2, once every level passes [the bar](bar.html).
-- **Where the choice lives.** Both kinds are a Computer seat to the engine: the skirmish entry and the record's controller `+0x73` stay 2 for ImpAI and OTA AI alike, so every stock reader of the seat sees what it always did ([sim](../engine/sim.html) lists the engine's other tests of the controller against 2). The per-seat choice is the `impure.cfg` key `seatai`, the seats ImpAI plays (`seatai=1,3`, or `none`), honoured under every launch, `--defaults` included, as the engine honours its own SKIRMISH settings. The level init copies it into a `SIM_STATE` table; a replay restores that table from the recording, whose header also names each seat's AI. Until the button lands (A1b) the key is set by hand or by a scenario's `impai` seats.
+- **Where the choice lives.** Both kinds are a Computer seat to the engine: the skirmish entry and the record's controller `+0x73` stay 2 for ImpAI and OTA AI alike, so every stock reader of the seat sees what it always did ([sim](../engine/sim.html) lists the engine's other tests of the controller against 2). The per-seat choice is the `impure.cfg` key `seatai`, the seats ImpAI plays (`seatai=1,3`, or `none`), honoured under every launch, `--defaults` included, as the engine honours its own SKIRMISH settings. The level init copies it into a `SIM_STATE` table; a replay restores that table from the recording, whose header also names each seat's AI. The SKIRMISH screen's seat button writes it (*The AI button*), and so do a scenario's `impai` seats and `tacli launch --seatai`.
 - **The `AI` chat command** (cheats on) never leaves a seat to ImpAI. On a human's seat it hands the seat to the stock AI, OTA AI, as in stock, even a seat a takeover played as ImpAI's; on an ImpAI seat it makes the seat a human's, as it does to an OTA AI seat, and a second `AI` hands it to OTA AI ([ImpAI in the engine](../modules/impai.html), *The `AI` command*).
 
 ## Levels
@@ -29,7 +29,7 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
 
 ## The stock AI's machinery on an ImpAI seat
 
-What stock AI code runs on a seat ImpAI plays, now (A1a) and once ImpAI builds (A1b):
+What stock AI code runs on a seat ImpAI plays, while ImpAI only observed (A1a) and now that it builds (A1b):
 
 | | A1a | A1b |
 |---|---|---|
@@ -67,7 +67,7 @@ What a seat's observation costs a tick -- its view's open and its knowledge tick
 | `impai-observe` (Core Prime Industrial Area, two ImpAI seats, 5 580 ticks, turbo) | 5 001 | slice 2 048, radar 32 768 | 62-70 µs | ≤ 256 µs | 1-2 of 5 580 a seat | 0.6-2.8 ms |
 
 - **The budgets stay at their L1 values** (slice 2 048 slots, 32 768 radar visits, the patch scan's rows and flood): the mean is a tenth of the bound, p99 half of it, and the slice's own share is small -- raising it from 2 048 to 15 001 slots adds about 23 ns a slot.
-- **The worst case is not yet within 1 ms.** About one turn in a thousand takes 1-4 ms. Which part is not separated: the tick that ends a line-of-sight pass publishes every row the pass found (`slots_max` 8 044 = the slice + 5 996 rows on `limits-tier1`), the tick that ends a patch scan publishes its patches, and the wall clock also counts preemption on a loaded machine. Spreading a publish across ticks changes when a seat's knowledge moves, a decision for A1, not a budget.
+- **The worst case was not within 1 ms** in these runs: about one turn in a thousand took 1-4 ms. Each of those turns also allocated and zeroed a 639 KB arena, above the process heap's VirtualAlloc threshold; the turn's scratch is static now. The cost line now times the whole turn, the brain's decision included, and the `impai: tail` line counts the slow turns by what they did -- a radar publish, a patch scan's last row, a decision, or none of them, which leaves the OS ([ImpAI in the engine](../modules/impai.html), *The cost*). The figures with the brain playing are not yet measured; the radar publish stays whole until they show it is the slow class.
 
 ## Not now
 

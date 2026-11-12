@@ -1048,7 +1048,10 @@ machine's first unit tick gave them, drawing COB RAND from the recording's simul
 **Player `+0xF0`, the players phase's 30-tick deadline.** `0x464700` sets it, `+0xF4` and `+0xF8`
 to GameTime at the level load (`0x464715`, `0x464727`, `0x464765`), for each record with a nonzero
 type (`0x464990`: `0x46499E..0x4649B1`). In the players phase `0x464F80`, a record whose `+0xF0`
-has reached GameTime (`0x46507D..0x465089`) gets `+0xF0 += 30` (`0x46508F`) and its 30-tick block:
+has reached GameTime (`0x46507D..0x465089`) gets `+0xF0 += 30` (`0x46508F`) and its 30-tick block,
+after the record's AI tick call `0x465031` and its acquisition tick `0x465037` in the same iteration,
+so an AI turn reads the record as the previous pass left it even on a tick whose pass is due
+(DISASSEMBLED 2026-11-12):
 for the controlled record (`0x46509D`) the end tests and the respawn; the economy `0x401360` for
 types 1 and 2 (`0x465539..0x46555A`); for the viewed record (`0x465565`) the radar pass `0x467440`
 and the minimap fog composite `0x466C20` (`0x46556D`, `0x465572`); and in game type 3, every fourth
