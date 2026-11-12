@@ -917,10 +917,13 @@ side had its own types.
   mod's, and fail on a context played on one side only, a different hash or a demo refused on one
   side only. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
 - **Try it in the game** (`wiki_regression.py try`) arms each demo's builds through the stage's
-  sidebar, as described [above](#try-it-yourself-in-the-game). In (t2c) NEXT and PREV page the
-  ARMCK, ORDERS shows the side's GEN and BUILD its page again, and STOP disarms and empties the
-  orders. Every step is read back from `sim.js` fed the logged inputs, once its hash equals the
-  game's (`sideview.mjs --dump`).
+  sidebar, as described [above](#try-it-yourself-in-the-game). In (t2c), with Try it paused, NEXT
+  and PREV page the ARMCK, ORDERS shows the side's GEN and BUILD its page again, a click on the map
+  places the building the demo left armed, the sidebar arms it again, and STOP disarms it and
+  empties the orders. Input stands between two ticks, so the order STOP clears is the click's, by
+  construction: the demo's own orders are worked off at a pace set by the tick wall time let Try
+  it reach, which under the gate's load once left none. Every step is read back from `sim.js` fed
+  the logged inputs, once its hash equals the game's (`sideview.mjs --dump`).
 - **Every mod in the game** (`wiki_regression.py all mods`) plays one game a compatibility setup
   on a private 2560 × 1440 display:
     - **(b1)** the setup's own sidebar, cropped from the engine's frame below the minimap, against
