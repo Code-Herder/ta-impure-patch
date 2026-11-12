@@ -270,12 +270,13 @@ Armed with the recorder's network sites, on every launch, each byte-matched befo
 The Mods screen writes no engine site. Its button is one more record in the main menu's own gadget block, written with REPLAYS' at the same observer on `GUI_Load` (`0x4AACAE`, `tagpu_replays.c` `mainmenu_visit`), and its OnCommand slot is REPLAYS' too (`0x42644C`).
 Under `mod=` the mount's filter (`mount_filtered`, `tagpu_modload.c`) reads the mod's catalog entry and the archives' bytes; of the player's profile it reads only which mutators are on (`mutator.<id>`).
 
-### The AI seat: the recorder's activity observers and the acquisition detour (`tagpu_recorder.c`, `tagpu_weapons.c`)
+### The AI seat: ImpAI's seam, the recorder's activity observers and the acquisition detour (`tagpu_impai.c`, `tagpu_recorder.c`, `tagpu_weapons.c`)
 
-The three observers are installed by `ai_hooks_init` at the end of the recorder's site install, after every event site is in: all three prefixes are byte-matched first (`tagpu_detour_bytes_ok`), and a mismatch at any leaves all three out and the harness refuses AI activity observation. They change no engine behaviour: they count, on the game thread, the orders made inside the AI tick ([orders](../engine/orders.html), *Direct AI order activity observer*). The acquisition detour is a row of the extra-weapons module's hook table, installed with that table all-or-none.
+The three observers are installed by `ai_hooks_init` at the end of the recorder's site install, after every event site is in: all three prefixes are byte-matched first (`tagpu_detour_bytes_ok`), and a mismatch at any leaves all three out and the harness refuses AI activity observation. They change no engine behaviour: they count, on the game thread, the orders made inside the AI tick ([orders](../engine/orders.html), *Direct AI order activity observer*). The acquisition detour is a row of the extra-weapons module's hook table, installed with that table all-or-none. ImpAI's seam is the call site of the tick, so it composes with the observer on the tick's entry: it is installed only when `tagpu_impai.on` names seats, and its wrapper always calls `0x408C40` ([entering the game](../impai/engine-seam.html), *As built*).
 
 | VA | What it is | Module | Mechanism |
 |---|---|---|---|
+| `0x465031` | the players phase's `call 0x408C40` (`E8 0A 3C FA FF`), the AI tick's only call | `tagpu_impai.c` (`impai_ai_tick`), only with `tagpu_impai.on` | call-site redirect (`tagpu_detour_redirect`): the rel32 at `0x465032` re-pointed to a `__fastcall` wrapper that counts an ImpAI seat's turn on the game thread and always calls `0x408C40` |
 | `0x408C40` | the AI object's tick, `thiscall`, called only from `0x465031` | `tagpu_recorder.c` (`ai_enter`, `ai_leave`) | entry and leave observer (`tagpu_detour_observe`), 5 stolen (`53 56 57 8B F9`) |
 | `0x43A0C0` | the order constructor, `thiscall`, `ret 0x18` | `tagpu_recorder.c` (`ai_order`) | entry observer, 7 stolen (`83 EC 0C 8A 44 24 10`) |
 | `0x43A1F0` | the order node's destructor, `thiscall` | `tagpu_recorder.c` (`ai_destroy`) | entry observer, 5 stolen (`53 56 8B F1 57`) |
