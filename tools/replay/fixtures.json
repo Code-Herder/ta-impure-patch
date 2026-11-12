@@ -440,7 +440,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -492,7 +497,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -546,6 +556,11 @@
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
     "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h",
     "tagpu/ddraw/src/tagpu_cob_safe.c",
     "tagpu/ddraw/inc/tagpu_cob_safe.h",
     "tagpu/ddraw/src/tagpu_patches.c",
@@ -622,6 +637,11 @@
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
     "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h",
     "tools/cob_legacy_save_probe.py"
    ],
    "steps": [
@@ -676,7 +696,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -728,7 +753,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -780,7 +810,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -832,7 +867,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -884,7 +924,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -940,7 +985,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -996,7 +1046,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1049,7 +1104,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -1103,7 +1163,12 @@
     "tools/resource_fixture.py",
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "content": {
     "run": [
@@ -1157,7 +1222,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1209,7 +1279,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1267,7 +1342,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1324,7 +1404,12 @@
     "tagpu/ddraw/src/dllmain.c",
     "tagpu/ddraw/src/config.c",
     "tools/resource_fixture.py",
-    "tagpu/ddraw/inc/tagpu_vpwide.h"
+    "tagpu/ddraw/inc/tagpu_vpwide.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_snap.c",
+    "tagpu/ddraw/src/tasim_snap.h"
    ],
    "steps": [
     [
@@ -1365,6 +1450,11 @@
     "tagpu/ddraw/src/tagpu_place.h",
     "tagpu/ddraw/src/tagpu_placegeo.c",
     "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_place.c",
+    "tagpu/ddraw/src/tasim_place.h",
     "tagpu/ddraw/src/tagpu_route.c",
     "tagpu/ddraw/src/tagpu_route.h",
     "tools/place_regression.py",
@@ -1392,6 +1482,11 @@
     "tagpu/ddraw/src/tagpu_sweep.h",
     "tagpu/ddraw/src/tagpu_sweepgeo.c",
     "tagpu/ddraw/src/tagpu_sweepgeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_sweep.c",
+    "tagpu/ddraw/src/tasim_sweep.h",
     "tools/sweep_regression.py",
     "tools/resource_regression.py"
    ],

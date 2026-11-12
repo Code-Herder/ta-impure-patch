@@ -6,12 +6,23 @@ Resource snapping, contextual Quick Build and profiles.
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`.
 
-### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tagpu_profiles.c`) — 2026-10-04
+### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tasim_snap.c`, `tagpu_profiles.c`) — 2026-10-04
 
 Manual mex/geo placement and a separate contextual Quick Build option use the existing input,
 packet and ghost paths. The [resource page](../tadr-port/resource-snapping.html) gives policy,
 behavior, fixture coverage and gaps; the engine map's *Resource placement and contextual order
 contracts* gives the allocation/lifetime proof and disassembly.
+
+The rules -- the snap scorer, the closed-patch rule, the queued-plan rules (a placed plan blocking a
+site, the same plan, its cancellation), Quick Build's choice and its commit -- are `tasim_snap.c`'s,
+over `WORLDQ` (`worldq.h`). `tagpu_resource.c` keeps the hooks, the gates, the build menu, the log
+lines and the packet's ghost, and calls the rules through the engine's view (`tagpu_worldq.c`); the
+in-game wiki's simulation calls the same functions through the core's (`tasim_worldq.c`), so its
+Quick Build demos play the game's rule. The snap's distance is exact: `D = Tx² + Tz²` over
+`T = cx·2²⁰ + 2¹⁹ − raw` in 64-bit integers, the search radius held to 64 cells, so the DLL's object
+and the wiki's native build agree by construction. With Shift, a builder whose list cannot take all
+its new orders gets none of them (`WQ_MAP.list_cap`: no bound in the engine, `PLACE_LIST_CAP` in the
+core), so an upgrade's reclaim never goes in without its build.
 
 | Seam | Mechanism |
 |---|---|

@@ -1753,7 +1753,11 @@ the shear is the same in every mode:
 - **Without it** (Permanent 12, Circular 8, whose LOS grids are all lit): the first three points go to
   `PositionInPlayerMapped 0x408090(player, point)` (`0x465BBB`, `0x465C53`, `0x465CF7`), which places
   the point at `0x408095..0x4080C0` — not visible at `0x4080C1` — and reads the shared mapped grid
-  `main+0x14273`, a `u16` a cell and a bit a player; the fourth goes to an inline copy of it,
+  `main+0x14273`, a `u16` a cell and a bit a player. **The bit it tests is the viewed player's**,
+  `1 << main+0x2A43` (the byte read at `0x4080E0`, the test `0x4080EA..0x4080F4`), whatever `player` is: the argument supplies only the
+  grid's size, `+0x80` and `+0x84`, so `0x408090` answers for the viewed player alone
+  [DISASSEMBLED 2026-11-11]. `tagpu_worldq.c`'s mapped test calls it only for the viewed seat for
+  that reason; the fourth goes to an inline copy of it,
   `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses.
 
 The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
