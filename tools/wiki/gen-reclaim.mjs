@@ -14,7 +14,7 @@
    Interface Types, as any armed order's is; its cancel is the `cancel` action. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-const { TRIP, PICK } = createRequire(import.meta.url)('./mockup/sim.js');
+const { TRIP, PICK } = createRequire(import.meta.url)('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 // the world point of cell (cx, cz)'s centre
 const C = (cx, cz) => [cx * 16 + 8, cz * 16 + 8];

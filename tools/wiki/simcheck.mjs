@@ -1,4 +1,5 @@
-/* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
+/* simcheck.mjs -- plays every demo of the wiki's entries through the wiki's simulation (the DLL's C core, run as a host
+   through tools/wiki/mockup/simhost.js), headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
    usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1]
@@ -18,7 +19,8 @@
    context themselves.
 
    THE UNITS' SCRIPTS: when gfx packs built by tools/wiki/gfx.py hold them (tools/wiki/mockup/gfx/, gitignored, read
-   from the game), every context is played again with them, through serve.py's host (cobhost.mjs), as the game's wiki
+   from the game), every context is played again with them, the host reading each type's script and sound category
+   from the packs (ctx.packs, the first pack naming a type), as the game's wiki
    plays its demos; --no-scripts keeps the plays without. Under --pack each type's script comes from the mod's own
    stage packs first (DIR/stage/, which sidepacks.py writes), then the gfx packs. Every play must end on its own end,
    never stopped by a wait that ran past its max (sim.js UNTILS), and with scripts no type may be quarantined (the
@@ -60,8 +62,9 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
-const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
+import path from 'node:path';
+import { scripts, sounds, soundSource } from './cobhost.mjs';
+const WikiSim = createRequire(import.meta.url)('./mockup/simhost.js');
 const WikiReplay = createRequire(import.meta.url)('./mockup/replay.js');
 const WikiSound = createRequire(import.meta.url)('./mockup/sound.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
@@ -87,8 +90,10 @@ function contexts() {
   const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`) : [];
   const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
   if (!Object.keys(scripts(packs)).length) return mine(cs);
-  const host = cobHost();
-  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))]);
+  /* `packs` is what the host reads (repository-relative); `snd` is this check's own reading of the same packs' sound
+     categories, which the death claim (gameClaims) holds the played WAV to */
+  const dirs = packs.map(d => path.relative(ROOT, d));
+  return mine([...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, packs: dirs, snd: soundSource(packs) } }))]);
 }
 function baseContexts() {
   if (PACK) {
@@ -1154,10 +1159,9 @@ const CTX_RULES = {
   'the bound entry renames every bound type, keeps the units\' order, and builds by cast'(entry) {
     const c = ident();
     for (const k of Object.values(c.casts)) k.type = `X${k.type}`;
-    const b = WikiSim.bindEntry(entry, c), demo = entry.demos.find(d => d.id === 'click');
+    const demo = entry.demos.find(d => d.id === 'click');
     const r = run(entry, demo, null, { ...T1, casting: c }), built = fresh(r.last.v, 'XARMMEX');
-    return same(Object.keys(b.units), Object.keys(entry.units).map(t => `X${t}`)) && same(b.units.XARMCK.builds, ['XARMMEX', 'XARMGEO']) &&
-      b.units.XARMCK.name === 'Construction KBot' && Object.values(b.scenes).every(g => g.units.every(u => u.type[0] === 'X')) &&
+    return same(r.sim.types, Object.keys(entry.units).map(t => `X${t}`)) && r.all[0].v.units.every(u => u.type[0] === 'X') &&
       built.length === 1 && built[0].built === 1 && !r.last.v.units.some(u => u.type === 'ARMMEX');
   },
 };
@@ -1354,11 +1358,12 @@ const GFX_PACKS = () => {
   const d = `${ROOT}tools/wiki/mockup/gfx`;
   return fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`).filter(x => fs.existsSync(`${x}/scene.json`)) : [];
 };
+// the context that takes the packs' sounds and none of their scripts
+const SOUNDS = () => ({ ...T1, packs: GFX_PACKS().map(d => path.relative(ROOT, d)), scripts: false });
 const SOUND_RULES = {
   'the player\'s clicks say select, SelectMultipleUnits, notoktobuild and oktobuild, one reply a second'(entry) {
-    const snd = soundSource(GFX_PACKS());
     if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
-    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, SOUNDS());
     const names = v => v.sound.events.map(([, k, n]) => (k ? `kind${k}` : WikiSim.SND_NAMES[n])).join(' ');
     const steps = n => { for (let i = 0; i < n; i++) { s.step(); s.view(); } };
     click(s, [304, 176], 'lmb');                                   // select ck: heard on the next tick's consumer
@@ -1378,9 +1383,8 @@ const SOUND_RULES = {
      0x403CDF), and a build order says no ok (MobileBuild never calls 0x438880): the Peewee stands on the site, the
      constructor says cant once while it steps off, then builds */
   'a builder whose site a unit stands on says cant once, no ok, and builds once it is clear'(entry) {
-    const snd = soundSource(GFX_PACKS());
     if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
-    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, SOUNDS());
     click(s, [304, 176], 'lmb');                                   // select ck
     for (let i = 0; i < 40; i++) s.step();
     s.input({ build: 'ARMMEX' });
@@ -1974,7 +1978,7 @@ function takeoverClaims(entry, d, layout, ctx, rr, ok) {
       const s = straight(entry, d, layout, ctx, f.tl, k.selected, k.pickR - 1, false);
       if (pbad) {}
       else if (f.game.tick !== k.pickR - 1 || !(f.W && sameWorld(s, rr.ids, f.W))) pbad = `the game at demo tick ${f.tick} is not its chain at ${k.pickR - 1}`;
-      else if (WikiSim.refreshAt(m.R, k.pickR) !== k.pickR || k.pickR === m.R || k.pickParent !== m.id)
+      else if (WikiReplay.refreshAt(m.R, k.pickR) !== k.pickR || k.pickR === m.R || k.pickParent !== m.id)
         pbad = `pickR ${k.pickR} is no refresh past the first of F${m.id} (from ${m.R}), or the parent ${k.pickParent} is not it`;
       else if (k.pickEvict !== (e.evict === null ? -1 : e.evict)) pbad = `the eviction ${k.pickEvict} is not forkEvict's ${e.evict}`;
       s.free();
@@ -2660,7 +2664,7 @@ for (const c of games.length ? contexts() : []) {
       } else {
         gameClaims(entry, d, c.ctx, r, ok, t.refused, t.deaths);
         stallClaims(entry, d, c.layout, c.ctx, ok);
-        if (entry.live && !c.ctx.cob) releaseSweep(entry, d, c.layout, c.ctx, ok);
+        if (entry.live && !c.ctx.packs) releaseSweep(entry, d, c.layout, c.ctx, ok);
         if (c.name === 'identity') {
           // a game leaves a cast whose economy is outside its bounds unbound: it stops where it stops on unbound casts
           const lk = gameLock(entry, d, { ...c.ctx, casting: castsOff(c.ctx.casting) });

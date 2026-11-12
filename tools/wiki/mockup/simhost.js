@@ -49,18 +49,31 @@ const WikiSim = (() => {
   // the calls waiting for the next request, each with what takes its answer
   let queue = [];
   const freed = typeof FinalizationRegistry !== 'undefined' ? new FinalizationRegistry(h => queue.push({ req: { op: 'free', sim: h }, take: () => {} })) : null;
+  /* one request line out, its answer line back. serve.py starts a host that has exited afresh at the next request,
+     and a new process numbers its handles from 1 again, so the exit's answer drops every handle and every answer kept
+     here: a kept handle would otherwise name another object in the new host */
+  function send(line) {
+    const t = channel().request(line);
+    if (t.startsWith('{"error": "the host exited') || t.startsWith('{"error":"the host exited')) {
+      for (const k in held) held[k] = [new WeakMap(), new Map()];
+      packsOf.clear(); pureKept.clear();
+    }
+    return t;
+  }
   /* one request, answered; the queue goes first in one batch, and the first queued call the host refused throws */
   function ask(req) {
     let a;
     if (queue.length) {
       const q = queue;
       queue = [];
-      const all = JSON.parse(channel().request(JSON.stringify({ op: 'batch', calls: [...q.map(c => c.req), req] }))).answers;
+      const got = JSON.parse(send(JSON.stringify({ op: 'batch', calls: [...q.map(c => c.req), req] })));
+      if (got.error) throw new Error(got.error);
+      const all = got.answers;
       let err = null;
       q.forEach((c, i) => { if (all[i] && all[i].error) err ??= all[i].error; else c.take(all[i]); });
       a = all[all.length - 1];
       if (err !== null) throw new Error(err);
-    } else a = JSON.parse(channel().request(JSON.stringify(req)));
+    } else a = JSON.parse(send(JSON.stringify(req)));
     if (a && a.error) throw new Error(a.error);
     return a;
   }
@@ -110,6 +123,21 @@ const WikiSim = (() => {
     const k = JSON.stringify(dirs);
     if (!packsOf.has(k)) packsOf.set(k, ask({ op: 'packs', dirs }).packs);
     return packsOf.get(k);
+  }
+
+  /* THE PURE ANSWERS: an op that reads no sim (sight, sighttable, scene, seatcam, fits) answers one request text alike
+     -- a handle names one object for the host's life, never reused -- so the last PURE_KEEP answers are kept by their
+     request's text, and a frame drawn again over the same tick asks nothing */
+  const PURE_KEEP = 64, pureKept = new Map();
+  function pure(req) {
+    const k = JSON.stringify(req);
+    let a = pureKept.get(k);
+    if (a === undefined) {
+      a = ask(req);
+      pureKept.set(k, a);
+      if (pureKept.size > PURE_KEEP) pureKept.delete(pureKept.keys().next().value);
+    }
+    return a;
   }
 
   let K = null;
@@ -190,7 +218,7 @@ const WikiSim = (() => {
   function sightLit(v, S, seat, g) {
     const types = v.game ? v.game.types : [], T = new Map(types.map((t, i) => [t.name, i]));
     const ix = n => T.has(n) ? T.get(n) : -1;
-    const a = withHandles(() => ask({ op: 'sight', table: S ? handle('table', S) : null, seat, tick: g, contacts: true, view: {
+    const a = withHandles(() => pure({ op: 'sight', table: S ? handle('table', S) : null, seat, tick: g, contacts: true, view: {
       w: v.map.w, h: v.map.h, units: v.units.map(u => [u.x, u.z, u.owner, ix(u.type), u.built]),
       deaths: v.game ? v.game.deaths.map(d => [d.tick, d.owner, d.x, d.z, ix(d.type)]) : [],
       types: types.map(t => [t.sightDistance, t.radarDistance, t.sonarDistance, t.activates ? 1 : 0, t.modelHeight]) } }));
@@ -203,8 +231,8 @@ const WikiSim = (() => {
     if (!c || c.v !== v || c.seat !== seat) throw new Error('wiki sim: sightContacts takes the grid sightLit made of the same view and seat');
     return c.contacts.slice();
   }
-  const sighttable = (S, d) => S ? withHandles(() => ask({ op: 'sighttable', table: handle('table', S), distance: d }))
-    : ask({ op: 'sighttable', table: null, distance: d });
+  const sighttable = (S, d) => S ? withHandles(() => pure({ op: 'sighttable', table: handle('table', S), distance: d }))
+    : pure({ op: 'sighttable', table: null, distance: d });
 
   const api = {
     create: (entry, demo, layout, ctx) => make(entry, demo, 'try', layout, ctx),
@@ -218,11 +246,11 @@ const WikiSim = (() => {
     // a text entry's refusal (null: none), as tagpu_wikidata_entry's
     checkText: entry => ask({ op: 'text', json: entry }).why,
     // the scene a demo plays on (null: the first)
-    sceneOf: (entry, demo) => entry.scenes[withHandles(() => ask({ op: 'scene', entry: entryOf(entry, demo) })).scene],
+    sceneOf: (entry, demo) => entry.scenes[withHandles(() => pure({ op: 'scene', entry: entryOf(entry, demo) })).scene],
     // a players entry's seat's camera at a tick (tagpu_wikidata_seat_cam), null for a seat with none
-    seatCam: (entry, demo, k, t) => withHandles(() => ask({ op: 'seatcam', entry: entryOf(entry, demo), seat: k, tick: t })).at,
+    seatCam: (entry, demo, k, t) => withHandles(() => pure({ op: 'seatcam', entry: entryOf(entry, demo), seat: k, tick: t })).at,
     // the game frame's 4:3 bound on a game entry's map (tagpu_wikidata_frame_fits)
-    frameFits: (w, h) => ask({ op: 'fits', w, h }).fits,
+    frameFits: (w, h) => pure({ op: 'fits', w, h }).fits,
     sightLit, sightContacts,
     // a layout's sight table's index for a sight distance, and its table (null: none)
     sightIndex: (S, d) => sighttable(S, d).idx,

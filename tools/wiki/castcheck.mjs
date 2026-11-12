@@ -41,7 +41,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
 const FIXTURES = ['fixture.json', 'fixture-tall.json'].map(f => path.join(ROOT, 'art/wiki/side', f));

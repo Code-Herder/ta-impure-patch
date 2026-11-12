@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>In-game wiki mockup</title>
-<!-- The in-game wiki drawn from art/wiki/ (tree.json, entries/<id>.json) and played by sim.js. Serve the repository root
-     with python3 tools/hudart/serve.py and open /tools/wiki/mockup/. research/notes/ingame-wiki.md is the specification:
+<!-- The in-game wiki drawn from art/wiki/ (tree.json, entries/<id>.json) and played by the DLL's own simulation, which
+     tools/wiki/serve.py runs as a host process (simhost.js). Serve the repository root with python3 tools/wiki/serve.py
+     and open /tools/wiki/mockup/. research/notes/ingame-wiki.md is the specification:
      the game copies this page, so a change to the wiki is made here first. -->
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="../../uikit/uikit.css">
@@ -89,10 +90,9 @@ whichever entry is open: the tree, its entry's demos under it, beside the stage;
 <code>entry=</code> before the tree lists it), <code>about</code> (the
 theatre's About panel open), <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
 resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
-<script src="sim.js"></script>
+<script src="simhost.js"></script>
 <script src="replay.js"></script>
 <script src="pose.js"></script>
-<script src="cob.js"></script>
 <script src="text.js"></script>
 <script src="../../tascene-render.js"></script>
 <script src="scene.js"></script>

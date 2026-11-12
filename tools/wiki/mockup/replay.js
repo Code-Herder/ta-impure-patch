@@ -113,10 +113,12 @@
    tail, and one ease and one re-read; the samples are at most STAT_PTS, the walk's ticks being at most
    GAME_END_MAX. The Players set is inert in every other replay: its presses are no control of theirs (PRESSES).
 
-   Runs in a page (the global WikiReplay, after sim.js) and under node (module.exports), as sim.js does. */
+   Runs in a page (the global WikiReplay, after simhost.js) and under node (module.exports), as simhost.js does. Its
+   simulations are the host's (simhost.js): a run of ticks with nothing to do between them is one request (THE BATCHES,
+   chainSteps and pastTicks). */
 const WikiReplay = (() => {
-  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./sim.js');
-  /* tagpu_wikireplay.h's constants (simparity compares them): the controls a press names (sim.js's HUD_CONTROLS,
+  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./simhost.js');
+  /* tagpu_wikireplay.h's constants (simparity compares them): the controls a press names (the host's HUD_CONTROLS,
      WIKI_HUD_*), the speeds in tenths with the one a replay starts at (hud-in-game.md: 5, 10, 20, 40, 80, 1/2x to 8x),
      the game ticks a seek and the walk play in one step (SEEK, WALK), rew's and fwd's 10 s (STEP), a bookmark's reach
      of 3 s (NEAR), the bookmarks and markers held (BOOKS; MARKS: a death per kill of a commander, a defeat per seat),
@@ -152,11 +154,27 @@ const WikiReplay = (() => {
   const MEASURES = Sim.CHIPS.slice(2), MEASURE0 = MEASURES.indexOf('units'), STAT_PTS = Math.trunc(Sim.GAME_END_MAX / RATE) + 1;
   const TOG = { cursors: 2, clicks: 4, selections: 8, chat: 16 }, TOG_ALL = 2 | 4 | 8 | 16, NOT_ASKED = -2, PASS = 30;
 
-  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h (sim.js holds the refresh grid, which its
-     loader's kept forks are held to; simparity compares them case by case): the refresh interval, the live forks a
-     recording keeps and the segments a file may hold (RECR_TIMELINES); the refresh grid and the eviction
+  /* THE RECORDER'S RULES, the twins of tagpu/ddraw/inc/tagpu_recrules.h, which the recorder runs and the DLL's replay
+     layer and loader include (simparity compares them case by case): the refresh interval a recording is written with
+     (REC_REFRESH_TICKS), the live forks a recording keeps (REC_FORK_LIMIT) and the segments a file may hold
+     (RECR_TIMELINES, from the host); the refresh grid (refresh_bin, reclossy_is_refresh) and the eviction
      (rec_fork_evict). */
-  const { REFRESH_TICKS, FORK_LIMIT, refreshBin, isRefresh, refreshAt } = Sim, TIMELINES = Sim.TIMELINES;
+  const REFRESH_TICKS = 300, FORK_LIMIT = 3, TIMELINES = Sim.TIMELINES;
+  // the interval of the refresh grid that holds GameTime t: 1 to interval is the first
+  const refreshBin = (t, interval) => Math.floor((t + interval - 1) / interval);
+  /* whether a segment's iteration at GameTime `tick` is a refresh, `n` its ordinal in the segment from 1 and `prev` the
+     GameTime of the segment's last refresh before it: the first two, then the first in each interval other than the last
+     refresh's; `interval` 0 makes only the first two */
+  const isRefresh = (n, tick, prev, interval) =>
+    n <= 2 || (interval !== 0 && refreshBin(tick, interval) !== refreshBin(prev, interval));
+  /* the last GameTime up to T that the writer flags a refresh in a segment whose first iteration is `first`, walked from
+     it with the ordinal from 1; `first` itself when T is below first + 1. At most T - first + 1 integer steps
+     (tagpu_wikidata.c tagpu_wikidata_refresh_at) */
+  function refreshAt(first, T) {
+    let R0 = first;
+    for (let r = first, n = 1, prev = 0; r <= T; r++, n++) if (isRefresh(n, r, prev, REFRESH_TICKS)) { R0 = r; prev = r; }
+    return R0;
+  }
   /* the recorder's choice among `rows`, [{id, live, used}] in file order (id 0 the original): never the original, never
      the selected; the least recently used, the earliest on a tie; refused when the live set cannot be bounded. Fewer
      than `limit` live forks evict none; exactly `limit` the candidate; more, or `limit` with no candidate, cannot be
@@ -182,7 +200,7 @@ const WikiReplay = (() => {
     const TK = entry.frame === 'game' && entry.takeover === true;
     let LIVE = entry.frame === 'game' && entry.live === true;
     // the walker makes no sound: nothing of it is heard. A live replay has none: the live HUD has no markers
-    const newWalker = () => Sim.game(entry, demo, layout, ctx == null ? ctx : { ...ctx, snd: null }, 'refuse');
+    const newWalker = () => Sim.game(entry, demo, layout, ctx == null ? ctx : { ...ctx, sounds: false }, 'refuse');
     let walker = null;
     if (!LIVE) {
       try { walker = newWalker(); }
@@ -274,11 +292,12 @@ const WikiReplay = (() => {
     const sound = () => R.game.gameNow().sound;
     const stopped = () => R.game !== null && R.game.gameNow().stopped;
     const isDone = () => clock >= vend || stalled || failed || left || clash || stopped();
-    // a seat's lost rising, a death; its out set, a defeat. BOUND: MARKS (above), and the guard holds it whatever.
-    function publish() {
-      walker.gameNow().seats.forEach((z, k) => {
-        if (z.lost > prev[k].lost && marks.length < MARKS) marks.push([walker.tick, DEATH, k]);
-        if (z.out && !prev[k].out && marks.length < MARKS) marks.push([walker.tick, DEFEAT, k]);
+    /* a seat's lost rising, a death; its out set, a defeat, from the walker's gameNow() `now` at its tick t. BOUND: MARKS
+       (above), and the guard holds it whatever. */
+    function publish(now = walker.gameNow(), t = walker.tick) {
+      now.seats.forEach((z, k) => {
+        if (z.lost > prev[k].lost && marks.length < MARKS) marks.push([t, DEATH, k]);
+        if (z.out && !prev[k].out && marks.length < MARKS) marks.push([t, DEFEAT, k]);
         prev[k] = { lost: z.lost, out: z.out };
       });
     }
@@ -389,8 +408,7 @@ const WikiReplay = (() => {
       const g = R.game;
       let ran = 0;
       if (target >= 0) {
-        const n = Math.min(SEEK, target - g.tick);
-        for (; ran < n && !g.done && chainStep(g); ran++);
+        ran = chainSteps(g, Math.min(SEEK, target - g.tick));
         if (!failed && g.tick === target) { target = -1; quiet = sound(); }
       } else if (!paused) {
         acc += speed;
@@ -491,18 +509,25 @@ const WikiReplay = (() => {
       rw = 'past';
       target = T;
     }
-    /* ONE TICK OF P along the chain, from t to t + 1: at the next member's R the member's fork operation, then the
-       entries the member logged at t + 1, in log order, through the calls that applied them live, so P's world is the
-       world the timeline was played with by construction */
-    function pastTick() {
-      const P = R.past, t = P.tick;
-      if (pm + 1 < pchain.length && t + 1 === rows[pchain[pm + 1]].R) {
-        pl = 0;
-        if (!forkMember(P, rows[pchain[++pm]])) return;
+    /* UP TO n TICKS OF P along the chain, each from t to t + 1: at the next member's R the member's fork operation,
+       then the entries the member logged at t + 1, in log order, through the calls that applied them live, so P's world
+       is the world the timeline was played with by construction. THE BATCHES: the ticks after one with something to
+       apply, up to the next member's R or logged entry, are one request (Sim steps). */
+    function pastTicks(n) {
+      for (let ran = 0; ran < n && !R.past.done && !failed;) {
+        const P = R.past, t = P.tick;
+        if (pm + 1 < pchain.length && t + 1 === rows[pchain[pm + 1]].R) {
+          pl = 0;
+          if (!forkMember(P, rows[pchain[++pm]])) return;
+        }
+        const log = rows[pchain[pm]].log;
+        for (; pl < log.length && log[pl].tau <= t + 1; pl++) if (log[pl].tau === t + 1) apply(P, log[pl]);
+        let m = n - ran;
+        if (pm + 1 < pchain.length) m = Math.min(m, rows[pchain[pm + 1]].R - 1 - t);
+        if (pl < log.length) m = Math.min(m, log[pl].tau - 1 - t);
+        P.steps(Math.max(1, m));
+        ran += P.tick - t;
       }
-      const log = rows[pchain[pm]].log;
-      for (; pl < log.length && log[pl].tau <= t + 1; pl++) if (log[pl].tau === t + 1) apply(P, log[pl]);
-      P.step();
     }
     // the rows a live timeline's chain reads keep their part and log; every other deleted row frees both (THE BOUND)
     function sweep() {
@@ -589,8 +614,7 @@ const WikiReplay = (() => {
         L.step();
         if (scripted && inHand(clock) && L.gameNow(human).fed !== fed) clash = true;
       } else if (rw === 'past' && target >= 0 && R.past) {
-        const n = Math.min(SEEK, target - 1 - R.past.tick);
-        for (let i = 0; i < n && !R.past.done && !failed; i++) pastTick();
+        pastTicks(Math.min(SEEK, target - 1 - R.past.tick));
         if (!failed && R.past.tick === target - 1) {
           target = -1;
           quiet = R.past.gameNow().sound;
@@ -659,6 +683,29 @@ const WikiReplay = (() => {
       s.step();
       return true;
     }
+    /* UP TO n TICKS of simulation s along the selected chain, as n chainSteps would run them; `each(now, t)` after every
+       tick ran, with that tick's gameNow() and GameTime, when given. THE BATCHES: the ticks up to the next member's R are
+       one request (Sim steps), so a member's fork operation runs between two of them. The ticks ran; it stops early
+       when s is done or a fork operation failed the replay */
+    function chainSteps(s, n, each) {
+      let ran = 0;
+      while (ran < n && !s.done) {
+        const t = s.tick;
+        let m = n - ran;
+        if (TK) {
+          const chain = chainOf(selected);
+          for (let k = 1; k < chain.length; k++) {
+            const at = rows[chain[k]].R;
+            if (at === t + 1 && !forkMember(s, rows[chain[k]])) return ran;
+            if (at > t + 1) m = Math.min(m, at - 1 - t);
+          }
+        }
+        const got = s.steps(m, each ? ['now'] : []);
+        if (each) got.forEach((e, i) => each(e.now, t + 1 + i));
+        ran += s.tick - t;
+      }
+      return ran;
+    }
     // a fork the file holds: a timeline's id other than the original's, not deleted
     const liveFork = id => Number.isInteger(id) && id >= 1 && id < rows.length && rows[id].live;
     const anyFork = () => rows.some(r => r.id && r.live);
@@ -682,8 +729,7 @@ const WikiReplay = (() => {
     // the background walk's share of a step that ran `ran` of the game's ticks (THE BOUND, WATCH)
     function bgWalk(ran) {
       if (!bg || !walker) return;
-      const n = Math.min(WALK - ran, chainLast() - walker.tick);
-      for (let i = 0; i < n && !walker.done && chainStep(walker); i++) publish();
+      chainSteps(walker, Math.min(WALK - ran, chainLast() - walker.tick), publish);
       if (failed) return;
       if (walker.done || walker.tick >= chainLast()) endWalk(); else walked = walker.tick;
     }
@@ -945,11 +991,12 @@ const WikiReplay = (() => {
        past base + n period, every seat's seven measures in MEASURES order -- metal and energy income (+0x9C, +0x90),
        units alive (+0x144), the army value (Sim's gameNow army: the summed metal cost of its live, finished, mobile
        units that are not its commander), kills and losses (+0xFC, +0xFE), and the metal wasted (+0xD4, a double the game
-       reads as f32) -- each an f32. BOUND: STAT_PTS, every sample of a game GAME_END_MAX long at a period of 30. */
-    function statWalk() {
+       reads as f32) -- each an f32, from the walker's gameNow() `now` at its tick t. BOUND: STAT_PTS, every sample of a
+       game GAME_END_MAX long at a period of 30. */
+    function statWalk(now, t = walker.tick) {
       if (!PL) return;
-      const seats = walker.gameNow().seats;
-      while (sv.length < STAT_PTS && walker.tick >= pbase + sv.length * period)
+      const seats = (now || walker.gameNow()).seats;
+      while (sv.length < STAT_PTS && t >= pbase + sv.length * period)
         sv.push(seats.map(z => [z.mi, z.ei, z.units, z.army, z.kills, z.losses, z.wm].map(Math.fround)));
     }
 
@@ -960,8 +1007,7 @@ const WikiReplay = (() => {
       if (done) return;
       R.tick++;
       if (walker && !bg) {
-        const n = Math.min(WALK, chainLast() - walker.tick);
-        for (let i = 0; i < n && !walker.done && chainStep(walker); i++) { publish(); statWalk(); }
+        chainSteps(walker, Math.min(WALK, chainLast() - walker.tick), (now, t) => { publish(now, t); statWalk(now, t); });
         if (!failed) { if (walker.done || walker.tick >= chainLast()) endWalk(); else walked = walker.tick; }
         done = isDone();
         return;
@@ -1124,7 +1170,7 @@ const WikiReplay = (() => {
     play: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, true),
     create: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, false),
     CONTROLS, PRESSES, TK_PRESSES, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
-    GAME_END_MAX: Sim.GAME_END_MAX, REFRESH_TICKS, FORK_LIMIT, TIMELINES, refreshBin, isRefresh, forkEvict,
+    GAME_END_MAX: Sim.GAME_END_MAX, REFRESH_TICKS, FORK_LIMIT, TIMELINES, refreshBin, isRefresh, refreshAt, forkEvict,
     RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME, PICKS, MODES, PL_PRESSES, MEASURES, MEASURE0, STAT_PTS, TOG, TOG_ALL, NOT_ASKED, PASS,
   };
 })();

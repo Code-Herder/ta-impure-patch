@@ -40,7 +40,7 @@ import { createRequire } from 'node:module';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiSide = require('./mockup/side.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');

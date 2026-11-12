@@ -56,7 +56,7 @@
    Runs in a page (the global WikiFrame) and under node (module.exports), as replay.js does. */
 const WikiFrame = (() => {
   const Replay = typeof WikiReplay !== 'undefined' ? WikiReplay : require('./replay.js');
-  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./sim.js');
+  const Sim = typeof WikiSim !== 'undefined' ? WikiSim : require('./simhost.js');
   const TICK = 30;                    // game ticks a second
   const SIDE_W = 128, BAR = 32;       // the engine's column width and bar height, game pixels
   const HUD_H = 720;                  // the HUD unit is the frame's height / 720 at 100 % (decision 21)

@@ -21,7 +21,7 @@
    ARMCK and ARMACK stand in both of this entry's scenes, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
+const { TRIP } = createRequire(import.meta.url)('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const C = c => c * 16 + 8;                  // a cell's centre in world units
 const at = (cx, cz) => [C(cx), C(cz)];

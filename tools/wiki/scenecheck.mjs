@@ -30,7 +30,7 @@ import { createRequire } from 'node:module';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiScene = require('./mockup/scene.js');
 require('../tascene-render.js');
 const TR = globalThis.TasceneRender;

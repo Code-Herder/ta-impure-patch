@@ -107,13 +107,15 @@ const LOGGED = new Set(['started', 'finished', 'reclaimed', 'nocorpse']);
 const HOST_DIFFS = [];
 let hostSims = 0;
 function twin(J, H) {
+  // replay.js's walker asks for no sounds as the drop-in takes it (sounds false): sim.js's ctx then has no source
   const ctxOf = c => c == null ? c : { side: c.side, iface: c.iface, casting: c.casting, rival: c.rival,
-    packs: c.cob || c.snd ? PACK_DIRS : null, scripts: !!c.cob, sounds: !!c.snd };
+    packs: c.cob || c.snd ? PACK_DIRS : null, scripts: !!c.cob, sounds: !!c.snd && c.sounds !== false };
+  const jctx = c => c && c.sounds === false ? { ...c, snd: null } : c;
   const logs = (l, from) => l.slice(from).filter(e => LOGGED.has(e.what)).map(e => JSON.stringify(e, ['t', 'what', 'id', 'type', 'ox', 'oz'])).sort();
   const mk = kind => (entry, demo, layout, ctx, mode) => {
     const label = `${entry && entry.id}/${demo ? demo.id : '(try)'}`;
     let j, h, jwhy = null, hwhy = null;
-    try { j = kind === 'game' ? J.game(entry, demo, layout, ctx, mode) : J[kind](entry, demo, layout, ctx); } catch (e) { jwhy = e; }
+    try { j = kind === 'game' ? J.game(entry, demo, layout, jctx(ctx), mode) : J[kind](entry, demo, layout, jctx(ctx)); } catch (e) { jwhy = e; }
     try { h = kind === 'game' ? H.game(entry, demo, layout, ctxOf(ctx), mode) : H[kind](entry, demo, layout, ctxOf(ctx)); } catch (e) { hwhy = e; }
     hostSims++;
     if ((jwhy === null) !== (hwhy === null))
@@ -146,6 +148,15 @@ function twin(J, H) {
         check('tick', h.tick, j.tick);
         check('done', h.done, j.done);
         logStep();
+      },
+      // the drop-in's batch, a tick at a time on both: each tick's hash and gameNow(seat) as `each` asks
+      steps(n, each = [], seat = 0) {
+        const out = [];
+        for (let i = 0; i < n && !j.done; i++) {
+          t.step();
+          if (each.length) out.push({ ...(each.includes('hash') ? { hash: h.hash() } : {}), ...(each.includes('now') ? { now: t.gameNow(seat) } : {}) });
+        }
+        return out;
       },
       view(seat) {
         const [jv, hv] = both('view', s => s.view(seat));
@@ -214,7 +225,7 @@ function twin(J, H) {
 }
 const WikiSim = twin(require('./mockup/sim.js'), require('./mockup/simhost.js'));
 // replay.js and frame.js take the module by require: they make their sims through the twin too
-require.cache[require.resolve('./mockup/sim.js')].exports = WikiSim;
+require.cache[require.resolve('./mockup/simhost.js')].exports = WikiSim;
 const WikiReplay = require('./mockup/replay.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiText = require('./mockup/text.js');

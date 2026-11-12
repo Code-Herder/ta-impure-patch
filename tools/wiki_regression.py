@@ -1889,7 +1889,7 @@ def sim_facing(entry, demo, tick, kind):
           "const v = sim.view(); const out = v.units.filter(u => u.type === process.argv[5]).map(u => {"
           " const p = prev && prev.units.find(q => q.id === u.id); return { hx: u.hx, hz: u.hz, dx: p ? u.x - p.x : 0, dz: p ? u.z - p.z : 0 }; });"
           "console.log(JSON.stringify(out));")
-    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / f"art/wiki/entries/{entry}.json"),
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/simhost.js"), str(TREE / f"art/wiki/entries/{entry}.json"),
                         str(demo), str(tick), kind], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     got = [u for u in json.loads(r.stdout) if u["dx"] or u["dz"]]
@@ -3290,10 +3290,10 @@ def pl_entry():
 
 
 def pl_twin(expr):
-    """`expr` evaluated by node with sim.js as S, replay.js as R and the players entry as E: the mockup's own answer"""
+    """`expr` evaluated by node with simhost.js as S, replay.js as R and the players entry as E: the mockup's own answer"""
     js = ("const S = require(process.argv[1]), R = require(process.argv[2]), E = require(process.argv[3]);"
           f" console.log(JSON.stringify({expr}));")
-    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / "tools/wiki/mockup/replay.js"),
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/simhost.js"), str(TREE / "tools/wiki/mockup/replay.js"),
                         str(TREE / f"art/wiki/entries/{PLAYERS}.json")], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, f"node: {r.stderr.strip()[-400:]}"
     return json.loads(r.stdout)

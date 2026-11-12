@@ -77,7 +77,7 @@ import { playersFixture, playersScratch } from './players-fixture.mjs';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiReplay = require('./mockup/replay.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiStage = require('./mockup/stage.js');
@@ -398,7 +398,7 @@ function framesCheck(exe, tmp) {
   for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     if (context++ % SHARDS !== SHARD - 1) continue;
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}`;
-    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: null, snd: null, rival: cname ? RIVALS[cname] : null };
+    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, rival: cname ? RIVALS[cname] : null };
     for (const [id, entry] of GAMES) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
       const cout = lines(run(exe, ['frames', path.join(tmp, 'wiki.bin'), path.join(tmp, 'game.json'), side || '-',

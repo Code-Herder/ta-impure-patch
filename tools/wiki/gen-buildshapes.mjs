@@ -22,7 +22,7 @@
    ARMCK stands in this entry's one scene, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
+const { TRIP } = createRequire(import.meta.url)('./mockup/simhost.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 // the cursor that puts a footprint of f cells on the site whose first cell is (cx, cz): its centre, which the build
 // cursor rounds back to that cell

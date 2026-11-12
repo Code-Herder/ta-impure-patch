@@ -84,11 +84,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { createRequire } from 'node:module';
-import { cobHost, scripts } from './cobhost.mjs';
+import { scripts } from './cobhost.mjs';
 import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiStage = require('./mockup/stage.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiReplay = require('./mockup/replay.js');
@@ -116,7 +116,6 @@ const SIZES = [
 const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
 const SCRIPTS = scripts(PACKS);
-let host = null;
 
 class CannotRun extends Error {}
 function run(cmd, args, opts = {}) {
@@ -417,7 +416,8 @@ try {
     sb.frames = [];
     entries.forEach((entry, i) => {
       for (const demo of entry.demos) {
-        const ctx = sb.cob ? { side: 0, casting: null, iface: 1, cob: (host ??= cobHost()).forPacks(PACKS) } : undefined;
+        // the scripts and none of the sounds, as the C side's cob.json gives them
+        const ctx = sb.cob ? { side: 0, casting: null, iface: 1, packs: PACKS.map(d => path.relative(ROOT, d)), sounds: false } : undefined;
         // a game entry's demo plays its game, the simulation its stage shows (replay.js plays it on demand)
         const sim = entry.frame === 'game' ? WikiSim.game(entry, demo, sb.layout, ctx) : WikiSim.play(entry, demo, sb.layout, ctx);
         for (;;) {
@@ -442,7 +442,7 @@ try {
   }
   /* A PLAYERS ENTRY'S DEMO through the replay layer (the header's THE PLAYERS FRAMES; wikistagetest.c players) */
   function playersFrames(sb, id, entry, demo) {
-    const R = WikiReplay.play(entry, demo, sb.layout, { side: 0, casting: null, iface: 1, cob: null, snd: null, rival: null });
+    const R = WikiReplay.play(entry, demo, sb.layout, { side: 0, casting: null, iface: 1, rival: null });
     for (;;) {
       const rv = R.view();
       if ((R.tick % 30 === 0 || rv.done) && rv.game.target < 0 && R.game) {
@@ -616,6 +616,5 @@ try {
   code = 2;
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
-  if (host) host.close();
 }
 process.exit(code);
