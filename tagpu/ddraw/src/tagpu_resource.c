@@ -51,7 +51,8 @@ typedef int (__stdcall* ReadFn)(void*, void*, int);        /* 0x4BB7C0, ret 0xC:
 typedef int (__stdcall* CloseFn)(void*);                   /* 0x4BB5D0, ret 4 */
 typedef unsigned (__stdcall* TypeOfFn)(const char*);       /* 0x488B10, ret 4: the type in ax */
 
-/* The build menu's view of the world: the main block, the defs and their count, the watched player. */
+/* The build menu's view of the world: the main block, the defs and their count, the seat whose side's pages
+   are read. */
 typedef struct {
     char *ta, *defs;
     unsigned ndefs;
@@ -76,7 +77,7 @@ static uint16_t s_sel[SNAP_UNITS_MAX];
    outlives its level; its
    content is then still the new level's [INFERRED: the archives are mounted once a process, so
    every level reads the same defs, download files and GUI pages]. An entry is built on its
-   first use for the watched player's side and rebuilt when that side changes.
+   first use for the side of the seat that asks, and rebuilt when a seat of another side asks.
    THE TABLE'S LIFETIME: it holds type numbers only, and every number read out of it is bounded
    against the live def count before it addresses a def, so even a table kept past its level
    costs a wrong candidate, never a read outside the defs. */
@@ -85,15 +86,15 @@ static Menu* s_menu;
 static unsigned s_menuN, s_menuGen;
 static uintptr_t s_menuDefs;
 
-/* the build menu's world: in a level, the watched player below 10, the def count 1..TAGPU_LIM_TYPES */
-static int menu_world(World* w)
+/* the build menu's world: in a level, the seat 0..9, the def count 1..TAGPU_LIM_TYPES */
+static int menu_world(World* w, int seat)
 {
     memset(w, 0, sizeof *w);
     if (!(w->ta = *(char**)TA_MAIN_PP)) return 0;
-    w->player = *(unsigned char*)(w->ta + OFF_WATCHED);
+    w->player = seat;
     w->ndefs = *(unsigned*)(w->ta + OFF_UDEFCOUNT);
     w->defs = *(char**)(w->ta + D_BASE);
-    return w->player < 10 && w->ndefs && w->ndefs <= TAGPU_LIM_TYPES && w->defs;
+    return seat >= 0 && seat < 10 && w->ndefs && w->ndefs <= TAGPU_LIM_TYPES && w->defs;
 }
 
 /* ---- the build menu, Quick Build's candidates --------------------------------------------
@@ -132,10 +133,10 @@ static int bm_armable(void* ctx, unsigned type)
     return type && type < w->ndefs && !w->defs[type * D_STRIDE + 0x22F];
 }
 
-/* The watched player's side, as 0x41ACE0 takes it for the DL page (0x41AD61..0x41AD66):
+/* The seat's side, read as 0x41ACE0 reads the controlled player's for the DL page (0x41AD61..0x41AD66):
    PlayerInfo at the player record +0x27, its byte +0x95. PlayerInfo objects live for the
    process. BOUND: below the sides loaded and the five records; 0xFF when out of bounds. */
-static unsigned char watched_side(const World* w)
+static unsigned char seat_side(const World* w)
 {
     const unsigned char* info =
         *(const unsigned char* const*)(w->ta + OFF_PLAYERS + w->player * 0x14B + PL_INFO);
@@ -215,7 +216,7 @@ static unsigned char* page_bytes(const char* path, size_t* size, const char** wh
 }
 
 /* One page's file name as 0x41ACE0 chooses it: its own "<NAME><page>.GUI" when the probe
-   0x4290F0 + 0x4BBC40 answers a size, else the watched side's "<prefix>DL". BOUND: the probe's
+   0x4290F0 + 0x4BBC40 answers a size, else the seat's side's "<prefix>DL". BOUND: the probe's
    output is 1024 bytes and 0x4290F0 writes with no bound of its own; the folder 0x502820 and the
    language 0x51FB50 (0x49F580) under 256 bytes each and a name of at most 36 keep its longest
    form, "<folder>-<language>\<name>.GUI", inside it (map_file_opens' argument). */
@@ -287,7 +288,7 @@ static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
                (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)hz.QuadPart);
 }
 
-/* The menu of def `id` (a builder) for the watched side, built on its first use against this
+/* The menu of def `id` (a builder) for the seat's side, built on its first use against this
    def table (the key above). GAME THREAD ONLY (the ordering above). The pointer is good until
    the next call. */
 static const Menu* build_menu(const World* w, unsigned id)
@@ -305,7 +306,7 @@ static const Menu* build_menu(const World* w, unsigned id)
         s_menuGen = gen;
         s_menuDefs = (uintptr_t)w->defs;
     }
-    side = watched_side(w);
+    side = seat_side(w);
     m = &s_menu[id];
     if (m->built && m->side == side) return m;
     free(m->types);
@@ -316,12 +317,12 @@ static const Menu* build_menu(const World* w, unsigned id)
     return m;
 }
 
-/* the view's WqMenuFn: the menu of builder type `id`, copied */
-static int menu_types(unsigned id, uint16_t* out, int cap)
+/* the view's WqMenuFn: the menu of builder type `id` for seat `seat`'s side, copied */
+static int menu_types(int seat, unsigned id, uint16_t* out, int cap)
 {
     World w;
     const Menu* m;
-    if (!menu_world(&w) || !(m = build_menu(&w, id))) return 0;
+    if (!menu_world(&w, seat) || !(m = build_menu(&w, id))) return 0;
     if (m->n > cap) return -1;
     memcpy(out, m->types, (size_t)m->n * sizeof *out);
     return m->n;

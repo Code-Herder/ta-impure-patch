@@ -130,8 +130,10 @@ static unsigned s_cCancelled, s_cStale;
 
 _Static_assert(TAGPU_PK_SWEEP_TARGETS == SWEEP_MAX_TARGETS, "the packet's targets are the ring's");
 _Static_assert((int)SWEEP_METAL == (int)SWEEP_KIND_METAL && (int)SWEEP_ENERGY == (int)SWEEP_KIND_ENERGY &&
-               (int)SWEEP_ALL == (int)SWEEP_KIND_ALL &&
-               TAGPU_LIM_UNITS <= SWEEP_BUILDERS_MAX, "the kinds are the rule's, a seat's units fit its set");
+               (int)SWEEP_ALL == (int)SWEEP_KIND_ALL, "the kinds are the rule's");
+/* sweep_view stops at SWEEP_BUILDERS_MAX selected units: a seat's whole block must fit, or a selection past
+   it would lose reclaimers silently */
+_Static_assert(TAGPU_LIM_UNITS <= SWEEP_BUILDERS_MAX, "a seat's units fit the rule's builder set");
 
 static int pointer_on_popup(const char* ta);
 static int popup_live(const char* ta);

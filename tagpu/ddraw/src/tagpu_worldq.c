@@ -188,13 +188,18 @@ static int wq_coverage(const WORLDQ* q, int cx, int cz, int fx, int fz)
 }
 
 /* 0x408090(player, pos): the mapped test the resolver's reclaim case makes inline, patched by the same fix
-   (tagpu_patches.c, LOS_MAPPED). DISASSEMBLED: it reads the bit 1 << main[0x2A43], the local player's
-   (0x4080E0..0x4080F4), whatever record it is passed, so it answers for the local seat only and is called
-   for no other. */
+   (tagpu_patches.c, LOS_MAPPED). DISASSEMBLED: it reads the bit 1 << main[0x2A43], the viewed player's
+   (0x4080E0..0x4080F4), whatever record it is passed -- and so does the resolver's mode 12 for any unit
+   (0x43F5E2, 0x43F5F0; engine/orders.md, *The order resolver's reclaim case*). So it is asked for two
+   seats only: the viewed one, whose own bit it is, and the controlled one, main[0x2A42], whose reclaim
+   orders the UI commits through that resolver, which judges them by the same viewed bit -- for that seat
+   0x408090 predicts the commit exactly even where the two players differ. Every other seat answers
+   unmapped: a rule that asks for a seat's own map (ImpAI's) must not be handed another player's bit. */
 static int wq_mapped_point(const WORLDQ* q, const int32_t pos[3])
 {
     const WQ_ENGINE* c = ctx_of(q);
-    if (c->seat != *(const unsigned char*)(c->ta + OFF_LOCALPLAYER)) return 0;
+    if (c->seat != *(const unsigned char*)(c->ta + OFF_LOCALPLAYER) &&
+        c->seat != *(const unsigned char*)(c->ta + OFF_WATCHED)) return 0;
     return ((Mapped)0x00408090u)(c->rec, (const int*)pos) != 0;
 }
 
@@ -248,7 +253,7 @@ static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, in
 {
     const WQ_ENGINE* c = ctx_of(q);
     if (!def_at(c, builder_type) || !c->menu) return 0;
-    return c->menu((unsigned)builder_type, out, cap);
+    return c->menu(c->seat, (unsigned)builder_type, out, cap);
 }
 
 /* THE SITE TEST, the instance's own (WQ_SITE_*), with the unit `ignore` taken as gone -- Quick Build's
@@ -257,10 +262,10 @@ static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, in
    the site's altitude, which 0x47C780 reads back; the AI's 0x47C770 and the build cursor read them too. Both
    words are put back as they were after both calls, so a view taken in the mouse handler or the packet fill
    leaves the engine's own reading of them as it was.
-   THE PLAYER. With a player 0x47D2E0 refuses a site whose centre the LOCAL player has not mapped
-   (main[0x2A43], 0x47D3D1..0x47D3FA), and under LosType bit 1 reads the passed record's line-of-sight
-   counters +0x7C (0x47D40C..0x47D42C) -- DISASSEMBLED; a unit or a yard occupant refuses only while that flag
-   is set (0x47D53B, 0x47D55B). The record passed is the seat's. */
+   THE PLAYER. With a player 0x47D2E0 refuses a site whose centre the VIEWED player has not mapped
+   (main[0x2A43], 0x47D3D1..0x47D3FA) whatever record it is passed, and under LosType bit 1 reads the passed
+   record's line-of-sight counters +0x7C (0x47D40C..0x47D42C) -- DISASSEMBLED; a unit or a yard occupant
+   refuses only while that flag is set (0x47D53B, 0x47D55B). The record passed is the seat's. */
 static int wq_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -321,8 +326,12 @@ static int wq_blocked_alt(const WORLDQ* q, int type, int cx, int cz)
    0xFFFE a footprint tile whose anchor is `cell - (byte[+0xA] * W + byte[+0xB])` cells back
    (0x43E71D..0x43E736), and the word found there must be an anchor's (0x43E73C). The engine bounds a direct
    anchor's def by the count (0x43E6F5) but not the hop's, nor tests that the hop stays on the grid; this does
-   all three. The grid is bounded as the feature pass bounds it: the cells and defs present, W and H 1..4096,
-   the def count 1..0xFFFA. The footprint is held to 1..16 cells. */
+   all three. The hop is taken per axis: a tile lies right of and below its anchor in the same footprint
+   (the anchor is the footprint's first cell, the offsets unsigned bytes back to it), so a tile whose column
+   offset exceeds its own column, or whose row offset its own row, is no tile's -- taken as one subtraction
+   it would land on another row's cell -- and is refused. The grid is bounded as the feature pass bounds it:
+   the cells and defs present, W and H 1..4096, the def count 1..0xFFFA. The footprint is held to 1..16
+   cells. */
 static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -337,8 +346,8 @@ static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
     cl = (const unsigned char*)c->grid + (size_t)cell * FT_STRIDE;
     word = *(const uint16_t*)(cl + FT_DEFIDX);
     if (word == 0xFFFEu) {
+        if (cl[FT_WIDX + 1] > cx || cl[FT_WIDX] > cz) return 0;
         cell -= cl[FT_WIDX] * c->w + cl[FT_WIDX + 1];
-        if (cell < 0) return 0;
         word = *(const uint16_t*)(c->grid + (size_t)cell * FT_STRIDE + FT_DEFIDX);
     }
     if (word >= 0xFFFBu || (int)word >= ndefs) return 0;
@@ -447,9 +456,10 @@ static int wq_action(const WORLDQ* q, int act)
    engine has freed: a bound, and a lifetime -- the game thread owns the unit array and the lists until the
    teardown, and every caller of this runs on that thread.
    NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 runs the action's handler with event 2 when the
-   node's +6 bit 2 is set, starts the StopBuilding script (0x505104) when +0x42 bit 0x400000 is set, and for
-   the head calls 0x489800(unit, 3), which resets the unit's three slots and queues a COB start of
-   TargetCleared (0x508D58, through 0x4B0A70); the roots 0x43ADC0 and 0x43AFC0 allocate and free nodes. */
+   node's +6 bit 1 (0x2, started; the test at 0x43A1FE) is set, starts the StopBuilding script (0x505104)
+   when +0x42 bit 0x400000 is set, and for the head calls 0x489800(unit, 3), which resets the unit's three
+   slots and queues a COB start of TargetCleared (0x508D58, through 0x4B0A70); the roots 0x43ADC0 and
+   0x43AFC0 allocate and free nodes. */
 static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 {
     const WQ_ENGINE* c = ctx_of(q);

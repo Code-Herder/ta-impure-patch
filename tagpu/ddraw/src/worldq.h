@@ -14,8 +14,9 @@
    NEVER STORED. A WORLDQ is opened for one call on the caller's stack and never outlives it: `self` is the
    implementation's context on that same stack and dies with the call. Nothing stores one.
 
-   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders. No op
-   allocates; every list is copied into the caller's buffer, with its capacity.
+   ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders -- but for
+   the engine's site_ok, can and mapped_point, which test the viewed player's mapped bit whatever seat asks
+   (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
 
    DETERMINISM. No op reads a clock, the cursor or a random generator. Lists come in a fixed order: slots
    ascending, order nodes in list order, cells row-major. Arithmetic is integer, or the definitions' own floats
@@ -124,7 +125,9 @@ typedef struct WORLDQ_OPS {
     int (*metal)(const WORLDQ*, int cx, int cz);
     /* the explored cells of the footprint above the threshold */
     int (*coverage)(const WORLDQ*, int cx, int cz, int fx, int fz);
-    /* the seat's map holds the point, as the reclaim click's resolver asks it */
+    /* the seat's map holds the point, as the reclaim click's resolver asks it. The engine's answers by the
+       viewed player's bit, and only for the viewed seat and the controlled one (main[0x2A42]), whose reclaim
+       the resolver judges by that bit; 0 for any other seat (tagpu_worldq.c) */
     int (*mapped_point)(const WORLDQ*, const int32_t pos[3]);
     /* the ground's height at a point, world px */
     int (*ground)(const WORLDQ*, const int32_t pos[3]);
@@ -136,7 +139,10 @@ typedef struct WORLDQ_OPS {
     /* the types a builder type's build menu offers, ascending; their count, -1 when cap is short */
     int (*build_options)(const WORLDQ*, int builder_type, uint16_t* out, int cap);
     /* the site test, the instance's own (tagpu_worldq.h WQ_SITE_*), at first cell (cx, cz) with the unit
-       `ignore_slot` taken as gone (0 none); with `alt` the free site's altitude, 0..255 */
+       `ignore_slot` taken as gone (0 none); with `alt` the free site's altitude, 0..255. The engine's tests the
+       VIEWED player's mapped bit at the site's centre whatever record it is given (0x47D2E0 reads
+       1 << main[0x2A43] at 0x47D3D1..0x47D3FA, DISASSEMBLED), so for any other seat it answers by the
+       viewer's map, not the seat's */
     int (*site_ok)(const WORLDQ*, int type, int cx, int cz, int ignore_slot, int* alt);
     /* the altitude the build cursor gives a refused site */
     int (*blocked_alt)(const WORLDQ*, int type, int cx, int cz);
@@ -152,7 +158,9 @@ typedef struct WORLDQ_OPS {
     /* the unit's orders in list order, at most `cap` (every walk is bounded); their count, -1 for no unit */
     int (*orders)(const WORLDQ*, int slot, WQ_ORDER* out, int cap);
     /* the resolver's action byte for the unit, mode WQ_CAN_* at `target_slot` (WQ_NONE: the point), -1 when
-       it refuses */
+       it refuses. The engine's WQ_CAN_RECLAIM at a point tests the VIEWED player's mapped bit whatever the
+       unit's owner (the resolver's mode 12, 1 << main[0x2A43] at 0x43F5E2..0x43F5F0, DISASSEMBLED), so for
+       any other seat it answers by the viewer's map, not the seat's */
     int (*can)(const WORLDQ*, int slot, int mode, int target_slot, const int32_t pos[3]);
     /* WQ_ACT_* -> its action byte, -1 when the world has none */
     int (*action)(const WORLDQ*, int act);

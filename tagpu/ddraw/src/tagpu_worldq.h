@@ -10,8 +10,9 @@
 
 /* the site test a placement is judged by: stdcall (def, cell, ignore, player record), `ret 0x10` */
 typedef int (__stdcall* WqSiteFn)(const void* def, unsigned cell, unsigned ignore, const void* player);
-/* a builder type's build menu, ascending, into the caller's buffer: the count, -1 when cap is short */
-typedef int (*WqMenuFn)(unsigned builder_type, uint16_t* out, int cap);
+/* the build menu builder type `builder_type` offers seat `seat`, from that seat's own side's pages, ascending,
+   into the caller's buffer: the count, -1 when cap is short */
+typedef int (*WqMenuFn)(int seat, unsigned builder_type, uint16_t* out, int cap);
 
 /* One open view's context, on the caller's stack beside its WORLDQ. */
 typedef struct WQ_ENGINE {

@@ -358,12 +358,14 @@ static int unqueue(const SNAP* c, const SNAP_CHOICE* ch)
    fits.
    THE DISTANCE IS EXACT. From the candidate centre (cx + 0.5 cells) to the raw point in 1/2^20 cells,
    T = cx * 2^20 + 2^19 - raw is an integer, and D = Tx^2 + Tz^2 orders the candidates exactly as the
-   real-valued distance does: this is the exact order. It is an integer because the core computes on SSE2
-   and the game's module on x87, and only an exact form makes the two builds agree: in double, T^2 needs up
-   to 62 bits, which x87 keeps in registers and rounds to 53 wherever a value is spilled. The candidates lie
-   within `radius` cells of the seed, and a seed within `radius` cells of the raw point (snapped's second
-   search starts at the first one's centre), both radii held to SNAP_RADIUS_MAX, so |T| < (2 x 64 + 2) x
-   2^20 < 2^28 and D < 2^57: a uint64 holds it exactly, which a double does not. */
+   real-valued distance does: this is the exact order. It is an integer so that no build's floating-point
+   unit can decide a tie: in double, T^2 needs up to 62 bits, which SSE2 rounds to 53 at once and x87 keeps
+   in registers and rounds wherever a value is spilled. The candidates lie
+   within `radius` cells of the seed, held to SNAP_RADIUS_MAX, and the entry refuses a seed more than
+   SNAP_RADIUS_MAX + 1 cells from the raw point's cell on either axis (snapped's second search starts at the
+   first one's chosen centre, within the first radius of it; tasim_snap_site takes any seed), so for any
+   caller |T| < (2 x 64 + 2) x 2^20 < 2^28 and D < 2^57: a uint64 holds it exactly, which a double does
+   not. */
 static int site(const SNAP* c, int type, const int32_t seed[3], const int32_t raw[3], int radius, int legal,
                 int ignore, SNAP_CHOICE* out)
 {
@@ -371,7 +373,9 @@ static int site(const SNAP* c, int type, const int32_t seed[3], const int32_t ra
     int fx, fz, dx, dz, base_x = seed[0] >> 20, base_z = seed[2] >> 20;
     int best = 0, bx = 0, bz = 0, height = 0, k;
     uint64_t distance = UINT64_MAX;
-    if (radius < 0 || radius > SNAP_RADIUS_MAX || !def(c, type, &d) || !(k = d.kind) || !footprint(&d, &fx, &fz))
+    if (radius < 0 || radius > SNAP_RADIUS_MAX || abs(base_x - (raw[0] >> 20)) > SNAP_RADIUS_MAX + 1 ||
+        abs(base_z - (raw[2] >> 20)) > SNAP_RADIUS_MAX + 1 || !def(c, type, &d) || !(k = d.kind) ||
+        !footprint(&d, &fx, &fz))
         return 0;
     for (dz = -radius; dz <= radius; dz++) for (dx = -radius; dx <= radius; dx++) {
         int cx = base_x + dx, cz = base_z + dz, x = cx - fx / 2, z = cz - fz / 2;
