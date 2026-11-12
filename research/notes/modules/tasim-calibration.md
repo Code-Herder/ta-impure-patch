@@ -278,6 +278,21 @@ every self-test ran, 2 when one reported an error (an exact scenario's runs diff
 or there was nothing to test -- no reference, or none `--only` matches: a self-test of nothing
 tested nothing.
 
+**The spread rule on a metric with a mass point is noisy at 25 runs a side.** MEASURED on the fifth
+verification's `duel-armpw-corak` references by shuffling each one's 50 runs into halves of 25
+4,000 times (exchangeable, so every OUT is a false alarm): the seat effect's false-alarm rate is
+0 for the winner and at most 0.3 % for the time to kill, but 31 % for the survivors of the
+one-lane set j1 and 6.5 % for j6 and j12. In that duel the survivors are 0.280 in about 70 % of
+the runs, with a sparse tail up to 0.400. A half's P10 is the mass point, so its P90, and with
+it the spread ratio, depends on whether two or three of its 25 runs land in the tail.
+
+j1's seat-effect OUT (survivors, spread 4.55: P90 0.306 unswapped against 0.400 swapped) is such
+a draw. Its swapped half has seven runs above the mass point against three in the unswapped half,
+a one-sided Fisher p of 0.15. Counting only 0.36 and above it is seven against one, p 0.024, but
+that threshold was chosen after looking at the data. The five-lane sets of the same scenario have
+six runs above the mass point on each side, and 0.400 comes up in unswapped runs there too. Grading such a metric needs a rule that knows its
+ties (the owner's decision, [calibration bands](../impai/calibration.html)).
+
 ### The tasim_run interface
 
 `tasim_run play --setup F --wire F --run-seed S --exogenous F --limit L --end "0:0,1:0" --trace F
