@@ -34,6 +34,7 @@
 #include "tagpu_puppet.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_worldq.h"
 
 #define D_STRIDE 0x249u
 #define D_BASE   0x1439B
@@ -49,7 +50,6 @@
 #define M_GUICOL 0x0DCB      /* the GUI colour byte array, the build square's colours */
 
 #define VA_CURSOR      0x004197D0u
-#define VA_SITE_CALL   0x004198C6u
 
 /* The caps. A commit makes at most PLACE_ORDER_BUDGET orders (sites x builders): the preview
    cuts the shape to what would be ordered. A builder's list stops growing at PLACE_LIST_CAP
@@ -366,7 +366,8 @@ static int ring_target(const Ctx* c, int* tx, int* tz, int* tw, int* th)
     return 0;
 }
 
-/* THE RED TEST IS THE ENGINE'S OWN CALL SITE. s_test is the target of the call at 0x4198C6,
+/* THE RED TEST IS THE ENGINE'S OWN CALL SITE. s_test is the target of the call at 0x4198C6
+   (tagpu_worldq_cursor_site, decoded at attach),
    the one the build cursor judges its site with (stock 0x47D2E0, queued_site's build_site_test
    in tagpu_patches.c when that fix is armed, or a foreign patch's), called with the arguments
    0x4198A0..0x4198C6 passes: (def, cell, 0, main + 0x1B63 + main[0x2A42] * 0x14B), stdcall,
@@ -852,12 +853,10 @@ void tagpu_place_entry(void)
 void tagpu_place_init(void)
 {
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
-    const unsigned char* call = (const unsigned char*)(uintptr_t)VA_SITE_CALL;
-    if (call[0] != 0xE8) {
+    if (!(s_test = (SiteTest)tagpu_worldq_cursor_site())) {
         tagpu_logf("place: the build cursor's site test (0x4198C6) is not a call; not armed");
         return;
     }
-    s_test = (SiteTest)(uintptr_t)(VA_SITE_CALL + 5 + *(const unsigned*)(call + 1));
     if (!tagpu_detour_bytes_ok(VA_CURSOR, build, sizeof build)) {
         tagpu_logf("place: incompatible build cursor (0x4197D0); not armed");
         return;
