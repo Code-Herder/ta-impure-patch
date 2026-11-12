@@ -1,9 +1,25 @@
 {
  "format": "ta-scenario/1",
- "description": "The calib-applier fixture at GameTime 60: the clear kills c before its order is due (cancelled as cleared) and the features go again; e is ordered after 5 ticks, issued at 65.",
+ "description": "The calib-applier fixture at GameTime 60: the clear kills c before its order is due (cancelled as cleared) and the features go again; e is ordered after 5 ticks, issued at 65. The clear also kills seat 1's commander, whose death clears the seat's base storage bit (0x486518), so both seats state their storage again: the applier writes it after its clear.",
  "setup": {
   "clear_existing": true,
-  "clear_features": true
+  "clear_features": true,
+  "players": [
+   {
+    "slot": 0,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   },
+   {
+    "slot": 1,
+    "storage": {
+     "metal": 5000,
+     "energy": 5000
+    }
+   }
+  ]
  },
  "units": [
   {

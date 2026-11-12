@@ -1645,9 +1645,13 @@ static void apply_switches(char* ta)
    bit at 0x496F5D, the floats at 0x496F64..0x496F97; DISASSEMBLED, engine/sim.md) -- +0x149
    bit 0 and the base storages +0xDC (energy) and +0xE0 (metal) -- which the economy pass
    adds to the storages it recomputes (0x401941, 0x401988..0x4019AA). Its only other writers
-   are the level setups, the loader and the commander's death 0x486518 (engine/units.md).
-   They land before the level writes, so a level at or below the base storage survives the
-   clamp.
+   are the level setups, the loader, the record's init 0x4647EF and the commander's death:
+   the kill 0x4864B0 compares the dying unit's type name with its side's commander name
+   (0x4F8A70 at 0x486501) and on a match clears its seat's bit 0 (0x486518; DISASSEMBLED,
+   engine/units.md). The apply's own clear kills through 0x4864B0, so apply_now runs this
+   AFTER the clear: a skirmish's starting commanders, or a commander a later apply clears,
+   would otherwise take the bit with them. The storage writes land before the level writes,
+   so a level at or below the base storage survives the clamp.
 
    The result reports the read-back from the SAME tick beside a second read taken when the
    file is written: requested, wrote, and what survived. */
@@ -2575,7 +2579,6 @@ static void apply_now(void)
     }
 
     apply_switches(ta);
-    apply_players(ta);
     apply_objective(ta);
 
     if (g_clear)
@@ -2584,6 +2587,9 @@ static void apply_now(void)
         clear_snapshot(ta);
         delay_cancel_cleared();
     }
+
+    /* after the clear: its commander kills clear +0x149 bit 0 (apply_players) */
+    apply_players(ta);
 
     if (g_clearfeat)
         clear_features();

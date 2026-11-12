@@ -192,7 +192,10 @@ unit names by scanning the live definition table. This design follows its recipe
     own writes (`+0x149` bit 0, `+0xE0` metal, `+0xDC` energy, the maxima raised to at least
     them). The economy pass adds it to the storage it recomputes, so a level set beside it
     survives the pass's clamp. Both numbers, 0 or more; the result's `players[s].storage` reads
-    them back as `[metal, energy]`.
+    them back as `[metal, energy]`, or `null` when the apply wrote none. The engine ends a seat's
+    base storage when a unit of its side's commander type dies (`0x486518`), so the applier
+    writes it after the apply's own clear; a later apply whose clear kills a commander states the
+    storage again.
   - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
     apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
     as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
