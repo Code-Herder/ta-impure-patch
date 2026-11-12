@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 GUARD = "TAGPU_DEVPY_REEXEC"
+VENV_HINT = "<main checkout>/.venv-undither/bin/python"
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -50,7 +51,8 @@ def ensure():
         return
     py = None if os.environ.get(GUARD) else venv_python()
     if py is None:
-        print("needs numpy, numba and zstandard: the shared venv (CLAUDE.md, Python tooling)",
+        print(f"could not run: needs numpy, numba and zstandard, which the shared venv has: "
+              f"run it with {venv_python() or VENV_HINT} (CLAUDE.md, Python tooling)",
               file=sys.stderr)
         sys.exit(2)
     os.environ[GUARD] = "1"

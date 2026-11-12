@@ -99,8 +99,6 @@ def probe_verdict(lane_dir: Path):
 
 
 def cmd_engine(a):
-    import devpy
-    devpy.ensure()
     import runlock
     import engrun
     import tareplay as R
@@ -315,8 +313,6 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
 
 
 def cmd_refs(a):
-    import devpy
-    devpy.ensure()
     try:
         written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings)
     except calibref.CalibError as e:
@@ -431,7 +427,17 @@ def main(argv=None):
     sl.add_argument("--catalogue", help="a live `tacli units --json` to check the install against")
     sl.set_defaults(func=cmd_stale)
     a = p.parse_args(argv)
-    return a.func(a)
+    # The commands read recordings and zstd-compressed traces, which need the shared venv:
+    # devpy re-executes under it, or exits 2 naming it. The guard below catches a module devpy
+    # does not test for.
+    import devpy
+    devpy.ensure()
+    try:
+        return a.func(a)
+    except ModuleNotFoundError as e:
+        print(f"calib.py: could not run: the module {e.name} is missing; run the tools with "
+              f"{devpy.venv_python() or devpy.VENV_HINT}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

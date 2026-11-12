@@ -21,6 +21,14 @@ the gate's plan note.*
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
 | `tools/tasim/native.py`, `native.py test`, `native.py roles` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` on the install | no |
 
+**The interpreter is the shared venv's**, `.venv-undither/bin/python` at the main checkout
+(CLAUDE.md, *Python tooling*): `calib.py`'s commands and `applier_check.py` read recordings and
+zstd-compressed traces, which need numpy, numba and zstandard. Started under the system `python3`
+they re-execute under the venv (`tools/replay/devpy.py`); without one, or when a module is still
+missing, they exit 2 ("could not run") naming the venv's interpreter, never 1, which means a check
+failed. `arenascan.py`, `duelgen.py`, `native.py` and the fake tasim's `play` need the standard
+library only.
+
 ## The arena
 
 Every run plays on one map, the one `tools/tasim/calib-arena.json` names. Nothing in it is written
