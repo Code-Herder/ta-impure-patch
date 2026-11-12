@@ -11,9 +11,9 @@
 /* DllMain, after tagpu_reclaim_init and tagpu_replay_init: when replay's sites are in -- among
    them the level init's PLAYERS call, the only caller of tagpu_impai_level_init -- and the
    teardown wrap is in, the only caller of tagpu_impai_level_end, byte-matches every site and
-   writes them all: the seam 0x465031, the AI command's 0x4162F4 and 0x4162FE and the eighteen
-   handicap sites. Otherwise nothing is written, ImpAI is unavailable and every level says
-   why. */
+   writes them all: the seam 0x465031, the AI command's 0x4162F4 and 0x4162FE, the eighteen
+   handicap sites and the site test's bit 0x47D3D1, with the thunk WQ_SITE_SEAT calls. Otherwise
+   nothing is written, ImpAI is unavailable and every level says why. */
 void tagpu_impai_init(void);
 
 /* The level init's (tagpu_replay.c, tagpu_replay_level_players), right after the engine's

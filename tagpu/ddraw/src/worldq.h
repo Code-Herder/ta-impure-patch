@@ -15,8 +15,8 @@
    implementation's context on that same stack and dies with the call. Nothing stores one.
 
    ONE SEAT. Every op answers for `seat` alone: its own units, its own explored map, its own orders -- but for
-   the engine's site_ok, can and mapped_point, which test the viewed player's mapped bit whatever seat asks
-   (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
+   the engine's site_ok (outside the seat's own site test, WQ_SITE_SEAT), can and mapped_point, which test the
+   viewed player's mapped bit whatever seat asks (beside each, below). No op allocates; every list is copied into the caller's buffer, with its capacity.
 
    DETERMINISM. No op reads a clock, the cursor or a random generator. Lists come in a fixed order: slots
    ascending, order nodes in list order, cells row-major. Arithmetic is integer, or the definitions' own floats
@@ -217,7 +217,7 @@ typedef struct WORLDQ_OPS {
        `ignore_slot` taken as gone (0 none); with `alt` the free site's altitude, 0..255. The engine's tests the
        VIEWED player's mapped bit at the site's centre whatever record it is given (0x47D2E0 reads
        1 << main[0x2A43] at 0x47D3D1..0x47D3FA, DISASSEMBLED), so for any other seat it answers by the
-       viewer's map, not the seat's */
+       viewer's map, not the seat's -- but in a WQ_SITE_SEAT view, which tests the seat's own bit */
     int (*site_ok)(const WORLDQ*, int type, int cx, int cz, int ignore_slot, int* alt);
     /* the altitude the build cursor gives a refused site */
     int (*blocked_alt)(const WORLDQ*, int type, int cx, int cz);

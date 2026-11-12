@@ -157,7 +157,8 @@ static struct {
     unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
-    unsigned char los_said, radar_said;
+    unsigned site_eval, site_miss, site_ok, site_stock_diff, site_type, site_area;
+    unsigned char los_said, radar_said, site_said, econ_said[PLAYER_COUNT];
 } s_obs;
 SIM_VAR(s_obs, SIM_PRIVATE);
 
@@ -208,6 +209,71 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
     }
 }
 
+/* THE SEAT'S VIEW, once an ImpAI turn through the seat's own site test (WQ_SITE_SEAT):
+   - THE ECONOMY LINE, once a level per seat, at its first decision tick from GameTime 590 (GameTime % 15 equal
+     to 7 x seat % 15): what the economy op reads of the record, for a peek of the same fields to be held to.
+   - THE SITE CHECK, under tagpu_impai_check.on: four sites of the level's smallest plain building type a turn,
+     two near the seat's first unit and two anywhere, each tested through the thunk and held to the seat's own
+     mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
+     is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
+     the two answers differ. The cells come from GameTime and the unit's position alone. */
+static void impai_seat_view(int seat)
+{
+    WQ_ENGINE c, ec;
+    WORLDQ q, eq;
+    WQ_ECON e;
+    WQ_UNIT u;
+    WQ_DEF d;
+    int t, k, first, last, slot, ux = 0, uz = 0;
+    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
+    t = q.ops->gametime(&q);
+    if (!s_obs.econ_said[seat] && t >= 590 && t % 15 == 7 * seat % 15 && q.ops->economy(&q, &e) == WQ_OK) {
+        s_obs.econ_said[seat] = 1;
+        tagpu_logf("impai: econ seat=%d t=%d metal=%.9g energy=%.9g metal_max=%.9g energy_max=%.9g metal_in=%.9g "
+                   "energy_in=%.9g metal_out=%.9g energy_out=%.9g", seat, t, e.metal, e.energy, e.metal_max,
+                   e.energy_max, e.metal_in, e.energy_in, e.metal_out, e.energy_out);
+    }
+    if (!s_install.check || !tagpu_worldq_open(&ec, &eq, seat, WQ_SITE_ENGINE, NULL)) return;
+    if (!s_obs.site_type) {
+        s_obs.site_type = WQ_NONE;
+        for (k = 1; k < q.ops->ndefs(&q); k++)
+            if (q.ops->def(&q, k, &d) && !(d.flags & WQ_DF_MOVER) && !d.kind && d.fx >= 1 && d.fz >= 1 &&
+                (s_obs.site_type == WQ_NONE || (unsigned)(d.fx * d.fz) < s_obs.site_area)) {
+                s_obs.site_type = (unsigned)k;
+                s_obs.site_area = (unsigned)(d.fx * d.fz);
+            }
+    }
+    if (s_obs.site_type == WQ_NONE) return;
+    q.ops->seat_units(&q, &first, &last);
+    for (slot = first; slot <= last; slot++)
+        if (q.ops->unit(&q, slot, &u)) {
+            ux = u.pos[0] >> 20;
+            uz = u.pos[2] >> 20;
+            break;
+        }
+    for (k = 0; k < 4; k++) {
+        const unsigned h = (unsigned)t * 2654435761u + (unsigned)k * 40503u;
+        const int cx = k < 2 ? ux + (int)(h % 61u) - 30 : (int)(h % (unsigned)c.w);
+        const int cz = k < 2 ? uz + (int)((h >> 8) % 61u) - 30 : (int)((h >> 12) % (unsigned)c.h);
+        const int bit = tagpu_worldq_site_mapped(&q, (int)s_obs.site_type, cx, cz);
+        int ok, stock;
+        if (bit < 0) continue;
+        ok = q.ops->site_ok(&q, (int)s_obs.site_type, cx, cz, 0, NULL);
+        stock = eq.ops->site_ok(&eq, (int)s_obs.site_type, cx, cz, 0, NULL);
+        s_obs.site_eval++;
+        s_obs.site_ok += (unsigned)ok;
+        s_obs.site_stock_diff += (unsigned)(ok != stock);
+        if (ok && !bit) {
+            s_obs.site_miss++;
+            if (!s_obs.site_said) {
+                s_obs.site_said = 1;
+                tagpu_logf("impai: check site mismatch seat=%d type=%u cell=%d,%d gametime=%d", seat,
+                           s_obs.site_type, cx, cz, t);
+            }
+        }
+    }
+}
+
 /* One ImpAI seat's turn, at its record's place in the players phase, after the step's unit tick, projectiles
    and explosions and before the seat's own sight emits (0x465053): positions are this tick's, the seat's own
    counters as its last emits left them; nothing after the players phase in the step writes a position, the
@@ -240,6 +306,7 @@ static void impai_observe(int seat)
     if (c.nslots > s_obs.nslots_max) s_obs.nslots_max = c.nslots;
     if ((unsigned)c.w > s_obs.map_w) s_obs.map_w = (unsigned)c.w;
     if (s_install.check) check_los(&c, &q, seat);
+    impai_seat_view(seat);
 }
 
 #define VA_RADAR_CALL 0x0046556Du   /* the players phase's `call 0x467440`, E8 CE 1E 00 00 */
@@ -332,6 +399,8 @@ static void impai_observe_end(unsigned now)
     tagpu_logf("impai: check los-local evaluated=%u mismatch=%u", s_obs.local_eval, s_obs.local_miss);
     tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u", s_obs.radar_passes, s_obs.radar_eval,
                s_obs.radar_miss);
+    tagpu_logf("impai: check site evaluated=%u mismatch=%u accepted=%u stock_differs=%u", s_obs.site_eval,
+               s_obs.site_miss, s_obs.site_ok, s_obs.site_stock_diff);
 }
 
 /* The level init's half of observation, on every level, live or puppet: nothing of the previous level's
@@ -703,6 +772,62 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned
     return p;
 }
 
+/* THE SEAT'S OWN SITE TEST. 0x47D2E0(def, cell, ignore, player) refuses a site whose centre the VIEWED player
+   has not mapped, `mov cl,[ebx+0x2A43]` at 0x47D3D1 loading the bit index whatever record it is passed
+   (DISASSEMBLED 0x47D3C4..0x47D3FA; tagpu_worldq.c, wq_site_ok). ImpAI calls it only through a thunk, and the
+   instruction at 0x47D3D1 tells that caller apart by its return address:
+
+     thunk:  push dword [esp+0x10]  x4     player, ignore, cell, def, re-pushed in order
+             call 0x47D2E0
+     ret_va: ret 0x10                      stdcall, as the engine function
+
+     0x47D3D1 (8A 8B 43 2A 00 00 -> jmp stub; nop):
+     stub:   cmp dword [esp+0x3C], ret_va
+             jne stock
+             mov cl,[edi+0x146]            the passed record's own mapped bit
+             jmp 0x47D3D7
+     stock:  mov cl,[ebx+0x2A43]           the stock instruction
+             jmp 0x47D3D7
+
+   THE INVARIANT is an identity, not a state. At 0x47D3D1 [esp+0x3C] is the function's return address: it
+   opens with `sub esp,0x2C` and four pushes (0x47D2E0..0x47D306), and its one call before the site, 0x485010
+   at 0x47D385, pops its own argument (`ret 4`, 0x48505F), so nothing else is on the stack (DISASSEMBLED). That
+   address is ret_va only for a call from the thunk, and only the WQ_SITE_SEAT view calls the thunk; every other
+   caller -- the build cursor 0x4198C6, the AI's spot search 0x40A4CD, the placement test 0x47DBE5 (scout I14)
+   -- reads main+0x2A43 as stock does. No static is read, so nothing crosses a tick or a thread. EDI holds the
+   record the caller passed from 0x47D358 on, the seat's own (ctx->rec), whose +0x146 is its mapped bit
+   (the activation 0x464290; the stamp 0x481930 writes 1 << rec+0x146); the LOS-shear fix's row at
+   0x47D3B8..0x47D3C3 (tagpu_patches.c, fix_los_local) ends before 0x47D3C4 and leaves EDI alone, so the two do
+   not overlap. ECX is the loaded register in both arms; the flags the `cmp` leaves are written again by the
+   `add` at 0x47D3EE before the first read, the `je` at 0x47D3FA (the `shl` at 0x47D3D7 writes none when CL
+   is 0). The occupancy flag that follows reads the passed record's sight counters under True line of sight
+   (0x47D40C..0x47D43A), which is what a human in the seat gets. */
+#define VA_SITE_TEST  0x0047D2E0u
+#define VA_SITE_BIT   0x0047D3D1u   /* `mov cl,[ebx+0x2A43]`, 8A 8B 43 2A 00 00 */
+#define VA_SITE_AFTER 0x0047D3D7u
+static const uint8_t SITE_BIT_WAS[6] = { 0x8A, 0x8B, 0x43, 0x2A, 0x00, 0x00 };
+#define SEAT_SITE_ROOM 64u          /* the thunk and the stub: 24 and 32 bytes */
+_Static_assert(18 * STUB_ROOM + SEAT_SITE_ROOM <= 0x1000, "the thunk and its stub fit after the handicap stubs");
+
+/* the thunk at `p`, the stub after it; returns the stub */
+static unsigned char* seat_site_emit(unsigned char* p)
+{
+    unsigned char *stub, *ret_va;
+    int k;
+    for (k = 0; k < 4; k++) { *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x10; }
+    *p++ = 0xE8; tagpu_detour_rel(p, VA_SITE_TEST); p += 4;
+    ret_va = p;
+    *p++ = 0xC2; *p++ = 0x10; *p++ = 0x00;
+    stub = p;
+    *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x3C; p = put32(p, (uint32_t)(uintptr_t)ret_va);
+    *p++ = 0x75; *p++ = 0x0B;
+    *p++ = 0x8A; *p++ = 0x8F; p = put32(p, 0x146);
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER); p += 4;
+    memcpy(p, SITE_BIT_WAS, sizeof SITE_BIT_WAS); p += sizeof SITE_BIT_WAS;
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SITE_AFTER);
+    return stub;
+}
+
 /* One site's bytes as stock has them and as we write them. */
 typedef struct WRITE { uint32_t va; int n; unsigned char was[10], now[10]; } WRITE;
 
@@ -720,15 +845,16 @@ static void write_branch(WRITE* w, unsigned char op, uint32_t target)
    PLAYERS call 0x4919C8, the only caller of tagpu_impai_level_init, and the teardown wrap is in,
    the only caller of tagpu_impai_level_end; so no site is in on a level whose seat table nobody
    cleared and wrote, nor between levels with a table nobody cleared. Then every site is
-   compared -- the seam 0x465031, the AI command's two calls 0x4162F4 and 0x4162FE and the
-   eighteen type tests -- and only when every one is stock are the stubs built and every site
-   written; a write that fails puts back every site already written. Otherwise nothing is
-   written, s_install.avail stays 0, and each level says why. */
+   compared -- the seam 0x465031, the AI command's two calls 0x4162F4 and 0x4162FE, the
+   eighteen type tests and the site test's bit at 0x47D3D1 -- and only when every one is stock
+   are the stubs built and every site written; a write that fails puts back every site already
+   written. Only then does WQ_SITE_SEAT get its thunk. Otherwise nothing is written,
+   s_install.avail stays 0, and each level says why. */
 void tagpu_impai_init(void)
 {
-    enum { NCALLS = 3 };
-    WRITE w[NSITES + NCALLS];
-    unsigned char* p;
+    enum { NCALLS = 3, NALL = NCALLS + NSITES + 1, SEAT_SITE = NALL - 1 };
+    WRITE w[NALL];
+    unsigned char *p, *thunk;
     int i, done;
     s_install.check = (uint8_t)tagpu_sim_lever("tagpu_impai_check.on");
     if (!tagpu_replay_level_init_in()) {
@@ -755,9 +881,13 @@ void tagpu_impai_init(void)
         w[NCALLS + i].n = HSITES[i].n;
         memcpy(w[NCALLS + i].was, (const void*)(uintptr_t)HSITES[i].va, HSITES[i].n);
     }
-    for (i = 0; i < NSITES + NCALLS; i++) {
+    w[SEAT_SITE].va = VA_SITE_BIT;
+    w[SEAT_SITE].n = (int)sizeof SITE_BIT_WAS;
+    memcpy(w[SEAT_SITE].was, (const void*)(uintptr_t)VA_SITE_BIT, sizeof SITE_BIT_WAS);
+    for (i = 0; i < NALL; i++) {
         int stock = i == 0 ? tagpu_detour_redirect_ok(VA_AI_CALL, VA_AI_TICK)
                   : i < NCALLS ? tagpu_detour_redirect_ok(w[i].va, VA_SET_TYPE)
+                  : i == SEAT_SITE ? !memcmp(w[i].was, SITE_BIT_WAS, sizeof SITE_BIT_WAS)
                   : !memcmp(w[i].was, HSITES[i - NCALLS].was, (size_t)w[i].n);
         if (!stock) {
             int k, at = wsprintfA(s_install.why, "0x%06X not stock (", (unsigned)w[i].va);
@@ -782,9 +912,11 @@ void tagpu_impai_init(void)
         stub_emit(p, &HSITES[i], s_diag.hits[i]);
         write_branch(&w[NCALLS + i], 0xE9, (uint32_t)(uintptr_t)p);
     }
-    for (done = 0; done < NSITES + NCALLS; done++)
+    thunk = s_code + (unsigned)NSITES * STUB_ROOM;
+    write_branch(&w[SEAT_SITE], 0xE9, (uint32_t)(uintptr_t)seat_site_emit(thunk));
+    for (done = 0; done < NALL; done++)
         if (!tagpu_detour_write(w[done].va, w[done].now, w[done].n)) break;
-    if (done < NSITES + NCALLS) {
+    if (done < NALL) {
         while (done-- > 0) tagpu_detour_write(w[done].va, w[done].was, w[done].n);
         SIM_FREE(s_code, s_code);
         s_code = NULL;
@@ -792,11 +924,12 @@ void tagpu_impai_init(void)
         tagpu_logf("impai: unavailable: %s", s_install.why);
         return;
     }
+    tagpu_worldq_seat_site_set((WqSiteFn)(uintptr_t)thunk);
     s_install.in = s_install.avail = 1;
     if (s_install.check) impai_check_install();
     /* the addresses handicap_check.py peeks: the seat table, and the counts as 18 pairs of u32,
        scaled then exempt */
-    tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE and %d handicap sites "
-               "in; seats at 0x%08X, handicap counts at 0x%08X", NSITES,
+    tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE, %d handicap sites and the "
+               "seat's site test 0x47D3D1 in; seats at 0x%08X, handicap counts at 0x%08X", NSITES,
                (unsigned)(uintptr_t)s_seat, (unsigned)(uintptr_t)s_diag.hits);
 }

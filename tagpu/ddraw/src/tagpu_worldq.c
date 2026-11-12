@@ -42,9 +42,10 @@ typedef int (__stdcall* GroundHeight)(const int*);
 typedef int (__stdcall* Mapped)(const void*, const int*);
 typedef void (__stdcall* Queue)(int, void*, int, int);
 
-/* the build cursor's site test, decoded once at attach */
-static WqSiteFn s_cursor_site;
+/* the build cursor's site test, decoded once at attach; the seat's own, set once at attach when its patch is in */
+static WqSiteFn s_cursor_site, s_seat_site;
 SIM_VAR(s_cursor_site, SIM_INSTALL);
+SIM_VAR(s_seat_site, SIM_INSTALL);
 
 /* The action names 0x438760 is given, the engine's own strings in .rdata, in WQ_ACT_* order: the build
    cursor's (0x419670), the resolver's (0x440187, 0x43F694, 0x44004C) and the build menu's queue call for a unit
@@ -65,6 +66,8 @@ void tagpu_worldq_init(void)
 }
 
 WqSiteFn tagpu_worldq_cursor_site(void) { return s_cursor_site; }
+
+void tagpu_worldq_seat_site_set(WqSiteFn thunk) { s_seat_site = thunk; }
 
 static int footprint(const char* d, int* x, int* z)
 {
@@ -347,7 +350,8 @@ static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, in
    words are put back as they were after both calls, so a view taken in the mouse handler or the packet fill
    leaves the engine's own reading of them as it was.
    THE PLAYER. With a player 0x47D2E0 refuses a site whose centre the VIEWED player has not mapped
-   (main[0x2A43], 0x47D3D1..0x47D3FA) whatever record it is passed, and under LosType bit 1 reads the passed
+   (main[0x2A43], 0x47D3D1..0x47D3FA) whatever record it is passed -- but through WQ_SITE_SEAT's thunk, where
+   the patch at 0x47D3D1 tests the passed record's own bit +0x146 -- and under LosType bit 1 reads the passed
    record's line-of-sight counters +0x7C (0x47D40C..0x47D42C) -- DISASSEMBLED; a unit or a yard occupant
    refuses only while that flag is set (0x47D53B, 0x47D55B). The record passed is the seat's. */
 static int wq_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
@@ -718,6 +722,35 @@ static int sight_block(const SIGHT* s, int32_t x, int32_t y, int32_t z, unsigned
 static int sight_lit(const SIGHT* s, unsigned k)
 {
     return s->truelos ? s->los[k] != 0 : (s->mapped[k] >> s->bit) & 1u;
+}
+
+/* THE BLOCK 0x47D2E0 READS THE MAPPED BIT AT, DISASSEMBLED 0x47D36C..0x47D3FA: the centre (2 cx + fx) << 19,
+   (2 cz + fz) << 19 and the height byte of the first cell (0x485010, the feature grid's +4: 0 off the map) as the
+   altitude; column x >> 5, row (z - altitude / 2) >> 5 on the high words, each below the passed record's grid
+   +0x80 / +0x84 (0x47D3B0, 0x47D3B8: under the shear fix, a sheared row off the grid is read at the point's own
+   row, the rule sight_block applies); the mapped grid main+0x14273 at row x +0x80 + column. This reads the
+   seat's own bit there, rec+0x146, as the patch at 0x47D3D1 makes the thunk's call do. The footprint is held
+   first to the test's own bounds (0x47D302..0x47D352). */
+int tagpu_worldq_site_mapped(const WORLDQ* q, int type, int cx, int cz)
+{
+    const WQ_ENGINE* c = ctx_of(q);
+    const char* d = def_at(c, type);
+    const uint16_t* mapped = *(const uint16_t* const*)(c->ta + 0x14273);
+    SIGHT s;
+    unsigned k, bit = *(const unsigned char*)(c->rec + PL_MAPBIT);
+    int fx, fz, alt;
+    if (!d || !footprint(d, &fx, &fz) || cx < 1 || cz < 1 || cx + fx >= c->w || cz + fz >= c->h || !mapped ||
+        bit >= 16)
+        return -1;
+    memset(&s, 0, sizeof s);
+    s.w = *(const unsigned*)(c->rec + PL_LOS_W);
+    s.h = *(const unsigned*)(c->rec + PL_LOS_H);
+    if (s.w != (unsigned)c->w / 2 || s.h != (unsigned)c->h / 2) return -1;
+    alt = (unsigned char)c->grid[((size_t)cz * c->w + cx) * FT_STRIDE + 4];
+    if (!sight_block(&s, (int32_t)((uint32_t)(2 * cx + fx) << 19), (int32_t)((uint32_t)alt << 16),
+                     (int32_t)((uint32_t)(2 * cz + fz) << 19), &k))
+        return -1;
+    return (mapped[k] >> bit) & 1u;
 }
 
 /* A unit of any owner at `slot` with the alive bit, dying or not -- the line of sight and the radar pass test
@@ -1143,7 +1176,7 @@ int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn 
     ctx->first = (unsigned)((first - (uintptr_t)ctx->units) / UNIT_STRIDE);
     ctx->last = (unsigned)((last - (uintptr_t)ctx->units) / UNIT_STRIDE);
     ctx->threshold = *(unsigned*)(state + 0xD30) > 255u ? 255 : (int)*(unsigned*)(state + 0xD30);
-    ctx->site = site == WQ_SITE_CURSOR ? s_cursor_site : (WqSiteFn)0x0047D2E0u;
+    ctx->site = site == WQ_SITE_CURSOR ? s_cursor_site : site == WQ_SITE_SEAT ? s_seat_site : (WqSiteFn)0x0047D2E0u;
     if (!ctx->site) return 0;
     ctx->menu = menu;
     out->ops = &OPS;
