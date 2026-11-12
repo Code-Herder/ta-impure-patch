@@ -6,9 +6,11 @@
 
 The rules (research/notes/modules/tasim-calibration.md, *The check*), exactly:
   1. win rate: in band iff |p_t − p_e| ≤ 2·SE, SE = √(p̄(1 − p̄)(1/n_e + 1/n_t)); SE = 0 needs p_t = p_e;
-  2. distribution: in band iff P10_e ≤ P50_t ≤ P90_e (numpy's linear quantiles) and the two-sample
-     Cramér–von Mises statistic of engine against tasim is at most its limit, the 95th percentile
-     of the statistic over the reference's seeded shuffles of the engine's own runs into halves;
+  2. distribution: in band iff P10_e ≤ P50_t ≤ P90_e (numpy's linear quantiles) and neither of two
+     statistics of engine against tasim exceeds its limit: the two-sample Cramér–von Mises
+     statistic (shape and location) and the gap between the two sides' mean absolute deviations
+     from the pooled median (spread), each limit the 97.5th percentile of its statistic over the
+     reference's seeded reshuffles of the pooled runs within each seat swap;
   3. exact: the family's series equal at every tick, no tolerance;
   4. predictor: on the decisive scenarios (p_e > 0.8 or < 0.2) the call agrees with the engine's
      majority on at least 90 %.
@@ -33,7 +35,7 @@ import calibref  # noqa: E402
 import metrics  # noqa: E402
 
 BAND_SE = 2.0
-ALPHA = 0.05            # the distribution rule's false-alarm rate per metric, by construction
+ALPHA_EACH = 0.025      # each of the distribution rule's two permutation tests: 5 % at most together
 SPLITS = 200            # the self-test's splits of the engine's runs: a 5 % rate measures to ±1.5 %
 DECISIVE = 0.2
 PREDICTOR_AGREE = 0.9
@@ -79,8 +81,7 @@ def cvm(values, first):
 
     over the distinct values z, t_z of the N runs sitting at z, F the two empirical distribution
     functions taken after every run at z. A tie is one step of both functions, so a mass point is
-    compared as a mass point; the shuffles of `cvm_limit` keep the ties where they are, so the
-    limit is the statistic's own distribution under those ties."""
+    compared as a mass point."""
     import numpy
     values = numpy.asarray(values, dtype=float)
     first = numpy.atleast_2d(first)
@@ -91,7 +92,7 @@ def cvm(values, first):
     n = int(m[0].sum())
     k = N - n
     if n == 0 or k == 0:
-        raise CouldNotCheck("the Cramér–von Mises statistic needs a run on each side")
+        raise CouldNotCheck("the distribution rule needs a run on each side")
     ends = numpy.flatnonzero(numpy.r_[v[1:] != v[:-1], True])
     c1 = numpy.cumsum(m, axis=1)[:, ends]
     c2 = (ends + 1) - c1
@@ -99,35 +100,70 @@ def cvm(values, first):
     return n * k / N ** 2 * (t * (c1 / n - c2 / k) ** 2).sum(axis=1)
 
 
-def cvm_limit(e, metric, shuffle):
-    """The statistic's 1 − ALPHA quantile (numpy's `higher`, so a tie at the limit stays in) over
-    `shuffle["count"]` random halvings of the engine's runs `e`, seeded by `shuffle["seed"]` and
-    the metric's name: the same reference gives the same limit, and each metric its own stream.
-    The engine's runs are exchangeable, so two of its halves differ only by chance. The limit is
-    estimated from the engine's runs alone, so tasim playing the engine's distribution exceeds it
-    ALPHA of the time only as far as that estimate is good, and on a metric with few distinct
-    values it is not: MEASURED 2026-11-12 by the self-test (25 runs a side) on the fifth
-    verification's references, 0.035-0.08 on the time to kill and the travel times, but 0.07-0.18
-    on the duel's survivors (7-11 distinct values, 62-76 % of the runs at one)."""
+def mad_gap(values, first):
+    """|D_1 − D_2| for each row of `first` (as in `cvm`), D a side's mean absolute deviation from
+    the median of all N runs. The pooled median is the same for every reshuffle, so the statistic
+    moves only with how far each side's runs lie from the common centre: the spread."""
     import numpy
-    if len(e) < 2:
-        raise CouldNotCheck(f"{metric}: the shuffles need two engine runs, there are {len(e)}")
+    values = numpy.asarray(values, dtype=float)
+    first = numpy.atleast_2d(first)
+    dev = numpy.abs(values - numpy.median(values))
+    n = first[0].sum()
+    k = len(values) - n
+    if n == 0 or k == 0:
+        raise CouldNotCheck("the distribution rule needs a run on each side")
+    return numpy.abs((first * dev).sum(axis=1) / n - (~first * dev).sum(axis=1) / k)
+
+
+def reshuffles(first, strata, metric, shuffle):
+    """`shuffle["count"]` masks like `first`: within each stratum (a seat swap), as many runs marked
+    as `first` marks there, chosen at random. Seeded by `shuffle["seed"]` and the metric's name, so
+    the same runs give the same masks, and each metric has its own stream."""
+    import numpy
     rng = numpy.random.default_rng([shuffle["seed"], zlib.crc32(metric.encode())])
-    first = rng.random((shuffle["count"], len(e))).argsort(axis=1) < len(e) // 2
-    return float(numpy.quantile(cvm(e, first), 1 - ALPHA, method="higher"))
+    masks = numpy.zeros((shuffle["count"], len(first)), bool)
+    for stratum in sorted(set(strata)):
+        idx = numpy.flatnonzero(numpy.asarray(strata) == stratum)
+        marked = int(first[idx].sum())
+        masks[:, idx] = rng.random((shuffle["count"], len(idx))).argsort(axis=1) < marked
+    return masks
 
 
-def rule_distribution(e, t, metric, shuffle):
-    """(in band, margin {outside, cvm, limit}, engine P10/P50/P90, tasim P10/P50/P90)."""
+def permutation_limits(values, first, strata, metric, shuffle):
+    """(Cramér–von Mises limit, spread limit): each statistic's 1 − ALPHA_EACH quantile (numpy's
+    `higher`, so a tie at the limit stays in) over the reshuffles of the pooled runs.
+
+    Why the pool, and why by stratum: when tasim plays the engine's distribution, the engine's and
+    tasim's runs of one seat swap are exchangeable, so the observed labelling is one draw among the
+    reshuffles and each statistic exceeds its limit with probability at most ALPHA_EACH, whatever
+    the ties. A limit from the engine's runs alone is an estimate, and on a metric with a few
+    distinct values a poor one: MEASURED 2026-11-12 on the fifth verification's duel survivors
+    (7-11 distinct values, 62-76 % of the runs at one), 0.07-0.18 false alarms against 0.04-0.06
+    pooled. Reshuffling across swaps would compare the observed swap-balanced labelling with
+    unbalanced ones, which a seat effect makes differ: 0.13 on the same survivors."""
+    import numpy
+    masks = reshuffles(first, strata, metric, shuffle)
+    q = 1 - ALPHA_EACH
+    return (float(numpy.quantile(cvm(values, masks), q, method="higher")),
+            float(numpy.quantile(mad_gap(values, masks), q, method="higher")))
+
+
+def rule_distribution(e, t, metric, shuffle, strata=None):
+    """(in band, margin {outside, cvm, cvm_limit, mad, mad_limit}, engine P10/P50/P90, tasim
+    P10/P50/P90). `strata`: (the engine runs' seat swaps, tasim's), None for one stratum."""
     import numpy
     e10, e50, e90 = quantiles(e)
     t10, t50, t90 = quantiles(t)
     outside = max(e10 - t50, t50 - e90, 0.0)
+    values = numpy.r_[numpy.asarray(e, float), numpy.asarray(t, float)]
     first = numpy.r_[numpy.ones(len(e), bool), numpy.zeros(len(t), bool)]
-    stat = float(cvm(numpy.r_[numpy.asarray(e, float), numpy.asarray(t, float)], first)[0])
-    limit = cvm_limit(e, metric, shuffle)
-    ok = outside == 0.0 and stat <= limit
-    return ok, {"outside": outside, "cvm": stat, "limit": limit}, [e10, e50, e90], [t10, t50, t90]
+    swaps = list(strata[0]) + list(strata[1]) if strata else [False] * len(values)
+    c = float(cvm(values, first)[0])
+    d = float(mad_gap(values, first)[0])
+    c_lim, d_lim = permutation_limits(values, first, swaps, metric, shuffle)
+    ok = outside == 0.0 and c <= c_lim and d <= d_lim
+    return (ok, {"outside": outside, "cvm": c, "cvm_limit": c_lim, "mad": d, "mad_limit": d_lim},
+            [e10, e50, e90], [t10, t50, t90])
 
 
 def rule_exact(e_series, t_series):
@@ -146,20 +182,22 @@ def rule_predictor(rows):
     return agree >= PREDICTOR_AGREE, agree, len(decisive), left
 
 
-def grade_metric(metric, kind, e_vals, t_vals, shuffle):
-    """One (metric, kind) graded: the scoreboard's row. `shuffle` is the engine reference's."""
+def grade_metric(metric, kind, e_vals, t_vals, shuffle, strata=None):
+    """One (metric, kind) graded: the scoreboard's row. `shuffle` is the engine reference's,
+    `strata` as rule_distribution's."""
     if kind == "winrate":
         ok, margin, pe, pt = rule_winrate(e_vals, t_vals)
         return {"metric": metric, "kind": kind, "verdict": "in" if ok else "out",
                 "margin": margin, "engine": {"p": pe, "n": len(e_vals)},
                 "tasim": {"p": pt, "n": len(t_vals)}}
-    ok, margin, eq, tq = rule_distribution(e_vals, t_vals, metric, shuffle)
+    ok, margin, eq, tq = rule_distribution(e_vals, t_vals, metric, shuffle, strata)
     return {"metric": metric, "kind": kind, "verdict": "in" if ok else "out", "margin": margin,
             "engine": {"q": eq, "n": len(e_vals)}, "tasim": {"q": tq, "n": len(t_vals)}}
 
 
-def grade_runs(block, e_runs, t_runs, shuffle):
-    """Every statistical metric of a block, engine runs against the other side's: rows."""
+def grade_runs(block, e_runs, t_runs, shuffle, strata=None):
+    """Every statistical metric of a block, engine runs against the other side's: rows.
+    `strata`: (the engine runs' seat swaps, the other side's), None for one stratum."""
     rows = []
     for m in block["metrics"]:
         if m == "winner":
@@ -170,7 +208,7 @@ def grade_runs(block, e_runs, t_runs, shuffle):
         t_s = [dict(metrics.scalars(m, r[m])) for r in t_runs]
         for name in sorted(e_s[0]) if e_s else ():
             rows.append(grade_metric(name, "distribution", [s[name] for s in e_s],
-                                     [s[name] for s in t_s], shuffle))
+                                     [s[name] for s in t_s], shuffle, strata))
     return rows
 
 
@@ -335,7 +373,9 @@ def grade_scenario(ref, path, played):
     values = {t: dict(v) for t, v in ref["values"]["types"].items()}
     R = ref["values"]["R"]
     t_runs = [metrics.compute(lines, block, values, R) for lines, _o in played]
-    return grade_runs(block, [r["metrics"] for r in ref["runs"]], t_runs, ref["shuffle"])
+    swaps = [r["swap"] for r in ref["runs"]]       # tasim plays run i with run i's swap
+    return grade_runs(block, [r["metrics"] for r in ref["runs"]], t_runs, ref["shuffle"],
+                      (swaps, swaps))
 
 
 def mark_stale(row, why):
@@ -367,7 +407,8 @@ def fmt_margin(row):
     if row["kind"] == "exact":
         return "—" if m is None else f"first diff #{m[0]}"
     if isinstance(m, dict):
-        return f"{m['outside']:g} cvm {m['cvm']:.3f} limit {m['limit']:.3f}"
+        return (f"{m['outside']:g} cvm {m['cvm']:.3f}/{m['cvm_limit']:.3f} "
+                f"spread {m['mad']:.4g}/{m['mad_limit']:.4g}")
     return f"{m:.2f}"
 
 
@@ -409,32 +450,38 @@ def exit_code(rows, errors):
 # ---- self-tests -------------------------------------------------------------------------------
 
 def false_alarms(ref):
-    """{metric: {kind, splits, out, cvm}}: the reference's runs split SPLITS times into two
+    """{metric: {kind, splits, out, cvm, mad}}: the reference's runs split SPLITS times into two
     halves, each holding half of the unswapped runs and half of the swapped, the second graded
     as if it were tasim against the first. The runs are exchangeable, so every OUT is a false
-    alarm; `cvm` counts the OUTs of the Cramér–von Mises part alone. The splits are seeded by the
-    reference's shuffle seed."""
+    alarm; `cvm` and `mad` count the OUTs of each permutation test alone. The splits are seeded
+    by the reference's shuffle seed."""
     import numpy
     rng = numpy.random.default_rng([ref["shuffle"]["seed"], SPLITS])
-    sides = [[r["metrics"] for r in ref["runs"] if not r["swap"]],
-             [r["metrics"] for r in ref["runs"] if r["swap"]]]
+    sides = [[r["metrics"] for r in ref["runs"] if r["swap"] == swap] for swap in (False, True)]
     out = {}
     for _ in range(SPLITS):
-        h1, h2 = [], []
-        for side in sides:
+        h1, h2, s1, s2 = [], [], [], []
+        for swap, side in zip((False, True), sides):
             order = rng.permutation(len(side))
             h1 += [side[i] for i in order[:len(side) // 2]]
             h2 += [side[i] for i in order[len(side) // 2:]]
-        for r in grade_runs(ref["scenario"]["calib"], h1, h2, ref["shuffle"]):
-            row = out.setdefault(r["metric"], {"kind": r["kind"], "splits": 0, "out": 0, "cvm": 0})
+            s1 += [swap] * (len(side) // 2)
+            s2 += [swap] * (len(side) - len(side) // 2)
+        for r in grade_runs(ref["scenario"]["calib"], h1, h2, ref["shuffle"], (s1, s2)):
+            row = out.setdefault(r["metric"], {"kind": r["kind"], "splits": 0, "out": 0,
+                                               "cvm": 0, "mad": 0})
             row["splits"] += 1
             row["out"] += r["verdict"] == "out"
             if r["kind"] == "distribution":
-                row["cvm"] += r["margin"]["cvm"] > r["margin"]["limit"]
+                m = r["margin"]
+                row["cvm"] += m["cvm"] > m["cvm_limit"]
+                row["mad"] += m["mad"] > m["mad_limit"]
     return out
 
 
 def seat_effect(ref):
+    """The swapped runs graded against the unswapped, reshuffled as one stratum: the swap is what
+    is tested, so it cannot also be what the reshuffles keep apart."""
     runs = ref["runs"]
     return grade_runs(ref["scenario"]["calib"], [r["metrics"] for r in runs if not r["swap"]],
                       [r["metrics"] for r in runs if r["swap"]], ref["shuffle"])
@@ -483,7 +530,7 @@ def selftest(only=None, against=None):
             for metric, row in fa.items():
                 alarms[row["kind"]][0] += row["out"]
                 alarms[row["kind"]][1] += row["splits"]
-                cvm_part = (f", the Cramér–von Mises part alone {row['cvm']}"
+                cvm_part = (f" (Cramér–von Mises {row['cvm']}, spread {row['mad']})"
                             if row["kind"] == "distribution" else "")
                 lines.append(f"{sid}: false alarms {metric} {row['out']} of {row['splits']} "
                              f"splits ({row['out'] / row['splits']:.3f}){cvm_part}")
@@ -494,8 +541,9 @@ def selftest(only=None, against=None):
             other = json.loads(Path(against).read_text())
             if "shuffle" not in other:
                 raise CouldNotCheck(f"{against}: no shuffle seed and count")
+            swaps = ([r["swap"] for r in other["runs"]], [r["swap"] for r in ref["runs"]])
             rows = grade_runs(block, [r["metrics"] for r in other["runs"]],
-                              [r["metrics"] for r in ref["runs"]], other["shuffle"])
+                              [r["metrics"] for r in ref["runs"]], other["shuffle"], swaps)
             ref["selftest"]["reload_vs_fresh"] = rows
             for r in rows:
                 lines.append(f"{sid}: reload against fresh {r['metric']} {r['verdict'].upper()} "

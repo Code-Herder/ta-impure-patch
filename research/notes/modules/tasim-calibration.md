@@ -15,7 +15,7 @@ the gate's plan note.*
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
 | `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard | no |
-| `calib.py selftest [--against REF]` | split-half, seat effect, exact self-consistency, reload against fresh | no |
+| `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
 | `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
@@ -242,13 +242,15 @@ random stream, not the reload.
 ## References
 
 Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`), because they carry the
-install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/1`), and an exact
+install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
 `--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names its DLL's build and
 commit (a dirty build is refused), the install's fingerprint (the types' keys and CRCs, the weapon
-and feature-def fingerprints), the setup, the values, `perturb.py`'s sha256, every run with its
-metrics, checks and exogenous values, and the engine time it cost.
+and feature-def fingerprints), the setup, the values, `perturb.py`'s sha256, the distribution
+rule's `shuffle` (its seed, the first four bytes of sha256("<scenario sha256>:shuffle"), and its
+count, 2,000), every run with its metrics, checks and exogenous values, and the engine time it
+cost. A reference without `shuffle` cannot be checked: rebuild it with `calib.py refs build`.
 
 **Staleness** (`calib.py stale`): a reference made at commit C is stale when C..HEAD changes a sim
 file's code lines (tareplay's own reading: comments and white space are not code), a header one
@@ -261,9 +263,15 @@ as `calibration_stale=` in its note; re-measuring is a command, never part of a 
 `tools/tasim/check.py`, against each scenario's newest reference:
 
 1. **win rate**: |p_t − p_e| ≤ 2·SE, SE = √(p̄(1 − p̄)(1/n_e + 1/n_t)), equality when SE = 0;
-2. **distribution**: P10_e ≤ P50_t ≤ P90_e and 0.5 ≤ spread_t/spread_e ≤ 2 (numpy's linear
-   quantiles; a censored value enters as its limit; a zero engine spread needs P90_t = P10_t =
-   P50_e);
+2. **distribution**: P10_e ≤ P50_t ≤ P90_e (numpy's linear quantiles; a censored value enters as
+   its limit), and two permutation tests at 2.5 % each, so at most 5 % together: the two-sample
+   Cramér–von Mises statistic (shape and location) and |D_e − D_t|, D a side's mean absolute
+   deviation from the pooled median (spread). Each limit is its statistic's 97.5th percentile over
+   the reference's 2,000 seeded reshuffles of the engine's and tasim's runs pooled, within each
+   seat swap: tasim's run i plays the engine's run i's swap, so the observed labelling is one of
+   the reshuffles whenever tasim plays the engine's distribution, and the rate holds whatever the
+   ties. The limits are computed at check time from the two sides' runs; the reference stores the
+   seed, so they reproduce;
 3. **exact**: each metric's series equal at every tick, no tolerance;
 4. **predictor**: on the decisive scenarios (p_e > 0.8 or < 0.2) the call agrees with the engine's
    majority on at least 90 % (the rule is in; the call needs `tasim_run predict`, A2).
@@ -271,27 +279,41 @@ as `calibration_stale=` in its note; re-measuring is a command, never part of a 
 Exit 0 every metric in band, 1 one out (each named), 2 could not run (no reference, a dirty or
 malformed one, a stale one under `--require-fresh`, a tasim failure, a perturbation mismatch). The
 scoreboard groups by `calib.area` less its last part; `--json` writes `ta-calib-score/1`.
-**Self-tests**: H2 = {i mod 4 ∈ {2, 3}} graded against H1 with the false-alarm rate per rule
-(about 4.6 % expected for the win rate), the swapped runs against the unswapped (the seat effect),
-an exact scenario's runs 0, 1 and 2 (fresh) equal, and `--against` a fresh reference. Exit 0 when
-every self-test ran, 2 when one reported an error (an exact scenario's runs differing among them)
-or there was nothing to test -- no reference, or none `--only` matches: a self-test of nothing
-tested nothing.
+**Self-tests**: each metric's false-alarm rate, the reference's runs split 200 times into halves
+holding half of the unswapped and half of the swapped runs, the second graded as tasim against the
+first (exchangeable, so every OUT is a false alarm; each permutation test's OUTs are counted
+too); the swapped runs against the unswapped (the seat effect, reshuffled as one stratum, since
+the swap is what it tests); an exact scenario's runs 0, 1 and 2 (fresh) equal; and `--against` a
+fresh reference. Exit 0 when every self-test ran, 2 when one reported an error (an exact
+scenario's runs differing among them) or there was nothing to test -- no reference, or none
+`--only` matches: a self-test of nothing tested nothing.
 
-**The spread rule on a metric with a mass point is noisy at 25 runs a side.** MEASURED on the fifth
-verification's `duel-armpw-corak` references by shuffling each one's 50 runs into halves of 25
-4,000 times (exchangeable, so every OUT is a false alarm): the seat effect's false-alarm rate is
-0 for the winner and at most 0.3 % for the time to kill, but 31 % for the survivors of the
-one-lane set j1 and 6.5 % for j6 and j12. In that duel the survivors are 0.280 in about 70 % of
-the runs, with a sparse tail up to 0.400. A half's P10 is the mass point, so its P90, and with
-it the spread ratio, depends on whether two or three of its 25 runs land in the tail.
+**Why the pool.** A limit estimated from the engine's runs alone is noisy on a metric with few
+distinct values. MEASURED 2026-11-12 on the fifth verification's `duel-armpw-corak` references:
+its survivors take 7-11 distinct values with 62-76 % of the runs at 0.280. Halves of 25 runs gave
+0.07-0.18 false alarms with an engine-only limit, against 0.04-0.06 with the pooled one.
+Reshuffling the pool across swaps compares the swap-balanced split with unbalanced ones, which a
+seat effect makes differ: 0.13 on the same survivors.
 
-j1's seat-effect OUT (survivors, spread 4.55: P90 0.306 unswapped against 0.400 swapped) is such
-a draw. Its swapped half has seven runs above the mass point against three in the unswapped half,
-a one-sided Fisher p of 0.15. Counting only 0.36 and above it is seven against one, p 0.024, but
-that threshold was chosen after looking at the data. The five-lane sets of the same scenario have
-six runs above the mass point on each side, and 0.400 comes up in unswapped runs there too. Grading such a metric needs a rule that knows its
-ties (the owner's decision, [calibration bands](../impai/calibration.html)).
+**Power at 50 runs a side** (`tests/test_check.py`, seeded draws): a +10 % median at a 10 %
+coefficient of variation is OUT in 99 of 100; a doubled spread in 197, 200 and 197 of 200 for a
+normal, a uniform and a lognormal shape, carried by the spread test (Cramér–von Mises alone
+catches 0.29-0.63 of 400 other seeded draws). A doubled tail on the 70 % mass point is OUT in
+only 48 of 200: seven runs in ten do not move.
+
+**The self-tests on the fifth verification's references**, rebuilt offline from its recordings
+(MEASURED 2026-11-12; false alarms out of 200 splits, the winner's 0 in every set):
+
+| set | time to kill | survivors | travel first / median / last | seat effect | reload against fresh |
+|---|---|---|---|---|---|
+| `duel-armpw-corak`, fresh launches | 0.050 | 0.050 | | IN | |
+| the same, reload, one lane (j1) | 0.050 | 0.060 | | IN | time to kill OUT |
+| the same, reload, j6 and j12 (identical runs) | 0.070 | 0.015 | | IN | time to kill OUT |
+| `duel-t1-raider-assault-median` | 0.030 | 0.040 | | IN | |
+| `course-kbot` | | | 0.035 / 0.060 / 0.060 | travel.last OUT | |
+
+The reload's time to kill has a median of 236 (j1) and 234.5 (j6) against the fresh launches'
+229, the same 50 wires in both; the cause is not established.
 
 ### The tasim_run interface
 

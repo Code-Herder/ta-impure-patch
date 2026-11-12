@@ -418,7 +418,8 @@ def main(argv=None):
     c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
     c.add_argument("--j", type=int, default=8)
     c.set_defaults(func=cmd_check)
-    st = sub.add_parser("selftest", help="false alarms over splits, seat effect, exact self-consistency")
+    st = sub.add_parser("selftest",
+                        help="false alarms over splits, seat effect, exact self-consistency")
     st.add_argument("--only")
     st.add_argument("--against", help="a reference to grade against (reload against fresh)")
     st.set_defaults(func=cmd_selftest)
