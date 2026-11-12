@@ -12,7 +12,7 @@ is derived from the player's install. So they live under the main checkout's `.d
 every worktree reads and writes the same set.
 
 Layout under calib_dir():
-    refs/<scenario-id>/<commit12>.json             a reference, ta-calib-ref/1
+    refs/<scenario-id>/<commit12>.json             a reference, ta-calib-ref/2
     refs/<scenario-id>/<commit12>.traces.jsonl.zst the engine traces of an exact scenario
     runs/<stamp>/lane<k>-<launch>/                 one lane-launch: manifest.jsonl, tagpu.log,
                                                    the dumps and the recording
@@ -28,7 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
 ARENA = HERE / "calib-arena.json"
-SCHEMA_REF = "ta-calib-ref/1"
+SCHEMA_REF = "ta-calib-ref/2"
 SCHEMA_TRACE = "ta-calib-trace/1"
 SCHEMA_SCORE = "ta-calib-score/1"
 
@@ -39,6 +39,10 @@ METRICS_INCOME = ("income.metal", "income.energy")
 METRICS_EXACT = ("build_time", "cost_per_tick", "extractor", "storage", "range", "reload",
                  "damage", "sight")
 INCOME_EVERY = 1800             # the income checkpoints: every minute of game time at 30 ticks
+# the distribution rule's shuffles of the engine's runs, per metric (check.py, cvm_limit): at 2,000
+# the 95th percentile's Monte-Carlo error is about ±0.5 % of false alarms, and a metric costs a
+# few milliseconds
+SHUFFLES = 2000
 
 
 class CalibError(Exception):
@@ -78,6 +82,14 @@ def sha256_file(path) -> str:
 def scenario_id(path) -> str:
     """`<stem>@<the first 12 hex of the file's sha256>`: a reference names the exact file."""
     return f"{Path(path).stem}@{sha256_file(path)[:12]}"
+
+
+def shuffle_of(scn_sha256: str) -> dict:
+    """A reference's `shuffle`: the seed of the distribution rule's shuffles, the first four bytes
+    little endian of sha256("<scenario sha256>:shuffle"), and their count. Stored in the reference
+    so that its thresholds reproduce from the file alone."""
+    seed = int.from_bytes(hashlib.sha256(f"{scn_sha256}:shuffle".encode()).digest()[:4], "little")
+    return {"seed": seed, "count": SHUFFLES}
 
 
 def ref_path(sid: str, commit: str) -> Path:

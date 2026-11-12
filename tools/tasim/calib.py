@@ -279,6 +279,7 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
                          "s_min": engrun.S_MIN},
                "values": {"R": R, "types": {t: g0["values"][t] for t in types}},
                "perturb": {"module_sha256": perturb_sha},
+               "shuffle": calibref.shuffle_of(calibref.sha256_file(path)),
                "runs": [], "selftest": {},
                "cost": {"lane_seconds": 0.0, "ticks": 0, "runs": len(items)},
                "created": datetime.date.today().isoformat()}
@@ -417,7 +418,7 @@ def main(argv=None):
     c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
     c.add_argument("--j", type=int, default=8)
     c.set_defaults(func=cmd_check)
-    st = sub.add_parser("selftest", help="split-half, seat effect, exact self-consistency")
+    st = sub.add_parser("selftest", help="false alarms over splits, seat effect, exact self-consistency")
     st.add_argument("--only")
     st.add_argument("--against", help="a reference to grade against (reload against fresh)")
     st.set_defaults(func=cmd_selftest)
