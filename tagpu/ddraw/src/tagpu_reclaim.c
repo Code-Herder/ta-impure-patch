@@ -66,6 +66,7 @@
 #include "tagpu_log.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay.h"
+#include "tagpu_impai.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudmarks.h"
 #include "tagpu_hudinput.h"
@@ -322,6 +323,7 @@ static void __cdecl reclaim_teardown_pre(void)
        in-game wiki closes here too, forgetting its pause without writing it: the level the pause
        was taken in is going (tagpu_wiki.c). */
     tagpu_rec_level_end();
+    tagpu_impai_level_end();
     tagpu_menu_level_end();
     tagpu_hudmarks_level_end();
     tagpu_hudinput_level_end();
