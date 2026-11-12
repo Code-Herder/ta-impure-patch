@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments and world): the C parser against the coverage build's map, the features' regions, the
-comment filter, `landing --check`, a recording's segments and chains, what the block walk refuses,
-its runs and snapshot chains, and which cells are images, read from files built from the format
-alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
+comment filter, `landing --check`, a sim file's prelude and the reach it asks of each build, a
+recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
+which cells are images, read from files built from the format alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
 multiplayer dump's sort chains (tarec.sort_chains). No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
@@ -976,6 +976,112 @@ class Landing(unittest.TestCase):
         with patch.object(tareplay, "fixtures", return_value={}), \
              patch.object(tareplay, "sim_paths", return_value=set()):
             self.assertEqual(tareplay.landing_check("main"), 1)
+
+
+class Prelude(unittest.TestCase):
+    """A sim file's prelude -- the lines above its first SIM_FEATURE -- in the landing tier, in
+    Landing's throwaway repository."""
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    SRC = "src/tagpu_new.c"
+    PATH = tareplay.DD + SRC
+    BODY = ('SIM_FEATURE(newfeat, SIM_PUPPET_RUNS, "one");\n'
+            "\n"
+            "static int f(void)\n{\n    return 1;\n}\n")
+    # a comment that opens on an #include and closes on the next line, as tagpu_patches.c has
+    PRELUDE = ("/* tagpu_new.c -- a new sim file. */\n"
+               "\n"
+               "#include <string.h>   /* the first line of a comment\n"
+               "                         that ends here */\n"
+               '#include "tagpu_simreg.h"\n'
+               "#define K(x) \\\n"
+               "    ((x) + 1)\n"
+               "\n")
+    FIXTURES = {"one": {"load": "one.json"}, "stock-one": {"load": "one.json", "dll": "stock"}}
+
+    def plan(self, includes=frozenset()):
+        """landing_plan against main, the temporary file the only sim file."""
+        feats, problems = tafeat.features_of(self.root / self.PATH, self.SRC)
+        with patch.object(tareplay, "fixtures", return_value=self.FIXTURES), \
+             patch.object(tareplay, "sim_paths", return_value={self.PATH}), \
+             patch.object(tareplay, "includes_of", return_value=set(includes)), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return tareplay.landing_plan("main")
+
+    def add(self, path, text):
+        (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / path).write_text(text)
+        sh(self.root, "git", "add", "-A")
+        sh(self.root, "git", "commit", "-qm", path)
+
+    def to_main(self):
+        """The work so far as the base, so that what follows is the landing."""
+        sh(self.root, "git", "checkout", "-q", "main")
+        sh(self.root, "git", "merge", "-q", "--ff-only", "work")
+        sh(self.root, "git", "checkout", "-q", "work")
+
+    @staticmethod
+    def where(problems):
+        """`KIND place` of each problem, its explanation dropped."""
+        return [": ".join(q.split(": ")[:1]) for q in problems]
+
+    def test_comment_or_directive_lines(self):
+        text = self.PRELUDE + "static int g;\n" + '"s /*"\n' + "/* x */ int h;"
+        n = self.PRELUDE.count("\n")
+        self.assertEqual(tafeat.comment_or_directive_lines(text), set(range(1, n + 1)))
+
+    def test_a_new_sim_files_prelude_is_covered(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        fx, funcs, regions, problems, _, gated_any = self.plan()
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        self.assertEqual(set(funcs), {(self.SRC, "f")})
+        key = f"{self.SRC}:prelude"
+        self.assertEqual(set(regions), {key, "newfeat"})   # newfeat: its SIM_FEATURE line
+        self.assertNotIn(" ", key)              # the note's features= is split on spaces
+        self.assertEqual(regions[key][:2], ([(self.SRC, "f")], tafeat.BOTH))
+        got = {"raised": {(self.SRC, "f")}, "stock": {(self.SRC, "f")}}
+        self.assertEqual(tareplay.uncovered(funcs, regions, got, fx, False), ([], 3, 3))
+
+    def test_code_above_the_first_feature_fails_by_name(self):
+        self.add(self.PATH, self.PRELUDE + "typedef int T;\nstatic int g;\n" + self.BODY)
+        problems = self.plan()[3]
+        n = self.PRELUDE.count("\n")
+        self.assertEqual(self.where(problems), [f"UNFEATURED {self.PATH}:{n + 1}",
+                                                f"UNFEATURED {self.PATH}:{n + 2}"])
+
+    def test_each_build_must_reach_a_function_of_the_file(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        self.to_main()
+        self.commit(self.PATH, self.PRELUDE.replace("<string.h>", "<stdlib.h>") + self.BODY)
+        fx, funcs, regions, problems, _, _ = self.plan()
+        self.assertEqual((problems, funcs), ([], {}))
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        per = {"one": {(self.SRC, "f")}, "stock-one": set()}
+        got = tareplay.reached_by_build(per, self.FIXTURES)
+        self.assertEqual(got, {"raised": {(self.SRC, "f")}, "stock": set()})
+        missed, k, total = tareplay.uncovered(funcs, regions, got, fx, False)
+        self.assertEqual((self.where(missed), k, total), ([f"UNCOVERED {self.SRC}:prelude"], 0, 1))
+        self.assertTrue(missed[0].endswith("ran in the builds raised+stock"), missed[0])
+        per["stock-one"] = {(self.SRC, "f")}
+        got = tareplay.reached_by_build(per, self.FIXTURES)
+        self.assertEqual(tareplay.uncovered(funcs, regions, got, fx, False), ([], 1, 1))
+
+    def test_a_changed_header_asks_the_same_of_each_build(self):
+        self.add(self.PATH, self.PRELUDE + self.BODY)
+        self.to_main()
+        header = tareplay.DD + "inc/tagpu_new.h"
+        self.add(header, "#define NEW 1\n")
+        fx, funcs, regions, problems, _, _ = self.plan(includes={header})
+        self.assertEqual((problems, funcs), ([], {}))
+        self.assertEqual(fx, {"one", tareplay.STOCK_FIXTURE})
+        key = f"{self.SRC}:headers"
+        self.assertEqual(set(regions), {key})
+        self.assertEqual(regions[key][:2], ([(self.SRC, "f")], tafeat.BOTH))
+        got = tareplay.reached_by_build({"one": {(self.SRC, "f")}}, self.FIXTURES)
+        missed, _, _ = tareplay.uncovered(funcs, regions, got, fx, False)
+        self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
 
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
