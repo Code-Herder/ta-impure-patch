@@ -83,7 +83,7 @@ void    tasim_cob_call(WIKISIM* s, const WIKIUNIT* u, const char* script, int ho
 /* ---- tasim_world.c: units and features by id, a unit's entry and leaving, the site test, a kill ---- */
 
 WIKIUNIT* tasim_new_unit(WIKISIM* s, int type, int owner, double built, const char* id, const char* label);
-WIKIUNIT* tasim_place(WIKISIM* s, WIKIUNIT* u, int ox, int oz);
+WIKIUNIT* tasim_seat_unit(WIKISIM* s, WIKIUNIT* u, int ox, int oz);
 WIKIUNIT* tasim_add(WIKISIM* s, int type, int owner, double x, double z, double built, const char* id, const char* label,
                     double hx, double hz);
 WIKIUNIT* tasim_by_id(const WIKISIM* s, const char* id);

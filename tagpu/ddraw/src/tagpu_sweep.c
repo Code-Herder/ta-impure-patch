@@ -19,6 +19,10 @@
    The orders a commit queues are drawn by the engine's own queued-order markers, as every other
    order is (tagpu_order.c: the reclaim cursor at each target and the route dots under Shift).
 
+   Which features a ring takes, the reclaimers' split inputs and the commit's removals and
+   appends are tasim_sweep.c's rules, over the engine's WORLDQ (tagpu_worldq.c); the game keeps the
+   gesture, the popup, the cursor's filter and the click's tail.
+
    Everything here is game-thread UI state: the simulation never reads it, and what a commit
    causes -- order nodes made through the engine's own root 0x43ADC0, and the click's own tail
    0x4958C0 -- is engine state the demo recorder keeps. The render thread sees the ring and
@@ -34,6 +38,8 @@
 #include "tagpu.h"
 #include "tagpu_sweep.h"
 #include "tagpu_sweepgeo.h"
+#include "tagpu_worldq.h"
+#include "tasim_sweep.h"
 #include "tagpu_route.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
@@ -47,17 +53,7 @@
 #include "dd.h"
 #include "render_vk.h"
 
-#define D_STRIDE  0x249u
-#define D_FLAGS   0x241       /* u32: bit 11 VTOL (the resolver's VTOL_RECLAIM test, 0x43F68E) */
-#define D_TAGS    0x245       /* u32: bit 0x400 canreclamate (0x43E65C, 0x43F4F7)             */
-#define D_SPEED   0x192       /* i32 maxvelocity, 16.16                                       */
-#define D_REACH   0x212       /* u16 builddistance                                            */
 #define U_FLAGS   0x110
-#define U_ORDERS  0x5C
-#define N_NEXT    0x4A        /* an order node's next                                         */
-#define N_OWNER   0x0E        /* ...its unit                                                  */
-#define N_POS     0x22        /* ...its position, x, altitude, z in 16.16                     */
-#define N_FLAGS   0x42        /* ...its flags: bit 2 survives stock's replace, 0x40000 the +0x60 list */
 #define M_RECORD  0x2C76      /* the six-dword mouse record the handler acts on               */
 #define M_POINT   0x2CAA      /* the world point, 16.16 x, altitude, z                        */
 #define M_MODE    0x2CC3
@@ -67,10 +63,7 @@
 #define M_FIELD   0x57D       /* i32 the active textfield's index, -1 none                    */
 #define M_SCREENS 0x37EBE     /* u16: 0x865 the options stack, chat, share and the rest       */
 #define M_SCREENS2 0x2BEE     /* u8: 0xE0                                                      */
-#define FD_ENERGY 0xEC        /* float                                                        */
-#define FD_METAL  0xF0        /* float                                                        */
 #define FD_TOP    0xFA        /* u8 the feature's height                                      */
-#define FD_RECL   0x80        /* FD_MASK's bit 7: reclaimable (0x43E75A, 0x43F681)            */
 #define FD_BODYSEQ  0xAC      /* GAF sequence: the static body (tagpu_feat.c, the feature pass) */
 #define FD_BODYANIM 0xCC      /* anim state: the animating body, FD_MASK bit 1                */
 #define WR_BODYANIM 0x04      /* a GAF wreck record's anim state: its body                    */
@@ -91,23 +84,10 @@
 /* The ring follows the drag at any zoom; RING_MAX_WU only bounds the scan (at most 513 x 513 cells
    a call, every one inside the grid's own W x H), never what the player can reach on a map. */
 #define RING_MAX_WU    4096.0 /* world px                                                      */
-/* A list stops growing at SWEEP_LIST_CAP nodes, below the 4096 a recorded list holds
-   (REC_ORDERS_MAX, tagpu_recfmt.h), so no commit makes a list the recorder would cut. LIST_WALK
-   bounds every walk of a list. */
-#define SWEEP_LIST_CAP 1024u
-#define LIST_WALK      16384u
 /* the gadget records a top screen may have: a count past it is not a screen's */
 #define GADGETS_MAX    512
-/* the reach of a footprint below its anchor's cell: a centre is at most 8 cells from it */
-#define FOOT_MAX       16
-
-typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, const void*);
-typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
-typedef void (__stdcall* RemoveOrder)(void*, const void*);
 typedef void (__stdcall* ClickTail)(int);
 typedef int (__stdcall* GroundHeight)(const int*);
-typedef int (__stdcall* Mapped)(const void*, const int*);
-typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 
 typedef struct {
     const unsigned char *cells, *defs, *wrecks;
@@ -119,12 +99,6 @@ typedef struct {
     int cell, ax, az, fx, fz, cx, cz;
     const unsigned char* def;
 } Feat;
-
-typedef struct {
-    Feat f;
-    int alt;                  /* the ground's height at the centre, world px */
-    uint64_t d2;              /* the squared distance to the ring's centre */
-} Target;
 
 typedef struct {
     int active, drag;         /* pressed in the viewport; past the threshold */
@@ -141,29 +115,23 @@ static unsigned char s_taken[2];     /* a press the window procedure consumed, p
    a release passed clears it. A drag's right press or Esc is taken only while it is set, so the
    release they would end it for has not gone into the engine's ring yet (tagpu_sweep_mouse). */
 static unsigned char s_lheld;
-/* The order bytes of RECLAIM, VTOL_RECLAIM and RESURRECT, by the engine's own names. The order
-   descriptor array they index is fixed for a level, so they are found once a level. */
 static TAGPU_CMD_SWEEP s_drawn;      /* the popup the render thread last drew (tagpu_sweep_take) */
 static int s_kindPending;            /* a kind the settings store has not taken yet */
-static unsigned char s_act[3];
-static int s_actOk;
 
-static Target s_t[SWEEP_MAX_TARGETS];
-static SweepTarget s_st[SWEEP_MAX_TARGETS];
-static uint16_t s_who[SWEEP_MAX_TARGETS], s_seq[SWEEP_MAX_TARGETS], s_cellOrder[SWEEP_MAX_TARGETS];
-static unsigned char s_drop[SWEEP_MAX_TARGETS];
-/* a node a ring without Shift takes off, as one walk read it: its place in the list, action and
-   position */
-typedef struct { uint16_t place; unsigned char action; int x, z; } Cut;
-static Cut s_cut[LIST_WALK];
-static SweepBuilder s_b[TAGPU_LIM_UNITS];
-static uint16_t s_slot[TAGPU_LIM_UNITS];
+/* the rules' scratch, their targets and the selection they read: one call's at a time, all on this
+   thread */
+static SWEEP_SCRATCH s_ss;
+static SWEEP_TARGET s_tt[SWEEP_MAX_TARGETS];
+static uint16_t s_sel[SWEEP_BUILDERS_MAX];
 
 /* the level's counters, logged at level end */
 static unsigned s_cCommit, s_cIssued, s_cClick, s_cMismatch, s_cListCap, s_cUnassigned, s_cTrunc;
 static unsigned s_cCancelled, s_cStale;
 
 _Static_assert(TAGPU_PK_SWEEP_TARGETS == SWEEP_MAX_TARGETS, "the packet's targets are the ring's");
+_Static_assert((int)SWEEP_METAL == (int)SWEEP_KIND_METAL && (int)SWEEP_ENERGY == (int)SWEEP_KIND_ENERGY &&
+               (int)SWEEP_ALL == (int)SWEEP_KIND_ALL &&
+               TAGPU_LIM_UNITS <= SWEEP_BUILDERS_MAX, "the kinds are the rule's, a seat's units fit its set");
 
 static int pointer_on_popup(const char* ta);
 static int popup_live(const char* ta);
@@ -244,11 +212,12 @@ static unsigned cell_word(const Grid* g, int cell)
     return *(const uint16_t*)(g->cells + (size_t)cell * FT_STRIDE + FT_DEFIDX);
 }
 
-/* The feature of `cell` by its anchor, as 0x43E6D5..0x43E754 finds it: a word below 0xFFFB is an
-   anchor, 0xFFFE a footprint tile whose anchor is `cell - (byte[+0xA] * W + byte[+0xB])` cells
-   back (0x43E71D..0x43E736), and the word found there must be an anchor's (0x43E73C). The engine
+/* The feature of `cell` by its anchor, for the drawing, as 0x43E6D5..0x43E754 finds it: a word
+   below 0xFFFB is an anchor, 0xFFFE a footprint tile whose anchor is
+   `cell - (byte[+0xA] * W + byte[+0xB])` cells back (0x43E71D..0x43E736), and the word found there
+   must be an anchor's (0x43E73C). The engine
    bounds a direct anchor's def by the count (0x43E6F5) but not the hop's, nor tests that the hop
-   stays on the grid; this does all three. The footprint is clamped to 1..FOOT_MAX cells. */
+   stays on the grid; this does all three. The footprint is clamped to 1..SWEEP_FOOT_MAX cells. */
 static int feature_of(const Grid* g, int cell, Feat* f)
 {
     const unsigned char* c = g->cells + (size_t)cell * FT_STRIDE;
@@ -264,201 +233,11 @@ static int feature_of(const Grid* g, int cell, Feat* f)
     f->ax = cell % g->w; f->az = cell / g->w;
     f->def = g->defs + (size_t)word * FD_STRIDE;
     fx = *(const int16_t*)(f->def + FD_FOOTX); fz = *(const int16_t*)(f->def + FD_FOOTZ);
-    f->fx = fx < 1 ? 1 : fx > FOOT_MAX ? FOOT_MAX : fx;
-    f->fz = fz < 1 ? 1 : fz > FOOT_MAX ? FOOT_MAX : fz;
+    f->fx = fx < 1 ? 1 : fx > SWEEP_FOOT_MAX ? SWEEP_FOOT_MAX : fx;
+    f->fz = fz < 1 ? 1 : fz > SWEEP_FOOT_MAX ? SWEEP_FOOT_MAX : fz;
     f->cx = 16 * f->ax + 8 * f->fx;
     f->cz = 16 * f->az + 8 * f->fz;
     return 1;
-}
-
-/* the feature at a 16.16 point: the cell (x >> 20, z >> 20) inside W x H, as 0x4815A0 */
-static int feature_at(const Grid* g, const int pos[3], Feat* f)
-{
-    int x = pos[0] >> 20, z = pos[2] >> 20;
-    if (x < 0 || z < 0 || x >= g->w || z >= g->h) return 0;
-    return feature_of(g, z * g->w + x, f);
-}
-
-/* the kind: a NaN amount compares false, so it counts as none */
-static int kind_ok(const unsigned char* def, unsigned kind)
-{
-    if (kind == SWEEP_METAL) return *(const float*)(def + FD_METAL) > 0.0f;
-    if (kind == SWEEP_ENERGY) return *(const float*)(def + FD_ENERGY) > 0.0f;
-    return 1;
-}
-
-static int reclaimable(const unsigned char* def) { return (def[FD_MASK] & FD_RECL) != 0; }
-
-/* the order bytes of the reclaim family, 0x438760's answer for the engine's own names at
-   0x5016C4 RECLAIM, 0x501B68 VTOL_RECLAIM and 0x5052F0 RESURRECT, the strings the resolver
-   passes it (0x440187, 0x43F694, 0x44004C); 0 for a name it does not find */
-static int actions(void)
-{
-    if (!s_actOk) {
-        ((Action)0x00438760u)(&s_act[0], (const char*)0x005016C4u);
-        ((Action)0x00438760u)(&s_act[1], (const char*)0x00501B68u);
-        ((Action)0x00438760u)(&s_act[2], (const char*)0x005052F0u);
-        s_actOk = s_act[0] && s_act[1] && s_act[2];
-    }
-    return s_actOk;
-}
-
-static int family(unsigned char a)
-{
-    return a && (a == s_act[0] || a == s_act[1] || a == s_act[2]);
-}
-
-/* A reclaimer of the player's at `slot`: alive, not excluded, owned, selected (+0x110 bit 4),
-   its def's +0x245 bit 0x400 (the resolver's first test, 0x43F4F7). NULL otherwise. */
-static char* reclaimer(const TagpuWorld* w, unsigned slot)
-{
-    char* u = tagpu_route_unit(w, slot);
-    unsigned id;
-    if (!u || *(const unsigned char*)(u + U_OWNER) != (unsigned)w->player ||
-        !(*(const unsigned*)(u + U_FLAGS) & 0x10u) || !(id = tagpu_route_def_id(w, u))) return NULL;
-    return *(const unsigned*)(w->defs + id * D_STRIDE + D_TAGS) & 0x400u ? u : NULL;
-}
-
-/* The representative: the first selected reclaimer. Whether the resolver's answer for a feature
-   is of the reclaim family depends on nothing of the unit but its def's +0x245 bit 0x400
-   (0x43F4FD) and its player's mapped bit (mode 12's case, 0x43F4F7..0x43F6AA), and every unit of
-   the block has the same player, so that answer for this unit is every one's. Which order of the
-   family it is does depend on the unit (RESURRECT for a def with +0x245 bit 0x800, 0x43F5A2;
-   VTOL_RECLAIM for one with +0x241 bit 11, 0x43F68E..0x43F69F), so the commit asks the resolver
-   again for each builder. */
-static char* representative(const TagpuWorld* w)
-{
-    unsigned i;
-    for (i = w->first; i <= w->last; i++) {
-        char* u = reclaimer(w, i);
-        if (u) return u;
-    }
-    return NULL;
-}
-
-/* The order the resolver 0x43F0E0 gives `u` for mode 12 with no target unit at `pos`, when it is
-   of the reclaim family; 0 otherwise. The resolver answers through its first argument (a byte,
-   0 on refusal, 0x4401E3). Mode 12 goes through the table at 0x4401EC to 0x43F4F7, whose answers
-   with no target unit are RESURRECT (0x43F612), VTOL_RECLAIM or RECLAIM (0x43F68A..0x43F6A5) or 0
-   (0x43F6AA, 0x4401DC) -- the family or nothing (DISASSEMBLED). The family test is the guard on
-   that: the same tests' copy in the contextual case (0x43FF38..0x4401D9) can answer VTOL_MOVE
-   (0x5016CC) or MOVE_GROUND (0x5052E4), so a non-zero answer is taken only when it reclaims. */
-static unsigned char feature_order(const char* u, const int pos[3])
-{
-    int out = -1;
-    const unsigned char* a;
-    if (!actions()) return 0;
-    a = ((Resolve)0x0043F0E0u)(&out, 12, (void*)u, NULL, pos);
-    return a && family(*a) ? *a : 0;
-}
-
-/* The unit's player pointer as a value: one of main's ten player records, or NULL. */
-static const char* player_of(const TagpuWorld* w, const char* u)
-{
-    uintptr_t p = (uintptr_t)*(const char* const*)(u + U_PLAYER);
-    uintptr_t base = (uintptr_t)(w->ta + OFF_PLAYERS);
-    if (p < base || (p - base) % PLAYER_STRIDE || (p - base) / PLAYER_STRIDE >= PLAYER_COUNT)
-        return NULL;
-    return (const char*)p;
-}
-
-/* the order position of a feature: its centre, at the ground's height there (0x485070, world px) */
-static void feature_pos(const Feat* f, int pos[3])
-{
-    pos[0] = (int)((unsigned)f->cx << 16); pos[1] = 0; pos[2] = (int)((unsigned)f->cz << 16);
-    pos[1] = (int)((unsigned)((GroundHeight)0x00485070u)(pos) << 16);
-}
-
-/* A target of the kind, by the click's own rules: reclaimable (def +0xFE bit 7) and mapped for
-   the representative's player at its order position (0x408090, the same arithmetic as the
-   resolver's inline test and patched by the same fix: tagpu_patches.c, LOS_MAPPED). */
-static int takes(const Feat* f, const char* player, unsigned kind, int pos[3])
-{
-    if (!reclaimable(f->def) || !kind_ok(f->def, kind)) return 0;
-    feature_pos(f, pos);
-    return ((Mapped)0x00408090u)(player, pos) != 0;
-}
-
-/* the targets' order: nearer the centre first, then z, then x, then the anchor cell */
-static int later(const Target* a, const Target* b)
-{
-    if (a->d2 != b->d2) return a->d2 > b->d2;
-    if (a->f.cz != b->f.cz) return a->f.cz > b->f.cz;
-    if (a->f.cx != b->f.cx) return a->f.cx > b->f.cx;
-    return a->f.cell > b->f.cell;
-}
-
-static void sift_down(Target* t, unsigned n, unsigned i)
-{
-    for (;;) {
-        unsigned l = 2 * i + 1, r = l + 1, m = i;
-        Target tmp;
-        if (l < n && later(&t[l], &t[m])) m = l;
-        if (r < n && later(&t[r], &t[m])) m = r;
-        if (m == i) return;
-        tmp = t[i]; t[i] = t[m]; t[m] = tmp;
-        i = m;
-    }
-}
-
-static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
-
-/* WHICH FEATURES A RING HOLDS, nearest the centre first, at most `cap`; `*more` the ones past it.
-   Anchors only, so no feature counts twice and no hop is followed; the cells scanned are the
-   ring's box, widened below by a footprint's reach and cut to the grid. A feature is in when its
-   centre is (sweep_inside, 64-bit) and `takes` holds.
-
-   WHY THIS IS THE RESOLVER'S ACCEPTANCE: for no target unit the resolver gives a reclaimer a
-   reclaim-family order exactly when the feature 0x4815A0 finds at `pos` is reclaimable and the
-   mapped bit at `pos` is set (mode 12's case, 0x43F4F7..0x43F6AA); the representative is a reclaimer; `pos` lies
-   in the anchor's footprint, so 0x4815A0 finds this anchor, directly or by its hop; and 0x408090
-   is the same mapped arithmetic. The commit asks the resolver itself before every order and
-   counts a refusal as a mismatch, the self-check of this equivalence, which must read 0. The
-   resolver is not asked here: each call reaches 0x438760's name search, and a forest is
-   thousands of anchors a frame. */
-static unsigned enumerate(const Grid* g, const char* player, const int c[3], int r, unsigned kind,
-                          Target* out, unsigned cap, unsigned* more)
-{
-    int x0 = floor16(c[0] - r) - FOOT_MAX / 2, x1 = floor16(c[0] + r);
-    int z0 = floor16(c[2] - r) - FOOT_MAX / 2, z1 = floor16(c[2] + r);
-    int x, z;
-    unsigned n = 0, i;
-    *more = 0;
-    if (x0 < 0) x0 = 0;
-    if (z0 < 0) z0 = 0;
-    if (x1 >= g->w) x1 = g->w - 1;
-    if (z1 >= g->h) z1 = g->h - 1;
-    for (z = z0; z <= z1; z++)
-        for (x = x0; x <= x1; x++) {
-            Target t;
-            int pos[3];
-            unsigned word = cell_word(g, z * g->w + x);
-            if (word >= 0xFFFBu || (int)word >= g->ndefs) continue;
-            if (!feature_of(g, z * g->w + x, &t.f) ||
-                !sweep_inside(c[0], c[2], r, t.f.cx, t.f.cz) || !takes(&t.f, player, kind, pos))
-                continue;
-            t.alt = pos[1] >> 16;
-            t.d2 = (uint64_t)((int64_t)(t.f.cx - c[0]) * (t.f.cx - c[0])) +
-                   (uint64_t)((int64_t)(t.f.cz - c[2]) * (t.f.cz - c[2]));
-            /* the nearest `cap`, kept as a max-heap of the order above */
-            if (n < cap) {
-                unsigned k = n++;
-                out[k] = t;
-                while (k && later(&out[k], &out[(k - 1) / 2])) {
-                    Target tmp = out[k]; out[k] = out[(k - 1) / 2]; out[(k - 1) / 2] = tmp;
-                    k = (k - 1) / 2;
-                }
-            } else {
-                (*more)++;
-                if (cap && later(&out[0], &t)) { out[0] = t; sift_down(out, n, 0); }
-            }
-        }
-    /* the heap sorted in place, nearest first */
-    for (i = n; i > 1; i--) {
-        Target tmp = out[0]; out[0] = out[i - 1]; out[i - 1] = tmp;
-        sift_down(out, i - 1, 0);
-    }
-    return n;
 }
 
 /* the ring's centre in world px */
@@ -467,245 +246,64 @@ static void centre_px(const Gesture* d, int c[3])
     c[0] = point_px(d->c[0]); c[1] = point_px(d->c[1]); c[2] = point_px(d->c[2]);
 }
 
-/* Builder `b` re-derived from its slot, or NULL when it no longer is one. Every root call is
-   preceded by this: a unit pointer is a fixed-array address, never a promise that the unit
-   still reclaims for us. */
-static char* live_builder(const TagpuWorld* w, unsigned b)
-{
-    return reclaimer(w, s_slot[b]);
-}
-
-/* The builder's split inputs, from its list walked on this thread, the one that links and frees
-   order nodes; the walk is bounded and stops at a node another unit owns. A ring only appends,
-   so a builder starts at its last node that has a position, its load the model's ticks over its
-   queued reclaim-family nodes from its position through each, as the mockup's queuedTime. Its
-   room keeps the list under SWEEP_LIST_CAP. */
-static void builder_inputs(const TagpuWorld* w, const Grid* g, const char* u, SweepBuilder* b)
-{
-    const char *def, *n;
-    unsigned steps = 0;
-    int px, pz;
-    memset(b, 0, sizeof *b);
-    if (!u) return;                     /* no room: the split gives it nothing */
-    def = w->defs + tagpu_route_def_id(w, u) * D_STRIDE;
-    b->x = px = *(const int*)(u + U_XFIX) >> 16;
-    b->z = pz = *(const int*)(u + U_YFIX) >> 16;
-    b->speed = (double)*(const int*)(def + D_SPEED) / 65536.0;
-    b->reach = (double)*(const uint16_t*)(def + D_REACH);
-    b->load = 0.0;
-    for (n = *(const char* const*)(u + U_ORDERS); n && steps < LIST_WALK;
-         n = *(const char* const*)(n + N_NEXT)) {
-        const int* pos = (const int*)(n + N_POS);
-        Feat f;
-        if (*(const char* const*)(n + N_OWNER) != u) break;
-        steps++;
-        if (pos[0] > 0 && pos[2] > 0) { b->x = pos[0] >> 16; b->z = pos[2] >> 16; }
-        if (family((unsigned char)n[4]) && feature_at(g, pos, &f)) {
-            double dx = (double)(f.cx - px), dz = (double)(f.cz - pz), d = sqrt(dx * dx + dz * dz);
-            double travel = b->speed > 0.0 && d > b->reach ? (d - b->reach) / b->speed : 0.0;
-            b->load += travel + (double)sweep_reclaim_ticks(*(const float*)(f.def + FD_ENERGY),
-                                                            *(const float*)(f.def + FD_METAL));
-            px = f.cx; pz = f.cz;
-        }
-    }
-    b->room = steps >= SWEEP_LIST_CAP ? 0u : SWEEP_LIST_CAP - steps;
-}
-
-static int cell_cmp(const void* a, const void* b)
-{
-    int x = s_t[*(const uint16_t*)a].f.cell, y = s_t[*(const uint16_t*)b].f.cell;
-    return x < y ? -1 : x > y;
-}
-
-/* The targets in anchor-cell order, for target_of: s_cellOrder holds their indices sorted. */
-static void sort_targets(unsigned n)
+/* the rules' view of the player and their input: the ring, the kind and the player's selected live
+   units, slots ascending (tasim_sweep.h) */
+static int sweep_view(const TagpuWorld* w, WQ_ENGINE* e, WORLDQ* q, SWEEP_IN* in)
 {
     unsigned i;
-    for (i = 0; i < n; i++) s_cellOrder[i] = (uint16_t)i;
-    qsort(s_cellOrder, n, sizeof *s_cellOrder, cell_cmp);
-}
-
-/* The target whose feature is anchored at `cell`, or -1; after sort_targets(n). */
-static int target_of(unsigned n, int cell)
-{
-    unsigned lo = 0, hi = n;
-    while (lo < hi) {
-        unsigned mid = (lo + hi) / 2;
-        if (s_t[s_cellOrder[mid]].f.cell < cell) lo = mid + 1; else hi = mid;
+    memset(in, 0, sizeof *in);
+    if (!tagpu_worldq_open(e, q, (int)w->player, WQ_SITE_ENGINE, NULL)) return 0;
+    in->kind = s_kind;
+    for (i = w->first; i <= w->last && in->nselected < (int)SWEEP_BUILDERS_MAX; i++) {
+        const char* u = tagpu_route_unit(w, i);
+        if (u && *(const unsigned char*)(u + U_OWNER) == (unsigned)w->player && (*(const unsigned*)(u + U_FLAGS) & 0x10u))
+            s_sel[in->nselected++] = (uint16_t)i;
     }
-    return lo < n && s_t[s_cellOrder[lo]].f.cell == cell ? (int)s_cellOrder[lo] : -1;
-}
-
-/* The ring's target a node reclaims, or -1: a reclaim-family node whose feature, found at its
-   position as the Reclaim handler finds it (0x421DA0 at order +0x22), is one of the targets.
-   `doomed` marks a node the next append takes off: 0x43ADC0 destroys the head of +0x5C while it
-   carries 0x4000 (0x43AE7C..0x43AECE), on every call, append or not -- so a leading run of such
-   nodes reclaims nothing that lasts, and its targets are queued again. */
-static int node_target(const Grid* g, const char* node, unsigned n, int doomed)
-{
-    Feat f;
-    if (doomed || !family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
-        return -1;
-    return target_of(n, f.cell);
-}
-
-/* WITHOUT SHIFT A RING REPLACES AS A STOCK ORDER DOES, BUT FOR WHAT IT TARGETS: of each builder's
-   list it takes off what 0x43ADC0's replace takes off -- every node of the +0x5C list without
-   +0x42 bit 2 (0x43AE14..0x43AE59) -- except a node that already reclaims one of the ring's
-   targets, which stays where it is, so a builder at work on one goes on with it. The places are
-   read in one bounded walk, then taken off in descending place through the exact-removal root
-   0x439F80 (stdcall, its callers 0x43BA7C and 0x49646F), each found again by a fresh walk to its
-   place and taken only while it still carries the action, position and flags that walk read.
-   NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 can run the action's handler and
-   start COB scripts, and on the head calls 0x489800(unit, 3) (tagpu_place.c, PHASE 1, the same
-   argument); descending, a removal moves no place still to come, and the head goes last. A node
-   carrying 0x40000 belongs on +0x60 (0x439F8F picks that list for it), so it is never taken.
-   Returns the nodes taken off; `*stale` counts a place that held something else by then, which
-   stays. After sort_targets(n). */
-static unsigned cancel_others(const TagpuWorld* w, const Grid* g, unsigned n, unsigned nb,
-                              unsigned* stale)
-{
-    unsigned b, removed = 0;
-    for (b = 0; b < nb; b++) {
-        const char *u = live_builder(w, b), *node;
-        unsigned place = 0, nc = 0;
-        int lead = 1;
-        if (!u) continue;
-        for (node = *(const char* const*)(u + U_ORDERS); node && place < LIST_WALK;
-             node = *(const char* const*)(node + N_NEXT), place++) {
-            const int* pos = (const int*)(node + N_POS);
-            unsigned fl;
-            if (*(const char* const*)(node + N_OWNER) != u) break;
-            fl = *(const unsigned*)(node + N_FLAGS);
-            lead = lead && (fl & 0x4000u);
-            if ((fl & 0x40004u) || node_target(g, node, n, lead) >= 0) continue;
-            s_cut[nc].place = (uint16_t)place;
-            s_cut[nc].action = (unsigned char)node[4];
-            s_cut[nc].x = pos[0];
-            s_cut[nc].z = pos[2];
-            nc++;
-        }
-        while (nc--) {
-            const Cut* c = &s_cut[nc];
-            const int* pos;
-            unsigned p;
-            if (!(u = live_builder(w, b))) break;
-            for (node = *(const char* const*)(u + U_ORDERS), p = 0;
-                 node && p < c->place && *(const char* const*)(node + N_OWNER) == u;
-                 node = *(const char* const*)(node + N_NEXT), p++) {}
-            pos = node ? (const int*)(node + N_POS) : NULL;
-            if (!node || *(const char* const*)(node + N_OWNER) != u ||
-                (unsigned char)node[4] != c->action || pos[0] != c->x || pos[2] != c->z ||
-                (*(const unsigned*)(node + N_FLAGS) & 0x40004u)) {
-                ++*stale;
-                continue;
-            }
-            ((RemoveOrder)0x00439F80u)((void*)u, node);
-            removed++;
-        }
-    }
-    return removed;
-}
-
-/* Every target that a reclaim-family node in a builder's list already reclaims is dropped, so
-   no feature is queued twice. Returns the targets kept, compacted in their order. After
-   sort_targets(n). */
-static unsigned drop_queued(const TagpuWorld* w, const Grid* g, unsigned n, unsigned nb)
-{
-    unsigned i, b, k;
-    memset(s_drop, 0, n);
-    for (b = 0; b < nb; b++) {
-        const char *u = live_builder(w, b), *node;
-        unsigned steps = 0;
-        int lead = 1, t;
-        if (!u) continue;
-        for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < LIST_WALK;
-             node = *(const char* const*)(node + N_NEXT)) {
-            if (*(const char* const*)(node + N_OWNER) != u) break;
-            lead = lead && (*(const unsigned*)(node + N_FLAGS) & 0x4000u);
-            if ((t = node_target(g, node, n, lead)) >= 0) s_drop[t] = 1;
-        }
-    }
-    for (i = k = 0; i < n; i++)
-        if (!s_drop[i]) s_t[k++] = s_t[i];
-    return k;
+    in->selected = s_sel;
+    return 1;
 }
 
 /* THE COMMIT, inside the in-play handler on the game thread, where stock's click calls its own
-   root: the ring's targets, split nearest-first across the selected reclaimers, each issued as
-   the order the resolver gives that builder there, then stock's tail of a click. Nothing is
-   ordered and the mode stays when the ring holds nothing (the owner's ruling: an empty ring
-   orders nothing and stays armed). WHAT IT TARGETS IS ONLY ADDED TO (the owner's ruling): a
-   builder already reclaiming one of the ring's targets keeps that order where it is, and no
-   feature is queued twice. Without Shift the rest of each builder's list goes, as a stock order's
-   replace takes it (cancel_others); with Shift it all stays. Every new order is appended. */
+   root: tasim_sweep_commit -- the ring's targets split nearest-first across the selected
+   reclaimers, each issued as the order the resolver gives that builder there -- then stock's tail
+   of a click. Nothing is ordered and the mode stays when the ring holds nothing (the owner's
+   ruling: an empty ring orders nothing and stays armed). WHAT IT TARGETS IS ONLY ADDED TO (the
+   owner's ruling): a builder already reclaiming one of the ring's targets keeps that order where
+   it is, and no feature is queued twice. */
 static void commit(const TagpuWorld* w, const Gesture* d, int shift)
 {
     Grid g;
-    const char *rep, *player;
-    int c[3], r = radius(d);
-    unsigned found = 0, more = 0, n, nb = 0, m = 0, k, i, issued = 0, mismatch = 0, capped = 0;
-    unsigned cancelled = 0, stale = 0;
-    centre_px(d, c);
-    if (!grid(w->ta, &g) || !(rep = representative(w)) || !(player = player_of(w, rep)) ||
-        !actions()) {
+    WQ_ENGINE e;
+    WORLDQ q;
+    SWEEP_IN in;
+    SWEEP_RES res;
+    int r = radius(d);
+    if (!grid(w->ta, &g) || !sweep_view(w, &e, &q, &in)) {
         tagpu_logf("sweep: commit refused: no feature grid, reclaimer or reclaim order");
         return;
     }
-    n = found = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
-    for (i = w->first; i <= w->last && nb < TAGPU_LIM_UNITS; i++)
-        if (reclaimer(w, i)) s_slot[nb++] = (uint16_t)i;
-    if (n) {
-        sort_targets(n);
-        if (!shift) cancelled = cancel_others(w, &g, n, nb, &stale);
-        n = drop_queued(w, &g, n, nb);
-    }
-    if (n) {
-        for (k = 0; k < nb; k++) {
-            builder_inputs(w, &g, live_builder(w, k), &s_b[k]);
-        }
-        for (k = 0; k < n; k++) {
-            s_st[k].x = s_t[k].f.cx; s_st[k].z = s_t[k].f.cz;
-            s_st[k].ticks = sweep_reclaim_ticks(*(const float*)(s_t[k].f.def + FD_ENERGY),
-                                                *(const float*)(s_t[k].f.def + FD_METAL));
-        }
-        m = sweep_split(s_b, nb, s_st, n, s_who, s_seq);
-        /* WHY 0x43ADC0, AND ALWAYS WITH ITS APPEND ARGUMENT 1: 0x43AFC0 with Shift first cancels
-           a same-action node within 16 world units, inclusive, and creates nothing -- the toggle
-           -- so it would take back a neighbouring 1x1 feature's order instead of adding this
-           one (tagpu_place.c, PHASE 2, the same argument); and 0x43ADC0's 0, stock's replace,
-           would take off a builder's order on one of the ring's own targets, which
-           cancel_others spares. The resolver is asked again for every order: the preview is never trusted, and the order byte is the builder's own
-           (VTOL_RECLAIM for a VTOL, RESURRECT for a resurrector). A refusal is a mismatch, the
-           self-check of enumerate's equivalence. No node pointer is held across a call. */
-        for (k = 0; k < m; k++) {
-            const Target* t = &s_t[s_seq[k]];
-            unsigned b = s_who[k];
-            char* u = live_builder(w, b);
-            int pos[3];
-            unsigned char action;
-            if (!u) continue;
-            feature_pos(&t->f, pos);
-            if (!(action = feature_order(u, pos))) { mismatch++; continue; }
-            ((Order)0x0043ADC0u)(action, 1, u, NULL, pos, 0, 0);
-            issued++;
-        }
-        for (k = 0; k < nb; k++) capped += m < n && !s_b[k].room;
+    centre_px(d, in.c);
+    in.r = r;
+    in.shift = shift;
+    if (!tasim_sweep_commit(&q, &in, &res, &s_ss)) {
+        tagpu_logf("sweep: commit refused: no feature grid, reclaimer or reclaim order");
+        return;
     }
     /* STOCK'S OWN TAIL OF A CLICK, 0x4958C0(keep): with Shift main+0x2CC6 |= 0x20, so releasing
        Shift disarms at the next record (0x4992D8); without it mode 1, bit 5 cleared and STOP's
        radio group reset through 0x49FE60 and 0x4A6A40, which also drops the armed plate --
        0x499092..0x4990F1 exactly (DISASSEMBLED). It reads [main+0x531] and its +4 unchecked,
        so both are tested first; the screen is this thread's and no call between frees it. */
-    if (issued || cancelled) {
+    if (res.issued || res.cancelled) {
         const char* top = *(const char* const*)(w->ta + M_TOP);
         if (top && *(const char* const*)(top + 4)) ((ClickTail)0x004958C0u)(shift ? 1 : 0);
     }
-    s_cCommit++; s_cIssued += issued; s_cMismatch += mismatch; s_cListCap += capped;
-    s_cUnassigned += n - m; s_cTrunc += more; s_cCancelled += cancelled; s_cStale += stale;
+    s_cCommit++; s_cIssued += res.issued; s_cMismatch += res.mismatch; s_cListCap += res.capped;
+    s_cUnassigned += res.unassigned; s_cTrunc += res.more; s_cCancelled += res.cancelled; s_cStale += res.stale;
     tagpu_logf("sweep: commit kind=%s r=%d found=%u taken=%u builders=%u issued=%u unassigned=%u "
-               "mismatch=%u listcap=%u cancelled=%u stale=%u shift=%d", kind_name(s_kind), r, found,
-               n, nb, issued, n - m, mismatch, capped, cancelled, stale, shift ? 1 : 0);
+               "mismatch=%u listcap=%u cancelled=%u stale=%u shift=%d", kind_name(s_kind), r, res.found,
+               res.taken, res.builders, res.issued, res.unassigned, res.mismatch, res.capped, res.cancelled,
+               res.stale, shift ? 1 : 0);
 }
 
 /* The drag follows the record's world point, which 0x498DA0 wrote for this record before the
@@ -724,9 +322,10 @@ static void gesture_update(const TagpuWorld* w)
 int tagpu_sweep_cursor(int mode, int idx)
 {
     TagpuWorld w;
-    Grid g;
-    Feat f;
-    const char* rep;
+    WQ_ENGINE e;
+    WORLDQ q;
+    SWEEP_IN in;
+    WQ_FEAT f;
     const int* point;
     if (mode != 12 || !live(&w)) return idx;
     gesture_update(&w);
@@ -735,8 +334,12 @@ int tagpu_sweep_cursor(int mode, int idx)
     if (pointer_on_popup(w.ta)) return CURSOR_NONE;
     if (s_kind == SWEEP_ALL) return idx;
     point = (const int*)(w.ta + M_POINT);
-    if (!grid(w.ta, &g) || !feature_at(&g, point, &f) || !(rep = representative(&w))) return idx;
-    if (!feature_order(rep, point)) return idx;
+    /* the feature at the point and the first selected reclaimer, the representative: whether the
+       resolver's answer there is of the reclaim family depends on nothing of the unit but its
+       def's canreclamate bit and its player's mapped bit (tasim_sweep_order_at) */
+    if (!sweep_view(&w, &e, &q, &in) || !q.ops->feature(&q, point[0] >> 20, point[2] >> 20, &f) ||
+        !tasim_sweep_reclaimers(&q, &in, &s_ss) || !tasim_sweep_actions(&q, &s_ss) ||
+        !tasim_sweep_order_at(&q, &s_ss, s_ss.slot[0], point)) return idx;
     /* THE FILTER IS THE CLICK'S OWN INPUT. The handler stores this answer in main+0x2CBE
        (0x4992AD) and stock's click reads that byte in the same handler call, after this store,
        for the same world point (0x499027); at 0x13 it orders nothing and keeps the mode
@@ -744,7 +347,7 @@ int tagpu_sweep_cursor(int mode, int idx)
        cursor table holds 0x15). The feature decides first, as in the resolver: a unit standing
        on a tree's cell under METAL is not click-reclaimable, as stock would have taken the tree
        for it anyway. */
-    return kind_ok(f.def, s_kind) ? idx : CURSOR_NONE;
+    return tasim_sweep_kind_ok(f.metal, f.energy, s_kind) ? idx : CURSOR_NONE;
 }
 
 /* The handler's entry, before 0x498DA0: the gesture ends when the record is handled in another
@@ -1014,8 +617,8 @@ static void box_item(TAGPU_PK_SWEEPITEM* e, unsigned kind, unsigned char colour,
         int hs = cell_height(g, f, 0, 0) + cell_height(g, f, 1, 0) + cell_height(g, f, 0, 1) +
                  cell_height(g, f, 1, 1);
         /* the feature pass's junk-def guard, so the anchor is the one it draws at */
-        if (fx < 0 || fx > FOOT_MAX) fx = 1;
-        if (fz < 0 || fz > FOOT_MAX) fz = 1;
+        if (fx < 0 || fx > SWEEP_FOOT_MAX) fx = 1;
+        if (fz < 0 || fz > SWEEP_FOOT_MAX) fz = 1;
         e->x = 16 * f->ax + (fx * 16) / 2 + r[0] - 1;
         e->z = 16 * f->az + (fz * 16) / 2 - (hs >> 3) + r[1] - 1;
         e->w = (int16_t)(r[2] - r[0] + 2);
@@ -1180,7 +783,9 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
 {
     TagpuWorld w;
     Grid g;
-    const char *rep, *player;
+    WQ_ENGINE e;
+    WORLDQ q;
+    SWEEP_IN in;
     const unsigned char* gui;
     int armed;
     *n = 0; *cut = 0;
@@ -1209,9 +814,9 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
         } else anchor_log(NULL);
     } else anchor_log(NULL);
     if (!grid(w.ta, &g)) return armed;
-    if (armed && (rep = representative(&w)) && (player = player_of(&w, rep))) {
+    if (armed && sweep_view(&w, &e, &q, &in) && tasim_sweep_reclaimers(&q, &in, &s_ss)) {
         if (s_g.active && s_g.drag) {
-            int c[3], r = radius(&s_g);
+            int *c = in.c, r = radius(&s_g);
             unsigned more, nt, k;
             float metal = 0.0f, energy = 0.0f;
             centre_px(&s_g, c);
@@ -1219,11 +824,12 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
                 h->flags |= TAGPU_PK_SW_RING;
                 h->c[0] = c[0]; h->c[1] = c[1]; h->c[2] = c[2]; h->r = r;
                 ring_items(c, r, h->col[1], it, max, n, cut);
-                nt = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
+                in.r = r;
+                nt = tasim_sweep_targets(&q, &in, s_tt, SWEEP_MAX_TARGETS, &more);
                 for (k = 0; k < nt; k++) {
-                    TAGPU_PK_SWEEPITEM e;
-                    float fm = *(const float*)(s_t[k].f.def + FD_METAL);
-                    float fe = *(const float*)(s_t[k].f.def + FD_ENERGY);
+                    TAGPU_PK_SWEEPITEM it1;
+                    Feat f;
+                    float fm = s_tt[k].metal, fe = s_tt[k].energy;
                     /* a wreck returns metal (a metal rock counts as one), a tree energy alone;
                        the sums are display only, and an amount that is not a sane one adds
                        nothing */
@@ -1231,20 +837,23 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
                     else if (fe > 0.0f) h->ntree++;
                     if (fm > 0.0f && fm < 1e7f) metal += fm;
                     if (fe > 0.0f && fe < 1e7f) energy += fe;
-                    box_item(&e, TAGPU_PK_SWI_BOX, h->col[0], &g, &s_t[k].f, s_t[k].alt);
-                    push_item(it, max, n, cut, &e);
+                    if (!feature_of(&g, s_tt[k].cell, &f)) continue;
+                    box_item(&it1, TAGPU_PK_SWI_BOX, h->col[0], &g, &f, s_tt[k].pos[1] >> 16);
+                    push_item(it, max, n, cut, &it1);
                 }
                 h->metal = metal < 1e9f ? metal : 1e9f;
                 h->energy = energy < 1e9f ? energy : 1e9f;
             }
         } else if (!s_g.active && (*(const unsigned char*)(w.ta + M_REGION) & 2) &&
                    !pointer_on_popup(w.ta)) {
+            const int* point = (const int*)(w.ta + M_POINT);
+            SWEEP_TARGET t;
             Feat f;
-            int pos[3];
-            if (feature_at(&g, (const int*)(w.ta + M_POINT), &f) && takes(&f, player, s_kind, pos)) {
-                TAGPU_PK_SWEEPITEM e;
-                box_item(&e, TAGPU_PK_SWI_HOVER, h->col[0], &g, &f, pos[1] >> 16);
-                if (push_item(it, max, n, cut, &e)) h->flags |= TAGPU_PK_SW_HOVER;
+            if (tasim_sweep_feature_takes(&q, point[0] >> 20, point[2] >> 20, s_kind, &t) &&
+                feature_of(&g, t.cell, &f)) {
+                TAGPU_PK_SWEEPITEM it1;
+                box_item(&it1, TAGPU_PK_SWI_HOVER, h->col[0], &g, &f, t.pos[1] >> 16);
+                if (push_item(it, max, n, cut, &it1)) h->flags |= TAGPU_PK_SW_HOVER;
             }
         }
     }
@@ -1308,7 +917,6 @@ void tagpu_sweep_level_end(void)
     memset(&s_g, 0, sizeof s_g);
     memset(&s_drawn, 0, sizeof s_drawn);
     s_taken[0] = s_taken[1] = 0;
-    s_actOk = 0;
     s_cCommit = s_cIssued = s_cClick = s_cMismatch = s_cListCap = s_cUnassigned = s_cTrunc = 0;
     s_cCancelled = s_cStale = 0;
 }

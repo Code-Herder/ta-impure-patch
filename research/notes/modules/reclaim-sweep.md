@@ -6,14 +6,17 @@ A ring of RECLAIM orders from one drag.
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`.
 
-### 2.110 The reclaim sweep (`tagpu_sweep.c`, `tagpu_sweepgeo.c`, `tagpu_route.c`) — 2026-10-28
+### 2.110 The reclaim sweep (`tagpu_sweep.c`, `tasim_sweep.c`, `tagpu_sweepgeo.c`, `tagpu_route.c`) — 2026-10-28
 
 With RECLAIM armed (cursor mode `main+0x2CC3` = 12, which only the RECLAIM branch of the orders
 menu writes) on the Vulkan lane, a left drag on the ground draws a ring; its release orders the
 selected reclaimers to take the features of the chosen kind inside it — METAL (a def with metal,
 `+0xF0` > 0), ENERGY (`+0xEC` > 0) or ALL — split nearest-first and balanced by queued work
 (`tagpu_sweepgeo.c`, engine-free, checked by `tests/sweeptest.py` against a port of the mockup's
-split). **Without Shift** the ring takes off, through the exact-removal root `0x439F80`, every node
+split). Which features a ring takes, the reclaimers' split inputs and the commit's removals and
+appends are `tasim_sweep.c`'s rules over `WORLDQ` (`worldq.h`): the game reads and orders through the
+engine's view (`tagpu_worldq.c`), the in-game wiki's simulation through the core's
+(`tasim_worldq.c`), so a reclaim demo plays the game's rule. **Without Shift** the ring takes off, through the exact-removal root `0x439F80`, every node
 a stock replace would (no `+0x42` bit 2) except a reclaim-family node on one of the ring's own
 targets, which stays where it is; then it appends the rest, none twice, and the order disarms.
 **With Shift** every order stays, the ring appends, reclaim stays armed and releasing Shift
@@ -36,7 +39,7 @@ engine side*.
 | `0x43F0E0` | The order resolver, mode 12, no target unit: asked once a cursor record for the feature under the pointer when the kind is not ALL (whether a click would take it), never by the ring's enumeration, which applies the same rule itself, and once per builder before each order (the order byte is the builder's own: `RECLAIM`, `VTOL_RECLAIM`, `RESURRECT`). A refusal at the commit counts `mismatch=`, the self-check of the ring's enumeration |
 | `0x43ADC0`, `0x439F80` | The commit, inside the click routing where stock's click calls its own root: removals first (without Shift), each node re-found by a fresh bounded walk and removed through `0x439F80` only while it still carries the action, position and flags the first walk read (else `stale=`), in descending place; then every target appended with `0x43ADC0(action, 1, unit, NULL, pos, 0, 0)` while the builder's list holds fewer than 1024 nodes (`listcap=` counts a builder that filled up). `0x43AFC0` is not used: with Shift it toggles off a same-action node within 16 units |
 | `0x4958C0` | Stock's click tail, called after a commit that issued or removed anything, with Shift as its argument: bit 5 of `main+0x2CC6` with Shift, else mode 1, bit 5 cleared and STOP's radio reset (which drops RECLAIM's armed plate). It has no caller in the image; `main+0x531` and its `+4` are tested first because it reads them unchecked |
-| `0x408090`, `0x485070`, `0x438760`, the feature grid | Read: the mapped test and the ground height per candidate feature, the three family names (`0x5016C4`, `0x501B68`, `0x5052F0`) once a level, and the grid `*(main+0x14287)` with its W×H, defs and count read and bounded every call (the hop's anchor bounded too, which the engine's own lookup does not) |
+| `0x408090`, `0x485070`, `0x438760`, the feature grid | Read through the engine's view: the mapped test and the ground height per candidate feature, the mapped test asked only for the viewed player (it tests `1 << main+0x2A43` whatever record it is given, so the view answers unmapped for any other seat); the three family names (`0x5016C4`, `0x501B68`, `0x5052F0`) once a view is opened -- a cursor record, a packet fill, a commit; and the grid `*(main+0x14287)` with its W×H, defs and count read and bounded every call (the hop's anchor bounded too, which the engine's own lookup does not) |
 | `tagpu_shield.c` key and button paths | `WM_CHAR` (real, injected through `deliver_key`, and `WM_TAGPU_CHAR`) → `tagpu_sweep_char`: Esc during a drag ends it, the RECLAIM gadget's quickkey (matched as the engine matches it, through `tolower`/`toupper`) cycles the kind while armed and goes no further — the engine would toggle RECLAIM off. Not while a modal screen, the chat or a textfield owns the keyboard (`main+0x37EBE & 0x865`, `main+0x2BEE & 0xE0`, `main+0x57D`). Buttons (real while the shield lets them through, injected through `deliver_engine`) → `tagpu_sweep_mouse`: a right press during a drag, and a left press on the popup as it was last drawn, are taken with their releases before the engine has a record of them (the right press's engine path `0x4993AC` is the recorder's). Focus loss → `tagpu_sweep_cancel`. Game thread |
 | `tagpu_packet_pub.c` → `PK_SWEEP`, `PK_SWEEPITEM` | At most one header (flags RING / POPUP / HOVER / ARMED, the kind, the hot row, the art style, the popup's and the tongue's screen rects, the ring's centre and radius, the readout's counts and sums, four palette indices: 224 METAL, 208 ENERGY, the GUI green `gui[0x0A]` for ALL) and its items (20 B each: up to 256 ring points, up to 1024 bracketed targets, the hovered feature), copied by value. The acquire bounds every field (`tagpu_packet.c`); an item table rides only beside its header; a cut sets `TAGPU_PK_TRUNC_SWEEP` (`0x2000000`) |
 | `tagpu_mark.c` `gather_sweep` (Vulkan) | The marker pass draws the ring (dashed 6/4), the brackets (the feature's drawn sprite, one px outside it; a 3-D wreck by its footprint and height) and the readout (`[KIND]`, counts, `+M METAL +E ENERGY`, or `NO … HERE`) in the cursor layer with fog off: 3 device px of colour with 1 px of black each side at any zoom, HUD scale and supersampling; the readout's glyphs on the game-pixel grid, so a line centred on an odd width or drawn at a fractional zoom stays whole (`text_quad`). Counter `mark: … sweep=N swover=V` under `tagpu_mark.on=log` |
@@ -58,8 +61,9 @@ expects: `ARMRECLAIM rect=5,300,55,31 popup=129,279,253,351`).
 written inside the in-play handler, the window procedure and the publisher; the render thread sees
 copies (the packet) and hands back values (the command record). The unit array, the player block,
 slots and def indices are bounded by `tagpu_route_world` (the placement's view, moved to the
-router); every list walk is bounded (16384) and stops at a node another unit owns; builders are
-held as slots and re-derived before every root call; no node pointer survives `0x439F80`. The
+router); the rules see the lists only as values the engine's view copies, its walk bounded (16384)
+and stopped at a node another unit owns; builders are held as slots and the view re-derives each
+before every root call; no node pointer survives `0x439F80`. The
 feature grid and defs live from LoadMap to the teardown, both on this thread. A puppet seat refuses
 every hook. `thread-split.allow` lists `tagpu_route.c` and `tagpu_sweep.c` as `publisher
 presentation` (the owner's decision, as for the placement).

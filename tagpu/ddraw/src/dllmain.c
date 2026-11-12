@@ -33,6 +33,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
+#include "tagpu_worldq.h"
 #include "tagpu_route.h"
 #include "tagpu_sweep.h"
 #include "tagpu_formation.h"
@@ -375,6 +376,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_resource_init();
         /* the in-play handler's shared hooks, before every one of their clients (tagpu_route.h) */
         tagpu_route_init();
+        /* the build cursor's site-test call decoded, once the patches have written it (tagpu_worldq.h) */
+        tagpu_worldq_init();
         /* after the resource module: its observer on 0x4197D0 must come first (tagpu_place.h) */
         tagpu_place_init();
         tagpu_sweep_init();

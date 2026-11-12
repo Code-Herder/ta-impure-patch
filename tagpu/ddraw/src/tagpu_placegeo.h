@@ -5,7 +5,10 @@
    and thread-free: no engine header, no Win32, no state. Recoil's
    CGuiHandler::GetBuildPositions and BAR's api_build_orders.lua, in exact integers
    (research/notes/tadr-port/quality-of-life.md, "Queue editing and line building"). The game
-   (tagpu_place.c) and the in-game wiki's simulation (tagpu_wikisim.c) both call these. */
+   (tagpu_place.c) and the in-game wiki's simulation (tagpu_wikisim.c) call the shapes; the
+   placement rule they share (tasim_place.c) calls the take-off rule.
+   INTEGERS ONLY, so the DLL's object and the wiki host's native build agree with no SSE2 rule:
+   MEASURED 2026-11-11, the i686 object holds no x87 or SSE instruction. */
 #include <stdint.h>
 
 #define PLACE_MAX_SITES   256

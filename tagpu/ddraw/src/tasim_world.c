@@ -48,7 +48,7 @@ WIKIUNIT* tasim_new_unit(WIKISIM* s, int type, int owner, double built, const ch
 /* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's
    default heading 0x8000 is the centre of the spawn's 0x8000 - BuildAngle/2 + rand(BuildAngle)
    (0x485A40, tagpu_native.c ghost_one), and the simulation has no randomness. */
-WIKIUNIT* tasim_place(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
+WIKIUNIT* tasim_seat_unit(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
 {
     u->ox = ox;
     u->oz = oz;
@@ -72,7 +72,7 @@ WIKIUNIT* tasim_add(WIKISIM* s, int type, int owner, double x, double z, double 
         u->hz = hz;
         return enter(s, u);
     }
-    return tasim_place(s, u, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(s, type) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(s, type) / 2.0)));
+    return tasim_seat_unit(s, u, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(s, type) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(s, type) / 2.0)));
 }
 
 WIKIUNIT* tasim_by_id(const WIKISIM* s, const char* id)
