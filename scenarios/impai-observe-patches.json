@@ -1,0 +1,36 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI's patch scan on a map with metal deposits: the `impai-observe` setup -- three computer seats and an idle human seat, seats 1 and 2 `impai`, 3 OTA AI, true line of sight -- on Comet Catcher, whose deposits stand above its surface metal, so the seats publish metal patches that tools/impai/impai_check.py (e) finds among the whole map's. Played by tools/impai/l1_run.py.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": false,
+  "los": "true",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "impai",
+    "side": "arm",
+    "color": 2
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3
+   }
+  ]
+ }
+}

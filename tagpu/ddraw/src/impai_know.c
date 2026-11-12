@@ -117,6 +117,7 @@ static void patch_scan(const WORLDQ* q, IMPAI_SEAT* st, SNAP_PATCH* clusters, co
         memset(clusters + IMPAI_CLUSTERS_HALF, 0, IMPAI_CLUSTERS_HALF * sizeof *clusters);
         st->npending = 0;
         st->clu_row = 0;
+        w->scans = 1;
     }
 }
 

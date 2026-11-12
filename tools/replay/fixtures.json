@@ -425,7 +425,7 @@
   },
   "impai-observe": {
    "load": "impai-observe.json", "los": "file",
-   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
    "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
                "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
                "tools/impai/check_lever.py"],
@@ -433,7 +433,7 @@
   },
   "impai-observe-perm": {
    "load": "impai-observe-perm.json", "los": "file",
-   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
    "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
                "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
                "tools/impai/check_lever.py"],

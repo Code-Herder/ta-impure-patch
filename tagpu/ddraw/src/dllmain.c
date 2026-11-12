@@ -309,6 +309,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            before the registry closes its lever list for the same reason. */
         tagpu_rec_lever_init();
 
+        /* tagpu: ImpAI's test levers (tagpu_impai.h), read before the registry closes its lever list
+           for the same reason; the install below acts on them. */
+        tagpu_impai_levers();
+
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
            module above has installed, so its line counts every declaration and every lever
            read, and closes the list: a lever or TLS index taken later is logged by name. */
