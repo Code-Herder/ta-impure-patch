@@ -2659,18 +2659,33 @@ host process and ask it through one JSON protocol, so there is one simulation an
   `now`, `poses`, `notes`, `fork`, `release`, `free`, the sight's `table`, `sight` and `sighttable`, the
   loader's `text`, `scene`, `seatcam` and `fits`, the constants' `hello`, and `batch`.
   `wikihost.c`'s header is the protocol; its handles are bounded (32 of each kind, 64 sims, the
-  least recently used freed past that). `wikitest trace FILE` plays a file of requests through
-  the same loop.
-- **The three builds** come from one recipe, `tools/wiki/wikibuild.mjs`, cached by a hash of its
-  sources and flags under `build/wikihost/`: `host` (gcc -O2, no `-march`, so no fused
-  multiply-add), the mockup's; `asan` (AddressSanitizer and UndefinedBehaviorSanitizer); and
-  `wine` (the DLL's `i686-w64-mingw32-gcc` with the Makefile's SSE2 flags, run under Wine), the
-  arithmetic the game runs.
+  least recently used freed past that), and `free` of a sim it no longer holds answers `{}`.
+  Every line read is answered, an empty one, one holding a NUL and one past 16 MB as errors, so a
+  caller waiting for an answer always gets one. **The instance:** a new host process numbers its
+  handles from 1 again, so each host is started with an id of 128 random bits (`serve --instance`,
+  which `hello` answers); the drop-in stamps every call with the id of the host its handles came
+  from and a host refuses another id's call before it reads a handle, so a handle is never read
+  by a host that did not give it -- serve.py starts a new host after one ends. **The packs' root:**
+  serve.py's host reads pack files under `tools/wiki/mockup/gfx/` only (`serve --packs-root`),
+  each resolved, links included, before it is read. `wikitest trace FILE` plays a file of
+  requests through the same loop. `node tools/wiki/hostcheck.mjs` holds these promises offline:
+  bad lines, garbage calls on live sims, the tables' evictions through the drop-in, a host
+  replaced under the drop-in, and a host killed mid-answer through `hostchan.cjs` and serve.py.
+- **The three builds** come from one recipe, `tools/wiki/wikibuild.mjs`, cached under
+  `build/wikihost/` by a hash of what decides the executable (the compiler's `--version`, the
+  flags, the SSE2 set, the recipe itself, and every source and every header `-MM` names for them),
+  taken again after compiling so that a file edited meanwhile publishes nothing: `host` (gcc -O2,
+  no `-march`, so no fused multiply-add), the mockup's; `asan` (AddressSanitizer and
+  UndefinedBehaviorSanitizer, `float-cast-overflow` included); and `wine` (the DLL's
+  `i686-w64-mingw32-gcc` with the Makefile's SSE2 flags, run under Wine), the arithmetic the game
+  runs.
 - **The drop-in**, `tools/wiki/mockup/simhost.js`, is the mockup's `WikiSim`: the page's calls
   become synchronous `POST /sim` requests that `tools/wiki/serve.py` relays to one `host` child
   (HTTP/1.1, kept alive, Nagle off), and node's become requests on
   `tools/wiki/hostchan.cjs`'s FIFO channel (MEASURED 2026-11-11: 15.5 µs a round trip to `host`,
-  24.4 µs to `asan`; `/sim` kept alive 231 µs). Objects are sent once and named by handle after;
+  24.4 µs to `asan`; `/sim` kept alive 231 µs). A host that ends mid-answer reads as ended on
+  both: `hostchan.cjs` takes any line that ends in its shell's dead marker for the end, and
+  serve.py a read without its newline. Objects are sent once and named by handle after;
   the queries made between a sim's last two changes ride on the next change's answer, so a page
   that steps and draws makes one request a tick; `replay.js` runs its seeks and walks as batches
   of ticks up to the next fork (`steps`).

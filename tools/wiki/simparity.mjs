@@ -405,7 +405,7 @@ function diff(c, j, at) {
   }
   return null;
 }
-const show = v => { const s = JSON.stringify(v); return s.length > 160 ? `${s.slice(0, 157)}...` : s; };
+const show = v => { const s = JSON.stringify(v) ?? String(v); return s.length > 160 ? `${s.slice(0, 157)}...` : s; };
 const lines = out => out.split(/\r?\n/).filter(l => l.length);
 /* A FRAME VIEW (frame.js view) in the shape of the game's state dump of a players frame (tagpu_wiki.c view_json): the eye
    and the viewport, the cursors, the clicks with their ages, the units drawn with their overlay selection (owner 255

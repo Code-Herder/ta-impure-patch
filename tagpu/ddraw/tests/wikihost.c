@@ -1194,14 +1194,13 @@ static void op_table(const TJV* v)
    exist (no pack built yet) holds no file. Without a root every path is read as given. */
 static int pack_at(const char* path, char* out, size_t n)
 {
+    if (!H.root) { snprintf(out, n, "%s", path); return 1; }
 #ifdef _WIN32
-    (void)path; (void)out; (void)n;
     return -1;                      /* unreachable: wikitest refuses --packs-root on _WIN32 */
 #else
     char *root, *real = NULL;
     size_t k;
     int r = 0;
-    if (!H.root) { snprintf(out, n, "%s", path); return 1; }
     if ((root = realpath(H.root, NULL)) && (real = realpath(path, NULL))) {
         k = strlen(root);
         r = !strncmp(real, root, k) && (real[k] == '/' || root[k - 1] == '/') && strlen(real) < n ? 1 : -1;
