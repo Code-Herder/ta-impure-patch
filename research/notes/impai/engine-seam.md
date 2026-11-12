@@ -15,7 +15,7 @@ From [Orders and the AI](../engine/orders.html), *The AI object, its lifecycle a
 
 ### As built (A1a)
 
-The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the stock AI plays every seat; the call at `0x465031` reaches a wrapper that counts an ImpAI seat's turn and then always calls `0x408C40`; the eighteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
+The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command, what a seat knows, the threat table, the overlay, the cost and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the stock AI plays every seat; the call at `0x465031` reaches a wrapper that runs an ImpAI seat's observation (its line of sight, its radar pass, its patch scan) and then always calls `0x408C40`; the level init, on the loader thread inside `0x4919C8`, also builds the content ImpAI reads -- each movement class's reach labels from the pathing maps `0x440940` built at `0x4918E3`, and the per-type threat table from the defs, weapons and categories the unit-data load `0x42D2E0` left at `0x4918CA`; the overlay is filled on the game thread from ImpAI's declared state, so a puppet draws what the live game drew; the eighteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
 
 ### When ImpAI plays (A1)
 
@@ -54,7 +54,7 @@ From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](..
 
 ## Not documented yet
 
-- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `maxvelocity`, `bankscale`, `transportcapacity`, the weapon's velocities, `burst`, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit.
+- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `bankscale`, the weapon's velocities, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit. ImpAI's threat table reads `maxvelocity` `+0x192`, `transportcapacity` `+0x22B` and `burst` `+0xEA` as the loader stores them; which engine code reads them in play is not traced.
 - **Network games (A4)**: which caller of the join `0x450A10` activates a battle-room AI on its own peer; the meaning of the add-AI path's three tests; what happens to a departed peer's AI seats on the peers that remain ([network](../engine/network.html), *A computer seat in a network game*).
 - Whether anything outside the load state can switch the state slot away mid-load, leaving the load flags set.
 

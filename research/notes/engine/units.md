@@ -255,7 +255,12 @@ same body, before the store. During play every inserter runs on the game thread 
 SHARE give and the console — and the free runs only in the game thread's teardown. So a walk on the
 game thread, inside the in-play draw, sees a map that nothing reallocates or frees while it runs —
 the strategic icons' per-level walk, which reads the entries and never calls `0x488C50`
-([strategic icons](../modules/icons.html), *Mod icon sets*). **What such a walk takes is a snapshot**:
+([strategic icons](../modules/icons.html), *Mod icon sets*). A walk on the **loader** thread after the level's FBI loop is ordered the same way from the other side: it
+runs after every load-time insert on that thread, and before the game thread's first in-play frame, the
+only frames whose code inserts — ImpAI's threat table walks it there, inside PLAYERS `0x4919C8`, to find
+the `VTOL` mask and each bad-target mask's tag ([ImpAI in the engine](../modules/impai.html)) [INFERRED that
+no game-thread inserter runs during a load, for the SHARE and TALK handlers, as above]. **What such a walk
+takes is a snapshot**:
 a key, a SHARE give or a console command after it can add an empty category, `Reload` can add bits
 to a mask, and an insert can move every entry, so an entry pointer is good only within the walk
 that took it.

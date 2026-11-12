@@ -1171,6 +1171,15 @@ reached through a pointer), the direct hit `0x49A062` (1.0), and the area pass `
 factor is `edge + (1 − edge) · (1 − d/aoe)` (`0x49A3B6..0x49A3E0`, `edge` the weapon's `+0xD8`;
 1.0 at `d = 0`). So a weapon with edge effectiveness 1 deals every area hit whole.
 
+**The `[DAMAGE]` table's layout** [DISASSEMBLED 2026-11-12, `0x499CEA..0x499D6F`]: `+0x64` is NULL for a
+weapon with no rows (`0x499CED`), else an object whose dwords at `+0x05` and `+0x09` (read at `0x499CFF` and
+`0x499D02`) are the begin and end of
+8-byte entries `{char* name, i32 damage}`, sorted by `_stricmp` (`0x4F8A70`). The search is a lower bound on
+the target's def name `def+0x20` (`0x499CF9..0x499D3C`), then an equality test (`0x499D46..0x499D60`); a
+match's dword replaces the default (`0x499D6D`), so a row's damage is a full dword and the default a word.
+ImpAI's threat table reads it this way, without calling anything, to average each weapon's damage over a
+mod's aircraft (`tagpu_worldq.c`, the role classifier's input; [ImpAI in the engine](../modules/impai.html)).
+
 ### The radar rebuild's projectile markers — `0x467300..0x467406`
 
 For a targetable or interceptor projectile (`ebx` = `proj+0x0A`), `al` = the local player

@@ -58,5 +58,5 @@ What stock AI code runs on a seat ImpAI plays, now (A1a) and once ImpAI builds (
 
 ## Not now
 
-- The threat-map overlay is a `tacli` test lever, never a player setting.
+- What a seat knows can be drawn over the game -- a map layer's cells, every unit it holds and how, its metal patches -- but only through the test lever `tagpu_impaiov.on` (`tacli arm <instance> impaiov.on=1:air`), never a player setting ([ImpAI in the engine](../modules/impai.html), *The overlay*).
 - A wiki entry for ImpAI is decided at A2.
