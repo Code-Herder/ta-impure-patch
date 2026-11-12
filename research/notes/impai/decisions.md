@@ -52,3 +52,12 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 - **Duels are generated** from the mod's data, over writing them all by hand.
 - **The tasim and AI landings alternate**, over finishing tasim first, so ImpAI plays real games early.
 - **Research step L0 runs beside S1**, since neither touches the other's files.
+
+## Settled at S3 and L1 (2026-11-11)
+
+- **ImpAI sees what a human in its seat would see.** Under Permanent or Circular LOS its view uses the seat's own mapped bit, over the local player's bit the engine reads (`0x408090`, `0x47D2E0`), which would show it the human's exploration. Submerged enemies are located only by the seat's own sonar and never identified, and an ally's units are position-only when the ally shares radar, as the engine shows a human; both stand until the naval and alliance work.
+- **One rule everywhere for snapping, placement and the sweep:** the wiki's demos change to follow the game's rules, over keeping the wiki's simplified copies, and the snap scorer's distance tie-break becomes exact 64-bit integer arithmetic in the game too, over a separate x87 build of the shared module.
+- **`tagpu_worldq.c` and `tagpu_impai.c` are `publisher sim` rows** in `thread-split.allow`: both read engine state on the game thread only and publish through the frame packet.
+- **The seat choice at L1 is a test lever,** `tagpu_impai.on`; `impure.cfg` and the AI button come with A1.
+- **ImpAI's maps are derived, not stored, at L1**; A1 rebuilds them on demand, over a stored copy in the recording.
+- **Build options come from the build menu,** as Quick Build reads them, over the CANBUILD lists.
