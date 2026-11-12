@@ -817,7 +817,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   size hint only.
 - **The sine table `0x509F00`**: MEASURED equal to `round(8192 · sin(2πi / 512))` on all 512
   entries, the closest to a rounding tie 0.0016, so the codec carries it as a literal of the
-  formula and never reads the executable.
+  formula and never reads the executable, and the shared core generates it from the same formula
+  (`tasim_fixed.h`, `ts_sin_table`). The ground velocity rule over it, −`0x4B70EF`(heading, speed)
+  and −`0x4B7123`(heading, speed), was MEASURED 2026-11-12 equal to the engine's mover velocity on
+  10 000 of 10 000 distinct (heading, speed) pairs from the slice-walkers recording
+  (`tools/tasim/velocity_triples.py`).
 
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a
