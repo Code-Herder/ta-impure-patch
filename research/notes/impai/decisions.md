@@ -82,3 +82,8 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 - **Transcendentals are the core's own SSE2 fdlibm routines,** the same in every build, over inline x87. A difference proven to be a rounding tie gets no tolerance: each case comes to the owner with its proof, and the scenario is replaced by one without the tie.
 - **Where the engine hangs, faults or reads the clock, tasim differs and names it:** the pathfinder's wall-following walk is bounded; types with turn rate or brake rate 0 are refused; hover over water is graded only by the water courses' distributions (the engine reads `GetTickCount` there); headless games expire temporary sight every tick.
 - **The re-recorded wiki demos are reviewed page by page in the mockup,** and a scout proposes the terrain-and-water arena from the install's stock maps, the choice coming back to the owner.
+
+## Settled during C1 and T1 (2026-11-12, later)
+
+- **The calibration's distribution rule is a permutation test,** over tasim's spread between half and double the engine's: a two-sample Cramér–von Mises test whose threshold is set by shuffling the engine's own runs to a 5 % false-alarm rate per metric. A metric where most runs share one value (a duel's survivors) read OUT 6.5–31 % of the time between two halves of the same engine under the spread rule; the median rule and the win rate stay.
+- **T1's terrain-and-water arena is Etorrep Glacier, `[256, 1408, 2048, 2048]`:** a ridge with passes, a bad-slope band, shallows two to eight cells wide, deep water, no blocking features and a flat plain; its water is a strip of 300–400 px, so ship courses wait for an arena with more of it.
