@@ -486,7 +486,7 @@ index `+0xA6` holds.
 
 | bits | set | what | writers | readers |
 |---|---|---|---|---|
-| 0–1 | 99.6 / 0.4 % | the layer | create `0x485B6D`, `0x486103`; relink `0x43DA3B`; `0x48AA94`; round robin `0x48B6B3` | |
+| 0–1 | 99.6 / 0.4 % | the layer; 2 is airborne, and the engine's aircraft test is def `+0x241` bit 11 together with layer 2 (`0x40F7FC..0x40F81D`, DISASSEMBLED 2026-11-11), ImpAI's AIR layer | create `0x485B6D`, `0x486103`; relink `0x43DA3B` (from the mover's `+0x2E & 3`); `0x48AA94`; round robin `0x48B6B3` | |
 | 2–3 | 37 / 0.1 % | the walk class | `0x43DB3D` | |
 | 4 | 0 | selected | the selection code, keyed to `main+0x2A42` or `+0x2A43` (the layout's row lists it); cleared by the sweeps `0x48BD00` and `0x48D846`, the unit tick `0x48AE59`, the give `0x4885FD`, the destructor | |
 | 5 | 100 % | selectable | every create; MakeSelectable `0x401CD0`; console `Selectable` `0x41648B`; cleared by the mission loader (`0x487E6E`) and the destructor | the "usable" gates |
