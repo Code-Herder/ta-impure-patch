@@ -56,6 +56,19 @@ What stock AI code runs on a seat ImpAI plays, now (A1a) and once ImpAI builds (
 - **Mods:** every setup of the compatibility suite where Impure runs a game. One tuning table serves every mod, through roles derived from the units' data. A mod passes when ImpAI never stalls in it and no key its units use is unmodelled ([tasim: scope](tasim.html)).
 - **Cost:** at most 1 ms per ImpAI seat per simulation tick, worst case, on the reference setup, measured on a ten-seat stress scenario. Work that does not fit is spread across ticks by a fixed schedule, never by a clock.
 
+### Cost, as measured (observation only, L1)
+
+What a seat's observation costs a tick -- its view's open and its knowledge tick, the `impai: cost` line ([ImpAI in the engine](../modules/impai.html), *The cost*) -- MEASURED 2026-11-12 on the reference setup, each game alone under the run lock, the wall time of `QueryPerformanceCounter` (so a turn the OS preempted counts its wait):
+
+| game | slots | budgets | mean | p99 | turns over 1 ms | max |
+|---|---|---|---|---|---|---|
+| `impai-cost` (`limits-tier1`, 5 996 kbots, three ImpAI seats, 1 980 ticks, normal speed) | 15 001 | slice 2 048, radar 32 768 | 90-125 µs (160-200 in a first run) | ≤ 512 µs (≤ 1 024) | 2-3 of 1 980 a seat | 1.2-2.4 ms (2.3-3.7) |
+| the same, `tagpu_impai_budget.on` | 15 001 | slice 15 001, radar 10^6 | 435-526 µs | ≤ 2 048 µs | -- | 3.3-7.7 ms |
+| `impai-observe` (Core Prime Industrial Area, two ImpAI seats, 5 580 ticks, turbo) | 5 001 | slice 2 048, radar 32 768 | 62-70 µs | ≤ 256 µs | 1-2 of 5 580 a seat | 0.6-2.8 ms |
+
+- **The budgets stay at their L1 values** (slice 2 048 slots, 32 768 radar visits, the patch scan's rows and flood): the mean is a tenth of the bound, p99 half of it, and the slice's own share is small -- raising it from 2 048 to 15 001 slots adds about 23 ns a slot.
+- **The worst case is not yet within 1 ms.** About one turn in a thousand takes 1-4 ms. Which part is not separated: the tick that ends a line-of-sight pass publishes every row the pass found (`slots_max` 8 044 = the slice + 5 996 rows on `limits-tier1`), the tick that ends a patch scan publishes its patches, and the wall clock also counts preemption on a loaded machine. Spreading a publish across ticks changes when a seat's knowledge moves, a decision for A1, not a budget.
+
 ## Not now
 
 - What a seat knows can be drawn over the game -- a map layer's cells, every unit it holds and how, its metal patches -- but only through the test lever `tagpu_impaiov.on` (`tacli arm <instance> impaiov.on=1:air`), never a player setting ([ImpAI in the engine](../modules/impai.html), *The overlay*).
