@@ -211,7 +211,9 @@ its own (the rest of the site NOPs). The stub runs the site's own compare, copie
 and its `jne` to the unscaled branch; for a type-2 record it bounds the record to one of main's ten
 (offset below `0xCEE`, divisible by `0x14B`) and, when ImpAI's seat table marks it, jumps to the
 unscaled branch, else to S. It restores `EAX`, `ECX` and `EDX`, touches no x87 register and calls
-nothing. At every one of the 36 targets the flags are dead: the first instruction that touches them
+nothing. Zero to two values are live on the FPU stack at a site, none at rows 13, 14 and 18: the
+transfers empty it with `fstp st(0)` (`0x464B88`, `0x464CB8`) before their calls of `0x401220` and
+`0x401260`, and the on-hit handler `0x406F80` loads no x87 value before `0x406FC3` (DISASSEMBLED). At every one of the 36 targets the flags are dead: the first instruction that touches them
 writes them or is a call (`0x401504: sub eax,ebx` behind the jumps at `0x4014C8`; `0x4016C5` passes
 `fcomp`/`fnstsw` before its `test ah,0x40`), and no direct branch of `.text` lands inside a site
 (DISASSEMBLED, the linear sweep, 49 473 direct branches). The stubs install at attach with the seam

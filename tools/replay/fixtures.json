@@ -426,8 +426,8 @@
   },
   "impai-handicap": {
    "load": "impai-handicap.json", "los": "file",
-   "steps": [[300, "apply", "impai-handicap-reclaim-1.json"],
-             [330, "apply", "impai-handicap-reclaim-2.json"],
+   "steps": [[300, "apply", "impai-handicap-economy.json"],
+             [300, "apply", "impai-handicap-army.json"],
              [360, "type", "+give 1 100 energy"], [360, "type", "+give 1 100 metal"],
              [360, "type", "+give 2 100 energy"], [360, "type", "+give 2 100 metal"],
              [4200, "run", ["tools/tacli", "switches", "{instance}", "cheats=on"]],

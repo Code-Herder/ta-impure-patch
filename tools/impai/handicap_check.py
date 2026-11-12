@@ -24,16 +24,18 @@ holds the Difficulty, records 1 and 2 are controller 2, the level init's line na
 the seat table marks record 2 and not record 1, and the eighteen handicap sites begin with E9
 (tagpu_impai.c).
 
-Then the rows the economy does not reach. The launch applies the `impai-handicap` test group's
-reclaims (impai-handicap-reclaim-1.json and -2.json: each seat reclaims a wreck and a radar tower
-of its own), and the human seat gives each computer seat 100 energy and 100 metal (`+give`, the
-console's Give, mask 1). Every handicap stub counts the type-2 records that take each of its exits
-(tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
-rows 11 and 12 (the reclaim payout), 13 and 14 (the transfers) and 17 (the reclaimed unit's
-credit) have each sent a record down both, at most RECLAIM_TICKS ticks. Seat 1 is the only
-unmarked type-2 record and seat 2 the only marked one, so a scaled count is OTA AI's and an
-exempt one ImpAI's; the economy rows 1 to 8 together must show both as well. All eighteen rows'
-counts are printed.
+Then the rows that need more than the commanders. The launch applies the `impai-handicap` test
+group's economy structures (impai-handicap-economy.json: a solar collector, a wind generator and
+a metal extractor for each computer seat), and the human seat gives each computer
+seat 100 energy and 100 metal (`+give`, the console's Give, mask 1). Every handicap stub counts the
+type-2 records that take each of its exits (tagpu_impai.c, s_diag.hits, at the address the attach
+line names); the level is advanced until every row of REACHED -- the economy's 1, 2, 4, 7 and 8
+and the transfers' 13 and 14 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the
+only unmarked type-2 record and seat 2 the only marked one, so a scaled count is OTA AI's and an
+exempt one ImpAI's. All eighteen rows' counts are printed, and the rows this test does not reach
+are named: 11, 12 and 17 (the reclaims) are shown at A1b, when ImpAI owns its seat's orders and no
+stock planner replaces a reclaim order; the others need water, a game mode, an order of their
+own, or a metal maker the stock AI would not switch off.
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
@@ -58,12 +60,13 @@ SCENARIO = TREE / "scenarios/impai-handicap.json"
 LOAD_S = 900                            # a launch to a live map, a cold prefix included
 LEVELS = {"easy": 0, "medium": 1, "hard": 2}
 AT = 61                                 # two economy passes in, nothing built yet
-RECLAIM_TICKS = 3600                    # the reclaims' bound: two minutes of simulation
-STEP = 150                              # ticks between two reads of the counts
+ROWS_TICKS = 900                        # the rows' bound: 30 economy passes
+STEP = 60                               # ticks between two reads of the counts: two passes
 OTA, IMPAI = 1, 2                       # the scenario's records
-RECLAIMS = ("impai-handicap-reclaim-1.json", "impai-handicap-reclaim-2.json")
-REACHED = (11, 12, 13, 14, 17)          # the rows the reclaims and the gives are built to reach
-ECONOMY = range(1, 9)
+STRUCTURES = "impai-handicap-economy.json"
+REACHED = (1, 2, 4, 7, 8, 13, 14)       # the rows the structures, commanders and gives reach
+AT_A1B = (11, 12, 17)                   # the reclaims: the stock AI replaces a scripted reclaim
+NOT_HERE = (3, 5, 6, 9, 10, 15, 16, 18) # makers, tide, a mobile producer, refunds, respawn, purge
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
 REC = 0x1B63                            # record 0 in main; 0x14B a record (tagpu_engine.h)
@@ -189,30 +192,29 @@ def run(api, instance, level, out):
 
 
 def rows_reached(c, instance, hits_at, out):
-    """The reclaims and the gives, then the level advanced until every REACHED row has sent a
+    """The structures and the gives, then the level advanced until every REACHED row has sent a
     record down both exits; the list of failed checks."""
-    for name in RECLAIMS:
-        r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
-                            str(TREE / "scenarios" / name)], capture_output=True, text=True,
-                           timeout=300)
-        if r.returncode:
-            raise OSError(f"scenario apply {name}: {(r.stdout + r.stderr).strip()[-400:]}")
+    r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
+                        str(TREE / "scenarios" / STRUCTURES)], capture_output=True, text=True,
+                       timeout=300)
+    if r.returncode:
+        raise OSError(f"scenario apply {STRUCTURES}: {(r.stdout + r.stderr).strip()[-400:]}")
     for seat in (OTA, IMPAI):
         for what in ("energy", "metal"):
             c.type(f"+give {seat} 100 {what}")
     start = c.tick
     hits = counts(c, hits_at)
-    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < RECLAIM_TICKS:
+    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < ROWS_TICKS:
         c.advance(STEP)
         hits = counts(c, hits_at)
     out.append(f"  rows scaled/exempt at GameTime {c.tick}: "
                + " ".join(f"{r}={s}/{e}" for r, (s, e) in hits.items()))
+    out.append(f"  rows {', '.join(map(str, AT_A1B))}: at A1b, when ImpAI owns its seat's orders; "
+               f"rows {', '.join(map(str, NOT_HERE))}: not reached by this test")
     fails = [f"row {r} sent no {'OTA AI' if not s else 'ImpAI'} record down its "
              f"{'scaled continuation' if not s else 'unscaled branch'} by GameTime {c.tick} "
              f"(scaled {s}, exempt {e})"
              for r, (s, e) in ((r, hits[r]) for r in REACHED) if not (s and e)]
-    if not both(hits, ECONOMY):
-        fails.append("the economy rows 1 to 8 did not send both seats down their exits")
     return fails
 
 

@@ -1,0 +1,15 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-handicap` test group's economy structures, applied to impai-handicap.json, keeping every unit already there (the commanders): a CORE solar collector, wind generator and metal extractor for seat 1 (OTA AI) and the same for seat 2 (ImpAI), finished, so the economy pass runs the Difficulty type tests of rows 1 (a structure's negative EnergyUse), 2 (a powered extractor's metal) and 4 (wind) for both seats, with no order the stock AI could replace. No metal maker: the pass tests its type only while it is switched on and granted its energy (0x4013C5, 0x4013F9..0x40141F), and the stock AI's structure planner 0x4086D0 switches makers itself. Each seat's units stand in a box of their own, about 5900 wu apart, so neither seat's kbots start within reach of the other seat's structures: seat 1's round (7024, 1712), seat 2's round (1200, 816). Both boxes are 320 wu square, dry, flat and free of map features (heights 80 to 85 against the sea's 75, read from the map's attribute grid) and lie far from the three seats' starts.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {"id": "solar1", "type": "CORSOLAR", "owner": 1, "pos": [6960, 1600], "facing": 0},
+  {"id": "win1", "type": "CORWIN", "owner": 1, "pos": [6960, 1760], "facing": 0},
+  {"id": "mex1", "type": "CORMEX", "owner": 1, "pos": [6960, 1830], "facing": 0},
+  {"id": "solar2", "type": "CORSOLAR", "owner": 2, "pos": [1136, 704], "facing": 0},
+  {"id": "win2", "type": "CORWIN", "owner": 2, "pos": [1136, 864], "facing": 0},
+  {"id": "mex2", "type": "CORMEX", "owner": 2, "pos": [1136, 934], "facing": 0}
+ ]
+}

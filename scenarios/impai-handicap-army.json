@@ -1,0 +1,13 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-handicap` test group's armed kbots, applied to impai-handicap.json with impai-handicap-economy.json, keeping every unit already there: two CORE AK for seat 1 (OTA AI) and two for seat 2 (ImpAI), so each computer seat orders something every 300 ticks whatever its economy does and the takeover's `ai` check has orders to see. The stock AI puts an armed mobile unit in group 3, its attack planner 0x4077E0 (due every 300 ticks, 0x4077F7) pulls group 3 into group 2 (0x407560), and with one to three units there it orders the group to move to the centroid of the seat's armed structures, else its other structures, else its builders (0x407869..0x4078C8, the group order 0x480460, mode 2); the economy structures make that centroid exist. With six or more it would attack instead (0x407846..0x407867), so two stay at home. At Easy the seat's commander alone can spend a whole window on one build stalled for energy, which the builder planner 0x408100 does not reorder (MEASURED 2026-11-12: one AI order of seat 1 in [1171, 2971) without these kbots). Each seat's units stand in a box of their own, about 5900 wu apart, so neither seat's kbots start within reach of the other seat's structures: seat 1's round (7024, 1712), seat 2's round (1200, 816). Both boxes are 320 wu square, dry, flat and free of map features (heights 80 to 85 against the sea's 75, read from the map's attribute grid) and lie far from the three seats' starts.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {"id": "ak1a", "type": "CORAK", "owner": 1, "pos": [7090, 1620], "facing": 0},
+  {"id": "ak1b", "type": "CORAK", "owner": 1, "pos": [7090, 1700], "facing": 0},
+  {"id": "ak2a", "type": "CORAK", "owner": 2, "pos": [1266, 724], "facing": 0},
+  {"id": "ak2b", "type": "CORAK", "owner": 2, "pos": [1266, 804], "facing": 0}
+ ]
+}
