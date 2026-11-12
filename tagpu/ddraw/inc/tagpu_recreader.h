@@ -38,6 +38,7 @@
 typedef struct RecSeat {
     unsigned char index, controller, side, logo;
     unsigned char ally[11];                 /* the alliance row, record +0x108          */
+    unsigned char ai;                       /* 1 when ImpAI played the seat (byte 15)   */
     unsigned char has_info;                 /* 0 when the record had no PlayerInfo       */
     unsigned char info[REC_INFO_BYTES];
     char          name[RECR_NAME];          /* record +0x2B                              */

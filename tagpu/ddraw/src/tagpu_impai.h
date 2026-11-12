@@ -23,4 +23,8 @@ void tagpu_impai_level_init(void);
    marked seat's observed turns. */
 void tagpu_impai_level_end(void);
 
+/* 1 when ImpAI plays record i, 0 for OTA AI, a human or an index past the ten: the recording
+   header's RT_PLAYER byte 15 (tagpu_recorder.c, header_build). */
+unsigned tagpu_impai_seat_ai(unsigned i);
+
 #endif

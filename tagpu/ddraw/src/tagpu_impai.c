@@ -192,3 +192,11 @@ void tagpu_impai_level_init(void)
     list[n] = 0;
     tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);
 }
+
+/* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it, else 0.
+   Game thread, at the header's capture after the level init, or a fork's after the takeover's
+   restore, so it states the seat table the game ran. */
+unsigned tagpu_impai_seat_ai(unsigned i)
+{
+    return i < PLAYER_COUNT ? (unsigned)(s_seat[i] & IMPAI_ON) : 0;
+}
