@@ -153,18 +153,16 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
 
 def arena(path: Path = ARENA) -> dict:
     """The arena: its map and scenario, the line of sight and mapping that are the default of
-    every scenario, the flat rectangle the duels and courses are placed in, and the meteor
-    assertion (a meteor shower draws the CRT's rand, shared with the draw path)."""
+    every scenario, and the flat rectangle the duels and courses are placed in. Which map, and
+    that its .ota leaves the meteor shower off, is tools/tasim/arenascan.py's to derive."""
     try:
         cfg = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise CalibError(f"{path}: {e}")
     for key in ("map", "scenario", "los", "mapping", "unit_limit", "flat", "a", "b", "axis",
-                "courses", "meteor_free"):
+                "courses"):
         if key not in cfg:
             raise CalibError(f"{path}: missing {key!r}")
-    if cfg["meteor_free"] is not True:
-        raise CalibError(f"{path}: the arena must assert meteor_free")
     if cfg["axis"] not in ("x", "y"):
         raise CalibError(f"{path}: axis is x or y")
     x, y, wd, ht = cfg["flat"]["rect"]

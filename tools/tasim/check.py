@@ -36,7 +36,7 @@ DECISIVE = 0.2
 PREDICTOR_AGREE = 0.9
 # a reference made at commit C is stale when C..HEAD touches one of these (or its scenario)
 STALE_FILES = ("tagpu/ddraw/src/tagpu_scenario.c", "tools/tacli", "tools/tasim/perturb.py",
-               "tools/tasim/engrun.py", "tools/tasim/calib-arena.json")
+               "tools/tasim/engrun.py", "tools/tasim/calib-arena.json", "scenarios/calib/arena.json")
 
 
 class CouldNotCheck(Exception):

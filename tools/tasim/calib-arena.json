@@ -1,19 +1,34 @@
 {
- "about": "The calibration arena (tools/tasim/calibref.py, arena()). map: a multiplayer map of the base game; scenario: its launch and first empty point. los and mapping: the default of every calibration scenario, the skirmish's True line of sight and Mapped, which a reference is keyed by. flat: the largest dry rectangle of one height on the map, [x, y, width, height] in world units, found offline from its TNT heights (height 73, sea level 20) and checked live by every duel's apply (each unit's actual altitude equal). a, b, axis: a duel puts side A at a and side B along the axis toward b at its distance. courses: a movement course per land move class, [from, to]. meteor_free: the map's .ota names no MeteorWeapon, which calib.py checks against the install.",
- "map": "Slate Gordon",
- "scenario": "scenarios/calib/arena-slate-gordon.json",
+ "about": "The calibration arena (tools/tasim/calibref.py, arena()). map, flat, axis, a, b and courses are written by tools/tasim/arenascan.py pick from the install and re-derived by its check before every `calib engine`: a two-seat map whose .ota leaves the meteor shower switched off in every schema by the engine's own rule, and the longest dry rectangle of one height at least 1600 world units across ([x, y, width, height] in world units, height and sea level the TNT's). A duel puts side A at a and side B along the axis toward b at its distance; courses holds a movement course per land move class, [from, to]. scenario: the launch and first empty point, its map the same. los and mapping: the default of every calibration scenario, the skirmish's True line of sight and Mapped, which a reference is keyed by.",
+ "map": "cavedog links cc",
+ "scenario": "scenarios/calib/arena.json",
  "los": 1,
  "mapping": 1,
  "unit_limit": 1500,
- "flat": {"rect": [7856, 2528, 2928, 2768], "height": 73},
- "axis": "x",
- "a": [8100, 3912],
- "b": [10540, 3912],
- "courses": {
-  "kbot": [[8100, 3000], [10540, 3000]],
-  "tank": [[8100, 3400], [10540, 3400]],
-  "hover": [[8100, 4400], [10540, 4400]],
-  "amphibious": [[8100, 4800], [10540, 4800]]
+ "flat": {
+  "rect": [4544, 384, 5584, 1600],
+  "height": 85,
+  "sealevel": 75
  },
- "meteor_free": true
+ "axis": "x",
+ "a": [4800, 1184],
+ "b": [9872, 1184],
+ "courses": {
+  "kbot": [
+   [4800, 704],
+   [9872, 704]
+  ],
+  "tank": [
+   [4800, 1024],
+   [9872, 1024]
+  ],
+  "hover": [
+   [4800, 1344],
+   [9872, 1344]
+  ],
+  "amphibious": [
+   [4800, 1664],
+   [9872, 1664]
+  ]
+ }
 }

@@ -17,21 +17,41 @@ the gate's plan note.*
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard | no |
 | `calib.py selftest [--against REF]` | split-half, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
+| `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived | no |
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
 | `tools/tasim/native.py`, `native.py test`, `native.py roles` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` on the install | no |
 
 ## The arena
 
-Every run plays on one map, `tools/tasim/calib-arena.json`: Slate Gordon, a base-game multiplayer
-map whose `.ota` names no meteor weapon (a shower draws the CRT's `rand`, which the draw path
-shares, so no run could be independent of the frame rate; `calib.py` checks the install's `.ota`
-before a run). Its flat rectangle `[7856, 2528, 2928, 2768]` (world units, height 73, sea level
-20) was found offline from the map's heights; every apply's result gives each unit's actual
-altitude, which a flat placement makes equal. The arena's scenario
-(`scenarios/calib/arena-slate-gordon.json`) loads the map with the objective off, seat 1 an AI seat
-with its AI off, and each seat's base storage at 1 000 000. Line of sight and mapping default to
-the skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and a reference is keyed
-by both.
+Every run plays on one map, the one `tools/tasim/calib-arena.json` names. Nothing in it is written
+by hand: `arenascan.py pick` grades every map the install resolves (`tavfs`, the engine's mount
+order) and writes the config and the arena scenario's map from the best; `arenascan.py check`
+re-derives the configured map before every `calib engine` and refuses one the install no longer
+gives. A map qualifies when:
+
+- **its meteor shower is off in every schema, by the engine's own rule.** The `.ota` reader switches
+  the shower on (`meteoron` `0x51232C`, through `0x437D40`) only when `MeteorWeapon` is not empty and
+  `MeteorRadius`, `MeteorDensity`, `MeteorDuration` and `MeteorInterval` are all non-zero
+  (`0x436759..0x4367EE`). With the switch off the shower tick still schedules showers but clears
+  their active flag, so no stone falls ([engine/weapons.md](../engine/weapons.md), *The meteor
+  shower on two peers*). A stone is a hit with no attacker at a point drawn from the CRT's `rand`,
+  which the draw path shares: no run could be independent of the frame rate. Every lane reads the
+  switch itself at its launch (`engrun.py`, a peek of `0x51232C`) and refuses a level where it is set;
+- schema 0 has two start positions, the arena's two seats;
+- its TNT holds a dry rectangle of ONE height (the TNT's height samples, one per 16 world units, all
+  equal and above the sea level), 8 samples in from every edge, at least 1 600 world units across;
+  the longest such, then the largest. The duel line runs along its long side through the middle, `a`
+  and `b` 256 in from its ends, and one course lane per land move class at each fifth across. Every
+  apply's result gives each unit's actual altitude, which a flat placement makes equal.
+
+On the retail install (275 maps): 4 qualify, 156 are single-player missions with one start
+position, 87 have no such rectangle and 28 have the shower on -- Slate Gordon among them
+(`MeteorWeapon=earthquake` in Schema 0). The arena is Cavedog Links CC, `[4544, 384, 5584, 1600]`
+at height 85 (sea level 75); the next is Moon Quartet at 2 592 long. The arena's scenario
+(`scenarios/calib/arena.json`) loads the map with the objective off, seat 1 an AI seat with its AI
+off, and each seat's base storage at 1 000 000. Line of sight and mapping default to the
+skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and a reference is keyed by
+both.
 
 ## The lane and its runs
 
@@ -144,8 +164,8 @@ metrics, checks and exogenous values, and the engine time it cost.
 
 **Staleness** (`calib.py stale`): a reference made at commit C is stale when C..HEAD changes a sim
 file's code lines (tareplay's own reading: comments and white space are not code), a header one
-includes, `tagpu_scenario.c`, `tools/tacli`, `perturb.py`, `engrun.py`, the arena, or the
-scenario. `tareplay.py landing` counts the references a gated landing made stale and records it
+includes, `tagpu_scenario.c`, `tools/tacli`, `perturb.py`, `engrun.py`, the arena config or the
+arena's scenario, or the reference's own scenario. `tareplay.py landing` counts the references a gated landing made stale and records it
 as `calibration_stale=` in its note; re-measuring is a command, never part of a landing.
 
 ## The check
@@ -210,7 +230,8 @@ pairs (not defence against defence), per tech level and at three ranks of value,
 attacking the other; dropped when neither can hurt the other, refused when B leaves the flat area or
 the shots' cost over the limit passes half the storage. **Courses**: eight of each land move class's
 cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses (kbot, tank, hover),
-4 refused (ARMVULC's range).
+4 refused: ARMVULC fits the arena (3 240 world units apart) but its shots over the 5 400-tick limit
+cost more than half of each seat's 1 000 000 storage.
 
 ## Speed
 

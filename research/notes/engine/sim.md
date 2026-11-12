@@ -861,7 +861,9 @@ and the setter are in *The speeds* above, the step's iteration in
   in 1,328 unit fields; two pairs at a fixed batch (k = 2, then k = 1) differed only in the meteor
   shower's two points (next bullet); speed 20 against k = 2 differed in 1,272 and 1,383 unit fields.
 - **The meteor shower and the CRT `rand`.** The meteor tick `0x437DE0` draws the CRT's `rand`
-  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`;
+  `0x4E4870` at six sites (`0x437E37..0x437FB5`) for the strike points `0x512334` and `0x512320`
+  -- the first four at every shower it schedules, with the switch `0x51232C` on or off, the last
+  two per stone ([weapons.md](weapons.md), *The switch*);
   the forced shower `0x438070` (one caller, `0x41778A`) draws it too (`0x4380AD`, `0x4380CE`) and
   writes `0x512334` (`0x4380FB`). On
   the game thread the draw path draws from the same per-thread stream every frame (static call

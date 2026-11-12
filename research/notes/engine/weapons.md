@@ -1185,7 +1185,19 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
 ### The meteor shower on two peers
 
 - **The shower** `0x437DE0` runs from the sim tick `0x495594` on every peer, with no host test; the
-  map's OTA arms it through `0x437D40` at `0x4367F9`. Each stone is spawned at `0x49DF7D` (a call of
+  map's OTA arms it through `0x437D40` at `0x4367F9`.
+- **The switch** `meteoron` `0x51232C` [DISASSEMBLED 2026-11-11]: `0x437D40` sets it and `0x437D50`
+  clears it; the save's load writes it (`0x438278`). The `.ota` reader calls `0x437D40` only when
+  `MeteorWeapon` is not empty (`0x43675A`) and `MeteorRadius` (an int, `0x43676A`) and
+  `MeteorDensity`, `MeteorDuration` and `MeteorInterval` (floats, `0x436780`, `0x436796`,
+  `0x4367AC`) are all non-zero (`0x4367B9..0x4367EE`); otherwise it calls `0x437D50` (`0x436800`)
+  after `0x438320` fills the configuration [INFERRED: a default one]. `+meteor`'s handler
+  `0x417760` calls `0x437D40` or `0x437D50` by `0x4B73E0(1, 0)` when its `+0xD0` is above 1 and
+  the forced shower `0x438070` otherwise [INFERRED: `+0xD0` the argument count]. The shower tick
+  schedules every shower whatever the switch says -- the active flag `0x512318` set, the end, the
+  points drawn from `rand` (`0x437E07..0x437EF0`) -- and then clears the active flag when the
+  switch is 0 (`0x437EF5..0x437EFE`); stones fall only while it is set (`0x437F0A`). A shower
+  already active runs to its end `0x51231C` (`0x43804F..0x43805F`) whatever the switch says. Each stone is spawned at `0x49DF7D` (a call of
   the projectile init `0x49C740` with no attacker) and broadcast as a `0x0D` (`0x49DFF6`); the
   receiver `0x49D270` (from the dispatcher at `0x455433`) builds it again in its meteor branch,
   `0x49D307`, also with no attacker.

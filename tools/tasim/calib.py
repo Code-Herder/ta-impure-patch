@@ -41,24 +41,16 @@ def scenario_paths(globs):
     return list(dict.fromkeys(p.resolve() for p in out))
 
 
-def meteor_check(cfg):
-    """The arena's .ota names no meteor weapon (a shower draws the CRT's rand, which the draw path
-    shares, so no run could be independent of the frame rate). Checked against the install when
-    one is found; the arena config's own assertion stands otherwise."""
-    sys.path.insert(0, str(TREE / "tools" / "wiki"))
-    import re
-    import tavfs
+def arena_check(cfg):
+    """The configured arena re-derived from the install (arenascan.py check): its meteor shower
+    off by the engine's rule in every schema, its flat rectangle and layout as the TNT gives
+    them. Without an install the lanes' own launch check of the switch still stands."""
+    import arenascan
     try:
-        vfs = tavfs.Vfs(tavfs.find_install(None))
+        vfs = arenascan.install(None)
     except Exception as e:                                  # noqa: BLE001 -- any install trouble
-        return f"meteors unchecked: {e}"
-    got = vfs.open(f"maps/{cfg['map'].lower()}.ota")
-    if not got or not got[0]:
-        raise calibref.CalibError(f"the arena map {cfg['map']!r} has no .ota in the install")
-    m = re.search(r"meteorweapon\s*=\s*([^;]*);", got[0].decode("latin-1"), re.I)
-    if m and m.group(1).strip():
-        raise calibref.CalibError(f"{cfg['map']}: MeteorWeapon={m.group(1).strip()}")
-    return "no meteor weapon"
+        return f"unchecked against the install: {e}"
+    return arenascan.check(cfg, vfs)
 
 
 def the_dll(given):
@@ -103,7 +95,7 @@ def cmd_engine(a):
     import tareplay as R
     try:
         cfg = calibref.arena()
-        print(f"arena {cfg['map']}: {meteor_check(cfg)}")
+        print(f"arena {cfg['map']}: {arena_check(cfg)}")
         build = calibref.git_build()
         if build.endswith("-dirty"):
             raise calibref.CalibError(f"the tree is dirty ({build}): a reference names its commit")

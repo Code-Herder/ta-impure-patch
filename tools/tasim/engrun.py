@@ -52,6 +52,10 @@ S_MIN, S_STEP, S_MAX = 60, 30, 1800
 PHASE = 30                      # the economy passes' period: an apply at 1 (mod 30) is at the
                                 # phase of the launch's first apply, GameTime 1
 PROJECTILES = "*0x511DE8+0x141F3:4"
+# `meteoron`, the shower's switch: the .ota reader sets it through 0x437D40 or clears it through
+# 0x437D50, and while it is 0 the shower tick 0x437DE0 clears `meteoractive` 0x512318 at every
+# shower it schedules (0x437EF5..0x437EFE), so no stone falls (engine/weapons.md)
+METEOR_ON = "0x51232C:4"
 # The defaults until the speed measurement sets them (the module note's *Speed*): lanes run as
 # threads under one lock, and a lane relaunches after this many runs to bound its recording.
 J_DEFAULT = 6
@@ -175,6 +179,9 @@ class Lane:
         self.T_prev = R.held_start(w, self.log)
         if any(PLAYING_RX.search(ln) for ln in self.log.lines):
             raise CouldNotRun("the lane's level plays a recording: a lane is puppet-free")
+        if self.peek(METEOR_ON):
+            raise CouldNotRun(f"{self.arena['map']}: the level's meteor shower is switched on "
+                              f"(0x51232C): the arena must leave it off")
         rc, o = R.tacli("units", w.name, "--json", timeout=R.ACK_S + 30)
         if rc:
             raise CouldNotRun(f"tacli units: {R.last(o)}")

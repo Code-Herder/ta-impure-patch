@@ -1,8 +1,8 @@
 {
  "format": "ta-scenario/1",
- "description": "The calibration arena (tools/tasim/calib-arena.json): Slate Gordon, emptied -- no unit, no feature, the objective off and seat 1 an AI seat with its AI off -- so the level runs on with nothing in it. The launch setup and the first empty point of a calibration lane (tools/tasim/engrun.py).",
+ "description": "The calibration arena's launch and first empty point (tools/tasim/engrun.py): the map tools/tasim/calib-arena.json names, which tools/tasim/arenascan.py pick writes here too, emptied -- no unit, no feature, the objective off and seat 1 an AI seat with its AI off -- so the level runs on with nothing in it.",
  "setup": {
-  "map": "Slate Gordon",
+  "map": "cavedog links cc",
   "unit_limit": 1500,
   "clear_existing": true,
   "clear_features": true,
