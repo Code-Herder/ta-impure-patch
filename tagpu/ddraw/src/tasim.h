@@ -4,11 +4,12 @@
    in-game wiki's front end, tagpu_wikisim.c, call across files. research/notes/impai/shared-core.md names the
    modules and what each holds; each function's contract is the comment at its definition.
 
-   THE CORE'S CONTRACT is tagpu_wikisim.h's, which it was carved out of: engine-free, Win32-free and without
-   globals; every piece of state in the WIKISIM its caller owns; no clock and no randomness; doubles with each
-   operation rounded once, so every tasim_*.c is compiled on SSE2 as tagpu_wikisim.c is (the Makefile's THE WIKI'S
-   SIMULATION) and agrees with tools/wiki/mockup/sim.js bit for bit. One WIKISIM is still the whole state, and the
-   core reads the parts of it the front end keeps: the acting seat (ST) and the sidebar a unit's pages come from. */
+   THE CORE'S CONTRACT is tagpu_wikisim.h's: engine-free, Win32-free and without globals; every piece of state in
+   the WIKISIM its caller owns; no clock and no randomness; doubles with each operation rounded once, so every
+   tasim_*.c is compiled on SSE2 as tagpu_wikisim.c is (the Makefile's THE WIKI'S SIMULATION) and agrees with
+   tools/wiki/mockup/sim.js bit for bit. One WIKISIM is the whole state, and the core reads one part of it the front
+   end keeps: the sidebar -- a type's pages (tasim_npages, at a unit's create) and the unit it shows, which
+   tasim_remove_unit clears. */
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,10 +23,6 @@
 #define CELL_BOUND (1 << 20)
 
 enum { HOW_BUILD, HOW_RECLAIM, HOW_FEATURE };
-
-/* sim.js's st: the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
-   nin wherever it is set (seat_in bounds it), so the index is in range. */
-#define ST(s) ((s)->in[(s)->act])
 
 /* Math.round: half rounds up. x - floor(x) is exact wherever it can fall on either side of 0.5,
    so this agrees with it for every double. */
@@ -103,7 +100,7 @@ void      tasim_remove_unit(WIKISIM* s, WIKIUNIT* u);
 int       tasim_grow(WIKISIM* s, void** p, int* cap, int need, size_t size);
 void      tasim_kill(WIKISIM* s, const char* id, int by);
 
-/* ---- tasim_orders.c: the bounded order list, its kinds, and arming a building ---- */
+/* ---- tasim_orders.c: the bounded order list and its kinds ---- */
 
 int       tasim_push_order(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o);
 void      tasim_splice_orders(WIKIUNIT* u, int i, int n);
@@ -112,8 +109,6 @@ int       tasim_started(const WIKISIM* s, const WIKIORDER* o);
 void      tasim_assign(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* os, int n, int shift);
 WIKIORDER tasim_order_build(int t, int ox, int oz);
 WIKIORDER tasim_order_target(int k, const char* id);
-void      tasim_disarm(WIKISIM* s);
-void      tasim_arm(WIKISIM* s, int t);
 
 /* ---- tasim_move.c: bodies, the step rule and the planner (MOVEMENT) ---- */
 

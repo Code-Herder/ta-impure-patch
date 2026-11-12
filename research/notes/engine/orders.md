@@ -369,7 +369,7 @@ and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 wi
 (`0x404C8B`). The controller takes 1 as "next state" (the jump table `0x43BAA4`, entry 1 →
 `0x43B897`, `inc byte [order+5]`) and loops, and the order's timer bit set by `0x439E80(2)`
 (`order+6 |= 1`, `order+0xA = now + 2`) skips it there (`0x43B817..0x43B81D`) until the two ticks
-are up; state 5 then pays out (`0x4237D0` at `0x404D66`, result 5) -- after the entry's lookup,
+are up; state 5 then pays out (the table's entry 5, `0x404D60`: the reclaim completion `0x4237D0(unit, ebp)`, *map.md*, at `0x404D66`, then `mov eax,5`, result 5; DISASSEMBLED 2026-11-11) -- after the entry's lookup,
 so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
 takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
 [DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the

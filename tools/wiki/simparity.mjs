@@ -1702,7 +1702,7 @@ function seatCases() {
     const want = ['refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'refused', 'ok'];
     return got.join() === want.join() ? 'every refusal refused' : `FAIL ${got.join()} for ${want.join()}`;
   } });
-  /* THE DEATH VISION'S BOUND (sim.js kill, tagpu_wikisim.c kill): 24 more of Bram's units, killed 20 on tick 50, 2 on
+  /* THE DEATH VISION'S BOUND (sim.js kill, tasim_world.c tasim_kill): 24 more of Bram's units, killed 20 on tick 50, 2 on
      60, 1 on 111 and 1 on 112, by a script no players rule holds (a replay entry's) and by a fork part; the engine's
      add keeps the first 20, refuses the three while they are live (a death of tick d is live at an add on t while
      d + 61 >= t) and keeps the last */

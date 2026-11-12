@@ -37,6 +37,9 @@
 /* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
    tagpu_placegeo.h's */
 #define PLACE_ORDER_BUDGET 4096
+/* sim.js's st: the acting seat's input state (THE ORDERING of WIKISIM.act). act is a seat below
+   nin wherever it is set (seat_in bounds it), so the index is in range. */
+#define ST(s) ((s)->in[(s)->act])
 
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
@@ -654,6 +657,32 @@ static void route(WIKISIM* s)
     s->shown = u;
 }
 
+/* leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it */
+static void disarm(WIKISIM* s)
+{
+    ST(s).mode = -1;
+    ST(s).has_gesture = 0;
+    ST(s).shift_placed = 0;
+    ST(s).rmode = 0;
+    ST(s).has_rg = 0;
+}
+
+/* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E
+   (0x41AB89) and the type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a
+   Shift-placement made earlier in this Shift hold keeps bit 5 (shift_placed), and releasing
+   Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
+   tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
+   armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
+   of its own type only. With the sidebar off as well as on, as sim.js's `arm`. */
+static void arm(WIKISIM* s, int t)
+{
+    if (ST(s).mode != t) ST(s).has_gesture = 0;
+    ST(s).mode = t;
+    ST(s).has_drag = 0;
+    ST(s).rmode = 0;
+    ST(s).has_rg = 0;
+}
+
 /* A BUTTON ACTS ON THE RELEASE INSIDE IT, as the engine's: 0x4A6AE0 returns 1 for a release inside
    a captured button, 0x4A9E98 stores its index and 0x4AA797 calls the screen's handler 0x41AA00.
    The tabs, which act on the press, come here too. PREV and NEXT step the shown unit's page as
@@ -696,7 +725,7 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
         ST(s).has_rg = 0;
         for (i = 0; i < s->nunit; i++)
             if (s->unit[i]->sel && s->unit[i]->owner == s->act) s->unit[i]->norder = 0;
-    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !tasim_mobile(s, t)) tasim_arm(s, t);
+    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !tasim_mobile(s, t)) arm(s, t);
     else if (is_reclaim(g)) toggle_reclaim(s);
     route(s);
 }
@@ -1910,7 +1939,7 @@ static void place_click(WIKISIM* s, int shift)
         }
     }
     tasim_sound_named(s, WIKI_SNDNAME_OKTOBUILD);
-    if (!shift) tasim_disarm(s);
+    if (!shift) disarm(s);
     else ST(s).shift_placed = 1;
 }
 
@@ -2002,9 +2031,9 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         if (ev->build >= 0 && ev->build < s->entry->ndef && s->unbound[ev->build]) lock(s, ev->build);
         else if (s->trips) {
             if (ev->build >= 0 && ev->build < s->entry->ndef) trip(s, ev->build);
-        } else if (ev->build >= 0 && ev->build < s->entry->ndef) tasim_arm(s, ev->build);
+        } else if (ev->build >= 0 && ev->build < s->entry->ndef) arm(s, ev->build);
         else {
-            tasim_disarm(s);
+            disarm(s);
             ST(s).has_drag = 0;
         }
     }
@@ -2076,7 +2105,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             if (ev->down == WIKI_KEY_RMB) {
                 ST(s).has_drag = 0;
                 click_action(s);
-                if (ST(s).mode >= 0 || ST(s).rmode) tasim_disarm(s);
+                if (ST(s).mode >= 0 || ST(s).rmode) disarm(s);
                 else if (s->iface) right_click(s, shift);
                 else right_press0(s);
             }
@@ -2097,7 +2126,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             click_action(s);
             place_click(s, shift);
         }
-        else if (ev->down == WIKI_KEY_RMB && (ST(s).mode >= 0 || ST(s).rmode)) tasim_disarm(s);
+        else if (ev->down == WIKI_KEY_RMB && (ST(s).mode >= 0 || ST(s).rmode)) disarm(s);
     }
     if (ev->up >= 0 && ev->up < WIKI_NKEYS && ST(s).held[ev->up]) {
         ST(s).held[ev->up] = 0;
@@ -2123,7 +2152,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         }
         /* 0x4992D8: Shift found up after a placement in this hold disarms, as after a stock Shift-click */
         if (ev->up == WIKI_KEY_SHIFT) {
-            if (ST(s).shift_placed) tasim_disarm(s);
+            if (ST(s).shift_placed) disarm(s);
             ST(s).shift_placed = 0;
         }
     }

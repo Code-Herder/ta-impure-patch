@@ -284,7 +284,12 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
 
 - **Where an emission starts.** MobileBuild steps at `0x403E43` and, only when `0x41BA60`
   returned nonzero (`0x403E4A je 0x403ED1` skips both), asks `0x43E400` at `0x403E56`, builds box
-  B (`0x403E5B..0x403EC8`) and emits at `0x403ECC`. ReclaimUnit `0x404730` sprays from its state 5
+  B (`0x403E5B..0x403EC8`) and emits at `0x403ECC`. ReclaimUnit `0x404730`'s state 1 (the jump
+  table `0x404AB0`, entry 1 = `0x4047FA`) returns 1 on the arrival event `0x20`; without it it
+  calls `0x438AD0(order, target+0x76, target+0x7E)` [INFERRED: the walk to the target's cell] at
+  `0x404818`, sets `order+6 |= 0x100E8`, calls `0x439E80(order, 15)`, stores
+  `0x438650(unit, target, 15)` at `order+0x36`, zeroes the hit counter `order+0x3A` (`0x404845`)
+  and returns 2 [DISASSEMBLED 2026-11-11]. It sprays from its state 5
   (the jump table `0x404AB0`, entry 5 = `0x4048D2`): in range (`0x404953`) and eligible
   (`0x489960` at `0x404961`), it may send its hit (`0x404974..0x404986`), stamps `+0xB0`, asks
   `0x43E400` at `0x4049AD`, builds box A of the target (`0x4049B2..0x404A4A`), emits in reverse at

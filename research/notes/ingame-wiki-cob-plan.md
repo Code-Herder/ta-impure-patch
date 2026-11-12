@@ -434,7 +434,7 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
   parents to a tree when it is made: a parent outside the model, or a chain that does not end
   within the primitive count, leaves the whole model flat, every piece at the unit's point.
 - **The particles**, `0x4720D0` / `0x472200` and their class `0x4FD5B8` repeated in int32
-  (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions, line for line): the source
+  (`tasim_fx.c`'s nano spray, *THE NANO SPRAY* in `tagpu_wikisim.h`, `sim.js`'s spray functions, line for line): the source
   box the piece's point, the target box the structure's centre ± FootprintX and FootprintZ × 8
   world units by the ground to `top`, each cut to its middle 4/11 … 7/11 on every axis
   (`0x473B50`); an emission is two bursts of five (`0x473D50`), the second on the next tick after
@@ -487,7 +487,7 @@ settings*.
   `0x47F1A0` or `0x47F300`, not the notice queue `0x47F780` -- so the game's 24 per-kind cooldowns
   (`0x5086EC`), its notice queue and its buffers stay the game's, and the game's own sounds are
   neither ducked nor delayed while the wiki is open.
-- **The events are simulation state, in both simulations** (`tagpu_wikisim.c` *THE SOUND*,
+- **The events are simulation state, in both simulations** (`tasim_fx.c`'s sound, *THE SOUND* in `tagpu_wikisim.h`,
   `sim.js`'s sound functions, line for line). The engine's rules are repeated as the wiki's own
   state: a notice is refused while its kind's next time is ahead (`0x47FAF0`) or while one of its
   kind is queued (`0x47FB0A`); a full queue of eight drops its last entry; the new one goes in
