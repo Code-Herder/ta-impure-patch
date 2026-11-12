@@ -4722,6 +4722,23 @@ static void* __cdecl ai_leave(unsigned* regs)
     return (void*)(size_t)s_ai.stack[--s_ai.depth].ret;
 }
 
+int tagpu_rec_ai_turn_enter(unsigned seat)
+{
+    if (seat >= REC_PLAYERS || !ai_window()) return 0;
+    if (s_ai.depth == sizeof s_ai.stack / sizeof s_ai.stack[0]) {
+        s_ai.bad = 1;
+        return 0;
+    }
+    s_ai.stack[s_ai.depth].ret = 0;
+    s_ai.stack[s_ai.depth++].seat = seat;
+    return 1;
+}
+
+void tagpu_rec_ai_turn_leave(int pushed)
+{
+    if (pushed && s_ai.tid == GetCurrentThreadId() && s_ai.depth) s_ai.depth--;
+}
+
 /* The constructor returns the same ECX object in EAX (0x43A1C6). Its entry
    samples that address without reading it. No order is dispatched inside the
    constructor; a later dispatch therefore names a completed, linked node,

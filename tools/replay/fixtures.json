@@ -451,6 +451,21 @@
    "end": 5400,
    "takeover": {"player": "controlled", "checks": ["judge", "line", "ai", "fork"]}
   },
+  "impai-eco": {
+   "load": "impai-eco.json", "los": "file",
+   "steps": [[900, "order", {"unit": ["ARMPW", 0], "args": ["attack", "unit", ["CORCOM", 0]]}],
+             [900, "order", {"unit": ["ARMPW", 1], "args": ["attack", "unit", ["CORCOM", 0]]}],
+             [900, "order", {"unit": ["ARMPW", 2], "args": ["attack", "unit", ["CORCOM", 0]]}],
+             [930, "order", {"unit": ["ARMPW", 3], "args": ["attack", "unit", ["CORCOM", 1]]}],
+             [930, "order", {"unit": ["ARMPW", 4], "args": ["attack", "unit", ["CORCOM", 1]]}],
+             [930, "order", {"unit": ["ARMPW", 5], "args": ["attack", "unit", ["CORCOM", 1]]}]],
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_tinfo.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tasim_snap.c", "tagpu/ddraw/src/tagpu_placegeo.c"],
+   "end": 5400,
+   "takeover": {"player": "controlled", "checks": ["judge", "line", "ai", "fork"]}
+  },
   "stock-impai-observe": {
    "load": "impai-observe.json", "los": "file", "dll": "stock",
    "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},

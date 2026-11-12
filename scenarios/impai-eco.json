@@ -1,0 +1,41 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI builds (tagpu/ddraw/src/tagpu_impai.c; the brain, impai_brain.c, impai_econ.c, impai_build.c): Comet Catcher with fixed starts, true line of sight, mapped, at Easy, so both branches of every handicap stub the economy reaches run each pass. Seat 0 is an idle human (ARM, StartPos1) with two groups of three Peewees on hold, one about 1100 world units south of seat 1's start (5184, 560) and one about 1100 north of seat 2's (5712, 7216); seat 1 is ImpAI (CORE, StartPos2, so the launch writes `seatai=1`) and seat 2 OTA AI (CORE, StartPos3). The `impai-eco` test group orders the first group onto seat 1's commander at GameTime 900 and the second onto seat 2's at 930, so the on-hit commander purge's site (row 18) runs for both seats. Comet Catcher has 3 to 7 metal spots within 1024 of each of its first four starts and a wind of 10..15 (scout I11), so the extractors come from spots and the energy from solar.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": false,
+  "los": "true",
+  "mapping": true,
+  "difficulty": "easy",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "core",
+    "color": 2
+   }
+  ]
+ },
+ "units": [
+  {"id": "pw1", "type": "ARMPW", "owner": 0, "pos": [5120, 1696], "facing": 0, "stance": "hold"},
+  {"id": "pw2", "type": "ARMPW", "owner": 0, "pos": [5184, 1728], "facing": 0, "stance": "hold"},
+  {"id": "pw3", "type": "ARMPW", "owner": 0, "pos": [5248, 1696], "facing": 0, "stance": "hold"},
+  {"id": "pw4", "type": "ARMPW", "owner": 0, "pos": [5648, 6080], "facing": 0, "stance": "hold"},
+  {"id": "pw5", "type": "ARMPW", "owner": 0, "pos": [5712, 6048], "facing": 0, "stance": "hold"},
+  {"id": "pw6", "type": "ARMPW", "owner": 0, "pos": [5776, 6080], "facing": 0, "stance": "hold"}
+ ]
+}

@@ -4,10 +4,10 @@
 /* tagpu_impai -- ImpAI's seam in the engine (research/notes/modules/impai.md).
 
    The players phase's call of the stock AI tick, 0x465031 `call 0x408C40`, is retargeted to a
-   wrapper that observes the seats impure.cfg's `seatai` gives ImpAI and then always calls the
-   stock tick, so the stock AI still plays every seat. Which seats are ImpAI's is SIM_STATE,
-   written at the level init. The eighteen Difficulty type tests skip those seats, and the
-   console's `AI` takes a seat from ImpAI. */
+   wrapper: the seats impure.cfg's `seatai` gives ImpAI are played by ImpAI -- its observation and
+   its brain, then the stock weapon scan -- and every other seat by the stock tick. Which seats are
+   ImpAI's is SIM_STATE, written at the level init. The eighteen Difficulty type tests skip those
+   seats, and the console's `AI` takes a seat from ImpAI. */
 
 /* DllMain, before tagpu_simreg_attach closes the lever list: ImpAI's test levers -- the self-checks,
    the overlay, the cost run's budgets. */
@@ -28,7 +28,7 @@ void tagpu_impai_init(void);
 void tagpu_impai_level_init(void);
 
 /* The level's teardown (tagpu_reclaim.c, reclaim_teardown_pre), on the game thread: logs each
-   marked seat's observed turns and the handicap rows' counts, and clears the seat table. */
+   marked seat's turns, the handicap rows' counts and the brain's lines, and clears the seat table. */
 void tagpu_impai_level_end(void);
 
 /* 1 when ImpAI plays record i -- active, controller 2 and marked -- else 0 (OTA AI, a human,

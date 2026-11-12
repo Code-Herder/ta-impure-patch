@@ -32,6 +32,9 @@ int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
 #define MAPS_BYTES   (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
                       ALIGN16(GRID_CELLS * sizeof(uint16_t)) + ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t)))
 
+_Static_assert(ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES <= IMPAI_BRAIN_SCRATCH_MAX,
+               "a decision's scratch fits IMPAI_BRAIN_SCRATCH_MAX");
+
 size_t impai_brain_scratch_bytes(void)
 {
     return ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES;
