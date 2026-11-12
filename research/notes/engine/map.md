@@ -770,7 +770,15 @@ refresh's margin), `+0x10`/`+0x14` the map's W and H,
 `+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick.
 `0x440940` builds them: for each present class it frees the old map, allocates the new one and
 fills it (`0x440500`), and it runs once a load, at `0x4918E3` in `LoadGameData_Main`, after LoadMap
-(`0x4918C0`): after the mask and before any saved feature is back. After that `0x440830` recomputes
+(`0x4918C0`): after the mask and before any saved feature is back. It gives every present class
+W = `main+0x14233` and H = `main+0x14237`, the PLOT grid's, and allocates `((H + 15) >> 4) · W`
+dwords (`0x44097E..0x4409B8`); `0x440470` is the same sizing for one class from two arguments. The
+reader `0x40D7B0` takes cell `(x, z)` as dword `(z >> 4) · W + x`, bits `2 · (z & 15)`
+(`0x40D83E..0x40D85E`): code 0 blocked, 1 passable but bad, 3 good, with the class's footprint
+already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). ImpAI's reach
+labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
+(`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
+the PLOT grid's. After that `0x440830` recomputes
 them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of caller:
 
 - **grid changes**, through `0x440A40(xy, wh)` (stdcall, `ret 8`, `xy = x | y << 16`,
