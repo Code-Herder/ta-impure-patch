@@ -430,6 +430,14 @@
                "tools/impai_fixture.py"],
    "end": 5400
   },
+  "stock-impai-observe": {
+   "load": "impai-observe.json", "los": "file", "dll": "stock",
+   "content": {"run": ["tools/impai_fixture.py", "{gamedir}", "1,2"],
+               "files": ["tagpu_impai.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h",
+               "tools/impai_fixture.py"],
+   "end": 5400
+  },
   "resource-mex": {
    "load": "resource-snapping.json",
    "sources": [
@@ -1491,6 +1499,37 @@
   },
   "sweep-basic": {
    "load": "sweep-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tagpu/ddraw/src/tagpu_sweep.c",
+    "tagpu/ddraw/src/tagpu_sweep.h",
+    "tagpu/ddraw/src/tagpu_sweepgeo.c",
+    "tagpu/ddraw/src/tagpu_sweepgeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_sweep.c",
+    "tagpu/ddraw/src/tasim_sweep.h",
+    "tools/sweep_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/sweep_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "stock-sweep-basic": {
+   "load": "sweep-basic.json",
+   "dll": "stock",
    "sources": [
     "tagpu/ddraw/src/tagpu_route.c",
     "tagpu/ddraw/src/tagpu_route.h",

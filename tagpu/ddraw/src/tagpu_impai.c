@@ -7,7 +7,7 @@
 
 /* ImpAI writes nothing on a puppet: the wrapper refuses a puppet seat and the level init writes
    no seat on a puppet level, so the recording is the only writer of the seat table there. */
-SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm");
+SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm stock-impai-observe");
 
 #include "dd.h"                 /* g_ddraw.gui_thread_id: the game thread */
 #include "tagpu_engine.h"
