@@ -102,9 +102,9 @@ class Held(Check):
 
 
 def counts(c, at):
-    """The eighteen rows' (scaled, exempt) counts, read in one peek."""
-    raw = c.bytes(f"0x{at:08X}:x144")
-    v = struct.unpack("<36I", raw)
+    """The eighteen rows' (scaled, exempt) counts, read in one peek of 36 u32s (one hex read of
+    the 144 bytes overruns the peek's line)."""
+    v = c.values(*(f"0x{at + 4 * k:08X}:4" for k in range(36)))
     return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in range(1, 19)}
 
 
