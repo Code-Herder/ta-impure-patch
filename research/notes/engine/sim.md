@@ -306,6 +306,15 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   `0x513000`, argument 0) [names not read], so a skirmish skips those too. Once a call, loop or no loop: `0x428BD0`, `0x428BE0`, `0x428BF0` (`0x495674`..`0x49567E`,
   not read), the chat expiry `0x463EF0` (`0x495683`) and the temporary sight records' expiry
   `0x482130` (`0x495688`).
+- **After the players phase, within the iteration, nothing writes a unit's position, alive bit, owner,
+  type or `+0x10E` bit 2, a line-of-sight counter or the mapped grid**: a recursive closure over the
+  direct calls of each callee from `0x495585` to `0x495646` finds no such store (scout G4 of the ImpAI
+  plan, DISASSEMBLED 2026-11-11; indirect calls listed there, not followed). The one listed-field write is
+  the dying bit 14: the feature tick's burn spread reaches the hit `0x489CE0` (`0x424463` → `0x4239C0` →
+  `0x423BE0` → `0x49A0C0` → `0x49A120` → `0x499CD0` → `0x489BB0`), which sets it at `0x489EE5`. The
+  counters change at the call's tail, `0x482130` after the last iteration. So the positions, owners, types
+  and cloak a turn of the players phase reads hold for the rest of the step (ImpAI's turns,
+  [ImpAI in the engine](../modules/impai.html)).
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
   `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
   call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no

@@ -425,12 +425,18 @@
   },
   "impai-observe": {
    "load": "impai-observe.json", "los": "file",
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
    "end": 5400
   },
   "impai-observe-perm": {
    "load": "impai-observe-perm.json", "los": "file",
-   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h"],
+   "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on"]},
+   "sources": ["tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/impai.h",
+               "tagpu/ddraw/src/impai_know.c", "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tagpu_worldq.c",
+               "tools/impai/check_lever.py"],
    "end": 5400
   },
   "impai-handicap": {

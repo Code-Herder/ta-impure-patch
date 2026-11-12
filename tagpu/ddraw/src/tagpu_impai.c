@@ -18,6 +18,9 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 #include "tagpu_log.h"
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
+#include "tagpu_packet.h"           /* TAGPU_PK_DESIGN_SLOTS: the most unit slots a world has */
+#include "tagpu_worldq.h"
+#include "impai.h"
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
@@ -47,6 +50,7 @@ enum { HIT_SCALED, HIT_EXEMPT };
 static struct {
     uint8_t in;            /* 1 once 0x465031 reaches impai_ai_tick            */
     uint8_t avail;
+    uint8_t check;         /* tagpu_impai_check.on: the self-checks run        */
     char    why[80];
 } s_install;
 SIM_VAR(s_install, SIM_INSTALL);
@@ -95,10 +99,215 @@ static int impai_seat_of(const void* obj)
     return (int)i;
 }
 
-/* One ImpAI seat's turn, at its record's place in the players phase: counted. */
+/* ---- WHAT A SEAT KNOWS: impai.h's rows, kept by impai_know.c over the engine's WORLDQ ---- */
+
+/* Each seat's knowledge of every unit slot (impai.h, THE INFORMATION RULE): a row changes only through what
+   the seat observes, so a death or a slot reuse the seat cannot see changes nothing it knows. A ghost row keeps
+   the last block and type the seat knew until the seat sees that block again. Keyed by slot, at most the
+   unit array's design size (tagpu_worldq_open bounds nslots by it). An ID field holds WQ_NONE or 0xFF when
+   the seat never identified the unit; the recorder images an SIMF_ID field as the value it is. */
+static IMPAI_ROW s_known[TAGPU_PK_DESIGN_SLOTS];
+static const SimField s_known_layout[] = {
+    { offsetof(IMPAI_ROW, seat[0].type),  2, WQ_SEATS, sizeof(IMPAI_SEEN), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_ROW, seat[0].owner), 1, WQ_SEATS, sizeof(IMPAI_SEEN), SIMF_ID, SIM_ID_PLAYER },
+    SIM_FIELD_END
+};
+SIM_ROWS(s_known, SIM_STATE, SIM_ID_UNIT_SLOT, s_known_layout);
+
+/* each seat's slice cursor and radar pass in progress */
+static IMPAI_SEAT s_seatst[PLAYER_COUNT];
+SIM_ROWS(s_seatst, SIM_STATE, SIM_ID_PLAYER, NULL);
+
+/* each seat's radar pass, one nibble a slot (worldq.h, WQ_RB_*): the pass's answer between passes, its
+   partial state during one that spans ticks */
+static uint8_t s_radar_bits[PLAYER_COUNT][WQ_RADAR_BYTES(TAGPU_PK_DESIGN_SLOTS)];
+SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
+
+/* THE BUDGETS of one seat's tick, by count (impai.h): the loops are the budgets, so a tick past them is a
+   bug in the code, and the level-end `work` lines show each tick's largest against its bound. */
+#define OBS_SLICE     2048u
+#define RADAR_VISITS  32768u
+
+/* The level's work and the self-checks' counts, for the level-end lines and tools/impai_check.py. */
+static struct {
+    unsigned ticks[PLAYER_COUNT], refused[PLAYER_COUNT];
+    unsigned slots_max[PLAYER_COUNT], visits_max[PLAYER_COUNT], nslots_max;
+    unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
+    unsigned local_eval, local_miss;
+    unsigned radar_passes, radar_eval, radar_miss;
+    unsigned char los_said, radar_said;
+} s_obs;
+SIM_VAR(s_obs, SIM_PRIVATE);
+
+typedef int (__stdcall* PFN_UnitInLos)(const void* player, const void* unit);
+#define VA_UNIT_IN_LOS 0x00465AC0u   /* (player, unit), `ret 8`: 1 when the player sees the unit; writes nothing */
+
+/* THE LINE-OF-SIGHT CHECK, under tagpu_impai_check.on: ImpAI's rule (tagpu_worldq_unit_los) against the
+   engine's 0x465AC0 for every live unit of another owner that is not under the sea, at one instant on one
+   thread, nothing written in between. Under True line of sight 0x465AC0 reads the record it is given, so the
+   seat's own record is compared. In the other modes it reads the viewed player's mapped bit whatever record
+   it is given (tagpu_worldq.c, sight_lit), so the rule is compared for the local record main[0x2A43], where
+   the two read the same bit. A puppet seat is no seat here: the open refuses it. */
+static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
+{
+    WQ_ENGINE lc;
+    WORLDQ lq;
+    const WQ_ENGINE* ec = c;
+    const WORLDQ* eq = q;
+    const int truelos = (*(const unsigned char*)(c->ta + OFF_LOSTYPE) & 2) != 0;
+    const unsigned local = *(const unsigned char*)(c->ta + OFF_LOCALPLAYER);
+    unsigned slot, *eval, *miss;
+    if (truelos) {
+        eval = &s_obs.los_eval[seat];
+        miss = &s_obs.los_miss[seat];
+    } else {
+        if (local >= PLAYER_COUNT || !tagpu_worldq_open(&lc, &lq, (int)local, WQ_SITE_ENGINE, NULL)) return;
+        ec = &lc;
+        eq = &lq;
+        eval = &s_obs.local_eval;
+        miss = &s_obs.local_miss;
+    }
+    for (slot = 1; slot < ec->nslots; slot++) {
+        const char* u = ec->units + slot * UNIT_STRIDE;
+        int mine, theirs, under;
+        if (*(const unsigned char*)(u + U_OWNER) == (unsigned)eq->seat) continue;
+        if ((mine = tagpu_worldq_unit_los(eq, (int)slot, &under)) < 0 || under) continue;
+        theirs = ((PFN_UnitInLos)(uintptr_t)VA_UNIT_IN_LOS)(ec->rec, u) != 0;
+        (*eval)++;
+        if (mine != theirs) {
+            (*miss)++;
+            if (!s_obs.los_said) {
+                s_obs.los_said = 1;
+                tagpu_logf("impai: check los mismatch seat=%d slot=%u ours=%d engine=%d pos=%d,%d,%d gametime=%d",
+                           eq->seat, slot, mine, theirs, *(const int*)(u + U_XFIX), *(const int*)(u + U_ZFIX),
+                           *(const int*)(u + U_YFIX), *(const int*)(ec->ta + OFF_GAMETIME));
+            }
+        }
+    }
+}
+
+/* One ImpAI seat's turn, at its record's place in the players phase, after the step's unit tick, projectiles
+   and explosions and before the seat's own sight emits (0x465053): positions are this tick's, the seat's own
+   counters as its last emits left them; nothing after the players phase in the step writes a position, the
+   alive bit, an owner, a type or cloak (engine/sim.md, the step), so what this turn reads of them holds for
+   the rest of the step. */
 static void impai_observe(int seat)
 {
+    static const IMPAI_BUDGET budget = { OBS_SLICE, RADAR_VISITS };
+    WQ_ENGINE c;
+    WORLDQ q;
+    IMPAI_WORK w;
     s_diag.calls[seat]++;
+    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
+        impai_know_tick(&q, &s_seatst[seat], s_known, (int)(sizeof s_known / sizeof s_known[0]),
+                        s_radar_bits[seat], (int)sizeof s_radar_bits[seat], &budget, &w) < 0) {
+        s_obs.refused[seat]++;
+        return;
+    }
+    s_obs.ticks[seat]++;
+    if (w.slots > s_obs.slots_max[seat]) s_obs.slots_max[seat] = w.slots;
+    if (w.visits > s_obs.visits_max[seat]) s_obs.visits_max[seat] = w.visits;
+    if (c.nslots > s_obs.nslots_max) s_obs.nslots_max = c.nslots;
+    if (s_install.check) check_los(&c, &q, seat);
+}
+
+#define VA_RADAR_CALL 0x0046556Du   /* the players phase's `call 0x467440`, E8 CE 1E 00 00 */
+#define VA_RADAR_PASS 0x00467440u   /* the radar pass: no argument, plain `ret`            */
+
+/* THE RADAR CHECK, the target of the call at 0x46556D under tagpu_impai_check.on alone: the engine's pass
+   runs, then ImpAI's copy (tagpu_worldq.c, wq_radar_step) for the same record, unbudgeted, and every live
+   unit's +0x110 bits 8 and 9 are compared with the copy's, and bit 10 where the pass's first loop cleared it
+   (WQ_RB_KEPT clear: an own or shared unit's bit 10 is older than the pass). The site is reached only in the
+   viewed record's turn (0x465565..0x46556B), so the record is main[0x2A43]. Same contract as 0x467440: no
+   argument, a plain `ret`, the callee-saved registers kept. The players phase's run on the loader thread
+   (0x497C10) passes through unchecked. */
+static void impai_radar_check(void)
+{
+    const char* ta;
+    WQ_ENGINE c;
+    WORLDQ q;
+    WQ_RADAR st;
+    uint8_t* bits;
+    int32_t budget = INT32_MAX;
+    unsigned slot, bytes, seat;
+    ((void (*)(void))(uintptr_t)VA_RADAR_PASS)();
+    ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    if (GetCurrentThreadId() != g_ddraw.gui_thread_id || !ta) return;
+    seat = *(const unsigned char*)(ta + OFF_LOCALPLAYER);
+    if (seat >= PLAYER_COUNT || *(const unsigned short*)(ta + 0x2A3C) < 2 ||
+        !tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_ENGINE, NULL))
+        return;
+    bytes = WQ_RADAR_BYTES(c.nslots);
+    if (!(bits = (uint8_t*)tagpu_sim_scratch(bytes))) return;
+    memset(&st, 0, sizeof st);
+    if (q.ops->radar_step(&q, &st, bits, (int)bytes, &budget)) {
+        s_obs.radar_passes++;
+        for (slot = 1; slot < c.nslots; slot++) {
+            const unsigned state = *(const unsigned*)(c.units + slot * UNIT_STRIDE + U_STATE);
+            const unsigned v = wq_radar_bits(bits, slot);
+            const unsigned mask = v & WQ_RB_KEPT ? 3u : 7u;
+            if (!(state & ST_ALIVE)) continue;
+            s_obs.radar_eval++;
+            if (((state >> 8) & mask) != (v & mask)) {
+                s_obs.radar_miss++;
+                if (!s_obs.radar_said) {
+                    s_obs.radar_said = 1;
+                    tagpu_logf("impai: check radar mismatch slot=%u ours=%X engine=%X gametime=%d", slot, v,
+                               (state >> 8) & 7u, *(const int*)(ta + OFF_GAMETIME));
+                }
+            }
+        }
+    }
+    tagpu_sim_scratch_free(bits);
+}
+
+/* Under tagpu_impai_check.on, once every ImpAI site is in: the radar check's call site, byte-matched, else no
+   radar check and a line says why. */
+static void impai_check_install(void)
+{
+    unsigned char now[5];
+    const int32_t rel = (int32_t)((uint32_t)(uintptr_t)impai_radar_check - (VA_RADAR_CALL + 5u));
+    if (!tagpu_detour_redirect_ok(VA_RADAR_CALL, VA_RADAR_PASS)) {
+        tagpu_logf("impai: check: 0x%06X not stock, no radar check", (unsigned)VA_RADAR_CALL);
+        return;
+    }
+    now[0] = 0xE8;
+    memcpy(now + 1, &rel, 4);
+    if (!tagpu_detour_write(VA_RADAR_CALL, now, 5)) {
+        tagpu_logf("impai: check: 0x%06X could not be written, no radar check", (unsigned)VA_RADAR_CALL);
+        return;
+    }
+    tagpu_logf("impai: check: line of sight in every ImpAI turn, radar at 0x%06X", (unsigned)VA_RADAR_CALL);
+}
+
+/* The level's observation lines, at the level end: each seat's work against its bounds, and the checks'
+   counts. The bound of `slots` is the slice plus a pass's publish, one observe a slot; of `visits` the
+   budget plus one walk past it, which reads each slot's unit once at most. */
+static void impai_observe_end(unsigned now)
+{
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if (s_obs.ticks[i] || s_obs.refused[i])
+            tagpu_logf("impai: work seat=%u ticks=%u refused=%u slots_max=%u/%u visits_max=%u/%u gametime=%u", i,
+                       s_obs.ticks[i], s_obs.refused[i], s_obs.slots_max[i], OBS_SLICE + s_obs.nslots_max,
+                       s_obs.visits_max[i], RADAR_VISITS + s_obs.nslots_max, now);
+    if (!s_install.check) return;
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if (s_obs.ticks[i])
+            tagpu_logf("impai: check los seat=%u evaluated=%u mismatch=%u", i, s_obs.los_eval[i], s_obs.los_miss[i]);
+    tagpu_logf("impai: check los-local evaluated=%u mismatch=%u", s_obs.local_eval, s_obs.local_miss);
+    tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u", s_obs.radar_passes, s_obs.radar_eval,
+               s_obs.radar_miss);
+}
+
+/* The level init's half of observation, on every level, live or puppet: nothing of the previous level's
+   knowledge survives, and a puppet's comes from its recording. */
+static void impai_observe_clear(void)
+{
+    memset(s_known, 0, sizeof s_known);
+    memset(s_seatst, 0, sizeof s_seatst);
+    memset(s_radar_bits, 0, sizeof s_radar_bits);
+    memset(&s_obs, 0, sizeof s_obs);
 }
 
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no
@@ -140,6 +349,7 @@ void tagpu_impai_level_end(void)
             at += wsprintfA(line + at, " %u=%u/%u", i + 1, s_diag.hits[i][HIT_SCALED],
                             s_diag.hits[i][HIT_EXEMPT]);
         tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
+        impai_observe_end(now);
     }
     memset(s_seat, 0, sizeof s_seat);
 }
@@ -165,6 +375,7 @@ void tagpu_impai_level_init(void)
     unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
+    impai_observe_clear();
     if (tagpu_puppet_on()) return;
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
@@ -430,6 +641,7 @@ void tagpu_impai_init(void)
     WRITE w[NSITES + NCALLS];
     unsigned char* p;
     int i, done;
+    s_install.check = (uint8_t)tagpu_sim_lever("tagpu_impai_check.on");
     if (!tagpu_replay_level_init_in()) {
         lstrcpynA(s_install.why, "the level init 0x4919C8 is not retargeted (the log's `replay:` "
                   "lines say why)", sizeof s_install.why);
@@ -492,6 +704,7 @@ void tagpu_impai_init(void)
         return;
     }
     s_install.in = s_install.avail = 1;
+    if (s_install.check) impai_check_install();
     /* the addresses handicap_check.py peeks: the seat table, and the counts as 18 pairs of u32,
        scaled then exempt */
     tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE and %d handicap sites "

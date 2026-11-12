@@ -49,4 +49,10 @@ int      tagpu_worldq_def_kind(const void* def);
    not a puppet seat) or `site` is WQ_SITE_CURSOR with no decoded target. */
 int tagpu_worldq_open(WQ_ENGINE* ctx, WORLDQ* out, int seat, int site, WqMenuFn menu);
 
+/* The line-of-sight rule `observe` applies, alone, for ImpAI's self-check against the engine's own
+   0x465AC0: 1 when the seat's sight shows the live unit at `slot`, 0 when not, -1 for no live unit or no
+   sight grid; *under is 1 for a unit whose top is below the sea, which the rule never shows. The caller
+   tests ownership first, as 0x465AC0 does. */
+int tagpu_worldq_unit_los(const WORLDQ* q, int slot, int* under);
+
 #endif

@@ -371,8 +371,13 @@ index `+0xA6` holds.
   `0x47D0B9`/`0x47D0C6`) sits behind a `+0x86` = 0 test or a caller that made it. MEASURED: every
   free unit's next shares its bucket (47,004) or is NULL (18,941); each of the 51 carried units is
   in its carrier's chain.
-- **Both orders reach the simulation.** The bucket walk `0x47E890` visits each bucket of a
-  rectangle from its head into a vector, from which RepairPatrol `0x405980` and VTOL_RepairPatrol
+- **Both orders reach the simulation.** The bucket walk `0x47E890(pos, r, visitor)` (stdcall `ret 0xC`,
+  `0x47E890..0x47EA36`, DISASSEMBLED 2026-11-11) takes the rectangle `(x ∓ r) >> 23`, `(z ∓ r) >> 23`, each bound
+  clamped into `[0, cols − 1]` or `[0, rows − 1]` (a value at or past the end, unsigned, becomes the last; a
+  negative one 0), walks it row by row and each bucket's chain from `+6` through `+0x8E` — not the cargo — and
+  calls the visitor's first method on a unit whose `(dx·dx >> 32) + (dz·dz >> 32)` is at most `r·r >> 32`
+  (`0x4E4400` the 64-bit product, `0x4E43D0` with `cl = 0x20` its arithmetic shift). In chain order, into a
+  visitor's vector, from which RepairPatrol `0x405980` and VTOL_RepairPatrol
   `0x4152F0` pick `candidates[rand(n)]` by the simulation RNG `0x4B6C30` (`0x405A89..0x405A91`,
   `0x415520..0x415528`) and VTOL_SeekGuard `0x410850` takes the first (`0x410ACE..0x410AD2`); the
   unloads take the carrier's head (Ground_Unload `0x406960`, VTOL_Unload `0x4115C7`). MEASURED: of
