@@ -201,11 +201,11 @@ key) and an owner record (`[esi+0x96]`) active and of type 2 (`0x406FBF..0x406FC
 `0x4B6C30(300)` (`0x406FCE`), stores GameTime + 30 + the draw at the AI object's `+0x0D`
 (`0x406FD3..0x406FEE`), which only the builder planner's commander wait reads (`0x408186`), and
 calls `0x439EB0(unit, 0)` (`0x406FF1`), which removes every order of the unit's `+0x5C` list
-whose `+0x42` lacks bit 4 ([orders](orders.html)). It reads no Difficulty: a hit OTA AI commander
+whose `+0x42` lacks flag `0x4` ([orders](orders.html)). It reads no Difficulty: a hit OTA AI commander
 drops its orders and pauses its planners 30 to 329 ticks, drawing the simulation RNG; a human's does
 not.
 
-**Impure's exemption for ImpAI** (`tagpu_impai.c`, [entering the game](../impai/engine-seam.html)).
+**Impure's exemption for ImpAI** (`tagpu_impai.c`, [ImpAI in the engine](../modules/impai.html)).
 Each of the eighteen type tests, rows 1 to 17 and `0x406FC3`, becomes a 5-byte `jmp` to a stub of
 its own (the rest of the site NOPs). The stub runs the site's own compare, copied from the site,
 and its `jne` to the unscaled branch; for a type-2 record it bounds the record to one of main's ten

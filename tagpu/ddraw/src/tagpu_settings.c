@@ -292,24 +292,6 @@ int tagpu_settings_seatai(void)
     return s_attached ? read_val(TS_SEATAI) : 0;
 }
 
-/* NOT REFUSED UNDER tagpu_defaults.off, unlike tagpu_settings_set: the seat choice is a setup
-   choice the player makes on the SKIRMISH screen, which the engine keeps under every launch, so
-   a choice made under the harness's launch is the one its next level plays (owner decision,
-   research/notes/impai/decisions.md). The flush writes the whole store, every other key as the
-   attach loaded it, since nothing else changes under tagpu_defaults.off. */
-void tagpu_settings_seatai_set(int mask)
-{
-    if (!s_attached) return;
-    if (!valid(TS_SEATAI, mask)) {
-        slog("refused seatai=%d: not a set of seats 0-9", mask);
-        return;
-    }
-    if ((int)s_val[TS_SEATAI] == mask) return;
-    InterlockedExchange(&s_val[TS_SEATAI], mask);
-    InterlockedIncrement(&s_gen);
-    InterlockedIncrement(&s_dirty);
-}
-
 long tagpu_settings_gen(void) { return (long)s_gen; }
 
 void tagpu_settings_set(TagpuSetting key, int value)

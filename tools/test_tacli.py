@@ -1745,6 +1745,26 @@ class SettingsStore(unittest.TestCase):
             self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=1,2"])
             tacli.write_seatai(inst, [])
             self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+            tacli.write_seatai(inst, None)
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+
+    def test_every_harness_launch_writes_seatai(self):
+        # a launch that names no seat replaces a stale choice with none; one that names seats
+        # writes them
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nseatai=2\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=[2]))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("seatai=2", lines)
+            self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
 
 
 # ----------------------------------------------------------- remote instances

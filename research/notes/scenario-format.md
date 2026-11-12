@@ -650,9 +650,10 @@ With ten slots declared it seats ten (the seating rule under the schema's notes)
 **A player's `controller`** is `human`, `ai` (OTA AI, the stock AI), `impai` or `off`. `impai`
 is a computer seat to the engine, written to the registry as `ai` is (controller 2); what makes
 ImpAI play it is the store: `load` writes `seatai=<the impai slots>` into the instance's
-`impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat, so a
-line an earlier launch left never seats ImpAI. The DLL reads the key at each level's init under
-every launch, `--defaults` included ([entering the game](impai/engine-seam.html)).
+`impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat; every
+other tacli launch writes `seatai=none`, so a line an earlier launch left never seats ImpAI. The
+DLL reads the key at each level's init under every launch, `--defaults` included ([ImpAI in the
+engine](modules/impai.html)).
 
 **`setup.difficulty`**, `easy`, `medium` or `hard`, sets the SKIRMISH screen's `Difficulty`
 gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine's own value

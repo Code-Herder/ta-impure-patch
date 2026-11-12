@@ -5,14 +5,16 @@
 #include "tagpu_impai.h"
 #include "tagpu_simreg.h"
 
-/* ImpAI writes nothing on a puppet: the wrapper refuses a puppet seat and the level init writes
-   no seat on a puppet level, so the recording is the only writer of the seat table there. */
+/* ImpAI marks no seat on a puppet: the wrapper refuses a puppet seat, and on a puppet level the
+   level init and the level end only clear the table, so between the two the recording is the
+   only writer of the seat table. */
 SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm");
 
 #include "dd.h"                 /* g_ddraw.gui_thread_id: the game thread */
 #include "tagpu_engine.h"
 #include "tagpu_puppet.h"
 #include "tagpu_detour.h"
+#include "tagpu_reclaim.h"
 #include "tagpu_log.h"
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
@@ -26,15 +28,19 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 
 #define IMPAI_ON     0x01u
 
-/* Which records ImpAI plays, by record index. Every level starts from the table a fresh
-   process holds: the level init clears it on every level, live or puppet, on the loader thread
-   before the level's first step, so no mark of an earlier level survives into this one. Then
-   the level init marks a live level's seats; on a puppet level the recording is the only
-   writer, its first restore running on the game thread at the level's first step, after the
-   clear (impai_seat_of, THE THREAD, gives the ordering). A recording that carries no row of
-   this table leaves it clear. */
+/* Which records ImpAI plays, by record index. No level sees another's marks: the level end
+   clears the table in the teardown, and the level init clears it again on every level, live or
+   puppet, on the loader thread before anything of the level reads it (the stubs' ordering,
+   below), which also covers a teardown tagpu_reclaim.off leaves unwrapped. Then the level init
+   marks a live level's seats; on a puppet level, after that clear, the recording is the only
+   writer, its first restore running on the game thread at the level's first step (the loader's
+   done bit orders the two: impai_seat_of, THE THREAD). A recording that carries no row of this
+   table leaves it clear. */
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
+
+#define IMPAI_HSITES 18        /* the handicap sites: the seventeen Difficulty tests and 0x406FC3 */
+enum { HIT_SCALED, HIT_EXEMPT };
 
 /* What went in at attach. `avail`: every site ImpAI needs is in, so a level may mark seats;
    `why` says what kept it out. */
@@ -45,9 +51,15 @@ static struct {
 } s_install;
 SIM_VAR(s_install, SIM_INSTALL);
 
-/* the wrapper's turns per seat this level, for the level-end line */
+/* The level's counts, for the level-end lines and handicap_check.py's peek: the wrapper's turns
+   per seat, and per handicap site how often a type-2 record took the scaled continuation (an OTA
+   AI seat) and the unscaled branch for an ImpAI mark. The stubs increment `hits` with a plain
+   `inc` on whichever thread reaches the site; the threads are ordered as the table's writes are
+   (the stubs' ordering), but nothing makes the counts exact against a network load's concurrent
+   removal: they are diagnostics the simulation never reads. */
 static struct {
     unsigned calls[PLAYER_COUNT];
+    unsigned hits[IMPAI_HSITES][2];         /* [HIT_SCALED], [HIT_EXEMPT] */
 } s_diag;
 SIM_VAR(s_diag, SIM_PRIVATE);
 
@@ -105,22 +117,36 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
     ((PFN_AiTick)(uintptr_t)VA_AI_TICK)(obj);
 }
 
-/* On the game thread, in the teardown 0x491B60's entry; with tagpu_reclaim.off that wrap is not
-   installed and no line is written. */
+/* THE LEVEL END, on the game thread in the teardown 0x491B60's entry, after the recorder has
+   closed the level's recording (tagpu_reclaim.c, reclaim_teardown_pre). It writes the level's
+   counts and clears the seat table, so nothing the engine runs between this level and the next
+   level init reads a mark of this one: the next load's loader thread, the only thread that can
+   reach a site before that init (its early pump 0x49727D, network loads), is created later by
+   this thread (0x4982CA), which orders the clear before it. The install requires the teardown
+   wrap (tagpu_impai_init), so a level with marks always ends here. */
 void tagpu_impai_level_end(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    char line[IMPAI_HSITES * 28];
     unsigned i, now;
-    if (!s_install.in || !ta) return;
-    now = *(const unsigned*)(ta + OFF_GAMETIME);
-    for (i = 0; i < PLAYER_COUNT; i++)
-        if ((s_seat[i] & IMPAI_ON) || s_diag.calls[i])
-            tagpu_logf("impai: calls seat=%u n=%u gametime=%u", i, s_diag.calls[i], now);
+    int at;
+    if (s_install.in && ta) {
+        now = *(const unsigned*)(ta + OFF_GAMETIME);
+        for (i = 0; i < PLAYER_COUNT; i++)
+            if ((s_seat[i] & IMPAI_ON) || s_diag.calls[i])
+                tagpu_logf("impai: calls seat=%u n=%u gametime=%u", i, s_diag.calls[i], now);
+        at = 0;
+        for (i = 0; i < IMPAI_HSITES; i++)
+            at += wsprintfA(line + at, " %u=%u/%u", i + 1, s_diag.hits[i][HIT_SCALED],
+                            s_diag.hits[i][HIT_EXEMPT]);
+        tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
+    }
+    memset(s_seat, 0, sizeof s_seat);
 }
 
 /* The level init's seat choice, the AI command and the header's accessor: what decides which
-   seats ImpAI plays. On a puppet the level init marks no seat and the AI command writes none, so
-   the recording is the only writer of the table there. */
+   seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
+   AI command clears no mark, so between the two clears the recording is the only writer. */
 SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm");
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
@@ -170,31 +196,41 @@ void tagpu_impai_level_init(void)
     tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);
 }
 
-/* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it, else 0.
-   Game thread, at the header's capture after the level init, or a fork's after the takeover's
-   restore, so it states the seat table the game ran. */
+/* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it -- the
+   record is seated, of controller 2 and marked, the seam's own test -- else 0. Game thread, at
+   the header's capture after the level init, or a fork's after the takeover's restore, so it
+   states the seats the game ran. */
 unsigned tagpu_impai_seat_ai(unsigned i)
 {
-    return i < PLAYER_COUNT ? (unsigned)(s_seat[i] & IMPAI_ON) : 0;
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const char* rec;
+    if (i >= PLAYER_COUNT || !ta || !(s_seat[i] & IMPAI_ON)) return 0;
+    rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+    return *(const uint32_t*)(rec + PL_ACTIVE) && (uint8_t)rec[PL_CONTROL] == CTRL_AI;
 }
 
-#define VA_AI_CMD    0x004162F4u   /* the AI command's `call 0x463C60`, E8 67 D9 04 00     */
-#define VA_SET_TYPE  0x00463C60u   /* thiscall (rec, type), ret 4: +0x73 = type           */
+#define VA_AI_CMD_AI    0x004162F4u   /* `AI`'s type 1 -> 2: `call 0x463C60`, E8 67 D9 04 00      */
+#define VA_AI_CMD_HUMAN 0x004162FEu   /* `AI`'s type 2 or 3 -> 1: `call 0x463C60`, E8 5D D9 04 00  */
+#define VA_SET_TYPE     0x00463C60u   /* thiscall (rec, type), ret 4: +0x73 = type             */
 
 typedef void (__thiscall* PFN_SetType)(void* rec, int type);
 
-/* THE AI COMMAND: a human's seat becomes OTA AI, as in stock (impai/decisions.md, Settled at L0).
-   0x416280, the console's `AI` (row 0x501FD0), makes an active type-1 record type 2 with
-   `push 2; call 0x463C60` at 0x4162F2..0x4162F4 (DISASSEMBLED). The record is ECX (thiscall),
-   the type one stack argument the callee pops (0x463C60 ends `ret 4`), which __fastcall's third
-   parameter reproduces; the site returns (`ret 4`, 0x4162F9) reading no register. The only way
-   a type-1 record carries an ImpAI mark is a takeover played as an ImpAI seat; without this the
-   command would hand that seat to ImpAI rather than to the stock AI.
+/* THE AI COMMAND: `AI` never leaves a seat to ImpAI. 0x416280, the console's `AI` (row
+   0x501FD0, mask 4: cheats), sets the type of the active record its argument names through
+   0x463C60 at one of two calls (DISASSEMBLED): type 1 becomes 2 with `push 2; call 0x463C60` at
+   0x4162F2..0x4162F4 -- a human's seat handed to the stock AI, as in stock (impai/decisions.md,
+   Settled at L0) -- and types 2 and 3 become 1 with `push 1; call 0x463C60` at
+   0x4162FC..0x4162FE, so `AI` on a computer seat makes it a human's. Both calls come
+   here, and the record loses its ImpAI mark either way: an ImpAI seat becomes a human's and, at a
+   second `AI`, OTA AI's; a type-1 record that carries a mark (a takeover played as an ImpAI seat)
+   becomes OTA AI's. The record is ECX (thiscall), the type one stack argument the callee pops
+   (0x463C60 ends `ret 4`), which __fastcall's third parameter reproduces; both sites return
+   (`ret 4` at 0x4162F9 and 0x416303) reading no register.
    THE BOUND is the seam's: the record is one of main's ten by range and exact division, else
    nothing is cleared. THE THREAD: the game thread between steps (the TALK screen 0x493BF0 and
-   the keys 0x495E90), or the loader thread through a script line that names `AI` inside the
-   PLAYERS call 0x4919C8 (the profile load 0x4648E0), before tagpu_impai_level_init clears and
-   writes the table on that same thread. On a puppet nothing is written: the recorder is the
+   the keys 0x495E90), or the loader thread when a profile script names `AI` (the profile load
+   0x4648E0, inside the players init 0x464990), before tagpu_impai_level_init clears the table
+   and marks the record if `seatai` names it. On a puppet nothing is written: the recorder is the
    only writer of the table there. */
 static void __fastcall impai_ai_command(char* rec, void* edx_unused, int type)
 {
@@ -202,8 +238,12 @@ static void __fastcall impai_ai_command(char* rec, void* edx_unused, int type)
     (void)edx_unused;
     if (ta && !tagpu_puppet_on()) {
         uintptr_t off = (uintptr_t)rec - (uintptr_t)(ta + OFF_PLAYERS);
-        if (off < (uintptr_t)PLAYER_COUNT * PLAYER_STRIDE && !(off % PLAYER_STRIDE))
+        if (off < (uintptr_t)PLAYER_COUNT * PLAYER_STRIDE && !(off % PLAYER_STRIDE)
+            && (s_seat[off / PLAYER_STRIDE] & IMPAI_ON)) {
             s_seat[off / PLAYER_STRIDE] = 0;
+            tagpu_logf("impai: the AI command makes record %u type %d: ImpAI no longer plays it",
+                       (unsigned)(off / PLAYER_STRIDE), type);
+        }
     }
     ((PFN_SetType)(uintptr_t)VA_SET_TYPE)(rec, type);
 }
@@ -252,8 +292,8 @@ static const HSITE HSITES[] = {
     { 0x00406FC3u,  6, 4, 0, { CMP2_EAX, 0x75, 0x2D } },             /* 18 on-hit commander purge  */
 };
 #define NSITES ((int)(sizeof HSITES / sizeof HSITES[0]))
-#define STUB_ROOM 80u          /* one stub's bytes, rounded up: the longest is 74 */
-_Static_assert(sizeof HSITES / sizeof HSITES[0] == 18, "the seventeen handicap sites and 0x406FC3");
+#define STUB_ROOM 96u          /* one stub's bytes, rounded up: the longest is 86 */
+_Static_assert(sizeof HSITES / sizeof HSITES[0] == IMPAI_HSITES, "the seventeen handicap sites and 0x406FC3");
 _Static_assert(18 * STUB_ROOM <= 0x1000, "every stub fits the one page");
 
 /* Every stub, one page made at attach and kept for the process: the sites jump into it. */
@@ -286,8 +326,13 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
        sub eax,ecx; cmp eax,10*0x14B; jae not
        xor edx,edx; mov ecx,0x14B; div ecx; test edx,edx; jnz not
        test byte [s_seat+eax],IMPAI_ON; jz not
-       pop edx; pop ecx; pop eax; jmp U        an ImpAI seat: unscaled
-   not: pop edx; pop ecx; pop eax; jmp S      an OTA AI seat: stock's scaled path, S = va + n
+       pop edx; pop ecx; pop eax
+       inc dword [hits+EXEMPT]; jmp U          an ImpAI seat: unscaled
+   not: pop edx; pop ecx; pop eax
+       inc dword [hits+SCALED]; jmp S          an OTA AI seat: stock's scaled path, S = va + n
+
+   `hits` is the site's row of s_diag.hits: the level's count of type-2 records that took each
+   exit, for the level-end line and handicap_check.py.
 
    THE INVARIANT.
    - A bound. The record pointer is data until it is one of main's ten records: an offset below
@@ -296,8 +341,10 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
      itself has already read [rec+0x73]).
    - Stock is preserved. The site's own compare and branch run first, so a record stock does not
      scale is not scaled. EAX, ECX and EDX are restored before either exit; no x87 register is
-     touched (one or two values are live on the FPU stack at every site, engine/sim.md); nothing
-     is called. The flags are dead at all 36 exits: from every U and S the first instruction that
+     touched (zero to two values are live on the FPU stack at a site, none at rows 13, 14 and 18:
+     0x464B88 and 0x464CB8 empty it with `fstp st(0)` before a call, and 0x406F80 holds no x87
+     value, DISASSEMBLED); nothing is called. The `inc` before each exit writes only the flags,
+     and the flags are dead at all 36 exits: from every U and S the first instruction that
      touches them writes them (sub, cmp, test, xor) or is a call, directly or through one jmp,
      and 0x4016C5 passes only fcomp/fnstsw before its `test ah` (DISASSEMBLED). No direct branch
      in .text lands inside a site, and every site starts and ends on an instruction (the linear
@@ -306,14 +353,23 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
      0x4919C8, which precedes on that thread the loader's own players phase 0x497C10 and every
      loader-thread order destruction that reaches a site (0x497B29, 0x497B40), and precedes the
      game thread's first step through the loader's done bit (0x497C62, tested 0x498342); later
-     only by the recorder's restore and the AI command, both on the game thread between steps.
-     The sites run inside the step on the game thread, between steps on it (console Give, the
-     SHARE dialog, a self-destruct), or on the loader thread after 0x4919C8. The one earlier
-     path, the loader's pump 0x49727D, removes players only in a network load, where the level
-     init marks no seat.
+     only by the recorder's restore and the AI command, both on the game thread between steps,
+     and by the level end's clear in the teardown. The sites run inside the step on the game
+     thread, between steps on it (console Give, the SHARE dialog, a self-destruct), or on the
+     loader thread after 0x4919C8. The one earlier path is the loader's early pump 0x49727D,
+     which in a network load can remove a player and so destroy its units (scout I1 of the ImpAI
+     plan, function-level reachability; in a skirmish the pump returns at once, 0x453D4B). It
+     runs before this level's init, and reads a table the previous level's end cleared
+     (tagpu_impai_level_end): every type-2 record takes stock's branch there.
    - A puppet holds type-3 records, which the site's own compare sends to U as stock does; s_seat
      is not read there. */
-static unsigned char* stub_emit(unsigned char* p, const HSITE* s)
+static unsigned char* inc_hits(unsigned char* p, const unsigned* hit)
+{
+    *p++ = 0xFF; *p++ = 0x05;
+    return put32(p, (uint32_t)(uintptr_t)hit);
+}
+
+static unsigned char* stub_emit(unsigned char* p, const HSITE* s, const unsigned* hits)
 {
     const uint32_t U = site_unscaled(s), S = s->va + s->n;
     unsigned char *j1, *j2, *j3, *not_;
@@ -335,12 +391,14 @@ static unsigned char* stub_emit(unsigned char* p, const HSITE* s)
     *p++ = 0xF6; *p++ = 0x80; p = put32(p, (uint32_t)(uintptr_t)s_seat); *p++ = IMPAI_ON;
     *p++ = 0x74; j3 = p++;
     *p++ = 0x5A; *p++ = 0x59; *p++ = 0x58;
+    p = inc_hits(p, &hits[HIT_EXEMPT]);
     *p++ = 0xE9; tagpu_detour_rel(p, U); p += 4;
     not_ = p;
     *j1 = (unsigned char)(not_ - (j1 + 1));
     *j2 = (unsigned char)(not_ - (j2 + 1));
     *j3 = (unsigned char)(not_ - (j3 + 1));
     *p++ = 0x5A; *p++ = 0x59; *p++ = 0x58;
+    p = inc_hits(p, &hits[HIT_SCALED]);
     *p++ = 0xE9; tagpu_detour_rel(p, S); p += 4;
     return p;
 }
@@ -357,16 +415,19 @@ static void write_branch(WRITE* w, unsigned char op, uint32_t target)
     memcpy(w->now + 1, &rel, 4);
 }
 
-/* THE INSTALL, all or none, after tagpu_replay_init. THE LEVEL INIT IS OURS FIRST: nothing goes in
-   unless replay's sites are in, among them the level init's PLAYERS call 0x4919C8, the only
-   caller of tagpu_impai_level_init, so no site is in on a level whose seat table nobody cleared
-   and wrote. Then every site is compared -- the seam 0x465031, the AI command 0x4162F4 and the
+/* THE INSTALL, all or none, after tagpu_replay_init and tagpu_reclaim_init. THE LEVEL'S EDGES
+   ARE OURS FIRST: nothing goes in unless replay's sites are in, among them the level init's
+   PLAYERS call 0x4919C8, the only caller of tagpu_impai_level_init, and the teardown wrap is in,
+   the only caller of tagpu_impai_level_end; so no site is in on a level whose seat table nobody
+   cleared and wrote, nor between levels with a table nobody cleared. Then every site is
+   compared -- the seam 0x465031, the AI command's two calls 0x4162F4 and 0x4162FE and the
    eighteen type tests -- and only when every one is stock are the stubs built and every site
    written; a write that fails puts back every site already written. Otherwise nothing is
    written, s_install.avail stays 0, and each level says why. */
 void tagpu_impai_init(void)
 {
-    WRITE w[NSITES + 2];
+    enum { NCALLS = 3 };
+    WRITE w[NSITES + NCALLS];
     unsigned char* p;
     int i, done;
     if (!tagpu_replay_level_init_in()) {
@@ -375,20 +436,28 @@ void tagpu_impai_init(void)
         tagpu_logf("impai: unavailable: %s", s_install.why);
         return;
     }
-    w[0].va = VA_AI_CALL;
-    w[1].va = VA_AI_CMD;
-    w[0].n = w[1].n = 5;
-    memcpy(w[0].was, (const void*)(uintptr_t)VA_AI_CALL, 5);
-    memcpy(w[1].was, (const void*)(uintptr_t)VA_AI_CMD, 5);
-    for (i = 0; i < NSITES; i++) {
-        w[2 + i].va = HSITES[i].va;
-        w[2 + i].n = HSITES[i].n;
-        memcpy(w[2 + i].was, (const void*)(uintptr_t)HSITES[i].va, HSITES[i].n);
+    if (!tagpu_reclaim_level_tracked()) {
+        lstrcpynA(s_install.why, "the teardown wrap 0x491B60 is not in (tagpu_reclaim.c), so "
+                  "nothing would clear a level's seats", sizeof s_install.why);
+        tagpu_logf("impai: unavailable: %s", s_install.why);
+        return;
     }
-    for (i = 0; i < NSITES + 2; i++) {
+    w[0].va = VA_AI_CALL;
+    w[1].va = VA_AI_CMD_AI;
+    w[2].va = VA_AI_CMD_HUMAN;
+    for (i = 0; i < NCALLS; i++) {
+        w[i].n = 5;
+        memcpy(w[i].was, (const void*)(uintptr_t)w[i].va, 5);
+    }
+    for (i = 0; i < NSITES; i++) {
+        w[NCALLS + i].va = HSITES[i].va;
+        w[NCALLS + i].n = HSITES[i].n;
+        memcpy(w[NCALLS + i].was, (const void*)(uintptr_t)HSITES[i].va, HSITES[i].n);
+    }
+    for (i = 0; i < NSITES + NCALLS; i++) {
         int stock = i == 0 ? tagpu_detour_redirect_ok(VA_AI_CALL, VA_AI_TICK)
-                  : i == 1 ? tagpu_detour_redirect_ok(VA_AI_CMD, VA_SET_TYPE)
-                  : !memcmp(w[i].was, HSITES[i - 2].was, (size_t)w[i].n);
+                  : i < NCALLS ? tagpu_detour_redirect_ok(w[i].va, VA_SET_TYPE)
+                  : !memcmp(w[i].was, HSITES[i - NCALLS].was, (size_t)w[i].n);
         if (!stock) {
             int k, at = wsprintfA(s_install.why, "0x%06X not stock (", (unsigned)w[i].va);
             for (k = 0; k < w[i].n; k++)
@@ -406,14 +475,15 @@ void tagpu_impai_init(void)
     }
     write_branch(&w[0], 0xE8, (uint32_t)(uintptr_t)impai_ai_tick);
     write_branch(&w[1], 0xE8, (uint32_t)(uintptr_t)impai_ai_command);
+    write_branch(&w[2], 0xE8, (uint32_t)(uintptr_t)impai_ai_command);
     for (i = 0; i < NSITES; i++) {
         p = s_code + (unsigned)i * STUB_ROOM;
-        stub_emit(p, &HSITES[i]);
-        write_branch(&w[2 + i], 0xE9, (uint32_t)(uintptr_t)p);
+        stub_emit(p, &HSITES[i], s_diag.hits[i]);
+        write_branch(&w[NCALLS + i], 0xE9, (uint32_t)(uintptr_t)p);
     }
-    for (done = 0; done < NSITES + 2; done++)
+    for (done = 0; done < NSITES + NCALLS; done++)
         if (!tagpu_detour_write(w[done].va, w[done].now, w[done].n)) break;
-    if (done < NSITES + 2) {
+    if (done < NSITES + NCALLS) {
         while (done-- > 0) tagpu_detour_write(w[done].va, w[done].was, w[done].n);
         SIM_FREE(s_code, s_code);
         s_code = NULL;
@@ -422,5 +492,9 @@ void tagpu_impai_init(void)
         return;
     }
     s_install.in = s_install.avail = 1;
-    tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and %d handicap sites in", NSITES);
+    /* the addresses handicap_check.py peeks: the seat table, and the counts as 18 pairs of u32,
+       scaled then exempt */
+    tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE and %d handicap sites "
+               "in; seats at 0x%08X, handicap counts at 0x%08X", NSITES,
+               (unsigned)(uintptr_t)s_seat, (unsigned)(uintptr_t)s_diag.hits);
 }

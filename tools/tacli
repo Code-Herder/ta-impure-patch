@@ -712,7 +712,8 @@ def write_title(inst: Instance, label: str) -> str:
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
 # The store keys an ordinary launch writes: the placement (write_placement),
-# the size (ensure_store) and, for a scenario, the seats ImpAI plays (write_seatai). A player's menu writes the same keys, so the store
+# the size (ensure_store) and the seats ImpAI plays (write_seatai, `none` unless the launch
+# names seats). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
@@ -828,9 +829,22 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
 
 def write_seatai(inst: Instance, seats) -> None:
     """The store's `seatai`: the computer seats ImpAI plays (tagpu_impai.c reads it at every
-    level init, under tagpu_defaults.off too), `none` for an empty list. A scenario launch writes
-    it every time, so a stale line never seats ImpAI on a scenario that names none."""
-    _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats)) or "none")
+    level init, under tagpu_defaults.off too), `none` for no seat (an empty list or None). Every
+    harness launch writes it, so no launch plays an earlier launch's seats."""
+    _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
+
+
+def write_harness_store(inst: Instance, meta, window, args) -> None:
+    """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
+    or missing (ensure_store), the placement, and the seats ImpAI plays -- `none` unless this
+    launch names some (a scenario's `impai` seats)."""
+    # The size goes into the store when it is asked for on THIS launch, or when
+    # the store has none yet; a recorded --res rewritten every launch would undo
+    # the player's pick (ensure_store).
+    ensure_store(inst, tuple(args.res) if args.res else None,
+                 default_res=tuple(meta["res"]))
+    write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
+    write_seatai(inst, getattr(args, "seatai", None))
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
@@ -2066,14 +2080,7 @@ def _launch(args) -> dict:
         terrown_note = _ensure_terrown_for_terr(inst)
         markown_note = _ensure_markown_for_mark(inst)
         defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-        # The size goes into the store when it is asked for on THIS launch, or when
-        # the store has none yet; a recorded --res rewritten every launch would undo
-        # the player's pick (ensure_store).
-        ensure_store(inst, tuple(args.res) if args.res else None,
-                     default_res=tuple(meta["res"]))
-        write_placement(inst, meta["tile"], win, vsync=meta.get("vsync", "on"))
-        if getattr(args, "seatai", None) is not None:
-            write_seatai(inst, args.seatai)
+        write_harness_store(inst, meta, win, args)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -7016,8 +7023,7 @@ def _remote_launch(args) -> dict:
     # it lacks is the DLL's default, on
     if getattr(args, "vsync", None) is not None:
         _store_set(inst, "vsync", args.vsync)
-    if getattr(args, "seatai", None) is not None:
-        write_seatai(inst, args.seatai)
+    write_seatai(inst, getattr(args, "seatai", None))
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)

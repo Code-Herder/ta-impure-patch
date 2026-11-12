@@ -58,11 +58,10 @@ instance, `--no-defaults` back). Every arm-set recipe in the skill therefore sti
 
 **What the store says under `tagpu_defaults.off`.** Nothing, but for four keys it answers under
 every launch: `display`, `vsync` and `window`, which place the window, and `seatai`, the computer
-seats ImpAI plays (`tagpu_settings_seatai`; [entering the game](../impai/engine-seam.html)), a
-setup choice like the engine's own SKIRMISH registry keys. `seatai`'s setter writes it under
-`tagpu_defaults.off` too, which the menu's setter refuses for every other key; the flush then
-writes the whole store, every other key as the attach loaded it. `tacli scenario load` writes
-`seatai` before every launch, so a bare launch seats no ImpAI unless something wrote the key.
+seats ImpAI plays (`tagpu_settings_seatai`; [ImpAI in the engine](impai.html)), a
+setup choice like the engine's own SKIRMISH registry keys. Nothing in the DLL writes `seatai`:
+it is tacli's and the player's. Every tacli launch writes it — the seats a scenario names
+`impai`, or `none` — so no launch inherits an earlier launch's choice.
 
 **Measured 2026-09-08** (Two Continents, 1024×768, `scenario load … one-unit --defaults`, no arm
 file in the gamedir): the `opt:` line listed all seventeen; `owndraw`, `fxown`, `featown`,

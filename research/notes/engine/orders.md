@@ -685,7 +685,7 @@ owner is an active type-2 record (the type test `0x406FC3`; [sim](sim.html), *Di
 AI handicap*, which Impure exempts ImpAI's seats from). **`0x439EB0(unit, all)`** (`ret 8`; three
 callers: `0x406FF1` with 0, the controller `0x43BA97` with 1 for a handler result above 9, the unit
 destructor `0x4867A1` with 1): with 0 it walks `+0x5C` and removes every node whose `+0x42` lacks
-bit 4 (`0x439ED2..0x439ED8`), each unlinked, marked `0x10000` unless it was the head
+flag `0x4` (`test byte [esi+0x42],4` at `0x439ED2`), each unlinked, marked `0x10000` unless it was the head
 (`0x439EE0..0x439EE6`), destructed by `0x43A1F0` (`0x439EF3`) and freed (`0x439EF9`), the rule of
 `0x43ADC0`'s non-Shift wipe; `+0x60` is untouched (`0x439F0B..0x439F0D`); with 1 every node of
 both lists goes (`0x439F0F..0x439F71`). It creates nothing: an emptied commander gets its
@@ -1045,7 +1045,7 @@ own crash). It constructs a `0x56`-byte node through
 Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
 head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). In
 detail [DISASSEMBLED 2026-10-25]: without Shift, and when the new node lacks `+0x42` bit `0x40`,
-every main-chain node lacking bit 4 is destroyed; then, on every call unless the new node has
+every main-chain node lacking flag `0x4` (`bl` = 4 at `0x43AE25`, tested at `0x43AE27`) is destroyed; then, on every call unless the new node has
 `0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`). The new
 node gets `+0x42 |= 1`, and `|= 0x2000` without Shift (`0x43AEE7`). A node with `0x40020` is linked
 at the head of its chain (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`.

@@ -1037,10 +1037,12 @@ enum RecTag {
     RT_UNITS_EACH,     /* u32: the units a player may have, main+0x37EE6                         */
     RT_UNITDEFS,       /* u32 count, u32 FNV-1a of every UnitName (def+0x20), in index order     */
     RT_PLAYER,         /* u8 index, u8 controller (+0x73), u8 side, u8 logo (PlayerInfo +0x95,
-                          +0x96), u8 alliances (+0x108, 11 bytes), u8 the seat's AI (0 the
-                          stock AI or not a computer seat, 1 ImpAI; 0 in a recording made
-                          before ImpAI's seat choice, which is what played), PlayerInfo
-                          (REC_INFO_BYTES, 0xFF bytes when the record has none), then the name
+                          +0x96), u8 alliances (+0x108, 11 bytes), u8 the seat's AI (1 when
+                          ImpAI plays it: an active record of controller 2 that ImpAI's seat
+                          table marks; 0 for the stock AI and every other record, and in a
+                          recording made before ImpAI's seat choice, which is what played),
+                          PlayerInfo (REC_INFO_BYTES, 0xFF bytes when the record has none), then
+                          the name
                           at +0x2B: a seat at the start                                           */
     RT_LEVER,          /* u8 present, u8 text read, u16 name bytes, the name, then its text       */
     RT_LAYOUT,         /* string: replay-layout.tsv's SHA-256, TAGPU_REPLAY_LAYOUT_SHA256        */
