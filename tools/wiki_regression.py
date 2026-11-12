@@ -348,7 +348,6 @@ mp:
       closes it, and both peers still run, with no desync line in either log.
 """
 import argparse
-import hashlib
 import itertools
 import json
 import math
@@ -4725,6 +4724,61 @@ def under_wine(cmd):
     return "--wine" in map(str, cmd) or any(str(c).endswith("simparity.mjs") for c in cmd)
 
 
+def git_dir():
+    """This worktree's own git directory (the main checkout's `.git`, a linked worktree's `.git/worktrees/<name>`):
+    what lives there goes with the worktree, and no other worktree reaches it."""
+    return Path(subprocess.run(["git", "-C", str(TREE), "rev-parse", "--absolute-git-dir"], capture_output=True,
+                               text=True, check=True).stdout.strip())
+
+
+WINEBOOT_S = 600                # a hang bound, deciding nothing: wineboot -i made a prefix in 23 s (MEASURED 2026-11-11)
+WINESERVER_S = 120              # and on `wineserver -w`, as tacli bounds it (WINESERVER_HANG_S)
+
+
+def wine_prefix():
+    """The Wine prefix the offline checks' Wine builds run in (textparity --wine, simparity's `wine` build):
+    `wikigate-wine` in this worktree's git directory, made by `wineboot -i` the first time and kept.
+    THE INVARIANT: it shares no file with any other prefix. Wine makes every file of it from its own install and reads
+    no other prefix, so no Wine process of the checks writes through to the hive inode the template prefix shares
+    with every tacli clone (tacli clone_prefix), and no other prefix's wineserver writes into it -- which is also why
+    making it needs no lock. It is made in a folder named by this process and renamed into place only once
+    wineboot's server has exited, so a prefix found at the name is whole; two processes making it at once both
+    finish, and the one whose rename comes second discards its own.
+    The checks need nothing else of a prefix: their programs are i686 console programs linked -static by the DLL's
+    compiler (tools/wiki/wikibuild.mjs, textparity.mjs), run with no game file, no DirectPlay and no registry key of
+    tacli's. Several of them at once share the prefix's one wineserver, as in any prefix."""
+    final = git_dir() / "wikigate-wine"
+    if final.is_dir():
+        return final
+    for old in final.parent.glob("wikigate-wine.making-*"):
+        pid = old.name.rsplit("-", 1)[1]
+        if pid.isdigit() and not Path(f"/proc/{pid}").exists():
+            shutil.rmtree(old, ignore_errors=True)          # a maker that died part-way: its folder is never used
+    making = final.with_name(f"wikigate-wine.making-{os.getpid()}")
+    shutil.rmtree(making, ignore_errors=True)
+    # no display, so nothing it does can open a window on the desktop; Mono and Gecko declined, whose installers
+    # would otherwise be offered: the checks' programs use neither
+    env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    env.update(WINEPREFIX=str(making), WINEDEBUG="-all", WINEDLLOVERRIDES="mscoree,mshtml=")
+    print(f"wiki offline: making the checks' Wine prefix {final} (wineboot -i)", flush=True)
+    t0 = time.monotonic()
+    try:
+        subprocess.run(["wineboot", "-i"], env=env, check=True, timeout=WINEBOOT_S, capture_output=True)
+        # its server writes the hives when it exits: the prefix is whole once no server of it lives
+        subprocess.run(["wineserver", "-w"], env=env, check=True, timeout=WINESERVER_S)
+        try:
+            making.rename(final)
+        except OSError:
+            if not final.is_dir():
+                raise
+            shutil.rmtree(making, ignore_errors=True)       # another process's prefix took the name first
+    except BaseException:
+        shutil.rmtree(making, ignore_errors=True)
+        raise
+    print(f"wiki offline: the Wine prefix made in {time.monotonic() - t0:.0f} s", flush=True)
+    return final
+
+
 def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
     which fails like one that differs. `popen` starts it and `done` lets it go: the gate's own (Lanes), which end
@@ -4750,8 +4804,11 @@ def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None
 
 
 def offline_checks():
-    """offline_runs one after another, each to its end whatever the one before said. Takes no lock."""
-    failed = [name for name, cmd in offline_runs() if offline_one(name, cmd)[0]]
+    """offline_runs one after another, each to its end whatever the one before said, the Wine ones in wine_prefix().
+    Takes no lock."""
+    runs = offline_runs()
+    wenv = {**os.environ, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in runs) else None
+    failed = [name for name, cmd in runs if offline_one(name, cmd, env=wenv if under_wine(cmd) else None)[0]]
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
@@ -4849,34 +4906,25 @@ def gate_lane(lanes, cmd, log, env, keep=()):
 
 def gate_instance(name, *create):
     """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
-    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every prefix of the gate is made
-    private before Wine first runs in it, so no wineserver of the gate ever writes the template's hives and the gate's
-    own lanes never tear a copy it makes later; tacli's THE GAP, a copy read while a wineserver of another,
-    non-private instance rewrites the template's, is open to whatever runs beside the gate."""
+    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every instance of the gate is made
+    private before Wine first runs in it, and the offline checks' prefix shares no file with the template
+    (wine_prefix), so no wineserver of the gate ever writes the template's hives and the gate's own lanes never tear
+    a copy it makes. Made under the run lock (gate), no other locked run's game writes them either; tacli's THE GAP,
+    a copy read while a wineserver of another, non-private instance rewrites the template's, stays open to a game
+    started outside every lock."""
     if tacli_api().Instance(name).exists:
         tacli("rm", name, "--force", timeout=120)
     tacli("create", name, "--private-registry", *create, timeout=300)
     return tacli_api().Instance(name)
 
 
-# the offline lanes' Wine instance, one a worktree: they start without the run lock, so a gate of another worktree may
-# be running its own at the same moment, and tacli's instances are the main checkout's, one set for every worktree.
-# It is made before the run lock is held, so tacli's THE GAP is open to the games of whichever run holds it. A torn
-# copy is this prefix's alone, where Wine runs the builds whose output the checks compare line for line with the
-# native builds': a Wine that does not run one fails its lane (run() in simparity.mjs and textparity.mjs throws on any
-# exit but 0: CANNOT RUN), and no hive can make a differing output equal.
-GATE_WINE = "wikigate-wine-" + hashlib.sha1(str(TREE).encode()).hexdigest()[:8]
-
-
 def gate_tree_hold():
     """One gate a worktree: an exclusive flock(2) on `wikigate.lock` in this worktree's own git directory, waited for
     while another gate of this worktree runs and held by this process until it exits (the returned file). The run
     lock does not order two gates' offline lanes, and those of one worktree build into the same files
-    (tagpu/ddraw/tests/*.exe, build/simparity-costs.json) and run in the same Wine instance (GATE_WINE)."""
+    (tagpu/ddraw/tests/*.exe, build/simparity-costs.json)."""
     import fcntl
-    git = subprocess.run(["git", "-C", str(TREE), "rev-parse", "--absolute-git-dir"], capture_output=True, text=True,
-                         check=True).stdout.strip()
-    path = Path(git) / "wikigate.lock"
+    path = git_dir() / "wikigate.lock"
     f = open(path, "a+")
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -4925,7 +4973,7 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
 
 def gate(shots, jobs, offline_jobs, modes, setups):
     """Every part of the wiki's gate at once: the offline checks on `offline_jobs` workers from the start, the Wine
-    ones in a prefix of their own, and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
+    ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
     own instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
     (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
     would give and says the same verdict. The runs viewer shows one step a lane.
@@ -5031,8 +5079,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
     checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
     try:
-        wine = gate_instance(GATE_WINE) if any(under_wine(c) for _, c in offline) else None
-        wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
+        wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline) else env
         done = gate_schedule([functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline],
                              game_lanes if modes or setups else None, checks, games,
                              f"wiki_regression gate (-j {jobs})", end_lanes)

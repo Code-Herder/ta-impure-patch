@@ -1235,7 +1235,10 @@ unless said).
 - **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
   `--null-layout` and `--pack` for each pack present), `simparity` (its three builds, the Wine one
   among them), `textparity` natively and `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and
-  `wikilaycheck.py --check-only`, one after another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
+  `wikilaycheck.py --check-only`, one after another, the Wine ones in the checks' own Wine prefix
+  (below). `assetcheck.py --side` and `wikilaycheck.py` are run on their own. Run directly, outside
+  `wiki_regression.py`, `simparity.mjs` and `textparity.mjs --wine` default `WINEPREFIX` to the
+  template prefix `wineprefix/`, whose hives are one inode with every tacli instance's.
 - **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on the threads the
   game lanes leave, two to a lane, at one and a half a check and at least four (`--offline-jobs`;
   13 at `-j 6` on 32 threads: 20 took the load to 59 and starved the lanes' mockup page),
@@ -1259,15 +1262,19 @@ unless said).
   lock itself until it exits (`runlock.fileno`, `runlock.release`), so the lock cannot go while one
   plays, however the gate ends. One gate runs in a worktree at a time (`wikigate.lock` in the
   worktree's git directory), since one worktree's offline checks build into the same files.
-  Every lane's prefix has registry hives of its own (`tacli create --private-registry`; the mods
-  lanes' `prepare_wine` already makes them so), because Wine rewrites a hive in place and the
+  Every game lane's prefix has registry hives of its own (`tacli create --private-registry`; the
+  mods lanes' `prepare_wine` already makes them so), because Wine rewrites a hive in place and the
   template's is one inode with every clone's: lanes at once on the shared one could tear it. The
-  checks that run a Wine build (`textparity --wine` and every `simparity` shard) run in the prefix
-  of an instance `wikigate-wine-<hash of the worktree's path>` made the same way, one a worktree
-  since two worktrees' gates may run their offline checks at once. It is made before the run lock
-  is held, so the gap `tacli`'s `privatise_hives` names (a copy read while a non-private instance's
-  wineserver rewrites the template's hives) is open to the games of the run holding the lock; a
-  torn copy can only fail the Wine lanes (CANNOT RUN), never make a differing output equal. The
+  checks that run a Wine build (`textparity --wine` and every `simparity` shard) run in a prefix
+  that shares no file with any other: `wikigate-wine` in the worktree's git directory, made by
+  `wineboot -i` the first time a gate or `- offline` needs it and kept (`wine_prefix`). Wine makes
+  every file of it from its own install and reads no other prefix, so nothing the checks run writes
+  through to the template's hives, and making it needs no lock; it is made under a name of the
+  making process and renamed into place once its wineserver has exited, so a prefix found there is
+  whole. The checks need nothing more of a prefix: their programs are i686 console programs linked
+  `-static`, with no game file, no DirectPlay and no registry key of tacli's. It takes some 20 s to
+  make and holds 1.3 GB (MEASURED 2026-11-11, Wine 9.0), deleted with the worktree's git directory
+  when the worktree is removed [INFERRED]. The
   game lanes' instances and X servers are made under the lock, as their names are every
   worktree's. The gate owns its lanes' processes and never exits while one runs: on any way out,
   Ctrl-C and SIGTERM included, it starts no more and ends each live one (SIGINT, which runs its
