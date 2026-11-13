@@ -299,8 +299,10 @@ static TS_CUNIT* slot_unit(TS_CLASSMAPS* cm, int32_t slot)
    (0x47D2CA). With a mover: the stamp becomes GameTime, and every class whose watermark is above the old stamp
    re-marks the unit's rectangle -- a unit that stood still was an obstacle there, and is erased as one once it moves.
    Without one (a building): every present class re-marks it. THE BOUND: the mover branch (0x440A94..0x440AB1) walks
-   the 32 records without the present test the other loops make; an absent class's watermark is 0, which only a
-   search of that class writes, so the branch never re-marks one [INFERRED], and the core tests presence. */
+   the 32 records without the present test the other loops make, and an absent class's re-mark writes nothing: its
+   W and H (+0x10, +0x14) are 0 -- the static constructor 0x440230 and the teardown 0x440A00 zero them, and 0x440940
+   sets them only for a class with a name (0x440974) -- so 0x440830's far ends clamp to 0 (0x440881..0x440897) and
+   it leaves at 0x44089D (DISASSEMBLED). The core tests presence, which is the same. */
 void ts_class_claim(TS_CLASSMAPS* cm, int32_t slot, uint32_t now)
 {
     TS_CUNIT* u = slot_unit(cm, slot);

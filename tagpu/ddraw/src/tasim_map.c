@@ -53,7 +53,7 @@ int ts_map_init(TS_MAP* m, void* mem, size_t bytes, int32_t w, int32_t h, uint8_
     (void)p;
     for (i = 0; i < m->cells; i++) m->fdef[i] = (uint16_t)TS_F_NONE;
     m->fd = fd;
-    m->nfd = fd ? nfd : 0;
+    m->nfd = fd && nfd > 0 ? nfd : 0;    /* a def bound compares unsigned: a negative count would pass every def */
     /* 0x421F5F..0x421F9B: next = i + 1, the free head 0, so record 0 is taken first */
     m->pool_cap = pool_cap;
     m->pool_top = pool_cap;
