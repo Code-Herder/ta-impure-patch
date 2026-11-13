@@ -1029,8 +1029,8 @@ static int impai_test(const char* path, const char* entry, const char* layout)
                 break;
             }
             for (k = 0; k < v->nseat && k < WIKI_SEATS; k++) {
-                const IMPAI_ARRAYS a = { rows, IMPAI_TEST_SLOTS, bits[k], (int)sizeof bits[k], hits[k], IMPAI_TEST_SLOTS,
-                                         clusters[k] };
+                const IMPAI_ARRAYS a = { rows, IMPAI_TEST_SLOTS, bits[k], (int)sizeof bits[k],
+                                         { hits[k], IMPAI_TEST_SLOTS, (unsigned)sizeof hits[k][0] }, clusters[k] };
                 WQ_CORE core;
                 WORLDQ q;
                 IMPAI_WORK w;

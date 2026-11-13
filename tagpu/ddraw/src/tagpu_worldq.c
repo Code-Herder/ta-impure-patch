@@ -928,7 +928,7 @@ typedef struct RADAR_RUN {
     int32_t      sea;
     unsigned     seat, idx;
     uint8_t*     bits;
-    WQ_RADAR_HIT* hits;
+    const WQ_HITS* hits;
     int32_t*     budget;
 } RADAR_RUN;
 
@@ -936,7 +936,7 @@ typedef struct RADAR_RUN {
    publish can tell this unit from one the slot holds by the time the pass completes. */
 static void radar_hit(const RADAR_RUN* r, unsigned slot, const char* u)
 {
-    WQ_RADAR_HIT* h = &r->hits[slot];
+    WQ_RADAR_HIT* h = wq_hit(r->hits, slot);
     WQ_OBS o;
     block_of(r->c, u, &o);
     h->bx = o.bx;
@@ -1057,13 +1057,15 @@ static void radar_lit(const RADAR_RUN* r)
 /* THE BUCKETS' BOUNDS: LoadMap sizes the grid main+0x142A3 columns x +0x142A7 rows and allocates
    main+0x142AB buckets of 10 bytes, (cols x rows + 7) & ~7 (0x482C84..0x482CC5; engine/recorder.md), so a
    grid of cols x rows within that count is inside the allocation. */
-static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                          int32_t* budget)
 {
     const WQ_ENGINE* c = ctx_of(q);
     RADAR_RUN r;
     unsigned slot;
-    if (nbytes < (int)WQ_RADAR_BYTES(c->nslots) || nhits < 0 || (unsigned)nhits < c->nslots) return 0;
+    if (nbytes < (int)WQ_RADAR_BYTES(c->nslots) || hits->n < 0 || (unsigned)hits->n < c->nslots ||
+        hits->stride < sizeof(WQ_RADAR_HIT))
+        return 0;
     r.c = c;
     r.buckets = *(const char* const*)(c->ta + 0x1429F);
     r.cols = *(const unsigned*)(c->ta + 0x142A3);

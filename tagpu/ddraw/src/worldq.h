@@ -192,6 +192,18 @@ typedef struct WQ_RADAR_HIT {
     uint8_t  known, pad[3];
 } WQ_RADAR_HIT;
 
+/* The caller's records: `n` of them, slot k's `stride` bytes past slot 0's, so a table keyed by slot that
+   holds every seat's record in one row (impai.h, IMPAI_HITROW) passes one seat's column. */
+typedef struct WQ_HITS {
+    WQ_RADAR_HIT* at;
+    int           n;
+    unsigned      stride;
+} WQ_HITS;
+static inline WQ_RADAR_HIT* wq_hit(const WQ_HITS* h, unsigned slot)
+{
+    return (WQ_RADAR_HIT*)((char*)h->at + (size_t)slot * h->stride);
+}
+
 /* A radar pass's progress: the CALLER's state, plain values, so a pass that spans calls can live in recorded
    state. Stage 0 is idle: the next call starts a pass. */
 enum { WQ_RS_IDLE, WQ_RS_EMIT, WQ_RS_JAM };
@@ -271,11 +283,11 @@ typedef struct WORLDQ_OPS {
     /* Advances the seat's radar pass in `st` while *budget is above 0, one whole walk at a time -- an
        emitter's, or one of a jammer's two (its radar radius, then its sonar radius), the budget tested before
        each -- and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
-       WQ_RADAR_BYTES(nslots) bytes and `hits` nhits >= nslots records, and every radar or sonar bit the pass
-       sets writes its slot's record (WQ_RADAR_HIT). 1 when the pass is complete: `bits` holds its answer,
-       `hits` what it knew of each slot it found, and `st` is idle; 0 with nothing written when an array is
-       short of the world */
-    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+       WQ_RADAR_BYTES(nslots) bytes and `hits` at least nslots records, each at least a WQ_RADAR_HIT apart,
+       and every radar or sonar bit the pass sets writes its slot's record. 1 when the pass is complete: `bits`
+       holds its answer, `hits` what it knew of each slot it found, and `st` is idle; 0 with nothing written
+       when an array is short of the world */
+    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                       int32_t* budget);
     /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
        passable but bad, 3 good; 0 off the map and for a class the world does not have */

@@ -472,18 +472,18 @@ static int wq_block_lit(const WORLDQ* q, int bx, int bz) { return lit_at(ctx_of(
    the seat's own units kept, as loop 1 keeps them, and every contact a radar and sonar one, the stage's
    altitude 0 being the sea level, where both tests hold together. One visit a unit; each bit set writes the
    slot's record, its incarnation the slot (wq_observe). */
-static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                          int32_t* budget)
 {
     const WQ_CORE* c = ctx_of(q);
     const int n = c->s->nunit + 1;
     const int gw = c->s->W >> 1, gh = c->s->H >> 1;
     int slot, bx, bz;
-    if (nbytes < (int)WQ_RADAR_BYTES(n) || nhits < n) return 0;
+    if (nbytes < (int)WQ_RADAR_BYTES(n) || hits->n < n || hits->stride < sizeof(WQ_RADAR_HIT)) return 0;
     memset(bits, 0, WQ_RADAR_BYTES(n));
     for (slot = 1; slot < n; slot++) {
         const WIKIUNIT* u = c->s->unit[slot - 1];
-        WQ_RADAR_HIT* h = &hits[slot];
+        WQ_RADAR_HIT* h = wq_hit(hits, (unsigned)slot);
         (*budget)--;
         if (u->owner == q->seat) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
         else if (c->con && c->con[slot - 1]) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR);

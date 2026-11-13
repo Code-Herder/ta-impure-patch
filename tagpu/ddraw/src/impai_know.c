@@ -70,7 +70,7 @@ static void publish(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, int 
         const unsigned v = wq_radar_bits(a->bits, (unsigned)slot);
         unsigned pass = (v & WQ_RB_RADAR ? IMPAI_RADAR : 0u) | (v & WQ_RB_SONAR ? IMPAI_SONAR : 0u);
         if (pass) {
-            const WQ_RADAR_HIT* h = &a->hits[slot];
+            const WQ_RADAR_HIT* h = wq_hit(&a->hits, (unsigned)slot);
             WQ_OBS o;
             const int seen = q->ops->observe(q, slot, 1, &o);
             w->slots++;
@@ -136,7 +136,8 @@ int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, cons
     const unsigned now = (unsigned)q->ops->gametime(q);
     uint32_t i;
     memset(w, 0, sizeof *w);
-    if (n < 1 || n > a->nrows || a->nbytes < (int)WQ_RADAR_BYTES(n) || a->nhits < n || seat < 0 || seat >= WQ_SEATS)
+    if (n < 1 || n > a->nrows || a->nbytes < (int)WQ_RADAR_BYTES(n) || a->hits.n < n ||
+        a->hits.stride < sizeof(WQ_RADAR_HIT) || seat < 0 || seat >= WQ_SEATS)
         return -1;
     /* 1. the line-of-sight slice: up to obs_slice slots from the cursor, wrapping past the last */
     if (st->obs_cursor < 1 || st->obs_cursor >= n) st->obs_cursor = 1;
@@ -149,7 +150,7 @@ int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, cons
        answer grows staler under load while a tick's work stays bounded */
     if (st->radar.stage != WQ_RS_IDLE || now % 30u == (unsigned)impai_radar_phase(seat)) {
         int32_t budget = (int32_t)b->radar_visits;
-        const int done = q->ops->radar_step(q, &st->radar, a->bits, a->nbytes, a->hits, a->nhits, &budget);
+        const int done = q->ops->radar_step(q, &st->radar, a->bits, a->nbytes, &a->hits, &budget);
         w->visits = (uint32_t)((int32_t)b->radar_visits - budget);
         if (done) {
             publish(q, st, a, n, w);

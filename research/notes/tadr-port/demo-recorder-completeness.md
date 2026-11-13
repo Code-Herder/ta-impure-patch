@@ -206,7 +206,11 @@ the DLL (`SIM_ENGINE`, in the engine's own record layout, so its bytes are descr
 engine records, not by a layout here); a TLS index whose class is the slot's content (`SIM_TLS`);
 and three install forms, `SIM_LOCK`, `SIM_CODE` (executable memory an installer builds) and
 `SIM_GUARD` (a reserved region no access may touch). The compiler checks what it can: a
-`SIM_ROWS` of a pointer, a `SIM_HEAP` of an array, or a count that is not `unsigned` does not build.
+`SIM_ROWS` of a pointer, a `SIM_HEAP` of an array, or a count that is not `unsigned` does not build,
+nor does a `SIM_STATE` declaration whose row is wider than `SIM_ROW_MAX` (0x7000 bytes): the recorder
+images a row whole into one span (`SPAN_MAX` is `SIM_ROW_MAX`) and refuses every game while one is
+wider, so a table with every seat's value of each slot is keyed by slot with its seats in the row, never
+by seat with every slot in it.
 
 **The key** says what a row index means, so a takeover can move rows with their units: none, unit
 slot, unit type, player, weapon, or a DirectPlay player ID (the session's, not the recording's).

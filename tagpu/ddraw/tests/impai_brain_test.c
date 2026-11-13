@@ -317,21 +317,22 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
 
 static int f_block_lit(const WORLDQ* q, int bx, int bz) { return f_explored(q, bx * 2, bz * 2); }
 
-static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                         int32_t* budget)
 {
     const FWORLD* w = fw(q);
     const int k = w->radar_slot;
     (void)budget;
-    if (nbytes < (int)WQ_RADAR_BYTES(FW_SLOTS) || nhits < FW_SLOTS) return 0;
+    if (nbytes < (int)WQ_RADAR_BYTES(FW_SLOTS) || hits->n < FW_SLOTS || hits->stride < sizeof(WQ_RADAR_HIT)) return 0;
     if (k > 0 && k < FW_SLOTS && st->stage == WQ_RS_IDLE) {
         memset(bits, 0, (size_t)nbytes);
         if (w->unit[k].live) {
             wq_radar_set(bits, (unsigned)k, WQ_RB_RADAR);
-            hits[k].birth = w->birth[k];
-            hits[k].bx = fblock(w->unit[k].pos[0]);
-            hits[k].bz = fblock(w->unit[k].pos[2]);
-            hits[k].known = 1;
+            WQ_RADAR_HIT* h = wq_hit(hits, (unsigned)k);
+            h->birth = w->birth[k];
+            h->bx = fblock(w->unit[k].pos[0]);
+            h->bz = fblock(w->unit[k].pos[2]);
+            h->known = 1;
         }
         st->stage = WQ_RS_EMIT;
         return 0;
@@ -484,9 +485,10 @@ static void check_radar_reuse(void)
     static FWORLD w;
     static IMPAI_ROW rows[FW_SLOTS];
     static uint8_t bits[WQ_RADAR_BYTES(FW_SLOTS)];
-    static WQ_RADAR_HIT hits[FW_SLOTS];
+    static IMPAI_HITROW hits[FW_SLOTS];
     static SNAP_PATCH clusters[IMPAI_CLUSTERS];
-    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits, hits, FW_SLOTS, clusters };
+    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits,
+                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0] }, clusters };
     const IMPAI_BUDGET b = { 0, 100, 0, 0 };
     const IMPAI_SEEN* r = &rows[40].seat[0];
     WORLDQ q = { &FAKE, &w, 0 };

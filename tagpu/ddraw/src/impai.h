@@ -61,17 +61,20 @@ typedef struct IMPAI_SEAT {
     uint32_t radar_done;        /* the gametime the last pass was published                               */
 } IMPAI_SEAT;
 
+/* Every seat's radar record of one slot (worldq.h, WQ_RADAR_HIT), 120 bytes: a table keyed by slot, as the
+   rows are, passes one seat's column (WQ_HITS, stride sizeof(IMPAI_HITROW)). */
+typedef struct IMPAI_HITROW { WQ_RADAR_HIT seat[WQ_SEATS]; } IMPAI_HITROW;
+
 /* One seat's arrays, the caller's: its rows (nrows, at least the world's nslots), its radar pass's bits
-   (nbytes, at least WQ_RADAR_BYTES(nslots)) and records (nhits, at least nslots) and its IMPAI_CLUSTERS
+   (nbytes, at least WQ_RADAR_BYTES(nslots)) and records (hits.n, at least nslots) and its IMPAI_CLUSTERS
    patches. */
 typedef struct IMPAI_ARRAYS {
-    IMPAI_ROW*    rows;
-    int           nrows;
-    uint8_t*      bits;
-    int           nbytes;
-    WQ_RADAR_HIT* hits;
-    int           nhits;
-    SNAP_PATCH*   clusters;
+    IMPAI_ROW*  rows;
+    int         nrows;
+    uint8_t*    bits;
+    int         nbytes;
+    WQ_HITS     hits;
+    SNAP_PATCH* clusters;
 } IMPAI_ARRAYS;
 
 /* The budgets of one seat's tick, each a count the loops are bounded by. */
