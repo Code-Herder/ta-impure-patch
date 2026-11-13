@@ -2899,7 +2899,8 @@ def cmd_weapons(args):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
                         f"slot{s['i']:<2} st={s['state']} w={s['weapon'] or '-':<14} "
-                        f"tgt={s['target']:<5} spot={s['spot']} rl={s['reload']:<4} "
+                        f"tgt={s['target']:<5} spot={s['spot']} "
+                        f"rl={s['reload_left']}/{'-' if s['reload_time'] is None else s['reload_time']:<4} "
                         f"hd={s['heading']:<6} pt={s['pitch']:<6} stk={s['stock']} "
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())

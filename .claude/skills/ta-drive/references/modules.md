@@ -37,7 +37,9 @@ tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each lo
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
-  reload, heading, pitch, stock, aim result and COB thread, plus the C-path hit counters,
+  reload (`rl=<left>/<time>`: the slot's countdown `+0x14`, 0 on a weapon that has not fired, and
+  the weapon's `reloadtime` in ticks, its record's `+0xE4`), heading, pitch, stock, aim result
+  and COB thread, plus the C-path hit counters,
   projectile launches per slot, and each extended type's cached `AimFromWeaponN,QueryWeaponN`
   pieces from slot 3 on (`-1` = not asked yet). With stock content every counter but
   `loader`/`stock_splice` must read 0 and `mismatch`/`violation` must be 0; that is the
