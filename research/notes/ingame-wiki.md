@@ -1260,7 +1260,7 @@ unless said).
   for the run lock (the log says so, and `runlock:` names the holder), holds it from its first game
   lane's start to its last one's end, so its games play together and no other run's among them, and
   releases it with offline checks perhaps still running. It declares its game lanes, `-j` and no more
-  than it has, two slots each; its instances carry its tag and the `mp` lane leases its DirectPlay
+  than it has, two slots and a GPU token each, and plays no more at once than its tokens; its instances carry its tag and the `mp` lane leases its DirectPlay
   port (`tools/dpport.py`), so another gate, in another worktree, plays beside it on its own. While
   another run holds the lock the
   offline checks run beside that run's games, as they run beside the gate's own once it has the

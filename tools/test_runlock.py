@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the weighted run lock (tools/runlock.py) on a throwaway repository's lock, with real
-processes and real files: the slots held never sum past the budget, admission keeps arrival order,
-a killed holder frees its slots, a nested run takes none, flock(1) on tareplay.lock still excludes
+processes and real files: the slots and the GPU tokens held never sum past their budgets, admission
+keeps arrival order across both, a killed holder frees its slots and tokens, a nested run takes none, flock(1) on tareplay.lock still excludes
 every run, resources exclude by name, and two runs of each tool that names instances or plays a
 network game at once take distinct names and DirectPlay ports (tools/dpport.py's leases, which
 are the machine's own, in /tmp). No game runs.
@@ -9,7 +9,9 @@ are the machine's own, in /tmp). No game runs.
     python3 tools/test_runlock.py
 
 A run here is `runlock.py run` around a stand-in command, with POLL_S at 0.05 s so the run being
-admitted retries at once. A step is waited for, never timed: WAIT_S bounds a step that takes
+admitted retries at once, and the device's memory given rather than read: none (no GPU budget) for
+the tests of the slots, the reference setup's 12 282 MiB -- 8 tokens with tools/runlock-vram.cfg --
+for the tests of the tokens. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
 import json
@@ -28,6 +30,7 @@ sys.path.insert(0, str(TOOLS))
 import runlock  # noqa: E402
 
 WAIT_S = 20
+REFERENCE_MIB = 12282           # the reference setup's GPU: 8 tokens (tools/runlock-vram.cfg)
 HOLD = "import sys; print('in', flush=True); sys.stdin.read()"
 
 
@@ -41,13 +44,16 @@ class RunLock(unittest.TestCase):
         self.lock = runlock.lock_path(self.tree)
         self.env = {k: v for k, v in os.environ.items() if k != runlock.ENV}
 
-    def wrapper(self, slots, what, *cmd, resources=()):
-        """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s."""
+    def wrapper(self, slots, what, *cmd, resources=(), vram=None, total=None):
+        """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s, on a device of
+        `total` MiB (None: no GPU budget)."""
         boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
-                f"runlock.POLL_S = 0.05; sys.exit(runlock.main(sys.argv[1:]))")
+                f"runlock.POLL_S = 0.05; runlock.device_total_mib = lambda: {total!r}; "
+                f"sys.exit(runlock.main(sys.argv[1:]))")
         named = [a for r in resources for a in ("--resource", r)]
-        return [sys.executable, "-c", boot, "run", "--slots", str(slots), "--what", what, *named,
-                "--", *cmd]
+        tokens = ["--vram", str(vram)] if vram is not None else []
+        return [sys.executable, "-c", boot, "run", "--slots", str(slots), *tokens, "--what", what,
+                *named, "--", *cmd]
 
     def start(self, argv, env=None):
         p = subprocess.Popen(argv, cwd=self.tree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -62,9 +68,17 @@ class RunLock(unittest.TestCase):
         self.addCleanup(end)
         return p
 
-    def holder(self, slots, what="holder", resources=()):
+    def holder(self, slots, what="holder", resources=(), vram=None, total=None):
         """A run that says `in` once admitted and holds its slots until its stdin closes."""
-        return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD, resources=resources))
+        return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD, resources=resources,
+                                       vram=vram, total=total))
+
+    def tokens(self, pid=None):
+        """The GPU token files held, or those whose line names `pid`."""
+        d = self.lock.parent / "runslots"
+        if pid is None:
+            return sum(runlock._held_now(p) for p in d.glob("vram-*"))
+        return sum(p.read_text().startswith(f"pid {pid},") for p in d.glob("vram-*"))
 
     def line(self, stream, timeout=WAIT_S):
         """The next line of `stream`, None when none comes within `timeout`."""
@@ -182,7 +196,7 @@ class RunLock(unittest.TestCase):
         # every slot is held now: an inner run that took slots of its own would never be admitted
         self.assertEqual(self.line(outer.stdout), "in")
         self.assertEqual(outer.wait(WAIT_S), 0)
-        self.assertIn("inner wants 8 slots inside a run that holds 4", outer.stderr.read())
+        self.assertIn("inner wants 4 games at once inside a run that may play 2", outer.stderr.read())
 
     def test_under_flock_1_on_the_lock_a_run_is_nested(self):
         p = self.start(["flock", str(self.lock), *self.wrapper(3, "under flock", sys.executable,
@@ -231,19 +245,92 @@ class RunLock(unittest.TestCase):
         env = os.environ.pop(runlock.ENV, None)
         self.addCleanup(lambda: env is not None and os.environ.update({runlock.ENV: env}))
         self.addCleanup(runlock.release)
+        device = runlock.device_total_mib
+        self.addCleanup(setattr, runlock, "device_total_mib", device)
+        runlock.device_total_mib = lambda: REFERENCE_MIB
         self.assertTrue(runlock.hold(self.tree, "lanes", 3))
         held = json.loads(os.environ[runlock.ENV])
-        self.assertEqual((held["slots"], held["path"]), (3 * runlock.LANE_SLOTS, str(self.lock)))
-        self.assertEqual(runlock.tag(), "s00")
-        self.assertEqual(len(runlock.fds()), 3 * runlock.LANE_SLOTS + 1)
+        self.assertEqual((held["slots"], held["tokens"], held["games"], held["path"]),
+                         (3 * runlock.LANE_SLOTS, 3, 3, str(self.lock)))
+        self.assertEqual((runlock.tag(), runlock.games(), self.tokens()), ("s00", 3, 3))
+        self.assertEqual(len(runlock.fds()), 3 * runlock.LANE_SLOTS + 3 + 1)
         self.assertFalse(runlock.hold(self.tree, "again", 1))
         self.assertEqual(self.free(), runlock.BUDGET - 3 * runlock.LANE_SLOTS)
         runlock.release()
         self.assertNotIn(runlock.ENV, os.environ)
         self.assertEqual(runlock.fds(), ())
-        self.assertEqual(self.free(), runlock.BUDGET)
-        self.assertEqual(runlock.slots_for(None), runlock.BUDGET)
-        self.assertEqual(runlock.slots_for(40), runlock.BUDGET)
+        self.assertEqual((self.free(), self.tokens()), (runlock.BUDGET, 0))
+
+    def test_the_plans_of_a_run(self):
+        device = runlock.device_total_mib
+        self.addCleanup(setattr, runlock, "device_total_mib", device)
+        runlock.device_total_mib = lambda: REFERENCE_MIB
+        self.assertEqual(runlock.vram_tokens(), 8)
+        # -j 12 on the reference setup: 8 games, their slots and their tokens
+        self.assertEqual(runlock.plan(12), (16, 8, 8, 8))
+        self.assertEqual(runlock.plan(None), (runlock.BUDGET, 8, 8, 8))
+        self.assertEqual(runlock.plan(3, gpu=False), (6, 0, 3, None))
+        runlock.device_total_mib = lambda: 2048
+        self.assertEqual(runlock.vram_tokens(), runlock.MIN_TOKENS)
+        runlock.device_total_mib = lambda: None
+        self.assertEqual(runlock.plan(12), (24, 0, 12, None))
+        self.assertEqual(runlock.plan(40), (runlock.BUDGET, 0, runlock.BUDGET // runlock.LANE_SLOTS,
+                                            None))
+
+    def test_the_held_tokens_never_sum_past_their_budget(self):
+        log = self.tree / "tokens.log"
+        probe = ("import os, pathlib, sys, time; d = pathlib.Path(sys.argv[1]); "
+                 "me = f'pid {os.getpid()},'; "
+                 "n = sum(p.read_text().startswith(me) for p in d.glob('vram-*')); "
+                 "log = open(sys.argv[2], 'a'); log.write(f'+ {os.getpid()} {sys.argv[3]} {n}\\n'); "
+                 "log.flush(); time.sleep(0.1); log.write(f'- {os.getpid()} {sys.argv[3]}\\n')")
+        wanted = [3, 8, 1, 5, 2, 12, 4, 7, 1, 6, 2, 3]
+        runs = [self.start(self.wrapper(1, f"v{k}", sys.executable, "-c", probe,
+                                        str(self.lock.parent / "runslots"), str(log),
+                                        str(min(w, 8)), vram=w, total=REFERENCE_MIB))
+                for k, w in enumerate(wanted)]
+        for p in runs:
+            self.assertEqual(p.wait(WAIT_S * 3), 0, p.stderr.read())
+        held, seen = 0, 0
+        for ln in log.read_text().splitlines():
+            sign, _, w, *n = ln.split()
+            if sign == "+":
+                self.assertEqual(int(n[0]), int(w), f"a run held other than its tokens: {ln}")
+                held += int(w)
+                seen += 1
+            else:
+                held -= int(w)
+            self.assertLessEqual(held, 8, "the GPU tokens held passed their budget")
+        self.assertEqual((seen, held), (len(wanted), 0))
+
+    def test_a_big_gpu_run_is_not_overtaken_across_both_budgets(self):
+        a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
+        self.admitted(a)
+        big = self.holder(1, "big", vram=8, total=REFERENCE_MIB)
+        self.until(lambda: self.admitting("big") and self.tokens() == 8, "big did not take the free tokens")
+        # behind big: one wanting no token at all, and one wanting only slots
+        cpu = self.holder(1, "cpu", vram=0, total=REFERENCE_MIB)
+        wide = self.holder(20, "wide", vram=0, total=REFERENCE_MIB)
+        for p in (cpu, wide):
+            self.assertIn("waiting for the run lock", self.line(p.stderr) or "")
+            self.quiet(p)
+        self.let_go(a)
+        self.admitted(big)
+        self.assertEqual(self.tokens(big.pid), 8)
+        self.admitted(cpu)
+        self.admitted(wide)
+
+    def test_a_killed_holder_frees_its_tokens(self):
+        a = self.holder(1, "a", vram=8, total=REFERENCE_MIB)
+        self.admitted(a)
+        b = self.holder(1, "b", vram=3, total=REFERENCE_MIB)
+        self.until(lambda: self.admitting("b"), "b did not reach the queue")
+        self.quiet(b)
+        a.send_signal(signal.SIGKILL)
+        a.wait(WAIT_S)
+        self.admitted(b)
+        self.assertEqual(self.tokens(), 3)
+        self.assertIn("3 GPU tokens held", runlock.report(self.lock)[1])
 
     def test_resources_exclude_by_name_and_admit_different_names(self):
         a = self.holder(2, "a", resources=["instance-x"])

@@ -277,6 +277,11 @@ IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/imp
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2 -ffp-contract=off
 
+# IMPAI'S RESPONSE TABLE AND BUY (src/impai_table.h) compare single-precision shares and scores, and the tuning
+# tools buy through the same source natively, so it computes on SSE2 for the same reason: the DLL's army and the
+# tools' are one army only if every operation rounds once (tests/impai_table_test.py holds the three builds).
+$(addprefix src/impai_table, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
 # arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an
 # 80-bit intermediate can carry a value across a pixel edge stage.js does not cross.
