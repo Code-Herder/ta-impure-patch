@@ -267,7 +267,7 @@ def pieces(ids, lanes: int, per_lane: int = 0, set_name: str = None) -> list:
     out = []
     for i in range(0, len(ids), size):
         chunk = ids[i:i + size]
-        out.append({"piece": f"{set_name}-{i // size:03d}", "lanes": lanes, "W": runlock.slots_for(lanes),
+        out.append({"piece": f"{set_name}-{i // size:03d}", "lanes": lanes, "W": runlock.plan(lanes, gpu=False)[0],
                     "games": len(chunk), "est_s": math.ceil(len(chunk) / lanes) * est, "ids": chunk})
     return out
 

@@ -208,7 +208,7 @@ class TierA:
                     continue
                 for k in keys:
                     fights.append(self._fight(f"g{self.s['gen']:02d}-c{c:02d}", cand["table"], k))
-        job = {"piece": f"tierA-{self.piece_name()}", "lanes": lanes, "W": runlock.slots_for(lanes),
+        job = {"piece": f"tierA-{self.piece_name()}", "lanes": lanes, "W": runlock.plan(lanes, gpu=False)[0],
                "est_s": math.ceil(len(fights) * FIGHT_S / lanes), "fights": fights}
         (self.d / "jobs").mkdir(exist_ok=True)
         save_json(self.d / "jobs" / f"{job['piece']}.json", job)
@@ -421,7 +421,7 @@ def plan(lanes: int) -> list:
     """Every tier's engine runs as runner pieces, W = 2 x the games played at once, in the order they depend on
     one another: tier A's pieces one after another, tier B's within a round in any order, tier C's in any order."""
     import runlock
-    W = runlock.slots_for(lanes)
+    W = runlock.plan(lanes, gpu=False)[0]
     out = [{"tier": "A", "piece": "tierA-incumbent", "lanes": lanes, "W": W, "fights": 120,
             "est_s": math.ceil(120 * FIGHT_S / lanes), "after": None,
             "cmd": f"tools/impai/tune.py tierA play --dir DIR --lanes {lanes}"}]
