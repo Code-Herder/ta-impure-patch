@@ -419,44 +419,63 @@ static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
    that test fails, read at the census after the job ended: the builder never came within reach of the site,
    which says nothing of the site. The distance is the census's integer px (impai_dist_px) where the engine
    truncates the 16.16 one, and the builder may have moved since the order ended -- Standby's state 0 stops it
-   (0x40605C) -- so this is the same compare on the census's reading, not a replay of the engine's. */
-static int beyond_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JOB* j)
+   (0x40605C) -- so this is the same compare on the census's reading, not a replay of the engine's. A site whose
+   type has no information, or a builder with no def, is not beyond reach. */
+static int out_of_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int pcx, int pcz)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO *bt = &in->ti[b->type], *st;
     WQ_DEF def;
     int bfx, bfz, sfx, sfz;
     int64_t gap;
-    if (j->build >= in->nti || !d->q->ops->def(d->q, b->type, &def)) return 0;
-    st = &in->ti[j->build];
+    if (type < 0 || type >= (int)in->nti || !d->q->ops->def(d->q, b->type, &def)) return 0;
+    st = &in->ti[type];
     bfx = bt->fx > 0 ? bt->fx : 1; bfz = bt->fz > 0 ? bt->fz : 1;
     sfx = st->fx > 0 ? st->fx : 1; sfz = st->fz > 0 ? st->fz : 1;
-    gap = (int64_t)impai_dist_px(b->pos, (2 * j->cx + sfx) * 8, (2 * j->cz + sfz) * 8) -
+    gap = (int64_t)impai_dist_px(b->pos, pcx, pcz) -
           impai_isqrt(64u * (uint64_t)(bfx * bfx + bfz * bfz)) - impai_isqrt(64u * (uint64_t)(sfx * sfx + sfz * sfz));
     return gap > (int64_t)def.reach;
 }
 
-/* A site the builder could not reach is this builder's alone, for fail_t: no other builder and no other site is
-   held back by it, since the cause may be where the builder stands (a constructor walled in by its own plant's
-   neighbours, MEASURED 2026-11-13 on Pincushion and Trout Farm, every patch of the map failed in turn). A water
-   factory's still counts a refusal of the sea plant, its search's termination (impai_build.c, THE SEA PLANT). */
+static int site_out_of_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz)
+{
+    const IMPAI_TINFO* st = type >= 0 && type < (int)d->in->nti ? &d->in->ti[type] : NULL;
+    const int sfx = st && st->fx > 0 ? st->fx : 1, sfz = st && st->fz > 0 ? st->fz : 1;
+    return out_of_reach(d, b, type, (2 * cx + sfx) * 8, (2 * cz + sfz) * 8);
+}
+
+/* THE FAR RECORD. A builder that ended its build beyond its reach is the one held back, for fail_t: no other
+   builder and no site is, since the cause may be where the builder stands (a constructor walled in by its own
+   plant's neighbours, MEASURED 2026-11-13 on Pincushion and Trout Farm, every patch of the map failed in turn).
+   While the record is live the builder is given no site beyond its reach from where it stands -- the same compare
+   as the abandon's -- so it cannot be sent from one unreachable site to the next, each failing in turn; and it
+   takes no factory, sea-plant or tech-up order (impai_econ.c, assign), which a builder that can walk is given, so
+   it cannot hold the seat's one plant want either. TERMINATION: the record ends at far_until, and the builder
+   then takes any site again; a builder still walled in then ends one more build beyond reach and is held back
+   one more fail_t, so its sites cost one job each fail_t, not one each decision. A water factory's still counts a
+   refusal of the sea plant, its search's termination (impai_build.c, THE SEA PLANT). */
 static void build_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
 {
-    j->far_cx = j->cx;
-    j->far_cz = j->cz;
     j->far_type = j->type;
     j->far_until = d->now + d->in->lv->fail_t;
     if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
 }
 
-int impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r)
+int impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b) { return d->in->job[b->slot].far_until > d->now; }
+
+int impai_far_px(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int pcx, int pcz)
 {
-    const IMPAI_JOB* j = &d->in->job[b->slot];
-    return j->far_until > d->now && inside(r, j->far_cx, j->far_cz);
+    return impai_far(d, b) && out_of_reach(d, b, type, pcx, pcz);
+}
+
+int impai_far_at(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz)
+{
+    return impai_far(d, b) && site_out_of_reach(d, b, type, cx, cz);
 }
 
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
-   covers the site; else the builder could not reach the site (beyond_reach), which it alone avoids, or the site
+   covers the site; else the builder could not reach the site (THE REACH ABANDON), which holds it back (THE FAR
+   RECORD), or the site
    failed. A busy one older than job_timeout with no frame of it at the site is stopped (one STOP a decision:
    resolver mode 10, then the order) and the site failed. An EXPLORE ends when its cell is explored, or after
    job_timeout with the cell failed. */
@@ -472,7 +491,7 @@ static void job_checks(IMPAI_DEC* d)
             if (d->jobbed_idle[i]) {
                 checks++;
                 if (!built_at(d, j->build, j->cx, j->cz, 0)) {
-                    if (beyond_reach(d, b, j)) build_unreached(d, j);
+                    if (site_out_of_reach(d, b, j->build, j->cx, j->cz)) build_unreached(d, j);
                     else build_failed(d, j);
                 }
                 impai_job_end(j);

@@ -1350,6 +1350,28 @@ static void check_plateau(void)
    built, past its build distance (THE REACH ABANDON). No failure is recorded: the site is held back for this
    builder alone, its next order goes elsewhere, and the commander, within reach, takes patch A in the same
    decision. A unit of another type in the slot has no record. */
+/* 1 when a build order since `from` sends slot `slot` beyond its reach: the abandon's compare (impai_brain.c,
+   THE REACH ABANDON) on the fake's builddistance, 120 px, and footprints */
+static int far_builds(int from, int slot)
+{
+    const FUNIT* u = &s_w.unit[slot];
+    const int bf = s_w.defs[u->type].d.fx, bz = s_w.defs[u->type].d.fz;
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        double dx, dz, gap;
+        int sf, sz;
+        if (c->verb != WQ_CMD_NEW || c->unit != slot || !c->type) continue;
+        sf = s_w.defs[c->type].d.fx;
+        sz = s_w.defs[c->type].d.fz;
+        dx = (double)(c->pos[0] >> 16) - (double)(u->pos[0] >> 16);
+        dz = (double)(c->pos[2] >> 16) - (double)(u->pos[2] >> 16);
+        gap = sqrt(dx * dx + dz * dz) - 8.0 * sqrt((double)(bf * bf + bz * bz)) - 8.0 * sqrt((double)(sf * sf + sz * sz));
+        n += gap > 122.0;           /* the brain truncates each term: within 2 px of this */
+    }
+    return n;
+}
+
 static void check_far(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -1371,9 +1393,8 @@ static void check_far(void)
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.failed == 0 && s_st.nfail == 0, "an unreachable site fails nothing: failed %u nfail %u", out.failed,
           s_st.nfail);
-    CHECK(s_job[2].far_cx == 40 && s_job[2].far_cz == 20 && s_job[2].far_type == T_CONS &&
-          s_job[2].far_until == 400u + s_lv->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
-          s_job[2].far_cz, s_job[2].far_until);
+    CHECK(s_job[2].far_type == T_CONS && s_job[2].far_until == 400u + s_lv->fail_t, "the builder's record: until %u",
+          s_job[2].far_until);
     for (from = 0; from < s_w.nlog; from++) {
         const WQ_CMD* w = &s_w.log[from].c;
         CHECK(!(w->unit == 2 && w->type == T_MEX && cmd_x0(w) >= 39 && cmd_x0(w) <= 42 && cmd_z0(w) <= 22),
@@ -1381,10 +1402,58 @@ static void check_far(void)
         if (w->unit != 2 && w->type == T_MEX && cmd_x0(w) >= 39 && cmd_x0(w) <= 42 && cmd_z0(w) <= 22) others++;
     }
     CHECK(others == 1, "a builder within reach takes patch A: %d orders there", others);
+    CHECK(!far_builds(0, 2), "nor anywhere else beyond its reach: patch C is as far");
+    /* no cycling: the record holds the constructor back from every site beyond its reach, decision after decision,
+       and none of them fails */
+    for (from = 0; from < 3; from++) {
+        const int at = s_w.nlog;
+        s_w.gametime += 15;
+        CHECK(decide(&out) == 0, "decide");
+        CHECK(!far_builds(at, 2) && s_st.nfail == 0, "decision %d: no site beyond the constructor's reach", from);
+    }
     unit_add(&s_w, 2, T_COM, 30, 40, 1);
     s_w.gametime = 430;
     CHECK(decide(&out) == 0, "decide");
     CHECK(s_job[2].far_until == 0, "a unit of another type in the slot has no record");
+}
+
+/* THE FAR RECORD AND THE PLANT: a constructor in slot 1 whose record is live and the commander in slot 2, both
+   idle, the opening factory wanted. The constructor comes first in slot order and stands within its reach of the
+   ring's first sites, but a builder with a live record takes no plant: the commander, which can walk, does. The
+   constructor far out instead: no site beyond its reach either. */
+static void check_far_plant(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, cons = 0, com = 0;
+    brain_world();
+    s_spots = NULL;
+    s_nspots = 0;
+    for (k = 0; k < 2; k++) {
+        const int from = s_w.nlog;
+        int i;
+        cons = com = 0;
+        unit_add(&s_w, 1, T_CONS, k ? 60 : 24, k ? 60 : 26, 1);
+        unit_add(&s_w, 2, T_COM, 20, 20, 1);
+        impai_brain_reset(&s_st, s_job, FW_SLOTS);
+        s_job[1].far_type = T_CONS;
+        s_st.ax = 20;
+        s_st.az = 20;
+        s_w.gametime = 2000 + 15 * k;
+        s_job[1].far_until = (uint32_t)s_w.gametime + s_lv->fail_t;
+        s_w.econ[0].energy = 900;
+        CHECK(decide(&out) == 0, "decide");
+        for (i = from; i < s_w.nlog; i++)
+            if (s_w.log[i].c.verb == WQ_CMD_NEW && s_w.log[i].c.type == T_FACTORY) {
+                cons += s_w.log[i].c.unit == 1;
+                com += s_w.log[i].c.unit == 2;
+            }
+        printf("far plant, the constructor %s: its factory orders %d, the commander's %d\n", k ? "far" : "near",
+               cons, com);
+        CHECK(!cons && com == 1, "the plant goes to the builder that can walk");
+        CHECK(!far_builds(from, 1), "and the constructor takes no site beyond its reach");
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
 }
 
 /* THE CLAIM TABLE'S BOUND: a seat's whole block of IMPAI_CENSUS_MAX units, each with a claim of its own -- 100
@@ -3531,6 +3600,7 @@ int main(void)
     check_way_blockers();
     check_plateau();
     check_far();
+    check_far_plant();
     check_claims_bound();
     check_fail();
     check_game();

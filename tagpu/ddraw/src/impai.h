@@ -268,7 +268,7 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 
 enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
 
-/* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
+/* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 24 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
    same type inherits it, which costs at most one misjudged failure (a site avoided for fail_t): the unit's
    UnitInGameIndex is its slot again (+0xA8, written once a level at 0x485603), so nothing tells the two apart. */
@@ -279,10 +279,11 @@ typedef struct IMPAI_JOB {
     int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
-    int16_t  far_cx, far_cz;    /* the last site this builder could not reach (impai_brain.c, job_checks):
-                                   avoided by this builder alone until far_until; kept across its jobs,
-                                   voided with the unit as a job is, by far_type                         */
-    uint16_t far_type;          /* the builder's type when it was recorded                                */
+    uint16_t far_type;          /* THE FAR RECORD (impai_brain.c, job_checks): this builder ended a build
+                                   beyond its reach, and until far_until it is given no site beyond its
+                                   reach from where it stands; kept across its jobs, voided with the unit
+                                   as a job is, by far_type, the builder's type when it was recorded      */
+    uint16_t far_pad;
     uint32_t far_until;         /* 0: no record                                                            */
 } IMPAI_JOB;
 

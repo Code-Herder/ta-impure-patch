@@ -127,17 +127,14 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
     return type < in->nti && in->ti[type].cat == IMPAI_C_FACTORY && (in->ti[type].flags & IMPAI_TF_WATER);
 }
 
-/* a job that ends: its task cleared, the builder's unreachable site kept (IMPAI_JOB.far_*), which belongs to the
-   unit and not to the task and goes only with the slot's unit (the census's clear) */
+/* a job that ends: its task cleared, the builder's far record kept (IMPAI_JOB.far_*), which belongs to the unit
+   and not to the task and goes only with the slot's unit (the census's clear) */
 static inline void impai_job_end(IMPAI_JOB* j)
 {
-    const int16_t fx = j->far_cx, fz = j->far_cz;
     const uint16_t ft = j->far_type;
     const uint32_t until = j->far_until;
     memset(j, 0, sizeof *j);
     j->type = j->build = j->target = (uint16_t)WQ_NONE;
-    j->far_cx = fx;
-    j->far_cz = fz;
     j->far_type = ft;
     j->far_until = until;
 }
@@ -171,10 +168,16 @@ int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* the patch builder b would take for an extractor of `type` (-1: none known), or NULL (impai_build.c) */
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* the seat's kept ways out, each a claim while its plant stands or is ordered (impai_build.c, THE WAY OUT) */
 void impai_ways_keep(IMPAI_DEC* d);
-/* 1 when the builder's last unreachable site (IMPAI_JOB.far_*) still lies in r */
-int  impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r);
+/* 1 while the builder's far record is live (impai_brain.c, THE FAR RECORD) */
+int  impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* 1 when the builder's far record is live and a site of `type` centred at px (pcx, pcz) lies beyond its reach from
+   where it stands (THE REACH ABANDON's compare) */
+int  impai_far_px(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int pcx, int pcz);
+/* the same for the site of `type` at first cell (cx, cz) */
+int  impai_far_at(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
 
 #endif

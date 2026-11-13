@@ -59,7 +59,8 @@ SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    (the visited bits) and the queue holds at most IMPAI_WAY_NODES places, so a search ends at the proof, at an
    empty queue (refused) or at a full one (refused, never accepted). A decision runs at most WAY_SEARCHES class
    searches, a candidate site's classes all at once after the site test has accepted it; a plant with more
-   classes than that is refused. A site refused fails for fail_t, so the next decision searches other sites.
+   classes than that is refused. A site refused is avoided by plants of its type for fail_t (THE WAY REFUSALS),
+   so the next decision searches other sites.
    THE CLAIM. The proven paths' squares, from each start to where it ends, are kept as at most IMPAI_WAY_RECTS
    rectangles over all classes -- a rectangle one already kept holds adds none, and a way that needs more is
    refused -- in the seat's state (IMPAI_BRAIN.way) when the plant is ordered, and claimed at every census while
@@ -551,7 +552,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     IMPAI_JOB* j = &in->job[b->slot];
     WQ_CMD c;
     int a;
-    if (d->roots >= in->lv->roots) return 0;
+    if (d->roots >= in->lv->roots || impai_far_at(d, b, type, cx, cz)) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)(2 * cx + t->fx) << 19);
     c.pos[1] = (int32_t)((uint32_t)(alt & 255) << 16);
@@ -676,9 +677,10 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
 }
 
 /* THE SPOT for builder b: of the seat's free patches -- for the commander within comm_r of the anchor, reachable
-   on b's class, under no ground threat -- the one with the best cells x 4096 / (4096 + d), d the integer
-   distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az, ax). NULL
-   when b has none.
+   on b's class, under no ground threat, and while b's far record is live (impai_brain.c, THE FAR RECORD) within
+   its reach of an extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d
+   the integer distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az,
+   ax). NULL when b has none. The snap's site is then held to the same reach (impai_build_spot).
    THE OPENING'S FAR PATCH: before the seat's first factory, while it counts fewer than open_mex extractors, a
    commander with no patch within comm_r takes the best patch at any distance by the same rule. Without it a start
    with no metal within comm_r opens on the commander's own income alone: MEASURED 2026-11-13 on Trout Farm, ARM's
@@ -686,7 +688,7 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
    stood idle until open_t, then the factory and its constructors starved at 1.25 metal a pass until about
    GameTime 13 800, and the seat sent no attack before 27 000. Inside the opening the walk is bounded by the
    extractors it orders: open_mex at most, and none once a factory is counted, frames included. */
-static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int range)
+static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
@@ -699,10 +701,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int ran
         const int px = (p->x0 + p->x1 + 1) * 8, pz = (p->z0 + p->z1 + 1) * 8;
         uint32_t dist;
         if (!p->cells || !patch_free(d, p)) continue;
-        {
-            const IMPAI_RECT box = patch_box(p);
-            if (impai_far_in(d, b, &box)) continue;
-        }
+        if (impai_far_px(d, b, type, px, pz)) continue;
         if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
         if (!reachable(d, b, p) || threatened(d, px, pz)) continue;
         dist = impai_dist_px(b->pos, px, pz);
@@ -718,15 +717,15 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int ran
     return best;
 }
 
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const SNAP_PATCH* best;
-    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, -1);
-    if ((best = spot_pick(d, b, in->lv->comm_r))) return best;
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1);
+    if ((best = spot_pick(d, b, type, in->lv->comm_r))) return best;
     if (d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] == 0 &&
         d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] < in->lv->open_mex)
-        return spot_pick(d, b, -1);
+        return spot_pick(d, b, type, -1);
     return NULL;
 }
 
@@ -736,7 +735,7 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const SNAP_PATCH* best = impai_spot_pick(d, b);
+    const SNAP_PATCH* best = impai_spot_pick(d, b, type);
     SNAP_CHOICE c;
     int32_t seed[3];
     int radius, alt = 0, w, h;
@@ -756,6 +755,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         impai_fail_add(d, best->ax, best->az);
         return 0;
     }
+    if (impai_far_at(d, b, type, c.x, c.z)) return 0;
     if (d->sites >= in->lv->site_tests) return 0;
     d->sites++;
     if (!d->q->ops->site_ok(d->q, type, c.x, c.z, 0, &alt)) {
@@ -772,7 +772,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
    keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
    explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
-   failure or the builder's own unreachable site; the site test decides the rest, against the decision's site
+   failure or lies beyond the builder's reach while its far record is live; the site test decides the rest, against the decision's site
    tests, and a plant's site its way out after it (THE WAY OUT), a site refused there avoided by plants of its type
    for fail_t (THE WAY REFUSALS) -- but for a waived plant (THE PLANT'S FALLBACK), which takes the first site the
    site test passes. A ring exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8),
@@ -802,7 +802,7 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         int alt = 0;
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_in(d, b, &r) ||
+        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
             (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
         if (d->sites >= in->lv->site_tests) return 0;
@@ -978,9 +978,11 @@ static int sea_search(IMPAI_DEC* d, int type)
    first count.
    NO BUILDER REACH TEST: a builder that cannot get to the site fails its job, which counts. Testing it here
    would answer 0 to a builder that cannot reach while a candidate exists, and a seat whose only sea-plant
-   builders cannot reach would hold its second factory until the count ran out. */
+   builders cannot reach would hold its second factory until the count ran out. A builder whose far record is
+   live (impai_brain.c, THE FAR RECORD) is not offered the plant at all: it neither searches nor counts. */
 int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
+    if (impai_far(d, b)) return 0;
     if (d->sea_type == WQ_NONE) {
         d->sea_type = (uint16_t)type;
         d->sea_answer = sea_search(d, type);
@@ -988,12 +990,6 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         return 0;
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
-        const IMPAI_RECT site = impai_rect_at(d, d->sea_type, d->sea_cx, d->sea_cz);
-        if (impai_far_in(d, b, &site)) {
-            /* the site stays the decision's for a builder that can reach it; this one's turn counts a refusal */
-            impai_sea_refusal(d);
-            return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
-        }
         if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt)) {
             d->out->sea_plants++;
             return 1;
