@@ -4,10 +4,11 @@
 /* tagpu_impai -- ImpAI's seam in the engine (research/notes/modules/impai.md).
 
    The players phase's call of the stock AI tick, 0x465031 `call 0x408C40`, is retargeted to a
-   wrapper: the seats impure.cfg's `seatai` gives ImpAI are played by ImpAI -- its observation and
-   its brain, then the stock weapon scan -- and every other seat by the stock tick. Which seats are
-   ImpAI's is SIM_STATE, written at the level init. Sixteen Difficulty type tests skip those seats,
-   and the console's `AI` takes a seat from ImpAI. */
+   wrapper: the seats impure.cfg gives ImpAI (`seatai` in a skirmish, `netai` for the computer seats
+   this peer adds in a network game) are played by ImpAI -- its observation and its brain, then the
+   stock weapon scan -- and every other seat by the stock tick. Which seats are ImpAI's is SIM_STATE,
+   written at the level init. Sixteen Difficulty type tests skip those seats, and the console's `AI`
+   takes a seat from ImpAI. */
 
 /* DllMain, before tagpu_simreg_attach closes the lever list: ImpAI's test levers -- the self-checks,
    the overlay, the cost run's budgets. */
@@ -23,9 +24,15 @@ void tagpu_impai_init(void);
 
 /* The level init's (tagpu_replay.c, tagpu_replay_level_players), right after the engine's
    players init 0x464990 on the LOADER thread: clears the seat table on every level, then marks
-   the computer seats `seatai` names on a live level; a puppet level's seats the recording
+   the computer seats `seatai` names on a live skirmish level, or on a live network level the
+   computer seats this peer added whose names begin ImpAI:; a puppet level's seats the recording
    restores. */
 void tagpu_impai_level_init(void);
+
+/* A takeover's (tagpu_replay.c, tk_end), on the GAME thread after the puppet mode has ended and the
+   recording's tables are restored, before the fork is armed: the fresh AI seats' marks from `seatai`, with
+   their content and no knowledge, as a skirmish's level init makes them. */
+void tagpu_impai_takeover(void);
 
 /* The level's teardown (tagpu_reclaim.c, reclaim_teardown_pre), on the game thread: logs each
    marked seat's turns, the handicap rows' counts and the brain's lines, and clears the seat table. */

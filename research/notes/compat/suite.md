@@ -36,7 +36,15 @@ names the gap). The hives are private because the store `tacli` keeps
   not of any archive path). **The units are seen**: after the battle's scenario, the newest
   `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
   in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
-  0, which every earlier check had passed. Every game runs silent but with a sound device: Wine is kept off
+  0, which every earlier check had passed. **The battle is played on its own map or not at all**:
+  its map (the scenario's `setup.map`, Two Continents) is saved as the skirmish map under every
+  registry root the game may read, as for the ImpAI stage below; before the walk the battle reads
+  the root in the game's memory and, when it is another, saves the map there and starts the game
+  again (the start-up's verdicts stay the first launch's, and `tagpu.log` holds both launches in
+  order); after the walk it reads the loaded map back (`GameingState +0x204`) and fails by name
+  when it is not the scenario's. Escalation's battle map was saved under retail's root only, as
+  the stage's seats were [INFERRED: its battles played the `TA Esc` key's saved skirmish; the first
+  run with the check says]. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of
@@ -89,6 +97,100 @@ names the gap). The hives are private because the store `tacli` keeps
   filtered pointers at 2 GB and ESC's exe is large-address-aware, its heap above that
   ([exe-reverse-engineering](../exe-reverse-engineering.md), *A large-address-aware exe's heap
   is above 2 GB*). Both now play their network game (MEASURED 2026-09-27).
+  With `--mp-impai` each peer writes `netai=impai` and adds one computer seat in the battle room
+  (the host `PLAYER2` twice, Unused → Blocked → AI; the joiner `PLAYER3` once), and the game is
+  also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
+  and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name. The peers' unit counts are not compared: the
+  game is not lockstep — only a unit's owner decides its death and the other peer applies it when
+  the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
+  two counts read at one GameTime differ by whatever is in flight, which depends on load. Nor are
+  the deaths compared, though the host's recording carries the joiner's own: each death of a
+  joiner's unit is in the joiner's contribution as an owner root (kind 10, `RK_EV_DEATH`, unit and
+  birth; `tools/replay/recmp_file.py`). The contributions travel on the recorder's own DirectPlay
+  session, the engine's death message `0x0C` on the game's, so nothing orders the two; and the host's
+  file closes at its own consumption cut without waiting for the joiner's later contributions
+  ([multiplayer slice](../tadr-port/demo-recorder-multiplayer-slice.md), *Consumption cuts and
+  terminal receipts*). A death the host applied near its end can therefore be missing from the
+  contributions in the file, and which one depends on load: the check would not hold by
+  construction, so the stage has none. **The gap**: a peer whose world lost a unit its owner still
+  has, or the reverse, is not caught here.
+  The seats get no alliances, and need none: Start refuses only a game whose every seat is on one
+  team, every seat starts on none, and the walk never clicks a team gadget
+  ([network](../engine/network.md), *The battle room's Start refuses only a game on one team*).
+- **The ImpAI stage** (`wine --impai [SECONDS]`, 900 when given bare; off by default): for each
+  player's setup whose single-player run showed Impure running, a third copy of the folder
+  (`-a`) plays the bar's seating ([the bar](../impai/bar.md)): record 0 the human with no unit,
+  record 1 a CORE computer seat played by ImpAI, record 2 an ARM computer seat OTA AI plays,
+  Difficulty Hard, 1000 metal and energy each. **The seats are written where the game reads
+  them**, plus `seatai`: the startup's registry load reads them, under the root the game's memory
+  names at `0x509EB8` ([process](../engine/process.md), the registry accessor `0x4B6880`). Before
+  the launch they go under retail's root, the setup's `registry_roots`, the root the exe's own
+  file names there (Escalation's: `TA Esc`) and, for a mod chosen by `mod=`, the one its drop-in's
+  exe names (the battle's map is saved the same way); once the menu is up the stage reads the root in the
+  game's memory, and when it is another — a loader's rewrite, or the exe image a mod chosen by
+  `mod=` lays over the process — seats it too and starts the game again. An accessor whose code
+  is not stock fails the stage as `could not run`, by name. After the walk into the skirmish
+  (Escalation's front end goes from Skirmish straight into the game: no SKIRMISH screen, the
+  saved settings as they are) the stage reads the loaded map (`GameingState +0x204`), the seats
+  and their commanders and the engine's Difficulty back, and fails by name on any that is not
+  the stage's — never playing another map. MEASURED 2026-11-12 (the survey): with the seats
+  written under retail's root only, Escalation and its managed row played the `TA Esc` key's saved
+  skirmish, Acid Foursome with two seats. The scenario
+  (`scenarios/compat/impai-stage.json`, Town & Country, or the setup's own `scenarios.impai`) is
+  played only where the setup's own files hold its map, both `.ota` and `.tnt`, looked up through
+  the engine's mount order over the setup's folder (`tools/wiki/tavfs.py`); otherwise the stage
+  fails as `could not run: no <map>`, never on another map. It clears the start, places the two commanders apart — each of the type the game itself gave
+  that record at the start (its side's commander, which a mod may name otherwise: TA Zero has no
+  `CORCOM`), the scenario's own types standing only for them — and
+  turns the end test off; after SECONDS of
+  game time an end scenario keeps one unit of record 1 and turns it back on, so the level ends and
+  its teardown writes ImpAI's level-end lines. **Judged by ImpAI's own lines**: the seat line
+  marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
+  refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
+  reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
+  failure unless the setup's expectation says `"impai": "unavailable"`. Pulse lines are counted
+  and reported, not judged: the military writes one a seat once a game minute. `--impai-seat ota`
+  plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
+  `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`
+  (unavailable and accepted) or `-`.
+- **The ImpAI survey** (`wine --impai-survey`): the stage with no game time — each setup's
+  skirmish seated and loaded, the Difficulty read back and the level init's lines read (the seat
+  line, the reason a seat is not ImpAI's, the content lines and any `could not`), nothing applied
+  or played: where ImpAI is available, setup by setup.
+- **A run that stops can be resumed** (`wine --resume DIR`): the run writes each setup's results
+  into its folder the moment the setup settles — every stage it plays done, its evidence files
+  first and its result last as `verdict.json`, written to a temporary name, flushed and renamed
+  over — so a setup the run did not finish, in any stage, has no verdict file. A resume reads the
+  verdict files back and plays every other setup whole, after removing whatever a stopped sitting
+  left in its folder. `run.json` holds the play arguments and the DLL's hash, and a resume that
+  differs in either is refused: the report would otherwise be one run of two builds or two
+  suites. What a managed row's own folder showed (a refusal's box, `mod=` left in `impure.cfg`, a
+  fetched package's swap) is read when it settles and kept in its result, and the comparison with
+  its drop-in row is made again at the report, so the two may come from different sittings.
+  What that comparison reads of a row's `tagpu.log` (a loose unit file refused, the name the
+  replays give the game) is read when the row is persisted, the last moment its files are in
+  memory, and kept in its result as `log_facts`. Both Twilight rows name the game `retail`, as
+  their drop-in does, and that is the rule, not a miss: the replays' mod table names a game by
+  the first mounted archive one of its rows' patterns matches, and Twilight's row has no pattern
+  (its main menu's version label names it, `tagpu_replays.c`), while Twilight 2.0b98 ships one
+  archive, `rev31.gp3` (the TA Forever zip holds no other), which no row names; a package's
+  `<id>.hpi` is matched only for a row that has a pattern.
+- **The verdicts the stage's fixes changed** (MEASURED, Wine, `--mp-impai --impai 120
+  --impai-seat ota`): run A `20261112-232644` (DLL `c03a6119`), run B `20261113-012639`
+  (`e8a8af21`, DLL `94bb9648`), run C `20261113-023826` (`b9da4344`, DLL `7da3e420`, the sixteen
+  setups below alone). Every other setup's verdict was the same in A and B.
+
+  | setup | A | B | C | cause |
+  |---|---|---|---|---|
+  | `escalation`, `escalation+tadr-dev`, `laa-escalation` | UNEXPECTED, `ai FAILED` | ok | -- / -- / ok (`escalation`) | the stage wrote its seats under retail's registry root, and Escalation's exe reads `TA Esc`, so the game played that key's saved two-seat skirmish: fixed by seating the root the game's memory names and refusing another map (`71a5bd4c`) |
+  | `managed-escalation` | UNEXPECTED, `ai FAILED` | UNEXPECTED, the comparison | ok | the same root, then the comparison below |
+  | `tazero-alpha5`, `laa-tazero-alpha5` | ok | UNEXPECTED, `ai FAILED` | ok | the stage's scenario named `CORCOM`, which TA Zero has not (its commanders are `ArmCommander` and `GoKCommander`); A's stage applied no scenario on any setup (no `scenario:` line in any of its stage logs), so it never named one. Fixed by placing the commander the game gave each record at the start (`3363684b`) |
+  | `managed-tazero`, `laa-managed-tazero` | ok | UNEXPECTED, `ai FAILED` and the comparison | ok | both causes |
+  | `managed-mayhem`, `managed-prota`, `managed-twilight`, `managed-fetched-prota`, `laa-managed-mayhem`, `laa-managed-prota`, `laa-managed-twilight` | ok | UNEXPECTED, the comparison | ok | the managed row's comparison with its drop-in read `tagpu.log` out of results whose files the resume's persist had dropped, so every managed row read "no loose unit file refused" and "the replays name this game None": fixed by keeping what the comparison reads as `log_facts` (`3363684b`) |
+
+  In C every managed row's `log_facts` holds a refused loose unit file and the drop-in's game name,
+  its CRCs equal its drop-in's, and all sixteen played `mp ok` and `ai ok`.
+  Windows runs one setup at a time on the owner's desktop and has no resume.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows. Every setup runs from a work folder

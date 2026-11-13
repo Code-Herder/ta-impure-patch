@@ -439,9 +439,18 @@ class CompletionCheckpoints(unittest.TestCase):
         with self.assertRaises(tareplay.CouldNotRun):
             tareplay.gametimes("too-short", 2400, "revision", last_min=7800)
 
+    def test_points_stay_clear_of_the_typed_work(self):
+        fix = tareplay.fixtures()["impai-handicap"]
+        typed = [s[0] for s in fix["steps"] if s[1] in ("type", "run", "keys")]
+        for revision in range(256):
+            times = tareplay.gametimes("impai-handicap", fix["end"], str(revision), 3, fix["first"],
+                                       None, fix["last_max"])
+            self.assertEqual(len(times), 4)
+            self.assertFalse([t for t in typed if times[0] <= t <= times[-1]], (revision, times))
+
     def test_ordinary_fixture_keeps_its_sampling(self):
         self.assertEqual(tareplay.gametimes("battle", 2400, "revision"),
-                         tareplay.gametimes("battle", 2400, "revision", last_min=None))
+                         tareplay.gametimes("battle", 2400, "revision", last_min=None, last_max=None))
 
 
 class TurboLanes(unittest.TestCase):

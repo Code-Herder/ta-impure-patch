@@ -1992,6 +1992,25 @@ class SettingsStore(unittest.TestCase):
             self.assertFalse(any(ln.startswith("gpumem=") for ln in lines))
             self.assertIn("gamma=12", lines)
 
+    def test_every_harness_launch_writes_netai(self):
+        # the network game's AI is ota unless the launch asks for impai, so a stale impai line
+        # never plays a later launch's network seats; a --shipped launch hands it to the player
+        self.assertIn("netai", tacli.HARNESS_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nnetai=impai\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("netai=ota", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, netai="impai"))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("netai=impai", lines)
+            self.assertEqual(sum(ln.startswith("netai=") for ln in lines), 1)
+            with self.assertRaises(SystemExit):
+                tacli.write_netai(inst, "stock")
+
 
 # ----------------------------------------------------------- remote instances
 

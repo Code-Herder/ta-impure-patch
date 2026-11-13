@@ -23,7 +23,7 @@
 
 static void slog(const char* fmt, ...)
 {
-    char b[700];
+    char b[1024];
     va_list ap;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b, fmt, ap);
@@ -115,6 +115,8 @@ static const Opt O_RADARDOTS[] = { {"always", 1}, {"zoomed", 0}, {"1", 1}, {"0",
    thread, so no value needs a restart. */
 static const Opt O_ONOFF[] = { {"on", 1}, {"off", 0}, {"1", 1}, {"0", 0} };
 static const char* const RC_NAME[5] = { "ground", "air", "nuke", "cannon", "lrpc" };
+/* What plays a computer seat this peer adds in a network game's battle room (tagpu_impai.c). */
+static const Opt O_NETAI[] = { {"ota", 0}, {"impai", 1} };
 
 #define N(a) (int)(sizeof a / sizeof a[0])
 
@@ -161,6 +163,8 @@ static const Key s_key[TS_NKEYS] = {
     { "rangeenemy",  NULL,    0,          TS_RC_GROUND | TS_RC_AIR | TS_RC_NUKE | TS_RC_CANNON },
     /* no seat ImpAI's: every computer seat plays OTA AI, the stock AI */
     { "seatai",      NULL,    0,          0 },
+    /* OTA AI, the stock AI, as `seatai`'s default is */
+    { "netai",       O_NETAI, N(O_NETAI), 0 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -294,6 +298,11 @@ int tagpu_settings_placement(TagpuSetting key, int* out)
 int tagpu_settings_seatai(void)
 {
     return s_attached ? read_val(TS_SEATAI) : 0;
+}
+
+int tagpu_settings_netai(void)
+{
+    return s_attached ? read_val(TS_NETAI) : 0;
 }
 
 void tagpu_settings_set_seatai(int mask)
@@ -1014,7 +1023,9 @@ static void migrate(void)
 void tagpu_settings_attach(void)
 {
     int i, first;
-    char b[512];
+    /* the attach line names every key: about 410 characters at the defaults, and 160 more for the
+       tagpu_defaults.off preamble */
+    char b[768];
     int at;
 
     if (s_attached) return;
@@ -1035,7 +1046,7 @@ void tagpu_settings_attach(void)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED but for display, vsync, window, seatai and gpumem (" MASTER_OFF
+                   s_ignored ? " IGNORED but for display, vsync, window, seatai, netai and gpumem (" MASTER_OFF
                                " present: every other setting is the lever's or the compiled "
                                "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {

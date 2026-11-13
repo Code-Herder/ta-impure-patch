@@ -19,9 +19,9 @@
    which `tagpu_settings_placement` and `tagpu_settings_window` answer
    under every launch: the store is the only thing that places a window or
    says how it presents, and tacli writes those keys before every launch.
-   The seats' AI choice is the other exception: `tagpu_settings_seatai`
-   answers under every launch, as the engine's own SKIRMISH registry keys are
-   honoured under every launch.
+   The seats' AI choice is the other exception: `tagpu_settings_seatai` and
+   `tagpu_settings_netai` answer under every launch, as the engine's own
+   SKIRMISH registry keys are honoured under every launch.
 
    THREADS. Every value a consumer reads is an aligned LONG, written by
    InterlockedExchange and BOUNDED against its key's own table on every read,
@@ -74,6 +74,9 @@ typedef enum {
     TS_SEATAI,      /* bit i: computer seat i plays ImpAI, else OTA AI (tagpu_impai.c);
                        `seatai=1,3` or `none`. Answered under tagpu_defaults.off too:
                        tagpu_settings_seatai, never tagpu_settings_get              */
+    TS_NETAI,       /* 1 impai | 0 ota: the battle room's first computer step for the
+                       seats this peer adds (tagpu_skirmish.c). Answered under
+                       tagpu_defaults.off too: tagpu_settings_netai                 */
     TS_NKEYS
 } TagpuSetting;
 
@@ -132,6 +135,11 @@ int  tagpu_settings_seatai(void);
 /* The seat button's write (tagpu_skirmish.c): the mask, bounded to ten seats, recorded for the next
    flush under every launch, as it is read under every launch. Any thread. */
 void tagpu_settings_set_seatai(int mask);
+
+/* The first computer step of this peer's AI rows in a network game's battle room (TS_NETAI): 1 ImpAI,
+   0 OTA AI; the row's button steps to the other (tagpu_skirmish.c, THE BATTLE ROOM). The same kind of
+   setup choice as `seatai`, answered under tagpu_defaults.off too, and read once at attach. Any thread. */
+int  tagpu_settings_netai(void);
 
 /* Bumped after every set, for readers that cache what they derived. */
 long tagpu_settings_gen(void);

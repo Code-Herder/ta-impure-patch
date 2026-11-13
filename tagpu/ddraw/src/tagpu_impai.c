@@ -23,6 +23,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #include "tagpu_worldq.h"
 #include "tagpu_limits.h"
 #include "impai.h"
+#include "impai_seats.h"
 #include "impai_mil.h"
 #include "tagpu_resource.h"       /* tagpu_buildmenu_types: the build menus */
 #include "tagpu_recorder.h"       /* the AI activity bracket around a turn */
@@ -31,8 +32,16 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
 #define PL_ACTIVE    0x00          /* u32: nonzero for a seated record                   */
 #define PL_CONTROL   0x73          /* u8: 1 human, 2 AI, 3 remote or puppet              */
+#define PL_AIOBJ     0x74          /* the AI object 0x408C40 runs on; the players phase
+                                      calls it only when set (0x46502A..0x465031)         */
+#define PI_TYPE      0x94          /* PlayerInfo's u8 type: 2 for an AI seat, on a remote
+                                      AI's type-3 record too (0x45490F..0x45493B)         */
+#define PL_NAME      0x2B          /* the long name, 30 bytes: an ImpAI seat's begins ImpAI:
+                                      (impai_seats.h, WHY THE NAME)                       */
+#define OFF_DIFFICULTY 0x37EEE     /* u32: 0 Easy, 1 Medium, 2 Hard (engine/sim.md)      */
+#define OFF_NETFLAGS 0x2A44        /* u8, bit 0: a network game (engine/ui.md, the network
+                                      bit: set in the front end only, cleared in play)    */
 #define CTRL_AI      2
-#define CTRL_REMOTE  3
 
 #define IMPAI_ON     0x01u
 
@@ -139,16 +148,16 @@ SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
    incarnation (tagpu_unit_birth) and block when the pass set it, so the publish takes a contact only for the
    unit the pass found and at the block it found it (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND).
    Without the fail-closed table there is no incarnation, and the seat publishes no radar contact at all.
-   A heap table, so the recorder write-watches it and images only the pages a pass wrote: the block is the
-   attach's own allocation (tagpu_impai_init), which starts on a page and shares none, and is never freed.
-   BOUND: s_radar_hit_n rows, TAGPU_PK_DESIGN_SLOTS on a level whose content is built -- a level a seat plays
-   ImpAI on, live or puppet (impai_content_build) -- and 0 on every other level, which records none of it.
-   The rows are zero whenever the count is 0: the level init clears the rows the last level counted
-   (impai_observe_clear) before it sets the next count. */
+   A heap block, so the recorder write-watches it and images only the pages a pass wrote: the attach's own
+   allocation (tagpu_impai_init), which starts on a page and shares none, and is never freed.
+   BOUND: TAGPU_PK_DESIGN_SLOTS rows on every level, a fixed size and no count, so every level records and
+   restores the same rows: a replay restores a heap table's rows within the size the host holds and never
+   writes a count that sizes one (tagpu_replay.c, count_kept), so a count would stay at whatever the puppet's
+   own level init set. The level init clears every row (impai_observe_clear). With no block (ImpAI
+   unavailable) the table has no rows and the passes no records. */
 static IMPAI_HITROW* s_radar_hit;
-static unsigned s_radar_hit_n;
-SIM_HEAP(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(IMPAI_HITROW), s_radar_hit_n, NULL);
-SIM_VAR(s_radar_hit_n, SIM_STATE);
+SIM_BLOCK(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, TAGPU_PK_DESIGN_SLOTS, NULL);
+#define RADAR_HIT_ROWS (s_radar_hit ? TAGPU_PK_DESIGN_SLOTS : 0u)
 
 /* each seat's metal patches (impai.h): the published set, then the scan in progress */
 static SNAP_PATCH s_cluster[PLAYER_COUNT][IMPAI_CLUSTERS];
@@ -380,7 +389,7 @@ static int impai_observe(int seat, SNAP_SCRATCH* scr, IMPAI_WORK* w)
 {
     const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
                                   (int)sizeof s_radar_bits[seat],
-                                  { s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL, (int)s_radar_hit_n,
+                                  { s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL, (int)RADAR_HIT_ROWS,
                                     (unsigned)sizeof(IMPAI_HITROW), s_install.check },
                                   s_cluster[seat] };
     WQ_ENGINE c;
@@ -610,8 +619,7 @@ static void impai_observe_clear(void)
     memset(s_known, 0, sizeof s_known);
     memset(s_seatst, 0, sizeof s_seatst);
     memset(s_radar_bits, 0, sizeof s_radar_bits);
-    if (s_radar_hit_n) memset(s_radar_hit, 0, (size_t)s_radar_hit_n * sizeof *s_radar_hit);
-    s_radar_hit_n = 0;
+    if (s_radar_hit) memset(s_radar_hit, 0, (size_t)TAGPU_PK_DESIGN_SLOTS * sizeof *s_radar_hit);
     memset(s_cluster, 0, sizeof s_cluster);
     memset(&s_obs, 0, sizeof s_obs);
 }
@@ -779,13 +787,16 @@ static void impai_threat_build(void)
     tagpu_sim_scratch_free(in);
 }
 
-/* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
-   gives orders to (a factory, a constructor, a commander), by Quick Build's page rule with every type a press
-   reaches, the structures armed and the units queued (tagpu_buildmenu_types): a factory offers only the second.
-   Sorted by (side, builder), each row's types ascending in the pool. Content: a function of the level's defs,
-   files and seats' sides, rebuilt beside the threat table -- on a live level from the sides of the seats
-   s_seat marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) --
-   all or none: past either table the level has no content, and a live level then marks no seat. */
+/* THE MENUS: for every side the game loaded (main+0x37F39, at most the five side records), the build menu of
+   every builder type the brain gives orders to (a factory, a constructor, a commander), by Quick Build's page
+   rule with every type a press reaches, the structures armed and the units queued (tagpu_buildmenu_types): a
+   factory offers only the second. Sorted by (side, builder), each row's types ascending in the pool. Content:
+   a function of the level's defs and files alone, so every mark a level can come to hold -- its own, a
+   takeover's, a rewind's restored ones -- finds its side's menus, whichever seats were marked when it was
+   built. All or none: past either table the level has no content, and no seat of it is marked. A side's
+   menus took at most 148 builders and at most 1309 types in the compatibility suite's ImpAI stages (MEASURED
+   2026-11-13, the `impai: menus` lines of the side each stage built), so five such sides take under half of
+   either table [INFERRED for the sides no stage built]. */
 #define IMPAI_MENUS     2048u
 #define IMPAI_MENU_POOL 65536u
 #define SIDE_ROOM       5u          /* the engine's five side records (tagpu_resource.c, seat_side) */
@@ -798,6 +809,10 @@ SIM_VAR(s_menu, SIM_CONTENT);
 SIM_VAR(s_menu_pool, SIM_CONTENT);
 SIM_VAR(s_nmenu, SIM_CONTENT);
 SIM_VAR(s_npool, SIM_CONTENT);
+
+/* 1 when the level's content is built (impai_content_build), which every mark requires */
+static unsigned s_content;
+SIM_VAR(s_content, SIM_CONTENT);
 
 /* Record i's side as the page loader reads the controlled player's (0x41AD61..0x41AD66): PlayerInfo at
    +0x27, its byte +0x95. PlayerInfo objects live for the process. BOUND: below the sides loaded and the five
@@ -1243,9 +1258,9 @@ static const SimField s_job_layout[] = {
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 
 /* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its noise seed and its table, set at a live
-   level's init and never again, its squads and its picture, written by its military decisions. Cleared at every
-   level init; a puppet's comes from its recording, so a replay or takeover plays the recorded level, seed and
-   table without either lever. A squad's target is a unit slot; the picture's enemy types are unit types. */
+   level's init or for a takeover's fresh seat (seat_fresh), its squads and its picture, written by its military
+   decisions. Cleared at every level init; a puppet's comes from its recording, so a replay plays the recorded
+   level, seed and table without either lever, and so does a takeover for every seat ImpAI played there. A squad's target is a unit slot; the picture's enemy types are unit types. */
 static IMPAI_MIL s_mil[PLAYER_COUNT];
 static const SimField s_mil_layout[] = {
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
@@ -1685,29 +1700,88 @@ static void impai_content_clear(void)
     memset(s_menu, 0, sizeof s_menu);
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
+    s_content = 0;
 }
 
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
-   and the menus of `sides`. All or none: 1, or 0 with no content when the menus are past their tables. With
-   the content, the level counts the radar records' rows: the same fact on both sides of a recording. */
-static int impai_content_build(unsigned sides)
+   and the menus of every side loaded. All or none: 1, or 0 with no content when the menus are past their
+   tables. On the LOADER thread inside 0x4919C8 (the level init), where every input is the load's. */
+static int impai_content_build(void)
 {
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const unsigned loaded = ta ? *(const unsigned*)(ta + M_SIDES) : 0u;
     impai_reach_build();
     impai_threat_build();
-    if (impai_menus_build(sides)) {
-        s_radar_hit_n = s_radar_hit ? TAGPU_PK_DESIGN_SLOTS : 0u;
+    if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
+        s_content = 1;
         return 1;
     }
     impai_content_clear();
     return 0;
 }
 
+
 /* The level init's seat choice, the AI command and the header's accessor: what decides which
    seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
    AI command clears no mark, so between the two clears the recording is the only writer. */
 SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
+typedef char impai_seat_recs_are_the_players[IMPAI_SEAT_RECS == PLAYER_COUNT ? 1 : -1];
+
+/* The ten records as the seat rule reads them (impai_seats.h): seated, controller, AI object, PlayerInfo's
+   type and whether the long name begins ImpAI:. PlayerInfo objects live for the process (record_side), so
+   +0x94 is read as a value; the name is read within its 30-byte field. */
+static void seat_recs(const char* ta, IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS])
+{
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        const char* r = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+        const unsigned char* info = *(const unsigned char* const*)(r + PL_INFO);
+        rec[i].active = *(const uint32_t*)(r + PL_ACTIVE) != 0;
+        rec[i].control = (uint8_t)r[PL_CONTROL];
+        rec[i].ai_object = *(void* const*)(r + PL_AIOBJ) != NULL;
+        rec[i].info_ai = info && info[PI_TYPE] == CTRL_AI;
+        rec[i].named = (uint8_t)impai_seats_named(r + PL_NAME, IMPAI_NAME_FIELD);
+    }
+}
+
+/* The table holds exactly the marks `marks`, bit i for record i. */
+static void seats_set(unsigned marks)
+{
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++) s_seat[i] = (uint8_t)(marks >> i & 1u ? IMPAI_ON : 0u);
+}
+
 static void impai_mil_init(const char* ta, unsigned seat);
+
+/* A takeover's seat ImpAI did not play in the recording, as a level init leaves it: its column of every
+   slot-keyed table and its own rows zero, its brain reset, the jobs of its unit block cleared, a new military.
+   BOUND: `seat` below PLAYER_COUNT (= WQ_SEATS, the columns), the radar records below their count, the jobs
+   within the block seat_units gives and the job table. Game thread (tagpu_impai_takeover). */
+static void seat_fresh(const char* ta, unsigned seat)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    unsigned k;
+    int first = 0, last = -1, slot;
+    for (k = 0; k < TAGPU_PK_DESIGN_SLOTS; k++) memset(&s_known[k].seat[seat], 0, sizeof s_known[k].seat[seat]);
+    for (k = 0; k < RADAR_HIT_ROWS; k++) memset(&s_radar_hit[k].seat[seat], 0, sizeof s_radar_hit[k].seat[seat]);
+    memset(&s_seatst[seat], 0, sizeof s_seatst[seat]);
+    memset(s_radar_bits[seat], 0, sizeof s_radar_bits[seat]);
+    memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
+    impai_brain_reset(&s_brain[seat], s_job, 0);
+    if (tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) && q.ops->seat_units(&q, &first, &last)) {
+        if (first < 0) first = 0;
+        if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;
+        for (slot = first; slot <= last; slot++) {
+            memset(&s_job[slot], 0, sizeof s_job[slot]);
+            s_job[slot].type = s_job[slot].build = s_job[slot].target = (uint16_t)WQ_NONE;
+        }
+    } else {
+        tagpu_logf("impai: seat %u's unit block unread at the takeover: its jobs stand to the census", seat);
+    }
+    impai_mil_init(ta, seat);
+}
 
 /* The level's start positions as the `starts` op answers them, once at a live level's init with an ImpAI
    seat: `impai: starts n=<n> <index>:<x>,<z> ...`, world px, which the military's base estimate and scouting
@@ -1733,23 +1807,34 @@ static void impai_starts_line(void)
    table is whole before any game-thread turn reads it (impai_seat_marked, THE THREAD). It clears
    the table on every level (s_seat); on a puppet level it marks no seat: the recording restores
    the table, and the recorder is the only writer of what a recording carries.
-   THE SEAT CHOICE is impure.cfg's `seatai`, bit i for settings entry i, which is record i: the
-   seat fill 0x47A760 activates record i for entry i on every path that seats a skirmish
-   (engine/sim.md, Seating a level).
-   THE CONTENT -- the reach labels, the threat table and type information, the menus -- is built here only
-   on a level a seat can play ImpAI on, and every other level has none (impai_content_clear). The test is
-   the same fact on both sides of a recording, so the content hash agrees: on a live level, a seat marked --
-   ImpAI available, no remote record, and a seated controller-2 record whose `seatai` bit is set; on a
-   puppet level, a seat the recording header's ImpAI byte names (RT_PLAYER byte 15, tagpu_replay_seat_ai),
-   which the header takes from those marks (tagpu_impai_seat_ai). The menus are the sides' that ImpAI plays:
-   on a live level the marked seats', so a level whose menus are past their tables has no content and marks
-   none, and its header names no ImpAI seat; on a puppet level the header's. */
+   THE SEAT CHOICE (impai_seats.c, which has the rule) marks only a record the engine runs an AI for
+   on this peer: seated, controller 2, its AI object +0x74 set, which 0x464990's player init
+   0x464700 builds for every record but an active type 3 (0x46489D..0x4648C1). In a skirmish the
+   records are impure.cfg's `seatai`, bit i for settings entry i, which is record i: the seat fill
+   0x47A760 activates record i for entry i on every path that seats a skirmish (engine/sim.md,
+   Seating a level). In a network game (main+0x2A44 bit 0) an AI seat is type 2 with its AI object
+   only on the peer that added it and type 3 without one on every other (engine/network.md, A
+   computer seat in a network game), and the seam 0x465031 runs only where +0x74 is set, so ImpAI
+   plays a seat on its own peer alone, by the engine's structure: which of this peer's AI seats is
+   the record's own name, ImpAI:<human> as the battle room's add or button named it (tagpu_skirmish.c,
+   THE BATTLE ROOM), which moves with the record when the room compacts its rows. The mark is this
+   peer's record index and ImpAI sends nothing to another peer, so a row index that differs there is
+   never used. A type-3 record outside a network game marks none, and the line says which.
+   THE CONTENT -- the reach labels, the threat table and type information, the menus of every side loaded --
+   is SIM_CONTENT, so it is built here and only here, on this thread, from what the load made: the class maps
+   as 0x440940 built them, before any unit or feature of play changes them (engine/map.md), the defs and the
+   files. A live level builds it when a seat is marked, and a level whose menus are past their tables marks
+   none, so its header names no ImpAI seat; a puppet level builds it whenever ImpAI is available, so a takeover
+   or a rewind of it finds the same content the live game had and builds none in play. Every other level has
+   none (impai_content_clear). */
 void tagpu_impai_level_init(void)
 {
     const char* ta;
-    char list[2 * PLAYER_COUNT + 1];
-    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want, sides = 0, any = 0;
-    unsigned char side;
+    char list[2 * IMPAI_SEAT_RECS], remote[2 * IMPAI_SEAT_RECS], rimpai[2 * IMPAI_SEAT_RECS];
+    IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
+    IMPAI_SEAT_PICK pick;
+    unsigned i;
+    int network;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
     s_ovc.built = 0;
@@ -1758,50 +1843,105 @@ void tagpu_impai_level_init(void)
     impai_play_clear();
     impai_content_clear();
     if (tagpu_puppet_on()) {
-        for (i = 0; i < PLAYER_COUNT; i++)
-            if (tagpu_replay_seat_ai(i, &side)) {
-                any = 1;
-                if (side < SIDE_ROOM) sides |= 1u << side;
-            }
-        if (any) impai_content_build(sides);
+        if (s_install.avail) impai_content_build();
         return;
     }
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
-    for (i = 0; i < PLAYER_COUNT; i++) {
-        const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
-        if (!*(const uint32_t*)(rec + PL_ACTIVE)) continue;
-        live++;
-        if ((uint8_t)rec[PL_CONTROL] == CTRL_REMOTE && remote == PLAYER_COUNT) remote = i;
-    }
-    /* A remote record means a network game, which ImpAI does not play yet. */
-    if (remote < PLAYER_COUNT) {
-        tagpu_logf("impai: seats none: record %u is remote, a network game", remote);
+    seat_recs(ta, rec);
+    network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
+    impai_seats_pick(rec, network, (unsigned)tagpu_settings_seatai(), &pick);
+    if (pick.refused >= 0) {
+        tagpu_logf("impai: seats none: record %d is remote outside a network game", pick.refused);
         return;
     }
     if (!s_install.avail) {
         tagpu_logf("impai: unavailable: %s", s_install.why);
         return;
     }
-    want = (unsigned)tagpu_settings_seatai();
-    for (i = 0; i < PLAYER_COUNT; i++) {
-        const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
-        if (!*(const uint32_t*)(rec + PL_ACTIVE) || (uint8_t)rec[PL_CONTROL] != CTRL_AI) continue;
-        if (!(want & (1u << i))) continue;
-        s_seat[i] = IMPAI_ON;
-        if ((side = record_side(ta, i)) != 0xFF) sides |= 1u << side;
-        if (n) list[n++] = ',';
-        list[n++] = (char)('0' + i);
-    }
-    if (n && !impai_content_build(sides)) {
-        memset(s_seat, 0, sizeof s_seat);
-        n = 0;
-    }
+    if (pick.marks && !impai_content_build()) pick.marks = 0;   /* the menus' line says why */
+    seats_set(pick.marks);
     for (i = 0; i < PLAYER_COUNT; i++)
         if (s_seat[i] & IMPAI_ON) impai_mil_init(ta, i);
-    if (n) impai_starts_line();
-    list[n] = 0;
-    tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);
+    if (pick.marks) impai_starts_line();
+    impai_seats_list(pick.marks, list);
+    if (network) {
+        impai_seats_list(pick.remote_ai, remote);
+        impai_seats_list(pick.remote_impai, rimpai);
+        tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s, "
+                   "ImpAI's %s", list, tagpu_settings_netai() ? "impai" : "ota",
+                   (unsigned)impai_seats_level(1, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote, rimpai);
+    } else {
+        tagpu_logf("impai: seats %s (impure.cfg) of %u records", list, pick.live);
+    }
+}
+
+/* THE TAKEOVER'S SEATS. A takeover makes every recorded seat but the player's P a fresh stock AI (tagpu_replay.c,
+   TK1: new AI objects through 0x408CB0) and P a human's, type 1 through the engine's setter (tk_types). ImpAI's
+   seats are then the seats it played in the recording -- the marks R13 (recorded_put) restored into s_seat,
+   read here, before anything below writes the table -- and any seat the store's `seatai` adds, bit i for
+   record i, both through the level init's rule (impai_seats_pick), which marks only a seated controller-2
+   record with its AI object: so P, now type 1, is never ImpAI's, and no other recorded seat loses ImpAI. A
+   player who takes over a game against ImpAI plays on against ImpAI, whatever store the playing process has.
+   A seat ImpAI played in the recording and still plays KEEPS what R13 restored -- its knowledge, its brain, its jobs, its military with the recorded level, seed and
+   table -- so the fork goes on from the recorded state as a rewind's does, and its first capture states the
+   parent's tables at the fork for every kept seat (tarec compare-fork compares every declared table). A seat
+   ImpAI did not play there starts fresh, as at a level's start (seat_fresh), so its mark, brain, jobs and
+   military differ from the parent's by design. A seat ImpAI no longer plays keeps its rows, which no turn
+   reads, and loses its knowledge generation, which the overlay and the digests' log test for a seat to show
+   (tagpu_impai_overlay, tagpu_impai_frame), so its frozen knowledge is not drawn. The content is the puppet level init's, built from the load
+   (THE CONTENT above), so the takeover builds none; a level without it marks no seat.
+   Called by tk_end on the GAME thread inside the takeover's frame visit, after tagpu_puppet_end() and after
+   R13, and before tagpu_rec_fork_arm, so the fork's first capture, its header's ImpAI byte included, states
+   these marks. Not on a rewind's fork: it restores the saved present's own seats and keeps their marks (the
+   caller's test).
+   THE THREAD AND THE ORDER: the loader thread is done (the level is in play), the render thread reads none
+   of these tables (the overlay's fill runs on the game thread), and the players phase runs in a later step,
+   so the table is whole before any turn reads it. The playing's level is single player (main+0x2A44 bit 0
+   is set only in the front end), so the rule reads `seatai`; after TK1 every recorded seat is type 1 or 2
+   with its AI object. */
+void tagpu_impai_takeover(void)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    char list[2 * IMPAI_SEAT_RECS], fresh_list[2 * IMPAI_SEAT_RECS];
+    IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
+    IMPAI_SEAT_PICK pick;
+    unsigned i, before = 0, fresh;
+    s_ovc.built = 0;
+    s_known_tick = 0;
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if (s_seat[i] & IMPAI_ON) before |= 1u << i;
+    if (!ta) {
+        seats_set(0);
+        return;
+    }
+    seat_recs(ta, rec);
+    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0,
+                     before | (unsigned)tagpu_settings_seatai(), &pick);
+    if (pick.refused >= 0) {
+        seats_set(0);
+        tagpu_logf("impai: seats none: record %d is remote after a takeover", pick.refused);
+        return;
+    }
+    if (!s_install.avail) {
+        seats_set(0);
+        tagpu_logf("impai: unavailable: %s", s_install.why);
+        return;
+    }
+    if (pick.marks && !s_content) {
+        tagpu_logf("impai: seats none: the level has no content (a takeover)");
+        pick.marks = 0;
+    }
+    fresh = pick.marks & ~before;
+    seats_set(pick.marks);
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if ((before & ~pick.marks) >> i & 1u) s_seatst[i].known_gen = 0;
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if (fresh >> i & 1u) seat_fresh(ta, i);
+    impai_seats_list(pick.marks, list);
+    impai_seats_list(fresh, fresh_list);
+    tagpu_logf("impai: seats %s (the recording's and impure.cfg's, a takeover) of %u records; fresh %s", list,
+               pick.live, fresh_list);
 }
 
 /* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it -- the
@@ -1840,7 +1980,7 @@ typedef void (__thiscall* PFN_SetType)(void* rec, int type);
    nothing is cleared. THE THREAD: the game thread between steps (the TALK screen 0x493BF0 and
    the keys 0x495E90), or the loader thread when a profile script names `AI` (the profile load
    0x4648E0, inside the players init 0x464990), before tagpu_impai_level_init clears the table
-   and marks the record if `seatai` names it. On a puppet nothing is written: the recorder is the
+   and marks the record if the seat choice names it. On a puppet nothing is written: the recorder is the
    only writer of the table there. */
 static void __fastcall impai_ai_command(char* rec, void* edx_unused, int type)
 {
@@ -2139,21 +2279,26 @@ static void impai_mil_levers(void)
         }
 }
 
-/* A live seat's military at the level init (tagpu_impai_level_init): its level from the level lever, else from
-   Difficulty main+0x37EEE (any other value plays Normal, and says so); its seed from the simulation RNG's state
-   0x51FC88 xor the seat, READ and never drawn (impai.h, impai_noise), which the loader 0x497180 seeded at
-   0x49719D before 0x4917D0 runs PLAYERS, inside which this runs (engine/sim.md); its table from the table lever's
+/* A live seat's military at the level init (tagpu_impai_level_init) or a takeover's fresh seat
+   (tagpu_impai_takeover): its level from the level lever, else impai_seats_level -- Hard in a network game,
+   else Difficulty main+0x37EEE (any other value plays Normal, and says so); its seed from the simulation RNG's
+   state 0x51FC88 xor the seat, READ and never drawn (impai.h, impai_noise), which the loader 0x497180 seeded at
+   0x49719D before 0x4917D0 runs PLAYERS, inside which the level init runs (engine/sim.md), and which a
+   takeover finds as the recording carries it (replay-globals.tsv, `rngseed`); its table from the table lever's
    file when it loads (impai_table_load bounds it, and refuses it whole), else IMPAI_TABLE_DEFAULT. Each says
    what it chose in one line, the table's as `impai: table seat= hash= from=`, the hash the file's trailer or
    the default's own. */
 #define VA_RNG_STATE 0x0051FC88u
+typedef char impai_seats_levels_are_the_rows[IMPAI_LEVEL_HARD == IMPAI_LV_HARD && IMPAI_LV_EASY == 0 &&
+                                             IMPAI_LV_NORMAL == 1 ? 1 : -1];
 static void impai_mil_init(const char* ta, unsigned seat)
 {
-    const uint32_t difficulty = *(const uint32_t*)(ta + 0x37EEE);
+    const uint32_t difficulty = *(const uint32_t*)(ta + OFF_DIFFICULTY);
+    const int network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
     const uint64_t seed = (uint64_t)*(const uint32_t*)(uintptr_t)VA_RNG_STATE ^ seat;
     IMPAI_TABLE table = IMPAI_TABLE_DEFAULT;
     uint64_t hash = impai_table_hash(&IMPAI_TABLE_DEFAULT);
-    int level = impai_level_of_difficulty(difficulty), lever = 0;
+    int level = impai_seats_level(network, difficulty), lever = 0;
     if (s_milvr.level[seat]) level = s_milvr.level[seat] - 1;
     else if (level < 0) {
         tagpu_logf("impai: level seat=%u: Difficulty %u is none of 0..2, so Normal", seat, difficulty);
