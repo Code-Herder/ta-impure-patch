@@ -1397,8 +1397,10 @@ int tagpu_worldq_role_count(void)
    TASIM_ROLE_WEAPONS) - 1 through the extra-weapons module, weapon1..weapon10 as the file filler reads them;
    a slot whose record is the no-weapon entry 0 stays empty, as the file filler leaves a name it finds no
    section for. A weapon's air damage is the mean, over the types of category VTOL, of its damage against
-   each. */
-int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n)
+   each. Build options: a builder's (+0x241 bit 6, the bit the classifier's factory test reads) are what
+   `options` answers for it, without the builder itself, as the file filler leaves a builder's own type out.
+   BOUND: every option is a type below n, else the fill fails; they are packed into opt[0..optcap). */
+int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t* opt, unsigned optcap)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const char* defs;
@@ -1407,8 +1409,9 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n)
     float* wair;                /* a weapon's air damage by its index, taken once: NAN until then */
     CATMAP cat;
     const int nw = tagpu_limits_weapon_slots();
+    unsigned used = 0;
     int i, k, nair = 0;
-    if (n <= 0 || n != tagpu_worldq_role_count() || nw <= 0 || !catmap_open(&cat)) return -1;
+    if (n <= 0 || n != tagpu_worldq_role_count() || nw <= 0 || !options || !opt || !catmap_open(&cat)) return -1;
     defs = *(const char* const*)(ta + D_BASE);
     air = (uint16_t*)tagpu_sim_scratch((size_t)n * sizeof *air);
     wair = (float*)tagpu_sim_scratch((size_t)nw * sizeof *wair);
@@ -1469,10 +1472,21 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n)
                        ((tagpu_datakeys_wkey(w) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
             r->nweapons = (uint16_t)(k + 1);
         }
+        if (r->flags241 & TASIM_F241_BUILDER) {
+            const int got = options((unsigned)i, opt + used, (int)(optcap - used < 0xFFFFu ? optcap - used : 0xFFFFu));
+            unsigned m = 0;
+            if (got < 0) break;
+            for (k = 0; k < got && opt[used + k] < (unsigned)n; k++)
+                if (opt[used + k] != (unsigned)i) opt[used + m++] = opt[used + k];
+            if (k < got) break;
+            r->build = opt + used;
+            r->nbuild = (uint16_t)m;
+            used += m;
+        }
     }
     tagpu_sim_scratch_free(wair);
     tagpu_sim_scratch_free(air);
-    return 0;
+    return i < n ? -1 : 0;
 }
 
 /* ---- the fight predictor's content (tagpu_worldq.h, THE FIGHT CONTENT'S ENGINE FILLER) ----

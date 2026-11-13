@@ -1556,11 +1556,24 @@ Those routines are unchanged from this landing's base. The bounded native storag
 `main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
-These measurements identify an existing cosmetic-pool snapshot gap. They do not establish
-that pool fullness is irrelevant to simulation. The owner approved exactly these three ranges
-on 2026-10-06 as a known-gap exception for the native `stock-secondary-orders` unlisted-image
-check alone. Every other image bit, fixture and state/order/effect-call/restore check retains
-its existing policy. Snapshot layouts for these pools remain unimplemented; see
+These measurements identify an existing cosmetic-pool snapshot gap. The pools' fullness is not
+irrelevant to the simulation: the explosion cap and a full debris pool gate the shatter's sim-RNG
+draws (*The caps gate the simulation's random numbers*, below).
+
+**MEASURED 2026-11-13, `stock-impai-fight` at T1 2251** (saved gate dumps, `tarec.py`). The live
+game and the playing hold count 1 and a written extent of 70 records; the fresh seek holds count 0
+and 300 zero records. 1565 pool bytes differ between the live game and the seek, and the images
+gate flags 301 of them: it classes the rest load-constant, because records 17..69 were written
+before T1 and are unchanged over [2251, 3991], so the gate under-reports the gap. The 338 bytes
+that differ between the live game and the playing are all record `+0x0C`/`+0x18` sequence
+pointers, heap addresses of each process. **The raised build has the same gap**, invisible to the
+gate: its seek clears `s_expl`, no record carries it, and the gate reads only the main block and
+the exe's `.data`.
+
+The owner approved exactly these three ranges as a known-gap exception for the native
+unlisted-image check of `stock-secondary-orders` (2026-10-06) and `stock-impai-fight`
+(2026-11-13) alone. Every other image bit, test group and state/order/effect-call/restore check
+retains its existing policy. Snapshot layouts for these pools remain unimplemented; see
 [recorder completeness](../tadr-port/demo-recorder-completeness.html).
 
 The subsequent whole run samples this control at T301: the image gate accepts zero cosmetic
@@ -1979,7 +1992,17 @@ record's leave only at a tick by which it is certainly gone. These are the facts
   state A at `+0x04` (sequence `+0x0C`) and B at `+0x10` (sequence `+0x18`). The add `0x420A30(point,
   seqA, idx, noflare)` (`ret 0x10`) starts A from `seqA` and B from table B `main+0x1AB8F + 4·idx`,
   none for `idx` < 0 (`0x420AB7`). Table B is built at the level load by `0x420620`
-  (`0x4206BA..0x4207C4`): idx 0 has 12 frames, idx 1 and 2 have 15, every duration 2.
+  (`0x4206BA..0x4207C4`): idx 0 has 12 frames, idx 1 and 2 have 15, every duration 2. Its three
+  entries `main+0x1AB8F/+0x1AB93/+0x1AB97` are stored at `0x4206E3`, `0x42075F` and `0x4207E2`; the
+  teardown `0x420960` frees each (`0x4209DF`) and nulls it (`0x4209ED`). The level load's reset
+  `0x420630` zeroes the count alone, so the records past it keep what earlier levels wrote, table B
+  pointers included.
+- **A shatter with no free debris record keeps a stale record.** `0x421700` raises the count first
+  (`0x4217B0..0x4217B1`), writes the point (`0x4217D5`) and the body (`0x421806`), and only after a
+  free debris record was found writes the flight and clears `+0x0C` and `+0x18` (`0x4218F1`,
+  `0x4218F4`). With none free the scan ends at `0x421802` with a NULL body and `0x421808` leaves, so
+  the counted record keeps the anim states and sequences of whatever explosion last held that slot,
+  and the tick steps them again: the pool's tail past the count is not dead bytes.
 - **The explosion tick `0x420F30`** walks `[0, count)` and re-reads the count each step (`0x4210D4`),
   so records appended during the walk are stepped too; it steps A (`0x4210BB`) and B (`0x4210CB`)
   through `0x4B8B90`, and its compaction (`0x4210E6..0x42113E`) drops a record whose `+0x00`, `+0x0C`

@@ -127,8 +127,19 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
 **The factories buy army** in the economy's decision, after the constructors: each idle factory left queues one
 unit, the class from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the army's value
 by class, built, building and queued) and the type by `impai_class_type` with the predictor's pair rate.
-**Tech-up**: with `factory_max` factories of its highest tech and a metal income of the table's `tech_m` times
-the level's `tech_scale` a pass, the next factory is of a higher tech. **Anti-air structures**: one per
+**Tech-up** compares what plants make. A plant's **offer** (`IMPAI_TINFO.offer`, built with the type information
+at the level init) is the highest tech level among the mobile types of its build menu, the menus merged over the
+sides that the classifier's tech walk reads ([ImpAI](../modules/impai.html), *The type information*); the seat's
+offer is the highest over its factories, frames included. With `factory_max` factories at the seat's offer and a
+metal income of the table's `tech_m` times the level's `tech_scale` a pass, and no factory ordered or pending, the
+next factory is a plant whose offer is above the seat's -- the least value among those a builder's menu holds,
+whose own menu offers a constructor that builds an extractor, on a site the ring finds, ties to the lower type, as
+for any factory. The offer and not the plant's own tech level, because the classifier makes a plant the tech of
+the factories before it: an advanced plant a tech-1 constructor builds is tech 1 like the lab (retail ARMLAB,
+ARMALAB, ARMAVP, CORALAB: 1; `tasim_run roles`, MEASURED 2026-11-13), while ARMLAB offers 1 and ARMALAB 2. So a
+seat with two labs techs up to the advanced lab, and one whose plants already offer tech 2 builds no other plant
+offering 2. The military's table input `F_TECH` is still its highest factory's tech level over 3, the input A3's
+table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
 
 ### The naval rule

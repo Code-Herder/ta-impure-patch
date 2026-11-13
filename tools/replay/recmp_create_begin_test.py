@@ -4,8 +4,9 @@
 Owns two fresh Wine instances, named with the run's tag (tools/runlock.py, TAGS) and --label, a
 private display and a DirectPlay port leased for the game (tools/dpport.py): --port asks for one
 port, refused while another run leases it, and with none the first free one is taken. Two games of
-one run at once each take a --label of their own (tareplay.py's landing gives each its build), so
-they never make or remove each other's instances.
+one run at once each take a --label of their own (tareplay.py's landing gives each its build's
+letter, MP_LABELS), so they never make or remove each other's instances. tools/mp_lobby.sh types
+each instance's name as its player's nickname, so every name fits the nickname (instance_names).
 Only the host saves; both endpoints must contribute each constructor boundary.
 This verifies capture and persisted causality, not multiplayer engine playback.
 
@@ -142,6 +143,19 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
+# SELGAME's NICKNAME field takes ten characters (MEASURED 2026-11-13: tacli's `ui fill` reads the
+# field's maxchars as 10 and refused 'MB-S00-RAISED-H'), and tools/mp_lobby.sh types the
+# instance's name, upper-cased, into it.
+NICKNAME_CHARS = 10
+
+
+def instance_names(tag, label=""):
+    """(host, joiner): the game's two instances, `mb-<tag>-<label>-H` and `-J`. The longest tag is
+    three characters (tools/runlock.py, TAGS: `s<NN>`) and a label one (label_arg), so the longest
+    name is NICKNAME_CHARS, and the tag and label keep every run's and every game's names apart."""
+    token = f"mb-{tag}-" + (f"{label}-" if label else "")
+    return token + "H", token + "J"
+
 
 def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None):
     """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
@@ -182,9 +196,7 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                 command(sys.executable, TREE / "tools/reproduce_fixture.py", output / "zzrepro.ufo")
             # an instance of the run's tag and this label is a dead run's: no live run shares the
             # tag, and no game of this run at once shares the label
-            token = f"mb-{tareplay.runlock.tag()}-" + (f"{label}-" if label else "")
-            for suffix in ("H", "J"):
-                name = token+suffix
+            for suffix, name in zip(("H", "J"), instance_names(tareplay.runlock.tag(), label)):
                 subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
                                stderr=subprocess.STDOUT, check=False, timeout=120)
                 owned.append(name)
@@ -338,10 +350,10 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
 
 
 def label_arg(value):
-    """--label: up to 12 lower-case letters and digits, which keep an instance's name inside
-    tacli's 32 characters."""
-    if not re.fullmatch(r"[a-z0-9]{1,12}", value):
-        raise argparse.ArgumentTypeError(f"{value!r} is not 1 to 12 lower-case letters and digits")
+    """--label: one lower-case letter or digit, which keeps an instance's name inside the nickname
+    (instance_names)."""
+    if not re.fullmatch(r"[a-z0-9]", value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not one lower-case letter or digit")
     return value
 
 

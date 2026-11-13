@@ -1081,7 +1081,7 @@ def _take(path: Path, what: str, resources: list, sizes,
         say(f"took the run lock ({slots} slots" + (f" of the {most} asked" if slots < most else "")
             + (f", {units * GRAIN_MIB} MiB of the GPU" if units else "")
             + f") after {waited / 60:.1f} min{cut}")
-    return ([shared, *taken.values(), *units_, *named.values()], f"s{min(taken):02d}", run,
+    return ([shared, *taken.values(), *units_, *named.values()], slot_tag(min(taken)), run,
             (slots, units, games_, budget, cap))
 
 
@@ -1266,6 +1266,11 @@ def game_seat(what: str):
         time.sleep(POLL_S)
 
 
+def slot_tag(k: int) -> str:
+    """The tag of a run whose lowest held slot is `k` (TAGS)."""
+    return f"s{k:02d}"
+
+
 def tags_held_by(path: Path, pids) -> set:
     """The tags of the runs on the lock of `path` whose holder is one of `pids` (TAGS: each run's
     lowest held slot, the holder its line names)."""
@@ -1277,7 +1282,7 @@ def tags_held_by(path: Path, pids) -> set:
         m = re.match(r"pid (\d+),", _read(p))
         if m and int(m.group(1)) in pids and m.group(1) not in seen:
             seen.add(m.group(1))
-            tags.add(f"s{k:02d}")
+            tags.add(slot_tag(k))
     return tags
 
 

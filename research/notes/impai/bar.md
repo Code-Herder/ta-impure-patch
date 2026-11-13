@@ -54,8 +54,8 @@ run is ten games.
   not reach the teardown (no `impai: handicap rows` in its log) could not run.
 - **What a result reads from the level's end**, for each ImpAI seat: `end`, from its `impai: eco` and
   `impai: mil … level=` lines -- its units completed, its army units completed by class (`army`, ImpAI's own
-  classes `lraider` … `ascout`, and `army_built`), its factories completed by tech level (`factories`, `"3"`
-  holding 3 and above), its water-only factories completed (`yards`), the sea plants it ordered, its attack waves,
+  classes `lraider` … `ascout`, and `army_built`), its factories completed by the tech level they offer
+  (`factories`, `"3"` holding 3 and above), its water-only factories completed (`yards`), the sea plants it ordered, its attack waves,
   raids and scouting runs begun, its naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the
   first `impai: mil seat= t= attack= raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
   for a kind it never began; `income_max`, its best metal income a pass over a pulse minute (the rise of

@@ -390,18 +390,35 @@ the native paths clear the count, reinitialise debris and zero flying-piece slot
 engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
 are implemented. These paths are unchanged from the landing's base.
 
-**Owner-approved known gap, 2026-10-06.** Only `stock-secondary-orders`, on its native
-300-projectile build, enables `images-gate --stock-secondary-cosmetics`. Otherwise failing
+**MEASURED 2026-11-13: `stock-impai-fight` at T1 2251** (the saved dumps of an ImpAI gate run,
+read with `tarec.py`). The live game and the playing hold explosion count 1 and a written extent of
+70 records; the fresh seek holds count 0 and 300 zero records. 1565 pool bytes differ between the
+live game and the seek; the images gate flags 301 of them and classes the rest load-constant,
+because records 17..69 were written before T1 and are unchanged over [2251, 3991]. So the gate
+under-reports this gap. Between the live game and the playing, 338 bytes differ and every one is
+inside a record's two sequence pointers (`+0x0C`, `+0x18`), which are heap addresses of each
+process: a byte-exact restore of the pool could not pass either.
+
+**Owner-approved known gap, 2026-10-06 (`stock-secondary-orders`) and 2026-11-13
+(`stock-impai-fight`).** Only these two test groups, `tarec.STOCK_COSMETIC_FIXTURES`, on their
+native 300-projectile build, enable `images-gate --stock-cosmetic-pools` (`tareplay.py`,
+`image_gate_options`). Otherwise failing
 unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x1E88F)` and
 `.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
 The address scope is 41204 bytes; it is not the measured number of differences. Adjacent bytes,
-other fixtures and raised-limit recordings retain the strict gate. No recorder layout,
+other test groups and raised-limit recordings retain the strict gate. No recorder layout,
 positive globals row, unit/player/order comparison, paused comparison, restore check or
-root/sink effect comparison changes. The saved whole-run and focused dumps pass only with
-this explicit option; the default still fails their original 514 and 469 bytes. Six portable
-policy tests cover the bounds and fixture/build/command restrictions. Native and raised
-cosmetic-pool snapshot layouts remain separate work; this exception does not establish that
-pool fullness is irrelevant to simulation.
+root/sink effect comparison changes. The saved dumps pass only with this explicit option and
+the default still fails them: `stock-secondary-orders`' whole-run and focused dumps by 514 and
+469 bytes, `stock-impai-fight`'s by 301 bytes, which the option accepts. The policy tests in
+`test_tareplay.py` (`NativeCosmeticImagePolicy`) pin the two names, the three ranges, the cap and
+the command. **The raised build has the same gap and the gate cannot see it**: a raised seek clears
+`s_expl` as stock's clears its pool, no record carries `s_expl`, and `images-gate` reads only the
+main block and the exe's `.data`, where the raised build leaves `main+0x1491B` unwritten. This
+exception does not establish that pool fullness is irrelevant to simulation: the explosion cap
+(`0x42176F`) and a full debris pool (`0x421802`) decide how many sim-RNG draws a shatter makes
+([the engine map](../engine/weapons.html)). The restore itself is open (*Open items*, *A seek
+drops the effects in flight*).
 
 The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
 37 image gates, with coverage reaching all 11 changed function/region requirements. Its
@@ -620,7 +637,10 @@ name before a game starts (`runlock.together`) rather than launch a joiner that 
 host's seat forever. A worker whose cleanup could not end its game retires and keeps its slot to
 the run's end, since that game may still hold its GPU memory and seat; a group that then asks more
 slots than the run has left is refused by name. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
-`tools/dpport.py`), and its instances carry the run's tag and the build (`--label`). A run that
+`tools/dpport.py`), and its instances carry the run's tag and the build's letter (`--label`,
+`MP_LABELS`): `mb-s00-r-H`, ten characters at most, since `mp_lobby.sh` types each name as its
+player's nickname and SELGAME's NICKNAME field holds ten (`test_tareplay.py`'s `MultiplayerNames`
+checks every tag and build). A run that
 does not fit waits; the kernel drops the slots when their holder exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
 (MEASURED 2026-10-12).
@@ -631,7 +651,9 @@ beside and renamed over), and the two-player groups theirs. `--resume DIR` plays
 earlier sitting left: a group whose PASS or FAIL is kept there under this sitting's key is read
 back -- its summary lines, its checks' verdicts, its recording and its coverage files -- and every
 other group's folder is emptied and the group played whole. A FAIL stays a FAIL; a group that
-could not run is played again. The key is HEAD with a worktree git sees no change in (a dirty tree
+could not run is played again. A DIR that does not exist yet is made and the sitting plays every
+group, so one command line serves the first sitting and every later one; a DIR that cannot be a
+folder, and a worktree with changes, are refused before the run selects its groups. The key is HEAD with a worktree git sees no change in (a dirty tree
 is never resumed), the hashes of the DLLs the run can load (default, coverage, stock-limits
 coverage, any named) less the three fields the link writes its time into (`tools/dllkey.py`: two
 builds of an unchanged tree differ in nothing else, so a `make` between sittings keeps the key),
@@ -1288,6 +1310,19 @@ and `0x4D0640` by file name. Nothing on that path calls the sound entry `0x47F0C
 are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`, so no `0x13` is sent. S2 records the replies
 and makes the engine's own reply calls inert on a puppet host, so a recorded `+0x10E` change applied
 there plays nothing twice.
+
+**A seek drops the effects in flight** (open; a recorder project of its own, the owner's ruling,
+2026-11-13). The seek's clear (`seek_run`, `tagpu_effects_clear`) empties the explosion pool,
+re-initialises the debris records and zeroes the flying-piece slots, in both builds, and no record
+kind carries any of them back: a seek to T shows none of the explosions, debris and pieces that
+were in flight at T, and the pools' fullness after it is exact only while the game stays below the
+caps that gate the shatter's sim-RNG draws (`0x42176F`, `0x421802`). The restore needs the pools
+recorded as engine records the way the projectile pool is, with every pointer an ID: an explosion's
+two sequence pointers name an fx-bank field, table B (`main+0x1AB8F`) or the impacting weapon's
+sequence, and its body names a debris record, whose faces point into the texture banks, for which no
+ID scheme exists yet. The flying-piece slots point at ring-allocated particle systems. Until then
+the stock images gate takes the known gap above on two test groups, and the raised build's gap is
+invisible to the gate.
 
 **A takeover does not reproduce the meteor shower's strike points** (open; the owner's ruling,
 2026-10-08: a known gap, not fixed now). The meteor tick draws its strike points `0x512334` and

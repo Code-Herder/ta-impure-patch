@@ -51,10 +51,10 @@ handler reaches the teardown within its own call, through the exit's three-call 
 frame 0x4257A0; 0x451B60, which returns at once off a network game (`test main+0x2A44, 1` at 0x451B66, the
 network bit, engine/sim.md; DISASSEMBLED); the teardown. A game whose exit does not reach the teardown (no
 `impai: handicap rows`, the line every level end writes) could not run. From the level-end lines each ImpAI
-seat's `end` (level_end): its units completed, its army by class, its factories completed by tech level, its
-water-only factories, the sea plants it ordered, its attack waves, raids and scouts, its naval judgement and its
-tech-up income; from the military's task lines its `first` ATTACK, RAID and scouting tick (first_ticks); from its
-pulses its best metal income a pass over a pulse minute (`income_max`).
+seat's `end` (level_end): its units completed, its army by class, its factories completed by the tech level they
+offer, its water-only factories, the sea plants it ordered, its attack waves, raids and scouts, its naval
+judgement and its tech-up income; from the military's task lines its `first` ATTACK, RAID and scouting tick
+(first_ticks); from its pulses its best metal income a pass over a pulse minute (`income_max`).
 
 WHAT IS KEPT FOR A DIAGNOSIS. A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
 instance log of its launch beside its result (`<id>.tagpu.log`), as a game that could not run does; a bar game
@@ -369,7 +369,7 @@ def _float(v):
 def level_end(lines, seat: dict) -> dict:
     """{A, B: ...} for each side whose seat wrote level-end lines (tagpu_impai.c, impai_play_end): from its `eco`
     line its units completed (`built`), its army units completed by class (`army`, ImpAI's own classes, and their
-    sum `army_built`), its factories completed by tech level (`factories`, {"1": n, "2": n}; "3" holds tech 3
+    sum `army_built`), its factories completed by the tech level they offer (`factories`, {"1": n, "2": n}; "3" holds 3
     and above), its water-only factories completed (`yards`), the sea plants it ordered and its income at the
     end; from its `mil` line its attack waves, raids and scouting runs begun, its naval judgement (-1 never
     judged) and the income a pass at which it techs up (`tech_m`). A key the line does not carry is None."""

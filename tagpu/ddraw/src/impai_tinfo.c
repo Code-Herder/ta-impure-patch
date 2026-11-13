@@ -1,7 +1,8 @@
 /* impai_tinfo.c -- what ImpAI's brain knows of each unit type (impai.h, IMPAI_TINFO): its category, its gains
    per economy pass on this map, its value. Engine-free: a function of the WORLDQ's def, def_econ and map and of
    the role classifier's answer, so the DLL and tasim build the same table. Single-precision floats, each
-   operation rounded once on SSE2 (the Makefile's rule for impai_*.c). */
+   operation rounded once on SSE2 (the Makefile's rule for impai_*.c). And the lookups of the build menus'
+   table (impai.h, IMPAI_BMENU): the seat's menu and the classifier's build options, its union over the sides. */
 #include <string.h>
 #include "impai.h"
 #include "tagpu_simreg.h"
@@ -72,4 +73,61 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
     int t;
     memset(count, 0, IMPAI_CATS * sizeof *count);
     for (t = 1; t < n; t++) count[ti[t].cat < IMPAI_CATS ? ti[t].cat : IMPAI_C_OTHER]++;
+}
+
+void impai_tinfo_offers(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
+{
+    const int m = n < nti ? n : nti;
+    int t, k;
+    for (t = 1; t < m; t++) {
+        int offer = 0;
+        for (k = 0; k < in[t].nbuild; k++) {
+            const unsigned v = in[t].build[k];
+            if (v < (unsigned)n && (roles[v].flags & TASIM_RF_MOBILE) && roles[v].tech > offer) offer = roles[v].tech;
+        }
+        ti[t].offer = (uint8_t)(offer < 255 ? offer : 255);
+    }
+}
+
+int impai_menu_find(const IMPAI_BMENU* rows, unsigned nrows, unsigned npool, unsigned side, unsigned builder)
+{
+    const uint32_t key = (uint32_t)side << 16 | builder;
+    unsigned lo = 0, hi = nrows;
+    if (side > 0xFFu || builder > 0xFFFFu) return -1;
+    while (lo < hi) {
+        const unsigned mid = lo + (hi - lo) / 2;
+        const uint32_t k = (uint32_t)rows[mid].side << 16 | rows[mid].builder;
+        if (k < key) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= nrows || rows[lo].side != side || rows[lo].builder != builder) return -1;
+    if (rows[lo].at > npool || rows[lo].n > npool - rows[lo].at) return -1;
+    return (int)lo;
+}
+
+/* A merge of the sides' rows, each ascending without repeats: every step takes the least head and moves past
+   it in every row that holds it. BOUND: a row's cursor stays below its count, and out is written below cap. */
+int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* pool, unsigned npool,
+                     unsigned builder, uint16_t* out, int cap)
+{
+    const uint16_t* list[IMPAI_MENU_SIDES];
+    unsigned len[IMPAI_MENU_SIDES], at[IMPAI_MENU_SIDES], s, nl = 0;
+    int n = 0;
+    for (s = 0; s < IMPAI_MENU_SIDES; s++) {
+        const int r = impai_menu_find(rows, nrows, npool, s, builder);
+        if (r < 0 || !rows[r].n) continue;
+        list[nl] = pool + rows[r].at;
+        len[nl] = rows[r].n;
+        at[nl++] = 0;
+    }
+    for (;;) {
+        unsigned least = 0x10000u;
+        for (s = 0; s < nl; s++)
+            if (at[s] < len[s] && list[s][at[s]] < least) least = list[s][at[s]];
+        if (least > 0xFFFFu) return n;
+        if (n == cap) return -1;
+        out[n++] = (uint16_t)least;
+        for (s = 0; s < nl; s++)
+            if (at[s] < len[s] && list[s][at[s]] == least) at[s]++;
+    }
 }

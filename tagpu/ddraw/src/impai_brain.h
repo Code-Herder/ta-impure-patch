@@ -68,8 +68,9 @@ typedef struct IMPAI_DEC {
     /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
     float         e_per_m, factory_per_m, cons_per_m;
     int           e_stall, m_stall, want_factory;
-    /* the army's production: each class's value built, building and queued; the highest tech of the seat's
-       factories and how many it has of it; its anti-air structures, built, building and ordered */
+    /* the army's production: each class's value built, building and queued; the highest offer of the seat's
+       factories, frames included (IMPAI_TINFO.offer), and how many it has of it; its anti-air structures, built,
+       building and ordered */
     float         kspent[IMPAI_KS];
     uint8_t       ftop;
     uint16_t      ftop_n, aa_n;

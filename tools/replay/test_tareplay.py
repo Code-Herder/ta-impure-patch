@@ -192,7 +192,7 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
                 redirect_stdout(output):
             result = tarec.cmd_images_gate(f"{name}.imprec", ("l1", "lT"), ("n1", "n2"),
                                           ("p1", "pT"), "r1", "q1",
-                                          stock_secondary_cosmetics=accepted)
+                                          stock_cosmetic_pools=accepted)
         return result, output.getvalue()
 
     def test_default_still_fails_inside_all_three_pools(self):
@@ -220,20 +220,37 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
     def test_other_fixture_and_guarded_cap_are_refused(self):
         self.assertEqual(self.gate([], accepted=True, name="stock-resource-mex")[0], 2)
         self.assertEqual(self.gate([], accepted=True, cap=3000)[0], 2)
+        self.assertEqual(self.gate([], accepted=True, name="impai-fight")[0], 2)
 
-    def test_harness_only_selects_named_stock_control(self):
+    def test_stock_impai_fight_takes_the_same_pools_at_the_stock_cap(self):
+        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
+        result, output = self.gate(positions, accepted=True, name="stock-impai-fight")
+        self.assertEqual(result, 0)
+        self.assertIn("accepted 6 native cosmetic-pool bytes for stock-impai-fight", output)
+        self.assertEqual(self.gate([(0, 0x1491A)], accepted=True, name="stock-impai-fight")[0], 1)
+        self.assertEqual(self.gate([], accepted=True, name="stock-impai-fight", cap=3000)[0], 2)
+
+    def test_the_exception_is_exactly_two_fixtures_and_three_ranges(self):
+        # a widening of either is the owner's decision, so it shows as a diff here
+        self.assertEqual(tarec.STOCK_COSMETIC_FIXTURES,
+                         ("stock-secondary-orders", "stock-impai-fight"))
+        self.assertEqual(tarec.STOCK_COSMETIC_POOLS, self.RANGES)
+
+    def test_harness_only_selects_named_stock_fixtures(self):
         for name, dll, accepted in (("stock-secondary-orders", "stock", True),
                                    ("stock-secondary-orders", "normal", False),
+                                   ("stock-impai-fight", "stock", True),
+                                   ("impai-fight", "normal", False),
                                    ("stock-resource-mex", "stock", False),
                                    ("resource-upgrade", "normal", False)):
             with self.subTest(name=name, dll=dll):
                 self.assertEqual(tareplay.image_gate_options({"name": name, "fix": {"dll": dll}}),
-                                 ["--stock-secondary-cosmetics"] if accepted else [])
+                                 ["--stock-cosmetic-pools"] if accepted else [])
 
     def test_cli_refuses_exception_on_other_commands(self):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(tarec.main(["tarec", "check", "missing.imprec",
-                                         "--stock-secondary-cosmetics"]), 2)
+                                         "--stock-cosmetic-pools"]), 2)
 
 
 class OpaqueGlobals(unittest.TestCase):
@@ -1326,6 +1343,66 @@ class Resume(StandInRun):
         self.tree = None
         with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
             self.sitting(out, resume=True)
+
+    def test_a_folder_that_does_not_exist_yet_starts_fresh(self):
+        out = self.root / "new" / "run"
+        with patch.dict(tareplay.os.environ):              # out_dir points the decode cache at it
+            made = tareplay.out_dir(SimpleNamespace(resume=str(out), out=None))
+        self.assertEqual(made, out.resolve())
+        self.assertTrue(made.is_dir())
+        status, summary = self.sitting(made, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertEqual(status, 0)
+        self.assertNotIn("resumed:", summary)
+
+
+class ResumeRefusedAtOnce(unittest.TestCase):
+    """main() refuses a --resume it cannot go on with before a command selects anything: a
+    landing's plan takes minutes, and a refusal after it costs them."""
+
+    def refusal(self, resume, tree="c0ffee"):
+        with patch.object(tareplay, "tree_key", lambda: tree), \
+                patch.object(tareplay, "landing_plan", side_effect=AssertionError("selected")), \
+                redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+            tareplay.main(["landing", "--resume", str(resume)])
+        self.assertEqual(stop.exception.code, 2)
+        return err.getvalue()
+
+    def test_a_folder_that_cannot_be_one_is_refused_at_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            taken = Path(d) / "a-file"
+            taken.write_text("")
+            self.assertIn(f"--resume {taken}: not a folder this run can play in", self.refusal(taken))
+
+    def test_a_dirty_tree_is_refused_at_once_and_makes_no_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            self.assertIn("uncommitted or untracked changes", self.refusal(out, tree=None))
+            self.assertFalse(out.exists())
+
+
+class MultiplayerNames(unittest.TestCase):
+    """The two-player games' instances: tools/mp_lobby.sh types each one's name as its player's
+    nickname, so every name the landing can make fits SELGAME's NICKNAME field, and none is another
+    run's or the other build's."""
+
+    def test_every_name_the_landing_makes_fits_the_nickname_and_is_its_own(self):
+        import recmp_create_begin_test as recmp
+        runlock = tareplay.runlock
+        tags = [runlock.slot_tag(k) for k in range(runlock.BUDGET)] + [runlock.FLOCK_TAG]
+        self.assertEqual(sorted(tareplay.MP_LABELS), sorted(tareplay.MP_BUILDS))
+        names = [name for tag in tags for build in tareplay.MP_BUILDS
+                 for name in recmp.instance_names(tag, recmp.label_arg(tareplay.MP_LABELS[build]))]
+        self.assertEqual(len(names), 2 * len(tags) * len(tareplay.MP_BUILDS))
+        self.assertEqual([n for n in names if len(n) > recmp.NICKNAME_CHARS], [])
+        self.assertEqual(len({n.upper() for n in names}), len(names))
+
+    def test_the_lobby_refuses_a_name_its_nickname_cannot_hold_before_any_menu(self):
+        r = subprocess.run(["bash", str(HERE.parent / "mp_lobby.sh"), "mb-s00-raised-H", "mb-s00-J"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("'mb-s00-raised-H' is 15 characters and its nickname holds 10", r.stderr)
+        self.assertEqual(r.stdout, "")                      # the port check, its first step, never ran
 
 
 class MultiplayerBeside(StandInRun):
@@ -2504,7 +2581,7 @@ class MultiplayerGroup(unittest.TestCase):
                     (d / f"cover-{k}.bin").write_text("c")
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
-                self.assertEqual(argv[argv.index("--label") + 1], "raised")
+                self.assertEqual(argv[argv.index("--label") + 1], tareplay.MP_LABELS["raised"])
                 return game
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)

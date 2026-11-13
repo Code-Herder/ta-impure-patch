@@ -182,7 +182,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 
-/* One type, 28 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 32 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
    ordered (DISASSEMBLED, engine/orders.md, *What each resolver mode answers*; impai_mil.c, can_attack) */
 #define IMPAI_TA_CANATTACK 0x01u    /* +0x245 bit 4 (0x43F154)                                             */
@@ -204,6 +204,9 @@ typedef struct IMPAI_TINFO {
     int16_t  fx, fz;
     uint8_t  klass;             /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
     uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
+    uint8_t  offer;             /* a builder's: the highest tech level among the mobile types its build options
+                                   hold (impai_tinfo_offers), 0 none; what a plant makes, which tech-up compares */
+    uint8_t  pad;
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
                                    take the order (+0x245 bit 14), 0 none                                       */
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
@@ -216,6 +219,29 @@ typedef struct IMPAI_TINFO {
 int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, IMPAI_TINFO* ti, int nti);
 /* how many types of each category ti[0..n) holds */
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
+/* Every type's offer (IMPAI_TINFO.offer) into ti[1 .. min(n, nti)) from the classifier's input and answer for the
+   level's n types: the highest tech level of a mobile type (TASIM_RF_MOBILE) among in[t]'s build options -- the
+   build menus merged over the sides, the input the tech walk read. A plant's units are what it makes, and the
+   classifier gives a plant the tech of the factories before it, so a lab and the advanced lab a tech-1
+   constructor builds share a tech level and differ in their offers. BOUND: an option at or past n is skipped. */
+void impai_tinfo_offers(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti);
+
+/* THE MENUS (tagpu_impai.c, impai_menus_build): one row a (side, builder type), sorted by (side, builder),
+   its build menu's types ascending and without repeats at pool[at .. at + n). */
+#define IMPAI_MENU_SIDES 5u             /* the engine's five side records (tagpu_resource.c, seat_side) */
+typedef struct IMPAI_BMENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_BMENU;
+
+/* The row of (side, builder) among rows[0..nrows): its index, or -1 when there is none or its types do not lie
+   inside a pool of npool. */
+int impai_menu_find(const IMPAI_BMENU* rows, unsigned nrows, unsigned npool, unsigned side, unsigned builder);
+
+/* Builder type `builder`'s build options as the role classifier takes them (tasim_roles.h, TASIM_ROLE_IN.build):
+   the union of its rows of every side, ascending, into out[0..cap). The count, or -1 when cap is short. A
+   builder's own pages are the same whatever the side, and only a page it has none of comes from the seat's side
+   (tagpu_resource.c, page_file); the classifier's input has no seat, so the union gives a builder every type a
+   seat of any side can have it build. */
+int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* pool, unsigned npool,
+                     unsigned builder, uint16_t* out, int cap);
 
 /* ---- the brain: one seat's economy, a decision every `decide` ticks (impai_brain.c, impai_econ.c,
    impai_build.c; research/notes/impai/brain.md) ----
