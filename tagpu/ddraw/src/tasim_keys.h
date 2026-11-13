@@ -185,6 +185,8 @@ typedef struct TASIM_WEAPONDEF {
     uint8_t  color;             /* +0x10D                                                                   */
     uint8_t  color2;            /* +0x10E                                                                   */
     uint32_t flags;             /* +0x111                                                                   */
+    uint8_t  wkeys;             /* Impure's weapon keys, tagpu_datakeys.h's TAGPU_WK_* bits: a table the DLL
+                                   keeps by ID beside the record (tagpu_datakeys_weapon_read), no engine field */
     int32_t  damage_rows;       /* [DAMAGE]'s per-type rows, the table at +0x64 (T2): how many              */
 } TASIM_WEAPONDEF;
 
@@ -240,6 +242,7 @@ enum {                          /* the landing whose rules read the field (resea
     TSL_T1D,                    /* sensors                                                                   */
     TSL_T2,                     /* combat: weapons, damage, targeting                                        */
     TSL_T3,                     /* air, transports, cloak, stealth                                           */
+    TSL_T4,                     /* Impure's engine and the mods                                              */
     TSL_AI,                     /* the stock AI's keys                                                       */
     TSL_OUT,                    /* presentation, the menus, the network: outside the simulation              */
     TSL_COUNT
@@ -335,7 +338,7 @@ enum {
 };
 
 #define TS_REPORT_MAX  1024
-#define TS_REPORT_TEXT 64
+#define TS_REPORT_TEXT 128
 
 typedef struct TS_REPORT_ROW {
     uint8_t cls;                /* TSRP_*                                                                    */
