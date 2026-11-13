@@ -1330,13 +1330,19 @@ static void live_pos(char* u, int* x, int* alt, int* y)
 
 /* The one order path, for an order at the apply and for a delayed one at its due visit: the
    action TA's mapper 0x43F0E0 gives the command for this unit, then ORDERS_NewMainOrder2Unit
-   without Shift. 0 when the unit cannot take the order. */
+   without Shift. 0 when the unit cannot take the order.
+   The mapper returns its first argument's buffer on every path, a refusal included: it says no
+   by writing action 0 there (0x4401DC..0x4401E7, DISASSEMBLED). Action 0 is `Ready`, the
+   descriptor with the empty name, which sorts first and names no command (engine/render.md,
+   *0x512344*), so no order the wire can ask for maps to it; and the engine's own caller tests
+   the byte the same way (the reaction attack, 0x43B24D). Issued anyway, a refusal would make
+   a Ready node after 0x43ADC0 without Shift had wiped the unit's queue. */
 static int issue_one(int cmd, char* unit, void* target, int* pos)
 {
     int   index = -1;
     char* resolved = ScriptAction_Type2Index(&index, (unsigned)cmd, unit, target, pos);
 
-    if (!resolved)
+    if (!resolved || !*(unsigned char*)resolved)
         return 0;
 
     ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, unit, target, pos, 0, 0);
@@ -1399,8 +1405,9 @@ static int         g_ndelay;
 static unsigned    g_dl_level;            /* the level generation the table was filled in */
 static int         g_dl_last;             /* the GameTime the watch last looked at */
 /* counted over every entry since the last report line; `deaths` holds a subject's death and a
-   target's (a unit gone, or a feature cell whose def changed) */
-static struct { int of, issued, deaths, cleared, skipped; } g_dl;
+   target's (a unit gone, or a feature cell whose def changed); `refused` the due orders the
+   unit could not take (issue_one) */
+static struct { int of, issued, refused, deaths, cleared, skipped; } g_dl;
 
 #define SCN_SLOT_MAX 20000                /* snapshot_existing's own bound on the array */
 #define U_DYING      0x4000u              /* +0x110 bit 14: the death is pending (engine/units.md) */
@@ -1462,9 +1469,9 @@ static int feat_cell_def(char* ta, int cell, unsigned short* def)
 
 static void delay_report(void)
 {
-    scnlogf("scenario: delayed orders: issued %d of %d, cancelled %d (deaths %d, cleared %d, "
-            "skipped %d)", g_dl.issued, g_dl.of, g_dl.deaths + g_dl.cleared + g_dl.skipped,
-            g_dl.deaths, g_dl.cleared, g_dl.skipped);
+    scnlogf("scenario: delayed orders: issued %d of %d, refused %d, cancelled %d (deaths %d, "
+            "cleared %d, skipped %d)", g_dl.issued, g_dl.of, g_dl.refused,
+            g_dl.deaths + g_dl.cleared + g_dl.skipped, g_dl.deaths, g_dl.cleared, g_dl.skipped);
     memset(&g_dl, 0, sizeof g_dl);
 }
 
@@ -1642,8 +1649,11 @@ static void delay_watch(void)
         if (issue_one(d->cmd, u, t, pos))
             g_dl.issued++;
         else
+        {
+            g_dl.refused++;
             scnlogf("scenario: delayed order at GameTime %d: slot %d cannot take cmd %d",
                     now, d->slot, d->cmd);
+        }
     }
 
     g_ndelay = n;

@@ -74,8 +74,8 @@ RUNS_PER_LAUNCH = 200
 CHUNK = 10                      # runs a job, so lanes share a scenario's runs
 PAUSE_RX = re.compile(r"pause: (paused at GameTime (\d+)(?: \(units of seat (\d) <= (\d+)\))?\s*$"
                       r"|at (\d+) not taken.*)")
-DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), cancelled (\d+) "
-                      r"\(deaths (\d+), cleared (\d+), skipped (\d+)\)")
+DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused (\d+), "
+                      r"cancelled (\d+) \(deaths (\d+), cleared (\d+), skipped (\d+)\)")
 # a level that plays a recording says so at its first step (tagpu_replay.c)
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
@@ -283,8 +283,9 @@ class Lane:
             if not ln:
                 raise CouldNotRun(f"{path.name} run {index}: no delayed-order line in {R.ACK_S} s")
             got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
-            report = dict(zip(("issued", "of", "cancelled", "deaths", "cleared", "skipped"), got_d))
-            if report["skipped"] or report["of"] != delayed or \
+            report = dict(zip(("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped"),
+                              got_d))
+            if report["skipped"] or report["refused"] or report["of"] != delayed or \
                     report["issued"] + report["cancelled"] != report["of"]:
                 raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
         if dump:

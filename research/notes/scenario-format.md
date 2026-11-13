@@ -211,8 +211,8 @@ unit names by scanning the live definition table. This design follows its recipe
     the recorder writes), or, fail-closed, if GameTime
     advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
     frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
-    log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped
-    S)`. The result's `delayed` is the number pending after the apply, and `cleared_slots` lists
+    log says `scenario: delayed orders: issued N of M, refused R, cancelled K (deaths D, cleared
+    C, skipped S)`, R the due orders the unit could not take. The result's `delayed` is the number pending after the apply, and `cleared_slots` lists
     the slots the apply's clear emptied.
 - **The top-level `calib` object** is the calibration runner's: the scenario's kinds, metrics,
   runs, tick limit, end clauses and scoreboard area (`tools/tasim/calibref.py` validates it).
@@ -328,12 +328,17 @@ consequences, both caught in review:
   map cell — `issue_orders` passes a position and a null target pointer for `feat` already —
   so a live feature is named by `pos <x> <y>` and reaches the identical engine path.
 
-**`ScriptAction_Type2Index` is not a validator, measured.** *The engine recipe* below records
-[CORPUS] that a `NULL` return means "this unit cannot take that order", and the applier does
-report it. It refused nothing we could construct: `capture`, `mobilebuild`, `unload`, `blast`,
-`repair` and `load` were all **accepted** on a commander with a bare position (2026-09-07) and
-did nothing observable. So `issued` counts orders handed to the engine, not orders that mean
-anything — the roster is the oracle. **There is no ownership check either**, by construction:
+**`ScriptAction_Type2Index` refuses by writing action 0.** It returns its first argument's
+buffer on every path and says "this unit cannot take that order" by storing 0 there
+(`0x4401DC..0x4401E7`); action 0 is `Ready`, the descriptor with the empty name, which no command
+maps to, and the engine's reaction attack tests the byte the same way (`0x43B24D`) [DISASSEMBLED].
+The applier reports such an order as failed and issues nothing, an undelayed one in the result's
+errors and a delayed one in the report line's `refused`. The mode-3 tests (`attack`) are in
+[orders](engine/orders.md); a 2026-09-07 trial that found `capture`, `mobilebuild`, `unload`,
+`blast`, `repair` and `load` all accepted on a commander with a bare position tested the
+returned pointer, never the byte, so it says nothing about which of them the mapper refuses.
+What the mapper accepts can still mean nothing to the unit: `issued` counts orders handed to the
+engine, and the roster is the oracle. **There is no ownership check either**, by construction:
 `issue_orders` passes whatever unit the subject resolved to, which is what lets a scenario
 order units it spawned for another player. An order aimed at an enemy unit is accepted; whether
 its AI immediately overrides it was not measured.
@@ -406,7 +411,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | feature name → id | `FeatureName2ID(name)` | `0x422DD0` | Only a feature the level loaded: a name it did not load is an error ("no feature named … in this game"). TADR's `TAMap.PlaceFeatureOnMap` falls back to `LoadFeature 0x4224B0`, which is not safe in a live game: it searches the TDF index `[0x511FB4]`, which the level load frees and zeroes (`0x4223E0` at `0x4918DE`, the store at `0x422452`), so it reads through NULL at `0x4224BB` (DISASSEMBLED). |
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] It returns the feature object for a 3-D def only: a 2-D (GAF) def such as a tree, `+0xFE` bit 0 set, gets no object and returns NULL on success, so the applier takes the anchor cell's `+8` word holding the def as the placement fact (`0x423C60` zeroes the return, `0x423EE5` writes the word) [DISASSEMBLED 2026-10-26] |
-| order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
+| order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and that byte at 0 means this unit cannot take that order (`0x4401DC..0x4401E7`; the pointer itself is never `NULL`, DISASSEMBLED). Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
 | issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last order per entity survives. [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |

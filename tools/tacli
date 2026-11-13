@@ -5502,11 +5502,10 @@ def _scn_apply_lines(res: dict, exp: dict):
 # Interface Type, and a target that is off-screen or under fog is the same as
 # one in the middle of the view.
 #
-# It is NOT a validator. `ScriptAction_Type2Index` returning NULL is documented
-# (scenario-format.md) to mean "this unit cannot take that order", and the fork
-# reports it — but measured 2026-09-07 it refused nothing: capture, mobilebuild,
-# unload, blast, repair and load were all accepted on a commander with a bare
-# position, and did nothing. An order that makes no sense is issued, not caught.
+# It is only as much of a validator as the engine's mapper: `ScriptAction_Type2Index`
+# says "this unit cannot take that order" by writing action 0 into its result
+# (scenario-format.md), and the fork reports that as a failed order. What the
+# mapper accepts and the unit then cannot act on is issued, not caught.
 # There is no ownership check either: the applier hands the engine whatever unit
 # the caller named, which is how a scenario orders units it spawned for another
 # player.
