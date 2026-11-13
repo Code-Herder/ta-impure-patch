@@ -36,7 +36,15 @@ names the gap). The hives are private because the store `tacli` keeps
   not of any archive path). **The units are seen**: after the battle's scenario, the newest
   `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
   in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
-  0, which every earlier check had passed. Every game runs silent but with a sound device: Wine is kept off
+  0, which every earlier check had passed. **The battle is played on its own map or not at all**:
+  its map (the scenario's `setup.map`, Two Continents) is saved as the skirmish map under every
+  registry root the game may read, as for the ImpAI stage below; before the walk the battle reads
+  the root in the game's memory and, when it is another, saves the map there and starts the game
+  again (the start-up's verdicts stay the first launch's, and `tagpu.log` holds both launches in
+  order); after the walk it reads the loaded map back (`GameingState +0x204`) and fails by name
+  when it is not the scenario's. Escalation's battle map was saved under retail's root only, as
+  the stage's seats were [INFERRED: its battles played the `TA Esc` key's saved skirmish; the first
+  run with the check says]. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of
@@ -116,8 +124,9 @@ names the gap). The hives are private because the store `tacli` keeps
   Difficulty Hard, 1000 metal and energy each. **The seats are written where the game reads
   them**, plus `seatai`: the startup's registry load reads them, under the root the game's memory
   names at `0x509EB8` ([process](../engine/process.md), the registry accessor `0x4B6880`). Before
-  the launch they go under retail's root, the setup's `registry_roots` and the root the exe's own
-  file names there (Escalation's: `TA Esc`); once the menu is up the stage reads the root in the
+  the launch they go under retail's root, the setup's `registry_roots`, the root the exe's own
+  file names there (Escalation's: `TA Esc`) and, for a mod chosen by `mod=`, the one its drop-in's
+  exe names (the battle's map is saved the same way); once the menu is up the stage reads the root in the
   game's memory, and when it is another — a loader's rewrite, or the exe image a mod chosen by
   `mod=` lays over the process — seats it too and starts the game again. An accessor whose code
   is not stock fails the stage as `could not run`, by name. After the walk into the skirmish

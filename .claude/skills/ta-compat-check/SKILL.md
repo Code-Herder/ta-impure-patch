@@ -116,7 +116,8 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
   lines, no `could not`, no refused turn). The seats go under the registry root the game itself
   reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
-  skirmish on another map, other seats or another Difficulty fails by name. ImpAI unavailable fails unless the setup says
+  skirmish on another map, other seats or another Difficulty fails by name. The single-player
+  battle saves and checks its map the same way: a battle on another map fails by name. ImpAI unavailable fails unless the setup says
   `"impai": "unavailable"`. `--impai-survey` loads the same skirmish and reads the level init's
   lines with nothing played; `--impai-seat ota` runs the harness on two stock seats. Column: `ai
   ok`, `ai FAILED`, `ai n/a`, `-`. The note: [the suite](../../../research/notes/compat/suite.md),

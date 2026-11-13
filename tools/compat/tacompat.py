@@ -1047,18 +1047,9 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     gamedir, prefix = Path(meta["gamedir"]), Path(meta["prefix"])
     if not meta.get("private_registry"):
         die(f"{name}: tacli made the prefix without registry hives of its own")
-    env = dict(os.environ, WINEPREFIX=str(prefix))
     if DPLAY_SRC.is_dir():
         subprocess.run(["bash", str(DPINSTALL), str(prefix), str(DPLAY_SRC)],
                        capture_output=True, check=True)
-    # The skirmish map the battle is built for (scenarios/200v200.json). The SKIRMISH
-    # screen loads the saved map's preview the moment it opens, so a map the setup lacks
-    # is a box before any gadget can pick another. A mod whose loader moves the registry
-    # (Mayhem: Software\TotalM) names its root in the setup.
-    for root in ["Software\\Cavedog Entertainment"] + setup.get("registry_roots", []):
-        subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
-                        "/t", "REG_SZ", "/d", BATTLE_MAP, "/f"], env=env, capture_output=True, timeout=120)
-    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
     for dest, src in overlay(setup):
         target = gamedir / dest
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1129,7 +1120,13 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for lever in setup.get("levers", []):
         file, text = lever_file(lever)
         (gamedir / file).write_bytes(text.encode())
-    return {"name": name, "gamedir": gamedir, "prefix": prefix}
+    # The skirmish map the battle is built for (scenarios/200v200.json), saved under every root the
+    # game may read (known_roots), now that the folder holds its exe. The SKIRMISH screen loads the
+    # saved map's preview the moment it opens, so a map the setup lacks is a box before any gadget
+    # can pick another; the battle reads the root in the game's memory before it walks in.
+    roots = known_roots(setup, gamedir)
+    seed_battle_map(prefix, roots)
+    return {"name": name, "gamedir": gamedir, "prefix": prefix, "roots": roots}
 
 
 def x_windows(display: int) -> list:
@@ -1853,6 +1850,23 @@ def refuse_to_gdi(name, display, gamedir: Path, device_full: "str | None" = None
     return {"opened": 1.0, "stale": stale, "where": str(where)}, None
 
 
+def wine_menu(name, proc, display, seen, boxes, t0) -> bool:
+    """Whether a started game reached its main menu within POLL_S, before any box and while alive."""
+    end = time.time() + POLL_S
+    while time.time() < end and not boxes and proc.poll() is None:
+        time.sleep(2)
+        new_boxes(display, seen, boxes, t0)
+        if "MAINMENU" in (tacli("ui", name, timeout=15).stdout.splitlines() or [""])[0]:
+            return True
+    return False
+
+
+def scenario_map(scenario: str) -> str:
+    """The map a scenario of `scenarios/` names (`setup.map`), BATTLE_MAP when it names none."""
+    f = TREE / "scenarios" / f"{scenario}.json"
+    return (json.loads(f.read_text()).get("setup") or {}).get("map") or BATTLE_MAP if f.is_file() else BATTLE_MAP
+
+
 def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario, refuse=None,
                 device_full=None, wiki_refused=False, menu_reset=False) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
@@ -1863,6 +1877,12 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
     why = wine_skirmish(name, proc)
     if why:
         return {"ok": False, "why": why}
+    want = scenario_map(scenario)
+    got = loaded_map(name)
+    if got is None or got.lower() != want.lower():
+        return {"ok": False, "hud": None,
+                "why": f"the skirmish loaded {got or 'no map the game names'}, not the battle's {want} (the saved map "
+                       f"under {', '.join(inst['roots'])})"}
     # Before the scenario: it clears the map (clear_existing), commanders and all. The commander
     # check comes first, since the side-panel step below selects the commander.
     cmd = commanders(name)
@@ -2325,9 +2345,12 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
-                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
+
+    def launch():
+        return subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    proc = launch()
+    first_log = None                    # the start-up's tagpu.log when the battle needed a second launch
     boxes, seen, menu, shots = [], set(), None, {}
     impure_log = gamedir / "log" / "tagpu.log"
     # THE START-UP WATCH ends on a fact: the process gone, the first box, or the menu watched for
@@ -2400,12 +2423,36 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         # network game (mp_eligible): gui-stress's fresh start every 120 presents, run on
         # through a battle, spends the layer's 32 repaints of a palette generation by design.
         if battle and menu and not boxes and proc.poll() is None and not setup.get("levers"):
-            fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
-                                scenarios(setup)["battle"],
-                                refuse=setup.get("refuse_in_battle"),
-                                device_full=setup.get("device_full"),
-                                wiki_refused=setup.get("wiki_refused", False),
-                                menu_reset=setup.get("menu_reset", False))
+            # THE BATTLE IS PLAYED ON ITS OWN MAP OR NOT AT ALL: the saved map is read under the
+            # registry root in the game's memory (REG_ROOT_VA), so a root prepare_wine had not
+            # seated is seated now and the game started again, and the walk's map is read back.
+            try:
+                root = game_registry_root(inst["name"])
+                if root.lower() not in {r.lower() for r in inst["roots"]}:
+                    first_log = impure_log.read_text(errors="replace") if impure_log.exists() else ""
+                    subprocess.run(["wineserver", "-k"], env=env, capture_output=True, timeout=30)
+                    try:
+                        proc.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    seed_battle_map(prefix, [root])
+                    inst["roots"] = inst["roots"] + [root]
+                    proc = launch()
+                    if not wine_menu(inst["name"], proc, display, seen, boxes, t0):
+                        raise Lobby(f"started again to seat HKCU\\{root}, the main menu never came up")
+                    again = game_registry_root(inst["name"])
+                    if again.lower() != root.lower():
+                        raise Lobby(f"the game read its settings under HKCU\\{root}, then under HKCU\\{again}")
+                fight = {"registry_root": root, "restarted": first_log is not None}
+            except Lobby as e:
+                fight = {"ok": False, "hud": None, "why": str(e)}
+            if "why" not in fight:
+                fight.update(wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
+                                         scenarios(setup)["battle"],
+                                         refuse=setup.get("refuse_in_battle"),
+                                         device_full=setup.get("device_full"),
+                                         wiki_refused=setup.get("wiki_refused", False),
+                                         menu_reset=setup.get("menu_reset", False)))
             level = level_tables(inst["name"]) if proc.poll() is None else {}
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
@@ -2436,6 +2483,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         return p.read_text(errors="replace") if p.exists() else None
 
     tagpu = read(impure_log) if impure_log.exists() and impure_log.stat().st_mtime >= t0 else None
+    if first_log is not None and tagpu is not None:     # both launches, in their order
+        tagpu = first_log + "\n# tacompat: the game started again for the battle's registry root\n" + tagpu
     o = {
         "setup": setup["name"], "platform": "wine",
         "boxes": boxes, "alive_at_end": alive,
@@ -2946,12 +2995,12 @@ def store_set(gamedir: Path, key: str, value: str):
     cfg.write_text("\r\n".join(lines) + "\r\n")
 
 
-def exe_registry_root(gamedir: Path) -> "str | None":
-    """The registry root TotalA.exe's file names (REG_ROOT_VA), None when its accessor's code is not stock
+def exe_registry_root(exe: Path) -> "str | None":
+    """The registry root an exe's file names (REG_ROOT_VA), None when its accessor's code is not stock
     there -- then where it reads is not known from the file."""
     import tavfs
     try:
-        blob = (gamedir / "TotalA.exe").read_bytes()
+        blob = exe.read_bytes()
         if any(tavfs.exe_bytes(blob, va, 5) != bytes.fromhex(want) for va, want in REG_PUSHES.items()):
             return None
         return "Software\\" + tavfs.exe_cstr(blob, REG_ROOT_VA, REG_ROOT_ROOM)
@@ -2959,11 +3008,33 @@ def exe_registry_root(gamedir: Path) -> "str | None":
         return None
 
 
+def managed_dropin(setup) -> "dict | None":
+    """The drop-in setup of the mod a row chooses by mod= (its `managed-<id>` row's `equals`), None for
+    any other row."""
+    by = {x["name"]: x for x in SETUPS}
+    row = by.get(f"managed-{setup['managed']}") if setup.get("managed") else None
+    return by.get(row.get("equals")) if row else None
+
+
 def known_roots(setup, gamedir: Path) -> list:
-    """The registry roots the stage seats before the launch: retail's, the setup's `registry_roots` (where a
-    loader moves the registry at run time) and the one the exe's file names, each once."""
-    roots = [STOCK_ROOT] + setup.get("registry_roots", []) + [exe_registry_root(gamedir)]
+    """The registry roots a game is seated under before its launch, each once: retail's, the setup's
+    `registry_roots` (where a loader moves the registry at run time), the one the folder's exe names,
+    and for a mod chosen by mod= the one its drop-in exe names, since the mod loader lays that exe's
+    image over the process. The game's memory has the last word (game_registry_root)."""
+    dropin = managed_dropin(setup)
+    exes = [gamedir / "TotalA.exe"] + [src for dest, src in (overlay(dropin) if dropin else [])
+                                       if dest.lower() == "totala.exe"]
+    roots = [STOCK_ROOT] + setup.get("registry_roots", []) + [exe_registry_root(e) for e in exes]
     return [r for i, r in enumerate(roots) if r and r.lower() not in {x.lower() for x in roots[:i] if x}]
+
+
+def seed_battle_map(prefix: Path, roots):
+    """The battle's map as the saved skirmish map under each of `roots`."""
+    env = dict(os.environ, WINEPREFIX=str(prefix))
+    for root in roots:
+        subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
+                        "/t", "REG_SZ", "/d", BATTLE_MAP, "/f"], env=env, capture_output=True, timeout=120)
+    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
 
 
 def impai_seating(inst, roots, scen_map: str, seat_ai: str):
@@ -3058,7 +3129,7 @@ def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
     why = stage_map_missing(tavfs.Vfs(Path(inst["gamedir"])).size, scen["setup"]["map"])
     if why:
         return {"ok": False, "available": None, "why": why}
-    roots = known_roots(setup, Path(inst["gamedir"]))
+    roots = inst["roots"]
     impai_seating(inst, roots, scen["setup"]["map"], seat_ai)
     return play_impai(inst, seconds, path, scen, seat_ai, roots)
 
