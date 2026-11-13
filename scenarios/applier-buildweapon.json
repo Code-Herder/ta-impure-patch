@@ -1,0 +1,26 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The applier's buildweapon order: two anti-nuke launchers of seat 0, whose seat has a million of each resource and as much storage, so no build step is refused. Launcher b is ordered to build two missiles: its second order list +0x60 holds one BuildWeapon node for slot 0 with a count of 2 (the result reads it back), and its stock byte (unit +0x1E) rises to 1 and then to 2 at the weapon's reload pace while the node's count falls to 0 and the node goes. Launcher c has no order and its stock stays 0.",
+ "setup": {
+  "map": "cavedog links cc",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0,
+    "metal": 1000000, "energy": 1000000,
+    "storage": {"metal": 1000000, "energy": 1000000}},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "ai": "off"}
+  ]
+ },
+ "units": [
+  {"id": "b", "type": "ARMAMD", "owner": 0, "pos": [4800, 1000],
+   "orders": [{"cmd": "buildweapon", "count": 2}]},
+  {"id": "c", "type": "ARMAMD", "owner": 0, "pos": [5300, 1000]},
+  {"id": "seat1", "type": "CORAK", "owner": 1, "pos": [5400, 1500], "stance": "hold",
+   "fire": "hold"}
+ ]
+}

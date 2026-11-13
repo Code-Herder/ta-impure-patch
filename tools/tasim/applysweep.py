@@ -58,7 +58,7 @@ DELAYED_RX = re.compile(r"scenario: delayed order at GameTime (\d+): slot (\d+) 
 # tasim_wire.c's ORDERTYPES, for the delayed lines, which carry the number only
 CMD_NAMES = {10: "stop", 2: "move", 3: "attack", 4: "blast", 5: "unload", 6: "load", 7: "defend",
              8: "repair", 9: "patrol", 11: "teleport", 12: "reclaim", 13: "capture",
-             14: "mobilebuild"}
+             14: "mobilebuild", 256: "buildweapon"}
 AFTER_MAX = 255                 # an order's `after` (scenario-format.md)
 J_MAX = 16
 
@@ -215,8 +215,11 @@ def wire_orders(exp: dict) -> list:
 
 def describe(u: dict, o: dict) -> dict:
     target = o.get("target") if o.get("target") else (o.get("to") and list(o["to"]))
-    return {"unit": u["id"], "type": u["type"], "owner": u["owner"], "order": o["cmd"],
-            "target": target, "after": o.get("after") or 0}
+    row = {"unit": u["id"], "type": u["type"], "owner": u["owner"], "order": o["cmd"],
+           "target": target, "after": o.get("after") or 0}
+    if o.get("count"):
+        row["count"] = o["count"]
+    return row
 
 
 def refusals(res: dict, exp: dict) -> tuple:

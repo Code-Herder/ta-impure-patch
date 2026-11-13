@@ -37,7 +37,7 @@ BUILDS = {   # `.exe` so the tree's *.exe ignore covers each
 }
 
 V1 = "v1 seed=1 clear=1 onerror=abort\n"
-UNIT = "unit 0 ARMPW 0 100 200 - - - - - -\n"
+UNIT = "unit 0 ARMPW 0 100 200 - - - - - - - -\n"
 
 # (name, wire, the error it must fail with, or None when it must parse)
 CASES = [
@@ -45,15 +45,16 @@ CASES = [
      "# a comment\r\n\r\nv1 seed=-7 clear=0 onerror=skip units=2 feats=1\r\nmap  Two Continents \r\n"
      "limit 1500\nsw noshake=1 shootall=1 clock=0 radar=0\nclearfeat 1\nobjective on\n"
      "player 3 metal=5000 energy=- ai=off mstore=1e3 estore=0.1\nplayer 9\n"
-     "unit 0 armcom 1 775 1098 - 90 50 roam 40 7\nunit 1 CORAK 0 1 2 3 -4 - hold - 65536\n"
+     "unit 0 armcom 1 775 1098 - 90 50 roam 40 7 at_will 5\nunit 1 CORAK 0 1 2 3 -4 - hold - 65536 hold -\n"
      "feat 0 ARMCOM_DEAD 1700 1200 - 45\n"
      "order 0 attack pos 2400 1200 after=7\norder sel stop\norder @12:ARMPW reclaim feat 0\n"
      "order @3 attack unit @44:CORAK after=255\norder 1 move pos 0 0\norder 1 stop after=0\n"
-     "order 0 defend unit 1\ncam unit 1 pin=1 x=3\nend\n# after the end\n", None),
+     "order 0 defend unit 1\norder 0 buildweapon count 5 after=3\norder @2 buildweapon count 200\n"
+     "cam unit 1 pin=1 x=3\nend\n# after the end\n", None),
     ("ok-cam-pos", V1 + "cam pos 10 20\nend", None),
     ("ok-cam-feat", V1 + "feat 0 X 1 2 - -\ncam feat 0 pin=0\nend\n", None),
-    ("ok-out-of-range", V1 + "unit 0 A 0 99999999999 5 -99999999999 -2147483647 - - - -\nend\n", None),
-    ("ok-long-names", V1 + "map " + "M" * 200 + "\nunit 0 " + "T" * 40 + " 0 1 2 - - - - - -\n"
+    ("ok-out-of-range", V1 + "unit 0 A 0 99999999999 5 -99999999999 -2147483647 - - - - - -\nend\n", None),
+    ("ok-long-names", V1 + "map " + "M" * 200 + "\nunit 0 " + "T" * 40 + " 0 1 2 - - - - - - - -\n"
      "order @1:" + "U" * 40 + " stop\nend\n", None),
     ("ok-storage-spellings", V1 + "player 0 mstore=0 estore=2.9999999999999997e38\nplayer 1 mstore=0.30000001 estore=16777217\n"
      "player 2 mstore=+5 estore=1.5e-45\nplayer 3 mstore=0x10 estore=1e-400\nend\n", None),
@@ -88,8 +89,17 @@ CASES = [
     ("unit-ordinal", V1 + "unit 1 A 0 1 2 - - - - - -\nend\n", "line 2: unit ordinals must run 0,1,2... (expected 0)"),
     ("unit-no-type", V1 + "unit 0\nend\n", "line 2: unit 0 has no type"),
     ("unit-short", V1 + "unit 0 A 0 1 2 - - - -\nend\n", "line 2: unit 0 has a malformed column"),
-    ("unit-unset-owner", V1 + "unit 0 A - 1 2 - - - - - -\nend\n", "line 2: unit 0 has a malformed column"),
-    ("unit-stance", V1 + "unit 0 A 0 1 2 - - - 2 - -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-unset-owner", V1 + "unit 0 A - 1 2 - - - - - - - -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-stance", V1 + "unit 0 A 0 1 2 - - - 2 - - - -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("ok-fire-stock", V1 + "unit 0 A 0 1 2 - - - - - - return 200\nunit 1 A 0 1 2 - - - - - - hold 0\nend\n",
+     None),
+    ("unit-no-fire", V1 + "unit 0 A 0 1 2 - - - - - -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-fire-word", V1 + "unit 0 A 0 1 2 - - - - - - fire -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-fire-number", V1 + "unit 0 A 0 1 2 - - - - - - 2 -\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-stock-high", V1 + "unit 0 A 0 1 2 - - - - - - - 201\nend\n", "line 2: unit 0 has a malformed column"),
+    ("unit-stock-negative", V1 + "unit 0 A 0 1 2 - - - - - - - -1\nend\n",
+     "line 2: unit 0 has a malformed column"),
+    ("unit-past-end", V1 + "unit 0 A 0 1 2 - - - - - - - - x\nend\n", "line 2: unit 0 has a malformed column"),
     ("unit-count", "v1 units=2\n" + UNIT + "end\n", "the header promised 2 units and the file carries 1"),
     ("feat-ordinal", V1 + "feat 3 X 1 2 - -\nend\n", "line 2: feature ordinals must run 0,1,2... (expected 0)"),
     ("feat-no-type", V1 + "feat 0\nend\n", "line 2: feature 0 has no type"),
@@ -107,14 +117,24 @@ CASES = [
     ("order-unit-target", V1 + "order 0 attack unit @y\nend\n",
      "line 2: order 0 target `@y` is not @<index> or @<index>:<TYPE>"),
     ("order-feat-target", V1 + "order 0 reclaim feat @1\nend\n", "line 2: order 0 feat wants an ordinal"),
-    ("order-target-kind", V1 + "order 0 move here 1 2\nend\n", "line 2: order target must be pos/unit/feat, got `here`"),
+    ("order-target-kind", V1 + "order 0 move here 1 2\nend\n",
+     "line 2: order target must be pos/unit/feat/count, got `here`"),
+    ("order-buildweapon-alone", V1 + "order 0 buildweapon\nend\n",
+     "line 2: order 0: buildweapon takes a count and nothing else, and only buildweapon takes one"),
+    ("order-buildweapon-pos", V1 + "order 0 buildweapon pos 1 2\nend\n",
+     "line 2: order 0: buildweapon takes a count and nothing else, and only buildweapon takes one"),
+    ("order-count-move", V1 + "order 0 move count 3\nend\n",
+     "line 2: order 0: buildweapon takes a count and nothing else, and only buildweapon takes one"),
+    ("order-count-zero", V1 + "order 0 buildweapon count 0\nend\n", "line 2: order 0 count wants 1..200"),
+    ("order-count-high", V1 + "order 0 buildweapon count 201\nend\n", "line 2: order 0 count wants 1..200"),
+    ("order-count-unset", V1 + "order 0 buildweapon count -\nend\n", "line 2: order 0 count wants 1..200"),
     ("order-target-after", V1 + "order 0 move pos 1 2 later\nend\n", "line 2: order 0 `later` wants after=0..255"),
     ("order-past-end", V1 + "order 0 move pos 1 2 after=1 x\nend\n", "line 2: order 0 has a column past its end"),
     ("cam-none", V1 + "cam\nend\n", "line 2: cam wants pos/unit/feat"),
     ("cam-pos", V1 + "cam pos 1\nend\n", "line 2: cam pos wants x and y"),
     ("cam-unit", V1 + "cam unit -\nend\n", "line 2: cam unit wants an ordinal"),
     ("cam-kind", V1 + "cam eye 1 2\nend\n", "line 2: cam target must be pos/unit/feat"),
-    ("cap-units", V1 + "".join(f"unit {i} A 0 1 2 - - - - - -\n" for i in range(15001)) + "end\n",
+    ("cap-units", V1 + "".join(f"unit {i} A 0 1 2 - - - - - - - -\n" for i in range(15001)) + "end\n",
      "more than 15000 units -- the fork's own ceiling"),
     ("cap-feats", V1 + "".join(f"feat {i} X 1 2 - -\n" for i in range(1025)) + "end\n",
      "more than 1024 features -- the fork's own ceiling"),

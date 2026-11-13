@@ -46,7 +46,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Mechanism | **Runtime spawn from inside the fork**, calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`. Not a `.sav` writer, not a generated `.ota` mission. |
 | Menus | **No menu navigation by the agent**: `scenario load` drives `ui click SINGLE → Skirmish → Start` internally, each step auto-waiting and reporting the screen it landed on. Not an engine bypass — the Start button *is* map load, player setup and start positions, so it gets pressed rather than reimplemented. |
 | File ownership | **Self-contained.** `setup` carries map, players, resolution, unit limit, switches; the entity list carries the situation. `load` = launch + apply (always a clean start); `apply` = mutate a live game, ignoring `setup`. Two verbs, two unambiguous meanings. |
-| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
+| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, fire state, stock), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
 | Coordinates | **World units, one space**, exactly what `roster` / `eye` / `click` already speak: `pos: [x, y]` on the eye plane, optional `height` (default: engine snaps to terrain). No normalized space, no tile space. Out-of-map is a validation error. |
 | Facing | **Degrees, `0` = TA's own default build facing** (heading word `0x8000`, *not* `0x0000`). Omitted = engine default. |
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
@@ -122,11 +122,26 @@ unit names by scanning the live definition table. This design follows its recipe
   half-built look, and is the percentage **built** — `40` is a 40%-complete scaffold.
   The engine's own field is the fraction *remaining*, so the applier inverts it.
 - `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask. It is the MOVEMENT
-  stance: a unit on `hold` still fires at what comes in range, so a target that must not shoot
-  back has to be unarmed.
+  stance: a unit on `hold` still fires at what comes in range; what keeps a unit from firing is
+  `fire`.
 - `kills` (0..65 535) sets the unit's kill count, which veterancy reads. It is written on the peer
   that applies the scenario only: the engine's create message carries no kills, so another peer's
   copy of the unit starts at 0.
+- **The weapon keys**, each refused in a network game and on a puppet, as the calibration keys
+  below are:
+  - `fire` is the FIRE state, a token: `hold` (hold fire), `return` (return fire), `at_will` (fire
+    at will), `+0x110` bits 20–21 = 0, 1, 2; absent, the unit keeps its def's `standingfireorder`.
+    The applier writes it as Standing_FireOrder `0x403100` does: the two bits, then for `hold` and
+    `return` the clear of each slot whose `+0x1B` has bit 4 (`0x48A0F0`), which at a create finds
+    no target, the create having just set each slot's to none (`0x485C50`). A unit on `hold`
+    neither acquires nor retaliates; on `return` it retaliates but runs no scan; on `at_will` the
+    scan and Standby's search run ([units](engine/units.md), the `+0x110` row). The result's
+    `units[i].fire` reads it back (0, 1, 2).
+  - `stock` (0..200) is slot 0's stockpile count, the byte BuildWeapon adds to (`unit+0x1E`); 200 is
+    where BuildWeapon stops. Only for a type whose slot 0 weapon is a stockpile weapon (weapon
+    `+0x111` bit 28): any other is an error naming the unit. The write is followed by the stock's
+    build-menu relabel `0x41C150`, as each engine writer's is. The result's `units[i].stock` reads
+    it back.
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group.
@@ -141,7 +156,7 @@ unit names by scanning the live definition table. This design follows its recipe
   duplicate scan *cancels* a matching order rather than adding one — it needs a live test
   before it is used.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
-  `orders`) may sit on a group, where it applies to every member.
+  `fire`, `stock`, `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
   the camera, so there is one rule for the word.
 - Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded. A `line`'s optional
@@ -229,7 +244,20 @@ fork's. Every number is TADR's button/order table's [`TA_MemoryStructures.pas:6-
 `stop`'s: TADR numbers it 1, and type 1 in the mapper is not Stop (below).
 
 `stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
-`patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+`patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14) `buildweapon`(256)
+
+`buildweapon` is no command of the mapper, whose types are 1–14; its 256 is the fork's own. It is
+the stockpile build of slot 0's weapon, `{"cmd": "buildweapon", "count": n}` with n 1–200 and no
+target, and the applier issues it as the build menu's MAKENUKE / MAKEANTI button does:
+`0x43B0B0(BUILDWEAPON, unit, 0, n)` (`0x419B97..0x419BA8`), the action looked up by name through
+`0x438760`, which adds n to the tail node of the unit's second list `+0x60` or appends one. The
+node is BuildWeapon `0x402B70`'s, which builds into slot 0's stock up to 200, charging the unit's
+ledger in steps of 5 ticks ([orders](engine/orders.md), *Which root for which order*). Only a unit
+whose slot 0 weapon is a stockpile weapon takes it (BuildWeapon reads that weapon with no test);
+another is `this unit cannot take that order`. Refused in a network game and on a puppet. The
+result's `units[i].buildweapon` reads back what slot 0's BuildWeapon nodes still have to build
+after the order, for an ordinal subject ordered at the apply. `tacli order <inst> buildweapon
+count <n> --unit <idx>` gives it to a live unit.
 
 Any order may carry `"after": n` (0–255): it is issued n ticks after the apply by the same path,
 or cancelled when its unit or target goes first ([the file](#the-file), the calibration keys).
@@ -589,10 +617,11 @@ sw noshake=1 shootall=1
 clearfeat 1
 objective off
 player 1 metal=5000 energy=5000 ai=off mstore=5000 estore=5000
-# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills>
-unit 0 ARMPW 1 775 1098 - 90 - - - -
+# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>
+unit 0 ARMPW 1 775 1098 - 90 - - - - hold -
 feat 0 ARMCOM_DEAD 1700 1200 - 45
 order 0 attack pos 2400 1200 after=7
+order 0 buildweapon count 2
 cam feat 0 pin=0
 end
 ```
@@ -600,7 +629,10 @@ end
 The calibration keys ride on their own lines and columns: `clearfeat 1` and `objective off|on`
 when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
 both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line. The
-parser refuses an unknown `player` key and any column past an order's end.
+weapon keys are the unit line's last two columns, `<fire>` a token (`hold` / `return` / `at_will`)
+and `<stock>` 0–200, each `-` when unset, and `buildweapon`'s amount is its target, `count <n>`
+(1–200), which no other order takes. The parser refuses an unknown `player` key and any column
+past an order's or a unit's end.
 
 The numbers are read as the DLL's C runtime reads them, in every build. An integer column is a
 32-bit `strtol`: a value out of range saturates, so a `v1 seed=` above 2147483647 — which `tacli`
@@ -612,7 +644,8 @@ once to the float the seat stores.
 
 Three details the sketch above did not have. The map gets **its own line** — the rest of
 the line is the name — so a map with spaces needs no escaping. An order names its target
-in a fixed vocabulary (`pos <x> <y>` / `unit <ord>` / `feat <ord>` / nothing, for `stop`),
+in a fixed vocabulary (`pos <x> <y>` / `unit <ord>` / `feat <ord>` / `count <n>`, for
+`buildweapon` / nothing, for `stop`),
 which is cheaper to parse than guessing from the argument count. And **every entity line
 precedes every order line**, because the fork creates the whole situation before issuing
 anything — so an order can name a unit spawned later in the same tick. `end` closes the
@@ -639,7 +672,7 @@ handles back before an agent sees it:
  "limit": {"total": 0, "per_player": 250, "array_slots": 2500},
  "switches": {"before": 12, "after": 1052, "bits": {"shootall": true, "noshake": true}},
  "units": {"0": {"engine_index": 3, "owner": 0, "type": "ARMPW",
-                 "requested": [1823, 1026], "actual": [1823, 1026, 85]}},
+                 "requested": [1823, 1026], "actual": [1823, 1026, 85], "fire": 0}},
  "features": {"0": {"def": 87, "type": "armlab_dead",
                     "requested": [3000, 1200], "actual": [3000, 1200, 85]}},
  "order_probe": {"passed": [3800, 1200, 84], "stored": [3800, 1200, 84]},
@@ -647,7 +680,9 @@ handles back before an agent sees it:
 ```
 
 `actual` carries three components — the two the file asked for plus the terrain snap the
-engine chose. `order_probe` is the applier reading `UnitOrders->Pos` straight back after the
+engine chose. A unit's `fire`, `stock` and `buildweapon` appear only when the file asked for
+them, each read back on the game thread right after the write or the order; `null` for a fire or
+stock the applier did not write. `order_probe` is the applier reading `UnitOrders->Pos` straight back after the
 first order, **reported in whole world units**. It does NOT check the coordinate convention and
 never could: the order constructor copies the caller's three dwords verbatim, so `passed ==
 stored` is a tautology — which is exactly how the wrong convention survived a month of

@@ -91,6 +91,8 @@
 #define UD_ESTORE     0x1E2        /* float energystorage, and                    */
 #define UD_MSTORE     0x1E6        /* float metalstorage (engine/keys.md)         */
 #define UD_BITS       0x241        /* u32 the def's flag word: bit 24 (0x486159) */
+#define UD_WEAPON0    0x1EE        /* WeaponDef* of slot 0, which the slot init
+                                      0x49E070 copies to the slot's +0xC (0x49E0B0) */
 
 #define OFF_LIMIT     0x37EEA      /* u16 ActualUnitLimit                         */
 #define OFF_PERPLAYER 0x37EEC      /* u16 MaxUnitNumberPerPlayer                  */
@@ -122,11 +124,26 @@
                                    /* — under construction is +0x104 alone, and    */
                                    /* 0x20000000 is the STRUCTURE bit              */
                                    /* stance (0xC0000)>>18: 0 hold 1 manv 2 roam  */
+#define U_FIRE_MASK   0x00300000u  /* +0x110 bits 20-21: the fire state, 0 hold,
+                                      1 return, 2 at will (Standing_FireOrder's
+                                      store 0x403123; engine/units.md)            */
 #define U_WSLOT       0x04         /* three weapon slots, stride 0x1C: +0x8 aim   */
 #define WS_STRIDE     0x1C         /*   complete, +0x16/+0x18 aim heading, pitch  */
 #define WS_AIMED      0x08         /*   (engine/weapons.md, units.md)             */
 #define WS_AIMHEAD    0x16
 #define WS_AIMPITCH   0x18
+#define WS_WEAPON     0x0C         /* WeaponDef*, written only by the slot init   */
+#define WS_STOCK      0x1A         /* u8 the stockpile count; slot 0's is +0x1E   */
+#define WS_FLAGS      0x1B         /* bit 4 set at init: the slots Standing_Fire-
+                                      Order clears (0x40313F)                     */
+#define WD_FLAGS      0x111        /* u32 the weapon's booleans (engine/weapons.md) */
+#define WD_STOCKPILE  0x10000000u  /*   bit 28 `stockpile` (0x42EA5F)             */
+#define U_SUBORDERS   0x60         /* the second order list: BuildWeapon's nodes  */
+#define ON_ACTION     0x04         /* an order node's action byte                 */
+#define ON_P1         0x36         /*   its first parameter: BuildWeapon's slot   */
+#define ON_COUNT      0x3A         /*   BuildWeapon's missiles still to build     */
+#define ON_NEXT       0x4A         /*   the next node (engine/orders.md)          */
+#define SCN_LIST_MAX  256          /* nodes walked of one list, at most           */
 #define U_LASTHIT     0xF5         /* u8 the kind of the last hit                 */
 #define U_WATER       0x10A        /* u32 the water state 0..4 (0x43DB50)         */
 #define U_STATE_KEPT  0x0000B0C0u  /* +0x110 bits 6, 7, 12, 13, 15: every store
@@ -179,6 +196,31 @@ typedef void (__cdecl* PFN_BURNALL)(void);
 /* 0x463C60, the controller setter: thiscall on a player record, `ret 4`. It stores the
    argument at +0x73 and, unless it is 3, at PlayerInfo +0x94 through +0x27
    (DISASSEMBLED 0x463C60..0x463C75). */
+/* The engine calls the weapon keys make, each DISASSEMBLED:
+   - ClearTarget 0x48A0F0, stdcall(unit, slot) `ret 8`: returns at once when the slot's target
+     +0x0 is already none, (0, 0x8000) (0x48A106..0x48A116); else stores none and starts COB
+     TargetCleared. Standing_FireOrder 0x403100 calls it for each slot whose +0x1B has bit 4 when
+     the new state is 0 or 1 (0x40312C..0x403150).
+   - 0x41C150, stdcall(unit) `ret 4`: the build menu's relabel of a stock, when the menu shows this
+     unit (main+0x37E9C against +0xA8); BuildWeapon (0x402BC3) and AutoAim (0x49E45E) call it after
+     each change of a stock byte. It writes label buffers only (engine/weapons.md).
+   - 0x438760, thiscall(out, name) `ret 4`: an action name's index, stored as a byte into *out,
+     0 when no descriptor has the name (0x438819).
+   - 0x43B0B0, stdcall(action, unit, p1, amount) `ret 0x10`: amount > 0 adds it to the tail node
+     of the list the action's descriptor picks when the tail has this action and p1, else appends
+     a node with that count; BuildWeapon's descriptor carries 0x40000, so its list is +0x60. The
+     build menu's MAKENUKE / MAKEANTI button calls it with p1 0 (0x419B97..0x419BA8). */
+typedef void (__stdcall* PFN_CLEARTARGET)(void* unit, int slot);
+typedef void (__stdcall* PFN_STOCKSHOWN)(void* unit);
+typedef void (__thiscall* PFN_ACTIONBYNAME)(int* out, const char* name);
+typedef void (__stdcall* PFN_QUEUE)(int action, void* unit, int p1, int amount);
+#define WEAPON_ClearTarget  ((PFN_CLEARTARGET)  0x0048A0F0u)
+#define WEAPON_StockShown   ((PFN_STOCKSHOWN)   0x0041C150u)
+#define ORDERS_ActionByName ((PFN_ACTIONBYNAME) 0x00438760u)
+#define ORDERS_Queue        ((PFN_QUEUE)        0x0043B0B0u)
+#define ACT_BUILDWEAPON     ((const char*)      0x00502678u)  /* "BUILDWEAPON", the string the
+                                                                 button pushes (0x419B9E) */
+
 typedef void (__thiscall* PFN_SETCONTROLLER)(void* player, unsigned type);
 #define PLAYER_SetController ((PFN_SETCONTROLLER) 0x00463C60u)
 /* 0x4904B0, the objective's disarm: `mov dword [ecx+0x88],0; ret` (thiscall) */
@@ -221,6 +263,10 @@ typedef struct {
     int   ax, ay, ah;                             /* where it actually landed    */
     int   engineIdx;
     int   ok;
+    int   fire_got, stock_got;                    /* read back after dress_unit wrote them,
+                                                     -1 not written                        */
+    int   queued;                                 /* buildweapon: slot 0's count queued on
+                                                     +0x60 after the order, -1 none asked  */
 } scn_unit;
 
 typedef struct {
@@ -403,6 +449,7 @@ static void results_reset(void)
     {
         memset(&g_units[i], 0, sizeof g_units[i]);
         g_units[i].defIdx = -1;
+        g_units[i].fire_got = g_units[i].stock_got = g_units[i].queued = -1;
     }
 
     for (i = 0; i < g_wire.nfeats; i++)
@@ -561,12 +608,28 @@ static int resolve_setup(char* ta)
             }
         }
         for (i = 0; i < g_wire.norders; i++)
-            if (g_wire.orders[i].after > 0)
+            if (g_wire.orders[i].after > 0 || g_wire.orders[i].cmd == TASIM_CMD_BUILDWEAPON)
             {
-                scn_err("order %d: after refused: %s", i, why);
+                scn_err("order %d: %s refused: %s", i,
+                        g_wire.orders[i].cmd == TASIM_CMD_BUILDWEAPON ? "buildweapon" : "after", why);
                 g_wire.orders[i].after = -1;
                 bad++;
             }
+        for (i = 0; i < g_wire.nunits; i++)
+        {
+            if (g_wire.units[i].fire != TASIM_WIRE_UNSET)
+            {
+                scn_err("unit %d: fire refused: %s", i, why);
+                g_wire.units[i].fire = TASIM_WIRE_UNSET;
+                bad++;
+            }
+            if (g_wire.units[i].stock != TASIM_WIRE_UNSET)
+            {
+                scn_err("unit %d: stock refused: %s", i, why);
+                g_wire.units[i].stock = TASIM_WIRE_UNSET;
+                bad++;
+            }
+        }
         return bad;
     }
 
@@ -604,6 +667,16 @@ static int resolve_setup(char* ta)
     return bad;
 }
 
+/* Whether a weapon def is a stockpile weapon: `w` is DATA, a slot's or a def's pointer, so it is
+   range-tested before its flag word is read. BuildWeapon reads its weapon's reload time with no test
+   (0x402BDE) and builds for whatever slot 0 holds (engine/orders.md), so the applier asks this before every
+   stock write and every buildweapon order: a unit with no weapon in slot 0 would make it read through
+   NULL on its first step. */
+static int stockpile_weapon(const char* w)
+{
+    return w && readable(w + WD_FLAGS, 4) && (*(const unsigned*)(w + WD_FLAGS) & WD_STOCKPILE);
+}
+
 /* Layer 3: resolve everything against the LIVE game before creating anything.
    The CLI already checked these names against a catalogue, but the file is on
    disk and can be stale — a mod reload, a different game, an edited wire. */
@@ -630,6 +703,17 @@ static int resolve_all(char* ta)
         {
             scn_err("unit %d (%.20s): %d,%d is outside the map (%dx%d)",
                     i, wu->type, wu->x, wu->y, map_w, map_h);
+            bad++;
+            continue;
+        }
+
+        /* the def's slot 0 weapon is the one the slot init copies (0x49E0B0); defIdx is
+           bounded by the def count (unit_type_index) */
+        if (wu->stock != TASIM_WIRE_UNSET &&
+            !stockpile_weapon(*(const char**)(*(char**)(ta + OFF_UDEFS) +
+                                              (size_t)u->defIdx * UD_STRIDE + UD_WEAPON0)))
+        {
+            scn_err("unit %d (%.20s): stock wants a stockpile weapon in slot 0", i, wu->type);
             bad++;
             continue;
         }
@@ -1045,6 +1129,35 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
 
     *(unsigned*)(p + U_STATE) = state;
 
+    /* The fire state as Standing_FireOrder 0x403100 writes it: the two bits (0x403123), then for
+       hold fire and return fire the clear of every slot with +0x1B bit 4 (0x40312C..0x403150).
+       The create's init has just set each slot's target to none (0x48A160 at 0x485C50, k = 0..2)
+       and ClearTarget returns at once on none, so the clear changes nothing at a create; it is
+       here so that the write is the writer's, whatever the slots hold. */
+    if (wu->fire != TASIM_WIRE_UNSET && wu->fire >= 0 && wu->fire <= 2)
+    {
+        int k;
+        *(unsigned*)(p + U_STATE) =
+            (*(unsigned*)(p + U_STATE) & ~U_FIRE_MASK) | ((unsigned)wu->fire << 20);
+        if (wu->fire <= 1)
+            for (k = 0; k < 3; k++)
+                if (*(unsigned char*)(p + U_WSLOT + k * WS_STRIDE + WS_FLAGS) & 0x10)
+                    WEAPON_ClearTarget(p, k);
+        u->fire_got = (int)((*(unsigned*)(p + U_STATE) & U_FIRE_MASK) >> 20);
+    }
+
+    /* Slot 0's stock byte, 0..TASIM_WIRE_STOCK_MAX: the slot init stores 0 (0x49E0C8), BuildWeapon
+       adds one a missile up to 200 (0x402BB9, the cap tested at 0x402CCA) and AutoAim takes one a
+       shot (0x49E45B); each of the two then relabels the build menu (0x41C150), as this does.
+       resolve_all asked the def's slot 0 weapon; the slot's own is asked again here. */
+    if (wu->stock != TASIM_WIRE_UNSET && wu->stock >= 0 && wu->stock <= TASIM_WIRE_STOCK_MAX &&
+        stockpile_weapon(*(const char**)(p + U_WSLOT + WS_WEAPON)))
+    {
+        *(unsigned char*)(p + U_WSLOT + WS_STOCK) = (unsigned char)wu->stock;
+        WEAPON_StockShown(p);
+        u->stock_got = *(unsigned char*)(p + U_WSLOT + WS_STOCK);
+    }
+
     u->ax = *(unsigned short*)(p + U_XPOS);
     u->ay = *(unsigned short*)(p + U_YPOS);
     u->ah = *(unsigned short*)(p + U_ZPOS);
@@ -1377,17 +1490,66 @@ static void live_pos(char* u, int* x, int* alt, int* y)
 
 /* The one order path, for an order at the apply and for a delayed one at its due visit: the
    action TA's mapper 0x43F0E0 gives the command for this unit, then ORDERS_NewMainOrder2Unit
-   without Shift. 0 when the unit cannot take the order.
+   without Shift; `buildweapon` instead goes to the queue root (issue_buildweapon). 0 when the
+   unit cannot take the order.
    The mapper returns its first argument's buffer on every path, a refusal included: it says no
    by writing action 0 there (0x4401DC..0x4401E7, DISASSEMBLED). Action 0 is `Ready`, the
    descriptor with the empty name, which sorts first and names no command (engine/render.md,
    *0x512344*), so no order the wire can ask for maps to it; and the engine's own caller tests
    the byte the same way (the reaction attack, 0x43B24D). Issued anyway, a refusal would make
    a Ready node after 0x43ADC0 without Shift had wiped the unit's queue. */
-static int issue_one(int cmd, char* unit, void* target, int* pos)
+/* BuildWeapon's action byte, or 0 when no descriptor has the name */
+static int buildweapon_action(void)
+{
+    int act = 0;
+
+    ORDERS_ActionByName(&act, ACT_BUILDWEAPON);
+    return act & 0xFF;
+}
+
+/* `buildweapon`: the build menu's own call, 0x43B0B0(BUILDWEAPON, unit, 0, count), p1 0 being
+   slot 0 as in every stock creator (engine/orders.md). BOUNDED: the count is 1..TASIM_WIRE_STOCK_MAX,
+   never 0 or below, which would take the removal path; the unit's slot 0 holds a stockpile
+   weapon, which BuildWeapon reads unconditionally. */
+static int issue_buildweapon(char* unit, int count)
+{
+    int act;
+
+    if (count < 1 || count > TASIM_WIRE_STOCK_MAX ||
+        !stockpile_weapon(*(const char**)(unit + U_WSLOT + WS_WEAPON)) ||
+        !(act = buildweapon_action()))
+        return 0;
+
+    ORDERS_Queue(act, unit, 0, count);
+    return 1;
+}
+
+/* What slot 0's BuildWeapon nodes on +0x60 still have to build, summed: the result's read-back of a
+   buildweapon order. The list is the game thread's, walked on it, at most SCN_LIST_MAX nodes. */
+static int buildweapon_queued(char* unit)
+{
+    const int   act = buildweapon_action();
+    const char* n = *(const char**)(unit + U_SUBORDERS);
+    int         k, sum = 0;
+
+    for (k = 0; act && n && k < SCN_LIST_MAX && readable(n, ON_NEXT + 4); k++)
+    {
+        if (*(const unsigned char*)(n + ON_ACTION) == (unsigned)act && !*(const int*)(n + ON_P1))
+            sum += *(const int*)(n + ON_COUNT);
+        n = *(const char* const*)(n + ON_NEXT);
+    }
+    return sum;
+}
+
+static int issue_one(int cmd, char* unit, void* target, int* pos, int count)
 {
     int   index = -1;
-    char* resolved = ScriptAction_Type2Index(&index, (unsigned)cmd, unit, target, pos);
+    char* resolved;
+
+    if (cmd == TASIM_CMD_BUILDWEAPON)
+        return issue_buildweapon(unit, count);
+
+    resolved = ScriptAction_Type2Index(&index, (unsigned)cmd, unit, target, pos);
 
     if (!resolved || !*(unsigned char*)resolved)
         return 0;
@@ -1434,6 +1596,7 @@ static int issue_one(int cmd, char* unit, void* target, int* pos)
      order and never a read outside it. */
 typedef struct {
     int            cmd, kind;
+    int            count;                 /* buildweapon's                                   */
     int            pos[3];                /* the apply's position, 16.16 (a position or a
                                              feature target)                                 */
     int            due;                   /* the GameTime of the visit that issues it        */
@@ -1554,6 +1717,7 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
     memset(d, 0, sizeof *d);
     d->cmd = o->cmd;
     d->kind = o->kind;
+    d->count = o->kind == TASIM_TGT_COUNT ? o->a : 0;
     memcpy(d->pos, pos, sizeof d->pos);
     d->due = g_gametime + o->after;
     d->slot = slot_of(ta, u);
@@ -1693,7 +1857,7 @@ static void delay_watch(void)
             pos[2] = y << 16;
         }
 
-        if (issue_one(d->cmd, u, t, pos))
+        if (issue_one(d->cmd, u, t, pos, d->count))
             g_dl.issued++;
         else
         {
@@ -1844,7 +2008,7 @@ static void issue_orders(void)
         /* ISSUE ------------------------------------------------------------ */
         for (s = 0; s < nsubj; s++)
         {
-            if (!issue_one(o->cmd, subj[s], target, pos))
+            if (!issue_one(o->cmd, subj[s], target, pos, o->kind == TASIM_TGT_COUNT ? o->a : 0))
             {
                 g_ord_fail++;
                 scn_err("order %d: this unit cannot take that order (%.20s, cmd %d)",
@@ -1853,6 +2017,9 @@ static void issue_orders(void)
             }
 
             g_ord_ok++;
+
+            if (o->cmd == TASIM_CMD_BUILDWEAPON && o->subj == TASIM_SUBJ_ORD)
+                g_units[o->uord].queued = buildweapon_queued(subj[s]);
 
             /* Read the stored order position back once, in whole world units, so the
                result file shows where the order actually points. It cannot prove the
@@ -2258,8 +2425,19 @@ static void write_result(void)
         fprintf(f, "%s\"%d\":{\"engine_index\":%d,\"owner\":%d,\"type\":",
                 first ? "" : ",", i, u->engineIdx, wu->owner);
         jstr(f, wu->type, TASIM_WIRE_NAMELEN);
-        fprintf(f, ",\"requested\":[%d,%d],\"actual\":[%d,%d,%d]}",
+        fprintf(f, ",\"requested\":[%d,%d],\"actual\":[%d,%d,%d]",
                 wu->x, wu->y, u->ax, u->ay, u->ah);
+        if (wu->fire != TASIM_WIRE_UNSET && u->fire_got >= 0)
+            fprintf(f, ",\"fire\":%d", u->fire_got);
+        else if (wu->fire != TASIM_WIRE_UNSET)
+            fprintf(f, ",\"fire\":null");
+        if (wu->stock != TASIM_WIRE_UNSET && u->stock_got >= 0)
+            fprintf(f, ",\"stock\":%d", u->stock_got);
+        else if (wu->stock != TASIM_WIRE_UNSET)
+            fprintf(f, ",\"stock\":null");
+        if (u->queued >= 0)
+            fprintf(f, ",\"buildweapon\":%d", u->queued);
+        fprintf(f, "}");
         first = 0;
     }
     fprintf(f, "}");

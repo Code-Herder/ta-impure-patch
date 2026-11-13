@@ -356,7 +356,12 @@ fill zeroed: MEASURED 2026-11-12, a unit created where a dead one stood began wi
   (`0x49D44E`). DIS; **`+0x14`**, the reload
   countdown (set at fire `0x49E4EE`, decremented by AutoAim `0x49E1C8..0x49E1D2`, which runs for
   type-1/2 owners only); **`+0x16`/`+0x18`**, the aim heading and pitch; **`+0x1A`**, the stockpile
-  count; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
+  count, a byte: the slot init stores 0 (`0x49E0C8`), BuildWeapon `0x402B70` adds one a missile
+  (`0x402BB9`) and starts no missile at 200 or more (`0x402CCA`), AutoAim takes one a stockpile shot
+  (`0x49E45B`), and the give copies slots 0–2 where the new unit's slot is present (`0x488759`,
+  `0x4887AB`); BuildWeapon and AutoAim then call the build menu's relabel `0x41C150`, which writes
+  label buffers only, and Impure's scenario `stock` key writes slot 0's and calls it too
+  (`tagpu_scenario.c` `dress_unit`). DIS; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
   at init.
 
 **The pointer fields**, each a row of the layout. An ID is one more than the pointer's row in its
@@ -527,7 +532,7 @@ index `+0xA6` holds.
 | 15 | 0 | a mission's unit | `0x488482` (record byte `+0x23` bit 7); cleared by MakeSelectable | the AI (`0x4071F0`, `0x4089A0`, `0x40AA40`, `0x40B7B0`) |
 | 16 | 0.6 % | the altitude fix-up is due | the movers `0x43CC07`, `0x43CFE4`, `0x43D57F`, `0x43D8D3`, `0x43D9FA`, `0x43DA53`; `0x48AAB1`; round robin `0x48B6D8`; create; cleared by `0x43D7EB` and the fix-up `0x48A8A2` | `0x48A870` |
 | 17 | 0 | carried with no attach piece | attach `0x48ACA7` (piece `0xFF`), detach `0x48ACC6` | |
-| 18–19, 20–21 | 29 / 71, 0 / 100 % | the move and fire states | Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123`, BuildingBuild `0x40296D`/`0x40298C`, GetBuilt `0x402EA3`/`0x402EC2` (the builder's), the AI `0x40887E`/`0x40888E`, `0x487CFC`, the give `0x488721` (clears), create (def `+0x241` bits 0–3) | |
+| 18–19, 20–21 | 29 / 71, 0 / 100 % | the move and fire states: move 0 hold position, 1 manoeuvre, 2 roam; fire 0 hold fire, 1 return fire, 2 fire at will (no stock writer but the def keys and the mission file makes 3) | Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123` (then, for a dword p1 of 0 or 1, ClearTarget `0x48A0F0` on each slot whose `+0x1B` has bit 4, `0x40312C..0x403150`), BuildingBuild `0x40296D`/`0x40298C`, GetBuilt `0x402EA3`/`0x402EC2` (the builder's), the AI `0x40887E`/`0x40888E`, `0x487CFC`, the give `0x488721` (clears), create (def `+0x241` bits 0–3, `0x485C9D`, `0x485CB6`, after the create's init has set each slot's target to none, `0x48A160` at `0x485C50` for k = 0..2), Impure's scenario `stance` and `fire` keys (`tagpu_scenario.c` `dress_unit`, after the create, the fire state as Standing_FireOrder writes it) | move 0: `0x43B1F0` refuses an unforced reaction attack (`0x43B211`); fire 0: `0x43B1F0` refuses (`0x43B224`), retaliation's slot loop is skipped (`0x4070F2`), Standby_Mine never triggers (`0x4060CC`); the scan and the target search `0x43B700` run only at fire 2 (`0x408A37`, `0x408964`, `0x408B64`). DIS |
 | 22–25 | 2.6 / 2.6 / 0 / 0 % | the build menu's page: 22 has one, 23–25 which (`0x41B200`) | `0x41BDE0`, `0x41BF10`, `0x41C060`, `0x41C180`; create when def `+0x22E` > 1 (`0x485CF1`) | the menu code only |
 | 26–27 | 2.5 / 1.8 % | the footprint contest | the stamp `0x47CC30`, the re-claim `0x47C790`, the clear `0x47D0E0`, YARD_OPEN `0x47DAEC`, `0x47DB3A`; cleared at create | `0x47C7A0` (27), `0x47D29C` (26); no other reader in `.text` (DISASSEMBLED 2026-10-12: every `test`/`and`/`or` with `0x4000000` or `0x8000000` and every `shr` by `0x1A` or `0x1B`; the rest read a weapon's `+0x111` or a def's `+0x241`) |
 | 28 | 100 % | alive | create `0x485A7B`; cleared by the destructor | |

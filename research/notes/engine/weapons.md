@@ -986,7 +986,10 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
   energy (the player `[edi+0xEC]`: `+0x8C` against weapon `+0xC0`, `+0x98` against `+0xC4`),
   `0x48A190`, and calls the fire function `[ebx+0x60]` at `0x49E43C`, its only call site. The next
   slot is `0x49E541`.
-- `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`.
+- `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`, `ret 8`: returns at once when the slot's target
+  `+0x0` is already none, (0, `0x8000`) (`0x48A106..0x48A116`); else stores none and starts COB
+  `TargetCleared` (`0x48A118..0x48A149`). Standing_FireOrder calls it for each slot whose `+0x1B` has
+  bit 4 when the new fire state's dword is 0 or 1 (`0x403146`). DIS
 - **`0x49E010(weapon)`**, `ret 4`, entry `8B 4C 24 04 8B 81 11 01 00 00`: sets `+0x60` from the flags
   (bit 19 → `0x49D580`; bit 4 → `0x49DB70`; bit 0 or 20 → `0x49D9C0`; bit 8 → `0x49DD60`). Its
   only callers are the loader's two exits, `0x42F314` and `0x42F32E` (both through flak's stub).
