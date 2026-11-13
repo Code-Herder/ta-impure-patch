@@ -2,21 +2,25 @@
 """calib.py -- the calibration runner: engine references for tasim, and the offline check against them.
 
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
-                    [--mode reload|fresh] [--out DIR] [--dll PATH] [--runs-per-launch N]
+                    [--mode reload|fresh] [--out DIR] [--dll PATH] [--runs-per-launch N] [--arena FILE]
     calib.py engine --probe-pause                 the pause's units clause, timed from a recording
-    calib.py refs build RUNS_DIR [--j N] [--keep-recordings]
-    calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT]
+    calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--arena FILE]
+    calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
     calib.py selftest [--only GLOB] [--against REF]
     calib.py stale [--since REV] [--json] [--catalogue FILE]
 
 What it measures and why each piece is the way it is: research/notes/modules/tasim-calibration.md,
 and research/notes/impai/calibration.md for the rules. The engine phase holds the machine's run lock
 (tools/runlock.py) for its whole life, declaring its lanes, and plays them in parallel under it;
-nothing else here plays a game. Exit 0 when it ran, 1 when a check failed, 2 when it could not run.
+nothing else here plays a game. --arena plays (and builds references from) another arena than
+tools/tasim/calib-arena.json, the water arena of the naval fights (tools/tasim/calib-arena-naval.json):
+the engine run, its `refs build` and a `check` of its references name the same file. Exit 0 when it ran,
+1 when a check failed, 2 when it could not run.
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -44,7 +48,10 @@ def scenario_paths(globs):
 def arena_check(cfg):
     """The configured arena re-derived from the install (arenascan.py check): its meteor shower
     off by the engine's rule in every schema, its flat rectangle and layout as the TNT gives
-    them. Without an install the lanes' own launch check of the switch still stands."""
+    them. Without an install the lanes' own launch check of the switch still stands, and it is all
+    a water arena gets: arenascan.py grades dry rectangles only."""
+    if not calibref.default_arena():
+        return "a water arena: its rectangle unchecked by arenascan.py, the shower checked at each launch"
     import arenascan
     try:
         vfs = arenascan.install(None)
@@ -58,8 +65,9 @@ def laid_out(cfg, paths):
     scenario a lane will play -- these, and the lane's own end -- stays on its flat rectangle."""
     import arenascan
     import engrun
-    arenascan.check_placed(cfg)
-    for p in list(paths) + [engrun.END]:
+    if calibref.default_arena():
+        arenascan.check_placed(cfg)
+    for p in list(paths) + ([] if "end" in cfg else [engrun.END]):
         calibref.check_positions(json.loads(Path(p).read_text()), cfg, Path(p).name)
 
 
@@ -405,6 +413,7 @@ def main(argv=None):
     e.add_argument("--runs-per-launch", type=int, default=engrun.RUNS_PER_LAUNCH)
     e.add_argument("--probe-pause", action="store_true",
                    help="one duel ended by the units clause, and its tick from the recording")
+    e.add_argument("--arena", help="the arena's config (default tools/tasim/calib-arena.json)")
     e.set_defaults(func=cmd_engine)
     r = sub.add_parser("refs", help="build references from an engine run's lane manifests")
     rs = r.add_subparsers(dest="refs_cmd", required=True)
@@ -412,6 +421,7 @@ def main(argv=None):
     rb.add_argument("runs_dir")
     rb.add_argument("--j", type=int, default=8, help="processes")
     rb.add_argument("--keep-recordings", action="store_true")
+    rb.add_argument("--arena", help="the arena the runs played, as calib.py engine was given it")
     rb.set_defaults(func=cmd_refs)
     c = sub.add_parser("check", help="grade tasim against the references")
     c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")
@@ -419,6 +429,7 @@ def main(argv=None):
     c.add_argument("--require-fresh", action="store_true")
     c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
     c.add_argument("--j", type=int, default=8)
+    c.add_argument("--arena", help="the arena the references played (a naval set: tools/tasim/calib-arena-naval.json)")
     c.set_defaults(func=cmd_check)
     st = sub.add_parser("selftest", help="split-half, seat effect, exact self-consistency")
     st.add_argument("--only")
@@ -430,6 +441,9 @@ def main(argv=None):
     sl.add_argument("--catalogue", help="a live `tacli units --json` to check the install against")
     sl.set_defaults(func=cmd_stale)
     a = p.parse_args(argv)
+    if getattr(a, "arena", None):
+        # the environment, so the lanes' and the reference builder's pools read the same arena
+        os.environ[calibref.ARENA_ENV] = str(Path(a.arena).resolve())
     # The commands read recordings and zstd-compressed traces, which need the shared venv:
     # devpy re-executes under it, or exits 2 naming it. The guard below catches a module devpy
     # does not test for.

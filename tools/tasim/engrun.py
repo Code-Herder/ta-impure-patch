@@ -82,6 +82,20 @@ CLEAR = TREE / "scenarios" / "calib" / "clear.json"
 END = TREE / "scenarios" / "calib" / "end.json"
 
 
+def end_scenario(arena_cfg: dict, where: Path) -> Path:
+    """The lane's end for this arena: END, or on an arena with an `end` entry END with seat 1's
+    unit of that type at that point, written into `where` (a water arena keeps it on its land)."""
+    if "end" not in arena_cfg:
+        return END
+    doc = json.loads(END.read_text())
+    doc["units"][0]["type"] = arena_cfg["end"]["type"]
+    doc["units"][0]["pos"] = list(arena_cfg["end"]["pos"])
+    doc.pop("calib", None)
+    out = Path(where) / "end.json"
+    out.write_text(json.dumps(doc, indent=1) + "\n")
+    return out
+
+
 class CalibLog(R.Log):
     NAP_S = 0.02
 
@@ -318,7 +332,7 @@ class Lane:
             raise CouldNotRun(f"projectiles in flight at the lane's last empty point, GameTime {T}")
         self.write({"dump": "eN", "t": self.dump_now("eN")})
         n = len(self.log.lines)
-        self.apply(plain_wire(END), "the lane's end")
+        self.apply(plain_wire(end_scenario(self.arena, self.dir)), "the lane's end")
         R.resume(self.w, self.log)
         for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
             self.log.wait_running(rx, n)

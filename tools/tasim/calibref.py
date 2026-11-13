@@ -3,7 +3,7 @@
     import calibref
     calibref.calib_dir()                     # <main checkout>/.data/calib, or $TACALIB_DIR
     calibref.calib_block(doc, "x.json")      # the block, validated, every default filled in
-    calibref.arena()                         # tools/tasim/calib-arena.json, validated
+    calibref.arena()                         # tools/tasim/calib-arena.json, validated, or $TACALIB_ARENA's
 
 The references are kept untracked (research/notes/modules/tasim-calibration.md, *References*): they
 carry the engine's costs and HP of the types a scenario uses and a fingerprint of the install, which
@@ -34,7 +34,7 @@ SCHEMA_SCORE = "ta-calib-score/1"
 
 KINDS = ("winrate", "distribution", "exact")
 # the metric families of calibration.md's three kinds; income takes a checkpoint, `income.metal@1800`
-METRICS_STAT = ("winner", "ttk", "survivors", "travel.first", "travel.median", "travel.last")
+METRICS_STAT = ("winner", "ttk", "survivors", "margin", "travel.first", "travel.median", "travel.last")
 METRICS_INCOME = ("income.metal", "income.energy")
 METRICS_EXACT = ("build_time", "cost_per_tick", "extractor", "storage", "range", "reload",
                  "damage", "sight")
@@ -156,10 +156,31 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
     }
 
 
-def arena(path: Path = ARENA) -> dict:
+ARENA_ENV = "TACALIB_ARENA"
+
+
+def arena_path() -> Path:
+    """The arena the runner plays: $TACALIB_ARENA when set (calib.py's --arena, for a water arena),
+    else tools/tasim/calib-arena.json."""
+    env = os.environ.get(ARENA_ENV)
+    return Path(env).resolve() if env else ARENA
+
+
+def default_arena() -> bool:
+    """The runner plays C1's land arena, the one arenascan.py derives and the tracked placed
+    scenarios are laid out on."""
+    return arena_path().resolve() == ARENA.resolve()
+
+
+def arena(path: Path = None) -> dict:
     """The arena: its map and scenario, the line of sight and mapping that are the default of
-    every scenario, and the flat rectangle the duels and courses are placed in. Which map, and
-    that its .ota leaves the meteor shower off, is tools/tasim/arenascan.py's to derive."""
+    every scenario, and the rectangle the fights and courses are placed in (`flat`: on the land
+    arena a dry rectangle of one height, on a water arena open water deep enough for every ship).
+    Which land map, and that its .ota leaves the meteor shower off, is tools/tasim/arenascan.py's
+    to derive; a water arena's map is the one tools/tasim/calib-arena-naval.json names, and every
+    lane still refuses a level whose shower is on. An `end` entry ({"type", "pos"}) is where the
+    lane's end keeps seat 1's unit when the arena's rectangle cannot stand it (engrun.end_scenario)."""
+    path = path or arena_path()
     try:
         cfg = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as e:
