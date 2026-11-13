@@ -89,7 +89,7 @@ and selection drawn over every replay view; it plays in both the mockup and the 
 | The fixture's castings | `tools/wiki/casting-fixture.json`: `identity` (the entries' own types and figures), `shifted` (invented figures, a 3 × 3 builder and a 4 × 4 geothermal plant with four interior G cells), `unbound` (`identity` without the wall) |
 | The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
 | Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
-| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks from the start with no lock, and every game lane (each single-player mode on its own instance `wikigate-<tag>-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
+| The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N] [--resume]`: the offline checks from the start with no lock, and every game lane (each single-player mode on its own instance `wikigate-<tag>-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (the simulation at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units|cursor|watch|rewind|takeover|players --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
@@ -1255,7 +1255,13 @@ unless said).
   run's, `tools/runlock.py` TAGS), made afresh on its
   own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
   command as a serial run, a process of the script, its log `DIR/<mode>.log` or
-  `DIR/mods-<setup>.log`. **Only the game lanes take the run lock.** The offline checks play no
+  `DIR/mods-<setup>.log`. The game lanes start longest first, by the median of each lane's last five
+  finished times in the runs journal (`game_lane_order`; a lane with none first): `players`, the
+  longest at a median of 23 min, starts with the first, and at the medians of 2026-11-13 the game
+  lanes end some 2.5 min sooner at `-j 6` than in the modes' listed order. The order changes when a
+  lane starts, never what it finds: each lane is its own process on its own tagged instance and X
+  server, writing only its own log, shots folder and verdict file. **Only the game lanes take the
+  run lock.** The offline checks play no
   game and read nothing a game lane writes, so they start at once, with no lock; the gate then waits
   for the run lock (the log says so, and `runlock:` names the holder), holds it from its first game
   lane's start to its last one's end, so its games play together and no other run's among them, and
@@ -1296,8 +1302,22 @@ unless said).
   its own clock, its pauses land on their ticks (`tagpu_wiki.pause`), and a stage's cost is its
   work, its milliseconds only said. MEASURED 2026-10-30 at `-j 6` on the reference setup: the whole
   gate, 36 lanes, in 347 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
-  `tools/test_wiki_regression.py` checks the schedule on a throwaway lock with stand-in lanes, no
-  game run.
+  `tools/test_wiki_regression.py` checks the schedule on a throwaway lock with stand-in lanes, the
+  lane order, and the resume, no game run.
+- **`gate --shots DIR --resume`** goes on with a gate cut short: every lane writes its verdict into
+  `DIR/verdicts/<kind>-<lane>.json` the moment it ends (written beside and renamed over), and a
+  resumed gate reads back each lane kept there as a pass or a fail under this sitting's key and plays
+  the rest, each from an emptied log and shots folder; a fail stays a fail, a check that could not
+  run (exit 2) is played again. A gate without `--resume` starts with no verdict file. The key is
+  HEAD with a worktree git sees no change in (a dirty tree is never resumed), `ddraw.dll`'s hash,
+  every file under `tools/wiki/mockup/gfx/` (the graphics and side packs, outside the tree), the
+  hash of `build/simparity-costs.json` (it decides what each `simparity` shard checks), the game
+  screen and the lane's name; a key that differs is refused naming each field, and the lane played
+  again. **What the key does not hold:** the retail install, Wine and the offline checks' prefix
+  (`wikigate-wine`) are not hashed, and are taken to be the same for both sittings. A lane's verdict
+  is written only with the gate not stopping: every lane runs in a session of its own, so a stop
+  reaches the gate alone, and the gate marks itself stopping before it signals any lane, so no
+  result a stop touched is kept.
 
 ## The first entry: Quick Build: Resource Extractors
 

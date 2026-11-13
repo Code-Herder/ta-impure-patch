@@ -1003,7 +1003,14 @@ block that reads to its last complete block.
   stock-limits build's lines need `stock-limits`), and on a pass writes a `replay-roundtrip:` git
   note on the commit it graded. Commit first: it refuses uncommitted changes under
   `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
-  covers HEAD.
+  covers HEAD. Its two-player games, one a coverage build, play at once beside the test groups'
+  lanes, on two of the run's game slots each; a run granted fewer than two games fails them as
+  `MULTIPLAYER <build>: could not run`.
+  `run`, `landing` and `broad` take `--resume DIR`: a run cut short goes on in its own folder,
+  each test group (and two-player group) whose PASS or FAIL it kept read back -- a FAIL stays a
+  FAIL -- and every other one played. A group is kept only under the same key: HEAD on a clean
+  worktree, the DLLs' hashes, the test group's entry and scenarios, renderer, speed, turbo, lanes
+  and GameTimes; one that differs is refused by the field that differs, and played again.
   Changes to `tools/tacli` select every test group, as changes to the replay harness do.
   `tareplay.py broad` runs every test group and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost

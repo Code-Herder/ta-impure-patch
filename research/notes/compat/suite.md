@@ -157,10 +157,14 @@ names the gap). The hives are private because the store `tacli` keeps
   skirmish seated and loaded, the Difficulty read back and the level init's lines read (the seat
   line, the reason a seat is not ImpAI's, the content lines and any `could not`), nothing applied
   or played: where ImpAI is available, setup by setup.
-- **A run that stops can be resumed** (`wine --resume DIR`): the run writes each setup's results
-  into its folder the moment the setup settles — every stage it plays done, its evidence files
-  first and its result last as `verdict.json`, written to a temporary name, flushed and renamed
-  over — so a setup the run did not finish, in any stage, has no verdict file. A resume reads the
+- **A run that stops can be resumed** (`wine --resume DIR`): the run reads each stage of a setup
+  the moment that stage ends, whatever stage of another setup is still playing (`as_each_ends`),
+  ends its runs-viewer step then, and writes the setup's results into its folder the moment its
+  last stage ends — its evidence files first and its result last as `verdict.json`, written to a
+  temporary name, flushed and renamed over — so a setup the run did not finish, in any stage, has
+  no verdict file, and every setup that finished has one, whichever setups were still playing.
+  A setup is judged again after each stage, in whichever order its network game and ImpAI stage
+  end, and the judging keeps nothing of an earlier one. A resume reads the
   verdict files back and plays every other setup whole, after removing whatever a stopped sitting
   left in its folder. `run.json` holds the play arguments and the DLL's hash, and a resume that
   differs in either is refused: the report would otherwise be one run of two builds or two
@@ -259,11 +263,25 @@ inside the device's memory less a reserve (the lock's `runslots/vram.cfg`, seede
 runs under that cap by construction: `start_game`, through which every game of the suite starts, writes the
 run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and hands the game a seat of the run
 (`runlock.game_seat`), so the suite never has more games on the GPU than its `games()`
-([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*). The suite's cap is
+([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*). A network game's two
+peers wait for each other in the battle room, so they need their two seats at once: a run granted
+fewer than two games plays no network game (`runlock.together`), and each setup's reads `could not
+run` by name, since its joiner's launch would wait for the seat the host holds while the host waits
+for it; `GameSlots` refuses more slots than the run has. The suite's cap is
 `compat` in `tools/runlock-suites.cfg`: still the play defaults' 920, 9 games on the reference setup, until
 `vramproof.py watch` measures the suite. `games at once:` in the output says how many it got. Where no
 device memory reads (no `nvidia-smi`, no amdgpu counters) there is no GPU budget and the pools alone bound
 it. A game launched by hand outside the run lock is not counted; the refusal it causes is named above.
+
+**Where a network game's time goes (a gap).** The network game itself is short: `play_mp` takes
+78 to 128 s a setup (MEASURED 2026-11-13 in the verdict files of two full runs, 31 and 16 setups),
+of which 900 ticks at speed 10 are 30 s. The rest is split [INFERRED, from four setups' host
+`tagpu.log` start against their recording's start time, no per-phase timestamps]: 39 to 46 s from the
+host's launch to the game starting (both peers launched, their menus, the battle room walked, Start),
+then the two scenario applies and the 900 ticks, then 10 s (retail) to some 40 s (Escalation) of hook
+reads, type CRCs and the two stops; what makes Escalation's tail four times retail's is not
+established. Speed 20 would halve the 30 s, but a network game cannot turbo and plays variable
+batches at speed 20, so the suite keeps speed 10: that is the owner's call, not taken.
 
 **The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
 `refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup

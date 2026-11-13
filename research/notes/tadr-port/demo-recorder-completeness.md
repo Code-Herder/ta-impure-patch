@@ -606,12 +606,37 @@ common git directory, admitted in arrival order) before its first game starts: t
 plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
 GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
 while that cap is the play defaults' 920), one game for `forks`
-and `rewind`. A `landing` that plays the two-player game declares at least its two peers; each game
-leases its DirectPlay port (`recmp_create_begin_test.py`, `tools/dpport.py`), and its instances
-carry the run's tag. A run that does not fit waits; the kernel drops the slots when their holder
-exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
+and `rewind`. A `landing` that plays the two-player game declares at least two peers for each
+build, and plays both builds' games at once and beside the test groups' lanes: one budget of game
+slots (`GameSlots`, sized to `runlock.games()`) gives each lane one and each two-player group two
+at once, a waiting lane before a group, so the groups fill the slots the run's tail leaves idle
+and the run never plays more games than its grant. The slots agree with the run lock's game seats
+(both number `games()`, and each game a slot holder launches takes one seat); a group's peers wait
+for each other in the battle room, so a run granted fewer than two games refuses both groups by
+name before a game starts (`runlock.together`) rather than launch a joiner that would wait for the
+host's seat forever. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
+`tools/dpport.py`), and its instances carry the run's tag and the build (`--label`). A run that
+does not fit waits; the kernel drops the slots when their holder exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
 (MEASURED 2026-10-12).
+
+**A run cut short is resumed, group by group.** `run`, `landing` and `broad` write each test
+group's result into its folder the moment its report settles (`<group>/verdict.json`, written
+beside and renamed over), and the two-player groups theirs. `--resume DIR` plays in the folder an
+earlier sitting left: a group whose PASS or FAIL is kept there under this sitting's key is read
+back -- its summary lines, its checks' verdicts, its recording and its coverage files -- and every
+other group's folder is emptied and the group played whole. A FAIL stays a FAIL; a group that
+could not run is played again. The key is HEAD with a worktree git sees no change in (a dirty tree
+is never resumed), the hashes of the DLLs the run can load (default, coverage, stock-limits
+coverage, any named), the fixture's entry and its scenario files' hashes, the renderer, the game
+speed and turbo, the lanes, whether its dumps are kept and the seeded GameTimes; a key that differs
+is refused naming each field, as are coverage files that are not the ones recorded, and the group
+is played again. The summary, the coverage check and the `replay-roundtrip:` note read the union,
+and the note names the groups kept (`kept=`). A verdict is written only with the run not stopping:
+a SIGTERM reaches the harness alone, so no result it touched is kept. A Ctrl-C also reaches the
+run's children with the same signal, and a report that settles between a child's end and the
+harness's stop can keep the FAIL that signal made, never a PASS; the summary names it, and a run
+without `--resume` clears it.
 
 **Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
 within the retail setter's range. `--game-speed 10` selects normal speed for
@@ -1038,9 +1063,11 @@ cannot see an address recorded as a value; the scan looks for one instead.
   The landing tier's reach includes **the two-player game**, on each build, whenever the recorder
   or its multiplayer half changed: two humans and two AIs with chat, a selection and a click from
   each human, `tarec check` on its recording, and the recording played to its end
-  (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`).
+  (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
+  both builds at once beside the test groups' lanes.
   A failure of the game, the check or the playing fails the landing as `MULTIPLAYER <build>: …`,
-  and never reads as a function nobody reached. It proves the code ran and its checks held, not
+  and so does a run granted fewer than two games at once (`could not run`); neither ever reads as
+  a function nobody reached. It proves the code ran and its checks held, not
   that the game replays exactly: it arms no round trip. Refusals and failure clean-up stay
   unreached (`mp_refuse`, `mp_relinquish`, `ring_free`, `sk_back`), so they still go to the owner
   or get a test that causes the failure, one by one. The `tagpu_recmp*` files are not instrumented
