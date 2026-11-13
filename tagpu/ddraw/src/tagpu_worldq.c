@@ -296,7 +296,7 @@ static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
     if ((flags & 0x40u) && (tags & 0x200u) && out->workertime) out->flags |= WQ_DF_ASSIST;
     if (flags & 0x800u) out->flags |= WQ_DF_VTOL;
     if (tags & 0x400u) out->flags |= WQ_DF_RECLAIMER;
-    if (d[0x22F]) out->flags |= WQ_DF_MOVER;
+    if (d[0x22F] == 1) out->flags |= WQ_DF_MOVER;
     memcpy(out->name, d + UD_NAME, WQ_NAME - 1);
     out->mclass = (uint8_t)move_class(d);
     return 1;

@@ -107,7 +107,10 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
     o->value = (double)u->cost_metal + (double)u->cost_energy / TASIM_ROLES_R;
     o->speed = (double)u->maxvelocity_fx / 65536.0;
     o->flags = 0;
-    if ((u->flags245 & TASIM_F245_CANMOVE) && u->bmcode) o->flags |= TASIM_RF_MOBILE;
+    /* bmcode 1 is the engine's own test for a mover (the creates 0x4860BB, 0x4862CF; a canfly type branches off
+       before the resolver asks for it); 0 is a building (bit 29, 0x485A9E), and any other value, the raw low
+       byte of atoi (0x42C422), is neither and cannot be ordered to chase (engine/units.md). */
+    if ((u->flags245 & TASIM_F245_CANMOVE) && u->bmcode == 1) o->flags |= TASIM_RF_MOBILE;
     if (u->flags245 & TASIM_F245_COMMANDER) o->flags |= TASIM_RF_COMMANDER;
     if (u->transportcapacity) o->flags |= TASIM_RF_TRANSPORT;
     if (u->flags241 & TASIM_F241_KAMIKAZE) o->flags |= TASIM_RF_KAMIKAZE;

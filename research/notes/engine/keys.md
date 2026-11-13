@@ -99,7 +99,8 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   (word `+0x218`).
 - **Build and health.** `buildtime` (dword `+0x1EA`), `workertime` (word `+0x1FE`), `healtime`
   (word `+0x200`), `maxdamage` (dword `+0x1FA`), `builddistance` (word `+0x212`), `buildangle`
-  (word `+0x210`), `bmcode` (byte `+0x22F`; 0 is a building).
+  (word `+0x210`), `bmcode` (byte `+0x22F`, unmasked: 0 a building, 1 a mover, any other value neither;
+  [units](units.html)).
 - **Sensors.** words: `sightdistance` `+0x202`, `radardistance` `+0x204`, `sonardistance` `+0x206`,
   `mincloakdistance` `+0x208`, `radardistancejam` `+0x20A`, `sonardistancejam` `+0x20C`. `cloakcost`
   (int, stored as a float, `+0x1DA`) and `cloakcostmoving` (`+0x1DE`, default the `cloakcost`'s int: `fst`

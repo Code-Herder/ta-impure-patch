@@ -71,8 +71,12 @@ remote human, remote AI. `0x48664B..0x486660` tests the dword and then 1 and 2 f
 was not followed.
 
 **The other FBI tags a type is classed by**, each read by the FBI reader `0x42BF40` with
-`0x4C46C0`, masked to one bit and merged into its word [DISASSEMBLED 2026-11-03]: `bmcode` → the
-byte `+0x22F` (`0x42C402..0x42C422`; 0 = the type cannot move); `builder` → `+0x241` bit `0x40`
+`0x4C46C0` [DISASSEMBLED 2026-11-03]. `bmcode` → the byte `+0x22F`, the low byte of `atoi` stored with no mask
+(`0x42C402..0x42C422`, default 0): 0 is a building, whose create sets `+0x110` bit 29 (`sete` at `0x485A9E`); 1
+a mover, the one value the creates give a mover object for (`cmp byte [def+0x22F],1` at `0x4860BB` and
+`0x4862CF`); any other value neither, which the attack resolver refuses unless the type is a kamikaze or
+canfly (`0x43F348`, `0x43F38A`) [DISASSEMBLED 2026-11-13; MEASURED: the 539 `bmcode=` lines of the FBIs under
+`vendor/` are 0 or 1]. The rest are masked to one bit and merged into their word: `builder` → `+0x241` bit `0x40`
 (`0x42C4B2..0x42C4DD`); `isairbase` → `+0x241` bit `0x200` (`0x42C5CB..0x42C5FC`); `hidedamage` →
 `+0x241` bit `0x4000` (`0x42C643..0x42C66A`); `canfly` → `+0x241` bit `0x800`
 (`0x42C6E1..0x42C70C`); `showplayername` → `+0x245` bit `0x20000` (`0x42CB50..0x42CB82`). The

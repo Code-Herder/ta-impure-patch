@@ -40,7 +40,8 @@ enum { WQ_KIND_NONE, WQ_KIND_MEX, WQ_KIND_GEO };   /* a resource building: what 
                                    builder to help it (tagpu_resource.c's helper test)                     */
 #define WQ_DF_VTOL      0x04u   /* +0x241 bit 11: its orders are the VTOL_ ones                            */
 #define WQ_DF_RECLAIMER 0x08u   /* +0x245 bit 10, canreclamate: the resolver's first reclaim test          */
-#define WQ_DF_MOVER     0x10u   /* +0x22F nonzero: a type with a move class, which places no building      */
+#define WQ_DF_MOVER     0x10u   /* +0x22F is 1: the creates give the unit a mover (0x4860BB, 0x4862CF);
+                                   0 is a building (0x485A9E), any other value neither (engine/units.md) */
 
 typedef struct WQ_MAP {
     int32_t w, h;               /* cells of 16 px                                                          */

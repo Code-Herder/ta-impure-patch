@@ -310,7 +310,7 @@ static void impai_seat_view(int seat)
     if (!s_obs.site_type) {
         s_obs.site_type = WQ_NONE;
         for (k = 1; k < q.ops->ndefs(&q); k++)
-            if (q.ops->def(&q, k, &d) && !(d.flags & WQ_DF_MOVER) && !d.kind && d.fx >= 1 && d.fz >= 1 &&
+            if (q.ops->def(&q, k, &d) && !(d.flags & WQ_DF_MOVER) && d.yard && !d.kind && d.fx >= 1 && d.fz >= 1 &&
                 (s_obs.site_type == WQ_NONE || (unsigned)(d.fx * d.fz) < s_obs.site_area)) {
                 s_obs.site_type = (unsigned)k;
                 s_obs.site_area = (unsigned)(d.fx * d.fz);
@@ -723,9 +723,12 @@ static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
 }
 
 /* A type's IMPAI_TA_* facts (impai.h) from its def's flags and its weapons 1 and 2, the role input's slots 0
-   and 1 (tagpu_worldq.c, the role filler, which ends at a type's first empty slot). The resolver reads the
-   unit's own slot weapons, +0x10 and +0x2C; a unit's slots hold its def's weapons [INFERRED: nothing in play is
-   known to change them]. */
+   and 1 (tagpu_worldq.c, the role filler, which leaves an empty slot zeroed and ends at the type's count). The
+   resolver reads the unit's own slot weapons, +0x10 and +0x2C, which are its def's: their one writer is the slot
+   init 0x49E070 at 0x49E0B0, called only by the creates (0x4860AC, 0x4862C4; tagpu_weapons.c's my_StartWeapons
+   in its place writes the same def weapons), and nothing re-types a live unit (DISASSEMBLED, engine/units.md).
+   A saved game loaded under changed content breaks it: the slot comes from the new def, its bit 1 from the save
+   (0x48766E). */
 #define F245_CANATTACK (1u << 4)
 static void attack_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
 {

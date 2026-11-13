@@ -1061,8 +1061,9 @@ static int target_now(const MDEC* d, const MENEMY* e, uint8_t* aim)
    - a target under the sea: refused unless weapon 1, or a weapon 2, is a waterweapon (0x43F1F1..0x43F236);
    - a target not under it, for a canhover unit with either a waterweapon: refused (0x43F240..0x43F277);
    - a canfly unit whose weapon 1 is dropped, on a target whose type flies: refused (0x43F27E..0x43F31D).
-   A mobile unit with a weapon is then answered (ATTACK_CHASE, 0x43F348): every army unit has a mover
-   [INFERRED: a unit with a move class has one]. Read with the target's state of this turn (target_now) and the
+   A mobile unit with a weapon is then answered (ATTACK_CHASE, 0x43F348): every army unit has a mover, army
+   being mobile and mobile bmcode 1, the creates' own test for one (0x4860BB, 0x4862CF; tasim_roles.c), unless
+   the mover's allocation failed. Read with the target's state of this turn (target_now) and the
    unit's flag word of this decision's census, it answers as the resolver will in the same call. */
 static int can_attack(const MUNIT* u, uint8_t aim)
 {

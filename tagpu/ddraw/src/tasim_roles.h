@@ -71,7 +71,7 @@ typedef struct {
 typedef struct {
     char     name[32];                  /* unitname, def +0x20                                  */
     uint32_t flags241, flags245;
-    uint8_t  bmcode;                    /* +0x22F, 0 = a building                               */
+    uint8_t  bmcode;                    /* +0x22F: 1 a mover, 0 a building, else neither        */
     float    cost_energy, cost_metal;   /* +0x186, +0x18A                                       */
     uint32_t maxdamage;                 /* +0x1FA                                               */
     uint16_t workertime;                /* +0x1FE                                               */
