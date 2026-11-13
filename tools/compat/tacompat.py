@@ -426,8 +426,9 @@ def pick_setups(names) -> list:
     if missing:
         die(f"no setup {', '.join(missing)} (tacompat.py list)")
     # a managed row is judged against its drop-in row, so one is no result without the other
-    partners = [by[by[n]["equals"]] for n in names if by[n].get("equals") and by[n]["equals"] not in names]
-    return [by[n] for n in names] + partners
+    partners = [by[n]["equals"] for n in names if by[n].get("equals") and by[n]["equals"] not in names]
+    # each once: two managed rows of one mod share a partner, and a setup named twice would be prepared twice
+    return [by[n] for n in dict.fromkeys(names + partners)]
 
 
 def expectation(setup, platform, which) -> "dict | None":
@@ -852,6 +853,7 @@ def persist(out: Path, o: dict):
     replaced by its JSON round trip, so a row played now and a row read back compare alike."""
     d = out / o["setup"]
     d.mkdir(parents=True, exist_ok=True)
+    o["log_facts"] = log_facts((o.get("_files") or {}).get("tagpu.log", ""))
     for name, text in o.pop("_files", {}).items():
         (d / name).write_text(text, errors="replace")
     for name, src in o.pop("_temps", {}).items():
@@ -1279,14 +1281,22 @@ def differs_from_dropin(s, o, d) -> list:
         wrong = [t for t in set(host) | set(join) if host.get(t) != join.get(t)]
         if wrong:
             out.append(f"CRC_all differs from a drop-in peer in the same game on {sorted(wrong)[:6]}")
-    log = (o.get("_files") or {}).get("tagpu.log", "")
-    if not re.search(r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS), log, re.I):
+    fa, fb = o.get("log_facts") or {}, d.get("log_facts") or {}
+    if not fa.get("loose_refused"):
         out.append("the log names no loose unit file as refused: the decoy never reached the closed step")
-    name = re.compile(r"its archives name (\S+?),")
-    ma, mb = name.search(log), name.search((d.get("_files") or {}).get("tagpu.log", ""))
-    if not ma or not mb or ma.group(1) != mb.group(1):
-        out.append(f"the replays name this game {ma and ma.group(1)}, its drop-in folder {mb and mb.group(1)}")
+    ga, gb = fa.get("archives_name"), fb.get("archives_name")
+    if not ga or not gb or ga != gb:
+        out.append(f"the replays name this game {ga}, its drop-in folder {gb}")
     return out
+
+
+def log_facts(text: str) -> dict:
+    """What the managed comparison reads of a run's tagpu.log: whether a loose unit file was refused (the decoy reached
+    the closed step) and the name the replays give the game from its archives. Read when the result is persisted, the
+    last moment its files are in memory, and kept in it, so a row read back is compared like one played now."""
+    loose = r"the loose files? (%s)\\\S+ (is not read|are not listed)" % "|".join(UNIT_FOLDERS)
+    name = re.search(r"its archives name (\S+?),", text)
+    return {"loose_refused": bool(re.search(loose, text, re.I)), "archives_name": name and name.group(1)}
 
 
 def folder_wrong(s) -> list:
@@ -2976,6 +2986,19 @@ def impai_scenario(setup) -> Path:
     return (TREE / "scenarios" / f"{name}.json") if name else IMPAI_SCENARIO
 
 
+def seat_commanders(scen: dict, live: list) -> dict:
+    """The stage's scenario with each unit's type the commander the engine gave its owner at the start (`commanders`,
+    from tacli units: its side's own), so a mod whose sides name other commanders -- TA Zero has no CORCOM -- plays
+    the same stage. Lobby when the game gave an owner the scenario places none."""
+    by = {}
+    for c in live:
+        by.setdefault(c["owner"], c["type"])
+    missing = sorted({u["owner"] for u in scen.get("units", [])} - set(by))
+    if missing:
+        raise Lobby(f"the game gave records {missing} no commander for the stage to place")
+    return dict(scen, units=[dict(u, type=by[u["owner"]]) for u in scen.get("units", [])])
+
+
 def impai_end_scenario(scen: dict) -> dict:
     """The stage's end: every unit cleared but the first record-1 unit the stage placed, kept where it was
     placed, and the end test armed again, so the human seat's defeat ends the level."""
@@ -3229,7 +3252,11 @@ def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list)
                 raise Lobby(f"the skirmish's Difficulty main+0x37EEE is {got}, not Hard ({IMPAI_HARD})")
             # the survey (`seconds` 0) has read what it came for: the level init's lines
             if seconds:
-                r = tacli("scenario", "apply", name, str(path), timeout=180)
+                scen = seat_commanders(scen, cmd["commanders"])
+                staged = Path(g["log"].name).with_suffix(".impai-stage.json")
+                staged.write_text(json.dumps(scen))
+                shots["impai-stage.json"] = str(staged)
+                r = tacli("scenario", "apply", name, str(staged), timeout=180)
                 if r.returncode != 0:
                     raise Lobby(f"scenario apply {path.name}: {(r.stderr or r.stdout).strip()[:200]}")
                 applied = (r.stdout.splitlines() or [""])[0]
@@ -4338,12 +4365,23 @@ def cmd_selftest(args):
         ok = got == want if not want.startswith("Lobby") else got.startswith("Lobby") and want[6:] in got
         print(f"  {'ok ' if ok else 'BAD'} {name:26} {got}")
         ibad += not ok
+    scen = {"units": [{"id": "a", "type": "CORCOM", "owner": 1, "pos": [1, 2]}, {"id": "b", "type": "ARMCOM", "owner": 2}]}
+    live = [{"type": "ARMCOM", "owner": 0}, {"type": "CORECOMMANDER", "owner": 1}, {"type": "GOKCOMMANDER", "owner": 2}]
+    got = [u["type"] for u in seat_commanders(scen, live)["units"]]
+    ok = got == ["CORECOMMANDER", "GOKCOMMANDER"]
+    try:
+        seat_commanders(scen, live[:2])
+        ok = False
+    except Lobby:
+        pass
+    print(f"  {'ok ' if ok else 'BAD'} {'commanders: from the game':26} {got}")
+    ibad += not ok
     roots = known_roots({"registry_roots": ["Software\\TotalM", "software\\cavedog entertainment"]}, Path("/nonexistent"))
     ok = roots == [STOCK_ROOT, "Software\\TotalM"]
     print(f"  {'ok ' if ok else 'BAD'} {'roots: each once':26} {roots}")
     ibad += not ok
     total = (len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
-             + len(IMPAI_ROOT_CASES) + 1)
+             + len(IMPAI_ROOT_CASES) + 2)
     print(f"impai stage: {total - ibad} of {total} as intended")
     sbad = resume_selftest()
     return 1 if bad or gbad or hbad or rbad or ibad or sbad else 0
@@ -4403,6 +4441,16 @@ def resume_selftest() -> int:
         rows = [{"setup": refusing["name"], "verdict": "meets goal", "folder_wrong": folder_wrong(inst)}]
         compare_managed(rows)
         cases.append(("compare: a read-back folder finding", rows[0]["verdict"] == "UNEXPECTED"))
+        logs = {"managed": f"modload: the loose file {UNIT_FOLDERS[0]}\\ARMAARP.FBI is not read under a mod\n"
+                           "recmp: its archives name ttm-1,\n", "dropin": "recmp: its archives name ttm-1,\n"}
+        for key, text in logs.items():
+            persist(out, {"setup": key, "verdict": "meets goal", "_files": {"tagpu.log": text}, "_temps": {}})
+        back = settled_results(out, list(logs))
+        said = differs_from_dropin({"equals": "dropin"}, back["managed"], back["dropin"])
+        cases.append(("compare: the log read back", not [m for m in said if "loose unit" in m or "replays name" in m]))
+        persist(out, {"setup": "managed", "verdict": "meets goal", "_files": {"tagpu.log": ""}, "_temps": {}})
+        said = differs_from_dropin({"equals": "dropin"}, settled_results(out, ["managed"])["managed"], back["dropin"])
+        cases.append(("compare: a log with neither", len([m for m in said if "loose unit" in m or "replays name" in m]) == 2))
     sbad = 0
     for name, ok in cases:
         print(f"  {'ok ' if ok else 'BAD'} {name}")

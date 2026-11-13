@@ -139,7 +139,10 @@ names the gap). The hives are private because the store `tacli` keeps
   (`scenarios/compat/impai-stage.json`, Town & Country, or the setup's own `scenarios.impai`) is
   played only where the setup's own files hold its map, both `.ota` and `.tnt`, looked up through
   the engine's mount order over the setup's folder (`tools/wiki/tavfs.py`); otherwise the stage
-  fails as `could not run: no <map>`, never on another map. It clears the start, places the two commanders apart and turns the end test off; after SECONDS of
+  fails as `could not run: no <map>`, never on another map. It clears the start, places the two commanders apart — each of the type the game itself gave
+  that record at the start (its side's commander, which a mod may name otherwise: TA Zero has no
+  `CORCOM`), the scenario's own types standing only for them — and
+  turns the end test off; after SECONDS of
   game time an end scenario keeps one unit of record 1 and turns it back on, so the level ends and
   its teardown writes ImpAI's level-end lines. **Judged by ImpAI's own lines**: the seat line
   marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
@@ -164,6 +167,9 @@ names the gap). The hives are private because the store `tacli` keeps
   suites. What a managed row's own folder showed (a refusal's box, `mod=` left in `impure.cfg`, a
   fetched package's swap) is read when it settles and kept in its result, and the comparison with
   its drop-in row is made again at the report, so the two may come from different sittings.
+  What that comparison reads of a row's `tagpu.log` (a loose unit file refused, the name the
+  replays give the game) is read when the row is persisted, the last moment its files are in
+  memory, and kept in its result as `log_facts`.
   Windows runs one setup at a time on the owner's desktop and has no resume.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
