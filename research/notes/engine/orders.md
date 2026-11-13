@@ -810,6 +810,16 @@ mover" is a unit whose first dword is 0.
 | 13 capture | `0x43F6D1` | 12 `cancapture`, a target of another record | `CAPTURE` |
 | 14 build | `0x43F7A0` | def `+0x156` (a CANBUILD list) and a mover | `VTOL_MOBILEBUILD`/`MOBILEBUILD` |
 
+**What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
+**enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
+for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
+mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
+its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
+that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An
+attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
+order behind.
+
 Bit 9 is **not a key**: the FBI loader writes it as a copy of bit 10, `canreclamate`
 (`0x42CA3B..0x42CA4F`), so every reclaimer can repair and nothing else can. The rows other than
 2, 7, 8, 10 and 12 are as read from each case's first tests; their tails were not each traced.

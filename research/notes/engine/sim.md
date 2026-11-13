@@ -108,7 +108,7 @@ the measured runs and what they mean for the design are in the
   (`0x496F08..0x496F3C`), sets `+0x149` bit 0 (`0x496F5D`) and the base storage `+0xDC`/`+0xE0` to
   max(entry `+0x10`/`+0xC`, 200) (`0x496F64..0x496F97`), takes the map's start position through
   `0x437320(&pos, start)` (`0x496FA9`; a failure formats the string at `0x509534` and shows it
-  through `0x4B6290`, `0x497009..0x497021`), the side's commander type through `0x488B10`
+  through `0x4B6290`, `0x497009..0x497021`; *The start positions*, below), the side's commander type through `0x488B10`
   (`0x496FDC`), and creates it with `0x485F50(seat, type, pos, 1, 1, 0)` (`0x497002`); for the
   controlled player `main+0x2A42` it moves the camera onto it (`0x41C4C0`, `0x497038..0x497060`).
   A type-3 owner's create takes a proxy mover (`0x43DC00`, *Replay state design* above).
@@ -815,6 +815,25 @@ skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause ke
 still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
 not run.
 
+
+### The start positions — `0x437300` and `0x437320` [DISASSEMBLED 2026-11-12]
+
+The game state `[main+0x391E9]` holds the map's specials as records of 12 bytes at `+0xDB4`, their count
+at `+0xDB8`, the allocation the `.ota` read makes of count × 12 bytes (`0x437043..0x437055`). A record:
+`+0` dword 1 for a start position, `+4` its 0-based index (`StartPos N` is N − 1), `+8` s16 X and `+0xA`
+s16 Z in world px. The schema read is the one whose start count equals the seats the skirmish enabled,
+else the one with most (scout N-b1); no retail skirmish map has fewer than six (N-b2), and index numbers
+may have gaps.
+
+- **`0x437300`**, thiscall on the game state, plain `ret`: the count of records whose `+0` is 1, walking
+  the array within `+0xDB8`. The SKIRMISH Start's player maximum (`0x47AFDE..0x47AFFA`).
+- **`0x437320(&pos, idx)`**, thiscall on the game state, `ret 8`: the first record with `+0` 1 and index
+  `idx` into `pos` as `{X << 16, 0, Z << 16}`, and 1; 0 for none. Called by the seat setup (`0x496FA9`)
+  and by ImpAI's `starts` op (`tagpu_worldq.c`, `wq_starts`), which asks indices 0 up, past gaps, until
+  it has as many as `0x437300` counted or has asked `WQ_STARTS_MAX` (64).
+
+The array is written by the `.ota` read before the level and lives for the level; nothing rewrites it in
+play but another `.ota` read.
 ## The engine's rates — sim tick, render cadence, and what `gamespeed` multiplies
 
 [MEASURED 2026-09-09, this project — a live skirmish on Two Continents, one walking ARMCOM,

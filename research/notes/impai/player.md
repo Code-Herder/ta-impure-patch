@@ -19,7 +19,10 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
   - micro (pulling back damaged units, focus fire);
   - noise in the fight predictor's and the economy's judgement;
   - attack thresholds and scouting frequency.
-- **One brain:** a level is a row of these parameters, held as data. There is no separate easy code.
+- **One brain:** a level is a row of these parameters, held as data. There is no separate easy code. The rows
+  and what each holds: [the brain](brain.html), *Levels*. Two test levers, never player settings, set a seat's
+  level (`tagpu_impai_level.on`) and response table (`tagpu_impai_table.on`) for the bar's and the tuning's
+  ImpAI-against-ImpAI games; the recording keeps both, so a replay plays what the game played.
 
 ## No cheating, in either direction
 

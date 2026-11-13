@@ -1471,13 +1471,19 @@ the map's edge an aircraft can fly was not derived [not established].
 
 - The player record from the byte argument (`main+0x1B63 + p·0x14B`), nothing when its unit
   count `+0x144` is 0; its block `[+0x67, +0x6B]`, stride `0x118` (`0x486F48..0x486F5A`).
-- For each unit alive and not pending death: a player of type 1 or 2 with a DirectPlay id (a
-  LOCAL player, `0x486F73..0x486F87`) hits its own unit with 30 000 of kind 3, the unit as its own
+- For each unit alive and not pending death: a player whose record is active (its first dword
+  nonzero, `0x486F79`) and of type 1 or 2 (`+0x73`, `0x486F7E..0x486F87`) -- no DirectPlay id is
+  tested -- hits its own unit with 30 000 of kind 3, the unit as its own
   attacker (`0x486F94`), and the reaper destroys it later; any other player's unit is detonated at once, `0x49B000(unit, 1)`
   (`0x486F9E`), marked pending (`0x486FAE`) and destroyed, `Send_UnitDeath(unit, 3)` (`0x486FB4`),
   whose destructor runs the cargo loop with kind 3 — and, the passengers' player not being local,
   only detaches them, before their own turn when the transport is earlier in the block. A passenger
   earlier in the block is still carried at its turn and detaches itself (`0x4867CB`). `0x486FC4..0x486FC6`: `pop edi; pop esi; ret 4`.
+- **What survives it**: a unit with more health than the hit takes. A veteran CORKROG (maxdamage
+  29 918) can survive it, so a seat whose commander died can still hold that unit (scout N-b4,
+  MEASURED offline from the retail FBIs). The units alive `+0x144` count unit objects, nanoframes
+  included and dying units until the reaper takes them (scout N-b4), so a seat reaches 0 only once
+  the last of them is reaped.
 - Callers: `0x4866B3` (a commander's death); `0x452E17` in the player removal `0x452CC0(dpid)`
   (nine callers, among them the network pump's leave case `0x4550D5`; *The session, not the host*),
   which kills the seat's army before it clears the seat's type (`0x452E62`), so every remaining peer
