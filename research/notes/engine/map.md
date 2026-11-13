@@ -49,7 +49,7 @@ functions and their behaviour on a full pool.
 | Offset | What |
 |---|---|
 | `+0x00`, `+0x02` | slot A and slot B, unit indices: the stamp `0x47CC30` files a unit by `+0x110 & 3`, 1 in A and 2 (airborne) in B, and a building's yard cells in A |
-| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal. The extremes are `0x483210(xz, wh)`'s (`0x483210..0x483368`; LoadMap calls it over the whole map at `0x483CE7`), over the cell and its right, lower and lower-right neighbours, which clamps the rectangle's far ends to W − 1 and H − 1 and loops below them (`0x483263..0x483277`), so **no call ever writes the last column's or the last row's extremes**; LoadMap's init does not either, and its grid is CRT malloc, so they hold what the allocator left [DISASSEMBLED]. The last column is border-masked (`0x4833B0` pass 1), so only the last row's reach a class map; `tools/tasim/classcheck.py` reports the engine's values there |
+| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal. The extremes are `0x483210(xz, wh)`'s (`0x483210..0x483368`; LoadMap calls it over the whole map at `0x483CE7`), over the cell and its right, lower and lower-right neighbours, which clamps the rectangle's far ends to W − 1 and H − 1 and loops below them (`0x483263..0x483277`), so **no call ever writes the last column's or the last row's extremes**; LoadMap's init does not either, and its grid is CRT malloc, so they hold what the allocator left [DISASSEMBLED]. The last row's reach a class map: the class rule `0x47DE60` reads a cell's extremes once its feature and unit rules pass it. So can the last column's, though the border mask's pass 1 (`0x4833B0`) marks that column: the mask leaves a feature's anchor where it is, and a non-blocking feature (FeatureDef `+0xFE` bit 6 clear) anchored on the last column passes the feature rule [DISASSEMBLED]. `tools/tasim/classcheck.py` reports the engine's values in both |
 | `+0x08` | the feature def: `0xFFFF` none, `0xFFFE` a footprint cell, `0xFFFD` the border, `0xFFFC` void. Every feature function treats a def from `0xFFFB` up as no feature (`0x4240ED`, `0x4244D3`, `0x4246EC`) |
 | `+0x0A`, `+0x0B` | a footprint cell's rows and columns back to its anchor: the anchor is the cell less `(rows × W + columns)` cells (the destroy, `0x4246C6..0x4246E6`). An anchor whose flags have bit 0 set: its record's index. A GAF anchor without one: the damage it has taken, a `u16` (the damage, `0x42463F..0x424666`) |
 | `+0x0C` | flags: bit 0 the anchor holds a record; bit 1 the yard mark, set by the stamp (`0x47CE32`) and cleared by the clear (`0x47D17C`); bit 2 the draw's, cleared and set again on every cell it draws, every frame (`0x4698A4..0x4698B0`, `0x469936`); bits 3–6 the feature's owner, 10 for none (the spawn, `0x423EF1..0x423F07`). LoadMap's init loop clears bits 0–1 (`and 0xFC`) and its height loops write `(flags & 0xD7) | 0x50` (owner 10, bit 5 clear; v1 `0x483A24`, v2 `0x483ABE`), so bits 2 and 7 keep the allocator's bytes until the draw writes bit 2 |
@@ -844,7 +844,11 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
 - **The re-mark `0x440830(class, xz, wh)`** (`0x440830..0x44091F`): `x`, `z`, `w`, `h` are the
   `int16` halves; the near ends `x − fx` and `z − fz` clamp at 0, the far ends `x + w + 1` and
   `z + h + 1` clamp to W and H through an **unsigned** compare (`0x440884` `jbe`, `0x440891`), so a far end below 0 recomputes the whole width or height; each
-  entry through `0x47E1F0`.
+  entry through `0x47E1F0`. W and H are the class record's `+0x10` and `+0x14` (`0x440881`, `0x44088E`), so an
+  absent class's re-mark writes nothing: the static constructor `0x440230` and the teardown `0x440A00` zero
+  them, `0x440940` sets them only for a class with a name (`0x440974`), and with both 0 the far ends clamp to 0
+  and it leaves at `0x44089D` [DISASSEMBLED 2026-11-12]. The claim `0x440A70`'s mover branch, which walks the
+  32 records with no present test, relies on it.
 - **The claim `0x440A70(unit)`** (`0x440A70..0x440AE0`, [its entry](units.md)), **the watermark `0x440AF0(class, unit)`**
   and **the cleanup `0x440BE0(class, unit)`**: the watermark becomes
   `max(GameTime, 30) − 30` (unsigned), the searcher's stamp is GameTime for the walk (re-marking its

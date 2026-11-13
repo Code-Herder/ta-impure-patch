@@ -13,9 +13,11 @@
 
    WHAT IT LOADS, each by its engine parser's rule (research/notes/impai/tasim.md, research/notes/engine/keys.md):
      - gamedata\moveinfo.tdf's CLASS0..CLASS31 (0x42D328..0x42D3AA), each over 0x4402E0's defaults;
-     - every units\*.fbi with a [UNITINFO] unitname, through 0x42BF40's rows, its move class taken from the class
-       record it names (the class record wins over the unit's own keys, 0x42CD0C..0x42CD97); the def array sorted
-       by _stricmp of the unitname (0x42D2E0, comparator 0x42DB60), so a type is its row;
+     - every units\*.fbi with a [UNITINFO] unitname that the menu-time pre-scan 0x42A8D0 keeps (its Version, an
+       archive's file, its Copyright: tasim_load.c, prescan_dropped), through 0x42BF40's rows, its move class taken
+       from the class record it names (the class record wins over the unit's own keys, 0x42CD0C..0x42CD97); the def
+       array sorted by _stricmp of the unitname (0x42D2E0, comparator 0x42DB60) after the engine's type 0, `None`,
+       so a type is its row + 1;
      - every section of weapons\*.tdf through 0x42E440's rows, kept in the slot its ID names, the later section of
        one ID replacing the earlier as Impure's loader keeps stock's rule (tagpu_patches.c, wpn_loader_id, which
        also skips an ID past the slots and a name longer than the record), and its [DAMAGE] table: the `default` into +0xD4 and every other key a row,
@@ -25,7 +27,7 @@
      - each builder's build options by the sidebar's page rule (tagpu_buildmenu) over its GUI pages and the
        download entries, the side's "<prefix>DL" page standing in for a missing one as 0x41ACE0 chooses;
      - the named-not-modelled report (TS_REPORT): the keys a later landing models, the keys no parser reads, the
-       values the core refuses, and the engine behaviours outside T1 from tools/tasim/engine-features.tsv.
+       values the core refuses, and the engine behaviours tools/tasim/engine-features.tsv does not mark modelled.
 
    THE FOLDERS a mod's loader renames in memory (ProTA's gamedatP, downloadP and guiP: tools/wiki/sidepacks.py,
    RECORDS) come in TASIM_LOAD_IN; the first mount pattern a mod renames is the mount list's own (native.py
@@ -59,8 +61,9 @@ typedef struct {
 typedef struct {
     TAGPU_VFS*              vfs;
     TASIM_MOVECLASS         cls[TS_CLASSES];
-    TASIM_UNITDEF*          u;              /* the def array, sorted: a type is its row                       */
+    TASIM_UNITDEF*          u;              /* the def array past None, sorted: a type is its row + 1         */
     int                     nu;
+    int                     dropped_version, dropped_loose, dropped_copyright;  /* FBIs the pre-scan drops */
     TASIM_WEAPONDEF*        w;              /* every section kept, in load order                              */
     int                     nw, replaced, refused;
     const TASIM_WEAPONDEF** ids;            /* the slot table, TS_WEAPON_IDS: an ID's record, NULL for none   */

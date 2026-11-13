@@ -874,12 +874,19 @@ FBI loader.
   2026-10-02]. The filter keeps the order of what it keeps (a `remove_if`: `0x42D4AD..0x42D4D2`
   finds the first type without bit 23, `0x42D4DC..0x42D50E` copies each later type that has it
   down). Bit 23 is the loader's verdict (`0x42A8D0`: set when the FBI's `Version` is not above
-  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` and
-  `0x42B14B..0x42B162`; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
+  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` for a file that did not
+  come from an archive and at `0x42B14B..0x42B162` for a `Copyright` other than Cavedog's, [keys](keys.html),
+  *Read only by the pre-scan*; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
   drops every type without it), and afterwards the battleroom's restriction store's (`0x46E203`,
   `0x46E23B`, in `0x46E160`, *A type's own cap* above, which marks its running at game start
-  INFERRED). Nothing else writes it: the other writers of `+0x241` are the def copy `0x42B370`
-  and the FBI loader `0x42BF40`, whose bit-field writes never touch bit 23.
+  INFERRED) and `0x431740`'s, called at `0x4974DE` in the loader body `0x497180`: when the file
+  `0x4356C0(6)` names from the schema record (`main+0x391E9`) opens (`0x431771`), it clears the bit on
+  every type from 1 (`0x4317B0..0x4317C5`) and sets it again on types the file names
+  (`0x431864..0x431872`, after a `_stricmp` at `0x43182D`) [INFERRED: a mission's unit list]. Nothing
+  else writes it: the other writers of `+0x241` are the def copy `0x42B370` and the FBI loader
+  `0x42BF40`, whose bit-field writes never touch bit 23 [DISASSEMBLED 2026-11-12: of every
+  `0x800000` and `0xFF7FFFFF` immediate in `.text`, only the sites above write `+0x241`, and no
+  instruction writes the bytes `+0x242` or `+0x243` alone].
   The sort covers `[1, count)` (`0x42D54F`, `0x42D557`), so `None`, type 0, stays first. Its
   comparator `0x42DB60` is `_stricmp(a+0x20, b+0x20) < 0` through the CRT's `0x4F8A70`, which,
   with `__lc_handle[LC_CTYPE]` (`0x52A018`) at 0, folds `A`..`Z` alone to lower case and compares

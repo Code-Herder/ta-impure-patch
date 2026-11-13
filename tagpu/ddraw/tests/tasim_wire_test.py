@@ -53,6 +53,11 @@ CASES = [
     ("ok-cam-pos", V1 + "cam pos 10 20\nend", None),
     ("ok-cam-feat", V1 + "feat 0 X 1 2 - -\ncam feat 0 pin=0\nend\n", None),
     ("ok-out-of-range", V1 + "unit 0 A 0 99999999999 5 -99999999999 -2147483647 - - - -\nend\n", None),
+    # the parser checks no ordinal's range: the applier bounds each against the units and features at its use
+    # (tagpu_scenario.c, issue_orders and resolve_camera); ORDINALS holds what must come through
+    ("ok-ordinals-unchecked", V1 + UNIT + "feat 0 X 1 2 - -\norder -1 stop\norder 1 move pos 1 2\n"
+     "order 0 attack unit 9\norder 0 attack unit -2\norder 0 reclaim feat 1\norder 0 reclaim feat -1\n"
+     "cam feat -3\nend\n", None),
     ("ok-long-names", V1 + "map " + "M" * 200 + "\nunit 0 " + "T" * 40 + " 0 1 2 - - - - - -\n"
      "order @1:" + "U" * 40 + " stop\nend\n", None),
     ("ok-storage-spellings", V1 + "player 0 mstore=0 estore=2.9999999999999997e38\nplayer 1 mstore=0.30000001 estore=16777217\n"
@@ -120,6 +125,11 @@ CASES = [
      "more than 1024 features -- the fork's own ceiling"),
     ("cap-orders", V1 + "order 0 stop\n" * 15001 + "end\n", "more than 15000 orders -- the fork's own ceiling"),
 ]
+
+# what a case's dump must hold: each ordinal as the wire gave it (the subject's, the target's, the camera's)
+ORDINALS = {"ok-ordinals-unchecked": ["cam 3 -3 0 pin 0", "order 0 subj 0 -1 [] cmd ", "order 1 subj 0 1 [] cmd ",
+                                      " kind 2 9 0 tlive 0 ", " kind 2 -2 0 tlive 0 ", " kind 3 1 0 tlive 0 ",
+                                      " kind 3 -1 0 tlive 0 "]}
 
 
 def build(name):
@@ -237,6 +247,10 @@ def main(argv):
             bad = 1
         elif want is not None and (ok or errs != [want]):
             print(f"tasim_wire_test: case {name} must fail with {want!r}; it gave {errs}")
+            bad = 1
+        missing = [part for part in ORDINALS.get(name, []) if part not in rest]
+        if missing:
+            print(f"tasim_wire_test: case {name}'s dump lacks {missing}")
             bad = 1
     for name, _w in wires:
         if not name.startswith("case-") and not blocks.get(name, "").startswith("ok 1 errors 0 "):

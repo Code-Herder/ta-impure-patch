@@ -92,7 +92,8 @@ size_t ts_map_bytes(int32_t w, int32_t h, int32_t pool_cap);
    the feature word TS_F_NONE, flags bits 0-1 clear, the metal the load's background (set by ts_map_load) -- and the
    fields the engine leaves to its allocator as 0: the back-reference, flags bits 2 and 7, and the 2x2 extremes of
    the last column and the last row, which no engine code writes (ts_map_extremes). `fd`/`nfd` are the feature
-   definitions; the pool starts as 0x421F20 leaves it. Returns TS_MAP_OK or the refusal. */
+   definitions, none when `fd` is NULL or `nfd` below 1; the pool starts as 0x421F20 leaves it. Returns TS_MAP_OK or
+   the refusal. */
 int ts_map_init(TS_MAP* m, void* mem, size_t bytes, int32_t w, int32_t h, uint8_t sea, int32_t pool_cap,
                 const TASIM_FEATUREDEF* fd, int32_t nfd);
 

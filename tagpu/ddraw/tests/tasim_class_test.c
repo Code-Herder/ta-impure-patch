@@ -430,6 +430,11 @@ static void test_spawn(void)
     /* a word past the definitions is counted and placed nowhere */
     CHECK(ts_map_spawn(&W.m, NULL, AT(W, 1, 1), 5, TS_OWNER_NONE) == 0 && W.m.past_defs == 1, "past the defs");
     world_free(&W);
+    /* a negative count is no definitions: every word is past them */
+    map_make(&W, 10, 10, 0, 2, FD, -1);
+    CHECK(W.m.nfd == 0 && ts_map_spawn(&W.m, NULL, AT(W, 1, 1), 0, TS_OWNER_NONE) == 0 && W.m.past_defs == 1,
+          "a negative definition count");
+    world_free(&W);
 }
 
 static void test_mask(void)

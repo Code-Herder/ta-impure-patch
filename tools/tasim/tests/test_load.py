@@ -1,10 +1,12 @@
 """The install loader (tools/tasim/tasim_load.c) through `tasim_run roles` and `defs` on a synthetic install: the move
 class record winning over a unit's own keys, a weapon reference resolved by its slot as the engine resolves it, the
-[DAMAGE] rows by type, Impure's `nottoair`, the folders a mod renames, and the report's classes.
+[DAMAGE] rows by type, Impure's `nottoair`, the folders a mod renames, the menu-time pre-scan's three drops, and the
+report's classes.
 
     python3 tools/tasim/tests/test_load.py
 
-No install: every file is written here, loose, into a temporary game folder with no archive.
+No install: every file is written here, into a temporary game folder: the units in an archive of their own, as the
+pre-scan drops a loose FBI, and the rest loose.
 """
 
 import json
@@ -16,21 +18,39 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parents[1]))
 import native  # noqa: E402
+import hpipack  # noqa: E402
+
+# the reference the pre-scan holds `Copyright` to, any four characters as its year (tasim_load.c, prescan_dropped)
+COPYRIGHT = "Copyright=Copyright 1997 Humongous Entertainment. All rights reserved.; "
 
 UNITS = {
-    "TCOM": "UnitName=TCOM; Commander=1; CanMove=1; BMcode=1; MaxVelocity=1; BuildCostMetal=1000; MaxDamage=3000;"
-            " TurnRate=500; BrakeRate=0.1; FootprintX=2; FootprintZ=2; Category=COMMANDER;",
+    "TCOM": "UnitName=TCOM; Version=3.1; Commander=1; CanMove=1; BMcode=1; MaxVelocity=1; BuildCostMetal=1000;"
+            " MaxDamage=3000; TurnRate=500; BrakeRate=0.1; FootprintX=2; FootprintZ=2; Category=COMMANDER;",
     # its own keys say a 1x1 land unit; its class says a 3x3 one that needs 15 of water
     "TSUB": "UnitName=TSUB; MovementClass=TDEEP; FootprintX=1; FootprintZ=1; MinWaterDepth=0; MaxWaterDepth=0;"
             " CanMove=1; BMcode=1; MaxVelocity=2; BuildCostMetal=100; MaxDamage=500; TurnRate=500;"
             " BrakeRate=0.1; Category=SHIP;",
-    "TPLANE": "UnitName=TPLANE; CanFly=1; CanMove=1; BMcode=1; MaxVelocity=8; BuildCostMetal=50; MaxDamage=100;"
-              " Category=VTOL;",
+    "TPLANE": "UnitName=TPLANE; Version=1.2; CanFly=1; CanMove=1; BMcode=1; MaxVelocity=8; BuildCostMetal=50;"
+              " MaxDamage=100; Category=VTOL;",
     "TGUN": "UnitName=TGUN; CanMove=1; BMcode=1; MaxVelocity=1.5; BuildCostMetal=120; MaxDamage=800; TurnRate=500;"
             " BrakeRate=0.1; FootprintX=2; FootprintZ=2; Category=TANK; Weapon1=TFLAK; Weapon2=TNOAIR;"
             " Weapon3=TBIGID; Frobnicate=1;",
+    # (3.3 - 3) * 10 is 2.9999999999999982 as doubles: minor 2, above the game's 3.1
+    "TNEWER": "UnitName=TNEWER; Version=3.3; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+    "TMAJOR": "UnitName=TMAJOR; Version=4; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+    # minor 1: kept
+    "TMINOR": "UnitName=TMINOR; Version=3.19; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
 }
+# without a Copyright the pre-scan holds its default to the reference; with another owner's it differs too
+NO_COPYRIGHT = {
+    "TBARE": "UnitName=TBARE; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+    "TOTHER": "UnitName=TOTHER; Copyright=Copyright 1997 Someone Else. All rights reserved.; CanMove=1; BMcode=1;"
+              " MaxVelocity=1; Category=TANK;",
+}
+# a loose FBI, with every key the archive's units have
+LOOSE = {"TLOOSE": COPYRIGHT + "UnitName=TLOOSE; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;"}
 
 WEAPONS = """
 [TFLAK] { ID=1; Range=500; ReloadTime=1; ToAirWeapon=1;
@@ -44,10 +64,20 @@ WEAPONS = """
 MOVEINFO = "[CLASS0] { Name=TDEEP; FootprintX=3; FootprintZ=3; MinWaterDepth=15; MaxWaterDepth=255; }\n"
 
 
+def fbi(keys):
+    return ("[UNITINFO]\n{\n" + keys.replace("; ", ";\n") + "\n}\n").encode()
+
+
 def write_install(root: Path, gamedata: str):
-    (root / "units").mkdir()
+    tree = {}
     for name, keys in UNITS.items():
-        (root / "units" / f"{name}.fbi").write_text("[UNITINFO]\n{\n" + keys.replace("; ", ";\n") + "\n}\n")
+        hpipack.insert(tree, f"units/{name}.fbi", fbi(COPYRIGHT + keys))
+    for name, keys in NO_COPYRIGHT.items():
+        hpipack.insert(tree, f"units/{name}.fbi", fbi(keys))
+    (root / "units.ufo").write_bytes(hpipack.build(tree))
+    (root / "units").mkdir()
+    for name, keys in LOOSE.items():
+        (root / "units" / f"{name}.fbi").write_bytes(fbi(keys))
     (root / "weapons").mkdir()
     (root / "weapons" / "test.tdf").write_text(WEAPONS)
     (root / gamedata).mkdir()
@@ -62,8 +92,8 @@ class Load(unittest.TestCase):
         cls.root = Path(cls.tmp.name) / "game"
         cls.root.mkdir()
         write_install(cls.root, "gamedatX")             # a mod's renamed gamedata folder
-        cls.mounts = Path(cls.tmp.name) / "none.mounts"
-        cls.mounts.write_text("")
+        cls.mounts = Path(cls.tmp.name) / "units.mounts"
+        cls.mounts.write_text(f"{cls.root / 'units.ufo'}\n")
 
     @classmethod
     def tearDownClass(cls):
@@ -95,9 +125,15 @@ class Load(unittest.TestCase):
         self.assertEqual(u["dps_ground"], 30 / 30)        # TNOAIR: nottoair makes its toairweapon a ground slot
         self.assertEqual(u["range_ground"], 400)          # TBIGID's ID is past the slots: its weapon is the null one
 
+    def test_prescan(self):
+        """The pre-scan's verdict: Version above 3.1, a loose file, and a Copyright other than the reference drop."""
+        d = self.run_cmd("defs")
+        self.assertEqual(d["counts"]["units_dropped"], {"version": 2, "loose": 1, "copyright": 2})
+        self.assertEqual(d["counts"]["units"], 5)
+
     def test_defs(self):
         d = self.run_cmd("defs", "--folders", "gamedata=gamedatX")
-        self.assertEqual([u["unitname"] for u in d["units"]], ["TCOM", "TGUN", "TPLANE", "TSUB"])
+        self.assertEqual([u["unitname"] for u in d["units"]], ["TCOM", "TGUN", "TMINOR", "TPLANE", "TSUB"])
         sub = next(u for u in d["units"] if u["unitname"] == "TSUB")
         image = {off: data for off, _w, data, _m in sub["image"]}
         self.assertEqual(image[0x14A], "0300")
