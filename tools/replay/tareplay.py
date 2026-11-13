@@ -134,6 +134,9 @@ No check is decided by the wall clock. A wait on a fact is bounded by ACK_S for 
 and, while the level runs, by STALL_S of GameTime standing still (Stall): each catches a hung or
 dead game, never an outcome. A peek the running game has not answered is no progress, not a
 failure: a seek's rebuild, a fork crossing's among them, holds the game thread for one frame. A
+wait for the level's end, given on a held tick T, is bounded at GameTime T + LEVEL_END_TICKS, where
+the engine's end test has ended it (Log.wait_end); a fixture whose scenarios leave that test
+disarmed is refused before a game (objective_left_off). A
 seek's cost is checked on its work, never its time: the iterations it read, the units it made and
 the blocks it decoded, each against the file (W1 to W3, work_verdict).
 
@@ -244,6 +247,30 @@ TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after T
 ACK_S = 60                      # a one-frame answer: an arm, a dump's line, a peek, a screen
 PEEK_UNANSWERED = "no peek lines"   # tacli peek's words when the game did not answer in its wait
 STALL_S = 120                   # GameTime standing still this long while the level runs: a hung game
+# THE LEVEL'S END. A level whose end was given while it was held at GameTime T -- the end scenario
+# clearing every unit, a takeover's `+iwin` -- is torn down by GameTime T + LEVEL_END_TICKS, so a
+# wait for its end is bounded there in game ticks (Log.wait_end), however slow the machine.
+# DISASSEMBLED 2026-11-13 from pristine/TotalA.exe.pristine:
+# - the end tests run on the controlled player's pass of the players phase 0x464F80, the tick
+#   GameTime reaches its record's +0xF0, which then takes 30 more (0x46507D..0x465092): the first
+#   pass after T falls at T+1..T+30;
+# - a test that answers 1 (defeat 0x490360 at 0x46516D, victory 0x490230 at 0x46586F) steps the
+#   countdown main+0x39239, -1 from the level's entry (0x498199): below 0 it is set to 4 (ebp,
+#   0x464F99) and the pass ends (0x46518B, 0x46588D); else it is decremented, and the pass that
+#   takes it below 0 sets the stop bit 2 of main+0x3923B (0x465833 by way of 0x465643 in a
+#   skirmish, 0x4658B4) -- the sixth pass, 150 ticks after the first, so T+151..T+180. +IWin sets
+#   the bit at once (0x416A22);
+# - the in-play handler tears the level down on that bit (0x4995FC) and a frame runs at most 5
+#   ticks (the scheduler's clamp 0x4953F5; the turbo's k is 1 to 5), so the level ends at most 4
+#   ticks past the pass that set it.
+# MEASURED 2026-11-13, a landing gate's 79 L lanes, the end scenario at T: the recorder ended at
+# T+180 in 78 and T+165 in one. The margin is one more pass: it holds the frame's ticks past the
+# setting pass, and a countdown misread by one pass would move the end by exactly one pass.
+LEVEL_END_TICKS = 180 + 30
+# A level's teardown 0x491B60, logged at its entry on the game thread (tagpu_reclaim.c,
+# reclaim_teardown_pre, and the recorder's end inside it) before the shell's clock 0x44A696 can
+# move GameTime again (engine/network.md, GameTime's five writers)
+LEVEL_ENDED = re.compile(r"reclaim: level teardown|recorder: ended after")
 SEEK_LEAD = 123                 # the reader's lead before a seek's target (tagpu_replay.c, EYE_LEAD)
 JUDGE_TICKS = 240               # the takeover judge's sample, this many ticks after T: its old 4 s
                                 # at speed 20
@@ -716,24 +743,42 @@ class Log:
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
 
-    def wait_running(self, rx, start=0, poll=None):
+    def wait_running(self, rx, start=0, poll=None, end_by=None):
         """The first line from index `start` on that matches, on a level that runs toward it: no
         deadline but a stall (Stall), so a loaded machine only makes it later. `poll` is called
-        at every look, for a lane that watches the window meanwhile."""
+        at every look, for a lane that watches the window meanwhile. `end_by`, (G, what): the
+        level must end by GameTime G (wait_end), and fails by name when a peek reads a later one
+        and the log, read after the peek's answer, shows no teardown. The peek's read, the shell
+        clock that moves GameTime after a teardown and the teardown's line are all the game
+        thread's, so a teardown before the read is logged before its answer: a GameTime past G
+        with no teardown in the log is a level still running there."""
         rx = re.compile(rx)
         stall = Stall(self.w)
         while True:
             for ln in self.lines[start:]:
                 if rx.search(ln):
                     return ln
+                if end_by and LEVEL_ENDED.search(ln):
+                    end_by = None
             start = len(self.lines)
             if poll:
                 poll()
-            stall.check()
+            g = stall.check()
+            if end_by and g is not None and g > end_by[0]:
+                self.read()
+                if not any(rx.search(ln) or LEVEL_ENDED.search(ln) for ln in self.lines[start:]):
+                    raise Failed(f"the level did not end by GameTime {end_by[0]} after {end_by[1]}:"
+                                 f" a peek read GameTime {g}")
+                continue
             nap(self.NAP_S)
             self.read()
             if not any(rx.search(ln) for ln in self.lines[start:]):
                 self.alive()
+
+    def wait_end(self, rx, start=0, poll=None, after="the end scenario"):
+        """`rx` from index `start` on, on a level whose end -- `after` -- was given while it was
+        held at `self.at`: it must end by GameTime self.at + LEVEL_END_TICKS."""
+        return self.wait_running(rx, start, poll, (self.at + LEVEL_END_TICKS, after))
 
 
 class Stall:
@@ -752,9 +797,10 @@ class Stall:
         self.since = self.next = time.monotonic()
 
     def check(self):
+        """The GameTime this look's peek read, or None: no peek this look, or one unanswered."""
         now = time.monotonic()
         if now < self.next:
-            return
+            return None
         g = self.w.gametime(self.EVERY, busy=True)
         now = time.monotonic()
         self.next = now + self.EVERY
@@ -763,6 +809,7 @@ class Stall:
         elif now - self.since > STALL_S:
             raise CouldNotRun(f"the level stood at GameTime {self.g} for {STALL_S} s while it ran"
                               + ("" if g is not None else ", its last peek unanswered"))
+        return g
 
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
@@ -789,6 +836,48 @@ def clear_impai_levers(gamedir):
     never written through."""
     for lever in Path(gamedir).glob("tagpu_impai*.on"):
         lever.unlink(missing_ok=True)
+
+
+REARM_SCENARIO = "replay-objective-on.json"
+
+
+def scenario_objective(name):
+    """The `objective` a scenario under scenarios/ sets: "on", "off" or None."""
+    try:
+        doc = json.loads((SCENARIOS / name).read_text())
+    except (OSError, ValueError) as e:
+        raise CouldNotRun(f"scenario {name}: {e}")
+    return (doc.get("setup") or {}).get("objective")
+
+
+def objective_left_off(name, fix):
+    """Why the fixture's level would never end, or None. A lane's level ends by the engine's end
+    test, which the end scenario's clear fires (LEVEL_END_TICKS); a scenario that sets `objective`
+    off disarms it (tagpu_scenario.c, apply_objective), and a level with the test disarmed runs on
+    with no unit at all. So the last scenario a lane applies that names the objective must arm it.
+    In the order they apply: the load; the `apply` steps at or before `end`, by GameTime (`steps`,
+    and U's `rewind_steps`); U's `rewind_paused`, whose GameTime the lane chooses, so it is taken
+    as last when it disarms and never as the one that arms; then the end scenario. A `type` or
+    `run` step that disarms it -- the console's Kill does (0x4164EF) -- is not read here; the end's
+    bound in game ticks (Log.wait_end) names that one when it runs."""
+    steps = [(T, a) for T, kind, a in fix.get("steps", []) + fix.get("rewind_steps", [])
+             if kind == "apply" and T <= fix["end"]]
+    order = [fix["load"]] + [a for _, a in sorted(steps, key=lambda st: st[0])]
+    if fix.get("rewind_paused") and scenario_objective(fix["rewind_paused"]) == "off":
+        order.append(fix["rewind_paused"])
+    order.append(END_SCENARIO.name)
+    off = None
+    for sc in order:
+        state = scenario_objective(sc)
+        if state == "off":
+            off = sc
+        elif state == "on":
+            off = None
+    if off:
+        return (f"{name}: {off} sets `objective` off and no step at or before its end "
+                f"({fix['end']}) nor {END_SCENARIO.name} sets it on again, so its level would "
+                f"never end: apply {REARM_SCENARIO} as a step at its end")
+    return None
 
 
 def broad_fixtures():
@@ -1315,7 +1404,7 @@ def live(w, fx, Ts, out):
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
     resume(w, log)
     for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
-        log.wait_running(rx, n)
+        log.wait_end(rx, n)
     wait_dumps(log, names)
     w.collect(out, recordings=True)
     w.stop()
@@ -1490,20 +1579,22 @@ def takeover_k(w, fx, out):
             # 2026-10-08: `+iwin` did), so the resume is asked for and not waited on, and taken
             # back if no level was left to read it
             n = 0
+            ender = f"its chat line {tk['type']!r}"
             log.read()
             if not any(re.search(r"recorder: ended after", ln) for ln in log.lines):
                 w.trigger("resume")
             log.held = False
-            log.wait_running(r"recorder: writer: .* closed", 0, watch)
+            log.wait_end(r"recorder: writer: .* closed", 0, watch, ender)
             (w.gamedir / TRIGGER).unlink(missing_ok=True)
         else:
             run_to(w, log, max(T + span, res.get("ai_window", [0, 0])[1], held), [], watch)
             n = len(log.lines)
+            ender = "the end scenario"
             rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
             if rc:
                 raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
             resume(w, log)
-        log.wait_running(r"recorder: writer: .* closed", n, watch)
+        log.wait_end(r"recorder: writer: .* closed", n, watch, ender)
     except Failed:
         if not res["gone"]:
             raise
@@ -2069,7 +2160,7 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     if rc:
         raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
     resume(w, log)
-    log.wait_running(r"recorder: writer: .* closed", n)
+    log.wait_end(r"recorder: writer: .* closed", n)
     if not log.wait(rf"replay: forks .*\b{re.escape(stem)}\.imprec: (done|refused):", 120, n):
         raise CouldNotRun("the fork's level did not complete its file maintenance")
     # the skirmish ends on its results screen; its MainMenu builds the main menu, over which the
@@ -2907,7 +2998,7 @@ def forks_steps(w, fx, out, results):
         rc, text = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
         if not rc:
             resume(w, log)
-        if rc or not log.wait_running(r"recorder: writer: .* closed", n):
+        if rc or not log.wait_end(r"recorder: writer: .* closed", n):
             raise CouldNotRun(f"forks: K{tid} did not end: {last(text)}")
         if not log.wait(r"replay: forks .*: (done|refused):", 120, n):
             raise CouldNotRun(f"forks: K{tid} did not complete maintenance")
@@ -4009,6 +4100,10 @@ class Run:
     gdi = False
 
     def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
+        fixes = fixes or fixtures()
+        unended = [why for why in (objective_left_off(n, fixes[n]) for n in names) if why]
+        if unended:
+            raise CouldNotRun("; ".join(unended))
         self.q = queue.PriorityQueue()
         self.seq = itertools.count()
         self.lock = threading.Lock()
@@ -4035,7 +4130,6 @@ class Run:
                         f"{'-cover' if getattr(args, 'cover', False) else ''}"
                         f"{'-gdi' if self.gdi else ''}")
         h = head()
-        fixes = fixes or fixtures()
         for name in names:
             fix = fixes[name]
             counts_options(fix)
