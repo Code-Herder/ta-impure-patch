@@ -166,7 +166,7 @@ STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limit
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
-import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
+import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -3971,6 +3971,7 @@ class Run:
         self.game_speed = getattr(args, "game_speed", TEST_GAME_SPEED)
         self.turbo = getattr(args, "turbo", 0)
         self.kind = getattr(args, "cmd", "run")
+        self.what = getattr(args, "what", "tareplay")
         # what the estimate keys a lane's past times by: the pacing and the build's kind
         self.variant = (f"gs{self.game_speed}-turbo{self.turbo}"
                         f"{'-cover' if getattr(args, 'cover', False) else ''}")
@@ -4282,10 +4283,22 @@ def cmd_run(args):
     return status
 
 
+def game_lanes(run):
+    """The games `run` plays at once, the lanes it declares to the run lock: its workers, and no
+    more than the lanes it queues; None, the whole machine, when it plays the two-player game,
+    whose DirectPlay ports (MP_GAMES) are fixed and so cannot be shared with another run."""
+    if getattr(run, "multiplayer", None):
+        return None
+    return min(run.j, sum(len(fx["want"]) for fx in run.fx.values()))
+
+
 def run_threads(run):
-    """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game.
-    The workers are the only threads that play games, one each: never more than -j at once."""
+    """The run's workers to their end, under the machine's run lock (tools/runlock.py), which is
+    taken first and held until the process ends; a stop by SIGTERM or Ctrl-C lets each worker
+    finish its game. The workers are the only threads that play games, one each: never more than
+    -j at once."""
     global J
+    runlock.hold(TREE, run.what, game_lanes(run))
     offline(run.j)
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
@@ -5022,6 +5035,7 @@ def cmd_forks(args):
     if not fix or not fix.get("takeover"):
         raise CouldNotRun("forks needs a takeover fixture")
     out = out_dir(args)
+    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     try:
@@ -5065,6 +5079,7 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
+    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
@@ -5176,9 +5191,9 @@ def main(argv=None):
     if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
         import devpy
         devpy.ensure()
-    # every command that plays games waits for the machine's run lock (tools/runlock.py)
-    if a.cmd not in ("features", "list") and not (a.cmd == "landing" and a.check):
-        runlock.hold(TREE, "tareplay " + " ".join(sys.argv[1:] if argv is None else argv))
+    # every command that plays games takes the machine's run lock where its games start
+    # (run_threads, cmd_forks, cmd_rewind), once it knows how many it plays at once
+    a.what = "tareplay " + " ".join(sys.argv[1:] if argv is None else argv)
     rc = 2                              # a CouldNotRun or anything unforeseen: it could not run
     try:
         rc = a.func(a)

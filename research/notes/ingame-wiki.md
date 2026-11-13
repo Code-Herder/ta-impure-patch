@@ -1258,11 +1258,13 @@ unless said).
   game and read nothing a game lane writes, so they start at once, with no lock; the gate then waits
   for the run lock (the log says so, and `runlock:` names the holder), holds it from its first game
   lane's start to its last one's end, so its games play together and no other run's among them, and
-  releases it with offline checks perhaps still running. While another run holds the lock the
+  releases it with offline checks perhaps still running. It declares no lanes, so it takes all 28
+  of the lock's slots: its instances `wikigate-<mode>` are one set for every worktree, and the
+  `mp` and `mods` lanes play on fixed setup instances and DirectPlay ports. While another run holds the lock the
   offline checks run beside that run's games, as they run beside the gate's own once it has the
   lock: `--offline-jobs` is the same either way, and the threads it counts on are those the games
   of whichever run leave. Each game lane's process inherits the lock's descriptor and holds the
-  lock itself until it exits (`runlock.fileno`, `runlock.release`), so the lock cannot go while one
+  lock itself until it exits (`runlock.fds`, `runlock.release`), so the lock cannot go while one
   plays, however the gate ends. One gate runs in a worktree at a time (`wikigate.lock` in the
   worktree's git directory), since one worktree's offline checks build into the same files.
   Every game lane's prefix has registry hives of its own (`tacli create --private-registry`; the

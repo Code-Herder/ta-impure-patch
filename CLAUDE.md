@@ -302,17 +302,25 @@ targets share an intermediate. CI has been building this way since the workflow 
 same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
 about `-j`. The assurances are the two above.
 
-## Game regressions run one at a time
+## Game regressions share a 28-slot budget
 
 A landing gate alone already peaks at a load of about 24 on the reference setup's 32 threads, so
 two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
-**Every tool that plays games for a regression holds the machine's run lock** (`tools/runlock.py`:
-`tareplay.py`'s game commands, `tacompat.py wine`, `recmp_play_test.py`), so a second run waits
-for the first. A chain of games scripted by hand queues the same way through `flock(1)` on the
-lock file, `$(git rev-parse --git-common-dir)/tareplay.lock`. Never work around it: while a run
-waits, do the offline work (builds, codectest, unit tests, docs). Builds and offline checks take
-no lock.
+**Every tool that plays games for a regression holds slots of the machine's run lock**
+(`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes **two a game
+lane** it plays at once, as it declares them (`tareplay.py` its `-j`, no more than the games it
+queues; `calib.py engine` its lanes; `recmp_play_test.py` and `l1_run.py` one), and a run that
+declares none takes all 28 and runs alone — every tool whose games use a fixed instance name, a
+fixed DirectPlay port or the instance its caller names (`tacompat.py wine`, the wiki gate, the
+`tareplay.py landing` that plays the two-player game, the single-game checks). Runs are admitted
+**in arrival order** and the slots held never sum past 28; a run that does not fit waits, and runs
+behind it wait for it. A chain of games scripted by hand goes through the wrapper,
+`tools/runlock.py run --slots W --what TEXT -- <command>`; `tools/runlock.py status` says who holds
+what. A bare `flock(1)` on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every
+run, but it waits outside the queue and can wait for as long as runs keep overlapping, so use the
+wrapper. Never work around it: while a run waits, do the offline work (builds, codectest, unit
+tests, docs). Builds and offline checks take no slots.
 
 ## Python tooling: install what you need, into the shared venv
 

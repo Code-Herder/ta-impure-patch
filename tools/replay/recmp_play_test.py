@@ -81,7 +81,7 @@ def main():
     ap.add_argument("--cover", metavar="NAME", default=None,
                     help="on a coverage DLL, keep what the playing ran as cover-NAME.bin in --out")
     a = ap.parse_args()
-    tareplay.runlock.hold(TREE, "recmp_play_test " + " ".join(sys.argv[1:]))
+    tareplay.runlock.hold(TREE, "recmp_play_test " + " ".join(sys.argv[1:]), 1)
     a.out.mkdir(parents=True, exist_ok=True)
     rec = a.out / a.recording.name
     if rec.resolve() != a.recording.resolve():

@@ -85,7 +85,7 @@ def main():
     (a.out / "run.txt").write_text(f"scenario {a.scenario.name}\nend {a.end}\nunit limit {limit} ({why})\n"
                                    f"levers {' '.join(a.lever) or 'none'}\n"
                                    f"speed {'normal' if a.normal_speed else 'test, turbo'}\n")
-    runlock.hold(TREE, f"l1_run {a.scenario.name} to {a.end}")
+    runlock.hold(TREE, f"l1_run {a.scenario.name} to {a.end}", 1)
     w = tr.Worker(a.out, tr.NORMAL_GAME_SPEED if a.normal_speed else tr.TEST_GAME_SPEED)
     written = []
     try:
