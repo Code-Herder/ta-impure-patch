@@ -2236,7 +2236,8 @@ class EngineFree(unittest.TestCase):
 
     def test_a_table_alone_runs_its_groups_and_asks_no_function(self):
         rel = "src/impai_fitparams.c"
-        self.edit(rel, "0x1p-1f,   /* focus */", "0x1p-2f,   /* focus */")
+        focus = re.search(r"^ *\S+,   /\* focus \*/$", (tafeat.DDRAW / rel).read_text(), re.M).group(0)
+        self.edit(rel, focus, focus.replace(",", " * 0.5f,", 1))
         feats, (fx, funcs, regions, problems, why, gated_any) = self.plan(rel)
         self.assertEqual(problems, [])
         self.assertTrue(gated_any)

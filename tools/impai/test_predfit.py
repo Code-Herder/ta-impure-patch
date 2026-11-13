@@ -8,17 +8,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import predfit  # noqa: E402
 
 
-def test_emit_start_is_the_tracked_file():
-    assert predfit.emit_c(predfit.START, "`tools/impai/predfit.py emit --start` writes them: the fit's starting "
-                          "point, fitted to no reference.") == predfit.PARAMS.read_text()
+def test_emit_is_the_tracked_file():
+    """the tracked coefficients file is exactly what `emit` writes for its own coefficients and its own provenance
+    line, whichever fit wrote it, so its includes and its SIM_FEATURE line are the emitter's of today"""
+    import re
+    text = predfit.PARAMS.read_text()
+    what = re.match(r"/\* impai_fitparams\.c -- [^\n]*, as\n   (.*?) \*/\n", text, re.S)
+    assert what
+    assert predfit.emit_c(predfit.read_params(predfit.PARAMS), what.group(1)) == text
 
 
 def test_params_read_back_bit_exact(tmp_path):
-    theta = [predfit.f32(v) for v in predfit.SYN_TRUE]
-    f = tmp_path / "p.c"
-    f.write_text(predfit.emit_c(theta, "a test."))
-    assert predfit.read_params(f) == theta
-    assert predfit.read_params(predfit.PARAMS) == [predfit.f32(v) for v in predfit.START]
+    for theta in ([predfit.f32(v) for v in predfit.SYN_TRUE], [predfit.f32(v) for v in predfit.START]):
+        f = tmp_path / "p.c"
+        f.write_text(predfit.emit_c(theta, "a test."))
+        assert predfit.read_params(f) == theta
 
 
 def test_split_is_by_stem():

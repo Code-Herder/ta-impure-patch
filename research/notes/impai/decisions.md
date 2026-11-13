@@ -200,7 +200,8 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   training fights with a homing weapon firing at a moving target.
 - **The predictor's chase walks to the first armed slot's reach** (S1, the engine's literal rule: `0x4897E0`,
   `0x4035A1`, `0x403623`, `0x4035D6`), not the longest reach that hurts the enemy type: in the training-half
-  cross-validation with homing held at prior 300 it lowered the validation loss 29 % (18590 to 13250) and
+  cross-validation with homing held at prior 300, on the one-order references (`ceed681e6fa9`), it lowered the
+  validation loss 29 % (18590 to 13250) and
   raised the accuracy from 420/468 to 424/468. The variant that walks to the first slot that hurts the type
   scored within 1 % and one fight of it; the engine's rule was taken.
 - **The military reads no fact of a target that the seat's observation of it does not show** (A2a's landing
@@ -237,7 +238,14 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 - **The protocol was diagnosed on two check-half fights**, group-141 and naval-012 (`fit-v2-spec.md` §4's
   stalemate). The check half is meant to be read once, after the fit; these two were read before the protocol
   was chosen, so a reader of the cross-validation and of the check figure on the new references should know the
-  check half informed the design here.
+  check half informed the design here. Under the re-targeting protocol neither reaches the limit in any run:
+  group-141's side A wins 25/25, which the fitted predictor calls, and naval-012's side B wins 25/25, which it
+  still gives to A (m +0.61), one of the check's nine misses (MEASURED 2026-11-13, `defcfcdb2359`).
+- **The predictor is fitted to the re-targeting references, and its check passed** (2026-11-13, reference set
+  `defcfcdb2359`): the cross-validation chose prior 300 with homing held, its estimate 428/484 (88.4 %, group
+  86.1 %); `check`, run once after the fit, passed at 113/122 (92.6 %), group 64/69, the other kinds too few to
+  judge. The cross-validation's figure is the one to plan with; nothing was chosen again after the check.
+  Figures and coefficients: [impai](../modules/impai.html), *The fight predictor*.
 - **The new generation lives in its own calibration root**, `TACALIB_DIR=<main checkout>/.data/calib-rt`
   (`scenarios/gen`, `runs`, `refs`), and the old `.data/calib` is never written: a duel's and a course's id is
   the same in both generations, and `predfit.load_fights` takes each id's newest reference. `calib.py refs

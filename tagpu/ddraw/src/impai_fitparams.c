@@ -1,5 +1,5 @@
 /* impai_fitparams.c -- the fight predictor's coefficients (impai_fight.h, IMPAI_FIT), as
-   `tools/impai/predfit.py emit --start` writes them: the fit's starting point, fitted to no reference. */
+   `tools/impai/predfit.py emit --fit` writes them: fitted to the training half (142 fights) of reference set defcfcdb2359, content CA6CC97C978BF7DF. */
 #include "impai_fight.h"
 #include "tagpu_simreg.h"
 
@@ -9,12 +9,12 @@ SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight im
 
 const IMPAI_FIT impai_fitparams = {
     {   /* hit: bias, lead */
-        { 0x1p+1f, -0x1p+0f },   /* straight */
-        { 0x1p+1f, -0x1p+0f },   /* ballistic */
+        { 0x1.091f06p+1f, -0x1.791bdap-1f },   /* straight */
+        { 0x1.ac102ap+0f, -0x1.a1f02ap+0f },   /* ballistic */
         { 0x1p+1f, -0x1p+0f },   /* homing */
         { 0x1p+1f, -0x1p+0f },   /* dropped */
     },
-    0x1p-1f,   /* focus */
-    0x1p+0f,   /* splash */
-    0x1.99999ap-3f,   /* tau */
+    0x1.121a3ap-2f,   /* focus */
+    0x1.a0ef94p-1f,   /* splash */
+    0x1.d8a716p-3f,   /* tau */
 };

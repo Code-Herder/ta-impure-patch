@@ -271,8 +271,9 @@ scenario's stem:
   model.
 - **Held by design**: the homing kind's bias 2 and lead −1. A guided shot at a standing target hits as a direct
   one does, and a target fleeing at a fifth of the shot's speed is still caught about 86 % of the time
-  (`s(2 − 0.2)`) [INFERRED: a radial-flight bound]; on the 117 decisive training fights the homing bias
-  moves 25 margins and the lead 7, flipping none, and holding them cost nothing in the cross-validation. The dropped
+  (`s(2 − 0.2)`) [INFERRED: a radial-flight bound]; on the 117 decisive training fights of the one-order
+  references (`ceed681e6fa9`) the homing bias moved 25 margins and the lead 7, flipping none, and holding them cost
+  nothing in the cross-validation. The dropped
   kind moves no fight and is
   held by the free test.
 - **`cv`** chooses the prior and the held set by 5-fold cross-validation inside the training half, stratified by
@@ -292,18 +293,30 @@ scenario's stem:
   truth's loss within 2 %, its margins within 0.05 and the check (at prior 0 the search stops on a step 3.7 %
   above the truth's loss).
 
-**The honest estimate** (MEASURED 2026-11-13 on reference set `ceed681e6fa9`, 142 training fights, 117 of them
-decisive). The cross-validation chooses prior 300 with homing held, validation loss 13250, and the form's
-accuracy on unseen training-half fights is 424/468 (90.6 %, 95 % CI 84-95 % on the unique fights): defence 52/56,
-duel 76/80, **group 236/264 (89.4 %)**, naval 60/68; by class, 296/316 of the fights that end before the limit,
-108/120 of the long ones (some runs at the limit) and **20/32 of the stalemates** (80 % or more at the limit).
-Weighted to the check half's mix (77 ended, 29 long, 13 stalemate decisive fights) that is about 89 %: at the bar,
-not past it. Nested cross-validation of the whole procedure, on the form before the first-slot chase, gave 88.0 %
-(103/117, group 84.8 %), and the design's own coefficients score 40/48 (83 %) on the decisive references built
-after it. The stalemates are the reference protocol's, one attack order a unit and none for a unit with nothing
-it can hurt, which no setting of the coefficients makes and real play does not: units there re-target. **Open:**
-the reference corpus is re-played with units that re-target, and the fit, `emit` and `check` wait for those
-references; this estimate is of the current ones, and `impai_fitparams.c` is the starting point until then.
+**The fitted coefficients** (`impai_fitparams.c`, MEASURED 2026-11-13) are fitted to the training half of the
+re-targeting references, reference set `defcfcdb2359` (`.data/calib-rt/refs`: 284 graded fights, defence 30,
+duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `CA6CC97C978BF7DF`. The
+cross-validation chooses **prior 300 with homing held** (validation loss 14047; the neighbours 14252 at 100 and
+14800 at 1000), and the final fit, best of 6 seeds that agree to 0.12 of a loss of 3096, keeps straight bias
+2.07 and lead −0.74, ballistic bias 1.67 and lead −1.63, focus 0.27, splash 0.81 and tau 0.231; homing stays
+at (2, −1) and dropped, which no training fight fires, at its start.
+
+**The honest estimate** is the cross-validation's accuracy on unseen training-half fights: **428/484 (88.4 %,
+95 % CI 82-93 % on the 121 unique fights)**: defence 44/48, duel 76/80, **group 248/288 (86.1 %, 76-92 %)**,
+naval 60/68 (88.2 %); by class, 416/464 (89.7 %) of the fights that end before the limit, 8/16 of the 4 long ones
+and 4/4 of the one stalemate. The re-targeting protocol emptied the classes the one-order references stalled in
+(116 of the 121 decisive training fights end, against 79 of 117), so the estimate now rests on fights that end,
+and those score lower than the one-order references' did (296/316): the fights that end are no longer the easy
+ones. Group, the kind ImpAI decides most, is below 90 % in the cross-validation at every candidate (85.8 % to 88.9 %).
+
+**The check** (MEASURED 2026-11-13, run once on the check half after the fit): **PASS, 113/122 (92.6 %)** of the
+decisive check-half fights; group 64/69 (92.8 %), the one kind with 20 or more decisive fights, passes its own 90 %;
+defence 13/15, duel 19/19 and naval 17/19 are too few to judge. The training half scores 109/121 (90.1 %) and all
+284 fights 222/243 (91.4 %). The nine fights it gets wrong: defence-001 and -021, group-017, -020, -042, -062 and
+-080, naval-012 and -021. The check's 92.6 % sits above the cross-validation's 88.4 % and inside its interval; the
+cross-validation is the estimate to plan with, and with group under 90 % there it is no margin. The check half
+is not clean of the design: the re-targeting protocol was diagnosed on two of its fights, group-141 and naval-012
+([decisions](../impai/decisions.html), *The re-targeting corpus*); naval-012 is still one it gets wrong.
 
 ## The overlay
 

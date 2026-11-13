@@ -301,9 +301,19 @@ sees ([weapons](../engine/weapons.md), the readers of `+0x111`).
 
 ## References
 
-Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`; the re-targeting generation's is
-`.data/calib-rt`, and `refs build` refuses a runs folder outside the root it writes to), because they carry the
-install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
+Untracked, under `$TACALIB_DIR`, else `<main checkout>/.data/calib/`, because they carry the
+install's costs and HP. **The generation in use is the re-targeting one, `<main checkout>/.data/calib-rt`**:
+the predictor's fit and check read its `refs/` (reference set `defcfcdb2359`, 284 graded fights, 2026-11-13;
+[ImpAI in the engine](impai.html), *The fight predictor*), `calib.py` reaching it through `TACALIB_DIR` and
+`predfit` through `--refs`. `.data/calib` holds the one-order generation (`ceed681e6fa9`) as a record and is
+not written. `refs build` refuses a runs folder outside the root it writes to. The 64 duels, byte-identical in
+both generations down to every run's wire and perturbation, agree across them: no duel's side-A wins or runs
+at the limit differ by Fisher's exact test at 1 % (MEASURED 2026-11-13, 50 runs each; the closest,
+`duel-t2-artillery-defence-cheapest`, 33 and 41 runs at the limit, p 0.11). A run keeps its wire across
+generations but not its draw: the simulation RNG and the wind, which no reload resets (*What a reload does not
+reset*), differ in all 50 of that duel's runs (`exogenous`), so its two references are two samples of one
+distribution, not one game played twice. The layout, in either root:
+`refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
 `--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names the build the DLL that
