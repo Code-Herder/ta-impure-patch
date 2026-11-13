@@ -4155,7 +4155,8 @@ static int outcomes_rechain(const RecCodecParams* p)
 
 /* The lists' hashes as the reader reads them (tagpu_recreader.c, list_id): a root recorded with
    v0.5.1's whole-file hashes reads as this build's, so a fork recorded with this build's is one
-   shape with it; a fork whose positive list has another hash is refused by name. */
+   shape with it; a fork whose positive list has another hash is refused by name. One of the
+   acceptance's sites, which each generator's ACCEPTANCE names (tools/replay-globals-gen.py). */
 static int outcomes_lists(const RecCodecParams* p)
 {
     char dir[MAX_PATH], path[MAX_PATH], why[256], other[sizeof TAGPU_REPLAY_GLOBALS_SHA256];

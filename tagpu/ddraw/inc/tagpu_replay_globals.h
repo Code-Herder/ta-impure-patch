@@ -4,14 +4,14 @@
 #ifndef TAGPU_REPLAY_GLOBALS_H
 #define TAGPU_REPLAY_GLOBALS_H
 
-/* The list's hash, over the columns that decide the recorded bytes, and the one v0.5.1's
-   recordings carry, which the generator proves names the same rows (tools/replay-globals-gen.py,
-   THE LIST'S HASH); then the whole file's and the generator's, which say which side a stale
-   header missed. */
-#define TAGPU_REPLAY_GLOBALS_SHA256 "a1c73eeefcb48ae0b7d26d4de1b13be3e29d9a974e455821d20d1e79dc19b300"
+/* The list's hash, over what the readers read as the generator derives it, and the one
+   v0.5.1's recordings carry, which the generator proves reads the same bytes
+   (tools/replay-globals-gen.py, THE LIST'S HASH); then the whole file's and the generator's,
+   which say which side a stale header missed. */
+#define TAGPU_REPLAY_GLOBALS_SHA256 "53be0058198de7d24e541902e902a6543fd5a99c09db3b18fb6fd13b02997edc"
 #define TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
-#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "d5290cff1b60e91164ba9272b2c5e8ed0a7bfd91d05142fb9706932d9b867f7e"
-#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "aeb8a089d596a19ebcd7c560289ebbebd73aa8c3837209203c70cdb25a0697aa"
+#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "79612fa306b52cdcc009a230a15d91532df249e5dd101dace7d6d599609c3d38"
+#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "37c5a7bcc7f7dcab79a566e88459a8e8c6097e55c8f1c349b158b9f2114df5e7"
 
 #define REC_GLOBALS_DWORDS 78    /* the globals image */
 #define REC_GLOBALS_SLOTS  60

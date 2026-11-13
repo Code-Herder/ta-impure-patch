@@ -473,14 +473,23 @@ static void text(char* dst, unsigned cap, const unsigned char* p, unsigned n)
 }
 
 /* A recording names the exclusion file and the positive list it was made with by their hashes
-   (RT_LAYOUT, RT_GLOBALS). This build's hash covers only what decides the recorded bytes; v0.5.1's
-   recordings carry that release's whole-file hash, and the generators fail the build unless that
-   file's semantic rows are this build's (tools/replay-layout-gen.py, tools/replay-globals-gen.py).
-   So the header reads that one hash as this build's here, where it is parsed, and every check that
-   compares one (validate_header, shape_differs) compares the list's identity, not its spelling. */
+   (RT_LAYOUT, RT_GLOBALS). This build's hash covers what the readers read, as the generators derive
+   it; v0.5.1's recordings carry that release's whole-file hash, and the generators fail the build
+   unless that file's rows, through this build's generator, read the bytes v0.5.1's generated
+   tables read (tools/replay-layout-gen.py, tools/replay-globals-gen.py, whose ACCEPTANCE names
+   every site of this acceptance). So the header reads that one hash as this build's here, where it
+   is parsed, and every check that compares one (validate_header, shape_differs) compares the
+   list's identity, not its spelling. An empty `legacy` never matches: a header without the entry
+   leaves `id` empty, which must stay refused. */
+_Static_assert(sizeof TAGPU_REPLAY_LAYOUT_SHA256 == 65 &&
+               sizeof TAGPU_REPLAY_LAYOUT_LEGACY_SHA256 == 65,
+               "the exclusion file's hashes are SHA-256s in hex");
+_Static_assert(sizeof TAGPU_REPLAY_GLOBALS_SHA256 == 65 &&
+               sizeof TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 == 65,
+               "the positive list's hashes are SHA-256s in hex");
 static void list_id(char* id, unsigned cap, const char* legacy, const char* current)
 {
-    if (!strcmp(id, legacy)) snprintf(id, cap, "%s", current);
+    if (legacy[0] && !strcmp(id, legacy)) snprintf(id, cap, "%s", current);
 }
 
 static unsigned u32(const unsigned char* p)

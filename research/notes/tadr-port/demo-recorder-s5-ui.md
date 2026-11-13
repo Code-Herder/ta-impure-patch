@@ -415,7 +415,7 @@ which called the same replay functions the HUD's do):
 process on every fixture marked `"watch": true` (`stock-limits`, `perspective`, `wpn-badtgt` and
 `tenseat` in `tools/replay/fixtures.json`; the
 [completeness note](demo-recorder-completeness.md#the-replay-test-harness)) starts the playing
-through REPLAYS and Watch, has Watch refuse two edited copies, then drives the replay HUD through
+through REPLAYS and Watch, has Watch refuse three edited copies, then drives the replay HUD through
 `tacli hud`: the speed, the Options' OK (the store's `gamespeed` must stay the player's), play,
 the HUD's seek (the trigger `hud seek <T>`, whose dump must compare EQUAL with the recording),
 Sight, Follow, Jump and a switch, play again, and Leave and Yes; `watch_refuse_engine` alone stays

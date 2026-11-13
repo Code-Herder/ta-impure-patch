@@ -208,10 +208,10 @@ base and `SizeOfImage` (`RT_DLL`) and each recorded table's layout (`RT_FIELDS`)
 does, and arms the dump (§2.6f). The writer thread reads no engine memory, and since
 `tagpu_recwriter.c` is not on `thread-split.allow` the build refuses an engine address in it.
 
-The header names the exclusion file and the positive list by a hash of the columns that decide the
-recorded bytes (`RT_LAYOUT`, `RT_GLOBALS`), not of the whole file, so a renamed field or corrected
-evidence leaves recordings playable; v0.5.1's whole-file hashes read as this build's, which each
-generator proves at build time
+The header names the exclusion file and the positive list by a hash of what the readers read, as
+the generators derive it from the rows (`RT_LAYOUT`, `RT_GLOBALS`), not of the whole file, so a
+renamed field or corrected evidence leaves recordings playable; v0.5.1's whole-file hashes read as
+this build's, which each generator proves at build time against v0.5.1's frozen file and tables
 ([what the hashes cover](../tadr-port/demo-recorder-completeness.md#engine-records-recorded-whole-by-default)).
 
 **Three simulation tables moved to the heap for it**, so their pages are write-watched: the build

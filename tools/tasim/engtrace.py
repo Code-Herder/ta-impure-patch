@@ -91,6 +91,17 @@ EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_wi
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
 
 
+def advancing_rows(rows):
+    """EMPTY_POINT_ADVANCING against `rows`, the checkout's replay-globals.tsv: CalibError naming
+    each entry no row has. R6 matches the set against the rows' names, which the list's hash does
+    not cover (tools/replay-globals-gen.py, THE LIST'S HASH), so a renamed row would leave its
+    entry naming nothing."""
+    stale = EMPTY_POINT_ADVANCING - {r["name"] for r in rows}
+    if stale:
+        raise calibref.CalibError(f"EMPTY_POINT_ADVANCING names {', '.join(sorted(stale))}, which "
+                                  f"no row of replay-globals.tsv has: rename the entry with its row")
+
+
 def as_f32(x):
     return struct.unpack("<f", struct.pack("<f", float(x)))[0]
 
@@ -476,7 +487,9 @@ class Lane:
     def stream(self):
         import tarec
         h, bl, _stop = tarec.load(self.dir / self.head["recording"], exact=True)
-        names = tarec.globals_names(tarec.globals_list(h["globals"])[2])
+        _gen, rows, slots, _digest = tarec.globals_list(h["globals"], h.get("globals_raw"))
+        advancing_rows(rows)
+        names = tarec.globals_names(slots)
         table_names = {ix: t["name"] for ix, t in h["tables"].items()}
         st = {"evs": [], "prev_players": None, "orders": set()}
         kinds = {tarec.RK_EV_CREATE: "create", tarec.RK_EV_DEATH: "death",

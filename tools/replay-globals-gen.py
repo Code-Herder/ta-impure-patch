@@ -63,24 +63,32 @@ script, so a stale header says which of the two moved.
 
 THE LIST'S HASH, which the recorder writes into a recording's header (RT_GLOBALS) and the reader
 compares with this build's (tagpu_recreader.c, list_id; tagpu_replay.c, validate_header), covers
-what decides the recorded bytes and what a reader does with them, and nothing else (`semantic`):
-a row's where, offset, size and mask (the field and its bits), carried (which rows make up the
-image, in file order, and for the others the coverage tarec.py's `--images` compare checks, which
-it takes only from a recording's own list: globals_list), puppet (what a playing host does with
-each bit) and value (the address scan's class, which tarec.py also takes from the recording's own
-list). Out of it: name and writers (the harness's lines and the evidence, which no reader acts
-on), evidence, comments, blank lines, the case of a hex digit and the spelling of a full mask. So
-renaming a field or correcting its evidence leaves every recording playable, and a change to what
-is recorded refuses the recordings made before it.
+what the readers read, as this generator derives it from the rows, and nothing else (`semantic`):
+the image's dwords; each slot as the header's table holds it, where, its first dword, size, offset
+(from main, or from .data's start) and the write, hold and react masks, with its value class (the
+address scan's, which tarec.py takes only from a recording's own list: globals_list); and each row,
+in file order, as tarec.py's `--images` coverage reads it: where, offset in its image, size, mask
+and carried. A slot's dword, its padding, how rows on one field merge, the subtraction of .data's
+start and each mask's derivation are the generator's, so the hash moves when either the rows or
+the derivation moves what is read. Out of it: name and writers (the harness's lines and the
+evidence), evidence, comments, blank lines, the case of a hex digit and the spelling of a full mask.
+No recording reader acts on a name; tasim's R6 set (tools/tasim/engtrace.py,
+EMPTY_POINT_ADVANCING) names rows of this checkout's list, and engtrace.py refuses a name no row
+has. So renaming a field or correcting its evidence leaves every recording playable, and a change
+to what is recorded refuses the recordings made before it.
 
-v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows.
-tagpu/ddraw/replay-globals.v0.5.1.tsv is that file, frozen: the check confirms that its SHA-256 is the
-one v0.5.1's header carries (PUBLISHED_SHA256) and fails the build when its semantic rows are not
-this one's; the header then carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader
-takes for this build's. A change to what is recorded therefore fails here until the acceptance is
-dropped (PUBLISHED_TSV here and the reader's list_id), which leaves v0.5.1's recordings
-unplayable: the owner's decision. The build reads no history: tools/replay/test_tareplay.py
-(ListHashes) checks that the frozen file is byte for byte the tag's.
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file. Two frozen files stand for what
+v0.5.1 published: tagpu/ddraw/replay-globals.v0.5.1.tsv, its file, and
+tagpu/ddraw/replay-globals.v0.5.1.tables, the text `semantic` renders from v0.5.1's generator over
+that file (no names). The check confirms that the file's SHA-256 is the one v0.5.1's header carries
+(PUBLISHED_SHA256), and fails the build unless `semantic` renders that file and this one alike and
+equal to the frozen tables: so neither a row nor a change here may move a byte v0.5.1's readers
+read. The header then carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader takes
+for this build's. A change to what is recorded therefore fails here until the acceptance is
+dropped, which leaves v0.5.1's recordings unplayable: the owner's decision. The acceptance is at
+each of ACCEPTANCE's sites. The build reads no history: tools/replay/test_tareplay.py (ListHashes)
+checks that the frozen file is byte for byte the tag's, and the frozen tables are the slots of the
+tag's header and what the tag's generator renders.
 """
 import argparse
 import hashlib
@@ -96,7 +104,12 @@ HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_globals.h")
 # header carries (v0.5.1's inc/tagpu_replay_globals.h, TAGPU_REPLAY_GLOBALS_SHA256).
 PUBLISHED = "v0.5.1"
 PUBLISHED_TSV = os.path.join(DDRAW, "replay-globals.v0.5.1.tsv")
+PUBLISHED_TABLES = os.path.join(DDRAW, "replay-globals.v0.5.1.tables")
 PUBLISHED_SHA256 = "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
+# Every site that accepts PUBLISHED's hash; dropping the acceptance edits each.
+ACCEPTANCE = ("PUBLISHED_* in tools/replay-globals-gen.py, list_id in "
+              "tagpu/ddraw/src/tagpu_recreader.c and in tools/replay/tarec.py, outcomes_lists in "
+              "tagpu/ddraw/tests/codectest.c, ListHashes in tools/replay/test_tareplay.py")
 
 # The main block's bytes, DISASSEMBLED 0x41D93A (`lea edi,[esi+0x3924D]`, the allocation less its
 # pad); .data's extent, from the pristine TotalA.exe's section header (VirtualSize 0x2A65C).
@@ -196,40 +209,64 @@ def parse(text):
 
 
 def semantic(rows):
-    """The text the list's hash covers: per row, in file order, where, offset, size, mask,
-    carried, puppet and value, each in one spelling (the module's THE LIST'S HASH says why these)."""
-    return "".join(
-        f"{r['where']}\t{r['offset']:#x}\t{r['size']}\t"
-        f"{'-' if r['mask'] is None else format(r['mask'], '#x')}\t{r['carried']}\t"
-        f"{r['puppet'] or '-'}\t{'opaque' if r['opaque'] else '-'}\n" for r in rows)
+    """The text the list's hash covers: what the readers read, as this generator derives it from
+    `rows` (the module's THE LIST'S HASH says why these)."""
+    sl, dwords = slots(rows)
+    return tables(sl, dwords, rows, DATA_BEGIN)
+
+
+def tables(sl, dwords, rows, data_begin):
+    """`semantic`'s text from a generator's own slots, dwords, rows and .data start, so that
+    v0.5.1's generator renders through it as this one does: the image's dwords, each slot in image
+    order and each row in file order."""
+    out = [f"dwords\t{dwords}\n"]
+    for s in sl:
+        out.append(f"slot\t{s['where']}\t{s['dword']}\t{s['size']}\t{s['offset']:#x}\t"
+                   f"{s['write']:#x}\t{s['hold']:#x}\t{s['react']:#x}\t"
+                   f"{'opaque' if s['opaque'] else '-'}\n")
+    for r in rows:
+        at = r["offset"] - (data_begin if r["where"] == "data" else 0)
+        out.append(f"row\t{r['where']}\t{at:#x}\t{r['size']}\t"
+                   f"{'-' if r['mask'] is None else format(r['mask'], '#x')}\t{r['carried']}\n")
+    return "".join(out)
 
 
 def semantic_digest(rows):
     return hashlib.sha256(semantic(rows).encode("ascii")).hexdigest()
 
 
+def first_difference(was, now):
+    """The first line on which two renderings differ: (its number, now's line, was's line)."""
+    a, b = was.splitlines(), now.splitlines()
+    i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+    return i + 1, b[i] if i < len(b) else "no line", a[i] if i < len(a) else "no line"
+
+
 def published(rows):
     """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
-    published and to hold `rows`' semantic columns: Invalid when either fails."""
+    published, and `semantic` renders it and `rows` alike and equal to its frozen tables: Invalid
+    when any of that fails."""
     with open(PUBLISHED_TSV, "rb") as f:
         tsv = f.read()
+    with open(PUBLISHED_TABLES, encoding="ascii") as f:
+        frozen = f.read()
     if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
         raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
                       f"(SHA-256 {PUBLISHED_SHA256})")
     try:
         old = parse(tsv.decode("utf-8"))
+        was = semantic(old)
     except (Invalid, UnicodeDecodeError) as e:
-        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer parses ({e})")
-    if semantic_digest(old) != semantic_digest(rows):
-        a, b = semantic(old).splitlines(), semantic(rows).splitlines()
-        i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
-        was = a[i] if i < len(a) else "no row"
-        now = b[i] if i < len(b) else "no row"
-        raise Invalid(f"its semantic row {i + 1} is {now!r}, {PUBLISHED}'s {was!r}: {PUBLISHED}'s "
-                      f"recordings would read other bytes, so the header cannot accept their hash. "
-                      f"Dropping that acceptance (PUBLISHED_TSV here, list_id in "
-                      f"tagpu_recreader.c) is "
-                      f"the owner's decision")
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer renders ({e})")
+    now = semantic(rows)
+    for what, ref in ((f"its rows read other bytes than {PUBLISHED}'s file", was),
+                      (f"this generator reads other bytes than {PUBLISHED}'s "
+                       f"({os.path.basename(PUBLISHED_TABLES)})", frozen)):
+        if ref != now:
+            n, a, b = first_difference(ref, now)
+            raise Invalid(f"{what}: line {n} is {a!r}, {PUBLISHED}'s {b!r}. The header cannot "
+                          f"accept {PUBLISHED}'s hash; dropping that acceptance ({ACCEPTANCE}) is "
+                          f"the owner's decision")
     return PUBLISHED_SHA256
 
 
@@ -316,10 +353,10 @@ def render(tsv_bytes, gen_bytes, rows, legacy):
         "#ifndef TAGPU_REPLAY_GLOBALS_H",
         "#define TAGPU_REPLAY_GLOBALS_H",
         "",
-        "/* The list's hash, over the columns that decide the recorded bytes, and the one v0.5.1's",
-        "   recordings carry, which the generator proves names the same rows (tools/replay-globals-gen.py,",
-        "   THE LIST'S HASH); then the whole file's and the generator's, which say which side a stale",
-        "   header missed. */",
+        "/* The list's hash, over what the readers read as the generator derives it, and the one",
+        "   v0.5.1's recordings carry, which the generator proves reads the same bytes",
+        "   (tools/replay-globals-gen.py, THE LIST'S HASH); then the whole file's and the generator's,",
+        "   which say which side a stale header missed. */",
         f'#define TAGPU_REPLAY_GLOBALS_SHA256 "{digest}"',
         f'#define TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 "{legacy}"',
         f'#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "{file_digest}"',

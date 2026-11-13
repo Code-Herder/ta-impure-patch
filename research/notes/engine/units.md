@@ -171,9 +171,11 @@ operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game i
 (called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
 player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
 per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
-`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
-those credits. So it is a budget a tick shared among the players, not one per search. Every 150
-calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
+`main+0x2A3C`, adds that to the credit at `[pf+0xA1+4i]` of each player whose record is in use,
+of type 1, 2 or 3 and whose `+0x146` is not 10 (`0x40EC45..0x40EC62`), and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. The function
+returns at once while that u16 is 0 (`0x40EB8B`). Every 150 calls (`0x511A38`) the same function
+rewrites, for all ten players whatever their type, a ten-dword table at `0x5119E8` (stride 4, to
 `0x511A10`; `pfweight` in `replay-globals.tsv`), a weight per player, not a budget: `+0x54` ×6,
 ×3 or ×1 as that player's count at `0x511A10` over the per-player count `main+0x1434F` is below
 1, below 2 or neither (`0x40EBBF..0x40EC06`), and the count is reset (`0x40EC0C`). The count

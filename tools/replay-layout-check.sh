@@ -20,8 +20,9 @@
 #      the file and of the generator say which side moved. A row added to the file without
 #      regenerating, or to the header without the file, fails the build. The exclusion file's and
 #      the positive list's generators also prove that v0.5.1's file, frozen beside each
-#      (replay-*.v0.5.1.tsv), is the one published and names the same recorded bytes, whose hash
-#      the header then accepts (each generator's docstring, v0.5.1'S RECORDINGS).
+#      (replay-*.v0.5.1.tsv), is the one published, and that it and the current file read, through
+#      this generator, the bytes v0.5.1's tables read (replay-*.v0.5.1.tables), whose hash the
+#      header then accepts (each generator's docstring, v0.5.1'S RECORDINGS).
 #   2. THE HEADER COMPILES AS C WITH NO WARNING, since nothing that includes it may yet use every
 #      row: a value that does not fit its field is an error, not a truncation.
 #
