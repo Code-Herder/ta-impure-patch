@@ -8,7 +8,7 @@
 /* The placement shapes, which the placement UI (tagpu_place.c) and ImpAI's base ring (impai_build.c) order
    by. OWNER: the orders they make are given only on a live seat, a gesture's or ImpAI's turn, and a puppet's
    come from its recording. */
-SIM_FEATURE(place_shapes, SIM_PUPPET_OWNER, "place-basic impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
+SIM_FEATURE(place_shapes, SIM_PUPPET_OWNER, "place-basic stock-place-basic impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
 static int64_t iabs64(int64_t v) { return v < 0 ? -v : v; }
 

@@ -258,7 +258,7 @@ OWNER, as the turn that calls them; what every level init derives, live or puppe
 | `impai_table` | `impai_table.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight` |
 | `impai_seat_rules` | `impai_seats.c` | `SIM_PUPPET_OWNER` | as `tagpu_impai.c`'s `impai_seats` |
 | `resource_rules` | `tasim_snap.c` | `SIM_PUPPET_OWNER` | the resource test groups and `impai_brain`'s |
-| `place_shapes` | `tagpu_placegeo.c` | `SIM_PUPPET_OWNER` | `place-basic` and `impai_brain`'s |
+| `place_shapes` | `tagpu_placegeo.c` | `SIM_PUPPET_OWNER` | `place-basic`, `stock-place-basic` and `impai_brain`'s |
 
 The last two are what the half calls outside itself: traced through the link's symbols from every `impai_*.o`,
 the brain reaches `tasim_snap.c` (`tasim_snap_site`, `tasim_snap_patches`) and `tagpu_placegeo.c` (`place_ring`),

@@ -4088,19 +4088,25 @@ class TakeoverFixtures(unittest.TestCase):
                     self.assertNotEqual(seat, t["player"])
                 self.assertIn("fork", t["checks"])
 
-    def test_the_fight_on_both_builds(self):
-        # impai-fight's stock-limits twin plays the same game, so the military's fight and the
-        # predictor, which every line of compiles in both builds, can be reached on each
+    def test_stock_twins_play_their_groups_on_both_builds(self):
+        # impai-fight's and place-basic's stock-limits twins play the same games, so what only those
+        # groups reach (the military's fight and the predictor, the placement shapes), every line
+        # of which compiles in both builds, can be reached on each
         fixes = tareplay.fixtures()
-        twin = dict(fixes["stock-impai-fight"])
-        self.assertEqual(twin.pop("dll"), "stock")
-        self.assertEqual(twin, fixes["impai-fight"])
-        for rel, feat in (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
-                          ("src/impai_fitparams.c", "impai_fitparams"), ("src/tagpu_impai.c", "impai_mil")):
-            with self.subTest(feature=feat):
-                f = next(f for f in tafeat.all_features()[0] if f["name"] == feat)
-                self.assertEqual(f["file"], rel)
-                self.assertLessEqual({"impai-fight", "stock-impai-fight"}, set(f["fixtures"]))
+        features = {f["name"]: f for f in tafeat.all_features()[0]}
+        for group, covered in (
+                ("impai-fight", (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
+                                 ("src/impai_fitparams.c", "impai_fitparams"),
+                                 ("src/tagpu_impai.c", "impai_mil"))),
+                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq")))):
+            twin = dict(fixes["stock-" + group])
+            with self.subTest(group=group):
+                self.assertEqual(twin.pop("dll"), "stock")
+                self.assertEqual(twin, fixes[group])
+            for rel, feat in covered:
+                with self.subTest(group=group, feature=feat):
+                    self.assertEqual(features[feat]["file"], rel)
+                    self.assertLessEqual({group, "stock-" + group}, set(features[feat]["fixtures"]))
 
 
 class AiActivity(unittest.TestCase):
