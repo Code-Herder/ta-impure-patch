@@ -4,8 +4,14 @@
 #ifndef TAGPU_REPLAY_LAYOUT_H
 #define TAGPU_REPLAY_LAYOUT_H
 
-#define TAGPU_REPLAY_LAYOUT_SHA256 "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
-#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "07ccfc19139e2f78284bde2d9754207f27487f3bbf7109c270103a600e0af070"
+/* The file's hash, over the columns that decide the recorded bytes, and the one v0.5.1's
+   recordings carry, which the generator proves names the same rows (tools/replay-layout-gen.py,
+   THE FILE'S HASH); then the whole file's and the generator's, which say which side a stale
+   header missed. */
+#define TAGPU_REPLAY_LAYOUT_SHA256 "bc637fcf0fb0bb71ce0e7827efa39232571b89521a16d28057acedf625b8d6f5"
+#define TAGPU_REPLAY_LAYOUT_LEGACY_SHA256 "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
+#define TAGPU_REPLAY_LAYOUT_FILE_SHA256 "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
+#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "0d49c29d171e513fd1b8cc501ab8b55403a16807a675383c929b0ac7cfa8e4cb"
 
 enum { RL_UNIT, RL_PLAYER, RL_MOVER, RL_ORDER, RL_INFO, RL_CELL, RL_WRECK3DO, RL_WRECKGAF, RL_PROJ };
 enum { RL_ID, RL_OBJECT, RL_CACHE, RL_TIMER, RL_DROP, RL_PUPPET0, RL_PUPPET1 };

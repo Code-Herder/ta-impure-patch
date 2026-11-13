@@ -808,6 +808,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                            Refusal* r)
 {
     unsigned i;
+    /* the lists' hashes as the reader parsed them, v0.5.1's already read as this build's
+       (tagpu_recreader.c, list_id): any other hash is a list whose rows differ in what they record */
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         r->code = TAGPU_REPLAY_REFUSED_LAYOUT;
@@ -8002,7 +8004,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
             return 0;
         }
         /* 0x40B320 indexes the ten-entry table with the record's +0x146, and index 10 would alias
-           the pathfinder's budget at 0x5119E8. R8's players_put then writes the image's byte over
+           the pathfinder's weights at 0x5119E8. R8's players_put then writes the image's byte over
            it (no row of replay-layout.tsv excludes it), and the teardown frees through
            0x5119C0[+0x146] (0x40B390, called at 0x464A4F). The level's slot setup 0x4854A0 copies
            it into each of the record's unit slots' +0xFF (0x485908..0x48590E), which the radar

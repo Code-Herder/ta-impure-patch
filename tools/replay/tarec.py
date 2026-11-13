@@ -391,6 +391,25 @@ def entries(payload):
 
 # ---- the header and the end ------------------------------------------------------------------
 
+_LIST_HASHES = {}
+
+
+def list_id(name, digest):
+    """A header's RT_LAYOUT (`name` "layout") or RT_GLOBALS ("globals") as the DLL's reader reads it
+    (tagpu_recreader.c, list_id): v0.5.1's whole-file hash, which the list's generator proves names
+    this checkout's semantic rows, as this checkout's hash; any other as it is."""
+    if name not in _LIST_HASHES:
+        with open(_generator(f"replay-{name}-gen").HEADER, encoding="utf-8") as f:
+            text = f.read()
+        found = [re.search(rf'#define TAGPU_REPLAY_{name.upper()}_{which}SHA256 "([0-9a-f]{{64}})"',
+                           text) for which in ("LEGACY_", "")]
+        if not all(found):
+            raise Unreadable(f"inc/tagpu_replay_{name}.h names no hash: regenerate it")
+        _LIST_HASHES[name] = tuple(m.group(1) for m in found)
+    legacy, current = _LIST_HASHES[name]
+    return current if digest == legacy else digest
+
+
 def header(payload):
     h = {"players": [], "levers": [], "tables": {}}
     for tag, b in entries(payload):
@@ -419,7 +438,7 @@ def header(payload):
             nf = struct.unpack_from("<H", b, 2)[0]
             h["levers"].append({"set": b[0], "read": b[1], "file": b[4:4 + nf].decode("latin-1"),
                                 "text": b[4 + nf:].decode("latin-1")})
-        elif tag == RT_LAYOUT: h["layout"] = b.decode("latin-1")
+        elif tag == RT_LAYOUT: h["layout"] = list_id("layout", b.decode("latin-1"))
         elif tag == RT_TABLE:
             ix, cls, key, stride, flags, _, lhash = struct.unpack_from("<HBBIHHI", b)
             h["tables"][ix] = {"class": cls, "key": key, "stride": stride, "flags": flags,
@@ -432,7 +451,7 @@ def header(payload):
         elif tag == RT_SETTINGS_MAP: h["settings_map"] = b.decode("latin-1")
         elif tag == RT_WEAPONS: h["weapons"] = struct.unpack_from("<II", b)
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
-        elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
+        elif tag == RT_GLOBALS: h["globals"] = list_id("globals", b.decode("latin-1"))
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
         elif tag == RT_FRAME: h["frame"] = u32
         elif tag == RT_DLL: h["dll"] = struct.unpack_from("<II", b)
@@ -2913,17 +2932,16 @@ def _generator(name):
 
 def globals_list(want=None):
     """replay-globals.tsv through its own parser (tools/replay-globals-gen.py): (the generator, its
-    rows, the image's slots, the file's SHA-256). With `want`, a recording's or a dump's RT_GLOBALS,
-    the file must be the one it was made with: the classes and the coverage are this checkout's."""
-    import hashlib
+    rows, the image's slots, the list's hash over its semantic columns). With `want`, a recording's
+    or a dump's RT_GLOBALS as header() reads it, the list must be the one it was made with: the
+    classes and the coverage are this checkout's."""
     gen = _generator("replay-globals-gen")
-    with open(gen.TSV, "rb") as f:
-        raw = f.read()
-    digest = hashlib.sha256(raw).hexdigest()
+    with open(gen.TSV, encoding="utf-8") as f:
+        rows = gen.parse(f.read())
+    digest = gen.semantic_digest(rows)
     if want is not None and want != digest:
         raise Unreadable(f"made with another replay-globals.tsv ({want[:12]}) than this checkout's "
                          f"({digest[:12]}): its classes and coverage would be the wrong ones")
-    rows = gen.parse(raw.decode("utf-8"))
     return gen, rows, gen.slots(rows)[0], digest
 
 

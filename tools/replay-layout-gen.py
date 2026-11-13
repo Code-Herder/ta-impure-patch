@@ -45,6 +45,24 @@ the field inside its record, the mask inside the field, a pointer row four bytes
 mask, no bit in two rows, rows in record and offset order, names unique within a record, and
 every writer an address inside the executable's .text. The header carries the SHA-256 of the
 file and of this script, so a stale header says which of the two moved.
+
+THE FILE'S HASH, which the recorder writes into a recording's header (RT_LAYOUT) and the reader
+compares with this build's (tagpu_recreader.c, list_id; tagpu_replay.c, validate_header), covers
+what decides the recorded bytes and what a reader does with them, and nothing else (`semantic`):
+a row's record, offset, size, mask and class with its table, in file order, the order of the
+generated table. Out of it: name (the harness's failure lines), writers and evidence, comments, blank
+lines, the case of a hex digit and the spelling of a full mask. So renaming a field or correcting
+its evidence leaves every recording playable, and a change to what is excluded refuses the
+recordings made before it.
+
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows.
+tagpu/ddraw/replay-layout.v0.5.1.tsv is that file, frozen: the check confirms that its SHA-256 is the
+one v0.5.1's header carries (PUBLISHED_SHA256) and fails the build when its semantic rows are not
+this one's; the header then carries that hash, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256, which the reader
+takes for this build's. A change to what is recorded therefore fails here until the acceptance is
+dropped (PUBLISHED_TSV here and the reader's list_id), which leaves v0.5.1's recordings
+unplayable: the owner's decision. The build reads no history: tools/replay/test_tareplay.py
+(ListHashes) checks that the frozen file is byte for byte the tag's.
 """
 import argparse
 import hashlib
@@ -56,6 +74,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-layout.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_layout.h")
+# The release whose recordings name the whole file's hash, its file frozen, and the SHA-256 its
+# header carries (v0.5.1's inc/tagpu_replay_layout.h, TAGPU_REPLAY_LAYOUT_SHA256).
+PUBLISHED = "v0.5.1"
+PUBLISHED_TSV = os.path.join(DDRAW, "replay-layout.v0.5.1.tsv")
+PUBLISHED_SHA256 = "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
 
 # The records the retail executable fixes, and their strides.
 RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9,
@@ -154,8 +177,47 @@ def parse(text):
     return rows
 
 
-def render(tsv_bytes, gen_bytes, rows):
-    digest = hashlib.sha256(tsv_bytes).hexdigest()
+def semantic(rows):
+    """The text the file's hash covers: per row, in file order, record, offset, size, mask, class
+    and table, each in one spelling (the module's THE FILE'S HASH says why these)."""
+    return "".join(
+        f"{r['record']}\t{r['offset']:#x}\t{r['size']}\t"
+        f"{'-' if r['mask'] is None else format(r['mask'], '#x')}\t{r['kind']}\t"
+        f"{r['target'] or '-'}\n" for r in rows)
+
+
+def semantic_digest(rows):
+    return hashlib.sha256(semantic(rows).encode("ascii")).hexdigest()
+
+
+def published(rows):
+    """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
+    published and to hold `rows`' semantic columns: Invalid when either fails."""
+    with open(PUBLISHED_TSV, "rb") as f:
+        tsv = f.read()
+    if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
+                      f"(SHA-256 {PUBLISHED_SHA256})")
+    try:
+        old = parse(tsv.decode("utf-8"))
+    except (Invalid, UnicodeDecodeError) as e:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer parses ({e})")
+    if semantic_digest(old) != semantic_digest(rows):
+        a, b = semantic(old).splitlines(), semantic(rows).splitlines()
+        i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+        was = a[i] if i < len(a) else "no row"
+        now = b[i] if i < len(b) else "no row"
+        raise Invalid(f"its semantic row {i + 1} is {now!r}, {PUBLISHED}'s {was!r}: {PUBLISHED}'s "
+                      f"recordings would read other bytes, so the header cannot accept their hash. "
+                      f"Dropping that acceptance (PUBLISHED_TSV here, list_id in "
+                      f"tagpu_recreader.c) is "
+                      f"the owner's decision")
+    return PUBLISHED_SHA256
+
+
+def render(tsv_bytes, gen_bytes, rows, legacy):
+    digest = semantic_digest(rows)
+    file_digest = hashlib.sha256(tsv_bytes).hexdigest()
     gen_digest = hashlib.sha256(gen_bytes).hexdigest()
     out = [
         "/* tagpu_replay_layout.h -- GENERATED from tagpu/ddraw/replay-layout.tsv by",
@@ -164,7 +226,13 @@ def render(tsv_bytes, gen_bytes, rows):
         "#ifndef TAGPU_REPLAY_LAYOUT_H",
         "#define TAGPU_REPLAY_LAYOUT_H",
         "",
+        "/* The file's hash, over the columns that decide the recorded bytes, and the one v0.5.1's",
+        "   recordings carry, which the generator proves names the same rows (tools/replay-layout-gen.py,",
+        "   THE FILE'S HASH); then the whole file's and the generator's, which say which side a stale",
+        "   header missed. */",
         f'#define TAGPU_REPLAY_LAYOUT_SHA256 "{digest}"',
+        f'#define TAGPU_REPLAY_LAYOUT_LEGACY_SHA256 "{legacy}"',
+        f'#define TAGPU_REPLAY_LAYOUT_FILE_SHA256 "{file_digest}"',
         f'#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "{gen_digest}"',
         "",
         "enum { " + ", ".join(f"RL_{r.upper()}" for r in RECORDS) + " };",
@@ -227,11 +295,14 @@ def main():
         return 2
     try:
         rows = parse(tsv.decode("utf-8"))
+        gen = open(os.path.abspath(__file__), "rb").read()
+        text = render(tsv, gen, rows, published(rows))
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-layout: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
-    gen = open(os.path.abspath(__file__), "rb").read()
-    text = render(tsv, gen, rows)
+    except OSError as e:
+        print(f"replay-layout: cannot read {e.filename}: {e.strerror}", file=sys.stderr)
+        return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
             f.write(text)
@@ -248,7 +319,7 @@ def main():
     def stamp(name, header):
         m = re.search(name + r' "([0-9a-f]+)"', header)
         return m.group(1) if m else None
-    if stamp("LAYOUT_SHA256", have) != stamp("LAYOUT_SHA256", text):
+    if stamp("LAYOUT_FILE_SHA256", have) != stamp("LAYOUT_FILE_SHA256", text):
         why = "replay-layout.tsv changed since the header was generated"
     elif stamp("GEN_SHA256", have) != stamp("GEN_SHA256", text):
         why = "tools/replay-layout-gen.py changed since the header was generated"

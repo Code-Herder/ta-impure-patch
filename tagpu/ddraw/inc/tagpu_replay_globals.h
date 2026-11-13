@@ -4,8 +4,14 @@
 #ifndef TAGPU_REPLAY_GLOBALS_H
 #define TAGPU_REPLAY_GLOBALS_H
 
-#define TAGPU_REPLAY_GLOBALS_SHA256 "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
-#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "3c40117a077fe54c2c49140ff9488e5acd1f83d088f4dcbb8cb8eb685f60ff19"
+/* The list's hash, over the columns that decide the recorded bytes, and the one v0.5.1's
+   recordings carry, which the generator proves names the same rows (tools/replay-globals-gen.py,
+   THE LIST'S HASH); then the whole file's and the generator's, which say which side a stale
+   header missed. */
+#define TAGPU_REPLAY_GLOBALS_SHA256 "a1c73eeefcb48ae0b7d26d4de1b13be3e29d9a974e455821d20d1e79dc19b300"
+#define TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
+#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "d5290cff1b60e91164ba9272b2c5e8ed0a7bfd91d05142fb9706932d9b867f7e"
+#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "aeb8a089d596a19ebcd7c560289ebbebd73aa8c3837209203c70cdb25a0697aa"
 
 #define REC_GLOBALS_DWORDS 78    /* the globals image */
 #define REC_GLOBALS_SLOTS  60
@@ -38,8 +44,8 @@ static const ReplayGlobalSlot tagpu_replay_globals[REC_GLOBALS_SLOTS] = {
     { RG_MAIN, 10, 4, 0x37ee2, 0xFFFFFFFFu, 0x0u, 0x0u, "windchanged" },
     { RG_MAIN, 11, 2, 0x39239, 0x0u, 0xffffu, 0x0u, "endcountdown" },
     { RG_MAIN, 12, 2, 0x3923b, 0x3u | (0x1u << 3) | (0x7ffu << 5), (0x1u << 2) | (0x1u << 4), 0x0u, "endflags+endbits" },
-    { RG_DATA, 13, 40, 0x109e8, 0xFFFFFFFFu, 0x0u, 0x0u, "pfbudget" },
-    { RG_DATA, 23, 40, 0x10a10, 0xFFFFFFFFu, 0x0u, 0x0u, "pfsearches" },
+    { RG_DATA, 13, 40, 0x109e8, 0xFFFFFFFFu, 0x0u, 0x0u, "pfweight" },
+    { RG_DATA, 23, 40, 0x10a10, 0xFFFFFFFFu, 0x0u, 0x0u, "pfexamined" },
     { RG_DATA, 33, 4, 0x10a38, 0xFFFFFFFFu, 0x0u, 0x0u, "pfcalls" },
     { RG_DATA, 34, 4, 0x112e8, 0xFFFFFFFFu, 0x0u, 0x0u, "meteornext" },
     { RG_DATA, 35, 4, 0x11318, 0xFFFFFFFFu, 0x0u, 0x0u, "meteoractive" },
