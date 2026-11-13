@@ -12,6 +12,7 @@ mod or patch install puts next to it (fixtures.json), and the ddraw.dll under te
     tacompat.py wine    --battle 0 --mp 0              # start-up only: no skirmish, no network game
     tacompat.py wine    --impai [SECONDS] [--mp-impai] # also the ImpAI stage, and ImpAI seats in the network game
     tacompat.py wine    --impai-survey                 # where ImpAI is available: the stage loaded, nothing played
+    tacompat.py wine    --resume DIR [ARGS]            # go on with an interrupted run: its unsettled setups only
     tacompat.py windows [--dll PATH] [SETUP ...]       # one at a time, on a Windows desktop
     tacompat.py clean                                  # remove the Wine instances
     tacompat.py selftest                               # check the hook decode, no game needed
@@ -738,8 +739,8 @@ def results_dir(platform, started) -> Path:
     return RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}{run}"
 
 
-def report(results, platform, dll, started, strict=False, source=None) -> int:
-    out = results_dir(platform, started)
+def report(results, platform, dll, started, strict=False, source=None, out=None) -> int:
+    out = out or results_dir(platform, started)
     out.mkdir(parents=True, exist_ok=True)
     for r in results:
         d = out / r["setup"]
@@ -779,6 +780,87 @@ def report(results, platform, dll, started, strict=False, source=None) -> int:
     if n["UNEXPECTED"] or (strict and n["known gap"]):
         return 1
     return 0
+
+
+# ----------------------------------------------------------------- resuming a run
+#
+# A Wine run writes each setup's result into its results folder the moment the setup settles: its
+# evidence files first, then `<setup>/verdict.json`, written to a temporary name, flushed and renamed
+# over. A setup the run did not finish -- interrupted in any stage -- therefore has no verdict file,
+# and `wine --resume DIR` plays it whole, beside every setup DIR has none for, and reads the rest back.
+# The cross-row comparisons (compare_managed) are made again from the results at the report, so a
+# managed row and its drop-in row may come from the two sittings. `run.json` holds what the run plays
+# and the DLL's hash; a resume that differs in either is refused, because its report would be one
+# run of two builds or two suites.
+
+VERDICT = "verdict.json"
+RUN_FILE = "run.json"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def wine_plays(args) -> dict:
+    """The arguments that decide what a Wine run plays and how it is judged: two sittings of one run
+    must agree on every one. The pool sizes, the DLL's path, the setup names, --screens (pictures
+    only) and --strict (the exit code only) are not among them."""
+    return {k: getattr(args, k) for k in ("watch", "battle", "mp", "mp_impai", "impai", "impai_survey",
+                                          "impai_seat", "refuse")}
+
+
+def run_stamp(out: Path, plays: dict, dll_md5: str):
+    """The run's `run.json`: what it plays and the DLL's hash, which a resume must match."""
+    write_atomic(out / RUN_FILE, json.dumps({"platform": "wine", "plays": plays, "dll_md5": dll_md5},
+                                            indent=2) + "\n")
+
+
+def resume_refusal(out: Path, plays: dict, dll_md5: str) -> "str | None":
+    """Why the run in `out` cannot be resumed with these arguments and this DLL, None when it can."""
+    try:
+        was = json.loads((out / RUN_FILE).read_text())
+    except (OSError, ValueError) as e:
+        return f"{out} holds no run to resume ({RUN_FILE}: {e})"
+    if was.get("platform") != "wine":
+        return f"{out} is a {was.get('platform')} run"
+    if was.get("dll_md5") != dll_md5:
+        return (f"{out} was played with the DLL {str(was.get('dll_md5'))[:12]}, this one is {dll_md5[:12]}: "
+                f"a resumed run is one build")
+    then = was.get("plays") or {}
+    differ = [f"{k} {then.get(k)!r} there, {v!r} here" for k, v in plays.items() if then.get(k) != v]
+    return f"{out} played other arguments: {'; '.join(differ)}" if differ else None
+
+
+def settled_results(out: Path, names) -> dict:
+    """{setup: its result} for each of `names` whose verdict file `out` holds."""
+    got = {}
+    for name in names:
+        f = out / name / VERDICT
+        if f.is_file():
+            got[name] = json.loads(f.read_text())
+    return got
+
+
+def persist(out: Path, o: dict):
+    """A settled setup's evidence and then its verdict file (VERDICT, above). The result in memory is
+    replaced by its JSON round trip, so a row played now and a row read back compare alike."""
+    d = out / o["setup"]
+    d.mkdir(parents=True, exist_ok=True)
+    for name, text in o.pop("_files", {}).items():
+        (d / name).write_text(text, errors="replace")
+    for name, src in o.pop("_temps", {}).items():
+        if Path(src).exists():
+            shutil.move(src, d / name)
+    text = json.dumps(o, indent=2) + "\n"
+    write_atomic(d / VERDICT, text)
+    o.clear()
+    o.update(json.loads(text))
 
 
 # ------------------------------------------------------------------------- Wine
@@ -1210,9 +1292,30 @@ def differs_from_dropin(s, o, d) -> list:
     return out
 
 
+def folder_wrong(s) -> list:
+    """What a managed row's own game folder shows wrong once its run is over: a refusal's box and its impure.cfg, a
+    fetched package's swap. Read when the setup settles, while its instance is the one this run played, and kept in
+    its result (`folder_wrong`), so a run resumed from the results folder judges it without the folder."""
+    wrong = []
+    if s.get("refusal"):
+        gamedir = s["_inst"]["gamedir"]
+        said = gamedir / "log" / "startup-failure.txt"
+        if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
+            wrong.append(f"the box does not say that {s['refusal']}")
+        cfg = gamedir / "impure.cfg"
+        if cfg.is_file() and re.search(rb"(?m)^mod=", cfg.read_bytes()):
+            wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
+    elif s.get("equals") and s.get("fetched"):
+        mods = s["_inst"]["gamedir"] / "mods"
+        if (mods / f"{s['managed']}.new").exists() or not (mods / s["managed"] / "installed.txt").is_file():
+            wrong.append("the start did not swap the downloaded package in")
+    return wrong
+
+
 def compare_managed(results):
     """Each managed row against its drop-in row of the same run, and each refusal against what it must say. A mod's files
-    coming from a package is otherwise invisible to every other check."""
+    coming from a package is otherwise invisible to every other check. Reads only the results: what a row's own
+    folder showed is its `folder_wrong`."""
     by = {r["setup"]: r for r in results}
     for s in SETUPS:
         o = by.get(s["name"])
@@ -1220,20 +1323,12 @@ def compare_managed(results):
             continue
         wrong = []
         if s.get("refusal"):
-            gamedir = s["_inst"]["gamedir"]
-            said = gamedir / "log" / "startup-failure.txt"
-            if not said.exists() or s["refusal"] not in said.read_text(errors="replace"):
-                wrong.append(f"the box does not say that {s['refusal']}")
-            if re.search(rb"(?m)^mod=", (gamedir / "impure.cfg").read_bytes()):
-                wrong.append("mod= is still in impure.cfg, so the next start would refuse again")
+            wrong = list(o.get("folder_wrong") or [])
             print(f"  {s['name']}: " + (f"WRONG: {wrong}" if wrong else "the box said why, and mod= is gone"))
         elif s.get("equals"):
             d = by.get(s["equals"])
             wrong = differs_from_dropin(s, o, d) if d else [f"{s['equals']} did not run, so nothing was compared"]
-            if s.get("fetched"):
-                mods = s["_inst"]["gamedir"] / "mods"
-                if (mods / f"{s['managed']}.new").exists() or not (mods / s["managed"] / "installed.txt").is_file():
-                    wrong.append("the start did not swap the downloaded package in")
+            wrong += o.get("folder_wrong") or []
             content = o.get("content") or {}
             join = ((o.get("mp") or {}).get("crcs") or {}).get("join") or {}
             print(f"  {s['name']}: against {s['equals']}: {len(content.get('names') or [])} types by key and by ID, "
@@ -3127,26 +3222,55 @@ def cmd_wine(args):
         print(f"skipped, fixtures not fetched: {', '.join(skipped)} (tacompat.py list)")
     if not ready:
         die("nothing to run")
+    plays, dll_md5 = wine_plays(args), md5_file(dll)
+    resume = Path(args.resume).expanduser().resolve() if args.resume else None
+    if resume:
+        why = resume_refusal(resume, plays, dll_md5)
+        if why:
+            die(f"cannot resume: {why}")
+    settled = settled_results(resume, [s["name"] for s in ready]) if resume else {}
+    todo = [s for s in ready if s["name"] not in settled]
+    if resume:
+        print(f"resuming {resume}: {len(settled)} setups settled there, {len(todo)} to play")
+
+    def finish(results, started, out):
+        results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
+        compare_managed(results)
+        rc = report(results, "wine", dll, started, args.strict, source, out=out)
+        J.note(summary=str(out / "summary.txt"))
+        shutil.rmtree(dll.parent, ignore_errors=True)
+        return rc
+    if not todo:
+        return finish([settled[s["name"]] for s in ready], time.time(), resume)
     mp_jobs = max(1, args.mp_jobs)
     impai_jobs = max(1, args.impai_jobs)
-    eligible = sum(mp_eligible(s) for s in ready) if args.mp else 0
+    eligible = sum(mp_eligible(s) for s in todo) if args.mp else 0
     stage = bool(args.impai or args.impai_survey)
-    impai_eligible = sum(impai_stage_eligible(s) for s in ready) if stage else 0
+    impai_eligible = sum(impai_stage_eligible(s) for s in todo) if stage else 0
     # the games at once: the single-player runs, two a network game and one an ImpAI stage beside
     # them; the instances prepared below carry the run's tag (inst_name)
     runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
-                 min(args.jobs, len(ready)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible))
+                 min(args.jobs, len(todo)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible))
     leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
+    out = resume or results_dir("wine", started)
+    out.mkdir(parents=True, exist_ok=True)
+    if not resume:
+        run_stamp(out, plays, dll_md5)
+    for s in todo:                  # an unsettled setup's evidence is from a sitting that did not finish
+        shutil.rmtree(out / s["name"], ignore_errors=True)
     taken = set()
+
+    def steps(s, k):
+        return [
+            {"id": "prepare", "pool": "prep", "order": k},
+            {"id": "run", "pool": "game", "after": ["prepare"], "order": k},
+        ] + ([{"id": "mp", "pool": "mp", "after": ["run"], "order": k}] if args.mp and mp_eligible(s)
+             else []) \
+          + ([{"id": "impai", "pool": "impai", "after": ["run"], "order": k}] if stage and impai_stage_eligible(s)
+             else [])
     global J
-    J = tarun.begin("tacompat", [(s["name"], [
-        {"id": "prepare", "pool": "prep", "order": k},
-        {"id": "run", "pool": "game", "after": ["prepare"], "order": k},
-    ] + ([{"id": "mp", "pool": "mp", "after": ["run"], "order": k}] if args.mp and mp_eligible(s)
-         else [])
-      + ([{"id": "impai", "pool": "impai", "after": ["run"], "order": k}] if stage and impai_stage_eligible(s)
-         else [])) for k, s in enumerate(ready)],
+    J = tarun.begin("tacompat", [(s["name"], steps(s, k)) for k, s in enumerate(ready)],
         kind="wine", title=f"tacompat wine ({len(ready)} setups) -j {args.jobs}", gate=True,
         pools={"prep": max(1, args.prep_jobs), "game": args.jobs, "mp": max(1, args.mp_jobs),
                "impai": impai_jobs},
@@ -3154,6 +3278,17 @@ def cmd_wine(args):
                 + (f"-impai{'survey' if args.impai_survey else args.impai}"
                    f"{'' if args.impai_seat == 'impai' else '-ota'}" if stage else "")
                 + ("-mpimpai" if args.mp_impai else ""))
+    for k, s in enumerate(ready):
+        if s["name"] in settled:
+            for step in steps(s, k):
+                J.finish(s["name"], step["id"], "skipped", f"settled in {out}")
+            judged(s, settled[s["name"]])
+
+    def settle(s, o):
+        """The setup's final verdict: journaled, and written to the results folder (VERDICT)."""
+        o["folder_wrong"] = folder_wrong(s)
+        judged(s, o)
+        persist(out, o)
 
     def prepared(s):
         inst = journaled(s, "prepare", prepare_wine, s, dll, create_display)
@@ -3162,22 +3297,22 @@ def cmd_wine(args):
     xv = start_xvfb()
     create_display = xv.tacompat_display
     try:
-        print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
+        print(f"preparing {len(todo)} setups, {args.prep_jobs} at a time")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
-            for s, inst in zip(ready, prep.map(prepared, ready)):
+            for s, inst in zip(todo, prep.map(prepared, todo)):
                 s["_inst"] = inst
     finally:
         stop_xvfb(xv)
     # Every prefix this run made, for free_dplay_port: the only ones it may end.
-    mine = {str(s["_inst"]["prefix"]) for s in ready}
-    print(f"running {len(ready)} setups, {args.jobs} at a time, each menu watched {args.watch} s "
+    mine = {str(s["_inst"]["prefix"]) for s in todo}
+    print(f"running {len(todo)} setups, {args.jobs} at a time, each menu watched {args.watch} s "
           f"of frames" + (f", a {args.battle} s battle" if args.battle else "")
           + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else "")
           + (" with an ImpAI seat on each peer" if args.mp and args.mp_impai else "")
           + (f"; an ImpAI stage of {args.impai} s ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai
              else f"; the ImpAI survey ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai_survey else "")
           + " (game time: x30 ticks or frames)")
-    results, mp_futs = [], {}
+    results, mp_futs = list(settled.values()), {}
     # Each network game is queued the moment its setup's single-player run shows Impure
     # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each,
     # leased for the run (tools/dpport.py, A PORT A GAME, LEASED).
@@ -3194,7 +3329,7 @@ def cmd_wine(args):
             concurrent.futures.ThreadPoolExecutor(max_workers=impai_jobs) as impai_pool:
         futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
                             args.screens, args.battle): s
-                for s in ready}
+                for s in todo}
         for f in concurrent.futures.as_completed(futs):
             s = futs[f]
             o = threw(s, "wine", f)         # a run that threw is its own result, and reported
@@ -3218,7 +3353,7 @@ def cmd_wine(args):
                 if args.mp and mp_eligible(s):
                     J.finish(s["name"], "mp", "skipped", "Impure did not reach the menu")
                 if s["name"] not in impai_futs:
-                    judged(s, o)
+                    settle(s, o)
         for name, (s, o, f) in mp_futs.items():
             try:
                 m = f.result()
@@ -3237,10 +3372,10 @@ def cmd_wine(args):
             o["mp"] = m
             verdict(o, s, "wine")
             if name not in impai_futs:
-                judged(s, o)
+                settle(s, o)
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
         for name, f in impai_futs.items():
-            s = next(x for x in ready if x["name"] == name)
+            s = next(x for x in todo if x["name"] == name)
             o = next(r for r in results if r["setup"] == name)
             try:
                 a = f.result()
@@ -3251,15 +3386,10 @@ def cmd_wine(args):
             o["_temps"].update(a.pop("_temps", {}))
             o["impai"] = a
             verdict(o, s, "wine")
-            judged(s, o)
+            settle(s, o)
             said = "unavailable" if a.get("available") is False else "ok" if a["ok"] else "FAILED: " + str(a["why"])
             print(f"  {name}: ImpAI stage {said} ({o['verdict']})")
-    results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
-    compare_managed(results)
-    rc = report(results, "wine", dll, started, args.strict, source)
-    J.note(summary=str(results_dir("wine", started) / "summary.txt"))
-    shutil.rmtree(dll.parent, ignore_errors=True)
-    return rc
+    return finish(results, started, out)
 
 
 def cmd_clean(args):
@@ -4033,7 +4163,55 @@ def cmd_selftest(args):
         ibad += not ok
     total = len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
     print(f"impai stage: {total - ibad} of {total} as intended")
-    return 1 if bad or gbad or hbad or rbad or ibad else 0
+    sbad = resume_selftest()
+    return 1 if bad or gbad or hbad or rbad or ibad or sbad else 0
+
+
+def resume_selftest() -> int:
+    """The resume's files in a scratch folder: a settled setup is read back as it was judged, an
+    interrupted one -- evidence and no verdict, or a verdict never renamed into place -- is not, and a
+    resume with another DLL, other arguments or no run is refused. Returns the cases not as intended."""
+    refusing = next(x for x in SETUPS if x.get("refusal"))
+    plays = {"watch": 45, "battle": 60, "mp": 30, "mp_impai": False, "impai": 0, "impai_survey": False,
+             "impai_seat": "impai", "refuse": None}
+    cases = []
+    with tempfile.TemporaryDirectory(prefix="tacompat-resume-") as tmp:
+        out = Path(tmp)
+        run_stamp(out, plays, "a" * 32)
+        o = {"setup": "settled", "verdict": "meets goal", "level": {"features": [("tree", 1)]},
+             "impai": {"work": {1: (5, 0)}}, "_files": {"tagpu.log": "log"}, "_temps": {}}
+        persist(out, o)
+        back = settled_results(out, ["settled", "evidence-only", "not-renamed", "never-ran"])
+        cases.append(("settled: read back as judged", back.get("settled") == o and o["level"]["features"] == [["tree", 1]]
+                      and (out / "settled" / "tagpu.log").read_text() == "log"))
+        cases.append(("settled: no file left half-written", not list(out.rglob("*.tmp"))))
+        (out / "evidence-only").mkdir()
+        (out / "evidence-only" / "tagpu.log").write_text("log")
+        (out / "not-renamed").mkdir()
+        (out / "not-renamed" / (VERDICT + ".tmp")).write_text("{}")
+        cases.append(("interrupted: played again", sorted(back) == ["settled"]))
+        cases.append(("resume: the same run", resume_refusal(out, plays, "a" * 32) is None))
+        why = resume_refusal(out, plays, "b" * 32)
+        cases.append(("resume: another DLL refused", bool(why) and "one build" in why))
+        why = resume_refusal(out, dict(plays, impai=120), "a" * 32)
+        cases.append(("resume: other arguments refused", bool(why) and "impai 0 there, 120 here" in why))
+        cases.append(("resume: no run refused", bool(resume_refusal(out / "settled", plays, "a" * 32))))
+        game = out / "game"
+        (game / "log").mkdir(parents=True)
+        (game / "log" / "startup-failure.txt").write_text(f"... {refusing['refusal']} ...")
+        inst = dict(refusing, _inst={"gamedir": game})
+        cases.append(("folder: no impure.cfg, nothing wrong", folder_wrong(inst) == []))
+        (game / "impure.cfg").write_bytes(b"mod=x\r\n")
+        cases.append(("folder: mod= kept, wrong", len(folder_wrong(inst)) == 1))
+        rows = [{"setup": refusing["name"], "verdict": "meets goal", "folder_wrong": folder_wrong(inst)}]
+        compare_managed(rows)
+        cases.append(("compare: a read-back folder finding", rows[0]["verdict"] == "UNEXPECTED"))
+    sbad = 0
+    for name, ok in cases:
+        print(f"  {'ok ' if ok else 'BAD'} {name}")
+        sbad += not ok
+    print(f"resume: {len(cases) - sbad} of {len(cases)} as intended")
+    return sbad
 
 
 # (name, pattern, text, whether it must match)
@@ -4214,6 +4392,10 @@ def main():
                     help="what plays the stage's seat under test: ImpAI, or OTA AI to run the harness on "
                          "two stock seats")
     wi.add_argument("--impai-jobs", type=int, default=6, metavar="N", help="ImpAI stages at once")
+    wi.add_argument("--resume", metavar="DIR",
+                    help="go on with the run whose results folder is DIR: every setup with a verdict there is "
+                         "read back, every other one played whole; refused when DIR's run played other "
+                         "arguments or another DLL")
     wi.set_defaults(fn=cmd_wine)
     wn = sub.add_parser("windows", help="run the setups on a Windows desktop, one at a time")
     wn.add_argument("setups", nargs="*")

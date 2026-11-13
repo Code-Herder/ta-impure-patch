@@ -34,6 +34,7 @@ tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a t
 tools/compat/tacompat.py wine --mp-impai              # each peer adds a computer seat its ImpAI plays
 tools/compat/tacompat.py wine --impai                 # also the ImpAI stage: 900 s of ImpAI against OTA AI
 tools/compat/tacompat.py wine --impai-survey          # where ImpAI is available: the stage loaded, nothing played
+tools/compat/tacompat.py wine --impai 120 --resume DIR   # go on with an interrupted run: only its unsettled setups
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py windows --smoke 30          # also play an isolated in-game smoke
@@ -140,7 +141,15 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
 - **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>[-<tag>]/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
-  `startup-failure.txt`, the Wine log and a picture of the first box.
+  `startup-failure.txt`, the Wine log and a picture of the first box. A Wine run writes each
+  setup's folder the moment the setup settles (every stage it plays done), its result last as
+  `verdict.json` (written aside and renamed over), and `run.json` holds what the run plays and the
+  DLL's hash. **`wine --resume DIR`** goes on with an interrupted run in that folder: a setup with
+  a `verdict.json` is read back, every other one — interrupted in any stage — is played whole.
+  Give it the same arguments: a resume with another DLL, or other play arguments (`--watch`,
+  `--battle`, `--mp`, `--mp-impai`, `--impai`, `--impai-survey`, `--impai-seat`, `--refuse`), is
+  refused. The managed rows are compared with their drop-in rows again at the report, so the two
+  may come from different sittings.
 
 ## Fixtures
 

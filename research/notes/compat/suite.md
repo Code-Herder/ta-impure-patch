@@ -134,6 +134,17 @@ names the gap). The hives are private because the store `tacli` keeps
   skirmish seated and loaded, the Difficulty read back and the level init's lines read (the seat
   line, the reason a seat is not ImpAI's, the content lines and any `could not`), nothing applied
   or played: where ImpAI is available, setup by setup.
+- **A run that stops can be resumed** (`wine --resume DIR`): the run writes each setup's results
+  into its folder the moment the setup settles — every stage it plays done, its evidence files
+  first and its result last as `verdict.json`, written to a temporary name, flushed and renamed
+  over — so a setup the run did not finish, in any stage, has no verdict file. A resume reads the
+  verdict files back and plays every other setup whole, after removing whatever a stopped sitting
+  left in its folder. `run.json` holds the play arguments and the DLL's hash, and a resume that
+  differs in either is refused: the report would otherwise be one run of two builds or two
+  suites. What a managed row's own folder showed (a refusal's box, `mod=` left in `impure.cfg`, a
+  fetched package's swap) is read when it settles and kept in its result, and the comparison with
+  its drop-in row is made again at the report, so the two may come from different sittings.
+  Windows runs one setup at a time on the owner's desktop and has no resume.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows. Every setup runs from a work folder
