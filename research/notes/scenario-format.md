@@ -160,7 +160,10 @@ unit names by scanning the live definition table. This design follows its recipe
   seats ten players on Core Prime Industrial Area, a ten-player map, each with its commander
   ("live with 10 units"). Before that (MEASURED 2026-09-24), with the count left at 4, the engine
   refused every unit of slots 4–9 as `player slot N is not in this game`. The count persists in the
-  instance's registry store.
+  instance's registry store. A record that is active but was not seated at the level start
+  (`+0x73` 0, so no control-group table `+0x78`) is refused as `player slot N has no seat in this
+  game`: the create files every unit into its owner's groups and would fault at `0x4802DD`
+  ([units](engine/units.md), the `+0x78` row).
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are

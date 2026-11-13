@@ -58,6 +58,7 @@
 #define PL_BASEFLAG   0x149        /* u8 bit 0: base storage in force (0x496F5D)  */
 #define PL_ALIVE      0x144        /* u16 the live unit count                     */
 #define PL_AIOBJ      0x74         /* the AI object, 0x3D bytes (ctor 0x408CB0)   */
+#define PL_GROUPS     0x78         /* the control groups, 10 x 0x20, or NULL      */
 #define AI_SCAN       0x39         /* its weapon scan's cursor, a unit or 0       */
 
 #define OFF_MAPPXW    0x14223      /* int MapWidth  (world units)                 */
@@ -640,6 +641,23 @@ static int resolve_all(char* ta)
         if (!*(int*)(player_at(ta, wu->owner) + PL_ACTIVE))
         {
             scn_err("unit %d (%.20s): player slot %d is not in this game",
+                    i, wu->type, wu->owner);
+            bad++;
+            continue;
+        }
+
+        /* The create files every unit into its owner's control groups: 0x480250 (from the
+           create, scout-K3 §4.5) indexes the record's +0x78 without a NULL test (0x4802DA,
+           0x4802DD), so a unit for a record without one crashes there. The level start gives
+           a table only to a seated record, +0x73 non-zero (0x4649A5..0x4649AE), through the
+           record init 0x464700, whose 0x480190 is the table's one allocator (0x464898,
+           0x4801B1); the teardown 0x464A00 frees and nulls it (0x480239). DISASSEMBLED. So
+           the seat test is the engine's own, and the table's pointer is what the create
+           reads. */
+        if (!*(unsigned char*)(player_at(ta, wu->owner) + PL_TYPE) ||
+            !*(char**)(player_at(ta, wu->owner) + PL_GROUPS))
+        {
+            scn_err("unit %d (%.20s): player slot %d has no seat in this game",
                     i, wu->type, wu->owner);
             bad++;
             continue;
