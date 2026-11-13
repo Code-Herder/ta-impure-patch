@@ -104,6 +104,9 @@ REC = 0x1B63                            # record 0 in main; 0x14B a record (tagp
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
 ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
+HIT_ROWS = 18                           # s_diag.hits[IMPAI_ROWS][2], u32 (tagpu_impai.c)
+HITS_BYTES = HIT_ROWS * 2 * 4
+PEEK_MAX = 256                          # bytes one x<N> read may ask (tagpu_peek.c)
 SITES = (0x401435, 0x4014B2, 0x4014F3, 0x40157F, 0x4015F3, 0x40167C, 0x4016F2, 0x401753,
          0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x486CDA, 0x406FC3)
 STOCK = (0x465437, 0x4654A3)            # rows 15 and 16, `cmp byte [eax+0x73],2`: 80 78 73 02
@@ -136,10 +139,19 @@ class Held(Check):
         self.keys("return")
 
 
+def hits_spec(at):
+    """The peek of the whole count table at `at`: one x<N> read, N its size. tagpu_peek.c parses
+    N as hex (parse_hex) and clamps it to PEEK_MAX, so the 144 bytes are `x90`."""
+    assert HITS_BYTES <= PEEK_MAX
+    return f"0x{at:08X}:x{HITS_BYTES:X}"
+
+
 def counts(c, at):
-    """Each row's (scaled, exempt) counts, read in one peek of 36 u32s, a pair a row id (one hex
-    read of the 144 bytes overruns the peek's line)."""
-    v = c.values(*(f"0x{at + 4 * k:08X}:4" for k in range(36)))
+    """Each row's (scaled, exempt) counts, a pair a row id, read in one peek of the table."""
+    raw = c.bytes(hits_spec(at))
+    if len(raw) != HITS_BYTES:
+        raise OSError(f"the count table's peek answered {len(raw)} bytes, not {HITS_BYTES}")
+    v = struct.unpack(f"<{HITS_BYTES // 4}I", raw)
     return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in ROWS}
 
 
