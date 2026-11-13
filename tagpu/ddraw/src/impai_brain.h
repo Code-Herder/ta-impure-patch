@@ -6,6 +6,7 @@
 #include <string.h>
 #include "impai.h"
 #include "tagpu_placegeo.h"
+#include "tasim_sweep.h"
 
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way; } IMPAI_CLAIM;   /* way: a plant's way out */
@@ -16,6 +17,12 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 #define IMPAI_EXIT_TYPES   8         /* the plant types a decision keeps the exits of                          */
 #define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT)        */
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
+#define IMPAI_RECLAIM_R    768       /* px around a builder a look at the features in sight covers, and a
+                                        reclaim's remembered features lie within (impai_build.c, THE RECLAIM) */
+#define IMPAI_RECLAIM_LOOK 32        /* the nearest features in sight one look keeps                            */
+#define IMPAI_RECLAIM_SCANS 2        /* reclaim searches a decision, each with its own look                     */
+#define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
+#define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
    run of them along it, first to last, relative to the plant's first cell; `size` the largest footprint side of
@@ -88,7 +95,12 @@ typedef struct IMPAI_DEC {
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     /* what the decision has spent of its budgets */
-    int           sites, snaps, roots, queued, assigned, stopped, explored_once;
+    int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
+    /* the features a look finds in sight, the memory's scores (impai_build.c, THE RECLAIM), and the builder the
+       decision's own look goes round (the census: the first reclaimer past IMPAI_BRAIN.fscan, else the first) */
+    SWEEP_TARGET  rt[IMPAI_RECLAIM_LOOK];
+    double        rscore[IMPAI_FEATS];
+    IMPAI_UNITREF fobs, ffirst;
     /* scratch beside the struct: two build menus, a short order list, the ring's sites, the threat maps */
     uint16_t*     menu;
     uint16_t*     menu2;
@@ -151,6 +163,17 @@ int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* THE FEATURE MEMORY (impai_build.c): the decision's refresh of what the seat sees and its one look; the
+   remembered feature anchored at (ax, az), its index or -1; its removal; whether the anchor's block is in the
+   seat's sight now; and a RECLAIM_GO's order once its feature is in sight and there, 1 ordered, 0 the decision's
+   commands spent, -1 refused */
+void impai_fmem_refresh(IMPAI_DEC* d);
+void impai_fmem_observe(IMPAI_DEC* d);
+int  impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az);
+void impai_fmem_drop(IMPAI_BRAIN* st, int k);
+int  impai_feat_lit(const IMPAI_DEC* d, int ax, int az);
+int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);
@@ -158,5 +181,7 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 void impai_ways_keep(IMPAI_DEC* d);
 /* 1 when the builder's last unreachable site (IMPAI_JOB.far_*) still lies in r */
 int  impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r);
+/* the footprint of the feature anchored at (ax, az), fx x fz cells */
+IMPAI_RECT impai_feat_rect(int ax, int az, int fx, int fz);
 
 #endif

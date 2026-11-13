@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tasim_sweep.h"
+#include "tagpu_simreg.h"
+
+/* The reclaim rules, which the sweep UI (tagpu_sweep.c) and ImpAI's reclaim (impai_build.c, THE RECLAIM) order
+   by. OWNER: their orders are given only on a live seat, a click's or ImpAI's turn, the WORLDQ refusing to
+   command a puppet seat, and a puppet's come from its recording. */
+SIM_FEATURE(sweep_rules, SIM_PUPPET_OWNER, "sweep-basic stock-sweep-basic impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval");
 
 /* the kind: a NaN amount compares false, so it counts as none */
 int tasim_sweep_kind_ok(float metal, float energy, unsigned kind)
@@ -61,9 +67,7 @@ int tasim_sweep_order_at(const WORLDQ* q, const SWEEP_SCRATCH* scr, int slot, co
     return family(scr, a) ? a : 0;
 }
 
-/* the feature anchored at `cell`'s place: its footprint, centre, order position (the centre at the ground's
-   height, 0x485070) */
-static void target_of_feat(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, SWEEP_TARGET* t)
+void tasim_sweep_target_of(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, SWEEP_TARGET* t)
 {
     memset(t, 0, sizeof *t);
     t->ax = f->ax; t->az = f->az;
@@ -80,10 +84,14 @@ static void target_of_feat(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, S
 
 /* A target of the kind, by the click's own rules: reclaimable (FeatureDef +0xFE bit 7) and mapped at its
    order position (0x408090 for the local seat, the same arithmetic as the resolver's inline test and
-   patched by the same fix: tagpu_patches.c, LOS_MAPPED). */
-static int takes(const WORLDQ* q, const WQ_FEAT* f, unsigned kind, const SWEEP_TARGET* t)
+   patched by the same fix: tagpu_patches.c, LOS_MAPPED) -- or, with seat_sight, in the seat's own sight,
+   which the caller tested before reading the cell: the reclaim handler 0x404AD0 tests the feature and its
+   reclaimable bit and no map (engine/orders.md, *The reclaim order's countdown*), so an order by name needs
+   the seat's own test. */
+static int takes(const WORLDQ* q, const WQ_FEAT* f, unsigned kind, const SWEEP_TARGET* t, int seat_sight)
 {
-    return (f->flags & 0x80u) && tasim_sweep_kind_ok(f->metal, f->energy, kind) && q->ops->mapped_point(q, t->pos);
+    return (f->flags & 0x80u) && tasim_sweep_kind_ok(f->metal, f->energy, kind) &&
+           (seat_sight || q->ops->mapped_point(q, t->pos));
 }
 
 int tasim_sweep_feature_takes(const WORLDQ* q, int x, int z, unsigned kind, SWEEP_TARGET* out)
@@ -92,8 +100,8 @@ int tasim_sweep_feature_takes(const WORLDQ* q, int x, int z, unsigned kind, SWEE
     WQ_FEAT f;
     q->ops->map(q, &m);
     if (!q->ops->feature(q, x, z, &f)) return 0;
-    target_of_feat(q, &m, &f, out);
-    return takes(q, &f, kind, out);
+    tasim_sweep_target_of(q, &m, &f, out);
+    return takes(q, &f, kind, out, 0);
 }
 
 /* the targets' order: nearer the centre first, then z, then x, then the anchor cell */
@@ -130,7 +138,9 @@ static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
    this anchor, directly or by its hop; and 0x408090 is the same mapped arithmetic. The commit asks the
    resolver itself before every order and counts a refusal as a mismatch, the self-check of this
    equivalence, which must read 0. The resolver is not asked here: each call reaches 0x438760's name search,
-   and a forest is thousands of anchors a frame. */
+   and a forest is thousands of anchors a frame. With seat_sight the caller orders RECLAIM by name, which the
+   handler takes for any reclaimable feature at the position; the test is the seat's own sight at the anchor's
+   block, and a cell outside it is never read. */
 unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* out, unsigned cap, unsigned* more)
 {
     WQ_MAP m;
@@ -148,9 +158,11 @@ unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* 
         for (x = x0; x <= x1; x++) {
             WQ_FEAT f;
             SWEEP_TARGET t;
+            if (in->seat_sight && !q->ops->block_lit(q, x >> 1, z >> 1)) continue;
             if (!q->ops->feature(q, x, z, &f) || f.ax != x || f.az != z) continue;
-            target_of_feat(q, &m, &f, &t);
-            if (!sweep_inside(in->c[0], in->c[2], in->r, t.cx, t.cz) || !takes(q, &f, in->kind, &t)) continue;
+            tasim_sweep_target_of(q, &m, &f, &t);
+            if (!sweep_inside(in->c[0], in->c[2], in->r, t.cx, t.cz) || !takes(q, &f, in->kind, &t, in->seat_sight))
+                continue;
             t.d2 = (uint64_t)((int64_t)(t.cx - in->c[0]) * (t.cx - in->c[0])) +
                    (uint64_t)((int64_t)(t.cz - in->c[2]) * (t.cz - in->c[2]));
             /* the nearest `cap`, kept as a max-heap of the order above */
@@ -268,24 +280,43 @@ static unsigned drop_queued(const WORLDQ* q, SWEEP_SCRATCH* scr, unsigned n)
     return k;
 }
 
+int tasim_sweep_builder(const WORLDQ* q, int slot, SweepBuilder* out)
+{
+    WQ_UNIT u;
+    WQ_DEF d;
+    memset(out, 0, sizeof *out);
+    if (!q->ops->unit(q, slot, &u) || !q->ops->def(q, u.type, &d)) return 0;
+    out->x = u.pos[0] >> 16;
+    out->z = u.pos[2] >> 16;
+    out->speed = (double)d.speed / 65536.0;
+    out->reach = (double)d.reach;
+    return 1;
+}
+
+double tasim_sweep_ticks(double speed, double reach, int32_t px, int32_t pz, int32_t cx, int32_t cz,
+                         float energy, float metal)
+{
+    const double dx = (double)(cx - px), dz = (double)(cz - pz), dd = sqrt(dx * dx + dz * dz);
+    const double travel = speed > 0.0 && dd > reach ? (dd - reach) / speed : 0.0;
+    return travel + (double)sweep_reclaim_ticks(energy, metal);
+}
+
 /* The reclaimer's split inputs, from its list: a ring only appends, so a builder starts at its last order
    that has a position, its load the model's ticks over its queued reclaim-family orders from its position
    through each. Its room keeps the list under SWEEP_LIST_CAP. Every position in
    whole world px, a 16.16 word >> 16. */
 static void builder_inputs(const WORLDQ* q, SWEEP_SCRATCH* scr, unsigned b, SweepBuilder* out)
 {
-    WQ_UNIT u;
-    WQ_DEF d;
     WQ_MAP m;
     int k, count, px, pz;
-    memset(out, 0, sizeof *out);
-    if (!q->ops->unit(q, scr->slot[b], &u) || !q->ops->def(q, u.type, &d) ||
-        (count = q->ops->orders(q, scr->slot[b], scr->list, WQ_LIST_MAX)) < 0) return;  /* no room */
+    if (!tasim_sweep_builder(q, scr->slot[b], out) ||
+        (count = q->ops->orders(q, scr->slot[b], scr->list, WQ_LIST_MAX)) < 0) {   /* no room */
+        memset(out, 0, sizeof *out);
+        return;
+    }
     q->ops->map(q, &m);
-    out->x = px = u.pos[0] >> 16;
-    out->z = pz = u.pos[2] >> 16;
-    out->speed = (double)d.speed / 65536.0;
-    out->reach = (double)d.reach;
+    px = out->x;
+    pz = out->z;
     for (k = 0; k < count; k++) {
         const int32_t* pos = scr->list[k].pos;
         WQ_FEAT f;
@@ -293,9 +324,7 @@ static void builder_inputs(const WORLDQ* q, SWEEP_SCRATCH* scr, unsigned b, Swee
         if (pos[0] > 0 && pos[2] > 0) { out->x = pos[0] >> 16; out->z = pos[2] >> 16; }
         if (family(scr, scr->list[k].action) && x >= 0 && z >= 0 && x < m.w && z < m.h && q->ops->feature(q, x, z, &f)) {
             const int cx = 16 * f.ax + 8 * f.fx, cz = 16 * f.az + 8 * f.fz;
-            const double dx = (double)(cx - px), dz = (double)(cz - pz), dd = sqrt(dx * dx + dz * dz);
-            const double travel = out->speed > 0.0 && dd > out->reach ? (dd - out->reach) / out->speed : 0.0;
-            out->load += travel + (double)sweep_reclaim_ticks(f.energy, f.metal);
+            out->load += tasim_sweep_ticks(out->speed, out->reach, px, pz, cx, cz, f.energy, f.metal);
             px = cx; pz = cz;
         }
     }

@@ -262,7 +262,10 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 #define IMPAI_CLAIM_MAX  256            /* sites held by a build order, an extractor or a plant's way out    */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
 
-enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
+/* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
+   remembered one to see whether it is still there (impai_build.c, THE RECLAIM) */
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM,
+       IMPAI_JOB_RECLAIM_GO };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
@@ -272,13 +275,18 @@ typedef struct IMPAI_JOB {
     uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
     uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
-    int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
+    int16_t  cx, cz;            /* the site's first cell, the cell explored, or the reclaimed feature's
+                                   anchor cell                                                             */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
-    int16_t  far_cx, far_cz;    /* the last site this builder could not reach (impai_brain.c, job_checks):
-                                   avoided by this builder alone until far_until; kept across its jobs,
-                                   voided with the unit as a job is, by far_type                         */
+    int16_t  far_cx, far_cz;    /* the last site or feature this builder could not reach (impai_brain.c,
+                                   job_checks): avoided by this builder alone until far_until; kept across
+                                   its jobs, voided with the unit as a job is, by far_type                */
     uint16_t far_type;          /* the builder's type when it was recorded                                */
+    uint16_t feat;              /* IMPAI_JOB_RECLAIM(_GO): the feature's definition, which with its anchor cell
+                                   names it (impai_build.c, THE RECLAIM); 0 otherwise. A level's feature
+                                   definitions are its content, the same numbers in its replay, so the
+                                   value is plain and no ID of the job's layout                           */
     uint32_t far_until;         /* 0: no record                                                            */
 } IMPAI_JOB;
 
@@ -295,6 +303,18 @@ typedef struct IMPAI_WAYREC {
     uint8_t  n, pad;
     int16_t  r[IMPAI_WAY_RECTS][4];
 } IMPAI_WAYREC;
+
+/* A feature the seat has seen in its own sight, which it may reclaim (impai_build.c, THE FEATURE MEMORY): its
+   anchor cell and definition, which name it; its footprint and amounts as last seen; and the GameTime it was last
+   seen. Out of sight it is a belief: anything may have taken it since. 20 bytes. */
+#define IMPAI_FEATS 128          /* the features a seat remembers                                          */
+typedef struct IMPAI_FMEM {
+    int16_t  ax, az;
+    uint16_t def;
+    uint8_t  fx, fz;
+    float    metal, energy;
+    uint32_t seen;
+} IMPAI_FMEM;
 
 /* One seat's standing state between decisions. */
 typedef struct IMPAI_BRAIN {
@@ -316,6 +336,10 @@ typedef struct IMPAI_BRAIN {
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
+    uint8_t    nfmem;
+    uint16_t   fscan;           /* the slot of the builder the last decision looked around; WQ_NONE      */
+    IMPAI_FMEM fmem[IMPAI_FEATS];  /* the features the seat remembers, the first nfmem used, in the order
+                                   first seen                                                             */
 } IMPAI_BRAIN;
 
 /* THE LEVEL ROW: every constant a decision uses, what it limits beside it. The three levels are rows of one
@@ -481,6 +505,9 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t count[IMPAI_CATS];
     uint16_t army;                      /* army units queued                                                     */
     uint16_t sea_plants;                /* sea plant orders given                                                */
+    uint16_t reclaims;                  /* reclaim orders given                                                  */
+    uint16_t reclaimed;                 /* reclaim jobs that ended with the seat seeing their feature gone        */
+    float    reclaim_metal;             /* the metal of the features the reclaim orders named                   */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

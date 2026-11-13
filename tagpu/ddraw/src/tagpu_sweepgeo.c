@@ -2,6 +2,12 @@
 #include <math.h>
 #include <string.h>
 #include "tagpu_sweepgeo.h"
+#include "tagpu_simreg.h"
+
+/* The ring's test, the split and the reclaim countdown, which the sweep's rules (tasim_sweep.c) and ImpAI's
+   reclaim through them order by. OWNER: their orders are given only on a live seat, and a puppet's come from
+   its recording. */
+SIM_FEATURE(sweep_geo, SIM_PUPPET_OWNER, "sweep-basic stock-sweep-basic impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval");
 
 /* Squared distances are taken in uint64: callers keep positions within +-2^30 world px (the
    packet bounds every world coordinate to +-2^20), so each axis's square is below 2^62 and
