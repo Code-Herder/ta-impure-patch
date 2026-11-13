@@ -215,10 +215,20 @@ static void unit_ref(IMPAI_UNITREF* r, const WQ_UNIT* u)
    in front of it), which any real order replaces (scout I6: no descriptor carries the bit; the controller sets
    it on the default order it makes, 0x43BA08, and 0x43ADC0 drops such a head). The stock factory planner's test
    is the same list's emptiness (0x40878B); a factory with a defaultmissiontype holds a 0x4000 head when idle,
-   so the factory takes the general test too. */
-static int idle_head(int h, const WQ_ORDER* o)
+   so the factory takes the general test too. A LONE PARK is idle as well: GetBuilt 0x402DA0 gives a factory's
+   finished unit the factory's QMove and QPatrol orders, and with none a PARK (0x402EE2..0x402EFA, through
+   0x438760 and 0x43ADC0 with Shift), whose handler 0x4061A0 moves it off the yard and then ends only when another
+   node follows it (0x4061D7..0x4061DC) or on its event bit 0x20 (0x4061C3), otherwise sleeping 30 ticks at a time
+   through 0x439E80 for ever (DISASSEMBLED). Its flag word carries no 0x4000, so the stock test reads it as busy
+   and a constructor the factory made would hold its Park for the whole game (MEASURED 2026-11-13 on Lava Mania,
+   a CORCV out of a CORVP: flags 0x1001, parked 64 px south of the plant's yard to GameTime 36 000, while the
+   next CORCV, finished on the yard, never left it and the plant built nothing more -- the parked one standing
+   in its way [INFERRED]). Any order replaces it: its flags lack WQ_OF_KEEP. The Park counts only as the unit's
+   one node, read from its list. */
+static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
 {
-    return h == 0 || (h == 1 && (o->flags & WQ_OF_DROP));
+    if (h == 0 || (h == 1 && (o->flags & WQ_OF_DROP))) return 1;
+    return h == 1 && d->act_park > 0 && o->action == d->act_park && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
 static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
@@ -284,7 +294,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         }
         if (u->finished) {
             IMPAI_UNITREF r;
-            const int idle = idle_head(h, &o);
+            const int idle = idle_head(d, u->slot, h, &o);
             unit_ref(&r, u);
             if (idle && d->nidle < in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = r;
             else if (!idle && job->kind == IMPAI_JOB_ASSIST && d->nhelpers < IMPAI_IDLE_CAP) d->helpers[d->nhelpers++] = r;
@@ -297,7 +307,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (cat == IMPAI_C_FACTORY && u->finished) {
         IMPAI_UNITREF r;
         unit_ref(&r, u);
-        if (idle_head(h, &o)) {
+        if (idle_head(d, u->slot, h, &o)) {
             if (d->nfidle < IMPAI_IDLE_CAP) d->fidle[d->nfidle++] = r;
         } else {
             int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
@@ -582,6 +592,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);
     d->act_vtol_build = q->ops->action(q, WQ_ACT_VTOL_MOBILEBUILD);
     d->act_queue = q->ops->action(q, WQ_ACT_BUILDINGBUILD);
+    d->act_park = q->ops->action(q, WQ_ACT_PARK);
     /* THE ECONOMY'S NOISE (impai_noise, tag 2): each ratio times 1 + noise x a draw of [-1, 1); at noise 0
        (Hard) the factor is exactly 1, so Hard's economy is A1b's */
     d->e_per_m = in->lv->e_per_m;

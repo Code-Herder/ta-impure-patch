@@ -32,7 +32,7 @@
 #define FW_WATER 48                     /* the water rectangles a world holds                                 */
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
-enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD,
+enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD, A_PARK,
        A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN };
 
 typedef struct FDEF {
@@ -990,6 +990,55 @@ static void check_caps(void)
     for (i = 0, queues = 0; i < s_w.nlog; i++)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE && s_w.log[i].c.type == T_CONS && s_w.log[i].c.count == 1) queues++;
     CHECK(queues == 2, "two idle factories queue one constructor each: %d", queues);
+}
+
+/* a constructor its factory parked: the Park GetBuilt gives a unit when the factory holds no rally never ends
+   while it is the unit's one node, so the economy tasks the unit; a Park with a node behind it ends by itself
+   and the unit is left to that node. The commander is busy on a build of its own. */
+static void park_world(int behind)
+{
+    FUNIT* u;
+    brain_world();
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    s_w.unit[1].list[0].action = A_MOBILEBUILD;
+    s_w.unit[1].list[0].type = T_SOLAR;
+    s_w.unit[1].n = 1;
+    unit_add(&s_w, 2, T_CONS, 30, 40, 1);
+    u = &s_w.unit[2];
+    u->list[0].action = A_PARK;
+    u->list[0].flags = 0x1001;
+    u->list[0].target = (uint16_t)WQ_NONE;
+    u->n = 1;
+    if (behind) {
+        u->list[1].place = 1;
+        u->list[1].action = A_MOVE;
+        u->list[1].target = (uint16_t)WQ_NONE;
+        u->list[1].pos[0] = u->pos[0];
+        u->list[1].pos[2] = u->pos[2];
+        u->n = 2;
+    }
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.gametime = 960;
+}
+
+static void check_park(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int i, to_cons = 0;
+    park_world(0);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.unit == 2 && c->c.verb == WQ_CMD_NEW && c->c.type == T_MEX,
+          "the parked constructor builds an extractor");
+    CHECK(s_job[2].kind == IMPAI_JOB_BUILD && s_job[2].type == T_CONS, "its job is kept");
+    if (c) cmd_print(c);
+    park_world(1);
+    CHECK(decide(&out) == 0, "decide");
+    for (i = 0; i < s_w.nlog; i++) to_cons += s_w.log[i].c.unit == 2;
+    CHECK(!to_cons && s_job[2].kind == IMPAI_JOB_NONE, "a Park with a node behind it is not idle: %d orders",
+          to_cons);
 }
 
 /* THE WAY OUT: the factory's yard is `o` but for two `c` cells at the middle of its south edge, and its menu's
@@ -3184,6 +3233,7 @@ int main(void)
     check_spot();
     check_factory();
     check_caps();
+    check_park();
     check_way();
     check_far();
     check_fail();

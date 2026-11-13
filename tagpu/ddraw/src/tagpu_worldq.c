@@ -52,10 +52,10 @@ SIM_VAR(s_cursor_site, SIM_INSTALL);
 SIM_VAR(s_seat_site, SIM_INSTALL);
 
 /* The action names 0x438760 is given, the engine's own strings in .rdata, in WQ_ACT_* order: the build
-   cursor's (0x419670), the resolver's (0x440187, 0x43F694, 0x44004C) and the build menu's queue call for a unit
-   with no mover, `BUILDINGBUILD` (0x419B76). */
+   cursor's (0x419670), the resolver's (0x440187, 0x43F694, 0x44004C), the build menu's queue call for a unit
+   with no mover, `BUILDINGBUILD` (0x419B76), and GetBuilt's for a factory's finished unit, `PARK` (0x402EF0). */
 static const uintptr_t ACT_NAME[WQ_ACTS] = { 0x00502654u, 0x00502640u, 0x005016C4u, 0x00501B68u, 0x005052F0u,
-                                             0x00502684u };
+                                             0x00502684u, 0x00501358u };
 
 static WQ_ENGINE* ctx_of(const WORLDQ* q) { return (WQ_ENGINE*)q->self; }
 

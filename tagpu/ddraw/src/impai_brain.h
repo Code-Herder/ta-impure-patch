@@ -36,7 +36,7 @@ typedef struct IMPAI_DEC {
     WQ_MAP                m;
     WQ_ECON               e;
     uint32_t              now;
-    int                   act_build, act_vtol_build, act_queue;   /* the world's action bytes; -1 none  */
+    int                   act_build, act_vtol_build, act_queue, act_park;   /* the world's action bytes; -1 none */
     /* the census */
     uint16_t      count[IMPAI_CATS], done[IMPAI_CATS], pending[IMPAI_CATS];
     IMPAI_UNITREF idle[IMPAI_IDLE_CAP], helpers[IMPAI_IDLE_CAP], jobbed[2 * IMPAI_IDLE_CAP];

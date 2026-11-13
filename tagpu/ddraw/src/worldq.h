@@ -129,8 +129,10 @@ typedef struct WQ_CMD {
 } WQ_CMD;
 enum { WQ_OK = 1, WQ_REFUSED = 0, WQ_UNSUPPORTED = -1 };
 
+/* WQ_ACT_PARK is the order a factory's finished unit gets when the factory holds no rally (engine/orders.md,
+   *Park*): it never ends while it is the unit's only order, so a unit holding it alone holds no task. */
 enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_RECLAIM,
-       WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACTS };
+       WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACT_PARK, WQ_ACTS };
 /* The resolver's modes the rules ask (engine/orders.md, What each resolver mode answers). MOVE with a target
    is not a move: an enemy target answers RECLAIMUNIT for a builder and CAPTURE for a commander (0x43F893..
    0x43F8BC), so a move toward a unit passes no target and the unit's point. ATTACK on an allied or own target
