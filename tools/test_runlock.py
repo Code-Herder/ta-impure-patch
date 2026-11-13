@@ -6,7 +6,10 @@ admitted while a GPU run waits for its own, all at once or none, a killed holder
 its slots and memory, no run deadlocks beside a stand-in of the runlock code that counted GPU
 tokens and gathered them in the slot queue, a run's games take seats and wait for one past
 games(), every launch writes the run's cap, a nested run takes none, flock(1) on
-tareplay.lock still excludes every run, resources exclude by name, and two runs of each tool that
+tareplay.lock still excludes every run, resources exclude by name, an offline phase and a build are
+cut to the slots they were granted and never below their least, the load guard holds a run back
+past its limit, cuts an offline phase to the room left and admits whatever the load when no other
+process holds a slot, and two runs of each tool that
 names instances or plays a network game at once take distinct names and DirectPlay ports
 (tools/dpport.py's leases, which are the machine's own, in /tmp). No game runs.
 
@@ -15,7 +18,9 @@ names instances or plays a network game at once take distinct names and DirectPl
 A run here is `runlock.py run` around a stand-in command, with POLL_S at 0.05 s so the run being
 admitted retries at once, and the device's memory given rather than read: none (no GPU budget) for
 the tests of the slots, the reference setup's 12 282 MiB -- 287 units of 32 MiB, 9 games at the
-play defaults' cap of tools/runlock-vram.cfg -- for the tests of the GPU memory. A step is waited for, never timed: WAIT_S bounds a step that takes
+play defaults' cap of tools/runlock-vram.cfg -- for the tests of the GPU memory. The machine's load
+is given too, from a file each test writes (none: no load guard), so the machine the tests run on
+never decides an admission. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
 import json
@@ -25,6 +30,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -37,6 +43,7 @@ WAIT_S = 20
 REFERENCE_MIB = 12282           # the reference setup's GPU
 UNITS = 287                     # its GPU budget: (12 282 - 3072) // 32 (tools/runlock-vram.cfg)
 GAMES = 9                       # the games at the play defaults' cap: 287 * 32 // (920 + 64 + 32)
+LIMIT = 32.0                    # the load guard's limit: the reference setup's threads at load_per_thread 1.0
 
 
 def units(n, cap=920):
@@ -59,17 +66,42 @@ class RunLock(unittest.TestCase):
         real = runlock.SUITES_CFG
         self.addCleanup(setattr, runlock, "SUITES_CFG", real)
         runlock.SUITES_CFG = self.suites
+        # the machine's load as every run here reads it: none, so no load guard, unless a test
+        # writes a figure
+        self.load = self.tree / "loadavg"
+        self.load.write_text("")
+        for name, value in (("load_limit", lambda: LIMIT),
+                            ("loadavg", lambda: float(t) if (t := self.load.read_text()).strip() else None)):
+            self.addCleanup(setattr, runlock, name, getattr(runlock, name))
+            setattr(runlock, name, value)
+
+    def boot(self, total=None, tree_cfg=None):
+        """The Python that sets a run's runlock up as wrapper() says, before what it runs."""
+        return (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
+                f"runlock.POLL_S = 0.05; runlock.device_total_mib = lambda: {total!r}; "
+                f"runlock.load_limit = lambda: {LIMIT!r}; "
+                f"runlock.loadavg = lambda: (lambda t: float(t) if t.strip() else None)"
+                f"(open({str(self.load)!r}).read()); "
+                f"from pathlib import Path; runlock.SUITES_CFG = Path({str(self.suites)!r}); "
+                + (f"runlock.VRAM_CFG = Path({str(tree_cfg)!r}); " if tree_cfg else ""))
+
+    def phase(self, most, least=1, what="phase"):
+        """An offline phase of `most` workers at most and `least` at least in a process of its own:
+        it says the workers granted once admitted and holds them until its stdin closes."""
+        return self.start([sys.executable, "-c", self.boot()
+                           + f"w = runlock.offline(Path({str(self.tree)!r}), {what!r}, {most}, {least}); "
+                             "print(w.n, flush=True); sys.stdin.read()"])
 
     def wrapper(self, slots, what, *cmd, resources=(), vram=None, total=None, tree_cfg=None,
-                suite=None):
+                suite=None, sub="run"):
         """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s, on a device of
         `total` MiB (None: no GPU budget), from a tree whose runlock-vram.cfg is `tree_cfg` (None:
-        this one's), its games of `suite` in this test's suites file (self.suites)."""
-        boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
-                f"runlock.POLL_S = 0.05; runlock.device_total_mib = lambda: {total!r}; "
-                f"from pathlib import Path; runlock.SUITES_CFG = Path({str(self.suites)!r}); "
-                + (f"runlock.VRAM_CFG = Path({str(tree_cfg)!r}); " if tree_cfg else "")
-                + "sys.exit(runlock.main(sys.argv[1:]))")
+        this one's), its games of `suite` in this test's suites file (self.suites), on a machine
+        whose 1-minute load is the figure in self.load (none: no load guard) and whose load guard's
+        limit is LIMIT; `sub` "make" for `runlock.py make -j slots -- cmd`."""
+        boot = self.boot(total, tree_cfg) + "sys.exit(runlock.main(sys.argv[1:]))"
+        if sub == "make":
+            return [sys.executable, "-c", boot, "make", "-j", str(slots), "--what", what, "--", *cmd]
         named = [a for r in resources for a in ("--resource", r)]
         gpu = ["--vram", str(vram)] if vram is not None else []
         gpu += ["--suite", suite] if suite else []
@@ -941,6 +973,187 @@ class RunLock(unittest.TestCase):
         os.environ[runlock.CAP_ENV] = "320"
         self.assertEqual(runlock.write_gpumem(gamedir), 320)
 
+    # ---- OFFLINE WORK, BUILDS ------------------------------------------------------------------
+
+    def in_process(self):
+        """This process's own holds released, and RUNLOCK_HELD put back, after the test; no GPU."""
+        env = os.environ.pop(runlock.ENV, None)
+        self.addCleanup(lambda: env is not None and os.environ.update({runlock.ENV: env}))
+        self.addCleanup(runlock.release)
+        self.addCleanup(setattr, runlock, "device_total_mib", runlock.device_total_mib)
+        runlock.device_total_mib = lambda: None
+
+    def test_an_offline_phase_takes_what_is_free_and_waits_for_its_least(self):
+        self.in_process()
+        a = self.holder(20, "a")
+        self.admitted(a)
+        w = runlock.offline(self.tree, "phase", 16, least=3)
+        self.addCleanup(w.release)
+        # 8 free of the 16 asked: its workers are cut to them
+        self.assertEqual((w.n, self.free()), (8, 0))
+        held = json.loads(w.environ()[runlock.ENV])
+        self.assertEqual((held["slots"], held["workers"], held["path"]), (8, 8, str(self.lock)))
+        self.assertEqual(len(w.fds()), 8 + 1)          # its slots and tareplay.lock shared
+        self.assertNotIn(runlock.ENV, os.environ, "a phase's hold is not this process's hold()")
+        w.release()
+        self.assertEqual(self.free(), 8)
+        b = self.holder(6, "b")
+        self.admitted(b)
+        # 2 free, under its least of 3: it waits in the queue, holding them, and takes the 3 it needs
+        p = self.phase(16, 3)
+        self.until(lambda: self.admitting("phase") and self.free() == 0, "the phase did not take the free slots")
+        self.quiet(p)
+        self.let_go(b)
+        self.assertEqual(self.line(p.stdout), "8")
+        self.assertEqual(self.free(), 0)
+
+    def test_a_nested_offline_phase_takes_none_and_is_cut_to_its_runs_workers(self):
+        probe = ("from pathlib import Path; w = runlock.offline(Path({tree!r}), 'inner', {most}); "
+                 "print(w.n, w.fds() == (), flush=True)")
+        for most, want in ((16, "4 True"), (3, "3 True")):
+            outer = self.start(self.wrapper(4, "outer", sys.executable, "-c",
+                                            self.boot() + probe.format(tree=str(self.tree), most=most)))
+            self.assertEqual(self.line(outer.stdout), want)
+            self.assertEqual(outer.wait(WAIT_S), 0)
+
+    def test_offline_workers_beside_game_lanes_are_cut_to_their_grant(self):
+        self.in_process()
+        a = self.holder(20, "a")
+        self.admitted(a)
+        # three lanes' 6 slots and at least one worker: 8 free, so 2 workers of the 10 asked
+        self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
+        self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 2, 0))
+        self.assertEqual(json.loads(os.environ[runlock.ENV])["slots"], 8)
+        runlock.release()
+        self.let_go(a)
+        self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
+        self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 10, 12))
+        runlock.release()
+        # lanes that would fill the budget leave one slot to the workers they asked for
+        self.assertTrue(runlock.hold(self.tree, "lanes", 14, gpu=False, workers=4))
+        self.assertEqual((runlock.games(), runlock.workers(), self.free()), (13, 2, 0))
+        runlock.release()
+        # a run that asks for none: its workers are its slots, which its own offline work shares
+        self.assertTrue(runlock.hold(self.tree, "lanes", 2, gpu=False))
+        self.assertEqual((runlock.workers(), self.free()), (4, 24))
+
+    def test_a_phases_tasks_share_its_grant_by_weight_in_the_order_they_ask(self):
+        w = runlock.Workers(3)
+        order, gates = [], {k: threading.Event() for k in ("heavy", "light1", "light2")}
+
+        def task(name, weight):
+            with w.share(weight) as got:
+                order.append((name, got))
+                gates[name].wait(WAIT_S)
+        first = threading.Thread(target=task, args=("light1", 1))
+        first.start()
+        self.until(lambda: order == [("light1", 1)], "a task did not start on a free grant")
+        heavy = threading.Thread(target=task, args=("heavy", 5))       # cut to the grant's 3
+        heavy.start()
+        self.until(lambda: len(w._turns) == 1, "the heavy task did not ask")
+        second = threading.Thread(target=task, args=("light2", 1))
+        second.start()
+        self.until(lambda: len(w._turns) == 2, "the light task did not ask")
+        # one slot is held, two are free: the light task behind the heavy one waits with it
+        self.assertEqual(order, [("light1", 1)])
+        gates["light1"].set()
+        self.until(lambda: len(order) == 2, "the heavy task did not start once the grant was free")
+        self.assertEqual(order[1], ("heavy", 3))
+        gates["heavy"].set()
+        gates["light2"].set()
+        for t in (first, heavy, second):
+            t.join(WAIT_S)
+        self.assertEqual(order[2], ("light2", 1))
+        self.assertEqual(w._free, 3)
+
+    def test_make_runs_at_the_slots_it_was_granted(self):
+        bindir = self.tree / "bin"
+        bindir.mkdir()
+        fake = bindir / "make"
+        fake.write_text("#!/bin/sh\necho \"$*\"\nread x\n")
+        fake.chmod(0o755)
+        env = dict(self.env, PATH=f"{bindir}:{os.environ['PATH']}")
+        a = self.holder(26, "a")
+        self.admitted(a)
+        build = self.start(self.wrapper(8, "a build", "-C", "tagpu/ddraw", "all", sub="make"), env=env)
+        # 2 free of the 8 asked: make runs at -j 2 and holds them
+        self.assertEqual(self.line(build.stdout), "-j2 -C tagpu/ddraw all")
+        self.assertEqual(self.free(), 0)
+        self.let_go(build)
+        self.assertEqual(self.free(), 2)
+        self.let_go(a)
+        # inside a run of 4 slots it takes none and runs at the run's 4
+        inner = self.wrapper(8, "inner build", "all", sub="make")
+        outer = self.start(self.wrapper(4, "outer", *inner), env=env)
+        self.assertEqual(self.line(outer.stdout), "-j4 all")
+        self.assertEqual(self.free(), runlock.BUDGET - 4)
+
+    # ---- THE LOAD GUARD ------------------------------------------------------------------------
+
+    def test_the_load_guard_holds_a_run_back_past_the_limit_and_admits_it_under(self):
+        a = self.holder(5, "a")
+        self.admitted(a)
+        # 30 of load beside a's 5 slots leaves room for 2 under the limit of 32: b's 4 wait
+        self.load.write_text("30")
+        b = self.holder(4, "b")
+        said = self.stderr_until(b, "waiting for the run lock")[-1]
+        self.assertIn("the 1-minute load 30.0 beside 5 slots held by other runs leaves room for 2", said)
+        self.quiet(b)
+        # a run behind it waits with it, though it would fit
+        c = self.holder(1, "c")
+        self.assertIn("waiting for the run lock", self.line(c.stderr) or "")
+        self.quiet(c)
+        self.load.write_text("20")          # room for 12
+        self.admitted(b)
+        self.admitted(c)
+        self.assertEqual(self.free(), runlock.BUDGET - 10)
+
+    def test_the_load_guard_counts_held_slots_once(self):
+        a = self.holder(20, "a")
+        self.admitted(a)
+        # the load is the holders' own: 20 slots under a load of 18 leave the 8 free to b
+        self.load.write_text("18")
+        b = self.holder(8, "b")
+        self.admitted(b)
+
+    def test_the_load_guard_cuts_an_offline_phase_to_the_room_left(self):
+        a = self.holder(5, "a")
+        self.admitted(a)
+        self.load.write_text("20")          # room for 12
+        p = self.phase(16, 3)
+        self.assertEqual(self.line(p.stdout), "12")
+        self.assertEqual(self.free(), runlock.BUDGET - 17)
+
+    def test_the_load_guard_admits_when_no_other_process_holds_a_slot(self):
+        self.load.write_text("100")
+        # nothing held: a load that is none of the lock's never holds the queue up
+        a = self.holder(10, "a")
+        self.admitted(a)
+        b = self.holder(1, "b")
+        self.until(lambda: self.admitting("b"), "b did not reach the queue")
+        self.quiet(b)
+        # a ends: no other process holds a slot, so b goes whatever the load
+        self.let_go(a)
+        self.admitted(b)
+        self.let_go(b)
+        # a process's own holds count for the load but never hold its next one up
+        self.in_process()
+        w = runlock.offline(self.tree, "own phase", 4)
+        self.addCleanup(w.release)
+        self.assertEqual(w.n, 4)
+        self.assertTrue(runlock.hold(self.tree, "own lanes", 2, gpu=False))
+        self.assertEqual(self.free(), runlock.BUDGET - 8)
+
+    def test_status_says_what_the_load_guard_says(self):
+        a = self.holder(5, "a")
+        self.admitted(a)
+        self.load.write_text("30")
+        env = dict(self.env, PYTHONPATH=str(TOOLS))
+        out = subprocess.run([sys.executable, "-c", self.boot() + "sys.exit(runlock.main(['status']))"],
+                             cwd=self.tree, capture_output=True, text=True, env=env).stdout
+        self.assertIn("load guard: the 1-minute load 30.0 beside 5 slots held by other runs leaves room for 2",
+                      out)
+
 
 class ToolNames(unittest.TestCase):
     """Two runs at once of each tool that names instances, results or plays a network game: what
@@ -958,7 +1171,7 @@ class ToolNames(unittest.TestCase):
     def setUp(self):
         RunLock.setUp(self)
 
-    wrapper, start, line = RunLock.wrapper, RunLock.start, RunLock.line
+    wrapper, boot, start, line = RunLock.wrapper, RunLock.boot, RunLock.start, RunLock.line
 
     def test_two_runs_take_distinct_names_and_ports(self):
         code = self.NAMES.format(tools=str(TOOLS))
