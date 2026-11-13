@@ -1,0 +1,1 @@
+landing-review: run lock GPU MiB budget, seats, resume, polling, engine-free sim, effort=high range=24f04759..d782be3e findings=8 (M2 L6) acted=8 rejected=0 fixed-in=5f951c27,900d26c8,1eebcfff,88d0f282,896b40e5,99a18b8d; residual: driver deferred free accepted by owner 2026-11-13
