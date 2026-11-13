@@ -1464,7 +1464,7 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
         d->ttype = *(unsigned short*)(target + U_TYPEWORD);
         d->towner = *(unsigned char*)(target + U_OWNER);
     }
-    else if (o->kind == TASIM_TGT_FEAT && fmap_x > 0)
+    else if (o->kind == TASIM_TGT_FEAT && o->a >= 0 && o->a < g_wire.nfeats && fmap_x > 0)
     {
         d->cell = g_feats[o->a].ay / 16 * fmap_x + g_feats[o->a].ax / 16;
         if (!feat_cell_def(ta, d->cell, &d->cdef))
@@ -1619,6 +1619,18 @@ static void issue_orders(void)
         int         pos[3];
         int         havepos = 0;
 
+        /* An ordinal indexes g_wire.units[], g_units[] and g_feats[] only inside [0, n), n being
+           at most their size by the parser's caps: the parser checks no ordinal's range, and
+           resolve_all counts one outside it as bad without dropping it, so under onerror=skip
+           the order reaches here and each use bounds it again. */
+        if ((o->subj == TASIM_SUBJ_ORD && (o->uord < 0 || o->uord >= g_wire.nunits)) ||
+            (o->kind == TASIM_TGT_UNIT && !o->tlive && (o->a < 0 || o->a >= g_wire.nunits)) ||
+            (o->kind == TASIM_TGT_FEAT && (o->a < 0 || o->a >= g_wire.nfeats)))
+        {
+            g_ord_fail++;                    /* resolve_all said why */
+            continue;
+        }
+
         /* WHO ------------------------------------------------------------- */
         if (o->subj == TASIM_SUBJ_ORD)
         {
@@ -1772,6 +1784,15 @@ static void issue_orders(void)
 
 static void resolve_camera(void)
 {
+    /* the ordinal's bound, as issue_orders': resolve_all named an ordinal outside the wire and
+       onerror=skip still arrives here, so the camera is skipped and counted with the failures */
+    if ((g_wire.cam_kind == TASIM_TGT_UNIT && (g_wire.cam_a < 0 || g_wire.cam_a >= g_wire.nunits)) ||
+        (g_wire.cam_kind == TASIM_TGT_FEAT && (g_wire.cam_a < 0 || g_wire.cam_a >= g_wire.nfeats)))
+    {
+        g_failed++;
+        return;
+    }
+
     if (g_wire.cam_kind == TASIM_TGT_POS)
     {
         g_cam_x = g_wire.cam_a;
