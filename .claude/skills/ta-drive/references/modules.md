@@ -381,9 +381,10 @@ producer. Main/mode/span/log boundaries are controlled; this does not prove a
 native loading receipt, its display or persisted application clocks. Its own
 prefix/display are removed.
 
-`python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
+`python3 tools/replay/recmp_primary_test.py [--port PORT] --out /tmp/recmp-primary-run`
 checks native live movement through the installed primary wrapper in two owned
-human instances, with saving off and a 20-unit limit. Both commanders must move
+human instances, with saving off and a 20-unit limit, under two lanes of the run
+lock, on a leased DirectPlay port (the first free one without `--port`). Both commanders must move
 on both observers; native movement counts must be positive and stale refusals
 zero. Add `--raw` for the unqueued primary transport. The fixture retains the
 tested DLL/map/hash, native ticks, rosters and logs, then removes its own

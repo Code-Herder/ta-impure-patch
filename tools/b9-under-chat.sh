@@ -1,8 +1,12 @@
 #!/bin/bash
 # A command mode whose unit dies under a modal screen — one scripted run, no hand driving.
 #
-#   tools/b9-under-chat.sh [out-dir]    (instance $B9_INSTANCE, default b9uc, on the private
-#                                        Xvfb $B9_DISPLAY, default :148)
+#   tools/b9-under-chat.sh [out-dir]    (instance b9uc, made afresh, on the private Xvfb
+#                                        $B9_DISPLAY, default :148)
+#
+# One game under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# instance's resource, so a second run of this probe waits for the first. The probe runs itself
+# again as the lock's command, which holds them until it exits.
 #
 # scenarios/b9-group.json with the play defaults. Select the CORAK alone, press CORATTACK (the
 # order byte main+0x2CC3 takes 3), open the chat with Enter (the key switch's case 0x4964FD pushes
@@ -16,9 +20,14 @@
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
-I=${B9_INSTANCE:-b9uc}
+I=b9uc
 D=${B9_DISPLAY:-:148}
-OUT=${1:-${TMPDIR:-/tmp}/b9-under-chat}
+OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b9-under-chat}")
+case "${RUNLOCK_HELD:-}" in
+  *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
+  *) cd "$REPO" && exec python3 tools/runlock.py run --slots 2 --vram 1 --what "b9-under-chat" \
+       --resource "instance-$I" -- "$REPO/tools/b9-under-chat.sh" "$OUT" ;;
+esac
 mkdir -p "$OUT"
 start=$(date +%s)
 echo "b9 chat start $(date -d @"$start" +%T)"
@@ -31,7 +40,9 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+# a registry of its own: an instance sharing the template's hives would take the whole budget
+"$T" rm "$I" --force > /dev/null 2>&1
+"$T" create "$I" --private-registry --display "$D" > "$OUT/create.txt" 2>&1 \
   || fail "create: $(tail -1 "$OUT/create.txt")"
 info() {        # retried: `tacli ls` fails while another session's instance is half made
   local v
