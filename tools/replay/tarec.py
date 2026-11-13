@@ -91,8 +91,9 @@
   timeline N, read across each fork it descends from. check, compare and compare --puppet take --exact: the
   world built from the exact records instead of the stream (exact_blocks).
 
-  images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
-  known gap for stock-secondary-orders at the native 300-projectile cap. Other bytes stay strict.
+  images-gate alone takes --stock-cosmetic-pools: the owner-approved native cosmetic-pool known
+  gap for the fixtures STOCK_COSMETIC_FIXTURES names, at the native 300-projectile cap. Other bytes
+  stay strict.
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -3871,12 +3872,16 @@ def image_group(which, at):
 
 
 GATE_CLASSES = ("presentation", "host-variant", "load-constant", "known-gap", "FAIL")
-STOCK_SECONDARY_COSMETICS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
-                           (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
+# The stock pools a seek does not restore: the explosions (count and 300 x 0x54 records), the
+# debris records (300 x 0x34) and the 100 flying-piece slots, upper ends exclusive.
+STOCK_COSMETIC_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
+                        (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
+# The fixtures the owner approved, 2026-10-06 and 2026-11-13; adding one is the owner's decision.
+STOCK_COSMETIC_FIXTURES = ("stock-secondary-orders", "stock-impai-fight")
 
 
 def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
-                    stock_secondary_cosmetics=False):
+                    stock_cosmetic_pools=False):
     """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
     replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
     the fresh seek to T1 is, in this order:
@@ -3884,14 +3889,15 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
                      camera, the zoom, the menu and the cursor moved): the viewer's own
       host-variant   two playings on one host differ there (P against R at T1)
       load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
-      known-gap      only the explicit stock-secondary-orders native cosmetic-pool exception
+      known-gap      only the native cosmetic-pool exception, on STOCK_COSMETIC_FIXTURES alone
       FAIL           anything else, labelled by who wrote it in play.
     A bit equal at both ends of [T1, Tlast] on each machine counts as unwritten in play: the window
     cannot see a write that was undone inside it. Exit 1 on any FAIL."""
     h = header_only(path)
-    if stock_secondary_cosmetics and (Path(path).stem != "stock-secondary-orders" or
-                                      h["projectiles"] != 300):
-        print("native cosmetic-pool exception requires stock-secondary-orders at the stock cap")
+    if stock_cosmetic_pools and (Path(path).stem not in STOCK_COSMETIC_FIXTURES or
+                                 h["projectiles"] != 300):
+        print("native cosmetic-pool exception requires one of "
+              f"{', '.join(STOCK_COSMETIC_FIXTURES)} at the stock cap")
         return 2
     (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
     got = {}
@@ -3929,11 +3935,12 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
             host = bits & ~pres & (P1[i] ^ R1[i])
             const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
             fail = bits & ~pres & ~host & ~const
-            # Seek clears these native pools; they have no snapshot layout yet. The owner's
-            # exact fixture/range exception leaves all other image bits and all record/effect
-            # comparisons intact. See demo-recorder-completeness.md, native cosmetic pools.
-            gap = fail if stock_secondary_cosmetics and any(
-                which == pool and lo <= i < hi for pool, lo, hi in STOCK_SECONDARY_COSMETICS) else 0
+            # A seek clears these native pools and no record carries them. The owner's exception
+            # covers exactly STOCK_COSMETIC_POOLS on STOCK_COSMETIC_FIXTURES; every other image
+            # bit and every record and effect comparison stays strict. See
+            # demo-recorder-completeness.md, the owner-approved known gap.
+            gap = fail if stock_cosmetic_pools and any(
+                which == pool and lo <= i < hi for pool, lo, hi in STOCK_COSMETIC_POOLS) else 0
             fail &= ~gap
             accepted += bool(gap)
             group = image_group(which, i)
@@ -3971,8 +3978,8 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
               f"{hexs(4)}, playing {hexs(5)}, seek {hexs(6)}")
     if len(runs) > 200:
         print(f"  ... and {len(runs) - 200} runs more")
-    if stock_secondary_cosmetics:
-        print(f"  accepted {accepted} native cosmetic-pool bytes for stock-secondary-orders; "
+    if stock_cosmetic_pools:
+        print(f"  accepted {accepted} native cosmetic-pool bytes for {Path(path).stem}; "
               "all other bytes checked")
     return 1 if fails else 0
 
@@ -4123,12 +4130,12 @@ def main(argv):
     import devpy
     devpy.ensure()
     timeline = 0
-    stock_secondary_cosmetics = "--stock-secondary-cosmetics" in argv
-    if stock_secondary_cosmetics:
+    stock_cosmetic_pools = "--stock-cosmetic-pools" in argv
+    if stock_cosmetic_pools:
         if argv[1:2] != ["images-gate"]:
-            print("--stock-secondary-cosmetics requires images-gate", file=sys.stderr)
+            print("--stock-cosmetic-pools requires images-gate", file=sys.stderr)
             return 2
-        argv = [a for a in argv if a != "--stock-secondary-cosmetics"]
+        argv = [a for a in argv if a != "--stock-cosmetic-pools"]
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
@@ -4238,7 +4245,7 @@ def main(argv):
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
                                    (argv[7], argv[8]), argv[9], argv[10], argv[11:],
-                                   stock_secondary_cosmetics)
+                                   stock_cosmetic_pools)
         if argv[1] == "scan":
             return cmd_scan(argv[2], argv[3])
         if argv[1] == "counts":
