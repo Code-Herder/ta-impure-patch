@@ -25,7 +25,7 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
 
 - ImpAI gets no vision, resource or unit advantage, and no resource penalty either.
 - `WORLDQ` returns only what the seat sees: its own units, what the game shares with allies, and enemies in its line of sight or on radar. The rule holds by construction, in the game and in tasim alike.
-- **The handicap exemption:** stock Difficulty scales an AI player's resources at seventeen sites: the eight incomes of the economy pass, the build-cancel and unbuild refunds, the reclaim payout's energy and metal, both resource transfers, the Deathmatch respawn's two grants and the credit for a reclaimed unit — × 0.5 on Easy, × 0.7 on Medium, and nothing on Hard, which is unscaled at every site ([sim](../engine/sim.html), *Difficulty and the AI handicap*). Those sites skip ImpAI seats, so ImpAI always plays at full rate. So does the stock AI's on-hit commander purge: a hit OTA AI commander drops its orders and its planners pause, an ImpAI commander, like a human's, does not. OTA AI keeps the stock handicap and the purge. This is a simulation change, with replay test groups ([ImpAI in the engine](../modules/impai.html), which names the sites no test reaches).
+- **The handicap exemption:** stock Difficulty scales an AI player's resources at seventeen sites: the eight incomes of the economy pass, the build-cancel and unbuild refunds, the reclaim payout's energy and metal, both resource transfers, the Deathmatch respawn's two grants and the credit for a reclaimed unit — × 0.5 on Easy, × 0.7 on Medium, and nothing on Hard, which is unscaled at every site ([sim](../engine/sim.html), *Difficulty and the AI handicap*). Fifteen of them skip ImpAI seats, so ImpAI always plays at full rate; the respawn's two grants stay stock, because the respawn only ever creates the controlled player's commander, which no ImpAI seat can be ([ImpAI in the engine](../modules/impai.html), *The handicap exemption*). So does the stock AI's on-hit commander purge: a hit OTA AI commander drops its orders and its planners pause, an ImpAI commander, like a human's, does not. OTA AI keeps the stock handicap and the purge. This is a simulation change, with replay test groups ([ImpAI in the engine](../modules/impai.html), which names the sites no test reaches).
 
 ## The stock AI's machinery on an ImpAI seat
 
@@ -38,7 +38,7 @@ What stock AI code runs on a seat ImpAI plays, now (A1a) and once ImpAI builds (
 | the acquisition tick `0x40B2C0(slot)` | runs | runs, as for every seat with an acquisition record, humans included |
 | the AI profile's `plan`/`weight`/`limit` parse at the level load | runs | runs; only the stock planners read what it writes |
 | the AI object and acquisition record's life | unchanged | unchanged |
-| the seventeen Difficulty scalings | skipped | skipped |
+| fifteen of the seventeen Difficulty scalings (all but the Deathmatch respawn's two) | skipped | skipped |
 | the on-hit commander purge `0x406FC3` | skipped | skipped |
 | the engine's other tests of the controller against 2 | unchanged | unchanged |
 

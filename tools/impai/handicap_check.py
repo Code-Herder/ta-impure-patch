@@ -21,7 +21,8 @@ commanders' own terms are the whole income, and the Difficulty scales them for O
 ImpAI's energy income must be above 0; a metal income of 0 on both seats (a commander with no
 metalmake) passes and is reported. Each launch also checks the setup it measures: main+0x37EEE
 holds the Difficulty, records 1 and 2 are controller 2, the level init's line names seat 2 only,
-the seat table marks record 2 and not record 1, and the eighteen handicap sites begin with E9
+the seat table marks record 2 and not record 1, the sixteen handicap sites begin with E9 and
+the Deathmatch respawn's two type tests, rows 15 and 16, are stock (80)
 (tagpu_impai.c).
 
 Then the rows that need more than the commanders. The launch applies the `impai-handicap` test
@@ -34,12 +35,11 @@ console's Give, mask 1). Every handicap stub counts the type-2 records that take
 every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 and the purge's
 18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
 record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's.
-All eighteen rows' counts are printed, and the rows this test does not reach are named with their
+Every row's counts are printed, and the rows this test does not reach are named with their
 reason: 9, 10, 11, 12 and 17 (the refunds and the reclaims) are shown at A1b, when ImpAI owns its
 seat's orders and no stock planner replaces a scripted build, unbuild or reclaim; 6 needs a mobile
-unit with a negative EnergyUse, which no unit of the retail game has; 15 and 16 are the
-Deathmatch respawn, which a skirmish cannot select and which only ever creates the controlled
-player's commander.
+unit with a negative EnergyUse, which no unit of the retail game has. Rows 15 and 16 have no
+site: ImpAI leaves the Deathmatch respawn's grants stock (tagpu_impai.c, HSITES).
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
@@ -73,18 +73,16 @@ ATTACKERS = "impai-handicap-purge.json"
 ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_packet_pub.c)
 REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
 AT_A1B = (9, 10, 11, 12, 17)            # refunds and reclaims: the stock AI replaces the order
-NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse",
-            15: "the Deathmatch respawn: no skirmish selects it, and it creates only the "
-                "controlled player's commander",
-            16: "as 15"}
+NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse"}
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
 REC = 0x1B63                            # record 0 in main; 0x14B a record (tagpu_engine.h)
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
+ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
 SITES = (0x401435, 0x4014B2, 0x4014F3, 0x40157F, 0x4015F3, 0x40167C, 0x4016F2, 0x401753,
-         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x465437, 0x4654A3,
-         0x486CDA, 0x406FC3)
+         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x486CDA, 0x406FC3)
+STOCK = (0x465437, 0x4654A3)            # rows 15 and 16, `cmp byte [eax+0x73],2`: 80 78 73 02
 
 
 def field(rec, off, size=4):
@@ -115,10 +113,10 @@ class Held(Check):
 
 
 def counts(c, at):
-    """The eighteen rows' (scaled, exempt) counts, read in one peek of 36 u32s (one hex read of
-    the 144 bytes overruns the peek's line)."""
+    """Each row's (scaled, exempt) counts, read in one peek of 36 u32s, a pair a row id (one hex
+    read of the 144 bytes overruns the peek's line)."""
     v = c.values(*(f"0x{at + 4 * k:08X}:4" for k in range(36)))
-    return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in range(1, 19)}
+    return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in ROWS}
 
 
 def both(hits, rows):
@@ -150,7 +148,7 @@ def run(api, instance, level, out):
             specs = [field(OTA, 0x90), field(IMPAI, 0x90), field(OTA, 0x9C), field(IMPAI, 0x9C),
                      field(OTA, 0x73, 1), field(IMPAI, 0x73, 1), DIFFICULTY]
             e_ota, e_imp, m_ota, m_imp, c1, c2, diff = c.values(*specs)
-            ops = c.values(*(f"0x{va:X}:1" for va in SITES))
+            ops = c.values(*(f"0x{va:X}:1" for va in SITES + STOCK))
             text = api.talog.run_text(gamedir).splitlines()
             seats = [ln for ln in text if "impai: seats" in ln or "impai: unavailable" in ln]
             where = next((m for m in map(ATTACH.search, text) if m), None)
@@ -180,6 +178,9 @@ def run(api, instance, level, out):
         fails.append(f"the level init's line is {seats[-1] if seats else 'missing'}, "
                      f"not `impai: seats 2 (impure.cfg) ...`")
     unpatched = [f"0x{va:X}" for va, op in zip(SITES, ops) if op != 0xE9]
+    written = [f"0x{va:X}" for va, op in zip(STOCK, ops[len(SITES):]) if op != 0x80]
+    if written:
+        fails.append(f"the respawn's sites are not stock: {', '.join(written)}")
     if unpatched:
         fails.append(f"sites not patched: {', '.join(unpatched)}")
     if not e_imp > 0:

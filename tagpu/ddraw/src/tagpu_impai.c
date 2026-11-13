@@ -39,7 +39,10 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm")
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
 
-#define IMPAI_HSITES 18        /* the handicap sites: the seventeen Difficulty tests and 0x406FC3 */
+/* The handicap rows keep the ids of engine/sim.md's table, 1 to 18, though rows 15 and 16, the
+   Deathmatch respawn's two grants, have no site: no ImpAI seat can reach them (HSITES). */
+#define IMPAI_ROWS 18
+#define IMPAI_HSITES 16        /* the fifteen Difficulty tests ImpAI exempts and 0x406FC3 */
 enum { HIT_SCALED, HIT_EXEMPT };
 
 /* What went in at attach. `avail`: every site ImpAI needs is in, so a level may mark seats;
@@ -53,17 +56,20 @@ SIM_VAR(s_install, SIM_INSTALL);
 
 /* The level's counts, for the level-end lines and handicap_check.py's peek: the wrapper's turns
    per seat, and per handicap site how often a type-2 record took the scaled continuation (an OTA
-   AI seat) and the unscaled branch for an ImpAI mark. The stubs increment `hits` with a plain
+   AI seat) and the unscaled branch for an ImpAI mark, indexed by row id less one, so the pairs
+   of rows 15 and 16 stay 0. The stubs increment `hits` with a plain
    `inc` on whichever thread reaches the site; the threads are ordered as the table's writes are
    (the stubs' ordering), but nothing makes the counts exact against a network load's concurrent
    removal: they are diagnostics the simulation never reads. */
 static struct {
     unsigned calls[PLAYER_COUNT];
-    unsigned hits[IMPAI_HSITES][2];         /* [HIT_SCALED], [HIT_EXEMPT] */
+    unsigned hits[IMPAI_ROWS][2];           /* [HIT_SCALED], [HIT_EXEMPT] */
 } s_diag;
 SIM_VAR(s_diag, SIM_PRIVATE);
 
 typedef void (__thiscall* PFN_AiTick)(void* obj);
+
+static void handicap_counts(char* line);
 
 /* The seat whose turn this is, or -1. Every test must hold:
    - THE THREAD. The players phase runs on the game thread every step and once on the loader
@@ -129,16 +135,12 @@ void tagpu_impai_level_end(void)
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     char line[IMPAI_HSITES * 28];
     unsigned i, now;
-    int at;
     if (s_install.in && ta) {
         now = *(const unsigned*)(ta + OFF_GAMETIME);
         for (i = 0; i < PLAYER_COUNT; i++)
             if ((s_seat[i] & IMPAI_ON) || s_diag.calls[i])
                 tagpu_logf("impai: calls seat=%u n=%u gametime=%u", i, s_diag.calls[i], now);
-        at = 0;
-        for (i = 0; i < IMPAI_HSITES; i++)
-            at += wsprintfA(line + at, " %u=%u/%u", i + 1, s_diag.hits[i][HIT_SCALED],
-                            s_diag.hits[i][HIT_EXEMPT]);
+        handicap_counts(line);
         tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
     }
     memset(s_seat, 0, sizeof s_seat);
@@ -248,19 +250,24 @@ static void __fastcall impai_ai_command(char* rec, void* edx_unused, int type)
     ((PFN_SetType)(uintptr_t)VA_SET_TYPE)(rec, type);
 }
 
-/* The Difficulty handicap's exemption: eighteen type tests of the engine skip a record ImpAI
+/* The Difficulty handicap's exemption: sixteen type tests of the engine skip a record ImpAI
    plays. RUNS on a puppet: the stubs run there and take stock's branch by the site's own
    compare, every recorded record being type 3. */
 SIM_FEATURE(impai_handicap, SIM_PUPPET_RUNS, "impai-handicap");
 
-/* The eighteen sites (engine/sim.md, Difficulty and the AI handicap; the hook map, The AI seat):
+/* The sixteen sites (engine/sim.md, Difficulty and the AI handicap; the hook map, The AI seat):
    rows 1-17 scale a type-2 record's resources by main+0x37EEE, row 18 is the on-hit handler
-   0x406F80's commander purge. Each holds `cmp byte [rec+0x73],2` (or `cmp [eax+0x73],bl` with
+   0x406F80's commander purge. Rows 15 and 16, the Deathmatch respawn's grants 0x465437 and
+   0x4654A3, stay stock: the respawn 0x4653D9 creates its commander for the controlled player only
+   (the owner pushed at 0x4653D2 is the byte main+0x2A42, DISASSEMBLED), a record that is type 2
+   only after the AI command, which clears its mark (impai_ai_command), so no ImpAI seat ever
+   reaches them. Each holds `cmp byte [rec+0x73],2` (or `cmp [eax+0x73],bl` with
    bl = 2, rows 11-12) and a `jne` to the unscaled branch, short or near; `rec_ecx` when the
    record is in ECX, else EAX. Bytes DISASSEMBLED from the retail image, and compared again at
    attach. */
 typedef struct HSITE {
     uint32_t va;
+    uint8_t  row;          /* engine/sim.md's row id, 1-18                 */
     uint8_t  n;            /* the compare and its jne: 5, 6 or 10 bytes    */
     uint8_t  clen;         /* the compare alone: 3 or 4                    */
     uint8_t  rec_ecx;
@@ -272,29 +279,40 @@ typedef struct HSITE {
 #define CMPBL    0x38, 0x58, 0x73
 
 static const HSITE HSITES[] = {
-    { 0x00401435u,  6, 4, 0, { CMP2_EAX, 0x75, 0x37 } },             /*  1 economy: EnergyUse < 0  */
-    { 0x004014B2u, 10, 4, 0, { CMP2_EAX, 0x0F, 0x85, 0x83, 0, 0, 0 } }, /* 2 extractor metal    */
-    { 0x004014F3u,  6, 4, 0, { CMP2_EAX, 0x75, 0x46 } },             /*  3 makesmetal              */
-    { 0x0040157Fu,  6, 4, 0, { CMP2_EAX, 0x75, 0x26 } },             /*  4 wind                    */
-    { 0x004015F3u, 10, 4, 0, { CMP2_EAX, 0x0F, 0x85, 0xB8, 0, 0, 0 } }, /* 5 tide                 */
-    { 0x0040167Cu,  6, 4, 0, { CMP2_EAX, 0x75, 0x33 } },             /*  6 mobile EnergyUse < 0    */
-    { 0x004016F2u,  6, 4, 0, { CMP2_EAX, 0x75, 0x33 } },             /*  7 energymake              */
-    { 0x00401753u,  6, 4, 0, { CMP2_EAX, 0x75, 0x36 } },             /*  8 metalmake               */
-    { 0x0040269Fu,  6, 4, 0, { CMP2_EAX, 0x75, 0x38 } },             /*  9 build-cancel refund     */
-    { 0x0041BBB1u,  6, 4, 0, { CMP2_EAX, 0x75, 0x37 } },             /* 10 unbuild refund          */
-    { 0x004238C4u,  5, 3, 0, { CMPBL, 0x75, 0x2E } },                /* 11 reclaim payout energy   */
-    { 0x00423918u,  5, 3, 0, { CMPBL, 0x75, 0x38 } },                /* 12 reclaim payout metal    */
-    { 0x00464C06u,  6, 4, 1, { CMP2_ECX, 0x75, 0x32 } },             /* 13 energy transfer         */
-    { 0x00464D36u,  6, 4, 1, { CMP2_ECX, 0x75, 0x34 } },             /* 14 metal transfer          */
-    { 0x00465437u,  6, 4, 0, { CMP2_EAX, 0x75, 0x38 } },             /* 15 respawn energy          */
-    { 0x004654A3u,  6, 4, 0, { CMP2_EAX, 0x75, 0x38 } },             /* 16 respawn metal           */
-    { 0x00486CDAu,  6, 4, 1, { CMP2_ECX, 0x75, 0x38 } },             /* 17 reclaimed unit's credit */
-    { 0x00406FC3u,  6, 4, 0, { CMP2_EAX, 0x75, 0x2D } },             /* 18 on-hit commander purge  */
+    { 0x00401435u,  1,  6, 4, 0, { CMP2_EAX, 0x75, 0x37 } },             /*  1 economy: EnergyUse < 0  */
+    { 0x004014B2u,  2, 10, 4, 0, { CMP2_EAX, 0x0F, 0x85, 0x83, 0, 0, 0 } }, /* 2 extractor metal    */
+    { 0x004014F3u,  3,  6, 4, 0, { CMP2_EAX, 0x75, 0x46 } },             /*  3 makesmetal              */
+    { 0x0040157Fu,  4,  6, 4, 0, { CMP2_EAX, 0x75, 0x26 } },             /*  4 wind                    */
+    { 0x004015F3u,  5, 10, 4, 0, { CMP2_EAX, 0x0F, 0x85, 0xB8, 0, 0, 0 } }, /* 5 tide                 */
+    { 0x0040167Cu,  6,  6, 4, 0, { CMP2_EAX, 0x75, 0x33 } },             /*  6 mobile EnergyUse < 0    */
+    { 0x004016F2u,  7,  6, 4, 0, { CMP2_EAX, 0x75, 0x33 } },             /*  7 energymake              */
+    { 0x00401753u,  8,  6, 4, 0, { CMP2_EAX, 0x75, 0x36 } },             /*  8 metalmake               */
+    { 0x0040269Fu,  9,  6, 4, 0, { CMP2_EAX, 0x75, 0x38 } },             /*  9 build-cancel refund     */
+    { 0x0041BBB1u, 10,  6, 4, 0, { CMP2_EAX, 0x75, 0x37 } },             /* 10 unbuild refund          */
+    { 0x004238C4u, 11,  5, 3, 0, { CMPBL, 0x75, 0x2E } },                /* 11 reclaim payout energy   */
+    { 0x00423918u, 12,  5, 3, 0, { CMPBL, 0x75, 0x38 } },                /* 12 reclaim payout metal    */
+    { 0x00464C06u, 13,  6, 4, 1, { CMP2_ECX, 0x75, 0x32 } },             /* 13 energy transfer         */
+    { 0x00464D36u, 14,  6, 4, 1, { CMP2_ECX, 0x75, 0x34 } },             /* 14 metal transfer          */
+    { 0x00486CDAu, 17,  6, 4, 1, { CMP2_ECX, 0x75, 0x38 } },             /* 17 reclaimed unit's credit */
+    { 0x00406FC3u, 18,  6, 4, 0, { CMP2_EAX, 0x75, 0x2D } },             /* 18 on-hit commander purge  */
 };
 #define NSITES ((int)(sizeof HSITES / sizeof HSITES[0]))
 #define STUB_ROOM 96u          /* one stub's bytes, rounded up: the longest is 86 */
-_Static_assert(sizeof HSITES / sizeof HSITES[0] == IMPAI_HSITES, "the seventeen handicap sites and 0x406FC3");
-_Static_assert(18 * STUB_ROOM <= 0x1000, "every stub fits the one page");
+_Static_assert(sizeof HSITES / sizeof HSITES[0] == IMPAI_HSITES, "the fifteen handicap sites and 0x406FC3");
+_Static_assert(IMPAI_HSITES * STUB_ROOM <= 0x1000, "every stub fits the one page");
+
+/* The level-end line's counts, ` <row>=<scaled>/<exempt>` for each site in row order, into
+   `line` (IMPAI_HSITES * 28 bytes: each item is at most 25). */
+static void handicap_counts(char* line)
+{
+    int i, at = 0;
+    unsigned r;
+    for (i = 0; i < NSITES; i++) {
+        r = HSITES[i].row;
+        at += wsprintfA(line + at, " %u=%u/%u", r, s_diag.hits[r - 1][HIT_SCALED],
+                        s_diag.hits[r - 1][HIT_EXEMPT]);
+    }
+}
 
 /* Every stub, one page made at attach and kept for the process: the sites jump into it. */
 static unsigned char* s_code;
@@ -331,8 +349,8 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
    not: pop edx; pop ecx; pop eax
        inc dword [hits+SCALED]; jmp S          an OTA AI seat: stock's scaled path, S = va + n
 
-   `hits` is the site's row of s_diag.hits: the level's count of type-2 records that took each
-   exit, for the level-end line and handicap_check.py.
+   `hits` is the site's row of s_diag.hits (HSITE.row less one): the level's count of type-2
+   records that took each exit, for the level-end line and handicap_check.py.
 
    THE INVARIANT.
    - A bound. The record pointer is data until it is one of main's ten records: an offset below
@@ -344,7 +362,7 @@ static unsigned char* put32(unsigned char* p, uint32_t v)
      touched (zero to two values are live on the FPU stack at a site, none at rows 13, 14 and 18:
      0x464B88 and 0x464CB8 empty it with `fstp st(0)` before a call, and 0x406F80 holds no x87
      value, DISASSEMBLED); nothing is called. The `inc` before each exit writes only the flags,
-     and the flags are dead at all 36 exits: from every U and S the first instruction that
+     and the flags are dead at all 32 exits: from every U and S the first instruction that
      touches them writes them (sub, cmp, test, xor) or is a call, directly or through one jmp,
      and 0x4016C5 passes only fcomp/fnstsw before its `test ah` (DISASSEMBLED). No direct branch
      in .text lands inside a site, and every site starts and ends on an instruction (the linear
@@ -421,7 +439,7 @@ static void write_branch(WRITE* w, unsigned char op, uint32_t target)
    the only caller of tagpu_impai_level_end; so no site is in on a level whose seat table nobody
    cleared and wrote, nor between levels with a table nobody cleared. Then every site is
    compared -- the seam 0x465031, the AI command's two calls 0x4162F4 and 0x4162FE and the
-   eighteen type tests -- and only when every one is stock are the stubs built and every site
+   sixteen type tests -- and only when every one is stock are the stubs built and every site
    written; a write that fails puts back every site already written. Otherwise nothing is
    written, s_install.avail stays 0, and each level says why. */
 void tagpu_impai_init(void)
@@ -478,7 +496,7 @@ void tagpu_impai_init(void)
     write_branch(&w[2], 0xE8, (uint32_t)(uintptr_t)impai_ai_command);
     for (i = 0; i < NSITES; i++) {
         p = s_code + (unsigned)i * STUB_ROOM;
-        stub_emit(p, &HSITES[i], s_diag.hits[i]);
+        stub_emit(p, &HSITES[i], s_diag.hits[HSITES[i].row - 1]);
         write_branch(&w[NCALLS + i], 0xE9, (uint32_t)(uintptr_t)p);
     }
     for (done = 0; done < NSITES + NCALLS; done++)
@@ -492,8 +510,8 @@ void tagpu_impai_init(void)
         return;
     }
     s_install.in = s_install.avail = 1;
-    /* the addresses handicap_check.py peeks: the seat table, and the counts as 18 pairs of u32,
-       scaled then exempt */
+    /* the addresses handicap_check.py peeks: the seat table, and the counts as 18 pairs of u32
+       by row id, scaled then exempt */
     tagpu_logf("impai: seam 0x465031, the AI command 0x4162F4 and 0x4162FE and %d handicap sites "
                "in; seats at 0x%08X, handicap counts at 0x%08X", NSITES,
                (unsigned)(uintptr_t)s_seat, (unsigned)(uintptr_t)s_diag.hits);

@@ -293,8 +293,6 @@ The three observers are installed by `ai_hooks_init` at the end of the recorder'
 | `0x423918` | handicap type test: the reclaim payout's metal (`bl` = 2) (`38 58 73 75 38`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub; U `0x423955`, S `0x42391D` |
 | `0x464C06` | handicap type test: the energy transfer (record in `ECX`) (`80 79 73 02 75 32`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x464C3E`, S `0x464C0C` |
 | `0x464D36` | handicap type test: the metal transfer (record in `ECX`) (`80 79 73 02 75 34`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x464D70`, S `0x464D3C` |
-| `0x465437` | handicap type test: the Deathmatch respawn's energy (`80 78 73 02 75 38`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x465475`, S `0x46543D` |
-| `0x4654A3` | handicap type test: the Deathmatch respawn's metal (`80 78 73 02 75 38`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x4654E1`, S `0x4654A9` |
 | `0x486CDA` | handicap type test: a reclaimed unit's credit to its killer (record in `ECX`) (`80 79 73 02 75 38`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x486D18`, S `0x486CE0` |
 | `0x406FC3` | handicap type test: the on-damage handler `0x406F80`'s commander purge (not a Difficulty site) (`80 78 73 02 75 2D`) | `tagpu_impai.c` (`stub_emit`) | `jmp` to its own stub, 1 NOP; U `0x406FF6`, S `0x406FC9` |
 | `0x408C40` | the AI object's tick, `thiscall`, called only from `0x465031` | `tagpu_recorder.c` (`ai_enter`, `ai_leave`) | entry and leave observer (`tagpu_detour_observe`), 5 stolen (`53 56 57 8B F9`) |
