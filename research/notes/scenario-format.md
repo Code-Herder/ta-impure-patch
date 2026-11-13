@@ -379,7 +379,20 @@ engine, and the roster is the oracle. **There is no ownership check either**, by
 order units it spawned for another player. An order aimed at an enemy unit is accepted; whether
 its AI immediately overrides it was not measured.
 
-**Every scenario's orders against the mapper: `tools/tasim/applysweep.py`.** `plan` lists the levels it would play (offline); `run --dll PATH --j N` applies every `ta-scenario/1` file under `scenarios/` that carries an order once, on the level it is written for (a fixture's mid-level applies on the fixture's load at their GameTimes, a calibration scenario on the arena, any other on its own map — a generated map, which only a fixture's content installs (the `RS` maps of `tools/resource_fixture.py`), with that fixture's content — scenarios with the same launch sharing one level except one that turns a seat's AI off, which loads its own), follows each past its last delayed order, and names every refused order with its unit, command and target. An apply passes only when its result does: `ok` 1, no error, no create refused and something created; any other is named as failed, so an `on_error: abort` that created nothing is never counted as played. It holds the run lock and plays `--j` tareplay Workers in parallel. A scenario it flags is fixed in the scenario.
+**Every scenario's orders against the mapper: `tools/tasim/applysweep.py`.** `plan` lists the levels it would play and what it would not; `run --dll PATH --j N` applies every `ta-scenario/1` file under `scenarios/` that carries an order once, on the level it is written for, set up as whatever plays it sets it up:
+
+- a fixture's mid-level applies on the fixture's load at their GameTimes, with its content, LOS and unit limit as tareplay launches it;
+- a calibration scenario on the arena;
+- any other on its own map with its own setup's unit limit (1500 when it names none, always passed: an instance keeps the last limit any launch wrote), and with a fixture's content when its map or its types need one;
+- a type the core's definitions of the stock install (`tasim_run defs`) lack needs a mod: the scenario takes the content of the first fixture whose content command installs every such type, read from the definitions of a scratch folder the command ran in. With none it is not played but named COULD NOT RUN, with the compatibility suite's setup when that plays it.
+
+Scenarios with the same launch share a level, each applied two ticks after the one before, unless one of three things holds; then the scenario loads a level of its own:
+
+- it turns a seat's AI off;
+- it keeps what it finds (`clear_existing: false`);
+- its creates would not fit. The stale-hits hold (`hit_take`, below) keeps the slots its clear frees from them, so an owner's units must fit in the limit less what the previous apply left. A scenario that does not fit even on a fresh load of its own launch (a 500-unit army on a limit of 500) is DOES NOT FIT, a failure.
+
+The sweep follows each scenario past its last delayed order and names every refused order with its unit, command and target. An apply passes only when its result does: `ok` 1, no error, no create refused and something created. Any other is named as failed, so an `on_error: abort` that created nothing is never counted as played. It holds the run lock for the lanes it plays and runs `--j` tareplay Workers in parallel. A scenario it flags is fixed in the scenario; a missing mod is a missing setup (exit 2).
 
 ## Engine switches
 

@@ -63,7 +63,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(sorted(reported), sorted(
             p for p, d in self.docs.items() if S.orders_of(d) and p != P("lost.json")))
         self.assertEqual(len(reported), len(set(reported)))
-        self.assertEqual(unhosted, [P("lost.json")])
+        self.assertEqual(unhosted, {P("lost.json"): {"could_not_run": "no map, and no fixture applies it"}})
 
     def test_fixture_applies_at_their_ticks_on_the_load(self):
         levels, _ = S.plan(self.docs, self.fx)
@@ -111,6 +111,78 @@ class Plan(unittest.TestCase):
         fx["fixtures"]["rs2"] = {"load": "rs-host.json", "content": dict(content, run=["x"])}
         self.assertEqual(S.map_content(docs, fx), {})
 
+    def test_the_unit_limit_is_always_named(self):
+        levels, _ = S.plan(self.docs, self.fx)
+        for lv in levels:
+            self.assertIsInstance(lv["launch"]["unit_limit"], int)
+        f1 = next(lv for lv in levels if lv["fix"] and lv["fix"][0] == "f1")
+        self.assertEqual(f1["launch"]["unit_limit"], S.FIXTURE_LIMIT)     # as tareplay launches it
+        a = next(lv for lv in levels if lv["items"][0]["path"] == P("a.json"))
+        self.assertEqual(a["launch"]["unit_limit"], S.DEFAULT_LIMIT)
+
+    def army(self, n, limit, clear=True, owner=0):
+        d = doc("Two Continents", [[ATTACK]], players=(0, 1))
+        d["units"][0]["owner"] = owner
+        d["groups"] = [{"owner": owner, "composition": [{"type": "ARMPW", "count": n - 1}]}]
+        d["setup"]["unit_limit"] = limit
+        d["setup"]["clear_existing"] = clear
+        return d
+
+    def test_the_room_the_hold_leaves(self):
+        docs = {P("big.json"): self.army(300, 500), P("big2.json"): self.army(300, 500),
+                P("small.json"): self.army(150, 500), P("full.json"): self.army(500, 500),
+                P("keep.json"): self.army(10, 500, clear=False)}
+        levels, skipped = S.plan(docs, {"fixtures": {}})
+        tc = sorted([S.rel(i["path"]) for i in lv["items"]] for lv in levels)
+        # big2 would find 300 slots held by big's units at its own clear: a level of its own;
+        # small fits behind it (300 + 150 <= 500); keep keeps what it finds: alone
+        self.assertEqual(tc, [["big.json"], ["big2.json", "small.json"], ["keep.json"]])
+        # 500 creates on a 500 limit: the start commander's slot is held by the clear
+        self.assertIn("does_not_fit", skipped[P("full.json")])
+        self.assertIn("player 0 needs 500 slots", skipped[P("full.json")]["does_not_fit"])
+        self.assertIsNone(S.misfit({}, self.army(499, 500), 500))
+        self.assertIsNotNone(S.misfit({}, self.army(500, 500), 500))
+        self.assertEqual(S.room_after({0: 7, 1: 1}, self.army(10, 500, clear=False)), {0: 17, 1: 1})
+        rc, lines = S.verdict({}, skipped)
+        self.assertEqual(rc, 1)
+        self.assertTrue(lines[0].startswith("DOES NOT FIT full.json: "))
+
+    def test_a_mod_scenario_takes_the_content_that_installs_its_types(self):
+        stock = ({"ARMPW", "CORAK"}, {"armpw_dead"})
+        tx = doc("Show Down", [[ATTACK]])
+        tx["units"][0]["type"] = "TXCOM1"
+        wx = doc("Show Down", [[ATTACK]])
+        wx["units"][0]["type"] = "CORBATSX"
+        tz = doc("Show Down", [[ATTACK]])
+        tz["units"][0]["type"] = "CORET1ASKBOT"
+        docs = {P("tx.json"): tx, P("wx.json"): wx, P("compat-tz.json"): tz,
+                P("keys-host.json"): doc("Show Down")}
+        fx = {"fixtures": {"b": {"load": "keys-host.json", "content": {"run": ["keys"], "files": []}},
+                           "a": {"load": "keys-host.json", "content": {"run": ["other"], "files": []}}}}
+        asked = []
+
+        def provides(name, fix):
+            asked.append(name)
+            return {"TXCOM1"} if fix["content"]["run"] == ["keys"] else set()
+        levels, skipped = S.plan(docs, fx, stock=stock, compat={"compat-tz": "tazero-alpha5"},
+                                 provides=provides)
+        lv = next(lv for lv in levels if lv["items"][0]["path"] == P("tx.json"))
+        self.assertEqual(lv["fix"][0], "b")
+        self.assertEqual(lv["launch"]["content"], "b")
+        self.assertEqual(lv["launch"]["unit_limit"], S.DEFAULT_LIMIT)  # the content alone is lent
+        self.assertEqual(skipped[P("wx.json")],
+                         {"could_not_run": "needs CORBATSX, which no fixture's content installs"})
+        self.assertIn("the compatibility suite plays it in tazero-alpha5",
+                      skipped[P("compat-tz.json")]["could_not_run"])
+        self.assertEqual(S.verdict({}, {P("wx.json"): skipped[P("wx.json")]})[0], 2)
+        self.assertEqual(S.needs_mod(tx, None), [])
+
+    def test_the_limits_match_the_launchers(self):
+        sys.path.insert(0, str(S.TREE / "tools" / "replay"))
+        import tareplay
+        self.assertEqual(S.FIXTURE_LIMIT, tareplay.UNIT_LIMIT)
+        self.assertEqual(S.DEFAULT_LIMIT, tareplay._CLI_API.SCN_DEFAULT_LIMIT)
+
     def test_calibration_on_the_arena(self):
         levels, _ = S.plan(self.docs, self.fx)
         lv = next(lv for lv in levels if lv["launch"]["map"] == "cavedog links cc")
@@ -122,7 +194,7 @@ class Plan(unittest.TestCase):
         levels, unhosted = S.plan(docs, json.loads(S.FIXTURES.read_text()))
         reported = [i["path"] for lv in levels for i in lv["items"] if i["report"]]
         ordered = {p for p, d in docs.items() if S.orders_of(d)}
-        self.assertEqual(sorted(reported + unhosted), sorted(ordered))
+        self.assertEqual(sorted(reported + list(unhosted)), sorted(ordered))
         self.assertEqual(len(reported), len(set(reported)))
         for lv in levels:
             self.assertTrue(lv["items"][0]["at"] is None)
@@ -162,12 +234,12 @@ class Answers(unittest.TestCase):
     def test_verdict(self):
         clean = {"refused": [], "other_errors": [], "creates_failed": 0, "ok": True, "applied": 3}
         ok = {P("a.json"): clean}
-        self.assertEqual(S.verdict(ok, [])[0], 0)
-        self.assertEqual(S.verdict(ok, [P("lost.json")])[0], 2)
+        self.assertEqual(S.verdict(ok, {})[0], 0)
+        self.assertEqual(S.verdict(ok, {P("lost.json"): {"could_not_run": "x"}})[0], 2)
         bad = {P("a.json"): dict(clean, ok=False,
                                  refused=[{"unit": "pw", "order": "attack", "target": "ak"}]),
                P("b.json"): {"could_not_run": "crash"}}
-        rc, lines = S.verdict(bad, [])
+        rc, lines = S.verdict(bad, {})
         self.assertEqual(rc, 1)
         self.assertTrue(any(ln.startswith("REFUSED a.json: pw") for ln in lines))
         self.assertFalse(any(ln.startswith("FAILED a.json") for ln in lines))
@@ -179,11 +251,11 @@ class Answers(unittest.TestCase):
             "1 entities did not resolve and on_error is abort: nothing was created"])
         for row in (abort, dict(clean, applied=0), dict(clean, ok=False),
                     dict(clean, ok=False, creates_failed=1), {"refused": [], "ok": True}):
-            rc, lines = S.verdict({P("a.json"): row}, [])
+            rc, lines = S.verdict({P("a.json"): row}, {})
             self.assertEqual(rc, 1, row)
             self.assertTrue(lines[0].startswith("FAILED a.json: "), lines)
             self.assertIn("0 scenario(s) applied clean", lines[-1])
-        _rc, lines = S.verdict({P("a.json"): abort}, [])
+        _rc, lines = S.verdict({P("a.json"): abort}, {})
         self.assertIn("FAILED a.json: nothing was created", lines)
 
 
@@ -292,7 +364,7 @@ class Levels(unittest.TestCase):
         # the wave applied at its tick, then followed past its last delayed order
         self.assertIn(("held", 30), R.calls)
         self.assertIn(("held", 30 + 40 + 2), R.calls)
-        rc, _lines = S.verdict(done, [])
+        rc, _lines = S.verdict(done, {})
         self.assertEqual(rc, 1)
 
     def test_a_failed_level_hands_its_mapped_scenarios_on(self):
@@ -303,6 +375,13 @@ class Levels(unittest.TestCase):
         self.assertEqual(done[P("m1.json")]["refused"], [])
         loads = [c for c in R.calls if c[0] == "load"]
         self.assertIn(("load", "m3.json"), loads)          # m3 on a level of its own
+
+    def test_a_grouped_apply_waits_out_the_hold(self):
+        R = FakeR({})
+        self.run_fake(R, j=1)
+        # m1 loads at GameTime 1; m2 and m3 follow it on its level, each HOLD_TICKS after the last
+        self.assertIn(("held", 1 + S.HOLD_TICKS), R.calls)
+        self.assertIn(("held", 1 + 2 * S.HOLD_TICKS), R.calls)
 
     def test_parallel_levels_cover_everything(self):
         R = FakeR({})
