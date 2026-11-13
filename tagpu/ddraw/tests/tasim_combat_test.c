@@ -1,5 +1,6 @@
 /* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool,
-   the flight's steps, the burst and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
+   the flight's steps, the burst and the ballistic pitch solver (src/tasim_proj.h), and the damage arithmetic
+   (src/tasim_dmg.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
    the DLL's i686 compiler under Wine.
 
      tasim_combat_test           the rules on hand-checked cases and against literal ports of the engine's
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tasim_dmg.h"
 #include "tasim_fixed.h"
 #include "tasim_proj.h"
 
@@ -515,6 +517,112 @@ static void burst_digest(void)
     feed(&div0, sizeof div0);
 }
 
+/* ---- damage ------------------------------------------------------------------------------------------------ */
+
+static float rand_float(void)
+{
+    if (next() & 1) return (float)((double)below(1u << 24) / (double)(1u << 24));   /* a factor or an edge in [0, 1) */
+    const uint32_t bits = (uint32_t)next() & 0x7FFFFFFFu;   /* any non-negative float, NaN and infinity included */
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+
+static void dmg_rules(void)
+{
+    CHECK(ts_stricmp("ARMCOM", "armcom") == 0 && ts_stricmp("a", "B") < 0 && ts_stricmp("B", "a") > 0,
+          "letters fold");
+    CHECK(ts_stricmp("[", "A") < 0 && ts_stricmp("_", "a") < 0 && ts_stricmp("_", "A") < 0,
+          "a differing pair is folded before the unsigned compare: '[' and '_' sort below every letter");
+    CHECK(ts_stricmp("arm", "armcom") < 0 && ts_stricmp("armcom", "arm") > 0 && ts_stricmp("\xE9", "a") > 0,
+          "the end sorts first; bytes past 0x7F are unsigned");
+
+    /* the parser inserts a name equal only without case at its lower bound, so "armcom" before "ARMCOM" */
+    const TS_DMGROW rows[] = { { "armcom", 200 }, { "ARMCOM", 100 }, { "corak", 50 }, { "CORE_X", 70000 } };
+    CHECK(ts_dmg_base(25, rows, 4, "ArmCom") == 200, "the first row equal without case");
+    CHECK(ts_dmg_base(25, rows, 4, "corak") == 50 && ts_dmg_base(25, rows, 4, "core_x") == 70000,
+          "a row's full dword");
+    CHECK(ts_dmg_base(25, rows, 4, "armc") == 25 && ts_dmg_base(25, rows, 4, "zzz") == 25 &&
+          ts_dmg_base(25, rows, 4, "") == 25 && ts_dmg_base(25, NULL, 0, "corak") == 25, "the default");
+
+    CHECK(ts_dmg_scale(100, 0.5f) == 50 && ts_dmg_scale(0x7FFFFFFF, 1.0f) == 0x7FFFFFFF && ts_dmg_scale(-7, 0.5f) == -3,
+          "the factor truncates");
+    CHECK(ts_vet_level(0) == 0 && ts_vet_level(4) == 0 && ts_vet_level(5) == 1 && ts_vet_level(24) == 4 &&
+          ts_vet_level(25) == 5 && ts_vet_level(65535) == 5, "the level");
+    CHECK(ts_dmg_shooter(1000, 5) == 1300 && ts_dmg_shooter(20000000, 5) == -16949672 && ts_dmg_shooter(-1000, 2) == -1120,
+          "the shooter's level, the product wrapping");
+    CHECK(ts_dmg_cheats(7, 0x80) == 14 && ts_dmg_cheats(7, 0x100) == 3 && ts_dmg_cheats(-7, 0x100) == -3 &&
+          ts_dmg_cheats(7, 0x180) == 7 && ts_dmg_cheats(7, 0x7E7F) == 7, "the cheat bits 7 and 8 only");
+    CHECK(ts_dmg_kind(0x80) == 2 && ts_dmg_kind(0xFFFFFF7Fu) == 1, "the kind");
+    CHECK(ts_dmg_angle(100, 0, 0, 0, 0x1000) == 0x3000 && ts_dmg_angle(0, -5, 0, 0, 0) == 0x8000, "the angle");
+
+    /* the hit's word */
+    CHECK(ts_hit_word(1000, 1, 0, 0, 0) == 1000 && ts_hit_word(1000, 1, 0, 0, 5) == 800, "the victim's level");
+    CHECK(ts_hit_word(1000, 1, 1, 0x8000, 0) == 500 && ts_hit_word(1000, 1, 0, 0x8000, 0) == 1000,
+          "armour, a 16.16 factor, only when armoured");
+    CHECK(ts_hit_word(29999, 1, 1, 0x10000, 5) == 23999, "below 30 000: armour and the level");
+    CHECK(ts_hit_word(30000, 1, 1, 0x8000, 5) == 30000, "kill outright: neither armour nor (B7) the level");
+    CHECK(ts_hit_word(40000, 1, 0, 0, 5) == 0x7FFF && ts_hit_word(-40000, 1, 0, 0, 0) == 0x8000,
+          "B7 saturates the signed word");
+    CHECK(ts_hit_word(40000, 2, 0, 0, 5) == 40000 && ts_hit_word(900, 2, 0, 0, 5) == 720 &&
+          ts_hit_word(70000, 2, 0, 0, 0) == 0xFFFF, "a paralyzer's word is unsigned");
+    CHECK(ts_hit_word(70000, 10, 1, 0x100, 5) == 0xFFFF && ts_hit_word(-5, 10, 0, 0, 0) == 0 &&
+          ts_hit_word(500, 10, 1, 0x100, 5) == 500, "a heal passes untouched, unsigned");
+    CHECK(ts_hit_word(-29999999, 1, 0, 0, 0) == 0x7FFF, "the level's product wraps before the divide");
+
+    /* the box distance and the falloff */
+    const int32_t u[3] = { 100 << 16, 0, 100 << 16 }, lo[3] = { -(8 << 16), 0, -(8 << 16) },
+                  hi[3] = { 8 << 16, 20 << 16, 8 << 16 };
+    const int32_t in[3] = { 100 << 16, 10 << 16, 105 << 16 }, off[3] = { 111 << 16, 24 << 16, 100 << 16 },
+                  side[3] = { 82 << 16, 0, 100 << 16 };
+    CHECK(ts_area_distance(in, u, lo, hi) == 0, "inside the box");
+    CHECK(ts_area_distance(off, u, lo, hi) == 5 << 16, "3 px past x, 4 px above: 5 px");
+    CHECK(ts_area_distance(side, u, lo, hi) == 10 << 16, "below the box's x");
+    CHECK(ts_area_falloff(0, 64, 0.25f) == 1.0f && ts_area_falloff(32, 64, 0.5f) == 0.625f &&
+          ts_area_falloff(64, 64, 0.3f) == 0.3f && ts_area_falloff(16, 64, 0.0f) == 0.5625f,
+          "the quadratic falloff");
+}
+
+static void dmg_digest(void)
+{
+    char a[6], b[6];
+    for (int i = 0; i < 300000; ++i) {
+        for (int k = 0; k < 5; ++k) {
+            a[k] = (char)(0x40 + below(0x40));
+            b[k] = below(4) ? a[k] : (char)(0x40 + below(0x40));
+        }
+        a[5] = b[5] = 0;
+        a[below(6)] = 0;
+        const int s = ts_stricmp(a, b);
+        const int32_t base = (int32_t)next();
+        const unsigned sh = below(16);
+        const int32_t amount = (int32_t)next() >> sh;
+        const float f = rand_float();
+        int32_t r[6];
+        r[0] = s;
+        r[1] = ts_dmg_scale(base, f);
+        r[2] = ts_dmg_shooter(amount, below(8));
+        r[3] = ts_dmg_cheats(amount, (uint16_t)next());
+        const int kind = (int)below(12), arm = (int)below(2);
+        const int32_t armour = (int32_t)next() >> 12;
+        r[4] = ts_hit_word(amount, kind, arm, armour, below(8));
+        int32_t q[4];
+        for (int k = 0; k < 4; ++k) q[k] = (int32_t)next();
+        r[5] = ts_dmg_angle(q[0], q[1], q[2], q[3], (uint16_t)next());
+        feed(r, sizeof r);
+        int32_t at[3], uu[3], bl[3], bh[3];
+        for (int k = 0; k < 3; ++k) {
+            at[k] = (int32_t)next(); uu[k] = (int32_t)next() >> 4;
+            bl[k] = -(int32_t)below(1u << 22); bh[k] = (int32_t)below(1u << 22);
+        }
+        const int32_t d = ts_area_distance(at, uu, bl, bh);
+        const int32_t dpx = (int32_t)below(300) - 20, R = 1 + (int32_t)below(255);
+        const float fo = ts_area_falloff(dpx, R, rand_float());
+        feed(&d, sizeof d);
+        feed(&fo, sizeof fo);
+    }
+}
+
 /* ---- the ballistic pitch solver --------------------------------------------------------------------------- */
 
 /* one random solver input: half in the ranges play reaches (a target within 2048 px and 255 px of height, a
@@ -707,6 +815,109 @@ static int x87_cruise_check(void)
     return bad != 0;
 }
 
+/* the damage's three x87 sequences, transcribed from the listing and run under the game's control word 0x27F:
+   the factor 0x499D73..0x499D77 (fild DWORD, fmul DWORD), the box distance 0x49A35A..0x49A388 (three filds, the
+   squares and sums in the listing's stack order, fsqrt) and the falloff 0x49A3B6..0x49A3E0 (fdivp st(2), st written
+   as its bytes DE FA so the assembler cannot swap it). The two _ftol calls take the x87's value, which under 0x27F is
+   a double's, stored first. */
+typedef struct {
+    int32_t i0, i1, i2;       /* 0x00 0x04 0x08                                   */
+    float f0;                 /* 0x0C                                             */
+    float one;                /* 0x10                                             */
+    uint16_t cw_old, cw_game; /* 0x14 0x16                                        */
+    double r;                 /* 0x18                                             */
+    float rf;                 /* 0x20                                             */
+    double l20, l18;          /* 0x28 0x30: the distance's two stored gaps        */
+} X87DMG;
+
+static int32_t x87_scale(int32_t base, float factor)
+{
+    X87DMG f = { base, 0, 0, factor, 1.0f, 0, 0x027F, 0.0, 0.0f, 0.0, 0.0 };
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "fnstcw word ptr [esi+0x14]\n\t" "fldcw word ptr [esi+0x16]\n\t"
+        "fild dword ptr [esi+0x0]\n\t" "fmul dword ptr [esi+0xC]\n\t" "fstp qword ptr [esi+0x18]\n\t"
+        "fldcw word ptr [esi+0x14]\n\t"
+        ".att_syntax prefix\n\t"
+        : : "S"(&f) : "memory", "cc");
+    return ts_ftol(f.r);
+}
+
+static int32_t x87_distance(int32_t gx, int32_t gy, int32_t gz)
+{
+    X87DMG f = { gx, gy, gz, 0.0f, 1.0f, 0, 0x027F, 0.0, 0.0f, 0.0, 0.0 };
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "fnstcw word ptr [esi+0x14]\n\t" "fldcw word ptr [esi+0x16]\n\t"
+        "fild dword ptr [esi+0x0]\n\t" "fild dword ptr [esi+0x4]\n\t" "fild dword ptr [esi+0x8]\n\t"
+        "fxch st(2)\n\t" "fst qword ptr [esi+0x28]\n\t" "fxch st(1)\n\t" "fst qword ptr [esi+0x30]\n\t"
+        "fxch st(1)\n\t" "fmul qword ptr [esi+0x28]\n\t" "fxch st(1)\n\t" "fmul qword ptr [esi+0x30]\n\t"
+        "fld st(2)\n\t" "fmul st, st(3)\n\t" "fxch st(1)\n\t" "faddp st(2), st\n\t" "faddp st(1), st\n\t"
+        "fsqrt\n\t" "fstp qword ptr [esi+0x18]\n\t" "fstp st(0)\n\t"
+        "fldcw word ptr [esi+0x14]\n\t"
+        ".att_syntax prefix\n\t"
+        : : "S"(&f) : "memory", "cc");
+    return ts_ftol(f.r);
+}
+
+static float x87_falloff(int32_t dpx, int32_t R, float e)
+{
+    X87DMG f = { dpx, R, 0, e, 1.0f, 0, 0x027F, 0.0, 0.0f, 0.0, 0.0 };
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "fnstcw word ptr [esi+0x14]\n\t" "fldcw word ptr [esi+0x16]\n\t"
+        "fild dword ptr [esi+0x0]\n\t" "fild dword ptr [esi+0x4]\n\t" "fld dword ptr [esi+0x10]\n\t"
+        "fsub dword ptr [esi+0xC]\n\t" "fxch st(1)\n\t" ".byte 0xDE, 0xFA\n\t" "fxch st(1)\n\t"
+        "fsub dword ptr [esi+0x10]\n\t" "fxch st(1)\n\t" "fld st(1)\n\t" "fmulp st(2), st\n\t" "fmulp st(1), st\n\t"
+        "fadd dword ptr [esi+0xC]\n\t" "fstp dword ptr [esi+0x20]\n\t"
+        "fldcw word ptr [esi+0x14]\n\t"
+        ".att_syntax prefix\n\t"
+        : : "S"(&f) : "memory", "cc");
+    return f.rf;
+}
+
+static int same_f(float a, float b) { return (isnan(a) && isnan(b)) || memcmp(&a, &b, 4) == 0; }
+
+static int x87_dmg_check(void)
+{
+    long bad = 0;
+    const long N = 2000000;
+    for (long i = 0; i < N; ++i) {
+        const int32_t base = (next() & 1) ? (int32_t)below(65536) : (int32_t)next();
+        const float fac = rand_float();
+        const int32_t e = x87_scale(base, fac), c = ts_dmg_scale(base, fac);
+        if (e != c && ++bad <= 10) printf("FAIL scale(%d, %a): x87 %d, core %d\n", base, (double)fac, e, c);
+    }
+    printf("x87: damage factor %ld of %ld equal\n", N - bad, N);
+    long bad2 = 0;
+    for (long i = 0; i < N; ++i) {
+        /* the gaps as the box gives them: inside (0), and any wrap of two 16.16 coordinates */
+        int32_t at[3], u[3], lo[3], hi[3], g[3];
+        for (int k = 0; k < 3; ++k) {
+            at[k] = (next() & 1) ? (int32_t)next() : (int32_t)(below(1u << 28) - (1u << 27));
+            u[k] = (int32_t)(below(1u << 28) - (1u << 27));
+            lo[k] = -(int32_t)below(64u << 16);
+            hi[k] = (int32_t)below(64u << 16);
+            const int32_t a = (int32_t)((uint32_t)lo[k] + (uint32_t)u[k]), b = (int32_t)((uint32_t)hi[k] + (uint32_t)u[k]);
+            g[k] = at[k] < a ? (int32_t)((uint32_t)a - (uint32_t)at[k])
+                 : at[k] > b ? (int32_t)((uint32_t)at[k] - (uint32_t)b) : 0;
+        }
+        const int32_t e = x87_distance(g[0], g[1], g[2]), c = ts_area_distance(at, u, lo, hi);
+        if (e != c && ++bad2 <= 10) printf("FAIL distance (%d, %d, %d): x87 %d, core %d\n", g[0], g[1], g[2], e, c);
+    }
+    printf("x87: box distance %ld of %ld equal\n", N - bad2, N);
+    long bad3 = 0;
+    for (long i = 0; i < N; ++i) {
+        const int32_t R = 1 + (int32_t)below(1024), dpx = 1 + (int32_t)below((uint32_t)R + 20);
+        const float edge = rand_float();
+        const float e = x87_falloff(dpx, R, edge), c = ts_area_falloff(dpx, R, edge);
+        if (!same_f(e, c) && ++bad3 <= 10)
+            printf("FAIL falloff(%d, %d, %a): x87 %a, core %a\n", dpx, R, (double)edge, (double)e, (double)c);
+    }
+    printf("x87: falloff %ld of %ld equal\n", N - bad3, N);
+    return bad != 0 || bad2 != 0 || bad3 != 0;
+}
+
 /* the core's acos (tasim_ballistic.c's crt_acos) for the residual's attribution */
 static double core_acos(double x)
 {
@@ -752,19 +963,22 @@ int main(int argc, char** argv)
         pitch_digest();
         flight_digest();
         burst_digest();
+        dmg_digest();
         printf("digest %016llx\n", (unsigned long long)fnv);
         return 0;
     }
 #if defined(__i386__)
     if (argc > 1 && !strcmp(argv[1], "x87")) {
         const int bad = x87_pitch_check();
-        return x87_cruise_check() | bad;
+        const int bad2 = x87_cruise_check();
+        return x87_dmg_check() | bad | bad2;
     }
 #endif
     pool_rules();
     pitch_rules();
     flight_rules();
     burst_rules();
+    dmg_rules();
     printf(fails ? "tasim_combat_test: %d failed\n" : "tasim_combat_test: ok\n", fails);
     return fails != 0;
 }
