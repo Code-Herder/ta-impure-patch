@@ -32,7 +32,7 @@
 # measures SMOOTHNESS, and pinning the game to one core would manufacture the very stutter
 # under test.
 #
-# A leg runs under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# A leg runs under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
 # instance's resource -- the whole budget instead when the instance's prefix shares the template's
 # registry hives (made without --private-registry), as resource_regression.hold_instance takes it.
 # The script runs itself again as the lock's command. The launch before the legs is the caller's:
@@ -52,8 +52,8 @@ case "${RUNLOCK_HELD:-}" in
 import json,sys
 i=[i for i in json.load(sys.stdin) if i['name']=='$INST']
 print(1 if i and i[0].get('private_registry') else 0)")
-     SLOTS=2; [ "$PRIVATE" = 1 ] || SLOTS=28
-     cd "$REPO" && FIX="$FIX" exec python3 tools/runlock.py run --slots "$SLOTS" --vram 1 \
+     SIZE="--lanes 1"; [ "$PRIVATE" = 1 ] || SIZE="--slots 28"
+     cd "$REPO" && FIX="$FIX" exec python3 tools/runlock.py run $SIZE --vram 1 \
        --what "barwobble $TAG on $INST" --resource "instance-$INST" -- \
        "$REPO/tools/barwobble.sh" "$INST" "$TAG" "$SX" "$SY" "$EX" "$EY" "$SECS" "$ZOOM" "$OUT" ;;
 esac

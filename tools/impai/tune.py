@@ -360,7 +360,7 @@ class TierB:
 
     def pieces(self, lanes: int, gpu: bool = False) -> list:
         """The round as runner pieces, one a candidate (one table pair a `tourney.py play`, `--gpu` with `gpu`),
-        W = 2 x lanes; each writes its results into its candidate's directory of the round."""
+        W the run lock's slots of `lanes` lanes on their renderer (tourney.pieces); each writes its results into its candidate's directory of the round."""
         rd = self.round_dir()
         rd.mkdir(parents=True, exist_ok=True)
         out = []
@@ -422,8 +422,8 @@ class TierB:
 # ---- the plan: every tier's runner pieces ----
 
 def plan(lanes: int, gpu: bool = False) -> list:
-    """Every tier's engine runs as runner pieces, W = 2 x the games played at once, in the order they depend on
-    one another: tier A's pieces one after another, tier B's within a round in any order, tier C's in any order."""
+    """Every tier's engine runs as runner pieces, W the run lock's slots of the games played at once on their
+    renderer (runlock.plan), in the order they depend on one another: tier A's pieces one after another, tier B's within a round in any order, tier C's in any order."""
     import runlock
     W = runlock.plan(lanes, gpu=False)[0]
     WG = runlock.plan(lanes, gpu=gpu)[0]           # tiers B and C: tourney.py plays, on the GPU with `gpu`

@@ -5344,7 +5344,8 @@ def main():
     p.add_argument("--offline-jobs", type=int, help="gate, offline: the most slots of the run lock the offline checks "
                                                     "hold, each check its weight (offline_weight), 0 for none in the "
                                                     "gate; by default the slots the game lanes leave of the budget "
-                                                    "(two to a lane), and at least 4; fewer when fewer are free")
+                                                    "(a Vulkan lane's weight each, tools/runlock-lanes.cfg), and at "
+                                                    "least 4; fewer when fewer are free")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
     p.add_argument("--resume", action="store_true", help="gate: go on with the gate an earlier sitting left in --shots "
@@ -5355,7 +5356,7 @@ def main():
     stop = None
     try:
         offline_jobs = a.offline_jobs if a.offline_jobs is not None else \
-            max(4, runlock.BUDGET - runlock.LANE_SLOTS * (a.jobs if a.mode == "gate" else 0))
+            max(4, runlock.BUDGET - runlock.lane_slots("vulkan") * (a.jobs if a.mode == "gate" else 0))
         if a.mode == "offline":
             offline_checks(offline_jobs)
         elif a.mode == "gate":

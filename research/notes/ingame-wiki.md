@@ -1276,7 +1276,7 @@ unless said).
   holder), holds it from its first game lane's start to its last one's end, so its games play
   together and no other run's among them, and releases it with offline checks perhaps still
   running. It declares its game lanes, `-j` and no more
-  than it has, two slots and a game's GPU memory each at the `wiki` suite's cap, and plays no more at once than its `games()`;
+  than it has, a Vulkan lane's slots (`tools/runlock-lanes.cfg`) and a game's GPU memory each at the `wiki` suite's cap, and plays no more at once than its `games()`;
   a refusal of that cap fails the lane that logs it; its instances carry its tag and the `mp` lane leases its DirectPlay
   port (`tools/dpport.py`), so another gate, in another worktree, plays beside it on its own. While
   another run holds part of the budget the offline checks run beside that run's games on what it

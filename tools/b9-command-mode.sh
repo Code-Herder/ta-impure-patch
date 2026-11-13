@@ -6,7 +6,7 @@
 #                                        default attack; B9_DLL=stocklimits runs
 #                                        ddraw-stocklimits.dll)
 #
-# One game under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# One game under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
 # instance's resource, so a second run of this probe waits for the first. The probe runs itself
 # again as the lock's command, which holds them until it exits.
 #
@@ -30,7 +30,7 @@ esac
 OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b9-command-mode-$MODE}")
 case "${RUNLOCK_HELD:-}" in
   *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
-  *) cd "$REPO" && exec python3 tools/runlock.py run --slots 2 --vram 1 --what "b9-command-mode $MODE" \
+  *) cd "$REPO" && exec python3 tools/runlock.py run --lanes 1 --what "b9-command-mode $MODE" \
        --resource "instance-$I" -- "$REPO/tools/b9-command-mode.sh" "$OUT" ;;
 esac
 mkdir -p "$OUT"

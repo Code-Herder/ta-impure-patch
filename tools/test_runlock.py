@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Tests of the weighted run lock (tools/runlock.py) on a throwaway repository's lock, with real
 processes and real files: the slots and the GPU memory held never sum past their budgets, runs
-of different caps included, each queue keeps arrival order, a run that wants no GPU memory is
+of different caps and GDI and Vulkan lanes of their own weights included, lane weights that cannot
+be read refuse every run, each queue keeps arrival order, a run that wants no GPU memory is
 admitted while a GPU run waits for its own, all at once or none, a killed holder or waiter frees
 its slots and memory, no run deadlocks beside a stand-in of the runlock code that counted GPU
 tokens and gathered them in the slot queue, a run's games take seats and wait for one past
@@ -20,7 +21,8 @@ admitted retries at once, and the device's memory given rather than read: none (
 the tests of the slots, the reference setup's 12 282 MiB -- 287 units of 32 MiB, 9 games at the
 play defaults' cap of tools/runlock-vram.cfg -- for the tests of the GPU memory. The machine's load
 is given too, from a file each test writes (none: no load guard), so the machine the tests run on
-never decides an admission. A step is waited for, never timed: WAIT_S bounds a step that takes
+never decides an admission, and so are the lane weights, a test's own file (GDI and VULKAN unless
+a test writes others), so the tree's figures never decide a test's arithmetic. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
 import json
@@ -44,6 +46,7 @@ REFERENCE_MIB = 12282           # the reference setup's GPU
 UNITS = 287                     # its GPU budget: (12 282 - 3072) // 32 (tools/runlock-vram.cfg)
 GAMES = 9                       # the games at the play defaults' cap: 287 * 32 // (920 + 64 + 32)
 LIMIT = 32.0                    # the load guard's limit: the reference setup's threads at load_per_thread 1.0
+GDI, VULKAN = 1, 2              # the lane weights every run here reads, unless a test writes others
 
 
 def units(n, cap=920):
@@ -66,6 +69,10 @@ class RunLock(unittest.TestCase):
         real = runlock.SUITES_CFG
         self.addCleanup(setattr, runlock, "SUITES_CFG", real)
         runlock.SUITES_CFG = self.suites
+        self.lanes = self.tree / "runlock-lanes.cfg"
+        self.weigh(GDI, VULKAN)
+        self.addCleanup(setattr, runlock, "LANES_CFG", runlock.LANES_CFG)
+        runlock.LANES_CFG = self.lanes
         # the machine's load as every run here reads it: none, so no load guard, unless a test
         # writes a figure
         self.load = self.tree / "loadavg"
@@ -75,6 +82,10 @@ class RunLock(unittest.TestCase):
             self.addCleanup(setattr, runlock, name, getattr(runlock, name))
             setattr(runlock, name, value)
 
+    def weigh(self, gdi, vulkan):
+        """The lane weights of every run here, from now on."""
+        self.lanes.write_text(f"# a test's lane weights\nlane_slots_gdi = {gdi}\nlane_slots_vulkan = {vulkan}\n")
+
     def boot(self, total=None, tree_cfg=None):
         """The Python that sets a run's runlock up as wrapper() says, before what it runs."""
         return (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
@@ -83,6 +94,7 @@ class RunLock(unittest.TestCase):
                 f"runlock.loadavg = lambda: (lambda t: float(t) if t.strip() else None)"
                 f"(open({str(self.load)!r}).read()); "
                 f"from pathlib import Path; runlock.SUITES_CFG = Path({str(self.suites)!r}); "
+                f"runlock.LANES_CFG = Path({str(self.lanes)!r}); "
                 + (f"runlock.VRAM_CFG = Path({str(tree_cfg)!r}); " if tree_cfg else ""))
 
     def phase(self, most, least=1, what="phase"):
@@ -93,20 +105,21 @@ class RunLock(unittest.TestCase):
                              "print(w.n, flush=True); sys.stdin.read()"])
 
     def wrapper(self, slots, what, *cmd, resources=(), vram=None, total=None, tree_cfg=None,
-                suite=None, sub="run"):
+                suite=None, sub="run", lanes=None):
         """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s, on a device of
         `total` MiB (None: no GPU budget), from a tree whose runlock-vram.cfg is `tree_cfg` (None:
         this one's), its games of `suite` in this test's suites file (self.suites), on a machine
         whose 1-minute load is the figure in self.load (none: no load guard) and whose load guard's
-        limit is LIMIT; `sub` "make" for `runlock.py make -j slots -- cmd`."""
+        limit is LIMIT; `sub` "make" for `runlock.py make -j slots -- cmd`; `lanes` for `run --lanes
+        lanes` in place of --slots."""
         boot = self.boot(total, tree_cfg) + "sys.exit(runlock.main(sys.argv[1:]))"
         if sub == "make":
             return [sys.executable, "-c", boot, "make", "-j", str(slots), "--what", what, "--", *cmd]
         named = [a for r in resources for a in ("--resource", r)]
         gpu = ["--vram", str(vram)] if vram is not None else []
         gpu += ["--suite", suite] if suite else []
-        return [sys.executable, "-c", boot, "run", "--slots", str(slots), *gpu, "--what", what,
-                *named, "--", *cmd]
+        size = ["--slots", str(slots)] if lanes is None else ["--lanes", str(lanes)]
+        return [sys.executable, "-c", boot, "run", *size, *gpu, "--what", what, *named, "--", *cmd]
 
     def start(self, argv, env=None):
         p = subprocess.Popen(argv, cwd=self.tree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -122,10 +135,11 @@ class RunLock(unittest.TestCase):
         return p
 
     def holder(self, slots, what="holder", resources=(), vram=None, total=None, tree_cfg=None,
-               suite=None):
+               suite=None, lanes=None):
         """A run that says `in` once admitted and holds its slots until its stdin closes."""
         return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD, resources=resources,
-                                       vram=vram, total=total, tree_cfg=tree_cfg, suite=suite))
+                                       vram=vram, total=total, tree_cfg=tree_cfg, suite=suite,
+                                       lanes=lanes))
 
     def stderr_until(self, p, text):
         """The stderr lines of `p` up to the first that holds `text`; a failure when none comes."""
@@ -320,11 +334,11 @@ class RunLock(unittest.TestCase):
         self.assertTrue(runlock.hold(self.tree, "lanes", 3))
         held = json.loads(os.environ[runlock.ENV])
         self.assertEqual((held["slots"], held["gpu_mib"], held["games"], held["cap_mib"], held["path"]),
-                         (3 * runlock.LANE_SLOTS, units(3) * 32, 3, 920, str(self.lock)))
+                         (3 * VULKAN, units(3) * 32, 3, 920, str(self.lock)))
         self.assertEqual((runlock.tag(), runlock.games(), self.held()), ("s00", 3, units(3)))
-        self.assertEqual(len(runlock.fds()), 3 * runlock.LANE_SLOTS + units(3) + 1)
+        self.assertEqual(len(runlock.fds()), 3 * VULKAN + units(3) + 1)
         self.assertFalse(runlock.hold(self.tree, "again", 1))
-        self.assertEqual(self.free(), runlock.BUDGET - 3 * runlock.LANE_SLOTS)
+        self.assertEqual(self.free(), runlock.BUDGET - 3 * VULKAN)
         runlock.release()
         self.assertNotIn(runlock.ENV, os.environ)
         self.assertEqual(runlock.fds(), ())
@@ -339,7 +353,7 @@ class RunLock(unittest.TestCase):
         # -j 12 on the reference setup: 9 games at the play defaults' cap, their slots and memory
         self.assertEqual(runlock.plan(12, path=lk), (2 * GAMES, units(GAMES), GAMES, UNITS, 920))
         self.assertEqual(runlock.plan(None, path=lk), (runlock.BUDGET, UNITS, GAMES, UNITS, 920))
-        self.assertEqual(runlock.plan(3, gpu=False, path=lk), (6, 0, 3, None, None))
+        self.assertEqual(runlock.plan(3, gpu=False, path=lk), (3 * GDI, 0, 3, None, None))
         # a suite of a smaller cap: 287 * 32 // 416 = 22 games, so -j 12 plays all 12
         self.assertEqual(runlock.plan(12, path=lk, suite="light"),
                          (24, units(12, 320), 12, UNITS, 320))
@@ -356,8 +370,109 @@ class RunLock(unittest.TestCase):
             runlock.plan(1, path=lk, suite="heavy")
         runlock.device_total_mib = lambda: None
         self.assertEqual(runlock.plan(12, path=lk), (24, 0, 12, None, None))
-        self.assertEqual(runlock.plan(40, path=lk), (runlock.BUDGET, 0, runlock.BUDGET // runlock.LANE_SLOTS,
-                                                     None, None))
+        self.assertEqual(runlock.plan(40, path=lk), (runlock.BUDGET, 0, runlock.BUDGET // VULKAN, None, None))
+
+    def test_a_lane_takes_its_renderers_weight(self):
+        device = runlock.device_total_mib
+        self.addCleanup(setattr, runlock, "device_total_mib", device)
+        runlock.device_total_mib = lambda: REFERENCE_MIB
+        lk = self.lock
+        self.weigh(3, 5)
+        # a run without GPU memory draws with GDI unless it says otherwise: llvmpipe is Vulkan
+        self.assertEqual(runlock.plan(4, gpu=False, path=lk), (12, 0, 4, None, None))
+        self.assertEqual(runlock.plan(4, gpu=False, path=lk, renderer="vulkan"), (20, 0, 4, None, None))
+        self.assertEqual(runlock.plan(None, gpu=False, path=lk)[2], runlock.BUDGET // 3)
+        # a GPU run's lanes are Vulkan's, cut to the GPU memory as ever
+        self.assertEqual(runlock.plan(4, path=lk), (20, units(4), 4, UNITS, 920))
+        self.assertEqual(runlock.plan(12, path=lk)[:3], (25, units(5), 5))
+        # with no device memory to bound, a GPU run is still a Vulkan run
+        runlock.device_total_mib = lambda: None
+        self.assertEqual(runlock.plan(4, path=lk), (20, 0, 4, None, None))
+        self.assertEqual((runlock.lane_slots("gdi"), runlock.lane_slots("vulkan"), runlock.lanes_in(7, "gdi"),
+                          runlock.lanes_in(2, "vulkan")), (3, 5, 2, 1))
+        with self.assertRaises(ValueError):
+            runlock.lane_slots("llvmpipe")
+        with self.assertRaises(ValueError):
+            runlock.plan(1, gpu=False, path=lk, renderer="opengl")
+
+    def test_held_gdi_and_vulkan_lanes_take_their_weights(self):
+        self.in_process()
+        self.assertTrue(runlock.hold(self.tree, "gdi lanes", 5, gpu=False))
+        self.assertEqual((runlock.games(), json.loads(os.environ[runlock.ENV])["slots"], self.free()),
+                         (5, 5 * GDI, runlock.BUDGET - 5 * GDI))
+        runlock.release()
+        # with no GPU budget a GPU run's lanes still take Vulkan's weight
+        self.assertTrue(runlock.hold(self.tree, "vulkan lanes", 5))
+        self.assertEqual((runlock.games(), self.free()), (5, runlock.BUDGET - 5 * VULKAN))
+        runlock.release()
+        a = self.holder(1, "gdi by lanes", lanes=7, vram=0)
+        self.admitted(a)
+        b = self.holder(1, "vulkan by lanes", lanes=7)
+        self.admitted(b)
+        self.assertEqual(self.free(), runlock.BUDGET - 7 * GDI - 7 * VULKAN)
+        probe = "import runlock; print(runlock.games(), flush=True)"
+        env = dict(self.env, PYTHONPATH=str(TOOLS))
+        for argv, games in ((self.wrapper(1, "gdi", sys.executable, "-c", probe, lanes=4, vram=0), 4),
+                            (self.wrapper(4, "slots", sys.executable, "-c", probe, vram=0), 4 // GDI),
+                            (self.wrapper(4, "slots", sys.executable, "-c", probe), 4 // VULKAN)):
+            p = self.start(argv, env=env)
+            self.assertEqual(self.line(p.stdout), str(games))
+            self.assertEqual(p.wait(WAIT_S), 0)
+
+    def test_mixed_lanes_never_sum_past_the_budget(self):
+        self.weigh(1, 3)
+        log = self.tree / "held.log"
+        probe = ("import os, pathlib, sys, time; d = pathlib.Path(sys.argv[1]); "
+                 "me = f'pid {os.getpid()},'; "
+                 "n = sum(p.read_text().startswith(me) for p in d.glob('slot-*')); "
+                 "log = open(sys.argv[2], 'a'); log.write(f'+ {os.getpid()} {sys.argv[3]} {n}\\n'); "
+                 "log.flush(); time.sleep(0.1); log.write(f'- {os.getpid()} {sys.argv[3]}\\n')")
+        # (lanes, renderer): GDI lanes a slot each, Vulkan ones three
+        wanted = [(5, "gdi"), (4, "vulkan"), (12, "gdi"), (9, "vulkan"), (1, "gdi"), (2, "vulkan"),
+                  (28, "gdi"), (7, "vulkan"), (3, "gdi"), (6, "gdi")]
+        runs = []
+        for k, (n, r) in enumerate(wanted):
+            slots = runlock.clamp(n * (1 if r == "gdi" else 3))
+            runs.append(self.start(self.wrapper(1, f"{r}{k}", sys.executable, "-c", probe,
+                                                str(self.lock.parent / "runslots"), str(log), str(slots),
+                                                lanes=n, vram=0 if r == "gdi" else None)))
+        for p in runs:
+            self.assertEqual(p.wait(WAIT_S * 3), 0, p.stderr.read())
+        held, seen = 0, 0
+        for ln in log.read_text().splitlines():
+            sign, _, w, *n = ln.split()
+            if sign == "+":
+                self.assertEqual(int(n[0]), int(w), f"a run held other than its lanes' slots: {ln}")
+                held += int(w)
+                seen += 1
+            else:
+                held -= int(w)
+            self.assertLessEqual(held, runlock.BUDGET, "the slots held passed the budget")
+        self.assertEqual((seen, held), (len(wanted), 0))
+
+    def test_lane_weights_that_cannot_be_read_refuse_every_run(self):
+        good = "lane_slots_gdi = 1\n# a comment = 9\nlane_slots_vulkan = 2\n"
+        self.lanes.write_text(good)
+        self.assertEqual(runlock.lane_weights(), {"gdi": 1, "vulkan": 2})
+        for bad in (good.replace("lane_slots_gdi = 1\n", ""),            # a renderer missing
+                    good + "lane_slots_llvmpipe = 4\n",                  # one it does not know
+                    good + "lane_slots_gdi = 2\n",                       # one named twice
+                    good.replace("= 1", "= one"),
+                    good.replace("= 1", "= 0"),
+                    good.replace("= 2", f"= {runlock.BUDGET + 1}")):
+            self.lanes.write_text(bad)
+            with self.assertRaises(runlock.BadLanes, msg=bad):
+                runlock.lane_weights()
+        p = self.start(self.wrapper(1, "gdi", sys.executable, "-c", "pass", vram=0))
+        self.assertEqual(p.wait(WAIT_S), 2)
+        err = p.stderr.read()
+        self.assertIn("the lane weights cannot be read, so no run is admitted", err)
+        self.assertIn(str(self.lanes), err)
+        self.assertNotIn("Traceback", err)
+        # the tree's own file is whole
+        self.addCleanup(setattr, runlock, "LANES_CFG", runlock.LANES_CFG)
+        runlock.LANES_CFG = TOOLS / "runlock-lanes.cfg"
+        self.assertEqual(set(runlock.lane_weights()), set(runlock.RENDERERS))
 
     def test_a_game_takes_its_capped_bound_and_its_margin(self):
         # the shipped figures: B = 920 + 64, a game 1016 of the budget, 9 on the reference setup
@@ -432,7 +547,7 @@ class RunLock(unittest.TestCase):
         runs = []
         for k, (w, suite) in enumerate(wanted):
             cap = caps[suite]
-            n = min(w, UNITS * 32 // (cap + 96), runlock.BUDGET // runlock.LANE_SLOTS)
+            n = min(w, UNITS * 32 // (cap + 96), runlock.BUDGET // VULKAN)
             runs.append(self.start(self.wrapper(1, f"v{k}", sys.executable, "-c", probe,
                                                 str(self.lock.parent / "runslots"), str(log),
                                                 str(units(n, cap)), vram=w, total=REFERENCE_MIB,
@@ -645,7 +760,7 @@ class RunLock(unittest.TestCase):
         # a suite's games run under the suite's cap, sized with the lock's driver and margin
         p = self.start(self.wrapper(1, "light", sys.executable, "-c", probe, vram=30, total=REFERENCE_MIB,
                                     suite="light"), env=env)
-        self.assertEqual(self.line(p.stdout), f"320 {runlock.BUDGET // runlock.LANE_SLOTS}")
+        self.assertEqual(self.line(p.stdout), f"320 {runlock.BUDGET // VULKAN}")
         p.wait(WAIT_S)
         # a run that wants no GPU memory publishes no cap: its games are not capped
         p = self.start(self.wrapper(1, "gdi", sys.executable, "-c", probe, vram=0, total=REFERENCE_MIB),
@@ -1020,22 +1135,29 @@ class RunLock(unittest.TestCase):
         self.in_process()
         a = self.holder(20, "a")
         self.admitted(a)
-        # three lanes' 6 slots and at least one worker: 8 free, so 2 workers of the 10 asked
-        self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
+        # three Vulkan lanes' 6 slots and at least one worker: 8 free, so 2 workers of the 10 asked
+        self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10, renderer="vulkan"))
         self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 2, 0))
         self.assertEqual(json.loads(os.environ[runlock.ENV])["slots"], 8)
         runlock.release()
-        self.let_go(a)
+        # three GDI lanes' 3 slots: the other 5 go to the workers
         self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
+        self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 5, 0))
+        runlock.release()
+        self.let_go(a)
+        self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10, renderer="vulkan"))
         self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 10, 12))
         runlock.release()
         # lanes that would fill the budget leave one slot to the workers they asked for
-        self.assertTrue(runlock.hold(self.tree, "lanes", 14, gpu=False, workers=4))
+        self.assertTrue(runlock.hold(self.tree, "lanes", 14, gpu=False, workers=4, renderer="vulkan"))
         self.assertEqual((runlock.games(), runlock.workers(), self.free()), (13, 2, 0))
+        runlock.release()
+        self.assertTrue(runlock.hold(self.tree, "lanes", 28, gpu=False, workers=4))
+        self.assertEqual((runlock.games(), runlock.workers(), self.free()), (27, 1, 0))
         runlock.release()
         # a run that asks for none: its workers are its slots, which its own offline work shares
         self.assertTrue(runlock.hold(self.tree, "lanes", 2, gpu=False))
-        self.assertEqual((runlock.workers(), self.free()), (4, 24))
+        self.assertEqual((runlock.workers(), self.free()), (2, 26))
 
     def test_a_phases_tasks_share_its_grant_by_weight_in_the_order_they_ask(self):
         w = runlock.Workers(3)
@@ -1142,7 +1264,7 @@ class RunLock(unittest.TestCase):
         self.addCleanup(w.release)
         self.assertEqual(w.n, 4)
         self.assertTrue(runlock.hold(self.tree, "own lanes", 2, gpu=False))
-        self.assertEqual(self.free(), runlock.BUDGET - 8)
+        self.assertEqual(self.free(), runlock.BUDGET - 4 - 2 * GDI)
         # nor a child on its parent's: this process holds the only slots held, and a run it starts goes
         c = self.holder(2, "child")
         self.admitted(c)
@@ -1174,7 +1296,7 @@ class ToolNames(unittest.TestCase):
     def setUp(self):
         RunLock.setUp(self)
 
-    wrapper, boot, start, line = RunLock.wrapper, RunLock.boot, RunLock.start, RunLock.line
+    wrapper, boot, start, line, weigh = RunLock.wrapper, RunLock.boot, RunLock.start, RunLock.line, RunLock.weigh
 
     def test_two_runs_take_distinct_names_and_ports(self):
         code = self.NAMES.format(tools=str(TOOLS))

@@ -6,9 +6,9 @@ its own, the cgroup's CPU time read every second, set beside a Vulkan lane's fig
 
 THE CLAIM. A calibration lane renders with GDI by default (tareplay.GDI_LEVER) and makes no Vulkan
 device, so it costs the machine no more CPU than a lane on the default renderer, whose peak the
-caller gives as --against (threads: CPU seconds a wall second). The run lock sizes a lane at
-LANE_SLOTS threads either way (tools/runlock.py), so a GDI lane above that figure would need its
-own size.
+caller gives as --against (threads: CPU seconds a wall second). The run lock sizes a lane by its
+renderer's weight (tools/runlock.py, THE LANE WEIGHTS; tools/runlock-lanes.cfg), and the mean this
+reports is a measurement of the GDI figure there.
 
 HOW. `systemd-run --user --scope` starts `calib.py engine --j 1` in a scope cgroup: every process
 the lane makes -- the harness, tacli, its Xvfb, Wine and the game -- lands in it and stays there
