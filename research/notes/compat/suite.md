@@ -95,7 +95,20 @@ names the gap). The hives are private because the store `tacli` keeps
   and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name. The peers' unit counts are not compared: the
   game is not lockstep — only a unit's owner decides its death and the other peer applies it when
   the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
-  two counts read at one GameTime differ by whatever is in flight, which depends on load.
+  two counts read at one GameTime differ by whatever is in flight, which depends on load. Nor are
+  the deaths compared, though the host's recording carries the joiner's own: each death of a
+  joiner's unit is in the joiner's contribution as an owner root (kind 10, `RK_EV_DEATH`, unit and
+  birth; `tools/replay/recmp_file.py`). The contributions travel on the recorder's own DirectPlay
+  session, the engine's death message `0x0C` on the game's, so nothing orders the two; and the host's
+  file closes at its own consumption cut without waiting for the joiner's later contributions
+  ([multiplayer slice](../tadr-port/demo-recorder-multiplayer-slice.md), *Consumption cuts and
+  terminal receipts*). A death the host applied near its end can therefore be missing from the
+  contributions in the file, and which one depends on load: the check would not hold by
+  construction, so the stage has none. **The gap**: a peer whose world lost a unit its owner still
+  has, or the reverse, is not caught here.
+  The seats get no alliances, and need none: Start refuses only a game whose every seat is on one
+  team, every seat starts on none, and the walk never clicks a team gadget
+  ([network](../engine/network.md), *The battle room's Start refuses only a game on one team*).
 - **The ImpAI stage** (`wine --impai [SECONDS]`, 900 when given bare; off by default): for each
   player's setup whose single-player run showed Impure running, a third copy of the folder
   (`-a`) plays the bar's seating ([the bar](../impai/bar.md)): record 0 the human with no unit,

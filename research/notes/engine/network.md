@@ -320,6 +320,24 @@ remote humans (`+0x94` = 1), so other peers' copies of an AI's resources are not
 **The loader does not run the skirmish seat fill in a network game** (`0x497532..0x497540`: the fill
 at `0x49757C` needs game mode 2), so the battle room's rows reach the level as they are.
 
+**The battle room's Start refuses only a game on one team** [DISASSEMBLED 2026-11-12]. A row's team is
+`rec+0x13F`, 0..4 or 5 for none. The START action (`0x44871D`, in `0x447B10`) first counts the humans
+whose PlayerInfo `+0x9D` has bit 2 (`0x44872A..0x44877F`) and refuses with fewer than one, or with
+more humans (`0x457AF0`) than three for one such human and six for two (`0x448781..0x4487AA`) [what bit
+2 means not traced]; then, for each team 0..4 (`0x4487C2..0x448893`), it counts the seated records of
+type 1, 2 or 3 with `+0x146` ≠ 10 on that team (in play, `main+0x2A44` bit 2, only those with units
+alive or none yet created) and refuses with "Can not start game with all players on the same team."
+(`0x505D38`, `0x4488A5..0x4488CC`) when that count equals every seat, humans `0x457AF0` plus AIs
+`0x457B40` (`0x4487B0..0x4487C4`). A seat with team 5 is counted in no team. **Every seat starts at
+5**: the activation `0x464290` writes it (`0x464371`), and every path of the join `0x450A10` reaches
+the activation at `0x450C29`. The team changes only through the `TEAMICONS<n>` gadget (`0x505C8C`) in
+`0x447B10`, which steps it (team + 1) mod 6 (`0x4480A7..0x4480B3`, then `0x452BD0`, not read);
+`0x447FB9`, which sets it back to 5; and the receiver at `0x454DE4`, which copies another peer's value
+for its row. A sixth writer, `0x446F8E` in `0x446F50`, has no caller and no stored pointer (call
+listing, rel32 scan, absolute-address scan). The room's compaction moves the byte with its record. So
+**a room in which nobody clicks a team gadget always starts**: every team 0..4 counts no seat, and the
+seats are at least the two humans.
+
 **No order crosses the wire.** The order code (`0x438000..0x441000`: `0x43ADC0`, `0x43F0E0`,
 `0x43B0B0`, `0x43A1F0`, the controllers `0x43B7C0`/`0x43BAD0`) calls neither sender `0x451DF0` nor
 `0x451BC0`, except through the COB script-start senders `0x456190`/`0x456290` (a `0x10`, from the
