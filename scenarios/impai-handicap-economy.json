@@ -1,0 +1,19 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-handicap` test group's economy structures, applied to impai-handicap.json, keeping every unit already there (the commanders): for seat 1 (OTA AI) and seat 2 (ImpAI) each, finished, a CORE solar collector, wind generator, metal extractor and metal maker on dry ground and a tidal generator in water, so the economy pass 0x401360 runs the Difficulty type tests of rows 1 (a structure's negative EnergyUse), 2 (a powered extractor's metal), 3 (a metal maker), 4 (wind) and 5 (tide) for both seats, with no order the stock AI could replace. The maker's test runs only while the maker is switched on (+0x10E bit 0, 0x4013C5) and granted its energy (no debt at +0xC8, 0x4013F9..0x40141F); the applier creates it switched on, and the stock AI's structure planner 0x4086D0 switches a maker off only when twice the stored metal is at least the stored energy (0x40871E..0x40877F), which impai-handicap.json's starting resources keep from happening (its description). MEASURED 2026-11-12: both makers switched on throughout, and rows 1 to 5 counted on both seats by GameTime 420. The tide's type test runs for a switched-on structure with a TidalGenerator above 0 that is no extractor, maker or wind generator (0x4015BC..0x4015F3), whatever the map's tidal strength, which only multiplies the grant. Seat 1's structures stand in a dry, flat 320 wu box round (7024, 1712) with its tide 460 wu north-west in water at least 24 deep; seat 2's in the box round (5848, 6744) with its tide 272 wu east, about 5100 wu from seat 1's. Heights read from the map's attribute grid: 80 to 85 on the boxes against the sea's 75, at most 51 under each tide's 128 wu square (CORTIDE wants 20 of depth).",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {"id": "solar1", "type": "CORSOLAR", "owner": 1, "pos": [6960, 1600], "facing": 0},
+  {"id": "win1", "type": "CORWIN", "owner": 1, "pos": [6960, 1760], "facing": 0},
+  {"id": "mex1", "type": "CORMEX", "owner": 1, "pos": [6960, 1830], "facing": 0},
+  {"id": "makr1", "type": "CORMAKR", "owner": 1, "pos": [7090, 1660], "facing": 0},
+  {"id": "tide1", "type": "CORTIDE", "owner": 1, "pos": [6696, 1384], "facing": 0},
+  {"id": "solar2", "type": "CORSOLAR", "owner": 2, "pos": [5784, 6632], "facing": 0},
+  {"id": "win2", "type": "CORWIN", "owner": 2, "pos": [5784, 6792], "facing": 0},
+  {"id": "mex2", "type": "CORMEX", "owner": 2, "pos": [5784, 6862], "facing": 0},
+  {"id": "makr2", "type": "CORMAKR", "owner": 2, "pos": [5914, 6692], "facing": 0},
+  {"id": "tide2", "type": "CORTIDE", "owner": 2, "pos": [6120, 6760], "facing": 0}
+ ]
+}

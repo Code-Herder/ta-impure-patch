@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "ImpAI's handicap exemption (tagpu/ddraw/src/tagpu_impai.c; engine/sim.md, Difficulty and the AI handicap): an idle human seat and two CORE computer seats on Town & Country at Easy, seat 1 OTA AI and seat 2 ImpAI, so the launch writes `seatai=2` into the store. Both seats are the same side, so their commanders produce the same terms: at Easy OTA AI's income is half of ImpAI's. The `impai-handicap` test group and tools/impai/handicap_check.py load it; the group's reclaim steps apply impai-handicap-reclaim-1.json and -2.json.",
+ "description": "ImpAI's handicap exemption (tagpu/ddraw/src/tagpu_impai.c; engine/sim.md, Difficulty and the AI handicap): an idle human seat and two CORE computer seats on Town & Country at Easy, seat 1 OTA AI and seat 2 ImpAI, so the launch writes `seatai=2` into the store. Both seats are the same side, so their commanders produce the same terms: at Easy OTA AI's income is half of ImpAI's. Each computer seat starts with 20 metal and 10000 energy, so the stock AI's structure planner 0x4086D0 leaves impai-handicap-economy.json's metal maker switched on: it switches one off only when twice the stored metal is at least the stored energy (0x40871E..0x40877F), and the stored metal is bounded by its storage, 200 at the start (the setting's floor, 0x496E90; no placed unit stores metal). MEASURED 2026-11-12: 20 of 200 metal at GameTime 1, and by 1200 at most 191 metal and at least 9433 energy on either seat. The human seat names its 1000 and 1000 so that no earlier run's setting carries over. The `impai-handicap` test group and tools/impai/handicap_check.py load it; both apply impai-handicap-economy.json, the group impai-handicap-army.json too and the check impai-handicap-purge.json.",
  "setup": {
   "map": "Town & Country",
   "res": "1024x768",
@@ -13,19 +13,25 @@
     "slot": 0,
     "controller": "human",
     "side": "arm",
-    "color": 0
+    "color": 0,
+    "metal": 1000,
+    "energy": 1000
    },
    {
     "slot": 1,
     "controller": "ai",
     "side": "core",
-    "color": 1
+    "color": 1,
+    "metal": 20,
+    "energy": 10000
    },
    {
     "slot": 2,
     "controller": "impai",
     "side": "core",
-    "color": 2
+    "color": 2,
+    "metal": 20,
+    "energy": 10000
    }
   ]
  }
