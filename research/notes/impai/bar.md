@@ -22,8 +22,10 @@ Note that ImpAI Easy plays at full income with handicapped behaviour, while OTA 
 
 ## The harness
 
-`tools/impai/bar.py` (`ids`, `play`, `judge`; `test_bar.py` holds its game list, seating, start schema, stall rule,
-judge, and `play`'s stop on fake lanes, offline). A pair is a list of game ids `bar-<pair>-<map>-<sides>-<n>`:
+`tools/impai/bar.py` (`ids`, `play`, `judge`, `check`; `test_bar.py` holds its game list, seating, start schema,
+stall rule, the holds' end at the cap, what a result reads from the level's end, the judge and the row checks, a
+game's end on a fake instance in each way a game ends, and `play`'s stop on fake lanes, offline). A pair is a list
+of game ids `bar-<pair>-<map>-<sides>-<n>`:
 `eota`, `nota`, `hota` (ImpAI Easy, Normal, Hard against OTA AI at Easy, Medium, Hard), the ladder pairs `ne` and
 `hn` (through the level lever, at Hard), and `dry`, OTA AI against OTA AI at Hard. Each ImpAI pair is the five
 maps × four side pairings × five games, the player under test at the map's first start in games 1, 3 and 5; the dry
@@ -41,12 +43,37 @@ run is ten games.
   count fell), and peeks both: the game ends when one is 0, or at GameTime 81 000. Both at 0 at one look -- both
   sides gone in one tick -- is a draw, judged as a game at the cap. A launch the engine does not reach is "could
   not run", never an outcome.
+- **The end of a game**: once the outcome is read, the level is ended through the engine's own exit
+  (`tareplay.Worker.quit`: the in-game menu, Exit, Exit Game, Yes). The exit menu's handler `0x4605C0` calls the
+  exit `0x491C60`, a three-call stub -- the blank frame `0x4257A0`; `0x451B60`, which returns at once off a
+  network game (`main+0x2A44` bit 0 at `0x451B66`, DISASSEMBLED); the teardown `0x491B60` -- so the teardown
+  runs within the handler's call, on the held level, before anything of the exit ([recorder](../engine/recorder.html)).
+  The teardown ends the recording and writes ImpAI's level-end lines, and the exit waits for the recording's
+  writer to close its file. No tick runs: the level stays held through the in-game menu, as tareplay's twin
+  checks on every record test. Ending the process (`tacli stop --hard`) reaches neither. A game whose exit does
+  not reach the teardown (no `impai: handicap rows` in its log) could not run.
+- **What a result reads from the level's end**, for each ImpAI seat: `end`, from its `impai: eco` and
+  `impai: mil … level=` lines -- its units completed, its army units completed by class (`army`, ImpAI's own
+  classes `lraider` … `ascout`, and `army_built`), its factories completed by tech level (`factories`, `"3"`
+  holding 3 and above), its water-only factories completed (`yards`), the sea plants it ordered, its attack waves,
+  raids and scouting runs begun, its naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the
+  first `impai: mil seat= t= attack= raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
+  for a kind it never began; `income_max`, its best metal income a pass over a pulse minute (the rise of
+  TotalMetalProduced between two pulses, over the passes between them). `judge` prints, per pair and side, in how
+  many games each first task came, its range and median, and the games without one.
 - **What a result keeps for a diagnosis**: its last two looks (`looks`: the GameTime and each seat's units alive,
   and at the last each seat's commanders lost, the word `+0x106` the destructor raises at `0x486996`,
-  [units](../engine/units.html)); a game no side won, and a game that could not run, also its instance log from
-  the launch on, `<id>.tagpu.log` beside its JSON. A draw then reads as both commanders dying (`+0x106` 1 for
-  each; [INFERRED] each death a kill-all of its side, whose units die as self-destructs, so its blasts can reach
-  the other commander) or as something else, from the log's `units:` heartbeats.
+  [units](../engine/units.html)). A game A did not win (lost, at the cap, a draw) or in which an ImpAI seat
+  stalled, and a game that could not run, keeps its instance log from the launch on, `<id>.tagpu.log` beside its
+  JSON. A bar game of the first kind keeps its recording too, moved to `<id>.imprec` beside its JSON with the
+  path in the result's `recording` -- once its writer's `closed` line is in the log, which is what says the file
+  is whole; a recording to keep that was not made or not closed makes the game "could not run". The
+  `.imprec.lock` beside a recording is no sign of an open file: the lock file stays beside every recording that
+  exists, by design (`tagpu_recfile.h`, THE PATH LOCK). Every other game's recording is deleted and its
+  `recording` is `null`; the tuning tournament's games (`tourney.py`, through `play_game`) keep none. A draw reads
+  as both commanders dying (`+0x106` 1 for each; [INFERRED] each death a kill-all of its side, whose units die as
+  self-destructs, so its blasts can reach the other commander) or as something else, from the log's `units:`
+  heartbeats.
 - **Why k = 1, and no `--turbo`**: the turbo's k ticks a frame are not the same game drawn less often. The step
   `0x495490` runs its tail once a call, not once a tick -- the temporary sight records' expiry `0x482130` among
   it -- so a sight record outlives its deadline by up to one batch and where the batches fall changes what units
@@ -75,12 +102,22 @@ run is ten games.
 - **The stall rule as built**: from ImpAI's pulse lines, a window of 3600 ticks starting at a pulse after GameTime
   1800 and ending before the game's end in which `built` and `eroots` both did not rise, or in which the seat
   held an army unit and `mroots` did not rise.
+- **The row checks**: `bar.py check b4|b5 DIR…` scores A2b's rows (the A2 specification's section 9) from the
+  results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound with `play --cap` --
+  b4 27 000, at least four games on two maps; b5 36 000, a game on each of the five maps. **b4**: an attack wave
+  begun (`first` ATTACK), a scouting run begun and no stall. **b5**: army units of at least `ROLES_MIN` (2)
+  classes completed; a water-only factory completed on Red Triangle and on any map ImpAI judged naval
+  (`naval=1`); a factory of tech 2 or above completed wherever `income_max` reached `tech_m`. Exit 0 when every
+  game meets each, 1 when one does not, 2 when a game could not run, is of another pair or bound, carries no
+  level-end lines of A's, or the games are short of the row's. The holds of every game end at its cap exactly
+  (`next_hold`), whatever the cap. **Not established**: b5's "an army of each wanted role" -- which classes a
+  seat wants follows from its table, its picture and its factories' menus at each decision, and no line logs
+  them, so the check asks for a composition of two classes and prints the classes completed.
 - **`play_game(game, lane, out_dir)`** is the tuning tournament's game runner (`tools/impai/tourney.py`): one game
   of its spec on one lane, with each seat's table copied into the game folder and named by
   `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and its value
   built and alive from its last pulse.
-- **Not built**: keeping the recordings of the games ImpAI lost, stalled in or ran to the cap. **Not run**: no
-  game of the bar has been played. The dry run of 2026-11-13 ended one game, Trout Farm 1, with both seats at 0 in
+- **Not run**: no game of the bar has been played. The dry run of 2026-11-13 ended one game, Trout Farm 1, with both seats at 0 in
   one 300-tick look at GameTime 30 000 (22 and 31 units at the look before), on a level held there by the harness's
   own `pause at 30000` and nothing else -- no scenario, no end test, no console command; the offsets are the
   records' (`main+0x1B63` + seat × `0x14B` + `0x144`, [memory](../engine/memory.html)). Its log was not kept, so

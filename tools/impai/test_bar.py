@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """test_bar -- the bar harness offline: its game list, the seating a game id gives, the start schema it reads
-from an .ota, the stall rule, the judge over synthetic results, and `play` on fake lanes: a game that could not
-run, and a run stopped by SIGINT. No game runs.
+from an .ota, the stall rule, the holds' end at the cap, what a result reads from the level's end, the judge and
+the b4 and b5 checks over synthetic results; a game's end on a fake instance (the engine's exit, the recording
+kept or deleted, the log kept for every non-win); and `play` on fake lanes: a game that could not run, and a run
+stopped by SIGINT. No game runs.
 
     python3 tools/impai/test_bar.py"""
 import json
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -53,9 +56,32 @@ class FakeVfs:
         return OTA
 
 
-def pulse(seat, t, built, mroots, eroots, army):
+def pulse(seat, t, built, mroots, eroots, army, metal=0):
     return (f"impai: pulse seat={seat} t={t} built={built} mroots={mroots} eroots={eroots} army={army} "
-            f"squads=F metal=0 energy=0 vlive=0 vbuilt=0")
+            f"squads=F metal={metal} energy=0 vlive=0 vbuilt=0")
+
+
+def eco_end(seat, classes="lraider:4,lassault:2", ftech="1:2,2:1", yards=0, sea_plants=0):
+    return (f"impai: eco seat={seat} decisions=360 orders=40 queued=8 failed=0 army=6 mex=3 energy=2 makers=0 "
+            f"factories=3 cons=2 metal_in=9.5 energy_in=120.0 gametime=27015 sea_plants={sea_plants} built=31 "
+            f"classes={classes} ftech={ftech} yards={yards}")
+
+
+def mil_end(seat, naval=0, tech_m=8.0):
+    return (f"impai: mil seat={seat} level=2 decisions=900 refused=0 predictions=60 refused_predictions=0 roots=300 "
+            f"refused_orders=0 left_out=0 attacks=2 raids=3 retreats=4 scouts=5 defends=1 safe=0 dguns=0 "
+            f"army_max=20/512 enemies_max=40/2048 contacts_max=3/32 predict_max=8/12 roots_max=30/40 naval={naval} "
+            f"unreached=0 cross=0 tech_m={tech_m:.1f}")
+
+
+def task(seat, t, attack=0, raid=0, scout=0):
+    return (f"impai: mil seat={seat} t={t} attack={attack} raid={raid} scout={scout} retreat=0 safe=0 dgun=0 "
+            f"army=6")
+
+
+REC = "replays\\2026-11-13 153139 Pincushion.imprec"
+REC_LINES = [f"recorder: recording {REC} from GameTime 1: 15001 slots, 38 tables",
+             f"recorder: writer: {REC} closed: 900 iterations to GameTime 27015, 0 corrections"]
 
 
 class TestBar(unittest.TestCase):
@@ -182,6 +208,273 @@ class TestBar(unittest.TestCase):
                     self.assertEqual(sorted(played), [(ids[1], False), (ids[2], False)])
                 else:                                       # every GDI result is another renderer's
                     self.assertEqual(sorted(played), [(i, True) for i in ids])
+
+
+class TestLevelEnd(unittest.TestCase):
+    """What a result reads from its launch's log once the level has ended, offline."""
+
+    def test_the_level_end_lines_give_each_impai_seat_its_end(self):
+        g = bar.parse_id("bar-hota-redtriangle-ac-2")                   # A in seat 2, B (OTA AI) in seat 1
+        seat = bar.seat_of(g)
+        lines = [task(2, 9000, scout=1), task(2, 12000, raid=1), task(2, 15000, attack=1), task(2, 16000, attack=1),
+                 task(1, 100, attack=1),                                 # seat 1 is no ImpAI seat here
+                 eco_end(2, yards=1, sea_plants=2), mil_end(2, naval=1),
+                 pulse(2, 1807, 1, 0, 1, 0, metal=100), pulse(2, 3607, 2, 0, 2, 0, metal=700)]
+        r = bar.read_result(lines, seat, g, "B", 20000)
+        self.assertEqual(r["end"]["A"], {"built": 31, "army": {"lraider": 4, "lassault": 2}, "army_built": 6,
+                                         "factories": {"1": 2, "2": 1}, "yards": 1, "sea_plants": 2,
+                                         "metal_in": 9.5, "attacks": 2, "raids": 3, "scouts": 5, "naval": 1,
+                                         "tech_m": 8.0})
+        self.assertNotIn("B", r["end"])
+        self.assertEqual(r["first"], {"A": {"attack": 15000, "raid": 12000, "scout": 9000}})
+        self.assertEqual(r["income_max"], {"A": 10.0})                   # 600 metal over 60 passes
+        self.assertEqual((r["outcome"], r["end_tick"]), ("B", 20000))
+
+    def test_a_line_without_the_counts_reads_none_and_no_task_reads_none(self):
+        g = bar.parse_id("bar-ne-pincushion-aa-1")                       # both seats ImpAI
+        old = ("impai: eco seat=1 decisions=360 orders=40 queued=8 failed=0 army=6 mex=3 energy=2 makers=0 "
+               "factories=3 cons=2 metal_in=9.5 energy_in=120.0 gametime=27015 sea_plants=0")
+        r = bar.read_result([old, eco_end(2, classes="-", ftech="-")], bar.seat_of(g), g, "cap", 81000)
+        self.assertEqual((r["end"]["A"]["built"], r["end"]["A"]["army"], r["end"]["A"]["factories"]),
+                         (None, {}, {}))
+        self.assertEqual((r["end"]["B"]["army_built"], r["end"]["B"]["factories"]), (0, {}))
+        self.assertEqual(r["first"], {s: {"attack": None, "raid": None, "scout": None} for s in ("A", "B")})
+        self.assertEqual(r["income_max"], {"A": None, "B": None})
+
+    def test_every_non_win_and_every_stall_is_kept_for_a_diagnosis(self):
+        st = [{"from": 1807, "to": 5407, "economy": True, "army": False}]
+        self.assertFalse(bar.for_diagnosis({"outcome": "A", "stalls": {"A": []}}))
+        for outcome in ("B", "cap"):
+            self.assertTrue(bar.for_diagnosis({"outcome": outcome, "stalls": {"A": []}}))
+        self.assertTrue(bar.for_diagnosis({"outcome": "A", "stalls": {"A": st}}))
+        self.assertTrue(bar.for_diagnosis({"outcome": "A", "stalls": {"A": [], "B": st}}))
+
+    def test_the_recording_is_whole_once_its_writer_closed_it(self):
+        self.assertEqual(bar.recording_of(REC_LINES), (REC, True))
+        self.assertEqual(bar.recording_of(REC_LINES[:1]), (REC, False))
+        self.assertIsNone(bar.recording_of(["recorder: recording timeline 2 of x.imprec from GameTime 5 (parent 0)"]))
+        self.assertIsNone(bar.recording_of([]))
+
+    def test_the_holds_end_at_the_cap_whatever_it_is(self):
+        for cap in (bar.CAP, 27000, 36000, 4500):
+            T, holds = 1, []
+            while T < cap:
+                T = bar.next_hold(T, cap)
+                holds.append(T)
+            self.assertEqual(holds[-1], cap)
+            self.assertTrue(all(h <= cap for h in holds))
+            self.assertTrue(all(b - a <= bar.STEP for a, b in zip(holds, holds[1:])))
+
+
+def row_result(gid, bound, **kw):
+    """A result of row b4's or b5's shape: A's level end, first tasks and best income, as Lane.play writes them"""
+    r = {"id": gid, "map": bar.parse_id(gid)["map"], "outcome": "cap", "end_tick": bound, "cap": bound,
+         "renderer": "gdi", "stalls": {"A": []},
+         "end": {"A": {"built": 40, "army": {"lraider": 4, "lassault": 2}, "army_built": 6,
+                       "factories": {"1": 2, "2": 1}, "yards": 0, "sea_plants": 0, "metal_in": 9.0, "attacks": 1,
+                       "raids": 2, "scouts": 3, "naval": 0, "tech_m": 8.0}},
+         "first": {"A": {"attack": 15000, "raid": 12000, "scout": 6000}}, "income_max": {"A": 9.0}}
+    for k, v in kw.items():
+        if k in ("end", "first"):
+            r[k] = {"A": dict(r[k]["A"], **v)}
+        else:
+            r[k] = v
+    return r
+
+
+class TestCheck(unittest.TestCase):
+    """`check b4|b5` and judge's first tasks over synthetic results."""
+
+    def run_check(self, row, results):
+        with tempfile.TemporaryDirectory() as d:
+            for r in results:
+                (Path(d) / f"{r['id']}.json").write_text(json.dumps(r))
+            with mock.patch("builtins.print") as said:
+                rc = bar.check(row, [Path(d)])
+        return rc, "\n".join(str(c.args[0]) for c in said.call_args_list)
+
+    def b4(self, **kw):
+        ids = ["bar-hota-pincushion-ac-1", "bar-hota-pincushion-ca-2", "bar-hota-troutfarm-aa-1",
+               "bar-hota-troutfarm-cc-2"]
+        return [row_result(g, 27000, **(kw if g == ids[0] else {})) for g in ids]
+
+    def b5(self, **kw):
+        ids = ["bar-hota-pincushion-aa-1", "bar-hota-redtriangle-ac-1", "bar-hota-troutfarm-ca-1",
+               "bar-hota-lavamania-cc-1", "bar-hota-plainspasses-ac-2"]
+        out = [row_result(g, 36000) for g in ids]
+        out[1] = row_result(ids[1], 36000, end={"yards": 1, "sea_plants": 1, "naval": 1})
+        for g, k in kw.items():
+            out[ids.index(g)] = row_result(g, 36000, **k)
+        return out
+
+    def test_b4_asks_an_attack_wave_a_scout_and_no_stall(self):
+        self.assertEqual(self.run_check("b4", self.b4())[0], 0)
+        rc, said = self.run_check("b4", self.b4(first={"attack": None}))
+        self.assertEqual(rc, 1)
+        self.assertIn("attack wave NOT MET (none)", said)
+        self.assertEqual(self.run_check("b4", self.b4(first={"scout": None}))[0], 1)
+        st = [{"from": 9007, "to": 12607, "economy": False, "army": True}]
+        rc, said = self.run_check("b4", self.b4(stalls={"A": st}))
+        self.assertEqual(rc, 1)
+        self.assertIn("no stall NOT MET (1 stall windows, the first from 9007)", said)
+
+    def test_a_row_is_played_to_its_bound_by_its_pair_on_its_maps(self):
+        rc, said = self.run_check("b4", self.b4(cap=81000))
+        self.assertEqual(rc, 2)
+        self.assertIn("played to GameTime 81000; b4 plays to 27000", said)
+        self.assertEqual(self.run_check("b4", self.b4()[:3])[0], 2)                    # three games
+        self.assertEqual(self.run_check("b4", [r for r in self.b4() if "troutfarm" not in r["id"]])[0], 2)
+        self.assertEqual(self.run_check("b4", self.b4(outcome="could_not_run", reason="x"))[0], 2)
+        rc, said = self.run_check("b4", [dict(self.b4()[0], end={})] + self.b4()[1:])  # a DLL before the lines
+        self.assertEqual(rc, 2)
+        self.assertIn("no level-end line of A's", said)
+        other = [dict(r, id=r["id"].replace("-hota-", "-nota-")) for r in self.b4()]
+        self.assertEqual(self.run_check("b4", other)[0], 2)
+        self.assertEqual(self.run_check("b5", self.b5())[0], 0)
+        self.assertEqual(self.run_check("b5", self.b5()[:4])[0], 2)                    # a map short
+
+    def test_b5_asks_a_composition_a_yard_on_the_sea_and_a_tech_up_the_income_allows(self):
+        g = "bar-hota-pincushion-aa-1"
+        rc, said = self.run_check("b5", self.b5(**{g: {"end": {"army": {"lraider": 9}}}}))
+        self.assertEqual(rc, 1)
+        self.assertIn("roles NOT MET (lraider:9)", said)
+        sea = "bar-hota-redtriangle-ac-1"
+        rc, said = self.run_check("b5", self.b5(**{sea: {"end": {"naval": 0}}}))        # the sea map, no yard
+        self.assertEqual(rc, 1)
+        self.assertIn("yard NOT MET (0 completed, 0 ordered)", said)
+        self.assertEqual(self.run_check("b5", self.b5(**{g: {"end": {"naval": 1}}}))[0], 1)   # judged naval
+        rc, said = self.run_check("b5", self.b5(**{g: {"end": {"factories": {"1": 3}}}}))
+        self.assertEqual(rc, 1)
+        self.assertIn("tech-up NOT MET (best income 9.0 a pass against tech_m 8.0; factories tech 1:3)", said)
+        rc, said = self.run_check("b5", self.b5(**{g: {"end": {"factories": {"1": 3}}, "income_max": {"A": 7.5}}}))
+        self.assertEqual(rc, 0)
+        self.assertIn("tech-up met (not asked: best income 7.5", said)
+
+    def test_judge_reports_the_first_tasks(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i, gid in enumerate(bar.ids("hota")[:3]):
+                r = row_result(gid, bar.CAP, outcome="A", wall_s=1.0,
+                               first={"attack": None if i == 2 else 9000 + i * 1000})
+                (Path(d) / f"{gid}.json").write_text(json.dumps(r))
+            with mock.patch("builtins.print") as said:
+                bar.judge([Path(d)])
+        text = "\n".join(str(c.args[0]) for c in said.call_args_list)
+        self.assertIn(f"A's first attack: in 2 of 3 games, GameTime 9000..10000, median 9000; none in "
+                      f"{bar.ids('hota')[2]}", text)
+        self.assertIn("A's first scout: in 3 of 3 games, GameTime 6000..6000, median 6000", text)
+
+
+class TestEnd(unittest.TestCase):
+    """Lane.play over a fake instance, every way a game ends: the level ended through the engine's exit, the
+    level-end lines read, the recording kept or deleted, the log kept for every non-win."""
+
+    def setUp(self):
+        import tareplay
+        self.R = tareplay
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "out").mkdir()
+        (self.tmp / "gamedir" / "replays").mkdir(parents=True)
+
+    def lane(self, alive, end_lines, recording=REC_LINES):
+        """A Lane whose holds land where they are asked, whose seats hold alive(T) units, and whose exit writes
+        `end_lines` and `recording`'s lines."""
+        R, tmp = self.R, self.tmp
+        quits = []
+
+        class Log:
+            NAP_S = 0
+
+            def __init__(self, w):
+                self.lines = list(recording[:1]) + [pulse(1, 1807, 1, 0, 1, 0)]
+
+            def read(self):
+                return []
+
+        class Worker:
+            gdi, name, gamedir = True, "tareplay-0", tmp / "gamedir"
+
+            def watch_caps(self):
+                pass
+
+            def place(self, fix, dll):
+                rd = self.gamedir / "replays"
+                (rd / REC.split("\\")[-1]).write_bytes(b"recording")
+                (rd / (REC.split("\\")[-1] + ".lock")).write_bytes(b"")
+
+            def quit(self):
+                quits.append(1)
+                lane.log.lines += end_lines + list(recording[1:])
+
+            def cap_failure(self):
+                return None
+
+        def hold(T, seats=()):
+            self.T = T
+            return T
+
+        def peek(off, size):
+            if off == bar.CMDR_DEATH:
+                return 1
+            k, field = divmod(off - bar.REC, bar.STRIDE)
+            return alive(self.T, k) if field == bar.ALIVE else 0
+
+        lane = bar.Lane.__new__(bar.Lane)
+        lane.R, lane.j, lane.out, lane.dll, lane.w, lane.log = R, 0, tmp / "out", Path("ddraw.dll"), Worker(), None
+        lane.hold, lane.peek = hold, peek
+        self.T, self.quits, self.Log = 1, quits, Log
+        return lane
+
+    def play(self, lane, gid, cap=27000):
+        R = self.R
+        with mock.patch.object(R, "Log", self.Log), mock.patch.object(R, "tacli", lambda *a, **k: (0, "")), \
+                mock.patch.object(R, "held_start", lambda w, log: 1), mock.patch.object(R, "say"), \
+                mock.patch.object(bar, "start_positions", lambda name: {2: (100, 100), 3: (900, 900)}):
+            return lane.play(dict(bar.parse_id(gid), cap=cap))
+
+    def files(self):
+        return sorted(p.name for p in (self.tmp / "out").iterdir() if not p.name.endswith(".scenario.json")), \
+            sorted(p.name for p in (self.tmp / "gamedir" / "replays").iterdir())
+
+    def test_a_win_ends_the_level_reads_its_end_and_deletes_its_recording(self):
+        gid = "bar-hota-pincushion-ac-1"                                 # A in seat 1
+        lane = self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5,
+                         [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"])
+        r = self.play(lane, gid)
+        self.assertEqual((r["outcome"], r["end_tick"], self.quits), ("A", 9000, [1]))
+        self.assertEqual(r["end"]["A"]["army"], {"lraider": 4, "lassault": 2})
+        self.assertIsNone(r["recording"])
+        self.assertEqual(self.files(), ([], []))                         # no log kept, no recording left
+
+    def test_a_loss_keeps_its_closed_recording_and_its_log(self):
+        gid = "bar-hota-pincushion-ac-1"
+        lane = self.lane(lambda T, s: 0 if s == 1 and T >= 12000 else 5,
+                         [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=12000:"])
+        r = self.play(lane, gid)
+        self.assertEqual(r["outcome"], "B")
+        self.assertEqual(r["recording"], str((self.tmp / "out" / f"{gid}.imprec").resolve()))
+        self.assertEqual((self.tmp / "out" / f"{gid}.imprec").read_bytes(), b"recording")
+        self.assertEqual(self.files(), ([f"{gid}.imprec", f"{gid}.tagpu.log"], []))
+
+    def test_a_game_run_to_the_cap_is_held_past_it_for_its_pulses_then_kept(self):
+        gid = "bar-hota-pincushion-ac-2"                                 # A in seat 2
+        lane = self.lane(lambda T, s: 5,
+                         [eco_end(2), mil_end(2), "impai: handicap rows scaled/exempt gametime=27015:"])
+        r = self.play(lane, gid)
+        self.assertEqual((r["outcome"], r["end_tick"], self.T), ("cap", 27000, 27015))
+        self.assertEqual(r["end"]["A"]["tech_m"], 8.0)
+        self.assertTrue(r["recording"].endswith(f"{gid}.imprec"))
+
+    def test_an_exit_that_writes_no_level_end_could_not_run(self):
+        lane = self.lane(lambda T, s: 5, [])
+        with self.assertRaisesRegex(self.R.CouldNotRun, "no level end"):
+            self.play(lane, "bar-hota-pincushion-ac-1")
+
+    def test_a_recording_to_keep_that_was_not_closed_could_not_run(self):
+        lane = self.lane(lambda T, s: 5, [eco_end(1), "impai: handicap rows scaled/exempt gametime=27015:"],
+                         recording=REC_LINES[:1])
+        with self.assertRaisesRegex(self.R.CouldNotRun, "was not closed"):
+            self.play(lane, "bar-hota-pincushion-ac-1")
 
 
 class TestPlay(unittest.TestCase):
