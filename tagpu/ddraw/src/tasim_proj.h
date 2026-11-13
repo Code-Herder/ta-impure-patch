@@ -105,4 +105,17 @@ TS_PROJ* ts_proj_append(TS_PROJPOOL* pool);
    no rewrite touches a stamp, so the order of the fix-ups changes nothing. */
 void ts_proj_compact(TS_PROJPOOL* pool);
 
+/* ---- the shot's arithmetic --------------------------------------------------------------------------------- */
+
+#define TS_PITCH_NONE 0x8000u   /* the solver's answer when no pitch reaches */
+
+/* The ballistic pitch solver 0x49A890(dx, dy, dz, v, minbarrel) (tasim_ballistic.c), DISASSEMBLED 0x49A890..0x49AA75,
+   stdcall, ret 0x14: the launch pitch in the engine's angle units for a shell of speed v (16.16 a tick) to cross the
+   16.16 offset (dx, dy, dz) under gravity g (main+0x14263, read by the engine itself, an argument here), or
+   TS_PITCH_NONE. Callers: can-aim 0x49AA80, can-engage 0x49ABB0, the turret fire 0x49D580 and AutoAim 0x49E1A0.
+   Every value the engine computes is reproduced bit for bit but one: RESIDUAL R4, the CRT acos 0x4E67F0's fpatan,
+   which the core computes with ts_atan2 (tasim_ballistic.c). MEASURED: tests/tasim_combat_test.c x87 runs the
+   engine's instruction sequence on the x87 and counts R4's differences. */
+uint16_t ts_ballistic_pitch(int32_t dx, int32_t dy, int32_t dz, int32_t v, float minbarrel, int32_t g);
+
 #endif

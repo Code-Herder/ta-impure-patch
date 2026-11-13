@@ -7,7 +7,8 @@ The core's standalone combat pieces (src/tasim_proj.h) must agree bit for bit in
 the self-test is built as tests/tasim_fixed_test.py builds its own: `host`, gcc -O2; `asan`, AddressSanitizer and
 UBSan, every finding fatal; `wine`, the DLL's compiler i686-w64-mingw32-gcc on SSE2 as the Makefile compiles every
 src/tasim_*.c, run under Wine in the wiki checks' prefix (tools/wiki/wineprefix.py). Each build runs the rules (the
-pool's append and compaction against the engine's sequence); every build prints the digest of the same calls on a
+pool's append and compaction against the engine's sequence, the pitch solver's hand cases); the i686 build also runs
+every floating-point function against the engine's instruction sequence on the x87 itself; every build prints the digest of the same calls on a
 fixed generator's arguments, and the three must be equal.
 
 Exit 0 when every build passes and the digests agree, 1 when one does not, 2 when a build cannot be made or run."""
@@ -19,8 +20,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DDRAW = HERE.parent
 TREE = DDRAW.parents[1]
-SRCS = ["tests/tasim_combat_test.c", "src/tasim_proj.c"]
-DEPS = [DDRAW / s for s in SRCS] + [DDRAW / f"src/{h}" for h in ("tasim_proj.h",)]
+SRCS = ["tests/tasim_combat_test.c", "src/tasim_proj.c", "src/tasim_ballistic.c", "src/tasim_fixed.c"]
+DEPS = [DDRAW / s for s in SRCS] + [DDRAW / f"src/{h}" for h in ("tasim_proj.h", "tasim_fixed.h")]
 SSE = ["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
 BUILDS = {   # `.exe` so the tree's *.exe ignore covers each
     "host": (["gcc", "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Isrc"], ["-lm"], "tasim_combat_test-host.exe"),
@@ -67,6 +68,10 @@ def main():
             code, out = run(name, exe, [])
             print(f"{name}: {out.strip()}")
             bad |= code != 0
+            if name == "wine":
+                code, out = run(name, exe, ["x87"])
+                print(f"{name}: {out.strip()}")
+                bad |= code != 0
             code, out = run(name, exe, ["digest"])
             digests[name] = out.strip()
             bad |= code != 0

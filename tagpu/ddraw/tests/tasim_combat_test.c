@@ -1,14 +1,19 @@
 /* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool
-   (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
+   and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
    the DLL's i686 compiler under Wine.
 
      tasim_combat_test           the rules on hand-checked cases and against literal ports of the engine's
                                  instruction sequences on random input; exit 1 on a failure
      tasim_combat_test digest    one 64-bit FNV-1a digest of every function on arguments from a fixed generator; the
-                                 driver requires every build to print the same digest */
+                                 driver requires every build to print the same digest
+     tasim_combat_test x87       (the i686 build only) every function that computes in floating point against the
+                                 engine's instruction sequence run on the x87 itself, under the game's control word,
+                                 on random input: equal, or a difference the residual it names explains */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tasim_fixed.h"
 #include "tasim_proj.h"
 
 static int fails;
@@ -161,14 +166,194 @@ static void pool_digest(void)
     }
 }
 
+/* ---- the ballistic pitch solver --------------------------------------------------------------------------- */
+
+/* one random solver input: half in the ranges play reaches (a target within 2048 px and 255 px of height, a
+   weaponvelocity of 100..1500 px a second, gravity 2000..20000, minbarrel -22.5..+12 degrees), half anything */
+typedef struct { int32_t dx, dy, dz, v, g; float mb; } PITCHIN;
+static PITCHIN pitch_input(void)
+{
+    PITCHIN a;
+    if (next() & 1) {
+        a.dx = (int32_t)(below(2u * 2048u << 16) - (2048u << 16));
+        a.dz = (int32_t)(below(2u * 2048u << 16) - (2048u << 16));
+        a.dy = (int32_t)(below(2u * 255u << 16) - (255u << 16));
+        a.v = (int32_t)(below((1500u - 100u) * 65536u / 30u) + 100u * 65536u / 30u);
+        a.g = (int32_t)(2000 + below(18000));
+        a.mb = (float)(((double)below(1000) / 1000.0 * 34.5 - 22.5) * 3.14159265358979 / 180.0);
+    } else {
+        a.dx = (int32_t)next(); a.dy = (int32_t)next(); a.dz = (int32_t)next();
+        a.v = (int32_t)next();
+        const int shift = (int)below(17) + 8;
+        a.g = (int32_t)next() >> shift;
+        a.mb = (float)((double)(int32_t)next() / 2147483648.0 * 2.0);
+    }
+    return a;
+}
+
+static void pitch_rules(void)
+{
+    const int32_t v = 655360, g = 8155;
+    /* sin 2t = g d / v^2: half the flat range is 15 degrees, 2730.67 units, truncated */
+    CHECK(ts_ballistic_pitch(26333337, 0, 0, v, -0.19635f, g) == 2730, "half the flat range: %u",
+          ts_ballistic_pitch(26333337, 0, 0, v, -0.19635f, g));
+    CHECK(ts_ballistic_pitch(0, 0, 0, v, -0.19635f, g) == TS_PITCH_NONE, "no offset: D = 0, both roots unordered");
+    CHECK(ts_ballistic_pitch(2 * 52666674, 0, 0, v, -0.19635f, g) == TS_PITCH_NONE, "past the flat range: E < 0");
+    /* minbarrel above the low root: the high one is 75 degrees, past the truncated pi/4 */
+    CHECK(ts_ballistic_pitch(26333337, 0, 0, v, 0.3f, g) == TS_PITCH_NONE, "the high root past pi/4");
+    /* the flat range's limit, where the two roots meet at 45 degrees: 8192 units exactly is pi/4, and the exe's pi/4
+       is below the true one, so the angle at the limit is refused unless it rounds below the truncated constant */
+    const uint16_t edge = ts_ballistic_pitch(52666650, 0, 0, v, -0.19635f, g);
+    CHECK(edge == TS_PITCH_NONE || edge <= 8192, "the flat range's limit: %u", edge);
+}
+
+static void pitch_digest(void)
+{
+    for (int i = 0; i < 1000000; ++i) {
+        const PITCHIN a = pitch_input();
+        const uint16_t r = ts_ballistic_pitch(a.dx, a.dy, a.dz, a.v, a.mb, a.g);
+        feed(&r, sizeof r);
+    }
+}
+
+#if defined(__i386__)
+/* The engine's instruction sequence 0x49A8C5..0x49AA61 on the x87 under the game's control word 0x27F, transcribed
+   from the listing: the frame's doubles at the engine's own local offsets (L0 .. L28), the arguments after them. The
+   CRT acos's normal path is its own five instructions and fpatan (0x4E6828..0x4E6836); its special cases (|x| = 1,
+   |x| > 1, a NaN) are the answers 0x4E6855..0x4E688F give. `fsubp st(1), st` is written as its bytes DE E9 so the
+   assembler cannot swap it. h is ts_hypot, which tests/tasim_fixed_test.c holds to the engine's _hypot on the x87. */
+typedef struct {
+    double L0, L8, L10, L18, L20, L28;         /* 0x00..0x2F                                                  */
+    int32_t dy, g, v, g2;                      /* 0x30, 0x34, 0x38, 0x3C                                      */
+    float mb; int32_t pad;                     /* 0x40                                                        */
+    double h;                                  /* 0x48                                                        */
+    double m2, zero, pi2, pi4, k32768, invpi;  /* 0x50, 0x58, 0x60, 0x68, 0x70, 0x78                          */
+    double ans;                                /* 0x80                                                        */
+    int32_t refused;                           /* 0x88                                                        */
+    uint16_t cw_old, cw_game;                  /* 0x8C, 0x8E                                                  */
+    double nan;                                /* 0x90                                                        */
+    long double t2;                            /* 0x98: the high root's angle as the x87 holds it             */
+} X87PITCH;
+
+#define X87_ACOS                                                                                                  \
+    "fld1\n\t" "fld st(1)\n\t" "fabs\n\t" "fcomip st, st(1)\n\t" "fstp st(0)\n\t" "jp 75f\n\t" "jb 70f\n\t"       \
+    "fld1\n\t" "fcomip st, st(1)\n\t" "je 72f\n\t" "fld1\n\t" "fchs\n\t" "fcomip st, st(1)\n\t" "je 73f\n\t"       \
+    "75:\n\t" "fstp st(0)\n\t" "fld qword ptr [esi+0x90]\n\t" "jmp 79f\n\t"                                       \
+    "72:\n\t" "fstp st(0)\n\t" "fldz\n\t" "jmp 79f\n\t"                                                           \
+    "73:\n\t" "fstp st(0)\n\t" "fldpi\n\t" "jmp 79f\n\t"                                                          \
+    "70:\n\t" "fld1\n\t" "fadd st, st(1)\n\t" "fld1\n\t" "fsub st, st(2)\n\t" "fmulp st(1), st\n\t" "fsqrt\n\t"  \
+    "fxch st(1)\n\t" "fpatan\n\t"                                                                                 \
+    "79:\n\t"
+
+static uint16_t x87_pitch(const PITCHIN* a, X87PITCH* f)
+{
+    memset(f, 0, sizeof *f);
+    f->dy = a->dy; f->g = a->g; f->v = a->v; f->g2 = (int32_t)((uint32_t)a->g * (uint32_t)a->g); f->mb = a->mb;
+    f->h = ts_hypot(a->dx, a->dz);
+    f->m2 = -2.0; f->zero = 0.0; f->pi2 = 0x1.921fb54442d11p+0; f->pi4 = 0x1.921fb54442d11p-1;
+    f->k32768 = 32768.0; f->invpi = 0x1.45f306dc9c889p-2; f->nan = NAN;
+    f->cw_game = 0x027F;
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "fnstcw word ptr [esi+0x8C]\n\t" "fldcw word ptr [esi+0x8E]\n\t"
+        "fld qword ptr [esi+0x48]\n\t" "fild dword ptr [esi+0x34]\n\t" "fild dword ptr [esi+0x30]\n\t"
+        "fstp qword ptr [esi+0x0]\n\t" "fmul qword ptr [esi+0x0]\n\t" "fild dword ptr [esi+0x38]\n\t"
+        "fxch st(2)\n\t" "fst qword ptr [esi+0x10]\n\t" "fmul qword ptr [esi+0x10]\n\t" "fxch st(2)\n\t"
+        "fst qword ptr [esi+0x8]\n\t" "fld qword ptr [esi+0x0]\n\t" "fxch st(1)\n\t" "fmul qword ptr [esi+0x8]\n\t"
+        "fxch st(2)\n\t" "fst qword ptr [esi+0x28]\n\t" "fxch st(1)\n\t" "fmul qword ptr [esi+0x0]\n\t"
+        "fxch st(3)\n\t" "fstp qword ptr [esi+0x0]\n\t" "fmul qword ptr [esi+0x50]\n\t" "fld qword ptr [esi+0x0]\n\t"
+        "fmul qword ptr [esi+0x0]\n\t" "fxch st(2)\n\t" "fstp qword ptr [esi+0x10]\n\t" "fsubr qword ptr [esi+0x10]\n\t"
+        "fild dword ptr [esi+0x3C]\n\t" "fxch st(3)\n\t" "fst qword ptr [esi+0x18]\n\t" "fld qword ptr [esi+0x18]\n\t"
+        "fxch st(2)\n\t" "fmul qword ptr [esi+0x10]\n\t" "fxch st(4)\n\t" "fstp qword ptr [esi+0x18]\n\t"
+        "fmul qword ptr [esi+0x18]\n\t" "fxch st(1)\n\t" "fadd qword ptr [esi+0x0]\n\t" "fxch st(2)\n\t"
+        "fst qword ptr [esi+0x20]\n\t" "fmul qword ptr [esi+0x18]\n\t" "fxch st(1)\n\t" "faddp st(3), st\n\t"
+        "fxch st(1)\n\t" "fstp qword ptr [esi+0x18]\n\t" "fmul qword ptr [esi+0x18]\n\t" "fxch st(1)\n\t"
+        "fmul qword ptr [esi+0x20]\n\t" "fxch st(1)\n\t" ".byte 0xDE, 0xE9\n\t"
+        "fcom qword ptr [esi+0x58]\n\t" "fnstsw ax\n\t" "test ah, 0x1\n\t" "jne 60f\n\t"
+        "fsqrt\n\t" "fld qword ptr [esi+0x10]\n\t" "fadd qword ptr [esi+0x28]\n\t" "fld qword ptr [esi+0x18]\n\t"
+        "fadd st(0), st\n\t" "fxch st(1)\n\t" "fmul qword ptr [esi+0x0]\n\t" "fxch st(2)\n\t"
+        "fst qword ptr [esi+0x28]\n\t" "fxch st(1)\n\t" "fstp qword ptr [esi+0x20]\n\t" "fadd st, st(1)\n\t"
+        "fxch st(1)\n\t" "fsub qword ptr [esi+0x28]\n\t" "fxch st(1)\n\t" "fdiv qword ptr [esi+0x20]\n\t"
+        "fxch st(1)\n\t" "fdiv qword ptr [esi+0x20]\n\t" "fxch st(1)\n\t" "fst qword ptr [esi+0x28]\n\t"
+        "fcomp qword ptr [esi+0x58]\n\t" "fstp qword ptr [esi+0x20]\n\t" "fnstsw ax\n\t" "test ah, 0x41\n\t"
+        "jne 20f\n\t"
+        "fld qword ptr [esi+0x28]\n\t" "fsqrt\n\t" "fdiv qword ptr [esi+0x8]\n\t" X87_ACOS
+        "fstp qword ptr [esi+0x0]\n\t" "jmp 21f\n\t"
+        "20:\n\t" "fld qword ptr [esi+0x60]\n\t" "fstp qword ptr [esi+0x0]\n\t"
+        "21:\n\t" "fld qword ptr [esi+0x20]\n\t" "fcomp qword ptr [esi+0x58]\n\t" "fnstsw ax\n\t"
+        "test ah, 0x41\n\t" "jne 22f\n\t"
+        "fld qword ptr [esi+0x20]\n\t" "fsqrt\n\t" "fdiv qword ptr [esi+0x8]\n\t" X87_ACOS "jmp 23f\n\t"
+        "22:\n\t" "fld qword ptr [esi+0x60]\n\t"
+        "23:\n\t" "fld st(0)\n\t" "fstp tbyte ptr [esi+0x98]\n\t"
+        "fld dword ptr [esi+0x40]\n\t" "fcomp qword ptr [esi+0x0]\n\t" "fnstsw ax\n\t" "test ah, 0x1\n\t"
+        "je 40f\n\t"
+        "fld qword ptr [esi+0x0]\n\t" "fcomp qword ptr [esi+0x68]\n\t" "fnstsw ax\n\t" "test ah, 0x41\n\t"
+        "je 40f\n\t"
+        "fstp st(0)\n\t" "fld qword ptr [esi+0x0]\n\t" "jmp 50f\n\t"
+        "40:\n\t" "fld dword ptr [esi+0x40]\n\t" "fld st(1)\n\t" "fcompp\n\t" "fnstsw ax\n\t" "test ah, 0x41\n\t"
+        "jne 60f\n\t"
+        "fcom qword ptr [esi+0x68]\n\t" "fnstsw ax\n\t" "test ah, 0x41\n\t" "je 60f\n\t"
+        "50:\n\t" "fmul qword ptr [esi+0x70]\n\t" "fmul qword ptr [esi+0x78]\n\t" "fstp qword ptr [esi+0x80]\n\t"
+        "mov dword ptr [esi+0x88], 0\n\t" "jmp 90f\n\t"
+        "60:\n\t" "fstp st(0)\n\t" "mov dword ptr [esi+0x88], 1\n\t"
+        "90:\n\t" "fldcw word ptr [esi+0x8C]\n\t"
+        ".att_syntax prefix\n\t"
+        : : "S"(f) : "eax", "memory", "cc");
+    return f->refused ? (uint16_t)TS_PITCH_NONE : (uint16_t)ts_ftol(f->ans);
+}
+
+/* the core's acos (tasim_ballistic.c's crt_acos) for the residual's attribution */
+static double core_acos(double x)
+{
+    if (!(fabs(x) < 1.0)) return x == 1.0 ? 0.0 : x == -1.0 ? 3.14159265358979323846 : NAN;
+    return ts_atan2(sqrt((1.0 + x) * (1.0 - x)), x);
+}
+
+static int same_d(double a, double b) { return (isnan(a) && isnan(b)) || memcmp(&a, &b, 8) == 0; }
+
+/* Every input on which the core and the x87 answer differently must be R4: the core's low-root angle differs from
+   the x87's as a double, or its high-root angle does, or the high root's 64-bit value falls on the other side of
+   minbarrel or pi/4 than its double. Any other difference is a port error and fails. */
+static int x87_pitch_check(void)
+{
+    long n = 0, r4 = 0, bad = 0, reached = 0;
+    X87PITCH f;
+    for (int i = 0; i < 2000000; ++i, ++n) {
+        const PITCHIN a = pitch_input();
+        const uint16_t e = x87_pitch(&a, &f), c = ts_ballistic_pitch(a.dx, a.dy, a.dz, a.v, a.mb, a.g);
+        reached += e != TS_PITCH_NONE;
+        if (e == c) continue;
+        const double x1 = sqrt(f.L28) / f.L8, x2 = sqrt(f.L20) / f.L8;
+        const double t1c = f.L28 > 0.0 ? core_acos(x1) : f.pi2, t2c = f.L20 > 0.0 ? core_acos(x2) : f.pi2;
+        const double t2e = (double)f.t2;
+        const int explained = !same_d(t1c, f.L0) || !same_d(t2c, t2e) ||
+                              ((f.t2 <= (long double)f.pi4) != (t2e <= f.pi4)) ||
+                              ((f.t2 > (long double)f.mb) != (t2e > (double)f.mb));
+        if (explained) ++r4;
+        else if (++bad <= 10)
+            printf("FAIL pitch(%d, %d, %d, %d, %a, g %d): x87 %u, core %u\n", a.dx, a.dy, a.dz, a.v, (double)a.mb,
+                   a.g, e, c);
+    }
+    printf("x87: pitch %ld of %ld equal (%ld with a pitch), %ld differ by R4 (fpatan), %ld unexplained\n",
+           n - r4 - bad, n, reached, r4, bad);
+    return bad != 0;
+}
+#endif
+
 int main(int argc, char** argv)
 {
     if (argc > 1 && !strcmp(argv[1], "digest")) {
         pool_digest();
+        pitch_digest();
         printf("digest %016llx\n", (unsigned long long)fnv);
         return 0;
     }
+#if defined(__i386__)
+    if (argc > 1 && !strcmp(argv[1], "x87"))
+        return x87_pitch_check();
+#endif
     pool_rules();
+    pitch_rules();
     printf(fails ? "tasim_combat_test: %d failed\n" : "tasim_combat_test: ok\n", fails);
     return fails != 0;
 }
