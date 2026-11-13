@@ -206,13 +206,36 @@ class Cursor:
     def read(self, advance=False) -> bytes:
         """The bytes written since the mark, oldest first. With advance, the mark moves to
         the end of what was returned, so successive calls return successive pieces."""
-        chunks, newest = _stable(self.gamedir, self.stream, self._pass)
+        got = self._same_file()
+        chunks, newest = got if got else _stable(self.gamedir, self.stream, self._pass)
         if advance and newest is not None:
             if self.key:
                 self.known.add(self.key)
             self.key, self.off = newest if newest[0] else (None, 0)
             self.known.discard(self.key)
         return b"".join(reversed(chunks))
+
+    def _same_file(self):
+        """_pass's answer from one open, when the current file is still the one the mark is
+        in, else None. The sink writes only to the current file and never reuses a key, so a
+        current file that carries the mark's key has not been rotated since the mark, and every
+        byte written since is in it past the mark's offset -- which is what _pass reads first
+        and stops at. A rotation after the open leaves the open file whole, and the next read
+        finds it under its new name by its key. This is what makes a poll cheap: one open
+        instead of the listing _stable takes three times (MEASURED 2026-11-13 on a stream of
+        11 files and about 105 MB: 405 us of CPU a read through _stable, 20 us through this;
+        research/notes/logging.md)."""
+        if self.key is None:
+            return None
+        f = _open(current(self.gamedir, self.stream))
+        if f is None:
+            return None
+        with f:
+            if _key(f.read(HEAD_BYTES)) != self.key:
+                return None
+            f.seek(self.off)
+            data = f.read()
+        return [data], (self.key, self.off + len(data))
 
     def _pass(self):
         chunks, newest = [], None
@@ -236,6 +259,39 @@ class Cursor:
 
     def text(self, advance=False) -> str:
         return self.read(advance).decode("utf-8", "replace")
+
+
+class Tail:
+    """One file's bytes, as a whole read of it returns them, read whole once and then only as
+    they grow: the reader of a wait that polls a single file (Cursor follows a stream across
+    its rotations). The sink only appends to a file, so a file whose first bytes are not the
+    ones read before, or that is shorter than what was read, is another file -- the sink
+    rotated it, or it was truncated -- and is read whole again, which is what a whole read
+    would return at that moment. A look then costs one open and the bytes appended, not the
+    file's size (MEASURED 2026-11-13: 13 us, against 17 ms of CPU for a whole read of a 15 MB
+    tagpu.log and a search of it)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.data = bytearray()
+
+    def read(self) -> int:
+        """`data` brought up to the file; returns the offset in it where the bytes new since the
+        last read begin, 0 when the file was read whole. Raises OSError as a whole read would,
+        and then holds nothing."""
+        try:
+            f = open(self.path, "rb")
+        except OSError:
+            self.data = bytearray()
+            raise
+        with f:
+            had = len(self.data)
+            if had and (f.read(min(HEAD_BYTES, had)) != self.data[:HEAD_BYTES]
+                        or os.fstat(f.fileno()).st_size < had):
+                self.data, had = bytearray(), 0
+            f.seek(had)
+            self.data += f.read()
+        return had
 
 
 def main(argv=None):

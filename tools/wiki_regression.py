@@ -373,6 +373,9 @@ EYE = (f"{MAIN}+0x1431f", f"{MAIN}+0x14323")
 KEY_RING = ("0x51F48E", "0x51F492")      # the key ring's enqueue and dequeue indices
 HELD_AT = 120                            # the plan's GameTime for the single-player case
 DUMP_S = 30
+# s between two looks for an answer file the game writes. It decides how soon a wait sees the file,
+# never what it reads: a look reads the file the game wrote, and a faster look reads it sooner.
+LOOK_S = 0.02
 GAP = 3                                  # client pixels kept clear of a margin's edges
 
 
@@ -408,7 +411,7 @@ class Wiki(Check):
                 except ValueError:
                     pass
             assert time.monotonic() < end, f"no tagpu_wiki.json in {DUMP_S} s: the wiki filled no record"
-            time.sleep(0.1)
+            time.sleep(LOOK_S)
 
     @staticmethod
     def hit(d, key):
@@ -4562,7 +4565,7 @@ def mods_setup(tacompat, setup, dll, out):
                 break
             except (OSError, ValueError):
                 assert time.monotonic() < end, "(w2) no whole tagpu_wiki3d.json within 60 s"
-                time.sleep(0.5)
+                time.sleep(LOOK_S)
         (out / "tagpu_wiki3d.json").write_text(json.dumps(report, indent=1))
         row["report"] = report
         poll("w2")

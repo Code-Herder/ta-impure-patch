@@ -34,6 +34,10 @@ PAUSED = "*0x511DE8+0x38a51:2"   # bit 0: the pause the Pause key flips, and THE
 TRIGGER = "tagpu_replay.trigger"
 ACK_S = 60                       # a frame's answer: a trigger's line, the camera, a menu (tareplay)
 STALL_S = 120                    # a running level's GameTime standing still: a hung game (tareplay)
+# s between two looks at the log in a wait for a line. It decides how soon a wait sees its line, never
+# which: a wait returns the first line from its start that matches, and a faster look sees it sooner.
+LOOK_S = 0.02
+PROGRESS_S = 5.0                 # s between two GameTime peeks of a wait on a running level (tareplay's Stall)
 
 
 def tacli_api():
@@ -95,7 +99,7 @@ class Check:
         end = time.monotonic() + seconds
         while (got := self._found(rx, start)) is None:
             assert time.monotonic() < end, f"no line matching {rx!r} in {seconds} s"
-            time.sleep(0.02)
+            time.sleep(LOOK_S)
         return got
 
     def _write(self, line):
@@ -123,16 +127,20 @@ class Check:
     def _taken(self, T, start):
         """The pause at T taken. The level runs until then, as many ticks as the case advances, so
         the wait is bounded by its progress: it gives up only when GameTime stands still for
-        STALL_S, a hung game, and a loaded machine makes it longer, never different."""
+        STALL_S, a hung game, and a loaded machine makes it longer, never different. The log is
+        looked at every LOOK_S; GameTime, which only bounds the wait, is peeked every PROGRESS_S,
+        since a peek is a tacli process of its own, and the bound is judged at each peek."""
         rx = rf"pause: (paused at GameTime {T}$|at {T} not taken.*)"
-        tick, since = None, time.monotonic()
+        tick, since, due = None, time.monotonic(), 0.0
         while (got := self._found(rx, start)) is None:
-            now = self._gametime()
-            if now is not None and now != tick:
-                tick, since = now, time.monotonic()
-            assert time.monotonic() - since < STALL_S, \
-                f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
-            time.sleep(0.05)
+            if time.monotonic() >= due:
+                now = self._gametime()
+                due = time.monotonic() + PROGRESS_S
+                if now is not None and now != tick:
+                    tick, since = now, time.monotonic()
+                assert time.monotonic() - since < STALL_S, \
+                    f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
+            time.sleep(LOOK_S)
         assert "paused at" in got, got
         self.held, self.tick = True, T
 

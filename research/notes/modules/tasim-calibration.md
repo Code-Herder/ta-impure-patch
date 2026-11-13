@@ -471,8 +471,8 @@ scope and is not counted. Not run yet.
 
 Not measured yet: the engine runs of C1's verification are the runner's. Until then `--j` defaults
 to 6 and `--runs-per-launch` to 200, and the cost a reference records (`cost.lane_seconds`, `ticks`)
-is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
-on one line per verb.
+is what each scenario took. A wait reads the log every 20 ms (`tareplay.Log.NAP_S`, every harness's
+log wait), since a run waits on one line per verb.
 
 ## Gaps
 

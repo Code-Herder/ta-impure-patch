@@ -128,10 +128,6 @@ def finished_lanes(out: Path) -> list:
     return sorted(p.parent for p in Path(out).glob("lane*/manifest.jsonl"))
 
 
-class CalibLog(R.Log):
-    NAP_S = 0.02
-
-
 def aligned(t: int) -> int:
     """The least GameTime at or after t that is 1 (mod 30)."""
     return t + ((1 - t) % PHASE)
@@ -225,7 +221,7 @@ class Lane:
         self.e0 = False
         w = self.w
         w.place({"name": "calib"}, self.dll)
-        self.log = CalibLog(w)
+        self.log = R.Log(w)
         rc, o = R.tacli("scenario", "load", w.name, TREE / self.arena["scenario"], "--defaults",
                         "--los", block["los"], "--mapping", block["mapping"],
                         "--commander-death", block["commander_death"], "--restart",
