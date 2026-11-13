@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """netai_check -- ImpAI in a network game plays the computer seats its own peer added, and only there.
 
-    tools/impai/netai_check.py --out DIR [--dll PATH] [--port N] [--until T] [--pulse]
+    tools/impai/netai_check.py --out DIR [--dll PATH] [--port N] [--until T] [--pulse] [--gpu]
 
 One two-player game on Two Continents (twopeers.py: the run's two instances on a private display and a
-DirectPlay port leased for the game), under the run lock for two game lanes (tools/runlock.py). The host
+DirectPlay port leased for the game), under the run lock for two game lanes (tools/runlock.py), both
+peers rendering with GDI and taking no GPU token; --gpu renders them on the default renderer and takes
+a token a peer (twopeers.py, THE RENDERER). The host
 launches with `--netai impai` and the joiner with `--netai ota`; in the battle room the host adds a computer seat (PLAYER2 twice: Unused, Blocked, AI) and the joiner one (PLAYER3 once), as
 tools/replay/recmp_create_begin_test.py's game does. The game plays to the host's GameTime T (default 6000),
 then each peer leaves through its menus, so its teardown writes ImpAI's level-end lines.
@@ -140,9 +142,9 @@ def judge(host, join, pulse=False):
     return bad
 
 
-def run(out, dll, port, until, pulse):
+def run(out, dll, port, until, pulse, gpu):
     from twopeers import TwoPeers
-    with TwoPeers(out, dll, port, "na") as tp:
+    with TwoPeers(out, dll, port, "na", gpu) as tp:
         tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "ota"])
         tp.battle_room()
         tp.add_ais()
@@ -169,15 +171,17 @@ def main():
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
     p.add_argument("--until", type=int, default=UNTIL, help="the host's GameTime the game plays to")
     p.add_argument("--pulse", action="store_true", help="require the host ImpAI seat's pulse lines, once a game minute")
+    p.add_argument("--gpu", action="store_true",
+                   help="render both peers on the default renderer and take a GPU token each, not GDI")
     a = p.parse_args()
     import runlock
     import tareplay
-    runlock.hold(TREE, "netai_check " + " ".join(sys.argv[1:]), GAMES)
+    runlock.hold(TREE, "netai_check " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        bad = run(out, a.dll.resolve(), a.port, a.until, a.pulse)
+        bad = run(out, a.dll.resolve(), a.port, a.until, a.pulse, a.gpu)
     except (OSError, ValueError, subprocess.SubprocessError, tareplay.CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2

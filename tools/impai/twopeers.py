@@ -4,6 +4,11 @@ netprobe.py): the run's two instances on a private display and a DirectPlay port
 tools/replay/recmp_create_begin_test.py's game is. The caller holds the run lock for two game lanes
 (tools/runlock.py); the instances carry the run's tag, so one left by a dead run of the tag is replaced.
 
+THE RENDERER. Both peers render with GDI (tareplay.GDI_LEVER in each game folder, which is the
+instance's own: launch makes it afresh) and the caller holds no GPU token for them; `gpu` renders
+them on the default renderer, for a debugging run, and the caller then holds a token for each.
+DIR/renderer.txt names the renderer, and a reading is compared only with readings of its own.
+
     with TwoPeers(out, dll, port, "na") as tp:
         tp.launch(host_args=[...], join_args=[...], registry={"H": [...], "J": [...]})
         tp.battle_room()
@@ -34,6 +39,10 @@ RECORDS = 10
 CouldNotRun = tareplay.CouldNotRun
 
 
+def renderer(gpu: bool) -> str:
+    return "vulkan" if gpu else "gdi"
+
+
 def field(rec: int, off: int, size: int = 4) -> str:
     """A peek spec of record `rec`'s field at `off`."""
     return f"*0x511DE8+0x{REC + rec * STRIDE + off:X}:{size}"
@@ -43,8 +52,8 @@ class TwoPeers:
     """The host (`<token>-<tag>-H`) and the joiner (`...-J`); every tacli call's output in DIR/driver.log;
     each peer's run log copied to DIR/<instance>.log and the instances removed on the way out."""
 
-    def __init__(self, out: Path, dll: Path, port, token: str):
-        self.out, self.dll, self.want_port, self.token = out, dll, port, token
+    def __init__(self, out: Path, dll: Path, port, token: str, gpu: bool = False):
+        self.out, self.dll, self.want_port, self.token, self.gpu = out, dll, port, token, gpu
         self.root = tareplay.main_checkout()
         self.instances, self.cli = self.root / "tagpu/instances", TREE / "tools/tacli"
         self.owned, self.display, self.lease = [], None, None
@@ -57,6 +66,7 @@ class TwoPeers:
         try:
             self.display = tareplay.start_xvfb()
             (self.out / "build-sha.txt").write_text(hashlib.sha256(self.dll.read_bytes()).hexdigest() + "\n")
+            (self.out / "renderer.txt").write_text(renderer(self.gpu) + "\n")
             tag = f"{self.token}-{runlock.tag()}-"     # an instance of the run's tag is a dead run's
             self.host, self.join = tag + "H", tag + "J"
         except BaseException:
@@ -115,6 +125,10 @@ class TwoPeers:
             self.owned.append(name)
             self.tacli("create", name, "--private-registry", "--display", self.display.display, "--res", "1024x768")
             shutil.copyfile(self.dll, self.gamedir(name) / "ddraw.dll")
+            gdi = self.gamedir(name) / tareplay.GDI_LEVER
+            gdi.unlink(missing_ok=True)     # unlinked first: a link is never written through
+            if not self.gpu:
+                gdi.write_text("")
             self.tacli("registry", name, "MultiCommanderDeath=0", "gamespeed=20", *registry.get(suffix, ()))
             self.tacli("launch", name, "--keep-dll", "--dplay", "--dplay-port", self.port, *extra)
             self.tacli("ui", name, "wait", "--gui", "MAINMENU", "--timeout", "45")

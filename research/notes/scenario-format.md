@@ -392,7 +392,7 @@ Scenarios with the same launch share a level, each applied two ticks after the o
 - it keeps what it finds (`clear_existing: false`);
 - its creates would not fit. The stale-hits hold (`hit_take`, below) keeps the slots its clear frees from them, so an owner's units must fit in the limit less what the previous apply left. A scenario that does not fit even on a fresh load of its own launch (a 500-unit army on a limit of 500) is DOES NOT FIT, a failure.
 
-The sweep follows each scenario past its last delayed order and names every refused order with its unit, command and target. An apply passes only when its result does: `ok` 1, no error, no create refused and something created. Any other is named as failed, so an `on_error: abort` that created nothing is never counted as played. It holds the run lock for the lanes it plays and runs `--j` tareplay Workers in parallel. A scenario it flags is fixed in the scenario; a missing mod is a missing setup (exit 2).
+The sweep follows each scenario past its last delayed order and names every refused order with its unit, command and target. An apply passes only when its result does: `ok` 1, no error, no create refused and something created. Any other is named as failed, so an `on_error: abort` that created nothing is never counted as played. It holds the run lock for the lanes it plays and runs `--j` tareplay Workers in parallel, no more than the lock's games. Its levels render with GDI and take no GPU token; `--gpu` renders them on the default renderer and takes a token a lane, and `applysweep.json` names the renderer. A scenario it flags is fixed in the scenario; a missing mod is a missing setup (exit 2).
 
 ## Engine switches
 

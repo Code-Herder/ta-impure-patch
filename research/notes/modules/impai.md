@@ -197,8 +197,13 @@ renders on the default renderer, for a debugging run, and takes a GPU token a la
 `impai-handicap`, `impai-observe*`) the same way during development: one run's record, puppets,
 round trips and seeks share the renderer, so no comparison it makes crosses two, and its summary's
 first line names the renderer. `tareplay.py landing` and `broad` play the players' renderer.
-`handicap_check.py` launches with `tagpu_gdi.on` as well, leaving the lever as it found it, and holds the
-lock with `gpu=False` (`--gpu` as above); `l1_run.py` launches on the default renderer.
+`handicap_check.py` and `econ_check.py` launch their caller's instance with `tagpu_gdi.on` as well,
+leaving the lever as they found it, and hold the lock with `gpu=False` (`--gpu` as above);
+`handicap_row6.py` writes it into the instance it makes, `l1_run.py` and `tools/tasim/applysweep.py
+run` set `Worker.gdi`, and `netai_check.py`, `netroom_check.py` and `netprobe.py` write it into both
+peers' game folders (`twopeers.py`), each holding the lock with `gpu=False` and taking `--gpu` as
+above. `l1_run.py`'s `run.txt`, `applysweep.json`, `netprobe.py`'s `probe.json` and the network
+checks' `renderer.txt` name the renderer.
 
 **A result is compared only with results of its own renderer.** Each bar, tourney and eco-bench
 result and each calibration lane-launch names its renderer (one written before the field is the
