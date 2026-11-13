@@ -1327,6 +1327,42 @@ class Resume(StandInRun):
         with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
             self.sitting(out, resume=True)
 
+    def test_a_folder_that_does_not_exist_yet_starts_fresh(self):
+        out = self.root / "new" / "run"
+        with patch.dict(tareplay.os.environ):              # out_dir points the decode cache at it
+            made = tareplay.out_dir(SimpleNamespace(resume=str(out), out=None))
+        self.assertEqual(made, out.resolve())
+        self.assertTrue(made.is_dir())
+        status, summary = self.sitting(made, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertEqual(status, 0)
+        self.assertNotIn("resumed:", summary)
+
+
+class ResumeRefusedAtOnce(unittest.TestCase):
+    """main() refuses a --resume it cannot go on with before a command selects anything: a
+    landing's plan takes minutes, and a refusal after it costs them."""
+
+    def refusal(self, resume, tree="c0ffee"):
+        with patch.object(tareplay, "tree_key", lambda: tree), \
+                patch.object(tareplay, "landing_plan", side_effect=AssertionError("selected")), \
+                redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+            tareplay.main(["landing", "--resume", str(resume)])
+        self.assertEqual(stop.exception.code, 2)
+        return err.getvalue()
+
+    def test_a_folder_that_cannot_be_one_is_refused_at_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            taken = Path(d) / "a-file"
+            taken.write_text("")
+            self.assertIn(f"--resume {taken}: not a folder this run can play in", self.refusal(taken))
+
+    def test_a_dirty_tree_is_refused_at_once_and_makes_no_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            self.assertIn("uncommitted or untracked changes", self.refusal(out, tree=None))
+            self.assertFalse(out.exists())
+
 
 class MultiplayerBeside(StandInRun):
     """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):

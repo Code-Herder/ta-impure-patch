@@ -24,7 +24,9 @@ what the tier never exercised.
 stopped or cut short: each test group (and each two-player group) whose PASS or FAIL DIR holds
 under this sitting's key is read back, a FAIL as a FAIL, and every other one is played whole
 (*resuming a run*, above the Run class). The summary, the coverage check and the note read the
-union; the note names the groups kept.
+union; the note names the groups kept. A DIR that does not exist yet is made, and the first
+sitting in it plays every group; a DIR that cannot be a folder, and a worktree with changes, are
+refused before anything is selected.
 
 `run --gdi` plays every lane with GDI (GDI_LEVER) and takes no GPU token, so the AI's fixtures
 can be played while the GPU is reserved: the record, the puppets, the round trips and the seeks
@@ -4307,6 +4309,20 @@ def tree_key() -> "str | None":
     return head()
 
 
+def resume_refusal(resume: str) -> "str | None":
+    """Why `--resume DIR` cannot go on, or None, with DIR made when it does not exist yet: a first
+    sitting with --resume starts fresh in it. main() asks before a command selects anything, so a
+    refusal costs no selection (a landing's plan takes minutes)."""
+    if tree_key() is None:
+        return (f"--resume {resume}: the worktree has uncommitted or untracked changes: a resumed "
+                f"run keeps results keyed by HEAD, so commit first")
+    try:
+        Path(resume).expanduser().resolve().mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"--resume {resume}: not a folder this run can play in ({e.strerror})"
+    return None
+
+
 def run_dlls(args, played=()) -> dict:
     """{name: hash} of the DLL files a run can load: the default build, its coverage build, the
     stock-limits coverage build, the ones the command gave, and `played`, those its groups play.
@@ -5041,13 +5057,11 @@ def out_dir(args):
                 Path.home() / ".local" / "share" / "ta-replay" / "runs")
     resume = getattr(args, "resume", None)
     if resume:
-        out = Path(resume).expanduser().resolve()
-        if not out.is_dir():
-            raise SystemExit(f"tareplay: --resume {resume}: no such folder")
+        out = Path(resume).expanduser()
     else:
         out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        out = out.resolve()
-        out.mkdir(parents=True, exist_ok=True)
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
     # every tarec this run starts, in this process or a child, shares one decode cache, which no
     # other run reads and which goes when the run does (reccache.py)
     cache = out / "tarec-cache"
@@ -5923,7 +5937,8 @@ def main(argv=None):
         parser.add_argument("--resume", metavar="DIR",
                             help="go on with the run an earlier sitting left in DIR: each test "
                                  "group whose PASS or FAIL it kept under this sitting's key is "
-                                 "read back, every other one played (*resuming a run*)")
+                                 "read back, every other one played (*resuming a run*); a "
+                                 "DIR that does not exist yet is made and the run starts fresh")
     for parser in (r, m, la, br, tk, fk, rw):
         parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
                             help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
@@ -5935,8 +5950,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
         ap.error("-j is 1..16")
-    if getattr(a, "resume", None) and a.out:
-        ap.error("--resume DIR plays in DIR: no --out with it")
+    if getattr(a, "resume", None):
+        if a.out:
+            ap.error("--resume DIR plays in DIR: no --out with it")
+        why = resume_refusal(a.resume)
+        if why:
+            ap.error(why)
     # the subcommands that read recordings need numpy, numba and zstandard (tarec.py through
     # reccodec.py); `features` and `list` run under the build's bare python3, and so does
     # `landing --check`, which reads git notes only

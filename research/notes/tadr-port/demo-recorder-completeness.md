@@ -631,7 +631,9 @@ beside and renamed over), and the two-player groups theirs. `--resume DIR` plays
 earlier sitting left: a group whose PASS or FAIL is kept there under this sitting's key is read
 back -- its summary lines, its checks' verdicts, its recording and its coverage files -- and every
 other group's folder is emptied and the group played whole. A FAIL stays a FAIL; a group that
-could not run is played again. The key is HEAD with a worktree git sees no change in (a dirty tree
+could not run is played again. A DIR that does not exist yet is made and the sitting plays every
+group, so one command line serves the first sitting and every later one; a DIR that cannot be a
+folder, and a worktree with changes, are refused before the run selects its groups. The key is HEAD with a worktree git sees no change in (a dirty tree
 is never resumed), the hashes of the DLLs the run can load (default, coverage, stock-limits
 coverage, any named) less the three fields the link writes its time into (`tools/dllkey.py`: two
 builds of an unchanged tree differ in nothing else, so a `make` between sittings keeps the key),

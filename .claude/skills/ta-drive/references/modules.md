@@ -1016,7 +1016,9 @@ block that reads to its last complete block.
   each test group (and two-player group) whose PASS or FAIL it kept read back -- a FAIL stays a
   FAIL -- and every other one played. A group is kept only under the same key: HEAD on a clean
   worktree, the DLLs' hashes, the test group's entry and scenarios, renderer, speed, turbo, lanes
-  and GameTimes; one that differs is refused by the field that differs, and played again.
+  and GameTimes; one that differs is refused by the field that differs, and played again. A DIR
+  that does not exist yet is made, so a first sitting can already name it; a DIR that cannot be a
+  folder, or a worktree with changes, is refused before the groups are selected.
   Changes to `tools/tacli` select every test group, as changes to the replay harness do.
   `tareplay.py broad` runs every test group and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
