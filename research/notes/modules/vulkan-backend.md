@@ -761,8 +761,9 @@ window lasts the session. With no world live the hold is zero.
 
 A harness game holds no more device memory than the run lock's GPU token was sized on, by
 construction. `tacli` writes `gpumem=<MiB>` into the instance's `impure.cfg` for every launch inside
-a run-lock hold (`write_gpumem`; the figure is `cap_mib` of `tools/runlock-vram.cfg`), and removes the
-line for a launch outside one. The store reads it under `tagpu_defaults.off` too
+a run-lock hold with GPU tokens (`write_gpumem`; the figure is the cap that hold published, `cap_mib`
+of the lock's `runslots/vram.cfg` read with its token count), and removes the line for any other
+launch: by hand, in a run without tokens, or in a hold of older runlock code that published no cap. The store reads it under `tagpu_defaults.off` too
 (`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
 launch hands it away with the rest of the harness keys. **With no cap nothing changes**: the door
 hands every allocation to the driver as it came.
