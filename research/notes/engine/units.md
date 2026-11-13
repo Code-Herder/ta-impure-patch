@@ -716,8 +716,9 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   then re-marks the unit's rectangle in each of the 32 movement classes (`0x512358`, stride `0x20`)
   whose watermark `+0x1C` is above the old stamp (`0x440A94..0x440AB1`, through `0x440830`); with
   none, it re-marks every present class (`0x440AB9..0x440ADB`). The mover branch makes no present
-  test: an absent class's watermark is 0, which only a search of that class writes, so it never
-  re-marks one [INFERRED]. Its one caller is the end of the
+  test, and needs none: an absent class's re-mark writes nothing, its W and H being 0 ([map](map.html),
+  *the re-mark `0x440830`*). Its watermark need not be 0, since the teardown `0x440A00` leaves `+0x1C`
+  as the last level's search set it [DISASSEMBLED 2026-11-12]. Its one caller is the end of the
   footprint clear `0x47D0E0` (`0x47D2CA`), so the stamp moves when the footprint does. The image
   sees the step before its iteration's label: the iteration labelled `gt` holds `gt − 1`.
   `0x440A70` is not the field's only writer: the footprint stamp `0x47CC30` stores GameTime there

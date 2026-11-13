@@ -159,8 +159,8 @@ static void load_classes(Load* D)
    the level's unit-data load 0x42D2E0 (0x42D493..0x42D510) before it sorts. Three tests, in this order:
    - VERSION: `Version` through 0x4C4760 (default 0.0) is V; major = _ftol(floor(V)), minor =
      _ftol(floor((V - major) * 10.0)), each floor the CRT's 0x4E5050 and the product stored as a double
-     (0x42B048..0x42B05E), so "3.3" has minor 2. Kept when major < main+1, or major == main+1 and minor <= main+2
-     (0x42B06C..0x42B091, signed bytes). The exe writes 3 and 1 there (0x49E9BD, 0x49E9C6); a Patch Loader's
+     (0x42B01F..0x42B05E), so "3.3" has minor 2. Kept when major < main+1, or major == main+1 and minor <= main+2
+     (0x42B066..0x42B0A7, signed bytes). The exe writes 3 and 1 there (0x49E9BD, 0x49E9C6); a Patch Loader's
      MultiplayerVersionMajor/Minor writes others (ProTA 4 and 5, research/notes/deep-prota.md), which the loader
      does not take: no FBI of the retail install, ProTA 4.8 or Total Mayhem 11.3 has a Version above 3.1
      (MEASURED 2026-11-12, every units\*.fbi the enumeration lists). [INFERRED: the game's control word keeps
@@ -172,7 +172,7 @@ static void load_classes(Load* D)
    - COPYRIGHT: `Copyright` through 0x4C48C0 into 0x80 bytes (strncpy, the last byte zeroed; absent, the default
      "Run to the Village! Warn your brother!"), its bytes 10..13 overwritten with "0000" (the offset strstr finds in
      the reference, 0x42AB0C), must equal "Copyright 0000 Humongous Entertainment. All rights reserved." byte for
-     byte (0x42B0E2..0x42B146).
+     byte (0x42B0E2..0x42B162).
    Later writers of the bit -- the restriction store 0x46E160 and 0x431740 -- are named in tasim.md. */
 static int prescan_dropped(TASIM_INSTALL* L, const TAGPU_VFILE* f, const Sec* c)
 {
