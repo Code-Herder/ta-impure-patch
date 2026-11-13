@@ -15,6 +15,7 @@ shared venv when they are missing.
 import importlib.util
 import io
 import json
+import os
 import re
 import socket
 import struct
@@ -3960,6 +3961,44 @@ class RunLock(unittest.TestCase):
         self.assertEqual(float(b.stdout.readline()), 0.0)
         b.communicate()
         self.assertEqual(b.returncode, 0)
+
+    def wrapped(self, *cmd):
+        return subprocess.Popen([sys.executable, str(self.TOOLS / "runlock.py"), "run", "--tree",
+                                 str(self.tree), "--what", "a hand chain", "--", *cmd],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_the_wrapper_holds_the_lock_names_itself_and_passes_the_status(self):
+        a = self.wrapped(sys.executable, "-c",
+                         "import os, sys, time; print(os.environ['RUNLOCK_HELD'], flush=True); "
+                         "time.sleep(3); sys.exit(7)")
+        self.assertEqual(a.stdout.readline().strip(), str(self.lock))
+        line = self.lock.read_text()
+        self.assertTrue(line.startswith(f"pid {a.pid} start "), line)
+        self.assertIn("a hand chain", line)
+        self.assertEqual(tareplay.runlock.holder(self.lock), line.strip())
+        b = self.holder(0)
+        waited = float(b.stdout.readline())
+        a.communicate(); b.communicate()
+        self.assertEqual(a.returncode, 7)
+        self.assertGreaterEqual(waited, 2.0)
+
+    def test_a_line_whose_process_has_exited_is_called_stale(self):
+        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                              capture_output=True, text=True, check=True)
+        dead = int(done.stdout)
+        self.lock.write_text(f"pid {dead} start 1, an exited run, from /, since 00:00:00\n")
+        self.assertIn("stale", tareplay.runlock.holder(self.lock))
+        self.assertIn("an exited run", tareplay.runlock.holder(self.lock))
+        me = tareplay.runlock._start_time(os.getpid())
+        self.lock.write_text(f"pid {os.getpid()} start {me + 1}, a recycled pid, from /\n")
+        self.assertIn("stale", tareplay.runlock.holder(self.lock))
+        self.lock.write_text(f"pid {os.getpid()}, an older tool's line, from /\n")
+        self.assertNotIn("stale", tareplay.runlock.holder(self.lock))
+
+    def test_holder_says_nobody_when_the_lock_is_free(self):
+        r = subprocess.run([sys.executable, str(self.TOOLS / "runlock.py"), "holder", "--tree",
+                            str(self.tree)], capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout.strip(), "nobody holds the run lock")
 
 
 class HudState(unittest.TestCase):
