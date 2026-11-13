@@ -13,6 +13,7 @@
 #include "tagpu_addr.h"
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
+#include "impai_table.h"
 
 SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic sweep-basic stock-sweep-basic");
 
@@ -1579,6 +1580,7 @@ int tagpu_worldq_fight_in(const TASIM_ROLE_IN* rin, const TASIM_ROLE_OUT* rout, 
         o->speed = *(const int32_t*)(def + 0x192);
         o->layer = (uint8_t)rout[i].layer;
         o->role = (uint8_t)rout[i].role;
+        o->klass = (uint8_t)impai_class_of(&rin[i], &rout[i]);
         o->fx = (uint8_t)(fx < 0 ? 0 : fx > 255 ? 255 : fx);
         o->fz = (uint8_t)(fz < 0 ? 0 : fz > 255 ? 255 : fz);
         if (rout[i].flags & TASIM_RF_MOBILE) o->flags |= IMPAI_FT_MOBILE;

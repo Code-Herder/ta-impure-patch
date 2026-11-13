@@ -176,6 +176,14 @@ int impai_fight_rate(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, unsigned i, un
     return 0;
 }
 
+float impai_fight_rate_of(const void* ctx, uint16_t i, uint16_t j)
+{
+    const IMPAI_FCTX* x = (const IMPAI_FCTX*)ctx;
+    float rate;
+    int32_t range;
+    return impai_fight_rate(x->c, x->p, i, j, &rate, &range) ? 0.0f : rate;
+}
+
 /* One side as the steps see it: per entry its type, its live count, the effective hp of a unit (its type's
    hp at the entry's health), the damage pooled and the shots aimed at it not yet spent on a kill. */
 typedef struct SIDE {

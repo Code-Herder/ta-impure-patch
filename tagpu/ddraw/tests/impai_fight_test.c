@@ -13,7 +13,8 @@
      - the steps never pass IMPAI_FSTEPS, the shares stay in [0, 1];
    and the refusals: a type past the content, a weapon index past it, a damage span past the pool, a side of
    more than IMPAI_FSIDE_TYPES entries. impai_expf is held to exp's value within 2^-22 and its bits printed;
-   the merge of a 20-entry side is printed. Exit 0 when every rule held, 1 otherwise. */
+   the merge of a 20-entry side is printed; the buy's callback impai_fight_rate_of answers impai_fight_rate.
+   Exit 0 when every rule held, 1 otherwise. */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -197,6 +198,14 @@ int main(void)
     for (e = 0; e < two.ne; e++) two.e[e].n = 8;
     if (!a.ne || impai_fight_predict(&C, &impai_fitparams, &two, &a, 600, &r) || !(r.m > 0.0f)) fail("the doubled army", -1);
     printf("doubled army: types=%u m=%08X steps=%u\n", a.ne, bits(r.m), r.steps);
+    {   /* the buy's predictor callback answers the pair rate, and 0 for a refused pair */
+        const IMPAI_FCTX ctx = { &C, &impai_fitparams };
+        if (impai_fight_rate_of(&ctx, NT, 1) != 0.0f) fail("the callback took a type past the content", -1);
+        for (e = 1; e < NT; e++)
+            if (!impai_fight_rate(&C, &impai_fitparams, e, 1, &rate, &range) &&
+                bits(impai_fight_rate_of(&ctx, (uint16_t)e, 1)) != bits(rate))
+                fail("the callback's pair rate", (int)e);
+    }
     /* the refusals */
     b = a;
     b.e[0].type = NT;

@@ -8,6 +8,8 @@
     tools/tasim/native.py defs [--gamedir DIR] [--language L] [--archive A] [--folders F] [--features]
                                           `tasim_run defs` on an install (--features: with
                                           tools/tasim/engine-features.tsv's rows), its JSON on stdout
+    tools/tasim/native.py fightlib        build tools/impai/fightlib-native.so, ImpAI's fight predictor
+                                          as a shared library for tools/impai/predfit.py
 
 A mod whose loader renames things in memory is read as the game reads it with --archive, the first
 mount pattern (ProTA's `ProTA.gp3`), and --folders, the renamed folders
@@ -86,6 +88,22 @@ def build_test():
     return TEST_EXE
 
 
+FIGHTLIB = TREE / "tools" / "impai" / "fightlib-native.so"
+FIGHT_SRCS = ["src/impai_fight.c", "src/impai_fitparams.c", "src/impai_table.c"]
+
+
+def fightlib():
+    """ImpAI's fight predictor and its army buy as a native shared library: the DLL's own sources with the
+    Makefile's IMPAI rules' rounding (no contraction; SSE2 is the x86-64 default), so the fit calls the C the DLL runs and
+    tagpu/ddraw/tests/impai_fight_test.py holds the two to one transcript. The path."""
+    glue = TREE / "tools" / "impai" / "fightlib.c"
+    if stale(FIGHTLIB, FIGHT_SRCS + ["src/impai_fight.h", "src/impai_table.h", "src/tasim_roles.h", str(glue)]):
+        print(f"native: building {FIGHTLIB.name}", file=sys.stderr, flush=True)
+        subprocess.run(["gcc", *STRICT, "-ffp-contract=off", "-O2", "-fPIC", "-shared", "-Isrc", "-Iinc",
+                        "-o", str(FIGHTLIB), str(glue), *FIGHT_SRCS, "-lm"], cwd=DDRAW, check=True)
+    return FIGHTLIB
+
+
 def mount_list(gamedir=None, archive=None):
     """(the game directory, a file of its archives' full paths in the engine's mount order). `archive`
     replaces the first mount pattern the executable spells, as a mod's loader does in memory."""
@@ -121,6 +139,9 @@ def roles(gamedir=None, language="english", archive=None, folders=None):
 def main(argv):
     if argv[:1] == ["test"]:
         return subprocess.run([str(build_test())]).returncode
+    if argv[:1] == ["fightlib"]:
+        print(fightlib())
+        return 0
     if argv[:1] in (["roles"], ["defs"]):
         import argparse
         p = argparse.ArgumentParser(prog=f"native.py {argv[0]}")

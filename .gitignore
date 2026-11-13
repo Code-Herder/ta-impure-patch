@@ -125,3 +125,6 @@ renders/
 # the engine lays its API declarations beside a mod at every load: generated, never ours
 /.claude/skills/ta-runs/.claude-plugin/types/
 !/.claude/skills/ta-video-montage/
+
+# tools/tasim/native.py fightlib: the fight predictor's native shared library
+/tools/impai/fightlib-native.so

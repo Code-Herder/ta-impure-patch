@@ -41,7 +41,8 @@ typedef struct IMPAI_FTYPE {         /* one unit type, its def index the row, 40
     uint16_t air;                    /* bit k: slot k is anti-air (tasim_roles_slot_antiair): the slot
                                         hurts aircraft. A unit's slot, not its weapon's: the bad-target
                                         category that makes a slot anti-air is the def's                   */
-    uint8_t  role, pad;              /* TASIM_ROLE, for the merge of a side past IMPAI_FSIDE_TYPES         */
+    uint8_t  role;                   /* TASIM_ROLE, for the merge of a side past IMPAI_FSIDE_TYPES         */
+    uint8_t  klass;                  /* impai_class_of (impai_table.h), IMPAI_K_NONE for no army class     */
 } IMPAI_FTYPE;
 
 typedef struct IMPAI_FWEAPON {       /* one weapon record, its index the row, 36 bytes                     */
@@ -113,6 +114,11 @@ float impai_fight_pwin(const IMPAI_FIT* p, float m);
    longest range among the weapons that hurt it, 0 and 0 when none does. 0, or -1 for a refused input. */
 int impai_fight_rate(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, unsigned i, unsigned j, float* rate,
                      int32_t* range);
+
+/* impai_fight_rate as the buy's IMPAI_PREDICTOR.rate (impai_table.h): ctx an IMPAI_FCTX, the answer the pair
+   rate r_ij, 0 for a refused pair. Its IMPAI_PREDICTOR.expf is impai_expf. */
+typedef struct IMPAI_FCTX { const IMPAI_FCONTENT* c; const IMPAI_FIT* p; } IMPAI_FCTX;
+float impai_fight_rate_of(const void* ctx, uint16_t i, uint16_t j);
 
 /* A side from a list of n entries, merged to IMPAI_FSIDE_TYPES (impai_fight.c, THE MERGE): 0, or -1 for a
    type past nt. */
