@@ -32,7 +32,11 @@ def unit_img(x, depth, hp, nano=0.0, alt=73):
     return bytes(b)
 
 
-def player_img(deadline=91):
+# the six fields the economy pass recomputes: income, expense, energy then metal, and the maxima
+PASS_FIELDS = (0x90, 0x94, 0x9C, 0xA0, 0xA4, 0xA8)
+
+
+def player_img(deadline=91, fields=None):
     b = bytearray(0x208)
     struct.pack_into("<f", b, engtrace.PL_BASE_M, STORE["metal"])
     struct.pack_into("<f", b, engtrace.PL_BASE_E, STORE["energy"])
@@ -40,6 +44,8 @@ def player_img(deadline=91):
     struct.pack_into("<f", b, engtrace.PL_E, STORE["energy"])
     b[engtrace.PL_BASEFLAG] = 1
     struct.pack_into("<i", b, engtrace.PL_PASS, deadline)
+    for at, v in (fields or {}).items():
+        struct.pack_into("<f", b, at, v)
     return bytes(b)
 
 
@@ -75,7 +81,7 @@ BLOCK = {"kind": ["winrate", "distribution"], "metrics": ["winner", "ttk", "surv
          "limit": 600, "end_units": {"0": 0, "1": 0}}
 
 
-def duel(swap, t0=61, t_end=70, a_dies=True):
+def duel(swap, t0=61, t_end=70, a_dies=True, fields=None):
     """A duel run: a (scenario owner 0) and b, b hits a twice and kills it in step t_end, and the
     clear takes b; with `a_dies` false neither dies and the clear takes both."""
     cleared = [3] if a_dies else [2, 3]
@@ -85,7 +91,7 @@ def duel(swap, t0=61, t_end=70, a_dies=True):
     exp = scenario(swap)
     run = engtrace.Run(row, exp, BLOCK, VALUES, IDS)
     seat_a, seat_b = (1, 0) if swap else (0, 1)
-    players = [player_img() for _ in range(10)]
+    players = [player_img(fields=fields) for _ in range(10)]
     run.empty_point({}, 0, b"", {}, b"")
     run.events(t0, [create(2, 5, seat_a, 100, 200), create(3, 6, seat_b, 400, 200)])
     hp_a = {t0 + 1: 300, t0 + 2: 300, t0 + 3: 150}
@@ -159,8 +165,52 @@ class TraceAndChecks(unittest.TestCase):
 
     def test_R4_compares_deadlines_modulo_30_from_the_apply(self):
         a = [player_img(deadline=91)]
-        self.assertIsNone(engtrace.phased_diff(a, [player_img(deadline=181)], 61, 151))
-        self.assertIn("phase", engtrace.phased_diff(a, [player_img(deadline=182)], 61, 151))
+        self.assertEqual(engtrace.phased_diff(a, [player_img(deadline=181)], 61, 151), [])
+        self.assertIn("phase", engtrace.phased_diff(a, [player_img(deadline=182)], 61, 151)[0])
+
+    def test_R4_names_every_differing_field(self):
+        a, b = bytearray(player_img()), bytearray(player_img())
+        b[0x10], b[0x13], b[0x40] = 1, 1, 1
+        self.assertEqual(engtrace.phased_diff([bytes(a)], [bytes(b)], 61, 61),
+                         ["seat image 0 differs at +0x10", "seat image 0 differs at +0x40"])
+
+    def test_R4_needs_the_applys_reset_of_the_pass_results(self):
+        """Two runs whose seats carry the previous runs' pass results (stale and different) fail
+        R4 on exactly those fields; with the applier's reset (tagpu_scenario.c, THE SEATS' PASS
+        RESULTS: rates 0, maxima from the units after the apply and the base storage) they pass."""
+        launch = dict(zip(PASS_FIELDS, (25.0, 1.0, 1.0, 0.0, 1000100.0, 1000000.0)))
+        reload = dict(zip(PASS_FIELDS, (0.3, 10.0, 0.0, 0.0, 1000000.0, 1000000.0)))
+        r0, r1 = duel(False, fields=launch), duel(False, fields=reload)
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertEqual(sorted({f.split(" at ")[1] for f in r1.fields["R4"]}),
+                         ["+0x90", "+0x94", "+0x9C", "+0xA4"])
+        reset = dict(zip(PASS_FIELDS, (0.0, 0.0, 0.0, 0.0, STORE["energy"], STORE["metal"])))
+        r0, r1 = duel(False, fields=reset), duel(False, fields=reset)
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertEqual(r1.checks["R4"], "ok")
+
+    def test_R6_fails_an_empty_or_mismatched_globals_image(self):
+        r0, r1 = duel(False), duel(False)
+        r0.empty["globals"], r1.empty["globals"] = bytes(8), b""
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertIn("the globals image", r1.checks["R6"])
+        r1.empty["globals"] = bytes(12)
+        r1.compare_run0(r0, {}, {}, False)
+        self.assertIn("8 bytes in run 0, 12 here", r1.checks["R6"])
+
+    def test_R4_compares_the_wires_levels_as_f32(self):
+        """0.1 is not an f32: the engine stores the nearest one, which must match."""
+        players = [player_img() for _ in range(10)]
+        exp = scenario(False)
+        for p in exp["setup"]["players"]:
+            p["storage"] = {"metal": 0.1, "energy": STORE["energy"]}
+        img = bytearray(players[0])
+        struct.pack_into("<f", img, engtrace.PL_BASE_M, 0.1)
+        players[0] = players[1] = bytes(img)
+        run = engtrace.Run(duel(False).row, exp, BLOCK, VALUES, IDS)
+        run.after_apply({2: unit_img(100, 200, 300), 3: unit_img(400, 200, 250)}, players,
+                        {"feature_defs": []})
+        self.assertNotIn("R4", run.checks)
 
     def test_R6_names_a_global_outside_the_advancing_set(self):
         r0, r1 = duel(False), duel(False)
@@ -172,6 +222,15 @@ class TraceAndChecks(unittest.TestCase):
         r1.failed = None
         r1.compare_run0(r0, {0: "rngseed", 1: "camerax"}, {}, False)
         self.assertIn("camerax", r1.failed)
+
+    def test_R6s_advancing_set_names_rows_of_the_checkouts_list(self):
+        sys.path.insert(0, str(HERE.parents[1] / "replay"))
+        import tarec
+        rows = tarec.globals_list()[1]
+        engtrace.advancing_rows(rows)
+        renamed = [dict(r, name="pfweightx") if r["name"] == "pfweight" else r for r in rows]
+        with self.assertRaisesRegex(engtrace.calibref.CalibError, r"\bpfweight\b"):
+            engtrace.advancing_rows(renamed)
 
 
 class Metrics(unittest.TestCase):

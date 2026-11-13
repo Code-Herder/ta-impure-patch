@@ -1,7 +1,10 @@
 """A test runner may only adopt the X server it actually started."""
 from pathlib import Path
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -42,6 +45,47 @@ class DisplayTests(unittest.TestCase):
             if second:
                 tacompat.stop_xvfb(second)
             tacompat.stop_xvfb(first)
+
+    def test_every_client_is_accepted_while_others_leave(self):
+        """The server never regenerates (-noreset): one that does drops some of the clients that
+        connect as others leave, and a game whose Wine loses its display ends before a window."""
+        x = tacompat.start_xvfb(None)
+        answers, lock = {}, threading.Lock()
+
+        def one():
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(30)
+            try:
+                s.connect(f'/tmp/.X11-unix/X{x.tacompat_display}')
+                s.sendall(struct.pack('<BxHHHHxx', ord('l'), 11, 0, 0, 0))
+                head = b''
+                while len(head) < 8:
+                    chunk = s.recv(8 - len(head))
+                    if not chunk:
+                        return 'closed before the answer'
+                    head += chunk
+                return 'accepted' if head[0] == 1 else f'refused ({head[0]})'
+            except OSError as e:
+                return type(e).__name__
+            finally:
+                s.close()
+
+        def loop():
+            for _ in range(150):
+                answer = one()
+                with lock:
+                    answers[answer] = answers.get(answer, 0) + 1
+
+        try:
+            workers = [threading.Thread(target=loop) for _ in range(4)]
+            for t in workers:
+                t.start()
+            for t in workers:
+                t.join()
+            self.assertEqual(answers, {'accepted': 600})
+            self.assertIsNone(x.poll())
+        finally:
+            tacompat.stop_xvfb(x)
 
 
 if __name__ == '__main__':

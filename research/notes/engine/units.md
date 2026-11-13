@@ -171,13 +171,21 @@ operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game i
 (called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
 player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
 per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
-`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
-those credits. So it is a budget a tick shared among the players, not one per search. Every 150
-calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
-`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
-per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
-nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
-TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+`main+0x2A3C`, adds that to the credit at `[pf+0xA1+4i]` of each player whose record is in use,
+of type 1, 2 or 3 and whose `+0x146` is not 10 (`0x40EC45..0x40EC62`), and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. The function
+returns at once while that u16 is 0 (`0x40EB8B`). Every 150 calls (`0x511A38`) the same function
+rewrites, for all ten players whatever their type, a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`; `pfweight` in `replay-globals.tsv`), a weight per player, not a budget: `+0x54` ×6,
+×3 or ×1 as that player's count at `0x511A10` over the per-player count `main+0x1434F` is below
+1, below 2 or neither (`0x40EBBF..0x40EC06`), and the count is reset (`0x40EC0C`). The count
+(`pfexamined`) is +1 at `0x40ECF9` for the player whose turn it is, before the slot's type `+0xA6`
+is tested at `0x40ED33`: unit slots examined, whether or not a search starts. A search's start
+copies its player's weight to `[pf+0x50]` (`0x40ED76`), which the search multiplies, 16.16, by
+the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0x40E191`,
+`0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
+budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
+raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
@@ -575,7 +583,7 @@ loader is `0x466050`.
 | `+0x74` | the AI object, also on a human seat ([orders](orders.html), *The AI object, its lifecycle and its ten planners*) | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`, which is both the human's Ctrl group and the stock AI's planner group; each AI planner holds a pointer to its own group here; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
-| `+0x8C..+0xE0` | the economy: the saver's keys | the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed; the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`): income `+0x90` and `+0x9C`, and MetalWasted, the double `+0xD4` |
+| `+0x8C..+0xE0` | the economy: the saver's keys | the record's init, 0 into `+0x8C..+0xA8` (`ebp` zeroed at `0x464712`, the stores `0x46476B..0x464795`, one dword each: the rates at `0x464771`, `0x464777`, `0x464783`, `0x464789`, the maxima at `0x46478F`, `0x464795`; DISASSEMBLED 2026-11-12); the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed; the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`): income `+0x90` and `+0x9C`, and MetalWasted, the double `+0xD4` |
 | `+0xE4`/`+0xE8` | share limits | SetShareMetal `0x4193C5`, SetShareEnergy `0x419485` | the auto-share `0x457D30`, network only; the resource bar's ticks of the viewed record, each drawn only while its level is not 0 and the raw stored value `+0x98`/`+0x8C` is above it (energy `0x469133..0x4691B2`, metal in `0x469391..0x469492`; *The four rects* in [render.md](render.md)) |
 | `+0xEC` | a 0x34-byte resource accumulator | init `0x4647D7` | |
 | `+0xF0` | UpdateTime, the 30-tick pass | init `0x464715` (GameTime, `0x46470C`); the players phase adds 30 (`0x465092`) | the players phase: the record's whole 30-tick block, the economy pass `0x401360` at `0x46555A` included, runs only once GameTime has reached it (`0x46507D..0x465089`, `ja` past the block) |
@@ -663,6 +671,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
 `0x48BFB3` and tests the mask with it at `0x48BFCE`).
 - **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
   `0x43CFDB`, `cx` loaded at `0x43CFD1`).
+- **The ground step divides by the def's turn and brake rates**, unguarded: `_alldiv 0x4E4440` by
+  the word `turnrate` `+0x1BA`, zero-extended (`0x43D014..0x43D022`), and by `brakerate` `+0x19A`
+  doubled in 32 bits (`lea eax,[esi+esi]`, `0x43D05A`; the call `0x43D06C`). A ground type whose
+  turnrate is 0, or whose brakerate doubles to 0, faults here on its first move [DISASSEMBLED
+  2026-11-12]; tasim refuses such a type (`tasim_unitdef_refusals`).
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
   `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
   `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in
@@ -817,7 +830,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   size hint only.
 - **The sine table `0x509F00`**: MEASURED equal to `round(8192 · sin(2πi / 512))` on all 512
   entries, the closest to a rounding tie 0.0016, so the codec carries it as a literal of the
-  formula and never reads the executable.
+  formula and never reads the executable, and the shared core generates it from the same formula
+  (`tasim_fixed.h`, `ts_sin_table`). The ground velocity rule over it, −`0x4B70EF`(heading, speed)
+  and −`0x4B7123`(heading, speed), was MEASURED 2026-11-12 equal to the engine's mover velocity on
+  10 000 of 10 000 distinct (heading, speed) pairs from the slice-walkers recording
+  (`tools/tasim/velocity_triples.py`).
 
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a

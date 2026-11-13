@@ -21,16 +21,20 @@ commanders' own terms are the whole income, and the Difficulty scales them for O
 ImpAI's energy income must be above 0; a metal income of 0 on both seats (a commander with no
 metalmake) passes and is reported. Each launch also checks the setup it measures: main+0x37EEE
 holds the Difficulty, records 1 and 2 are controller 2, the level init's line names seat 2 only,
-the seat table marks record 2 and not record 1, and the eighteen handicap sites begin with E9
+the seat table marks record 2 and not record 1, the sixteen handicap sites begin with E9 and
+the Deathmatch respawn's two type tests, rows 15 and 16, are stock (80)
 (tagpu_impai.c).
 
-Then the rows the economy does not reach. The human seat gives each computer seat 100 energy and
-100 metal (`+give`, the console's Give, mask 1). Every handicap stub counts the type-2 records that
-take each of its exits (tagpu_impai.c, s_diag.hits, at the address the attach line names); the
-level is advanced until rows 13 and 14 (the transfers) have each sent a record down both, at most
-RECLAIM_TICKS ticks. Seat 1 is the only unmarked type-2 record and seat 2 the only marked one, so a
-scaled count is OTA AI's and an exempt one ImpAI's; the economy rows 1 to 8 together must show both
-as well. All eighteen rows' counts are printed.
+Then the rows that need more than the commanders. The launch applies the `impai-handicap` test
+group's economy structures (impai-handicap-economy.json: a solar collector, a wind generator, a
+metal extractor, a metal maker and a tidal generator for each computer seat) and two Fleas for the
+human seat (impai-handicap-purge.json), orders each Flea to attack the computer seat's commander
+nearest it, and the human seat gives each computer seat 100 energy and 100 metal (`+give`, the
+console's Give, mask 1). Every handicap stub counts the type-2 records that take each of its exits
+(tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
+every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 and the purge's
+18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
+record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's.
 
 Then the reclaims (rows 11 and 12, the payout; 17, the reclaimed unit's credit), which need a
 seat's own order to hold: impai-handicap-reclaims.json gives each computer seat a construction kbot
@@ -44,6 +48,12 @@ ticks after a planner run and has at least 45 ticks before the next, and the fea
 0x404BBA..0x404C89); a unit's reclaim keeps its progress on the unit across re-issues. The level is
 advanced until rows 11, 12 and 17 have each sent a record down both, at most RECLAIM_TICKS ticks.
 
+Every row's counts are printed, and the rows this test does not reach are named with their
+reason: 9 and 10, the refunds of a cancelled build and of an unbuild, which no step here scripts;
+6 needs a mobile unit with a negative EnergyUse, which no unit of the retail game has, and
+handicap_row6.py reaches it on Escalation. Rows 15 and 16 have no site: ImpAI leaves the
+Deathmatch respawn's grants stock (tagpu_impai.c, HSITES).
+
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
 the mark still clear. Exit 0 when every Difficulty passes, 1 on a failed check, 2 when a launch
@@ -56,6 +66,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -67,27 +78,35 @@ SCENARIO = TREE / "scenarios/impai-handicap.json"
 LOAD_S = 900                            # a launch to a live map, a cold prefix included
 LEVELS = {"easy": 0, "medium": 1, "hard": 2}
 AT = 61                                 # two economy passes in, nothing built yet
-RECLAIM_TICKS = 3600                    # the reclaims' bound: two minutes of simulation
-STEP = 150                              # ticks between two reads of the counts
+ROWS_TICKS = 900                        # the rows' bound: 30 economy passes
+STEP = 60                               # ticks between two reads of the counts: two passes
 OTA, IMPAI = 1, 2                       # the scenario's records
-REACHED = (13, 14)                      # the rows the gives reach
+STRUCTURES = "impai-handicap-economy.json"
+ATTACKERS = "impai-handicap-purge.json"
+ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_packet_pub.c)
+REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
 RECLAIMS = "impai-handicap-reclaims.json"
 RECLAIMED = (11, 12, 17)                # the rows a seat's own reclaim orders reach
+RECLAIM_TICKS = 3600                    # the reclaims' bound: two minutes of simulation
 REISSUE = 45                            # ticks between two re-issues: half the builder planner's 90
 # the reclaims' kbots and targets as the scenario places them: (seat, the feature's kbot, the
 # feature's world point, the unit's kbot, the unit's world point)
-RECLAIM_PAIRS = ((OTA, (6880, 1632), (6880, 1680), (6944, 1632), (6944, 1680)),
-                 (IMPAI, (7104, 1632), (7104, 1680), (7168, 1632), (7168, 1680)))
+RECLAIM_PAIRS = ((OTA, (7056, 1744), (7056, 1808), (7136, 1744), (7136, 1808)),
+                 (IMPAI, (5896, 6776), (5896, 6840), (5976, 6776), (5976, 6840)))
 NEAR = 40                               # world units: a roster unit at a placed point
-ECONOMY = range(1, 9)
+NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse (handicap_row6.py: "
+                "Escalation)",
+            9: "no step here cancels a build",
+            10: "no step here unbuilds"}
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
 REC = 0x1B63                            # record 0 in main; 0x14B a record (tagpu_engine.h)
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
+ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
 SITES = (0x401435, 0x4014B2, 0x4014F3, 0x40157F, 0x4015F3, 0x40167C, 0x4016F2, 0x401753,
-         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x465437, 0x4654A3,
-         0x486CDA, 0x406FC3)
+         0x40269F, 0x41BBB1, 0x4238C4, 0x423918, 0x464C06, 0x464D36, 0x486CDA, 0x406FC3)
+STOCK = (0x465437, 0x4654A3)            # rows 15 and 16, `cmp byte [eax+0x73],2`: 80 78 73 02
 
 
 def field(rec, off, size=4):
@@ -118,10 +137,10 @@ class Held(Check):
 
 
 def counts(c, at):
-    """The eighteen rows' (scaled, exempt) counts, read in one peek."""
-    raw = c.bytes(f"0x{at:08X}:x144")
-    v = struct.unpack("<36I", raw)
-    return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in range(1, 19)}
+    """Each row's (scaled, exempt) counts, read in one peek of 36 u32s, a pair a row id (one hex
+    read of the 144 bytes overruns the peek's line)."""
+    v = c.values(*(f"0x{at + 4 * k:08X}:4" for k in range(36)))
+    return {row: (v[2 * (row - 1)], v[2 * (row - 1) + 1]) for row in ROWS}
 
 
 def both(hits, rows):
@@ -153,7 +172,7 @@ def run(api, instance, level, out):
             specs = [field(OTA, 0x90), field(IMPAI, 0x90), field(OTA, 0x9C), field(IMPAI, 0x9C),
                      field(OTA, 0x73, 1), field(IMPAI, 0x73, 1), DIFFICULTY]
             e_ota, e_imp, m_ota, m_imp, c1, c2, diff = c.values(*specs)
-            ops = c.values(*(f"0x{va:X}:1" for va in SITES))
+            ops = c.values(*(f"0x{va:X}:1" for va in SITES + STOCK))
             text = api.talog.run_text(gamedir).splitlines()
             seats = [ln for ln in text if "impai: seats" in ln or "impai: unavailable" in ln]
             where = next((m for m in map(ATTACH.search, text) if m), None)
@@ -184,6 +203,9 @@ def run(api, instance, level, out):
         fails.append(f"the level init's line is {seats[-1] if seats else 'missing'}, "
                      f"not `impai: seats 2 (impure.cfg) ...`")
     unpatched = [f"0x{va:X}" for va, op in zip(SITES, ops) if op != 0xE9]
+    written = [f"0x{va:X}" for va, op in zip(STOCK, ops[len(SITES):]) if op != 0x80]
+    if written:
+        fails.append(f"the respawn's sites are not stock: {', '.join(written)}")
     if unpatched:
         fails.append(f"sites not patched: {', '.join(unpatched)}")
     if not e_imp > 0:
@@ -205,35 +227,85 @@ def run(api, instance, level, out):
     return fails
 
 
+def apply(instance, name):
+    r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
+                        str(TREE / "scenarios" / name)], capture_output=True, text=True,
+                       timeout=300)
+    if r.returncode:
+        raise OSError(f"scenario apply {name}: {(r.stdout + r.stderr).strip()[-400:]}")
+
+
+def attack_commanders(c, out):
+    """Each Flea ordered to attack the CORE commander nearest it, once the roster lists both."""
+    deadline = time.monotonic() + ROSTER_S
+    while True:
+        units = c.call("roster", "--json")["units"]
+        fleas = [u for u in units if u["type"].upper() == "ARMFLEA"]
+        coms = [u for u in units if u["type"].upper() == "CORCOM"]
+        if len(fleas) == 2 and len(coms) == 2:
+            break
+        if time.monotonic() > deadline:
+            raise OSError(f"the roster lists {len(fleas)} Fleas and {len(coms)} CORE commanders "
+                          f"after {ROSTER_S} s, not 2 and 2")
+        time.sleep(1)
+    for f in fleas:
+        com = min(coms, key=lambda u: (u["world"][0] - f["world"][0]) ** 2
+                  + (u["world"][1] - f["world"][1]) ** 2)
+        c.call("order", "attack", "unit", com["engine_index"], "--unit", f["engine_index"],
+               "--expect", "ARMFLEA")
+        out.append(f"  Flea {f['engine_index']} attacks seat {com['owner']}'s commander "
+                   f"{com['engine_index']}")
+
+
 def rows_reached(c, instance, hits_at, out):
-    """The reclaims and the gives, then the level advanced until every REACHED row has sent a
-    record down both exits; the list of failed checks."""
+    """The structures, the Fleas' attacks and the gives, then the level advanced until every
+    REACHED row has sent a record down both exits; the list of failed checks."""
+    apply(instance, STRUCTURES)
+    apply(instance, ATTACKERS)
+    attack_commanders(c, out)
     for seat in (OTA, IMPAI):
         for what in ("energy", "metal"):
             c.type(f"+give {seat} 100 {what}")
     start = c.tick
     hits = counts(c, hits_at)
-    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < RECLAIM_TICKS:
+    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < ROWS_TICKS:
         c.advance(STEP)
         hits = counts(c, hits_at)
     out.append(f"  rows scaled/exempt at GameTime {c.tick}: "
                + " ".join(f"{r}={s}/{e}" for r, (s, e) in hits.items()))
+    out += [f"  row {r}: not reached, {why}" for r, why in NOT_HERE.items()]
     fails = [f"row {r} sent no {'OTA AI' if not s else 'ImpAI'} record down its "
              f"{'scaled continuation' if not s else 'unscaled branch'} by GameTime {c.tick} "
              f"(scaled {s}, exempt {e})"
              for r, (s, e) in ((r, hits[r]) for r in REACHED) if not (s and e)]
-    if not both(hits, ECONOMY):
-        fails.append("the economy rows 1 to 8 did not send both seats down their exits")
     return fails
 
 
 def placed(roster, owner, kind, at):
-    """The engine index of the roster's `kind` of `owner` within NEAR of world point `at`."""
+    """The engine index of the roster's `kind` of `owner` within NEAR of world point `at`, or None."""
     for u in roster:
         if (u["owner"] == owner and u["type"].upper() == kind and u["engine_index"]
                 and abs(u["world"][0] - at[0]) <= NEAR and abs(u["world"][1] - at[1]) <= NEAR):
             return u["engine_index"]
-    raise OSError(f"no {kind} of seat {owner} at {at} in the roster")
+    return None
+
+
+def reclaim_units(c):
+    """Each pair's kbots and Dragon's Teeth unit by engine index, once one roster lists them all:
+    the roster is a dump logged every 5 s (tagpu_packet_pub.c) and the level is held, so the first
+    dump that lists every unit the apply placed is the held level's."""
+    deadline = time.monotonic() + ROSTER_S
+    while True:
+        roster = c.call("roster", "--json")["units"]
+        pairs = [(seat, placed(roster, seat, "CORCK", fk), fp, placed(roster, seat, "CORCK", uk),
+                  placed(roster, seat, "CORDRAG", up)) for seat, fk, fp, uk, up in RECLAIM_PAIRS]
+        missing = [f"seat {p[0]}" for p in pairs if None in p]
+        if not missing:
+            return pairs
+        if time.monotonic() > deadline:
+            raise OSError(f"the roster lacks the reclaims' units of {', '.join(missing)} after "
+                          f"{ROSTER_S} s")
+        time.sleep(1)
 
 
 def reissue(instance, *args):
@@ -246,14 +318,8 @@ def reissue(instance, *args):
 def reclaims_reached(c, instance, hits_at, out):
     """The reclaims, re-issued every REISSUE ticks while a row lacks the seat's exit, until rows 11,
     12 and 17 have each sent a record down both; the list of failed checks."""
-    r = subprocess.run([sys.executable, str(TACLI), "scenario", "apply", instance,
-                        str(TREE / "scenarios" / RECLAIMS)], capture_output=True, text=True,
-                       timeout=300)
-    if r.returncode:
-        raise OSError(f"scenario apply {RECLAIMS}: {(r.stdout + r.stderr).strip()[-400:]}")
-    roster = c.call("roster", "--json")["units"]
-    pairs = [(seat, placed(roster, seat, "CORCK", fk), fp, placed(roster, seat, "CORCK", uk),
-              placed(roster, seat, "CORDRAG", up)) for seat, fk, fp, uk, up in RECLAIM_PAIRS]
+    apply(instance, RECLAIMS)
+    pairs = reclaim_units(c)
     exit_of = {OTA: 0, IMPAI: 1}            # scaled for OTA AI's seat, exempt for ImpAI's
     start = c.tick
     hits = counts(c, hits_at)

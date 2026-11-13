@@ -287,6 +287,8 @@ def main(argv):
     if len(argv) != 2 or argv[0] != "check":
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
+    import devpy                        # the recording's blocks need the shared venv
+    devpy.ensure()
     try:
         check(argv[1])
     except Fail as e:

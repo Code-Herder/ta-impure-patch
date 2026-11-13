@@ -72,6 +72,13 @@ lists what was ended (`ended` in `--json`) and warns when that was a TotalA.exe;
 still fails says its exit code and the prefix's processes on the same line. A Wine program you
 run in an instance's prefix ends at its next launch.
 
+**A private display must be started with `-noreset`.** Without it an X server regenerates each
+time its last client leaves and drops a client that connects meanwhile; when that client is the
+launch's Wine, the game has no display driver (`nodrv_CreateWindow ... no driver could be loaded`
+on Wine's stderr) and exits with **code 0** and *"exited during launch"*, its log ending at the
+`WIN32.dll loaded` line. Every harness's Xvfb passes it (`tareplay.start_xvfb` has the
+measurements); an Xvfb you start by hand needs it too.
+
 **TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
 from the template's `user.reg` (`gamespeed` 10). **Tick-based replay tests use internal 20 (2x) as standard;
 timing measurements use 10.** The replay harness also runs its lanes at one tick a frame once armed

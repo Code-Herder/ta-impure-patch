@@ -323,9 +323,14 @@ $(addprefix res, $(ALLEXTS)): $(RMODELS:%=inc/tagpu_rmodel_%.zst)
 # feature that names its replay fixtures, so a landing knows which fixtures to run. The check
 # reads the sources, not the objects, and runs beside the state rule for the same reasons; the
 # fixture list and the parser are prerequisites so that a change to either runs it again.
-$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout scene-check
+#
+# TASIM'S CLASSIFICATION (tools/tasim/engine-features.tsv): every simulation feature says whether the
+# shared core models it, which landing will, or why it is outside, so a fix that lands in the engine
+# cannot leave tasim's model of it silently stale. It reads the same sources as the feature check.
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py ../../tools/tasim/engine-features.tsv ../../tools/tasim/featcheck.py | thread-split spirv log-check replay-layout scene-check
 	../../tools/sim-state-check.sh . $(OBJEXT)
 	python3 ../../tools/replay/tareplay.py features --check .
+	python3 ../../tools/tasim/featcheck.py .
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 # THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the
@@ -375,7 +380,7 @@ RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.
              src/tagpu_recmp_orders.c src/tagpu_recmp_players.c src/tagpu_recmp_pov.c \
              src/tagpu_recmp_roots.c src/tagpu_recmp_stream.c src/tagpu_recmp_text.c \
              src/tagpu_recmp_units.c src/crc32.c
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h src/zstd.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h inc/tagpu_replay_layout.h inc/tagpu_replay_globals.h src/zstd.c
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
 # THE STRATEGIC ICONS' RULE AND SHAPES (tests/icontest.c over inc/tagpu_icon_rule.h): the defaults'

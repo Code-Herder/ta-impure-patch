@@ -21,6 +21,14 @@ the gate's plan note.*
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
 | `tools/tasim/native.py`, `native.py test`, `native.py roles` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` on the install | no |
 
+**The interpreter is the shared venv's**, `.venv-undither/bin/python` at the main checkout
+(CLAUDE.md, *Python tooling*): `calib.py`'s commands and `applier_check.py` read recordings and
+zstd-compressed traces, which need numpy, numba and zstandard. Started under the system `python3`
+they re-execute under the venv (`tools/replay/devpy.py`); without one, or when a module is still
+missing, they exit 2 ("could not run") naming the venv's interpreter, never 1, which means a check
+failed. `arenascan.py`, `duelgen.py`, `native.py` and the fake tasim's `play` need the standard
+library only.
+
 ## The arena
 
 Every run plays on one map, the one `tools/tasim/calib-arena.json` names. Nothing in it is written
@@ -113,6 +121,7 @@ limit.
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
+| the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | by the apply, not by the settle: no economy pass runs at an empty point (*The seat's rates*) | the applier resets them at every apply to values the apply alone decides; R4 compares them |
 
 ## The per-run checks
 
@@ -121,14 +130,58 @@ makes the run unusable and the reference builder refuses its scenario.
 
 | | Check |
 |---|---|
-| R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch |
+| R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
 | R2 | no projectile at the empty point |
 | R3 | after the apply the grid holds only the scenario's features |
-| R4 | each seat's image after the apply equals run 0's, but the lifetime totals and the deadlines' phase; the storage, flag and levels equal the wire's |
+| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG, the wind rows `main+0x37EC4..+0x37EE5`, B4's slot table. Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
+
+**The seat's rates.** The economy pass `0x401360` recomputes a seat's rates and storage maxima
+from its units at every pass: it zeroes the maxima before summing (`0x40137D`, `0x401383`) and writes
+income `+0x90`/`+0x9C` and expense `+0x94`/`+0xA0` as the pass's sums without reading what they
+held (`0x4019C6`, `0x4019DD`, `0x401A05`, `0x401A2D`, [weapons](../engine/weapons.md)); their
+other writers are the record's init, the level start, the network's `0x28` receiver, the
+transfers and a cheat ([units](../engine/units.md), the `+0x8C..+0xE0` row). The players phase calls
+the pass only for a record with a live unit or one that never had any: with the word `+0x144` at
+0 and the dword `+0x140` not, it jumps past the call (`0x465525..0x465537`; DISASSEMBLED
+2026-11-12). So no pass runs at an empty point, and a seat's rates and maxima there are those of
+the last pass that saw its units: the launch's starting commanders' for run 0, the previous run's
+for every later one. MEASURED in the C1 lanes on Cavedog Links CC: income 25.0/1.0 (seat 0) and
+12.5/0.5 (seat 1, the AI's ×0.5 while it was still type 2) after run 0's apply, 0.3/0.0 after
+every later one; the exact scenario's energy maximum 1,000,000 after a launch's first apply and
+1,000,100 after a reload's. No settle can reset them, and comparing them after the run's first
+pass compares an outcome: two fresh launches of the exact scenario, same wire, read energy expense
+20 and 10 after that pass. A seat with no unit in a scenario (the course's) never runs a pass in
+the run at all.
+
+So **the scenario applier resets them at every apply**, after its creates, on the game thread
+inside the apply, for each active seat the scenario names (`reset_pass_results`, `tagpu_scenario.c`): the
+rates to 0, the record init's value, and the maxima to what the next pass would compute from the
+seat's units after the apply (every alive, finished unit's `energystorage`/`metalstorage`, a
+pending death left out, then the base storage while `+0x149` bit 0 is set), raised to a level the
+wire sets. A seat with units reads the same maxima before its first pass as after it unless a unit
+is finished or lost on the way; a seat with none keeps rates 0 and its base storage for the whole
+run. Either way the values follow from the wire and the units it made, never from the previous
+run. The readers in between, established from the disassembly: the rates go only through the
+getters `0x464AB0..0x464B20`, called by the stock AI's planners (`0x408691`, `0x40874A`,
+`0x40BC53..0x40BCC5`, type 2 only) and the resource bar (`0x468F8D..0x468FB4`); the maxima are read
+by RepairPatrol `0x405980` and VTOL_RepairPatrol `0x4152F0`, which compare the stored level with
+0.2 × the maximum and a feature's yield with the room left, by the AI's score, the share sliders,
+the network's sends and the bars. Nothing clamps a level to them but the pass, against the maxima
+it recomputes (`0x401AB3..0x401B27`), so the reset never clamps the storage the scenario sets. The
+reset is withheld in a network game and on a puppet, where the calibration keys are refused.
+
+A run's `t = 0` seat row, the state after the apply, carries the reset values, so the `extractor`
+exact family's metal income at `t = 0` is 0 in every run, as tasim's must be: it starts from the
+applied state, before any pass.
+
+**How a refused scenario reads.** `calib.py refs build` prints, for each scenario it refuses, the
+number of failed runs, then each check with the runs it failed and under it every field it named
+(R4 a seat's dword, R6 a global or table) with its count and first run, so one report shows every
+cause at once.
 
 **The iteration of an event made on a paused frame.** The recorder's capture point publishes the
 last step's events and then writes the new tick's `RK_TICK` and images (`tagpu_rec_capture`), and
@@ -164,7 +217,7 @@ plays it. A unit made during a run is `built:<n>`.
 | `survivors` | the winner's HV(t_e)/HV(0); a draw takes side A's |
 | `income.<res>@c` | a side's produced(c) − produced(0), c a multiple of 1800 |
 | `travel.first/median/last` | the tick each mover first comes within 16·(fp + 1)·⌈√n⌉ of its destination; censored at the limit |
-| exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage`, `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
+| exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage` (each side's maxima at every economy pass after t = 0), `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
 
 ## Perturbations
 
@@ -173,6 +226,18 @@ with the first four bytes of sha256("<scenario sha256>:<index>"): a mobile unit'
 −8..7 world units on each axis, then each order's `after` raised by 0..15 ticks; odd runs swap the
 seats. An exact scenario is never perturbed. A reference records each run's perturbation and its
 wire's sha256, and the checker refuses one that `perturb.py` no longer makes.
+
+**Every unit's facing is in the wire**: the scenario's, or 0 (heading `0x8000`) where it names
+none, and the applier writes it after the create. The create draws a structure's heading from the
+simulation RNG, `0x8000` − BuildAngle/2 + rand(BuildAngle), BuildAngle the def's word `+0x210`
+(`0x485BD6..0x485C06`; a mobile unit's is then overwritten with that word, `0x4860BB..0x4860ED`),
+so without it a structure faces where the launch's random stream says and its turret's first aim
+turns further or less. MEASURED on the exact scenario at `5c28bdea`: the ARMLLT at headings
+`0x6E49` and `0x7054` (reload runs 0 and 1) fired first at t = 16, at `0x61D0` (fresh run 2) at
+t = 18, every later shot and decrement two ticks behind; the three runs' images differed after the
+apply only in the two units' heading `+0x66`, the hover phase `+0xAA` (also drawn at the create,
+`0x485D22`) and the tower's weapon fields `+0x14..+0x1B`. So the self-test's fresh-against-reload failure was the
+random stream, not the reload.
 
 ## References
 
@@ -213,12 +278,32 @@ every self-test ran, 2 when one reported an error (an exact scenario's runs diff
 or there was nothing to test -- no reference, or none `--only` matches: a self-test of nothing
 tested nothing.
 
+**The spread rule on a metric with a mass point is noisy at 25 runs a side.** MEASURED on the fifth
+verification's `duel-armpw-corak` references by shuffling each one's 50 runs into halves of 25
+4,000 times (exchangeable, so every OUT is a false alarm): the seat effect's false-alarm rate is
+0 for the winner and at most 0.3 % for the time to kill, but 31 % for the survivors of the
+one-lane set j1 and 6.5 % for j6 and j12. In that duel the survivors are 0.280 in about 70 % of
+the runs, with a sparse tail up to 0.400. A half's P10 is the mass point, so its P90, and with
+it the spread ratio, depends on whether two or three of its 25 runs land in the tail.
+
+j1's seat-effect OUT (survivors, spread 4.55: P90 0.306 unswapped against 0.400 swapped) is such
+a draw. Its swapped half has seven runs above the mass point against three in the unswapped half,
+a one-sided Fisher p of 0.15. Counting only 0.36 and above it is seven against one, p 0.024, but
+that threshold was chosen after looking at the data. The five-lane sets of the same scenario have
+six runs above the mass point on each side, and 0.400 comes up in unswapped runs there too. Grading such a metric needs a rule that knows its
+ties (the owner's decision, [calibration bands](../impai/calibration.html)).
+
 ### The tasim_run interface
 
 `tasim_run play --setup F --wire F --run-seed S --exogenous F --limit L --end "0:0,1:0" --trace F
 --json` plays one run and writes its trace; one JSON object on stdout, exit 0 when it ran and 2
 when it could not. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
-traces from a table, for the checker's tests.
+traces from a table, for the checker's tests; without `TASIM_FAKE_TABLE` it exits 2.
+`fake_tasim.py table RUNS_DIR OUT.json` builds a table from an engine run's lane manifests, every
+run's engine trace under its seed (`perturb.run_seed`: the scenario's hash and the run's index), so
+`TASIM_FAKE_TABLE=OUT.json calib.py check --tasim tools/tasim/tests/fake_tasim.py` against the
+references built from the same directory grades every metric in: the checker's end-to-end test,
+with the engine standing in for tasim.
 
 ## Roles
 

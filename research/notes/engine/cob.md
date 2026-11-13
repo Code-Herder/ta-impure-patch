@@ -1278,14 +1278,38 @@ engine does not make.
 
 Helpers the ids reach, all read this session:
 
-- **`0x4B715A`** `cdecl(a, b)` — `fild a; fild b; fpatan` (so `atan2(a, b)`, +x measured from
-  +z), `fmul qword ds:0x509EF0` = **65536 / 2π = 10430.37835047**, then a **bare `fistp`**, so
-  this one rounds to nearest. `ds:0x509EF8` is its inverse, 2π/65536.
+- **`0x4B715A`** `cdecl(a, b)` — `0x4B715D..0x4B716B`: `fild a; fild b; fpatan` (so `atan2(a, b)`, +x measured from
+  +z), `fmul qword ds:0x509EF0`, then a **bare `fistp`**, so this one rounds to nearest.
+  MEASURED 2026-11-12 (the bytes read from the file): `0x509EF0` is `0x40C45F306DC9C78A`, the
+  decimal literal **10430.37835047**, 249 ulp below the double nearest 65536 / 2π; `0x509EF8`,
+  the rotator's scale (`0x4B7173`), is `0x3F1921FB54442C5A`, the literal **9.587379924285e-05**,
+  190 ulp below the double nearest 2π / 65536. The shared core uses both literals
+  (`tasim_fixed.h`), and its SSE2 angle (fdlibm atan2) equals this x87 sequence under the game's
+  control word on 10⁶ of 10⁶ random calls (MEASURED 2026-11-12); `fpatan` runs no CRT code.
 - **`0x4E43A0`** is MSVC's `_ftol`: `fstcw`, `or ah,0x0C`, `fldcw` — the mode is forced to
-  chop, so every other float→int here **truncates toward zero**. `0x4FB440` is the two-double
-  entry of the C runtime's mode-dispatched math routine (`push 0x18; call 0x4FB480`); the mode
-  table is unread, so "hypot" is from the id it serves and the shape of the call, not from the
-  callee `[INFERRED]`.
+  chop, so every other float→int here **truncates toward zero**: `fistp qword`, the low dword
+  returned.
+- **The 64-bit helpers**: `_allmul 0x4E4400`, `_alldiv 0x4E4440`, `_allshl 0x4E44F0` and
+  `_allshr 0x4E43D0`. `_allshr` (DISASSEMBLED `0x4E43D0..0x4E43F0`) is an arithmetic shift of
+  `edx:eax` by `cl`: `shrd`/`sar` below 32, `sar` of the high dword from 32 to 63, and the sign
+  alone (`sar edx, 0x1F` into both) from 64 up. The shared core's `ts_mul_shr` and `ts_shl_div`
+  are these pairs; `_alldiv` by zero faults, which the core counts instead.
+- **`0x4FB440`** is MSVC's `_hypot(double x, double y)` (cdecl; `0x4FB480(x, y, 0x18)`, the
+  `0x18` an operation code only the error paths read), DISASSEMBLED `0x4FB480..0x4FB6A8`: it
+  switches the x87 to a 64-bit significand for its own body (`_ctrlfp(0x133F)` at `0x4FB487`,
+  `0x4EC4C0`), takes M = max(|x|, |y|) (ties take x; 0 returns 0), then x' = x / M and
+  y' = y / M (`fdiv`, `fstp qword`, `0x4FB55F..0x4FB577`), s = x'² + y'² (`fmul`, `fmul`,
+  `faddp`, `fstp qword`, `0x4FB57B..0x4FB58D`), the
+  CRT `sqrt 0x4FB7B4`, which keeps the 64-bit precision (`0x4EC9A5`), its result stored to a
+  double, and the product of the mantissas of that root and M (`0x4EC380` twice, `fmul` at
+  `0x4FB5B0`, `fstp qword`) with the exponents added back exactly (`0x4EC290`, `0x4EC250`). It is **not
+  correctly rounded**: MEASURED 2026-11-12, the shared core's emulation of this sequence equals
+  the sequence run on the x87 under the same control word in 3 003 686 of 3 003 686 pairs, and
+  among the 3 686 pairs 0 < a ≤ b < 3000 whose distance c is an integer it lands below c in
+  359, so `_ftol` gives c − 1 ((20, 99) → 100), the same pairs in 16.16. `.text` calls it from
+  39 sites, among them the ground step's `0x43CDA7` (on the `fild`ed dx and dz,
+  `0x43CD98..0x43CDA7`) and `0x43CDF4`
+  (`tasim_fixed.h`, `ts_hypot`).
 - **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
   (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
   the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell.

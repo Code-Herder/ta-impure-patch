@@ -196,11 +196,19 @@ unit names by scanning the live definition table. This design follows its recipe
     base storage when a unit of its side's commander type dies (`0x486518`), so the applier
     writes it after the apply's own clear; a later apply whose clear kills a commander states the
     storage again.
+  - **Every apply resets each listed active seat's economy-pass results** after its creates, asked by
+    no key: income and expense to 0, and the storage maxima to what the next economy pass would
+    compute from the seat's alive, finished units and its base storage (raised to a level the
+    wire sets). The pass skips a seat with no live unit that has had one (`0x465525..0x465537`),
+    so without the reset a seat emptied by a clear would carry the previous level's values into
+    the next. Withheld in a network game and on a puppet, without an error (the calibration
+    note, [tasim calibration](modules/tasim-calibration.md), *The seat's rates*).
   - `orders[].after` (0–255, default 0): the applier issues the order that many ticks after the
     apply, at the visit whose GameTime is the apply's plus `after`, through the same order path
     as an undelayed one. A watch cancels it if its unit (or a unit target) dies or a feature
     target's cell changes first (a unit whose death is pending, `+0x110` bit 14, counts as dead), if
-    a later apply's clear kills it, if the level changes, or, fail-closed, if GameTime
+    a later apply's clear kills it, if the level changes or becomes a puppet (whose state only
+    the recorder writes), or, fail-closed, if GameTime
     advances by more than 1 between two visits (the game's own pacing batches up to 5 steps a
     frame, so delayed orders need the test turbo at k = 1). When the pending table empties the
     log says `scenario: delayed orders: issued N of M, cancelled K (deaths D, cleared C, skipped
@@ -551,7 +559,10 @@ per-instance. Two established idioms, both followed:
 - **In**: `tagpu_scenario.trigger` — a private, versioned, line-oriented text file the CLI
   writes and the DLL scans with a small fixed-vocabulary parser, then deletes
   (`tagpu_peek` idiom). No user hand-writes it; **no compatibility promise** — it changes
-  freely whenever the DLL does.
+  freely whenever the DLL does. The parser is the shared core's `tasim_wire.c`, one copy for
+  the applier (`tagpu_scenario.c`) and tasim ([layers and modules](impai/shared-core.html));
+  `tagpu/ddraw/tests/tasim_wire_test.py` holds its native, sanitized and i686 builds to one
+  dump of every scenario's wire and names each malformed case's error.
 - **Out**: `tagpu_scenario.json` — written **tmp + rename** so a reader never sees a
   half-built file, polled by the CLI in an auto-wait loop (`tagpu_ui` idiom,
   `inc/tagpu_ui.h`).
@@ -580,6 +591,14 @@ The calibration keys ride on their own lines and columns: `clearfeat 1` and `obj
 when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
 both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line. The
 parser refuses an unknown `player` key and any column past an order's end.
+
+The numbers are read as the DLL's C runtime reads them, in every build. An integer column is a
+32-bit `strtol`: a value out of range saturates, so a `v1 seed=` above 2147483647 — which `tacli`
+writes for some scenarios (33 of the 201 in `scenarios/`, counted 2026-11-12) — comes back in the
+result as 2147483647, and a column saturated at the low end is −2147483648, the value `-`
+stands for: the engine's default where `-` is allowed, refused where a number is required. A
+storage is a `strtod` double from 0 up to, and not including, the double nearest 3e38, rounded
+once to the float the seat stores.
 
 Three details the sketch above did not have. The map gets **its own line** — the rest of
 the line is the name — so a map with spaces needs no escaping. An order names its target

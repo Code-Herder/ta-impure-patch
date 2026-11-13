@@ -7,7 +7,7 @@
    schema), art.json (below), sheet.bin, pal.bin, and seen.bin and greyed.bin when present -- into
    a WIKISIDE, plays every demo of every entry in PAK (tools/hudpak.py --set wiki) on its layout in
    the context CTX names, and at every sampled tick (`sampled` below) copies the view of the entry
-   the sim plays (tagpu_wikistage_copy over WIKISIM.entry, the bound entry with a casting, as
+   the sim plays (tagpu_wikistage_copy over WIKISIM.defs.entry, the bound entry with a casting, as
    tagpu_wiki.c copies it) and composes its column for the view's side over
    DIR/bases/<entry>.<scene>.bin, the minimap picture of the stage the demo plays on, when that
    file exists. CTX is a JSON file, the drop-in's ctx:
@@ -282,11 +282,11 @@ static int compose(char** a, const char* ctxfile)
                     prev.screen = w->side.screen;
                     memcpy(prev.state, w->side.state, sizeof(int) * (size_t)prev.n);
                 }
-                if (sampled(w, &was, s.tick, s.done)) {
+                if (sampled(w, &was, s.sim.tick, s.done)) {
                     int h;
-                    tagpu_wikistage_copy(&v, w, s.entry, WIKISTAGE_LAYOUT_MOD);
+                    tagpu_wikistage_copy(&v, w, s.defs.entry, WIKISTAGE_LAYOUT_MOD);
                     h = tagpu_wikiside_compose(sd, &v, v.side.index, base, base ? (int)nbase : 0, &col);
-                    key(e->id, e->demo[j].id, s.tick);
+                    key(e->id, e->demo[j].id, s.sim.tick);
                     put32(h);
                     put32(col.minimap);
                     if (h > 0) {

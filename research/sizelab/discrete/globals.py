@@ -61,9 +61,9 @@ def main():
           f"max {max(ok)}")
     hist = collections.Counter(n.bit_length() for n in ok)
     print("  bits of the step count:", sorted(hist.items()))
-    pf = series.get("pfsearches")
+    pf = series.get("pfexamined")
     if pf:
-        print("pfsearches series:", [(t, a, v) for t, a, v in pf[:40]])
+        print("pfexamined series:", [(t, a, v) for t, a, v in pf[:40]])
     pc = series.get("pfcalls")
     if pc:
         print("pfcalls series:", [(t, v) for t, a, v in pc[:20]])

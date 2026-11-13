@@ -139,6 +139,11 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
     area = node.get("area")
     if not isinstance(area, str) or not area:
         raise CalibError(f"{w}.area: expected the scoreboard's grouping, like duel/land/t1/x")
+    if (doc.get("setup") or {}).get("clear_features") is False:
+        # every run must start from a level without features: the empty point's checks (R3)
+        # and the perturbation assume it; keeping them is not supported yet
+        raise CalibError(f"{label}: setup.clear_features: false is not supported in a "
+                         f"calibration scenario: every run clears the level's features")
     cfg = arena_cfg or arena()
     return {
         "kind": list(kind), "metrics": list(metrics),

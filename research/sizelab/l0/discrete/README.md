@@ -136,7 +136,7 @@ contesting one cell, so modelling the contest rule would close more of them.
 
 **Globals.** Every `rngseed` change is found as a Park-Miller step count: 3,553, 2,789 and 3,848
 of them. The median is 23, 3 and 2 steps; the maximum is 1,460, 3,833 and 1,314, under
-size-battle's 12,622. The pfsearches delta-of-delta rule still holds.
+size-battle's 12,622. The pfexamined delta-of-delta rule still holds.
 
 **Feature cursor.** The feature cursor flag still holds.
 

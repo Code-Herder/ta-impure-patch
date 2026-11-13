@@ -551,7 +551,8 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 (`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
 type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
-redirects this call to a wrapper that always calls the tick
+redirects this call to a wrapper that calls the tick for every seat ImpAI does not play and, for
+an ImpAI seat, the weapon scan `0x4089A0(obj, 1)` after ImpAI's turn instead
 ([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
@@ -560,7 +561,7 @@ redirects this call to a wrapper that always calls the tick
 |---|---|---|---|---|
 | `+0x11` | 0 | none (NULL) | — | — |
 | `+0x15` | 1, structures | `0x14` B, `0x4FC9B0` | `0x4086D0`, every 30 | each complete structure (`+0x110` bits 29 and 28, not 14): a metal maker (`+0x22D`) is switched **off** through `0x48B090(unit, 1, 0)` when twice the stored metal `rec+0x98` is at least the stored energy `rec+0x8C`, left alone when the net energy `0x464AD0(rec)` is not above 0, and otherwise switched **on** when `0x4B6C30(5)` is not 0 (`0x40871E..0x40877F`); a factory (a build list, `+0x152`) with no order queues one unit of the type `0x40BDB0(seat, unit)` picks, through `0x419B00(name, unit, 1)` (`0x408781..0x4087C4`). `0x408620` and `0x408670` are uncalled copies of these two |
-| `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; at three units or fewer it moves (mode 2) to the centroid of group 5, 1 or 4, the base; at six or more, or while attacking, it attacks (mode 3) the unit the target picker names, all through the group order `0x480460` |
+| `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; with none it does nothing (`0x407828`); at three units or fewer, or four or five while not attacking, it moves (mode 2) to the centroid of group 5, 1 or 4, the base (`0x407869..0x4078C8`; none of them holding a unit, nothing); at six or more, or more than three while attacking (`+0x24`), it attacks (mode 3) the unit the target picker names (`0x407846..0x407867`, `0x4078D2`), all through the group order `0x480460`. Its next due time is GameTime + 300, written before anything else (`0x4077F7..0x4077FE`), so a seat with an armed mobile unit and any structure orders a move every 300 ticks whatever its economy [DISASSEMBLED 2026-11-12] |
 | `+0x1D` | 3, armed mobile | `0x18` B, `0x4FC990`; `+0x14` 2 | `0x4079F0`, every 150 | moves group 3 (mode 2) to group 2's centroid |
 | `+0x21` | 4, builders | `0x14` B, `0x4FC9A8` | `0x408100`, every 90 | the builder planner, below |
 | `+0x25` | 5, armed structures | `0x14` B, `0x4FC980` | `0x407380` = `ret` | nothing; its `+0xC` stays 0, so it is due every tick |
@@ -701,7 +702,14 @@ takes the first unit of group `src` into an empty group, sends a unit back to `s
 farther than √(cap·n) from the group's centroid, then takes in every `src` unit within that
 distance (`0x407560..0x4077CF`): √(20000·n) for group 2, √(50000·n) for group 6. No RNG, no sight.
 The attack rule (three units or fewer: regroup at the base; six or more, or more than three while
-already attacking: attack the target picker's unit) runs every 300 ticks.
+already attacking: attack the target picker's unit) runs every 300 ticks. **The base it regroups at
+is not the builder planner's base point**: it is **`0x407410(&out)`** (thiscall on a planner slot,
+`ret 4`) of the armed-structure slot `+0x25`, else the structure slot `+0x15`, else the builder
+slot `+0x21` (`0x407869..0x4078A3`), the first that holds a unit. `0x407410` averages its group's
+units' integer x, y and z words `+0x6C`, `+0x70`, `+0x74`, each sum divided by the count, and
+writes them as 16.16 values into `out` (`0x40743D..0x407493`); an empty group returns 0 and writes
+nothing (`0x40742B..0x40743A`). So a seat with no armed structure regroups at the plain mean of the
+positions of its group-1 structures [DISASSEMBLED 2026-11-12].
 
 **RNG and sight, in one place.** The helpers that draw the simulation RNG: the build choice (one
 per scored entry), the build site (one for an extractor, four a try), the acquisition record (eight

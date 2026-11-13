@@ -1,21 +1,21 @@
 {
  "format": "ta-scenario/1",
- "description": "The reclaim rows of ImpAI's handicap exemption (rows 11 and 12, the reclaim payout 0x4238C4 energy and 0x423918 metal; row 17, the reclaimed unit's credit 0x486CDA), applied by tools/impai/handicap_check.py to impai-handicap.json: for each computer seat -- seat 1 OTA AI, seat 2 ImpAI -- one CORE construction kbot beside a Dragon's Teeth feature (8 metal, so its reclaim pays 20 ticks after it starts: the countdown 15 + (energy + metal) / 2, two a working call, engine/orders.md) and another beside a Dragon's Teeth unit of its own seat, each ordered to reclaim it. Both payout compares run whatever the feature's values (0x4238B3..0x423918, DISASSEMBLED). The box round (7024, 1700) is dry, flat and holds no map feature (heights 80 to 85 against the sea's 75, read from the map's attribute grid), far from the three seats' starts. The stock AI's builder planner reorders seat 1's kbots every 90 ticks; handicap_check.py re-issues each reclaim every 45 ticks until its row has counted the seat.",
+ "description": "The reclaim rows of ImpAI's handicap exemption (rows 11 and 12, the reclaim payout 0x4238C4 energy and 0x423918 metal; row 17, the reclaimed unit's credit 0x486CDA), applied by tools/impai/handicap_check.py to impai-handicap.json after impai-handicap-economy.json and impai-handicap-purge.json, keeping every unit already there: for each computer seat -- seat 1 OTA AI, seat 2 ImpAI -- one CORE construction kbot beside a Dragon's Teeth feature (8 metal, so its reclaim pays 20 ticks after it starts: the countdown 15 + (energy + metal) / 2, two a working call, engine/orders.md) and another beside a Dragon's Teeth unit of its own seat, each ordered to reclaim it. Both payout compares run whatever the feature's values (0x4238B3..0x423918, DISASSEMBLED). Each seat's four stand in the part of its economy box that impai-handicap-economy.json leaves empty: seat 1's in x 7040..7184, z 1720..1872 of the box round (7024, 1712), east of the wind generator and the extractor and south of the metal maker; seat 2's in x 5864..6008, z 6740..6904 of the box round (5848, 6744), placed the same way. Both boxes are dry and flat (impai-handicap-economy.json, read from the map's attribute grid). The stock AI's builder planner reorders seat 1's kbots every 90 ticks; handicap_check.py re-issues each reclaim every 45 ticks until its row has counted the seat.",
  "setup": {"clear_existing": false},
  "units": [
-  {"id": "fcons1", "type": "CORCK", "owner": 1, "pos": [6880, 1632], "facing": 0,
+  {"id": "fcons1", "type": "CORCK", "owner": 1, "pos": [7056, 1744], "facing": 0,
    "orders": [{"cmd": "reclaim", "target": "teeth1"}]},
-  {"id": "ucons1", "type": "CORCK", "owner": 1, "pos": [6944, 1632], "facing": 0,
+  {"id": "ucons1", "type": "CORCK", "owner": 1, "pos": [7136, 1744], "facing": 0,
    "orders": [{"cmd": "reclaim", "target": "drag1"}]},
-  {"id": "drag1", "type": "CORDRAG", "owner": 1, "pos": [6944, 1680], "facing": 0},
-  {"id": "fcons2", "type": "CORCK", "owner": 2, "pos": [7104, 1632], "facing": 0,
+  {"id": "drag1", "type": "CORDRAG", "owner": 1, "pos": [7136, 1808], "facing": 0},
+  {"id": "fcons2", "type": "CORCK", "owner": 2, "pos": [5896, 6776], "facing": 0,
    "orders": [{"cmd": "reclaim", "target": "teeth2"}]},
-  {"id": "ucons2", "type": "CORCK", "owner": 2, "pos": [7168, 1632], "facing": 0,
+  {"id": "ucons2", "type": "CORCK", "owner": 2, "pos": [5976, 6776], "facing": 0,
    "orders": [{"cmd": "reclaim", "target": "drag2"}]},
-  {"id": "drag2", "type": "CORDRAG", "owner": 2, "pos": [7168, 1680], "facing": 0}
+  {"id": "drag2", "type": "CORDRAG", "owner": 2, "pos": [5976, 6840], "facing": 0}
  ],
  "features": [
-  {"id": "teeth1", "type": "DragonsTeeth", "pos": [6880, 1680], "facing": 0},
-  {"id": "teeth2", "type": "DragonsTeeth", "pos": [7104, 1680], "facing": 0}
+  {"id": "teeth1", "type": "DragonsTeeth", "pos": [7056, 1808], "facing": 0},
+  {"id": "teeth2", "type": "DragonsTeeth", "pos": [5896, 6840], "facing": 0}
  ]
 }

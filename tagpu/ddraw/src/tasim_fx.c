@@ -1,16 +1,16 @@
 /* tasim_fx.c -- the shared simulation core's presentation events: the nano spray's particles and the sound's
-   replies, named sounds and death sounds, each the engine's rule (tagpu_wikisim.h, THE NANO SPRAY and THE
+   replies, named sounds and death sounds, each the engine's rule (tasim_state.h, THE NANO SPRAY and THE
    SOUND). research/notes/impai/shared-core.md, tasim_fx. Contract: tasim.h.
 
-   They are state of the sim, in the WIKISIM its caller owns, and the state hash carries them (tagpu_wikisim.h,
-   items 9 and 10), so a twin that draws or says something else is caught; nothing else the core computes reads
-   them. Their randomness is the wiki's own stateless hashes, never a generator with state. No globals. */
+   They are state of the sim, in the TASIM its caller owns, and the state hash carries them (tagpu_wikisim.h,
+   items 9 and 10; tasim_hash_fx), so a twin that draws or says something else is caught; nothing else the core
+   computes reads them. Their randomness is the wiki's own stateless hashes, never a generator with state. No globals. */
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include "tasim.h"
 
-/* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY) ---- */
+/* ---- the nano spray (tasim_state.h, THE NANO SPRAY) ---- */
 
 static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
 static int32_t sub32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (uint32_t)b); }
@@ -69,7 +69,7 @@ static void spray_box(const int32_t lo[3], const int32_t hi[3], int32_t out[6])
    step the distance over the steps toward zero, its end `tick` + steps; one of 0 steps is not
    made, its draws spent (0x473EDE). Its colour is 0xA1 + its place in the burst (0x473F13..
    0x473F41). Returns the particles the burst made, those past the pool's bound included. */
-static int spray_burst(WIKISIM* s, const WIKISPRAY* e, int tick)
+static int spray_burst(TASIM* s, const WIKISPRAY* e, int tick)
 {
     int i, k, made = 0;
     for (i = 0; i < 5; i++) {
@@ -112,10 +112,10 @@ static int spray_burst(WIKISIM* s, const WIKISPRAY* e, int tick)
    2 ticks, 0x439E80). */
 /* the nano piece's point: QueryNanoPiece names the piece and the host gives its origin, turned by
    the unit's facing */
-static void nano_point(WIKISIM* s, const WIKIUNIT* u, int32_t pt[3])
+static void nano_point(TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, int32_t pt[3])
 {
     int32_t io[4] = { 0, 0, 0, 0 }, turned[3], base[3];
-    const int fixed = !tasim_mobile(s, u->type);
+    const int fixed = !tasim_mobile(defs, u->type);
     const double cs = fixed ? -1.0 : -u->hz, sn = fixed ? 0.0 : u->hx;
     int piece = 0;
     const int n = tasim_facts(s);
@@ -128,7 +128,7 @@ static void nano_point(WIKISIM* s, const WIKIUNIT* u, int32_t pt[3])
 
 /* one reverse emission from box `target` to point `pt` (0x472200), its second burst due on the
    next tick */
-static void emit_reverse(WIKISIM* s, const WIKIUNIT* u, const int32_t target[6], const int32_t pt[3], int t)
+static void emit_reverse(TASIM* s, const WIKIUNIT* u, const int32_t target[6], const int32_t pt[3], int t)
 {
     WIKISPRAY e;
     memcpy(e.box[0], target, sizeof e.box[0]);
@@ -144,11 +144,11 @@ static void emit_reverse(WIKISIM* s, const WIKIUNIT* u, const int32_t target[6],
    arguments (0x404D3B, 0x404D4C): the box from the anchor cell's corner, FootprintX x FootprintZ
    cells wide and the feature's height (+0xFA) tall over the ground (0x404CC9..0x404D37), the
    stage's ground being 0 */
-static void spray_feature(WIKISIM* s, WIKIUNIT* u, int t)
+static void spray_feature(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, int t)
 {
     const int* f = u->spray_box;
     int32_t pt[3], lo[3], hi[3], target[6];
-    nano_point(s, u, pt);
+    nano_point(s, defs, u, pt);
     lo[0] = tasim_fix16(f[0] * CELL);
     lo[1] = 0;
     lo[2] = tasim_fix16(f[1] * CELL);
@@ -160,7 +160,7 @@ static void spray_feature(WIKISIM* s, WIKIUNIT* u, int t)
     emit_reverse(s, u, target, pt, t);
 }
 
-void tasim_spray(WIKISIM* s, WIKIUNIT* u, int t)
+void tasim_spray(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, int t)
 {
     const WIKIDEF* d;
     int32_t pt[3], lo[3], hi[3];
@@ -168,16 +168,16 @@ void tasim_spray(WIKISIM* s, WIKIUNIT* u, int t)
     int k;
     if (!s->part) return;
     if (u->spray - 1 == HOW_FEATURE) {
-        spray_feature(s, u, t);
+        spray_feature(s, defs, u, t);
         return;
     }
-    d = tasim_def(s, u->spray_type);
+    d = tasim_def(defs, u->spray_type);
     if (u->spray - 1 == HOW_RECLAIM) {
         if (u->spray_at && !strcmp(u->spray_on, u->spray_id) && t - u->spray_at < 2) return;
         u->spray_at = t;
         snprintf(u->spray_on, sizeof u->spray_on, "%s", u->spray_id);
     }
-    nano_point(s, u, pt);
+    nano_point(s, defs, u, pt);
     lo[0] = sub32(tasim_fix16(u->spray_x), d->fx * 0x80000);
     hi[0] = add32(tasim_fix16(u->spray_x), d->fx * 0x80000);
     lo[1] = 0;
@@ -197,7 +197,7 @@ void tasim_spray(WIKISIM* s, WIKIUNIT* u, int t)
 /* THE WALKER on tick `t` (0x471EB0, after the units' turns): every particle moves a step, its
    colour's low nibble on from 1 to 7 and round (0x4739B0), and dies once `t` is past its end
    (0x473B30); then each burst due now is made (0x472F60's second spawn) */
-void tasim_spray_tick(WIKISIM* s, int t)
+void tasim_spray_tick(TASIM* s, int t)
 {
     int i, k = 0;
     for (i = 0; i < s->npart; i++) {
@@ -217,7 +217,7 @@ void tasim_spray_tick(WIKISIM* s, int t)
     s->nburst = k;
 }
 
-/* ---- THE SOUND (tagpu_wikisim.h) ---- */
+/* ---- THE SOUND (tasim_state.h) ---- */
 
 static const unsigned char SND_PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
 static const unsigned char SND_INTERVAL[WIKI_SND_KINDS] = WIKI_SND_INTERVALS;
@@ -231,7 +231,7 @@ static int32_t snd_draw(const char* id, int kind, int tick)
 }
 
 /* an event into the ring; the count stops at INT_MAX, the ring's place wraps by itself */
-static void sound_event(WIKISIM* s, int kind, int name, int cat, int variant)
+static void sound_event(TASIM* s, int kind, int name, int cat, int variant)
 {
     WIKISNDEV* v = &s->snd[s->snd_total % WIKI_SND_LOG];
     v->tick = s->now;
@@ -243,7 +243,7 @@ static void sound_event(WIKISIM* s, int kind, int name, int cat, int variant)
 }
 
 /* 0x47F1A0's play by name: at once, no queue, no cooldown */
-void tasim_sound_named(WIKISIM* s, int name)
+void tasim_sound_named(TASIM* s, int name)
 {
     if (s->snd_on && name >= 0 && name < WIKI_NSNDNAME) sound_event(s, 0, name, -1, 0);
 }
@@ -251,7 +251,7 @@ void tasim_sound_named(WIKISIM* s, int name)
 /* 0x47F780 then 0x47FAD0: the viewed player's unit (s->viewed's), then the kind's cooldown, a notice
    of its kind already queued, a full queue's last entry dropped, and the notice in before the first
    entry of a lower priority */
-void tasim_notice(WIKISIM* s, const WIKIUNIT* u, int kind)
+void tasim_notice(TASIM* s, const WIKIUNIT* u, int kind)
 {
     WIKISNDQ* e;
     int i, k;
@@ -274,7 +274,7 @@ void tasim_notice(WIKISIM* s, const WIKIUNIT* u, int kind)
 
 /* ACTIVATION as the state setter 0x48B090 notices it, for a unit whose script runs: a change since
    the last look says activate or deactivate */
-void tasim_notice_active(WIKISIM* s, WIKIUNIT* u)
+void tasim_notice_active(TASIM* s, WIKIUNIT* u)
 {
     int on;
     if (!s->cob || !u->cob || tagpu_wikicob_resting(s->cob, u->cob)) return;
@@ -288,7 +288,7 @@ void tasim_notice_active(WIKISIM* s, WIKIUNIT* u)
    gap after the last reply, which it then is; with sound and a variant to pick (0x47FD70's count
    gate), the reply is made and the kind's next time written. BOUND: the queue's type is a def index
    tasim_notice took from a unit, below WIKI_MAX_DEFS, and its kind is below WIKI_SND_KINDS. */
-void tasim_sound_tick(WIKISIM* s)
+void tasim_sound_tick(TASIM* s)
 {
     WIKISNDQ e;
     int32_t count;
@@ -308,7 +308,7 @@ void tasim_sound_tick(WIKISIM* s)
 /* an order's first run says ok (0x438880 at its handler's start, the one kind-5 push, 0x438899),
    unless the scene gave it; a build order's never does: MobileBuild, 0x403A20..0x403F6F, does not
    call 0x438880 */
-void tasim_begin(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
+void tasim_begin(TASIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
     if (o->serial == u->begun) return;
     u->begun = o->serial;
@@ -324,7 +324,7 @@ int tasim_cant_said(const WIKIUNIT* u)
     return u->norder && u->cant == u->order[0].serial;
 }
 
-/* THE DEATH SOUND of a finished unit killed (tagpu_wikisim.h, WIKI_SND_DEATH): the destructor
+/* THE DEATH SOUND of a finished unit killed (tasim_state.h, WIKI_SND_DEATH): the destructor
    explodes it through 0x49B000, which impacts its ExplodeAs weapon (def+0x220) at the unit with no
    victim through 0x499EB0, and on dry ground that plays the weapon's soundhit (+0xF6, 0x499FE9)
    through 0x47F300 (0x499FF2), not sent on the network and gated by the viewed player's sight
@@ -333,7 +333,7 @@ int tasim_cant_said(const WIKIUNIT* u)
    as its variant; the gate is the player's (the viewer's sight is no state of the game's), and the
    event is made whether or not the type has a WAV, so the state does not depend on the load beyond
    the source being there. */
-void tasim_death_sound(WIKISIM* s, const WIKIUNIT* u)
+void tasim_death_sound(TASIM* s, const WIKIUNIT* u)
 {
     int cx = (int)floor(u->x / CELL), cz = (int)floor(u->z / CELL);
     if (!s->snd_on) return;

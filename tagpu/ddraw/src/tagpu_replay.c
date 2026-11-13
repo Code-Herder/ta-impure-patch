@@ -808,6 +808,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                            Refusal* r)
 {
     unsigned i;
+    /* the lists' hashes as the reader parsed them, v0.5.1's already read as this build's
+       (tagpu_recreader.c, list_id): any other hash is a list whose rows differ in what they record */
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         r->code = TAGPU_REPLAY_REFUSED_LAYOUT;
@@ -8002,7 +8004,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
             return 0;
         }
         /* 0x40B320 indexes the ten-entry table with the record's +0x146, and index 10 would alias
-           the pathfinder's budget at 0x5119E8. R8's players_put then writes the image's byte over
+           the pathfinder's weights at 0x5119E8. R8's players_put then writes the image's byte over
            it (no row of replay-layout.tsv excludes it), and the teardown frees through
            0x5119C0[+0x146] (0x40B390, called at 0x464A4F). The level's slot setup 0x4854A0 copies
            it into each of the record's unit slots' +0xFF (0x485908..0x48590E), which the radar
@@ -8232,9 +8234,11 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
      where the forced 0x491D70(1) would pop that screen without clearing its bits and stall single
      player;
    - the objective armed, the exact inverse of E_Disarm (0x4904B0), which writes only +0x88. The
-     objective is made at the level's setup (0x435DA0) and only the next setup frees it, and the
-     end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D, 0x46586F), so
-     none sees the half-built world. */
+     objective is made at the level's setup (0x435DA0), and freed either by the next setup or by
+     the gaming state's destructor 0x434FF0, which frees and nulls main+0x391ED (0x43500E,
+     0x43501C) at a game-mode change (called at 0x434AD6 and 0x434BCF), neither inside this
+     visit; and the end tests run only in a step's players phase (0x4650C9, 0x4650E1, 0x46516D,
+     0x46586F), so none sees the half-built world. */
 static void tk_live(char* ta, unsigned P)
 {
     LARGE_INTEGER a, b;
