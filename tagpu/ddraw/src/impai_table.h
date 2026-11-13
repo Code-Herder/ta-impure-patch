@@ -22,6 +22,9 @@
      sea:  raider, assault, artillery, anti-air -- a sea scout is no class;
      air:  fighter (the classifier's anti-air), bomber (a DROPPED weapon), air scout (the classifier's scout),
            gunship (any other armed flyer), tested in that order.
+   A retail fighter is anti-air by its slot's bad-target category NOTAIR, not by `toairweapon`, which no
+   retail fighter weapon carries (MEASURED on the install data, scout-Nc); so it also dives on
+   ground units, and its class is what the army buys it for, not a limit on what it attacks.
    Builders, the commander, defences, transports, kamikaze, stockpile units and everything the classifier calls
    OTHER are no class: the army does not buy them, and defences stay the economy's. Derived from the classifier's
    output and the def's weapons alone, so every mod is classified by the same rule (one table for every mod,

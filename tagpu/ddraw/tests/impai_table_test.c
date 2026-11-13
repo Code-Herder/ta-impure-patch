@@ -503,7 +503,7 @@ static void test_buy(void)
     }
 }
 
-/* A2's hand-written composition (a2-spec.md section 4.3 step 8) as A2 writes it -- raider 0.25, assault 0.45,
+/* A2's hand-written composition as A2's design states it -- raider 0.25, assault 0.45,
    artillery 0.15, scout 0.05, anti-air min(0.35, 1.5 x seen air value / seen enemy value), the rest scaled to
    1 - anti-air -- against IMPAI_TABLE_HAND, on 50 pictures drawn from a fixed generator, each bought through
    the same deficit rule and type choice: the two must buy the same army. */
