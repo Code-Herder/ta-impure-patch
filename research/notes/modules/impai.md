@@ -173,6 +173,39 @@ It restores `EAX`, `ECX` and `EDX`, touches no x87 register (zero to two values 
 
 `0x416280`, the console's `AI` (row `0x501FD0`, mask 4: cheats), sets the type of the active record its argument names through `0x463C60` at one of two calls: type 1 becomes 2 at `0x4162F4` (`push 2`), types 2 and 3 become 1 at `0x4162FE` (`push 1`). Both calls come to `impai_ai_command`, `__fastcall(rec, edx, type)` (the record in `ECX`, the type on the stack, popped by the callee as `0x463C60`'s `ret 4` does), which clears the record's mark, bounded as above and never on a puppet, logs `impai: the AI command makes record <i> type <t>: ImpAI no longer plays it` when there was one, and calls `0x463C60`. So `AI` never leaves a seat to ImpAI: on an ImpAI seat it makes the seat a human's, and a second `AI` hands it to the stock AI; on a human's seat it hands it to the stock AI, as in stock, even one a takeover played as an ImpAI seat. It runs on the game thread, or on the loader thread through a profile script line in `0x4648E0`, inside the players init `0x464990`, before the level init clears the table and marks the record if `seatai` names it ([recorder](../engine/recorder.html), the `AI` command's entry).
 
+## The renderer
+
+The AI's test games render with GDI and take no GPU token. `tools/impai/bar.py play`,
+`tourney.py play` (and the `tourney.py play` commands `tune.py tierB next` and `tune.py plan`
+write), `eco_bench.py engine` and `tools/tasim/calib.py engine` launch every lane with
+`tagpu_gdi.on` in its game folder (tareplay's `Worker.gdi`): the DLL reads the lever at attach and
+picks the GDI backend, which makes no Vulkan device (`tagpu_cfg.c`; the log says `cfg: ...
+renderer GDI (tagpu_gdi.on)`), and each tool holds the run lock with `gpu=False`. `--gpu` on each
+renders on the default renderer, for a debugging run, and takes a GPU token a lane.
+`tools/replay/tareplay.py run --gdi` plays the ImpAI test groups (`impai-eco`, `impai-fight`,
+`impai-handicap`, `impai-observe*`) the same way during development: one run's record, puppets,
+round trips and seeks share the renderer, so no comparison it makes crosses two, and its summary's
+first line names the renderer. `tareplay.py landing` and `broad` play the players' renderer.
+`handicap_check.py` and `l1_run.py` launch on the default renderer.
+
+**A result is compared only with results of its own renderer.** Each bar, tourney and eco-bench
+result and each calibration lane-launch names its renderer (one written before the field is the
+default renderer's); the bar's, tourney's and eco bench's judgements and `calib.py refs build`
+refuse a set that mixes two, and `bar.py play`, `tourney.py play` and `calib.py engine --resume`
+keep only results of the renderer asked for. GDI is the ground truth for the AI's tests: results
+made on the default renderer (A2a's calibration among them) are not compared with GDI ones until
+they are made again under GDI.
+
+**Open: whether the renderer changes the simulation.** Under the Vulkan backend the game thread
+skips engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
+`tagpu_terrown.c`, each armed by the render thread's own pass), and that those draws write no
+simulation state is argued per site, not checked. The question is the CRT's `rand` `0x4E4870`: its
+stream is per thread and in neither recorded image, and a draw the Vulkan lane skips leaves the
+game thread's stream elsewhere, so does any simulation step on the game thread draw from it
+([sim](../engine/sim.html), *The two random streams*: 61 call sites)? `tools/tasim/rendereq.py`
+answers it for the exact calibration runs, which draw nothing from the simulation RNG: it plays them
+with GDI and with `--gpu` and compares their calibration traces tick by tick. It has not run yet.
+
 ## The replay features and their tests
 
 Each a region of `tagpu_impai.c`:
