@@ -810,6 +810,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         dgun_of(&in[t], &s_tinfo[t]);
         attack_of(&in[t], &s_tinfo[t]);
     }
+    impai_tinfo_offers(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
     tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
                k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army);
@@ -1486,14 +1487,14 @@ static unsigned char s_turn_brain[TURN_SCRATCH] __attribute__((aligned(16)));
 SIM_VAR(s_turn_brain, SIM_TRANSIENT);
 
 /* WHAT A SEAT BUILT AND HOLDS, for the pulse line, the level-end `eco` line and the bar: its units completed
-   and their value, those of each army class (IMPAI_TINFO.klass), its factories completed by tech level and its
-   water-only factories, and the value of its finished units alive, in metal (IMPAI_TINFO.value). A unit is
+   and their value, those of each army class (IMPAI_TINFO.klass), its factories completed by the tech level they
+   offer (IMPAI_TINFO.offer, the level tech-up compares) and its water-only factories, and the value of its finished units alive, in metal (IMPAI_TINFO.value). A unit is
    counted once, at the first walk that finds it finished, keyed by its slot's incarnation (tagpu_unit_birth) so
    that the slot's next unit counts again. Without the fail-closed table there is no incarnation and the key is
    the type: a slot's next unit of the same type is then not counted. The walks run at each economy and military
    decision and at the pulse, so a unit finished and destroyed between two of them -- at most the level's decide
    ticks apart -- is not counted either. Diagnostics the simulation never reads. */
-#define VALUE_TECHS 4                       /* fbuilt's buckets: tech 0, 1, 2, and 3 or above (tasim_roles.c) */
+#define VALUE_TECHS 4                       /* fbuilt's buckets: offer 0, 1, 2, and 3 or above */
 static struct {
     uint32_t key[TAGPU_PK_DESIGN_SLOTS];      /* birth + 1, or 0x80000000 | type with no birth; 0 none     */
     uint32_t built[PLAYER_COUNT];
@@ -1525,8 +1526,8 @@ static void value_walk(int seat, const WORLDQ* q)
         s_value.vbuilt[seat] += s_tinfo[u.type].value;
         if (s_tinfo[u.type].klass < IMPAI_KS) s_value.kbuilt[seat][s_tinfo[u.type].klass]++;
         if (s_tinfo[u.type].cat == IMPAI_C_FACTORY) {
-            const unsigned tech = s_tinfo[u.type].tech;
-            s_value.fbuilt[seat][tech < VALUE_TECHS ? tech : VALUE_TECHS - 1]++;
+            const unsigned offer = s_tinfo[u.type].offer;
+            s_value.fbuilt[seat][offer < VALUE_TECHS ? offer : VALUE_TECHS - 1]++;
             if (s_tinfo[u.type].flags & IMPAI_TF_WATER) s_value.yards[seat]++;
         }
     }
@@ -1783,8 +1784,8 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
 /* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
    largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
-   what the seat completed (s_value): its units, its army by class, its factories by tech level (`ftech=`, the
-   last bucket tech 3 and above) and its water-only factories; the `mil` line with the metal income a pass at
+   what the seat completed (s_value): its units, its army by class, its factories by the tech level they offer
+   (`ftech=`, the last bucket 3 and above) and its water-only factories; the `mil` line with the metal income a pass at
    which the seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP). */
 static void impai_play_end(const char* ta, unsigned now)
 {

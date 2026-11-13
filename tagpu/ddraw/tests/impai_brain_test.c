@@ -637,7 +637,7 @@ static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
 static const IMPAI_MIL* s_milp;
 
 /* the classifier's answers for the fake's types: the commander and the constructor mobile builders, the
-   factory a standing one, the turret a defence; the tech levels are tech_set's */
+   factory a standing one, the turret a defence; the tech levels are content_set's */
 static void roles_set(TASIM_ROLE_OUT* r)
 {
     int t;
@@ -680,12 +680,14 @@ static int tech_options(TASIM_ROLE_IN* in, int n, const IMPAI_BMENU* rows, unsig
     return 0;
 }
 
-/* The tech levels the game gives the fake's n types: their menus as the level init's table of one side, merged
-   into build options as the engine filler takes them, and classified (tasim_roles_classify). A type is a mover
-   or a commander by its roles' flags, a builder by WQ_DF_BUILDER. Only roles' tech levels are written: the rest
-   is the case's own. */
-static void tech_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
+/* The type information of the fake's n types as the level init builds it: their menus as the level init's table
+   of one side, merged into build options as the engine filler takes them, and classified (tasim_roles_classify)
+   for the tech levels; the table from those (impai_tinfo_build); and each type's offer from the same options
+   (impai_tinfo_offers). A type is a mover or a commander by its roles' flags, a builder by WQ_DF_BUILDER. Only
+   roles' tech levels are written: the rest is the case's own. impai_tinfo_build's answer, or -1. */
+static int content_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
 {
+    WORLDQ wq = { &FAKE, (void*)w, 0 };
     TASIM_ROLE_IN in[FW_DEFS];
     TASIM_ROLE_OUT out[FW_DEFS];
     TASIM_ROLE_Q q;
@@ -693,11 +695,11 @@ static void tech_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
     uint16_t pool[FW_DEFS * FW_MENU], opt[FW_DEFS * FW_MENU];
     unsigned nrows = 0, npool = 0;
     void* work = malloc(tasim_roles_work(n));
-    int t, k, v;
+    int t, k, v, got;
     if (!work || n > FW_DEFS) {
-        CHECK(0, "tech_set: %d types", n);
+        CHECK(0, "content_set: %d types", n);
         free(work);
-        return;
+        return -1;
     }
     for (t = 0; t < n; t++) {
         const FDEF* d = &w->defs[t];
@@ -716,7 +718,9 @@ static void tech_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
     CHECK(tech_options(in, n, rows, nrows, pool, npool, opt, (int)(sizeof opt / sizeof opt[0])) == 0, "tech options");
     CHECK(tasim_roles_classify(in, n, out, &q, work) == 0, "tech levels");
     for (t = 0; t < n; t++) roles[t].tech = out[t].tech;
+    if ((got = impai_tinfo_build(&wq, roles, n, s_ti, FW_DEFS)) == n) impai_tinfo_offers(in, roles, n, s_ti, FW_DEFS);
     free(work);
+    return got;
 }
 
 /* metal patches: A and C in the commander's component of class 0, B across a wall the labels draw */
@@ -732,7 +736,6 @@ static unsigned s_nspots = NPATCH;
 static void brain_world(void)
 {
     TASIM_ROLE_OUT roles[T_N];
-    WORLDQ q = { &FAKE, &s_w, 0 };
     unsigned i;
     int x, z;
     world_init(&s_w);
@@ -742,8 +745,7 @@ static void brain_world(void)
         for (z = PATCHES[i].z0; z <= PATCHES[i].z1; z++)
             for (x = PATCHES[i].x0; x <= PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
     roles_set(roles);
-    tech_set(&s_w, T_N, roles);
-    CHECK(impai_tinfo_build(&q, roles, T_N, s_ti, FW_DEFS) == T_N, "tinfo");
+    CHECK(content_set(&s_w, T_N, roles) == T_N, "tinfo");
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
     for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++)
         s_labels[i] = (uint16_t)((i % (FW_W / 2)) >= 24 && (i / (FW_W / 2)) < 16 ? 2 : 1);
@@ -1178,7 +1180,6 @@ static void egame_world(int metal_map)
     static const uint16_t SYMENU[] = { E_CS, E_PT };
     static const uint16_t CSMENU[] = { E_SY, E_UWMEX };
     TASIM_ROLE_OUT roles[E_N];
-    WORLDQ q = { &FAKE, &s_w, 0 };
     unsigned i;
     int x, z, t;
     memset(&s_w, 0, sizeof s_w);
@@ -1248,8 +1249,7 @@ static void egame_world(int metal_map)
     roles[E_COM].flags = TASIM_RF_COMMANDER | TASIM_RF_MOBILE;
     roles[E_CK].flags = roles[E_CV].flags = roles[E_CS].flags = TASIM_RF_MOBILE;
     roles[E_LAB].flags = roles[E_VP].flags = roles[E_SY].flags = TASIM_RF_FACTORY;
-    tech_set(&s_w, E_N, roles);
-    CHECK(impai_tinfo_build(&q, roles, E_N, s_ti, FW_DEFS) == E_N, "tinfo");
+    CHECK(content_set(&s_w, E_N, roles) == E_N, "tinfo");
     s_ti[E_PT].klass = IMPAI_K_SRAIDER;
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
     memset(&s_reach, 0, sizeof s_reach);
@@ -1618,7 +1618,6 @@ static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t sp
 static void mil_world(void)
 {
     TASIM_ROLE_OUT roles[M_N];
-    WORLDQ q = { &FAKE, &s_w, 0 };
     int t;
     brain_world();
     s_w.ndefs = M_N;
@@ -1654,8 +1653,7 @@ static void mil_world(void)
     roles[M_RAIDER].role = TASIM_ROLE_RAIDER;
     roles[M_TANK].role = TASIM_ROLE_ASSAULT;
     roles[M_SCOUT].role = TASIM_ROLE_SCOUT;
-    tech_set(&s_w, M_N, roles);
-    CHECK(impai_tinfo_build(&q, roles, M_N, s_ti, FW_DEFS) == M_N, "the military's tinfo");
+    CHECK(content_set(&s_w, M_N, roles) == M_N, "the military's tinfo");
     s_ti[M_RAIDER].klass = IMPAI_K_LRAIDER;
     s_ti[M_TANK].klass = IMPAI_K_LASSAULT;
     s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
@@ -2585,6 +2583,104 @@ static void sea_decide(const char* name, int* sy, int* land)
     CHECK(out.sites <= s_lv->site_tests, "%s: %u site tests of %u", name, out.sites, s_lv->site_tests);
 }
 
+/* TECH-UP (impai_brain.c, economy; impai_econ.c, choose_factory) by the plants' offers, on retail's ARM K-bot
+   shape: the commander's menu holds the lab (FACTORY), whose constructor CONS builds the advanced lab ALAB and the
+   advanced plant AVP; both make the advanced constructor ACK (tech 2) and ALAB the K-bot ZEUS too. The classifier
+   makes the lab and both advanced plants tech 1 (content_set), and their offers 1, 2 and 2. Hard's row, with a
+   military whose table's tech_m is Hard's, a metal income of 30 a pass against it, and an idle constructor. */
+enum { U_ALAB = T_N, U_AVP, U_ACK, U_ZEUS, U_N };
+static IMPAI_MIL s_umil;
+static void techup_world(void)
+{
+    static const uint16_t CONSMENU[] = { T_MEX, T_SOLAR, T_FACTORY, U_ALAB, U_AVP };
+    static const uint16_t ALABMENU[] = { U_ACK, U_ZEUS };
+    static const uint16_t AVPMENU[] = { U_ACK };
+    static const uint16_t ACKMENU[] = { T_MEX, T_SOLAR };
+    TASIM_ROLE_OUT roles[U_N];
+    int t;
+    brain_world();
+    s_w.ndefs = U_N;
+    def_set(&s_w, U_ALAB, "ALAB", 6, 6, 0, 0, 1800, 3000);
+    def_set(&s_w, U_AVP, "AVP", 6, 6, 0, 0, 2000, 3500);
+    def_set(&s_w, U_ACK, "ACK", 2, 2, 1, 200, 400, 6000);
+    def_set(&s_w, U_ZEUS, "ZEUS", 2, 2, 1, 0, 300, 4000);
+    menu_set(&s_w, T_CONS, CONSMENU, (int)(sizeof CONSMENU / sizeof CONSMENU[0]));
+    menu_set(&s_w, U_ALAB, ALABMENU, (int)(sizeof ALABMENU / sizeof ALABMENU[0]));
+    menu_set(&s_w, U_AVP, AVPMENU, (int)(sizeof AVPMENU / sizeof AVPMENU[0]));
+    menu_set(&s_w, U_ACK, ACKMENU, (int)(sizeof ACKMENU / sizeof ACKMENU[0]));
+    roles_set(roles);
+    for (t = T_N; t < U_N; t++) {
+        memset(&roles[t], 0, sizeof roles[t]);
+        roles[t].role = TASIM_ROLE_BUILDER;
+    }
+    roles[U_ALAB].flags = roles[U_AVP].flags = TASIM_RF_FACTORY;
+    roles[U_ACK].flags = TASIM_RF_MOBILE;
+    roles[U_ZEUS].role = TASIM_ROLE_ASSAULT;
+    roles[U_ZEUS].flags = TASIM_RF_MOBILE;
+    CHECK(content_set(&s_w, U_N, roles) == U_N, "the tech-up world's tinfo");
+    impai_mil_reset(&s_umil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_umil.naval = 0;
+    s_milp = &s_umil;
+    s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].metal_in = 30;
+    s_w.econ[0].energy_in = 100;
+    s_w.econ[0].energy_out = 50;
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 2, T_CONS, 24, 26, 1);
+    s_w.gametime = 3000;
+}
+
+/* one decision of the tech-up world; the plants it ordered */
+static void techup_decide(const char* name, int* lab, int* alab, int* avp)
+{
+    IMPAI_BRAIN_OUT out;
+    const int from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide: %s", name);
+    *lab = builds_of(from, T_FACTORY, NULL, NULL);
+    *alab = builds_of(from, U_ALAB, NULL, NULL);
+    *avp = builds_of(from, U_AVP, NULL, NULL);
+    printf("tech-up %s: lab=%d alab=%d avp=%d\n", name, *lab, *alab, *avp);
+}
+
+static void check_techup(void)
+{
+    int lab, alab, avp;
+    const float tech_m = IMPAI_TABLE_DEFAULT.tech_m * IMPAI_LEVELS[IMPAI_LV_HARD].tech_scale;
+    techup_world();
+    CHECK(s_ti[T_FACTORY].tech == 1 && s_ti[U_ALAB].tech == 1 && s_ti[U_AVP].tech == 1,
+          "the lab and both advanced plants are tech 1: %u %u %u", s_ti[T_FACTORY].tech, s_ti[U_ALAB].tech,
+          s_ti[U_AVP].tech);
+    CHECK(s_ti[T_FACTORY].offer == 1 && s_ti[U_ALAB].offer == 2 && s_ti[U_AVP].offer == 2 && s_ti[T_CONS].offer == 0,
+          "offers: lab %u, advanced lab %u, advanced plant %u, constructor %u (its menu holds no mobile type)",
+          s_ti[T_FACTORY].offer, s_ti[U_ALAB].offer, s_ti[U_AVP].offer, s_ti[T_CONS].offer);
+    CHECK(s_w.econ[0].metal_in >= tech_m, "the income %g is at tech_m %g", s_w.econ[0].metal_in, tech_m);
+    /* two labs stand, factory_max of the highest offer, 1: the advanced lab, the least value of offer 2 */
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    techup_decide("two labs", &lab, &alab, &avp);
+    CHECK(alab == 1 && !avp && !lab, "with two labs offering tech 1 the constructor builds the advanced lab");
+    /* one lab: not yet factory_max of the highest offer, so no tech-up; the second factory is the ordinary
+       choice, the least value, the lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    techup_decide("one lab", &lab, &alab, &avp);
+    CHECK(lab == 1 && !alab && !avp, "one lab: the second lab, no tech-up");
+    /* the advanced lab and the advanced plant stand, two plants offering tech 2: nothing offers more */
+    techup_world();
+    unit_add(&s_w, 10, U_ALAB, 30, 30, 1);
+    unit_add(&s_w, 11, U_AVP, 40, 35, 1);
+    techup_decide("two plants offering tech 2", &lab, &alab, &avp);
+    CHECK(!alab && !avp && !lab, "plants offering tech 2: no other plant of tech 2");
+    /* a frame of the advanced lab beside two labs: the seat's highest offer is 2 already */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    unit_add(&s_w, 12, U_ALAB, 50, 30, 0);
+    techup_decide("an advanced lab's frame", &lab, &alab, &avp);
+    CHECK(!alab && !avp, "an advanced lab under construction: no second plant of tech 2");
+    s_milp = NULL;
+}
+
 static void check_sea_plant(void)
 {
     const uint32_t fail_t = IMPAI_LEVELS[IMPAI_LV_HARD].fail_t;
@@ -2955,6 +3051,7 @@ int main(void)
     check_economy_game();
     check_levels();
     check_sea_plant();
+    check_techup();
     check_military();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");

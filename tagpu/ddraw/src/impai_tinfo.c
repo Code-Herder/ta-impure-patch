@@ -75,6 +75,20 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
     for (t = 1; t < n; t++) count[ti[t].cat < IMPAI_CATS ? ti[t].cat : IMPAI_C_OTHER]++;
 }
 
+void impai_tinfo_offers(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
+{
+    const int m = n < nti ? n : nti;
+    int t, k;
+    for (t = 1; t < m; t++) {
+        int offer = 0;
+        for (k = 0; k < in[t].nbuild; k++) {
+            const unsigned v = in[t].build[k];
+            if (v < (unsigned)n && (roles[v].flags & TASIM_RF_MOBILE) && roles[v].tech > offer) offer = roles[v].tech;
+        }
+        ti[t].offer = (uint8_t)(offer < 255 ? offer : 255);
+    }
+}
+
 int impai_menu_find(const IMPAI_BMENU* rows, unsigned nrows, unsigned npool, unsigned side, unsigned builder)
 {
     const uint32_t key = (uint32_t)side << 16 | builder;
