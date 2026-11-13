@@ -281,7 +281,14 @@ passes only rows already active, which case (a) refuses; `0x45162D` is the enume
 `0x4515D0` of the join `0x451A30`, run before this peer can have added an AI; and the system dispatch
 `0x453D90` runs case 3 only when the destination is an active local type-1 row
 (`0x453ED4..0x453EF1`). That DirectPlay delivers the message for a locally created player is the
-inference; `tools/impai/netprobe.py activation` measures it.
+inference. **The activation is fast, and the room moves the seat as soon as it lands**: the add takes
+the clicked row (`push ebp`, `0x447D8F`), and once the row is seated the compaction moves it to the
+first free row before it. MEASURED 2026-11-12, the reference setup, Wine (`tools/impai/netprobe.py
+activation`, host in record 0, joiner in record 1): the joiner clicked `PLAYER3`; at the first read,
+0.58 s later, record 3 was free again (`[rec]` 0, `+0x73` 0, `+4` −1, `+0x1C` 0) and stayed so for
+5 s, while the `PLAYER2` row read `AI:<the joiner's name>`. The compaction swaps only a seated record
+(`[rec]` ≠ 0), so the seat was activated within 0.58 s of the click; which caller activated it is not
+established by that.
 
 **The same seat on two peers:**
 
@@ -291,7 +298,7 @@ inference; `tools/impai/netprobe.py activation` measures it.
 | `+4` | the AI's own DPID | the same DPID |
 | `+0x73` | **2** | **3** |
 | PlayerInfo `+0x94` | 2 (`0x463C60`) | 2, copied from the owner's `0x20` by its receiver `0x454874`, for an active type-3 row only (`0x45490F..0x45493B`) |
-| row index | the row clicked | the first free row at the join: **can differ** |
+| row index | the row clicked, then the first free row before it once the room compacts (MEASURED, above) | the first free row at the join: **can differ** |
 | unit block | sorted by DPID in a network game, so the same block on every peer ([units](units.html)) | the same |
 | AI object, acquisition record, profile, economy pass and handicap | yes | none |
 
@@ -311,7 +318,28 @@ directly is removed alone (`0x4532FA`). `0x452CC0` clears the local rows' allian
 record (`0x463C60(0)`, `[rec]` 0, `+4` −1, `+0x0C` 0, `main+0x2A3C` − 1), electing a new host when the
 departed held the host bit (`0x452EE3..0x452FF8`, the active type-1 or type-3 row with the highest DPID,
 `+0x94` not tested). The `0x1C` case `0x454EC4` is no route: its only sender `0x452800` has no caller.
-Never measured with an AI on the departing peer; `tools/impai/netprobe.py departure` measures it.
+The `0x1B` receiver passes the message's byte `+5` as the reason (`0x454EAC..0x454EBA`).
+
+**A peer that leaves through its menus takes its AI seats at once; one that dies does not, for minutes.**
+MEASURED 2026-11-12, the reference setup, Wine (`tools/impai/netprobe.py departure`, one computer seat
+on each peer, the joiner gone at GameTime 1800, the host's records and units read 28 times in 60 s):
+
+- **through its menus** (`--route menu`): both of the joiner's records on the host — its human and its
+  AI, each with `+0x0C` 2 before — were free 1.3 s after it left, `+0x22` 1, and neither owner had a
+  live unit;
+- **its processes killed** (`--route kill`, `tacli stop --hard`): for the whole 60 s both records stood
+  as before (`[rec]` 1, their DPIDs, `+0x73` 3, `+0x0C` 2, `+0x22` 0), both owners kept their live
+  units, and the host's game ran on (its heartbeat's `tick` kept advancing). So no
+  DirectPlay drop (system case 5) reached the host's pump in 60 s.
+
+What removes a dead peer is then the timeout [DISASSEMBLED; not yet seen to fire]: `0x453C20`, from the
+dispatcher's tail, raises it for the first type-3 row silent for more than `main+0x37F31` seconds — 30
+by default (`0x49EE9A`), a command-line value clamped to 30..300 (`0x49F43D..0x49F454`) — unless two
+silent rows have different `+0x0C`, and the countdown at `0x453832..0x4538C6` shows
+`main+0x37F31` + 120 less the silence and, when it runs out, calls `0x453010(dpid, 6)` itself
+([units](units.html), the player record's `+0x1C`). On a type-3 human that removes its AIs with it, as
+above. So with the default a dead peer's seats stand for about 150 s, past the probe's 60 s; the
+probe now watches the kill route for 200 s.
 
 **The engine's own "remote AI" test is `+0x73` = 3 and PlayerInfo `+0x94` = 2**: the unit-sync wait
 `0x46E000` does not wait for such a row, or for a type-2 row (`0x46E03D..0x46E04C`), and the alliance
@@ -351,10 +379,11 @@ The sender `0x451DF0(src, buf, len)` refuses a source that is not an active loca
 `+0x22` = 0 (`0x451E7E..0x451EA5`), so only the adding peer can speak for the AI, and the receive
 pump drops a message whose source is local. Only the owner decides a death.
 
-**Not measured**: the activation by `0x454143` (inferred by elimination above;
-`tools/impai/netprobe.py activation`), a departure with an AI on the departing peer
-(`netprobe.py departure`), and a joiner's Difficulty after Start (`netprobe.py difficulty`). The
-host's kick `0x446080` is not read.
+**Not measured**: which caller activates a battle-room AI (`0x454143`, inferred by elimination above;
+the activation itself is measured within 0.58 s), the timeout's removal of a dead peer
+(`tools/impai/netprobe.py departure --route kill`, now 200 s), and a joiner's records on a third
+peer. The host's kick `0x446080` is not read. A joiner's Difficulty after Start is measured: 0, its
+own ([sim](sim.html), *Difficulty and the AI handicap*).
 
 ### The network receivers take a unit index straight off the wire — `0x09`, `0x0B`, `0x0C`, `0x2C` [DISASSEMBLED 2026-09-25]
 

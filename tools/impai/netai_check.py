@@ -24,7 +24,9 @@ the DirectPlay ID +4, the controller +0x73, the AI object +0x74):
   - at the level end the host logged ImpAI turns (`impai: calls`) for its marked seat and for no other, and
     the joiner logged none;
   - with --pulse, the host logged ImpAI's pulse lines for its marked seat and the joiner none
-    (`impai: pulse seat=`), else whatever pulse lines there are are reported.
+    (`impai: pulse seat=`), else whatever pulse lines there are are reported. No build writes the line
+    yet: it describes ImpAI's military, which lands with A2b, so until then --pulse fails on every run
+    with "host: pulse lines for seats none" and says nothing about the network seats.
 Exit 0 when every check passes, 1 when one fails, 2 when the game could not be run.
 """
 import argparse
@@ -166,7 +168,7 @@ def main():
     p.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw.dll")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
     p.add_argument("--until", type=int, default=UNTIL, help="the host's GameTime the game plays to")
-    p.add_argument("--pulse", action="store_true", help="require the host ImpAI seat's pulse lines")
+    p.add_argument("--pulse", action="store_true", help="require the host ImpAI seat's pulse lines (written from A2b's military on; fails before)")
     a = p.parse_args()
     import runlock
     import tareplay

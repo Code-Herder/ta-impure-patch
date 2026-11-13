@@ -272,12 +272,19 @@ the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game w
 settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`, a skirmish or a campaign only: a
 network game's restart sets nothing); the campaign screens (`0x477D26..0x477D62`); a saved game's
 load (its `Difficulty` key, `0x4926DF..0x492701`; a save is a campaign or a skirmish); and
-**`0x448A0B`, which stores 2 right after the settings save `0x430F00`** (called at `0x448A00`, so the registry keeps the value from before Start), at the end of the START
+**`0x448A0B`, which stores 2 right after the settings save `0x430F00`** (called at `0x448A00`), at the end of the START
 action of the battle room's handler `0x447B10` ([network](network.html), *A computer seat in a
 network game*), which only the host can press. **So the host of a network game plays at Hard and
 every other peer at the value it already held** — its registry's (default Medium, `0x42F9C0`) or its
 last choice; each peer runs the handicap sites against its own value, which matters only on the
-peer that runs the seat. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
+peer that runs the seat. **The host's registry takes the 2 as well, at the level load**: the save at
+`0x448A00` precedes the store, but the game thread's load state `0x497F40` saves again at `0x497FF6`
+(unless `0x435100`, called with `ecx` = `*(main+0x391E9)`, returns 2, `0x497FE6..0x497FF4`) before the level starts. MEASURED
+2026-11-12, the reference setup, Wine (`tools/impai/netprobe.py difficulty`, two peers, one
+computer seat each): the host's store held `Difficulty` 1 before launch and 2 once both peers were
+in the level, where `main+0x37EEE` read 2 on the host and 0 on the joiner [the writer INFERRED: the
+load state's save is the one on that way, *REGISTRY_SaveSettings* in [the GUI](ui.html)]. So a
+network game's host starts its next skirmish at Hard unless the player changes it. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
 `0x4913F6` at start-up, `0x4273E8`, `0x47BB52`). The switch at `0x426A66`, `0x426A80`, `0x426A9B` is in
 `0x4269D0`, a key handler (0–9 warp to a campaign mission through `Warp.ini`, A/C the local side,
 E/M/H the Difficulty) that nothing calls and no pointer names [the purpose INFERRED from its strings]:
