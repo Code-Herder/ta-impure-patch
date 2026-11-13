@@ -117,7 +117,7 @@ limit.
 | lifetime totals `+0xAC..+0xDB`, kills `+0xFC..+0xFF`, `+0x104..+0x107`, units made `+0x140` | no | metrics use differences from the apply |
 | deadlines `+0xF0`, `+0xF4`, `+0xF8` | their phase, by T ≡ 1 (mod 30) | a fresh run's phase |
 | GameTime | no | what follows it is reset by the apply (the next two rows) or aligned by T ≡ 1 (mod 30); the reload-against-fresh self-test is the evidence |
-| each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by the apply (`reset_weapon_scans`): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
+| each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by an apply that clears (`reset_weapon_scans`, every calibration wire): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
 | what a reused slot hands its next unit: each weapon slot's aim (`+0x8`, `+0x16`, `+0x18`), the last hit `+0xF5`, the water state `+0x10A`, `+0x110` bits 6, 7, 12, 13, 15 | by the apply (`fresh_unit`), right after each create: the level fill's 0, or the create's 7 in `+0xF5` for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's: the aim the weapon code reads, the last hit the reaper and the AI read, the water state whose change starts `setSFXoccupy` at the first movement pass (`0x43DB50`), and bit 12, which the economy pass reads for a cloaked unit (`0x4017ED`) before the radar pass clears it |
 | a canhover unit's mover `+0x2A` | no | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; it is heap the allocator does not zero, as arbitrary in a fresh launch, and the fit's wave also reads the wall clock ([units](../engine/units.md), *The hover wave runs on the wall clock*), so a canhover unit's altitude is not a function of the run in either mode: a generated scenario with a hovercraft (course-hover, some T2 duels) carries that in fresh and reloaded runs alike |
 | the simulation RNG `0x51FC88`, the wind | no | random from launch to launch too; each run records them as `exogenous` |
@@ -125,6 +125,15 @@ limit.
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
 | the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | by the apply, not by the settle: no economy pass runs at an empty point (*The seat's rates*) | the applier resets them at every apply to values the apply alone decides; R4 compares them |
+
+**The resets and the replay.** `tagpu_scenario.c` is a presentation file with no
+`SIM_FEATURE`, so `tareplay.py landing` selects no test group for a change to it; its argument is
+its row in `thread-split.allow`. The resets reach a recording only through the unit bytes
+`fresh_unit` writes, which the recorder keeps whole but for `+0x110` bits 6–7 (dropped as marks)
+and the aim words (hold rows); the AI object's cursor is in no recording, and no puppet runs it.
+The test groups whose recording has a mid-level apply that clears, so that both resets run on a
+recorded level, are `calib-applier` (at 60) and `contact-waves` (at 60, 90 and 120): playing them
+shows the recordings stay self-consistent.
 
 ## The per-run checks
 

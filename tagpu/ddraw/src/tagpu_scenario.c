@@ -652,12 +652,17 @@ static int resolve_all(char* ta)
 
         /* The create files every unit into its owner's control groups: 0x480250, from the
            create's init 0x485A40 (0x485D29), indexes the record's +0x78 without a NULL test
-           (0x4802DA, 0x4802DD), so a unit for a record without one crashes there. The level start gives
-           a table only to a seated record, +0x73 non-zero (0x4649A5..0x4649AE), through the
-           record init 0x464700, whose 0x480190 is the table's one allocator (0x464898,
-           0x4801B1); the teardown 0x464A00 frees and nulls it (0x480239). DISASSEMBLED. So
-           the seat test is the engine's own, and the table's pointer is what the create
-           reads. */
+           (0x4802DA, 0x4802DD), so a unit for a record without one crashes there. The table's
+           one allocator is 0x480190 (0x4801B1), called only by the record init 0x464700
+           (0x464898), which the level start runs for a seated record, +0x73 non-zero
+           (0x4649A5..0x4649AE); the teardown 0x464A00 frees and nulls it (0x480239).
+           DISASSEMBLED.
+           The table's pointer is the safety argument: it is what the create reads. The +0x73
+           test is the engine's seat test and stricter than the create needs; where the two
+           disagree the pointer test still stands on its own. A record's type changes in play
+           without the table changing: 0x463C60 is handed 0 at 0x447CC2 and 0x447CFA in the
+           network code, leaving the table allocated [INFERRED: that these are a peer's leave],
+           and the join sets 3 (0x450B16) on a record the level start may not have seated. */
         if (!*(unsigned char*)(player_at(ta, wu->owner) + PL_TYPE) ||
             !*(char**)(player_at(ta, wu->owner) + PL_GROUPS))
         {
@@ -1053,8 +1058,10 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
    - each weapon slot's aim complete +0x8 and aim heading and pitch +0x16/+0x18: the slot init
      0x49E070 writes +0xC, +0x10, +0x14, +0x1A and +0x1B only (0x49E099..0x49E11B). The weapon
      code reads them for its own unit.
-   - +0xF5, the kind of the last hit: the create writes it only for a def with +0x241 bit 24, as
-     7 (0x48614D..0x486167); a hit (0x489DAC) and a completion (0x41B9FE) are its other writers.
+   - +0xF5, the kind of the last hit: the create writes it, as 7, only for a finished create
+     (its sixth argument, tested at 0x48611A..0x48611C) of a def with +0x241 bit 24
+     (0x48614D..0x486167); a hit (0x489DAC), a completion (0x41B9FE) and the saved game's restore
+     (0x487289) are its other writers.
      The reaper hands it to the kill 0x4864B0, the AI compares it (0x405E13, 0x4071CA, 0x415953).
    - +0x10A, the water state: written only by 0x43DB50 (0x43DBED), which keeps the old value when
      none of its tests holds and runs setSFXoccupy only when the value changes
@@ -1068,7 +1075,8 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
    began with the dead units' aim (0xFC18/0xF477 and 0xFE72/0xF9BA), aim complete 1 and their
    last hit, where a fresh launch's began with 0. Writing the fill's values right after the
    create, before the unit's first step, and the create's own 7 where it writes one, gives the
-   unit what it would hold on a level's first step.
+   unit what it would hold on a level's first step; `finished` is the argument the create was
+   given, so the test follows the create's own.
    The mover's +0x2A is not reset: the canhover fit reads it inside the create (0x48A6DE), before
    the applier runs, and it is heap from the allocator 0x4B4F10 (0x4860C6), which does not zero,
    so a fresh launch's is as arbitrary as a reload's. The same fit's wave phase reads the wall
@@ -1076,7 +1084,7 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
    (engine/units.md, *The hover wave runs on the wall clock*).
    BOUNDED: u is the create's own return, checked readable over the stride (create_units); its
    def +0x92 is the engine's type table entry the create just set (0x485A75). */
-static void fresh_unit(char* u)
+static void fresh_unit(char* u, int finished)
 {
     const char* def = *(const char**)(u + U_UDEF);
     int         i;
@@ -1088,7 +1096,8 @@ static void fresh_unit(char* u)
         *(unsigned short*)(s + WS_AIMHEAD) = 0;
         *(unsigned short*)(s + WS_AIMPITCH) = 0;
     }
-    if (!readable(def + UD_BITS, 4) || !(*(const unsigned*)(def + UD_BITS) & 0x01000000u))
+    if (!finished || !readable(def + UD_BITS, 4) ||
+        !(*(const unsigned*)(def + UD_BITS) & 0x01000000u))
         *(unsigned char*)(u + U_LASTHIT) = 0;
     *(unsigned*)(u + U_WATER) = 0;
     *(unsigned*)(u + U_STATE) &= ~U_STATE_KEPT;
@@ -1096,7 +1105,9 @@ static void fresh_unit(char* u)
 
 static void create_units(void)
 {
-    int i;
+    const int finished = 1;          /* the create's sixth argument: a finished unit, which
+                                        dress_unit then makes a nanoframe where the wire asks */
+    int       i;
 
     for (i = 0; i < g_wire.nunits; i++)
     {
@@ -1116,7 +1127,7 @@ static void create_units(void)
            other peers' copies start with the HP and build state it writes (sim-fixes.md B8). */
         tagpu_kill_hold();
         u->unit = UNITS_CreateUnit(wu->owner, u->defIdx,
-                                   wu->x << 16, alt << 16, wu->y << 16, 1, 1, 0);
+                                   wu->x << 16, alt << 16, wu->y << 16, finished, 1, 0);
 
         if (!u->unit || !readable(u->unit, UNIT_STRIDE))
         {
@@ -1130,7 +1141,7 @@ static void create_units(void)
         }
 
         if (g_fresh_reset)
-            fresh_unit((char*)u->unit);
+            fresh_unit((char*)u->unit, finished);
         dress_unit(wu, u);
         tagpu_kill_flush();
         g_applied++;
@@ -2007,15 +2018,22 @@ static void reset_pass_results(char* ta)
    in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51, and the lane's
    median time to kill was 236 against the fresh launches' 229. With every cursor at 0 a run's
    scan starts from each block's first slot on the step after the apply, whatever ran before it.
-   BOUNDED: the ten records only (player_at); the object is the engine's own, made at the player
-   init and freed only by the teardown 0x464A00 (engine/orders.md, *The AI object*), so it is
-   live for the apply's visit, which runs on the thread that runs the step; the store is one
-   dword the scan reads and writes on that same thread. */
+   Only an apply that clears the level resets them (g_wire.clear): that is the reload C1 needs,
+   every calibration wire clears, and an apply that adds to a running game (a camera move, `tacli
+   order`, a fixture's mid-level wave) leaves the scans where the game has them.
+   BOUNDED: the ten records only (player_at). The object is the engine's own, made at the player
+   init 0x464700 (0x4648A7..0x4648C1). Every path that ends it leaves the record's pointer NULL,
+   which the loop tests: the teardown 0x464A00 frees it and stores NULL (0x464A5D..0x464A6B);
+   the seat activation 0x464290 stores 0 without a free (0x46434A); Impure's rewind frees it
+   through the same destructor 0x408F10 and stores NULL (tagpu_replay.c, rw_seats). All three,
+   the players phase that runs the scan and this apply's visit run on the game thread, between
+   two steps, so a pointer read here is the live object or NULL; the store is one dword the scan
+   reads and writes on that same thread. */
 static void reset_weapon_scans(char* ta)
 {
     int i;
 
-    if (!g_fresh_reset)
+    if (!g_fresh_reset || !g_wire.clear)
         return;
 
     for (i = 0; i < 10; i++)
