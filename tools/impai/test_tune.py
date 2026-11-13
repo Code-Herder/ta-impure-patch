@@ -222,7 +222,7 @@ class TierCJudge(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def results(self, wins, cap_losses=0, drop=0, could_not_run=0, wrong=0):
+    def results(self, wins, cap_losses=0, drop=0, could_not_run=0, wrong=0, gdi=0):
         out = self.d / "games"
         out.mkdir(exist_ok=True)
         for p in out.glob("*.json"):
@@ -233,6 +233,8 @@ class TierCJudge(unittest.TestCase):
             if could_not_run and i >= len(self.reg["ids"]) - drop - could_not_run:
                 o = "could_not_run"
             r = {"id": gid, "outcome": o, "end_tick": 50000, "tables": {"A": ta if i >= wrong else tb, "B": tb}}
+            if i < gdi:
+                r["renderer"] = "gdi"
             (out / f"{gid}.json").write_text(json.dumps(r))
         return out
 
@@ -260,6 +262,8 @@ class TierCJudge(unittest.TestCase):
         self.assertEqual(self.verdict(wins=300, drop=1), 2, "a registered game unplayed: could not run")
         self.assertEqual(self.verdict(wins=300, could_not_run=1), 2)
         self.assertEqual(self.verdict(wins=300, wrong=1), 1, "a game played with another table")
+        self.assertEqual(self.verdict(wins=300, gdi=1), 2, "games of two renderers")
+        self.assertEqual(self.verdict(wins=224, gdi=400), 0)
 
     def test_ids_and_pieces(self):
         ids = tourney.game_ids("tierC", MAPS)
@@ -385,6 +389,12 @@ class CapRules(unittest.TestCase):
         self.assertTrue(all(p["W"] == 28 for p in ps))
         self.assertEqual(sum(1 for p in ps if p["tier"] == "A"), 37)
         self.assertTrue(all(p["est_s"] <= 600 for p in ps if p["tier"] == "A"))
+        self.assertFalse(any("--gpu" in p["cmd"] for p in ps))
+        import runlock
+        gpu = tune.plan(14, gpu=True)
+        self.assertTrue(all("--gpu" in p["cmd"] and p["W"] == runlock.plan(14, gpu=True)[0]
+                            for p in gpu if p["tier"] == "C"))
+        self.assertTrue(all(p["W"] == 28 for p in gpu if p["tier"] == "A"))
 
 
 if __name__ == "__main__":

@@ -612,17 +612,34 @@ class ImpaiLevers(unittest.TestCase):
     def worker(self, gamedir):
         w = tareplay.Worker.__new__(tareplay.Worker)
         w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.gdi = False
         w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
         return w
 
-    def place(self, gamedir, fix):
+    def place(self, gamedir, fix, gdi=False):
         reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
         dll = gamedir.parent / "ddraw.dll"
         dll.write_bytes(b"MZ")
         with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
              patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
              patch.object(tareplay._CLI_API, "Instance"):
-            self.worker(gamedir).place(fix, dll)
+            w = self.worker(gamedir)
+            w.gdi = gdi
+            w.place(fix, dll)
+
+    def test_the_gdi_lever_follows_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.GDI_LEVER).symlink_to(target)
+            self.place(g, {}, gdi=True)
+            self.assertTrue((g / tareplay.GDI_LEVER).is_file())
+            self.assertFalse((g / tareplay.GDI_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, {}, gdi=False)
+            self.assertFalse((g / tareplay.GDI_LEVER).exists())
 
     def test_left_levers_go(self):
         with tempfile.TemporaryDirectory() as d:
@@ -826,7 +843,23 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(tareplay.report(run), 2)
-        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
+        self.assertEqual((run.out / "summary.txt").read_text(),
+                         "renderer: the players' (the default)\n== a\n")
+
+    def test_a_gdi_run_says_so_and_takes_no_gpu_token(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out, run.gdi = Path(tmp.name), True
+        run.put("a", "L")
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            tareplay.report(run)
+        self.assertTrue((run.out / "summary.txt").read_text().startswith("renderer: GDI (--gdi)"))
+        run.j, run.what = 0, "tareplay run a --gdi"
+        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
+            tareplay.run_threads(run)
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False})
 
 
 class RewindPolicy(unittest.TestCase):

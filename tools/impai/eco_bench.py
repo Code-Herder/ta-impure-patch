@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """eco_bench -- ImpAI's economy against OTA AI's, in the engine: A1b's exit test.
 
-    tools/impai/eco_bench.py engine --map "<name>" --starts 1,2,3 [--j 6] [--out DIR] [--dll PATH]
+    tools/impai/eco_bench.py engine --map "<name>" --starts 1,2,3 [--j 6] [--out DIR] [--dll PATH] [--gpu]
     tools/impai/eco_bench.py judge DIR [DIR ...]
 
 A GAME is scenarios/impai/eco-bench.json with the map and the seat under test filled in: an idle
@@ -33,6 +33,10 @@ metal and energy deltas, I, the game's wall time and the level's `impai: eco` li
 ImpAI's. `judge` reads every game of the directories given and prints, for each (map, start), both
 incomes: exit 0 when ImpAI's is above OTA AI's at every pair, 1 when it is not at one or a pair
 lacks a game, 2 when nothing could be read.
+
+THE RENDERER. The games render with GDI (tareplay.GDI_LEVER) and take no GPU token; `--gpu` renders them on
+the default renderer for a debugging run, a GPU token a lane. Each game's JSON names its renderer, and `judge`
+refuses directories that mix two (research/notes/modules/impai.md, *The renderer*).
 """
 import argparse
 import json
@@ -94,11 +98,12 @@ def slug(mapname, k, ai):
 class Lane:
     """One Worker and the games it plays, one at a time."""
 
-    def __init__(self, j, out, dll):
+    def __init__(self, j, out, dll, gpu=False):
         self.j, self.out, self.dll = j, out, dll
         self.w = R.Worker(out)
         self.w.turbo = 1
         self.w.held = True
+        self.w.gdi = not gpu
         self.log = None
 
     def peek_double(self, off):
@@ -167,6 +172,7 @@ class Lane:
                "income": (dm + de / E_PER_M) / PASSES,
                "metal_per_pass": dm / PASSES, "energy_per_pass": de / PASSES,
                "eco": [ln.strip() for ln in self.log.lines if ECO.search(ln)],
+               "renderer": "gdi" if self.w.gdi else "vulkan",
                "wall_s": round(time.monotonic() - t0, 1)}
         (self.out / f"{name}.json").write_text(json.dumps(row, indent=1) + "\n")
         R.say(f"lane {self.j}: {name}: income {row['income']:.3f} ({row['wall_s']} s)")
@@ -182,7 +188,12 @@ class Lane:
         self.w.close()
 
 
-def run_engine(mapname, starts, j, out, dll):
+def lane_count(starts, j):
+    """The lanes run_engine plays on, one game each at once: what `engine` declares to the run lock."""
+    return min(j, J_MAX, 2 * len(starts))
+
+
+def run_engine(mapname, starts, j, out, dll, gpu=False):
     work = queue.Queue()
     for k in starts:
         for ai in AIS:
@@ -192,7 +203,7 @@ def run_engine(mapname, starts, j, out, dll):
     def lane_main(n):
         lane = None
         try:
-            lane = Lane(n, out, dll)
+            lane = Lane(n, out, dll, gpu)
             while not R.STOP.is_set():
                 try:
                     k, ai = work.get_nowait()
@@ -212,7 +223,7 @@ def run_engine(mapname, starts, j, out, dll):
                 lane.close()
 
     threads = [threading.Thread(target=lane_main, args=(n,), daemon=True)
-               for n in range(min(j, J_MAX, 2 * len(starts)))]
+               for n in range(lane_count(starts, j))]
     for t in threads:
         t.start()
     for t in threads:
@@ -229,6 +240,12 @@ def judge(dirs):
             rows.append(json.loads(p.read_text()))
     if not rows:
         print("eco_bench judge: no game in " + ", ".join(map(str, dirs)))
+        return 2
+    # a game written before the renderer was recorded was played on the default renderer
+    renderers = sorted({r.get("renderer", "vulkan") for r in rows})
+    if len(renderers) > 1:
+        print(f"eco_bench judge: the games were rendered by {' and '.join(renderers)}: a judgement compares "
+              f"games of one renderer")
         return 2
     pairs = {}
     for r in rows:
@@ -262,6 +279,9 @@ def main():
     e.add_argument("--j", type=int, default=6, help="lanes")
     e.add_argument("--out", type=Path, default=None)
     e.add_argument("--dll", default=None, help="the DLL to play (default this tree's build)")
+    e.add_argument("--gpu", action="store_true",
+                   help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
+                        "the games render with GDI and take none")
     jd = sub.add_parser("judge", help="ImpAI's income against OTA AI's, every (map, start)")
     jd.add_argument("dirs", nargs="+", type=Path)
     a = p.parse_args()
@@ -281,9 +301,9 @@ def main():
             raise CouldNotRun(f"no DLL at {dll} ({make})")
         out = a.out or TREE / ".data" / "impai" / "eco-bench" / time.strftime("%Y%m%d-%H%M%S")
         out.mkdir(parents=True, exist_ok=True)
-        runlock.hold(TREE, f"eco_bench engine {a.map} {a.starts}")
+        runlock.hold(TREE, f"eco_bench engine {a.map} {a.starts}", lane_count(starts, a.j), gpu=a.gpu)
         t0 = time.monotonic()
-        errors = run_engine(a.map, starts, a.j, out, dll)
+        errors = run_engine(a.map, starts, min(a.j, runlock.games()), out, dll, a.gpu)
     except CouldNotRun as e:
         print(f"eco_bench: COULD NOT RUN: {e}")
         return 2

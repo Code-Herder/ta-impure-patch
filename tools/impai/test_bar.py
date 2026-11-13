@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bar  # noqa: E402
@@ -118,6 +119,56 @@ class TestBar(unittest.TestCase):
             self.assertEqual(bar.judge([d]), 0)                     # 96 of 100: the ladder asks 90
             put(bar.ids("hota")[0], outcome="could_not_run", reason="x")
             self.assertEqual(bar.judge([d]), 2)
+            put(bar.ids("hota")[0])
+            self.assertEqual(bar.judge([d]), 0)
+            put(bar.ids("hota")[0], renderer="gdi")                # one GDI game among default-renderer ones
+            self.assertEqual(bar.judge([d]), 2)
+
+    def test_a_kept_game_is_one_played_as_asked(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            g = dict(bar.parse_id("bar-hota-pincushion-ac-1"))
+            self.assertIsNone(bar.game_kept(d, g, False))
+            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi"}
+            (d / f"{g['id']}.json").write_text(json.dumps(r))
+            self.assertEqual(bar.game_kept(d, g, False)["outcome"], "A")
+            self.assertIsNone(bar.game_kept(d, g, True))           # played with GDI, asked on the GPU
+            self.assertIsNone(bar.game_kept(d, dict(g, cap=9000), False))
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, renderer=None, outcome="cap")))
+            self.assertIsNone(bar.game_kept(d, g, False))
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, outcome="could_not_run")))
+            self.assertIsNone(bar.game_kept(d, g, False))
+            (d / f"{g['id']}.json").write_text("{")
+            self.assertIsNone(bar.game_kept(d, g, False))
+            t = dict(g, seats={"A": dict(g["seats"]["A"], table_hash="aa"), "B": g["seats"]["B"]})
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, tables={"A": "bb"})))
+            self.assertIsNone(bar.game_kept(d, t, False))           # another table
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, tables={"A": "aa"})))
+            self.assertIsNotNone(bar.game_kept(d, t, False))
+
+    def test_play_skips_the_kept_games_and_takes_no_token_without_gpu(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            ids = bar.ids("hota")[:3]
+            (d / f"{ids[0]}.json").write_text(json.dumps({"id": ids[0], "outcome": "A", "cap": bar.CAP,
+                                                          "renderer": "gdi"}))
+            played = []
+
+            def play(game, lane, out, gpu):
+                played.append((game["id"], gpu))
+                return {"id": game["id"], "outcome": "B", "cap": game["cap"], "renderer": bar.renderer(gpu)}
+            import runlock
+            for gpu in (False, True):
+                played.clear()
+                with mock.patch.object(bar, "play_game", play), mock.patch.object(runlock, "hold") as hold, \
+                        mock.patch.object(bar, "close_lanes"), mock.patch("sys.stdout"):
+                    argv = ["play", "--ids", ",".join(ids), "--lanes", "2", "--out", str(d)] + (["--gpu"] if gpu else [])
+                    self.assertEqual(bar.main(argv), 0)
+                self.assertEqual(hold.call_args.kwargs["gpu"], gpu)
+                if not gpu:
+                    self.assertEqual(sorted(played), [(ids[1], False), (ids[2], False)])
+                else:                                       # every GDI result is another renderer's
+                    self.assertEqual(sorted(played), [(i, True) for i in ids])
 
 
 if __name__ == "__main__":

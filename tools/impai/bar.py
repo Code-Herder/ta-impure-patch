@@ -2,7 +2,7 @@
 """bar.py -- ImpAI's bar: one-against-one games against OTA AI and between ImpAI's levels, judged.
 
     tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
-    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T]
+    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T] [--gpu]
     tools/impai/bar.py judge DIR...
 
 THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" its opponent:
@@ -41,6 +41,15 @@ THE STALL RULE, from ImpAI's pulse lines (`impai: pulse`, one a game minute a se
 ticks, after GameTime 1800 and before the game's end, in which the seat's `built` and its `eroots` both did not
 rise (the economy stopped), or in which it held at least one army unit and its `mroots` did not rise (the army
 stopped).
+
+THE RENDERER. A game renders with GDI (tareplay.GDI_LEVER) and takes no GPU token; `--gpu` renders it on the
+default renderer, for a debugging run, and takes a token a lane. A result names its renderer, and is compared
+only with results of the same one (research/notes/modules/impai.md, *The renderer*).
+
+RESUMING. `play` into an out dir that holds results skips every game whose result is already there, played to
+the same cap on the same renderer with the same tables (game_kept): a game reloads its scenario from scratch at
+its own launch (Lane.play: `scenario load --restart`), so a game skipped changes nothing another plays. A result
+that could not run is played again.
 
 Exit 0 when the verdict passed (or the command ran), 1 when it failed, 2 when it could not run."""
 import argparse
@@ -84,8 +93,35 @@ STALL_WINDOW, STALL_FROM = 3600, 1800
 LEVER_LEVEL, LEVER_TABLE = "tagpu_impai_level.on", "tagpu_impai_table.on"
 
 
+# A result written before the renderer was recorded was played on the default renderer: this one
+VULKAN = "vulkan"
+
+
 class BarError(Exception):
     pass
+
+
+def renderer(gpu: bool) -> str:
+    return VULKAN if gpu else "gdi"
+
+
+def game_kept(out: Path, game: dict, gpu: bool):
+    """The result of `game` already in `out`, or None: a game that ran (not could_not_run) to the same cap, on
+    the same renderer, each seat with the table it is to play (a seat's table_hash, where the spec names one)."""
+    p = Path(out) / f"{game['id']}.json"
+    try:
+        r = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if r.get("id") != game["id"] or r.get("outcome") in (None, "could_not_run"):
+        return None
+    if r.get("cap", CAP) != game.get("cap", CAP) or r.get("renderer", VULKAN) != renderer(gpu):
+        return None
+    for s in ("A", "B"):
+        want = game["seats"][s].get("table_hash")
+        if want and (r.get("tables") or {}).get(s) != want:
+            return None
+    return r
 
 
 # ---- the game list ----
@@ -218,13 +254,14 @@ def stalls(rows, end: int) -> list:
 class Lane:
     """One tareplay Worker and the games it plays, one at a time."""
 
-    def __init__(self, j, out, dll):
+    def __init__(self, j, out, dll, gpu=False):
         import tareplay as R
         self.R = R
         self.j, self.out, self.dll = j, out, dll
         self.w = R.Worker(out)
         self.w.turbo = 1
         self.w.held = True
+        self.w.gdi = not gpu
         self.log = None
 
     def peek(self, off: int, size: int) -> int:
@@ -268,7 +305,8 @@ class Lane:
         seat = seat_of(game)
         res = {"id": game["id"], "map": game["map"], "sides": game["sides"], "start": game["start"],
                "seats": {s: dict(game["seats"][s], seat=seat[s]) for s in ("A", "B")},
-               "difficulty": game.get("difficulty", "hard"), "cap": game.get("cap", CAP)}
+               "difficulty": game.get("difficulty", "hard"), "cap": game.get("cap", CAP),
+               "renderer": renderer(not self.w.gdi)}
         doc = game_doc(dict(game, difficulty=res["difficulty"]), start_positions(map_name(game["map"])))
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
@@ -351,11 +389,11 @@ def _dll():
         return _DLL["path"]
 
 
-def play_game(game: dict, lane: int, out_dir: Path) -> dict:
+def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
     """One game on lane `lane` (one Worker a lane, made at its first game and kept), its result in tourney.py's
     format: outcome A, B, cap or could_not_run, the end tick, each seat's table hash from its `impai: table` line,
     each ImpAI seat's value built and alive from its last pulse. Called from one thread a lane; the caller holds
-    the run lock."""
+    the run lock, with a GPU token a lane when `gpu`; one process plays on one renderer."""
     import tareplay as R
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +401,7 @@ def play_game(game: dict, lane: int, out_dir: Path) -> dict:
         dll = _dll()
         with _LANES_LOCK:
             if lane not in _LANES:
-                _LANES[lane] = Lane(lane, out_dir, dll)
+                _LANES[lane] = Lane(lane, out_dir, dll, gpu)
             ln = _LANES[lane]
         ln.out = out_dir
         try:
@@ -392,6 +430,11 @@ def judge(dirs) -> int:
                 rows.append(json.loads(p.read_text()))
     if not rows:
         print("bar judge: no game in " + ", ".join(map(str, dirs)))
+        return 2
+    rs = sorted({r.get("renderer", VULKAN) for r in rows})
+    if len(rs) > 1:
+        print(f"bar judge: COULD NOT RUN: the games were rendered by {' and '.join(rs)}; a verdict reads games "
+              f"of one renderer")
         return 2
     by_pair = {}
     for r in rows:
@@ -455,11 +498,15 @@ def cmd_play(a) -> int:
     out.mkdir(parents=True, exist_ok=True)
     if a.dll:
         _DLL["path"] = Path(a.dll).resolve()
-    runlock.hold(TREE, "bar play " + " ".join(sys.argv[2:]), lanes=a.lanes)
+    left = [g for g in games if not game_kept(out, g, a.gpu)]
+    if len(left) < len(games):
+        print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
+    games = left
+    runlock.hold(TREE, "bar play " + " ".join(sys.argv[2:]), lanes=a.lanes, gpu=a.gpu)
 
     def one(job):
         lane, g = job
-        r = play_game(g, lane, out)
+        r = play_game(g, lane, out, a.gpu)
         (out / f"{g['id']}.json").write_text(json.dumps(r, indent=1) + "\n")
         return r
 
@@ -469,7 +516,7 @@ def cmd_play(a) -> int:
     finally:
         close_lanes()
     bad = [r["id"] for r in results if r.get("outcome") == "could_not_run"]
-    print(f"bar play: {len(results)} games in {out}, {len(bad)} could not run")
+    print(f"bar play: {len(results)} games played in {out}, {len(bad)} could not run")
     return 2 if bad else 0
 
 
@@ -486,6 +533,9 @@ def main(argv=None) -> int:
     pl.add_argument("--dll", default=None)
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a shorter piece's check; the bar's games end at 81 000")
+    pl.add_argument("--gpu", action="store_true",
+                    help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
+                         "the games render with GDI and take none")
     j = sub.add_parser("judge", help="the verdict over the games in DIR...")
     j.add_argument("dirs", nargs="+", type=Path)
     a = p.parse_args(argv)
