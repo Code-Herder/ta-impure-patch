@@ -14,7 +14,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
 
-SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic sweep-basic stock-sweep-basic");
+SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic stock-place-basic sweep-basic stock-sweep-basic");
 
 #define D_STRIDE  0x249u
 #define D_BASE    0x1439B

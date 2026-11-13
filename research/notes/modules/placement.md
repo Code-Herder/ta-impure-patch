@@ -50,13 +50,15 @@ preview shows the cut shape. A puppet seat refuses every hook. `thread-split.all
 **Replay.** The module is presentation: it declares no simulation state, and a commit's effects are
 ordinary order nodes the recorder keeps. `tagpu_placegeo.c`, whose `place_ring` ImpAI's base ring
 calls as well, is `engine-free sim` in `thread-split.allow`: one feature, `place_shapes`, names
-`place-basic` and ImpAI's test groups, the coverage build instruments it, and a landing that changes a
-function of it asks those groups to reach that function. `place-basic` has no stock-limits twin, so a
-changed function only it reaches fails the landing `UNCOVERED` on the stock-limits build. A one-site
+`place-basic`, `stock-place-basic` and ImpAI's test groups, the coverage build instruments it, and a
+landing that changes a function of it asks those groups to reach that function on each build. A one-site
 gesture goes through `0x4995B3` and records its click as stock's; a multi-site gesture records none. Its sound has the owner-approved
 `replay-absent.tsv` row `0x47F1A0 dll * absent` ([recorder
 completeness](../tadr-port/demo-recorder-completeness.html)). Test group `place-basic`
-(`scenarios/place-basic.json`, `tools/place_regression.py replay`).
+(`scenarios/place-basic.json`, `tools/place_regression.py replay`), and on the stock-limits build its twin
+`stock-place-basic`, the same entry but its `dll`: nothing in it is past a stock limit (three placed units
+of retail types and the two players' commanders on Comet Catcher, the default unit limit, a few dozen build
+orders). `tagpu_worldq.c`'s `worldq` names both.
 
 **A zoomed Shift-click.** Between the press and its release IdleTick hands the handler the move
 made before the press (the ring is empty), and the gesture ends on a move without the button that is
