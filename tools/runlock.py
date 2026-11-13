@@ -50,9 +50,11 @@ can run on (one worker, or its heaviest task's weight). The queue's holder takes
 are free, else what is free and the load guard allows, never fewer than the least, so a phase that
 arrives beside a running gate starts on what is left rather than waiting for the gate's end. Its
 worker count is cut to the slots granted, as a run's game lanes are cut to games(): Workers.n, or
-workers() inside a hold(). A phase whose tasks differ in weight -- a simparity shard keeps three
-hosts busy -- runs each task on Workers.share(weight), a weighted semaphore over the grant that
-admits tasks in the order they ask. Inside a run (NESTING) a phase takes no slot and is granted
+workers() inside a hold(). A run may move its own game slots to its workers once no game will play
+on them again (Workers.widen; tareplay.py, THE LENDING): it holds them already, and the widened
+grant never passes slots(). A phase whose tasks differ in weight -- a simparity shard
+keeps three hosts busy -- runs each task on Workers.share(weight), a weighted semaphore over the
+grant that admits tasks in the order they ask. Inside a run (NESTING) a phase takes no slot and is granted
 min(W, the run's workers): the run's own slots. A process may hold a Workers beside its hold() --
 the wiki gate takes its offline phase's first and then queues for its game lanes' -- because a
 Workers, once held, waits on nothing: its tasks are leaves that end, and the process lets it go
@@ -1201,6 +1203,15 @@ def workers() -> int:
     return held.get("workers") or held["slots"]
 
 
+def slots() -> int:
+    """The slots the run this process is in holds: its games' and its offline workers' together, or,
+    in a run that declared no workers, its games' alone, which workers() then shares."""
+    held = _env()
+    if held is None:
+        raise RuntimeError("runlock.slots() outside a run: hold() first")
+    return held["slots"]
+
+
 def games() -> int:
     """The games this run may play at once (THE GPU MEMORY): its lanes, cut to its GPU memory."""
     held = _env()
@@ -1587,8 +1598,9 @@ class Workers:
     fds(), the descriptors a worker process inherits so that it holds the slots with this process
     until it exits (A HOLD THAT ENDS BEFORE THE PROCESS); environ(), a worker process's
     environment, carrying the hold in RUNLOCK_HELD so that a run started inside it takes none of
-    its own (NESTING); share(weight), a task's turn on the grant; release(), also on leaving a
-    `with`. Inside another run it holds no file and its environment is the outer run's."""
+    its own (NESTING); share(weight), a task's turn on the grant; widen(k), the grant raised by
+    slots the process holds already; release(), also on leaving a `with`. Inside another run it
+    holds no file and its environment is the outer run's."""
 
     def __init__(self, n: int, files=(), held: "dict | None" = None):
         self.n, self._files, self._held = n, list(files), held
@@ -1629,6 +1641,15 @@ class Workers:
             with self._cv:
                 self._free += w
                 self._cv.notify_all()
+
+    def widen(self, k: int) -> None:
+        """`k` more workers at once, on slots this process already holds for something else that
+        no longer needs them -- a run's game slots once no game will play on them (tareplay.py,
+        THE LENDING). It takes nothing from the queue, so what it adds must be held already."""
+        with self._cv:
+            self.n += k
+            self._free += k
+            self._cv.notify_all()
 
     def release(self) -> None:
         """This process's descriptors of the slots closed: they go once no worker process given

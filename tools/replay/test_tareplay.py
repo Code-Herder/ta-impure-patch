@@ -998,17 +998,131 @@ class OfflineOrder(unittest.TestCase):
         self.assertEqual(tareplay.offline_workers(1), 2)
         with patch.object(tareplay, "_POOL", None), \
                 patch.object(tareplay.runlock, "holding", lambda: True), \
-                patch.object(tareplay.runlock, "workers", lambda: 3):
+                patch.object(tareplay.runlock, "workers", lambda: 3), \
+                patch.object(tareplay.runlock, "games", lambda: 8), \
+                patch.object(tareplay.runlock, "slots", lambda: 19):
             pool = tareplay.offline(8)
             try:
-                self.assertEqual(pool._max_workers, min(3, tareplay.offline_workers(8)))
+                granted = min(3, tareplay.offline_workers(8))
+                self.assertEqual(pool.gate.n, granted)
+                # widened to every slot the run holds, a thread for each as memory allows
+                self.assertEqual(pool.most, granted + tareplay.runlock.LANE_SLOTS * 8)
+                self.assertEqual(pool.threads, max(granted, min(pool.most, self.gib())))
+                pool.widen(100)
+                self.assertEqual(pool.gate.n, pool.most, "never past the slots the run holds")
             finally:
                 pool.shutdown()
+
+    def test_a_run_that_declared_no_workers_has_none_to_widen_into(self):
+        """Nested in a `runlock.py run --slots 8`: workers() is the games' own slots."""
+        with patch.object(tareplay, "_POOL", None), \
+                patch.object(tareplay.runlock, "holding", lambda: True), \
+                patch.object(tareplay.runlock, "workers", lambda: 8), \
+                patch.object(tareplay.runlock, "games", lambda: 4), \
+                patch.object(tareplay.runlock, "slots", lambda: 8):
+            pool = tareplay.offline(8)
+            try:
+                granted = pool.gate.n
+                pool.widen(tareplay.runlock.LANE_SLOTS * 4)
+                self.assertEqual(pool.gate.n, granted)
+                self.assertLessEqual(pool.gate.n, 8)
+            finally:
+                pool.shutdown()
+
+    def test_the_pool_runs_no_more_than_its_gate_until_widened(self):
+        pool = tareplay.OfflinePool(6, 2, 6)
+        self.addCleanup(pool.shutdown)
+        lock, live, peak, go = threading.Lock(), [0], [0], threading.Event()
+
+        def task(barrier=None):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            if barrier is not None:
+                barrier.wait()          # all of them at once, or this times out
+            else:
+                go.wait(WAIT_S)
+            with lock:
+                live[0] -= 1
+            return True
+        first = [pool.submit(task) for _ in range(3)]
+        deadline = time.monotonic() + WAIT_S
+        while live[0] < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(live[0], 2)
+        go.set()
+        self.assertTrue(all(f.result(WAIT_S) for f in first))
+        self.assertEqual(peak[0], 2)
+        pool.widen(4)
+        together = threading.Barrier(6, timeout=WAIT_S)
+        self.assertTrue(all(f.result(WAIT_S) for f in [pool.submit(task, together)
+                                                        for _ in range(6)]))
+        self.assertEqual(peak[0], 6)
 
     @staticmethod
     def gib():
         with open("/proc/meminfo") as f:
             return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+
+
+class WidenedPoolSameReport(unittest.TestCase):
+    """THE GAME SLOTS GO TO THE CHECKS: a group's report through a pool widened while its checks
+    run is the serial pool's -- the same summary lines, verdicts in the same order, and the same
+    dumps kept -- whatever order its tarec calls end in."""
+
+    TS = [301, 331, 361, 391]
+
+    def group(self, root):
+        """A group whose four lanes ran, every file its checks name present and empty."""
+        out = root / "g"
+        rec = out / "L" / "g.imprec"
+        names = {"L": [f"l{self.TS[0]}", f"l{self.TS[-1]}", "ln1", "ln2"] + list(tareplay.NULL_VIEWS),
+                 "P": [f"p{self.TS[0]}", f"p{self.TS[-1]}"],
+                 "R": [f"r{self.TS[0]}"] + [f"rt{T}{x}" for T in self.TS[1:] for x in ("c", "-a", "-b")],
+                 "Q": [f"q{self.TS[0]}"]}
+        for proc, ns in names.items():
+            (out / proc).mkdir(parents=True)
+            (out / proc / "tagpu.log").write_text("")
+            for n in ns:
+                (out / proc / f"dump-{n}.bin").write_bytes(b"")
+        rec.write_bytes(b"")
+        return {"name": "g", "fix": {"end": 900}, "Ts": self.TS, "out": out, "rec": rec,
+                "procs": {p: "ran" for p in "LPRQ"}, "want": "LPRQ", "problems": [], "passed": [],
+                "held": [], "game_speed": 20, "turbo": [],
+                "rt": {f"rt{T}": f"replay: g: round trip rt{T}: 35 tables poisoned, residue 0"
+                       for T in self.TS[1:]}}
+
+    @staticmethod
+    def tarec(*args):
+        """A pass, a FAIL or a could-not-run, by the arguments alone, ending at a random time."""
+        key = " ".join(Path(str(a)).name for a in args)
+        h = zlib.crc32(key.encode())
+        time.sleep((h % 7) / 1000)
+        return (0, 0, 0, 1, 2)[h % 5], f"{key}: first\n{key}: {h}"
+
+    def report_on(self, pool, widen=0):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        fx = self.group(root)
+        self.addCleanup(pool.shutdown)
+        with patch.object(tareplay, "_POOL", pool), patch.object(tareplay, "tarec_run", self.tarec):
+            if widen:
+                # the lanes end while the checks run: the pool widens beside them
+                t = threading.Thread(target=lambda: (time.sleep(0.005), pool.widen(widen)))
+                t.start()
+                self.addCleanup(t.join, WAIT_S)
+            lines, failed, unrun = tareplay.fixture_report(fx, keep=False)
+        kept = sorted(str(f.relative_to(root)) for f in root.rglob("*.bin"))
+        verdicts = [(label, v, detail.replace(str(root), "ROOT")) for label, v, detail in fx["verdicts"]]
+        return [ln.replace(str(root), "ROOT") for ln in lines], failed, unrun, verdicts, kept
+
+    def test_a_widened_pool_reports_what_a_serial_one_does(self):
+        serial = self.report_on(tareplay.OfflinePool(1, 1))
+        self.assertTrue(serial[1] and serial[2], "the stand-in grades a FAIL and a could not run")
+        self.assertGreater(len(serial[3]), 30)
+        for _ in range(3):
+            self.assertEqual(self.report_on(tareplay.OfflinePool(12, 2, 12), widen=10), serial)
 
 
 class Scheduling(unittest.TestCase):
@@ -1022,6 +1136,7 @@ class Scheduling(unittest.TestCase):
         run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
         run.keys, run.kept = {}, []
         run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
+        run.slots = tareplay.GameSlots(2)
         run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
                   for name, want, end in fixtures}
         return run
@@ -1052,7 +1167,9 @@ class Scheduling(unittest.TestCase):
             run.put("a", "F")               # so does K
             run.done("a")
             self.assertFalse(run.reports)
+            self.assertFalse(run.slots.lanes_over)
             run.done("a")
+            self.assertTrue(run.slots.lanes_over, "no lane is left: the slots go to the checks")
             self.assertEqual(run.report_of("a").result(), (["== a"], False, False))
             self.assertEqual(run.report_of("a"), run.reports["a"])
         rep.assert_called_once_with(run.fx["a"], False)
@@ -1102,6 +1219,8 @@ class StandInRun(unittest.TestCase):
         self.tree = "c0ffee"
         self.played = []
         self.outcome = {}                   # group -> "pass", "fail" or "unrun" for its next lane
+        self.widened = []                   # the workers the run's game slots gave the pool
+        self.pool = SimpleNamespace(widen=self.widened.append)
         fixes = {n: {"load": f"{n}.json", "end": 900} for n in self.GROUPS}
         test = self
 
@@ -1132,7 +1251,7 @@ class StandInRun(unittest.TestCase):
                                      lambda out: SimpleNamespace(close=lambda: None)),
                                     (tareplay, "fixture_report", self.report),
                                     (tareplay, "journal", lambda run: tareplay.tarun.NULL),
-                                    (tareplay, "offline", lambda games=1: None),
+                                    (tareplay, "offline", lambda games=1: self.pool),
                                     (tareplay.runlock, "hold", lambda *a, **k: True),
                                     (tareplay.runlock, "games", lambda: 2),
                                     (tareplay.signal, "signal", lambda *a: None),
@@ -1424,7 +1543,8 @@ class MultiplayerBeside(StandInRun):
             self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
         self.assertEqual(sorted(seen), ["raised", "stock"], self.run.mp_results)
         self.assertEqual(self.run.mp_results["stock"], ({("src/tagpu_recorder.c", "stock")}, []))
-        self.assertEqual(self.run.slots.free, 4, "a slot was not given back")
+        self.assertEqual(self.run.slots.lent, 4, "a slot was not given back")
+        self.assertEqual(sum(self.widened), tareplay.runlock.LANE_SLOTS * 4)
         self.assertTrue((self.root / "run" / "multiplayer-raised" / tareplay.VERDICT).is_file())
 
     def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
@@ -1472,7 +1592,10 @@ class MultiplayerBeside(StandInRun):
         still hold the GPU memory and seat the slot stands for."""
         self.outcome = {"a": "retire"}
         self.sitting(self.root / "run")
-        self.assertEqual((self.run.slots.total, self.run.slots.free), (1, 1))
+        # the retired slot is neither free nor lent: its game may still be running
+        self.assertEqual((self.run.slots.total, self.run.slots.free, self.run.slots.lent),
+                         (0, 0, 1))
+        self.assertEqual(sum(self.widened), tareplay.runlock.LANE_SLOTS)
         self.assertEqual(sorted(self.played), list(self.GROUPS), "the other worker plays on")
 
     def test_a_group_left_too_few_slots_by_a_retirement_is_refused(self):
@@ -1569,6 +1692,36 @@ class GameSlotsOrder(unittest.TestCase):
         tareplay.STOP.set()
         t.join(WAIT_S)
         self.assertEqual(got, [0])
+
+    def test_nothing_is_lent_while_a_lane_may_still_come(self):
+        lent = []
+        slots = tareplay.GameSlots(3, spare=lent.append)
+        slots.give(slots.take(2, lane=True))
+        self.assertEqual((lent, slots.free, slots.total), ([], 3, 3))
+
+    def test_the_slots_no_game_takes_again_are_lent_past_the_groups_two(self):
+        """After the lanes, a free slot goes to the pool unless a group that has not asked yet
+        needs it; a retired slot never does; the group still finds its two."""
+        lent = []
+        slots = tareplay.GameSlots(5, groups=1, spare=lent.append)
+        slots.retire(slots.take(1, lane=True))      # its game may still run
+        self.assertEqual(slots.take(1, lane=True), 1)
+        slots.lanes_end()                           # one lane still plays, no other will come
+        self.assertEqual((lent, slots.free), ([1], 2), "three free, two kept for the group")
+        self.assertEqual(slots.take(2, lane=False), 2)
+        slots.give(1)                               # the last lane ends
+        slots.give(2)                               # the group ends
+        self.assertEqual(lent, [1, 1, 2])
+        self.assertEqual((slots.total, slots.free, slots.lent), (0, 0, 4))
+
+    def test_a_refused_group_reserves_nothing(self):
+        lent = []
+        slots = tareplay.GameSlots(1, groups=1, spare=lent.append)
+        slots.lanes_end()
+        self.assertEqual(lent, [], "the group's two are kept until it asks")
+        with self.assertRaises(ValueError):
+            slots.take(2, lane=False)
+        self.assertEqual((lent, slots.lent), ([1], 1))
 
 
 class RewindPolicy(unittest.TestCase):
