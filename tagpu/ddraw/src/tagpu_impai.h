@@ -4,7 +4,8 @@
 /* tagpu_impai -- ImpAI's seam in the engine (research/notes/modules/impai.md).
 
    The players phase's call of the stock AI tick, 0x465031 `call 0x408C40`, is retargeted to a
-   wrapper that observes the seats impure.cfg's `seatai` gives ImpAI and then always calls the
+   wrapper that observes the seats impure.cfg gives ImpAI (`seatai` in a skirmish, `netai` for the
+   computer seats this peer adds in a network game) and then always calls the
    stock tick, so the stock AI still plays every seat. Which seats are ImpAI's is SIM_STATE,
    written at the level init. Sixteen Difficulty type tests skip those seats, and the
    console's `AI` takes a seat from ImpAI. */
@@ -23,7 +24,8 @@ void tagpu_impai_init(void);
 
 /* The level init's (tagpu_replay.c, tagpu_replay_level_players), right after the engine's
    players init 0x464990 on the LOADER thread: clears the seat table on every level, then marks
-   the computer seats `seatai` names on a live level; a puppet level's seats the recording
+   the computer seats `seatai` names on a live skirmish level, or on a live network level the
+   computer seats this peer added when `netai` is impai; a puppet level's seats the recording
    restores. */
 void tagpu_impai_level_init(void);
 
