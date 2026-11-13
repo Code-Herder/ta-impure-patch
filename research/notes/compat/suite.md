@@ -148,7 +148,13 @@ names the gap). The hives are private because the store `tacli` keeps
   marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
   refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
   reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
-  failure unless the setup's expectation says `"impai": "unavailable"`. Pulse lines are counted
+  failure unless the setup's expectation says `"impai": "unavailable"`. **Content that did not fit is
+  a failure whatever the setup accepts**, named by its line: ImpAI's content is all or none
+  ([ImpAI in the engine](../modules/impai.md), *The fight content*), so a mod whose `[DAMAGE]` rows,
+  weapons or types overflow the fight tables (`impai: fight none: … do not fit the tables …`) or whose
+  menus overflow theirs (`impai: menus past their tables …`) has no ImpAI seat, and the stage says
+  which table rather than reading the empty mark as an accepted gap (`IMPAI_NOFIT`).
+  `tools/impai/netai_check.py` fails the same lines on either peer. Pulse lines are counted
   and reported, not judged: the military writes one a seat once a game minute. `--impai-seat ota`
   plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
   `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`

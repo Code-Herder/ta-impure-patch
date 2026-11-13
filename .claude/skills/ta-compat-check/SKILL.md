@@ -118,8 +118,10 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
   skirmish on another map, other seats or another Difficulty fails by name. The single-player
   battle saves and checks its map the same way: a battle on another map fails by name. ImpAI unavailable fails unless the setup says
-  `"impai": "unavailable"`. `--impai-survey` loads the same skirmish and reads the level init's
-  lines with nothing played; `--impai-seat ota` runs the harness on two stock seats. Column: `ai
+  `"impai": "unavailable"`; content past its tables (`impai: fight none: … do not fit the tables`,
+  `impai: menus past their tables`) fails by its line whatever the setup says. `--impai-survey`
+  loads the same skirmish and reads the level init's lines with nothing played; `--impai-seat ota` runs the harness
+  on two stock seats. Column: `ai
   ok`, `ai FAILED`, `ai n/a`, `-`. The note: [the suite](../../../research/notes/compat/suite.md),
   *The ImpAI stage*.
 - **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:

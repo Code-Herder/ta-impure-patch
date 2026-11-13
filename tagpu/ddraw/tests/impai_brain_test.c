@@ -17,6 +17,7 @@
 #include <string.h>
 #include "worldq.h"
 #include "impai.h"
+#include "impai_brain.h"
 #include "impai_mil.h"
 
 #define FW_W     128                    /* cells of 16 px                                                      */
@@ -340,7 +341,6 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
         out->type = w->unit[slot].type;
     } else if (contact) {
         out->seen = WQ_SEEN_CONTACT;
-        out->aim = w->unit[slot].aim;
         out->owner = 0xFF;
         out->type = (uint16_t)WQ_NONE;
     } else {
@@ -1390,6 +1390,7 @@ enum { M_RAIDER = T_N, M_TANK, M_SCOUT, M_AA, M_SUB, M_DEST, M_N };
 
 static IMPAI_MIL     s_mil;
 static IMPAI_ROW     s_rows[FW_SLOTS];
+static WQ_RADAR_HIT  s_hits[FW_SLOTS];  /* seat 0's radar records, the view's hits */
 static IMPAI_THREAT  s_threat[FW_DEFS];
 static IMPAI_FTYPE   s_ft[FW_DEFS];
 static IMPAI_FWEAPON s_fwp[FW_DEFS];
@@ -1467,6 +1468,7 @@ static void mil_world(void)
     s_fc.w = s_fwp; s_fc.nw = M_N;
     s_fc.d = NULL; s_fc.nd = 0;
     memset(s_rows, 0, sizeof s_rows);
+    memset(s_hits, 0, sizeof s_hits);
     s_st.ax = 20;
     s_st.az = 20;
     impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
@@ -1498,6 +1500,15 @@ static void enemy(int slot, int type, int cx, int cz, unsigned how, int live)
     r->bz = (uint16_t)(cz / 2);
 }
 
+/* seat 0's radar pass found the unit slot `slot` holds now: its record names the slot's incarnation */
+static void radar_found(int slot)
+{
+    s_hits[slot].birth = s_w.birth[slot];
+    s_hits[slot].bx = fblock(s_w.unit[slot].pos[0]);
+    s_hits[slot].bz = fblock(s_w.unit[slot].pos[2]);
+    s_hits[slot].known = 1;
+}
+
 static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
@@ -1513,6 +1524,9 @@ static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* ou
     v.ntypes = M_N;
     v.w = s_w.mw;
     v.h = s_w.mh;
+    v.hits.at = s_hits;
+    v.hits.n = FW_SLOTS;
+    v.hits.stride = (unsigned)sizeof(WQ_RADAR_HIT);
     memset(&in, 0, sizeof in);
     in.q = &q;
     in.view = &v;
@@ -1643,33 +1657,81 @@ static uint16_t attack_target(int from, int unit)
     return t;
 }
 
+/* how far own unit `unit` stands from the centroid of own units `first`..`last`, px, as the squad's centroid is
+   taken: the mean of the members' whole-pixel positions */
+static uint32_t off_centroid(int unit, int first, int last)
+{
+    int64_t sx = 0, sz = 0, dx, dz;
+    int k;
+    for (k = first; k <= last; k++) {
+        sx += s_w.unit[k].pos[0] >> 16;
+        sz += s_w.unit[k].pos[2] >> 16;
+    }
+    dx = (s_w.unit[unit].pos[0] >> 16) - sx / (last - first + 1);
+    dz = (s_w.unit[unit].pos[2] >> 16) - sz / (last - first + 1);
+    return impai_isqrt((uint64_t)(dx * dx + dz * dz));
+}
+
 /* AN ANTI-AIR UNIT IN A GROUND FIGHT: six tanks and two anti-air K-bots against five tanks on the ground. The
    tanks attack; the K-bots' weapon 1 is toairweapon, which the resolver refuses on a target not airborne, so
-   they are ordered to the squad's centroid instead, and nothing is refused. */
+   they keep with the squad instead, and nothing is refused: beside it (within SPREAD_PX, 64 px, of its
+   centroid) they are given nothing, so they cost no order; 14 cells behind it each moves to the centroid. */
 static void check_mil_aa_in_ground_fight(void)
 {
     IMPAI_MIL_OUT o;
-    int k, from;
-    mil_world();
-    for (k = 0; k < 6; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
-    own(7, M_AA, 26, 22);
-    own(8, M_AA, 30, 22);
-    for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
-    from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
-    mil_print("anti-air in a ground fight", &o, from);
-    CHECK(o.refused == 0, "no order is refused: %u", o.refused);
-    CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
-    CHECK(count_action(from, A_ATTACK, 7) == 0 && count_action(from, A_MOVE, 7) == 1 &&
-          count_action(from, A_ATTACK, 8) == 0 && count_action(from, A_MOVE, 8) == 1,
-          "each anti-air K-bot moves with the squad");
+    int k, from, far;
+    for (far = 0; far <= 1; far++) {
+        mil_world();
+        for (k = 0; k < 6; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+        own(7, M_AA, 26, far ? 8 : 22);
+        own(8, M_AA, 30, far ? 8 : 22);
+        for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+        mil_print(far ? "anti-air behind a ground fight" : "anti-air in a ground fight", &o, from);
+        CHECK(o.refused == 0, "no order is refused: %u", o.refused);
+        CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
+        CHECK((off_centroid(7, 1, 8) > 64) == far && (off_centroid(8, 1, 8) > 64) == far,
+              "the K-bots stand %u and %u px off the centroid", off_centroid(7, 1, 8), off_centroid(8, 1, 8));
+        CHECK(count_action(from, A_ATTACK, 7) == 0 && count_action(from, A_MOVE, 7) == far &&
+              count_action(from, A_ATTACK, 8) == 0 && count_action(from, A_MOVE, 8) == far,
+              "%s", far ? "each anti-air K-bot moves to the squad" : "the K-bots beside the squad are given nothing");
+        CHECK(o.roots == 6 + 2 * far, "orders %u", o.roots);
+    }
+}
+
+/* THE ORDER BUDGET GOES TO THE ATTACKS: the same fight under Easy's six orders a decision (mil_roots), the four
+   anti-air K-bots in the census before the six tanks. Beside the squad the K-bots take none of the six; behind
+   it they wait for what the attacks leave, and here the six tanks take all six. */
+static void check_mil_budget(void)
+{
+    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_MIL_OUT o;
+    int k, from, far;
+    lv.mil_roots = IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots;
+    for (far = 0; far <= 1; far++) {
+        mil_world();
+        for (k = 0; k < 4; k++) own(1 + k, M_AA, 28 + k % 2, far ? 8 : 24 + k / 2);
+        for (k = 0; k < 6; k++) own(5 + k, M_TANK, 24 + 2 * k, 24);
+        for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&lv, 1, &o) == 0, "the budget decision runs");
+        mil_print(far ? "six orders, anti-air behind" : "six orders, anti-air beside", &o, from);
+        for (k = 1; k <= 4; k++)
+            CHECK((off_centroid(k, 1, 10) > 64) == far, "K-bot %d stands %u px off the centroid", k,
+                  off_centroid(k, 1, 10));
+        CHECK(o.roots == lv.mil_roots && count_action(from, A_ATTACK, -1) == 6 && count_action(from, A_MOVE, -1) == 0,
+              "the six orders are the six tanks' attacks: %u orders, %d attacks, %d moves", o.roots,
+              count_action(from, A_ATTACK, -1), count_action(from, A_MOVE, -1));
+    }
 }
 
 /* A SUBMARINE AND MIXED WEAPONS: four tanks and two destroyers (a gun, and a torpedo as weapon 2) against a
    submarine under the sea nearest them and two tanks beyond it. The resolver answers a target under the sea
    only for a unit with a waterweapon as weapon 1 or 2: the destroyers may attack the submarine, the tanks
    only the surface tanks, and nothing is refused. With the surface tanks gone, the tanks have nothing to
-   attack and move with the squad. */
+   attack and keep with the squad: the one farther than SPREAD_PX (64 px) from its centroid moves to it, the
+   others are given nothing. */
 static void check_mil_sub_mixed_weapons(void)
 {
     IMPAI_MIL_OUT o;
@@ -1691,12 +1753,69 @@ static void check_mil_sub_mixed_weapons(void)
         CHECK(o.refused == 0, "no order is refused: %u", o.refused);
         CHECK(attacks_answered(from), "every attack is one the resolver answers");
         for (k = 1; k <= 4; k++)
-            CHECK(gone ? count_action(from, A_ATTACK, k) == 0 && count_action(from, A_MOVE, k) == 1
+            CHECK(gone ? count_action(from, A_ATTACK, k) == 0 &&
+                             count_action(from, A_MOVE, k) == (off_centroid(k, 1, 6) > 64)
                        : count_action(from, A_ATTACK, k) == 1 && attack_target(from, k) != 1300,
-                  "tank %d: %s", k, gone ? "moves with the squad" : "attacks a surface tank");
+                  "tank %d: %s", k, gone ? "keeps with the squad" : "attacks a surface tank");
+        if (gone)
+            CHECK(count_action(from, A_MOVE, -1) == 1 && count_action(from, A_MOVE, 1) == 1,
+                  "tank 1 alone, %u px off the centroid, moves", off_centroid(1, 1, 6));
         CHECK(count_action(from, A_ATTACK, 5) == 1 && count_action(from, A_ATTACK, 6) == 1,
               "the destroyers attack");
     }
+}
+
+/* A SLOT TAKEN SINCE ITS ROW: six tanks against five enemy rows, each of whose slot holds a unit now. 1300's row
+   says a tank of seat 1, and a raider of seat 1 holds the slot; 1301's a tank of seat 1, and a tank of seat 2
+   holds it; 1302 is a radar contact the pass found, whose slot another unit holds since (its incarnation is
+   not the record's). None of the three is attacked. 1303, a radar contact the pass found, and 1304, a tank in
+   sight, are, and no order is refused. */
+static void check_mil_slot_taken(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 6; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, k == 2 || k == 3 ? IMPAI_RADAR : IMPAI_LOS, 1);
+    s_w.unit[1300].type = M_RAIDER;
+    s_w.unit[1301].owner = 2;
+    radar_found(1302);
+    radar_found(1303);
+    s_w.birth[1302]++;
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    mil_print("slots taken since their rows", &o, from);
+    CHECK(o.enemies == 5 && o.refused == 0, "five enemy rows, %u, and no order refused, %u", o.enemies, o.refused);
+    CHECK(count_action(from, A_ATTACK, -1) == 6, "six attack orders");
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_ATTACK)
+            CHECK(s_w.log[k].c.target == 1303 || s_w.log[k].c.target == 1304,
+                  "an attack at the unit its row is about, not %u", s_w.log[k].c.target);
+}
+
+/* A RADAR CONTACT'S RESOLVER TESTS ARE THE TARGET'S: six tanks and two anti-air K-bots against five tanks the
+   seat knows by its radar alone. Whether a target is airborne, under the sea or of a type that flies is not the
+   seat's to see on a radar contact (observe gives no aim there), so each member is ordered at one, and the
+   resolver refuses the K-bots' -- counted as refused and costing no order -- as it did before the military
+   read the resolver's tests. */
+static void check_mil_radar_aim(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 6; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    own(7, M_AA, 26, 22);
+    own(8, M_AA, 30, 22);
+    for (k = 0; k < 5; k++) {
+        enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_RADAR, 1);
+        radar_found(1300 + k);
+    }
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    mil_print("anti-air against radar contacts", &o, from);
+    CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
+    CHECK(o.refused == 2 && o.roots == 6 && s_w.nlog - from == 6,
+          "the resolver refuses the K-bots: %u refused, %u orders", o.refused, o.roots);
 }
 
 /* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
@@ -2011,6 +2130,9 @@ static void check_military(void)
     check_mil_defence();
     check_mil_gone_target();
     check_mil_aa_in_ground_fight();
+    check_mil_budget();
+    check_mil_slot_taken();
+    check_mil_radar_aim();
     check_mil_sub_mixed_weapons();
     check_mil_retreat();
     check_mil_attack();

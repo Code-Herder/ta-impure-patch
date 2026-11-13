@@ -912,13 +912,13 @@ static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     if (out->seen <= WQ_SEEN_LOS) {
         out->owner = (uint8_t)owner;
         out->type = (uint16_t)def_id(c, u);
+        out->aim = aim_of(c, u, d);
     } else {
         out->owner = 0xFF;
         out->type = (uint16_t)WQ_NONE;
     }
     block_of(c, u, out);
     out->layer = layer_of(c, u, d);
-    out->aim = aim_of(c, u, d);
     out->birth_known = (uint8_t)tagpu_unit_birth((unsigned)slot, &out->birth);
     return out->seen;
 }

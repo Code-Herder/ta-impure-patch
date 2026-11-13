@@ -258,6 +258,72 @@ static void chase_content(void)
     }
 }
 
+/* THE CHASE TAKES SLOTS 0..2 ALONE (0x4897E0): a mover whose one weapon, 700 px, sits in slot `slot`, 668 px from
+   a target that cannot die and whose 100-px weapon hurts it. In slot 2 the chase walks to that weapon's reach
+   less the stand-off and stops out of the target's; in slot 3 the engine's chase takes slot 0, empty, and
+   walks to contact, inside the target's reach, where the target's shots land. */
+static void chase_slots(void)
+{
+    static IMPAI_FTYPE t[3];
+    static IMPAI_FWEAPON w[3];
+    const IMPAI_FCONTENT c = { t, 3, w, 3, D, 0, 8155 };
+    IMPAI_FIT sure = impai_fitparams;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r;
+    IMPAI_FSTATS st;
+    unsigned k, slot;
+    memset(w, 0, sizeof w);
+    w[1].range = 700; w[1].reload = 30; w[1].burst = 1; w[1].dmg = 1; w[1].kind = IMPAI_FK_STRAIGHT;
+    w[2].range = 100; w[2].reload = 30; w[2].burst = 1; w[2].dmg = 1; w[2].kind = IMPAI_FK_STRAIGHT;
+    for (k = 0; k < IMPAI_FKINDS; k++) sure.hit[k][IMPAI_FH_BIAS] = 30.0f;
+    for (slot = 2; slot <= 3; slot++) {
+        memset(t, 0, sizeof t);
+        t[1].hp = 4000000000u; t[1].value = 100.0f; t[1].fx = t[1].fz = 2; t[1].flags = IMPAI_FT_MOBILE;
+        t[1].speed = 2 * 65536;
+        t[1].w[slot] = 1;
+        t[2].hp = 4000000000u; t[2].value = 100.0f; t[2].fx = t[2].fz = 2; t[2].w[0] = 2;
+        memset(&a, 0, sizeof a);
+        memset(&b, 0, sizeof b);
+        a.ne = b.ne = 1;
+        a.closes = 1;
+        a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 65535;
+        b.e[0].type = 2; b.e[0].n = 1; b.e[0].hp_frac = 65535;
+        if (impai_fight_run(&c, &sure, &a, &b, 668, &s_work, &r, &st)) fail("the chase slots: the run", (int)slot);
+        printf("chase: the weapon in slot %u: the target's shots %08X\n", slot,bits(st.shots[0]));
+        if (slot == 2 ? st.shots[0] != 0.0f : !(st.shots[0] > 0.0f))
+            fail(slot == 2 ? "the chase walked past slot 2's reach" : "the chase took slot 3", (int)slot);
+    }
+}
+
+/* A NaN STOPS NOTHING AND KILLS NONE: every hit bias, the focus and the splash NaN, and a weapon's edge NaN. The
+   hit probabilities, the damage and so the pools are NaN; each step's kills are then 0, never a NaN converted
+   to an integer (the asan build traps one), and the run ends at its bound with every unit standing. */
+static void nan_fit(void)
+{
+    static IMPAI_FTYPE t[2];
+    static IMPAI_FWEAPON w[2];
+    const IMPAI_FCONTENT c = { t, 2, w, 2, D, 0, 8155 };
+    IMPAI_FIT bad = impai_fitparams;
+    IMPAI_FSIDE a;
+    IMPAI_FRESULT r;
+    IMPAI_FSTATS st;
+    unsigned k;
+    memset(t, 0, sizeof t);
+    memset(w, 0, sizeof w);
+    w[1].range = 500; w[1].reload = 30; w[1].burst = 1; w[1].dmg = 400; w[1].aoe = 64; w[1].edge = NAN;
+    w[1].kind = IMPAI_FK_STRAIGHT;
+    t[1].hp = 500; t[1].value = 100.0f; t[1].fx = t[1].fz = 2; t[1].w[0] = 1;
+    for (k = 0; k < IMPAI_FKINDS; k++) bad.hit[k][IMPAI_FH_BIAS] = NAN;
+    bad.focus = NAN;
+    bad.splash = NAN;
+    memset(&a, 0, sizeof a);
+    a.ne = 1;
+    a.e[0].type = 1; a.e[0].n = 3; a.e[0].hp_frac = 65535;
+    if (impai_fight_run(&c, &bad, &a, &a, 100, &s_work, &r, &st)) fail("the NaN fit: the run", -1);
+    printf("NaN fit: steps=%u killed=%u,%u\n", r.steps, st.killed[0], st.killed[1]);
+    if (st.killed[0] || st.killed[1] || r.steps > IMPAI_FSTEPS) fail("the NaN fit killed", -1);
+}
+
 int main(void)
 {
     IMPAI_FSIDE a, b, two;
@@ -372,6 +438,8 @@ int main(void)
     if (impai_fight_side(&C, many, 20, 1, &a) != -1) fail("the merge took a type past the content", -1);
     small_content();
     chase_content();
+    chase_slots();
+    nan_fit();
     printf("impai_fight_test: %s\n", s_fail ? "FAIL" : "ok");
     return s_fail ? 1 : 0;
 }
