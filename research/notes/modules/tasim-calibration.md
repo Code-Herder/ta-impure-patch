@@ -19,7 +19,8 @@ the gate's plan note.*
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
 | `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
-| `tools/tasim/native.py`, `native.py test`, `native.py roles` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` on the install | no |
+| `tools/tasim/native.py`, `native.py test`, `native.py roles` / `defs [--archive A] [--folders F]` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` or `defs` on the install, a mod read with its renamed first archive and folders | no |
+| `tools/tasim/tests/test_load.py` | the install loader on a synthetic install: the class record, the weapon slots, the `[DAMAGE]` rows, `nottoair`, the folders, the report | no |
 
 **The interpreter is the shared venv's**, `.venv-undither/bin/python` at the main checkout
 (CLAUDE.md, *Python tooling*): `calib.py`'s commands and `applier_check.py` read recordings and
@@ -330,12 +331,22 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
 - **Tech**: max(1, the least number of factories before the unit on a build chain from a
   commander); 0 when no chain reaches it.
 
-`tasim_run roles` (`tools/tasim/tasim_run.c`) fills the input from the install's files with the
-engine's conversions (reloadtime × 30, speeds × 65536, the build costs read as integers) and takes build options by the sidebar's page
-rule (`tagpu_buildmenu`) over the GUI pages and download entries; the engine's page count
-(`+0x22E`) is not read from a file, so the pages are those that exist or that an entry names
-[INFERRED]. On the retail install (2.0 s): land 20 defence, 15 assault, 22 raider, 10 artillery,
-15 scout, 6 antiair, 35 builder, 63 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The engine filler's
+`tasim_run roles` (`tools/tasim/tasim_run.c`) fills the input with a copy of the definitions the
+install loader read (`tools/tasim/tasim_load.c`, through the shared core's key table), as the engine
+filler copies the engine's: every field as the FBI and weapon parsers store it, the water depths and
+footprint the move class record's when the unit names one (the record wins over the unit's own keys,
+`0x42CD0C..0x42CD97`), weapon1..weapon10 the records in the slots their names resolve to as
+`0x49E5B0` resolves them (a section whose ID is past the slots is no weapon), each weapon's air
+damage the mean of its `[DAMAGE]` rows over the types of category VTOL in def row order, matched
+without case as `0x499CD0` matches them, and the units in the def array's order. Build options come
+from the loader by the sidebar's page rule (`tagpu_buildmenu`) over the GUI pages and download
+entries; the engine's page count (`+0x22E`) is not read from a file, so the pages are those that
+exist or that an entry names [INFERRED]. On the retail install (0.1 s with the archives in the page
+cache): land 20 defence, 15 assault, 22 raider, 10 artillery, 15 scout, 6 antiair, 35 builder, 63
+other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The class record changes the footprint of 13 retail types
+(ARMAAS 3 × 3 by its own keys, 4 × 4 by its class); no role, layer or duel changes. On ProTA 4.8
+(`native.py roles --archive ProTA.gp3 --folders gui=guiP,gamedata=gamedatP,download=downloadP`):
+land 32 defence, 10 assault, 19 raider, 14 artillery, 20 scout, 8 antiair, 42 builder, 64 other. The engine filler's
 parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (the check lever) against
 `tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
 against ground and air, ground range and the role flags, exactly; the tech level apart, which the
@@ -364,4 +375,6 @@ on one line per verb.
   yet run. Not run at all: the duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on a full
   lane, the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a
   course, and their costs.
-- `tasim_run play` and `predict` are T1 and A2; `defs` does not exist yet.
+- `tasim_run play` and `predict` are T1 and A2.
+- `defcheck.py` has not been run against a game: only against a synthetic memory made from the
+  core's own JSON. It takes no `--archive` or `--folders`, so it reads a mod's instance as stock.
