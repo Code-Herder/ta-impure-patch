@@ -1876,10 +1876,14 @@ void tagpu_impai_level_init(void)
     }
 }
 
-/* THE TAKEOVER'S SEATS. A takeover makes every recorded seat but the player's a fresh stock AI (tagpu_replay.c,
-   TK1: new AI objects through 0x408CB0), and ImpAI's seats follow the store as a skirmish's level init does:
-   `seatai`, bit i for record i. A seat ImpAI played in the recording and still plays KEEPS what R13
-   (recorded_put) restored -- its knowledge, its brain, its jobs, its military with the recorded level, seed and
+/* THE TAKEOVER'S SEATS. A takeover makes every recorded seat but the player's P a fresh stock AI (tagpu_replay.c,
+   TK1: new AI objects through 0x408CB0) and P a human's, type 1 through the engine's setter (tk_types). ImpAI's
+   seats are then the seats it played in the recording -- the marks R13 (recorded_put) restored into s_seat,
+   read here, before anything below writes the table -- and any seat the store's `seatai` adds, bit i for
+   record i, both through the level init's rule (impai_seats_pick), which marks only a seated controller-2
+   record with its AI object: so P, now type 1, is never ImpAI's, and no other recorded seat loses ImpAI. A
+   player who takes over a game against ImpAI plays on against ImpAI, whatever store the playing process has.
+   A seat ImpAI played in the recording and still plays KEEPS what R13 restored -- its knowledge, its brain, its jobs, its military with the recorded level, seed and
    table -- so the fork goes on from the recorded state as a rewind's does, and its first capture states the
    parent's tables at the fork for every kept seat (tarec compare-fork compares every declared table). A seat
    ImpAI did not play there starts fresh, as at a level's start (seat_fresh), so its mark, brain, jobs and
@@ -1913,7 +1917,7 @@ void tagpu_impai_takeover(void)
     }
     seat_recs(ta, rec);
     impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0,
-                     (unsigned)tagpu_settings_seatai(), &pick);
+                     before | (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         seats_set(0);
         tagpu_logf("impai: seats none: record %d is remote after a takeover", pick.refused);
@@ -1936,7 +1940,8 @@ void tagpu_impai_takeover(void)
         if (fresh >> i & 1u) seat_fresh(ta, i);
     impai_seats_list(pick.marks, list);
     impai_seats_list(fresh, fresh_list);
-    tagpu_logf("impai: seats %s (impure.cfg, a takeover) of %u records; fresh %s", list, pick.live, fresh_list);
+    tagpu_logf("impai: seats %s (the recording's and impure.cfg's, a takeover) of %u records; fresh %s", list,
+               pick.live, fresh_list);
 }
 
 /* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it -- the
