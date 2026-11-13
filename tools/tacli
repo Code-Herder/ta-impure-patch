@@ -38,6 +38,7 @@ import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.p
 import taremote  # noqa: E402  remote instances: PowerShell over SSH (tools/taremote.py)
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  an instance's game as a run, for the runs viewer (tools/tarun.py)
+import runlock  # noqa: E402  the machine's run lock: a game inside a hold runs under its GPU cap
 
 # --------------------------------------------------------------------------- paths
 
@@ -712,12 +713,12 @@ def write_title(inst: Instance, label: str) -> str:
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
 # The store keys an ordinary launch writes: the placement (write_placement),
-# the size (ensure_store) and the seats ImpAI plays (write_seatai, `none` unless the launch
-# names seats). A player's menu writes the same keys, so the store
+# the size (ensure_store), the seats ImpAI plays (write_seatai, `none` unless the launch
+# names seats) and the GPU memory cap (write_gpumem, inside a run-lock hold only). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai", "gpumem")
 
 
 def _split_store(inst: Instance):
@@ -834,10 +835,28 @@ def write_seatai(inst: Instance, seats) -> None:
     _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
 
 
+def write_gpumem(inst: Instance) -> None:
+    """The store's `gpumem`, the GPU memory cap (MiB): runlock.cap_mib() for a launch inside a
+    run-lock hold, which counts this game against a GPU token sized on that cap
+    (tools/runlock-vram.cfg), and no line otherwise, so a launch by hand after a run is not
+    capped. The DLL reads it under tagpu_defaults.off too and charges every device-local
+    allocation against it (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
+    if runlock.holding():
+        _store_set(inst, "gpumem", str(runlock.cap_mib()))
+        return
+    path = inst.gamedir / "impure.cfg"
+    if path.exists():
+        lines = path.read_text().splitlines()
+        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() != "gpumem"]
+        if keep != lines:
+            path.write_text("\n".join(keep) + ("\n" if keep else ""))
+
+
 def write_harness_store(inst: Instance, meta, window, args) -> None:
     """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
-    or missing (ensure_store), the placement, and the seats ImpAI plays -- `none` unless this
-    launch names some (a scenario's `impai` seats)."""
+    or missing (ensure_store), the placement, the seats ImpAI plays -- `none` unless this
+    launch names some (a scenario's `impai` seats) -- and the GPU memory cap inside a run-lock
+    hold (write_gpumem)."""
     # The size goes into the store when it is asked for on THIS launch, or when
     # the store has none yet; a recorded --res rewritten every launch would undo
     # the player's pick (ensure_store).
@@ -845,6 +864,7 @@ def write_harness_store(inst: Instance, meta, window, args) -> None:
                  default_res=tuple(meta["res"]))
     write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
     write_seatai(inst, getattr(args, "seatai", None))
+    write_gpumem(inst)
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):

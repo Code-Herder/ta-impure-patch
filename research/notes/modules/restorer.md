@@ -231,7 +231,10 @@ screen's 479 keys in 114 ms, the whole map in 19.3–26.3 s, Lava Alley's in 3.2
 
 **Whether it fits** (D10): the atlas against half of what the driver says is free —
 `VK_EXT_memory_budget` through `VK_KHR_get_physical_device_properties2`, which the instance now
-enables when the loader offers it — or a quarter of the largest device-local heap. **A seam fix
+enables when the loader offers it — or a quarter of the largest device-local heap, and under the
+GPU memory cap a harness launch sets (`gpumem=`) at most the cap's headroom, so a capped game
+restores per tile rather than reach the cap ([the Vulkan backend](vulkan-backend.html), *The GPU
+memory cap*). **A seam fix
 rode with it:** the device-extension walk in `tagpu_vk.c` stopped as soon as its two-entry array
 was full, which `VK_KHR_maintenance1` fills, so no extension listed after it was ever seen; the
 bound now guards the append. Where the atlas does not fit, the device refuses it, the keys need an

@@ -1923,6 +1923,30 @@ class SettingsStore(unittest.TestCase):
             self.assertIn("seatai=2", lines)
             self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
 
+    def test_a_launch_inside_a_run_lock_hold_runs_under_the_gpu_cap(self):
+        # the cap the run lock's tokens were sized on, written inside a hold and gone outside one,
+        # so a launch by hand after a run is not capped; a --shipped launch hands it away
+        self.assertIn("gpumem", tacli.HARNESS_KEYS)
+        held = json.dumps({"slots": 2, "tokens": 1, "games": 1, "tag": "s00", "resources": [],
+                           "path": "/nowhere/tareplay.lock"})
+        outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\ngpumem=64\n")
+            with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertIn(f"gpumem={tacli.runlock.cap_mib()}", lines)
+            self.assertEqual(sum(ln.startswith("gpumem=") for ln in lines), 1)
+            with patch.dict(os.environ, outside, clear=True):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertFalse(any(ln.startswith("gpumem=") for ln in lines))
+            self.assertIn("gamma=12", lines)
+
 
 # ----------------------------------------------------------- remote instances
 

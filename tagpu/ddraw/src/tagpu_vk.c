@@ -136,6 +136,7 @@
 #include "hook.h"
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
+#include "tagpu_vkcap.h"
 #include "tagpu_window.h"
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
@@ -359,21 +360,153 @@ static int full_refuses(void)
     return 1;
 }
 
+/* THE GPU MEMORY CAP, at the same door (inc/tagpu_vkcap.h has the ledger and its bound). A
+   harness launch sets `gpumem=` (tagpu_settings_gpumem); `cap_arm` latches it for a device when
+   the device is made, before its first allocation, and `cap_disarm` drops the ledger when the
+   device is destroyed, which frees whatever it still held. With no cap the door hands every call
+   to the driver as it came, so a player's game allocates exactly as it would without it.
+
+   Only memory types of a DEVICE_LOCAL heap are charged: host memory is not the device's. A
+   refusal is the driver's own VK_ERROR_OUT_OF_DEVICE_MEMORY, so each pass takes the road a full
+   device sends it down (vulkan-backend.md, *A pass refused its memory*). The only allocations
+   sized against free memory, the terrain's neighbourhood atlas and its restored chain, ask the
+   headroom first (tagpu_vk_mem_cap, in tagpu_vk_restore_fits) and fall back before the door.
+
+   THE LOCK IS HELD ACROSS THE DRIVER'S CALL, both ways. Across the allocation, so two threads
+   cannot both pass the test and then both allocate; across the free, so a handle the driver
+   reuses at once cannot be recorded before its old entry is gone. The lane's worker allocates
+   while it brings the device up and the render thread after, and the lane's ownership already
+   keeps the two apart; the lock makes the bound independent of that. It is a leaf -- nothing
+   inside calls back here -- so a waiter waits for one driver call at most. */
+static PFN_vkFreeMemory s_realFree;
+static volatile LONG s_capLock;
+static TAGPU_VKCAP s_cap;
+static uint32_t s_capTypes;         /* bit i: memory type i is on a DEVICE_LOCAL heap */
+/* The high water last logged, in 16 MiB steps: at most cap/16 lines a device, and a game killed
+   before its teardown line has still said its peak to within one step. */
+static uint64_t s_capSaid;
+
+/* The yield decides only how a waiter spends its wait, never whether it holds the lock. */
+static void cap_lock(void)
+{
+    unsigned n;
+    for (n = 0; InterlockedCompareExchange(&s_capLock, 1, 0); n++) Sleep(n < 64 ? 0 : 1);
+}
+
+static void cap_unlock(void)
+{
+    InterlockedExchange(&s_capLock, 0);
+}
+
+static uint64_t mem_bits(VkDeviceMemory m)
+{
+    uint64_t h = 0;
+    memcpy(&h, &m, sizeof m);
+    return h;
+}
+
+/* The cap for the device just made on `pd`. Before the device's first allocation: the bring-up
+   worker calls it once vkCreateDevice has succeeded. */
+static void cap_arm(VkPhysicalDevice pd)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    uint32_t i, types = 0;
+    long mib = tagpu_settings_gpumem();
+    memset(&mp, 0, sizeof mp);
+    if (mib) vkGetPhysicalDeviceMemoryProperties(pd, &mp);
+    for (i = 0; i < mp.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; i++)
+        if (mp.memoryTypes[i].heapIndex < mp.memoryHeapCount &&
+            (mp.memoryHeaps[mp.memoryTypes[i].heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+            types |= 1u << i;
+    cap_lock();
+    tagpu_vkcap_init(&s_cap, mib);
+    s_capTypes = types;
+    s_capSaid = 0;
+    cap_unlock();
+    if (mib)
+        vklog("gpumem: this device's allocations are capped at %ld MiB of device-local memory "
+              "(impure.cfg gpumem=, memory types 0x%x)", mib, types);
+}
+
+/* The device is gone and with it everything it held. */
+static void cap_disarm(void)
+{
+    uint64_t cap, peak;
+    unsigned npeak, refused;
+    cap_lock();
+    cap = s_cap.cap; peak = s_cap.peak; npeak = s_cap.npeak; refused = s_cap.refused;
+    tagpu_vkcap_init(&s_cap, 0);
+    s_capTypes = 0;
+    cap_unlock();
+    if (cap)
+        vklog("gpumem: the device is down - it held at most %llu MiB of the %llu MiB cap in at "
+              "most %u allocations, and the cap refused %u",
+              (unsigned long long)(peak >> 20), (unsigned long long)(cap >> 20), npeak, refused);
+}
+
+int tagpu_vk_mem_cap(unsigned long long* headroom, unsigned long long* cap)
+{
+    int on;
+    cap_lock();
+    on = s_cap.cap != 0;
+    if (on) { *headroom = tagpu_vkcap_headroom(&s_cap); *cap = s_cap.cap; }
+    cap_unlock();
+    return on;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL full_AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo* ai,
                                                           const VkAllocationCallbacks* cb,
                                                           VkDeviceMemory* mem)
 {
+    VkResult r;
+    uint64_t charge, held, cap, said = 0;
+    unsigned n;
+    int charged, fits = 1;
     if (full_refuses()) {
         tagpu_logf("vk: tagpu_vkfull.on refuses an allocation of %llu bytes",
                    (unsigned long long)ai->allocationSize);
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
-    return s_realAllocate(dev, ai, cb, mem);
+    charge = tagpu_vkcap_charge(ai->allocationSize);
+    cap_lock();
+    charged = s_cap.cap && ai->memoryTypeIndex < 32 && (s_capTypes >> ai->memoryTypeIndex & 1u);
+    if (charged && !tagpu_vkcap_fits(&s_cap, charge)) {
+        s_cap.refused++;
+        fits = 0;
+        r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    } else {
+        r = s_realAllocate(dev, ai, cb, mem);
+        /* fits, under the lock this test was made in: the add cannot refuse */
+        if (charged && r == VK_SUCCESS) tagpu_vkcap_add(&s_cap, mem_bits(*mem), charge);
+    }
+    held = s_cap.held;
+    cap = s_cap.cap;
+    n = s_cap.n;
+    if (charged && fits && (held >> 24) > s_capSaid) said = s_capSaid = held >> 24;
+    cap_unlock();
+    if (!fits)
+        vklog("gpumem: the cap refuses an allocation of %llu bytes - %llu MiB held of %llu MiB, "
+              "%u allocations", (unsigned long long)ai->allocationSize,
+              (unsigned long long)(held >> 20), (unsigned long long)(cap >> 20), n);
+    else if (said)
+        vklog("gpumem: %llu MiB held of the %llu MiB cap (a new high water)",
+              (unsigned long long)(held >> 20), (unsigned long long)(cap >> 20));
+    return r;
+}
+
+static VKAPI_ATTR void VKAPI_CALL full_FreeMemory(VkDevice dev, VkDeviceMemory mem,
+                                                  const VkAllocationCallbacks* cb)
+{
+    cap_lock();
+    s_realFree(dev, mem, cb);
+    if (s_cap.cap && mem != VK_NULL_HANDLE) tagpu_vkcap_remove(&s_cap, mem_bits(mem));
+    cap_unlock();
 }
 
 static PFN_vkVoidFunction VKAPI_CALL full_gdpa(VkDevice dev, const char* name)
 {
     if (!strcmp(name, "vkAllocateMemory")) return (PFN_vkVoidFunction)(void*)full_AllocateMemory;
+    if (!strcmp(name, "vkFreeMemory")) return (PFN_vkVoidFunction)(void*)full_FreeMemory;
     return vkGetDeviceProcAddr(dev, name);
 }
 
@@ -1992,6 +2125,7 @@ static void vk_down(void)
         if (s_vk.sc)   { vkDestroySwapchainKHR(s_vk.dev, s_vk.sc, NULL);  s_vk.sc = VK_NULL_HANDLE; }
         vkDestroyDevice(s_vk.dev, NULL);
         s_vk.dev = VK_NULL_HANDLE;
+        cap_disarm();
         /* no work of the restorer's outlives its device: a later loss on the
            next device must not be blamed for it */
         tagpu_rguard_idle();
@@ -2280,6 +2414,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
 #undef RES
     s_realAllocate = vkAllocateMemory;
     vkAllocateMemory = full_AllocateMemory;
+    s_realFree = vkFreeMemory;
+    vkFreeMemory = full_FreeMemory;
+    cap_arm(s_vk.pd);
     if (!vkCreateSwapchainKHR || !vkQueuePresentKHR || !vkAcquireNextImageKHR) {
         vklog("device entry points missing"); goto fail;
     }
