@@ -3003,7 +3003,11 @@ IMPAI_INSTALLED = re.compile(r"^impai: seam 0x465031", re.M)
 IMPAI_SEATS_LINE = re.compile(r"^impai: seats (\S+) \(impure\.cfg\) of (\d+) records", re.M)
 # what keeps a seat from ImpAI, each the line that says so (tagpu_impai.c)
 IMPAI_WHY = re.compile(r"^impai: (unavailable: .*|menus past their tables .*|menus none: .*|threat none: .*|"
-                       r"tinfo none: .*|seats none: record \d+ is remote.*)$", re.M)
+                       r"tinfo none: .*|fight none: .*|seats none: record \d+ is remote.*)$", re.M)
+# ImpAI's content is all or none (tagpu_impai.c, impai_content_build): a mod whose [DAMAGE] rows, weapons or
+# types do not fit the fight tables (IMPAI_FDMG_POOL rows), or whose menus do not fit theirs, has no ImpAI
+# seat. Each line says so, and fails the stage by name whatever the setup accepts.
+IMPAI_NOFIT = re.compile(r"^impai: (fight none: .*do not fit the tables.*|menus past their tables .*)$", re.M)
 IMPAI_CONTENT = re.compile(r"^impai: (threat types=.*|tinfo mex=.*|menus side=.*|reach classes=.*)$", re.M)
 IMPAI_WORK = re.compile(r"^impai: work seat=(\d+) ticks=(\d+) refused=(\d+)", re.M)
 IMPAI_COULD_NOT = re.compile(r"^impai: .*could not.*$", re.M)
@@ -3140,7 +3144,7 @@ def impai_stage_read(text: str) -> dict:
     return {"installed": bool(IMPAI_INSTALLED.search(text)),
             "marks": seat_list(seats[-1][0]) if seats else None, "live": int(seats[-1][1]) if seats else None,
             "why": IMPAI_WHY.findall(text), "content": IMPAI_CONTENT.findall(text), "work": work,
-            "could_not": IMPAI_COULD_NOT.findall(text), "pulses": pulses,
+            "could_not": IMPAI_COULD_NOT.findall(text), "nofit": IMPAI_NOFIT.findall(text), "pulses": pulses,
             "level_end": IMPAI_LEVEL_END in text}
 
 
@@ -3157,6 +3161,8 @@ def impai_stage_misses(st: dict, seat_ai: str, survey: bool = False) -> tuple:
         miss.append("the level end wrote no ImpAI lines")
     for line in st["could_not"]:
         miss.append(f"ImpAI could not: {line}")
+    for line in st.get("nofit", []):
+        miss.append(f"ImpAI's content did not fit its tables: impai: {line}")
     for seat, (_, refused) in sorted(st["work"].items()):
         if refused:
             miss.append(f"ImpAI's seat {seat} refused {refused} turn(s)")
@@ -4618,7 +4624,12 @@ IMPAI_CASES = [
     ("ImpAI plays record 1", _IMPAI_OK, "impai", True, 0),
     ("not installed", "impai: unavailable: 0x465031 not stock (E9 00 00 00 00)\n", "impai", False, 0),
     ("menus past their tables", _IMPAI_IN + "impai: menus past their tables (side 1, builder 9: 2048 menus, 9 "
-     "types)\nimpai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "impai", False, 0),
+     "types)\nimpai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "impai", False, 1),
+    ("[DAMAGE] rows past the pool", _IMPAI_IN + "impai: fight none: the engine's types, weapons or [DAMAGE] rows do "
+     "not fit the tables (480 types, 4096 weapon slots, 65536 rows)\nimpai: seats none (impure.cfg) of 3 records\n"
+     + _IMPAI_END, "impai", False, 1),
+    ("no classification, not a fit", _IMPAI_IN + "impai: fight none: no classification\n"
+     "impai: seats none (impure.cfg) of 3 records\n" + _IMPAI_END, "impai", False, 0),
     ("a refused turn", _IMPAI_OK.replace("refused=0", "refused=3"), "impai", True, 1),
     ("could not", _IMPAI_OK + "impai: tinfo none: the content view could not be opened\n", "impai", True, 1),
     ("no level end", _IMPAI_OK.replace(_IMPAI_END, ""), "impai", True, 1),

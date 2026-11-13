@@ -363,6 +363,17 @@ class NetaiJudge(unittest.TestCase):
         bad = netai_check.judge(*self.peers(join_log=""))
         self.assertEqual(bad, ["join: 0 network seat lines, not one"])
 
+    def test_content_past_its_tables(self):
+        host_log = ("impai: fight none: the engine's types, weapons or [DAMAGE] rows do not fit the tables "
+                    "(480 types, 4096 weapon slots, 65536 rows)\n" + self.HOST_LOG.replace("seats 2", "seats none"))
+        bad = netai_check.judge(*self.peers(host_log=host_log))
+        self.assertTrue(any(b.startswith("host: ImpAI's content did not fit its tables: impai: fight none:")
+                            for b in bad), bad)
+        bad = netai_check.judge(*self.peers(join_log="impai: menus past their tables (side 1, builder 9: 2048 "
+                                                     "menus, 9 types)\n" + self.JOIN_LOG))
+        self.assertTrue(any(b.startswith("join: ImpAI's content did not fit its tables: impai: menus past")
+                            for b in bad), bad)
+
     def test_names_across_peers(self):
         bad = netai_check.judge(*self.peers(join_log=self.JOIN_LOG.replace("ImpAI's 4", "ImpAI's none")))
         self.assertTrue(any("not record 4, the host's ImpAI seat" in b for b in bad), bad)
