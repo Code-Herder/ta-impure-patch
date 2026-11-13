@@ -119,12 +119,10 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   shot of its longest CommandFire weapon when its def has `candgun`, `+0x245` bit 14 -- is filled into
   `IMPAI_TINFO` at the content build from the classifier's input (`dgun_of`), held to 16 bits. The `mil` lines
   count the D-gun orders (`dgun=`, `dguns=`).
-- **The fight content** comes through `impai_fight_content`, which in this tree answers no type: the predictor's
-  tables and their filler come with its own landing. Until they are wired to it, every prediction is refused --
-  no attack wave, no retreat, the commander moved away from every contact worth more than it -- and every pair
-  rate is 0, so the factories buy the cheapest type of each class. `src/impai_fight.c` is a stub of the
-  predictor's model (a plain Lanchester, every shot hitting) under the predictor's own header and coefficients,
-  which the predictor's `impai_fight.c` replaces whole.
+- **The fight content** comes through `impai_fight_content`: the fight tables (*The fight predictor* below), each
+  count bounded by its table's capacity, so a count the build did not write yields no content -- every
+  prediction refused, no attack wave, no retreat, the commander moved away from every contact worth more than
+  it, every pair rate 0 and the factories buying the cheapest type of each class.
 - **The pulse**, once a game minute a seat on its economy phase (`GameTime % 1800 == 7·seat % 15`), always on:
   `impai: pulse seat=<i> t=<GameTime> built=<n> mroots=<n> eroots=<n> army=<n> squads=<letters> metal=<x>
   energy=<x> vlive=<x> vbuilt=<x>` -- units completed, the military's and the economy's orders, all since the
@@ -140,6 +138,44 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row>`, and a decision that
   begins a task logs `impai: mil seat=<i> t=<t> attack raid scout retreat safe army`. The `eco` line counts
   the army units the factories queued (`army=`).
+
+## The fight predictor
+
+`src/impai_fight.c` (`impai_fight.h`) predicts a fight between two sides -- up to 16 types each, a count and a
+health fraction a type, a distance and whether each side closes -- as a stepped Lanchester model in 30-tick
+steps, at most 60: a pair rate from each weapon's kind (beam, direct, ballistic, guided, dropped), its reach, its
+lead, spread and area against the target's size, the `[DAMAGE]` row for the target type, and the 24 fitted
+coefficients of `IMPAI_FIT` (`src/impai_fitparams.c`: per kind a bias and the weights of lead, spread and area;
+close, focus, splash and the logistic's scale tau). It answers each side's kept value share, the margin `m`
+(side A's less side B's) and `P(A wins) = s(m / tau)`; `impai_fight_rate_of` is the buy's
+`IMPAI_PREDICTOR.rate` and `impai_expf` its `expf`, defined here once. Engine-free C on SSE2 with
+`-ffp-contract=off` and no libm transcendental, its structs fixed-width (`IMPAI_FTYPE` 40 bytes,
+`IMPAI_FWEAPON` 36, `IMPAI_FDMG` 8), so the DLL, the native test builds and the fit's library
+(`tools/impai/fightlib.c`, built by `tools/tasim/native.py fightlib`) compute the same bits;
+`tests/impai_fight_test.py` requires one transcript from all three builds (mirror fights draw, a swap negates
+`m`, a doubled army never loses, refusals, `impai_expf` within 2^-22, the merge).
+
+**The fight content** is built at the level init beside the threat table, all or none with the menus: the
+filler `tagpu_worldq_fight_in` (`tagpu_worldq.c`, beside the role classifier's input) reads each type's hp
+`+0x1FA`, speed `+0x192`, footprint, waterline `+0x22C`, model top `+0x16E` and weapons, and each weapon's
+range, velocity, reload, burst, damage, area, edge, accuracy, spray and flags and its `[DAMAGE]` rows resolved to
+types, every count bounded by its table (`IMPAI_FWEAPONS` 4096, `IMPAI_FDMG_POOL` 65536). A type is
+`SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
+stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
+(`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
+dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight digest=`.
+
+**The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)):
+`content` peeks the three tables out of a held GDI launch and checks them against the digest and `tasim_run
+defs` (type 0, the reserved `None`, has no files), writing the file only on PASS; `fit` minimises the binomial
+loss plus 4 n (m - M)^2 over the training half (the FNV-1a 32 of the scenario's stem even) by CMA-ES then
+Nelder-Mead, holding the coefficients no fight moves; `emit` writes `impai_fitparams.c` (`--start` reproduces
+the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40). `selftest`
+fits fights the model made at known coefficients and requires the truth's loss within 2 %, its margins within
+0.05 and the check: the coefficients are confounded, so recovery of each is printed, not judged. The fights are
+the calibration references of `duelgen.py`'s duels, groups, defence and naval fights
+([tasim calibration](tasim-calibration.html)). **Open:** the fit and the check have not run on engine
+references yet; `impai_fitparams.c` is the starting point.
 
 ## The overlay
 

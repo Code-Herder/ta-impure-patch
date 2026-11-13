@@ -263,6 +263,7 @@ plays it. A unit made during a run is `built:<n>`.
 | `winner` | at t_e = min(elimination, limit), the side with the larger HV(t_e)/HV(0); equal is a draw (0.5). hv = (metal + energy / R) × hp / maxdamage × (1 − nano left) |
 | `ttk` | the first t at which the loser's HV ≤ 10 % of its start (a draw: either side's); censored at the limit |
 | `survivors` | the winner's HV(t_e)/HV(0); a draw takes side A's |
+| `margin` | side A's HV(t_e)/HV(0) less side B's, in [-1, 1]: what ImpAI's fight predictor is fitted to (`tools/impai/predfit.py`) |
 | `income.<res>@c` | a side's produced(c) − produced(0), c a multiple of 1800 |
 | `travel.first/median/last` | the tick each mover first comes within 16·(fp + 1)·⌈√n⌉ of its destination; censored at the limit |
 | exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage` (each side's maxima at every economy pass after t = 0), `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
@@ -473,6 +474,21 @@ the shots' cost over the limit passes half the storage. **Courses**: eight of ea
 cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses (kbot, tank, hover),
 4 refused: ARMVULC fits the arena (3 240 world units apart) but its shots over the 5 400-tick limit
 cost more than half of each seat's 1 000 000 storage.
+
+**The predictor's fights** (`duelgen.py --groups`, `--defence`, `--naval`), each drawn by a random stream
+seeded with its own name, graded for `winner`, `ttk`, `survivors` and `margin` at 25 runs: 150 group fights
+(one to three types a side of the mobile land roles, 3 to 12 units, side B at a value ratio of 0.5, 0.75, 1,
+1.33 or 2 to side A, the tech levels in turn), 30 defence fights (one to eight mobile units against one to
+three defence structures of the same tech, B at its range + 160) and 40 naval fights (the group rule on the sea
+roles). Each side stands in rows of four across the axis (`write_fight`, the one placement every kind uses),
+side B at the longer range + 160. Types whose shots a side of 12 cannot pay from half the storage (CORKROG) and
+defences whose range leaves the rectangle (CORINT) are in no pool. Retail: 149 groups (`group-015` dropped,
+neither side can hurt the other), 30 defence and 40 naval fights. The naval fights play on **the water arena**,
+`tools/tasim/calib-arena-naval.json`: Seven Islands, a 5000 x 1600 rectangle of open water of depth at least 38
+(the naval scout's survey: the deepest retail ship needs 15), the lane's end keeping its seat-1 unit on the dry
+strip north (`end`); `calib.py engine`, `refs build` and `check` take `--arena` (through `$TACALIB_ARENA`), and
+arenascan.py does not grade a water rectangle, so only the lanes' launch check of the meteor shower holds
+there. A reference names its arena's files for staleness by its map (`check.py`, `ARENA_FILES`).
 
 ## Speed
 
