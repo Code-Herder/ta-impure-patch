@@ -912,6 +912,72 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotEqual(a.sight[0], b.sight[0])
 
 
+class ForkFreshSeat(unittest.TestCase):
+    """D2 (e): compare-fork leaves out ImpAI's mark, brain, military and unit-block jobs of a seat
+    the takeover newly gave ImpAI, at the fork's first capture only (tarec.fork_fresh_seats)."""
+    SLOTS, FORK_AT = 40, 601
+    TABLES = {0: ("src/tagpu_impai.c:s_seat", 1, 10), 1: ("src/tagpu_impai.c:s_brain", 8, 10),
+              2: ("src/tagpu_impai.c:s_mil", 8, 10), 3: ("src/tagpu_impai.c:s_job", 4, 40),
+              4: ("src/tagpu_impai.c:s_known", 8, 40)}
+    BLOCKS = {0: (1, 10), 1: (11, 20)}        # each seat's unit block, inclusive slots
+
+    def header(self, ai, fork=True):
+        h = {"players": [{"index": i, "controller": 1 if i == 0 else 2, "ai": ai.get(i, 0)}
+                         for i in (0, 1)],
+             "tables": {ix: {"name": n, "stride": s} for ix, (n, s, _) in self.TABLES.items()}}
+        if fork:
+            h["timeline"] = (1, 0, self.FORK_AT)
+        return h
+
+    def world(self, h, tick):
+        w = tarec.World(self.SLOTS, h["tables"], h, dims=(0, 0, 0, 0))
+        w.tick = tick
+        for ix, (_, stride, rows) in self.TABLES.items():
+            w.tables[ix] = bytearray(stride * rows)
+        for seat, (lo, hi) in self.BLOCKS.items():
+            struct.pack_into("<II", w.players[seat], tarec.PL_BLOCKFIRST, lo + 1, hi + 1)
+        return w
+
+    def compare(self, writes, parent_ai=None, tick=FORK_AT, fork=True):
+        """(the difference count, the lines) after fork_view, the fork's header marking seat 1,
+        and `writes` (table, row, byte) set in the fork's world only."""
+        ha, hb = self.header(parent_ai or {}), self.header({1: 1}, fork)
+        a, b = self.world(ha, tick), self.world(hb, tick)
+        for ix, row, value in writes:
+            b.tables[ix][row * self.TABLES[ix][1]] = value
+        tarec.fork_view(a, b, ha, hb)
+        lines, n = a.differences(b, ha["tables"], hb["tables"])
+        return n, lines
+
+    FRESH = [(0, 1, 1), (1, 1, 7), (2, 1, 9), (3, 11, 3), (3, 20, 4)]
+
+    def test_a_fresh_seats_rows_pass_at_the_first_capture(self):
+        self.assertEqual(self.compare(self.FRESH), (0, []))
+
+    def test_the_same_rows_fail_at_the_second_capture(self):
+        n, lines = self.compare(self.FRESH, tick=self.FORK_AT + 1)
+        self.assertEqual(n, 5)
+        for name in ("s_seat", "s_brain", "s_mil", "s_job"):
+            self.assertTrue(any(f"src/tagpu_impai.c:{name} " in ln for ln in lines), name)
+
+    def test_another_seats_rows_fail_at_the_first_capture(self):
+        for write in ((0, 0, 1), (1, 0, 7), (2, 0, 9), (3, 10, 3), (3, 21, 3), (4, 11, 5)):
+            with self.subTest(write=write):
+                n, lines = self.compare([write])
+                self.assertEqual(n, 1, lines)
+                self.assertIn(self.TABLES[write[0]][0], lines[0])
+
+    def test_a_seat_the_parent_marked_is_not_masked(self):
+        self.assertEqual(tarec.fork_fresh_seats(self.header({1: 1}), self.header({1: 1}),
+                                                self.world(self.header({}), self.FORK_AT)), set())
+        n, _ = self.compare(self.FRESH, parent_ai={1: 1})
+        self.assertEqual(n, 5)
+
+    def test_a_header_with_no_fork_masks_nothing(self):
+        n, _ = self.compare(self.FRESH, fork=False)
+        self.assertEqual(n, 5)
+
+
 def counts_compare(live, puppet, rewind=False, cob_exact=False):
     """compare-counts over a window whose first dumps count nothing: `live` and `puppet` are the
     second dumps' counts. (exit code, report)"""
