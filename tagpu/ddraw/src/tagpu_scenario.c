@@ -1979,7 +1979,15 @@ static void issue_orders(void)
             /* A feature is not a UnitStruct: TA reclaims and attacks it through the
                map cell, so the order carries the position and no target pointer.
                A feature the wire did not create is named by its position instead —
-               `pos` reaches the same code, which is why there is no @ form here. */
+               `pos` reaches the same code, which is why there is no @ form here.
+               A feature that was not placed has no position (ax/ay stay 0): the order
+               fails by name rather than reaching the mapper at the map's corner. */
+            if (!g_feats[o->a].ok)
+            {
+                g_ord_fail++;
+                scn_err("order %d: its target feature %d was never placed", i, o->a);
+                continue;
+            }
             pos[0] = g_feats[o->a].ax << 16;
             pos[1] = g_feats[o->a].ah << 16;
             pos[2] = g_feats[o->a].ay << 16;

@@ -144,7 +144,12 @@ unit names by scanning the live definition table. This design follows its recipe
     it back.
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
-  wreck gets reclaimed), never a group.
+  wreck gets reclaimed), never a group. An order whose handle names a unit that was not created
+  or a feature that was not placed fails by name (`its target unit N was never created`, `its
+  target feature N was never placed`) and is not issued, under `on_error: skip` too. The spawn
+  `0x423C50` refuses a feature whose footprint covers an indestructible feature of the map, such
+  as a metal rock ([map](engine/map.md), the `0x423C50` row): a scenario places its wrecks clear of
+  them.
 - **Only the LAST order of a list takes effect today.** The applier issues each with
   `shift = 0`, and `ORDERS_NewMainOrder2Unit`'s allocator walks the unit's order list and
   destroys every entry lacking flag bit `0x4` before linking the new one, when the new order's
