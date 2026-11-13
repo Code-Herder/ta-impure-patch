@@ -23,3 +23,20 @@ The order of work and each landing's exit test. Research step L0 runs beside S1;
 | **A4** | ImpAI everywhere: network games, every supported mod | the compatibility suite and a two-player recorded game with ImpAI seats come back clean |
 
 Every landing follows the repository's rules: review at the level the diff calls for, the documentation pass, and replay test groups for any landing that changes simulation code. This plan does not repeat them.
+
+## Where it stands
+
+On the branch `worktree-Bar_game_AI` (not `main`, not published), 2026-11-12.
+
+| Id | State | What the runs showed |
+|---|---|---|
+| L0, S1, S2, S3 | built, reviewed | the wiki gate 69 of 69 lanes; `simparity` equal on every play |
+| L1 | built, reviewed twice, fixes verified | the replay test groups 106 of 106 with ImpAI observing; a live game and its replay hold the same knowledge at 125 to 146 shared GameTimes; line of sight and radar 0 mismatches; ImpAI's turn 65 to 74 µs on average. Owes the replay landing gate, run once with C1 and A1b |
+| C1 | built, reviewed; last game session running | reload against fresh launch equal in 50 of 50 runs on time to kill, survivors and target step; R1 to R8 pass on every run. The applier refuses a refused order and an unseated seat, and gained the `fire`, `stock`, `buildweapon` and `commander_death` keys; the refusal sweep over every scenario is being played |
+| T1a | built; engine checks pass; review findings being fixed | defcheck 29 259 of 29 259 definition fields equal to a live game; classcheck every grid field and all 15 class maps equal on Cavedog Links CC and Etorrep Glacier; the wiki unchanged |
+| A1a | built, verified | the handicap rows reached on both seats at every level; row 6 on Escalation; `impai-handicap` 59 of 59 |
+| A1b | in progress | ImpAI's economy numbers equal the engine's; the seat label shows ImpAI; worst turn under 1 ms. Still failing: no factory by 5400, the OTA AI seat idle in the scenario, the handicap test's Dragon's Teeth, Core Prime's extractors |
+| A1c, A2, A3, A4 | being re-specified for the engine | -- |
+| T1b, T1c, T1d, T2, T3, T4 | stopped 2026-11-12 | kept from them: the RNG stream (41 433 recorded engine draws reproduced), the pathfinder and T2's combat arithmetic as standalone modules |
+
+The run lock is becoming a weighted lock of 28 slots, so independent game runs play side by side.
