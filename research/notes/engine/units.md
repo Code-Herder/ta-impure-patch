@@ -715,7 +715,9 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   `+0x26` (`0x440A83`) and stores GameTime `main+0x38A47` there as a **dword** (`0x440A8B..0x440A91`),
   then re-marks the unit's rectangle in each of the 32 movement classes (`0x512358`, stride `0x20`)
   whose watermark `+0x1C` is above the old stamp (`0x440A94..0x440AB1`, through `0x440830`); with
-  none, it re-marks every present class (`0x440AB9..0x440ADB`). Its one caller is the end of the
+  none, it re-marks every present class (`0x440AB9..0x440ADB`). The mover branch makes no present
+  test: an absent class's watermark is 0, which only a search of that class writes, so it never
+  re-marks one [INFERRED]. Its one caller is the end of the
   footprint clear `0x47D0E0` (`0x47D2CA`), so the stamp moves when the footprint does. The image
   sees the step before its iteration's label: the iteration labelled `gt` holds `gt − 1`.
   `0x440A70` is not the field's only writer: the footprint stamp `0x47CC30` stores GameTime there

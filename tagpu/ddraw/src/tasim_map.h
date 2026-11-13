@@ -42,7 +42,7 @@ struct TS_CLASSMAPS;            /* tasim_class.h: the pathing maps a feature cha
 #define TS_MAP_H_MIN     9
 
 /* the cell's owner bits, 10 for none, as LoadMap's height loops (0x483A24, 0x483ABE: and 0xD7, or 0x50) and every
-   map spawn (owner 0xA, 0x423EF4..0x423F07) write them */
+   map spawn (owner 0xA, 0x423EF1..0x423F07) write them */
 #define TS_OWNER_NONE    10
 
 typedef struct TS_MAP {
@@ -112,7 +112,7 @@ typedef struct TS_MAPLOAD {
     const uint8_t*    attr;         /* the attribute records, w * h of them: v2 4 bytes (height, the feature word
                                        at +1), v1 8 bytes (height, the feature byte at +2, the metal at +6)       */
     int32_t           surface_metal;/* the schema's SurfaceMetal, game state +0xD30 (0x4366B3, default 0)        */
-    int32_t           lava;         /* GlobalHeader `lavaworld`, game state +0xD44 (0x436586, default 0)        */
+    int32_t           lava;         /* GlobalHeader `lavaworld`, game state +0xD44 (0x43658B, default 0)        */
     const TS_MAPFEAT* schema;       /* the schema's features, v2 only (0x423160 runs on that path alone)         */
     int32_t           nschema;
 } TS_MAPLOAD;

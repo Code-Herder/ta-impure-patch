@@ -123,7 +123,7 @@ int ts_map_spawn(TS_MAP* m, struct TS_CLASSMAPS* cm, int32_t idx, uint32_t def, 
     row = idx / m->w;
     fx = d->footx;
     fz = d->footz;
-    if (col + fx > m->w || row + fz > m->h) return 0;   /* 0x423CEC, 0x423D22: equal is accepted */
+    if (col + fx > m->w || row + fz > m->h) return 0;   /* 0x423CEC, 0x423D20..0x423D24: equal accepted */
     for (dz = 0; dz < fz; dz++)
         for (dx = 0; dx < fx; dx++) {
             const int32_t c = idx + dz * m->w + dx;
@@ -282,7 +282,7 @@ int32_t ts_map_ground(const TS_MAP* m, int32_t x16, int32_t z16)
     h10 = m->height[i + 1];
     h01 = m->height[i + m->w];
     h11 = m->height[i + m->w + 1];
-    top = h00 + (h10 - h00) * fx / 16;                 /* C's division truncates toward zero, as the sar does */
+    top = h00 + (h10 - h00) * fx / 16;                 /* C's division truncates, as the header's idiom does */
     bot = h01 + (h11 - h01) * fx / 16;
     return top + (bot - top) * fz / 16;
 }
