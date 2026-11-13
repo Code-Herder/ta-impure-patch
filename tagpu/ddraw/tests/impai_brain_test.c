@@ -444,6 +444,7 @@ static void unit_add(FWORLD* w, int slot, int type, int cx, int cz, int finished
 /* ---- the checks ---- */
 
 static int s_fail;
+static int s_quiet;           /* 1: the economy game prints its summary alone */
 
 #define CHECK(cond, ...) do { if (!(cond)) { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
                                               printf(__VA_ARGS__); putchar('\n'); } } while (0)
@@ -535,6 +536,10 @@ static SNAP_SCRATCH s_snap;
 static void* s_scratch;
 static uint16_t s_labels[(FW_W / 2) * (FW_H / 2)];
 static IMPAI_REACH s_reach;
+/* the level row the decisions play, Hard's unless a check says otherwise, and the military the economy reads
+   (NULL: none, as at A1) */
+static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+static const IMPAI_MIL* s_milp;
 
 /* the classifier's answers for the fake's types: the commander and the constructor mobile builders, the
    factory a standing one, the turret a defence */
@@ -597,9 +602,10 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &IMPAI_LEVEL_A1;
+    in.lv = s_lv;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
+    in.mil = s_milp;
     return impai_brain_decide(&in, out);
 }
 
@@ -642,7 +648,7 @@ static void check_due(void)
 {
     int seat, t, hits[15] = { 0 };
     for (seat = 0; seat < WQ_SEATS; seat++)
-        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, &IMPAI_LEVEL_A1)) hits[t]++;
+        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_lv)) hits[t]++;
     for (t = 0; t < 15; t++) CHECK(hits[t] <= 1, "two seats decide at phase %d", t);
 }
 
@@ -691,7 +697,7 @@ static void check_spot(void)
     c = last_cmd(2);
     CHECK(c && c->c.unit == 3 && c->c.type == T_MEX && cmd_x0(&c->c) >= 51,
           "the constructor beside B, in B's component, takes B");
-    CHECK(out.snaps <= IMPAI_LEVEL_A1.snaps && out.sites <= IMPAI_LEVEL_A1.site_tests, "the budgets hold");
+    CHECK(out.snaps <= s_lv->snaps && out.sites <= s_lv->site_tests, "the budgets hold");
 }
 
 /* the opening factory once two extractors and two energy buildings stand, on the ring around the base */
@@ -731,8 +737,8 @@ static void check_caps(void)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE) queues++;
         else builds++;
     }
-    CHECK(builds <= IMPAI_LEVEL_A1.assign_max, "builder orders %d past assign_max", builds);
-    CHECK(out.roots <= IMPAI_LEVEL_A1.roots && out.queued <= IMPAI_LEVEL_A1.queue_max, "roots %u queued %u", out.roots,
+    CHECK(builds <= s_lv->assign_max, "builder orders %d past assign_max", builds);
+    CHECK(out.roots <= s_lv->roots && out.queued <= s_lv->queue_max, "roots %u queued %u", out.roots,
           out.queued);
     CHECK(queues == 0, "six constructors stand, past the target of four: %d queued", queues);
     brain_world();
@@ -769,7 +775,7 @@ static void check_fail(void)
     s_w.gametime = 400;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.failed == 1 && s_st.nfail == 1 && s_st.fail[0].cx == 26 && s_st.fail[0].cz == 20 &&
-          s_st.fail[0].until == 400u + IMPAI_LEVEL_A1.fail_t, "the site fails until GameTime + fail_t");
+          s_st.fail[0].until == 400u + s_lv->fail_t, "the site fails until GameTime + fail_t");
     for (i = 0; i < s_w.nlog; i++) {
         const WQ_CMD* c = &s_w.log[i].c;
         if (c->verb == WQ_CMD_NEW && c->type && 26 >= cmd_x0(c) && 26 < cmd_x0(c) + s_w.defs[c->type].d.fx &&
@@ -836,8 +842,8 @@ static GAME run_game(int print)
         const int from = s_w.nlog;
         s_w.gametime = 15 * (i + 1);
         CHECK(decide(&out) == 0, "decide %d", i);
-        CHECK(out.roots <= IMPAI_LEVEL_A1.roots && out.sites <= IMPAI_LEVEL_A1.site_tests &&
-              out.snaps <= IMPAI_LEVEL_A1.snaps && out.queued <= IMPAI_LEVEL_A1.queue_max, "decision %d's budgets", i);
+        CHECK(out.roots <= s_lv->roots && out.sites <= s_lv->site_tests &&
+              out.snaps <= s_lv->snaps && out.queued <= s_lv->queue_max, "decision %d's budgets", i);
         for (k = from; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
             const int32_t v[9] = { s_w.log[k].at, c->verb, c->action, c->unit, c->target, c->type, c->count,
@@ -1182,7 +1188,7 @@ static void economy_game(const char* name, int metal_map, int cx, int cz, int n[
     memset(n, 0, E_N * sizeof *n);
     printf("economy game, %s\n", name);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
-        if (impai_brain_due((unsigned)s_w.gametime, 0, &IMPAI_LEVEL_A1)) {
+        if (impai_brain_due((unsigned)s_w.gametime, 0, s_lv)) {
             const int from = s_w.nlog;
             int k;
             CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
@@ -1191,7 +1197,7 @@ static void economy_game(const char* name, int metal_map, int cx, int cz, int n[
                 orders++;
                 *queues += s_w.log[k].c.verb == WQ_CMD_QUEUE;
                 *wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
-                cmd_print(&s_w.log[k]);
+                if (!s_quiet) cmd_print(&s_w.log[k]);
             }
             if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
         }
@@ -1230,6 +1236,38 @@ static void check_economy_game(void)
     CHECK(!wet, "no water-only type ordered on the metal map: %d", wet);
 }
 
+/* THE LEVELS (impai_brain.c, IMPAI_LEVELS): the economy game on each row, with a military whose seed gives
+   Easy's and Normal's ratios their noise. Hard's must be A1b's game exactly -- its noise is 0, so its ratios'
+   factor is exactly 1 -- and A1b's bar is judged there; Easy's and Normal's are reported, slower by design. */
+static void check_levels(void)
+{
+    static IMPAI_MIL mil;
+    int ref[E_N], n[E_N], queues, rq, wet, snaps, lv, t;
+    s_quiet = 1;
+    economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35, ref, &rq, &wet, &snaps);
+    for (lv = 0; lv < IMPAI_LVS; lv++) {
+        impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+        s_lv = &IMPAI_LEVELS[lv];
+        s_milp = &mil;
+        economy_game(lv == IMPAI_LV_EASY ? "Comet Catcher, Easy" : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
+                                                                                       : "Comet Catcher, Hard",
+                     0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
+        if (lv == IMPAI_LV_HARD) {
+            for (t = 1; t < E_N; t++) CHECK(n[t] == ref[t], "Hard's economy is A1b's: type %d %d against %d", t, n[t], ref[t]);
+            CHECK(queues == rq, "Hard's queues are A1b's: %d against %d", queues, rq);
+        }
+        CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
+    }
+    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_milp = NULL;
+    s_quiet = 0;
+    for (t = 0; t < 4; t++)
+        printf("noise seed=%016llx t=%d: %.8f %.8f\n", (unsigned long long)mil.seed, 15 * t,
+               (double)impai_noise(mil.seed, 15u * (unsigned)t, 1, 0), (double)impai_noise(mil.seed, 15u * (unsigned)t, 2, 1));
+    CHECK(impai_level_of_difficulty(0) == IMPAI_LV_EASY && impai_level_of_difficulty(2) == IMPAI_LV_HARD &&
+          impai_level_of_difficulty(3) < 0, "the Difficulty's levels");
+}
+
 int main(void)
 {
     if (!(s_scratch = malloc(impai_brain_scratch_bytes()))) return 2;
@@ -1244,6 +1282,7 @@ int main(void)
     check_fail();
     check_game();
     check_economy_game();
+    check_levels();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");
     return s_fail ? 1 : 0;

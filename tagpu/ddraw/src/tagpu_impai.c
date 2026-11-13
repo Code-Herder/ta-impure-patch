@@ -276,6 +276,8 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
      is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
      the two answers differ. The cells come from GameTime and the unit's position alone. */
+static const IMPAI_LEVEL* seat_level(int seat);
+
 static void impai_seat_view(int seat)
 {
     WQ_ENGINE c, ec;
@@ -286,7 +288,7 @@ static void impai_seat_view(int seat)
     int t, k, first, last, slot, ux = 0, uz = 0;
     if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
     t = q.ops->gametime(&q);
-    if (!s_obs.econ_said[seat] && t >= 590 && impai_brain_due((unsigned)t, (unsigned)seat, &IMPAI_LEVEL_A1) &&
+    if (!s_obs.econ_said[seat] && t >= 590 && impai_brain_due((unsigned)t, (unsigned)seat, seat_level(seat)) &&
         *(const uint32_t*)(c.rec + PL_PASS_DUE) > (uint32_t)t && q.ops->economy(&q, &e) == WQ_OK) {
         s_obs.econ_said[seat] = 1;
         tagpu_logf("impai: econ seat=%d t=%d pass=%u metal=%.9g energy=%.9g metal_max=%.9g energy_max=%.9g "
@@ -761,8 +763,8 @@ static void impai_threat_build(void)
 #define IMPAI_MENU_POOL 65536u
 #define SIDE_ROOM       5u          /* the engine's five side records (tagpu_resource.c, seat_side) */
 #define M_SIDES         0x37F39     /* u32: the sides this game loaded                              */
-typedef struct IMPAI_MENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_MENU;
-static IMPAI_MENU s_menu[IMPAI_MENUS];
+typedef struct IMPAI_BMENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_BMENU;
+static IMPAI_BMENU s_menu[IMPAI_MENUS];
 static uint16_t   s_menu_pool[IMPAI_MENU_POOL];
 static unsigned   s_nmenu, s_npool;
 SIM_VAR(s_menu, SIM_CONTENT);
@@ -1208,6 +1210,39 @@ static const SimField s_job_layout[] = {
 };
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 
+/* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its noise seed and its table, set at a live
+   level's init and never again, its squads and its picture, written by its military decisions. Cleared at every
+   level init; a puppet's comes from its recording, so a replay or takeover plays the recorded level, seed and
+   table without either lever. A squad's target is a unit slot; the picture's enemy types are unit types. */
+static IMPAI_MIL s_mil[PLAYER_COUNT];
+static const SimField s_mil_layout[] = {
+    { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
+    SIM_FIELD_END
+};
+SIM_ROWS(s_mil, SIM_STATE, SIM_ID_PLAYER, s_mil_layout);
+
+/* THE TEST LEVERS of the level and the table, read at attach (tagpu_impai_levers), honoured at a live level's
+   init only: tagpu_impai_level.on, `<seat>=easy|normal|hard` comma-separated, sets a seat's level whatever the
+   Difficulty, for the bar's ImpAI-against-ImpAI games; tagpu_impai_table.on, `<seat>=<file>` comma-separated,
+   the file a table with its FNV-1a 64 trailer (impai_table.h, THE FILE) in the game's folder, for the tuning's
+   tournaments. Never player settings. Each file's bytes are read here, at attach, so a level reads no file. */
+#define TABLE_PATH 128
+static struct {
+    uint8_t  level[PLAYER_COUNT];             /* IMPAI_LV_* + 1, 0 when the lever names none for the seat     */
+    uint16_t table_n[PLAYER_COUNT];           /* the file's bytes read, 0 when none                           */
+    uint8_t  table[PLAYER_COUNT][IMPAI_TABLE_FILE_BYTES];
+    char     table_path[PLAYER_COUNT][TABLE_PATH];
+} s_milvr;
+SIM_VAR(s_milvr, SIM_INSTALL);
+
+/* The seat's level row. BOUND: IMPAI_MIL.level is recorded state, so a value past the rows reads Normal. */
+static const IMPAI_LEVEL* seat_level(int seat)
+{
+    const unsigned lv = s_mil[seat].level;
+    return &IMPAI_LEVELS[lv < IMPAI_LVS ? lv : IMPAI_LV_NORMAL];
+}
+
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
    largest use of each budget against the level row's bound, and the most units of each category any census
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
@@ -1248,6 +1283,7 @@ static void impai_decide(int seat)
     IMPAI_VIEW v;
     IMPAI_REACH r;
     int rc = -1, first = 0, last = -1, k;
+    const IMPAI_LEVEL* lv = seat_level(seat);
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
@@ -1269,10 +1305,11 @@ static void impai_decide(int seat)
         }
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;
-        in.lv = &IMPAI_LEVEL_A1;
+        in.lv = lv;
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
+        in.mil = &s_mil[seat];
         rc = impai_brain_decide(&in, &out);
         q.ops->seat_units(&q, &first, &last);
     }
@@ -1312,7 +1349,7 @@ static void impai_turn(int seat)
             flags |= 1u << TAIL_PUBLISH;
         if (w.scans) flags |= 1u << TAIL_SCAN;
     }
-    if (impai_brain_due(now, (unsigned)seat, &IMPAI_LEVEL_A1)) {
+    if (impai_brain_due(now, (unsigned)seat, seat_level(seat))) {
         impai_decide(seat);
         flags |= 1u << TAIL_DECIDE;
     }
@@ -1363,11 +1400,11 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
    largest use against the level row's bound -- the census against the seat's unit block. */
 static void impai_play_end(const char* ta, unsigned now)
 {
-    const IMPAI_LEVEL* lv = &IMPAI_LEVEL_A1;
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) {
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         const uint16_t* k = s_play.count[i];
+        const IMPAI_LEVEL* lv = seat_level((int)i);
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u", i, s_play.decisions[i],
@@ -1388,6 +1425,7 @@ static void impai_play_clear(void)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) impai_brain_reset(&s_brain[i], s_job, i ? 0u : TAGPU_PK_DESIGN_SLOTS);
+    memset(s_mil, 0, sizeof s_mil);
     memset(&s_play, 0, sizeof s_play);
 }
 
@@ -1452,6 +1490,8 @@ static int impai_content_build(unsigned sides)
    seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
    AI command clears no mark, so between the two clears the recording is the only writer. */
 SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe");
+
+static void impai_mil_init(const char* ta, unsigned seat);
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
@@ -1523,6 +1563,8 @@ void tagpu_impai_level_init(void)
         memset(s_seat, 0, sizeof s_seat);
         n = 0;
     }
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if (s_seat[i] & IMPAI_ON) impai_mil_init(ta, i);
     list[n] = 0;
     tagpu_logf("impai: seats %s (impure.cfg) of %u records", n ? list : "none", live);
 }
@@ -1820,6 +1862,88 @@ static void write_branch(WRITE* w, unsigned char op, uint32_t target)
     memcpy(w->now + 1, &rel, 4);
 }
 
+static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };
+
+/* The two military levers' texts (s_milvr): each `<seat>=<value>` item, the seat one digit; an item not
+   understood is logged and skipped. A table file is read whole here, up to one byte past its size so that a
+   longer file is refused by size at the level init. */
+static void impai_mil_levers(void)
+{
+    char t[PLAYER_COUNT * (TABLE_PATH + 4)];
+    char* p;
+    int n;
+    if ((n = tagpu_sim_lever_read("tagpu_impai_level.on", t, (int)sizeof t)) > 0)
+        for (p = strtok(t, ", \r\n\t"); p; p = strtok(NULL, ", \r\n\t")) {
+            unsigned k;
+            for (k = 0; k < IMPAI_LVS && !(p[0] >= '0' && p[0] <= '9' && p[1] == '=' && !lstrcmpiA(p + 2, LEVEL_NAME[k])); k++) {}
+            if (k == IMPAI_LVS) {
+                tagpu_logf("impai: tagpu_impai_level.on: `%s` not understood (<seat>=easy|normal|hard)", p);
+                continue;
+            }
+            s_milvr.level[p[0] - '0'] = (uint8_t)(k + 1);
+            tagpu_logf("impai: level lever: seat %c plays %s", p[0], LEVEL_NAME[k]);
+        }
+    if ((n = tagpu_sim_lever_read("tagpu_impai_table.on", t, (int)sizeof t)) > 0)
+        for (p = strtok(t, ", \r\n\t"); p; p = strtok(NULL, ", \r\n\t")) {
+            uint8_t buf[IMPAI_TABLE_FILE_BYTES + 1];
+            DWORD got = 0;
+            HANDLE f;
+            unsigned seat;
+            if (!(p[0] >= '0' && p[0] <= '9' && p[1] == '=' && p[2]) || lstrlenA(p + 2) >= TABLE_PATH) {
+                tagpu_logf("impai: tagpu_impai_table.on: `%s` not understood (<seat>=<file>)", p);
+                continue;
+            }
+            seat = (unsigned)(p[0] - '0');
+            lstrcpynA(s_milvr.table_path[seat], p + 2, TABLE_PATH);
+            f = CreateFileA(p + 2, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (f == INVALID_HANDLE_VALUE || !ReadFile(f, buf, (DWORD)sizeof buf, &got, NULL)) got = 0;
+            if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+            s_milvr.table_n[seat] = (uint16_t)got;
+            memcpy(s_milvr.table[seat], buf, got < IMPAI_TABLE_FILE_BYTES ? got : IMPAI_TABLE_FILE_BYTES);
+            tagpu_logf("impai: table lever: seat %u reads %s, %u bytes", seat, p + 2, (unsigned)got);
+        }
+}
+
+/* A live seat's military at the level init (tagpu_impai_level_init): its level from the level lever, else from
+   Difficulty main+0x37EEE (any other value plays Normal, and says so); its seed from the simulation RNG's state
+   0x51FC88 xor the seat, READ and never drawn (impai.h, impai_noise), which the loader 0x497180 seeded at
+   0x49719D before 0x4917D0 runs PLAYERS, inside which this runs (engine/sim.md); its table from the table lever's
+   file when it loads (impai_table_load bounds it, and refuses it whole), else IMPAI_TABLE_DEFAULT. Each says
+   what it chose in one line, the table's as `impai: table seat= hash= from=`, the hash the file's trailer or
+   the default's own. */
+#define VA_RNG_STATE 0x0051FC88u
+static void impai_mil_init(const char* ta, unsigned seat)
+{
+    const uint32_t difficulty = *(const uint32_t*)(ta + 0x37EEE);
+    const uint64_t seed = (uint64_t)*(const uint32_t*)(uintptr_t)VA_RNG_STATE ^ seat;
+    IMPAI_TABLE table = IMPAI_TABLE_DEFAULT;
+    uint64_t hash = impai_table_hash(&IMPAI_TABLE_DEFAULT);
+    int level = impai_level_of_difficulty(difficulty), lever = 0;
+    if (s_milvr.level[seat]) level = s_milvr.level[seat] - 1;
+    else if (level < 0) {
+        tagpu_logf("impai: level seat=%u: Difficulty %u is none of 0..2, so Normal", seat, difficulty);
+        level = IMPAI_LV_NORMAL;
+    }
+    if (s_milvr.table_path[seat][0]) {
+        IMPAI_TABLE t;
+        uint64_t h;
+        const int rc = impai_table_load(s_milvr.table[seat], s_milvr.table_n[seat], &t, &h);
+        if (rc == IMPAI_TABLE_OK) {
+            table = t;
+            hash = h;
+            lever = 1;
+        } else {
+            tagpu_logf("impai: table seat=%u: %s refused: %s", seat, s_milvr.table_path[seat],
+                       impai_table_error(rc));
+        }
+    }
+    impai_mil_reset(&s_mil[seat], (unsigned)level, seed, &table, lever);
+    tagpu_logf("impai: level seat=%u level=%s from=%s", seat, LEVEL_NAME[s_mil[seat].level],
+               s_milvr.level[seat] ? "lever" : "difficulty");
+    tagpu_logf("impai: table seat=%u hash=%08x%08x from=%s", seat, (unsigned)(hash >> 32), (unsigned)hash,
+               lever ? "lever" : "default");
+}
+
 /* THE LEVERS, at attach before the registry closes its lever list (dllmain.c), so a recording lists each:
    the self-checks (tagpu_impai_check.on), the overlay (tagpu_impaiov.on) and the cost run's budgets
    (tagpu_impai_budget.on). Read whatever the install then finds; they act only once it is in. */
@@ -1828,6 +1952,7 @@ void tagpu_impai_levers(void)
     QueryPerformanceFrequency(&s_qpf);
     s_install.check = (uint8_t)tagpu_sim_lever("tagpu_impai_check.on");
     impai_overlay_lever();
+    impai_mil_levers();
     if (tagpu_sim_lever("tagpu_impai_budget.on")) {
         s_budget.obs_slice = TAGPU_PK_DESIGN_SLOTS;
         s_budget.radar_visits = 1000000u;

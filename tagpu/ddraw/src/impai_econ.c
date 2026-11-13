@@ -146,7 +146,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO* bt = &in->ti[b->type];
     const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
-    const float keep = in->lv->e_per_m * d->pm_in;
+    const float keep = d->e_per_m * d->pm_in;
     int t;
     if (n > 0) {
         if (d->e_stall && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
@@ -199,7 +199,7 @@ void impai_econ_factories(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_LEVEL* lv = in->lv;
-    const float more = lv->cons_per_m > 0 ? d->e.metal_in / lv->cons_per_m : 0.0f;
+    const float more = d->cons_per_m > 0 ? d->e.metal_in / d->cons_per_m : 0.0f;
     const int extra = more > 0 ? (more < 255.0f ? (int)more : 255) : 0;
     const int target = lv->cons_base + extra < lv->cons_max ? lv->cons_base + extra : lv->cons_max;
     int i;

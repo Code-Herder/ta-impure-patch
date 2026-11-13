@@ -37,7 +37,8 @@ typedef struct IMPAI_DEC {
     float         pe_extra;                     /* the energy the seat's claims and frames will add      */
     int           has_bbox;
     IMPAI_RECT    bbox;
-    /* the economy */
+    /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
+    float         e_per_m, factory_per_m, cons_per_m;
     int           e_stall, m_stall, want_factory;
     float         pe_in, pm_in;
     /* what the decision has spent of its budgets */
