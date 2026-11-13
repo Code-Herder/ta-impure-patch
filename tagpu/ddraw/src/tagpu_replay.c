@@ -10974,32 +10974,13 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     return n;
 }
 
+int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
+
 /* The defs are the level's, which a load makes and only the teardown frees, and their count the
    engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
    max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
    def+0x22F is 1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the
    FBI `commander` tag. */
-/* THE ORDERING: s_rd and its header are written on the game thread at the seating, before the load state
-   creates the loader thread (THE VIEWER'S BUFFERS), and never written after. Every replay_close is on the
-   game thread too -- the Watch's Start and its undo, a takeover's or a rewind's end in play, the level's
-   end -- none between the seating and the level's first step, where the loader runs. So the loader's read
-   inside 0x4919C8 sees the header whole. */
-int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
-
-int tagpu_replay_seat_ai(unsigned i, unsigned char* side)
-{
-    const RecHeader* h;
-    unsigned k;
-    if (!s_rd || !(h = recr_header(s_rd))) return 0;
-    for (k = 0; k < h->nseats && k < REC_PLAYERS; k++)
-        if (h->seats[k].index == i) {
-            if (h->seats[k].ai != 1) return 0;
-            *side = h->seats[k].side;
-            return 1;
-        }
-    return 0;
-}
-
 unsigned tagpu_replay_army_values(float* out, unsigned cap)
 {
     const char* ta = ta_main();

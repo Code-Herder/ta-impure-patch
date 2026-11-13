@@ -116,7 +116,9 @@ static int __stdcall skirmish_label_computer(void* gui, const char* name, const 
    other, then Unused as stock removes it -- Unused -> ImpAI -> OTA AI -> Unused with `netai=impai`, Unused ->
    OTA AI -> ImpAI -> Unused with `netai=ota`, the host's with Blocked before them. Stock's one AI a peer
    (0x457B90) is kept: the step changes which AI plays a row, not how many rows there are.
-   Two writes, both or neither, and neither while ImpAI is not available, so the room is then stock:
+   Two writes, neither while ImpAI is not available, so the room is then stock: the step always, and the
+   first step's name only when ImpAI is the first step, written before the step and put back when the step
+   cannot be landed (room_init), so 0x451310 is never written without 0x447CB3:
    - THE FIRST STEP'S NAME: the immediate of the add's `push 0x5064B4` (68 B4 64 50 00 at 0x451310, the
      format's only reference) points at ImpAI's format when the first step is ImpAI's, and stays stock's
      otherwise. The add's cut at 0x45131E stores a NUL at the buffer's sixteenth byte whatever the format,

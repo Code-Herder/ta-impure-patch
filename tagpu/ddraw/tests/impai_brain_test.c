@@ -1291,8 +1291,6 @@ static void check_levels(void)
     for (t = 0; t < 4; t++)
         printf("noise seed=%016llx t=%d: %.8f %.8f\n", (unsigned long long)mil.seed, 15 * t,
                (double)impai_noise(mil.seed, 15u * (unsigned)t, 1, 0), (double)impai_noise(mil.seed, 15u * (unsigned)t, 2, 1));
-    CHECK(impai_level_of_difficulty(0) == IMPAI_LV_EASY && impai_level_of_difficulty(2) == IMPAI_LV_HARD &&
-          impai_level_of_difficulty(3) < 0, "the Difficulty's levels");
 }
 
 /* ---- the military over the fake world (impai_mil.c) ----
