@@ -123,6 +123,11 @@ def main():
         log.read()
         (a.out / "tagpu.log").write_text(talog.run_text(w.gamedir))
         w.stop(hard=True)
+        # the game has ended: a refusal of the GPU memory cap anywhere in it fails the run by name
+        refused = w.cap_failure()
+        if refused:
+            print(f"l1_run: FAILED: {refused}")
+            return 1
     except (tr.CouldNotRun, tr.Failed) as e:
         print(f"l1_run: COULD NOT RUN: {e}")
         try:

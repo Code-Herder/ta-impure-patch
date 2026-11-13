@@ -839,7 +839,7 @@ class RunLock(unittest.TestCase):
         self.admitted(a)
         take = ("import sys, pathlib; sys.path.insert(0, {tools!r}); import runlock; "
                 "tree = pathlib.Path({tree!r})\n"
-                "try:\n    print(runlock.hold(tree, 'nested', 1, [sys.argv[1]]), runlock.fds() != (), flush=True)\n"
+                "try:\n    print(runlock.hold(tree, 'nested', 1, [sys.argv[1]], gpu=False), runlock.fds() != (), flush=True)\n"
                 "except runlock.Busy as e:\n    print('busy', e, flush=True)")
         take = take.format(tools=str(TOOLS), tree=str(self.tree))
         outer = self.start(self.wrapper(2, "outer", "bash", "-c",
@@ -861,6 +861,85 @@ class RunLock(unittest.TestCase):
         self.let_go(runs[0])
         again = self.start(self.wrapper(1, "again", sys.executable, "-c", show))
         self.assertEqual(self.line(again.stdout), "s00")
+
+    def test_a_dead_runs_game_holds_up_every_run_that_wants_gpu_memory(self):
+        go = self.tree / "go"
+        play = ("import subprocess, sys; import runlock\n"
+                f"g = runlock.start_game([sys.executable, '-c', {SLEEPS_UNTIL!r}, {str(go)!r}], 'orphan',\n"
+                "                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
+                "                        stderr=subprocess.DEVNULL, start_new_session=True)\n"
+                "print('launched', g.pid, flush=True)\n"
+                "sys.stdin.read()\n")
+        self.addCleanup(go.touch)
+        run = self.start(self.wrapper(2, "dies", sys.executable, "-c", play, vram=1, total=REFERENCE_MIB),
+                         env=dict(self.env, PYTHONPATH=str(TOOLS)))
+        word, keeper = self.line(run.stdout).split()
+        self.assertEqual(word, "launched")
+        d = self.lock.parent / "runslots"
+        seat = runlock.seat_file(d, "s00", 0)
+        self.assertEqual(runlock.orphaned_seats(d), [], "a live run's seat counted as a dead run's")
+        run.kill()                              # the run dies outright; its game plays on
+        run.wait(WAIT_S)
+        self.assertEqual(self.held(), 0)
+        self.assertTrue(runlock._held_now(seat))
+        self.assertEqual(runlock.orphaned_seats(d), [seat.name])
+        _free, lines = runlock.report(self.lock, UNITS)
+        self.assertTrue(any("OF NO LIVE RUN" in ln and f"pid {keeper}," in ln and "STALE" not in ln
+                            for ln in lines), lines)
+        # a run that wants GPU memory waits for the game, naming its seat; one that wants none does not
+        nxt = self.holder(2, "next", vram=1, total=REFERENCE_MIB)
+        self.stderr_until(nxt, seat.name)
+        self.quiet(nxt)
+        gdi = self.holder(2, "gdi", vram=0, total=REFERENCE_MIB)
+        self.admitted(gdi)
+        go.touch()
+        self.admitted(nxt)
+
+    def test_a_gpu_run_inside_a_run_without_gpu_memory_is_refused(self):
+        for vram, refused in ((None, True), (0, False)):
+            inner = self.wrapper(1, "inner", sys.executable, "-c", "print('in')", vram=vram,
+                                 total=REFERENCE_MIB)
+            outer = self.start(self.wrapper(2, "outer", sys.executable, "-c",
+                                            f"import subprocess, sys; "
+                                            f"sys.exit(subprocess.run({inner!r}).returncode)",
+                                            vram=0, total=REFERENCE_MIB))
+            code = outer.wait(WAIT_S)
+            out, err = outer.stdout.read(), outer.stderr.read()
+            if refused:
+                self.assertEqual((code, out), (2, ""), err)
+                self.assertIn("inner wants its games on the GPU inside a run that took no GPU memory",
+                              err)
+            else:
+                self.assertEqual((code, out.strip()), (0, "in"), err)
+
+    def test_a_measurements_cap_sizes_the_run_and_its_games(self):
+        probe = "import runlock; print(runlock.held_cap_mib(), runlock.games(), flush=True)"
+        env = dict(self.env, PYTHONPATH=str(TOOLS), RUNLOCK_CAP_MIB="2000")
+        # a suite of 320 measured at 2000: each game takes 2000 + 64 + 32 of the budget, whatever
+        # its suite says
+        p = self.start(self.wrapper(1, "measured", sys.executable, "-c", probe, vram=30,
+                                    total=REFERENCE_MIB, suite="light"), env=env)
+        self.assertEqual(self.line(p.stdout), f"2000 {UNITS * 32 // 2096}")
+        p.wait(WAIT_S)
+        for bad in ("lots", "32"):
+            p = self.start(self.wrapper(1, "bad", sys.executable, "-c", probe, vram=1,
+                                        total=REFERENCE_MIB), env=dict(env, RUNLOCK_CAP_MIB=bad))
+            self.assertEqual(p.wait(WAIT_S), 2)
+            self.assertIn("RUNLOCK_CAP_MIB", p.stderr.read())
+
+    def test_a_launch_under_another_cap_than_the_measurements_is_refused(self):
+        gamedir = self.tree / "game"
+        gamedir.mkdir()
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in (runlock.ENV, runlock.CAP_ENV)])
+        os.environ[runlock.ENV] = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00",
+                                              "cap_mib": 320, "resources": [], "path": str(self.lock)})
+        os.environ[runlock.CAP_ENV] = "2000"
+        with self.assertRaises(RuntimeError) as e:
+            runlock.write_gpumem(gamedir)
+        self.assertIn("admitted under a cap of 320", str(e.exception))
+        self.assertFalse((gamedir / "impure.cfg").exists())
+        os.environ[runlock.CAP_ENV] = "320"
+        self.assertEqual(runlock.write_gpumem(gamedir), 320)
 
 
 class ToolNames(unittest.TestCase):
@@ -905,6 +984,132 @@ class ToolNames(unittest.TestCase):
             r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
             self.assertNotEqual(r.returncode, 0)
             self.assertIn(f"port {held.port} is leased by another run", r.stderr)
+
+
+# Stand-in games. FORKS_OFF writes the pid of a grandchild it forks off -- a double fork into a
+# session of its own, as the wineserver makes itself a daemon -- into argv[1] and exits with 3; the
+# grandchild lives until the file argv[2] exists. SLEEPS_UNTIL lives until the file argv[1] exists.
+FORKS_OFF = ("import os, sys, time\n"
+             "if os.fork() == 0:\n"
+             "    os.setsid()\n"
+             "    if os.fork() == 0:\n"
+             "        open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+             "        while not os.path.exists(sys.argv[2]):\n"
+             "            time.sleep(0.02)\n"
+             "    os._exit(0)\n"
+             "os.wait()\n"
+             "sys.exit(3)\n")
+SLEEPS_UNTIL = ("import os, sys, time\n"
+                "while not os.path.exists(sys.argv[1]):\n"
+                "    time.sleep(0.02)\n")
+SLEEPS = "import time; time.sleep(600)"
+
+
+class Keeper(unittest.TestCase):
+    """A game's seat is let go by its keeper once every process of the game has been reaped and the
+    prefix's wineserver has ended (tools/runlock.py, A SEAT IS LET GO AFTER ITS GAME), and the
+    handle start_game returns answers for the game itself."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tree = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.tree)], check=True)
+        lock = runlock.lock_path(self.tree)
+        saved = os.environ.get(runlock.ENV)
+        self.addCleanup(lambda: os.environ.pop(runlock.ENV, None) if saved is None
+                        else os.environ.update({runlock.ENV: saved}))
+        os.environ[runlock.ENV] = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00",
+                                              "run": "1-1", "cap_mib": 320, "resources": [],
+                                              "path": str(lock)})
+        self.seat = runlock.seat_file(runlock.slots_dir(lock), "s00", 0)
+
+    def game(self, code, *args, env=None):
+        g = runlock.start_game([sys.executable, "-c", code, *map(str, args)], "a stand-in game",
+                               env=env, stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(lambda: g.keeper.poll() is None and g.keeper.kill())
+        return g
+
+    def until(self, cond, what):
+        deadline = time.monotonic() + WAIT_S
+        while not cond():
+            if time.monotonic() > deadline:
+                self.fail(what)
+            time.sleep(0.02)
+
+    def test_the_seat_outlives_every_process_of_the_game(self):
+        pidfile, go = self.tree / "grandchild.pid", self.tree / "go"
+        self.addCleanup(go.touch)
+        g = self.game(FORKS_OFF, pidfile, go)
+        self.assertIsInstance(g, runlock.KeptGame)
+        # the game's own end is told at once, while a process it started still lives
+        self.assertEqual(g.wait(WAIT_S), 3)
+        self.until(lambda: pidfile.exists() and pidfile.read_text(), "the grandchild never started")
+        gpid = int(pidfile.read_text())
+        # its parent has ended: it is the keeper's child now, not init's
+        ppid = int(Path(f"/proc/{gpid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        self.assertEqual(ppid, g.pid)
+        self.assertTrue(runlock._held_now(self.seat), "the seat went before the game's last process")
+        self.assertIsNone(g.keeper.poll())
+        # the seat names the keeper, which lives as long as the seat is held, and the run's id
+        line = self.seat.read_text()
+        self.assertTrue(line.startswith(f"pid {g.pid}, a game's keeper: a stand-in game"), line)
+        self.assertIn("[run 1-1]", line)
+        self.assertNotIn("STALE", runlock._named(line))
+        go.touch()
+        self.assertEqual(g.wait_released(WAIT_S), 3)
+        self.assertFalse(runlock._held_now(self.seat))
+
+    def test_the_seat_outlives_the_prefixs_wineserver(self):
+        bindir, said, go = self.tree / "bin", self.tree / "said", self.tree / "go"
+        self.addCleanup(go.touch)
+        bindir.mkdir()
+        server = bindir / "wineserver"
+        server.write_text(f"#!/bin/sh\necho \"$* $WINEPREFIX\" > {said}.tmp && mv {said}.tmp {said}\n"
+                          f"while [ ! -e {go} ]; do sleep 0.02; done\n")
+        server.chmod(0o755)
+        env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", WINEPREFIX="/some/prefix")
+        g = self.game("import sys; sys.exit(0)", env=env)
+        self.assertEqual(g.wait(WAIT_S), 0)
+        self.until(said.exists, "the keeper never waited for the prefix's wineserver")
+        self.assertEqual(said.read_text().split(), ["-w", "/some/prefix"])
+        self.assertTrue(runlock._held_now(self.seat), "the seat went before the wineserver")
+        go.touch()
+        self.assertEqual(g.wait_released(WAIT_S), 0)
+        self.assertFalse(runlock._held_now(self.seat))
+
+    def test_the_keeper_is_no_game_of_any_prefix(self):
+        g = self.game(SLEEPS, "TotalA.exe", env=dict(os.environ, WINEPREFIX="/some/prefix"))
+        keeper_env = Path(f"/proc/{g.pid}/environ").read_bytes().split(b"\0")
+        self.assertFalse(any(e.startswith(b"WINEPREFIX=") for e in keeper_env))
+        self.assertNotIn(b"totala.exe", Path(f"/proc/{g.pid}/cmdline").read_bytes().lower())
+        game_env = Path(f"/proc/{g.game_pid}/environ").read_bytes().split(b"\0")
+        self.assertIn(b"WINEPREFIX=/some/prefix", game_env)
+        g.kill()
+        g.wait_released(WAIT_S)
+
+    def test_kill_and_terminate_reach_the_game_and_the_seat_goes_after(self):
+        for end, code in (("kill", -signal.SIGKILL), ("terminate", -signal.SIGTERM)):
+            g = self.game(SLEEPS)
+            self.assertIsNone(g.poll())
+            with self.assertRaises(subprocess.TimeoutExpired):
+                g.wait(0.05)
+            getattr(g, end)()
+            self.assertEqual(g.wait(WAIT_S), code, end)
+            g.wait_released(WAIT_S)
+            self.assertFalse(runlock._held_now(self.seat), end)
+
+    def test_a_game_that_cannot_start_is_refused_and_its_seat_goes(self):
+        with self.assertRaises(OSError) as e:
+            runlock.start_game([str(self.tree / "no-such-wine")], "nothing", stdin=subprocess.DEVNULL)
+        self.assertIn("its keeper did not start it", str(e.exception))
+        self.until(lambda: not runlock._held_now(self.seat), "the seat stayed held")
+
+    def test_outside_a_gpu_run_a_game_is_started_as_it_is(self):
+        os.environ.pop(runlock.ENV)
+        p = runlock.start_game([sys.executable, "-c", "pass"], "loose")
+        self.assertIsInstance(p, subprocess.Popen)
+        self.assertEqual(p.wait(WAIT_S), 0)
 
 
 if __name__ == "__main__":

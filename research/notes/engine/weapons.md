@@ -1159,9 +1159,9 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   the slot is zeroed at the unit's creation (`0x49E099`), so its first shot needs no reload. After a shot it
   is `⌊⌊(100 − 6L) · reload / 100⌋ · (120 − ⌊20 · hp / maxhp⌋) / 100⌋` (`0x49E48D..0x49E4EE`), reload the
   weapon's `+0xE4`, hp the unit's word `+0x108`, maxhp def `+0x1FA`, and L = `min(⌊kills / 5⌋, 5)` from the
-  u16 `+0xB8` (`0x49E468..0x49E488`): a unit at full health reloads in 1.2 × reload, one near death in
-  1.0 × reload, and each 5 kills take 6 % off. ImpAI's fight predictor fires volleys by this countdown
-  ([impai](../modules/impai.html)).
+  u16 `+0xB8` (`0x49E468..0x49E488`): a unit at full health reloads in 1.0 × reload (120 − 20), one near
+  death in 1.2 × reload (120 − 0) (`0x49E48D..0x49E4BB`), and each 5 kills take 6 % off. ImpAI's fight
+  predictor fires volleys by this countdown ([impai](../modules/impai.html)).
 - **A turret fires the tick after its aim script returns** [DISASSEMBLED 2026-11-13]. The aim start
   stores the heading and pitch it asks for at the slot's `+0x16`/`+0x18` (`0x49E2E0..0x49E2E4`),
   clears the result `+0x8` (`0x49E2FF`) and starts the script with run-now 0 (`0x49E31C`); with the

@@ -27,6 +27,8 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
+import talog  # the DLL's log, its refusals of the GPU memory cap (tools/talog.py)
+
 TREE = Path(__file__).resolve().parents[1]
 TACLI = TREE / "tools/tacli"
 GAMETIME = "*0x511DE8+0x38a47"
@@ -58,10 +60,29 @@ def hold_instance(what, instance, lanes=1, gpu=True, suite=None):
     games render with GDI."""
     sys.path.insert(0, str(TREE / "tools"))
     import runlock
-    meta = tacli_api().Instance(instance).meta_or_none() or {}
+    inst = tacli_api().Instance(instance)
+    meta = inst.meta_or_none() or {}
     alone = meta.get("type") != "remote" and not meta.get("private_registry")
-    return runlock.hold(TREE, what, None if alone else lanes, [runlock.instance_resource(instance)], gpu=gpu,
+    took = runlock.hold(TREE, what, None if alone else lanes, [runlock.instance_resource(instance)], gpu=gpu,
                         suite=suite)
+    # from the hold on, no other run plays in this folder: what its log says is this run's games'
+    _CAPS[instance] = talog.CapWatch(inst.gamedir)
+    return took
+
+
+# THE CAP'S REFUSALS: every refusal of the GPU memory cap the games of a tool's instance log, from
+# its hold_instance on (talog.CapWatch), read at each Check's start and by cap_failure once the
+# tool has stopped the games it judges -- the lines after a case's last read included. A Check's
+# own reads fail the case at the line (Check.read).
+_CAPS = {}
+
+
+def cap_failure(instance) -> "str | None":
+    """The failure the refusals of the GPU memory cap name in `instance`'s games since the last
+    call, or since hold_instance (THE CAP'S REFUSALS), asked once the tool has stopped the games it
+    judges; None when there is none, or when the tool took no hold on the instance."""
+    caps = _CAPS.get(instance)
+    return caps.failure(instance) if caps is not None else None
 
 
 FIXTURE_UNITS = {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"}
@@ -87,13 +108,25 @@ class Check:
         api = tacli_api()
         instance = api.Instance(self.name)
         self.gamedir = instance.gamedir
+        if self.name in _CAPS:
+            _CAPS[self.name].sweep()    # a Check a game: the game before it read, as it rotates on
         self.reader = api._LogLines(api._log_cursor(instance))
         self.log = []
         self.held = False
 
+    def read(self):
+        """The log's lines written since the last read, onto `log`. A refusal of the GPU memory cap
+        among them fails the case by name (talog.cap_failure): the cap the run lock sized the game
+        on is too small for it, and what the case reads next was played without that memory."""
+        got = [ln.rstrip() for ln in self.reader()]
+        self.log += got
+        refused = talog.cap_failure("\n".join(got))
+        assert not refused, refused
+        return got
+
     def _found(self, rx, start):
         """The first log line from index `start` on matching `rx`, None while there is none."""
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return next((ln for ln in self.log[start:] if re.search(rx, ln)), None)
 
     def _answer(self, rx, start, seconds=ACK_S):
@@ -108,7 +141,7 @@ class Check:
         """One line of the replay trigger, written whole and renamed into place as tareplay writes
         it; the log index its answer is looked for from. Each caller awaits the answer before the
         next line, so no line replaces one the DLL has not read."""
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         tmp = self.gamedir / (TRIGGER + ".tmp")
         tmp.write_text(line + "\n")
         os.replace(tmp, self.gamedir / TRIGGER)
@@ -998,7 +1031,9 @@ def main():
             failures.append(("", e))
             raised = False
         finally:
-            cleanup = [("release", check.release)]   # the world handed back held, as it came
+            # the world handed back held, as it came; then the log read to its end, for a refusal
+            # of the GPU memory cap after the case's last wait (Check.read)
+            cleanup = [("release", check.release), ("the log", check.read)]
             if a.case in ("locked", "inherit"):
                 cleanup.insert(0, ("menu.open=off", lambda: check.call("arm", "menu.open=off")))
             for what, step in cleanup:

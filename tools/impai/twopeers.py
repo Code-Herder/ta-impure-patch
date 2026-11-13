@@ -50,13 +50,16 @@ def field(rec: int, off: int, size: int = 4) -> str:
 
 class TwoPeers:
     """The host (`<token>-<tag>-H`) and the joiner (`...-J`); every tacli call's output in DIR/driver.log;
-    each peer's run log copied to DIR/<instance>.log and the instances removed on the way out."""
+    each peer stopped, its run log copied to DIR/<instance>.log and the instances removed on the way out.
+    `refused` then names each peer whose GPU memory cap refused it an allocation (talog.cap_failure, read
+    from its whole log once it has stopped), which fails the check that played them."""
 
     def __init__(self, out: Path, dll: Path, port, token: str, gpu: bool = False):
         self.out, self.dll, self.want_port, self.token, self.gpu = out, dll, port, token, gpu
         self.root = tareplay.main_checkout()
         self.instances, self.cli = self.root / "tagpu/instances", TREE / "tools/tacli"
         self.owned, self.display, self.lease = [], None, None
+        self.refused = []
 
     def __enter__(self):
         self.lease = dpport.lease(self.want_port)
@@ -77,11 +80,18 @@ class TwoPeers:
     def __exit__(self, *exc):
         for name in self.owned:
             game = self.gamedir(name)
-            if (game / "log/tagpu.log").exists():
-                (self.out / f"{name}.log").write_text(talog.run_text(game))
-            if (self.instances / name / "instance.json").exists():
+            held = (self.instances / name / "instance.json").exists()
+            if held:
                 subprocess.run([sys.executable, str(self.cli), "stop", name, "--hard"], stdout=self.log,
                                stderr=subprocess.STDOUT, check=False, timeout=60)
+            # read once the peer has stopped, so its last lines are in it
+            if (game / "log/tagpu.log").exists():
+                text = talog.run_text(game)
+                (self.out / f"{name}.log").write_text(text)
+                why = talog.cap_failure(text, name)
+                if why:
+                    self.refused.append(why)
+            if held:
                 subprocess.run([sys.executable, str(self.cli), "rm", name], stdout=self.log,
                                stderr=subprocess.STDOUT, check=False, timeout=60)
         if self.display:

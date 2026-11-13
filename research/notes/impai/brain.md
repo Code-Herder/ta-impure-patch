@@ -91,16 +91,20 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    estimate rests on no structure. A task ends at its timeout, when its target is no longer known, or on
    arrival. **A refused prediction changes no task.**
 5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now, and only
-   those its own observation of the same turn still finds -- a row is as fresh as the slice's last visit of its
-   slot, up to 8 ticks at the raised limit, and an order at a unit killed since is refused, leaving the member
-   with nothing until the next decision -- with
+   those its own observation of the same turn still finds as the unit its row is about -- a row is as fresh as
+   the slice's last visit of its slot, up to 8 ticks at the raised limit, so the slot may hold another unit by
+   then: a row seen in sight must name the type and owner the observation shows, any other the incarnation the
+   seat's radar recorded -- with
    `focus`, the one its members kill quickest (type health over the summed pair rates), else each member its
    nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
    canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
    target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
    answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
-   that turn; one with nothing it can attack, an anti-air unit in a ground fight, moves to the squad's centroid.
-   A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
+   that turn, where the seat sees it; a target known by radar alone shows no such state, so there the resolver
+   decides and a refusal costs no order. One with nothing it can attack, an anti-air unit in a ground fight,
+   keeps with the squad: it moves to the centroid when it stands farther than 64 px from it, and is given nothing
+   nearer. The attacks and the steps back are ordered before those moves, so the decision's orders go to the
+   fight first. A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
    no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.

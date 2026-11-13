@@ -13,6 +13,9 @@ then each peer leaves through its menus, so its teardown writes ImpAI's level-en
 
 What it judges (`judge`), from each peer's log and its ten player records read at T (tacli peek: `[rec]`,
 the DirectPlay ID +4, the controller +0x73, the AI object +0x74):
+  - no peer's level init logged that ImpAI's content did not fit its tables (`impai: fight none: ... do not
+    fit the tables`, `impai: menus past their tables`): the content is all or none, so such a mod has no
+    ImpAI seat, and the failure is named by that line rather than by the empty mark it leaves;
   - each peer's level init logged one network seat line (tagpu_impai.c): the host's names its store's
     `netai=impai` and marks exactly one record, the joiner's names `netai=ota` and marks none, and both
     name level 2, Hard, whatever each peer's Difficulty. `netai` is the battle room's first computer step,
@@ -48,6 +51,9 @@ SEATS = re.compile(r"impai: seats (\S+) \(netai=(impai|ota), a network game, lev
                    r"other peers' AI seats (\S+), ImpAI's (\S+)")
 LEVEL_HARD = 2                          # impai_seats_level: Hard in every network game
 CALLS = re.compile(r"impai: calls seat=(\d+) n=(\d+)")
+# ImpAI's content is all or none (tagpu_impai.c, impai_content_build): past the fight tables or the menus' there
+# is no ImpAI seat, and the line that says so names the failure (tools/compat/tacompat.py, IMPAI_NOFIT)
+NOFIT = re.compile(r"^impai: (?:fight none: .*do not fit the tables.*|menus past their tables .*)$", re.M)
 PULSE = re.compile(r"impai: pulse seat=(\d+)")
 
 
@@ -79,6 +85,7 @@ def judge(host, join, pulse=False):
     bad = []
     lines = {}
     for role, peer, netai in (("host", host, "impai"), ("join", join, "ota")):
+        bad += [f"{role}: ImpAI's content did not fit its tables: {m}" for m in NOFIT.findall(peer["log"])]
         got = seats_lines(peer["log"])
         if len(got) != 1:
             bad.append(f"{role}: {len(got)} network seat lines, not one")
@@ -161,7 +168,8 @@ def run(out, dll, port, until, pulse, gpu):
             for line in peers[name]["log"].splitlines():
                 if "impai: seats" in line or "impai: calls" in line or "impai: pulse" in line:
                     print(f"  {name}: {line.strip()}")
-        return judge(peers[tp.host], peers[tp.join], pulse)
+        bad = judge(peers[tp.host], peers[tp.join], pulse)
+    return bad + tp.refused             # the peers have stopped (TwoPeers.refused)
 
 
 def main():

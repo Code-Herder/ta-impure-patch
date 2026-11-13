@@ -39,7 +39,7 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools"))
 import native  # noqa: E402
-from resource_regression import hold_instance, tacli_api  # noqa: E402
+from resource_regression import cap_failure, hold_instance, tacli_api  # noqa: E402
 
 TACLI = TREE / "tools" / "tacli"
 SCENARIO = TREE / "scenarios" / "calib" / "arena.json"
@@ -313,8 +313,13 @@ def main():
         print(f"defcheck: {kind}: {t.fields[kind] - t.bad.get(kind, 0)} of {t.fields[kind]} equal")
     print("\n".join(t.lines))
     bad = sum(t.bad.values())
-    print(f"defcheck: {'FAIL' if bad else 'PASS'}, {bad} field(s) differ")
-    return 1 if bad else 0
+    # the game it launched, as far as it has logged: a refusal of the GPU memory cap fails the
+    # check (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance)
+    if refused:
+        print(f"defcheck: {refused}")
+    print(f"defcheck: {'FAIL' if bad or refused else 'PASS'}, {bad} field(s) differ")
+    return 1 if bad or refused else 0
 
 
 if __name__ == "__main__":

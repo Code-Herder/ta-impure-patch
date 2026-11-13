@@ -143,13 +143,65 @@ def run_text(gamedir, stream="tagpu") -> str:
 # adaptation to a lower cap -- the terrain's neighbourhood atlas and its restored chain, which ask
 # the cap's headroom first (tagpu_vk_restore_fits) -- never reaches the door and logs no such line,
 # so every one is a pass that lost memory it was not sized to do without: the cap is too small for
-# that game, and the game fails by name in every suite (tools/runlock.py, THE GPU MEMORY).
-CAP_REFUSED_RX = re.compile(r"^vk: gpumem: the cap refuses .*$", re.M)
+# that game, and every harness that plays a game under a cap fails it by name (tools/runlock.py,
+# THE GPU MEMORY): on the lines its waits read, and on the game's whole log once it has ended --
+# cap_failure on one run's text, CapWatch across the launches of one game folder.
+CAP_REFUSED_RX = re.compile(r"^vk: gpumem: the cap refuses [^\r\n]*", re.M)
+CAP_FAILED = "the GPU memory cap refused"     # how every failure cap_failure names begins
 
 
 def cap_refusals(text: str) -> list:
-    """Every refusal of the GPU memory cap in `text`, a run of the DLL's log, in order."""
+    """Every refusal of the GPU memory cap in `text`, the DLL's log or part of it, in order, each
+    line without its line end."""
     return [m.group(0) for m in CAP_REFUSED_RX.finditer(text or "")]
+
+
+def cap_failure(text: str, game: str = "") -> "str | None":
+    """The one line a harness fails a game by when `text`, its log, holds a refusal of the GPU
+    memory cap -- `game` names it where a harness plays several -- or None when it holds none."""
+    return _failure(cap_refusals(text), game)
+
+
+def _failure(refused, game):
+    if not refused:
+        return None
+    more = f" ({len(refused)} refusals)" if len(refused) > 1 else ""
+    return f"{CAP_FAILED} {game + ' ' if game else ''}an allocation{more}: {refused[0]}"
+
+
+class CapWatch:
+    """The refusals of the GPU memory cap (cap_refusals) logged in one game folder from the watch's
+    start on, across every launch and rotation between: what a harness that plays one game or
+    several in a folder fails them by, the lines after its last wait included. sweep() reads only
+    what was written since the last sweep (a Cursor), and a rotation moves the file it is reading
+    to a name the Cursor finds by its key, so every byte the sink wrote is read while the sink
+    keeps it: up to KEEP rotations between two sweeps. A harness sweeps at each launch and at each
+    end of a game, which keeps that to the launch's one rotation and the ones a game's size makes."""
+
+    def __init__(self, gamedir):
+        self.cursor = Cursor(gamedir)
+        self.part = ""
+        self.refused = []
+
+    def sweep(self) -> list:
+        """The refusals read since the last failure(), the complete lines written since the last
+        sweep included."""
+        text = self.part + self.cursor.text(advance=True)
+        whole = text.rfind("\n") + 1
+        self.part = text[whole:]
+        self.refused += cap_refusals(text[:whole])
+        return self.refused
+
+    def failure(self, game: str = "") -> "str | None":
+        """cap_failure over the refusals logged since the last failure(), or since the watch
+        began, asked once the games they judge have ended: a last line a game never finished is
+        read as it stands. Each refusal is named by one failure() only."""
+        self.sweep()
+        cut = cap_refusals(self.part)
+        if cut:
+            self.part = ""
+        refused, self.refused = self.refused + cut, []
+        return _failure(refused, game)
 
 
 def tail_lines(gamedir, n, stream="tagpu"):

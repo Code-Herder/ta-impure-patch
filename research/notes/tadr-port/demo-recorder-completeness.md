@@ -614,7 +614,9 @@ and the run never plays more games than its grant. The slots agree with the run 
 (both number `games()`, and each game a slot holder launches takes one seat); a group's peers wait
 for each other in the battle room, so a run granted fewer than two games refuses both groups by
 name before a game starts (`runlock.together`) rather than launch a joiner that would wait for the
-host's seat forever. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
+host's seat forever. A worker whose cleanup could not end its game retires and keeps its slot to
+the run's end, since that game may still hold its GPU memory and seat; a group that then asks more
+slots than the run has left is refused by name. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
 `tools/dpport.py`), and its instances carry the run's tag and the build (`--label`). A run that
 does not fit waits; the kernel drops the slots when their holder exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
@@ -628,11 +630,15 @@ back -- its summary lines, its checks' verdicts, its recording and its coverage 
 other group's folder is emptied and the group played whole. A FAIL stays a FAIL; a group that
 could not run is played again. The key is HEAD with a worktree git sees no change in (a dirty tree
 is never resumed), the hashes of the DLLs the run can load (default, coverage, stock-limits
-coverage, any named), the fixture's entry and its scenario files' hashes, the renderer, the game
+coverage, any named) less the three fields the link writes its time into (`tools/dllkey.py`: two
+builds of an unchanged tree differ in nothing else, so a `make` between sittings keeps the key),
+the fixture's entry and its scenario files' hashes, the renderer, the game
 speed and turbo, the lanes, whether its dumps are kept and the seeded GameTimes; a key that differs
 is refused naming each field, as are coverage files that are not the ones recorded, and the group
 is played again. The summary, the coverage check and the `replay-roundtrip:` note read the union,
-and the note names the groups kept (`kept=`). A verdict is written only with the run not stopping:
+and the note names the groups kept (`kept=`). A verdict file is written after its result is stored
+in the sitting: one that cannot be written is said by name, and only a resume loses that result, by
+playing the group again. A verdict is written only with the run not stopping:
 a SIGTERM reaches the harness alone, so no result it touched is kept. A Ctrl-C also reaches the
 run's children with the same signal, and a report that settles between a child's end and the
 harness's stop can keep the FAIL that signal made, never a PASS; the summary names it, and a run
@@ -816,6 +822,14 @@ the gate does not check.
 (`tagpu_presentcap.on`, test launch only): the Classic++ look keys off, the engine's own draw and
 its shadow switch as a player has them. A configuration players do not run, accepted for the gate
 by the owner (2026-10-08).
+
+**A refusal of the GPU memory cap fails the lane by name.** A wait fails at the line itself
+(`Log.read`); the lines a game writes after the lane's last wait are read by the worker's watch
+(`Worker`, *THE CAP'S REFUSALS*: `talog.CapWatch` from the lane's start, read at each launch,
+collection and stop), so every game of every lane is read whole once it has stopped, and a refusal
+anywhere in it is a FAILED problem of the lane, its checks still run. `forks`, `rewind`,
+`recmp_play_test.py` and the network game's `recmp_create_begin_test.py`, which names the peer,
+fail the same way, and so does the two-player group that runs the last two.
 
 MEASURED 2026-10-05 on the reference setup: at internal speed 20,
 `secondary-orders` passes all 23 checks, `wpn-badtgt --cover` all 33 (W starting

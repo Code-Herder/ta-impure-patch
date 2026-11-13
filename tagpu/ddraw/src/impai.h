@@ -140,7 +140,9 @@ void impai_threat_from_roles(const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t);
 enum { IMPAI_THREAT_GROUND, IMPAI_THREAT_AIR, IMPAI_THREAT_WATER, IMPAI_THREATS };
 
 /* What the maps are a function of: one seat's rows and patches, its allies (bit j: record j), the threat
-   table (NULL: no threat, no influence) indexed by type and the map's size in 16-px cells. */
+   table (NULL: no threat, no influence) indexed by type and the map's size in 16-px cells. `hits` is the
+   seat's column of its radar records (IMPAI_HITROW), which the maps do not read and the military tells a
+   slot's incarnation by (impai_mil.c, target_now); n 0 for none. */
 typedef struct IMPAI_VIEW {
     int                 seat;
     const IMPAI_ROW*    rows;
@@ -151,6 +153,7 @@ typedef struct IMPAI_VIEW {
     const IMPAI_THREAT* threat;
     int                 ntypes;
     int                 w, h;
+    WQ_HITS             hits;
 } IMPAI_VIEW;
 
 /* The maps, gw x gh cells of IMPAI_CELL_PX, into the caller's arrays of IMPAI_GRID_MAX^2 each:

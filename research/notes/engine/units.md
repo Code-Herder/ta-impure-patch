@@ -524,7 +524,10 @@ fill zeroed: MEASURED 2026-11-12, a unit created where a dead one stood began wi
   `0x4887AB`); BuildWeapon and AutoAim then call the build menu's relabel `0x41C150`, which writes
   label buffers only, and Impure's scenario `stock` key writes slot 0's and calls it too
   (`tagpu_scenario.c` `dress_unit`). DIS; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
-  at init.
+  at init. The init sets bit 1 when the slot's weapon `*(def + 0x1EE + 4i)` has an ID byte `+0x10A` other
+  than 0, the null record's, and bit 4 always (`0x49E0C2..0x49E0E8`, DIS), so any weapon, a stockpile or an
+  interceptor one included, is present; Attack_Chase's slot pick `0x4897E0` reads bit 1 of slots 0..2
+  ([recorder](recorder.html), *The takeover from a recording*).
 
 **The pointer fields**, each a row of the layout. An ID is one more than the pointer's row in its
 table, never a field of the target, so NULL's is 0 and a pointer to a dead unit keeps its ID. It is

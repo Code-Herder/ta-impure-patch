@@ -5,7 +5,7 @@ sized on (the lock's runslots/vram.cfg, seeded from tools/runlock-vram.cfg). And
 measured: `watch` samples every game a suite's command plays.
 
     vramproof.py [--scenario 200v200] [-n N] [--play S] [--out DIR]
-    vramproof.py watch [--out DIR] -- CMD ...
+    vramproof.py watch [--cap N] [--out DIR] -- CMD ...
 
 THE CLAIM. A game launched inside a run-lock hold runs under the GPU memory cap (`gpumem=`,
 tools/tacli write_gpumem): the DLL charges every device-local allocation against it and refuses one
@@ -35,15 +35,33 @@ report.json go to --out. Exit 0 when every line holds, 1 when one does not, 2 wh
 be made.
 
 WATCH: a suite's peak, the figure its cap in tools/runlock-suites.cfg is set from. CMD runs as given
--- the suite takes the run lock itself, under its suite's present cap -- while every TotalA.exe on
-the machine is sampled once a second, keyed by its instance (its Wine prefix's folder), and each
-instance's DLL log is read as it plays for the ledger's peak (`held at most`, its high waters).
-The report gives, per instance and over all of them, the most a process held (nvidia-smi) and the
-most its ledger held, and every refusal of the cap. A game launched beside the suite by anything
-else is sampled too: watch a suite on a machine that runs nothing else on the GPU. Exit: CMD's.
+and takes the run lock itself; with --cap N it runs with RUNLOCK_CAP_MIB=N (tools/runlock.py, A
+MEASUREMENT'S CAP), so the run takes the GPU memory of its games at N, fewer of them at once, and
+launches every game at N: a suite measured under a cap above its peak is not cut at the cap being
+measured, and no tracked file changes for it. Without --cap the games run under the suite's present
+cap. Every TotalA.exe on the machine is sampled once a second, and a sample counts only the games
+of the watched run: the run whose holder is CMD or a process below it (its tag, runlock TAGS), and
+of that run's games those whose process holds one of its seats. A game of any other run -- another
+suite beside it, a hand launch -- is not counted, so the figures together are the suite's own. Each
+counted game's DLL log is read as it plays for the ledger's peak (`held at most`, its high waters).
+The report gives, per instance and over all of them, the most a process held (nvidia-smi), the most
+its ledger held, the most the run's games held together, and every refusal of the cap. Exit: CMD's;
+2 when the watch could not run.
+
+WHAT A MEASUREMENT NEEDS, in the worktree the suite runs from:
+  * Outside every run: watch refuses inside one (RUNLOCK_HELD, or `runlock.py run`), whose cap and
+    seats the watched run would take as its own.
+  * The suite's own setup. The wiki gate draws on art derived from the game's files, which is
+    gitignored and so absent from a fresh worktree: run `.venv-undither/bin/python
+    tools/wiki/gfx.py`, then `.venv-undither/bin/python tools/wiki/sidepacks.py`, first. Without
+    them the gate's game lanes fail (no gfx/cursors.json, `no sidebar pack for <mod>`) and the
+    measurement has fewer games than the gate plays.
+  * --cap at least the suite's present cap, and above what it is expected to hold: a cap the suite
+    reaches shows as refusals in the report, which means measure again higher.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -134,6 +152,16 @@ def gpu_processes():
     return best
 
 
+def watched_games(root, lock):
+    """({pid: instance} of the watched run's games, the run's tags): every TotalA.exe whose process
+    holds a seat of a run held by `root` or a process below it, on the lock `lock` (WATCH)."""
+    tags = runlock.tags_held_by(lock, set(tacompat.descendants(root)))
+    if not tags:
+        return {}, tags
+    return {pid: name for pid, name in game_pids(None).items()
+            if runlock.seats_of(pid, lock) & tags}, tags
+
+
 def game_pids(names):
     """{pid: instance} of every TotalA.exe process of the instances `names` (None: of any instance,
     named by its Wine prefix's folder), by the Wine prefix its environment names."""
@@ -159,11 +187,12 @@ def game_pids(names):
 
 class Sampler(threading.Thread):
     """One sample a second until stopped: the time, the device's use and each game's MiB, by
-    instance (the most of its processes, which is the game's one process on the GPU)."""
+    instance (the most of its processes, which is the game's one process on the GPU) -- the games of
+    the instances `names`, or with `root` those of the run it holds on `lock` (watched_games)."""
 
-    def __init__(self, names, path, ledgers=False):
+    def __init__(self, names, path, ledgers=False, root=None, lock=None):
         super().__init__(daemon=True)
-        self.names, self.path = names, path
+        self.names, self.path, self.root, self.lock = names, path, root, lock
         self.samples, self.error = [], None
         self.halt = threading.Event()
         # with `ledgers`, each game's folder: its log read every LEDGER_EVERY samples (watch)
@@ -181,11 +210,15 @@ class Sampler(threading.Thread):
                     self.error = str(e)
                     self.halt.set()         # the run's wait ends: a run with no samples shows nothing
                     return
+                if self.root is not None:
+                    pids, tags = watched_games(self.root, self.lock)
+                else:
+                    pids, tags = game_pids(self.names), set()
                 games = {}
-                for pid, name in game_pids(self.names).items():
+                for pid, name in pids.items():
                     if pid in procs:
                         games[name] = max(games.get(name, 0), procs[pid])
-                s = {"t": t, "used": used, "total": total, "games": games}
+                s = {"t": t, "used": used, "total": total, "games": games, "tags": sorted(tags)}
                 self.n += 1
                 if self.ledgers is not None and self.n % LEDGER_EVERY == 1:
                     self.read_ledgers(games)
@@ -255,15 +288,27 @@ def suite_report(samples, ledgers):
                    "refused": refused, "games": len(peaks)}
 
 
-def watch(cmd, out):
-    """CMD run while every game on the machine is sampled (WATCH); CMD's exit code."""
+def watch(cmd, out, cap=None):
+    """CMD run, at the cap `cap` when one is given, while the games of the run it holds are sampled
+    (WATCH); CMD's exit code."""
     if not cmd:
         raise CouldNotRun("watch: no command after --")
-    sampler = Sampler(None, out / "samples.jsonl", ledgers=True)
-    sampler.start()
+    if runlock.holding():
+        raise CouldNotRun("watch inside a run: the watched command would nest in it, take its seats "
+                          "and play under its cap; run the watch outside every run")
+    env = dict(os.environ)
+    if cap is not None:
+        if not runlock.CAP_MIN_MIB <= cap <= runlock.CAP_MAX_MIB:
+            raise CouldNotRun(f"--cap {cap}: the DLL takes {runlock.CAP_MIN_MIB}.."
+                              f"{runlock.CAP_MAX_MIB} MiB")
+        env[runlock.CAP_ENV] = str(cap)
     t0 = time.time()
+    proc = subprocess.Popen(cmd, env=env)
+    sampler = Sampler(None, out / "samples.jsonl", ledgers=True, root=proc.pid,
+                      lock=runlock.lock_path(TREE))
+    sampler.start()
     try:
-        code = subprocess.run(cmd).returncode
+        code = proc.wait()
     finally:
         sampler.halt.set()
         sampler.join(NVIDIA_S * 2)
@@ -272,9 +317,13 @@ def watch(cmd, out):
     if sampler.error:
         raise CouldNotRun(f"the sampler stopped: {sampler.error}")
     lines, figures = suite_report(sampler.samples, sampler.ledgers)
+    tags = sorted({t for smp in sampler.samples for t in smp["tags"]})
+    lines.insert(0, f"the watched run{'s' if len(tags) != 1 else ''}: {', '.join(tags)}, its games alone "
+                 f"counted, at a cap of {cap if cap is not None else 'its suite'}" if tags else
+                 "no run of the command held GPU memory: no game was counted")
     (out / "report.json").write_text(json.dumps(
-        {"cmd": cmd, "seconds": round(time.time() - t0), "exit": code, **figures, "lines": lines,
-         "ledgers": sampler.ledgers}, indent=2, default=str))
+        {"cmd": cmd, "cap": cap, "runs": tags, "seconds": round(time.time() - t0), "exit": code,
+         **figures, "lines": lines, "ledgers": sampler.ledgers}, indent=2, default=str))
     for ln in lines:
         print(ln)
     say(f"the command exited {code}; the report is {out / 'report.json'}")
@@ -335,6 +384,9 @@ def play(args, out):
     if not scenario.exists():
         raise CouldNotRun(f"no scenario {scenario}")
     lock = runlock.lock_path(TREE)
+    if runlock.cap_override() is not None:
+        raise CouldNotRun(f"{runlock.CAP_ENV} is set: the proof plays the lock's own cap_mib, "
+                          f"which the figures it judges are")
     if not runlock.gpu_budget(lock):
         raise CouldNotRun("no GPU budget here: no device memory reads, so no bound to show")
     lanes = args.n or runlock.plan(None, path=lock)[2]
@@ -413,7 +465,12 @@ def play(args, out):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["watch"]:
-        wa = argparse.ArgumentParser(prog="vramproof.py watch", description="a suite's peak (WATCH)")
+        wa = argparse.ArgumentParser(prog="vramproof.py watch", description="a suite's peak",
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog=__doc__[__doc__.index("WATCH:"):])
+        wa.add_argument("--cap", type=int, default=None, metavar="N",
+                        help="the cap in MiB every game of the watched run is launched at, and its GPU "
+                             "memory taken at (default: the suite's own)")
         wa.add_argument("--out", type=Path, default=None,
                         help="where the samples and report go (default: .data/vramproof/watch-<time>)")
         wa.add_argument("cmd", nargs=argparse.REMAINDER, help="-- and the suite's command")
@@ -422,7 +479,7 @@ def main(argv=None):
         out = a.out or TREE / ".data" / "vramproof" / time.strftime("watch-%Y%m%d-%H%M%S")
         out.mkdir(parents=True, exist_ok=True)
         try:
-            return watch(cmd, out)
+            return watch(cmd, out, a.cap)
         except CouldNotRun as e:
             say(f"could not run: {e}")
             return 2

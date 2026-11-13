@@ -148,7 +148,13 @@ names the gap). The hives are private because the store `tacli` keeps
   marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
   refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
   reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
-  failure unless the setup's expectation says `"impai": "unavailable"`. Pulse lines are counted
+  failure unless the setup's expectation says `"impai": "unavailable"`. **Content that did not fit is
+  a failure whatever the setup accepts**, named by its line: ImpAI's content is all or none
+  ([ImpAI in the engine](../modules/impai.md), *The fight content*), so a mod whose `[DAMAGE]` rows,
+  weapons or types overflow the fight tables (`impai: fight none: … do not fit the tables …`) or whose
+  menus overflow theirs (`impai: menus past their tables …`) has no ImpAI seat, and the stage says
+  which table rather than reading the empty mark as an accepted gap (`IMPAI_NOFIT`).
+  `tools/impai/netai_check.py` fails the same lines on either peer. Pulse lines are counted
   and reported, not judged: the military writes one a seat once a game minute. `--impai-seat ota`
   plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
   `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`
@@ -251,7 +257,12 @@ only if the layer never asks for one of its own and its fallback is seen to run
 memory is what a player would see, and no pixel check sees most of them: a dead HUD leaves the side
 panel right. So every refusal is judged by name from `tagpu.log`, in the single-player run and on
 both peers of the network game (`DEVICE_REFUSED`). The first full run to meet them scored `twilight`
-and `loader+tadr-mayhem` "ok" with their HUD gone.
+and `loader+tadr-mayhem` "ok" with their HUD gone. **A refusal of the GPU memory cap fails a game
+whatever its setup expects** (*CAP REFUSED*): a lever that refuses the device on purpose
+(`refuse_lever`, `stage_refused`) excuses the device's refusals, never the cap's, which mean the
+suite's figure in `tools/runlock-suites.cfg` is too small. The run (both its launches), each peer of
+the network game, the ImpAI stage and a mod's install start are each read for them across every
+launch and rotation once the game has stopped (`talog.CapWatch`).
 
 **The suite cannot refuse itself its memory (`GameSlots`).** The pools are sized for the CPU, and
 `--jobs` single-player games plus `--mp-jobs` two-player games is 18 at about 900 MiB each, which filled
@@ -261,15 +272,16 @@ MEMORY), taken in a queue of their own before its CPU slots, so every run on the
 inside the device's memory less a reserve (the lock's `runslots/vram.cfg`, seeded from
 `tools/runlock-vram.cfg`). A game takes its cap plus the driver's allowance and a margin of the budget, and
 runs under that cap by construction: `start_game`, through which every game of the suite starts, writes the
-run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and hands the game a seat of the run
-(`runlock.game_seat`), so the suite never has more games on the GPU than its `games()`
+run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and starts the game under a keeper that
+holds a seat of the run until every process of the game is reaped (`runlock.start_game`), so the suite never
+has more games on the GPU than its `games()`
 ([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*). A network game's two
 peers wait for each other in the battle room, so they need their two seats at once: a run granted
 fewer than two games plays no network game (`runlock.together`), and each setup's reads `could not
 run` by name, since its joiner's launch would wait for the seat the host holds while the host waits
 for it; `GameSlots` refuses more slots than the run has. The suite's cap is
-`compat` in `tools/runlock-suites.cfg`: still the play defaults' 920, 9 games on the reference setup, until
-`vramproof.py watch` measures the suite. `games at once:` in the output says how many it got. Where no
+`compat` in `tools/runlock-suites.cfg`: a provisional 1536, 5 games on the reference setup, until
+`vramproof.py watch --cap N` measures the suite. `games at once:` in the output says how many it got. Where no
 device memory reads (no `nvidia-smi`, no amdgpu counters) there is no GPU budget and the pools alone bound
 it. A game launched by hand outside the run lock is not counted; the refusal it causes is named above.
 

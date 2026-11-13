@@ -1236,21 +1236,40 @@ static void defence(MDEC* d)
 
 /* ---- 5. the orders ---- */
 
-/* THE TARGET IS THERE THIS TURN: 1 when the seat's own observation of this turn still finds enemy e -- seen,
-   for a row seen by sight; alive, for a radar contact, which the pass found. A row is only as fresh as the
-   line-of-sight slice's last visit of its slot, which covers every slot once in nslots / OBS_SLICE ticks (8 at
-   the 15 001 slots of the raised limit), and a radar row as its pass: a unit killed since still reads seen now,
-   and an order at its slot is refused (wq_can, a target not alive), which leaves the member with no order
-   until the next decision -- every member in reach of it, when it was the focus. The order follows in the
-   same call on the game thread, so what this finds holds when the order is given. A unit pending death
-   (+0x110 bit 14), reaped at its owner's next unit tick, is still observed and still refused. *aim is the
-   observation's WQ_AIM_*, which can_attack reads. */
+/* can_attack's aim for a target whose observation does not identify it (SHARED, CONTACT): observe gives no
+   WQ_AIM_* there, the facts being its type's and its state's, which the seat does not see */
+#define AIM_HIDDEN 0x80u
+
+/* THE TARGET IS THERE THIS TURN: 1 when the seat's own observation of this turn finds, at enemy e's slot, the
+   unit e's row is about. A row is only as fresh as the line-of-sight slice's last visit of its slot, which
+   covers every slot once in nslots / OBS_SLICE ticks (8 at the 15 001 slots of the raised limit), and a radar
+   row as its pass, so the unit it was written for may have died since and another taken its slot; observe
+   answers for whichever unit holds the slot now. What the observation tells decides:
+   - an identified observation (LOS) of an identified row: the type and owner the row names. The row's owner
+     is an enemy (picture), so a unit that passes is an enemy of the type the row says, which the seat sees
+     now, whichever incarnation it is; a slot taken since by another type or owner -- an ally's unit, one of
+     the seat's own -- fails;
+   - any other: the slot's incarnation is the seat's radar record of it (WQ_RADAR_HIT, the view's hits), as the
+     publish tests a contact (impai_know.c): a unit the seat's own radar found, in the published pass or in
+     the one in progress, whose records are written as it finds each unit. An incarnation unknown on either
+     side, or no records, matches nothing.
+   A slot that holds no unit now fails (observe answers 0). The order follows in the same call on the game
+   thread, so what this finds holds when the order is given; a unit pending death (+0x110 bit 14), reaped at
+   its owner's next unit tick, is still observed, and an order at it is refused (wq_can). *aim is the
+   observation's WQ_AIM_* where it identifies the unit, else AIM_HIDDEN; can_attack reads it. */
 static int target_now(const MDEC* d, const MENEMY* e, uint8_t* aim)
 {
+    const IMPAI_VIEW* v = d->in->view;
+    const IMPAI_SEEN* r = &v->rows[e->slot].seat[v->seat];
+    const WQ_RADAR_HIT* h;
     WQ_OBS o;
-    const int found = d->q->ops->observe(d->q, e->slot, e->now == 2, &o) > WQ_SEEN_OWN;
-    *aim = o.aim;
-    return found;
+    *aim = AIM_HIDDEN;
+    if (d->q->ops->observe(d->q, e->slot, e->now == 2, &o) <= WQ_SEEN_OWN) return 0;
+    if (o.seen == WQ_SEEN_LOS) *aim = o.aim;
+    if (o.seen == WQ_SEEN_LOS && e->type != WQ_NONE) return o.type == e->type && o.owner == r->owner;
+    if (!v->hits.at || e->slot >= v->hits.n || v->hits.stride < sizeof(WQ_RADAR_HIT)) return 0;
+    h = wq_hit(&v->hits, e->slot);
+    return h->known && o.birth_known && o.birth == h->birth;
 }
 
 /* 1 when the order resolver 0x43F0E0 answers an attack (mode 3) for army unit u on an enemy whose WQ_AIM_* is
@@ -1264,13 +1283,16 @@ static int target_now(const MDEC* d, const MENEMY* e, uint8_t* aim)
    - a canfly unit whose weapon 1 is dropped, on a target whose type flies: refused (0x43F27E..0x43F31D).
    A mobile unit with a weapon is then answered (ATTACK_CHASE, 0x43F348): every army unit has a mover, army
    being mobile and mobile bmcode 1, the creates' own test for one (0x4860BB, 0x4862CF; tasim_roles.c), unless
-   the mover's allocation failed. Read with the target's state of this turn (target_now) and the
-   unit's flag word of this decision's census, it answers as the resolver will in the same call. */
+   the mover's allocation failed. Read with the target's state of this turn (target_now) and the unit's flag
+   word of this decision's census, it answers as the resolver will in the same call. A target whose aim is
+   AIM_HIDDEN is taken on the unit's own two tests alone: the rest are the target's, which the seat does not
+   see, so the resolver decides them when the order is asked (order: a refusal counted, no order spent). */
 static int can_attack(const MUNIT* u, uint8_t aim)
 {
     const unsigned a = u->attack, water = a & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2);
     if (!(a & IMPAI_TA_CANATTACK)) return 0;
     if (!u->armed) return (a & IMPAI_TA_KAMIKAZE) != 0;
+    if (aim & AIM_HIDDEN) return 1;
     if (!(aim & WQ_AIM_AIRBORNE) && (a & IMPAI_TA_TOAIR1)) return 0;
     if (aim & WQ_AIM_UNDER) {
         if (!water) return 0;
@@ -1332,17 +1354,49 @@ static void spread(int k, int32_t* x, int32_t* z)
     *z += (((k / 5) % 5) - 2) * SPREAD_PX;
 }
 
+/* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
+static int damaged(const MDEC* d, const MUNIT* u)
+{
+    return d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max;
+}
+
+/* The candidate member u attacks: the focus where the resolver answers u for it and u has it within its range
+   plus REACH_PAD, else u's nearest candidate the resolver answers it for that u has within that range or can
+   travel to (unit_reaches); -1 for none. */
+static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const uint8_t* caim, int nc, int focus,
+                     int fi)
+{
+    uint32_t bd = 0;
+    int target = -1, i;
+    if (focus >= 0 && can_attack(u, caim[fi]) &&
+        dist(u->x, u->z, d->en[focus].x, d->en[focus].z) <= (uint32_t)u->range + REACH_PAD)
+        return focus;
+    for (i = 0; i < nc; i++) {
+        const uint32_t x = dist(u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z);
+        if (can_attack(u, caim[i]) && (target < 0 || x < bd) &&
+            (x <= (uint32_t)u->range + REACH_PAD ||
+             unit_reaches(d, u->type, u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z))) {
+            target = cand[i];
+            bd = x;
+        }
+    }
+    return target;
+}
+
 /* A fighting squad's orders. The candidates are the TARGETS seen-now members of its contact nearest its
    centroid that are there this turn (target_now), armed or mobile ones before the rest. With focus, every
    member attacks the candidate of least hp / sum of the squad's pair rates on it -- the quickest kill, over
    FOCUS_TYPES types, by the type's maximum health, which is all the seat knows of an enemy's -- where it
    reaches it, else its own nearest candidate; without, each its nearest. A member attacks only a candidate the
    resolver answers it for (can_attack); one with none -- an anti-air unit in a ground fight, a unit with no
-   waterweapon against submarines -- moves to the squad's centroid instead, and keeps with it. A member attacks a
-   candidate only where it has it within its range plus REACH_PAD or can travel to it (unit_reaches), so no ship
-   is sent at a target inland and no tank at one across the water; its moves go through move_to. Micro: a member
-   under micro_hp of its health steps MICRO_PX towards the rally point, once in micro_period, and is given
-   nothing between two steps. Only a unit the seat sees now is ever ordered at. */
+   waterweapon against submarines -- keeps with the squad: it moves to the centroid when it is farther than
+   SPREAD_PX from it, and is given nothing nearer, so a member that can attack nothing costs no order while it
+   stands with the squad. A member attacks a candidate only where it has it within its range plus REACH_PAD or
+   can travel to it (target_of, unit_reaches), so no ship is sent at a target inland and no tank at one across
+   the water; its moves go through move_to. Micro: a member under micro_hp of its health steps MICRO_PX towards
+   the rally point, once in micro_period, and is given nothing between two steps. Two passes over the members,
+   so the decision's orders (mil_roots) go to the attacks and the steps back first and to the centroid moves
+   only with what is left. Only a unit the seat sees now is ever ordered at. */
 static void fight(MDEC* d, int s)
 {
     const MCONTACT* ct = &d->ct[d->sq[s].contact];
@@ -1397,9 +1451,9 @@ static void fight(MDEC* d, int s)
     for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
         MUNIT* u = &d->army[k];
         IMPAI_JOB* j = &d->in->job[u->slot];
-        int target = -1, i;
+        int target;
         if (u->sq != s) continue;
-        if (d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max) {
+        if (damaged(d, u)) {
             /* a damaged member steps back, and is left on its way between two steps */
             if (!j->since || d->now - j->since >= d->lv->micro_period) {
                 const uint32_t dr = dist(u->x, u->z, d->rx, d->rz);
@@ -1412,25 +1466,15 @@ static void fight(MDEC* d, int s)
             }
             continue;
         }
-        if (focus >= 0 && can_attack(u, caim[fi]) &&
-            dist(u->x, u->z, d->en[focus].x, d->en[focus].z) <= (uint32_t)u->range + REACH_PAD)
-            target = focus;
-        else {
-            uint32_t bd = 0;
-            for (i = 0; i < nc; i++) {
-                const uint32_t x = dist(u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z);
-                if (can_attack(u, caim[i]) && (target < 0 || x < bd) &&
-                    (x <= (uint32_t)u->range + REACH_PAD ||
-                     unit_reaches(d, u->type, u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z))) {
-                    target = cand[i];
-                    bd = x;
-                }
-            }
-        }
-        if (target >= 0)
+        if ((target = target_of(d, u, cand, caim, nc, focus, fi)) >= 0)
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z);
-        else
-            move_to(d, u->slot, u->type, u->x, u->z, d->sq[s].x, d->sq[s].z);
+    }
+    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+        const MUNIT* u = &d->army[k];
+        if (u->sq != s || damaged(d, u) || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
+            dist(u->x, u->z, d->sq[s].x, d->sq[s].z) <= SPREAD_PX)
+            continue;
+        move_to(d, u->slot, u->type, u->x, u->z, d->sq[s].x, d->sq[s].z);
     }
 }
 

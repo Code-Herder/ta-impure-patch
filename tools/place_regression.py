@@ -42,7 +42,8 @@ import subprocess
 import sys
 import time
 
-from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
+from resource_regression import (ACK_S, CHECK_FAILURES, TACLI, TREE, Check, cap_failure, hold_instance,
+                                 tacli_api)
 
 SCENARIO = TREE / "scenarios/place-basic.json"
 END_SCENARIO = TREE / "scenarios/replay-end.json"
@@ -356,7 +357,7 @@ class Place(Check):
     # -- the log
     def mark(self):
         """The log index from which the next input's lines are looked for."""
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return len(self.log)
 
     def place_lines(self, start, kind):
@@ -960,6 +961,12 @@ def main():
     finally:
         if stop:
             stop()
+    # a game this run launched has stopped: a refusal of the GPU memory cap anywhere in it fails
+    # the mode, whatever its checks saw (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance) if stop else None
+    if refused:
+        print(f"place regression FAILED: {refused}", file=sys.stderr)
+        return 1
     return 0
 
 

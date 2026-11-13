@@ -140,6 +140,7 @@ class Lane:
         t0 = time.monotonic()
         scn = self.out / f"{name}.scenario.json"
         scn.write_text(json.dumps(game_doc(mapname, k, ai), indent=1) + "\n")
+        self.w.watch_caps()             # this game's refusals of the GPU memory cap, none before it
         self.w.place({"name": "eco-bench"}, self.dll)
         self.log = R.Log(self.w)
         rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
@@ -166,6 +167,10 @@ class Lane:
         self.log.wait_end(r"impai: handicap rows", n)
         self.w.stop(hard=True)
         self.log.read()
+        # the game has ended: a refusal of the GPU memory cap anywhere in it fails it by name
+        refused = self.w.cap_failure()
+        if refused:
+            raise Failed(refused)
         dm, de = m2 - m1, e2 - e1
         row = {"map": mapname, "start": k, "ai": ai, "from": FROM, "until": UNTIL,
                "metal": [m1, m2], "energy": [e1, e2], "d_metal": dm, "d_energy": de,

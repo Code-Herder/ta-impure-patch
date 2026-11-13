@@ -2181,9 +2181,12 @@ is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
 - Paralyze `0x402D10` clamps its p1 to `0x708` ticks (`0x402D33..0x402D3B`).
 - Attack_Chase `0x4034A0` picks a slot when p1 is 0 and stores it to `+0x36` (`0x4035A1`): `0x4897E0(unit)`
   (`thiscall`, plain `ret`; `0x4897E0..0x4897F9`) answers the first of slots 0, 1, 2 whose flag byte, unit
-  `+0x1F`, `+0x3B`, `+0x57`, has bit `0x2`, and 2 & that last byte when none before it has [INFERRED: bit `0x2`
-  marks a slot holding a weapon; AutoAim skips a slot without it at `0x49E1C0`]. The slot is chosen without the
-  target, so a unit whose first weapon cannot hurt it still walks to that weapon's range (ImpAI's fight
+  `+0x1F`, `+0x3B`, `+0x57`, has bit `0x2`, and 2 & that last byte when none before it has -- slot 0 when no
+  slot of the three has it; slots 3..9 of the extra weapons are never its answer. Bit `0x2` is the slot's
+  "a weapon present": the weapons' init `0x49E070` sets it when the slot's weapon has an ID byte `+0x10A`
+  other than 0, the null record's (`0x49E0C2..0x49E0E8`), so a stockpile or interceptor weapon arms its slot
+  as any other does; AutoAim skips a slot without it (`0x49E1C0`). DISASSEMBLED. The slot is chosen without
+  the target, so a unit whose first weapon cannot hurt it still walks to that weapon's range (ImpAI's fight
   predictor, `chase_reach`). It calls
   can-engage `0x49ABB0` at `0x4035D6`; when that passes the unit stops (`0x4898B0` with 0 at `0x4035F2` and
   with 2 at `0x4035FB`) and engages (`0x48A060`), so a chaser stops on its first in-range tick, and where it

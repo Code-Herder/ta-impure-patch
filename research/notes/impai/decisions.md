@@ -145,11 +145,12 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   through `0x440AF0`, which carries over from run to run and is not fight state. The group, defence and naval
   fights bring moveclasses the duels never used (4, 6, 9, 14 seen), which is why they showed only now.
 - **R4 exempts player record `+0x148`, the scoreboard rank, as display state** -- decided on the condition
-  that no simulation path reads it, which the pristine exe's disassembly shows: its one writer at the
-  activation `0x464290`, the scoreboard `0x4948E0` (one caller, DrawGameScreen `0x469F65`), and the
-  destructor's rank update `0x4866D0` (network and mode-2 games), which reads it only into the ranks and the
-  lead message; every other `+0x148` operand of the exe is another record's ([units](../engine/units.html),
-  `+0x148`). GDI runs the scoreboard and the Vulkan lane does not, so the rank moved between GDI runs only.
+  that no simulation path reads it, which the pristine exe's disassembly shows: its three writers, the
+  activation `0x464290` (`0x464353`), the scoreboard `0x4948E0` (one caller, DrawGameScreen `0x469F65`), which
+  compacts the ranks while it is shown (`0x494E27`), and the destructor's rank update `0x4866D0` (network and
+  mode-2 games, `0x486C17`), which reads it only into the ranks and the lead message; every other `+0x148`
+  operand of the exe is another record's ([units](../engine/units.html), `+0x148`). GDI runs the scoreboard and the
+  Vulkan lane does not, so the rank moved between GDI runs only.
   The owner accepted the proof with its stated gap: a function handed a `record+k` pointer by its caller and
   reading `+0x148−k` through it is outside what the scan sees.
 - **The predictor's check judges each kind as well as the total.** Every kind (duel, group, defence, naval)
@@ -193,7 +194,7 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   against, and at 0 the search stops 3.7 % above the truth's loss. A change to the model's form is judged by this cross-validation, both forms on the
   same folds, before `check` runs on it.
 - **The homing kind's bias and lead are held at (2, −1)**: a guided shot at a standing target hits as a direct
-  shot does, and a target fleeing at a fifth of the shot's speed is still caught 80 % of the time
+  shot does, and a target fleeing at a fifth of the shot's speed is still caught about 86 % of the time
   [INFERRED: a radial-flight bound]; the references cannot tell (25 and 7 of 117 decisive training fights move
   with them, none flips), and holding cost nothing in the cross-validation. Revisited past about 20 decisive
   training fights with a homing weapon firing at a moving target.
@@ -202,6 +203,13 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   cross-validation with homing held at prior 300 it lowered the validation loss 29 % (18590 to 13250) and
   raised the accuracy from 420/468 to 424/468. The variant that walks to the first slot that hurts the type
   scored within 1 % and one fight of it; the engine's rule was taken.
+- **The military reads no fact of a target that the seat's observation of it does not show** (A2a's landing
+  review, 2026-11-13). `observe` gives the resolver's target facts (`WQ_OBS.aim`: airborne, under the sea, a
+  type that flies) only where it identifies the unit, its own or in sight; at an ally's shared radar or the
+  seat's own radar contact they stay hidden, as its type and owner do. `can_attack` takes such a target on the
+  unit's own tests alone and lets the order resolver refuse the rest, counted as a refusal and costing no
+  order -- the military's behaviour before it read the resolver's tests. The premises the resolver test rests
+  on are in [ImpAI in the engine](../modules/impai.html), *Whom a squad attacks*.
 
 ## The re-targeting corpus (2026-11-13)
 
