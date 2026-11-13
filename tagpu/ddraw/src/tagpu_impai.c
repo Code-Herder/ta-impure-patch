@@ -711,7 +711,8 @@ static void impai_threat_build(void)
 }
 
 /* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
-   gives orders to (a factory, a constructor, a commander), as Quick Build reads it (tagpu_buildmenu_types).
+   gives orders to (a factory, a constructor, a commander), by Quick Build's page rule with every type a press
+   reaches, the structures armed and the units queued (tagpu_buildmenu_types): a factory offers only the second.
    Sorted by (side, builder), each row's types ascending in the pool. Content: a function of the level's defs,
    files and seats' sides, rebuilt at every level init -- on a live level from the sides of the seats s_seat
    marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) -- all or

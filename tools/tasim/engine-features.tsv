@@ -20,9 +20,9 @@ keys_nomapalert	outside	the silence of harmless weather: notifications, sounds a
 keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c:1413, veterancy
 keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c:1704, transported explosions
 impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c:12, SIM_PUPPET_OWNER
-impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1069, the wrapper, the turn, the brain's state and glue, the level end
-impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1300, the level init on the loader thread
-impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1426, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
+impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1070, the wrapper, the turn, the brain's state and glue, the level end
+impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1304, the level init on the loader thread
+impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1430, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
 patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c:30, write val at addr iff it holds expect
 sort_buffer_end	outside	DrawGameScreen's unit binning, a drawing	tagpu_patches.c:277, the sort buffer's end in 0x4697CF..0x469840
 feature_null_plot	T1a	the map's feature lookup off the grid; the core bounds every cell against W x H (P4)	tagpu_patches.c:395, a NULL plot handed to GetGridPosFeature 0x421E60

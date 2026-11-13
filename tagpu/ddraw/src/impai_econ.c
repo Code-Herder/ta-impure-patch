@@ -15,14 +15,20 @@ static int builds_mex(IMPAI_DEC* d, int type)
 
 /* ---- the type within a category, from the builder's menu; ties go to the lower type number ---- */
 
-/* energy: the most egain per value. A type placed on water only is skipped unless the anchor's ground lies below
-   the sea. */
+/* The ring places energy and plants around the anchor, so a type placed on water only (IMPAI_TF_WATER) can stand
+   there only when the anchor's ground lies below the sea; on a dry anchor every site test of it fails. */
+static int anchor_wet(IMPAI_DEC* d)
+{
+    const int32_t apos[3] = { (int32_t)((uint32_t)(d->in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(d->in->st->az * 16 + 8) << 16) };
+    return d->q->ops->ground(d->q, apos) < (int)d->m.sea;
+}
+
+/* energy: the most egain per value, a water-only type only on a wet anchor */
 static int choose_energy(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
-                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
-    const int wet = d->q->ops->ground(d->q, apos) < (int)d->m.sea;
+    const int wet = anchor_wet(d);
     int k, best = 0;
     for (k = 0; k < n; k++) {
         const int t = menu[k];
@@ -70,7 +76,8 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
-/* a factory: the least value among those whose own menu offers a constructor that can build an extractor;
+/* a factory: the least value among those whose own menu offers a constructor that can build an extractor, a
+   water-only plant only on a wet anchor (a shipyard: CORSY's value, 612.5, is the least of CORE's four plants);
    at most FACTORY_LOOK candidates are examined, each costing a menu read and one per constructor on it. A
    factory whose menu is past PLANT_MENU types is not chosen [INFERRED: a retail plant offers a few dozen]. */
 #define FACTORY_LOOK 8
@@ -79,11 +86,13 @@ static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     uint16_t plant[PLANT_MENU];
+    const int wet = anchor_wet(d);
     int k, j, best = 0, looked = 0;
     for (k = 0; k < n && looked < FACTORY_LOOK; k++) {
         const int t = menu[k];
         int np, ok = 0;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
+        if ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) continue;
         if (best && (in->ti[t].value > in->ti[best].value || (in->ti[t].value == in->ti[best].value && t > best))) continue;
         looked++;
         np = d->q->ops->build_options(d->q, t, plant, (int)(sizeof plant / sizeof plant[0]));

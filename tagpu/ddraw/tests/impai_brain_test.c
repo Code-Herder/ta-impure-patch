@@ -142,13 +142,14 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
     *z1 = *z0 + fz - 1;
 }
 
-/* inside the placeable interior, the centre explored, no building's yard crossed */
+/* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
+   fits nowhere, the ground (f_ground, 10) lying above the sea (0) */
 static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const FWORLD* w = fw(q);
     const FDEF* d = fdef(w, type);
     int s;
-    if (!d || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
+    if (!d || d->e.minwater > 0 || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
         !f_explored(q, cx + d->d.fx / 2, cz + d->d.fz / 2))
         return 0;
     for (s = 1; s < FW_SLOTS; s++) {
@@ -789,24 +790,35 @@ static void check_game(void)
 
 /* ---- the economy game ---- */
 
-/* A game in the economy's own time: the retail game's CORE numbers (its FBIs: costs, build times, worker times,
-   gains, footprints, speeds), a commander alone on a 1000/1000 start, and a tick-by-tick model of what the engine
-   does between decisions -- a builder walks to its site at its speed, a frame stands there and grows by
-   workertime / buildtime a second, its cost drawn as it grows and the growth cut to what the stores can pay, an
-   extractor pays 2 metal a second and every finished unit its gains and upkeep, a factory makes constructors one
-   at a time. The wind's mean ratio is 0.25, under which the solar collector wins the energy choice, as it did in
-   the impai-eco game (MEASURED 2026-11-12: CORSOLAR built). The brain decides on seat 0's phase, every 15 ticks,
-   to GameTime 5400, impai-eco's end: what it has built by then is what that game can be held to. */
-enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_N };
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, with the retail game's CORE numbers (its
+   FBIs: costs, build times, worker times, gains, footprints, speeds), a commander alone on a 1000/1000 start, and
+   a tick-by-tick model of what the engine does between decisions -- a builder walks to its site at its speed, a
+   frame stands there and grows by workertime / buildtime a second, its cost drawn as it grows and the growth cut
+   to what the stores can pay, an extractor pays its extractsmetal times the metal under its footprint a second
+   and every finished unit its gains and upkeep, a factory makes constructors one at a time. The commander's menu
+   holds CORE's land plants and the shipyard with its water-only constructor and extractor, which the dry map
+   refuses everywhere (f_site_ok), as the retail menus do (CORCOM2.GUI, CORSY1.GUI, the download entries of
+   CORCS). The wind's mean ratio is 0.25, under which the solar collector wins the energy choice, as it did in the
+   impai-eco game (MEASURED 2026-11-12: CORSOLAR built). The brain decides on seat 0's phase, every 15 ticks, to
+   GameTime 5400, impai-eco's end: what it has built by then is what that game can be held to. */
+enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_N };
 
-/* five patches within 600 px of the commander's start, (20, 20), as on Comet Catcher's starts */
+/* Comet Catcher's patches within 1100 px of seat 1's start, cell (324, 35), less 240 cells in x so they fit the
+   fake's 128: every 3 x 3 block of metal above the background 3, with its metal (MEASURED 2026-11-12: the
+   feature grid's byte +7 in impai-eco's recording at GameTime 30). The game's extractors stood on the first four
+   by distance: 223, 112, 223 and 223 under CORMEX's 0.001, so 8.0 metal a second with the commander's 1, the
+   income the game reached (impai: eco ... metal_in=8.1). */
+#define EGAME_DX 240
 static const SNAP_PATCH EPATCHES[] = {
-    { 30, 14, 30, 14, 32, 16, 9 },
-    { 12, 30, 12, 30, 14, 32, 9 },
-    { 40, 28, 40, 28, 42, 30, 9 },
-    { 26, 44, 26, 44, 28, 46, 9 },
-    { 50, 12, 50, 12, 52, 14, 9 },
+    { 76, 15, 76, 15, 78, 17, 9 },
+    { 105, 43, 105, 43, 107, 45, 9 },
+    { 70, 55, 70, 55, 72, 57, 9 },
+    { 116, 17, 116, 17, 118, 19, 9 },
+    { 118, 70, 118, 70, 120, 72, 9 },
+    { 110, 81, 110, 81, 112, 83, 9 },
+    { 25, 59, 25, 59, 27, 61, 9 },
 };
+static const uint8_t EMETAL[] = { 223, 112, 223, 223, 56, 223, 112 };
 #define NEPATCH ((unsigned)(sizeof EPATCHES / sizeof EPATCHES[0]))
 
 typedef struct EGAME {
@@ -829,15 +841,18 @@ static void egame_def(FWORLD* w, int t, const char* name, int fx, int fz, int mo
 
 static void egame_world(void)
 {
-    static const uint16_t COMMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB };
-    static const uint16_t CKMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB };
+    static const uint16_t COMMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_UWMEX };
+    static const uint16_t CKMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY };
     static const uint16_t LABMENU[] = { E_CK };
+    static const uint16_t VPMENU[] = { E_CV };
+    static const uint16_t SYMENU[] = { E_CS };
+    static const uint16_t CSMENU[] = { E_SY, E_UWMEX };
     TASIM_ROLE_OUT roles[E_N];
     WORLDQ q = { &FAKE, &s_w, 0 };
     unsigned i;
     int x, z, t;
     memset(&s_w, 0, sizeof s_w);
-    s_w.threshold = 0;
+    s_w.threshold = 3;
     s_w.wind_mean = 0.25f;
     s_w.ndefs = E_N;
     egame_def(&s_w, E_COM, "CORCOM", 2, 2, 1, 300, 23512, 35838, 97852);
@@ -859,23 +874,41 @@ static void egame_world(void)
     s_w.defs[E_MAKR].e.makesmetal = 1;
     egame_def(&s_w, E_LAB, "CORLAB", 6, 6, 0, 100, 680, 1250, 7000);
     s_w.defs[E_LAB].e.estore = s_w.defs[E_LAB].e.mstore = 100;
+    egame_def(&s_w, E_VP, "CORVP", 7, 7, 0, 100, 600, 1100, 6700);
+    s_w.defs[E_VP].e.estore = s_w.defs[E_VP].e.mstore = 100;
+    egame_def(&s_w, E_SY, "CORSY", 8, 8, 0, 100, 600, 750, 6000);
+    s_w.defs[E_SY].e.minwater = 30;
+    egame_def(&s_w, E_CV, "CORCV", 3, 3, 1, 100, 175, 2145, 5146);
+    s_w.defs[E_CV].e.energymake = 9.2f;
+    s_w.defs[E_CV].e.metalmake = 0.25f;
+    egame_def(&s_w, E_CS, "CORCS", 4, 4, 1, 125, 260, 2375, 5537);
+    s_w.defs[E_CS].e.minwater = 30;
+    egame_def(&s_w, E_UWMEX, "CORUWMEX", 3, 3, 0, 0, 56, 600, 1900);
+    s_w.defs[E_UWMEX].d.kind = WQ_KIND_MEX;
+    s_w.defs[E_UWMEX].d.strength = s_w.defs[E_UWMEX].e.extracts = 0.001f;
+    s_w.defs[E_UWMEX].e.minwater = 15;
     menu_set(&s_w, E_COM, COMMENU, (int)(sizeof COMMENU / sizeof COMMENU[0]));
     menu_set(&s_w, E_CK, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
     menu_set(&s_w, E_LAB, LABMENU, 1);
-    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    menu_set(&s_w, E_VP, VPMENU, 1);
+    menu_set(&s_w, E_SY, SYMENU, 1);
+    menu_set(&s_w, E_CV, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, E_CS, CSMENU, (int)(sizeof CSMENU / sizeof CSMENU[0]));
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) { s_w.explored[z][x] = 1; s_w.metal[z][x] = 3; }
     s_spots = EPATCHES;
     s_nspots = NEPATCH;
     for (i = 0; i < NEPATCH; i++)
         for (z = EPATCHES[i].z0; z <= EPATCHES[i].z1; z++)
-            for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = 200;
+            for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = EMETAL[i];
     s_w.first[0] = 1; s_w.last[0] = 31;
     s_w.first[1] = 32; s_w.last[1] = 63;
     memset(roles, 0, sizeof roles);
     for (t = 1; t < E_N; t++) roles[t].role = TASIM_ROLE_OTHER;
-    roles[E_COM].role = roles[E_CK].role = roles[E_LAB].role = TASIM_ROLE_BUILDER;
+    roles[E_COM].role = roles[E_CK].role = roles[E_CV].role = roles[E_CS].role = TASIM_ROLE_BUILDER;
+    roles[E_LAB].role = roles[E_VP].role = roles[E_SY].role = TASIM_ROLE_BUILDER;
     roles[E_COM].flags = TASIM_RF_COMMANDER | TASIM_RF_MOBILE;
-    roles[E_CK].flags = TASIM_RF_MOBILE;
-    roles[E_LAB].flags = TASIM_RF_FACTORY;
+    roles[E_CK].flags = roles[E_CV].flags = roles[E_CS].flags = TASIM_RF_MOBILE;
+    roles[E_LAB].flags = roles[E_VP].flags = roles[E_SY].flags = TASIM_RF_FACTORY;
     CHECK(impai_tinfo_build(&q, roles, E_N, s_ti, FW_DEFS) == E_N, "tinfo");
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
     memset(&s_reach, 0, sizeof s_reach);
@@ -883,7 +916,7 @@ static void egame_world(void)
     s_eg.metal = s_eg.energy = s_eg.mstore = s_eg.estore = 1000;
 }
 
-static float egame_speed(int type) { return type == E_COM ? 1.07f : type == E_CK ? 0.9f : 0; }
+static float egame_speed(int type) { return type == E_COM ? 1.07f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
 static float egame_reach(int type) { return type == E_COM ? 60.0f : 40.0f; }
 
 /* a step of `speed` px toward (x, z) px; 1 when within `reach` */
@@ -995,27 +1028,41 @@ static void egame_tick(void)
 {
     int s;
     float mstore = 1000, estore = 1000;     /* the start's storage (impai-eco's econ line: 1000 and 1000) */
+    float e_gain = 0, m_gain = 0;
     for (s = 1; s < 32; s++) egame_unit(s);
     for (s = 1; s < 32; s++) {
         const FUNIT* u = &s_w.unit[s];
         const FDEF* d = &s_w.defs[u->type];
+        const float use = d->e.energyuse > 0 ? d->e.energyuse / 30.0f : 0.0f;
         float e, m;
+        int paid;
         if (!u->live || !u->finished) continue;
+        /* a unit with an upkeep works only while the store, what the builders left of it, pays it: impai-eco's
+           extractors gave no metal while a build spent its stored energy (MEASURED 2026-11-12, the recording's
+           seat 1: metal_in 1.00, the commander's alone, at GameTimes 2902, 4282 and 4897 with four extractors
+           standing and the energy under 25); the tick's gains come in after every upkeep */
+        paid = use > 0 && s_eg.energy >= use;
         e = d->e.energymake + (d->e.energyuse < 0 ? -d->e.energyuse : 0) + d->e.wind * s_w.wind_mean;
         m = d->e.metalmake;
-        if (u->type == E_MEX) m += 2.0f;
-        if (u->type == E_MAKR && s_eg.energy >= 60.0f / 30.0f) m += 1.0f;
-        s_eg.e_acc_in += e / 30.0f;
-        s_eg.m_acc_in += m / 30.0f;
-        s_eg.energy += e / 30.0f;
-        s_eg.metal += m / 30.0f;
-        if (d->e.energyuse > 0) {
-            s_eg.e_acc_out += d->e.energyuse / 30.0f;
-            s_eg.energy -= s_eg.energy < d->e.energyuse / 30.0f ? s_eg.energy : d->e.energyuse / 30.0f;
+        if (u->type == E_MEX && paid) {
+            int x0, z0, x1, z1, x, z;
+            yard_rect(&s_w, u, &x0, &z0, &x1, &z1);
+            for (z = z0; z <= z1; z++) for (x = x0; x <= x1; x++) m += d->e.extracts * (float)s_w.metal[z][x];
         }
+        if (u->type == E_MAKR && paid) m += 1.0f;
+        if (paid) {
+            s_eg.e_acc_out += use;
+            s_eg.energy -= use;
+        }
+        e_gain += e / 30.0f;
+        m_gain += m / 30.0f;
         estore += d->e.estore;
         mstore += d->e.mstore;
     }
+    s_eg.e_acc_in += e_gain;
+    s_eg.m_acc_in += m_gain;
+    s_eg.energy += e_gain;
+    s_eg.metal += m_gain;
     s_eg.estore = estore;
     s_eg.mstore = mstore;
     if (s_eg.energy > estore) s_eg.energy = estore;
@@ -1034,9 +1081,9 @@ static void egame_tick(void)
 static void check_economy_game(void)
 {
     IMPAI_BRAIN_OUT out;
-    int s, n[E_N] = { 0 }, orders = 0, queues = 0;
+    int s, n[E_N] = { 0 }, orders = 0, queues = 0, wet = 0;
     egame_world();
-    unit_add(&s_w, 1, E_COM, 20, 20, 1);
+    unit_add(&s_w, 1, E_COM, 324 - EGAME_DX, 35, 1);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
         if (impai_brain_due((unsigned)s_w.gametime, 0, &IMPAI_LEVEL_A1)) {
             const int from = s_w.nlog;
@@ -1045,6 +1092,7 @@ static void check_economy_game(void)
             for (k = from; k < s_w.nlog; k++) {
                 orders++;
                 queues += s_w.log[k].c.verb == WQ_CMD_QUEUE;
+                wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
                 cmd_print(&s_w.log[k]);
             }
             if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
@@ -1052,14 +1100,18 @@ static void check_economy_game(void)
         egame_tick();
     }
     for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) n[s_w.unit[s].type]++;
-    printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d labs=%d cons=%d metal=%.0f energy=%.0f "
-           "first mex=%d energy=%d lab=%d ck=%d\n", orders, n[E_MEX], n[E_SOLAR], n[E_WIND], n[E_MAKR], n[E_LAB], n[E_CK],
-           s_eg.metal, s_eg.energy, s_eg.first[E_MEX], s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
-           s_eg.first[E_LAB], s_eg.first[E_CK]);
+    printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
+           "energy=%.0f first mex=%d energy=%d plant=%d\n", orders, n[E_MEX], n[E_SOLAR], n[E_WIND], n[E_MAKR],
+           n[E_LAB] + n[E_VP], n[E_CK] + n[E_CV], s_eg.metal, s_eg.energy, s_eg.first[E_MEX],
+           s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
+           s_eg.first[E_VP] ? s_eg.first[E_VP] : s_eg.first[E_LAB]);
+    /* At impai-eco's pace the first plant, CORVP (the least value of the land plants), takes the energy two
+       solar collectors would: one stands by 5400 and the second is a frame. */
     CHECK(n[E_MEX] >= 4, "four extractors by 5400: %d", n[E_MEX]);
-    CHECK(n[E_SOLAR] + n[E_WIND] >= 2, "two energy buildings by 5400: %d", n[E_SOLAR] + n[E_WIND]);
-    CHECK(n[E_LAB] >= 1 && queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d", n[E_LAB],
-          queues);
+    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400: %d", n[E_SOLAR] + n[E_WIND]);
+    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
+          n[E_LAB] + n[E_VP], queues);
+    CHECK(!wet, "no water-only type ordered on the dry map: %d", wet);
 }
 
 int main(void)
