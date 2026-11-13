@@ -749,7 +749,8 @@ def main():
         # reservation against another run starting its own
         xv = tacompat.start_xvfb(screen="1920x1080x24")
         display = f":{xv.tacompat_display}"
-    runlock.hold(ROOT, "modsscreen", 1, resources(args.display))
+    # on llvmpipe (--software) the game holds no device memory: no GPU token
+    runlock.hold(ROOT, "modsscreen", 1, resources(args.display), gpu=not args.software)
     # a failure anywhere leaves no game behind, on a display nobody watches
     atexit.register(lambda: tacli("stop", instance(), check=False))
     try:
