@@ -174,11 +174,12 @@ stored **9** in `UnitStruct+0xF8` (the frame index) where at stage 1 it stored *
 
 ## 4. What targeting actually does with LOS
 
-Four ways a weapon slot gets a target. **One of them checks LOS.**
+Five ways a weapon slot gets a target. **Two of them check LOS**, through the same list.
 
 | path | code | LOS-gated? |
 |---|---|---|
 | periodic acquisition | `FUN_004089A0` → `FUN_0040B7B0` → `FUN_0040AD80` | **yes** |
+| an idle unit's search (Standby, Patrol) | `FUN_0043B700` → `FUN_0040B7B0` mode 0 → `FUN_0040AD80` | **yes** |
 | retaliation on damage | `FUN_00406F80` | **no** |
 | an explicit attack order | order state machine | no |
 | radar-blip fallback | second list in `FUN_0040AD80` | needs radar; none in these tests |
@@ -201,10 +202,16 @@ only if it comes up empty *and* the player owns an active unit whose def flags c
 
 Two details worth having:
 
-- **The search radius is the weapon's range**, `FUN_0049ADF0(unit, slot)` =
-  `WeaponStruct+0xDC` (peeked live: `810` for `CORE_BATSLASER`). `FUN_0040B7B0`'s other
-  branch, the one that would search `SightDistance` instead, is **dead** — the finder has
-  exactly one caller (`0x408B76`) and it always passes `1`.
+- **The search radius is the weapon's range in the weapon scan, and `SightDistance` for an
+  idle unit.** `FUN_0040B7B0(unit, slot, mode)` has three callers [DISASSEMBLED 2026-11-13]:
+  the weapon scan `0x408B76` and `0x408974` (in `0x408920`, with no direct caller found) pass
+  mode 1, whose radius is `FUN_0049ADF0(unit, slot)` = `WeaponStruct+0xDC` (peeked live: `810`
+  for `CORE_BATSLASER`; `0x40B80C..0x40B82F`); the Standby and Patrol search `0x43B700` passes
+  mode 0 (`0x43B718..0x43B71D`), whose radius is the def's raw signed `SightDistance` word
+  `+0x202` (`0x40B83A..0x40B85F`), not the LOS table's 256 cap. Each pick must also pass
+  can-engage `0x49ABB0`, which holds the range test, so an idle unit's search reaches
+  min(`SightDistance`, slot 0's range), and only among the enemies on its seat's visible list
+  ([orders](engine/orders.md), *What an idle unit does*).
 - The candidate gate `(def+0x241 & 0x8000) || <owner is human/AI> || (SoftwareDebugMode &
   0x400)` is where **`+shootall`** lands; bLoBbY's "shootall default" patch is the
   `0F 84`→`0F 85` at `0x0040B8F5` inside it. It changes *eligibility*, never visibility.

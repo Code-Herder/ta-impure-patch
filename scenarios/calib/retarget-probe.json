@@ -1,0 +1,14 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The re-targeting probe (research/notes/modules/tasim-calibration.md, The predictor's fights): one ARMPW with a queue of attacks on three ARMFAVs that have no orders, 700 world units apart along the arena's axis, the first at the duel's 340. ARMPW won all 50 runs of the old duel-t1-raider-scout-cheapest reference against one ARMFAV, median ttk 138. 700 is more than 200 past the longer of either type's sight (ARMFAV 310, ARMPW 280: def +0x202) and slot 0's reach (180 each), so neither an idle ARMPW nor an idle ARMFAV searches from one to the next (Standby 0x405FE0, finder mode 0 0x40B7B0, can-engage 0x49ABB0): only the queue carries the ARMPW on. The control is this file without the two queued orders; it reaches the limit.",
+ "units": [
+  {"id": "a", "type": "ARMPW", "owner": 0, "pos": [4800, 1184], "facing": 90,
+   "orders": [{"cmd": "attack", "target": "b0"}, {"cmd": "attack", "target": "b1", "queue": true},
+              {"cmd": "attack", "target": "b2", "queue": true}]},
+  {"id": "b0", "type": "ARMFAV", "owner": 1, "pos": [5140, 1184], "facing": 270},
+  {"id": "b1", "type": "ARMFAV", "owner": 1, "pos": [5840, 1184], "facing": 270},
+  {"id": "b2", "type": "ARMFAV", "owner": 1, "pos": [6540, 1184], "facing": 270}
+ ],
+ "calib": {"kind": ["winrate", "distribution"], "metrics": ["winner", "ttk", "survivors", "margin"],
+           "runs": 4, "limit": 5400, "end_units": {"1": 0}, "area": "probe/land/t1/retarget"}
+}

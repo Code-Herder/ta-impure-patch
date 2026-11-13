@@ -35,9 +35,16 @@ others are made, and graded for the winner and the margin at GROUP_RUNS runs:
              (default tools/tasim/calib-arena-naval.json); calib.py engine plays them with the same --arena.
 Each side stands in rows of four across the arena's axis, a unit's step 16 x (its footprint + 1) + 16 world
 units, side A's front row at the arena's a and side B's at the longer ground range + 160 beyond it (a
-defence's own range + 160), and unit k of a side attacks unit k mod n of the other. A fight neither side can
-hurt is dropped, one whose shots would spend more than half the storage or that leaves the arena's rectangle
-refused by name. --groups, --defence and --naval write only their own kind; without them the duels and
+defence's own range + 160). Each unit with a mover attacks every enemy the resolver lets it attack, nearest
+first by the squared distance between the scenario positions (ties to the lower index), as one TA queue: the
+second and later orders carry `"queue": true`, so the engine starts the next attack the tick the head's target dies
+(Attack_Chase 0x4034A0 returns 5 on a cleared target); no idle unit re-acquires past its first slot's reach
+(Standby 0x405FE0, finder mode 0 0x40B7B0, can-engage 0x49ABB0). A unit without a mover -- a defence structure --
+gets no order and keeps the engine's standing Guard_NoMove 0x4021F0, as in real play: queued, its attack
+Attack_NoMove 0x402160 drops an out-of-range head (AutoAim raises 0x1000 at 0x49E53A, state 2 at 0x402191 returns 9,
+0x43B8E5 frees a node with a successor), so a nearest-first queue would drain to its farthest target and retry it
+every 30 to 59 ticks, never reaching the guard. A fight neither side can hurt or order is dropped, one whose shots
+would spend more than half the storage or that leaves the arena's rectangle refused by name. --groups, --defence and --naval write only their own kind; without them the duels and
 courses are made. write_fight is the one placement every kind uses, for a generator of other armies.
 """
 
@@ -139,8 +146,16 @@ def attack_facts(defs_doc) -> dict:
             "f241": word(u, 0x241, F241_CANFLY | F241_CANHOVER | F241_WEAPON | F241_KAMIKAZE),
             "f245": word(u, 0x245, F245_CANATTACK),
             "slots": slots,
-            "waterline": int.from_bytes(bytes.fromhex(img[0x22C][2]), "little") if 0x22C in img else None}
+            "waterline": int.from_bytes(bytes.fromhex(img[0x22C][2]), "little") if 0x22C in img else None,
+            "bmcode": word(u, 0x22F, 0xFF)}
     return out
+
+
+def has_mover(u) -> bool:
+    """The creates give a unit a mover only when def +0x22F (bmcode) is 1 (0x4860BB, 0x4862CF); a type with none
+    is a structure, whose attack is Attack_NoMove (the resolver's mode 3, 0x43F348..0x43F375)."""
+    f = u.get("attack")
+    return bool(f) and f["bmcode"] == 1
 
 
 def never_submerged(t) -> bool:
@@ -224,19 +239,31 @@ def rows(arena, units, front: int, toward_b: bool) -> list:
     return out
 
 
+def queue_orders(u, upos, them, tpos, other) -> list:
+    """Unit u's orders at upos: an attack on every enemy of `them` (at `tpos`, handles `other` + index) the
+    resolver lets it attack, nearest first by the squared distance between the scenario positions, ties to the
+    lower index; the second and later carry `queue`. Empty when it can attack none or has no mover."""
+    if not has_mover(u):
+        return []
+    near = sorted((t for t in range(len(them)) if takes_attack(u, them[t])),
+                  key=lambda t: ((tpos[t][0] - upos[0]) ** 2 + (tpos[t][1] - upos[1]) ** 2, t))
+    return [dict({"cmd": "attack", "target": f"{other}{t}"}, **({"queue": True} if i else {}))
+            for i, t in enumerate(near)]
+
+
 def write_fight(name, side_a, side_b, arena, arena_scn, desc, area, gap=None, runs=GROUP_RUNS):
     """The scenario of side_a (owner 0) against side_b (owner 1), each a list of (role row, count): A's front
-    row at the arena's a, B's at the longer ground range + REACH beyond (or `gap`), unit k of each side
-    attacking the first unit from k mod n on of the other that the resolver lets it attack (takes_attack), or
-    holding its ground with no order when there is none. GenError when no unit can be ordered to attack, a
-    position leaves the arena's rectangle or the shots spend more than half the storage."""
+    row at the arena's a, B's at the longer ground range + REACH beyond (or `gap`). Each unit with a mover
+    attacks every enemy the resolver lets it attack (takes_attack), nearest first, as one TA queue
+    (queue_orders); a structure, or a unit with no such enemy, gets no order. GenError when no unit can be ordered to attack, a position
+    leaves the arena's rectangle or the shots spend more than half the storage."""
     ua = [u for u, n in side_a for _ in range(n)]
     ub = [u for u, n in side_b for _ in range(n)]
     if not ua or not ub:
         raise GenError(f"{name}: a side has no unit")
     if all(u["dps_ground"] == 0 for u in ua + ub):
         raise GenError(f"{name}: neither side can hurt the other")
-    if not any(takes_attack(u, t) for us, ts in ((ua, ub), (ub, ua)) for u in us for t in ts):
+    if not any(has_mover(u) and takes_attack(u, t) for us, ts in ((ua, ub), (ub, ua)) for u in us for t in ts):
         raise GenError(f"{name}: no unit can be ordered to attack the other side")
     for u, n in side_a + side_b:
         if not storage_ok(arena_scn, u, n):
@@ -247,19 +274,22 @@ def write_fight(name, side_a, side_b, arena, arena_scn, desc, area, gap=None, ru
     pa = rows(arena, ua, depth_a, False)
     pb = rows(arena, ub, depth_a + gap, True)
     fa, fb = calibref.arena_facing(arena)
-    units = []
-    for side, us, ps, face, other, them in (("a", ua, pa, fa, "b", ub), ("b", ub, pb, fb, "a", ua)):
-        for k, (u, (along, across)) in enumerate(zip(us, ps)):
+    at = {}
+    for side, us, ps in (("a", ua, pa), ("b", ub, pb)):
+        at[side] = []
+        for u, (along, across) in zip(us, ps):
             pos = calibref.arena_point(arena, along, across)
             if not calibref.in_flat(arena, pos):
                 raise GenError(f"{name}: {u['name']} at {pos} leaves the arena's rectangle")
-            row = {"id": f"{side}{k}", "type": u["name"], "owner": 0 if side == "a" else 1, "pos": pos,
+            at[side].append(pos)
+    units = []
+    for side, us, face, other, them in (("a", ua, fa, "b", ub), ("b", ub, fb, "a", ua)):
+        for k, u in enumerate(us):
+            row = {"id": f"{side}{k}", "type": u["name"], "owner": 0 if side == "a" else 1, "pos": at[side][k],
                    "facing": face}
-            for j in range(len(them)):
-                t = (k + j) % len(them)
-                if takes_attack(u, them[t]):
-                    row["orders"] = [{"cmd": "attack", "target": f"{other}{t}"}]
-                    break
+            orders = queue_orders(u, at[side][k], them, at[other], other)
+            if orders:
+                row["orders"] = orders
             units.append(row)
     return name, {
         "format": "ta-scenario/1",

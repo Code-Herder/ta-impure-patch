@@ -150,16 +150,32 @@ unit names by scanning the live definition table. This design follows its recipe
   `0x423C50` refuses a feature whose footprint covers an indestructible feature of the map, such
   as a metal rock ([map](engine/map.md), the `0x423C50` row): a scenario places its wrecks clear of
   them.
-- **Only the LAST order of a list takes effect today.** The applier issues each with
-  `shift = 0`, and `ORDERS_NewMainOrder2Unit`'s allocator walks the unit's order list and
-  destroys every entry lacking flag bit `0x4` before linking the new one, when the new order's
-  own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at
-  `0x43AE0E..0x43AE12`; a move order's evidently do) — so a list is a replacement, not a queue.
-  [BINARY-VERIFIED 2026-09-04, found by the landing review; no shipped fixture uses more than
-  one order per entity, so nothing depends on it yet.] Making the array a real queue means
-  passing `shift = 1` for the second and later orders, and that path is the one whose
-  duplicate scan *cancels* a matching order rather than adding one — it needs a live test
-  before it is used.
+- **A list replaces, unless its later orders carry `queue`.** The applier issues an order
+  without Shift (`shift = 0`), and `ORDERS_NewMainOrder2Unit`'s allocator then walks the unit's
+  order list and destroys every entry lacking flag bit `0x4` before linking the new one, when the
+  new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at
+  `0x43AE0E..0x43AE12`; a move order's evidently do) — so of plain orders only the last takes
+  effect. [BINARY-VERIFIED 2026-09-04.]
+- **Queued orders: `"queue": true`** is TA's Shift. The applier issues the order with Shift, and
+  `0x43ADC0` then skips the wipe and links it after the unit's last commanded node (the one marked
+  `+0x42` bit `0x1000`, which it takes the mark from), or at the tail (`0x43AE5B..0x43AFB1`), so a
+  plain order followed by queued ones is one queue in file order: when the head ends, the
+  engine's controller starts the next. With Shift, `0x43AFC0` first walks the list for a node of
+  the same action, of the same target when the order has one, and within 16 world units on x and
+  z of a position the order has, and **removes that node and adds nothing** — the toggle a
+  Shift-click on a waypoint makes (`0x43AFE0..0x43B087`, [orders](engine/orders.md), *The order
+  module*). So `queue` is refused, by name, by `tacli` and again by the DLL's parser, unless:
+  - it is not the first order of its list (it has an order to join);
+  - its target is a unit handle (`"target"` naming a unit), with no `to` and no `count` — never a
+    feature, a position or `buildweapon`, whose root `0x43B0B0` takes no Shift;
+  - no earlier order of its list names the same target (`tacli` checks the whole list; the parser,
+    which sees the wire, checks the chain back to its head without `queue`);
+  - its `after` is not below the previous order's: an order issued before its predecessor would be
+    wiped by the predecessor's plain issue.
+  On the wire the order line ends ` queue`, after any ` after=<n>`; the parser takes it only for an
+  ordinal subject and a `unit <ordinal>` target. A delayed chain reaches `0x43AFC0` in file order
+  (*The delayed orders*, `tagpu_scenario.c`); an entry the watch cancels leaves the chain's later
+  entries to join whatever list the unit holds.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
   `fire`, `stock`, `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
@@ -463,7 +479,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] It returns the feature object for a 3-D def only: a 2-D (GAF) def such as a tree, `+0xFE` bit 0 set, gets no object and returns NULL on success, so the applier takes the anchor cell's `+8` word holding the def as the placement fact (`0x423C60` zeroes the return, `0x423EE5` writes the word) [DISASSEMBLED 2026-10-26] |
 | order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and that byte at 0 means this unit cannot take that order (`0x4401DC..0x4401E7`; the pointer itself is never `NULL`, DISASSEMBLED). Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
-| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last order per entity survives. [BINARY-VERIFIED] |
+| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last plain order per entity survives; a `queue` order passes `shift = 1` and joins the list (*Queued orders*). [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
@@ -646,7 +662,8 @@ end
 
 The calibration keys ride on their own lines and columns: `clearfeat 1` and `objective off|on`
 when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
-both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line. The
+both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line, or
+before a closing ` queue` (*Queued orders*). The
 weapon keys are the unit line's last two columns, `<fire>` a token (`hold` / `return` / `at_will`)
 and `<stock>` 0–200, each `-` when unset, and `buildweapon`'s amount is its target, `count <n>`
 (1–200), which no other order takes. The parser refuses an unknown `player` key and any column

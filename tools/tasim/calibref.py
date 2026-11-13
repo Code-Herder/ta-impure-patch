@@ -71,6 +71,18 @@ def runs_dir() -> Path:
     return calib_dir() / "runs"
 
 
+def runs_in_root(runs: Path) -> Path:
+    """`runs` resolved, when it lies in calib_dir(); else CalibError. `refs build` writes under calib_dir()'s
+    refs, so a runs folder of another root would put its references beside a generation they do not belong to:
+    a duel's and a course's scenario id is the same in every generation, and a reader takes each id's newest
+    reference (tools/impai/predfit.py, load_fights)."""
+    runs, root = Path(runs).resolve(), calib_dir().resolve()
+    if not runs.is_relative_to(root):
+        raise CalibError(f"{runs} is not in the calibration root {root}, where its references would go: "
+                         f"set TACALIB_DIR to the root the runs were played into")
+    return runs
+
+
 def gen_dir() -> Path:
     return calib_dir() / "scenarios" / "gen"
 

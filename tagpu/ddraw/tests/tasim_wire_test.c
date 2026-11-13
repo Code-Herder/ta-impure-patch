@@ -62,8 +62,8 @@ static void dump(const char* name, const TASIM_WIRE* w, const TASIM_WIRE_ERRS* e
     for (i = 0; i < w->norders; i++)
     {
         const TASIM_WIRE_ORDER* o = &w->orders[i];
-        printf("order %d subj %d %d [%s] cmd %d kind %d %d %d tlive %d [%s] after %d\n", i, o->subj, o->uord,
-               o->sexp, o->cmd, o->kind, o->a, o->b, o->tlive, o->texp, o->after);
+        printf("order %d subj %d %d [%s] cmd %d kind %d %d %d tlive %d [%s] after %d queue %d\n", i, o->subj,
+               o->uord, o->sexp, o->cmd, o->kind, o->a, o->b, o->tlive, o->texp, o->after, o->queue);
     }
 }
 

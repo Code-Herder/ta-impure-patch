@@ -16,6 +16,8 @@ engine and compared with what the fixture's scenarios ask for.
 - the feature grid holds no feature the BurnAll walker would burn (a dump read with tarec);
 - the delayed orders' one report line, its counts computed from the fixture's scenarios and step
   GameTimes, never a literal;
+- each queued chain in the unit's main list `+0x5C`: exactly its orders' Attack_Chase nodes, each on
+  the unit its order names, in file order (a `queue` order goes through 0x43AFC0 with Shift);
 - `tacli units --json` carries the engine's costs and max HP.
 
 Exit 0 when every check holds, 1 with the first that does not, 2 when it could not run. The puppet
@@ -58,6 +60,13 @@ PASS_EVERY = 30                 # the economy pass's period; it falls at GameTim
 ACK_S = 60
 CELL, CELL_DEF = tarec.REC_CELL_BYTES, 8
 DUMP = "calibfeat"
+OFF_BEGIN, OFF_END, UNIT_STRIDE = 0x14357, 0x1435B, 0x118
+PL_FIRSTUNIT, PL_LASTUNIT = 0x67, 0x6B
+U_ORDERS, U_XPOS, U_YPOS, U_OWNER, U_STATE = 0x5C, 0x6C, 0x74, 0xFF, 0x110
+ON_ACTION, ON_TARGET, ON_NEXT = 0x04, 0x16, 0x4A
+ATTACK_CHASE = 6                # the action a mover's attack order takes (MEASURED, engine/weapons.md)
+LIST_MAX = 16                   # nodes walked a list, at most
+NEAR = 24                       # world units: a unit found by where the scenario stood it
 
 
 class Fail(Exception):
@@ -262,6 +271,77 @@ def check_delays(gamedir, seq, now):
             "skipped %d)" % want)
 
 
+def chains(seq, now):
+    """[(the subject's scenario unit, [the target units its orders name])] of every unit with a queued
+    order created by the last clearing apply by `now` or after it, each target the scenario's unit."""
+    last = max(T for T, exp in seq if T <= now and exp["setup"]["clear_existing"])
+    out = []
+    for T, exp in seq:
+        if last <= T <= now:
+            by = {u["id"]: u for u in exp["units"]}
+            out += [(u, [by[o["target"]] for o in u["orders"]]) for u in exp["units"]
+                    if any(o.get("queue") for o in u["orders"])]
+    return out
+
+
+def seat_units(instance, ta, owner):
+    """[(pointer, x, y, the main list's head)] of the seat's live units: its record's first..last,
+    inclusive, bounded by the unit array."""
+    rec = ta + OFF_PLAYERS + owner * PL_STRIDE
+    first, last, beg, end = peek(instance, f"0x{rec + PL_FIRSTUNIT:X}:4", f"0x{rec + PL_LASTUNIT:X}:4",
+                                 f"0x{ta + OFF_BEGIN:X}:4", f"0x{ta + OFF_END:X}:4")
+    if not (beg <= first <= last <= end) or (first - beg) % UNIT_STRIDE or (last - first) // UNIT_STRIDE > 64:
+        raise CannotRun(f"seat {owner}: its units 0x{first:X}..0x{last:X} are not a short run of the array")
+    ptrs = list(range(first, last + 1, UNIT_STRIDE))
+    vals = peek(instance, *(f"0x{u + off:X}:{n}" for u in ptrs
+                            for off, n in ((U_STATE, 4), (U_XPOS, 2), (U_YPOS, 2), (U_ORDERS, 4))))
+    out = []
+    for k, u in enumerate(ptrs):
+        st, x, y, head = vals[4 * k:4 * k + 4]
+        if st & 0x10000000:
+            out.append((u, x, y, head))
+    return out, beg, end
+
+
+def near(x, y, pos):
+    return abs(x - pos[0]) <= NEAR and abs(y - pos[1]) <= NEAR
+
+
+def check_queues(instance, ta, seq, now):
+    """Each queued chain's subject, found nearest its scenario position (a subject has walked well under
+    NEAR world units a tick since), holds exactly its chain: Attack_Chase nodes through +0x4A, each
+    target a slot of the array standing where its scenario unit stood, of that unit's owner."""
+    said = []
+    for u, targets in chains(seq, now):
+        live, beg, end = seat_units(instance, ta, u["owner"])
+        ordered = [(p, x, y, h) for p, x, y, h in live if h]
+        if not ordered:
+            raise Fail(f"{u['id']}: no unit of seat {u['owner']} holds an order")
+        p, x, y, node = min(ordered, key=lambda r: (r[1] - u["pos"][0]) ** 2 + (r[2] - u["pos"][1]) ** 2)
+        if (x - u["pos"][0]) ** 2 + (y - u["pos"][1]) ** 2 > 200 ** 2:
+            raise Fail(f"{u['id']}: the nearest ordered unit of seat {u['owner']} is at ({x}, {y})")
+        got = []
+        while node and len(got) <= LIST_MAX:
+            act, tgt, nxt = peek(instance, f"0x{node + ON_ACTION:X}:1", f"0x{node + ON_TARGET:X}:4",
+                                 f"0x{node + ON_NEXT:X}:4")
+            got.append((act, tgt))
+            node = nxt
+        if len(got) != len(targets):
+            raise Fail(f"{u['id']}: its main list holds {len(got)} nodes, its chain {len(targets)}")
+        for k, ((act, tgt), t) in enumerate(zip(got, targets)):
+            if act != ATTACK_CHASE:
+                raise Fail(f"{u['id']}: node {k} is action {act}, not Attack_Chase")
+            if not (beg <= tgt <= end) or (tgt - beg) % UNIT_STRIDE:
+                raise Fail(f"{u['id']}: node {k}'s target 0x{tgt:X} is not a slot of the array")
+            owner, tx, ty = peek(instance, f"0x{tgt + U_OWNER:X}:1", f"0x{tgt + U_XPOS:X}:2",
+                                 f"0x{tgt + U_YPOS:X}:2")
+            if owner != t["owner"] or not near(tx, ty, t["pos"]):
+                raise Fail(f"{u['id']}: node {k} targets seat {owner}'s unit at ({tx}, {ty}), not "
+                           f"{t['id']} at {t['pos']}")
+        said.append(f"{u['id']} queues {'/'.join(t['id'] for t in targets)}")
+    return "; ".join(said)
+
+
 def check_catalogue(instance):
     r = subprocess.run([sys.executable, str(TACLI), "units", instance, "--json"],
                        capture_output=True, text=True, timeout=ACK_S + 30)
@@ -281,7 +361,7 @@ def check(instance):
     now, = peek(instance, f"0x{ta + OFF_GAMETIME:X}:4")
     said = [check_objective(instance, ta), check_seats(instance, ta, seq, now),
             check_features(instance, inst.gamedir), check_delays(inst.gamedir, seq, now),
-            check_catalogue(instance)]
+            check_queues(instance, ta, seq, now), check_catalogue(instance)]
     print(f"applier_check at GameTime {now}: " + "; ".join(s for s in said if s))
 
 

@@ -11,8 +11,10 @@ THE DRAWS, in this order, from tacli's xorshift32 (_ScnRandom) seeded with run_s
   1. for each unit of the expanded scenario, in ordinal order, if its type is mobile (the value
      table's bmcode is not 0: the engine places a structure on cells, so a structure draws
      nothing): dx = r % 16 - 8, then dy = r % 16 - 8, world units added to its position;
-  2. then for each order, in wire order (unit by unit, each unit's orders in turn): r % 16 ticks
-     added to the order's `after`.
+  2. then for each order without `queue`, in wire order (unit by unit, each unit's orders in turn):
+     r % 16 ticks added to its `after` and to that of each queued order after it. A unit's queue
+     waits together, so the engine receives it in order and R8 sees one list change; a file with no
+     queued order draws exactly as it did before the key existed, so its wires are unchanged.
 On an odd index the seats swap: owner 0 <-> 1 in every unit, and the end clauses with them. Side A
 is the scenario's owner 0 and side B its owner 1 whatever seat plays them, so every metric is per
 side. An exact scenario is never perturbed: every index is the file as written.
@@ -84,9 +86,12 @@ def perturb(exp: dict, index: int, values: dict, seed: int, exact: bool = False)
         dy = rnd.next() % JITTER - JITTER // 2
         u["pos"] = [u["pos"][0] + dx, u["pos"][1] + dy]
         jitter[u["id"]] = [dx, dy]
-    drawn = []
+    drawn, a = [], None
     for o in afters:
-        a = rnd.next() % STAGGER
+        if not o.get("queue"):
+            a = rnd.next() % STAGGER
+        elif a is None:
+            raise PerturbError("a queued order with no order before it")   # tacli refuses it
         if o["after"] + a > 255:
             raise PerturbError(f"an order's after {o['after']} + {a} is past 255")
         o["after"] += a

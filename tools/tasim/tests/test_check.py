@@ -369,6 +369,43 @@ class Facing(unittest.TestCase):
         self.assertEqual([u["facing"] for u in exp["units"]], [90, 270])
 
 
+class Stagger(unittest.TestCase):
+    """THE DRAWS (perturb.py): one stagger a queue."""
+
+    def test_a_file_without_queue_keeps_its_wires(self):
+        """The DUEL fixture's wires and records, pinned from before `queue` existed."""
+        want = {0: ("53b92143db6c0f0ba98bfd2feccdbf351dc01af65065b43b52ebe205468a2533", [9, 10]),
+                1: ("6935f79c89d3c2143e5a1eeca440ec708c3d4d7c2dc211fe2ed4be6838d66525", [8, 1]),
+                2: ("62ee5d06ce6ade17bbbedd31609e9e723ef1dda262ec53d1aba9927d9adaa1a0", [5, 0]),
+                3: ("604146f2699421d12b936113e66afc6eb527cbaf85913b85e5cee1b2acf77620", [15, 14])}
+        import hashlib
+        for i, (sha, after) in want.items():
+            _e, rec, wire, _c = perturb.run_wire(DUEL, i, VALUES, calibref.arena())
+            self.assertEqual(hashlib.sha256(wire.encode()).hexdigest(), sha)
+            self.assertEqual(rec["after"], after)
+
+    def test_a_queue_shares_its_heads_draw(self):
+        doc = json.loads(DUEL.read_text())
+        c = dict(doc["units"][1], id="c", pos=[5200, 1250])
+        c.pop("orders")
+        plain = dict(doc, units=doc["units"] + [c])
+        queued = json.loads(json.dumps(plain))
+        queued["units"][0]["orders"].append({"cmd": "attack", "target": "c", "queue": True})
+        exps = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, d in (("plain", plain), ("queued", queued)):
+                p = Path(tmp) / f"{name}.json"
+                p.write_text(json.dumps(d))
+                exps.append(perturb.CLI._scn_compile(str(p)))
+        _p, rp = perturb.perturb(exps[0], 0, VALUES, 12345)
+        out, rq = perturb.perturb(exps[1], 0, VALUES, 12345)
+        self.assertEqual(rq["jitter"], rp["jitter"])
+        self.assertEqual(rq["after"], [rp["after"][0], rp["after"][0], rp["after"][1]])
+        self.assertEqual([o["after"] for o in out["units"][0]["orders"]], [rp["after"][0]] * 2)
+        after = f" after={rp['after'][0]}" if rp["after"][0] else ""
+        self.assertIn(f"order 0 attack unit 2{after} queue", perturb.CLI._scn_wire(out).splitlines())
+
+
 class CalibBlock(unittest.TestCase):
 
     def test_the_commander_toggle_defaults_to_the_arenas_and_keys_the_launch(self):
