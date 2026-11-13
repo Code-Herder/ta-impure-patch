@@ -310,14 +310,21 @@ def proc_prefix(pid, environ: list):
     return None
 
 
-def _proc_is_totala(pid: int) -> bool:
-    """Whether `pid` is a TotalA.exe that has not ended. A leader that is a zombie is not an answer:
-    the process may live on in its other threads, and the listing can tell."""
+def _totala_start(stat: str) -> "int | None":
+    """The start time of the process a /proc/<pid>/stat line describes (field 22, clock ticks
+    since boot) while it is a TotalA.exe that has not ended, else None. A leader that is a zombie
+    is not an answer: the process may live on in its other threads, and the listing can tell."""
+    name, rest = stat[stat.find("(") + 1:stat.rfind(")")], stat[stat.rfind(")") + 2:].split()
+    if name != "TotalA.exe" or not rest or rest[0] == "Z" or len(rest) < 20:
+        return None
+    return int(rest[19])
+
+
+def _proc_totala_start(pid: int) -> "int | None":
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(errors="replace")
-    except OSError:
-        return False
-    return stat[stat.find("(") + 1:stat.rfind(")")] == "TotalA.exe" and stat[stat.rfind(")") + 2:][:1] != "Z"
+        return _totala_start(Path(f"/proc/{pid}/stat").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
 
 
 def totala_by_prefix() -> dict:
@@ -453,12 +460,20 @@ class Instance:
             return self.remote.pid()
         # THE GAME THIS OBJECT HAS ALREADY FOUND ANSWERS FOR ITSELF. The listing reads the process's
         # environment, which a live process can answer empty, and one such read here would report a
-        # running game as exited. Only a process that is gone, or a zombie, loses the pid.
-        known = getattr(self, "_known_pid", None)
-        if known and _proc_is_totala(known):
-            return known
-        self._known_pid = totala_by_prefix().get(prefix_key(self.prefix))
-        return self._known_pid
+        # running game as exited. Only a process that is gone, or a zombie, loses the pid. The game
+        # found is known by its pid AND its start time, verified at every answer: the kernel hands a
+        # pid out again only after its cyclic allocator has gone round the whole of pid_max, never
+        # within one clock tick, so a pid that kept its start time is the same process. That is
+        # what lets one Instance serve a harness's every call for as long as it likes (a game that
+        # exits and a later one that takes its pid are told apart), and skip the listing -- a
+        # pgrep and an environment scan -- at each.
+        known = getattr(self, "_known", None)
+        if known and _proc_totala_start(known[0]) == known[1]:
+            return known[0]
+        pid = totala_by_prefix().get(prefix_key(self.prefix))
+        start = _proc_totala_start(pid) if pid else None
+        self._known = (pid, start) if start is not None else None
+        return pid
 
     def running(self) -> bool:
         return self.pid() is not None

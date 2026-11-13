@@ -4723,5 +4723,45 @@ class DumpLines(unittest.TestCase):
         self.assertIsNone(re.search(tacli.dump_written_rx("e0"), line))
 
 
+class KnownGame(unittest.TestCase):
+    """Instance.pid: the game an Instance has found answers for itself while its pid keeps the
+    start time it had, so one Instance serves every call of a harness without a listing each;
+    a pid another process has taken since, or a zombie, is listed again."""
+
+    STAT = ("4242 (TotalA.exe) {state} 1 4242 4242 0 -1 4194560 100 0 0 0 5 6 0 0 20 0 9 0 "
+            "{start} 1000 200 18446744073709551615")
+
+    def test_the_stat_line_gives_a_live_totala_its_start(self):
+        self.assertEqual(tacli._totala_start(self.STAT.format(state="S", start=777)), 777)
+        self.assertIsNone(tacli._totala_start(self.STAT.format(state="Z", start=777)))
+        self.assertIsNone(tacli._totala_start(
+            self.STAT.format(state="S", start=777).replace("TotalA.exe", "wineserver")))
+        self.assertEqual(tacli._totala_start(self.STAT.format(state="R", start=5)), 5)
+
+    def test_a_pid_is_listed_again_only_when_its_process_changed(self):
+        listings, starts = [], {4242: 100}
+
+        def listing():
+            listings.append(1)
+            return {tacli.prefix_key(inst.prefix): 4242}
+
+        with tempfile.TemporaryDirectory() as d, patch.object(tacli, "INSTANCES", Path(d)), \
+                patch.object(tacli, "totala_by_prefix", listing), \
+                patch.object(tacli, "_proc_totala_start", lambda pid: starts.get(pid)):
+            inst = tacli.Instance("k1")
+            self.assertEqual([inst.pid(), inst.pid(), inst.pid()], [4242] * 3)
+            self.assertEqual(len(listings), 1, "the game found answers for itself")
+            starts[4242] = 900          # the game exited and another took its pid
+            self.assertEqual(inst.pid(), 4242)
+            self.assertEqual(len(listings), 2)
+            self.assertEqual(inst.pid(), 4242)
+            self.assertEqual(len(listings), 2)
+            del starts[4242]            # gone: listed again, and not running
+            listing_none = lambda: listings.append(1) or {}
+            with patch.object(tacli, "totala_by_prefix", listing_none):
+                self.assertFalse(inst.running())
+            self.assertEqual(len(listings), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

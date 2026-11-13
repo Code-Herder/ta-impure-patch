@@ -157,6 +157,7 @@ stay as a player has them.
 import argparse
 import atexit
 import fcntl
+import functools
 import datetime
 import hashlib
 import itertools
@@ -544,8 +545,15 @@ class Worker:
             (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
         self.sweep_caps()
 
+    @functools.cached_property
+    def instance(self):
+        """tacli's Instance of this worker's instance, one for the run: it knows the game it has
+        found by pid and start time and verifies both at every answer (tacli Instance.pid), so a
+        relaunched game is found again and each call in between costs no process listing."""
+        return _CLI_API.Instance(self.name)
+
     def running(self):
-        return _CLI_API.Instance(self.name).running()
+        return self.instance.running()
 
     def quit(self):
         """The game's exit hook joins its file workers; SIGTERM bypasses it."""
