@@ -252,12 +252,12 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
     h = d->q->ops->head(d->q, u->slot, &o);
     if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
-    if (cat == IMPAI_C_FACTORY) {
-        if (t->tech > d->ftop) {
-            d->ftop = t->tech;
+    if (cat == IMPAI_C_FACTORY) {           /* a frame too: a plant under construction is what the seat will make */
+        if (t->offer > d->ftop) {
+            d->ftop = t->offer;
             d->ftop_n = 0;
         }
-        if (t->tech == d->ftop) d->ftop_n++;
+        if (t->offer == d->ftop) d->ftop_n++;
     }
     if (building && impai_aa_struct(in, type)) d->aa_n++;
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
@@ -461,8 +461,9 @@ static void economy(IMPAI_DEC* d)
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] && !d->e_stall &&
                   !d->m_stall && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
-    /* TECH-UP: with factory_max factories of its highest tech and a metal income of tech_m a pass -- the
-       table's tech_m, Hard's, times the level's tech_scale -- the next factory is of a higher tech */
+    /* TECH-UP: with factory_max factories of its highest offer (IMPAI_TINFO.offer: the tech its plants make, frames
+       included) and a metal income of tech_m a pass -- the table's tech_m, Hard's, times the level's tech_scale --
+       the next factory offers a higher tech (impai_econ.c, choose_factory) */
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m * lv->tech_scale;
