@@ -21,10 +21,11 @@ HERE = Path(__file__).resolve().parent
 DDRAW = HERE.parent
 REPO = HERE.parents[2]
 TEST = "tests/impai_brain_test.c"
-# the sources the test links: the brain's, the knowledge tick's radar publish, and the shared rules they call
+# the sources the test links: the brain's, the knowledge tick's radar publish, the shared rules they call, and
+# the role classifier, whose tech walk the fake worlds' menus are put through
 SRCS = ["src/impai_know.c", "src/impai_tinfo.c", "src/impai_brain.c", "src/impai_econ.c", "src/impai_build.c",
         "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_fight.c", "src/impai_fitparams.c",
-        "src/tasim_snap.c", "src/tagpu_placegeo.c"]
+        "src/tasim_snap.c", "src/tagpu_placegeo.c", "src/tasim_roles.c"]
 # the Makefile's SSE2 rule: every src/tasim_*.c and src/impai_*.c
 SSE = ["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
 WARN = ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc"]

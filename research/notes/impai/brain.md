@@ -125,7 +125,12 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
 unit, the class from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the army's value
 by class, built, building and queued) and the type by `impai_class_type` with the predictor's pair rate.
 **Tech-up**: with `factory_max` factories of its highest tech and a metal income of the table's `tech_m` times
-the level's `tech_scale` a pass, the next factory is of a higher tech. **Anti-air structures**: one per
+the level's `tech_scale` a pass, the next factory is of a higher tech. A tech level is the role classifier's
+(`IMPAI_TINFO.tech`, [ImpAI](../modules/impai.html), *The type information*), which the game and tasim take from
+the same build menus. **Gap:** by that rule an advanced plant a tech-1 constructor builds is tech 1, like the lab
+before it (retail ARMALAB, ARMAVP, CORALAB: 1), so tech-up does not choose it: only a plant two factories down a
+chain is of a higher tech than a lab (ARMPLAT, CORGANT: 2; `tasim_run roles`, MEASURED 2026-11-13). The military's
+table input `F_TECH`, its highest factory's tech over 3, reads the same levels. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
 
 ### The naval rule

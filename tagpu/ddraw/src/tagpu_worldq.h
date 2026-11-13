@@ -87,10 +87,12 @@ int tagpu_worldq_class_exists(unsigned mclass);
    LOADER thread at the level init, inside PLAYERS 0x4919C8, after the unit-data load 0x42D2E0 (0x4918CA) has
    loaded every weapon, def and category: tagpu_impai.c is its one caller.
    tagpu_worldq_role_count: the level's UNITINFOCount, 0 when the def array or its count is not usable.
-   tagpu_worldq_role_in: in[0..n) for the n role_count answered; 0, or -1 with nothing promised when a bound
-   fails. */
+   tagpu_worldq_role_in: in[0..n) for the n role_count answered, each builder's build options what `options`
+   answers for its type (the count, or -1 when cap is short), packed into opt[0..optcap), which must outlive
+   `in`; 0, or -1 with nothing promised when a bound fails or opt is short. */
+typedef int (*WqRoleOptFn)(unsigned type, uint16_t* out, int cap);
 int tagpu_worldq_role_count(void);
-int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n);
+int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t* opt, unsigned optcap);
 
 /* THE FIGHT CONTENT'S ENGINE FILLER: the fight predictor's tables (impai_fight.h) for the n unit types the
    role filler gave `rin` and the classifier made `rout` of, from the same def array and weapon records on the
