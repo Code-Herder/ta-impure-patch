@@ -6,12 +6,15 @@
 
 writes `tagpu_impai_level.on` with the items given, one a line. The DLL reads it once, at attach
 (tagpu/ddraw/src/tagpu_impai.c, THE TEST LEVERS), so it must be in place before the game starts, and honours it
-at a live level's init only: a seat it names plays that level whatever the Difficulty, and a puppet's level comes
-from its recording. Each item is `<seat>=easy|normal|hard`, the seat one digit, as the DLL parses it; an item it
-would skip is refused here, so the lever never holds one. A game folder links the install's files one by one, so
-a lever path that is a link, which would write into the install, is refused.
+at a live level's init and for a seat a takeover newly marks: a seat it names plays that level whatever the
+Difficulty, and a puppet's level comes from its recording. Each item is `<seat>=easy|normal|hard`, the seat one
+digit, as the DLL parses it; an item it would skip is refused here, so the lever never holds one. A game folder
+links the install's files one by one, so the lever is never written through a path: whatever stands at its name
+is removed (a link, not its target) and the file is created anew by an open that refuses to follow a link or
+to find anything there, so a link that appears in between fails the open instead of taking the write.
 """
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -33,10 +36,14 @@ def main() -> int:
         print(f"level_lever: {', '.join(bad)} is not <seat>=easy|normal|hard", file=sys.stderr)
         return 2
     lever = args.gamedir / LEVER
-    if lever.is_symlink():
-        print(f"level_lever: {lever} is a link; refusing to write through it", file=sys.stderr)
+    lever.unlink(missing_ok=True)
+    try:
+        fd = os.open(lever, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except OSError as e:
+        print(f"level_lever: {lever}: {e.strerror}; refusing to write", file=sys.stderr)
         return 2
-    lever.write_text("".join(f"{item}\n" for item in args.items))
+    with os.fdopen(fd, "w") as f:
+        f.write("".join(f"{item}\n" for item in args.items))
     return 0
 
 
