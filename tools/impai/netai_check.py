@@ -12,7 +12,8 @@ then each peer leaves through its menus, so its teardown writes ImpAI's level-en
 What it judges (`judge`), from each peer's log and its ten player records read at T (tacli peek: `[rec]`,
 the DirectPlay ID +4, the controller +0x73, the AI object +0x74):
   - each peer's level init logged one network seat line (tagpu_impai.c): the host's names its store's
-    `netai=impai` and marks exactly one record, the joiner's names `netai=ota` and marks none;
+    `netai=impai` and marks exactly one record, the joiner's names `netai=ota` and marks none, and both
+    name level 2, Hard, whatever each peer's Difficulty;
   - the host's marked record is, on the host, seated, controller 2 with its AI object, and on the joiner the
     record with the same DirectPlay ID is controller 3 and is among the joiner's other peers' AI seats;
   - the joiner's own AI seat (controller 2 there) is, on the host, controller 3, unmarked and among the host's
@@ -36,8 +37,9 @@ sys.path.insert(0, str(TREE / "tools"))
 
 GAMES = 2                               # the host and the joiner: the run lock's lanes
 UNTIL = 6000
-SEATS = re.compile(r"impai: seats (\S+) \(netai=(impai|ota), a network game\) of (\d+) records; "
+SEATS = re.compile(r"impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) records; "
                    r"other peers' AI seats (\S+)")
+LEVEL_HARD = 2                          # impai_seats_level: Hard in every network game
 CALLS = re.compile(r"impai: calls seat=(\d+) n=(\d+)")
 PULSE = re.compile(r"impai: pulse seat=(\d+)")
 
@@ -48,8 +50,8 @@ def seat_list(text):
 
 
 def seats_lines(text):
-    """Every network seat line of the log: (marks, netai, live, remote AI seats)."""
-    return [(seat_list(m.group(1)), m.group(2), int(m.group(3)), seat_list(m.group(4)))
+    """Every network seat line of the log: (marks, netai, level, live, remote AI seats)."""
+    return [(seat_list(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)), seat_list(m.group(5)))
             for m in SEATS.finditer(text)]
 
 
@@ -76,10 +78,12 @@ def judge(host, join, pulse=False):
         lines[role] = got[0]
         if got[0][1] != netai:
             bad.append(f"{role}: its level init read netai={got[0][1]}, not {netai}")
+        if got[0][2] != LEVEL_HARD:
+            bad.append(f"{role}: ImpAI's level {got[0][2]} in a network game, not Hard")
     if len(lines) != 2:
         return bad
-    marks, _, _, host_remote = lines["host"]
-    jmarks, _, _, join_remote = lines["join"]
+    marks, _, _, _, host_remote = lines["host"]
+    jmarks, _, _, _, join_remote = lines["join"]
     if jmarks:
         bad.append(f"join: marked {jmarks} with netai=ota")
     if len(marks) != 1:

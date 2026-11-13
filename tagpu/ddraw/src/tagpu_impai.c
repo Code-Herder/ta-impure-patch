@@ -34,6 +34,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
                                       calls it only when set (0x46502A..0x465031)         */
 #define PI_TYPE      0x94          /* PlayerInfo's u8 type: 2 for an AI seat, on a remote
                                       AI's type-3 record too (0x45490F..0x45493B)         */
+#define OFF_DIFFICULTY 0x37EEE     /* u32: 0 Easy, 1 Medium, 2 Hard (engine/sim.md)      */
 #define OFF_NETFLAGS 0x2A44        /* u8, bit 0: a network game (engine/ui.md, the network
                                       bit: set in the front end only, cleared in play)    */
 #define CTRL_AI      2
@@ -1297,8 +1298,9 @@ void tagpu_impai_level_init(void)
     impai_seats_list(pick.marks, list);
     if (network) {
         impai_seats_list(pick.remote_ai, remote);
-        tagpu_logf("impai: seats %s (netai=%s, a network game) of %u records; other peers' AI seats %s", list,
-                   tagpu_settings_netai() ? "impai" : "ota", pick.live, remote);
+        tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s",
+                   list, tagpu_settings_netai() ? "impai" : "ota",
+                   impai_seats_level(network, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote);
     } else {
         tagpu_logf("impai: seats %s (impure.cfg) of %u records", list, pick.live);
     }

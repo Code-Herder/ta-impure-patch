@@ -291,9 +291,9 @@ class NetaiJudge(unittest.TestCase):
                  3: (True, 0xD, 3, False), **{i: (False, 0, 0, False) for i in range(4, 10)}}
     JOIN_RECS = {0: (True, 0xA, 3, False), 1: (True, 0xB, 1, True), 2: (False, 0, 0, False),
                  3: (True, 0xD, 2, True), 4: (True, 0xC, 3, False), **{i: (False, 0, 0, False) for i in range(5, 10)}}
-    HOST_LOG = ("impai: seats 2 (netai=impai, a network game) of 4 records; other peers' AI seats 3\n"
+    HOST_LOG = ("impai: seats 2 (netai=impai, a network game, level 2) of 4 records; other peers' AI seats 3\n"
                 "impai: calls seat=2 n=5999 gametime=6000\n")
-    JOIN_LOG = "impai: seats none (netai=ota, a network game) of 4 records; other peers' AI seats 4\n"
+    JOIN_LOG = "impai: seats none (netai=ota, a network game, level 2) of 4 records; other peers' AI seats 4\n"
 
     def peers(self, host_log=None, join_log=None, host_recs=None, join_recs=None):
         return ({"log": self.HOST_LOG if host_log is None else host_log, "records": host_recs or self.HOST_RECS},
@@ -330,6 +330,10 @@ class NetaiJudge(unittest.TestCase):
         self.assertTrue(any("netai=ota, not impai" in b for b in bad), bad)
         bad = netai_check.judge(*self.peers(join_log=""))
         self.assertEqual(bad, ["join: 0 network seat lines, not one"])
+
+    def test_joiner_level_from_its_difficulty(self):
+        bad = netai_check.judge(*self.peers(join_log=self.JOIN_LOG.replace("level 2", "level 0")))
+        self.assertEqual(bad, ["join: ImpAI's level 0 in a network game, not Hard"])
 
     def test_turns_for_another_seat(self):
         host_log = self.HOST_LOG + "impai: calls seat=0 n=3 gametime=6000\n"
