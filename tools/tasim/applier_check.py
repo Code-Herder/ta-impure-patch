@@ -284,17 +284,25 @@ def chains(seq, now):
     return out
 
 
+PEEK_BATCH = 256    # specs a tacli peek call: four a slot, so 64 slots
+
+
 def seat_units(instance, ta, owner):
     """[(pointer, x, y, the main list's head)] of the seat's live units: its record's first..last,
-    inclusive, bounded by the unit array."""
+    inclusive, bounded by the unit array. first..last is the player's whole block of unit slots
+    (player +0x67/+0x6B: a block of the unit limit's slots a player, engine/units.md), not its live
+    units, so the live bit sorts them; the array's own bounds are the bound."""
     rec = ta + OFF_PLAYERS + owner * PL_STRIDE
     first, last, beg, end = peek(instance, f"0x{rec + PL_FIRSTUNIT:X}:4", f"0x{rec + PL_LASTUNIT:X}:4",
                                  f"0x{ta + OFF_BEGIN:X}:4", f"0x{ta + OFF_END:X}:4")
-    if not (beg <= first <= last <= end) or (first - beg) % UNIT_STRIDE or (last - first) // UNIT_STRIDE > 64:
-        raise CannotRun(f"seat {owner}: its units 0x{first:X}..0x{last:X} are not a short run of the array")
+    if not (beg <= first <= last <= end) or (first - beg) % UNIT_STRIDE:
+        raise CannotRun(f"seat {owner}: its units 0x{first:X}..0x{last:X} are not slots of the array")
     ptrs = list(range(first, last + 1, UNIT_STRIDE))
-    vals = peek(instance, *(f"0x{u + off:X}:{n}" for u in ptrs
-                            for off, n in ((U_STATE, 4), (U_XPOS, 2), (U_YPOS, 2), (U_ORDERS, 4))))
+    specs = [f"0x{u + off:X}:{n}" for u in ptrs
+             for off, n in ((U_STATE, 4), (U_XPOS, 2), (U_YPOS, 2), (U_ORDERS, 4))]
+    vals = []
+    for k in range(0, len(specs), PEEK_BATCH):       # the game is held: every batch reads one tick
+        vals += peek(instance, *specs[k:k + PEEK_BATCH])
     out = []
     for k, u in enumerate(ptrs):
         st, x, y, head = vals[4 * k:4 * k + 4]
