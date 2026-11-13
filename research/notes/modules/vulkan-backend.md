@@ -770,7 +770,10 @@ that names none (`tools/runlock.py`, *THE GPU MEMORY*). A refusal of the cap fai
 in tareplay, tacompat and the wiki gate (`talog.cap_refusals`): a cap too small for a suite shows as
 a failure, never as a quietly different result. The store reads it under `tagpu_defaults.off` too
 (`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
-launch hands it away with the rest of the harness keys. **With no cap nothing changes**: the door
+launch hands it away with the rest of the harness keys -- which is why tacli refuses `--shipped`
+inside a run with GPU memory, where its game would take a seat uncapped. A run nested in one that
+took no GPU memory and wanting its games on the GPU is refused too (`runlock.NotCarried`): its games
+would take no seat and carry no cap. **With no cap nothing changes**: the door
 hands every allocation and free to the driver as it came, taking no lock and asking no ledger.
 `cap_arm` latches that road for the device (`s_capDirect`, `tagpu_vkcap_direct`) before the
 device's first allocation, on the bring-up worker; the worker's interlocked move of the lane to
@@ -862,15 +865,42 @@ lock's own copy of the file, `runslots/vram.cfg`, so runs of different commits s
 charge granule are [INFERRED] from the passes' bounds and NVIDIA's page size, not counted.
 
 **A suite's cap.** 920 is the play defaults' figure, and a run that names no suite runs under it. A
-suite whose games need less names its own cap (`tools/runlock-suites.cfg`: replay, compat, wiki),
-and each of its games then takes that cap plus `driver_mib` and the margin of the budget, so more
-of them fit at once: runs of different caps share the budget, which is counted in 32 MiB units.
-Each suite's figure is its measured peak plus a stated margin, measured by `vramproof.py watch --
-<the suite's command>`, which samples every game the suite plays (per process) and reads each
-game's ledger. NOT YET MEASURED: every suite's figure is still the play defaults' 920, so the replay
-gate and the compatibility suite still play 9 games at once on the reference setup. The test-render
-figure above (308-338 MiB a process, no ledger read) is the replay suite's lead, not its measurement:
-the heaviest test groups -- battle, tenseat and the two-player games -- set it.
+suite names its own cap (`tools/runlock-suites.cfg`: replay, compat, wiki), and each of its games
+then takes that cap plus `driver_mib` and the margin of the budget: runs of different caps share
+the budget, which is counted in 32 MiB units. Each suite's figure is its measured peak plus a
+stated margin. The replay suite's, 384, is measured (2026-11-13: a ledger peak of 320 MiB in every
+game, 345 per process, no refusal; the two-player groups not yet played); its games take 480 MiB
+each, so on the reference setup the memory holds 19 and the slots 14 at once. Compat's and the
+wiki gate's 1536 are NOT YET MEASURED -- at 920 the cap refused allocations of 40-64 MiB at 877-915
+MiB held in 36 of 68 compat games, and the wiki gate's players and units lanes at 912 -- and are a
+provisional bound to measure under, 5 games at once there.
+
+**Measuring a suite** is `vramproof.py watch --cap N -- <the suite's command>`, run outside every run.
+The watched command takes the run lock itself; `--cap N` sets `RUNLOCK_CAP_MIB=N` in its environment,
+which the lock sizes the run's GPU memory on and publishes as the run's cap, so every game it launches
+runs at N (`write_gpumem` refuses a launch whose run was admitted under another cap) and a suite
+measured under a cap above its peak is not cut at the cap being measured; no tracked file changes.
+The samples count the watched run's games alone -- the run whose holder is the command or a process
+below it, and of its games those whose process holds one of its seats -- so a suite playing beside
+it adds nothing to its figures, the games together included. What a measurement needs besides
+(`vramproof.py watch --help`): the suite's own setup in the worktree it runs from -- for the wiki
+gate the art derived from the game's files, which a fresh worktree lacks, so `tools/wiki/gfx.py` and
+then `tools/wiki/sidepacks.py` (each through `.venv-undither/bin/python`) run first, or the gate's
+game lanes fail on the missing packs and the measurement has fewer games than the gate plays -- and
+a cap above what the suite holds, since a refusal in the report means the cap was reached.
+
+**When a game's memory is free again.** A game's seat, which bounds the games a run has on the GPU,
+is held by the game's keeper (`runlock.start_game`) until every process the game started has been
+reaped and the prefix's wineserver has ended, not by the game's own descriptor, whose release is in no
+order with the device's (`tools/runlock.py`, *A SEAT IS LET GO AFTER ITS GAME*); a game whose run
+died holds up every run that wants GPU memory until it ends (*A DEAD RUN'S GAMES*). THE GAP: the
+bound rests on a game's device memory being free once its processes are reaped, and the driver does
+not establish that. NVIDIA's kernel interface (the reference setup's 595.99.02, `nv.c`) frees a
+GPU device file's clients in its release only when its open has completed and the system power
+lock can be read; with a signal pending in the dying thread and either of those not so, it defers
+the close to its kernel thread `nv_queue`, after the reap. The control device frees its clients in
+the release; what the driver's core does then is in its binary, unread. `margin_mib` does not cover
+a deferred close: it is what the device holds for a game outside every process.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 

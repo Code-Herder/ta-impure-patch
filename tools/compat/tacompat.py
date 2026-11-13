@@ -2198,7 +2198,8 @@ def folder_files(gamedir: Path) -> dict:
 
 def game_pid(root: int, exe_real: str) -> "int | None":
     """The pid whose memory holds the game. `wine TotalA.exe` maps the PE in the process
-    Popen started or in a child of it, so the launcher's pid is not always the game's. Only
+    started or in a child of it, and inside a run with GPU memory start_game's `pid` is the game's
+    keeper, its parent, so the launcher's pid is not always the game's. Only
     descendants of `root` are looked at: a ptrace_scope of 1 lets a process read its own
     descendants and nothing else, and another session's game must never be read."""
     for pid in descendants(root):
@@ -2642,17 +2643,15 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
 
 def start_game(gamedir, env, **out):
     """`wine TotalA.exe` in `gamedir`, as tacli launches it for the run lock: the store carries the
-    run's GPU memory cap (runlock.write_gpumem) and the game's process holds a seat of the run while
-    it lives (runlock.game_seat), so a game started here stays inside the GPU memory its run took
-    (tools/runlock.py, THE GPU MEMORY, THE GAME SEATS)."""
+    run's GPU memory cap (runlock.write_gpumem) and, inside a run with GPU memory, the game's keeper
+    holds a seat of the run until every process of the game is reaped (runlock.start_game), so a
+    game started here stays inside the GPU memory its run took (tools/runlock.py, THE GPU MEMORY,
+    THE GAME SEATS, A SEAT IS LET GO AFTER ITS GAME). The handle answers for the game as a Popen
+    does; its `pid` is the root of the game's processes (game_pid looks below it)."""
     runlock.write_gpumem(gamedir)
-    seat = runlock.game_seat(f"{Path(gamedir).parent.name} (tacompat)")
-    try:
-        return subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdin=subprocess.DEVNULL,
-                                start_new_session=True, pass_fds=(seat.fileno(),) if seat else (), **out)
-    finally:
-        if seat:
-            seat.close()
+    return runlock.start_game(["wine", "TotalA.exe"], f"{Path(gamedir).parent.name} (tacompat)",
+                              cwd=str(gamedir), env=env, stdin=subprocess.DEVNULL,
+                              start_new_session=True, **out)
 
 
 def start_wine(inst, display, *, display_server=None):

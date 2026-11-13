@@ -4,6 +4,7 @@ XML it samples, and the judgement against the run lock's figures. No game runs.
 
     python3 tools/test_vramproof.py
 """
+import json
 import os
 import shutil
 import subprocess
@@ -119,6 +120,92 @@ class VramProof(unittest.TestCase):
             self.addCleanup(game.kill)
             self.assertEqual(vramproof.game_pids(None).get(game.pid), str(inst))
             self.assertNotIn(game.pid, vramproof.game_pids(["elsewhere"]))
+
+
+# A stand-in run: holds slot argv[2] and seat argv[3] of the runslots folder argv[1] as a run does,
+# its holder line naming itself, and starts a stand-in game -- a process named TotalA.exe on its
+# command line, in the prefix argv[4] -- that holds the seat as a game's process does; prints the
+# game's pid, then waits for its stdin to close.
+RUN = """import fcntl, os, subprocess, sys
+d = sys.argv[1]
+slot = open(os.path.join(d, sys.argv[2]), 'a+'); fcntl.flock(slot, fcntl.LOCK_EX)
+slot.seek(0); slot.truncate(); slot.write(f'pid {os.getpid()}, a run of 2 slots, stand-in\\\\n'); slot.flush()
+seat = open(os.path.join(d, sys.argv[3]), 'a+'); fcntl.flock(seat, fcntl.LOCK_EX)
+game = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()', 'TotalA.exe'],
+                        stdin=subprocess.PIPE, pass_fds=(seat.fileno(),),
+                        env=dict(os.environ, WINEPREFIX=sys.argv[4]))
+print(game.pid, flush=True)
+sys.stdin.read()
+game.stdin.close(); game.wait()
+"""
+
+
+class Watch(unittest.TestCase):
+    """watch counts the watched run's games alone, launches them at its --cap, and never runs
+    inside another run."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.lock = vramproof.runlock.lock_path(self.root)
+
+    def run_(self, slot, tag, inst):
+        (inst / "prefix").mkdir(parents=True)
+        p = subprocess.Popen([sys.executable, "-c", RUN, str(vramproof.runlock.slots_dir(self.lock)),
+                              f"slot-{slot:02d}", f"seat-{tag}-00", str(inst / "prefix")],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+        def end():
+            p.stdin.close()
+            p.wait()
+            p.stdout.close()
+        self.addCleanup(end)
+        return p, int(p.stdout.readline())
+
+    def test_only_the_watched_runs_games_are_counted(self):
+        watched, game = self.run_(2, "s02", self.root / "inst-a")
+        other, other_game = self.run_(5, "s05", self.root / "inst-b")
+        pids, tags = vramproof.watched_games(watched.pid, self.lock)
+        self.assertEqual(tags, {"s02"})
+        self.assertEqual(pids, {game: str(self.root / "inst-a")})
+        self.assertIn(other_game, vramproof.game_pids(None))     # on the machine, and not counted
+        # a command that holds no run counts no game
+        idle = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(idle.wait)
+        self.addCleanup(idle.kill)
+        self.assertEqual(vramproof.watched_games(idle.pid, self.lock), ({}, set()))
+
+    def watch(self, *argv):
+        out = self.root / "out"
+        with patch.object(vramproof, "gpu_processes", return_value=(0, 12282, {})):
+            return vramproof.main(["watch", "--out", str(out), *argv]), out
+
+    def test_the_watched_run_plays_at_the_cap_and_no_tracked_file_changes(self):
+        said = self.root / "said"
+        status = ["git", "-C", str(vramproof.TREE), "status", "--porcelain"]
+        before = subprocess.run(status, capture_output=True, text=True).stdout
+        held = os.environ.pop(vramproof.runlock.ENV, None)
+        self.addCleanup(lambda: held is not None and os.environ.update({vramproof.runlock.ENV: held}))
+        code, out = self.watch("--cap", "2000", "--", sys.executable, "-c",
+                               f"import os; open({str(said)!r}, 'w').write(os.environ['RUNLOCK_CAP_MIB'])")
+        self.assertEqual(code, 0)
+        self.assertEqual(said.read_text(), "2000")
+        report = json.loads((out / "report.json").read_text())
+        self.assertEqual((report["cap"], report["runs"]), (2000, []))
+        self.assertTrue(report["lines"][0].startswith("no run of the command held GPU memory"))
+        self.assertEqual(subprocess.run(status, capture_output=True, text=True).stdout, before)
+        for bad in ("32", "2000000"):
+            self.assertEqual(self.watch("--cap", bad, "--", "true")[0], 2)
+
+    def test_watch_refuses_inside_a_run(self):
+        with patch.dict(os.environ, {vramproof.runlock.ENV: json.dumps(
+                {"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00", "resources": [],
+                 "path": str(self.lock), "cap_mib": 384})}):
+            code, out = self.watch("--", "true")
+        self.assertEqual(code, 2)
+        self.assertFalse((out / "report.json").exists())
 
 
 class Instances(unittest.TestCase):

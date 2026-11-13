@@ -117,22 +117,85 @@ runs that want GPU memory. A run that renders without the GPU (llvmpipe, GDI) ta
 machine with no device memory to read -- no NVIDIA or amdgpu card -- has no budget; one whose
 NVIDIA driver is there but does not answer refuses the run rather than run it unbounded.
 
+A MEASUREMENT'S CAP. RUNLOCK_CAP_MIB=N in a run's environment replaces its suite's cap and cap_mib
+alike (cap_override): the run takes the memory of its games at N and publishes N, so its games run
+at N, the budget counting them at N -- what `tools/vramproof.py watch --cap N` sets, so that a
+suite's peak is measured under a cap above it rather than cut at the cap being measured, and no
+tracked file changes for it. write_gpumem refuses a launch where it is set and the run's published
+cap is another: a run admitted before it was set, whose games would be measured at the wrong cap.
+
 THE GAME SEATS hold the games a run plays at once to games(), whatever tool plays them: every game
 launched inside a run with GPU memory takes a seat, a flock(2) file runslots/seat-<tag>-NN with NN
-under games(), held by the game's process itself (game_seat(), passed to it in `pass_fds`), and a
+under games(), held by the game's KEEPER (start_game(), A SEAT IS LET GO AFTER ITS GAME), and a
 launch waits while every seat is held. A tool that starts more lanes than games() therefore waits
-at the launch rather than puts a game on the GPU its run did not take memory for. A process the
-game starts can inherit the seat too (wine's server), which only holds it longer. [INFERRED, not yet
-measured: that a descriptor `wine TotalA.exe` inherits stays open for the game's life; `status`
-lists the seats held, which shows it in a live run.] Seats are named by the run's tag, so their
-files are a bounded set, and a game left running by a dead run holds its seat against the next run
-of that tag: a game still on the GPU still counts. A lane that plays two
+at the launch rather than puts a game on the GPU its run did not take memory for. Seats are named
+by the run's tag, so their files are a bounded set. A game left running by a dead run holds its seat
+against the next run of that tag, and its seat holds up every run that wants GPU memory until it
+ends, since the dead run's units no longer count it (A DEAD RUN'S GAMES). A lane that plays two
 games at once takes its second seat holding its first; lanes that need more seats together than
 games() can wait on each other, so a tool counts a network game as two games. Games that wait on
 each other -- a network game's peers, which meet in one battle room -- need their seats together:
 in a run whose games() is under their count the last launch waits for a seat the others hold while
 they wait for it in the lobby, which never ends. Every such tool asks together() before its first
 launch and refuses the game by name when the run may not play them all at once.
+
+A SEAT IS LET GO AFTER ITS GAME. A seat bounds the games on the GPU only if it is held for as long
+as its game holds device memory, so it is let go by a process that outlives every process of the
+game, never by the game's own exit:
+  * Why not the game's own descriptor. Every process of a Wine game inherits the seat: the game,
+    the prefix's wineserver, services.exe, explorer.exe, winedevice.exe, plugplay.exe, svchost.exe,
+    rpcss.exe and dplaysvr.exe all held it (MEASURED 2026-11-13, the descriptors of each seat
+    sampled every 15 s through a compatibility run). A dying process closes its descriptors in
+    exit_files and runs each file's release, the GPU driver's included, in its deferred fputs
+    (exit_task_work), before exit_notify makes it reapable [INFERRED from Linux's do_exit and fput
+    as known, not re-read for this and not measured]; the order of the seat's release and the
+    device's within that is not fixed, and whichever process of the prefix holds the seat last --
+    the wineserver, which `wineserver -k` ends without waiting for its clients -- ends in no order
+    with the game's release. In those samples three games had closed their descriptors, the seat
+    held by the wineserver alone, while the game was not yet reaped.
+  * THE KEEPER. start_game() runs the game under a keeper, a process of its own (keep()) that holds
+    the seat and is the game's parent. It makes itself the child subreaper of everything below it
+    (prctl PR_SET_CHILD_SUBREAPER), so a process of the game whose parent ends -- the wineserver,
+    which forks itself off, and Wine's services -- becomes the keeper's child, not init's, and it
+    reaps its children until waitpid(-1) answers ECHILD. Every process below the keeper that is not
+    yet reaped is its child or the child of another such process, so ECHILD means every process the
+    game started has been reaped, each after the releases of its files. Then it waits for the
+    prefix's wineserver (`wineserver -w`), which covers a server this game did not start, and only
+    then ends, which lets the seat go. The keeper is in a session of its own and outlives the
+    launcher: tacli's launch ends at once, and a run killed outright leaves its keepers to their
+    games (A DEAD RUN'S GAMES). The game holds the seat as well, so a keeper killed outright
+    (SIGKILL, which it cannot pass on and which nothing here sends it) leaves the seat to the game's
+    own descriptors. SIGTERM, SIGINT and SIGHUP are passed on to the game and SIGUSR1 kills it:
+    KeptGame's terminate() and kill(). The holder line of a seat names the keeper's pid, live for as
+    long as the seat is held.
+  * THE GAP: the driver can free a game's memory after the release. Read from NVIDIA's kernel
+    interface (the reference setup's 595.99.02, nv.c and nv-lock.h): the control device's release,
+    `nvidia_ctl_close`, frees its clients (`rm_cleanup_file_private`) within the release; a GPU
+    device's, `nvidia_close`, does so only when its wait for the open's completion
+    (`wait_for_completion_interruptible`) and for the system power lock
+    (`nv_down_read_interruptible`, a trylock loop that gives up on a pending signal) both succeed,
+    and otherwise queues `nvidia_close_deferred` on its kernel thread `nv_queue` and returns. So the
+    close is deferred only with a signal pending in the dying thread while the open has not
+    completed (no memory was allocated through it yet) or while a system suspend or resume holds
+    the power lock for writing. What `rm_cleanup_file_private` does inside the driver's core is in
+    its binary, unread. The invariant the bound would need -- a game's device memory is free once
+    its processes are reaped -- is therefore not established, and no driver interface says when a
+    client's memory is free. margin_mib does not cover it: it is what the device holds for a game
+    outside every process (13-16 MiB a game, tools/runlock-vram.cfg), not a whole game left behind.
+    A game seated while a deferred close still holds its predecessor's memory can find the device
+    full and takes the road a full device takes (the Vulkan backend note, *A pass refused its
+    memory*). The gap is the driver's: it is stated here, not closed.
+
+A DEAD RUN'S GAMES still hold device memory the dead run's units no longer count: a game's keeper
+holds its seat, never its run's GPU units, and outlives the run in a session of its own, so a run
+killed outright lets its units go while its games still play. So a seat is counted as its run's
+only while that run lives: each run has an id (pid and start, in RUNLOCK_HELD and in its holder
+line), its games' seats carry it, and a held seat is a live run's when the slot file its tag names
+(sNN: slot NN, the lowest the run holds, for its whole hold) is held by the run of that id
+(orphaned_seats). Any other held seat -- a dead run's game, or a seat whose line names no run --
+is among the files the token queue's holder's budget does not count (_others): it takes no unit
+while one is held, and waits, naming it, until the game's keeper lets it go. A seat of a live run
+is counted by that run's units.
 
 THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE. Branches and worktrees at different commits share one
 runslots directory and run side by side, so a budget each read from its own tree's file could
@@ -169,20 +232,25 @@ a shared lock beside a waiting exclusive one, so it can wait for as long as runs
 Hand chains therefore go through `runlock.py run`, which queues like the tools.
 
 NESTING. The holder exports RUNLOCK_HELD, a JSON object of its slots, GPU memory (`gpu_mib`),
-games, tag, resources, lock path and the GPU cap it was admitted under (none without GPU memory),
-which its children inherit; a process that finds it, or that has a flock(1) ancestor on
+games, tag, run id, resources, lock path and the GPU cap it was admitted under (none without GPU
+memory), which its children inherit; a process that finds it, or that has a flock(1) ancestor on
 tareplay.lock (which holds every slot and no GPU memory, so no cap), takes no slots: the outer
-run's declaration covers its children, and its games take the outer run's seats. A nested run that asks for more games than its ancestor may play says so and runs under
-the ancestor's. A resource the outer run did not name, a nested run takes without waiting -- waiting
-there could wait on the queue's holder, which waits on the outer run's slots -- and Busy is raised
-when another run holds it. A child started with an environment of its own carries RUNLOCK_HELD
-over: without it, it would queue behind the run it belongs to and wait for that run's end.
+run's declaration covers its children, and its games take the outer run's seats. A nested run that
+asks for more games than its ancestor may play says so and runs under the ancestor's. A nested run
+that wants its games on the GPU inside a run that took no GPU memory is refused (NotCarried): its
+games would take no seat and carry no cap, on the GPU and counted nowhere. Under a flock(1) chain,
+which no run plays beside, its games run uncapped as the chain's always have. A resource the outer
+run did not name, a nested run takes without waiting -- waiting there could wait on the queue's
+holder, which waits on the outer run's slots -- and Busy is raised when another run holds it. A
+child started with an environment of its own carries RUNLOCK_HELD over: without it, it would queue
+behind the run it belongs to and wait for that run's end.
 
-HOLDERS. A run writes its line -- pid, slots, GPU memory, resources, start, what, directory -- into
-each slot, unit and resource file it takes, after taking it (its units once it has them all), and
-into the token queue's or the slot queue's file while it waits there as the holder; a game writes
-its own into its seat.
-`status` asks each file's own lock whether it is held and reads the line only to name the holder;
+HOLDERS. A run writes its line -- pid, slots, GPU memory, resources, start, what, directory, run id
+-- into each slot, unit and resource file it takes, after taking it (its units once it has them
+all), and into the token queue's or the slot queue's file while it waits there as the holder; a
+game's keeper writes its own, with its run's id, into its seat, naming its own pid, which lives as
+long as the seat is held. `status` asks each file's own lock whether it is held and reads the line
+only to name the holder;
 a line whose pid is gone is marked stale, the file then held by a process that inherited the lock
 (below).
 
@@ -195,12 +263,15 @@ execs its command with the descriptors inheritable, so the command is the holder
 """
 
 import argparse
+import ctypes
 import fcntl
 import hashlib
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -208,6 +279,8 @@ import time
 from pathlib import Path
 
 ENV = "RUNLOCK_HELD"
+CAP_ENV = "RUNLOCK_CAP_MIB"     # a measurement's cap (A MEASUREMENT'S CAP)
+KEEPER_ENV = "RUNLOCK_KEEPER"   # the game a keeper starts (A SEAT IS LET GO AFTER ITS GAME)
 BUDGET = 28                     # slots (THE BUDGET)
 LANE_SLOTS = 2                  # slots a game lane takes (LANE_SLOTS, above)
 FLOCK_TAG = "fx"                # the tag under a flock(1) ancestor (TAGS)
@@ -227,6 +300,10 @@ _said_differs = set()           # the locks whose figures this process has said 
 
 class Busy(RuntimeError):
     """A resource another run holds, asked for by a run nested in another (NESTING)."""
+
+
+class NotCarried(RuntimeError):
+    """A nested run that wants GPU memory inside a run that took none (NESTING)."""
 
 
 class BadFigures(ValueError):
@@ -273,11 +350,42 @@ def _numbered(d: Path, prefix: str) -> list:
 
 
 def _others(d: Path, budget: int) -> list:
-    """The GPU files a run holds that this run's budget of `budget` units does not count: a unit
-    numbered at or past it (a run under another budget, THE BUDGET BELONGS TO THE LOCK) and a
-    token of runlock code of before the GPU budget was memory (vram-NN, TRANSITION)."""
+    """The GPU files held that this run's budget of `budget` units does not count: a unit numbered
+    at or past it (a run under another budget, THE BUDGET BELONGS TO THE LOCK), a token of runlock
+    code of before the GPU budget was memory (vram-NN, TRANSITION) and a dead run's game's seat
+    (A DEAD RUN'S GAMES)."""
     return ([p.name for k, p in _numbered(d, "gpu") if k >= budget and _held_now(p)]
-            + [p.name for _k, p in _numbered(d, "vram") if _held_now(p)])
+            + [p.name for _k, p in _numbered(d, "vram") if _held_now(p)]
+            + orphaned_seats(d))
+
+
+RUN_RX = re.compile(r"\[run ([0-9]+-[0-9]+)\]")
+
+
+def _run_of(line: str) -> "str | None":
+    """The run id a holder's line carries (_line, game_seat), None for a line that names none."""
+    m = RUN_RX.search(line)
+    return m.group(1) if m else None
+
+
+def orphaned_seats(d: Path) -> list:
+    """The held seats whose run holds no slot (A DEAD RUN'S GAMES): a seat is its live run's only
+    when the slot file its tag names (sNN: slot NN, the lowest a run holds) is held by the run the
+    seat's line names. A seat whose line names no run -- one runlock code of before the run id
+    wrote, or one being taken this moment, its line not yet written -- counts as a dead run's,
+    which can only make a run wait more."""
+    out = []
+    for p in sorted(d.glob("seat-*")):
+        if not _held_now(p):
+            continue
+        m = re.fullmatch(r"seat-s(\d+)-\d+", p.name)
+        run = _run_of(_read(p))
+        if m and run and int(m.group(1)) < BUDGET:
+            slot = slot_file(d, int(m.group(1)))
+            if _held_now(slot) and _run_of(_read(slot)) == run:
+                continue
+        out.append(p.name)
+    return out
 
 
 def seat_file(d: Path, tag_: str, k: int) -> Path:
@@ -390,6 +498,22 @@ def suite_cap(suite: str) -> int:
     return caps[suite]
 
 
+def cap_override() -> "int | None":
+    """The cap RUNLOCK_CAP_MIB names for every game of a run admitted under it (A MEASUREMENT'S
+    CAP), None when it is not set; BadFigures for a figure the DLL would not take."""
+    value = os.environ.get(CAP_ENV)
+    if value is None:
+        return None
+    try:
+        cap = int(value)
+    except ValueError:
+        raise BadFigures(f"{CAP_ENV}={value!r} is not a whole number of MiB") from None
+    if not CAP_MIN_MIB <= cap <= CAP_MAX_MIB:
+        raise BadFigures(f"{CAP_ENV}={cap} is not a cap the DLL takes "
+                         f"({CAP_MIN_MIB}..{CAP_MAX_MIB}): its games would run uncapped")
+    return cap
+
+
 def game_bound_mib(cfg: "dict | None" = None, cap: "int | None" = None) -> int:
     """B, the most device memory one harness game under the cap `cap` (None: cap_mib) holds, MiB:
     the cap on its own allocations and what the driver holds for it beside them."""
@@ -457,13 +581,14 @@ def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
          cfg: "dict | None" = None, suite: "str | None" = None) -> "tuple[int, int, int, int | None, int | None]":
     """(slots, GPU units, games, GPU budget in units, cap) for a run of `lanes` game lanes at once
     on the lock of `path` (of the figures `cfg` when given), its games on the GPU under `suite`'s cap
-    (None: cap_mib) unless `gpu` is False; None lanes, the whole of both budgets."""
+    (None: cap_mib), or the cap_override() when one is set, unless `gpu` is False; None lanes, the
+    whole of both budgets."""
     budget = gpu_budget(path, cfg) if gpu else None
     if not budget:
         games = BUDGET // LANE_SLOTS if lanes is None else min(max(1, lanes), BUDGET // LANE_SLOTS)
         return (BUDGET if lanes is None else clamp(games * LANE_SLOTS)), 0, games, budget, None
     cfg = cfg or vram_config(path)
-    cap = suite_cap(suite) if suite else cfg["cap_mib"]
+    cap = cap_override() or (suite_cap(suite) if suite else cfg["cap_mib"])
     most = gpu_games(budget, cfg, cap)
     if most < 1:
         raise RuntimeError(f"a game of {suite or 'a run that names no suite'} under a cap of {cap} MiB "
@@ -529,13 +654,15 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _line(slots: int, what: str, resources=(), mib=0) -> str:
+def _line(slots: int, what: str, resources=(), mib=0, run: "str | None" = None) -> str:
     """A holder's line: the run, and what it asks for in all -- what it holds of that at a moment is
-    the count of files bearing the line (report)."""
+    the count of files bearing the line (report) -- and the run's id, which its games' seats carry
+    too (orphaned_seats)."""
     return (f"pid {os.getpid()}, a run of {slots} slot{'s' if slots != 1 else ''}"
             + (f" and {mib} MiB of the GPU" if mib else "")
             + (f" and {', '.join(resources)}" if resources else "")
-            + f", since {time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()}\n")
+            + f", since {time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()}"
+            + (f" [run {run}]" if run else "") + "\n")
 
 
 def _write(f, line: str) -> None:
@@ -612,14 +739,18 @@ def report(path: Path, budget: "int | None" = None) -> "tuple[int, list[str]]":
             line = _read(p) or "a run that has not written its line yet"
             old[line] = old.get(line, 0) + 1
     held = sum(by.values())
-    if held or other or old or budget:
+    orphans = set(orphaned_seats(d))
+    if held or other or old or orphans or budget:
         lines.append(f"GPU memory: {held * GRAIN_MIB} MiB held"
                      + (f" of {budget * GRAIN_MIB}, {max(budget - held, 0) * GRAIN_MIB} free"
                         if budget else "")
                      + (f"; {sum(other.values()) * GRAIN_MIB} MiB more held under another budget"
                         if other else "")
                      + (f"; {sum(old.values())} GPU tokens of older runlock code held" if old else "")
-                     + ("; no run takes GPU memory until they end" if other or old else ""))
+                     + (f"; {len(orphans)} game{'s' if len(orphans) != 1 else ''} of no live run "
+                        f"on the GPU" if orphans else "")
+                     + ("; no run takes GPU memory until they end" if other or old or orphans
+                        else ""))
     lines += [f"{n * GRAIN_MIB:5} MiB of the GPU held by {_named(line)}" for line, n in by.items()]
     lines += [f"{n * GRAIN_MIB:5} MiB of the GPU held under another budget by {_named(line)}"
               for line, n in other.items()]
@@ -630,10 +761,12 @@ def report(path: Path, budget: "int | None" = None) -> "tuple[int, list[str]]":
         if _held_now(p):
             line = _read(p) or "a game that has not written its line yet"
             run = p.name.rsplit("-", 1)[0][5:]
-            seats.setdefault(run, []).append(line)
+            seats.setdefault(run, []).append(_named(line) + (" [OF NO LIVE RUN: it holds up every "
+                                                             "run that wants GPU memory]"
+                                                             if p.name in orphans else ""))
     for run, held_by in seats.items():
         lines.append(f"{len(held_by):2} game seat{'s' if len(held_by) != 1 else ''} of run {run} held: "
-                     + "; ".join(_named(ln) for ln in held_by))
+                     + "; ".join(held_by))
     for p in sorted(d.glob("res-*")):
         if _held_now(p):
             lines.append(f"resource {p.name[4:]} held by "
@@ -720,14 +853,17 @@ def _all_units(path: Path, units: int, budget: int, line: str, t0: float) -> lis
         time.sleep(POLL_S)
 
 
-def _take(path: Path, what: str, resources: list, sizes, gpu: bool) -> "tuple[list, str, tuple]":
+def _take(path: Path, what: str, resources: list, sizes,
+          gpu: bool) -> "tuple[list, str, str, tuple]":
     """A GPU run's memory in the token queue, then every run's slots, resources and tareplay.lock
     shared in the slot queue (ADMISSION IS IN ARRIVAL ORDER, IN TWO QUEUES): the open files that
-    hold them, the run's tag, and (slots, units, games, budget, cap) as `sizes(figures)` gave them.
+    hold them, the run's tag, its id (pid and start, unique on the machine) and (slots, units,
+    games, budget, cap) as `sizes(figures)` gave them.
     A GPU run reads the lock's figures once it holds the token queue, so its budget and its cap are
     those of the moment it takes its memory; any other run reads none (figures None)."""
     d = slots_dir(path)
     t0 = time.monotonic()
+    run = f"{os.getpid()}-{time.time_ns()}"
     cfg, units_, taken, named, shared, tokenq, queue = None, [], {}, {}, None, None, None
     try:
         if gpu and device_total_mib() is not None:
@@ -735,7 +871,7 @@ def _take(path: Path, what: str, resources: list, sizes, gpu: bool) -> "tuple[li
             _wait_for_queue(tokenq, path, "GPU memory wanted", None)
             cfg = vram_config(path)
         slots, units, games_, budget, cap = sizes(cfg)
-        line = _line(slots, what, resources, units * GRAIN_MIB)
+        line = _line(slots, what, resources, units * GRAIN_MIB, run)
         if tokenq is not None:
             if units:
                 _write(tokenq, line)
@@ -792,7 +928,7 @@ def _take(path: Path, what: str, resources: list, sizes, gpu: bool) -> "tuple[li
     if waited >= 1:
         say(f"took the run lock ({slots} slots" + (f", {units * GRAIN_MIB} MiB of the GPU" if units else "")
             + f") after {waited / 60:.1f} min")
-    return ([shared, *taken.values(), *units_, *named.values()], f"s{min(taken):02d}",
+    return ([shared, *taken.values(), *units_, *named.values()], f"s{min(taken):02d}", run,
             (slots, units, games_, budget, cap))
 
 
@@ -831,6 +967,12 @@ def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True) 
         outer = {"slots": BUDGET, "gpu_mib": 0, "games": BUDGET // LANE_SLOTS, "tag": FLOCK_TAG,
                  "resources": [], "cap_mib": None}
     if outer is not None:
+        if (gpu and "path" in outer and not outer.get("gpu_mib") and not outer.get("tokens")
+                and device_total_mib() is not None):
+            # its games would take no seat and no cap: on the GPU, uncounted
+            raise NotCarried(f"{what} wants its games on the GPU inside a run that took no GPU "
+                             f"memory ({outer['tag']}): they would run uncapped and uncounted; "
+                             f"declare the GPU lanes in the outer run, or render without the GPU")
         if wanted is not None and wanted > outer["games"]:
             say(f"{what} wants {wanted} games at once inside a run that may play {outer['games']}: "
                 f"it plays under those")
@@ -843,12 +985,12 @@ def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True) 
         _outer = os.environ.get(ENV)
         _publish(path, {**outer, "resources": outer["resources"] + extra})
         return True
-    _held, tag_, (slots, units, games_, budget, cap) = _take(path, what, resources, sizes, gpu)
+    _held, tag_, run, (slots, units, games_, budget, cap) = _take(path, what, resources, sizes, gpu)
     _outer = None
     # a game of a run with GPU memory runs under the cap that memory was sized on; any other,
     # uncapped
     _publish(path, {"slots": slots, "gpu_mib": units * GRAIN_MIB, "games": games_, "tag": tag_,
-                    "cap_mib": cap if units else None, "resources": resources})
+                    "run": run, "cap_mib": cap if units else None, "resources": resources})
     return True
 
 
@@ -864,6 +1006,7 @@ def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: b
     path = lock_path(tree)
     if suite is not None:
         suite_cap(suite)                    # a suite the file does not name refuses before the wait
+    cap_override()                          # so does a measurement's cap the DLL would not take
     return _hold(path, what, lanes, lambda cfg: plan(lanes, cfg is not None, path, cfg, suite),
                  resources, gpu)
 
@@ -890,8 +1033,15 @@ def write_gpumem(gamedir: Path) -> "int | None":
     """The `gpumem=` line of the game store in `gamedir` (impure.cfg) set to the cap of the run this
     process is in, or removed when it has none (held_cap_mib), whatever launches the game: the
     DLL's cap is what the run's GPU memory was sized on, so a game launched inside a run with GPU
-    memory and without this line would hold memory the budget does not count. Returns the cap."""
+    memory and without this line would hold memory the budget does not count. Returns the cap.
+    RuntimeError, and the store untouched, when a measurement's cap is set and the run's is another
+    (A MEASUREMENT'S CAP)."""
     cap = held_cap_mib()
+    want = cap_override()
+    if want is not None and cap is not None and cap != want:
+        raise RuntimeError(f"{CAP_ENV}={want}, but this run was admitted under a cap of {cap} "
+                           f"MiB (set after its hold, or inherited from an outer run): its game "
+                           f"would be measured at {cap}, so it is not launched")
     path = Path(gamedir) / "impure.cfg"
     lines = path.read_text().splitlines() if path.exists() else []
     keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() != "gpumem"]
@@ -903,15 +1053,15 @@ def write_gpumem(gamedir: Path) -> "int | None":
 
 
 def game_seat(what: str):
-    """A seat for one game of the run this process is in, an open file the game's process is to hold
-    (pass it in `pass_fds`, then close it here): THE GAME SEATS. Waits while every seat of the run
-    is held. None outside a run or in a run without GPU memory, whose games need none."""
-    held = _env()
-    if held is None or not held.get("gpu_mib") or not held.get("path"):
+    """A seat for one game of the run this process is in, an open file for start_game's keeper to
+    hold (THE GAME SEATS). Waits while every seat of the run is held. None outside a run or in a run
+    without GPU memory, whose games need none."""
+    if not seated():
         return None
+    held = _env()
     d = slots_dir(Path(held["path"]))
     n, tag_ = held["games"], held["tag"]
-    line = f"pid {os.getpid()}, a game: {what}, since {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    line = _seat_line(os.getpid(), "a game being launched", what)
     t0, said = time.monotonic(), None
     while True:
         for k in range(n):
@@ -924,6 +1074,239 @@ def game_seat(what: str):
                 f"at once on the GPU, and every seat is held; {waited / 60:.0f} min so far")
             said = waited
         time.sleep(POLL_S)
+
+
+def tags_held_by(path: Path, pids) -> set:
+    """The tags of the runs on the lock of `path` whose holder is one of `pids` (TAGS: each run's
+    lowest held slot, the holder its line names)."""
+    d, tags, seen = slots_dir(path), set(), set()
+    for k in range(BUDGET):
+        p = slot_file(d, k)
+        if not p.exists() or not _held_now(p):
+            continue
+        m = re.match(r"pid (\d+),", _read(p))
+        if m and int(m.group(1)) in pids and m.group(1) not in seen:
+            seen.add(m.group(1))
+            tags.add(f"s{k:02d}")
+    return tags
+
+
+def seats_of(pid: int, path: Path) -> set:
+    """The tags of the runs on the lock of `path` whose seats process `pid` has open: a game's own
+    process holds its seat beside its keeper (A SEAT IS LET GO AFTER ITS GAME)."""
+    prefix = str(slots_dir(path).resolve() / "seat-")
+    tags = set()
+    try:
+        fds = os.listdir(f"/proc/{pid}/fd")
+    except OSError:
+        return tags
+    for fd in fds:
+        try:
+            target = os.readlink(f"/proc/{pid}/fd/{fd}")
+        except OSError:
+            continue
+        if target.startswith(prefix):
+            tags.add(target[len(prefix):].rsplit("-", 1)[0])
+    return tags
+
+
+def seated() -> bool:
+    """Whether a game launched by this process takes a seat: inside a run with GPU memory."""
+    held = _env()
+    return bool(held is not None and held.get("gpu_mib") and held.get("path"))
+
+
+def _seat_line(pid: int, who: str, what: str) -> str:
+    """A seat's holder line, carrying the run's id (orphaned_seats)."""
+    run = (_env() or {}).get("run")
+    return (f"pid {pid}, {who}: {what}, since {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            + (f" [run {run}]" if run else "") + "\n")
+
+
+def start_game(argv, what: str, **popen):
+    """`argv`, a game, started as every harness starts one: inside a run with GPU memory, under a
+    keeper holding a seat of the run (A SEAT IS LET GO AFTER ITS GAME), as a KeptGame; anywhere
+    else, where a game takes no seat, as the subprocess.Popen of `argv` itself. `popen` is what
+    Popen takes (cwd, env, the streams, start_new_session). Waits for a seat like game_seat()."""
+    seat = game_seat(what)
+    if seat is None:
+        return subprocess.Popen(argv, **popen)
+    try:
+        game = KeptGame(argv, seat, **popen)
+        # the holder `status` names is the keeper, which holds the seat for as long as it is held
+        _write(seat, _seat_line(game.pid, "a game's keeper", what))
+        return game
+    finally:
+        seat.close()
+
+
+class KeptGame:
+    """A game started under its keeper (start_game), answering for the game as subprocess.Popen
+    does: `pid` is the keeper's, the root of every process of the game; poll(), wait() and
+    `returncode` are the game's own end, which the keeper says the moment it reaps the game, before
+    the rest of the game's processes are gone and its seat with them; terminate() and kill() reach
+    the game through the keeper. `keeper` is the keeper's Popen: it ends once the seat is let go."""
+
+    def __init__(self, argv, seat, env=None, **popen):
+        self._status = None
+        self.args, self.returncode, self.game_pid = list(argv), None, None
+        self._failed, self._said = None, b""
+        r, w = os.pipe()
+        own = {k: v for k, v in os.environ.items() if k != "WINEPREFIX"}
+        # the game's command and environment travel in one variable, so the keeper's command line
+        # names no TotalA.exe and its environment no prefix: no listing of a prefix's processes or
+        # of the games counts the keeper as one
+        own[KEEPER_ENV] = json.dumps({"argv": [str(a) for a in argv],
+                                      "env": dict(os.environ if env is None else env)})
+        try:
+            self.keeper = subprocess.Popen(
+                [sys.executable, "-I", str(Path(__file__).resolve()), "keep", str(seat.fileno()),
+                 str(w)],
+                env=own, pass_fds=(seat.fileno(), w), **popen)
+        except BaseException:
+            os.close(r)
+            raise
+        finally:
+            os.close(w)
+        self._status = r
+        self.pid = self.keeper.pid
+        while self.game_pid is None and self._failed is None and self._status is not None:
+            self._hear(None)
+        if self.game_pid is None:
+            code = self.keeper.wait()
+            raise OSError(f"{self.args[0]}: its keeper did not start it: "
+                          f"{self._failed or f'the keeper ended with {code}'}")
+
+    def _hear(self, timeout) -> bool:
+        """What the keeper has said within `timeout` s (None: until it says something or ends);
+        False when it said nothing."""
+        if self._status is None:
+            return False
+        ready, _, _ = select.select([self._status], [], [], timeout)
+        if not ready:
+            return False
+        data = os.read(self._status, 4096)
+        if not data:
+            self._close()
+            if self.returncode is None and self.game_pid is not None:
+                # the keeper ended without saying the game's end: it was killed, and its own end is
+                # all there is to say
+                self.returncode = self.keeper.wait()
+            return False
+        self._said += data
+        while b"\n" in self._said:
+            line, _, self._said = self._said.partition(b"\n")
+            word, _, rest = line.decode(errors="replace").partition(" ")
+            if word == "started":
+                self.game_pid = int(rest)
+            elif word == "failed":
+                self._failed = rest
+            elif word == "exit":
+                self.returncode = int(rest)
+                self._close()
+        return True
+
+    def _close(self):
+        if self._status is not None:
+            os.close(self._status)
+            self._status = None
+
+    def poll(self) -> "int | None":
+        while self.returncode is None and self._hear(0):
+            pass
+        return self.returncode
+
+    def wait(self, timeout=None) -> int:
+        end = None if timeout is None else time.monotonic() + timeout
+        while self.returncode is None:
+            left = None if end is None else end - time.monotonic()
+            if left is not None and left <= 0:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            self._hear(left)
+        return self.returncode
+
+    def terminate(self) -> None:
+        """SIGTERM to the game, through its keeper."""
+        if self.poll() is None:
+            self.keeper.send_signal(signal.SIGTERM)
+
+    def kill(self) -> None:
+        """SIGKILL to the game, through its keeper (SIGUSR1 asks it): never to the keeper, whose end
+        lets the seat go."""
+        if self.poll() is None:
+            self.keeper.send_signal(signal.SIGUSR1)
+
+    def wait_released(self, timeout=None) -> int:
+        """Until the keeper has let the seat go: every process of the game reaped and the prefix's
+        wineserver gone. The keeper's exit code."""
+        return self.keeper.wait(timeout)
+
+    def __del__(self):
+        self._close()
+
+
+PR_SET_CHILD_SUBREAPER = 36             # <linux/prctl.h>
+
+
+def keep(argv) -> int:
+    """The keeper (A SEAT IS LET GO AFTER ITS GAME), `runlock.py keep SEAT_FD STATUS_FD` with the
+    game in RUNLOCK_KEEPER: starts the game, says `started <pid>` on STATUS_FD and `exit <code>`
+    once it has reaped the game, and holds SEAT_FD until every process below it has been reaped
+    and the prefix's wineserver has exited. Exits with the game's code."""
+    seat, status = int(argv[0]), int(argv[1])
+    spec = json.loads(os.environ.pop(KEEPER_ENV))
+    os.set_inheritable(status, False)
+
+    def tell(text):
+        try:
+            os.write(status, f"{text}\n".encode())
+        except OSError:
+            pass                # the launcher has gone: the seat is kept all the same
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        tell(f"failed prctl(PR_SET_CHILD_SUBREAPER): {os.strerror(ctypes.get_errno())}")
+        return 127
+    game = {"pidfd": None, "pending": []}
+
+    def forward(signum, _frame):
+        sig = signal.SIGKILL if signum == signal.SIGUSR1 else signum
+        if game["pidfd"] is None:
+            game["pending"].append(sig)
+            return
+        try:
+            # through the pidfd: once the game is reaped it names no process, never a reused pid
+            signal.pidfd_send_signal(game["pidfd"], sig)
+        except ProcessLookupError:
+            pass
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGUSR1):
+        signal.signal(s, forward)
+    try:
+        proc = subprocess.Popen(spec["argv"], env=spec["env"], pass_fds=(seat,))
+    except OSError as e:
+        tell(f"failed {e}")
+        return 127
+    game["pidfd"] = os.pidfd_open(proc.pid)            # the game is not reaped yet: it is this pid
+    for sig in game["pending"]:
+        forward(sig, None)
+    tell(f"started {proc.pid}")
+    code = 0
+    while True:
+        try:
+            pid, st = os.waitpid(-1, 0)
+        except ChildProcessError:
+            break               # no child left, so no process below this one in any state
+        if pid == proc.pid:
+            code = proc.returncode = os.waitstatus_to_exitcode(st)
+            tell(f"exit {code}")
+    if spec["env"].get("WINEPREFIX"):
+        try:
+            subprocess.run(["wineserver", "-w"], env=spec["env"], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            say(f"the keeper of {spec['argv'][0]}: no `wineserver -w` ({e}); every process the game "
+                f"started has been reaped all the same")
+    return code if code >= 0 else 128 - code
 
 
 def together(n: int, what: str) -> "str | None":
@@ -987,9 +1370,10 @@ def cmd_run(a) -> int:
         return slots, units, (games_ if units else slots // LANE_SLOTS or 1), budget, cap
     if a.suite is not None:
         suite_cap(a.suite)
+    cap_override()
     try:
         _hold(path, a.what, lanes, sizes, a.resource, gpu=a.vram != 0)
-    except Busy as e:
+    except (Busy, NotCarried) as e:
         say(f"run: {e}")
         return 2
     for fd in fds():
@@ -1013,6 +1397,9 @@ def cmd_status(a) -> int:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["keep"]:
+        return keep(argv[1:])               # start_game's keeper, not a command for a hand
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n", 2)[2])

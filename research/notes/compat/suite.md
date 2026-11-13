@@ -261,15 +261,16 @@ MEMORY), taken in a queue of their own before its CPU slots, so every run on the
 inside the device's memory less a reserve (the lock's `runslots/vram.cfg`, seeded from
 `tools/runlock-vram.cfg`). A game takes its cap plus the driver's allowance and a margin of the budget, and
 runs under that cap by construction: `start_game`, through which every game of the suite starts, writes the
-run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and hands the game a seat of the run
-(`runlock.game_seat`), so the suite never has more games on the GPU than its `games()`
+run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and starts the game under a keeper that
+holds a seat of the run until every process of the game is reaped (`runlock.start_game`), so the suite never
+has more games on the GPU than its `games()`
 ([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*). A network game's two
 peers wait for each other in the battle room, so they need their two seats at once: a run granted
 fewer than two games plays no network game (`runlock.together`), and each setup's reads `could not
 run` by name, since its joiner's launch would wait for the seat the host holds while the host waits
 for it; `GameSlots` refuses more slots than the run has. The suite's cap is
-`compat` in `tools/runlock-suites.cfg`: still the play defaults' 920, 9 games on the reference setup, until
-`vramproof.py watch` measures the suite. `games at once:` in the output says how many it got. Where no
+`compat` in `tools/runlock-suites.cfg`: a provisional 1536, 5 games on the reference setup, until
+`vramproof.py watch --cap N` measures the suite. `games at once:` in the output says how many it got. Where no
 device memory reads (no `nvidia-smi`, no amdgpu counters) there is no GPU budget and the pools alone bound
 it. A game launched by hand outside the run lock is not counted; the refusal it causes is named above.
 

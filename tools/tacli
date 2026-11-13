@@ -1930,6 +1930,11 @@ def _launch(args) -> dict:
         if clash:
             die(f"--shipped launches the gamedir as a player has it, so it writes nothing; "
                 f"{', '.join(clash)} would write something")
+        if runlock.seated():
+            # a game that takes a seat runs under its run's cap, and a player's store carries none
+            die("--shipped inside a run with GPU memory: the game would take a seat of the run and "
+                "run uncapped, holding memory the run's budget does not count; launch it outside "
+                "the run, or in one without GPU memory")
     if getattr(args, "window", None) is not None:
         store_window(args.window)
     inst = Instance(args.name)
@@ -2154,16 +2159,12 @@ def _launch(args) -> dict:
     # shared registry.
     token = [taremote.TEST_TOKEN] if registry["serves"] else []
     old_log = _log_key(inst)
-    # the game holds a seat of its run for as long as it lives (runlock.py, THE GAME SEATS): a run
-    # puts no more games on the GPU than its GPU memory was taken for, whichever tool launches them
-    seat = runlock.game_seat(f"{inst.name} (tacli launch)")
-    try:
-        proc = subprocess.Popen(["wine", "TotalA.exe"] + token + argv, cwd=str(inst.gamedir),
-                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True, pass_fds=(seat.fileno(),) if seat else ())
-    finally:
-        if seat:
-            seat.close()
+    # inside a run with GPU memory the game's keeper holds a seat of the run until every process of
+    # the game is reaped (runlock.py, THE GAME SEATS): a run puts no more games on the GPU than its
+    # GPU memory was taken for, whichever tool launches them
+    proc = runlock.start_game(["wine", "TotalA.exe"] + token + argv, f"{inst.name} (tacli launch)",
+                              cwd=str(inst.gamedir), env=env, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, start_new_session=True)
     deadline = time.time() + args.timeout
     pid = None
     while time.time() < deadline:

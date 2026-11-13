@@ -2223,6 +2223,21 @@ class SettingsStore(unittest.TestCase):
             self.assertFalse(any(ln.startswith("gpumem=") for ln in lines))
             self.assertIn("gamma=12", lines)
 
+    def test_a_shipped_launch_is_refused_inside_a_run_with_gpu_memory(self):
+        # its game would take a seat of the run and carry no cap; in a run without GPU memory it
+        # takes no seat, and the refusal comes before anything is made or written
+        held = {"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00", "resources": [],
+                "path": "/nowhere/tareplay.lock", "cap_mib": 536}
+        args = tacli.build_parser().parse_args(["launch", "nowhere-instance", "--shipped"])
+        with patch.dict(os.environ, {tacli.runlock.ENV: json.dumps(held)}), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            tacli._launch(args)
+        self.assertIn("--shipped inside a run with GPU memory", err.getvalue())
+        self.assertFalse(tacli.Instance("nowhere-instance", lenient=True).exists)
+        no_gpu = json.dumps(dict(held, gpu_mib=0, cap_mib=None))
+        with patch.dict(os.environ, {tacli.runlock.ENV: no_gpu}):
+            self.assertFalse(tacli.runlock.seated())
+
     def test_every_harness_launch_writes_netai(self):
         # the network game's AI is ota unless the launch asks for impai, so a stale impai line
         # never plays a later launch's network seats; a --shipped launch hands it to the player
@@ -4085,35 +4100,32 @@ class LocalRegistry(unittest.TestCase):
         self.assertIn("registry store created", out)
         self.assertEqual(self.store().get(taremote.STORE_TA, "Nickname")[2], b"LATER\0")
 
-    def test_a_game_launched_inside_a_gpu_run_holds_a_seat_of_it(self):
-        # the game's process is handed a seat (runlock.py, THE GAME SEATS), held while it starts and
-        # given up by tacli once the game has it; outside a run it is handed none
+    def test_a_game_launched_inside_a_gpu_run_is_started_through_runlocks_keeper(self):
+        # tacli starts its game through runlock.start_game, which inside a run with GPU memory puts it
+        # under a keeper holding a seat of the run (runlock.py, A SEAT IS LET GO AFTER ITS GAME:
+        # test_runlock.py's Keeper plays the keeper itself) and outside one starts it as it is. The
+        # seat is taken away here so that the stand-in game, not wine, is what starts.
         self.assertEqual(self.main("create", "l1")[0], 0)
-        lock = Path(self.tmp.name) / "common" / "tareplay.lock"
-        lock.parent.mkdir()
-        seat = lock.parent / "runslots" / "seat-s03-00"
         seen = []
-        game = self.game
+        real = tacli.runlock.start_game
 
-        def launch(argv, **kw):
-            if list(argv[:2]) == ["wine", "TotalA.exe"]:
-                seen.append((kw.get("pass_fds"), tacli.runlock._held_now(seat)))
-            return game(argv, **kw)
-        tacli.subprocess.Popen = launch
+        def start(argv, what, **kw):
+            seen.append((list(argv[:2]), what, tacli.runlock.seated(), kw.get("start_new_session")))
+            with patch.object(tacli.runlock, "game_seat", lambda what: None):
+                return real(argv, what, **kw)
         held = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s03", "resources": [],
-                           "path": str(lock), "cap_mib": 920})
-        with patch.dict(os.environ, {tacli.runlock.ENV: held}):
-            code, _, err = self.main("launch", "l1", "--no-restore-pointer")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(len(seen), 1)
-        self.assertEqual((len(seen[0][0]), seen[0][1]), (1, True))
-        self.assertFalse(tacli.runlock._held_now(seat))      # tacli's own copy is closed
-        self.running = False                                # the game ended
-        outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
-        with patch.dict(os.environ, outside, clear=True):
-            code, _, err = self.main("launch", "l1", "--no-restore-pointer")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(seen[1][0], ())
+                           "path": str(Path(self.tmp.name) / "tareplay.lock"), "cap_mib": 920})
+        with patch.object(tacli.runlock, "start_game", start):
+            with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+                code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+            self.assertEqual(code, 0, err)
+            self.running = False                                # the game ended
+            outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+            with patch.dict(os.environ, outside, clear=True):
+                code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+            self.assertEqual(code, 0, err)
+        self.assertEqual(seen, [(["wine", "TotalA.exe"], "l1 (tacli launch)", True, True),
+                                (["wine", "TotalA.exe"], "l1 (tacli launch)", False, True)])
 
     def test_an_existing_store_is_the_instances_and_is_not_reseeded(self):
         self.assertEqual(self.main("create", "l1")[0], 0)
