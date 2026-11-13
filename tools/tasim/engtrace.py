@@ -14,7 +14,8 @@ head (tagpu_recorder.c, tagpu_rec_capture): it publishes the last step's events 
 the engine makes it, on the game thread (ev_rec, ev_put), whether a step is running or not. So the
 apply's creates and the clear's deaths, made on the frames held after step T, come in iteration T,
 after step T's own events, and the images of iteration T + 1 are the first to show them. Hence:
-  - the empty point is iteration t_apply's images (before the apply);
+  - the empty point is iteration t_apply's images (before the apply), the pool the settle's hold at
+    t_apply - 1 read; the apply's state is iteration t_apply + 1's; R2 reads the pool in both;
   - the apply's creates are iteration t_apply's RK_EV_CREATEs, the trace's t = 0 events;
   - the clear's deaths are iteration t_end's last death of each cleared slot: B4's slot hold
     (tagpu_patches.c, hit_held) keeps a slot freed in a step from a create in that step and the
@@ -321,6 +322,12 @@ class Run:
             self.ok("R2")
         self.empty = {"globals": globals_rows, "tables": tables, "mapped": mapped}
 
+    def apply_point(self, phead):
+        """R2's second read: no projectile in iteration t0 + 1's images, the apply's state before any
+        of its units has stepped (engrun.py, THE EMPTY POINT'S POOL)."""
+        if phead:
+            self.fail("R2", f"{phead} projectile(s) at the apply")
+
     def apply_creates(self, creates, ln):
         """R1: the apply's creates are exactly the wire's units: ID, type and owner."""
         want = {}
@@ -527,6 +534,7 @@ class Lane:
                                       bytes(w.mapped))
                         r.exogenous = None
                     if L == r.t0 + 1:
+                        r.apply_point((w.phead or (0, 0))[0])
                         g = bytes(w.globals or b"")
                         r.exogenous = {names.get(i, str(i)): struct.unpack_from("<I", g, 4 * i)[0]
                                        for i in range(len(g) // 4)

@@ -153,6 +153,14 @@ class TraceAndChecks(unittest.TestCase):
         run.empty_point({}, 3, b"", {}, b"")
         self.assertTrue(run.failed.startswith("R2"))
 
+    def test_a_projectile_at_the_apply_fails_R2(self):
+        run = engtrace.Run(duel(False).row, scenario(False), BLOCK, VALUES, IDS)
+        run.apply_point(1)
+        self.assertEqual(run.failed, "R2: 1 projectile(s) at the apply")
+        run = engtrace.Run(duel(False).row, scenario(False), BLOCK, VALUES, IDS)
+        run.apply_point(0)
+        self.assertIsNone(run.failed)
+
     def test_a_create_the_result_does_not_name_fails_R1(self):
         run = engtrace.Run(duel(False).row, scenario(False), BLOCK, VALUES, IDS)
         run.empty_point({}, 0, b"", {}, b"")

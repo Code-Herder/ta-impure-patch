@@ -404,6 +404,43 @@ class EmptyPoint(unittest.TestCase):
             self.assertEqual(T % 30, 1)
         self.assertEqual(engrun.aligned(1 + engrun.S_MIN), 91)
 
+    @staticmethod
+    def settle(t_prev, gone_in):
+        """engrun.Lane.settle on a lane with no Worker whose pool holds a projectile on every hold
+        before `gone_in`: (T, waits) and the holds it asked for."""
+        import engrun
+
+        class Fake(engrun.Lane):
+            def __init__(self):
+                self.T_prev, self.held = t_prev, []
+
+            def hold(self, T):
+                self.held.append(T)
+
+            def peek(self, spec):
+                assert spec == engrun.PROJECTILES
+                return 1 if self.held[-1] < gone_in else 0
+
+        lane = Fake()
+        return lane.settle(), lane.held
+
+    def test_the_settle_peeks_the_empty_points_pool_on_the_hold_before_it(self):
+        """The pool of iteration T's images is the one the hold at T - 1 reads (engrun.py, THE EMPTY
+        POINT'S POOL): the settle ends held at T, its last peek on the hold at T - 1."""
+        import engrun
+        t_prev = 1921
+        for gone_in in range(t_prev, t_prev + 230):
+            (T, _waits), held = self.settle(t_prev, gone_in)
+            self.assertEqual(T % 30, 1, gone_in)
+            self.assertGreaterEqual(T, t_prev + engrun.S_MIN, gone_in)
+            self.assertLessEqual(gone_in, T - 1, gone_in)
+            self.assertEqual(held[-2:], [T - 1, T], gone_in)
+
+    def test_naval_000_run_3(self):
+        """The shot of naval-000 run 3 was removed in step 2011, the settle's first T: the hold at
+        2010 still holds it, so the settle waits to 2041."""
+        self.assertEqual(self.settle(1921, 2011), ((2041, 1), [2010, 2040, 2041]))
+
 class ApplierSeats(unittest.TestCase):
     """applier_check holds each seat to the last apply that named it."""
 

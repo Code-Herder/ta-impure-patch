@@ -9,8 +9,9 @@ turbo k = 1, held at launch and recording the exact stream. A LANE-LAUNCH loads 
 (tools/tasim/calib-arena.json) and then plays runs, each from an EMPTY POINT -- no unit, no
 projectile, the 30-tick phase realigned -- that the previous run's clear and a settle make:
 
-  1. settle: hold at the least T >= T_prev + S_MIN with T = 1 (mod 30), raised by S_STEP while the
-     projectile count main+0x141F3 is not 0, never past T_prev + S_MAX;
+  1. settle: the least T >= T_prev + S_MIN with T = 1 (mod 30) whose hold at T - 1 reads the
+     projectile count main+0x141F3 as 0, raised by S_STEP while it does not, never past
+     T_prev + S_MAX; then one step to the hold at T (THE EMPTY POINT'S POOL);
   2. apply the run's wire (perturb.py) on the held frame, and check the result: GameTime T, ok,
      nothing cleared (the level was empty), as many delayed orders as the wire asks;
   3. arm `pause at <T + L> or units <seat> <= <n> ...`;
@@ -82,6 +83,22 @@ from tareplay import CouldNotRun, Failed  # noqa: E402
 # skirmish's commanders at its hold, so an empty point at T_prev + S_MIN or later holds no record
 # and its counters are zero.
 SIGHT_TTL = 60
+# THE EMPTY POINT'S POOL. The empty point is iteration T's images, and the recorder captures them at
+# the head of step T, before that step's projectile tick: the step 0x495490 increments GameTime
+# (0x4954B7..0x4954C0) and pumps the network (0x4954C8), then calls the unit tick at 0x4954ED, whose
+# stub captures first, and only after it the projectile tick (0x495513) and the explosion tick
+# (0x495539) (DISASSEMBLED). A hold at H is the frame visit after step H, and no step runs on a held
+# frame: 0x496920 tests the pause bit and jumps past the step's call at 0x49693E (DISASSEMBLED). So a
+# peek on the hold at T reads the pool one projectile tick after iteration T's images, and a shot
+# removed in step T itself reads 0 there and 1 in the images (MEASURED 2026-11-13: the nine R2
+# failures of 566 runs, each one projectile in iteration T's images and none in T + 1's). The settle
+# therefore peeks on the hold at T - 1, whose pool is iteration T's: on a held frame the pool is
+# reached only through a unit's kill (the destructor's purge 0x49C880, and the level holds no unit)
+# or the receiver 0x49D270 handling a peer's packet (the static call graph of 0x495E90 and
+# 0x453D40's direct calls, DISASSEMBLED), and a lane has no peer [INFERRED]. Step T then appends
+# none: the pool's appends are a unit's weapon (no unit), a burst template's copy (none in the pool),
+# the meteor spawn 0x49DF10 (the launch refuses METEOR_ON) and the receiver. R2 reads the pool in
+# iterations T and T + 1 (engtrace.Run.empty_point, apply_point), so a broken link fails by name.
 S_MIN, S_STEP, S_MAX = SIGHT_TTL + 1, 30, 1800
 PHASE = 30                      # the economy passes' period: an apply at 1 (mod 30) is at the
                                 # phase of the launch's first apply, GameTime 1
@@ -303,15 +320,17 @@ class Lane:
 
     def settle(self):
         """The empty point: held at T = 1 (mod 30), S_MIN on from the last run's end -- past every
-        temporary sight record its deaths left (THE EMPTY POINT'S SIGHT) -- with no projectile
-        left in flight. Returns (T, the settle's extra steps)."""
+        temporary sight record its deaths left (THE EMPTY POINT'S SIGHT) -- with no projectile in
+        the pool the empty point's images hold, read on the hold at T - 1 (THE EMPTY POINT'S
+        POOL). Returns (T, the settle's extra steps)."""
         T, waits = aligned(self.T_prev + S_MIN), 0
         while True:
             if T > self.T_prev + S_MAX:
                 raise CouldNotRun(f"projectiles still in flight {S_MAX} ticks after the clear at "
                                   f"{self.T_prev}")
-            self.hold(T)
+            self.hold(T - 1)
             if self.peek(PROJECTILES) == 0:
+                self.hold(T)
                 return T, waits
             T += S_STEP
             waits += 1

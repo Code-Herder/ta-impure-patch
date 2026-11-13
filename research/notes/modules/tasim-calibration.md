@@ -83,8 +83,12 @@ lanes are threads under one run lock (`tools/runlock.py`).
 
 One run (`tools/tasim/engrun.py`, `Lane.run`):
 
-1. **Settle**: hold at the least T ≥ T_prev + 61 with T ≡ 1 (mod 30), raised by 30 while the
-   projectile count `main+0x141F3` is not 0, never past T_prev + 1800. Sixty-one ticks drain every
+1. **Settle**: the least T ≥ T_prev + 61 with T ≡ 1 (mod 30) whose hold at T − 1 reads the
+   projectile count `main+0x141F3` as 0, raised by 30 while it does not, never past T_prev + 1800;
+   then one step to the hold at T. The peek is on the hold before T because the recorder captures
+   iteration T's images at the head of step T, before its projectile tick (the capture at `0x4954ED`,
+   the projectile tick at `0x495513`), and a held frame runs no step and appends no shot, nor does
+   step T with no unit in the level (`engrun.py`, *THE EMPTY POINT'S POOL*). Sixty-one ticks drain every
    temporary sight record: a death of a viewed-seat unit under true LOS leaves one in that seat's
    sight counters (`0x482910` at `0x486748`), expiring at the death's GameTime + 60, and the expiry
    `0x482130` removes it only from GameTime d + 61 on ([engine/map.md](../engine/map.md), *The
@@ -138,7 +142,7 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 | State | Reset by the next run | Why no metric is biased |
 |---|---|---|
 | units, features | the clear and `clear_features` in every wire | — |
-| projectiles | the settle waits for none | — |
+| projectiles | the settle's hold at T − 1 waits for none; step T adds none | none is in flight at the empty point or the apply; R2 checks both |
 | levels and storage | every wire's `storage` and levels | — |
 | lifetime totals `+0xAC..+0xDB`, kills `+0xFC..+0xFF`, `+0x104..+0x107`, units made `+0x140` | no | metrics use differences from the apply |
 | deadlines `+0xF0`, `+0xF4`, `+0xF8` | their phase, by T ≡ 1 (mod 30) | a fresh run's phase |
@@ -169,7 +173,7 @@ makes the run unusable and the reference builder refuses its scenario.
 | | Check |
 |---|---|
 | R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
-| R2 | no projectile at the empty point |
+| R2 | no projectile at the empty point (iteration T's images) or at the apply (T + 1's) |
 | R3 | after the apply the grid holds only the scenario's features |
 | R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them), and the scoreboard rank `+0x148`, display state by its readers ([units](../engine/units.html), `+0x148`; owner's decision of 2026-11-13); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
@@ -509,9 +513,6 @@ on one line per verb.
 
 ## Gaps
 
-- **R2 in GDI runs, open**: 6 runs of the 2026-11-13 GDI sweep failed R2 with `1 projectile(s) at the
-  empty point`, though the settle's own peek of the projectile count read 0 before each apply. The cause is
-  not found; the next sweep shows whether it recurs.
 - The `calib-applier` fixture and the units clause's probe have passed, the fixture before its seat
   check held seat 1 to the spec; its strict check is not yet run. The sixth verification ran
   R1..R8, the settle's 61 ticks against R7 included, on full lanes of the duel (fresh and at `-j`
