@@ -1682,14 +1682,19 @@ COUNTED = (r"wiki3d: count (\d+): (\d+) of (\d+) frame\(s\) drew the image, fram
 
 
 def wait_line(c, start, rx, what, seconds=30):
-    end = time.monotonic() + seconds
+    """The first log line from index `start` on that matches `rx`, `start` being a mark (c.mark()) taken before the
+    action whose answer the line is. The first, not the newest: which lines follow a mark is the game's to say, so
+    the answer cannot depend on when a look lands, and the look's interval decides only how soon it is seen. Each
+    line is searched once."""
+    rx, end, k = re.compile(rx), time.monotonic() + seconds, start
     while True:
         c.mark()
-        hit = [ln for ln in c.log[start:] if re.search(rx, ln)]
-        if hit:
-            return hit[-1]
-        assert time.monotonic() < end, f"{what}: no line matching `{rx}` in {seconds} s"
-        time.sleep(0.3)
+        for ln in c.log[k:]:
+            if rx.search(ln):
+                return ln
+        k = max(k, len(c.log))
+        assert time.monotonic() < end, f"{what}: no line matching `{rx.pattern}` in {seconds} s"
+        time.sleep(LOOK_S)
 
 
 def drawn_window(c, what, want_all):

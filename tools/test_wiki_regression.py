@@ -201,5 +201,55 @@ class GateSchedule(unittest.TestCase):
         self.assertTrue(self.free())
 
 
+class WaitLine(unittest.TestCase):
+    """wait_line answers the first line after its mark that matches, so a look every 0.3 s and a look every LOOK_S
+    take the same line; the game writes on a fake clock that each look's sleep advances."""
+
+    class Log:
+        def __init__(self, script):
+            self.log, self.todo, self.clock = ["wiki: shot 4 asked: an earlier one"], list(script), [0.0]
+
+        def mark(self):
+            while self.todo and self.todo[0][0] <= self.clock[0] + 1e-9:
+                self.log.append(self.todo.pop(0)[1])
+            return len(self.log)
+
+    def wait(self, look_s, script, rx, seconds=30):
+        c = self.Log(script)
+        start = c.mark()
+
+        def sleep(s):
+            c.clock[0] += s
+
+        with mock.patch.object(wiki_regression, "LOOK_S", look_s), \
+                mock.patch.object(wiki_regression.time, "sleep", sleep), \
+                mock.patch.object(wiki_regression.time, "monotonic", lambda: c.clock[0]):
+            try:
+                got = wiki_regression.wait_line(c, start, rx, "the shot")
+            except AssertionError as e:
+                got = str(e)
+        return got, round(c.clock[0], 6)
+
+    def test_the_first_line_after_the_mark_at_either_look(self):
+        script = [(0.1, "wiki3d: stage quickbuild.base: the ground in 3D - 4 tiles"),
+                  (0.2, "units: alive=0"),
+                  (0.25, "wiki3d: stage buildshapes.flat: the ground in 3D - 9 tiles")]
+        rx = r"wiki3d: stage \S+: the ground"
+        slow, fast = self.wait(0.3, script, rx), self.wait(wiki_regression.LOOK_S, script, rx)
+        self.assertEqual(slow[0], fast[0])
+        self.assertEqual(fast[0], script[0][1])
+        self.assertLess(fast[1], slow[1])
+
+    def test_a_line_before_the_mark_is_not_the_answer(self):
+        got, _ = self.wait(wiki_regression.LOOK_S, [(1.0, "wiki: shot 5 asked: quickbuild 1 30")],
+                           r"wiki: shot \d+ asked")
+        self.assertEqual(got, "wiki: shot 5 asked: quickbuild 1 30")
+
+    def test_no_line_fails_at_the_bound(self):
+        got, at = self.wait(wiki_regression.LOOK_S, [], r"never")
+        self.assertIn("the shot: no line matching `never` in 30 s", got)
+        self.assertGreaterEqual(at, 30 - 1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
