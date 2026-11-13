@@ -33,9 +33,10 @@ A scenario with delayed orders is followed far enough for its last one to fall d
 delayed refusals are read from the log (`delayed order at GameTime G: slot S cannot take cmd C`).
 
 FAST BY CONSTRUCTION. The levels are tareplay's Workers (one instance and one Xvfb each) played by
-`--j` threads under one run lock (tools/runlock.py); a level serves every scenario of its launch,
-and the longest levels go first. A level that fails part-way hands each remaining scenario that
-names a map to a level of its own.
+`--j` threads under the run lock, holding the slots of as many game lanes as it plays at once
+(tools/runlock.py, lanes_of); a level serves every scenario of its launch, and the longest levels
+go first. A level that fails part-way hands each remaining scenario that names a map to a level of
+its own.
 
 WHAT COUNTS AS APPLIED. An apply passes only when its result says so: `ok` 1, no error, no create
 refused and at least one entity created. Every swept scenario has a unit with an order, so an apply
@@ -380,6 +381,12 @@ class Stopped(Exception):
         self.k, self.why, self.rows = k, why, rows
 
 
+def lanes_of(levels, j) -> int:
+    """The game lanes run_levels plays at once: one Worker a thread, `j` threads, never more than
+    there are levels."""
+    return min(j, J_MAX, max(1, len(levels)))
+
+
 def run_levels(levels, docs, j, out, dll, R):
     """{path: row} for every reported scenario, played on `j` Workers of `R` (tareplay)."""
     work = queue.Queue()
@@ -424,7 +431,7 @@ def run_levels(levels, docs, j, out, dll, R):
                 L.close()
 
     threads = [threading.Thread(target=lane, args=(k,), daemon=True)
-               for k in range(min(j, J_MAX, max(1, len(levels))))]
+               for k in range(lanes_of(levels, j))]
     for t in threads:
         t.start()
     for t in threads:
@@ -510,7 +517,7 @@ def cmd_run(a):
         unhosted = [p for p in unhosted if a.only in rel(p)]
     out = Path(a.out) if a.out else TREE / ".data" / "applysweep" / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
-    runlock.hold(TREE, "applysweep " + " ".join(sys.argv[2:]))
+    runlock.hold(TREE, "applysweep " + " ".join(sys.argv[2:]), lanes_of(levels, a.j))
     print(f"applysweep: {len(levels)} level(s) on j={a.j}, DLL {dll}, out {out}")
     done = run_levels(levels, docs, a.j, out, dll, R)
     rc, lines = verdict(done, unhosted)
