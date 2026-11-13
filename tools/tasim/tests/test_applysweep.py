@@ -90,6 +90,27 @@ class Plan(unittest.TestCase):
               if lv["launch"]["map"] == "two continents"]
         self.assertEqual(sorted(tc), [["a.json", "b.json"], ["c.json"], ["d.json"], ["e.json"]])
 
+    def test_a_map_only_content_installs_brings_its_content(self):
+        content = {"run": ["tools/resource_fixture.py", "{gamedir}"], "files": ["resource-test.ufo"]}
+        docs = dict(self.docs)
+        docs[P("rs-host.json")] = doc("RS mixed")
+        docs[P("rs-a.json")] = doc("RS mixed", [[ATTACK]])
+        docs[P("rs-b.json")] = doc("rs mixed", [[ATTACK]])
+        fx = {"fixtures": dict(self.fx["fixtures"],
+                               rs={"load": "rs-host.json", "content": content},
+                               tc={"load": "a.json", "content": content},
+                               tc2={"load": "c.json"}),
+              "broad": {}}
+        self.assertEqual(list(S.map_content(docs, fx)), ["rs mixed"])
+        levels, _ = S.plan(docs, fx)
+        lv = next(lv for lv in levels if lv["launch"]["map"] == "rs mixed")
+        self.assertEqual(lv["fix"][0], "rs")
+        self.assertEqual(lv["launch"]["content"], "rs")
+        self.assertEqual([S.rel(i["path"]) for i in lv["items"]], ["rs-a.json", "rs-b.json"])
+        # two fixtures that install different content for one map: none is taken
+        fx["fixtures"]["rs2"] = {"load": "rs-host.json", "content": dict(content, run=["x"])}
+        self.assertEqual(S.map_content(docs, fx), {})
+
     def test_calibration_on_the_arena(self):
         levels, _ = S.plan(self.docs, self.fx)
         lv = next(lv for lv in levels if lv["launch"]["map"] == "cavedog links cc")

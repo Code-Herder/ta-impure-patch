@@ -20,9 +20,11 @@ stage and issue no order through the applier.
 THE LEVELS. A scenario plays on the level it is written for:
   - a fixture's (tools/replay/fixtures.json, its `fixtures` and `broad`) mid-level `apply` steps on
     the fixture's own `load`, at the steps' GameTimes, with its content, LOS and unit limit;
-  - a scenario that names a map on a level it loads itself, and every other scenario with the same
-    launch (content, map, players, unit limit, LOS, mapping) applied after it on that level, each
-    on the held frame where the previous one left the level (`--no-group`: one load each); a
+  - a scenario that names a map on a level it loads itself -- with the content of the fixtures
+    that load that map when only content installs it (map_content) -- and every other scenario
+    with the same launch (content, map, players, unit limit, LOS, mapping) applied after it on
+    that level, each on the held frame where the previous one left the level (`--no-group`: one
+    load each); a
     scenario that turns a seat's AI off changes the seat for the rest of the level, so it loads a
     level of its own and nothing is applied after it;
   - a calibration scenario (scenarios/calib/, no map) on the calibration arena it is applied to;
@@ -136,6 +138,23 @@ def writes_seats(doc: dict) -> bool:
     return any(pl.get("ai") == "off" for pl in (doc.get("setup") or {}).get("players") or [])
 
 
+def map_content(docs: dict, fixtures_json: dict) -> dict:
+    """{map: (name, fixture)} for each map that only content installs: every fixture that loads a
+    scenario on it installs the same content. Those maps are generated -- `tools/resource_fixture.py`
+    writes the `RS ...` maps into the game folder -- and are not in a stock install, where TA loads
+    another map instead of a missing one. A map some fixture loads without content, or that two
+    fixtures install different content for, is not one of them."""
+    seen = {}
+    for name, fix in fixture_list(fixtures_json):
+        d = docs.get((SCENARIOS / fix["load"]).resolve()) if fix.get("load") else None
+        m = ((d or {}).get("setup") or {}).get("map")
+        if m:
+            seen.setdefault(m.lower(), []).append(
+                (name, fix, json.dumps(fix.get("content"), sort_keys=True)))
+    return {m: rows[0][:2] for m, rows in seen.items()
+            if rows[0][2] != "null" and all(r[2] == rows[0][2] for r in rows)}
+
+
 def plan(docs: dict, fixtures_json: dict, no_group=False) -> tuple:
     """(levels, unhosted). A level is {"fix": (name, fixture) or None, "launch": {...},
     "items": [{"path", "at" (a GameTime, or None for the held frame the level is at), "report"}]};
@@ -172,9 +191,10 @@ def plan(docs: dict, fixtures_json: dict, no_group=False) -> tuple:
 
     # every other scenario with an order: on its own map, or the arena, grouped by launch
     groups, unhosted = {}, []
+    generated = map_content(docs, fixtures_json)
     for p in sorted(ordered - reported):
         doc = docs[p]
-        fix = by_scenario.get(p)
+        fix = by_scenario.get(p) or generated.get(((doc.get("setup") or {}).get("map") or "").lower())
         if (doc.get("setup") or {}).get("map"):
             launch = launch_of(doc, fix)
             items = [{"path": p, "at": None, "report": True}]
