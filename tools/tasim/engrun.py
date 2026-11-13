@@ -226,11 +226,12 @@ class Lane:
             log.alive()
 
     def apply(self, wire: str, what: str, refusal=None) -> dict:
-        """The wire applied in-process through tacli's own call. Its refusal could not run -- `refusal`'s
-        exception when the caller names one (the applier refused the wire, the game is intact) --, and a
-        call that did not answer is the lane's CouldNotRun."""
+        """The wire applied in-process through tacli's own call, on the worker's one Instance (Worker.instance:
+        the game it found is verified at every call, not listed again). Its refusal could not run --
+        `refusal`'s exception when the caller names one (the applier refused the wire, the game is intact) --,
+        and a call that did not answer is the lane's CouldNotRun."""
         try:
-            res = R._CLI_API._scn_apply(R._CLI_API.Instance(self.w.name), wire, R.ACK_S)
+            res = R._CLI_API._scn_apply(self.w.instance, wire, R.ACK_S)
         except SystemExit as e:
             raise CouldNotRun(f"{what}: {e}")
         if res.get("ok") != 1:

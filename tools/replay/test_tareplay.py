@@ -5164,53 +5164,83 @@ class LogWaitNap(unittest.TestCase):
             self.assertLessEqual(at, 60 + nap_s + 1e-6)
 
 
-class BusyGameIsNoStall(unittest.TestCase):
-    """A running game that has not answered a peek -- its game thread inside a seek's rebuild --
-    is no progress for Stall, and only STALL_S of it is a hung game; a game that is not running
-    still fails at once."""
+class WaitRunningStall(unittest.TestCase):
+    """Log.wait_running's bound (Stall, tools/stall.py) never stands between a wait and its line:
+    a line already logged, or logged within Stall.EVERY, is returned with no GameTime read asked
+    and no tacli process started; a level whose GameTime stands still is still named, as could
+    not run. A fake game answers the peek trigger at each nap of a fake clock."""
 
     class Worker:
-        def __init__(self, answers):
-            self.answers = list(answers)
+        lane = None
 
-        def gametime(self, wait, busy=False):
-            self.busy = busy
-            return self.answers.pop(0)
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
 
-    def stall(self, answers):
-        """A Stall over `answers`, made under the patched clock its caller holds."""
-        st = tareplay.Stall(self.Worker(answers))
-        st.EVERY = 0
-        return st
+        def running(self):
+            return True
 
-    def test_unanswered_peeks_within_the_bound_pass(self):
-        with patch("time.monotonic", side_effect=[0, 10, 20, 30, 40, 50, 60, 70, 80]):
-            st = self.stall([100, None, None, 101])
-            for _ in range(4):
-                st.check()
-        self.assertTrue(st.w.busy)
-        self.assertEqual(st.g, 101)
+    def wait(self, lines, ticks, line_at=None):
+        """wait_running(r"pause: paused") with `lines` logged at its start and the pause's line at
+        `line_at` (None: never), the game answering each read with ticks(t): (the line or the
+        failure, the fake time, the reads answered, whether a request was left)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            logf = g / "log" / "tagpu.log"
+            logf.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\n")
+            log = tareplay.Log(self.Worker(g))
+            log.ALIVE_EVERY = 0
+            with open(logf, "ab") as f:
+                f.write("".join(ln + "\r\n" for ln in lines).encode())
+            trigger = g / "tagpu_peek.trigger"
+            clock, answered, written = [0.0], [0], [False]
 
-    def test_unanswered_past_the_bound_is_a_hung_game(self):
-        late = tareplay.STALL_S + 1
-        with patch("time.monotonic", side_effect=[0, 0, 0, late, late]):
-            st = self.stall([100, None])
-            st.check()
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "stood at GameTime 100.*unanswered"):
-                st.check()
+            def nap(s):
+                clock[0] += s
+                with open(logf, "ab") as f:
+                    if trigger.exists():
+                        spec = trigger.read_text().strip()
+                        trigger.unlink()
+                        answered[0] += 1
+                        f.write(f"peek: {spec} @0x00512345 = {ticks(clock[0])} (0x0)\r\n".encode())
+                    if line_at is not None and not written[0] and clock[0] >= line_at:
+                        written[0] = True
+                        f.write(b"pause: paused at GameTime 900\r\n")
 
-    def test_the_peek_names_a_busy_game_only_while_it_runs(self):
-        w = Mock(name="w", lane=None)
-        w.name = "tareplay-1"
-        busy = (1, "tacli: no peek lines \u2014 is the game past its first frame?")
-        with patch.object(tareplay, "tacli", return_value=busy):
-            w.running.return_value = True
-            self.assertIsNone(tareplay.Worker.gametime(w, 5, busy=True))
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
-                tareplay.Worker.gametime(w, 5)
-            w.running.return_value = False
-            with self.assertRaisesRegex(tareplay.CouldNotRun, "no peek lines"):
-                tareplay.Worker.gametime(w, 5, busy=True)
+            def no_tacli(*a, **k):
+                raise AssertionError(f"a tacli process during the wait: {a}")
+
+            with patch.object(tareplay, "nap", nap), patch.object(tareplay, "tacli", no_tacli), \
+                    patch.object(tareplay.stall.time, "monotonic", lambda: clock[0]):
+                log.read()
+                try:
+                    got = log.wait_running(r"pause: paused")
+                except tareplay.CouldNotRun as e:
+                    got = str(e)
+            return got, round(clock[0], 6), answered[0], trigger.exists()
+
+    def test_a_line_already_logged_asks_nothing(self):
+        got, at, answered, left = self.wait(["units: alive=3", "pause: paused at GameTime 900"],
+                                            lambda t: 900)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertEqual((at, answered, left), (0.0, 0, False))
+
+    def test_a_line_within_every_asks_nothing(self):
+        got, at, answered, left = self.wait([], lambda t: int(t * 30), line_at=3.0)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertAlmostEqual(at, 3.0, delta=tareplay.Log.NAP_S + 1e-6)
+        self.assertEqual((answered, left), (0, False))
+
+    def test_a_later_line_comes_with_its_reads_answered(self):
+        got, at, answered, left = self.wait([], lambda t: int(t * 30), line_at=12.0)
+        self.assertEqual(got.strip(), "pause: paused at GameTime 900")
+        self.assertEqual((answered, left), (2, False))
+
+    def test_a_level_standing_still_could_not_run(self):
+        got, at, answered, _ = self.wait([], lambda t: 40)
+        self.assertIn("the level stood at GameTime 40 for 120 s while it ran", got)
+        self.assertGreater(at, tareplay.STALL_S)
+        self.assertLessEqual(at, tareplay.STALL_S + tareplay.Stall.EVERY + 1)
 
 
 class ObjectiveLeftOff(unittest.TestCase):
@@ -5263,30 +5293,38 @@ class LevelEndBound(unittest.TestCase):
     end was given with and the log shows no teardown (Log.wait_end)."""
 
     class Worker:
-        def __init__(self, gamedir, log_ref, answers):
-            self.gamedir, self.log_ref, self.answers = gamedir, log_ref, list(answers)
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
 
         def running(self):
             return True
 
-        def gametime(self, wait, busy=False):
-            """the next answer; a (GameTime, line) pair logs the line before the answer, as the
-            game logs what ran before the peek's read"""
+    class Stall:
+        """A read answered at every look: the next answer; a (GameTime, line) pair logs the line
+        before the answer, as the game logs what ran before the peek's read"""
+        answers = []
+
+        def __init__(self, log):
+            self.log = log
+
+        def check(self):
             g = self.answers.pop(0)
             if isinstance(g, tuple):
                 g, line = g
-                self.log_ref[0].lines.append(line)
+                self.log.lines.append(line)
             return g
+
+        def retire(self):
+            pass
 
     def wait(self, answers, lines=(), at=5400):
         with tempfile.TemporaryDirectory() as d:
-            ref = []
-            log = tareplay.Log(self.Worker(Path(d), ref, answers))
-            ref.append(log)
+            log = tareplay.Log(self.Worker(Path(d)))
             log.ALIVE_EVERY = 0
             log.lines = ["scenario: applied=1 failed=0 cleared=31"] + list(lines)
             log.at = at
-            with patch.object(tareplay.Stall, "EVERY", 0), patch.object(tareplay, "nap"):
+            with patch.object(self.Stall, "answers", list(answers)), \
+                    patch.object(tareplay, "Stall", self.Stall), patch.object(tareplay, "nap"):
                 return log.wait_end(r"recorder: writer: .* closed", 1)
 
     def test_a_level_that_runs_past_the_bound_fails_by_name(self):

@@ -220,10 +220,10 @@ the sink never writes the same `run/part` twice.
 | caller | how |
 |---|---|
 | `tacli wait`, `peek`, `scenario load`'s live wait | a `Cursor` taken before the trigger, looked at every 20 ms (`ANSWER_NAP_S`) |
-| `tools/replay/tareplay.py`'s `Log`, and every harness on it (bar, eco_bench, l1_run, the calibration runner) | a `Cursor` that advances, read every 20 ms (`Log.NAP_S`) |
+| `tools/replay/tareplay.py`'s `Log`, and every harness on it (bar, eco_bench, l1_run, the calibration runner) | a `Cursor` that advances, read every 20 ms (`Log.NAP_S`); a wait on a running level reads GameTime for its stall bound from 5 s into it on, every 5 s, answered on a `Cursor` of its own (`tools/stall.py`) |
 | `tools/compat/tacompat.py`'s log waits | a `Tail` of `tagpu.log`, read every 20 ms (`LOOK_S`) |
 | every harness that plays under a GPU memory cap, once its game has stopped | a `CapWatch` from before the launch, or `run_text` of a stopped peer, for the cap's refusals |
-| `tools/resource_regression.py`'s lockstep `Check` (the wiki gate, handicap_check, the formation, sweep, placement and resource regressions) | tacli's line reader on a `Cursor`, read every 20 ms (`LOOK_S`); a wait on a running level peeks GameTime every 5 s for its stall bound |
+| `tools/resource_regression.py`'s lockstep `Check` (the wiki gate, handicap_check, the formation, sweep, placement and resource regressions) | tacli's line reader on a `Cursor`, read every 20 ms (`LOOK_S`); a wait on a running level reads GameTime as tareplay's does (`tools/stall.py`) |
 | `tacli log -n N` | `tail_lines`: back through the run's parts until N lines |
 | `tacli log -g RX` | every part of the run |
 | `tacli roster` | newest part first, one more part only while no roster line has been found |
