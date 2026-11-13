@@ -2,23 +2,24 @@
 """tune.py -- ImpAI's response table tuned in the engine: tier A's search, tier B's race, tier C's confirmation.
 
     tune.py tierA init --dir D --base TABLE --pictures FILE [--seed S] [--pop 10] [--gens 18] [--sigma 0.3]
-    tune.py tierA next --dir D [--lanes 14]      write the current piece's fights; say what it is
+    tune.py tierA next --dir D [--lanes L]       write the current piece's fights; say what it is
     tune.py tierA play --dir D --lanes L         play them (waits on the composition fights, below)
     tune.py tierA ingest --dir D RESULTS         take a piece's margins; advance the search
     tune.py tierA report --dir D                 each generation's best and spread
     tune.py tierA top --dir D --n 4 --out DIR    the best fully-scored tables, for tier B
 
     tune.py tierB init --dir D --hand TABLE --maps M1,..,M5 TABLE...   the race's 12 candidates
-    tune.py tierB next --dir D [--lanes 14] [--gpu]   the round's games, as runner pieces
+    tune.py tierB next --dir D [--lanes L] [--gpu]    the round's games, as runner pieces
     tune.py tierB ingest --dir D RESULTS_DIR...  take a round's games; drop; say who is left
     tune.py tierB report --dir D
 
     tune.py confirm register --dir D --tuned TABLE --hand TABLE --maps M1,..,M5   (tourney.py register)
     tune.py confirm judge --dir D RESULTS_DIR...                                  (tourney.py judge)
 
-    tune.py plan [--lanes 14] [--gpu]            every tier's runner pieces, for the runner
+    tune.py plan [--lanes L] [--gpu]             every tier's runner pieces, for the runner
 
-Run with the shared venv's interpreter (numpy). The design: research/notes/impai/brain.md, Adaptation.
+L defaults to LANES, the GDI lanes the run lock's whole budget holds (tools/runlock-lanes.cfg). Run with the shared
+venv's interpreter (numpy). The design: research/notes/impai/brain.md, Adaptation.
 
 TIER A searches the counter part of the table -- the eight response gains and the type choice's `counter`, nine
 numbers -- by CMA-ES (cmaes.py) in a box around the base table: each number within its scale of its base value,
@@ -74,6 +75,7 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools"))
 import cmaes  # noqa: E402
+import runlock  # noqa: E402
 import tablefile  # noqa: E402
 import tourney  # noqa: E402
 
@@ -82,7 +84,7 @@ FIGHT_S = 10                # lane-seconds a group fight by reload [INFERRED: th
 ROUND_GAMES = 40            # tier B: games a candidate plays a round
 BUDGET_B = 960              # tier B: games the race may play
 VARIANT = 0.25              # tier B: the variants' step
-LANES = 14                  # the run lock's 28 slots at two a lane
+LANES = runlock.lanes_in(runlock.BUDGET, "gdi")    # the run lock's whole budget of GDI lanes
 
 
 class TuneError(Exception):
@@ -194,7 +196,6 @@ class TierA:
 
     def job(self, lanes: int = LANES) -> dict:
         """The current piece's fights; the generation's candidates are drawn on its first call."""
-        import runlock
         p = self.s["phase"]
         if p == "done":
             raise TuneError("the search is done")
@@ -424,7 +425,6 @@ class TierB:
 def plan(lanes: int, gpu: bool = False) -> list:
     """Every tier's engine runs as runner pieces, W the run lock's slots of the games played at once on their
     renderer (runlock.plan), in the order they depend on one another: tier A's pieces one after another, tier B's within a round in any order, tier C's in any order."""
-    import runlock
     W = runlock.plan(lanes, gpu=False)[0]
     WG = runlock.plan(lanes, gpu=gpu)[0]           # tiers B and C: tourney.py plays, on the GPU with `gpu`
     out = [{"tier": "A", "piece": "tierA-incumbent", "lanes": lanes, "W": W, "fights": 120,

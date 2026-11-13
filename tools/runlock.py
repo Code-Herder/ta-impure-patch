@@ -48,7 +48,10 @@ through lane_slots(): plan(), and so hold() and the slots every tool sizes its p
     figures differ size their own runs differently and share the one budget.
   * What a weight leaves out is load, and THE LOAD GUARD reads it. A figure is the lane's measured
     CPU rounded to a whole slot -- a GDI lane's 1.16 threads takes one -- so lanes that cost more
-    than their slots raise the load, and the guard admits no run past its limit for it.
+    than their slots raise the load, and the guard admits no run past its limit for it. A GDI game
+    adds about 2 to the 1-minute load (MEASURED, tools/runlock-lanes.cfg), so beside other runs the
+    guard holds GDI admissions near where the reference setup's cores fill, about 12 games, whatever
+    the weight; the weight speeds a run up where they are not full.
   * Nothing a run concludes depends on it, as nothing depends on the guard. The tools that play GDI
     lanes judge in game ticks; their wall-clock bounds -- tareplay's ACK_S and STALL_S, a launch's,
     handicap_check's roster wait -- end a game as one that could not run, and the one bound that
