@@ -33,7 +33,7 @@ The players phase's `call 0x408C40` at `0x465031` calls `impai_ai_tick`, `__fast
 - the record is seated with controller 2, the test `0x408C40` makes before it plans;
 - the seat table marks record `i`, and `i` is not a puppet seat.
 
-Any other seat takes the stock tick `0x408C40`, and the recorder's observer on its entry sees the call. **An ImpAI seat never runs `0x408C40`'s group assignment `0x408830` or its ten planners**, on either thread: of the tick it runs only what both its exits end with for an active type-2 record, the weapon scan `0x4089A0(obj, 1)` (`0x408C96..0x408C9A`), called by address so that the extra-weapons module's detour of its entry runs. On the **loader thread's** one players phase (`0x497C10`) that is all it runs. On the **game thread** (`GetCurrentThreadId()` against `g_ddraw.gui_thread_id`) the seat's turn -- its observation (*What a seat knows*), then the brain on its decision tick (*The brain*) -- and the scan run inside `tagpu_rec_ai_turn_enter`/`_leave`, the recorder's attribution bracket beside `ai_enter`: the orders the turn builds are the seat's in the recorder's AI activity window, and the scan's detour ends the attribution before it scans (`tagpu_rec_ai_planning_end`), as for the stock tick.
+Any other seat takes the stock tick `0x408C40`, and the recorder's observer on its entry sees the call. **An ImpAI seat never runs `0x408C40`'s group assignment `0x408830` or its ten planners**, on either thread: of the tick it runs only the weapon scan `0x4089A0`, called by address so that the extra-weapons module's detour of its entry runs, and with argument 0, as `0x408C40` ends for every record but an active type-2 one: CommandFire weapons are left to orders (`0x408A88..0x408A96`; the detour's port tests the same argument), where the stock AI's argument 1 (`0x408C96..0x408C9A`) fires them on its own. On the **loader thread's** one players phase (`0x497C10`) that is all it runs. On the **game thread** (`GetCurrentThreadId()` against `g_ddraw.gui_thread_id`) the seat's turn -- its observation (*What a seat knows*), then the brain on its decision tick (*The brain*) -- and the scan run inside `tagpu_rec_ai_turn_enter`/`_leave`, the recorder's attribution bracket beside `ai_enter`: the orders the turn builds are the seat's in the recorder's AI activity window, and the scan's detour ends the attribution before it scans (`tagpu_rec_ai_planning_end`), as for the stock tick.
 
 ## What a seat knows
 
@@ -103,6 +103,12 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   seat=<i> hash=<16 hex> from=lever|default`, and `impai: starts n=<n> <index>:<x>,<z>...`, the level's start
   positions as the `starts` op answers them (*The start positions*, [sim](../engine/sim.html)). Cleared at every
   level init; a puppet's comes from its recording, so a replay plays the recorded level, seed and table.
+- **The weapon scan and the D-gun**: the wrapper runs `0x4089A0(obj, 0)` for an ImpAI seat, a human seat's
+  argument, so CommandFire weapons fire only by order, and the military orders the D-gun (resolver mode 4) under
+  its three conditions ([the brain](../impai/brain.html), *The military*). Each type's D-gun -- range and energy a
+  shot of its longest CommandFire weapon when its def has `candgun`, `+0x245` bit 14 -- is filled into
+  `IMPAI_TINFO` at the content build from the classifier's input (`dgun_of`), held to 16 bits. The `mil` lines
+  count the D-gun orders (`dgun=`, `dguns=`).
 - **The fight content** comes through `impai_fight_content`, which in this tree answers no type: the predictor's
   tables and their filler come with its own landing. Until they are wired to it, every prediction is refused --
   no attack wave, no retreat, the commander moved away from every contact worth more than it -- and every pair

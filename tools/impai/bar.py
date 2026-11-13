@@ -32,8 +32,8 @@ tagpu_impai_level.on, and a tournament's tables to tagpu_impai_table.on, both in
 (the DLL reads them at attach). A lane (a tareplay Worker, held, turbo) loads it, then every 300 ticks holds and
 peeks seats 1 and 2's units alive, +0x144: the game ends when one is 0 -- the other side won -- or at the cap,
 GameTime 81 000 (45 minutes), a failure for ImpAI. With the commander-death rule on, a commander's death kills its
-side (0x48667E..0x4866B3); the harness reads the rule, ActiveCommanderDeath main+0x37EF6, into each result, since
-no scenario key sets it. A hold the engine does not reach within the harness's bounds is "could not run", never an
+side (0x48667E..0x4866B3); bar.json sets the rule on (setup.commander_death), and the harness reads the level's
+ActiveCommanderDeath main+0x37EF6 into each result, so every result states the rule it was played under. A hold the engine does not reach within the harness's bounds is "could not run", never an
 outcome. A veteran CORKROG (29 918 HP) can survive the kill-all's 30 000 hit, so a side whose commander died can
 still hold that one unit (scout N-b4).
 
@@ -417,10 +417,10 @@ def judge(dirs) -> int:
         for gid, s, w in stalled[:12]:
             print(f"  stall: {gid} seat {s} {w['from']}..{w['to']}{' economy' if w['economy'] else ''}"
                   f"{' army' if w['army'] else ''}")
+        dead = [r["id"] for r in rs if r.get("commander_death") == 0]
+        if dead:
+            print(f"  commander-death rule off in: {' '.join(dead)}")
         if pair == "dry":
-            dead = [r["id"] for r in rs if r.get("commander_death") == 0]
-            if dead:
-                print(f"  commander-death rule off in: {' '.join(dead)}")
             continue
         if len(rs) < need:
             lacking += 1

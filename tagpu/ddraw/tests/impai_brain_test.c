@@ -29,7 +29,7 @@
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD,
-       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL };
+       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN };
 
 typedef struct FDEF {
     WQ_DEF      d;
@@ -38,6 +38,7 @@ typedef struct FDEF {
     int         nmenu;
     uint32_t    hp;                     /* maxdamage                                                          */
     int         armed;                  /* it answers the attack mode                                         */
+    int         dgun;                   /* it answers the D-gun mode (candgun)                                */
 } FDEF;
 
 typedef struct FUNIT {
@@ -244,6 +245,7 @@ static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int
     case 10: return A_STOP;
     case 3:  return d->armed ? A_ATTACK : -1;
     case 9:  return mobile ? A_PATROL : -1;
+    case 4:  return d->dgun ? A_DGUN : -1;
     }
     return -1;
 }
@@ -1725,6 +1727,69 @@ static void check_production(void)
           "the value bought follows the shares: assault, raider, scout");
 }
 
+/* THE D-GUN (impai_mil.c): the commander, its D-gun 140 px and 400 energy a shot, fires at a tank whose block
+   centre is 104 px off (128 with the block's half diagonal), when the tank is seen now, stored energy covers
+   the shot and Hard's reserve (0.25 of the storage), and the tank is worth the shot (400 / 60 metal); of two
+   targets it takes the more valuable, and it does not repeat an order its head already holds. Each refusal on its own: a ghost, a radar contact never identified, energy
+   short of the reserve, a target worth less than the shot, a target out of range, a def that cannot take the
+   order, and the commander's safety window. */
+static int dgun_case(const char* name, int expect, void (*setup)(void))
+{
+    IMPAI_MIL_OUT o;
+    int from, n;
+    mil_world();
+    own(1, T_COM, 20, 20);
+    s_w.defs[T_COM].dgun = 1;
+    s_ti[T_COM].dgun_range = 140;
+    s_ti[T_COM].dgun_e = 400;
+    s_w.econ[0].energy = 1000;
+    s_w.econ[0].energy_max = 1000;
+    enemy(1300, M_TANK, 20, 26, IMPAI_LOS, 1);
+    if (setup) setup();
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the D-gun decision runs: %s", name);
+    n = count_action(from, A_DGUN, 1);
+    printf("dgun %s: %d order%s%s", name, n, n == 1 ? "" : "s", n ? "," : "\n");
+    if (n) printf(" target %u\n", s_w.log[s_w.nlog - 1].c.target);
+    CHECK(n == expect && o.dgun == (uint8_t)expect, "D-gun %s: %d orders, %d wanted", name, n, expect);
+    return n;
+}
+
+static void dgun_two(void) { enemy(1301, M_RAIDER, 22, 26, IMPAI_LOS, 1); }
+static void dgun_ghost(void) { s_rows[1300].seat[0].how = IMPAI_GHOST; }
+static void dgun_radar(void)
+{
+    s_rows[1300].seat[0].how = IMPAI_RADAR;
+    s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+    s_rows[1300].seat[0].owner = 0xFF;
+}
+static void dgun_poor(void) { s_w.econ[0].energy = 640; }          /* 400 + 0.25 x 1000 = 650 */
+static void dgun_cheap(void) { s_ti[M_TANK].value = 6.0f; }        /* 400 / 60 = 6.67 */
+static void dgun_far(void) { enemy(1300, M_TANK, 20, 30, IMPAI_LOS, 1); }   /* 168 px off, 192 with the half diagonal */
+static void dgun_none(void) { s_ti[T_COM].dgun_range = 0; }
+static void dgun_window(void) { s_mil.safe_until = (uint32_t)s_w.gametime + 100; }
+
+static void check_mil_dgun(void)
+{
+    IMPAI_MIL_OUT o;
+    int from;
+    dgun_case("fires at a seen tank", 1, NULL);
+    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the D-gun's target is the tank");
+    from = s_w.nlog;
+    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0 && count_action(from, A_DGUN, 1) == 0,
+          "a D-gun order the head already holds is not given again");
+    dgun_case("fires at the more valuable of two", 1, dgun_two);
+    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the tank (300) over the raider (120)");
+    dgun_case("refuses a ghost", 0, dgun_ghost);
+    dgun_case("refuses a radar contact never identified", 0, dgun_radar);
+    dgun_case("refuses below the energy reserve", 0, dgun_poor);
+    dgun_case("refuses a target worth less than the shot", 0, dgun_cheap);
+    dgun_case("refuses a target out of range", 0, dgun_far);
+    dgun_case("refuses a commander that cannot take the order", 0, dgun_none);
+    dgun_case("refuses inside the commander's safety window", 0, dgun_window);
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -1738,6 +1803,7 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_mil_bounds();
+    check_mil_dgun();
     check_production();
     free(s_mscratch);
 }

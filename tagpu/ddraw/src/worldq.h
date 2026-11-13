@@ -135,8 +135,12 @@ enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_
    0x43F8BC), so a move toward a unit passes no target and the unit's point. ATTACK on an allied or own target
    is the ground attack at `pos`. Neither tests the target's visibility to the issuer nor its dying bit: a rule
    that must not see through the fog, or shoot the dying, tests that itself before it asks. */
-enum { WQ_CAN_MOVE = 2, WQ_CAN_ATTACK = 3, WQ_CAN_GUARD = 7, WQ_CAN_PATROL = 9, WQ_CAN_STOP = 10,
-       WQ_CAN_RECLAIM = 12 };
+enum { WQ_CAN_MOVE = 2, WQ_CAN_ATTACK = 3, WQ_CAN_DGUN = 4, WQ_CAN_GUARD = 7, WQ_CAN_PATROL = 9,
+       WQ_CAN_STOP = 10, WQ_CAN_RECLAIM = 12 };
+/* WQ_CAN_DGUN, mode 4 (0x43F7E8..0x43F80A): `ATTACKSPECIAL` when the unit's def (+0x92) has +0x245 bit 14
+   (`candgun`), else refused; of the target the case tests nothing beyond the resolver's entry, which refuses a
+   target without +0x110 bit 28 (0x43F0F4..0x43F0FE) [DISASSEMBLED]. The order is how a player fires the
+   CommandFire weapon, which the weapon scan 0x4089A0 leaves alone when its argument is 0 (engine/orders.md). */
 
 /* A seat's economy: what it holds and can hold, then the rates of the last 30-tick pass. Every value is finite,
    0 where the world's is not. */

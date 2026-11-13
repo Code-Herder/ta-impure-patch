@@ -24,9 +24,9 @@ const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
     /* mil_period, mil_roots, react_confirm, predict_max, focus, raids, aa_struct_max; micro_hp, micro_period,
        rally_px; noise, attack_margin, retreat_margin, wave_value; scout_period, task_timeout; tech_scale,
        aa_struct_v */
-    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f },
-    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f },
-    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f },
+    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f },
+    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f },
+    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f },
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)

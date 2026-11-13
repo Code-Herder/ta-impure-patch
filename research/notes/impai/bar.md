@@ -36,9 +36,10 @@ lever, at Hard), and `dry`, OTA AI against OTA AI at Hard. Each ImpAI pair is th
   storage 1000/1000, the end test off. A lane, a held turbo tareplay Worker, holds every 300 ticks and peeks each
   seat's units alive `+0x144`; the game ends when one is 0, or at GameTime 81 000. A launch the engine does not
   reach is "could not run", never an outcome.
-- **Commander death**: no scenario key sets the rule, so each result carries `ActiveCommanderDeath`
-  (`main+0x37EF6`) as the launch left it; the dry run shows whether a commander's death ends a side. A veteran
-  CORKROG can outlive its side's kill-all ([units](../engine/units.html)).
+- **Commander death**: `bar.json` sets `setup.commander_death: true`, which `tacli scenario load` sets on the
+  SKIRMISH screen and reads back from `ActiveCommanderDeath` (`main+0x37EF6`); each result carries the level's
+  value as the harness peeked it. A veteran CORKROG can outlive its side's kill-all
+  ([units](../engine/units.html)).
 - **The stall rule as built**: from ImpAI's pulse lines, a window of 3600 ticks starting at a pulse after GameTime
   1800 and ending before the game's end in which `built` and `eroots` both did not rise, or in which the seat
   held an army unit and `mroots` did not rise.

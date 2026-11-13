@@ -566,7 +566,8 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
 type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
 redirects this call to a wrapper that calls the tick for every seat ImpAI does not play and, for
-an ImpAI seat, the weapon scan `0x4089A0(obj, 1)` after ImpAI's turn instead
+an ImpAI seat, the weapon scan `0x4089A0(obj, 0)` after ImpAI's turn instead -- a human seat's argument,
+so its CommandFire weapons fire only by order
 ([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
@@ -816,7 +817,7 @@ mover" is a unit whose first dword is 0.
 | 1 | `0x43F9E9` | — | the contextual order (the Interface Type arms, *The order resolver's reclaim case*) |
 | 2 move | `0x43F845` | 7 `canmove` | no mover → `QMOVE`; no target → `VTOL_MOVE`/`MOVE_GROUND`; with a target, by its kind: `CAPTURE`, `VTOL_RECLAIMUNIT`/`RECLAIMUNIT` (an enemy), `HELPBUILD`/`REPAIRUNIT` (an ally `0x4899B0` accepts), the pickups (`0x489A90`), `VTOL_FOLLOW`/`FOLLOW_GROUND` (an ally), else the move (`0x43F893..0x43F9E4`) [the order of these tests as read, not each branch traced] |
 | 3 attack | `0x43F154` | 4 `canattack` | an enemy target: by both units' air and water state `AIRSTRIKE`, `AIRTOAIR`, `AIRTOGROUND`, `AIRTOGROUNDHOVER`; a mover → `ATTACK_CHASE`; a structure → `ATTACK_NOMOVE`; `ATTACK_KAMIKAZE` for `+0x241` bit 28. **No target, or an allied one: the ground attack**, refused when weapon 1's `+0x111` bit 17 (`toairweapon`) is set (`0x43F17E..0x43F189`), else `SUPPRESS` for a non-flyer and `AIRSTRIKE`/`AIRTOGROUND` for a flyer |
-| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL` |
+| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL`: the def's (`unit+0x92`) `+0x245` bit 14, else the refusal `0x4401DC`; nothing of the target is tested beyond the entry's `+0x110` bit 28 (`0x43F0F4..0x43F0FE`, `0x43F7E8..0x43F80A`, DISASSEMBLED 2026-11-12). The order that fires a CommandFire weapon, which the weapon scan leaves alone at argument 0; ImpAI's military gives it for the commander's D-gun (`WQ_CAN_DGUN`) |
 | 5 unload | `0x43F735` | 8 `canload` | `VTOL_UNLOAD`/`GROUND_UNLOAD` |
 | 6 load | `0x43F701` | a target `0x489A90` accepts | `VTOL_PICKUP`/`GROUND_PICKUP` |
 | 7 guard | `0x43F4C7` | 5 `canguard`, **and an allied target** (`ebx`, `0x43F4D4`) | `VTOL_FOLLOW`/`FOLLOW_GROUND` |

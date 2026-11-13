@@ -695,6 +695,25 @@ static unsigned    s_tinfo_n;
 SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 SIM_VAR(s_tinfo_n, SIM_CONTENT);
 
+/* A type's D-gun: its longest CommandFire weapon when its def takes the resolver's mode 4 (+0x245 bit 14,
+   `candgun`, 0x43F7E8..0x43F7F4), its range held to 1..65535 px and its energy a shot (+0xC0) to 0..65535; none
+   otherwise. BOUND: nweapons is held to the input's slots; a value not finite reads as none. */
+#define F245_CANDGUN (1u << 14)
+static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
+{
+    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
+    unsigned k;
+    t->dgun_range = t->dgun_e = 0;
+    if (!(in->flags245 & F245_CANDGUN)) return;
+    for (k = 0; k < nw; k++) {
+        const TASIM_ROLE_WEAPON* w = &in->w[k];
+        if (!(w->flags & TASIM_WF_COMMANDFIRE) || w->range <= 0 || w->range <= (int32_t)t->dgun_range) continue;
+        t->dgun_range = (uint16_t)(w->range < 65535 ? w->range : 65535);
+        t->dgun_e = (uint16_t)(w->energy_per_shot >= 0.0f && w->energy_per_shot < 65535.0f
+                                   ? (unsigned)w->energy_per_shot : w->energy_per_shot >= 65535.0f ? 65535u : 0u);
+    }
+}
+
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
     WQ_ENGINE c;
@@ -711,6 +730,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     for (t = 1; t < got && t < n; t++) {
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
+        dgun_of(&in[t], &s_tinfo[t]);
     }
     impai_tinfo_count(s_tinfo, got, k);
     tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
@@ -1413,7 +1433,7 @@ static struct {
     unsigned predictions[PLAYER_COUNT], refused_predictions[PLAYER_COUNT], roots[PLAYER_COUNT];
     unsigned refused_orders[PLAYER_COUNT], left_out[PLAYER_COUNT];
     unsigned attacks[PLAYER_COUNT], raids[PLAYER_COUNT], retreats[PLAYER_COUNT], scouts[PLAYER_COUNT];
-    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT];
+    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT];
     unsigned army_max[PLAYER_COUNT], enemies_max[PLAYER_COUNT], contacts_max[PLAYER_COUNT];
     unsigned predict_max[PLAYER_COUNT], roots_max[PLAYER_COUNT];
     unsigned army[PLAYER_COUNT];
@@ -1469,16 +1489,17 @@ static void impai_mil_turn(int seat)
     s_milp.scouts[seat] += out.scouts;
     s_milp.defends[seat] += out.defends;
     s_milp.safe[seat] += out.safe;
+    s_milp.dguns[seat] += out.dgun;
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
     play_max(&s_milp.enemies_max[seat], out.enemies);
     play_max(&s_milp.contacts_max[seat], out.contacts);
     play_max(&s_milp.predict_max[seat], out.predictions);
     play_max(&s_milp.roots_max[seat], out.roots);
-    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe)
-        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u army=%u",
+    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun)
+        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u army=%u",
                    seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats, out.safe,
-                   out.army);
+                   out.dgun, out.army);
 }
 
 /* THE PULSE, once a game minute a seat, on its economy phase (GameTime % 1800 == 7 seat % 15): `impai: pulse
@@ -1549,9 +1570,12 @@ typedef void (__thiscall* PFN_AiScan)(void* obj, int mode);
    A seat ImpAI does not play takes the stock tick 0x408C40, and the recorder's observer on its entry
    (tagpu_recorder.c, ai_enter) sees the call. AN IMPAI SEAT NEVER RUNS 0x408C40's group assignment
    0x408830 or its ten planners, on either thread: they would give its units orders of their own. What it
-   runs of the tick is the end both of the tick's exits reach for an active type-2 record, the weapon scan
-   0x4089A0(obj, 1) (0x408C96..0x408C9A, DISASSEMBLED), called by address so that the extra-weapons module's
-   detour of its entry runs. The players phase also runs once on the LOADER thread (0x497C10), where only the
+   runs of the tick is the weapon scan 0x4089A0, called by address so that the extra-weapons module's detour of
+   its entry runs, WITH ARGUMENT 0, as every record but an active type-2 one gets it at 0x408C40's end -- a
+   human seat's: CommandFire weapons are left to orders (0x408A88..0x408A96; the detour's port tests the same
+   argument), and the military orders the commander's D-gun itself (impai_mil.c, the D-gun). The stock AI's
+   argument 1 (0x408C96..0x408C9A, DISASSEMBLED) would fire the D-gun at whatever came in range, 400 energy a
+   shot, whatever the economy held (research/notes/impai/decisions.md). The players phase also runs once on the LOADER thread (0x497C10), where only the
    scan runs, as there the stock tick would plan and scan. On the GAME thread the turn and the scan run
    inside the recorder's attribution bracket, as the stock tick runs inside ai_enter/ai_leave: orders built in
    the turn are the seat's, and the scan's detour ends the attribution before it scans
@@ -1567,10 +1591,10 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
     if (GetCurrentThreadId() == g_ddraw.gui_thread_id) {
         const int pushed = tagpu_rec_ai_turn_enter((unsigned)seat);
         impai_turn(seat);
-        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 1);
+        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 0);
         tagpu_rec_ai_turn_leave(pushed);
     } else {
-        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 1);
+        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 0);
     }
 }
 
@@ -1598,11 +1622,12 @@ static void impai_play_end(const char* ta, unsigned now)
                    lv->queue_max);
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
-                   "safe=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u roots_max=%u/%u",
+                   "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
+                   "roots_max=%u/%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
-                   s_milp.safe[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
+                   s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
                    s_milp.roots_max[i], lv->mil_roots);
     }

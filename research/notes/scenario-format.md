@@ -813,7 +813,7 @@ clicks only when it differs, reads it again, and after the level is live reads `
 back; a value other than the one asked for stops the load. The load's steps and
 `loaded.commander_death` report the level's value whether or not the file asked. With 1, a
 commander's death kills every other unit of its side that is alive and not already dying, when
-the side is a local seat, type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
+the side's record is active and of type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
 own clear sets it to 0 for its kills, so clearing a skirmish's commanders takes nothing with them.
 It is a launch key, set where a player sets it, so the level holds it from its first step: the
 demo recording leaves it out as a level constant (`replay-globals.tsv`), and an apply never

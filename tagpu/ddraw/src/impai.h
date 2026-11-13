@@ -178,7 +178,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 
-/* One type, 24 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 28 bytes. The gains are per 30-tick economy pass on this map. */
 typedef struct IMPAI_TINFO {
     uint8_t  cat, tech, flags, mclass;  /* IMPAI_C_*, the classifier's tech level, IMPAI_TF_*, WQ_DEF.mclass  */
     float    egain;     /* energymake + max(0, -energyuse) + windgenerator x the wind's mean + tidalgenerator x
@@ -188,6 +188,9 @@ typedef struct IMPAI_TINFO {
     uint16_t workertime;
     int16_t  fx, fz;
     uint8_t  klass, pad;        /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
+    uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
+                                   take the order (+0x245 bit 14), 0 none                                       */
+    uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
 } IMPAI_TINFO;
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
@@ -286,6 +289,8 @@ typedef struct IMPAI_LEVEL {
     uint16_t task_timeout;      /* ticks an attack or a raid may last                                     */
     float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
+    float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
+                                   share of the seat's energy storage                                       */
 } IMPAI_LEVEL;
 extern const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS];
 

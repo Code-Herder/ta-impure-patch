@@ -36,6 +36,7 @@ typedef struct IMPAI_MIL_OUT {
                                                      list's bound                                            */
     uint8_t  tasks[IMPAI_SQ_TASKS];               /* squads by task after the decision                       */
     uint8_t  attacks, raids, retreats, scouts, defends, safe;   /* tasks begun in the decision               */
+    uint8_t  dgun;                                /* 1 when the commander was ordered to D-gun               */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % mil_period == (7 seat + 8) % 15. Every

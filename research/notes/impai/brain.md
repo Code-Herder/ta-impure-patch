@@ -95,6 +95,14 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    of it is predicted against the commander and the army within 512 px; a margin below 0, or no prediction, moves
    it to the farther of the rally point and the own structure farthest from the contact, and makes it the
    military's for 300 ticks, a window the economy's census honours.
+7. **The D-gun**, then, when the commander is not fleeing: the seat's weapon scan leaves CommandFire weapons to
+   orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now
+   within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
+   and only a target worth the shot's energy in metal. A type's D-gun is its longest CommandFire weapon when its
+   def can take the order (`candgun`), from the content build. The three conditions are tested when the order is
+   given, not at each shot: an order already given holds its target until it ends, and the engine fires each
+   shot only while the seat holds the shot's energy (AutoAim, `0x49E3F3..0x49E40C`, [keys](../engine/keys.html)),
+   so the reserve is not held between two shots at one target.
 
 **The factories buy army** in the economy's decision, after the constructors: each idle factory left queues one
 unit, the class from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the army's value
@@ -129,6 +137,7 @@ A1b's:
 | `scout_period`, `task_timeout` (ticks) | 5400, 5400 | 2700, 3600 | 1800, 2700 |
 | `tech_scale` (× the table's `tech_m`) | 1.5 | 1.25 | 1.0 |
 | `aa_struct_v` (seen air value) | 2000 | 1500 | 1000 |
+| `dgun_reserve` (share of energy storage) | 0.75 | 0.50 | 0.25 |
 
 **`tech_m` lives in two places, and the table's rules**: A3's table carries `tech_m` as Hard's, tuned with the
 rest of it, and a level row carries only its factor `tech_scale`; the threshold a seat plays is the product.

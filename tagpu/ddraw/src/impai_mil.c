@@ -776,8 +776,8 @@ static void form_attack(MDEC* d, int s)
 }
 
 /* RAIDS: while fewer than the level's raid squads go, up to RAID_MAX units of the fastest type of a land FORM
-   squad but its scouts, at least RAID_MIN, go for the seen or remembered enemy extractor or energy building of least threat
-   on its cell of the ground threat map (ties to the nearer, then the lower slot) */
+   squad but its scouts, at least RAID_MIN, go for the seen or remembered enemy extractor or energy building of
+   least threat on its cell of the ground threat map (ties to the nearer, then the lower slot) */
 static void raid(MDEC* d)
 {
     int k, raids = 0, form = -1, best = -1, s, n = 0;
@@ -1023,8 +1023,8 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     }
     h = d->q->ops->head(d->q, slot, &o);
     if (h == 1 && o.action == a &&
-        (mode == WQ_CAN_ATTACK ? o.target == target
-                               : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
+        (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
+             ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
         return 0;
     c.verb = WQ_CMD_NEW;
     c.action = (uint8_t)a;
@@ -1048,7 +1048,8 @@ static void spread(int k, int32_t* x, int32_t* z)
    hp / sum of the squad's pair rates on it -- the quickest kill, over FOCUS_TYPES types, by the type's maximum
    health, which is all the seat knows of an enemy's -- where it reaches it, else its own nearest candidate;
    without, each its nearest. Micro: a member under micro_hp of its health steps MICRO_PX towards the rally
-   point, once in micro_period, and is given nothing between two steps. Only a unit the seat sees now is ever ordered at. */
+   point, once in micro_period, and is given nothing between two steps. Only a unit the seat sees now is ever
+   ordered at. */
 static void fight(MDEC* d, int s)
 {
     const MCONTACT* ct = &d->ct[d->sq[s].contact];
@@ -1198,12 +1199,49 @@ static void commander(MDEC* d)
     }
 }
 
+/* ---- 7b. the D-gun ----
+
+   THE D-GUN IS ORDERED, never automatic: an ImpAI seat's weapon scan runs with argument 0, which leaves
+   CommandFire weapons alone (0x408A88..0x408A96), as a human seat's does. The commander D-guns one target when
+   all three hold: the target is SEEN NOW (an identified enemy row with IMPAI_NOW or IMPAI_PASS -- never a ghost,
+   never a radar contact never identified); the seat's stored energy is at least the shot's plus dgun_reserve of
+   its energy storage; and the target is WORTH THE SHOT, its value at least the shot's energy in metal (energy /
+   TASIM_ROLES_R). Of those within the D-gun's range of the commander -- the row's block centre plus the block's
+   half diagonal, 24 px, inside the weapon's range -- the most valuable, ties to the lower slot. Not while the
+   commander is the military's for its safety. BOUNDS: the range and the energy are the content's, held at the
+   build; the economy's floats are compared so that a value not finite refuses the shot. */
+static void dgun(MDEC* d)
+{
+    const IMPAI_TINFO* ct;
+    WQ_ECON e;
+    float need, worth;
+    int k, best = -1;
+    if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return;
+    ct = &d->in->ti[d->com_type];
+    if (!ct->dgun_range) return;
+    if (d->q->ops->economy(d->q, &e) != WQ_OK) return;
+    need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
+    if (!(e.energy >= need)) return;
+    worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
+    for (k = 0; k < d->nen; k++) {
+        const MENEMY* m = &d->en[k];
+        if (!m->now || m->type == WQ_NONE || !(m->value >= worth)) continue;
+        if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
+        if (best < 0 || m->value > d->en[best].value ||
+            (m->value == d->en[best].value && m->slot < d->en[best].slot))
+            best = k;
+    }
+    if (best < 0) return;
+    if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z)) d->out->dgun = 1;
+}
+
 /* ---- the entry ----
 
    ONE MILITARY DECISION, in order: (1) the army's census over the seat's slot block; (2) the picture of the
    enemy over the seat's column of the knowledge rows, the base's estimate and the contacts; (3) the base's
-   threats and its defence; (7) the commander's safety; (4) the squads' tasks with their predictions, raids
-   and scouting; (5) the orders; (8) the picture kept for the factories; (9) the pulse's counts.
+   threats and its defence; (7) the commander's safety, then its D-gun; (4) the squads' tasks with their
+   predictions, raids and scouting; (5) the orders; (8) the picture kept for the factories; (9) the pulse's
+   counts.
 
    BOUNDS. Every slot taken from a table -- a job row, a squad's target, a knowledge row -- is below the
    table's count before it indexes it, and is re-read through the WORLDQ, which answers from the engine's
@@ -1270,6 +1308,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     base_threats(d);
     defence(d);
     commander(d);
+    if (!d->out->safe) dgun(d);
     tasks(d);
     raid(d);
     scouting(d);
