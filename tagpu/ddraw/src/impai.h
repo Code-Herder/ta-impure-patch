@@ -187,6 +187,7 @@ typedef struct IMPAI_TINFO {
     float    value;     /* metal + energy / TASIM_ROLES_R                                                       */
     uint16_t workertime;
     int16_t  fx, fz;
+    uint8_t  klass, pad;        /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
 } IMPAI_TINFO;
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
@@ -215,7 +216,7 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
 #define IMPAI_CLAIM_MAX  128            /* sites held by a build order, an extractor or a plant              */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
 
-enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE };
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 16 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
@@ -226,8 +227,8 @@ typedef struct IMPAI_JOB {
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
     uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
     int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
-    uint8_t  kind, pad;         /* IMPAI_JOB_*                                                             */
-    uint32_t since;             /* GameTime of the order                                                   */
+    uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
+    uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
 } IMPAI_JOB;
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
@@ -338,11 +339,11 @@ typedef struct IMPAI_MIL {
     int16_t  ebx, ebz;                /* the enemy base's estimate, 32-px block; IMPAI_NO_ANCHOR               */
     uint32_t scout_t, wave_t;         /* GameTime of the last scouting run, of the last attack wave            */
     uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
-    uint16_t waves, finished_last;    /* attack waves sent; the seat's finished units at the last decision     */
-    uint32_t pulse_built, pulse_roots;/* units completed, military roots given: the pulse line's counts        */
-    float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
+    uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */
+    uint16_t waves;                   /* attack waves sent                                                     */
     int8_t   naval;                   /* 1 the seat's next factory goes to sea, 0 not, -1 not judged yet       */
-    uint8_t  pad[3];
+    uint8_t  pad;
+    float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];

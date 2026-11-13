@@ -28,9 +28,12 @@
 
 /* the weapon's flag word +0x111, bit by bit (the key inventory, engine/keys.md) */
 #define TASIM_WF_BALLISTIC   (1u << 1)
+#define TASIM_WF_BEAM        (1u << 3)
 #define TASIM_WF_VLAUNCH     (1u << 4)
 #define TASIM_WF_PARALYZER   (1u << 7)
 #define TASIM_WF_DROPPED     (1u << 8)
+#define TASIM_WF_GUIDANCE    (1u << 12)
+#define TASIM_WF_TRACKS      (1u << 13)
 #define TASIM_WF_WATER       (1u << 16)
 #define TASIM_WF_TOAIR       (1u << 17)
 #define TASIM_WF_COMMANDFIRE (1u << 26)

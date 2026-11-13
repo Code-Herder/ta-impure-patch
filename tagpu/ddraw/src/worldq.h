@@ -82,7 +82,13 @@ typedef struct WQ_UNIT {        /* one of the seat's own live units             
     uint8_t  owner, finished;   /* finished: the build fraction left (+0x104) is exactly 0                 */
     int32_t  pos[3];            /* 16.16 x, altitude, z                                                    */
     uint32_t state;             /* the unit's flag word (+0x110)                                           */
+    int32_t  hp;                /* its health, the signed word +0x108                                      */
+    uint32_t hp_max;            /* its type's maxdamage, def +0x1FA; 0 where the world keeps no health     */
 } WQ_UNIT;
+
+/* A start position of the level, world px, and its 0-based index (StartPos N is N - 1). */
+typedef struct WQ_START { int32_t x, z, index; } WQ_START;
+#define WQ_STARTS_MAX 64            /* the start indices a `starts` walk asks, 0 up: a bound, past any map's */
 
 typedef struct WQ_ORDER {       /* a COPY of one order node: no pointer survives the call                  */
     uint16_t place;             /* 0-based place in the unit's list                                        */
@@ -124,7 +130,13 @@ enum { WQ_OK = 1, WQ_REFUSED = 0, WQ_UNSUPPORTED = -1 };
 
 enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_RECLAIM,
        WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACTS };
-enum { WQ_CAN_GUARD = 7, WQ_CAN_RECLAIM = 12 };     /* the resolver's modes the rules ask */
+/* The resolver's modes the rules ask (engine/orders.md, What each resolver mode answers). MOVE with a target
+   is not a move: an enemy target answers RECLAIMUNIT for a builder and CAPTURE for a commander (0x43F893..
+   0x43F8BC), so a move toward a unit passes no target and the unit's point. ATTACK on an allied or own target
+   is the ground attack at `pos`. Neither tests the target's visibility to the issuer nor its dying bit: a rule
+   that must not see through the fog, or shoot the dying, tests that itself before it asks. */
+enum { WQ_CAN_MOVE = 2, WQ_CAN_ATTACK = 3, WQ_CAN_GUARD = 7, WQ_CAN_PATROL = 9, WQ_CAN_STOP = 10,
+       WQ_CAN_RECLAIM = 12 };
 
 /* A seat's economy: what it holds and can hold, then the rates of the last 30-tick pass. Every value is finite,
    0 where the world's is not. */
@@ -303,6 +315,9 @@ typedef struct WORLDQ_OPS {
     /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
        passable but bad, 3 good; 0 off the map and for a class the world does not have */
     int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
+    /* the level's start positions in index order, at most `cap` copied: their count, or WQ_UNSUPPORTED where
+       the world keeps none. Public, as the skirmish screen shows them to every seat */
+    int (*starts)(const WORLDQ*, WQ_START* out, int cap);
 } WORLDQ_OPS;
 
 

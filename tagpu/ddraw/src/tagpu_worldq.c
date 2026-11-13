@@ -475,6 +475,8 @@ static int wq_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->finished = *(const float*)(u + 0x104) == 0;
     memcpy(out->pos, u + U_XFIX, sizeof out->pos);
     out->state = *(const unsigned*)(u + U_FLAGS);
+    out->hp = *(const short*)(u + U_HEALTH);
+    if (out->type) out->hp_max = *(const uint32_t*)(def_at(c, out->type) + 0x1FA);
     return 1;
 }
 
@@ -635,6 +637,41 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
    production +0x90 / +0x9C and requests +0x94 / +0xA0, the storage maxima +0xA4 / +0xA8, as the economy pass
    0x401360 writes them once a pass, every seat on the same ticks (DISASSEMBLED: engine/network.md, the economy
    pass 0x401360). Floats; one not finite reads 0. */
+/* THE START POSITIONS, through the engine's own two readers of the game-state object [main+0x391E9]
+   (DISASSEMBLED, scout N-b1): 0x437300, thiscall, plain `ret`, counts the records of its specials array
+   +0xDB4 (count +0xDB8, the allocation's: count x 12 bytes at 0x437043..0x437055) whose +0 is 1, a StartPos;
+   0x437320(&pos, idx), thiscall, `ret 8`, gives the first such record of 0-based index idx as {XPos << 16, 0,
+   ZPos << 16}, 1, or 0 for none. Both walk the array within that count, so nothing here reads it. THE BOUND:
+   the object pointer is a value tested before the calls; the indices asked are 0 up, until as many as the
+   count were found or WQ_STARTS_MAX were asked, so gaps in the map's numbering are walked over and the walk
+   ends whatever the count says. THE LIFETIME: the array is written by the .ota read before the level and
+   lives for the level -- nothing frees or rewrites it in play but another .ota read or a mode change, none
+   inside a tick -- and this runs on the game thread (N-b1). Which schema's positions they are depends on
+   the seats a skirmish enabled (the schema whose count equals them, else the one with most). */
+typedef int (__attribute__((thiscall))* StartCount)(const void* gs);
+typedef int (__attribute__((thiscall))* StartAt)(const void* gs, int32_t* pos, int idx);
+#define VA_START_COUNT 0x00437300u
+#define VA_START_AT    0x00437320u
+
+static int wq_starts(const WORLDQ* q, WQ_START* out, int cap)
+{
+    const char* gs = *(const char* const*)(ctx_of(q)->ta + 0x391E9);
+    int n, idx, k = 0;
+    if (!gs || (uintptr_t)gs < 0x10000u) return 0;
+    n = ((StartCount)(uintptr_t)VA_START_COUNT)(gs);
+    for (idx = 0; idx < WQ_STARTS_MAX && k < n; idx++) {
+        int32_t pos[3];
+        if (!((StartAt)(uintptr_t)VA_START_AT)(gs, pos, idx)) continue;
+        if (k < cap) {
+            out[k].x = pos[0] >> 16;
+            out[k].z = pos[2] >> 16;
+            out[k].index = idx;
+        }
+        k++;
+    }
+    return k < cap ? k : cap;
+}
+
 static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 {
     const char* r = ctx_of(q)->rec;
@@ -1430,6 +1467,7 @@ static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
+    wq_starts,
 };
 
 /* THE OPEN'S BOUNDS, each read value made data before it is an index: the map's W and H even and 2..0x7FFF,
