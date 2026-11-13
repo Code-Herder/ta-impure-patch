@@ -2179,7 +2179,12 @@ is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
 - BuildWeapon `0x402B70` reads the slot `p1` (`node+0x36`) at entry, `[unit + p1·0x1C + 0x10]`
   (`0x402B7F..0x402B89`), and in state 2 increments the byte `[unit + p1·0x1C + 0x1E]` (`0x402BB3..0x402BB9`).
 - Paralyze `0x402D10` clamps its p1 to `0x708` ticks (`0x402D33..0x402D3B`).
-- Attack_Chase `0x4034A0` picks a slot when p1 is 0 and stores it to `+0x36` (`0x4035A1`). It calls
+- Attack_Chase `0x4034A0` picks a slot when p1 is 0 and stores it to `+0x36` (`0x4035A1`): `0x4897E0(unit)`
+  (`thiscall`, plain `ret`; `0x4897E0..0x4897F9`) answers the first of slots 0, 1, 2 whose flag byte, unit
+  `+0x1F`, `+0x3B`, `+0x57`, has bit `0x2`, and 2 & that last byte when none before it has [INFERRED: bit `0x2`
+  marks a slot holding a weapon; AutoAim skips a slot without it at `0x49E1C0`]. The slot is chosen without the
+  target, so a unit whose first weapon cannot hurt it still walks to that weapon's range (ImpAI's fight
+  predictor, `chase_reach`). It calls
   can-engage `0x49ABB0` at `0x4035D6`; when that passes the unit stops (`0x4898B0` with 0 at `0x4035F2` and
   with 2 at `0x4035FB`) and engages (`0x48A060`), so a chaser stops on its first in-range tick, and where it
   comes to rest inside its range is its braking [INFERRED: how far it brakes is not established]. Otherwise it

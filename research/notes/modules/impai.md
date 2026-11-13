@@ -154,9 +154,13 @@ closes -- as a stepped fight of volleys over the 5400-tick horizon of the refere
 engine facts, each with its addresses in the file's header ([weapons](../engine/weapons.html)):
 - **The range test is flat and centre to centre** (can-engage `0x49ABB0`), and a ballistic weapon's reach is
   `min(range, v² / (g · 65536))` with g the level's gravity, from the solver `0x49A890`.
-- **Each type closes at its own maxvelocity** until it is within its reach of a live enemy type it can hurt
-  less a 32-px stand-off, a chaser stopping on its first in-range tick (Attack_Chase `0x4035D6`); the 32 is
-  [INFERRED], fitted against 0, 16 and 48; a type that can hurt nothing walks to contact.
+- **Each type closes at its own maxvelocity** until a live enemy type it can hurt is within its **first armed
+  slot's** reach less a 32-px stand-off, whether or not that slot hurts it (`chase_reach`): Attack_Chase takes its
+  slot from `0x4897E0`, the first of slots 0..2 whose flag byte has bit `0x2`, stores it at `0x4035A1`, walks
+  toward the target (that slot's range read at `0x403623`) and stops on the first tick that slot's can-engage
+  passes (`0x4035D6`), DISASSEMBLED; that bit `0x2` marks a slot holding a weapon is [INFERRED]. So ARMAMPH (260 against 700),
+  CORKROG (300, 900), ARMPT (180, 604) and CORPT (180, 590) walk in to their first weapon. The 32 is [INFERRED],
+  fitted against 0, 16 and 48; a type that can hurt nothing walks to contact.
 - **Each weapon of each type fires volleys**: loaded at the start (the slot is zeroed at creation), counting
   down whether or not it has a target, and reloading for `⌊(120 − ⌊20 hp/maxhp⌋) · reload / 100⌋` ticks
   (`0x49E48D..0x49E4EE`, veterancy left at 0); its hits spread over the types in its reach, (1 − focus) by
@@ -196,31 +200,53 @@ stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s.
 (`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
 dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight digest=`.
 
-**The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)):
-`content` peeks the three tables out of a held GDI launch and checks them against the digest and `tasim_run
-defs` (type 0, the reserved `None`, has no files), writing the file (`impai-fight-content/2`) only on PASS; `fit`
-minimises the binomial loss plus 4 n (m - M)^2 over the training half (the FNV-1a 32 of the scenario's stem
-even), plus a pull of 1 × each free coefficient's squared distance from the start (bias 2, lead −1, focus 0.5,
-splash 1, tau 0.2), in a box that holds every lead at or below 0 (a moving target is never easier to hit): 6
-CMA-ES seeds, each followed by Nelder-Mead and coordinate steps, the lowest penalised loss kept and each free
-coefficient's range across the seeds reported; a coefficient no training fight moves is held at its start.
-Each fight's gravity comes from the reference's map in `.data/impai/map-gravity.json` (`{"maps": {name:
-main+0x14263}}`), and a reference on a map the table lacks is refused by name; `emit` writes `impai_fitparams.c`
-(`--start` reproduces the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40), and the same 90 % for each kind
-(duel, group, defence, naval) with at least 20 decisive check-half fights; a kind with fewer is reported as too
-few to judge and cannot fail the check on its own. Each reference is judged on its own arena, the water arena
-for a naval fight and the land arena for the rest: one whose setup names another map, or whose scenario lies
-outside that arena's rectangle, is refused by name and neither `fit` nor `check` runs. **Limit:** the water
-arena is the default one, `calib-arena-naval.json`; naval fights `duelgen.py --naval --arena` lays out on
-another water map are refused. `selftest`
-fits fights the model made at known coefficients and requires the truth's loss within 2 %, its margins within
-0.05 and the check: the coefficients are confounded, so recovery of each is printed, not judged. The fights are
-the calibration references of `duelgen.py`'s duels, groups, defence and naval fights
-([tasim calibration](tasim-calibration.html)). **Open:** `impai_fitparams.c` is the starting point until the
-references are complete; the content file stays `/1`, which `fit` and `check` refuse, until `predfit content`
-re-dumps it; and `map-gravity.json` is not yet measured on either reference map. The design was compared on
-the check half too, so the references built after it are the honest holdout (*Settled at A2a's GDI
-calibration*, [decisions](../impai/decisions.html)).
+**The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)),
+the calibration references of `duelgen.py`'s duels, groups, defence and naval fights ([tasim
+calibration](tasim-calibration.html)), split into a training and a check half by the FNV-1a 32 of the
+scenario's stem:
+- **`content`** peeks the three tables out of a held GDI launch and checks them against the digest and `tasim_run
+  defs` (type 0, the reserved `None`, has no files), writing the file (`impai-fight-content/2`) only on PASS.
+  Each fight's gravity comes from its reference's map in `.data/impai/map-gravity.json` (`{"maps": {name:
+  main+0x14263}}`); a reference on a map the table lacks is refused by name.
+- **The loss** is the binomial loss plus 4 n (m − M)² over the training half, plus the prior's pull on each free
+  coefficient's squared distance from the start (bias 2, lead −1, focus 0.5, splash 1, tau 0.2), in a box that
+  holds every lead at or below 0. It is a staircase in the coefficients -- a unit dies whole, so the loss jumps
+  where a coefficient crosses a kill -- so an unpulled search over-fits: it finds a deeper step, not a better
+  model.
+- **Held by design**: the homing kind's bias 2 and lead −1. A guided shot at a standing target hits as a direct
+  one does, and a target fleeing at a fifth of the shot's speed is still caught 80 % of the time [INFERRED: a
+  radial-flight bound]; on the 117 decisive training fights the homing bias moves 25 margins and the lead 7,
+  flipping none, and holding them cost nothing in the cross-validation. The dropped kind moves no fight and is
+  held by the free test.
+- **`cv`** chooses the prior and the held set by 5-fold cross-validation inside the training half, stratified by
+  kind and repeated 4 times, each fold fit the best of 3 seeds: the candidate of the lowest summed validation
+  data loss among priors 30 to 3000 (extended threefold past an end the choice sits on) and the homing hold with
+  or without splash held at 1. The accuracy is printed beside it and never chooses. The folds run on every core
+  at nice 19 against a private copy of the library, about 4 minutes. `fit` runs the choice on the whole training
+  half with 6 seeds, refusing a cross-validation of another reference set, and records its table and estimate;
+  `emit` writes `impai_fitparams.c` (`--start` reproduces the starting point). `fit`, `cv` and `selftest` refuse a
+  check-half fight.
+- **`check`** reads the check half once, after the fit: the 90 % rule on its decisive fights (at least 40), and
+  the same 90 % for each kind with at least 20 decisive check-half fights; a kind with fewer is reported as too
+  few to judge. Each reference is judged on its own arena, the water arena for a naval fight and the land arena
+  for the rest, and one played elsewhere is refused by name. **Limit:** the water arena is the default one,
+  `calib-arena-naval.json`.
+- **`selftest`** fits fights the model made at known coefficients, at prior 1 with nothing held, and requires the
+  truth's loss within 2 %, its margins within 0.05 and the check (at prior 0 the search stops on a step 3.7 %
+  above the truth's loss).
+
+**The honest estimate** (MEASURED 2026-11-13 on reference set `ceed681e6fa9`, 142 training fights, 117 of them
+decisive). The cross-validation chooses prior 300 with homing held, validation loss 13250, and the form's
+accuracy on unseen training-half fights is 424/468 (90.6 %, 95 % CI 84-95 % on the unique fights): defence 52/56,
+duel 76/80, **group 236/264 (89.4 %)**, naval 60/68; by class, 296/316 of the fights that end before the limit,
+108/120 of the long ones (some runs at the limit) and **20/32 of the stalemates** (80 % or more at the limit).
+Weighted to the check half's mix (77 ended, 29 long, 13 stalemate decisive fights) that is about 89 %: at the bar,
+not past it. Nested cross-validation of the whole procedure, on the form before the first-slot chase, gave 88.0 %
+(103/117, group 84.8 %), and the design's own coefficients score 40/48 (83 %) on the decisive references built
+after it. The stalemates are the reference protocol's, one attack order a unit and none for a unit with nothing
+it can hurt, which no setting of the coefficients makes and real play does not: units there re-target. **Open:**
+the reference corpus is re-played with units that re-target, and the fit, `emit` and `check` wait for those
+references; this estimate is of the current ones, and `impai_fitparams.c` is the starting point until then.
 
 ## The overlay
 

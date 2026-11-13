@@ -45,7 +45,8 @@ Not built yet: the decay of a remembered threat (a ghost row keeps its type's th
 
 - Two groups in, with the gap between their fronts; both sides' remaining value and the margin out.
 - A stepped fight of volleys over the engine's own numbers for every type and weapon, read at the level init:
-  each type closes at its own speed to its reach less a stand-off, each weapon fires its first volley at once
+  each type closes at its own speed to its first armed slot's reach less a stand-off, as the engine's chase
+  does, each weapon fires its first volley at once
   and then by its reload, a hit deals at most one unit's hp and an area hit reaches more units, and a hit's
   probability is fitted by what guides the shot (straight, ballistic, homing, dropped) and how far the target
   moves while it flies. 5400 ticks at most, the references' limit. The form and its engine facts:

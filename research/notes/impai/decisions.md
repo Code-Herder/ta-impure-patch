@@ -164,11 +164,11 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   fit of the first): the horizon is the references' 5400 ticks, scored where the fight stands; a weapon's kind
   is what the projectile tick does with its shot -- straight, ballistic, homing (`selfprop ∧ ((guidance ∧
   ¬twophase) ∨ (twophase ∧ tracks))`), dropped; each weapon fires volleys, the first at once; each type closes
-  at its own speed to its reach less a 32-px stand-off [INFERRED]; an area widens the radius a hit can land
+  at its own speed to its first armed slot's reach less a 32-px stand-off [INFERRED] (below); an area widens the radius a hit can land
   within; ranges are tested centre to centre against the gap between the two sides' fronts, a ballistic one
   capped at v²/g; a hit deals at most one unit's hp. 11 coefficients (a bias and a lead a kind, focus, splash,
-  tau), fitted in a box that keeps every lead at or below 0, pulled toward the start by 1 × each free one's
-  squared distance, over 6 CMA-ES seeds, the lowest penalised loss kept. Engine facts and addresses:
+  tau), fitted in a box that keeps every lead at or below 0, pulled toward the start by the prior the
+  cross-validation below chooses. Engine facts and addresses:
   [impai](../modules/impai.html), *The fight predictor*.
 - **The worst military decision of about 2.3 ms is accepted** (16 predictions of 16 types a side over the whole
   horizon, about 146 µs each on i686): no side is merged to 8 types in game. Owner's decision, 2026-11-13.
@@ -177,6 +177,29 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   Revisited only if fights in game disagree with the predictor. Owner's decision, 2026-11-13.
 - **The check is also reported on the references built after the design**, the honest holdout, since the
   design was compared on the current check half; the gate stays the check half's figure. 2026-11-13.
+- **The predictor is fitted by a procedure that reads only the training half**, decided 2026-11-13 after the
+  widened fit over-fitted (its training loss 283 below the prototype's, its check loss 769 above): the loss is
+  a staircase in the coefficients, kills being whole units, so a wider search finds a deeper step, not a better
+  model. The prior pull and the held set are chosen by 5-fold cross-validation inside the training half,
+  stratified by kind and repeated 4 times, by the summed validation **data loss**; the accuracy is printed beside
+  it and never chooses, since the strong-prior candidates differ by one or two stalemates. The candidates are
+  fixed in `predfit.py` (priors 30 to 3000, extended threefold past an end the choice sits on; the homing hold,
+  or it with splash at 1), each fold fit the best of 3 seeds, the final fit the best of 6. `fit`, `cv` and the
+  selftest refuse a check-half fight; `check` reads the check half once, after the fit, and nothing is chosen
+  again after it; the cross-validation runs again whenever the reference set changes. The selftest stays at
+  its prior of 1 with nothing held: the cross-validation's choice would pull it off the truth it is judged
+  against, and at 0 the search stops 3.7 % above the truth's loss. A change to the model's form is judged by this cross-validation, both forms on the
+  same folds, before `check` runs on it.
+- **The homing kind's bias and lead are held at (2, −1)**: a guided shot at a standing target hits as a direct
+  shot does, and a target fleeing at a fifth of the shot's speed is still caught 80 % of the time
+  [INFERRED: a radial-flight bound]; the references cannot tell (25 and 7 of 117 decisive training fights move
+  with them, none flips), and holding cost nothing in the cross-validation. Revisited past about 20 decisive
+  training fights with a homing weapon firing at a moving target.
+- **The predictor's chase walks to the first armed slot's reach** (S1, the engine's literal rule: `0x4897E0`,
+  `0x4035A1`, `0x403623`, `0x4035D6`), not the longest reach that hurts the enemy type: in the training-half
+  cross-validation with homing held at prior 300 it lowered the validation loss 29 % (18590 to 13250) and
+  raised the accuracy from 420/468 to 424/468. The variant that walks to the first slot that hurts the type
+  scored within 1 % and one fight of it; the engine's rule was taken.
 
 ## The owner accepted row 18's Flea race on 2026-11-13
 

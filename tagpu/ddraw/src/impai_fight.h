@@ -95,8 +95,9 @@ int impai_fight_kind(uint32_t flags);
 #define IMPAI_FHORIZON    5400
 _Static_assert(IMPAI_FSTEP0 * IMPAI_FSTEPS0 + IMPAI_FSTEP1 * IMPAI_FSTEPS1 == IMPAI_FHORIZON,
                "the two parts of the steps cover the horizon");
-/* px a closer stands inside its range: Attack_Chase 0x4034A0 stops the unit on the first tick can-engage passes
-   (0x4035D6, the stop 0x4898B0 at 0x4035F2 and 0x4035FB) and it brakes inside. 32 is [INFERRED], fitted
+/* px a closer stands inside its first armed slot's range (impai_fight.c, chase_reach): Attack_Chase 0x4034A0
+   stops the unit on the first tick can-engage passes (0x4035D6, the stop 0x4898B0 at 0x4035F2 and 0x4035FB)
+   and it brakes inside. 32 is [INFERRED], fitted
    against 0, 16 and 48 (MEASURED 2026-11-13 on the 197 references then built); the braking distance of each
    type would replace it. */
 #define IMPAI_FSTANDOFF   32

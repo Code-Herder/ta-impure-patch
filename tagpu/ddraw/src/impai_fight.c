@@ -8,8 +8,9 @@
          dx^2 + dz^2 of the two units' positions with range^2 (0x49AC47..0x49AC92), no height term;
      E1b a ballistic weapon must also pass the solver 0x49A890, so its reach on flat ground is
          min(range, v^2 / g), g the level's gravity main+0x14263;
-     E2  a chaser stops on its first in-range tick (Attack_Chase 0x4034A0, can-engage at 0x4035D6) and brakes
-         inside its range;
+     E2  a chaser walks to the range of its first armed slot, whatever that slot can hurt, and stops on its
+         first in-range tick (Attack_Chase 0x4034A0: the slot 0x4897E0 stored at 0x4035A1, its range 0x49ADF0
+         at 0x403623, can-engage at 0x4035D6), braking inside it (chase_reach);
      E3  every weapon slot starts loaded (the slot is zeroed at creation, 0x49E099), counts down once a tick
          whether or not it has a target (AutoAim 0x49E1A0, 0x49E1C8..0x49E1D2), and after a shot reloads for
          floor(floor((100 - 6L) reload / 100) (120 - floor(20 hp / maxhp)) / 100) ticks (0x49E48D..0x49E4EE);
@@ -20,7 +21,7 @@
          killing shot deals beyond the unit's hp reaches nobody else but through its area.
    Each step:
      1. every live type of a side that closes moves at its own maxvelocity toward the other side's front,
-        until its gap to a live enemy type it can hurt is within its reach against that type less
+        until its gap to a live enemy type it can hurt is within its first armed slot's reach less
         IMPAI_FSTANDOFF (E2), or, when it can hurt none, to contact; both sides move from the step's start;
      2. each weapon of each type fires volleys on the enemy types within its reach of it: the first at once,
         the next a reload later (E3), the countdown running down by the step's ticks whether it fires or not.
@@ -265,11 +266,36 @@ static int side_load(const IMPAI_FCONTENT* c, const IMPAI_FSIDE* in, IMPAI_FSTAT
     return s->hv0 > 0.0f ? 0 : -1;
 }
 
+/* The reach the engine's chase walks to: that of its first armed slot. Attack_Chase takes its slot from
+   0x4897E0 (the first of slots 0..2 whose flag byte, unit +0x1F, +0x3B, +0x57, has bit 0x2;
+   0x4897E0..0x4897F9), stores it at 0x4035A1, and walks toward the target -- that slot's range read by
+   0x49ADF0 at 0x403623, the move's arrival radius half of it (0x403660) -- until can-engage for that slot
+   passes (0x4035D6), whether or not that slot can hurt the target, a failed can-engage keeping the order
+   running: DISASSEMBLED.
+   That bit 0x2 marks a slot holding a weapon is [INFERRED]: AutoAim skips a slot without it (0x49E1C0). The
+   reach is reach_of's, the range capped by the ballistic solver, where the engine's radius is the raw +0xDC:
+   the distance the slot can engage from [INFERRED: can-engage 0x49ABB0 includes the solver's test]. The
+   content leaves out a stockpile or interceptor weapon, so a slot holding one is passed over here. 0 when
+   that weapon cannot reach; -1 for a weapon past the content. */
+static int32_t chase_reach(const IMPAI_FCONTENT* c, const IMPAI_FTYPE* t)
+{
+    int k;
+    for (k = 0; k < IMPAI_FW_SLOTS; k++) {
+        const IMPAI_FWEAPON* w;
+        int32_t r;
+        if (!t->w[k]) continue;
+        if (!(w = weapon_of(c, t->w[k]))) return -1;
+        r = reach_of(c, w);
+        return r > 0 ? r : 0;
+    }
+    return 0;
+}
+
 /* Side x's weapons against side y: one weapon entry for each slot of each entry whose weapon hurts at least
    one of y's entries, with its reach, reload, burst, a loaded countdown, and on each of y's entries its
    damage a hit (at most one unit's effective hp, E6), its hit probabilities and its area's overlap; and each
-   pair's stand-off, the longest reach against the enemy entry less IMPAI_FSTANDOFF, -1 for none. -1 for a
-   weapon past the content. */
+   pair's stand-off, the reach of the slot the engine's chase walks to (chase_reach, E2) less IMPAI_FSTANDOFF,
+   set when some slot of the entry hurts the enemy entry, -1 for none. -1 for a weapon past the content. */
 static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSIDE* xin, IMPAI_FSTATE* x,
                     const IMPAI_FSTATE* y)
 {
@@ -279,6 +305,8 @@ static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSI
         for (j = 0; j < y->ne; j++) x->stop[e][j] = -1;
     for (e = 0; e < x->ne; e++) {
         const IMPAI_FTYPE* ti = &c->t[x->type[e]];
+        const int32_t chase = chase_reach(c, ti);
+        if (chase < 0) return -1;
         for (k = 0; k < IMPAI_FW_SLOTS; k++) {
             const unsigned wi = ti->w[k];
             const IMPAI_FWEAPON* w;
@@ -302,7 +330,7 @@ static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSI
                 edge = clamp01(w->edge);
                 over = (float)w->aoe / (size_px(tj) + SPACING_PAD);
                 x->ov[slot][j] = over * over * (edge + (1.0f - edge) / 6.0f);
-                if (x->stop[e][j] < range) x->stop[e][j] = range;
+                if (x->stop[e][j] < 0) x->stop[e][j] = chase;
             }
             if (!any) continue;
             x->we[slot] = (uint8_t)e;

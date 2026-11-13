@@ -203,7 +203,7 @@ def test_the_fit_ends_on_a_bound_it_is_pulled_past():
     class Pulled(predfit.Fitter):
         def __init__(self):
             self.start, self.say, self.evals = list(predfit.START), lambda *_a: None, 0
-            self.free, self.held, self.fights = sorted(want), [], []
+            self.free, self.held, self.fights, self.prior = sorted(want), {}, [], 0.0
 
         def loss(self, x):
             self.evals += 1
@@ -213,3 +213,84 @@ def test_the_fit_ends_on_a_bound_it_is_pulled_past():
     th, _loss = Pulled().run()
     assert th[bias] == predfit.BOX[bias][1] and th[splash] == predfit.BOX[splash][0]
     assert np.isclose(th[predfit.TAU], 0.5, atol=1e-3)
+
+
+def _train(n_by_kind):
+    """training-half fights by kind, as many as asked: stems whose FNV-1a 32 is even"""
+    out, i = [], 0
+    for kind, n in n_by_kind.items():
+        got = 0
+        while got < n:
+            stem = f"{kind}-{i:03d}"
+            i += 1
+            if not predfit.in_check_half(stem):
+                out.append({"id": stem, "kind": kind})
+                got += 1
+    return out
+
+
+def test_the_folds_are_stratified_deterministic_and_check_free():
+    train = _train({"group": 66, "duel": 20, "defence": 14, "naval": 17})
+    for rep in range(predfit.CV_REPS):
+        fold = predfit.folds_of(train, predfit.CV_K, rep)
+        assert fold == predfit.folds_of(train, predfit.CV_K, rep)
+        assert set(fold) == {f["id"] for f in train}
+        for kind in ("group", "duel", "defence", "naval"):
+            sizes = [sum(1 for f in train if f["kind"] == kind and fold[f["id"]] == k) for k in range(predfit.CV_K)]
+            assert max(sizes) - min(sizes) <= 1, (kind, sizes)
+    assert predfit.folds_of(train, predfit.CV_K, 0) != predfit.folds_of(train, predfit.CV_K, 1)
+
+
+def test_a_fit_refuses_a_check_half_fight():
+    stem = next(f"group-{i:03d}" for i in range(1000) if predfit.in_check_half(f"group-{i:03d}"))
+    try:
+        predfit.Fitter(None, None, [{"id": stem, "kind": "group"}])
+    except predfit.CouldNotRun as e:
+        assert stem in str(e)
+    else:
+        raise AssertionError("a fit took a check-half fight")
+
+
+def _scored(n, right):
+    """n decisive fights (A wins all 25 runs), `right` of them given a positive margin"""
+    return [({"id": f"group-{k}", "kind": "group", "W": 25, "n": 25, "limit": 0}, 1.0 if k < right else -1.0)
+            for k in range(n)]
+
+
+def test_the_choice_is_the_lowest_validation_loss_never_the_accuracy():
+    rows = []
+    for rep in range(4):
+        rows.append((30.0, "homing", 900.0, _scored(10, 10)))       # every fight right, the worst loss
+        rows.append((100.0, "homing", 700.0, _scored(10, 8)))
+        rows.append((300.0, "homing", 500.0, _scored(10, 7)))       # plainly the best loss
+        rows.append((1000.0, "homing", 650.0, _scored(10, 9)))
+    table = predfit.cv_table(rows)
+    choice = predfit.cv_choice(table)
+    assert choice["prior"] == 300.0 and choice["val_loss"] == 2000.0
+    assert (choice["right"], choice["decisive"]) == (28, 40)
+    assert choice["kinds"] == {"group": [28, 40]} and choice["classes"] == {"ended": [28, 40]}
+
+
+def test_a_choice_at_an_end_extends_the_priors_that_way():
+    assert predfit.cv_extend([30.0, 100.0, 300.0], 100.0) is None
+    assert predfit.cv_extend([30.0, 100.0, 300.0], 300.0) == [30.0, 100.0, 300.0, 900.0]
+    assert predfit.cv_extend([30.0, 100.0, 300.0], 30.0) == [10.0, 30.0, 100.0, 300.0]
+
+
+def test_the_fight_classes():
+    f = {"n": 25}
+    assert predfit.fight_class({**f, "limit": 0}) == "ended"
+    assert predfit.fight_class({**f, "limit": 19}) == "long"
+    assert predfit.fight_class({**f, "limit": 20}) == "stalemate"
+
+
+def test_held_coefficients_are_not_free_and_are_listed_with_their_values():
+    lib = predfit.Lib()
+    content = predfit.synthetic_content()
+    fights = [f for f in predfit.synthetic_fights(lib, content, predfit.START) if not predfit.in_check_half(f["id"])]
+    held = {**predfit.HOLD, "splash": 0.75}
+    ft = predfit.Fitter(lib, content, fights, say=lambda *_a: None, prior=300.0, held=held)
+    names = [predfit.NAMES[k] for k in ft.free]
+    for n, v in held.items():
+        assert n not in names and ft.held[n] == v and ft.start[predfit.NAMES.index(n)] == v
+    assert "hit.straight.bias" in names and "tau" in names

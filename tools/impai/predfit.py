@@ -2,8 +2,12 @@
 """predfit.py -- ImpAI's fight predictor fitted to the engine's fights, and its 90 % check.
 
     predfit.py content --out FILE [--dll PATH]       one held launch: the fight content read out of the engine
-    predfit.py fit --content FILE [--refs DIR] --out FIT.json
-                                                     the coefficients, fitted to the training half
+    predfit.py cv --content FILE [--refs DIR] --out CV.json [--procs N]
+                                                     the prior pull and the held coefficients, chosen by
+                                                     cross-validation inside the training half
+    predfit.py fit --content FILE --cv CV.json [--refs DIR] --out FIT.json
+                                                     the coefficients, fitted to the training half with the
+                                                     cross-validation's choice
     predfit.py emit (--fit FIT.json | --start) [--out FILE]
                                                      the coefficients as src/impai_fitparams.c
     predfit.py check --content FILE [--refs DIR] [--params FILE] [--json OUT]
@@ -44,22 +48,46 @@ half. The fit sees only the training half.
 
 THE FIT minimises
     L = -sum_f [W_f log s(m_f / tau) + (n_f - W_f) log(1 - s(m_f / tau))] + 4 sum_f n_f (m_f - M_f)^2
-        + PRIOR sum_k (theta_k - start_k)^2
+        + prior sum_k (theta_k - start_k)^2
 over the training fights (the margin term only where M_f is known; the last sum over the free coefficients), s
 the logistic function, in the box BOX: every kind's bias -6..6 and lead -6..0 (a moving target is never easier
-to hit), focus 0..1, splash 0..3, tau 0.01..2. The pull of PRIOR = 1 toward the start (biases 2, leads -1,
-focus 0.5, splash 1, tau 0.2) moves nothing the data determines against a loss in the thousands; it picks the
-point nearest the start along the flat directions, where a kind's bias and lead trade along a ridge. For each
-seed of SEEDS: CMA-ES (tools/impai/cmaes.py, CMA_POP samples a generation, sigma CMA_SIGMA of the box) from the
-start until CMA_STALL generations improve the best loss by less than 1e-6 of it, then Nelder-Mead (scipy,
-adaptive, bounded by the box) from the best point, restarted until a run gains less than 1e-4 of the loss, then
-coordinate steps of +-10 %, clipped to the box, until none improves; the seed of the lowest penalised loss is
-kept, and each free coefficient's range over the seeds' optima is reported, so a weakly determined one shows.
-Deterministic. The global stage and its width are there because the loss is not convex and is piecewise in the
-coefficients (a unit dies whole): on the self-test's 400 training fights, at a population of 24 and sigma
-0.15 every one of the six seeds stopped between 979 and 1017 against the truth's 953 (penalised); at 48 and 0.3
-two of them reached it (MEASURED 2026-11-13). A coefficient that moves no training fight's margin (a weapon kind
-no fight fires) is held at its start: it cannot be fitted, and leaving it free would let it drift.
+to hit), focus 0..1, splash 0..3, tau 0.01..2. The prior pulls toward the start (biases 2, leads -1, focus 0.5,
+splash 1, tau 0.2). For each seed: CMA-ES (tools/impai/cmaes.py, CMA_POP samples a generation, sigma CMA_SIGMA
+of the box) from the start until CMA_STALL generations improve the best loss by less than 1e-6 of it, then
+Nelder-Mead (scipy, adaptive, bounded by the box) from the best point, restarted until a run gains less than
+1e-4 of the loss, then coordinate steps of +-10 %, clipped to the box, until none improves; the seed of the
+lowest penalised loss is kept. Deterministic. The loss is not convex and is a staircase in the coefficients (a
+unit dies whole, so the loss jumps where a coefficient crosses a kill), which is why a global stage runs and why
+a bare search over-fits: it finds a deeper step, not a better model. A coefficient that moves no training
+fight's margin (a weapon kind no fight fires) is held at its start: it cannot be fitted.
+
+HELD BY DESIGN (HOLD): the homing kind's bias 2 and lead -1. A guided shot at a standing target flies to it as a
+direct shot does, so it shares the direct shot's prior hit probability, s(2) = 0.88; a shot launched within range
+lives for range / v_w, and a target fleeing straight away at v_t is caught if it started within
+range (1 - v_t / v_w), so for v_t / v_w <= 0.2 the catch rate stays at or above 0.8, which (2, -1) gives at a moved
+fraction of 0.2 (s(1.8) = 0.86) [INFERRED: a radial-flight bound, not a measurement]. The references cannot tell:
+on the 117 decisive training fights of 2026-11-13 the homing bias moves 25 margins and the lead 7, neither flips
+one, both profiles are flat, and holding them cost nothing in the cross-validation (validation loss 18590 held,
+18728 free). Revisit when the training half holds more than about 20 decisive fights in which a homing weapon
+fires at a moving target.
+
+THE CROSS-VALIDATION (`cv`) chooses the prior and the held set inside the training half, never reading the check
+half: each candidate of PRIORS x HOLD_SETS is fitted on 4 of CV_K folds and scored on the fifth by its data loss
+(loss_of, without the prior), CV_REPS times over differently dealt folds (folds_of: stratified by kind, each kind's
+fights ordered by fnv1a32("<stem>:<rep>") and dealt round-robin from offset rep), each fit the best of CV_SEEDS by
+penalised loss. The candidate of the lowest summed validation loss is chosen; the accuracy on the validated
+decisive fights, overall, by kind and by class (ended: no run at the limit; long: some, under 80 %; stalemate:
+80 % or more), is printed beside it and never chooses -- the strong-prior candidates differ by one or two fights,
+the stalemates whose margins sit near 0, where the loss sees every run of every fight. A choice at an end of
+PRIORS extends the list threefold that way and the new candidates run, until the choice is interior. The folds run
+in parallel, at nice 19. `fit` then runs the choice on the whole training half with SEEDS, refusing a cross-
+validation of another reference set; its file carries the cross-validation's table, its choice and its accuracy,
+the expected accuracy on unseen fights, and `check` reads the check half once, after it. A change to the model's
+form is judged by this cross-validation, both forms on the same folds, before `check` runs on it. The selftest
+fits at SELFTEST_PRIOR with nothing held, not at the cross-validation's choice, which would pull the fit off the
+truth it is judged against: a pull of 1 moves the truth's optimum by little against a loss near 900 and steadies
+the search, which at 0 stopped on a step 3.7 % above the truth's loss (MEASURED 2026-11-13: 919.06 against
+886.29, every seed of SEEDS).
 
 THE CHECK: on the check half's DECISIVE fights (the engine's side-A win rate W/n above 0.8 or below 0.2),
 sign(m) agrees with the engine's majority on at least 90 %, and there are at least 40 of them; fewer is
@@ -101,8 +129,14 @@ NCOEF = len(NAMES)                       # IMPAI_FIT_COEFFS
 TAU = NCOEF - 1
 START = [v for _k in KINDS for v in (2.0, -1.0)] + [0.5, 1.0, 0.2]
 LAMBDA = 4.0
-PRIOR = 1.0                              # the pull toward START, a free coefficient's squared distance
-SEEDS = (1, 2, 3, 4, 5, 6)               # CMA-ES seeds, the lowest penalised loss kept
+SEEDS = (1, 2, 3, 4, 5, 6)               # CMA-ES seeds of the final fit, the lowest penalised loss kept
+HOLD = {"hit.homing.bias": 2.0, "hit.homing.lead": -1.0}   # held by design (THE FIT, HELD BY DESIGN)
+HOLD_SETS = {"homing": HOLD, "homing+splash": {**HOLD, "splash": 1.0}}
+PRIORS = (30.0, 100.0, 300.0, 1000.0, 3000.0)   # the cross-validation's prior pulls
+PRIOR_EXTENSIONS = 6                     # threefold extensions of PRIORS at most, before it could not run
+CV_K, CV_REPS, CV_SEEDS = 5, 4, (1, 2, 3)
+SELFTEST_PRIOR = 1.0                     # the selftest's pull (THE CROSS-VALIDATION, the selftest)
+STALEMATE = 0.8                          # a fight with this share of its runs at the limit is a stalemate
 DECISIVE = 0.8
 PASS = 0.90
 MIN_DECISIVE = 40
@@ -197,10 +231,11 @@ class Content:
 
 
 class Lib:
-    """tools/impai/fightlib.c, loaded; refuses a library whose struct sizes are not the ones packed here."""
+    """tools/impai/fightlib.c, loaded -- built when stale, or the library at `path` -- refusing a library whose
+    struct sizes are not the ones packed here."""
 
-    def __init__(self):
-        self.so = ctypes.CDLL(str(native.fightlib()))
+    def __init__(self, path=None):
+        self.so = ctypes.CDLL(str(path or native.fightlib()))
         got = (ctypes.c_uint32 * len(SIZES))()
         self.so.fightlib_sizes(got)
         if list(got) != SIZES:
@@ -363,6 +398,7 @@ def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None
         fight.update({"id": stem, "kind": stem.split("-", 1)[0], "area": scn["calib"].get("area", ""),
                       "W": w, "n": len(runs), "M": sum(ms) / len(ms) if len(ms) == len(runs) else None,
                       "ref": f"{d.name}/{path.name}", "gravity": gravity[played],
+                      "limit": sum(1 for r in runs if "limit" in str(r.get("end", ""))),
                       "created": ref.get("created", "")})
         fights.append(fight)
     return fights, skipped, refused
@@ -390,8 +426,18 @@ def loss_of(ms, fights, tau):
 
 
 class Fitter:
-    def __init__(self, lib: Lib, content: Content, fights, start=START, say=print):
-        self.lib, self.content, self.fights, self.start, self.say = lib, content, fights, list(start), say
+    """The fit of `fights`, every one of the training half (else could not run: nothing but `check` reads the
+    check half), pulled toward the start by `prior`, with `held` ({name: value}) held at its values."""
+
+    def __init__(self, lib: Lib, content: Content, fights, start=START, say=print, prior=0.0, held=None):
+        held = dict(held or {})
+        inside = [f["id"] for f in fights if in_check_half(f["id"])]
+        if inside:
+            raise CouldNotRun(f"{len(inside)} check-half fights handed to a fit, e.g. {inside[:3]}")
+        if set(held) - set(NAMES):
+            raise CouldNotRun(f"no coefficient {sorted(set(held) - set(NAMES))}")
+        self.lib, self.content, self.fights, self.say, self.prior = lib, content, fights, say, float(prior)
+        self.start = [held.get(n, v) for n, v in zip(NAMES, start)]
         self.evals = 0
         base = self.ms(self.start)
         self.free = [TAU]
@@ -400,8 +446,8 @@ class Fitter:
             th[k] = th[k] * 1.5 if th[k] else 0.5
             if self.ms(th) != base:
                 self.free.append(k)
-        self.free.sort()
-        self.held = [NAMES[k] for k in range(NCOEF) if k not in self.free]
+        self.free = sorted(k for k in self.free if NAMES[k] not in held)
+        self.held = {NAMES[k]: self.start[k] for k in range(NCOEF) if k not in self.free}
 
     def ms(self, theta):
         self.evals += 1
@@ -418,11 +464,11 @@ class Fitter:
         return th
 
     def loss(self, x):
-        """The penalised loss: the data's (loss_of) and PRIOR x the free coefficients' squared distance from
-        the start."""
+        """The penalised loss: the data's (loss_of) and the prior x the free coefficients' squared distance
+        from the start."""
         th = self.theta(x)
-        return loss_of(self.ms(th), self.fights, th[TAU]) + PRIOR * sum((th[k] - self.start[k]) ** 2
-                                                                         for k in self.free)
+        return loss_of(self.ms(th), self.fights, th[TAU]) + self.prior * sum((th[k] - self.start[k]) ** 2
+                                                                              for k in self.free)
 
     def global_stage(self, x, best, seed):
         """CMA-ES over the free coefficients' box, from x, with `seed`; the best point it evaluated, if
@@ -453,16 +499,17 @@ class Fitter:
         self.say(f"predfit: seed {seed}: CMA-ES: loss {best:.6f} after {gen + 1} generations")
         return x, best
 
-    def run(self):
-        """Every seed of SEEDS from the start: (the coefficients of the lowest penalised loss, that loss). Each
-        seed's optimum is kept in self.optima as (seed, loss, coefficients)."""
+    def run(self, seeds=SEEDS):
+        """Every seed of `seeds` from the start: (the coefficients of the lowest penalised loss, that loss), ties
+        to the lower seed. Each seed's optimum is kept in self.optima as (seed, loss, coefficients)."""
         import numpy as np
         x0 = np.asarray([self.start[k] for k in self.free], dtype=np.float64)
         start_loss = self.loss(x0)
         self.say(f"predfit: {len(self.fights)} training fights, {len(self.free)} free coefficients"
-                 f"{' (held: ' + ', '.join(self.held) + ')' if self.held else ''}; start loss {start_loss:.6f}")
+                 f"{' (held: ' + ', '.join(self.held) + ')' if self.held else ''}; prior {self.prior:g}; start loss "
+                 f"{start_loss:.6f}")
         self.optima = []
-        for seed in SEEDS:
+        for seed in seeds:
             x, best = self.run_seed(x0, start_loss, seed)
             self.optima.append((seed, best, self.theta(x)))
         seed, best, theta = min(self.optima, key=lambda o: (o[1], o[0]))
@@ -815,28 +862,185 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
 
 # ---- the commands ----
 
-def cmd_fit(a) -> int:
-    try:
-        content = Content.load(a.content)
-        gravity = load_gravity(a.gravity or gravity_path())
-    except CouldNotRun as e:
-        print(f"predfit fit: COULD NOT RUN: {e}")
-        return 2
+def training_fights(a, what):
+    """(content, every fight, the training half) for `fit` and `cv`, or CouldNotRun."""
+    content = Content.load(a.content)
+    gravity = load_gravity(a.gravity or gravity_path())
     fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content, gravity)
-    for s, why in skipped:
-        print(f"skipped {s}: {why}")
+    for st, why in skipped:
+        print(f"skipped {st}: {why}")
     if refused:
-        for s, why in refused:
-            print(f"refused {s}: {why}")
-        print(f"predfit fit: COULD NOT RUN: {len(refused)} references refused (their arena or their map's "
-              f"gravity)")
-        return 2
+        for st, why in refused:
+            print(f"refused {st}: {why}")
+        raise CouldNotRun(f"{len(refused)} references refused (their arena or their map's gravity)")
     train = [f for f in fights if not in_check_half(f["id"])]
     if not train:
-        print("predfit fit: COULD NOT RUN: no training fight")
+        raise CouldNotRun(f"no training fight for {what}")
+    return content, fights, train
+
+
+# ---- the cross-validation ----
+
+def folds_of(train, k, rep):
+    """{fight id: its fold} of repetition `rep`: stratified by kind, each kind's fights ordered by
+    fnv1a32("<stem>:<rep>") and dealt round-robin from offset rep, so every fold holds each kind's share to one
+    fight, and a repetition deals them otherwise."""
+    fold = {}
+    for kind in sorted({f["kind"] for f in train}):
+        fs = sorted((f for f in train if f["kind"] == kind), key=lambda f: fnv1a32(f"{f['id']}:{rep}"))
+        for i, f in enumerate(fs):
+            fold[f["id"]] = (i + rep) % k
+    return fold
+
+
+def fight_class(f):
+    """ended (no run at the limit), long (some, under STALEMATE of them) or stalemate"""
+    lim = f.get("limit", 0)
+    return "ended" if not lim else "stalemate" if lim >= STALEMATE * f["n"] else "long"
+
+
+_CV = {}
+
+
+def _cv_init(content, train, lib_path):
+    import os
+    os.nice(19)
+    _CV.update(content=content, train=train, lib=lib_path)
+
+
+def _cv_task(t):
+    """One candidate's fit of one repetition's fold left out, one seed: (task, penalised loss, coefficients)."""
+    prior, hold, rep, fold, seed = t
+    fo = folds_of(_CV["train"], CV_K, rep)
+    fit_fs = [f for f in _CV["train"] if fo[f["id"]] != fold]
+    ft = Fitter(Lib(_CV["lib"]), _CV["content"], fit_fs, say=lambda *_: None, prior=prior, held=HOLD_SETS[hold])
+    theta, best = ft.run(seeds=(seed,))
+    return t, best, theta
+
+
+def cv_table(rows):
+    """[candidate row] from [(prior, hold, val loss, [(fight, m)])], one entry a repetition's fold: each
+    candidate's summed validation loss and its decisive validated fights right, overall, by kind and by class,
+    each counted once a repetition."""
+    out = {}
+    for prior, hold, vloss, scored in rows:
+        r = out.setdefault((prior, hold), {"prior": prior, "hold": hold, "val_loss": 0.0, "right": 0,
+                                           "decisive": 0, "kinds": {}, "classes": {}})
+        r["val_loss"] += vloss
+        for f, m in scored:
+            rate = f["W"] / f["n"]
+            if DECISIVE >= rate >= 1 - DECISIVE:
+                continue
+            ok = int((m > 0) == (rate > 0.5) and m != 0)
+            r["right"] += ok
+            r["decisive"] += 1
+            for key, val in (("kinds", f["kind"]), ("classes", fight_class(f))):
+                c = r[key].setdefault(val, [0, 0])
+                c[0] += ok
+                c[1] += 1
+    return sorted(out.values(), key=lambda r: (r["prior"], r["hold"]))
+
+
+def cv_choice(table):
+    """The candidate row of the lowest summed validation loss, ties to the lower prior, then the hold set's
+    name."""
+    return min(table, key=lambda r: (r["val_loss"], r["prior"], r["hold"]))
+
+
+def cv_extend(priors, chosen):
+    """The priors with one more threefold step past the end the choice sits on, or None when it is interior."""
+    ps = sorted(priors)
+    if chosen == ps[0]:
+        return [ps[0] / 3.0] + ps
+    if chosen == ps[-1]:
+        return ps + [ps[-1] * 3.0]
+    return None
+
+
+def cmd_cv(a) -> int:
+    """THE LIBRARY IS PINNED: built once here and copied to a private file every worker loads, so a source edited
+    or a library rebuilt while the folds run cannot reach them, and no two workers build it at once."""
+    import shutil
+    import tempfile
+    try:
+        content, fights, train = training_fights(a, "the cross-validation")
+        pinned = Path(tempfile.mkdtemp(prefix="predfit-cv-")) / "fightlib.so"
+        shutil.copy2(native.fightlib(), pinned)
+    except (CouldNotRun, calibref.CalibError, OSError) as e:
+        print(f"predfit cv: COULD NOT RUN: {e}")
         return 2
-    lib = Lib()
-    fitter = Fitter(lib, content, train)
+    try:
+        return cv_run(a, content, fights, train, pinned)
+    finally:
+        shutil.rmtree(pinned.parent, ignore_errors=True)
+
+
+def cv_run(a, content, fights, train, pinned) -> int:
+    import os
+    from multiprocessing import Pool
+    procs = a.procs or os.cpu_count() or 1
+    print(f"predfit cv: {len(train)} training fights of reference set {refset_hash(fights)}, {CV_REPS} x {CV_K} "
+          f"folds, seeds {', '.join(map(str, CV_SEEDS))} a fold, {procs} processes at nice 19")
+    priors, done, rows = list(PRIORS), set(), []
+    lib = Lib(pinned)
+    with Pool(procs, initializer=_cv_init, initargs=(content, train, pinned)) as pool:
+        for _round in range(PRIOR_EXTENSIONS + 1):
+            cands = [(pr, h) for pr in priors for h in HOLD_SETS if (pr, h) not in done]
+            tasks = [(pr, h, rep, fold, seed) for pr, h in cands for rep in range(CV_REPS)
+                     for fold in range(CV_K) for seed in CV_SEEDS]
+            best = {}
+            for t, pen, theta in pool.imap_unordered(_cv_task, tasks):
+                key = t[:4]
+                if key not in best or (pen, t[4]) < best[key][:2]:
+                    best[key] = (pen, t[4], theta)
+            for (pr, h, rep, fold), (_pen, _seed, theta) in sorted(best.items()):
+                fo = folds_of(train, CV_K, rep)
+                val = [f for f in train if fo[f["id"]] == fold]
+                ms = [g[3] for g in lib.margins(content, theta, val)]
+                rows.append((pr, h, loss_of(ms, val, theta[TAU]), list(zip(val, ms))))
+            done |= set(cands)
+            table = cv_table(rows)
+            choice = cv_choice(table)
+            wider = cv_extend(priors, choice["prior"])
+            if wider is None:
+                break
+            print(f"predfit cv: the choice, prior {choice['prior']:g}, is at an end of {priors}: extended")
+            priors = wider
+        else:
+            print(f"predfit cv: COULD NOT RUN: the choice stayed at an end of the priors after {PRIOR_EXTENSIONS} "
+                  f"extensions")
+            return 2
+    print(f"{'prior':>8s} {'held':14s} {'val loss':>10s}  decisive right    by kind ; by class")
+    for r in table:
+        mark = "  <- chosen" if r is choice else ""
+        kinds = " ".join(f"{k} {v[0]}/{v[1]}" for k, v in sorted(r["kinds"].items()))
+        classes = " ".join(f"{k} {v[0]}/{v[1]}" for k, v in sorted(r["classes"].items()))
+        print(f"{r['prior']:8g} {r['hold']:14s} {r['val_loss']:10.1f}  {pct(r['right'], r['decisive']):18s} "
+              f"{kinds} ; {classes}{mark}")
+    print(f"predfit cv: chosen prior {choice['prior']:g}, held {choice['hold']}: expected accuracy on unseen "
+          f"fights {pct(choice['right'], choice['decisive'])}")
+    Path(a.out).write_text(json.dumps({"refset": refset_hash(fights), "content_digest": f"{content.digest():016X}",
+                                       "folds": CV_K, "repetitions": CV_REPS, "seeds": list(CV_SEEDS),
+                                       "priors": priors, "table": table, "choice": choice}, indent=1) + "\n")
+    print(f"predfit cv: written to {a.out}")
+    return 0
+
+
+def cmd_fit(a) -> int:
+    try:
+        cv = json.loads(Path(a.cv).read_text())
+        content, fights, train = training_fights(a, "the fit")
+        if cv.get("refset") != refset_hash(fights):
+            raise CouldNotRun(f"the cross-validation is of reference set {cv.get('refset')}, these are "
+                              f"{refset_hash(fights)}: run `predfit cv` again")
+        prior, hold = float(cv["choice"]["prior"]), cv["choice"]["hold"]
+        if hold not in HOLD_SETS:
+            raise CouldNotRun(f"the cross-validation chose a held set this tree does not have: {hold}")
+        lib = Lib()
+        fitter = Fitter(lib, content, train, prior=prior, held=HOLD_SETS[hold])
+    except (OSError, ValueError, KeyError, CouldNotRun, calibref.CalibError) as e:
+        print(f"predfit fit: COULD NOT RUN: {e}")
+        return 2
     theta, loss = fitter.run()
     # each free coefficient's range over the seeds' optima: a wide one is weakly determined by the fights
     spread = {}
@@ -847,7 +1051,10 @@ def cmd_fit(a) -> int:
     Path(a.out).write_text(json.dumps({"coefficients": dict(zip(NAMES, theta)), "theta": theta, "loss": loss,
                                        "data_loss": loss_of(fitter.ms(theta), train, theta[TAU]),
                                        "seeds": [{"seed": sd, "loss": ls, "theta": th} for sd, ls, th in fitter.optima],
-                                       "spread": spread, "held": fitter.held,
+                                       "spread": spread, "held": fitter.held, "prior": prior,
+                                       "cv": {"table": cv["table"], "choice": cv["choice"]},
+                                       "expected_accuracy": {k: cv["choice"][k] for k in
+                                                             ("right", "decisive", "kinds", "classes")},
                                        "training_fights": len(train), "refset": refset_hash(fights),
                                        "content_digest": f"{content.digest():016X}"}, indent=1) + "\n")
     print(f"predfit fit: written to {a.out}")
@@ -984,7 +1191,7 @@ def cmd_selftest(_a) -> int:
     average, and pass the check. Each coefficient's distance from its true value is printed but not judged:
     the coefficients are confounded (a kind's bias and lead move one hit probability, and focus and splash
     trade against them), so many coefficient sets give the same margins. MEASURED 2026-11-13 on this set: the
-    kept seed reached a training loss of 948.045 against the truth's 948.024, the check-half margins 0.001 from
+    kept seed reached a training loss of 886.322 against the truth's 886.292, the check-half margins 0.0007 from
     the truth's on average."""
     try:
         lib = Lib()
@@ -993,7 +1200,7 @@ def cmd_selftest(_a) -> int:
         fights = synthetic_fights(lib, content, truth)
         train = [f for f in fights if not in_check_half(f["id"])]
         check = [f for f in fights if in_check_half(f["id"])]
-        fitter = Fitter(lib, content, train)
+        fitter = Fitter(lib, content, train, prior=SELFTEST_PRIOR)
         truth_loss = loss_of(fitter.ms(truth), train, truth[TAU])
         theta, _penalised = fitter.run()
         loss = loss_of(fitter.ms(theta), train, theta[TAU])
@@ -1033,8 +1240,15 @@ def main(argv=None):
     c = sub.add_parser("content")
     c.add_argument("--out", required=True)
     c.add_argument("--dll")
+    v = sub.add_parser("cv")
+    v.add_argument("--content", required=True)
+    v.add_argument("--refs")
+    v.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
+    v.add_argument("--out", required=True)
+    v.add_argument("--procs", type=int, help="worker processes (default: every core)")
     f = sub.add_parser("fit")
     f.add_argument("--content", required=True)
+    f.add_argument("--cv", required=True, help="`predfit cv`'s file: the prior and the held set to fit with")
     f.add_argument("--refs")
     f.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
     f.add_argument("--out", required=True)
@@ -1051,7 +1265,7 @@ def main(argv=None):
     k.add_argument("--json")
     sub.add_parser("selftest")
     a = ap.parse_args(argv)
-    return {"content": cmd_content, "fit": cmd_fit, "emit": cmd_emit, "check": cmd_check,
+    return {"content": cmd_content, "cv": cmd_cv, "fit": cmd_fit, "emit": cmd_emit, "check": cmd_check,
             "selftest": cmd_selftest}[a.cmd](a)
 
 

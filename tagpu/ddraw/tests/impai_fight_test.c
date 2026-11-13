@@ -17,7 +17,8 @@
    table on the engine's flag words of ARMSUB, ARMMH, ARMROCK, CORRL, ARMAMB, ARMSH and ARMTHUND's bomb
    (homing, straight, straight, homing, ballistic, straight, dropped); the first volley -- one shooter in reach
    at step 0 whose burst x damage is the target's hp kills it in step 1 at a hit probability of 1; and a
-   ballistic weapon's reach capped at v^2 / (g 65536) and uncapped at gravity 0 and past 65536. impai_expf is held to exp's value within 2^-22 and its bits printed;
+   ballistic weapon's reach capped at v^2 / (g 65536) and uncapped at gravity 0 and past 65536; and the chase
+   walking to its first armed slot's reach, not its longest. impai_expf is held to exp's value within 2^-22 and its bits printed;
    the merge of a 20-entry side is printed; the buy's callback impai_fight_rate_of answers impai_fight_rate.
    Exit 0 when every rule held, 1 otherwise. */
 #include <math.h>
@@ -210,6 +211,53 @@ static void small_content(void)
     printf("reach: 200 at gravity 8155, 2000 at 0 and 65537\n");
 }
 
+/* THE CHASE WALKS TO ITS FIRST ARMED SLOT'S REACH (impai_fight.c, chase_reach): a mover with a 260-px weapon
+   in slot 0 and a 700-px one in slot 1, 668 px from a target that has no weapon and cannot die, walks in, so
+   its short weapon comes into reach and it fires more than the same type standing still; with the two
+   weapons the other way round it stands where it is, 700 less the stand-off, and fires as the standing one
+   does. */
+static void chase_content(void)
+{
+    static IMPAI_FTYPE t[4];
+    static IMPAI_FWEAPON w[3];
+    const IMPAI_FCONTENT c = { t, 4, w, 3, D, 0, 8155 };
+    IMPAI_FIT sure = impai_fitparams;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r;
+    IMPAI_FSTATS walks, stands;
+    unsigned k, order;
+    memset(w, 0, sizeof w);
+    w[1].range = 260; w[1].reload = 30; w[1].burst = 1; w[1].dmg = 1; w[1].kind = IMPAI_FK_STRAIGHT;
+    w[2].range = 700; w[2].reload = 30; w[2].burst = 1; w[2].dmg = 1; w[2].kind = IMPAI_FK_STRAIGHT;
+    for (k = 0; k < IMPAI_FKINDS; k++) sure.hit[k][IMPAI_FH_BIAS] = 30.0f;
+    for (order = 0; order < 2; order++) {
+        memset(t, 0, sizeof t);
+        t[1].hp = 500; t[1].value = 100.0f; t[1].fx = t[1].fz = 2; t[1].flags = IMPAI_FT_MOBILE;
+        t[1].speed = 2 * 65536;
+        t[1].w[0] = (uint16_t)(order ? 2 : 1);
+        t[1].w[1] = (uint16_t)(order ? 1 : 2);
+        t[2] = t[1];
+        t[2].flags = 0;
+        t[2].speed = 0;
+        t[3].hp = 4000000000u; t[3].value = 100.0f; t[3].fx = t[3].fz = 2;
+        memset(&a, 0, sizeof a);
+        memset(&b, 0, sizeof b);
+        a.ne = b.ne = 1;
+        a.closes = 1;
+        a.e[0].n = 1; a.e[0].hp_frac = 65535;
+        b.e[0].type = 3; b.e[0].n = 1; b.e[0].hp_frac = 65535;
+        a.e[0].type = 1;
+        if (impai_fight_run(&c, &sure, &a, &b, 668, &s_work, &r, &walks)) fail("the chase: the mover's run", (int)order);
+        a.e[0].type = 2;
+        if (impai_fight_run(&c, &sure, &a, &b, 668, &s_work, &r, &stands)) fail("the chase: the standing run", (int)order);
+        printf("chase: slot 0 reach %d: shots %08X walking, %08X standing\n", order ? 700 : 260,
+               bits(walks.shots[1]), bits(stands.shots[1]));
+        if (order ? walks.shots[1] != stands.shots[1] : !(walks.shots[1] > stands.shots[1]))
+            fail(order ? "the chase walks past its first slot's reach" : "the chase stops short of its first slot's reach",
+                 (int)order);
+    }
+}
+
 int main(void)
 {
     IMPAI_FSIDE a, b, two;
@@ -323,6 +371,7 @@ int main(void)
     many[3].type = NT;
     if (impai_fight_side(&C, many, 20, 1, &a) != -1) fail("the merge took a type past the content", -1);
     small_content();
+    chase_content();
     printf("impai_fight_test: %s\n", s_fail ? "FAIL" : "ok");
     return s_fail ? 1 : 0;
 }
