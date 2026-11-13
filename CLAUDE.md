@@ -315,8 +315,10 @@ A landing gate alone already peaks at a load of about 24 on the reference setup'
 two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
 **Every tool that plays games for a regression holds slots of the machine's run lock**
-(`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes **two a game
-lane** it plays at once, as it declares them, and runs are admitted **in arrival order**: the
+(`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes, for each game lane it plays at once, as it declares
+them, **its renderer's measured weight** — **one slot a GDI lane, two a Vulkan lane**
+(`tools/runlock-lanes.cfg`, each figure's measurement beside it; `runlock.lane_slots`) — and
+runs are admitted **in arrival order**: the
 slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. The
 GPU's memory is budgeted the same way, **in MiB**: in the same admission a run takes, for each
 game it plays on the GPU at once, that game's **cap** plus the driver's allowance and a margin
@@ -336,8 +338,9 @@ run on the same instance waits and a run on another goes beside it. Only two run
 `tacompat.py clean`, which removes every run's instances, and a run on a caller's instance whose
 prefix still shares the template's registry hives (made without `--private-registry`), whose
 wineserver rewrites them under every other run's copy. A chain of games scripted by hand goes
-through the wrapper, `tools/runlock.py run --slots W [--vram G] [--suite S] --what TEXT
-[--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU);
+through the wrapper, `tools/runlock.py run --lanes N [--vram G] [--suite S] --what TEXT
+[--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU, whose lanes are
+GDI's; `--slots W` in place of `--lanes N` for W slots outright);
 `tools/runlock.py status` says who holds what, GPU memory and game seats included. A bare `flock(1)`
 on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every run, but it waits
 outside the queue and can wait for as long as runs keep overlapping, so use the wrapper.
