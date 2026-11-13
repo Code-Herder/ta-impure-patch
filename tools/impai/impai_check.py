@@ -30,7 +30,9 @@ names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
       number does not decide anything;
   (c) every `impai: work` line is within its bounds, which the line states beside each count
       (`slots_max`, `visits_max`, `cells_max` and `flood_max`, each N/BOUND), its `refused` count
-      is 0, and its patch scan completed at least one pass (`scans`);
+      is 0, and its patch scan completed at least one pass (`scans`); every brain `impai: work`
+      line (`decisions=`) likewise: `census_max`, `sites_max`, `snaps_max`, `roots_max` and
+      `queue_max` within theirs and `refused=0`;
   (d) every seat with a `work` line has its `impai: cost` line: the instrument ran. Its figures
       are printed, never judged;
   (e) every metal patch a seat published (`impai: patch`) is one the patch rule finds on the
@@ -61,6 +63,10 @@ WORK = re.compile(r"impai: work seat=(\d+) ticks=(\d+) refused=(\d+) slots_max=(
 BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
 SCANS = re.compile(r"impai: work seat=(\d+) ticks=(\d+) .*? scans=(\d+) clusters=(\d+)")
 COST = re.compile(r"impai: cost seat=(\d+) .*")
+BRAIN = re.compile(r"impai: work seat=(\d+) decisions=(\d+) refused=(\d+) census_max=(\d+)/(\d+) "
+                   r"sites_max=(\d+)/(\d+) snaps_max=(\d+)/(\d+) roots_max=(\d+)/(\d+) "
+                   r"queue_max=(\d+)/(\d+)")
+BRAIN_BOUNDED = ("census_max", "sites_max", "snaps_max", "roots_max", "queue_max")
 OV = re.compile(r"impai: ov seat=(\d+) tick=(\d+) known=([0-9A-F]{16}) ov=([0-9A-F]{16})")
 KNOWN = re.compile(r"impai: known seat=(\d+) tick=(\d+) known=([0-9A-F]{16})(?: ov=([0-9A-F]{16}|none))?")
 PART = re.compile(r"^(?:# )?log: run (\S+) part (\d+) ")
@@ -103,6 +109,17 @@ def judge(lines, los):
             if refused:
                 fails.append(f"(c) seat {seat}: refused={refused}")
             for k, name in enumerate(BOUNDED):
+                n, bound = int(m.group(4 + 2 * k)), int(m.group(5 + 2 * k))
+                if n > bound:
+                    fails.append(f"(c) seat {seat}: {name} {n} over its bound {bound}")
+            notes.append(ln.strip())
+            continue
+        m = BRAIN.search(ln)
+        if m:
+            seat, refused = int(m.group(1)), int(m.group(3))
+            if refused:
+                fails.append(f"(c) seat {seat}: the brain was refused {refused} decisions")
+            for k, name in enumerate(BRAIN_BOUNDED):
                 n, bound = int(m.group(4 + 2 * k)), int(m.group(5 + 2 * k))
                 if n > bound:
                     fails.append(f"(c) seat {seat}: {name} {n} over its bound {bound}")

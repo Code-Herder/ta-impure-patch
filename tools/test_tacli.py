@@ -1406,19 +1406,19 @@ class LoadComposition(unittest.TestCase):
 
     def test_a_slot_becomes_the_launch_flag_a_human_would_type(self):
         self.assertEqual(self.flags([{"slot": 0, "controller": "human",
-                                      "side": "arm", "color": 3}]), ["0:1:0:3"])
+                                      "side": "arm", "color": 3}]), ["0:1:0:3:::5"])
 
     def test_core_is_side_one_and_ai_is_controller_two(self):
         self.assertEqual(self.flags([{"slot": 1, "controller": "ai",
-                                      "side": "core"}]), ["1:2:1"])
+                                      "side": "core"}]), ["1:2:1::::5"])
 
     def test_an_undeclared_field_is_left_alone_rather_than_guessed(self):
         # --player's fields are positional, so a colour with no side needs the
         # empty middle field: the alternative is writing a side nobody asked for.
-        self.assertEqual(self.flags([{"slot": 2, "color": 4}]), ["2:2::4"])
+        self.assertEqual(self.flags([{"slot": 2, "color": 4}]), ["2:2::4:::5"])
 
     def test_a_player_with_nothing_but_a_slot_still_names_its_controller(self):
-        self.assertEqual(self.flags([{"slot": 5}]), ["5:2"])
+        self.assertEqual(self.flags([{"slot": 5}]), ["5:2:::::5"])
 
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
@@ -1426,7 +1426,14 @@ class LoadComposition(unittest.TestCase):
     def test_an_impai_seat_is_a_computer_seat_to_the_engine(self):
         # ImpAI is chosen by the store's seatai, never by the controller the registry holds
         self.assertEqual(self.flags([{"slot": 2, "controller": "impai",
-                                      "side": "core"}]), ["2:2:1"])
+                                      "side": "core"}]), ["2:2:1::::5"])
+
+    def test_an_omitted_ally_is_no_group_never_the_stores_last(self):
+        # the group an earlier scenario wrote would otherwise stay in the store, and seats that
+        # all inherit one group make the Start refuse (0x479760)
+        self.assertEqual(self.flags([{"slot": 0, "controller": "human"},
+                                     {"slot": 1, "controller": "ai", "ally": 2}]),
+                         ["0:1:::::5", "1:2:::::2"])
 
     def test_the_difficulty_is_a_word_and_absent_leaves_the_screen_alone(self):
         self.assertEqual(tacli._scn_setup({"setup": {"difficulty": "easy"}}, "t")["difficulty"],
@@ -1503,9 +1510,12 @@ class PlayerSpecs(unittest.TestCase):
         self.assertEqual(tacli.player_keys("0:1::::4000"),
                          [("Player0Controller", "1"), ("Player0Energy", "4000")])
 
-    def test_a_seventh_field_is_refused(self):
+    def test_the_seventh_field_is_the_alliance_group(self):
+        self.assertEqual(tacli.player_keys("0:1:0:3:1000:1000:2")[-1], ("Player0AllyGroup", "2"))
+
+    def test_an_eighth_field_is_refused(self):
         with refuses(self):
-            tacli.player_keys("0:1:0:3:1000:1000:9")
+            tacli.player_keys("0:1:0:3:1000:1000:2:9")
 
     def test_every_flag_the_compiler_emits_parses(self):
         # The one seam between the two halves: setup.players compiles to these
@@ -1520,6 +1530,41 @@ class PlayerSpecs(unittest.TestCase):
         for flag in tacli._scn_player_flags(setup):
             with self.subTest(flag=flag):
                 self.assertTrue(tacli.player_keys(flag))
+
+
+class StartRefusal(unittest.TestCase):
+    """The SKIRMISH Start's alliance test, decided from the settings block as 0x479760 decides it,
+    before the click, so a refused Start dies with its reason instead of at the live wait's bound."""
+
+    BLOCK = 0x0B8CBD10
+
+    def refusal(self, seats):
+        """`seats`: (controller, group) for each settings entry the screen counts."""
+        mem = {self.BLOCK + 0x18 * i: c for i, (c, _) in enumerate(seats)}
+        mem.update({self.BLOCK + 0x18 * i + 8: g for i, (_, g) in enumerate(seats)})
+
+        def peek(inst, specs, timeout):
+            vals = {tacli.SCN_SETTINGS_PEEK: self.BLOCK, tacli.SCN_SEATS_PEEK: len(seats)}
+            out = []
+            for spec in specs:
+                v = vals[spec] if spec in vals else mem[int(spec.split(":")[0], 16)]
+                out.append({"spec": spec, "value": f"{v} (0x{v:08X})"})
+            return out
+        with patch.object(tacli, "_peek", side_effect=peek):
+            return tacli._scn_start_refusal(Mock())
+
+    def test_two_seats_in_one_group_are_refused(self):
+        self.assertIn("alliance group 1", self.refusal([(1, 1), (2, 1), (0, 1), (0, 1)]))
+
+    def test_seats_of_two_groups_start(self):
+        self.assertIsNone(self.refusal([(1, 1), (2, 2), (0, 5), (0, 5)]))
+
+    def test_no_group_is_no_alliance(self):
+        self.assertIsNone(self.refusal([(1, 5), (2, 5), (0, 5), (0, 5)]))
+        self.assertIsNone(self.refusal([(1, 5), (2, 1), (0, 1), (0, 1)]))
+
+    def test_an_off_seat_neither_refuses_nor_lets_through(self):
+        self.assertIn("alliance group 2", self.refusal([(1, 2), (0, 1), (2, 2), (0, 3)]))
 
 
 class LoadedMap(unittest.TestCase):

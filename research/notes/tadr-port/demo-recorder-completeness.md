@@ -671,7 +671,9 @@ own lanes never send a clause — `resume` clears it, and
 **the hold keeper** at the pause test `0x496920` puts the bit back before every test while a pause
 of the DLL's is taken, so neither the Pause key nor the in-game menu's OK lets a held level run.
 An L step — keys, a chat line, an order, a scenario — is given while the level is held at its T,
-then the level resumes; the twin (Tlast + 30) and the end scenario (at the fixture's end) are held
+then the level resumes; an order names its units from the first roster dump that begins in the
+log after the step does (`roster_after`), so it sees the level as the steps before it left it
+whatever the dump cadence; the twin (Tlast + 30) and the end scenario (at the fixture's end) are held
 ticks too. A `run` step, a script, is handed the level held at its tick with the turbo on,
 advances it by exact ticks itself (`pause at` and `resume`, `resource_regression.py`'s IN
 LOCKSTEP) and hands it back held; a later step whose T it ran past could not run, named. K's

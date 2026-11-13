@@ -1,6 +1,6 @@
 # Entering the game
 
-Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI observes, and the button is a design (A1b).
+Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI plays its seats' economy and the seat button chooses it (A1b).
 
 ## The seam: the call at `0x465031`
 
@@ -15,7 +15,7 @@ From [Orders and the AI](../engine/orders.html), *The AI object, its lifecycle a
 
 ### As built (A1a)
 
-The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command, what a seat knows, the threat table, the overlay, the cost and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the stock AI plays every seat; the call at `0x465031` reaches a wrapper that runs an ImpAI seat's observation (its line of sight, its radar pass, its patch scan) and then always calls `0x408C40`; the level init, on the loader thread inside `0x4919C8`, also builds the content ImpAI reads -- each movement class's reach labels from the pathing maps `0x440940` built at `0x4918E3`, and the per-type threat table from the defs, weapons and categories the unit-data load `0x42D2E0` left at `0x4918CA`; the overlay is filled on the game thread from ImpAI's declared state, so a puppet draws what the live game drew; the eighteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
+The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command, what a seat knows, the threat table, the overlay, the cost and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the call at `0x465031` reaches a wrapper that plays an ImpAI seat -- its observation (its line of sight, its radar pass, its patch scan) and its brain's decision, then the stock weapon scan `0x4089A0` -- and hands every other seat to the stock tick `0x408C40`; the level init, on the loader thread inside `0x4919C8`, also builds the content ImpAI reads -- each movement class's reach labels from the pathing maps `0x440940` built at `0x4918E3`, and the per-type threat table from the defs, weapons and categories the unit-data load `0x42D2E0` left at `0x4918CA`; the overlay is filled on the game thread from ImpAI's declared state, so a puppet draws what the live game drew; fifteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
 
 ### When ImpAI plays (A1)
 

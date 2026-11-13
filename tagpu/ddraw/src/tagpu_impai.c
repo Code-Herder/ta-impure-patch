@@ -24,6 +24,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #include "tagpu_limits.h"
 #include "impai.h"
 #include "tagpu_resource.h"       /* tagpu_buildmenu_types: the build menus */
+#include "tagpu_recorder.h"       /* the AI activity bracket around a turn */
 
 #define VA_AI_CALL   0x00465031u   /* the players phase's `call 0x408C40`, E8 0A 3C FA FF */
 #define VA_AI_TICK   0x00408C40u   /* the stock AI tick, thiscall, no stack argument      */
@@ -40,7 +41,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
    below), which also covers a teardown tagpu_reclaim.off leaves unwrapped. Then the level init
    marks a live level's seats; on a puppet level, after that clear, the recording is the only
    writer, its first restore running on the game thread at the level's first step (the loader's
-   done bit orders the two: impai_seat_of, THE THREAD). A recording that carries no row of this
+   done bit orders the two: impai_seat_marked, THE THREAD). A recording that carries no row of this
    table leaves it clear. */
 static uint8_t s_seat[PLAYER_COUNT];
 SIM_ROWS(s_seat, SIM_STATE, SIM_ID_PLAYER, NULL);
@@ -78,27 +79,27 @@ typedef void (__thiscall* PFN_AiTick)(void* obj);
 
 static void handicap_counts(char* line);
 
-/* The seat whose turn this is, or -1. Every test must hold:
-   - THE THREAD. The players phase runs on the game thread every step and once on the loader
-     thread, at 0x497C10 at the end of a level load (DISASSEMBLED). Only the game thread observes.
-     The seat table the level init writes on the loader thread is ordered before every game-thread
-     call by the engine's own handshake: the init runs inside the loader's PLAYERS call 0x4919C8,
-     before the loader's last store sets bit 1 of main+0x38D75 (0x497C62), and the game thread
-     runs no step until it has read that bit set (0x498342; tagpu_replay.c, THE VIEWER'S
-     BUFFERS). The bit itself is no per-call gate: 0x498480 clears the word after the level's
-     first in-game frame (tagpu_engine.h, OFF_LOADFLAGS).
+/* The seat ImpAI plays at this AI object, or -1. Every test must hold:
    - THE BOUND. The AI object's +0 is its record (the constructor 0x408CB0 stores it at
      0x408CBB, DISASSEMBLED); that value is data until it is one of main's ten records, which the
      offset's range and exact division by the stride establish without dereferencing it.
    - THE SEAT. The record is seated with controller 2 -- the test 0x408C40 makes before it plans
-     (0x408C45..0x408C50) -- marked in the seat table, and not a puppet seat. */
-static int impai_seat_of(const void* obj)
+     (0x408C45..0x408C50) -- marked in the seat table, and not a puppet seat.
+   THE THREAD is the caller's to tell apart (impai_ai_tick): the players phase runs on the game
+   thread every step and once on the loader thread, at 0x497C10 at the end of a level load
+   (DISASSEMBLED). Both read a whole table. The loader thread's call comes after the level init on
+   that same thread; every game-thread call is ordered after it by the engine's own handshake: the
+   init runs inside the loader's PLAYERS call 0x4919C8, before the loader's last store sets bit 1
+   of main+0x38D75 (0x497C62), and the game thread runs no step until it has read that bit set
+   (0x498342; tagpu_replay.c, THE VIEWER'S BUFFERS). The bit itself is no per-call gate: 0x498480
+   clears the word after the level's first in-game frame (tagpu_engine.h, OFF_LOADFLAGS). */
+static int impai_seat_marked(const void* obj)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const char* rec;
     uintptr_t off;
     unsigned i;
-    if (GetCurrentThreadId() != g_ddraw.gui_thread_id || !ta) return -1;
+    if (!ta) return -1;
     rec = *(const char* const*)obj;
     off = (uintptr_t)rec - (uintptr_t)(ta + OFF_PLAYERS);
     if (off >= (uintptr_t)PLAYER_COUNT * PLAYER_STRIDE || off % PLAYER_STRIDE) return -1;
@@ -180,18 +181,30 @@ static struct {
 } s_reach_ix;
 SIM_VAR(s_reach_ix, SIM_CONTENT);
 
+/* What a turn did, for the cost's tail: the radar pass's publish, the patch scan's last row (its patches
+   published), a decision; PLAIN when none of them. */
+enum { TAIL_PUBLISH, TAIL_SCAN, TAIL_DECIDE, TAIL_PLAIN, TAIL_CLASSES };
+#define TAIL_US 1000u              /* a slow turn: the owner's bound, 1 ms a seat a tick */
+static const char* const TAIL_NAME[TAIL_CLASSES] = { "publish", "scan", "decide", "plain" };
+
 /* The level's work and the self-checks' counts, for the level-end lines and tools/impai_check.py. */
 static struct {
     unsigned ticks[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned slots_max[PLAYER_COUNT], visits_max[PLAYER_COUNT], nslots_max;
     unsigned cells_max[PLAYER_COUNT], flood_max[PLAYER_COUNT], map_w;
     unsigned scans[PLAYER_COUNT];             /* patch scan passes completed and published         */
-    /* THE COST, MEASURED: QueryPerformanceCounter around a turn's observation (the knowledge tick and its
-       view, not the self-checks nor the stock tick), each seat's largest, its sum and a log2 histogram of
-       microseconds, bucket k holding [2^k, 2^(k+1)) and bucket 0 [0, 2). A measurement for the cost line,
-       never a verdict: the gate judges the counts. */
+    /* THE COST, MEASURED: QueryPerformanceCounter around a turn (its observation and its decision, not the
+       self-checks nor the weapon scan), each seat's largest, its sum and a log2 histogram of microseconds,
+       bucket k holding [2^k, 2^(k+1)) and bucket 0 [0, 2). A measurement for the cost line, never a verdict:
+       the gate judges the counts.
+       THE TAIL, by what each turn did (TAIL_*): per class its turns, those of at least TAIL_US, its largest
+       and its sum, a turn counted in every class it belongs to; and the slowest turn's counts. A slow turn
+       that published nothing, scanned no last row and made no decision did only its slice and a bounded
+       radar step, so its time is not its work's: the OS's (preemption, a page fault). */
     unsigned cost_max[PLAYER_COUNT], cost_hist[PLAYER_COUNT][24];
     double   cost_sum[PLAYER_COUNT];
+    struct { unsigned turns, over, max; double sum; } tail[PLAYER_COUNT][TAIL_CLASSES];
+    struct { unsigned us, gametime, flags, slots, visits, cells, flood; } worst[PLAYER_COUNT];
     unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
@@ -248,9 +261,16 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
     }
 }
 
+#define PL_PASS_DUE 0xF0          /* u32: the GameTime of the record's next 30-tick block (engine/recorder.md) */
+
 /* THE SEAT'S VIEW, once an ImpAI turn through the seat's own site test (WQ_SITE_SEAT):
-   - THE ECONOMY LINE, once a level per seat, at its first decision tick from GameTime 590 (GameTime % 15 equal
-     to 7 x seat % 15): what the economy op reads of the record, for a peek of the same fields to be held to.
+   - THE ECONOMY LINE, once a level per seat, at its first decision tick from GameTime 590 at which no economy
+     pass of the record is due this step: what the economy op reads of the record, for a peek of the same fields
+     to be held to. THE ORDERING: the players phase reaches this turn at 0x465031 and the record's own 30-tick
+     block, whose economy pass 0x401360 writes these fields (0x465539..0x46555A), later in the same iteration,
+     when GameTime has reached +0xF0 (0x46507D..0x465089; +0xF0 += 30 at 0x46508F; DISASSEMBLED,
+     engine/recorder.md). So with +0xF0 past GameTime nothing of the pass runs after the line in this step, and
+     a peek held at the end of any step from `t` to `pass` - 1 reads what the line read; the line names both.
    - THE SITE CHECK, under tagpu_impai_check.on: four sites of the level's smallest plain building type a turn,
      two near the seat's first unit and two anywhere, each tested through the thunk and held to the seat's own
      mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
@@ -266,11 +286,13 @@ static void impai_seat_view(int seat)
     int t, k, first, last, slot, ux = 0, uz = 0;
     if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
     t = q.ops->gametime(&q);
-    if (!s_obs.econ_said[seat] && t >= 590 && t % 15 == 7 * seat % 15 && q.ops->economy(&q, &e) == WQ_OK) {
+    if (!s_obs.econ_said[seat] && t >= 590 && impai_brain_due((unsigned)t, (unsigned)seat, &IMPAI_LEVEL_A1) &&
+        *(const uint32_t*)(c.rec + PL_PASS_DUE) > (uint32_t)t && q.ops->economy(&q, &e) == WQ_OK) {
         s_obs.econ_said[seat] = 1;
-        tagpu_logf("impai: econ seat=%d t=%d metal=%.9g energy=%.9g metal_max=%.9g energy_max=%.9g metal_in=%.9g "
-                   "energy_in=%.9g metal_out=%.9g energy_out=%.9g", seat, t, e.metal, e.energy, e.metal_max,
-                   e.energy_max, e.metal_in, e.energy_in, e.metal_out, e.energy_out);
+        tagpu_logf("impai: econ seat=%d t=%d pass=%u metal=%.9g energy=%.9g metal_max=%.9g energy_max=%.9g "
+                   "metal_in=%.9g energy_in=%.9g metal_out=%.9g energy_out=%.9g", seat, t,
+                   *(const uint32_t*)(c.rec + PL_PASS_DUE), e.metal, e.energy, e.metal_max, e.energy_max,
+                   e.metal_in, e.energy_in, e.metal_out, e.energy_out);
     }
     if (!s_install.check || !tagpu_worldq_open(&ec, &eq, seat, WQ_SITE_ENGINE, NULL)) return;
     if (!s_obs.site_type) {
@@ -316,7 +338,8 @@ static void impai_seat_view(int seat)
 static LARGE_INTEGER s_qpf;            /* the counter's frequency, taken at attach */
 SIM_VAR(s_qpf, SIM_INSTALL);
 
-static void cost_note(int seat, long long ticks)
+/* One turn's time: `flags` bit TAIL_* for each class the turn belongs to, `w` its observation's counts. */
+static void cost_note(int seat, long long ticks, unsigned flags, const IMPAI_WORK* w, unsigned gametime)
 {
     const double us = s_qpf.QuadPart > 0 ? (double)ticks * 1e6 / (double)s_qpf.QuadPart : 0.0;
     const unsigned u = us < 4e9 ? (unsigned)us : 0xFFFFFFFFu;
@@ -325,14 +348,32 @@ static void cost_note(int seat, long long ticks)
     s_obs.cost_hist[seat][k]++;
     s_obs.cost_sum[seat] += us;
     if (u > s_obs.cost_max[seat]) s_obs.cost_max[seat] = u;
+    if (!flags) flags = 1u << TAIL_PLAIN;
+    for (k = 0; k < TAIL_CLASSES; k++)
+        if (flags >> k & 1u) {
+            s_obs.tail[seat][k].turns++;
+            s_obs.tail[seat][k].over += u >= TAIL_US;
+            s_obs.tail[seat][k].sum += us;
+            if (u > s_obs.tail[seat][k].max) s_obs.tail[seat][k].max = u;
+        }
+    if (u >= s_obs.worst[seat].us) {
+        s_obs.worst[seat].us = u;
+        s_obs.worst[seat].gametime = gametime;
+        s_obs.worst[seat].flags = flags;
+        s_obs.worst[seat].slots = w->slots;
+        s_obs.worst[seat].visits = w->visits;
+        s_obs.worst[seat].cells = w->cells;
+        s_obs.worst[seat].flood = w->flood;
+    }
 }
 
-/* One ImpAI seat's turn, at its record's place in the players phase, after the step's unit tick, projectiles
-   and explosions and before the seat's own sight emits (0x465053): positions are this tick's, the seat's own
-   counters as its last emits left them; nothing after the players phase in the step writes a position, the
-   alive bit, an owner, a type or cloak (DISASSEMBLED for the direct calls, [INFERRED for indirect calls]:
-   engine/sim.md, the step), so what this turn reads of them holds for the rest of the step. */
-static void impai_observe(int seat)
+/* One ImpAI seat's observation, at its record's place in the players phase, after the step's unit tick,
+   projectiles and explosions and before the seat's own sight emits (0x465053): positions are this tick's, the
+   seat's own counters as its last emits left them; nothing after the players phase in the step writes a
+   position, the alive bit, an owner, a type or cloak (DISASSEMBLED for the direct calls, [INFERRED for indirect
+   calls]: engine/sim.md, the step), so what this turn reads of them holds for the rest of the step. `scr` is
+   the turn's patch-flood arena. 0, or -1 when the view could not be opened or the knowledge tick refused it. */
+static int impai_observe(int seat, SNAP_SCRATCH* scr, IMPAI_WORK* w)
 {
     const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
                                   (int)sizeof s_radar_bits[seat],
@@ -341,32 +382,30 @@ static void impai_observe(int seat)
                                   s_cluster[seat] };
     WQ_ENGINE c;
     WORLDQ q;
-    IMPAI_WORK w;
-    SNAP_SCRATCH* scr;
-    LARGE_INTEGER t0, t1;
-    int rc = -1;
-    s_diag.calls[seat]++;
-    QueryPerformanceCounter(&t0);
-    /* the patch flood's arena, freed before return: nothing in it crosses a tick */
-    if ((scr = (SNAP_SCRATCH*)tagpu_sim_scratch(sizeof *scr)) && tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL))
-        rc = impai_know_tick(&q, &s_seatst[seat], &arrays, &s_budget, scr, &w);
-    tagpu_sim_scratch_free(scr);
-    QueryPerformanceCounter(&t1);
-    cost_note(seat, t1.QuadPart - t0.QuadPart);
-    if (rc < 0) {
+    memset(w, 0, sizeof *w);
+    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) ||
+        impai_know_tick(&q, &s_seatst[seat], &arrays, &s_budget, scr, w) < 0) {
         s_obs.refused[seat]++;
-        return;
+        return -1;
     }
     s_obs.ticks[seat]++;
-    if (w.slots > s_obs.slots_max[seat]) s_obs.slots_max[seat] = w.slots;
-    if (w.visits > s_obs.visits_max[seat]) s_obs.visits_max[seat] = w.visits;
-    if (w.cells > s_obs.cells_max[seat]) s_obs.cells_max[seat] = w.cells;
-    if (w.flood > s_obs.flood_max[seat]) s_obs.flood_max[seat] = w.flood;
-    s_obs.scans[seat] += w.scans;
+    if (w->slots > s_obs.slots_max[seat]) s_obs.slots_max[seat] = w->slots;
+    if (w->visits > s_obs.visits_max[seat]) s_obs.visits_max[seat] = w->visits;
+    if (w->cells > s_obs.cells_max[seat]) s_obs.cells_max[seat] = w->cells;
+    if (w->flood > s_obs.flood_max[seat]) s_obs.flood_max[seat] = w->flood;
+    s_obs.scans[seat] += w->scans;
     if (c.nslots > s_obs.nslots_max) s_obs.nslots_max = c.nslots;
     if ((unsigned)c.w > s_obs.map_w) s_obs.map_w = (unsigned)c.w;
-    s_obs.radar_stale += w.stale;
-    if (s_install.check) check_los(&c, &q, seat);
+    s_obs.radar_stale += w->stale;
+    return 0;
+}
+
+/* The turn's self-checks, after its timed work: line of sight under the check lever, and the seat's view. */
+static void impai_observe_checks(int seat)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    if (s_install.check && tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL)) check_los(&c, &q, seat);
     impai_seat_view(seat);
 }
 
@@ -536,6 +575,18 @@ static void impai_observe_end(unsigned now)
             tagpu_logf("impai: cost seat=%u ticks=%u max_us=%u mean_us=%.1f p99_us=%u slice=%u visits=%u nslots=%u "
                        "hist=%s", i, turns, s_obs.cost_max[i], s_obs.cost_sum[i] / (turns ? turns : 1), p99,
                        s_budget.obs_slice, s_budget.radar_visits, s_obs.nslots_max, hist);
+            /* each class as <name>=<turns of TAIL_US or more>/<turns>:<largest us>:<mean us> */
+            at = 0;
+            for (k = 0; k < TAIL_CLASSES; k++)
+                at += _snprintf(hist + at, sizeof hist - at, "%s%s=%u/%u:%u:%.1f", k ? " " : "", TAIL_NAME[k],
+                                s_obs.tail[i][k].over, s_obs.tail[i][k].turns, s_obs.tail[i][k].max,
+                                s_obs.tail[i][k].sum / (s_obs.tail[i][k].turns ? s_obs.tail[i][k].turns : 1));
+            hist[sizeof hist - 1] = 0;
+            tagpu_logf("impai: tail seat=%u over_us=%u %s worst_us=%u gametime=%u publish=%u scan=%u decide=%u "
+                       "slots=%u visits=%u cells=%u flood=%u", i, TAIL_US, hist, s_obs.worst[i].us,
+                       s_obs.worst[i].gametime, s_obs.worst[i].flags >> TAIL_PUBLISH & 1u,
+                       s_obs.worst[i].flags >> TAIL_SCAN & 1u, s_obs.worst[i].flags >> TAIL_DECIDE & 1u,
+                       s_obs.worst[i].slots, s_obs.worst[i].visits, s_obs.worst[i].cells, s_obs.worst[i].flood);
         }
     if (!s_install.check) return;
     for (i = 0; i < PLAYER_COUNT; i++)
@@ -700,7 +751,8 @@ static void impai_threat_build(void)
 }
 
 /* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
-   gives orders to (a factory, a constructor, a commander), as Quick Build reads it (tagpu_buildmenu_types).
+   gives orders to (a factory, a constructor, a commander), by Quick Build's page rule with every type a press
+   reaches, the structures armed and the units queued (tagpu_buildmenu_types): a factory offers only the second.
    Sorted by (side, builder), each row's types ascending in the pool. Content: a function of the level's defs,
    files and seats' sides, rebuilt beside the threat table -- on a live level from the sides of the seats
    s_seat marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) --
@@ -972,26 +1024,33 @@ static void seat_view(unsigned seat, IMPAI_VIEW* v)
     v->nclusters = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
 }
 
-/* THE BUILD: seat `seat`'s maps into `o`, over its rows, its patches, its alliance row (main's record of the
-   seat, +0x108 + j, one of the ten records by index), the threat table and the map's size; the reach
-   layer's label at each cell's centre block for the level's lowest movement class; each cell's ground
-   height; and the digests of the knowledge and of what was built from it. A function of ImpAI's declared
-   state and content and of what the recording carries, whatever `o` held before. 0 when the map's size is
-   past the maps' grid. */
-static int ov_build(const char* ta, unsigned seat, OV_MAPS* o)
+/* What the maps and the brain of seat `seat` (below 10) are a function of: its view (seat_view), its alliance
+   row (main's record of the seat, +0x108 + j, one of the ten records by index), the threat table and the map's
+   size. */
+static void impai_view_of(const char* ta, unsigned seat, IMPAI_VIEW* v)
 {
     const char* rec = ta + OFF_PLAYERS + seat * PLAYER_STRIDE;
+    unsigned j;
+    seat_view(seat, v);
+    for (j = 0; j < PLAYER_COUNT; j++)
+        if (j != seat && *(const uint8_t*)(rec + 0x108 + j) == 1) v->allies |= 1u << j;
+    v->threat = s_threat_n ? s_threat_def : NULL;
+    v->ntypes = (int)s_threat_n;
+    v->w = *(const int*)(ta + OFF_MAP_W16);
+    v->h = *(const int*)(ta + OFF_MAP_H16);
+}
+
+/* THE BUILD: seat `seat`'s maps into `o`, over its view (impai_view_of); the reach layer's label at each cell's
+   centre block for the level's lowest movement class; each cell's ground height; and the digests of the
+   knowledge and of what was built from it. A function of ImpAI's declared state and content and of what the
+   recording carries, whatever `o` held before. 0 when the map's size is past the maps' grid. */
+static int ov_build(const char* ta, unsigned seat, OV_MAPS* o)
+{
     IMPAI_VIEW v;
     IMPAI_MAPS m;
-    unsigned j, c;
+    unsigned c;
     int gx, gz, layer;
-    seat_view(seat, &v);
-    for (j = 0; j < PLAYER_COUNT; j++)
-        if (j != seat && *(const uint8_t*)(rec + 0x108 + j) == 1) v.allies |= 1u << j;
-    v.threat = s_threat_n ? s_threat_def : NULL;
-    v.ntypes = (int)s_threat_n;
-    v.w = *(const int*)(ta + OFF_MAP_W16);
-    v.h = *(const int*)(ta + OFF_MAP_H16);
+    impai_view_of(ta, seat, &v);
     if (v.w < 2 || v.h < 2 || v.w * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX || v.h * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX)
         return 0;
     for (layer = 0; layer < IMPAI_THREATS; layer++) m.threat[layer] = o->threat[layer];
@@ -1122,20 +1181,214 @@ void tagpu_impai_frame(void)
     tagpu_sim_scratch_free(o);
 }
 
+/* ImpAI plays its seats: the wrapper, the turn, the brain's state and its glue, the level end. OWNER: the
+   wrapper plays no puppet seat (impai_seat_marked refuses one, and a record that is not controller 2), the
+   WORLDQ refuses to open for a puppet seat and order() to command one, and on a puppet level the level init
+   only clears the brain's state, which the recording then restores. */
+SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-handicap impai-observe impai-observe-perm");
+
+/* THE BRAIN'S STATE (impai.h): each seat's standing state, and the job table, SLOT-KEYED -- the task ImpAI gave
+   the unit in that slot, for whichever seat owns it: slots are partitioned among the players' unit blocks, so
+   one table serves every seat. A job holds only while its slot holds a live unit of the seat's of the job's
+   type, which the census tests every decision; a slot reused by a unit of the same type inherits the job, at the
+   cost of at most one misjudged failure (impai.h, IMPAI_JOB). Cleared at every level init; a puppet's come from
+   its recording. */
+static IMPAI_BRAIN s_brain[PLAYER_COUNT];
+static const SimField s_brain_layout[] = {
+    { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
+    SIM_FIELD_END
+};
+SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
+static IMPAI_JOB s_job[TAGPU_PK_DESIGN_SLOTS];
+static const SimField s_job_layout[] = {
+    { offsetof(IMPAI_JOB, type),   2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_JOB, build),  2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_JOB, target), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
+    SIM_FIELD_END
+};
+SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
+
+/* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
+   largest use of each budget against the level row's bound, and the most units of each category any census
+   counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
+   clears every unit before the level-end lines are written (scenarios/replay-end.json). Diagnostics the
+   simulation never reads. */
+static struct {
+    unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
+    unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT];
+    unsigned census_max[PLAYER_COUNT], block_max[PLAYER_COUNT], sites_max[PLAYER_COUNT];
+    unsigned snaps_max[PLAYER_COUNT], roots_max[PLAYER_COUNT], queue_max[PLAYER_COUNT];
+    uint16_t count[PLAYER_COUNT][IMPAI_CATS];
+} s_play;
+SIM_VAR(s_play, SIM_PRIVATE);
+
+static void play_max(unsigned* m, unsigned v) { if (v > *m) *m = v; }
+
+/* THE TURN'S SCRATCH, static so that no turn allocates: the snap's (the patch flood's arena, and the brain's
+   snaps; 639 KB, which the process heap would take from VirtualAlloc and zero on every call) and a decision's
+   (impai_brain_scratch_bytes, at most IMPAI_BRAIN_SCRATCH_MAX). One turn at a time uses them, on the game
+   thread only (impai_ai_tick runs a turn there alone), and every byte of either is written before the call
+   that takes it reads it -- tasim_snap clears its flood arena per flood and fills its lists from the WORLDQ,
+   and the brain clears its decision and fills its arrays (its test runs it over unzeroed memory) -- so nothing
+   in them crosses a tick. */
+static SNAP_SCRATCH s_turn_snap;
+SIM_VAR(s_turn_snap, SIM_TRANSIENT);
+static unsigned char s_turn_brain[IMPAI_BRAIN_SCRATCH_MAX] __attribute__((aligned(16)));
+SIM_VAR(s_turn_brain, SIM_TRANSIENT);
+
+/* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
+   build menus, in the turn's scratch. */
+static void impai_decide(int seat)
+{
+    const size_t bytes = impai_brain_scratch_bytes();
+    WQ_ENGINE c;
+    WORLDQ q;
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT out;
+    IMPAI_VIEW v;
+    IMPAI_REACH r;
+    int rc = -1, first = 0, last = -1, k;
+    if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
+        tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
+        memset(&in, 0, sizeof in);
+        in.q = &q;
+        in.st = &s_brain[seat];
+        in.job = s_job;
+        in.njob = TAGPU_PK_DESIGN_SLOTS;
+        in.ti = s_tinfo;
+        in.nti = s_tinfo_n;
+        in.spots = s_cluster[seat];
+        in.nspots = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+        if (s_reach) {
+            r.labels = s_reach;
+            memcpy(r.at, s_reach_ix.at, sizeof r.at);
+            r.present = s_reach_ix.present;
+            r.bw = s_reach_ix.bw;
+            r.bh = s_reach_ix.bh;
+            in.reach = &r;
+        }
+        impai_view_of(c.ta, (unsigned)seat, &v);
+        in.view = &v;
+        in.lv = &IMPAI_LEVEL_A1;
+        in.scratch = s_turn_brain;
+        in.scratch_bytes = bytes;
+        in.snap = &s_turn_snap;
+        rc = impai_brain_decide(&in, &out);
+        q.ops->seat_units(&q, &first, &last);
+    }
+    if (rc < 0) {
+        s_play.refused[seat]++;
+        return;
+    }
+    s_play.decisions[seat]++;
+    s_play.orders[seat] += out.orders;
+    s_play.queued[seat] += out.queued;
+    s_play.failed[seat] += out.failed;
+    play_max(&s_play.census_max[seat], out.census);
+    play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
+    play_max(&s_play.sites_max[seat], out.sites);
+    play_max(&s_play.snaps_max[seat], out.snaps);
+    play_max(&s_play.roots_max[seat], out.roots);
+    play_max(&s_play.queue_max[seat], out.queued);
+    for (k = 0; k < IMPAI_CATS; k++)
+        if (out.count[k] > s_play.count[seat][k]) s_play.count[seat][k] = out.count[k];
+}
+
+/* One ImpAI seat's turn on the game thread: its observation, then the brain on its decision tick
+   (impai_brain_due: GameTime % 15 == 7 x seat % 15, so no two seats decide on one tick), and nothing else
+   between decisions. THE COST covers both, the views' opens included, and not the self-checks, which run after
+   it. */
+static void impai_turn(int seat)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const unsigned now = *(const unsigned*)(ta + OFF_GAMETIME);
+    IMPAI_WORK w;
+    LARGE_INTEGER t0, t1;
+    unsigned flags = 0;
+    s_diag.calls[seat]++;
+    QueryPerformanceCounter(&t0);
+    if (impai_observe(seat, &s_turn_snap, &w) == 0) {
+        if (s_seatst[seat].radar.stage == WQ_RS_IDLE && s_seatst[seat].radar_done == now)
+            flags |= 1u << TAIL_PUBLISH;
+        if (w.scans) flags |= 1u << TAIL_SCAN;
+    }
+    if (impai_brain_due(now, (unsigned)seat, &IMPAI_LEVEL_A1)) {
+        impai_decide(seat);
+        flags |= 1u << TAIL_DECIDE;
+    }
+    QueryPerformanceCounter(&t1);
+    cost_note(seat, t1.QuadPart - t0.QuadPart, flags, &w, now);
+    impai_observe_checks(seat);
+}
+
+#define VA_AI_SCAN 0x004089A0u     /* the weapon scan, thiscall (obj, mode), `ret 4` */
+typedef void (__thiscall* PFN_AiScan)(void* obj, int mode);
+
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no
    stack argument (ECX the AI object, 0x46502A) and expects a plain `ret` (0x408CA2, 0x408CAF).
    __fastcall takes ECX as its first argument and EDX as its second and pops nothing, so the
    site's stack is unchanged; EBX, ESI, EDI and EBP are callee-saved in every convention, so the
    loop counter BL, the record EDI and the record index ESI that the players phase uses after the
-   call (0x465036 `push esi`, 0x46506A `cmp bl,[eax+0x2A43]`) survive. The stock tick always runs,
-   so the stock AI plays every seat and the recorder's observer on 0x408C40's entry
-   (tagpu_recorder.c, ai_enter) still sees each call. */
+   call (0x465036 `push esi`, 0x46506A `cmp bl,[eax+0x2A43]`) survive.
+   A seat ImpAI does not play takes the stock tick 0x408C40, and the recorder's observer on its entry
+   (tagpu_recorder.c, ai_enter) sees the call. AN IMPAI SEAT NEVER RUNS 0x408C40's group assignment
+   0x408830 or its ten planners, on either thread: they would give its units orders of their own. What it
+   runs of the tick is the end both of the tick's exits reach for an active type-2 record, the weapon scan
+   0x4089A0(obj, 1) (0x408C96..0x408C9A, DISASSEMBLED), called by address so that the extra-weapons module's
+   detour of its entry runs. The players phase also runs once on the LOADER thread (0x497C10), where only the
+   scan runs, as there the stock tick would plan and scan. On the GAME thread the turn and the scan run
+   inside the recorder's attribution bracket, as the stock tick runs inside ai_enter/ai_leave: orders built in
+   the turn are the seat's, and the scan's detour ends the attribution before it scans
+   (tagpu_rec_ai_planning_end). */
 static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
 {
-    int seat = impai_seat_of(obj);
+    const int seat = impai_seat_marked(obj);
     (void)edx_unused;
-    if (seat >= 0) impai_observe(seat);
-    ((PFN_AiTick)(uintptr_t)VA_AI_TICK)(obj);
+    if (seat < 0) {
+        ((PFN_AiTick)(uintptr_t)VA_AI_TICK)(obj);
+        return;
+    }
+    if (GetCurrentThreadId() == g_ddraw.gui_thread_id) {
+        const int pushed = tagpu_rec_ai_turn_enter((unsigned)seat);
+        impai_turn(seat);
+        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 1);
+        tagpu_rec_ai_turn_leave(pushed);
+    } else {
+        ((PFN_AiScan)(uintptr_t)VA_AI_SCAN)(obj, 1);
+    }
+}
+
+/* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
+   category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
+   largest use against the level row's bound -- the census against the seat's unit block. */
+static void impai_play_end(const char* ta, unsigned now)
+{
+    const IMPAI_LEVEL* lv = &IMPAI_LEVEL_A1;
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+        const uint16_t* k = s_play.count[i];
+        if (!s_play.decisions[i] && !s_play.refused[i]) continue;
+        tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u mex=%u energy=%u makers=%u "
+                   "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u", i, s_play.decisions[i],
+                   s_play.orders[i], s_play.queued[i], s_play.failed[i], k[IMPAI_C_MEX], k[IMPAI_C_ENERGY],
+                   k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
+                   *(const float*)(rec + 0x90), now);
+        tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
+                   "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
+                   s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
+                   s_play.snaps_max[i], lv->snaps, s_play.roots_max[i], lv->roots, s_play.queue_max[i],
+                   lv->queue_max);
+    }
+}
+
+/* The level init's half of the brain, on every level, live or puppet: no anchor, no failure, no explorer and
+   no job survive a level, and a puppet's come from its recording. */
+static void impai_play_clear(void)
+{
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++) impai_brain_reset(&s_brain[i], s_job, i ? 0u : TAGPU_PK_DESIGN_SLOTS);
+    memset(&s_play, 0, sizeof s_play);
 }
 
 /* THE LEVEL END, on the game thread in the teardown 0x491B60's entry, after the recorder has
@@ -1158,6 +1411,7 @@ void tagpu_impai_level_end(void)
         handicap_counts(line);
         tagpu_logf("impai: handicap rows scaled/exempt gametime=%u:%s", now, line);
         impai_observe_end(now);
+        impai_play_end(ta, now);
     }
     memset(s_seat, 0, sizeof s_seat);
 }
@@ -1202,7 +1456,7 @@ SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-o
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
    engine's players init 0x464990 has seated and activated every record and before the loader's
    last store (0x497C62), which the game thread waits for before the level's first step: so the
-   table is whole before any game-thread turn reads it (impai_seat_of, THE THREAD). It clears
+   table is whole before any game-thread turn reads it (impai_seat_marked, THE THREAD). It clears
    the table on every level (s_seat); on a puppet level it marks no seat: the recording restores
    the table, and the recorder is the only writer of what a recording carries.
    THE SEAT CHOICE is impure.cfg's `seatai`, bit i for settings entry i, which is record i: the
@@ -1227,6 +1481,7 @@ void tagpu_impai_level_init(void)
     s_ovc.built = 0;
     s_known_tick = 0;
     impai_observe_clear();
+    impai_play_clear();
     impai_content_clear();
     if (tagpu_puppet_on()) {
         for (i = 0; i < PLAYER_COUNT; i++)

@@ -15,14 +15,20 @@ static int builds_mex(IMPAI_DEC* d, int type)
 
 /* ---- the type within a category, from the builder's menu; ties go to the lower type number ---- */
 
-/* energy: the most egain per value. A type placed on water only is skipped unless the anchor's ground lies below
-   the sea. */
+/* The ring places energy and plants around the anchor, so a type placed on water only (IMPAI_TF_WATER) can stand
+   there only when the anchor's ground lies below the sea; on a dry anchor every site test of it fails. */
+static int anchor_wet(IMPAI_DEC* d)
+{
+    const int32_t apos[3] = { (int32_t)((uint32_t)(d->in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(d->in->st->az * 16 + 8) << 16) };
+    return d->q->ops->ground(d->q, apos) < (int)d->m.sea;
+}
+
+/* energy: the most egain per value, a water-only type only on a wet anchor */
 static int choose_energy(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
-                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
-    const int wet = d->q->ops->ground(d->q, apos) < (int)d->m.sea;
+    const int wet = anchor_wet(d);
     int k, best = 0;
     for (k = 0; k < n; k++) {
         const int t = menu[k];
@@ -70,7 +76,8 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
-/* a factory: the least value among those whose own menu offers a constructor that can build an extractor;
+/* a factory: the least value among those whose own menu offers a constructor that can build an extractor, a
+   water-only plant only on a wet anchor (a shipyard: CORSY's value, 612.5, is the least of CORE's four plants);
    at most FACTORY_LOOK candidates are examined, each costing a menu read and one per constructor on it. A
    factory whose menu is past PLANT_MENU types is not chosen [INFERRED: a retail plant offers a few dozen]. */
 #define FACTORY_LOOK 8
@@ -79,11 +86,13 @@ static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     uint16_t plant[PLANT_MENU];
+    const int wet = anchor_wet(d);
     int k, j, best = 0, looked = 0;
     for (k = 0; k < n && looked < FACTORY_LOOK; k++) {
         const int t = menu[k];
         int np, ok = 0;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
+        if ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) continue;
         if (best && (in->ti[t].value > in->ti[best].value || (in->ti[t].value == in->ti[best].value && t > best))) continue;
         looked++;
         np = d->q->ops->build_options(d->q, t, plant, (int)(sizeof plant / sizeof plant[0]));
@@ -117,10 +126,21 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 
 /* ---- 4. the builders ---- */
 
+/* A METAL MAP: the threshold is 255 (SurfaceMetal, game state +0xD30, held to 255), so no cell can stand above
+   it and the patch scan publishes no patch whatever the seat explores; the loader seeds every cell with the
+   background (0x4839B3..0x4839E6, engine/map.md), and an extractor yields extractsmetal x its footprint's metal
+   wherever it stands. Core Prime Industrial Area is one: SurfaceMetal 255, no metal feature, every cell 255.
+   The stock AI places its extractors there by its general site search: it takes the spot search only when
+   SurfaceMetal is below a draw of 0x4B6C30(255), 0..254 (0x40C150..0x40C16C), and the general search 0x40A5D0
+   refuses a site only when its footprint holds more than twice the background over its area
+   (0x40A5EC..0x40A602, 0x40A76F), which a footprint of 255s never does (DISASSEMBLED). So does ImpAI: the
+   extractor goes to the base ring like any other building, and the ladder alone decides how many. */
+static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
+
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
-   site falls through. A helper (a builder assisting) answers the first two rules only. A constructor explores
-   only when no patch is left for it -- none free, reachable on its class and unthreatened -- so a patch it can
-   never reach does not keep it home. */
+   site falls through. A helper (a builder assisting) answers the first two rules only. An extractor's site is a
+   patch, or on a metal map the ring. A constructor explores only when no patch is left for it -- none free,
+   reachable on its class and unthreatened -- so a patch it can never reach does not keep it home. */
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -138,7 +158,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             return 1;
         }
         if (helper) return 0;
-        if ((t = choose_mex(d, d->menu, n)) && impai_build_spot(d, b, t)) return 1;
+        if ((t = choose_mex(d, d->menu, n)) &&
+            (metal_map(d) ? impai_build_ring(d, b, t) : impai_build_spot(d, b, t)))
+            return 1;
         if (d->pe_in < (keep > 1.1f * d->e.energy_out ? keep : 1.1f * d->e.energy_out) &&
             (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;

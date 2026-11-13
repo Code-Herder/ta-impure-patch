@@ -10,6 +10,7 @@
    accepts is logged. Its radar pass finds nothing, but when `radar_slot` names a slot: then the pass finds
    that slot's unit at its first call and completes at its second, so the knowledge tick's publish can be held
    to a slot that changed hands, or a unit that moved, while the pass was open. */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,13 +146,14 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
     *z1 = *z0 + fz - 1;
 }
 
-/* inside the placeable interior, the centre explored, no building's yard crossed */
+/* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
+   fits nowhere, the ground (f_ground, 10) lying above the sea (0) */
 static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const FWORLD* w = fw(q);
     const FDEF* d = fdef(w, type);
     int s;
-    if (!d || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
+    if (!d || d->e.minwater > 0 || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
         !f_explored(q, cx + d->d.fx / 2, cz + d->d.fz / 2))
         return 0;
     for (s = 1; s < FW_SLOTS; s++) {
@@ -557,6 +559,8 @@ static const SNAP_PATCH PATCHES[] = {
     { 10, 45, 10, 45, 12, 47, 9 },      /* C */
 };
 #define NPATCH ((unsigned)(sizeof PATCHES / sizeof PATCHES[0]))
+static const SNAP_PATCH* s_spots = PATCHES;
+static unsigned s_nspots = NPATCH;
 
 static void brain_world(void)
 {
@@ -565,6 +569,8 @@ static void brain_world(void)
     unsigned i;
     int x, z;
     world_init(&s_w);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
     for (i = 0; i < NPATCH; i++)
         for (z = PATCHES[i].z0; z <= PATCHES[i].z1; z++)
             for (x = PATCHES[i].x0; x <= PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
@@ -588,8 +594,8 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.q = &q;
     in.st = &s_st;
     in.job = s_job; in.njob = FW_SLOTS;
-    in.ti = s_ti; in.nti = T_N;
-    in.spots = PATCHES; in.nspots = NPATCH;
+    in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
+    in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
     in.lv = &IMPAI_LEVEL_A1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
@@ -865,6 +871,365 @@ static void check_game(void)
     printf("game digest %016llx\n", a.digest);
 }
 
+/* ---- the economy game ---- */
+
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, with the retail game's CORE numbers (its
+   FBIs: costs, build times, worker times, gains, footprints, speeds), a commander alone on a 1000/1000 start, and
+   a tick-by-tick model of what the engine does between decisions -- a builder walks to its site at its speed, a
+   frame stands there and grows by workertime / buildtime a second, its cost drawn as it grows and the growth cut
+   to what the stores can pay, an extractor pays its extractsmetal times the metal under its footprint a second
+   and every finished unit its gains and upkeep, a factory makes constructors one at a time. The commander's menu
+   holds CORE's land plants and the shipyard with its water-only constructor and extractor, which the dry map
+   refuses everywhere (f_site_ok), as the retail menus do (CORCOM2.GUI, CORSY1.GUI, the download entries of
+   CORCS). The wind's mean ratio is 0.25, under which the solar collector wins the energy choice, as it did in the
+   impai-eco game (MEASURED 2026-11-12: CORSOLAR built). The brain decides on seat 0's phase, every 15 ticks, to
+   GameTime 5400, impai-eco's end: what it has built by then is what that game can be held to.
+   THE METAL MAP is the same game on Core Prime Industrial Area's numbers (its OTA: SurfaceMetal 255, no feature,
+   wind 25..1500): the threshold 255, every cell 255, no patch, and the wind's mean ratio over 5000 0.1524
+   (tagpu_worldq.c, THE WIND'S MEAN). An extractor there pays 0.001 x 9 x 255 = 2.295 a second wherever it stands,
+   and the brain places it on the base ring (impai_econ.c, metal_map). */
+enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_N };
+
+/* Comet Catcher's patches within 1100 px of seat 1's start, cell (324, 35), less 240 cells in x so they fit the
+   fake's 128: every 3 x 3 block of metal above the background 3, with its metal (MEASURED 2026-11-12: the
+   feature grid's byte +7 in impai-eco's recording at GameTime 30). The game's extractors stood on the first four
+   by distance: 223, 112, 223 and 223 under CORMEX's 0.001, so 8.0 metal a second with the commander's 1, the
+   income the game reached (impai: eco ... metal_in=8.1). */
+#define EGAME_DX 240
+static const SNAP_PATCH EPATCHES[] = {
+    { 76, 15, 76, 15, 78, 17, 9 },
+    { 105, 43, 105, 43, 107, 45, 9 },
+    { 70, 55, 70, 55, 72, 57, 9 },
+    { 116, 17, 116, 17, 118, 19, 9 },
+    { 118, 70, 118, 70, 120, 72, 9 },
+    { 110, 81, 110, 81, 112, 83, 9 },
+    { 25, 59, 25, 59, 27, 61, 9 },
+};
+static const uint8_t EMETAL[] = { 223, 112, 223, 223, 56, 223, 112 };
+#define NEPATCH ((unsigned)(sizeof EPATCHES / sizeof EPATCHES[0]))
+
+typedef struct EGAME {
+    float metal, energy, mstore, estore;
+    float m_in, e_in, m_out, e_out;     /* the last pass's, a second, as WQ_ECON reports them        */
+    float m_acc_in, e_acc_in, m_acc_out, e_acc_out;   /* the pass in progress                     */
+    float built[FW_SLOTS];              /* a frame's fraction built                                  */
+    int   at_site[FW_SLOTS];            /* a factory's frame in progress, 0 none                     */
+    int   first[E_N];                   /* the GameTime the first of a type was finished, 0 never    */
+} EGAME;
+
+static EGAME s_eg;
+
+static void egame_def(FWORLD* w, int t, const char* name, int fx, int fz, int mobile, uint16_t wt, float cm, float ce,
+                      uint32_t bt)
+{
+    def_set(w, t, name, fx, fz, mobile, wt, cm, ce);
+    w->defs[t].e.buildtime = bt;
+}
+
+static void egame_world(int metal_map)
+{
+    static const uint16_t COMMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_UWMEX };
+    static const uint16_t CKMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY };
+    static const uint16_t LABMENU[] = { E_CK };
+    static const uint16_t VPMENU[] = { E_CV };
+    static const uint16_t SYMENU[] = { E_CS };
+    static const uint16_t CSMENU[] = { E_SY, E_UWMEX };
+    TASIM_ROLE_OUT roles[E_N];
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    unsigned i;
+    int x, z, t;
+    memset(&s_w, 0, sizeof s_w);
+    s_w.threshold = metal_map ? 255 : 3;
+    s_w.wind_mean = metal_map ? 0.1524f : 0.25f;
+    s_w.ndefs = E_N;
+    egame_def(&s_w, E_COM, "CORCOM", 2, 2, 1, 300, 23512, 35838, 97852);
+    s_w.defs[E_COM].e.energymake = 25;
+    s_w.defs[E_COM].e.metalmake = 1;
+    egame_def(&s_w, E_CK, "CORCK", 2, 2, 1, 80, 130, 2540, 5818);
+    s_w.defs[E_CK].e.energymake = 8.5f;
+    s_w.defs[E_CK].e.metalmake = 0.25f;
+    egame_def(&s_w, E_MEX, "CORMEX", 3, 3, 0, 0, 51, 514, 1874);
+    s_w.defs[E_MEX].d.kind = WQ_KIND_MEX;
+    s_w.defs[E_MEX].d.strength = s_w.defs[E_MEX].e.extracts = 0.001f;
+    s_w.defs[E_MEX].e.energyuse = 3;
+    egame_def(&s_w, E_SOLAR, "CORSOLAR", 5, 5, 0, 0, 141, 790, 2416);
+    s_w.defs[E_SOLAR].e.energyuse = -20;
+    egame_def(&s_w, E_WIND, "CORWIN", 4, 4, 0, 0, 55, 523, 1687);
+    s_w.defs[E_WIND].e.wind = 30;
+    egame_def(&s_w, E_MAKR, "CORMAKR", 4, 3, 0, 0, 0, 700, 2682);
+    s_w.defs[E_MAKR].e.energyuse = 60;
+    s_w.defs[E_MAKR].e.makesmetal = 1;
+    egame_def(&s_w, E_LAB, "CORLAB", 6, 6, 0, 100, 680, 1250, 7000);
+    s_w.defs[E_LAB].e.estore = s_w.defs[E_LAB].e.mstore = 100;
+    egame_def(&s_w, E_VP, "CORVP", 7, 7, 0, 100, 600, 1100, 6700);
+    s_w.defs[E_VP].e.estore = s_w.defs[E_VP].e.mstore = 100;
+    egame_def(&s_w, E_SY, "CORSY", 8, 8, 0, 100, 600, 750, 6000);
+    s_w.defs[E_SY].e.minwater = 30;
+    egame_def(&s_w, E_CV, "CORCV", 3, 3, 1, 100, 175, 2145, 5146);
+    s_w.defs[E_CV].e.energymake = 9.2f;
+    s_w.defs[E_CV].e.metalmake = 0.25f;
+    egame_def(&s_w, E_CS, "CORCS", 4, 4, 1, 125, 260, 2375, 5537);
+    s_w.defs[E_CS].e.minwater = 30;
+    egame_def(&s_w, E_UWMEX, "CORUWMEX", 3, 3, 0, 0, 56, 600, 1900);
+    s_w.defs[E_UWMEX].d.kind = WQ_KIND_MEX;
+    s_w.defs[E_UWMEX].d.strength = s_w.defs[E_UWMEX].e.extracts = 0.001f;
+    s_w.defs[E_UWMEX].e.minwater = 15;
+    menu_set(&s_w, E_COM, COMMENU, (int)(sizeof COMMENU / sizeof COMMENU[0]));
+    menu_set(&s_w, E_CK, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, E_LAB, LABMENU, 1);
+    menu_set(&s_w, E_VP, VPMENU, 1);
+    menu_set(&s_w, E_SY, SYMENU, 1);
+    menu_set(&s_w, E_CV, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, E_CS, CSMENU, (int)(sizeof CSMENU / sizeof CSMENU[0]));
+    for (z = 0; z < FW_H; z++)
+        for (x = 0; x < FW_W; x++) {
+            s_w.explored[z][x] = 1;
+            s_w.metal[z][x] = (uint8_t)(metal_map ? 255 : 3);
+        }
+    s_spots = metal_map ? NULL : EPATCHES;
+    s_nspots = metal_map ? 0 : NEPATCH;
+    for (i = 0; i < s_nspots; i++)
+        for (z = EPATCHES[i].z0; z <= EPATCHES[i].z1; z++)
+            for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = EMETAL[i];
+    s_w.first[0] = 1; s_w.last[0] = 31;
+    s_w.first[1] = 32; s_w.last[1] = 63;
+    memset(roles, 0, sizeof roles);
+    for (t = 1; t < E_N; t++) roles[t].role = TASIM_ROLE_OTHER;
+    roles[E_COM].role = roles[E_CK].role = roles[E_CV].role = roles[E_CS].role = TASIM_ROLE_BUILDER;
+    roles[E_LAB].role = roles[E_VP].role = roles[E_SY].role = TASIM_ROLE_BUILDER;
+    roles[E_COM].flags = TASIM_RF_COMMANDER | TASIM_RF_MOBILE;
+    roles[E_CK].flags = roles[E_CV].flags = roles[E_CS].flags = TASIM_RF_MOBILE;
+    roles[E_LAB].flags = roles[E_VP].flags = roles[E_SY].flags = TASIM_RF_FACTORY;
+    CHECK(impai_tinfo_build(&q, roles, E_N, s_ti, FW_DEFS) == E_N, "tinfo");
+    impai_brain_reset(&s_st, s_job, FW_SLOTS);
+    memset(&s_reach, 0, sizeof s_reach);
+    memset(&s_eg, 0, sizeof s_eg);
+    s_eg.metal = s_eg.energy = s_eg.mstore = s_eg.estore = 1000;
+}
+
+static float egame_speed(int type) { return type == E_COM ? 1.07f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
+static float egame_reach(int type) { return type == E_COM ? 60.0f : 40.0f; }
+
+/* a step of `speed` px toward (x, z) px; 1 when within `reach` */
+static int egame_walk(FUNIT* u, float x, float z, float reach)
+{
+    const float ux = (float)u->pos[0] / 65536.0f, uz = (float)u->pos[2] / 65536.0f, dx = x - ux, dz = z - uz;
+    const float d = sqrtf(dx * dx + dz * dz), v = egame_speed(u->type);
+    if (d <= reach) return 1;
+    u->pos[0] = (int32_t)((ux + dx * (v / d)) * 65536.0f);
+    u->pos[2] = (int32_t)((uz + dz * (v / d)) * 65536.0f);
+    return 0;
+}
+
+static int egame_free_slot(void)
+{
+    int k;
+    for (k = 1; k < 32 && s_w.unit[k].live; k++) {}
+    return k < 32 ? k : 0;
+}
+
+/* `wt` workertime on frame `f` this tick, its draw cut to what the stores hold; 1 when it finished */
+static int egame_grow(int f, float wt)
+{
+    FUNIT* u = &s_w.unit[f];
+    const FDEF* d = &s_w.defs[u->type];
+    const float step = wt / (float)d->e.buildtime / 30.0f;
+    const float need_m = d->e.cost_m * step, need_e = d->e.cost_e * step;
+    float k = 1.0f;
+    s_eg.m_acc_out += need_m;
+    s_eg.e_acc_out += need_e;
+    if (need_m > 0 && s_eg.metal < need_m) k = s_eg.metal / need_m;
+    if (need_e > 0 && s_eg.energy < need_e * k) k = s_eg.energy / need_e;
+    s_eg.metal -= need_m * k;
+    s_eg.energy -= need_e * k;
+    s_eg.built[f] += step * k;
+    if (s_eg.built[f] < 1.0f) return 0;
+    u->finished = 1;
+    if (!s_eg.first[u->type]) s_eg.first[u->type] = s_w.gametime;
+    return 1;
+}
+
+static int egame_frame_at(int type, const int32_t pos[3])
+{
+    int k;
+    for (k = 1; k < 32; k++)
+        if (s_w.unit[k].live && s_w.unit[k].type == type && s_w.unit[k].pos[0] == pos[0] && s_w.unit[k].pos[2] == pos[2])
+            return k;
+    return 0;
+}
+
+static void egame_unit(int s)
+{
+    FUNIT* u = &s_w.unit[s];
+    const FDEF* d = &s_w.defs[u->type];
+    WQ_ORDER* o = &u->list[0];
+    if (!u->live || !u->finished || !u->n) return;
+    if (o->action == A_MOBILEBUILD) {
+        int f;
+        if (!egame_walk(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16),
+                        egame_reach(u->type) + 8.0f * s_w.defs[o->type].d.fx))
+            return;
+        if (!(f = egame_frame_at(o->type, o->pos))) {
+            if (!(f = egame_free_slot())) return;
+            memset(&s_w.unit[f], 0, sizeof s_w.unit[f]);
+            s_w.unit[f].live = 1;
+            s_w.unit[f].type = o->type;
+            memcpy(s_w.unit[f].pos, o->pos, sizeof o->pos);
+            s_eg.built[f] = 0;
+        }
+        if (s_w.unit[f].finished || egame_grow(f, d->d.workertime)) u->n = 0;
+    } else if (o->action == A_HELPBUILD || o->action == A_GUARD) {
+        FUNIT* t = o->target < FW_SLOTS ? &s_w.unit[o->target] : NULL;
+        if (!t || !t->live) { u->n = 0; return; }
+        if (!egame_walk(u, (float)(t->pos[0] >> 16), (float)(t->pos[2] >> 16), egame_reach(u->type) + 48.0f)) return;
+        if (o->action == A_HELPBUILD) {
+            if (t->finished || egame_grow(o->target, d->d.workertime)) u->n = 0;
+        } else if (t->n && t->list[0].action == A_BUILDINGBUILD) {
+            const int f = s_eg.at_site[o->target];
+            if (f && s_w.unit[f].live && !s_w.unit[f].finished) egame_grow(f, d->d.workertime);
+        }
+    } else if (o->action == A_MOVE) {
+        if (egame_walk(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16), 8.0f)) u->n = 0;
+    } else if (o->action == A_BUILDINGBUILD) {
+        int f = s_eg.at_site[s];
+        if (!f || !s_w.unit[f].live || s_w.unit[f].finished) {
+            if (!(f = egame_free_slot())) return;
+            memset(&s_w.unit[f], 0, sizeof s_w.unit[f]);
+            s_w.unit[f].live = 1;
+            s_w.unit[f].type = o->type;
+            s_w.unit[f].pos[0] = u->pos[0];
+            s_w.unit[f].pos[2] = u->pos[2] + (int32_t)((8 * d->d.fz + 16) << 16);
+            s_eg.built[f] = 0;
+            s_eg.at_site[s] = f;
+        }
+        if (egame_grow(f, d->d.workertime)) {
+            s_eg.at_site[s] = 0;
+            if (--o->count <= 0) {
+                memmove(&u->list[0], &u->list[1], (size_t)(u->n - 1) * sizeof u->list[0]);
+                u->n--;
+            }
+        }
+    } else
+        u->n = 0;
+}
+
+/* one tick: the units' work, then the gains and the upkeep of every finished unit; each 30 ticks the pass's
+   rates are published as WQ_ECON reports them */
+static void egame_tick(void)
+{
+    int s;
+    float mstore = 1000, estore = 1000;     /* the start's storage (impai-eco's econ line: 1000 and 1000) */
+    float e_gain = 0, m_gain = 0;
+    for (s = 1; s < 32; s++) egame_unit(s);
+    for (s = 1; s < 32; s++) {
+        const FUNIT* u = &s_w.unit[s];
+        const FDEF* d = &s_w.defs[u->type];
+        const float use = d->e.energyuse > 0 ? d->e.energyuse / 30.0f : 0.0f;
+        float e, m;
+        int paid;
+        if (!u->live || !u->finished) continue;
+        /* a unit with an upkeep works only while the store, what the builders left of it, pays it: impai-eco's
+           extractors gave no metal while a build spent its stored energy (MEASURED 2026-11-12, the recording's
+           seat 1: metal_in 1.00, the commander's alone, at GameTimes 2902, 4282 and 4897 with four extractors
+           standing and the energy under 25); the tick's gains come in after every upkeep */
+        paid = use > 0 && s_eg.energy >= use;
+        e = d->e.energymake + (d->e.energyuse < 0 ? -d->e.energyuse : 0) + d->e.wind * s_w.wind_mean;
+        m = d->e.metalmake;
+        if (u->type == E_MEX && paid) {
+            int x0, z0, x1, z1, x, z;
+            yard_rect(&s_w, u, &x0, &z0, &x1, &z1);
+            for (z = z0; z <= z1; z++) for (x = x0; x <= x1; x++) m += d->e.extracts * (float)s_w.metal[z][x];
+        }
+        if (u->type == E_MAKR && paid) m += 1.0f;
+        if (paid) {
+            s_eg.e_acc_out += use;
+            s_eg.energy -= use;
+        }
+        e_gain += e / 30.0f;
+        m_gain += m / 30.0f;
+        estore += d->e.estore;
+        mstore += d->e.mstore;
+    }
+    s_eg.e_acc_in += e_gain;
+    s_eg.m_acc_in += m_gain;
+    s_eg.energy += e_gain;
+    s_eg.metal += m_gain;
+    s_eg.estore = estore;
+    s_eg.mstore = mstore;
+    if (s_eg.energy > estore) s_eg.energy = estore;
+    if (s_eg.metal > mstore) s_eg.metal = mstore;
+    if (s_w.gametime % 30 == 0) {
+        s_eg.e_in = s_eg.e_acc_in; s_eg.m_in = s_eg.m_acc_in;
+        s_eg.e_out = s_eg.e_acc_out; s_eg.m_out = s_eg.m_acc_out;
+        s_eg.e_acc_in = s_eg.m_acc_in = s_eg.e_acc_out = s_eg.m_acc_out = 0;
+    }
+    s_w.econ[0].metal = s_eg.metal; s_w.econ[0].energy = s_eg.energy;
+    s_w.econ[0].metal_max = s_eg.mstore; s_w.econ[0].energy_max = s_eg.estore;
+    s_w.econ[0].metal_in = s_eg.m_in; s_w.econ[0].energy_in = s_eg.e_in;
+    s_w.econ[0].metal_out = s_eg.m_out; s_w.econ[0].energy_out = s_eg.e_out;
+}
+
+/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); what stands at 5400 into n, and the
+   orders' counts. */
+static void economy_game(const char* name, int metal_map, int cx, int cz, int n[E_N], int* queues, int* wet,
+                         int* snaps)
+{
+    IMPAI_BRAIN_OUT out;
+    int s, orders = 0;
+    egame_world(metal_map);
+    unit_add(&s_w, 1, E_COM, cx, cz, 1);
+    *queues = *wet = *snaps = 0;
+    memset(n, 0, E_N * sizeof *n);
+    printf("economy game, %s\n", name);
+    for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
+        if (impai_brain_due((unsigned)s_w.gametime, 0, &IMPAI_LEVEL_A1)) {
+            const int from = s_w.nlog;
+            int k;
+            CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
+            *snaps += out.snaps;
+            for (k = from; k < s_w.nlog; k++) {
+                orders++;
+                *queues += s_w.log[k].c.verb == WQ_CMD_QUEUE;
+                *wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
+                cmd_print(&s_w.log[k]);
+            }
+            if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
+        }
+        egame_tick();
+    }
+    for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) n[s_w.unit[s].type]++;
+    printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
+           "energy=%.0f metal_in=%.3f first mex=%d energy=%d plant=%d\n", orders, n[E_MEX], n[E_SOLAR], n[E_WIND],
+           n[E_MAKR], n[E_LAB] + n[E_VP], n[E_CK] + n[E_CV], s_eg.metal, s_eg.energy, s_eg.m_in, s_eg.first[E_MEX],
+           s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
+           s_eg.first[E_VP] ? s_eg.first[E_VP] : s_eg.first[E_LAB]);
+}
+
+static void check_economy_game(void)
+{
+    int n[E_N], queues, wet, snaps;
+    /* At impai-eco's pace the first plant, CORVP (the least value of the land plants), takes the energy two
+       solar collectors would: one stands by 5400 and the second is a frame. */
+    economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
+    CHECK(n[E_MEX] >= 4, "four extractors by 5400: %d", n[E_MEX]);
+    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400: %d", n[E_SOLAR] + n[E_WIND]);
+    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
+          n[E_LAB] + n[E_VP], queues);
+    CHECK(!wet, "no water-only type ordered on the dry map: %d", wet);
+    /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
+       by 450), then the energy that income asks for, CORVP from 3390 with a CORCV queued when it stands, and a
+       second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the commander 1. */
+    economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2, n, &queues, &wet, &snaps);
+    CHECK(!snaps, "no snap onto a patch on a metal map: %d", snaps);
+    CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)n[E_MEX])) < 0.01f,
+          "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, n[E_MEX]);
+    CHECK(n[E_MEX] >= 4, "four extractors by 5400 on the metal map: %d", n[E_MEX]);
+    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400 on the metal map: %d", n[E_SOLAR] + n[E_WIND]);
+    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1,
+          "a finished factory with a constructor queued by 5400 on the metal map: %d, %d", n[E_LAB] + n[E_VP], queues);
+    CHECK(!wet, "no water-only type ordered on the metal map: %d", wet);
+}
+
 int main(void)
 {
     if (!(s_scratch = malloc(impai_brain_scratch_bytes()))) return 2;
@@ -878,6 +1243,7 @@ int main(void)
     check_caps();
     check_fail();
     check_game();
+    check_economy_game();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");
     return s_fail ? 1 : 0;
